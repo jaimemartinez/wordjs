@@ -1,6 +1,6 @@
 {
   "name": "Wanderlust Journal",
-  "version": "1.0.2",
+  "version": "1.0.6",
   "description": "Travel & adventure blog theme with immersive map cards, location tags, and photo narrative layouts.",
   "author": "WordJS Premium Studio",
   "category": "Media",
@@ -17,5 +17,9 @@
     "media",
     "organic",
     "responsive"
-  ]
+  ],
+  "tokens": {
+    "--wjs-font-family-base": "'Outfit', 'Century Gothic', 'Avenir Next', 'Segoe UI', sans-serif",
+    "--wjs-font-family-heading": "'Outfit', 'Century Gothic', 'Avenir Next', 'Segoe UI', sans-serif"
+  }
 }

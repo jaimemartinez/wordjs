@@ -1,6 +1,6 @@
 {
   "name": "Gourmet Cellar",
-  "version": "1.0.2",
+  "version": "1.0.6",
   "description": "Fine wine & artisan spirits storefront theme with deep burgundy palette and vintage typography.",
   "author": "WordJS Premium Studio",
   "category": "Commerce",
@@ -17,5 +17,9 @@
     "commerce",
     "editorial",
     "responsive"
-  ]
+  ],
+  "tokens": {
+    "--wjs-font-family-base": "'Lora', Georgia, 'Times New Roman', serif",
+    "--wjs-font-family-heading": "'Playfair Display', Didot, 'Bodoni MT', Georgia, serif"
+  }
 }

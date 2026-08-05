@@ -1,6 +1,6 @@
 {
   "name": "Apex Enterprise",
-  "version": "1.0.2",
+  "version": "1.0.6",
   "description": "Corporate SaaS template with glassmorphism cards, glowing metrics, and dark mode hero banners.",
   "author": "WordJS Premium Studio",
   "category": "Corporate",
@@ -17,5 +17,9 @@
     "corporate",
     "glassmorphism",
     "responsive"
-  ]
+  ],
+  "tokens": {
+    "--wjs-font-family-base": "'Plus Jakarta Sans', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif",
+    "--wjs-font-family-heading": "'Plus Jakarta Sans', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif"
+  }
 }

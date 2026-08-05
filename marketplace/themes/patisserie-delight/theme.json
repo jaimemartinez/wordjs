@@ -1,6 +1,6 @@
 {
   "name": "Patisserie Delight",
-  "version": "1.0.2",
+  "version": "1.0.6",
   "description": "Artisanal bakery & confectionery theme with warm pastel colors, custom order forms, and gallery grids.",
   "author": "WordJS Premium Studio",
   "category": "Commerce",
@@ -17,5 +17,9 @@
     "commerce",
     "organic",
     "responsive"
-  ]
+  ],
+  "tokens": {
+    "--wjs-font-family-base": "'Outfit', 'Century Gothic', 'Avenir Next', 'Segoe UI', sans-serif",
+    "--wjs-font-family-heading": "'Outfit', 'Century Gothic', 'Avenir Next', 'Segoe UI', sans-serif"
+  }
 }

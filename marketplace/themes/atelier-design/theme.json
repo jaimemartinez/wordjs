@@ -1,6 +1,6 @@
 {
   "name": "Atelier Design",
-  "version": "1.0.2",
+  "version": "1.0.6",
   "description": "European architectural design studio theme with grid overlays, editorial typography, and floating caption boxes.",
   "author": "WordJS Premium Studio",
   "category": "Creative",
@@ -17,5 +17,9 @@
     "creative",
     "editorial",
     "responsive"
-  ]
+  ],
+  "tokens": {
+    "--wjs-font-family-base": "'Lora', Georgia, 'Times New Roman', serif",
+    "--wjs-font-family-heading": "'Playfair Display', Didot, 'Bodoni MT', Georgia, serif"
+  }
 }

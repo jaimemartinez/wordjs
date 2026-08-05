@@ -1,5 +1,6 @@
 /* Theme: Atelier Design (Editorial Luxury Archetype) */
-@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,600;0,800;1,400&family=Lora:ital,wght@0,400;0,500;1,400&display=swap');
+
+@import url('fonts.css');
 
 /* @wjs-generated:start — compiled from theme.json; DO NOT EDIT inside. Edit theme.json and run: node backend/cli/wordjs.js build theme atelier-design */
 :root {
@@ -14,93 +15,13 @@
   --wjs-color-text-main: #f5f5f4;
   --wjs-color-text-muted: #a3a1a0;
   --wjs-color-heading: #f5f5f4;
-  --wjs-color-link: #78716c;
-  --wjs-color-link-hover: #57534e;
+  --wjs-color-link: #8e8884;
+  --wjs-color-link-hover: #8d8a87;
   --wjs-border-subtle: #43413f;
   --wjs-outline: #6e6d6b;
   --wjs-outline-variant: #3d3a38;
   --wjs-focus-ring: #78716c;
-}
-/* Archetype: Editorial Luxury */
-:root {
-    --edit-primary: #78716c;
-    --edit-secondary: #57534e;
-    --edit-bg: #1c1917;
-    --edit-text: #f5f5f4;
-}
-
-body {
-    background-color: var(--edit-bg);
-    color: var(--edit-text);
-    font-family: 'Lora', Georgia, 'Times New Roman', serif;
-    font-size: 1.1rem;
-    line-height: 1.8;
-    margin: 0;
-}
-
-h1, h2, h3 {
-    font-family: 'Playfair Display', Didot, 'Bodoni MT', Georgia, serif;
-    font-weight: 800;
-    letter-spacing: -0.01em;
-    color: var(--edit-primary);
-}
-
-.theme-container {
-    max-width: 1100px;
-    margin: 0 auto;
-    padding: 4rem 2rem;
-}
-
-.theme-hero {
-    border-top: 3px double var(--edit-primary);
-    border-bottom: 1px solid var(--edit-secondary);
-    padding: 5rem 1rem;
-    text-align: center;
-    margin-bottom: 4rem;
-}
-
-.theme-hero h1 {
-    font-size: 4rem;
-    font-style: italic;
-}
-
-.theme-card-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-    gap: 3rem;
-}
-
-.theme-card {
-    border-left: 2px solid var(--edit-primary);
-    padding-left: 1.5rem;
-    transition: border-color 0.3s ease;
-}
-
-.theme-card:hover {
-    border-left-color: var(--edit-secondary);
-}
-
-.theme-badge {
-    font-family: 'Playfair Display', Didot, 'Bodoni MT', Georgia, serif;
-    font-style: italic;
-    color: var(--edit-secondary);
-    font-size: 0.9rem;
-    border-bottom: 1px solid var(--edit-secondary);
-}
-
-button.theme-btn {
-    background: transparent;
-    color: var(--edit-primary);
-    border: 1px solid var(--edit-primary);
-    padding: 10px 24px;
-    font-family: 'Playfair Display', Didot, 'Bodoni MT', Georgia, serif;
-    font-style: italic;
-    cursor: pointer;
-    transition: all 0.3s ease;
-}
-
-button.theme-btn:hover {
-    background: var(--edit-primary);
-    color: var(--edit-bg);
+  --wjs-font-family-base: 'Lora', Georgia, 'Times New Roman', serif;
+  --wjs-font-family-heading: 'Playfair Display', Didot, 'Bodoni MT', Georgia, serif;
 }
 /* @wjs-generated:end */

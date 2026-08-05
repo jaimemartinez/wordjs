@@ -1,6 +1,6 @@
 {
   "name": "Cyber Hardware",
-  "version": "1.0.2",
+  "version": "1.0.6",
   "description": "Gaming hardware & peripheral shop theme with RGB neon glow effects and spec comparison tables.",
   "author": "WordJS Premium Studio",
   "category": "Commerce",
@@ -17,5 +17,9 @@
     "commerce",
     "cyber",
     "responsive"
-  ]
+  ],
+  "tokens": {
+    "--wjs-font-family-base": "'JetBrains Mono', 'Cascadia Code', Consolas, Menlo, monospace",
+    "--wjs-font-family-heading": "'Chakra Petch', 'Bahnschrift', 'Trebuchet MS', 'Segoe UI', sans-serif"
+  }
 }

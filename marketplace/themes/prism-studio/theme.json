@@ -1,6 +1,6 @@
 {
   "name": "Prism Studio",
-  "version": "1.0.2",
+  "version": "1.0.6",
   "description": "Creative agency portfolio with dynamic color shifts, kinetic typography, and masonry image galleries.",
   "author": "WordJS Premium Studio",
   "category": "Portfolio",
@@ -17,5 +17,9 @@
     "portfolio",
     "glassmorphism",
     "responsive"
-  ]
+  ],
+  "tokens": {
+    "--wjs-font-family-base": "'Plus Jakarta Sans', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif",
+    "--wjs-font-family-heading": "'Plus Jakarta Sans', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif"
+  }
 }

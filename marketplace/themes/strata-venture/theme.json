@@ -1,6 +1,6 @@
 {
   "name": "Strata Venture",
-  "version": "1.0.2",
+  "version": "1.0.6",
   "description": "Venture capital & startup accelerator theme with sleek timeline views and dealflow portfolio grids.",
   "author": "WordJS Premium Studio",
   "category": "Finance",
@@ -17,5 +17,9 @@
     "finance",
     "glassmorphism",
     "responsive"
-  ]
+  ],
+  "tokens": {
+    "--wjs-font-family-base": "'Plus Jakarta Sans', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif",
+    "--wjs-font-family-heading": "'Plus Jakarta Sans', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif"
+  }
 }

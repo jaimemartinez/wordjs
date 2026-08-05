@@ -1,6 +1,6 @@
 {
   "name": "Cinema Reel",
-  "version": "1.0.2",
+  "version": "1.0.6",
   "description": "Movie reviews, film criticism, and entertainment portal with dark theater background, rating meters, and trailer modals.",
   "author": "WordJS Premium Studio",
   "category": "Media",
@@ -17,5 +17,9 @@
     "media",
     "obsidian",
     "responsive"
-  ]
+  ],
+  "tokens": {
+    "--wjs-font-family-base": "'Montserrat', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif",
+    "--wjs-font-family-heading": "'Cinzel', 'Trajan Pro', 'Times New Roman', serif"
+  }
 }

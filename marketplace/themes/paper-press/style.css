@@ -276,13 +276,18 @@
   --wjs-cta-button-color: #ffffff;
   --wjs-pricing-button-color: #ffffff;
   --wjs-social-hover-color: #ffffff;
+  --wjs-nav-font-family: 'Source Serif 4', Georgia, 'Times New Roman', serif;
+  --wjs-nav-font-size: 0.74rem;
+  --wjs-nav-font-weight: 600;
+  --wjs-nav-letter-spacing: 0.19em;
+  --wjs-nav-text-transform: uppercase;
   --wjs-quote-size: 1.45rem;
   --wjs-stats-value-tracking: -0.03em;
 }
 body { font-size: 17px; line-height: 1.62 }
 h1,h2,h3,h4,h5,h6 { letter-spacing: -0.022em; line-height: 1.08 }
 .wjs-header-logo { font-family: "Bodoni Moda",Georgia,"Times New Roman",serif; text-transform: uppercase; letter-spacing: -0.015em }
-.wjs-header-nav { width: 100%; justify-content: center; margin-top: 0.7rem; padding-top: 0.5rem; padding-bottom: 0.5rem; border-top: 1px solid #141414; border-bottom: 1px solid #141414; font-family: "Source Serif 4",Georgia,"Times New Roman",serif; font-size: 0.74rem; font-weight: 600; letter-spacing: 0.19em; text-transform: uppercase }
+.wjs-header-nav { width: 100%; justify-content: center; margin-top: 0.7rem; padding-top: 0.5rem; padding-bottom: 0.5rem; border-top: 1px solid #141414; border-bottom: 1px solid #141414 }
 footer { font-size: 0.86rem; letter-spacing: 0.005em }
 .wp-block-hero { border-bottom: 1px solid #141414 }
 .wp-block-hero__title { line-height: 0.95 }

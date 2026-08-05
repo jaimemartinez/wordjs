@@ -1,6 +1,6 @@
 {
   "name": "Metro Journal",
-  "version": "1.0.2",
+  "version": "1.0.6",
   "description": "High-density digital newspaper theme with ticker bars, trending widgets, and multi-column article grids.",
   "author": "WordJS Premium Studio",
   "category": "Media",
@@ -17,5 +17,9 @@
     "media",
     "brutalist",
     "responsive"
-  ]
+  ],
+  "tokens": {
+    "--wjs-font-family-base": "'Public Sans', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif",
+    "--wjs-font-family-heading": "'Space Grotesk', 'Arial Black', 'Segoe UI', Arial, sans-serif"
+  }
 }

@@ -9,12 +9,12 @@
   --wjs-color-primary-dark: #00327d;
   --wjs-color-on-primary: #ffffff;
   --wjs-color-accent: #0ea5e9;
-  --wjs-color-on-accent: #ffffff;
+  --wjs-color-on-accent: #111111;
   --wjs-color-text-main: #141414;
   --wjs-color-text-muted: #6b6b6d;
   --wjs-color-heading: #141414;
   --wjs-color-link: #00327d;
-  --wjs-color-link-hover: #0ea5e9;
+  --wjs-color-link-hover: #0a709e;
   --wjs-border-subtle: #cfd0d5;
   --wjs-outline: #a1a2a6;
   --wjs-outline-variant: #d6d7dc;
@@ -298,9 +298,12 @@
   --wjs-footer-text-heading: #ffffff;
   --wjs-footer-text-body: #94a1b5;
   --wjs-footer-text-hover: #ffffff;
+  --wjs-nav-font-size: 0.9375rem;
+  --wjs-nav-font-weight: 500;
+  --wjs-nav-letter-spacing: 0;
 }
 body { line-height: 1.65 }
-.wjs-header-nav { gap: 2rem; font-size: 0.9375rem; font-weight: 500; letter-spacing: 0 }
+.wjs-header-nav { gap: 2rem }
 .wjs-header-logo { font-weight: 700; letter-spacing: -0.02em }
 footer { margin-top: 0; padding-top: 4rem; padding-bottom: 1.75rem; border-top-width: 0; font-size: 0.9375rem }
 .wp-block-hero__subtitle { max-width: 36rem; margin-left: auto; margin-right: auto }

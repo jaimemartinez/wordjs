@@ -342,30 +342,33 @@ function compileTheme(dirOrSlug: string, opts: CompileOpts = {}): CompileResult 
     }
   }
 
-  // --- archetype (personality preset CSS from theme-derive) ---
-  let archetypeCssText = '';
+  // --- archetype (personality label; NO LONGER emits CSS) ---
+  //
+  // The archetype presets used to append a block of hand-written CSS to every compiled stylesheet:
+  // `.theme-container`, `.theme-hero`, `.theme-card-grid`, `.theme-card`, `.theme-badge`,
+  // `button.theme-btn`, plus bare `body {}` and `h1, h2, h3 {}` rules. That is the LEGACY theme model
+  // and it is retired — themes are declarative now, and a theme's look must come from the --wjs-*
+  // token contract alone.
+  //
+  // Removing it loses nothing and fixes two things:
+  //   - The `.theme-*` classes are DEMO markup. Nothing in the CMS renders them — not the block
+  //     components, not a theme template, not functions.js (verified across the whole tree). They were
+  //     dead bytes shipped to every visitor of 58 of the 64 catalogue themes.
+  //   - The `body` and `h1, h2, h3` rules were the only live ones, and they are pure duplication:
+  //     wordjs-ui.css already sets exactly those properties from --wjs-font-family-base /
+  //     --wjs-color-text-main / --wjs-bg-canvas / --wjs-font-family-heading / --wjs-color-heading. As
+  //     bare ELEMENT selectors they also leaked into surfaces the theme has no business styling.
+  //
+  // The field itself stays as validated metadata (the CLI's --archetype, the catalogue's grouping), so
+  // an unknown name is still an error rather than a silent typo. It just no longer reaches the
+  // stylesheet. Note it never fed a single TOKEN either: deriveTokens() takes the four seeds and
+  // nothing else, so no theme's palette depends on this.
   const archetype: any = themeJson.archetype;
   if (archetype !== undefined) {
     const names: string[] = derive && Array.isArray(derive.ARCHETYPE_NAMES) ? derive.ARCHETYPE_NAMES : ARCHETYPE_FALLBACK;
     if (typeof archetype !== 'string' || !names.includes(archetype)) {
       const suggestion = typeof archetype === 'string' ? closestToken(archetype, names) : null;
       error('ARCHETYPE_UNKNOWN', 'archetype', `"${archetype}" is not an archetype (${names.join(', ')})${suggestion ? ` — did you mean ${suggestion}?` : ''}`, suggestion);
-    } else if (!derive || typeof derive.archetypeCss !== 'function') {
-      error('DERIVE_UNAVAILABLE', 'archetype', 'theme-derive is not available — archetype CSS cannot be generated');
-    } else if (!isPlainObject(seeds) || SEED_KEYS.some((k) => typeof (seeds as any)[k] !== 'string')) {
-      // The presets interpolate the four seeds into their CSS by template literal, so a missing one
-      // reaches the stylesheet as the literal text "undefined" — a value that parses, compiles with
-      // zero diagnostics and silently breaks whatever it feeds. The CLI already demands all four.
-      error('ARCHETYPE_NEEDS_SEEDS', 'archetype', `archetype "${archetype}" needs all four seeds (${SEED_KEYS.join(', ')})`);
-    } else {
-      try { archetypeCssText = String(derive.archetypeCss(archetype, isPlainObject(seeds) ? seeds : {}) || ''); } catch (e) {
-        error('DERIVE_FAILED', 'archetype', `archetypeCss threw: ${e.message}`);
-      }
-      // Contract invariant for presets (no external @import); enforce it structurally.
-      if (/@import/i.test(archetypeCssText)) {
-        warning('ARCHETYPE_IMPORT_STRIPPED', 'archetype', 'archetype CSS contained @import — stripped');
-        archetypeCssText = archetypeCssText.replace(/@import[^;]*;?/gi, '');
-      }
     }
   }
 
@@ -549,7 +552,7 @@ function compileTheme(dirOrSlug: string, opts: CompileOpts = {}): CompileResult 
     emitRules(rules, '  ');
     lines.push('}');
   }
-  if (archetypeCssText.trim().length > 0) lines.push(archetypeCssText.trim());
+  // (no archetype CSS block — see the archetype section above: the legacy preset stylesheet is retired)
   lines.push(MARKER_END);
   const css = lines.join('\n');
 

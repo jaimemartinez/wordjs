@@ -1,6 +1,6 @@
 {
   "name": "Sole Vault",
-  "version": "1.0.2",
+  "version": "1.0.6",
   "description": "Hypebeast & sneaker marketplace theme with bold street-style typography, countdown drop banners, and filter drawers.",
   "author": "WordJS Premium Studio",
   "category": "Commerce",
@@ -17,5 +17,9 @@
     "commerce",
     "brutalist",
     "responsive"
-  ]
+  ],
+  "tokens": {
+    "--wjs-font-family-base": "'Public Sans', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif",
+    "--wjs-font-family-heading": "'Space Grotesk', 'Arial Black', 'Segoe UI', Arial, sans-serif"
+  }
 }

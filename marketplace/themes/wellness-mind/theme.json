@@ -1,6 +1,6 @@
 {
   "name": "Wellness Mind",
-  "version": "1.0.2",
+  "version": "1.0.6",
   "description": "Health, yoga, and mindfulness publication with calming gradient palette, daily quote widgets, and audio embeds.",
   "author": "WordJS Premium Studio",
   "category": "Media",
@@ -17,5 +17,9 @@
     "media",
     "organic",
     "responsive"
-  ]
+  ],
+  "tokens": {
+    "--wjs-font-family-base": "'Outfit', 'Century Gothic', 'Avenir Next', 'Segoe UI', sans-serif",
+    "--wjs-font-family-heading": "'Outfit', 'Century Gothic', 'Avenir Next', 'Segoe UI', sans-serif"
+  }
 }

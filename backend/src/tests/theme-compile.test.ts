@@ -116,19 +116,26 @@ describe('compileTheme (declarative theme compiler)', () => {
         assert.strictEqual(errsOf(r, 'DERIVE_FAILED').length, 0, JSON.stringify(r.diagnostics));
     });
 
-    it('emits the archetype CSS inside the block for a known archetype', () => {
+    // LEGACY RETIRED: the archetype no longer contributes CSS. It used to append a preset stylesheet
+    // (.theme-container / .theme-hero / .theme-card / button.theme-btn, plus bare `body` and
+    // `h1, h2, h3` rules) to every compiled theme. Nothing in the CMS renders those demo classes, and
+    // the two element rules only duplicated what wordjs-ui.css already derives from the tokens. A
+    // theme's look comes from the --wjs-* contract alone now.
+    it('never emits archetype CSS — a theme compiles to its tokens alone', () => {
         const slug = writeTheme({ archetype: 'cyber', seeds: { primary: '#7c3aed', secondary: '#06b6d4', bg: '#0f0f23', text: '#e2e8f0' } });
         const r = compile(slug, { derive: STUB_DERIVE });
         assert.strictEqual(r.stats.errors, 0, JSON.stringify(r.diagnostics));
-        assert.ok(r.css.includes('.wjs-archetype-cyber'), r.css);
+        assert.ok(!r.css.includes('.wjs-archetype-cyber'), r.css);
+        // and the seeds still derive their tokens — retiring the CSS must not cost the palette
+        assert.ok(r.css.includes('--wjs-color-primary'), r.css);
     });
 
-    // The presets interpolate the seeds into their CSS, so a missing one used to reach the stylesheet
-    // as the literal "undefined" with zero diagnostics — this asserts the archetype is refused instead.
-    it('refuses an archetype declared without its seeds', () => {
+    // Seeds are no longer a PRECONDITION of the archetype (nothing interpolates them into CSS any
+    // more), so an archetype without seeds is simply a label and must compile cleanly.
+    it('an archetype without seeds is just a label — no error, no "undefined" in the CSS', () => {
         const slug = writeTheme({ archetype: 'cyber' });
         const r = compile(slug, { derive: STUB_DERIVE });
-        assert.strictEqual(errsOf(r, 'ARCHETYPE_NEEDS_SEEDS').length, 1, JSON.stringify(r.diagnostics));
+        assert.strictEqual(errsOf(r, 'ARCHETYPE_NEEDS_SEEDS').length, 0, JSON.stringify(r.diagnostics));
         assert.ok(!r.css.includes('undefined'), r.css);
     });
 

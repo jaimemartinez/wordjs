@@ -1,5 +1,6 @@
 /* Theme: Silicon Digest (Glassmorphism Aurora Archetype) */
-@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;800&display=swap');
+
+@import url('fonts.css');
 
 /* @wjs-generated:start — compiled from theme.json; DO NOT EDIT inside. Edit theme.json and run: node backend/cli/wordjs.js build theme silicon-digest */
 :root {
@@ -8,111 +9,19 @@
   --wjs-bg-surface-raised: #252936;
   --wjs-color-primary: #3b82f6;
   --wjs-color-primary-dark: #1d4ed8;
-  --wjs-color-on-primary: #ffffff;
+  --wjs-color-on-primary: #111111;
   --wjs-color-accent: #1d4ed8;
   --wjs-color-on-accent: #ffffff;
   --wjs-color-text-main: #eff6ff;
   --wjs-color-text-muted: #989ea9;
   --wjs-color-heading: #eff6ff;
   --wjs-color-link: #3b82f6;
-  --wjs-color-link-hover: #1d4ed8;
+  --wjs-color-link-hover: #5378e1;
   --wjs-border-subtle: #333946;
   --wjs-outline: #616773;
   --wjs-outline-variant: #2c323f;
   --wjs-focus-ring: #3b82f6;
-}
-/* Archetype: Glassmorphism Aurora */
-:root {
-    --glass-primary: #3b82f6;
-    --glass-secondary: #1d4ed8;
-    --glass-bg: #0a0f1d;
-    --glass-text: #eff6ff;
-}
-
-body {
-    background-color: var(--glass-bg);
-    color: var(--glass-text);
-    font-family: 'Plus Jakarta Sans', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
-    margin: 0;
-    background-image: radial-gradient(at 10% 10%, var(--glass-primary) 0px, transparent 50%),
-                      radial-gradient(at 90% 90%, var(--glass-secondary) 0px, transparent 50%);
-    background-attachment: fixed;
-}
-
-h1, h2, h3 {
-    font-weight: 800;
-    letter-spacing: -0.03em;
-}
-
-.theme-container {
-    max-width: 1240px;
-    margin: 0 auto;
-    padding: 3rem 2rem;
-}
-
-.theme-hero {
-    background: rgba(255, 255, 255, 0.03);
-    backdrop-filter: blur(16px);
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    border-radius: 24px;
-    padding: 5rem 2rem;
-    text-align: center;
-    box-shadow: 0 30px 60px rgba(0,0,0,0.3);
-    margin-bottom: 3rem;
-}
-
-.theme-hero h1 {
-    font-size: 3.8rem;
-    background: linear-gradient(135deg, #ffffff 0%, var(--glass-primary) 100%);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-}
-
-.theme-card-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-    gap: 2rem;
-}
-
-.theme-card {
-    background: rgba(255, 255, 255, 0.04);
-    backdrop-filter: blur(12px);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 20px;
-    padding: 2rem;
-    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.theme-card:hover {
-    transform: translateY(-6px);
-    border-color: var(--glass-primary);
-    box-shadow: 0 20px 40px rgba(0,0,0,0.4);
-}
-
-.theme-badge {
-    background: rgba(255, 255, 255, 0.1);
-    color: var(--glass-primary);
-    border: 1px solid var(--glass-primary);
-    border-radius: 9999px;
-    padding: 4px 14px;
-    font-size: 0.75rem;
-    font-weight: 600;
-}
-
-button.theme-btn {
-    background: linear-gradient(135deg, var(--glass-primary), var(--glass-secondary));
-    color: #fff;
-    border: none;
-    border-radius: 9999px;
-    padding: 12px 28px;
-    font-weight: 600;
-    cursor: pointer;
-    box-shadow: 0 10px 25px rgba(0,0,0,0.3);
-    transition: transform 0.2s, box-shadow 0.2s;
-}
-
-button.theme-btn:hover {
-    transform: scale(1.04);
-    box-shadow: 0 15px 30px rgba(0,0,0,0.4);
+  --wjs-font-family-base: 'Plus Jakarta Sans', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+  --wjs-font-family-heading: 'Plus Jakarta Sans', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
 }
 /* @wjs-generated:end */

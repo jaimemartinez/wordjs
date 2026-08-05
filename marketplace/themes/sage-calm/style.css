@@ -9,12 +9,12 @@
   --wjs-color-primary-dark: #3b7a57;
   --wjs-color-on-primary: #ffffff;
   --wjs-color-accent: #c2703d;
-  --wjs-color-on-accent: #ffffff;
+  --wjs-color-on-accent: #111111;
   --wjs-color-text-main: #141414;
   --wjs-color-text-muted: #696a68;
   --wjs-color-heading: #141414;
   --wjs-color-link: #3b7a57;
-  --wjs-color-link-hover: #c2703d;
+  --wjs-color-link-hover: #a35e33;
   --wjs-border-subtle: #ccceca;
   --wjs-outline: #9fa19e;
   --wjs-outline-variant: #d2d5d1;
