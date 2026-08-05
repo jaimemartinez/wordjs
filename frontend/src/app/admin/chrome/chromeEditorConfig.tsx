@@ -281,7 +281,7 @@ export function buildChromeEditorConfig(part: ChromePart): Config {
                 part === "header" ? (
                     // Same wrapper the public layout renders around a composed header (normal-flow,
                     // solid surface, data-scrolled kept as the stable theme hook).
-                    <header data-scrolled="false" className="wjs-chrome-header bg-[var(--wjs-bg-surface-glass,white)] shadow-sm py-4">
+                    <header data-scrolled="false" className="wjs-header wjs-chrome-header bg-[var(--wjs-bg-surface-glass,white)] shadow-sm py-4">
                         <div className="wjs-header-container container mx-auto px-4 min-h-16">{children}</div>
                     </header>
                 ) : (

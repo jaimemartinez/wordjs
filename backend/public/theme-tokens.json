@@ -2,8 +2,8 @@
   "version": 1,
   "source": "backend/public/css/wordjs-ui.css",
   "counts": {
-    "tokens": 738,
-    "varUses": 1691,
+    "tokens": 744,
+    "varUses": 1710,
     "elements": 33
   },
   "tokens": {
@@ -3739,12 +3739,25 @@
       "group": "color",
       "declaredDefault": "#ffffff",
       "fallbacks": [
+        "#ffffff",
         "#fff"
       ],
       "consumers": [
         {
           "selector": ":root",
           "property": "--wjs-color-primary-text"
+        },
+        {
+          "selector": ".wjs-footer-social a:hover, .wjs-chrome-socials a:hover",
+          "property": "color"
+        },
+        {
+          "selector": ".wjs-chrome-button--primary, .wjs-chrome-button--primary:hover",
+          "property": "color"
+        },
+        {
+          "selector": ".wjs-chrome-button--ghost:hover",
+          "property": "color"
         },
         {
           "selector": ".btn-primary",
@@ -3919,6 +3932,7 @@
       "group": "color",
       "declaredDefault": "#2563eb",
       "fallbacks": [
+        "#2F6D86",
         "#2563eb"
       ],
       "consumers": [
@@ -3929,6 +3943,18 @@
         {
           "selector": ":root",
           "property": "--wjs-blockquote-border-color"
+        },
+        {
+          "selector": ".wjs-header-nav a:hover, .wjs-chrome-nav a:hover",
+          "property": "color"
+        },
+        {
+          "selector": ".wjs-header-logo:hover",
+          "property": "color"
+        },
+        {
+          "selector": ".wjs-chrome-button--ghost",
+          "property": "color"
         },
         {
           "selector": "blockquote",
@@ -4361,8 +4387,15 @@
     "--wjs-color-text-footer-dim": {
       "group": "color",
       "declaredDefault": "var(--wjs-footer-text-body, gray)",
-      "fallbacks": [],
-      "consumers": [],
+      "fallbacks": [
+        "#94a3b8"
+      ],
+      "consumers": [
+        {
+          "selector": ".wjs-footer-grid a, .wjs-footer-minimal a",
+          "property": "color"
+        }
+      ],
       "flags": [
         "chrome-phantom"
       ]
@@ -4383,8 +4416,19 @@
     "--wjs-color-text-footer-main": {
       "group": "color",
       "declaredDefault": "var(--wjs-footer-text-body, white)",
-      "fallbacks": [],
-      "consumers": [],
+      "fallbacks": [
+        "#ffffff"
+      ],
+      "consumers": [
+        {
+          "selector": ".wjs-footer-grid a:hover, .wjs-footer-minimal a:hover",
+          "property": "color"
+        },
+        {
+          "selector": ".wjs-footer-social a, .wjs-chrome-socials a",
+          "property": "color"
+        }
+      ],
       "flags": [
         "chrome-phantom"
       ]
@@ -4415,6 +4459,14 @@
         },
         {
           "selector": "body",
+          "property": "color"
+        },
+        {
+          "selector": ".wjs-header-nav a, .wjs-chrome-nav a",
+          "property": "color"
+        },
+        {
+          "selector": ".wjs-header-logo",
           "property": "color"
         },
         {
@@ -5995,7 +6047,8 @@
       "declaredDefault": null,
       "fallbacks": [
         "white",
-        "gray"
+        "gray",
+        "var(--wjs-color-text-footer-dim, #94a3b8)"
       ],
       "consumers": [
         {
@@ -6005,6 +6058,10 @@
         {
           "selector": ":root",
           "property": "--wjs-color-text-footer-dim"
+        },
+        {
+          "selector": ".wjs-footer-grid a, .wjs-footer-minimal a",
+          "property": "color"
         }
       ]
     },
@@ -6018,6 +6075,19 @@
         {
           "selector": ":root",
           "property": "--wjs-color-text-footer-heading"
+        }
+      ]
+    },
+    "--wjs-footer-text-hover": {
+      "group": "footer",
+      "declaredDefault": null,
+      "fallbacks": [
+        "var(--wjs-color-text-footer-main, #ffffff)"
+      ],
+      "consumers": [
+        {
+          "selector": ".wjs-footer-grid a:hover, .wjs-footer-minimal a:hover",
+          "property": "color"
         }
       ]
     },
@@ -8326,6 +8396,32 @@
         }
       ]
     },
+    "--wjs-logo-color": {
+      "group": "logo",
+      "declaredDefault": null,
+      "fallbacks": [
+        "var(--wjs-color-text-main)"
+      ],
+      "consumers": [
+        {
+          "selector": ".wjs-header-logo",
+          "property": "color"
+        }
+      ]
+    },
+    "--wjs-logo-color-hover": {
+      "group": "logo",
+      "declaredDefault": null,
+      "fallbacks": [
+        "var(--wjs-color-primary)"
+      ],
+      "consumers": [
+        {
+          "selector": ".wjs-header-logo:hover",
+          "property": "color"
+        }
+      ]
+    },
     "--wjs-mark-bg": {
       "group": "mark",
       "declaredDefault": "#fcf8c3",
@@ -8439,6 +8535,45 @@
         {
           "selector": ".wp-block-social-links",
           "property": "gap"
+        }
+      ]
+    },
+    "--wjs-nav-color": {
+      "group": "nav",
+      "declaredDefault": null,
+      "fallbacks": [
+        "var(--wjs-color-text-main)"
+      ],
+      "consumers": [
+        {
+          "selector": ".wjs-header-nav a, .wjs-chrome-nav a",
+          "property": "color"
+        }
+      ]
+    },
+    "--wjs-nav-color-hover": {
+      "group": "nav",
+      "declaredDefault": null,
+      "fallbacks": [
+        "var(--wjs-color-primary)"
+      ],
+      "consumers": [
+        {
+          "selector": ".wjs-header-nav a:hover, .wjs-chrome-nav a:hover",
+          "property": "color"
+        }
+      ]
+    },
+    "--wjs-nav-hover-decoration": {
+      "group": "nav",
+      "declaredDefault": null,
+      "fallbacks": [
+        "none"
+      ],
+      "consumers": [
+        {
+          "selector": ".wjs-header-nav a:hover, .wjs-chrome-nav a:hover, .wjs-footer-grid a:hover, .wjs-footer-minimal a:hover",
+          "property": "text-decoration"
         }
       ]
     },
@@ -11044,9 +11179,14 @@
       "group": "social",
       "declaredDefault": null,
       "fallbacks": [
+        "var(--wjs-color-on-primary, #ffffff)",
         "var(--wjs-color-on-primary)"
       ],
       "consumers": [
+        {
+          "selector": ".wjs-footer-social a:hover, .wjs-chrome-socials a:hover",
+          "property": "color"
+        },
         {
           "selector": ".wp-block-social-links__link:hover",
           "property": "color"

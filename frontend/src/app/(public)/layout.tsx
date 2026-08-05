@@ -7,6 +7,7 @@ import { redirect } from "next/navigation";
 import PublicLayoutShell from "@/components/public/PublicLayoutShell";
 import ChromeRenderer from "@/components/chrome/ChromeRenderer";
 import { buildChromeBindings, resolveEffectiveChrome } from "@/lib/chromeData";
+import { parseThemeLayout } from "@/lib/themeLayout";
 import { getSettings, getPublicAssets, getMenuByLocation, getThemeChrome, checkSetupRequired } from "@/lib/server-api";
 
 export default async function PublicLayout({
@@ -67,14 +68,21 @@ export default async function PublicLayout({
     const bindings = buildChromeBindings(settings, headerMenu?.items, footerMenu?.items);
 
     // Composed chrome renders ON THE SERVER inside the same semantic landmarks + container hooks the
-    // default chrome uses, so theme CSS keeps applying. Wrapper decision: the header sits in NORMAL
-    // FLOW with the solid surface (the classes Header.tsx uses for its non-sticky/scrolled state) —
-    // a server-rendered composition has no scroll listener, and fixed+transparent NEEDS the client
-    // isScrolled swap to stay readable over content. data-scrolled="false" stays as the stable theme
-    // hook; the shell zeroes --wjs-header-offset when a headerSlot is present (same mechanism as
-    // layout v2 sticky:false). The ONLY client island underneath is ChromeNavMobile.
+    // default chrome uses, so theme CSS keeps applying. It carries .wjs-header too — the selector the
+    // theme contract maps `styles.header` to — so a declared header style applies to BOTH chromes.
+    //
+    // Positioning: `sticky:true` becomes CSS position:sticky, not the client Header's fixed. Sticky
+    // needs no scroll listener (it is the whole point of the property) AND stays in flow, so the
+    // shell's --wjs-header-offset:0 for a composed header remains correct — a fixed header would
+    // have overlapped the first section. The surface stays solid at all times: `transparent:true`
+    // is deliberately NOT honored here, because transparent-over-content only stays readable via the
+    // client isScrolled swap this server composition has no way to run. data-scrolled="false" stays
+    // as the stable theme hook. The ONLY client island underneath is ChromeNavMobile.
+    // `layout` is the RAW option here — the Shell is what normalizes it. Run the same normalizer
+    // rather than re-deriving the default (`sticky !== false`), so the two can't drift apart.
+    const headerPos = parseThemeLayout(layout).header.sticky ? "sticky top-0" : "relative";
     const headerSlot = headerChrome.data ? (
-        <header data-scrolled="false" className="wjs-chrome-header relative z-50 transition-all duration-300 bg-[var(--wjs-bg-surface-glass,white)] backdrop-blur-md shadow-sm py-4">
+        <header data-scrolled="false" className={`wjs-header wjs-chrome-header ${headerPos} z-50 transition-all duration-300 bg-[var(--wjs-bg-surface-glass,white)] backdrop-blur-md shadow-sm py-4`}>
             <div className="wjs-header-container container mx-auto px-4">
                 <ChromeRenderer data={headerChrome.data} bindings={bindings} />
             </div>

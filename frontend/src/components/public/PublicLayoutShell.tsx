@@ -66,12 +66,15 @@ export default function PublicLayoutShell({
     // A fixed header needs the main content pushed down by its own height, and the variants are not
     // the same height: `centered` stacks the logo ABOVE the nav, so the 6rem sized for the classic
     // single row let it overlap the first section. Themes still override --wjs-header-offset.
-    const STICKY_OFFSET: Record<string, string> = { classic: "6rem", centered: "9.5rem", minimal: "5rem" };
+    // Measured in the browser, not guessed: at the top state classic renders 79px and minimal 92px —
+    // minimal is TALLER because its hamburger (44px) is always visible where classic shows a 40px
+    // logo. The old 5rem/80px for minimal therefore ran 12px UNDER the header on every minimal theme.
+    const STICKY_OFFSET: Record<string, string> = { classic: "6rem", centered: "9.5rem", minimal: "6rem" };
     const shellStyle = {
         backgroundColor: 'var(--wjs-bg-canvas, #f8fafc)',
-        // sticky:false — or a composed headerSlot, which always sits in normal flow — → the main no
-        // longer needs the fixed-header offset; declaring the var here (ancestor) wins over any theme
-        // :root value for descendants.
+        // sticky:false — or a composed headerSlot, which uses position:sticky and therefore keeps its
+        // own space in flow — → the main no longer needs the fixed-header offset; declaring the var
+        // here (ancestor) wins over any theme :root value for descendants.
         ...(header.sticky && !headerSlot
             ? { "--wjs-header-offset": STICKY_OFFSET[header.variant] || STICKY_OFFSET.classic }
             : { "--wjs-header-offset": "0rem" }),

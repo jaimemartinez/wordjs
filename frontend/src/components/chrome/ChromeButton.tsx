@@ -18,7 +18,12 @@ export interface ChromeButtonViewProps {
 }
 
 export default function ChromeButton({ label, href, variant = "primary" }: ChromeButtonViewProps) {
-    const className = `wjs-chrome-button inline-flex items-center justify-center px-5 py-2 rounded-full font-medium text-sm transition-colors ${VARIANT_CLASS[variant]}`;
+    // The wjs-chrome-button--<variant> modifier is what wordjs-ui.css hooks the LABEL COLOUR onto.
+    // It has to be stated there because this is an <a>, and ui.css's unlayered `a { color: … }` beats
+    // the text-[var(--wjs-color-on-primary)] utility below (Tailwind utilities are layered, and
+    // unlayered rules win over layered ones regardless of specificity) — which painted the label the
+    // link colour, i.e. invisible on any palette where link == primary.
+    const className = `wjs-chrome-button wjs-chrome-button--${variant} inline-flex items-center justify-center px-5 py-2 rounded-full font-medium text-sm transition-colors ${VARIANT_CLASS[variant]}`;
     if (!isSafeChromeHref(href)) {
         return <span className={className}>{label}</span>;
     }
