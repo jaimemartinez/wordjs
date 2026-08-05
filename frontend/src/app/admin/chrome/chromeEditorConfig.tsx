@@ -9,6 +9,9 @@
 import { useEffect, useState } from "react";
 import type { Config } from "@wordjs/puck";
 import { menusApi, settingsApi, type ChromePart } from "@/lib/api";
+// Same i18n access the page editor's config factory uses (components/puckConfig.tsx): a Puck config
+// is built outside the React tree, so it reads the stored language directly instead of useI18n().
+import { t as translate, getStoredLanguage } from "@/lib/i18n";
 import { buildChromeBindings, parseChromeSocials, type ChromeBindings } from "@/lib/chromeData";
 import ChromeButton from "@/components/chrome/ChromeButton";
 import ChromeLogo from "@/components/chrome/ChromeLogo";
@@ -67,33 +70,40 @@ function EmptyHint({ text }: { text: string }) {
 
 function LogoEdit({ size }: { size?: "sm" | "md" | "lg" }) {
     const bindings = useEditorBindings();
-    if (!bindings) return <BindingPlaceholder label="Logo" />;
+    const lang = getStoredLanguage();
+    if (!bindings) return <BindingPlaceholder label={translate("chrome.block.logo", lang)} />;
     const settings = bindings.settings;
-    if (!settings.site_logo && !settings.blogname) return <EmptyHint text="Sin logo ni nombre del sitio" />;
+    if (!settings.site_logo && !settings.blogname) return <EmptyHint text={translate("chrome.hint.noLogo", lang)} />;
     return <ChromeLogo size={size} logoUrl={settings.site_logo || null} siteTitle={settings.blogname || ""} />;
 }
 
 function SiteTitleEdit({ showTagline }: { showTagline?: boolean }) {
     const bindings = useEditorBindings();
-    if (!bindings) return <BindingPlaceholder label="Título" />;
+    const lang = getStoredLanguage();
+    if (!bindings) return <BindingPlaceholder label={translate("chrome.block.siteTitle", lang)} />;
     const settings = bindings.settings;
-    if (!settings.blogname) return <EmptyHint text="Sin nombre del sitio" />;
+    if (!settings.blogname) return <EmptyHint text={translate("chrome.hint.noSiteTitle", lang)} />;
     return <ChromeSiteTitle showTagline={showTagline} siteTitle={settings.blogname || ""} tagline={settings.blogdescription || ""} />;
 }
 
 function NavEdit({ location, orientation }: { location: "header" | "footer"; orientation: "horizontal" | "vertical" }) {
     const bindings = useEditorBindings();
-    if (!bindings) return <BindingPlaceholder label="Menú" />;
+    const lang = getStoredLanguage();
+    if (!bindings) return <BindingPlaceholder label={translate("chrome.block.nav", lang)} />;
     const items = location === "footer" ? bindings.menus.footer : bindings.menus.header;
-    if (items.length === 0) return <EmptyHint text={`Sin menú en «${location}»`} />;
+    if (items.length === 0) {
+        const where = translate(location === "footer" ? "chrome.admin.part.footer" : "chrome.admin.part.header", lang);
+        return <EmptyHint text={translate("chrome.hint.noMenu", lang).replace("{location}", where)} />;
+    }
     return <ChromeNav location={location} orientation={orientation} items={items} />;
 }
 
 function SocialsEdit() {
     const bindings = useEditorBindings();
-    if (!bindings) return <BindingPlaceholder label="Redes" />;
+    const lang = getStoredLanguage();
+    if (!bindings) return <BindingPlaceholder label={translate("chrome.block.socials", lang)} />;
     const links = parseChromeSocials(bindings.settings);
-    if (links.length === 0) return <EmptyHint text="Sin redes (ver Pie de Página)" />;
+    if (links.length === 0) return <EmptyHint text={translate("chrome.hint.noSocials", lang)} />;
     return <ChromeSocials links={links} />;
 }
 
@@ -102,18 +112,19 @@ function SocialsEdit() {
 // ships. The caller MUST memoize the result per part — an unmemoized Puck config remounts the
 // canvas on every keystroke (Puck appearance lesson).
 export function buildChromeEditorConfig(part: ChromePart): Config {
+    const lang = getStoredLanguage();
     return {
         components: {
             ChromeLogo: {
-                label: "Logo",
+                label: translate("chrome.block.logo", lang),
                 fields: {
                     size: {
                         type: "select",
-                        label: "Tamaño",
+                        label: translate("chrome.field.size", lang),
                         options: [
-                            { label: "Pequeño", value: "sm" },
-                            { label: "Mediano", value: "md" },
-                            { label: "Grande", value: "lg" },
+                            { label: translate("chrome.option.size.sm", lang), value: "sm" },
+                            { label: translate("chrome.option.size.md", lang), value: "md" },
+                            { label: translate("chrome.option.size.lg", lang), value: "lg" },
                         ],
                     },
                 },
@@ -121,14 +132,14 @@ export function buildChromeEditorConfig(part: ChromePart): Config {
                 render: ({ size }: any) => <LogoEdit size={size} />,
             },
             ChromeSiteTitle: {
-                label: "Título del sitio",
+                label: translate("chrome.block.siteTitle", lang),
                 fields: {
                     showTagline: {
                         type: "radio",
-                        label: "Mostrar descripción",
+                        label: translate("chrome.field.showTagline", lang),
                         options: [
-                            { label: "Sí", value: true },
-                            { label: "No", value: false },
+                            { label: translate("yes", lang), value: true },
+                            { label: translate("no", lang), value: false },
                         ],
                     },
                 },
@@ -136,22 +147,22 @@ export function buildChromeEditorConfig(part: ChromePart): Config {
                 render: ({ showTagline }: any) => <SiteTitleEdit showTagline={showTagline} />,
             },
             ChromeNav: {
-                label: "Navegación",
+                label: translate("chrome.block.nav", lang),
                 fields: {
                     location: {
                         type: "select",
-                        label: "Menú (ubicación)",
+                        label: translate("chrome.field.menuLocation", lang),
                         options: [
-                            { label: "Cabecera", value: "header" },
-                            { label: "Pie", value: "footer" },
+                            { label: translate("chrome.admin.part.header", lang), value: "header" },
+                            { label: translate("chrome.admin.part.footer", lang), value: "footer" },
                         ],
                     },
                     orientation: {
                         type: "select",
-                        label: "Orientación",
+                        label: translate("chrome.field.orientation", lang),
                         options: [
-                            { label: "Horizontal", value: "horizontal" },
-                            { label: "Vertical", value: "vertical" },
+                            { label: translate("chrome.option.horizontal", lang), value: "horizontal" },
+                            { label: translate("chrome.option.vertical", lang), value: "vertical" },
                         ],
                     },
                 },
@@ -161,44 +172,44 @@ export function buildChromeEditorConfig(part: ChromePart): Config {
                 render: ({ location, orientation }: any) => <NavEdit location={location} orientation={orientation} />,
             },
             ChromeSearch: {
-                label: "Buscador",
+                label: translate("chrome.block.search", lang),
                 fields: {
-                    placeholder: { type: "text", label: "Placeholder" },
+                    placeholder: { type: "text", label: translate("chrome.field.placeholder", lang) },
                 },
                 defaultProps: { placeholder: "Buscar…" },
                 render: ({ placeholder }: any) => <ChromeSearch placeholder={placeholder} />,
             },
             ChromeSocials: {
-                label: "Redes sociales",
+                label: translate("chrome.block.socials", lang),
                 fields: {
                     source: {
                         type: "select",
-                        label: "Origen",
-                        options: [{ label: "Ajustes del sitio", value: "settings" }],
+                        label: translate("chrome.field.source", lang),
+                        options: [{ label: translate("chrome.option.settings", lang), value: "settings" }],
                     },
                 },
                 defaultProps: { source: "settings" },
                 render: () => <SocialsEdit />,
             },
             ChromeText: {
-                label: "Texto",
+                label: translate("chrome.block.text", lang),
                 fields: {
-                    text: { type: "textarea", label: "Texto (plano, siempre escapado)" },
+                    text: { type: "textarea", label: translate("chrome.field.text", lang) },
                 },
                 defaultProps: { text: "Texto" },
                 render: ({ text }: any) => <ChromeText text={text ?? ""} />,
             },
             ChromeButton: {
-                label: "Botón",
+                label: translate("chrome.block.button", lang),
                 fields: {
-                    label: { type: "text", label: "Etiqueta" },
-                    href: { type: "text", label: "Enlace (/ruta o https://…)" },
+                    label: { type: "text", label: translate("chrome.field.label", lang) },
+                    href: { type: "text", label: translate("chrome.field.href", lang) },
                     variant: {
                         type: "select",
-                        label: "Variante",
+                        label: translate("chrome.field.variant", lang),
                         options: [
-                            { label: "Primario", value: "primary" },
-                            { label: "Fantasma", value: "ghost" },
+                            { label: translate("chrome.option.primary", lang), value: "primary" },
+                            { label: translate("chrome.option.ghost", lang), value: "ghost" },
                         ],
                     },
                 },
@@ -206,15 +217,15 @@ export function buildChromeEditorConfig(part: ChromePart): Config {
                 render: ({ label, href, variant }: any) => <ChromeButton label={label ?? ""} href={href ?? ""} variant={variant} />,
             },
             ChromeSpacer: {
-                label: "Separador",
+                label: translate("chrome.block.spacer", lang),
                 fields: {
                     size: {
                         type: "select",
-                        label: "Tamaño",
+                        label: translate("chrome.field.size", lang),
                         options: [
-                            { label: "Pequeño", value: "sm" },
-                            { label: "Mediano", value: "md" },
-                            { label: "Grande", value: "lg" },
+                            { label: translate("chrome.option.size.sm", lang), value: "sm" },
+                            { label: translate("chrome.option.size.md", lang), value: "md" },
+                            { label: translate("chrome.option.size.lg", lang), value: "lg" },
                         ],
                     },
                 },
@@ -222,7 +233,7 @@ export function buildChromeEditorConfig(part: ChromePart): Config {
                 render: ({ size }: any) => <ChromeSpacer size={size} />,
             },
             ChromeRow: {
-                label: "Fila",
+                label: translate("chrome.block.row", lang),
                 fields: {
                     // v0.20 SLOT (not a zone): the slot prop arrives in render as a component whose
                     // className lands on the drop-zone div itself, so we make the ZONE the flex
@@ -231,29 +242,29 @@ export function buildChromeEditorConfig(part: ChromePart): Config {
                     items: { type: "slot" },
                     align: {
                         type: "select",
-                        label: "Alineación",
+                        label: translate("chrome.field.align", lang),
                         options: [
-                            { label: "Inicio", value: "start" },
-                            { label: "Centro", value: "center" },
-                            { label: "Final", value: "end" },
-                            { label: "Espaciado", value: "between" },
+                            { label: translate("chrome.option.start", lang), value: "start" },
+                            { label: translate("chrome.option.center", lang), value: "center" },
+                            { label: translate("chrome.option.end", lang), value: "end" },
+                            { label: translate("chrome.option.between", lang), value: "between" },
                         ],
                     },
                     gap: {
                         type: "select",
-                        label: "Separación",
+                        label: translate("chrome.field.gap", lang),
                         options: [
-                            { label: "Pequeña", value: "sm" },
-                            { label: "Mediana", value: "md" },
-                            { label: "Grande", value: "lg" },
+                            { label: translate("chrome.option.gap.sm", lang), value: "sm" },
+                            { label: translate("chrome.option.gap.md", lang), value: "md" },
+                            { label: translate("chrome.option.gap.lg", lang), value: "lg" },
                         ],
                     },
                     wrap: {
                         type: "radio",
-                        label: "Multilínea",
+                        label: translate("chrome.field.wrap", lang),
                         options: [
-                            { label: "Sí", value: true },
-                            { label: "No", value: false },
+                            { label: translate("yes", lang), value: true },
+                            { label: translate("no", lang), value: false },
                         ],
                     },
                 },

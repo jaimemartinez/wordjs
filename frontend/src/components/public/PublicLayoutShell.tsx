@@ -63,12 +63,18 @@ export default function PublicLayoutShell({
         paddingTop: "var(--wjs-header-offset, 6rem)",
         ...(containerWidth ? { maxWidth: containerWidth } : undefined),
     };
+    // A fixed header needs the main content pushed down by its own height, and the variants are not
+    // the same height: `centered` stacks the logo ABOVE the nav, so the 6rem sized for the classic
+    // single row let it overlap the first section. Themes still override --wjs-header-offset.
+    const STICKY_OFFSET: Record<string, string> = { classic: "6rem", centered: "9.5rem", minimal: "5rem" };
     const shellStyle = {
         backgroundColor: 'var(--wjs-bg-canvas, #f8fafc)',
         // sticky:false — or a composed headerSlot, which always sits in normal flow — → the main no
         // longer needs the fixed-header offset; declaring the var here (ancestor) wins over any theme
         // :root value for descendants.
-        ...(header.sticky && !headerSlot ? undefined : { "--wjs-header-offset": "0rem" }),
+        ...(header.sticky && !headerSlot
+            ? { "--wjs-header-offset": STICKY_OFFSET[header.variant] || STICKY_OFFSET.classic }
+            : { "--wjs-header-offset": "0rem" }),
     } as React.CSSProperties;
 
     return (

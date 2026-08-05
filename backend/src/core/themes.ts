@@ -303,12 +303,24 @@ function createDefaultTheme(force = false) {
   fs.mkdirSync(path.join(defaultDir, 'partials'), { recursive: true });
 
   // theme.json
-  const themeJson = {
+  const themeJson: Record<string, any> = {
     name: 'WordJS',
     version: '2.0.0',
     description: 'The default WordJS theme — modern, JavaScript-native, developer-first. Signature indigo→violet gradient, Space Grotesk display type, and a deep-indigo footer.',
     author: 'WordJS'
   };
+  // A restore rewrites style.css, and the stylesheet URL is keyed by this version — leaving it alone
+  // (or resetting it to the literal above, which would move it BACKWARDS) means every browser keeps
+  // the copy it already had. Carry the installed version forward by one patch instead.
+  if (force) {
+    try {
+      const current = JSON.parse(fs.readFileSync(path.join(defaultDir, 'theme.json'), 'utf8'));
+      const parts = String(current.version || themeJson.version).split('.');
+      if (parts.length === 3 && parts.every((p: string) => /^\d+$/.test(p))) {
+        themeJson.version = `${parts[0]}.${parts[1]}.${Number(parts[2]) + 1}`;
+      }
+    } catch { /* no readable theme.json — the literal version below is the right starting point */ }
+  }
   writeIfAbsent(path.join(defaultDir, 'theme.json'), JSON.stringify(themeJson, null, 2));
 
   // functions.js
@@ -321,9 +333,11 @@ module.exports = () => {
 `;
   writeIfAbsent(path.join(defaultDir, 'functions.js'), functionsJs);
 
-  // style.css — WordJS's own visual identity. KEEP IN SYNC with the committed
-  // themes/default/style.css (this embedded copy is only written on `force`
-  // = admin "restore default theme", or when the file is missing).
+  // style.css — WordJS's own visual identity. This embedded copy is written on `force` (the admin's
+  // "restore default theme") or when the file is missing, so it must MATCH the committed
+  // themes/default/style.css byte for byte: it had drifted to an old 17-token version, and restoring
+  // silently replaced the curated 75-token palette with it. The parity is now asserted by
+  // tests/default-theme-parity.test.ts — regenerate this literal from the file, never by hand.
   const styleCss = `/* =========================================================================
    THEME: WORDJS  (default)
    WordJS's own visual identity — modern, JavaScript-native, developer-first.
@@ -335,22 +349,48 @@ module.exports = () => {
    hooks and the --wjs- framework tokens — the same contract every theme uses.
    ========================================================================= */
 
-
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap');
 
 :root {
-/* WordJS's OWN tokens only. Everything this theme used to restate — palette, type scale,
-     radii, shadows, spacing — now comes from the framework defaults in public/css/wordjs-ui.css.
-     Re-declaring them here made the default theme silently mask the design system, so the
-     shipped defaults could never actually be seen. Only tokens the framework does NOT define
-     (nav, logo, footer chrome and the signature gradient) belong here. */
-
   /* --- SIGNATURE GRADIENT (the WordJS mark) --- */
   --wjs-gradient: linear-gradient(120deg, #4f46e5 0%, #7c3aed 55%, #a855f7 100%);
   --wjs-gradient-soft: linear-gradient(120deg, rgba(79, 70, 229, 0.10), rgba(168, 85, 247, 0.10));
 
-  
-  
-  
+  /* --- COLOR PALETTE: Indigo / Violet --- */
+  --wjs-color-primary: #4f46e5;        /* Indigo */
+  --wjs-color-primary-dark: #4338ca;
+  --wjs-color-secondary: #64748b;      /* Slate */
+  --wjs-color-secondary-dark: #475569;
+  --wjs-color-accent: #a855f7;         /* Violet */
+  --wjs-color-success: #10b981;
+  --wjs-color-danger: #ef4444;
+  --wjs-color-warning: #f59e0b;
+  --wjs-color-info: #3b82f6;
+  --wjs-color-light: #f8f9ff;
+  --wjs-color-dark: #0b1120;
+  /* --- on-color tokens (max-contrast text on each solid color) --- */
+  --wjs-color-on-primary: #ffffff;
+  --wjs-color-on-secondary: #ffffff;
+  --wjs-color-on-success: #ffffff;
+  --wjs-color-on-danger: #ffffff;
+  --wjs-color-on-warning: #161616;
+  --wjs-color-on-info: #ffffff;
+  --wjs-color-on-light: #161616;
+  --wjs-color-on-dark: #ffffff;
+
+  /* --- SURFACES / TEXT / BORDER --- */
+  --wjs-bg-canvas: #f8f9ff;            /* barely-tinted indigo white */
+  --wjs-bg-surface: #ffffff;
+  --wjs-bg-muted: #f1f2fb;
+  --wjs-color-text-main: #1e293b;
+  --wjs-color-text-muted: #64748b;
+  --wjs-color-heading: #0b1120;
+  --wjs-color-link: #4f46e5;
+  --wjs-color-link-hover: #7c3aed;
+  --wjs-border-subtle: #e6e8f4;
+  --wjs-border-width: 1px;
+  --wjs-focus-ring: rgba(79, 70, 229, 0.28);
+
   /* --- NAVIGATION CONFIG --- */
   --wjs-nav-font-family: 'Inter', sans-serif;
   --wjs-nav-font-size: 0.95rem;
@@ -370,8 +410,40 @@ module.exports = () => {
   --wjs-footer-icon-bg: rgba(255, 255, 255, 0.06);
   --wjs-footer-icon-color: #c4b5fd;
 
-  
-  
+  /* --- TYPOGRAPHY --- */
+  --wjs-font-family-base: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --wjs-font-family-heading: 'Space Grotesk', 'Inter', sans-serif;
+  --wjs-font-family-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --wjs-font-size-base: 1rem;
+  --wjs-line-height-base: 1.7;
+  --wjs-heading-weight: 700;
+  --wjs-heading-line-height: 1.15;
+  --wjs-h1: 3rem;
+  --wjs-h2: 2.1rem;
+  --wjs-h3: 1.6rem;
+  --wjs-h4: 1.3rem;
+  --wjs-h5: 1.1rem;
+  --wjs-h6: 1rem;
+
+  /* --- SPACING / SHAPE / DEPTH --- */
+  --wjs-spacer: 1rem;
+  --wjs-radius-sm: 8px;
+  --wjs-radius: 12px;
+  --wjs-radius-md: 16px;
+  --wjs-radius-lg: 24px;
+  --wjs-radius-pill: 9999px;
+  --wjs-shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06);
+  --wjs-shadow: 0 6px 20px -6px rgba(79, 70, 229, 0.15), 0 2px 6px rgba(15, 23, 42, 0.05);
+  --wjs-shadow-md: 0 14px 34px -10px rgba(79, 70, 229, 0.22);
+  --wjs-shadow-lg: 0 28px 60px -18px rgba(79, 70, 229, 0.30);
+
+  /* --- CARD BLOCK --- keeps this theme's depth and hover lift through the token contract instead of a
+     rule that would override whatever colour the author gave an individual card. */
+  --wjs-card-radius: var(--wjs-radius-lg);
+  --wjs-card-shadow: var(--wjs-shadow-sm);
+  --wjs-card-hover-transform: translateY(-3px);
+  --wjs-card-hover-shadow: var(--wjs-shadow-md);
+  --wjs-card-hover-border-color: rgba(79, 70, 229, 0.35);
 }
 
 /* ============================ BASE ============================ */
@@ -445,16 +517,24 @@ header {
 .wjs-header-nav a:hover::after { width: 100%; }
 
 /* ============================ CONTENT ============================ */
-.container { max-width: 1100px; margin: 0 auto; padding: 0 24px; }
+/* Gutters only — NEVER the \`padding\` shorthand. The public layout puts \`pt-24 pb-10\` on this same
+   element to clear the fixed header; a shorthand here resets those to 0 (equal specificity, and the
+   theme sheet loads after the app CSS), which left the page title rendering underneath the header. */
+.container { max-width: 1100px; margin: 0 auto; padding-inline: 24px; }
 
-article, .wp-block-card {
+/* \`article\` only. This used to include \`.wp-block-card\`, and the \`!important\` background overrode the
+   card's own --wjs-card-bg while leaving the block's paired text colours alone — an accent card became
+   white with white text, so its icon and description vanished. The card's surface, border, radius and
+   hover already come from the token contract in wordjs-ui.css, which falls back to this theme's
+   --wjs-bg-surface / --wjs-border-subtle anyway. */
+article {
   background: var(--wjs-bg-surface) !important;
   border: 1px solid var(--wjs-border-subtle) !important;
   border-radius: var(--wjs-radius-lg) !important;
   box-shadow: var(--wjs-shadow-sm);
   transition: transform 0.25s ease, box-shadow 0.25s ease, border-color 0.25s ease;
 }
-article:hover, .wp-block-card:hover {
+article:hover {
   transform: translateY(-3px);
   border-color: rgba(79, 70, 229, 0.35) !important;
   box-shadow: var(--wjs-shadow-md);

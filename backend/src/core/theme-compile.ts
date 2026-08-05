@@ -9,6 +9,14 @@
  * which is what kills `red;} body{...}` style injection. url() is allowed only for the
  * theme's own /themes/<slug>/ assets. @import and author selectors cannot be expressed.
  *
+ * LIMITATION — var() cannot appear in a "styles" DECLARATION value: substitution is only
+ * resolved at render time, so css-tree answers matchProperty() with "Matching for a tree
+ * with var() is not supported" and the declaration is refused as VALUE_INVALID. The route
+ * for var() is the "tokens" map instead: token values land verbatim in `:root`, which is
+ * where a reference to another token belongs — and a style key that RESOLVES to a token
+ * takes that route too (the token grammar check below has no opinion on var() values for
+ * the same reason). Same limitation, author-facing, in documentation/themes.md.
+ *
  * compileTheme(dirOrSlug, { slug?, themesDir?, manifestPath?, dryRun?, derive? })
  *   → { css, diagnostics, stats }        (css = the complete marked block)
  * writeCompiled(dir, blockCss) swaps only the marked block in style.css (prepends when
@@ -127,7 +135,7 @@ function tokenValueProblem(raw: any): string | null {
   // construct: everything after the token — the rest of the block, and every rule following it in
   // style.css — is swallowed as part of the value. The stylesheet then loads with no error anywhere,
   // just silently missing most of itself. Cheap structural check; the grammar of the consuming
-  // property is not knowable here (one token feeds many properties).
+  // properties is checked separately (tokenGrammarProblem, warning-level).
   let depth = 0;
   let quote: string | null = null;
   for (const ch of value) {
@@ -138,6 +146,42 @@ function tokenValueProblem(raw: any): string | null {
   }
   if (depth !== 0) return 'leaves a parenthesis unclosed';
   if (quote) return 'leaves a quote unclosed';
+  return null;
+}
+
+const grammarAccepts = (prop: string, value: string): boolean => {
+  try { return !csstree.lexer.matchProperty(prop, value).error; } catch { return false; }
+};
+
+/**
+ * Grammar check for a token value against the properties the manifest says consume it.
+ * Returns an example consuming property when EVERY one of them rejects the value, else null.
+ *
+ * Warning-level on purpose, and deliberately conservative: the manifest records WHICH
+ * property reads a token, not HOW — a token spliced into `blur(var(--x))` or
+ * `0 0 0 3px var(--x)` is a valid value for nothing on its own. So the framework's own
+ * default/fallback for that token is used as a control: if it is rejected too, the model is
+ * wrong for this token and nothing is reported (that alone silences ~40% of the manifest,
+ * e.g. --wjs-focus-ring, whose only consumer is a box-shadow it never fills alone).
+ */
+function tokenGrammarProblem(entry: any, value: string): string | null {
+  if (!isPlainObject(entry) || !Array.isArray(entry.consumers)) return null;
+  // var() is outside matchProperty's reach (see the header) — and a token value MAY point at
+  // another token, so this is a no-opinion case, not a finding.
+  if (/var\s*\(/i.test(value)) return null;
+  const props: string[] = Array.from(new Set<string>(entry.consumers
+    .map((c: any) => (isPlainObject(c) && typeof c.property === 'string' ? c.property : ''))
+    // A custom property accepts anything: it carries no grammar to check against.
+    .filter((p: string) => p !== '' && !p.startsWith('--'))))
+    // Shortest name first — "color" reads better than "border-left" in the diagnostic.
+    .sort((a: string, b: string) => a.length - b.length || (a < b ? -1 : 1));
+  if (props.length === 0) return null;
+  if (props.some((p: string) => grammarAccepts(p, value))) return null;
+  const controls: string[] = [entry.declaredDefault, ...(Array.isArray(entry.fallbacks) ? entry.fallbacks : [])]
+    .filter((v: any) => typeof v === 'string' && v.trim() !== '' && !/var\s*\(/i.test(v));
+  for (const p of props) {
+    if (controls.some((c: string) => grammarAccepts(p, c))) return p;
+  }
   return null;
 }
 
@@ -228,7 +272,15 @@ function compileTheme(dirOrSlug: string, opts: CompileOpts = {}): CompileResult 
     return true;
   };
   const addToken = (name: string, value: string, p: string): void => {
-    if (rootTokens.has(name) || reserve(p)) rootTokens.set(name, value);
+    if (!rootTokens.has(name) && !reserve(p)) return;
+    rootTokens.set(name, value);
+    // Every route into :root lands here (seeds, tokens map, token-resolving style keys), so
+    // the grammar check runs once for all three instead of at each call site.
+    const consumedBy = tokenGrammarProblem(manifestTokens[name], value);
+    if (consumedBy) {
+      warning('TOKEN_VALUE_GRAMMAR', p,
+        `${name}: ${JSON.stringify(value)} is not a valid value for any property that consumes this token (e.g. "${consumedBy}") — it will be ignored where it is used`);
+    }
   };
   const addDecl = (mediaKey: string, selector: string, prop: string, value: string, p: string): void => {
     if (!reserve(p)) return;
@@ -255,6 +307,15 @@ function compileTheme(dirOrSlug: string, opts: CompileOpts = {}): CompileResult 
           seedsOk = false;
           error('SEED_INVALID', `seeds.${k}`, `seeds.${k} must be a #rrggbb color (got ${JSON.stringify(seeds[k])})`);
         }
+      }
+      // deriveTokens() reads all four seeds unconditionally, so a partial map used to reach it
+      // and come back as a raw JS TypeError under DERIVE_FAILED. Refuse it here with a
+      // diagnostic that names what is missing (a missing seed is an authoring mistake, not a
+      // derivation failure).
+      const missing = SEED_KEYS.filter((k: string) => seeds[k] === undefined);
+      if (missing.length > 0) {
+        seedsOk = false;
+        error('SEEDS_INCOMPLETE', 'seeds', `seeds is missing ${missing.join(', ')} — all four (${SEED_KEYS.join(', ')}) are required to derive the palette`);
       }
       if (seedsOk) {
         if (!derive || typeof derive.deriveTokens !== 'function') {

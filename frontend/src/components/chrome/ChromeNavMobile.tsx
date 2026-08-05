@@ -3,17 +3,24 @@
 // Client island for the composable chrome: hamburger + slide-in panel that a horizontal ChromeNav
 // needs on mobile. Mirrors Header.tsx's mobile pattern and reuses its .wjs-header-mobile-* hook
 // classes so existing theme CSS keeps applying. Mounted by the SERVER ChromeNav next to the desktop
-// nav (valid server → client island composition) with already-resolved items.
+// nav (valid server → client island composition) with already-resolved items — HEADER navs only, a
+// footer row keeps its links visible at every width instead of hiding them behind a drawer.
 import Link from "next/link";
 import { createPortal } from "react-dom";
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { ChromeMenuItem } from "@/lib/chromeData";
+
+// Everything the drawer can hand focus to. Kept in one place: the open effect uses it both to place
+// the initial focus and to find the cycle ends for the Tab trap.
+const FOCUSABLE = 'a[href], button:not([disabled])';
 
 export default function ChromeNavMobile({ items }: { items: ChromeMenuItem[] }) {
     const [open, setOpen] = useState(false);
     const [mounted, setMounted] = useState(false);
-    // Unique panel id — the composition may mount several horizontal navs (header AND footer).
+    // Unique panel id — a composition may hold several horizontal header navs (one per row).
     const panelId = useId();
+    const panelRef = useRef<HTMLDivElement>(null);
+    const triggerRef = useRef<HTMLButtonElement>(null);
 
     // The drawer is PORTALED to <body>. `position: fixed` resolves against the nearest ancestor with a
     // transform/filter/backdrop-filter, and the composed header wrapper uses backdrop-blur — inside it
@@ -31,22 +38,55 @@ export default function ChromeNavMobile({ items }: { items: ChromeMenuItem[] }) 
         return () => window.removeEventListener("resize", handleResize);
     }, []);
 
-    // Drawer semantics, same as Header.tsx: Escape dismisses it and the page behind stays put.
+    // Drawer semantics: Escape dismisses it and the page behind stays put (as in Header.tsx), plus the
+    // two halves of a modal focus contract — while it is open Tab CYCLES inside the panel (it covers the
+    // viewport, so tabbing to the page behind would strand the keyboard user), and closing hands focus
+    // back to the hamburger that opened it (otherwise focus falls back to <body> and the reading
+    // position is lost). The panel is portaled to <body>, so its DOM position cannot do either for us.
     useEffect(() => {
         if (!open) return;
-        const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+        const panel = panelRef.current;
+        // Captured here, not read in the cleanup: the <button> node is stable across the icon swap, and
+        // the cleanup must not depend on a ref that React may already have detached.
+        const trigger = triggerRef.current;
+        const focusable = (): HTMLElement[] =>
+            panel ? Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE)) : [];
+        const onKey = (e: KeyboardEvent) => {
+            if (e.key === "Escape") {
+                setOpen(false);
+                return;
+            }
+            if (e.key !== "Tab" || !panel) return;
+            const stops = focusable();
+            if (stops.length === 0) return;
+            const first = stops[0];
+            const last = stops[stops.length - 1];
+            const active = document.activeElement as HTMLElement | null;
+            const inside = active !== null && panel.contains(active);
+            // Wrap at whichever end the focus is leaving from — and pull it back in if it escaped.
+            if (e.shiftKey ? (!inside || active === first) : (!inside || active === last)) {
+                e.preventDefault();
+                (e.shiftKey ? last : first).focus();
+            }
+        };
         const previousOverflow = document.body.style.overflow;
         document.body.style.overflow = "hidden";
         document.addEventListener("keydown", onKey);
+        focusable()[0]?.focus();
         return () => {
             document.removeEventListener("keydown", onKey);
             document.body.style.overflow = previousOverflow;
+            trigger?.focus();
         };
     }, [open]);
 
     return (
-        <div className="wjs-chrome-nav-mobile md:hidden">
+        // .wjs-header-actions: the hook Header.tsx puts on the <div> holding this same hamburger, which
+        // themes target as `.wjs-header-actions button`. Same classes as that div so the theme's flex
+        // tweaks (order / margin-left:auto) land identically.
+        <div className="wjs-chrome-nav-mobile wjs-header-actions flex items-center gap-4 md:hidden">
             <button
+                ref={triggerRef}
                 className="w-11 h-11 rounded-full bg-[var(--wjs-color-primary,#2F6D86)] text-[var(--wjs-color-on-primary,#ffffff)] flex items-center justify-center shadow-lg hover:bg-[var(--wjs-color-primary-dark,#266073)] transition-colors"
                 onClick={() => setOpen(!open)}
                 aria-label="Toggle menu"
@@ -73,6 +113,7 @@ export default function ChromeNavMobile({ items }: { items: ChromeMenuItem[] }) 
 
             {/* Panel */}
             <div
+                ref={panelRef}
                 id={panelId}
                 inert={!open}
                 aria-hidden={!open}

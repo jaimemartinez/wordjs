@@ -413,6 +413,23 @@ function analyzeTheme(slug: string, opts: { themesDir?: string; manifestPath?: s
     });
   }
 
+  // GENERATED_MARKERS — the generated block must appear exactly once and be closed. Counted on
+  // the RAW css (the markers are comments, stripped from `cleaned`) and independent of the
+  // declarative sections, since a leftover block outlives them. A second block is not
+  // cosmetic: it comes later in the file, so it WINS the cascade until the next compile
+  // collapses the duplicates — and an unclosed start marker is never touched by writeCompiled
+  // (it refuses to guess where the block ends), so it survives every recompile.
+  const countMarker = (marker: string): number => css.split(marker).length - 1;
+  const starts = countMarker(GENERATED_START_PREFIX);
+  const ends = countMarker(GENERATED_END);
+  if (starts > 1 || starts !== ends) {
+    report.warnings.push({
+      code: 'GENERATED_MARKERS',
+      message: `style.css has ${starts} @wjs-generated:start and ${ends} @wjs-generated:end marker(s) — expected one matched pair; a duplicate block wins the cascade and an unclosed one is left as-is — recompile: node backend/cli/wordjs.js build theme ${slug}`,
+      detail: { starts, ends }
+    });
+  }
+
   // --- declarative sections (theme-compile v1 contract) × compiler ---------------------
   const hasDeclarative = themeJson && typeof themeJson === 'object' && !Array.isArray(themeJson)
     && DECLARATIVE_KEYS.some((k: string) => themeJson[k] !== undefined);
