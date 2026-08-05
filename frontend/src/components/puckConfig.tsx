@@ -1320,7 +1320,10 @@ const baseConfig: any = {
                                     // Per-column overrides only: an untouched column emits nothing and
                                     // inherits whatever the theme set for --wjs-col-*.
                                     style={blockVars('col', {
-                                        pad: colStyle.padding,
+                                        // '16px' is the resolveData seed; ui.css falls back to
+                                        // var(--wjs-md) = 16px, so filtering it keeps the render
+                                        // identical while letting a theme's --wjs-col-pad apply.
+                                        pad: colStyle.padding !== '16px' ? colStyle.padding : undefined,
                                         bg: colStyle.backgroundColor !== 'transparent' ? colStyle.backgroundColor : undefined,
                                         'border-width': hasBorder ? colStyle.borderWidth : undefined,
                                         'border-color': hasBorder ? colStyle.borderColor : undefined,

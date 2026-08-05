@@ -55,9 +55,9 @@ themes/
 
 ## Available Themes
 
-WordJS offers **64 first-party themes**. Only **default** (WordJS) ships bundled in
-`backend/themes/`; the rest install on demand through the **theme marketplace** (see *Installing a
-Theme* below). A representative selection:
+WordJS offers **65 first-party themes**. Only **default** (WordJS) ships bundled in
+`backend/themes/`; the other 64 (`marketplace/themes/`) install on demand through the **theme
+marketplace** (see *Installing a Theme* below). A representative selection:
 
 | Theme               | Aesthetic          | Key Features                                |
 | ------------------- | ------------------ | ------------------------------------------- |
@@ -75,10 +75,12 @@ Theme* below). A representative selection:
 | **sage-calm**       | Wellness           | Organic sage greens on soft cream           |
 | **sepia-press**     | Editorial Magazine | Serif headlines on warm paper               |
 
-> **`--wjs-` variable adoption.** All first-party themes ship the full `--wjs-*` token set documented below (dozens
-> of declarations each — e.g. `carbon-terminal` has 71, `default` 70 — including the `--wjs-color-on-*`
-> contrast set). The **default** theme's `:root` is entirely `--wjs-*` (no older bare `--primary`/`--text`
-> aliases remain). Copy any theme as a starting point.
+> **`--wjs-` variable adoption.** All first-party themes ship the `--wjs-*` token set documented in
+> [`theming.md`](./theming.md) — from compact token-first themes (17 declarations in `artisan-craft`)
+> up to heavily parameterized ones (270 in `paper-press`; `carbon-terminal` declares 172, the bundled
+> `default` 75) —
+> including the `--wjs-color-on-*` contrast set. The **default** theme's `:root` is entirely
+> `--wjs-*` (no older bare `--primary`/`--text` aliases remain). Copy any theme as a starting point.
 
 ## The WordJS UI Framework
 
@@ -92,7 +94,8 @@ Beyond a theme's own `style.css`, WordJS ships **one shared, token-driven CSS fr
   (`.container`/`.row`/`.col-*`).
 - **A utility layer**: spacing, display, flexbox, text, colors, borders, sizing, and shadow helpers.
 
-Everything in the framework is driven by the same `--wjs-*` design tokens documented below, each with
+Everything in the framework is driven by the same `--wjs-*` design tokens (see the *CSS Variables
+Reference* below and the manifest `backend/public/theme-tokens.json`), each with
 a sensible fallback. Because the tokens are declared in each theme's **`style.css :root`** (not
 `theme.json`), a theme re-skins the entire framework — every element, component, and utility — just by
 overriding tokens. Per-variant `--wjs-color-on-*` tokens carry the max-contrast text color
@@ -126,8 +129,9 @@ rules). When a theme hides or rearranges header pieces such as `.wjs-header-acti
 **scoped to the intended breakpoint/selector** — an unscoped `display: none` there also kills the
 mobile nav toggle.
 
-All first-party themes ship a complete `--wjs-*` token set tuned to their palette. For the full token +
-class reference, see [`documentation/theming.md`](./theming.md).
+All first-party themes ship a `--wjs-*` token set tuned to their palette (see the adoption note
+above for the real per-theme declaration counts). For the full token + class reference, see
+[`documentation/theming.md`](./theming.md).
 
 ## Theme integration with the live site
 
@@ -157,6 +161,125 @@ all of which default to today's look so the existing themes render unchanged:
    `PUBLIC_SETTINGS`), and the SSR public layout (`app/(public)/layout.tsx`) honors it — `containerWidth`
    caps the main column, `sidebar: true` switches content/archive pages to two columns with `sidebar-1`.
    Omitting the block (as every first-party theme does today) keeps the current single-column, default-width layout.
+   The full v2 schema is documented in "Structure config (layout)" below.
+
+### Structure config (layout)
+
+`theme.json` may declare a `layout` block (schema v2 — machine-readable copy in
+`backend/public/theme-layouts.schema.json`). Every key is **optional**: omitting a key — or the
+whole block, as the default theme does — keeps the current design exactly.
+
+```json
+{
+  "layout": {
+    "header": { "variant": "centered", "sticky": true, "transparent": false },
+    "footer": { "variant": "minimal" },
+    "sidebar": { "position": "left" },
+    "containerWidth": "72rem"
+  }
+}
+```
+
+| Key | Values (default) | Meaning |
+| --- | --- | --- |
+| `header.variant` | `classic` \| `centered` \| `minimal` (`classic`) | `classic` = today's markup unchanged; `centered` = logo centered on top, nav in a row below; `minimal` = logo + hamburger only (nav always in the mobile panel). |
+| `header.sticky` | boolean (`true`) | `false` renders the header static in flow — no fixed positioning and no main offset. |
+| `header.transparent` | boolean (`false`) | `true` = no header background over the start of the page until the first scroll (`data-scrolled` restores it). |
+| `footer.variant` | `columns` \| `minimal` (`columns`) | `minimal` = a single row: copyright + socials, no column grid. |
+| `footer.columns` | `1`–`4` (`4`) | Footer grid column count; only applies to `variant: "columns"`. |
+| `sidebar` | boolean or `{ "position": "left" \| "right" }` | `true` ≡ `{ "position": "right" }` (back-compat with the existing boolean form). |
+| `containerWidth` | CSS length | Caps the main column (existing key, kept as-is). |
+
+The variants themselves are implemented by the platform chrome (`Header.tsx`/`Footer.tsx`/
+`PublicLayoutShell.tsx`) — a theme only *declares* them here; no markup or CSS ships in the theme,
+so every declared value renders consistently across themes. `node backend/cli/wordjs.js doctor theme <slug>`
+lints the block against the schema: unrecognized keys warn as `LAYOUT_UNKNOWN_KEY` (with a
+did-you-mean suggestion) and invalid enum/type values as `LAYOUT_INVALID_VALUE`.
+
+### Composable chrome (`chrome/*.json`)
+
+Beyond the layout *variants* above, a theme (or the site itself) can compose the header/footer
+from blocks. A composition is **Puck Data JSON** — `{ "root": { "props": {} }, "content": [ { "type", "props" } ] }` —
+validated on the backend by `core/chrome-validate.ts` (contract v1, the write authority) and
+rendered by the public SSR layout without mounting any editor runtime.
+
+**Effective chrome precedence** (header and footer resolve independently; any invalid/unreadable
+level falls through to the next — fail-closed, never a partial render):
+
+1. **Site composition** — options `site_chrome_header` / `site_chrome_footer` (JSON strings),
+   written only via `PUT /api/v1/chrome/:part` (admin; a 400 carries the validator's
+   `errors: [{ code, path, message }]`) and cleared via `DELETE /api/v1/chrome/:part`. Both
+   travel in the public `/api/v1/settings` payload — readable there, but **not writable** through
+   it (see below).
+2. **Theme composition** — `chrome/header.json` / `chrome/footer.json` inside the active theme,
+   served statically at `/themes/<slug>/chrome/*.json`.
+3. **Layout variant** — `theme.json` `layout` (v2, previous section).
+4. **Default** — today's built-in chrome.
+
+**Block allowlist (closed)** — a type outside it invalidates the whole composition. Props marked
+`?` are optional; every block also accepts the editor's per-instance `id` string:
+
+| Block | Props |
+| --- | --- |
+| `ChromeLogo` | `size?: "sm" \| "md" \| "lg"` |
+| `ChromeSiteTitle` | `showTagline?: boolean` |
+| `ChromeNav` | `location: "header" \| "footer"`, `orientation: "horizontal" \| "vertical"` |
+| `ChromeSearch` | `placeholder?: string` |
+| `ChromeSocials` | `source: "settings"` |
+| `ChromeText` | `text: string` (plain text — always rendered escaped) |
+| `ChromeButton` | `label: string`, `href: string`, `variant: "primary" \| "ghost"` |
+| `ChromeSpacer` | `size: "sm" \| "md" \| "lg"` |
+| `ChromeRow` | `items` (slot: array of blocks), `align: "start" \| "center" \| "end" \| "between"`, `gap: "sm" \| "md" \| "lg"`, `wrap?: boolean` |
+
+**Budgets & security**: JSON ≤ **64KB**, ≤ **100 blocks**, nesting depth ≤ **3** (only via
+`ChromeRow.items`); `ChromeButton.href` must be site-relative (`/…`, never `//`) or `http(s)://`
+— `javascript:` and every other scheme are rejected. Blocks are presentational: data (menus,
+logo, socials) is resolved by the renderer from already-fetched settings, never fetched by a
+block. Styling rides the existing `.wjs-chrome-*` hook classes + `--wjs-*` tokens.
+
+Minimal `chrome/header.json`:
+
+```json
+{
+  "root": { "props": {} },
+  "content": [
+    { "type": "ChromeRow", "props": { "align": "between", "gap": "md", "items": [
+      { "type": "ChromeLogo", "props": { "size": "md" } },
+      { "type": "ChromeNav", "props": { "location": "header", "orientation": "horizontal" } }
+    ] } }
+  ]
+}
+```
+
+`node backend/cli/wordjs.js doctor theme <slug>` validates shipped compositions: contract
+violations are **errors** (`CHROME_INVALID`, with the offending block path); a file that cannot
+be read or parsed is a **warning** (`CHROME_UNREADABLE`).
+
+### Options with a dedicated write API
+
+**Five** theme-related options are **readable** through `GET /api/v1/settings` (the SSR public layout
+needs them on first paint) but are **never writable through the generic settings API**. `PUT
+/api/v1/settings` silently skips them and `PUT /api/v1/settings/:key` answers **400
+`rest_invalid_param`** (`DEDICATED_WRITE_API` in `backend/src/routes/settings.ts`):
+
+| Option | Only writable through | Why a plain option write is not enough |
+| --- | --- | --- |
+| `site_chrome_header`, `site_chrome_footer` | `PUT`/`DELETE /api/v1/chrome/:part` | `core/chrome-validate.ts` is the write authority — the closed block allowlist, the href rules and the budgets above are enforced there. A raw option write stores an unvalidated composition on every public page. |
+| `template`, `stylesheet` | `POST /api/v1/themes/:slug/activate` (`switchTheme()`) | Activating a theme is much more than an option write: it also republishes the new theme's `layout` to `active_theme_layout`, clears the previous theme's customizer mods, re-initializes the theme engine (retiring the outgoing theme's isolated `functions.js` child) and fires `switch_theme` to purge the frontend. Written alone, the site serves the new theme's CSS with the old theme's structure and token overrides, and the replaced theme's code keeps running. |
+| `active_theme_layout` | *(nothing — it is derived)* `switchTheme()` publishes it | It is not an input at all: activation copies the active `theme.json` `layout` block into it. Nothing reconciles a hand-written value, so the site would render a structure the theme never declared until the next activation silently replaced it. |
+
+**`active_theme_mods` is deliberately *not* in that set.** The theme customizer saves the active
+theme's `--wjs-*` overrides through this very API (`PUT /api/v1/settings`, admin-gated), and the
+value is sanitized where it is rendered (`ThemeTokenOverlay.tsx`, see below) rather than at write
+time — so it is a normal settings write.
+
+The same refusal holds on every other generic write path, so there is no side door: plugins
+holding `settings:write` cannot reach these keys through the options bridge
+(`isProtectedOption` in `backend/src/core/plugin-api.ts`), and a **site import**
+(`POST /api/v1/import`) skips them too, listing what it refused in
+`results.settings.skipped` (`backend/src/core/import-export.ts`). That list is a **superset** of
+the table above: it also covers `active_theme_mods`/`theme_mods`, so the customizer's option is
+reachable by an admin through the settings API but never by a plugin or an import bundle.
 
 ### Theme customizer (live `--wjs-*` overrides)
 
@@ -170,20 +293,29 @@ nothing when empty, and `switchTheme()` resets it, so changing themes starts fro
 
 ## CSS Variables Reference
 
-### Core Color Variables
+The narrative reference (core tables, alias/editor-internal rules, per-block groups) lives in
+[`theming.md`](./theming.md); the **complete machine-readable contract** is
+`backend/public/theme-tokens.json`, regenerated from `wordjs-ui.css` with
+`node scripts/generate-token-manifest.js`. The manifest currently tracks **738 tokens** and
+**1691 `var()` uses** across 71 name groups — mostly per-block groups such as `cta` (55),
+`pricing` (49), `card` (40), `accordion` (38), `form` (37), `hero` (37), `audio` (34), `tabs` and
+`testimonial` (29 each), `search` (26), `button` (25).
+
+### Core variables (defaults as declared in `wordjs-ui.css`)
 
 ```css
 :root {
   /* Primary Brand Color */
   --wjs-color-primary: #2563eb;
-  --wjs-color-primary-dark: #1d4ed8;
+  --wjs-color-primary-dark: #1e40af;
 
   /* Background Colors */
   --wjs-bg-canvas: #ffffff;        /* Page background */
-  --wjs-bg-surface: #f9fafb;       /* Card/panel background */
+  --wjs-bg-surface: #ffffff;       /* Card/panel background */
+  --wjs-bg-muted: #f8f9fa;         /* Subtle fills: code, thead, inputs */
 
   /* Text Colors */
-  --wjs-color-text-main: #111827;  /* Main text */
+  --wjs-color-text-main: #1f2937;  /* Main text */
   --wjs-color-text-muted: #6b7280; /* Secondary text */
 
   /* Border */
@@ -191,77 +323,75 @@ nothing when empty, and `switchTheme()` resets it, so changing themes starts fro
 }
 ```
 
-### Navigation Variables
+### Chrome (header/footer) tokens
 
-```css
-:root {
-  --wjs-nav-font-family: 'Inter', sans-serif;
-  --wjs-nav-font-size: 0.875rem;
-  --wjs-nav-font-weight: 500;
-  --wjs-nav-text-transform: none;      /* or 'uppercase' */
-  --wjs-nav-letter-spacing: normal;    /* or '0.1em' */
-  
-  --wjs-nav-color: #6b7280;            /* Default link color */
-  --wjs-nav-color-hover: #111827;      /* Hover color */
-  --wjs-nav-transition: color 200ms ease;
-  
-  --wjs-logo-color: #111827;
-}
-```
+The React chrome reads the **canonical** tokens (`--wjs-bg-surface`, `--wjs-color-heading`,
+`--wjs-color-primary`, `--wjs-color-text-muted`, …) — there are no separate
+`--wjs-nav-*`/`--wjs-logo-*` tokens. Four tokens are consumed *only* by the React chrome (no CSS
+rule in `wordjs-ui.css` references them) and carry the `chrome-phantom` flag in the manifest:
+`--wjs-bg-footer`, `--wjs-color-text-footer-main`, `--wjs-color-text-footer-dim`,
+`--wjs-bg-surface-glass`. Themes may set them (footer surface/text, translucent header surface)
+even though a CSS-only audit would report them unused.
 
-### Footer Variables
+### Two token families a theme must NOT declare
 
-```css
-:root {
-  --wjs-footer-bg: #111827;
-  --wjs-footer-text-heading: #ffffff;
-  --wjs-footer-text-body: #9ca3af;
-  --wjs-footer-text-hover: #ffffff;
-  --wjs-footer-icon-bg: #1f2937;
-  --wjs-footer-icon-color: #ffffff;
-}
-```
-
-### Puck Component Variables
-
-```css
-:root {
-  /* Accordion */
-  --puck-accordion-bg: var(--wjs-bg-surface);
-  --puck-accordion-border: var(--wjs-border-subtle);
-  --puck-accordion-header-bg: var(--wjs-bg-surface);
-  
-  /* Tabs */
-  --puck-tabs-border: var(--wjs-border-subtle);
-  --puck-tabs-active-color: var(--wjs-color-primary);
-  
-  /* Pricing */
-  --puck-pricing-bg: var(--wjs-bg-surface);
-  --puck-pricing-highlight-bg: var(--wjs-color-primary);
-  
-  /* Search */
-  --puck-search-input-bg: var(--wjs-bg-surface);
-  --puck-search-input-border: var(--wjs-border-subtle);
-  --puck-search-btn-bg: var(--wjs-color-primary);
-}
-```
+- **The 21 alias tokens** (flagged `alias` in the manifest): `--wjs-h{1..6}-size`,
+  `--wjs-h{1..6}-weight`, `--wjs-font-family`, `--wjs-foreground`, `--wjs-color-text-heading`,
+  `--wjs-color-text-dim`, `--wjs-color-primary-text`, `--wjs-bg-surface-hover`,
+  `--wjs-border-radius`, `--wjs-space-md`, `--wjs-space-sm`. They remap the names used by the
+  visual-editor block renderer onto the canonical tokens — override the **canonical** token
+  (`--wjs-h1`, not `--wjs-h1-size`) and the alias follows automatically.
+- **The 22 `--wjs-r-*` tokens** (flagged `editor-internal`): the visual editor's per-instance
+  responsive channel (`--wjs-r-<prop>-{tb,mb}`), injected **inline** on each block by the editor.
+  Declaring one in a theme `:root` would silently override every block instance on every page.
 
 ## Creating a Custom Theme
 
-### 1. Create the Theme Folder
+### 1. Scaffold with the CLI
 
 ```bash
-mkdir backend/themes/my-custom-theme
+node backend/cli/wordjs.js create theme my-custom-theme
 ```
 
-### 2. Create style.css
+This creates `backend/themes/my-custom-theme/` from the CLI template
+(`backend/cli/templates/theme/`): a `style.css` whose `:root` is pre-filled with **53** `--wjs-*`
+tokens (plus a commented-out chrome block with 14 more `--wjs-nav-*`/`--wjs-footer-*` tokens — 67
+names in the file), and a `theme.json` carrying `name`/`version`/`description`/`author` and a
+`layout` block (`containerWidth: "1100px"`, `sidebar: false`). Restart the backend once so the theme is discovered, then
+activate it in **Admin → Themes**. (Creating the folder by hand still works — the CLI just writes
+the boilerplate for you.)
+
+Prefer generating instead of editing boilerplate? Pass the four seed colors
+(`--primary --secondary --bg --text`, optionally `--archetype`) and the CLI writes a
+**declarative `theme.json`** and compiles `style.css` from it — see
+[Declarative theming (`theme.json`)](#declarative-theming-themejson) below.
+
+At any point, lint your theme against the machine-readable contract with the doctor:
+
+```bash
+node backend/cli/wordjs.js doctor theme my-custom-theme
+```
+
+It flags unknown token names (with a closest-match suggestion), overrides of the 21 readonly
+aliases, missing `--wjs-color-on-*` contrast pairs, external `@import`s/`url()`s, `:root`
+values that would not be portable to declarative tokens, a `@wjs-generated` block that is
+duplicated or unclosed (`GENERATED_MARKERS`), invalid shipped chrome compositions
+(`CHROME_INVALID`/`CHROME_UNREADABLE`) and — for a declarative theme — every compiler diagnostic,
+prefixed `DECLARATIVE_`. A hand-authored theme also gets an informational `LEGACY_THEME` nudge.
+The complete list is in [Diagnostics reference](#diagnostics-reference) below. The command exits
+**1** when the report contains any error, **0** otherwise. Admins can fetch the same report from
+`GET /api/v1/themes/:slug/doctor`.
+
+### 2. Edit style.css
 
 ```css
 /* =========================================
    THEME: My Custom Theme
    ========================================= */
 
-@import url('https://fonts.googleapis.com/css2?family=YourFont:wght@400;700&display=swap');
+/* Avoid external @import (Google Fonts etc.) — the doctor flags it (EXTERNAL_REF): it adds a
+   render-blocking third-party request on every page view. Ship font files with the theme (or use
+   the framework's font tokens) instead. */
 
 :root {
   /* Override variables here */
@@ -292,7 +422,7 @@ header {
 }
 ```
 
-### 3. Create theme.json (Optional)
+### 3. Edit theme.json (Optional)
 
 ```json
 {
@@ -307,10 +437,327 @@ header {
 
 Add a `screenshot.png` (400x300px recommended) for the theme picker.
 
+## Declarative theming (`theme.json`)
+
+Instead of hand-writing the whole `style.css`, a theme can describe itself **declaratively** in
+`theme.json` and have WordJS compile the CSS. The compiler is
+`backend/src/core/theme-compile.ts` (`compileTheme()`), driven by:
+
+```bash
+# create a theme from four seed colors (writes theme.json + compiled style.css + functions.js stub)
+node backend/cli/wordjs.js create theme neon-shop \
+  --primary "#7c3aed" --secondary "#0ea5e9" --bg "#0b1020" --text "#e5e7eb" \
+  --archetype cyber --name "Neon Shop"
+
+# after editing theme.json, recompile style.css in place
+node backend/cli/wordjs.js build theme neon-shop
+```
+
+Admins can do the same over the API: `POST /api/v1/themes` (create) and `PUT /api/v1/themes/:slug`
+(rebuild) in `backend/src/routes/themes.ts`, both `authenticate` + `isAdmin`.
+
+All declarative keys are **optional and additive** to the existing `name` / `version` /
+`description` / `author` / `layout` keys — a `theme.json` without them keeps working exactly as
+before.
+
+### `generator: "wordjs"`
+
+The writer's mark. Every **declarative** `theme.json` written by WordJS carries it (the CLI's
+seeded `create theme` and the API's `POST /api/v1/themes` both stamp it; the plain template
+scaffold does not). `PUT /api/v1/themes/:slug` refuses to rebuild themes that lack it, so
+hand-crafted themes can never be overwritten through the API. The `build theme` CLI command
+compiles any `theme.json` that has declarative keys.
+
+### `seeds` — four colors → the whole palette
+
+```json
+"seeds": { "primary": "#7c3aed", "secondary": "#0ea5e9", "bg": "#0b1020", "text": "#e5e7eb" }
+```
+
+Each seed must be a strict `#rrggbb` hex. `theme-derive.ts` (`deriveTokens()`) expands them into
+the 17-token canonical palette emitted into `:root` — the same derivation the first-party theme
+generator uses: `--wjs-bg-canvas`, `--wjs-bg-surface`, `--wjs-bg-surface-raised`,
+`--wjs-color-primary`, `--wjs-color-primary-dark`, `--wjs-color-on-primary`,
+`--wjs-color-accent`, `--wjs-color-on-accent`, `--wjs-color-text-main`,
+`--wjs-color-text-muted`, `--wjs-color-heading`, `--wjs-color-link`, `--wjs-color-link-hover`,
+`--wjs-border-subtle`, `--wjs-outline`, `--wjs-outline-variant`, `--wjs-focus-ring`.
+Surfaces mix toward white on dark canvases (luminance of `bg` < 0.35) and toward black on light
+ones; the `on-*` colors are picked for contrast against their base color.
+
+### `archetype` — personality preset
+
+```json
+"archetype": "cyber"
+```
+
+One of `cyber`, `brutalist`, `editorial`, `glassmorphism`, `organic`, `obsidian`. Appends the
+preset's CSS (interpolating your seeds) inside the generated block. Presets contain **no external
+`@import`** — font stacks lead with the intended family and fall back to system fonts; the
+compiler additionally strips any `@import` structurally. An unknown name is an error with a
+closest-match suggestion.
+
+### `tokens` — explicit token overrides
+
+```json
+"tokens": { "--wjs-hero-radius": "18px", "--wjs-button-weight": "700" }
+```
+
+A flat map. The name must exist in the token manifest (`backend/public/theme-tokens.json`,
+738 tokens) — or be one of the documented `--wjs-footer-*` chrome-bridge tokens, which are valid
+even before the manifest learns them. Editor-internal `--wjs-r-*` tokens are rejected. Values
+follow the portable token rules: non-empty, ≤ 120 chars, charset `#a-zA-Z0-9 ,.%()/_'"-`
+(spaces allowed), no backslash, no `//`, no `url()`, and every parenthesis and quote **balanced**.
+
+> **Unbalanced `(` or a dangling quote is a `TOKEN_VALUE_INVALID` error.** The charset admits `(`
+> and quotes, and a token value is emitted verbatim into `:root`, so an unclosed one keeps the CSS
+> parser inside that construct: the rest of the generated block *and* every rule after it in
+> `style.css` are swallowed as part of the value. The stylesheet then loads with no error anywhere,
+> just silently missing most of itself. The compiler refuses it structurally
+> (`tokenValueProblem` in `backend/src/core/theme-compile.ts`).
+
+> **The charset has no `+` and no `*`.** `-` and `/` are in the set, so `calc(100% - 2rem)`
+> and `calc(100%/3)` are fine, but **`calc()` with addition or multiplication does not fit in a
+> token** — `calc(50% + 8px)` and `calc(2 * 1.5rem)` are rejected as `TOKEN_VALUE_INVALID`. Put
+> the arithmetic in a `styles` declaration instead (those are parsed against the real property
+> grammar, where `+`/`*` are accepted), or pre-compute the value.
+>
+> `var(--wjs-…)` **is** allowed in a token value (it is inside the charset), so tokens may point
+> at other tokens — but see the opposite restriction for `styles` declarations below.
+
+#### Is the token value valid *for the properties that read it*?
+
+The **errors** above are charset/structure only: they are decided without knowing which property
+will consume the token, because one token feeds many properties and the manifest records **which**
+property reads a token, not **how** (a token spliced into `blur(var(--x))` or
+`0 0 0 3px var(--x)` is a complete value for nothing on its own).
+
+On top of that the compiler runs one **warning-level** grammar check, `TOKEN_VALUE_GRAMMAR`, which
+*does* use the manifest — it reads the token's `consumers` list and asks css-tree whether the value
+matches any of those properties' grammars. It fires only when **every** consuming property rejects
+the value, and the message names one of them:
+
+```
+⚠️  [TOKEN_VALUE_GRAMMAR] tokens.--wjs-color-text-main — --wjs-color-text-main: "18px" is not a
+    valid value for any property that consumes this token (e.g. "color") — it will be ignored
+    where it is used
+```
+
+It is a warning, not an error: the compiler still writes the token. A token read by even one
+permissive property is therefore never reported — `--wjs-color-primary` is also consumed by
+`border-left`, `border` and `outline`, for which `18px` *is* a legal value, so that same mistake
+passes silently on that token.
+
+**Coverage is partial by design.** Before reporting, the framework's own value for that token
+(`declaredDefault`, then the observed `fallbacks`) is tried as a **control**: if the control is
+rejected too, the "one property consumes this whole value" model is wrong for that token and
+nothing is reported. That silences roughly 40% of the manifest — every token that is only ever
+spliced *into* a larger value, `--wjs-focus-ring` (consumed inside a `box-shadow`) being the
+canonical case. Two more no-opinion cases: values containing `var()` (substitution is only known
+at render time, so `matchProperty` cannot decide) and tokens whose only consumers are custom
+properties (a custom property accepts anything). So **a token with no `TOKEN_VALUE_GRAMMAR`
+warning is not certified correct** — it is either fine or unjudged. Source:
+`tokenGrammarProblem()` / `addToken()` in `backend/src/core/theme-compile.ts`.
+
+### `styles` — nested element styling
+
+Top-level keys are **themable elements**: every entry of the manifest's `elements` registry
+(33 entries — 29 `.wp-block-*` blocks such as `hero`, `card`, `button`, `posts-grid`, … plus the
+four chrome entries `header`, `logo`, `nav` and `footer`, each with a `selector` and optional
+`children`) plus three globals: `body` (selector `body`), `headings`
+(`h1,h2,h3,h4,h5,h6`) and `links` (`a`). Inside an element you can nest:
+
+- **CSS properties** — `"background": "#0f172a"`, `"letter-spacing": "0.08em"`, …
+- **children** — one level, from the element's `children` in the manifest
+  (e.g. `hero` → `title`, `subtitle`, `button`, `actions`, `inner`, `overlay`)
+- **states** — `hover`, `focus`, `active`, `disabled` (cannot nest inside another state)
+- **breakpoints** — `mobile`, `tablet`, `desktop` (cannot nest inside states or other
+  breakpoints; states *can* nest inside breakpoints and children)
+
+The framework's breakpoints are fixed:
+
+| Key | Media query |
+| :-- | :-- |
+| `mobile` | `@media (max-width: 767.98px)` |
+| `tablet` | `@media (min-width: 768px) and (max-width: 1023.98px)` |
+| `desktop` | `@media (min-width: 1024px)` |
+
+#### Token-vs-declaration resolution
+
+For each property at the base level (not inside a state or breakpoint) the compiler builds
+token-name candidates — `--wjs-<element>-<child>-<prop>` then `--wjs-<element>-<prop>` — from the
+key **as written**. If a candidate exists in the manifest, the value is emitted as that **token**
+in `:root` (token value rules above). That is why the short manifest suffixes work as keys:
+`styles.hero.bg` → `--wjs-hero-bg`, `styles.hero.button.bg` → `--wjs-hero-button-bg`.
+
+Otherwise the key must be a **standard CSS property**, and the pair is emitted as a **declaration**
+on the element's mapped selector, validated with css-tree: the property must be known standard
+CSS, the value must parse *and* match the property's grammar, and the output is re-serialized
+from the parsed AST — the raw string from `theme.json` never reaches `style.css`, so
+`red;} body{...}`-style injection cannot survive. `url()` is allowed **only** for the theme's own
+assets (`/themes/<slug>/…`); `@import` and author-written selectors cannot be expressed at all.
+Inside states and breakpoints everything is a declaration — `styles.hero.button.hover.background`
+becomes `.wp-block-hero__button:hover { background: … }` even though a `bg` token exists for the
+base level.
+
+> **`var()` is not accepted in a `styles` declaration value.** Grammar matching is what makes the
+> AST re-serialization safe, and a value containing `var()` cannot be matched against a property's
+> grammar — its substitution is only known at render time. css-tree reports *"Matching for a tree
+> with `var()` is not supported"*, which the compiler surfaces as `VALUE_INVALID`. So
+> `"styles": { "hero": { "box-shadow": "0 0 0 1px var(--wjs-border-subtle)" } }` fails to compile.
+> Workarounds, in order of preference: (1) use a key that **resolves to a token** so the value
+> lands in `:root` instead of in a declaration — token values *do* accept `var()`; (2) declare the
+> indirection in the `tokens` map and let `wordjs-ui.css` consume it; (3) write the literal value.
+> Hand-written CSS outside the `@wjs-generated` markers is unaffected — this limit applies only to
+> values the compiler generates.
+
+#### Caps
+
+- ≤ **2,000** compiled declarations in total (`:root` tokens count toward it)
+- declaration values ≤ **300** chars, token values ≤ **120** chars
+- `theme.json` ≤ **256 KB**
+
+### The generated block and manual CSS
+
+The compiled CSS lives in `style.css` between exact markers:
+
+```css
+/* @wjs-generated:start — compiled from theme.json; DO NOT EDIT inside. Edit theme.json and run: node backend/cli/wordjs.js build theme <slug> */
+...
+/* @wjs-generated:end */
+```
+
+Recompiling replaces **only** that block (or prepends it, with a warning, when `style.css` has no
+markers yet) — every byte outside the markers is preserved, so declarative theming and manual CSS
+coexist in the same file. `build theme` prints every diagnostic (errors and warnings carry a code,
+a `theme.json` path and, where possible, a closest-match suggestion) and **exits 1 without
+writing anything** if there are errors.
+
+Two details of the marker handling matter when a file has been edited by hand
+(`writeCompiled()` in `backend/src/core/theme-compile.ts`):
+
+- **Every** marked block is replaced, not just the first, and duplicates collapse into one. A
+  second block would otherwise sit *after* the fresh one and win the cascade.
+- A start marker with **no** closing `@wjs-generated:end` is left untouched — the compiler refuses
+  to guess where the block ends, because guessing would delete the author's CSS. Such a block
+  therefore survives every recompile.
+
+The doctor reports both situations as a `GENERATED_MARKERS` warning ("`style.css` has *N*
+`@wjs-generated:start` and *M* `@wjs-generated:end` marker(s) — expected one matched pair"),
+counted on the raw CSS and independently of whether `theme.json` still has declarative sections.
+
+**`build theme` also bumps `theme.json`'s patch version** after a successful write (`1.0.0` →
+`1.0.1`). The public stylesheet URL is keyed by that version (`?v=<slug>-<version>-<ASSET_VERSION>`),
+so a rebuild that left the version alone would ship new CSS behind the old cache key and browsers
+would keep the pre-build copy for up to an hour. The write API bumps it for the same reason. If
+`theme.json` cannot be read or its version is not `x.y.z`, the CLI warns and skips the bump instead
+of failing the build. When `theme.json` has none of the declarative keys **and** `style.css` has no
+`@wjs-generated` block, `build theme` prints an informational "nothing to build" line and exits
+without touching either file — it never prepends an empty block to a hand-authored theme.
+
+### Diagnostics reference
+
+Every diagnostic carries a `level` (`error` | `warning`), a `code`, the `theme.json` `path` it
+came from and a message; typo-shaped ones also carry a closest-match `suggestion`. The same list
+is what `build theme` prints, what `POST`/`PUT /api/v1/themes[/:slug]` return in `diagnostics`,
+and what the doctor re-emits prefixed with `DECLARATIVE_` (so a compiler `THEME_JSON_INVALID` can
+never be confused with the doctor's own).
+
+**Compiler errors** — nothing is written while any of these is present:
+
+| Code | Raised when |
+| --- | --- |
+| `THEME_SLUG_INVALID` / `THEME_JSON_MISSING` / `THEME_JSON_INVALID` / `THEME_JSON_TOO_LARGE` | The theme dir/slug or `theme.json` itself is unusable (cap: 256 KB). |
+| `MANIFEST_MISSING` | `backend/public/theme-tokens.json` is missing or unreadable — there is no contract to resolve tokens/elements against. |
+| `SEEDS_INVALID` / `SEED_INVALID` | `seeds` is not an object / a seed is not a strict `#rrggbb`. |
+| `SEEDS_INCOMPLETE` | `seeds` is present but missing one or more of `primary`, `secondary`, `bg`, `text`. All four are required: the derivation reads them unconditionally, and a partial map used to surface as a raw `TypeError` under `DERIVE_FAILED`. The message names what is missing. |
+| `ARCHETYPE_UNKNOWN` | Not one of the archetype names (with a did-you-mean). |
+| `ARCHETYPE_NEEDS_SEEDS` | A valid `archetype` without all four seeds. The presets interpolate the seeds into their CSS by template literal, so a missing one reaches the stylesheet as the literal text `undefined` — a value that parses, compiles with zero diagnostics and silently breaks whatever it feeds. |
+| `DERIVE_UNAVAILABLE` / `DERIVE_FAILED` | `core/theme-derive` could not be loaded, or it threw / returned a non-map. |
+| `TOKENS_INVALID` / `TOKEN_NAME_INVALID` / `TOKEN_UNKNOWN` / `TOKEN_EDITOR_INTERNAL` | The `tokens` map, a token name, a name absent from the manifest (and not a `--wjs-footer-*` bridge token), or an editor-internal `--wjs-r-*`. |
+| `TOKEN_VALUE_INVALID` | A token value breaks the portable rules above (charset, length, `//`, `url()`, backslash, unbalanced parenthesis/quote) — including a `styles` key that resolves to a token. |
+| `STYLES_INVALID` / `ELEMENT_UNKNOWN` / `STYLE_UNKNOWN_KEY` / `STYLE_INVALID_VALUE` | The `styles` tree: not an object, an element outside the manifest's registry, a key that is not a child/state/breakpoint here (states cannot nest in states; breakpoints cannot nest in states or breakpoints), or a value that is neither string/number nor object. |
+| `PROPERTY_UNKNOWN` / `VALUE_TOO_LONG` / `VALUE_INVALID` / `URL_FORBIDDEN` | A declaration: non-standard property (or a `--custom` one, which only `tokens` may write), value over 300 chars, value that does not parse or does not match the property grammar (this is where `var()` lands), or a `url()` outside `/themes/<slug>/`. |
+| `TOO_MANY_DECLARATIONS` | Over the 2,000-declaration cap; the remaining declarations are dropped. |
+
+**Compiler warnings** — these do **not** block the write:
+
+| Code | Raised when |
+| --- | --- |
+| `TOKEN_VALUE_GRAMMAR` | The value matches no consuming property's grammar (see the section above, including why coverage is partial). |
+| `DERIVED_TOKEN_INVALID` | A token coming back from `deriveTokens()` has an invalid name or value; that one token is skipped. |
+| `ARCHETYPE_IMPORT_STRIPPED` | The preset CSS contained an `@import`; it is removed structurally. |
+
+**Doctor-only findings** (`doctor theme <slug>` / `GET /api/v1/themes/:slug/doctor`) — everything
+above still shows up here as `DECLARATIVE_*`:
+
+| Level | Code | Meaning |
+| --- | --- | --- |
+| error | `THEME_NOT_FOUND`, `STYLE_UNREADABLE` | No such theme dir (or a bad slug); `style.css` missing/unreadable. |
+| error | `CHROME_INVALID` | `chrome/header.json` / `chrome/footer.json` violates the chrome contract — the file is inert (the renderer falls through to the next precedence level). One finding per offending block path. |
+| warning | `CHROME_UNREADABLE` | The chrome file cannot be read, or is not valid JSON. |
+| warning | `THEME_JSON_INVALID` | `theme.json` is not valid JSON — a warning here (not an error) because the site still renders from `parseThemeMetadata()`'s defaults. |
+| warning | `LAYOUT_UNKNOWN_KEY` / `LAYOUT_INVALID_VALUE` | The `layout` block against `backend/public/theme-layouts.schema.json`. |
+| warning | `UNKNOWN_TOKEN` / `ALIAS_OVERRIDE` / `EDITOR_INTERNAL` | A declared `--wjs-*` name that is not in the contract (with a did-you-mean), one of the 21 aliases, one of the 22 `--wjs-r-*`. |
+| warning | `MISSING_ON_COLOR` / `LOW_CONTRAST` | A surface color without its `--wjs-color-on-*` pair (a value is suggested by luminance when the color is hex); main text over main background below 3:1. |
+| warning | `EXTERNAL_REF` | `http(s)://` or protocol-relative `//` in an `@import`/`url()`. |
+| warning | `GENERATED_MARKERS` | Not exactly one matched marker pair — a duplicate block wins the cascade, an unclosed one is never rewritten. Fix by recompiling. |
+| warning | `STALE_GENERATED` | `theme.json` has declarative sections but `style.css` has no generated block at all. |
+| info | `LEGACY_THEME` | A `theme.json` with no `generator` stamp and none of the declarative sections — i.e. a hand-authored theme that predates the v1 contract. Purely a nudge: legacy themes keep working everywhere. |
+| info | `GENERATED_DRIFT` | The block on disk differs from what `theme.json` compiles to today. |
+| info | `IMPORTANT_CENSUS` / `UNPORTABLE_VALUE` | How many `!important`s the stylesheet uses; `:root` values the declarative sanitizer could not express. |
+
+The doctor is **fail-open** throughout: a missing token manifest returns `{ available: false }`
+with no findings at all, and a missing layout schema, chrome validator or compiler simply skips
+that family of checks — linting must never break an install/activate/render flow.
+
+### Example: minimal seeded theme
+
+```json
+{
+  "name": "Neon Shop",
+  "version": "1.0.0",
+  "description": "A dark neon storefront theme.",
+  "author": "You",
+  "generator": "wordjs",
+  "seeds": { "primary": "#7c3aed", "secondary": "#0ea5e9", "bg": "#0b1020", "text": "#e5e7eb" }
+}
+```
+
+### Example: tokens + nested styles with children, states and breakpoints
+
+```json
+{
+  "name": "Neon Shop",
+  "version": "1.0.0",
+  "generator": "wordjs",
+  "seeds": { "primary": "#7c3aed", "secondary": "#0ea5e9", "bg": "#0b1020", "text": "#e5e7eb" },
+  "archetype": "cyber",
+  "tokens": { "--wjs-hero-radius": "18px" },
+  "styles": {
+    "hero": {
+      "bg": "#11162a",
+      "button": {
+        "bg": "#7c3aed",
+        "letter-spacing": "0.08em",
+        "hover": { "background": "#0ea5e9", "transform": "translateY(-2px)" }
+      }
+    },
+    "body": {
+      "mobile": { "font-size": "15px" }
+    }
+  }
+}
+```
+
+Compiled, that emits `--wjs-hero-radius`, `--wjs-hero-bg` and `--wjs-hero-button-bg` as `:root`
+tokens; `letter-spacing` (no token candidate) as a declaration on `.wp-block-hero__button`; the
+`hover` block as `.wp-block-hero__button:hover { background: #0ea5e9; transform: translateY(-2px) }`;
+and the `body.mobile` block inside `@media (max-width: 767.98px)`.
+
 ## Installing a Theme
 
 Building a theme by hand isn't the only way to add one. The **`default`** theme ships bundled in
-`backend/themes/`; the other 63 first-party themes are
+`backend/themes/`; the other 64 first-party themes are
 distributed through the **theme marketplace** and installed on demand. WordJS ships two admin-only
 install paths — both land the theme in the same `backend/themes/{slug}/` layout described above.
 
@@ -323,6 +770,15 @@ first-party catalog and installs a theme in one click. The frontend `themesMarke
 unpack via `installThemeFromZip()`), both admin-gated. The catalog origin is admin-configurable and
 independent of the plugin marketplace via `GET`/`PUT /marketplace/themes/sources` (backed by the
 `marketplace_theme_sources` option).
+
+> **The first-party catalog is migrating to the declarative format.** **40 of the 64**
+> marketplace themes ship it today: a `theme.json` with `generator: "wordjs"` plus `seeds` and
+> `archetype`, and a `style.css` whose manual section (header + font `@import`s) sits above the
+> compiled `@wjs-generated` block. The remaining 24 (`neo-digital`, `carbon-terminal`,
+> `paper-press`, …) are still hand-authored, as is the bundled `default`. New marketplace themes
+> must follow the declarative `theme.json` contract; hand-authored themes keep working everywhere
+> else, but the doctor flags them with an informational `LEGACY_THEME` finding to encourage
+> migration.
 
 ### From a ZIP upload
 
@@ -346,25 +802,45 @@ Any installed theme can be packaged back into a ZIP for backup or transfer via
 Under the hood, activation calls `switchTheme()` in `backend/src/core/themes.ts`, which writes
 the `template` and `stylesheet` options, publishes the new theme's `theme.json` `layout` to the
 `active_theme_layout` option, clears any customizer overrides (`active_theme_mods`), and
-re-initializes the (legacy) theme engine. On the
-public site, `frontend/src/components/public/ThemeLoader.tsx` receives the active-theme slug resolved
-on the **server** (`app/(public)/layout.tsx` → `getSettings().theme`) as `initialSlug`, so the first
+re-initializes the (legacy) theme engine. `template`/`stylesheet` are activation's *output*, not
+an input you can set yourself: every generic option writer refuses them — see
+[Options with a dedicated write API](#options-with-a-dedicated-write-api). On the
+public site, `frontend/src/components/public/ThemeLoader.tsx` receives the active-theme slug **and
+version** resolved on the **server** (`app/(public)/layout.tsx` → `getSettings()` → `template` +
+`active_theme_version`) as `initialSlug` / `initialThemeVersion`, so the first
 SSR paint already carries the right stylesheet. It renders
-`<link rel="stylesheet" href="/themes/{slug}/style.css?v={slug}-{ASSET_VERSION}">` (id
+`<link rel="stylesheet" href="/themes/{slug}/style.css?v={slug}-{themeVersion}-{ASSET_VERSION}">` (id
 `wjs-theme-stylesheet`) with a React 19 **`precedence`** attribute — required so React hoists the
 link into `<head>` and treats it as render-blocking; without it the page painted with fallback token
 values and only restyled once the CSS finished loading (a flash of unthemed content). The framework
 link (`wjs-ui-framework`) is declared in an earlier precedence group, so the theme's `:root` still
-cascades after it. The
-client effect only re-checks via `themesApi.list()` on `window` `focus` (and resolves the slug once
-if the server gave none, e.g. the editor preview), so switching the theme in one tab applies in an
-open public tab when you return to it; on such a runtime switch the loader also removes the previous
-theme's `<link>` (React treats `precedence` stylesheets as add-only, so the stale stylesheet would
-otherwise stay applied alongside the new one). The `?v=` query string is the **theme slug** plus
-**`ASSET_VERSION`** (`frontend/src/lib/assetVersion.ts`, kept in step with the package version) — a
-deterministic value identical across SSR and hydration. Theme CSS and `wordjs-ui.css` are served with
-a long `Cache-Control` (~1 day), so `ASSET_VERSION` is bumped on any release that changes them,
-forcing browsers with a cached copy to refetch.
+cascades after it.
+
+**No per-visitor theme query.** The loader used to re-fetch `themesApi.list()` on every `window`
+`focus` — an unauthenticated request per visitor per focus, running a themes-dir scan on the server.
+It doesn't any more: switching or editing a theme purges the `settings` tag
+(`backend/src/core/frontend-purge.ts`), so the next navigation serves HTML with the new slug/version.
+An already-open public tab keeps the theme it was rendered with until it navigates. The only client
+resolve left is the Puck editor preview, which reuses the public shell without server props and reads
+`GET /api/v1/settings` **once** (cheap, cached, no fs). When the href does change at runtime the
+loader still removes the previous `<link>` — matched on the exact href, so a version-only change
+evicts it too (React treats `precedence` stylesheets as add-only, so the stale stylesheet would
+otherwise stay applied alongside the new one).
+
+The `?v=` query string is the **theme slug**, the theme's **`theme.json` version** and
+**`ASSET_VERSION`**, built by `themeStylesheetHref()` in `frontend/src/lib/assetVersion.ts` — a
+deterministic value identical across SSR and hydration (the version always comes from the server,
+never recomputed on the client). Theme CSS and `wordjs-ui.css` are served with a long `Cache-Control`
+(~1 day), so both parts matter: the theme version busts an **in-place theme edit** — a change no
+build can see — and `ASSET_VERSION` busts a **release** that changes `wordjs-ui.css`. Every writer
+that rewrites a theme's CSS in place therefore bumps the `theme.json` patch: `PUT
+/api/v1/themes/:slug` (`bumpPatch()` in `backend/src/routes/themes.ts`), the CLI's `build theme`,
+and **restoring the default theme** (`POST /api/v1/themes/default` → `createDefaultTheme(true)`,
+which carries the *installed* version forward by one patch rather than resetting it to the literal
+in the source, which would move it backwards). `ASSET_VERSION` is no longer hand-maintained: it is the
+sha256 of `backend/public/css/wordjs-ui.css`, generated into the committed
+`frontend/src/lib/assetVersion.generated.ts` by `scripts/generate-asset-version.js` (run in the
+frontend `prebuild`, diff-gated in CI). Nothing to bump — edit the CSS and the token follows.
 
 ## Theme Previews in Admin
 

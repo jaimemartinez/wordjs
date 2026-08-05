@@ -1,9 +1,16 @@
 {
   "name": "Metro Journal",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "High-density digital newspaper theme with ticker bars, trending widgets, and multi-column article grids.",
   "author": "WordJS Premium Studio",
   "category": "Media",
+  "generator": "wordjs",
+  "seeds": {
+    "primary": "#ef4444",
+    "secondary": "#b91c1c",
+    "bg": "#0f0f0f",
+    "text": "#ffffff"
+  },
   "archetype": "brutalist",
   "tags": [
     "premium",

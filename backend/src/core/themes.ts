@@ -107,29 +107,61 @@ function parseThemeMetadata(themeDir: string, slug: string) {
 }
 
 /**
+ * Memoized theme scan.
+ *
+ * The scan is SYNCHRONOUS fs work: one readdir plus, per theme, a readFile of theme.json and up to
+ * three existsSync for the screenshot — ~200 blocking syscalls on a 40-theme install. It ran on every
+ * GET /api/v1/themes (public, unauthenticated, polled by the frontend's ThemeLoader on each tab focus)
+ * and on every read of the active theme, so it is cached.
+ *
+ * The TTL is only a backstop: every mutation THIS process performs drops the cache explicitly
+ * (switch/delete/install/createDefaultTheme here, the declarative write API + zip upload in
+ * routes/themes.ts), so anything done through the app is visible immediately.
+ * WORST CASE: a theme added/edited/removed on disk from OUTSIDE the app (scp, git pull, an editor,
+ * another node's filesystem) stays invisible for up to SCAN_TTL_MS — no code here observes that write.
+ */
+const SCAN_TTL_MS = 60_000;
+let scanCache: { at: number; records: any[] } | null = null;
+
+/** Drop the memoized scan. MUST be called by every path that writes inside THEMES_DIR. */
+function invalidateThemeScanCache() {
+  scanCache = null;
+}
+
+/**
  * Scan for installed themes
  */
 function scanThemes() {
-  ensureThemesDir();
-  const themes: Theme[] = [];
+  const now = Date.now();
+  let cached = scanCache;
+  if (!cached || now - cached.at >= SCAN_TTL_MS) {
+    ensureThemesDir();
+    const records: any[] = [];
 
-  const entries = fs.readdirSync(THEMES_DIR, { withFileTypes: true });
+    const entries = fs.readdirSync(THEMES_DIR, { withFileTypes: true });
 
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
 
-    const themeDir = path.join(THEMES_DIR, entry.name);
-    const metadata = parseThemeMetadata(themeDir, entry.name);
+      const themeDir = path.join(THEMES_DIR, entry.name);
+      const metadata = parseThemeMetadata(themeDir, entry.name);
 
-    themes.push(new Theme({
-      ...metadata,
-      slug: entry.name,
-      path: themeDir,
-      templatePath: path.join(themeDir, 'templates')
-    }));
+      records.push({
+        ...metadata,
+        slug: entry.name,
+        path: themeDir,
+        templatePath: path.join(themeDir, 'templates')
+      });
+    }
+
+    cached = { at: now, records };
+    scanCache = cached;
   }
 
-  return themes;
+  // Fresh Theme instances per call, from the cached metadata: callers get exactly what they got
+  // before the memo existed (same class, same fields, nothing filtered) and no caller can corrupt
+  // another's copy by mutating the array or an instance.
+  return cached.records.map((record: any) => new Theme(record));
 }
 
 /**
@@ -146,6 +178,23 @@ async function getActiveTheme() {
   const currentSlug = await getCurrentTheme();
   const themes = scanThemes();
   return themes.find(t => t.slug === currentSlug) || themes[0] || null;
+}
+
+/**
+ * theme.json `version` of the theme that actually renders (same fallback chain as getActiveTheme).
+ *
+ * Served in the PUBLIC settings payload so the frontend can version the theme stylesheet URL: the
+ * build-time asset version cannot see an in-place theme edit, this can. Costs no fs (memoized scan)
+ * and no extra SQL (the `template` option is already cached). Never throws — a themes-dir hiccup
+ * must not 500 the public settings payload; the stylesheet URL just goes unversioned.
+ */
+async function getActiveThemeVersion() {
+  try {
+    const theme = await getActiveTheme();
+    return theme ? String(theme.version) : '';
+  } catch {
+    return '';
+  }
 }
 
 /**
@@ -191,6 +240,11 @@ async function doSwitchTheme(slug: string) {
   await themeEngine.init();
 
   await doAction('switch_theme', slug, previousTheme);
+
+  // Activation is the moment everything downstream re-reads the active theme (getActiveThemeVersion
+  // → the public settings payload), and both theme-engine.init() and a switch_theme listener may
+  // have written inside THEMES_DIR by now — so this runs LAST, after those writes, not before them.
+  invalidateThemeScanCache();
 
   return { success: true, message: `Switched to theme ${theme.name}` };
 }
@@ -249,12 +303,24 @@ function createDefaultTheme(force = false) {
   fs.mkdirSync(path.join(defaultDir, 'partials'), { recursive: true });
 
   // theme.json
-  const themeJson = {
+  const themeJson: Record<string, any> = {
     name: 'WordJS',
     version: '2.0.0',
     description: 'The default WordJS theme — modern, JavaScript-native, developer-first. Signature indigo→violet gradient, Space Grotesk display type, and a deep-indigo footer.',
     author: 'WordJS'
   };
+  // A restore rewrites style.css, and the stylesheet URL is keyed by this version — leaving it alone
+  // (or resetting it to the literal above, which would move it BACKWARDS) means every browser keeps
+  // the copy it already had. Carry the installed version forward by one patch instead.
+  if (force) {
+    try {
+      const current = JSON.parse(fs.readFileSync(path.join(defaultDir, 'theme.json'), 'utf8'));
+      const parts = String(current.version || themeJson.version).split('.');
+      if (parts.length === 3 && parts.every((p: string) => /^\d+$/.test(p))) {
+        themeJson.version = `${parts[0]}.${parts[1]}.${Number(parts[2]) + 1}`;
+      }
+    } catch { /* no readable theme.json — the literal version below is the right starting point */ }
+  }
   writeIfAbsent(path.join(defaultDir, 'theme.json'), JSON.stringify(themeJson, null, 2));
 
   // functions.js
@@ -267,9 +333,11 @@ module.exports = () => {
 `;
   writeIfAbsent(path.join(defaultDir, 'functions.js'), functionsJs);
 
-  // style.css — WordJS's own visual identity. KEEP IN SYNC with the committed
-  // themes/default/style.css (this embedded copy is only written on `force`
-  // = admin "restore default theme", or when the file is missing).
+  // style.css — WordJS's own visual identity. This embedded copy is written on `force` (the admin's
+  // "restore default theme") or when the file is missing, so it must MATCH the committed
+  // themes/default/style.css byte for byte: it had drifted to an old 17-token version, and restoring
+  // silently replaced the curated 75-token palette with it. The parity is now asserted by
+  // tests/default-theme-parity.test.ts — regenerate this literal from the file, never by hand.
   const styleCss = `/* =========================================================================
    THEME: WORDJS  (default)
    WordJS's own visual identity — modern, JavaScript-native, developer-first.
@@ -281,22 +349,48 @@ module.exports = () => {
    hooks and the --wjs- framework tokens — the same contract every theme uses.
    ========================================================================= */
 
-
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap');
 
 :root {
-/* WordJS's OWN tokens only. Everything this theme used to restate — palette, type scale,
-     radii, shadows, spacing — now comes from the framework defaults in public/css/wordjs-ui.css.
-     Re-declaring them here made the default theme silently mask the design system, so the
-     shipped defaults could never actually be seen. Only tokens the framework does NOT define
-     (nav, logo, footer chrome and the signature gradient) belong here. */
-
   /* --- SIGNATURE GRADIENT (the WordJS mark) --- */
   --wjs-gradient: linear-gradient(120deg, #4f46e5 0%, #7c3aed 55%, #a855f7 100%);
   --wjs-gradient-soft: linear-gradient(120deg, rgba(79, 70, 229, 0.10), rgba(168, 85, 247, 0.10));
 
-  
-  
-  
+  /* --- COLOR PALETTE: Indigo / Violet --- */
+  --wjs-color-primary: #4f46e5;        /* Indigo */
+  --wjs-color-primary-dark: #4338ca;
+  --wjs-color-secondary: #64748b;      /* Slate */
+  --wjs-color-secondary-dark: #475569;
+  --wjs-color-accent: #a855f7;         /* Violet */
+  --wjs-color-success: #10b981;
+  --wjs-color-danger: #ef4444;
+  --wjs-color-warning: #f59e0b;
+  --wjs-color-info: #3b82f6;
+  --wjs-color-light: #f8f9ff;
+  --wjs-color-dark: #0b1120;
+  /* --- on-color tokens (max-contrast text on each solid color) --- */
+  --wjs-color-on-primary: #ffffff;
+  --wjs-color-on-secondary: #ffffff;
+  --wjs-color-on-success: #ffffff;
+  --wjs-color-on-danger: #ffffff;
+  --wjs-color-on-warning: #161616;
+  --wjs-color-on-info: #ffffff;
+  --wjs-color-on-light: #161616;
+  --wjs-color-on-dark: #ffffff;
+
+  /* --- SURFACES / TEXT / BORDER --- */
+  --wjs-bg-canvas: #f8f9ff;            /* barely-tinted indigo white */
+  --wjs-bg-surface: #ffffff;
+  --wjs-bg-muted: #f1f2fb;
+  --wjs-color-text-main: #1e293b;
+  --wjs-color-text-muted: #64748b;
+  --wjs-color-heading: #0b1120;
+  --wjs-color-link: #4f46e5;
+  --wjs-color-link-hover: #7c3aed;
+  --wjs-border-subtle: #e6e8f4;
+  --wjs-border-width: 1px;
+  --wjs-focus-ring: rgba(79, 70, 229, 0.28);
+
   /* --- NAVIGATION CONFIG --- */
   --wjs-nav-font-family: 'Inter', sans-serif;
   --wjs-nav-font-size: 0.95rem;
@@ -316,8 +410,40 @@ module.exports = () => {
   --wjs-footer-icon-bg: rgba(255, 255, 255, 0.06);
   --wjs-footer-icon-color: #c4b5fd;
 
-  
-  
+  /* --- TYPOGRAPHY --- */
+  --wjs-font-family-base: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --wjs-font-family-heading: 'Space Grotesk', 'Inter', sans-serif;
+  --wjs-font-family-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --wjs-font-size-base: 1rem;
+  --wjs-line-height-base: 1.7;
+  --wjs-heading-weight: 700;
+  --wjs-heading-line-height: 1.15;
+  --wjs-h1: 3rem;
+  --wjs-h2: 2.1rem;
+  --wjs-h3: 1.6rem;
+  --wjs-h4: 1.3rem;
+  --wjs-h5: 1.1rem;
+  --wjs-h6: 1rem;
+
+  /* --- SPACING / SHAPE / DEPTH --- */
+  --wjs-spacer: 1rem;
+  --wjs-radius-sm: 8px;
+  --wjs-radius: 12px;
+  --wjs-radius-md: 16px;
+  --wjs-radius-lg: 24px;
+  --wjs-radius-pill: 9999px;
+  --wjs-shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06);
+  --wjs-shadow: 0 6px 20px -6px rgba(79, 70, 229, 0.15), 0 2px 6px rgba(15, 23, 42, 0.05);
+  --wjs-shadow-md: 0 14px 34px -10px rgba(79, 70, 229, 0.22);
+  --wjs-shadow-lg: 0 28px 60px -18px rgba(79, 70, 229, 0.30);
+
+  /* --- CARD BLOCK --- keeps this theme's depth and hover lift through the token contract instead of a
+     rule that would override whatever colour the author gave an individual card. */
+  --wjs-card-radius: var(--wjs-radius-lg);
+  --wjs-card-shadow: var(--wjs-shadow-sm);
+  --wjs-card-hover-transform: translateY(-3px);
+  --wjs-card-hover-shadow: var(--wjs-shadow-md);
+  --wjs-card-hover-border-color: rgba(79, 70, 229, 0.35);
 }
 
 /* ============================ BASE ============================ */
@@ -391,16 +517,24 @@ header {
 .wjs-header-nav a:hover::after { width: 100%; }
 
 /* ============================ CONTENT ============================ */
-.container { max-width: 1100px; margin: 0 auto; padding: 0 24px; }
+/* Gutters only — NEVER the \`padding\` shorthand. The public layout puts \`pt-24 pb-10\` on this same
+   element to clear the fixed header; a shorthand here resets those to 0 (equal specificity, and the
+   theme sheet loads after the app CSS), which left the page title rendering underneath the header. */
+.container { max-width: 1100px; margin: 0 auto; padding-inline: 24px; }
 
-article, .wp-block-card {
+/* \`article\` only. This used to include \`.wp-block-card\`, and the \`!important\` background overrode the
+   card's own --wjs-card-bg while leaving the block's paired text colours alone — an accent card became
+   white with white text, so its icon and description vanished. The card's surface, border, radius and
+   hover already come from the token contract in wordjs-ui.css, which falls back to this theme's
+   --wjs-bg-surface / --wjs-border-subtle anyway. */
+article {
   background: var(--wjs-bg-surface) !important;
   border: 1px solid var(--wjs-border-subtle) !important;
   border-radius: var(--wjs-radius-lg) !important;
   box-shadow: var(--wjs-shadow-sm);
   transition: transform 0.25s ease, box-shadow 0.25s ease, border-color 0.25s ease;
 }
-article:hover, .wp-block-card:hover {
+article:hover {
   transform: translateY(-3px);
   border-color: rgba(79, 70, 229, 0.35) !important;
   box-shadow: var(--wjs-shadow-md);
@@ -466,8 +600,15 @@ footer .w-10:hover {
 }
 
 /* ============================ BLOCKS ============================ */
-/* Hero */
-.wp-block-hero h1, .wp-block-hero h2 { font-family: var(--wjs-font-family-heading) !important; }
+/* Hero — the blanket \`h1..h6 { color: heading !important }\` above also hits the title of a hero,
+   which sits on the hero's OWN band (wordjs-ui.css gives .wp-block-hero \`color: var(--wjs-hero-color,
+   #fff)\` and lets the title inherit it). On the usual dark gradient that painted the title in the dark
+   heading color — invisible. Restore the framework's own declaration verbatim so \`--wjs-hero-title-color\`
+   still wins when a theme or block instance sets it. Same treatment the footer and CTA bands already get. */
+.wp-block-hero h1, .wp-block-hero h2, .wp-block-hero__title {
+  font-family: var(--wjs-font-family-heading) !important;
+  color: var(--wjs-hero-title-color, inherit) !important;
+}
 
 /* Stats — gradient figures */
 .wp-block-stats .stat-value,
@@ -664,6 +805,10 @@ footer .w-10:hover {
       {{/each}}
 {{> footer}}`;
   fs.writeFileSync(path.join(defaultDir, 'templates', 'archive.html'), archiveTemplate);
+
+  // Unconditional: the scaffold writes on `force` AND whenever a file was missing (first boot),
+  // and a boot-time scan may already have observed the dir half-populated.
+  invalidateThemeScanCache();
 }
 
 /**
@@ -689,6 +834,7 @@ async function deleteTheme(slug: string) {
 
   // Recursive delete
   fs.rmSync(targetDir, { recursive: true, force: true });
+  invalidateThemeScanCache();
   return { success: true, message: `Theme ${theme.name} deleted successfully` };
 }
 
@@ -774,6 +920,9 @@ function installThemeFromDir(sourceDir: string, targetSlug: string, opts: { them
     // Never leave a half-copied theme behind.
     try { fs.rmSync(targetDir, { recursive: true, force: true }); } catch { /* best effort */ }
     throw e;
+  } finally {
+    // The dir existed, even if only briefly (rollback path) — no scan may answer from before it.
+    invalidateThemeScanCache();
   }
 
   return { slug: targetSlug, files: files.length };
@@ -866,11 +1015,14 @@ async function installThemeFromZip(zipPath: any, slug: any): Promise<{ ok: boole
       fs.mkdirSync(path.dirname(dest), { recursive: true });
       fs.writeFileSync(dest, entry.getData());
     }
+    invalidateThemeScanCache();
     cleanup();
     return { ok: true, status: 200, body: { success: true, message: `Theme "${slug}" installed successfully`, slug } };
   } catch (error: any) {
     cleanup();
     try { const t = path.resolve(THEMES_DIR, String(slug)); if (fs.existsSync(t)) fs.rmSync(t, { recursive: true, force: true }); } catch { /* best-effort */ }
+    // Entries may already have landed before the throw (and the rollback above removed them).
+    invalidateThemeScanCache();
     return { ok: false, status: 500, body: { error: `Failed to install theme: ${error.message}` } };
   }
 }
@@ -878,8 +1030,10 @@ async function installThemeFromZip(zipPath: any, slug: any): Promise<{ ok: boole
 module.exports = {
   Theme,
   scanThemes,
+  invalidateThemeScanCache,
   getCurrentTheme,
   getActiveTheme,
+  getActiveThemeVersion,
   switchTheme,
   getAllThemes,
   renderTemplate,

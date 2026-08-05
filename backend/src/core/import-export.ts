@@ -262,6 +262,7 @@ async function importSite(data: any, options: Record<string, any> = {}) {
         menus: { created: 0, skipped: 0 },
         users: { created: 0, skipped: 0, updated: 0 },
         custom_tables: { created: 0, rows: 0 },
+        settings: { imported: 0, skipped: [] as string[] },
         errors: [] as string[]
     };
 
@@ -531,12 +532,29 @@ async function importSite(data: any, options: Record<string, any> = {}) {
         }
     }
 
-    // Import settings
-    if (data.settings) {
+    // Import settings.
+    // SECURITY: this loop used to write ANY key the bundle named, making an import a second, unguarded
+    // door onto options whose real write path validates or does far more than store a value —
+    // 'site_chrome_header'/'site_chrome_footer' (chrome-validate is the write authority, reachable only
+    // through PUT /api/v1/chrome/:part) and 'template'/'stylesheet' (switching a theme is switchTheme(),
+    // not an option write). Same discipline as the generic settings writers, which refuse exactly those
+    // (DEDICATED_WRITE_API in routes/settings.ts) — but gated on plugin-api's isProtectedOption, the one
+    // list of security-critical option NAMES and a superset of that set, so there is no second copy to
+    // drift. Required lazily: plugin-api is a heavy leaf nothing else on this path needs. Skipped keys are
+    // REPORTED, not silently dropped: an import that looks like it applied a theme but did not is worse
+    // than a visible refusal. exportSite() only emits unprotected keys, so its bundles round-trip intact.
+    // The shape guard matters too: Object.entries() on a string/array yields index keys, so a malformed
+    // `"settings": "x"` used to create option rows named '0', '1', … — writes nobody ever asked for.
+    if (data.settings && typeof data.settings === 'object' && !Array.isArray(data.settings)) {
+        const { isProtectedOption } = require('./plugin-api');
         for (const [key, value] of Object.entries(data.settings)) {
-            if (value !== null && value !== undefined) {
-                await updateOption(key, value);
+            if (value === null || value === undefined) continue;
+            if (isProtectedOption(key)) {
+                results.settings.skipped.push(key);
+                continue;
             }
+            await updateOption(key, value);
+            results.settings.imported++;
         }
     }
 

@@ -1,9 +1,16 @@
 {
   "name": "Velocity Agency",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "High-converting agency theme featuring bold typography, dynamic hover cards, and marquee tickers.",
   "author": "WordJS Premium Studio",
   "category": "Agency",
+  "generator": "wordjs",
+  "seeds": {
+    "primary": "#f43f5e",
+    "secondary": "#e11d48",
+    "bg": "#18181b",
+    "text": "#fff1f2"
+  },
   "archetype": "brutalist",
   "tags": [
     "premium",

@@ -150,10 +150,15 @@ async function purgeForPost(postId: any) {
 
 // Options whose change alters the public chrome/canvas — anything else (cron bookkeeping, plugin
 // state) must NOT purge, or background jobs would evict the cache constantly.
+// NOT here, deliberately: `active_theme_version` (public settings payload) is DERIVED from the
+// active theme's theme.json, not an option row, so no updated_option hook can ever carry it. It
+// moves on activation (covered by 'template'/'stylesheet') and on an in-place theme rebuild, where
+// PUT /api/v1/themes/:slug purges 'settings' explicitly — the same pattern DELETE /chrome/:part uses.
 const SETTINGS_OPTIONS = new Set([
     'blogname', 'blogdescription', 'siteurl', 'home', 'homepage_id', 'posts_per_page',
     'template', 'stylesheet', 'active_theme_layout', 'active_theme_mods', 'theme_mods',
     'site_logo', 'site_icon', 'permalink_structure', 'default_category',
+    'site_chrome_header', 'site_chrome_footer',
 ]);
 
 /** Wire the content hooks. Call ONCE from initialize() after the hook system is up. */

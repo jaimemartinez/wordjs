@@ -1,9 +1,16 @@
 {
   "name": "Silicon Digest",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Tech news & startup blog theme with dark mode toggle, reading progress indicators, and code snippet blocks.",
   "author": "WordJS Premium Studio",
   "category": "Media",
+  "generator": "wordjs",
+  "seeds": {
+    "primary": "#3b82f6",
+    "secondary": "#1d4ed8",
+    "bg": "#0a0f1d",
+    "text": "#eff6ff"
+  },
   "archetype": "glassmorphism",
   "tags": [
     "premium",

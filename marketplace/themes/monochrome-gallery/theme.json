@@ -1,9 +1,16 @@
 {
   "name": "Monochrome Gallery",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Minimalist black & white photography portfolio with high-contrast typography and fullscreen viewports.",
   "author": "WordJS Premium Studio",
   "category": "Portfolio",
+  "generator": "wordjs",
+  "seeds": {
+    "primary": "#ffffff",
+    "secondary": "#a1a1aa",
+    "bg": "#000000",
+    "text": "#ffffff"
+  },
   "archetype": "brutalist",
   "tags": [
     "premium",

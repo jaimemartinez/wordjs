@@ -120,10 +120,12 @@ export async function api<T>(endpoint: string, options: ApiOptions = {}): Promis
             // Not JSON (e.g. HTML 500 error): include the raw text snippet.
             errorMessage += `: ${raw.slice(0, 100)}`;
         }
-        const thrown: Error & { details?: unknown; status?: number } = new Error(errorMessage);
+        const thrown: Error & { details?: unknown; status?: number; errors?: string[] } = new Error(errorMessage);
         // Preserve any structured `details` (e.g. a plugin activation reject's
         // missingPermissions/dangerousCalls) so callers can render more than a flat string.
         if (error && error.details !== undefined) thrown.details = error.details;
+        // Preserve a validator's `errors` array (e.g. the chrome contract's 400) the same way.
+        if (error && Array.isArray(error.errors)) thrown.errors = error.errors;
         thrown.status = res.status;
         throw thrown;
     }
@@ -581,6 +583,16 @@ export const settingsApi = {
     get: () => apiGet<Record<string, string>>("/settings"),
     getAll: () => apiGet<Record<string, string>>("/settings/all"),
     update: (data: Record<string, string>) => apiPut("/settings", data),
+};
+
+// Composable chrome (contract v1): the DEDICATED write API — the generic settings writers reject
+// site_chrome_* so nothing bypasses the backend validator. Reads travel via settingsApi.get()
+// (site_chrome_header / site_chrome_footer are PUBLIC_SETTINGS). A 400 carries the validator's
+// errors[] — api() preserves them on the thrown Error for field-level display.
+export type ChromePart = "header" | "footer";
+export const chromeApi = {
+    save: (part: ChromePart, data: unknown) => apiPut<{ part: string; saved: boolean }>(`/chrome/${part}`, { data }),
+    reset: (part: ChromePart) => apiDelete<{ part: string; deleted: boolean }>(`/chrome/${part}`),
 };
 
 export const rolesApi = {

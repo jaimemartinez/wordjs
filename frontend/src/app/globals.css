@@ -25,30 +25,18 @@
   transition: all 300ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
-
 /* (The old `--ed-*` editor-chrome tokens lived here; they had ZERO consumers and collided with the
  * Stitch-design `--ed-*` roles that puck-theme.css now owns — deleted, single owner.) */
 
+/* The old body font-family (Arial), --background/--foreground + dark flip, scroll-behavior and
+ * the iframe height !important moved to app/admin/admin-globals.css: they fought the wordjs-ui.css
+ * theme contract on the public tree (which owns body font/color/background there). Only the
+ * heights stay global — public rendering depends on them today. */
 html {
-  scroll-behavior: smooth;
   height: 100%;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
   height: 100%;
 }
 
@@ -61,10 +49,6 @@ body {
 .puck-container,
 .puck-container>div {
   height: 100%;
-}
-
-iframe {
-  height: 100% !important;
 }
 
 /* Custom Scrollbar for the (light) editor sidebar */

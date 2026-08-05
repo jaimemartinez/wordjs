@@ -1,9 +1,16 @@
 {
   "name": "Artisan Craft",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Fine art & studio pottery theme featuring organic stone textures, warm earth tones, and story-driven layouts.",
   "author": "WordJS Premium Studio",
   "category": "Craft",
+  "generator": "wordjs",
+  "seeds": {
+    "primary": "#d97706",
+    "secondary": "#b45309",
+    "bg": "#1c130b",
+    "text": "#fef3c7"
+  },
   "archetype": "organic",
   "tags": [
     "premium",

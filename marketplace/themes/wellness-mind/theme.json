@@ -1,9 +1,16 @@
 {
   "name": "Wellness Mind",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Health, yoga, and mindfulness publication with calming gradient palette, daily quote widgets, and audio embeds.",
   "author": "WordJS Premium Studio",
   "category": "Media",
+  "generator": "wordjs",
+  "seeds": {
+    "primary": "#06b6d4",
+    "secondary": "#0e7490",
+    "bg": "#031b21",
+    "text": "#cffaff"
+  },
   "archetype": "organic",
   "tags": [
     "premium",

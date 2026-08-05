@@ -1,9 +1,16 @@
 {
   "name": "Atelier Design",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "European architectural design studio theme with grid overlays, editorial typography, and floating caption boxes.",
   "author": "WordJS Premium Studio",
   "category": "Creative",
+  "generator": "wordjs",
+  "seeds": {
+    "primary": "#78716c",
+    "secondary": "#57534e",
+    "bg": "#1c1917",
+    "text": "#f5f5f4"
+  },
   "archetype": "editorial",
   "tags": [
     "premium",

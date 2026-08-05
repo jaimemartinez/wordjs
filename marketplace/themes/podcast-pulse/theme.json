@@ -1,9 +1,16 @@
 {
   "name": "Podcast Pulse",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Media & podcasting platform theme with embedded audio wave players, episode playlists, and transcripts.",
   "author": "WordJS Premium Studio",
   "category": "Media",
+  "generator": "wordjs",
+  "seeds": {
+    "primary": "#a855f7",
+    "secondary": "#7e22ce",
+    "bg": "#160926",
+    "text": "#f3e8ff"
+  },
   "archetype": "glassmorphism",
   "tags": [
     "premium",
