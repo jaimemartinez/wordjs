@@ -28,7 +28,9 @@ export default function ChromeLogo({ size = "md", location = "header", logoUrl, 
     // Most catalog themes style the site logo through .wjs-header-logo, the hook Header.tsx emits on
     // this very shape (<a><img|span></a>), so the composed header logo emits it too. NEVER in a footer:
     // those rules carry masthead colors and `order`/`width` !important overrides.
-    const hook = location === "header" ? " wjs-header-logo" : "";
+    // A footer logo gets wjs-footer-logo instead of nothing: hookless, it fell through to the bare
+    // `a` rule and rendered underlined in the link colour on the footer band.
+    const hook = location === "header" ? " wjs-header-logo" : " wjs-footer-logo";
     return (
         <Link href="/" className={`wjs-chrome-logo${hook} flex items-center gap-2`}>
             {logoUrl ? (

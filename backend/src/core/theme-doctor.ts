@@ -364,19 +364,79 @@ function analyzeTheme(slug: string, opts: { themesDir?: string; manifestPath?: s
     report.warnings.push(finding);
   }
 
-  // LOW_CONTRAST — main text over main background, approximate WCAG ratio (simple luma).
-  const bg = declared.get('--wjs-bg-canvas');
-  const text = declared.get('--wjs-color-text-main');
-  if (bg !== undefined && text !== undefined && isHexColor(bg) && isHexColor(text)) {
-    const [hi, lo] = [lum(bg.trim()), lum(text.trim())].sort((a: number, b: number) => b - a);
-    const ratio = (hi + 0.05) / (lo + 0.05);
-    if (ratio < 3) {
-      report.warnings.push({
-        code: 'LOW_CONTRAST',
-        message: `--wjs-color-text-main on --wjs-bg-canvas has ~${ratio.toFixed(2)}:1 contrast (below 3:1)`,
-        detail: { ratio: Number(ratio.toFixed(2)), background: bg.trim(), text: text.trim() }
-      });
+  // LOW_CONTRAST — every text/background pair the page actually paints.
+  //
+  // This used to check ONE pair (main text over the canvas) at 3:1, which is how a catalogue theme
+  // shipped a call-to-action with a 2.15:1 label and a clean doctor report. The pairs below are the
+  // ones a visitor reads: the button they click, the link they follow, the footer they scan, the
+  // hero headline. Each resolves through the same fallback chain wordjs-ui.css uses, so a theme that
+  // sets only --wjs-color-primary is judged on the colour its buttons will really have.
+  //
+  // Ratios use the real WCAG relative luminance, not the `lum` luma above — that one exists to pick
+  // an on-colour and is pinned byte-for-byte against the generator, so it cannot be changed here.
+  const relLum = (h: string): number => {
+    const c = hex2rgb(h.trim()).map((v: number) => {
+      const s = v / 255;
+      return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+    });
+    return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+  };
+  const contrast = (a: string, b: string): number => {
+    const [hi, lo] = [relLum(a), relLum(b)].sort((x: number, y: number) => y - x);
+    return (hi + 0.05) / (lo + 0.05);
+  };
+  /** First declared token in the chain, as a hex colour, or undefined. */
+  const resolve = (chain: string[]): string | undefined => {
+    for (const name of chain) {
+      const v = declared.get(name);
+      if (v !== undefined && isHexColor(v)) return v.trim();
     }
+    return undefined;
+  };
+  /**
+   * Backgrounds only. A theme that says `--wjs-button-bg: transparent` has an OUTLINE button, and
+   * its label sits on the page, not on the fill: chaining on to --wjs-color-primary would compare
+   * the gold label against a gold fill that is never painted and report a 1.00:1 that does not
+   * exist. Anything non-hex (transparent, none, a gradient) means "whatever is behind me".
+   */
+  const resolveBg = (chain: string[]): string | undefined => {
+    const first = declared.get(chain[0]);
+    if (first !== undefined && !isHexColor(first)) {
+      return resolve(['--wjs-bg-surface', '--wjs-bg-canvas']);
+    }
+    return resolve(chain);
+  };
+
+  // [label, foreground chain, background chain, minimum]. 3:1 is the WCAG large-text threshold and
+  // is only used where the text really is large (hero headline); everything else is body size.
+  const CONTRAST_PAIRS: Array<[string, string[], string[], number]> = [
+    ['body text on the page', ['--wjs-color-text-main'], ['--wjs-bg-canvas'], 4.5],
+    ['muted text on the page', ['--wjs-color-text-muted'], ['--wjs-bg-canvas'], 4.5],
+    ['headings on the page', ['--wjs-color-heading'], ['--wjs-bg-canvas'], 3],
+    ['links on the page', ['--wjs-color-link'], ['--wjs-bg-canvas'], 4.5],
+    ['text on a surface', ['--wjs-color-text-main'], ['--wjs-bg-surface', '--wjs-bg-canvas'], 4.5],
+    ['button labels', ['--wjs-button-color', '--wjs-color-on-primary'], ['--wjs-button-bg', '--wjs-color-primary'], 4.5],
+    ['nav items', ['--wjs-nav-color', '--wjs-color-text-main'], ['--wjs-bg-surface', '--wjs-bg-canvas'], 4.5],
+    ['footer text', ['--wjs-color-text-footer-main', '--wjs-footer-text-heading'], ['--wjs-bg-footer', '--wjs-footer-bg'], 4.5],
+    ['muted footer text', ['--wjs-color-text-footer-dim', '--wjs-footer-text-body'], ['--wjs-bg-footer', '--wjs-footer-bg'], 4.5],
+    ['the hero headline', ['--wjs-hero-title-color'], ['--wjs-hero-bg'], 3],
+    ['card titles', ['--wjs-card-title-color', '--wjs-color-heading'], ['--wjs-card-bg', '--wjs-bg-surface'], 4.5],
+  ];
+
+  for (const [label, fgChain, bgChain, min] of CONTRAST_PAIRS) {
+    const fg = resolve(fgChain);
+    const bg = resolveBg(bgChain);
+    // Only judge a pair the theme actually decided: if neither side is declared there is nothing to
+    // answer for, and the framework defaults are the framework's problem.
+    if (fg === undefined || bg === undefined) continue;
+    if (!declared.has(fgChain[0]) && !declared.has(bgChain[0])) continue;
+    const ratio = contrast(fg, bg);
+    if (ratio >= min) continue;
+    report.warnings.push({
+      code: 'LOW_CONTRAST',
+      message: `${label}: ${fgChain[0]} on ${bgChain[0]} is ${ratio.toFixed(2)}:1 (needs ${min}:1)`,
+      detail: { pair: label, ratio: Number(ratio.toFixed(2)), minimum: min, text: fg, background: bg }
+    });
   }
 
   // IMPORTANT_CENSUS — !important defeats the token cascade; count is informational.

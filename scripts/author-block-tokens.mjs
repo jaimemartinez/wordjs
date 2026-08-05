@@ -44,6 +44,10 @@ const rgb2hex = (r, g, b) => "#" + [r, g, b].map((v) => Math.round(v).toString(1
 const mix = (a, b, t) => { const A = hex2rgb(a), B = hex2rgb(b); return rgb2hex(...A.map((v, i) => v + (B[i] - v) * t)); };
 const alpha = (h, a) => { const [r, g, b] = hex2rgb(h); return `rgba(${r},${g},${b},${a})`; };
 const lum = (h) => { const [r, g, b] = hex2rgb(h); return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255; };
+// Real WCAG relative luminance (gamma-corrected), for the places where a RATIO has to be right —
+// `lum` above is the plain luma the palette derivation uses and must keep using.
+const relLum = (h) => { const c = hex2rgb(h).map((v) => { const x = v / 255; return x <= 0.03928 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4); }); return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]; };
+const contrast = (a, b) => { const [hi, lo] = [relLum(a), relLum(b)].sort((x, y) => y - x); return (hi + 0.05) / (lo + 0.05); };
 
 /**
  * Recipes. `corners` / `weightOfLine` / `depth` are the three axes that carry most of the felt
@@ -99,7 +103,7 @@ const PAD = {
     airy: { box: "2.5rem", btnX: "2rem", btnY: "0.9rem", panel: "2.25rem" },
 };
 
-function build(slug, design, existing) {
+function build(slug, design, existing, styles) {
     const r = RECIPES[slug];
     if (!r) throw new Error(`no recipe for ${slug}`);
     const c = design.designTheme.namedColors;
@@ -107,6 +111,25 @@ function build(slug, design, existing) {
     const primary = c.primary, onPrimary = c.on_primary, secondary = c.secondary, onSecondary = c.on_secondary;
     const dark = lum(bg) < 0.35;
     const toward = dark ? "#ffffff" : "#000000";
+
+    // The label that sits ON a primary fill. NOT --wjs-color-on-primary: that token is pinned to the
+    // design system by `verify theme` and must keep saying what Stitch said. But Stitch picks it by
+    // luminance, and on a mid-tone brand colour that lands at 2.3:1 — white on candy pink. The fill
+    // is the design's; the readability of the words on it is ours, so the label is chosen by contrast
+    // and written to the button/CTA/submit tokens the verifier does not pin.
+    // …measured against the fill the button WILL have, which is not always `primary`: a theme that
+    // already declared --wjs-button-bg (a dark surface, an outline's `transparent`) keeps it, and
+    // judging the label against primary instead is how a gold-on-black button gets a black label.
+    const isHex = (v) => /^#[0-9a-fA-F]{6}$/.test(String(v || ""));
+    const btnBg = isHex(existing["--wjs-button-bg"]) ? existing["--wjs-button-bg"]
+        : existing["--wjs-button-bg"] !== undefined ? bg   // transparent/none → the page shows through
+            : primary;
+    // Candidates must include a real black: on a DARK theme the page ink is itself light, so
+    // "white vs ink" is a choice between two light colours and a gold button keeps its white label
+    // at 1.7:1. The design's own on_primary is offered first so a faithful, readable answer wins.
+    const onFill = [onPrimary, "#111111", "#ffffff"]
+        .filter((c) => /^#[0-9a-fA-F]{6}$/.test(String(c || "")))
+        .reduce((best, c) => (contrast(c, btnBg) > contrast(best, btnBg) ? c : best), "#ffffff");
 
     const rad = CORNERS[r.corners];
     const pad = PAD[r.pad];
@@ -143,12 +166,31 @@ function build(slug, design, existing) {
     const headFam = "var(--wjs-font-family-heading)";
     const bodyFam = "var(--wjs-font-family-base)";
 
-    // The footer band is usually the one surface a theme already decided on (--wjs-bg-footer), and it
-    // is frequently the inverse of the page — so the text on it must be read off THAT colour, not off
-    // the page ink. Reading it from the page is how a dark footer ends up with near-black type.
+    // The footer band is usually the one surface a theme already decided on, and it is frequently the
+    // inverse of the page — so the text on it must be read off THAT colour, not off the page ink.
+    //
+    // A theme can state that background in THREE places and they must all be consulted: the
+    // --wjs-bg-footer token, the --wjs-footer-bg bridge token, or `styles.footer.bg`, which the
+    // compiler turns into the bridge token. Reading only `tokens` is how sage-calm — a pale sage
+    // footer declared in styles.footer.bg — got white footer text at 1.15:1, i.e. an invisible footer.
     const hexOr = (v, fb) => (/^#[0-9a-fA-F]{6}$/.test(String(v || "")) ? String(v) : fb);
-    const footerBg = hexOr(existing["--wjs-bg-footer"], hexOr(existing["--wjs-footer-bg"], mix(bg, toward, 0.9)));
-    const onFooter = lum(footerBg) < 0.5 ? "#ffffff" : mix(ink, footerBg, 0.05);
+    const styleFooter = (styles && styles.footer) || {};
+    const footerBg = hexOr(existing["--wjs-bg-footer"],
+        hexOr(existing["--wjs-footer-bg"],
+            hexOr(styleFooter.bg,
+                hexOr(styleFooter["background-color"], mix(bg, toward, 0.9)))));
+    // Pick the on-colour by CONTRAST, not by a luminance threshold: near the 0.5 boundary the
+    // threshold picks a colour that then fails WCAG. Try the obvious candidate, keep the better one.
+    const onFooter = contrast("#ffffff", footerBg) >= contrast("#111111", footerBg) ? "#ffffff" : "#111111";
+    // And step the muted variant toward the background only as far as it can go while staying
+    // readable — a fixed 0.42 mix produced 2.3:1 "dim" text on half the catalogue.
+    const dimFooter = (() => {
+        for (const t of [0.42, 0.34, 0.26, 0.18, 0.1, 0]) {
+            const c = mix(onFooter, footerBg, t);
+            if (contrast(c, footerBg) >= 4.5) return c;
+        }
+        return onFooter;
+    })();
 
     const t = {
         // ---- hero surface
@@ -168,7 +210,7 @@ function build(slug, design, existing) {
 
         // ---- buttons
         "--wjs-button-bg": primary,
-        "--wjs-button-color": onPrimary,
+        "--wjs-button-color": onFill,
         "--wjs-button-radius": rad.pill,
         "--wjs-button-pad-x": pad.btnX,
         "--wjs-button-pad-y": pad.btnY,
@@ -180,7 +222,7 @@ function build(slug, design, existing) {
         "--wjs-button-family": r.label === "plain" ? bodyFam : headFam,
         "--wjs-button-shadow": shadow,
         "--wjs-button-hover-bg": mix(primary, toward, 0.16),
-        "--wjs-button-hover-color": onPrimary,
+        "--wjs-button-hover-color": onFill,
         "--wjs-button-hover-shadow": shadowHover,
         "--wjs-button-hover-transform": lift,
         "--wjs-button-secondary-bg": secondary,
@@ -279,7 +321,7 @@ function build(slug, design, existing) {
         "--wjs-tabs-transform": caseT,
         "--wjs-tabs-tracking": track,
         "--wjs-tabs-radius": rad.sm,
-        "--wjs-tabs-active-color": onPrimary,
+        "--wjs-tabs-active-color": onFill,
         "--wjs-tabs-active-bg": primary,
         "--wjs-tabs-active-weight": "700",
         "--wjs-tabs-list-bg": r.line === "none" ? alpha(ink, 0.05) : "transparent",
@@ -314,7 +356,7 @@ function build(slug, design, existing) {
         "--wjs-form-placeholder-color": mix(ink, bg, 0.6),
         "--wjs-form-accent": primary,
         "--wjs-form-submit-bg": primary,
-        "--wjs-form-submit-color": onPrimary,
+        "--wjs-form-submit-color": onFill,
         "--wjs-form-submit-radius": rad.pill,
         "--wjs-form-submit-family": r.label === "plain" ? bodyFam : headFam,
         "--wjs-form-submit-weight": "600",
@@ -326,7 +368,7 @@ function build(slug, design, existing) {
         "--wjs-search-input-radius": rad.pill,
         "--wjs-search-placeholder-color": mix(ink, bg, 0.6),
         "--wjs-search-button-bg": primary,
-        "--wjs-search-button-color": onPrimary,
+        "--wjs-search-button-color": onFill,
         "--wjs-search-button-radius": rad.pill,
         "--wjs-search-button-transform": caseT,
         "--wjs-search-button-tracking": track,
@@ -348,7 +390,7 @@ function build(slug, design, existing) {
         "--wjs-cta-border-color": lineC,
         "--wjs-cta-shadow": shadow,
         "--wjs-cta-button-bg": r.depth === "pillow" ? bg : primary,
-        "--wjs-cta-button-color": r.depth === "pillow" ? primary : onPrimary,
+        "--wjs-cta-button-color": r.depth === "pillow" ? primary : onFill,
         "--wjs-cta-button-radius": rad.pill,
         "--wjs-cta-button-family": r.label === "plain" ? bodyFam : headFam,
         "--wjs-cta-button-weight": "600",
@@ -381,7 +423,7 @@ function build(slug, design, existing) {
         "--wjs-pricing-period-color": muted,
         "--wjs-pricing-feature-color": muted,
         "--wjs-pricing-button-bg": primary,
-        "--wjs-pricing-button-color": onPrimary,
+        "--wjs-pricing-button-color": onFill,
         "--wjs-pricing-button-radius": rad.pill,
         "--wjs-pricing-button-hover-bg": mix(primary, toward, 0.16),
         "--wjs-pricing-highlight-bg": dark ? mix(surface, primary, 0.12) : mix(surface, primary, 0.06),
@@ -393,9 +435,9 @@ function build(slug, design, existing) {
         // ---- footer text (the band colour is already themed; these are the words on it)
         "--wjs-color-text-footer-heading": onFooter,
         "--wjs-color-text-footer-main": onFooter,
-        "--wjs-color-text-footer-dim": mix(onFooter, footerBg, 0.42),
+        "--wjs-color-text-footer-dim": dimFooter,
         "--wjs-footer-text-heading": onFooter,
-        "--wjs-footer-text-body": mix(onFooter, footerBg, 0.42),
+        "--wjs-footer-text-body": dimFooter,
         "--wjs-footer-text-hover": onFooter,
 
         // ---- chrome (header nav + logo). Without these the nav inherits the framework fallback,
@@ -406,13 +448,13 @@ function build(slug, design, existing) {
         // When the logo is ALREADY the primary colour, hovering to primary is a no-op — the mark just
         // doesn't respond. Shift it instead of repeating it.
         "--wjs-logo-color-hover": accentInk.toLowerCase() === primary.toLowerCase() ? mix(primary, toward, 0.28) : primary,
-        "--wjs-social-hover-color": onPrimary,
+        "--wjs-social-hover-color": onFill,
 
         // ---- socials, images, tables, dividers
         "--wjs-social-bg": r.line === "none" ? alpha(primary, 0.12) : "transparent",
         "--wjs-social-color": accentInk,
         "--wjs-social-hover-bg": primary,
-        "--wjs-social-hover-color": onPrimary,
+        "--wjs-social-hover-color": onFill,
         "--wjs-social-radius": r.corners === "square" ? "0" : "999px",
         "--wjs-image-radius": rad.lg,
         "--wjs-image-shadow": r.depth === "offset" ? "none" : shadow,
@@ -448,7 +490,7 @@ for (const slug of targets) {
     }
     const meta = JSON.parse(fs.readFileSync(metaPath, "utf8"));
     const design = JSON.parse(fs.readFileSync(designPath, "utf8"));
-    const fresh = build(slug, design, meta.tokens || {});
+    const fresh = build(slug, design, meta.tokens || {}, meta.styles || {});
     meta.tokens = { ...(meta.tokens || {}), ...fresh };
     if (!DRY) fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2) + "\n");
     added += Object.keys(fresh).length;

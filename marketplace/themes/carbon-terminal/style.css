@@ -33,9 +33,6 @@
   --wjs-header-offset: 0rem;
   --wjs-bg-surface-glass: #0b0f19;
   --wjs-footer-bg: #070a12;
-  --wjs-footer-text-body: #8b8f96;
-  --wjs-footer-text-heading: #22c55e;
-  --wjs-color-text-footer-dim: #5b6068;
   --wjs-xs: 4px;
   --wjs-sm: 8px;
   --wjs-md: 16px;
@@ -145,11 +142,9 @@
   --wjs-pricing-border-width: 1px;
   --wjs-pricing-highlight-scale: 1;
   --wjs-button-bg: #22c55e;
-  --wjs-button-color: #0b0b0b;
   --wjs-button-border-color: transparent;
   --wjs-button-family: var(--wjs-font-family-heading);
   --wjs-button-hover-bg: #45ce78;
-  --wjs-button-hover-color: #0b0b0b;
   --wjs-button-secondary-bg: #38bdf8;
   --wjs-button-secondary-color: #0b0b0b;
   --wjs-button-outline-bg: transparent;
@@ -209,7 +204,6 @@
   --wjs-tabs-family: var(--wjs-font-family-heading);
   --wjs-tabs-color: #939498;
   --wjs-tabs-tracking: 0.06em;
-  --wjs-tabs-active-color: #0b0b0b;
   --wjs-tabs-active-bg: #22c55e;
   --wjs-tabs-active-weight: 700;
   --wjs-tabs-list-bg: transparent;
@@ -237,14 +231,12 @@
   --wjs-form-placeholder-color: #696b71;
   --wjs-form-accent: #22c55e;
   --wjs-form-submit-bg: #22c55e;
-  --wjs-form-submit-color: #0b0b0b;
   --wjs-form-submit-radius: 0;
   --wjs-form-submit-family: var(--wjs-font-family-heading);
   --wjs-form-submit-weight: 600;
   --wjs-form-submit-shadow: none;
   --wjs-form-submit-hover-bg: #45ce78;
   --wjs-search-button-bg: #22c55e;
-  --wjs-search-button-color: #0b0b0b;
   --wjs-search-button-tracking: 0.06em;
   --wjs-search-focus-ring: rgba(34,197,94,0.3);
   --wjs-search-focus-color: #22c55e;
@@ -260,7 +252,6 @@
   --wjs-cta-border-color: #12462e;
   --wjs-cta-shadow: none;
   --wjs-cta-button-bg: #22c55e;
-  --wjs-cta-button-color: #0b0b0b;
   --wjs-cta-button-family: var(--wjs-font-family-heading);
   --wjs-cta-button-weight: 600;
   --wjs-cta-button-tracking: 0.06em;
@@ -286,7 +277,6 @@
   --wjs-pricing-period-color: #939498;
   --wjs-pricing-feature-color: #939498;
   --wjs-pricing-button-bg: #22c55e;
-  --wjs-pricing-button-color: #0b0b0b;
   --wjs-pricing-button-radius: 0;
   --wjs-pricing-button-hover-bg: #45ce78;
   --wjs-pricing-highlight-bg: #0e2521;
@@ -294,12 +284,9 @@
   --wjs-pricing-highlight-border-width: 1px;
   --wjs-pricing-highlight-shadow: none;
   --wjs-pricing-highlight-price-color: #22c55e;
-  --wjs-color-text-footer-heading: #ffffff;
-  --wjs-color-text-footer-main: #ffffff;
   --wjs-social-bg: transparent;
   --wjs-social-color: #22c55e;
   --wjs-social-hover-bg: #22c55e;
-  --wjs-social-hover-color: #0b0b0b;
   --wjs-social-radius: 0;
   --wjs-image-radius: 0;
   --wjs-image-shadow: none;
@@ -310,11 +297,16 @@
   --wjs-table-head-tracking: 0.06em;
   --wjs-divider-color: #12462e;
   --wjs-hero-gradient: none;
-  --wjs-footer-text-hover: #ffffff;
   --wjs-nav-color: #f5f5f4;
   --wjs-nav-color-hover: #22c55e;
   --wjs-logo-color: #22c55e;
   --wjs-logo-color-hover: #60d58b;
+  --wjs-color-text-footer-heading: #ffffff;
+  --wjs-color-text-footer-main: #ffffff;
+  --wjs-color-text-footer-dim: #97989b;
+  --wjs-footer-text-heading: #ffffff;
+  --wjs-footer-text-body: #97989b;
+  --wjs-footer-text-hover: #ffffff;
 }
 body { line-height: 1.65 }
 .wjs-header-nav { gap: 1.75rem; font-size: 0.8125rem; font-weight: 500; letter-spacing: 0.02em; text-transform: lowercase }
