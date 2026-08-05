@@ -296,6 +296,15 @@ function assertSqlAllowed(sql: string, allowedVerbs: string[], tablePrefix?: str
     if (/\b(?:readfile|writefile|load_extension|fsdir|zipfile|sqlite3_\w+|lo_import|lo_export|pg_read_file|pg_read_binary_file|pg_ls_dir|pg_stat_file|dblink|dblink_exec)\s*\(/.test(lower)) {
         throw new Error(`🛡️ Plugin DB access denied: file/extension/program SQL functions are not permitted.`);
     }
+    // Postgres' xml-export family takes a SQL QUERY as a string argument and executes it. That breaks this
+    // guard's load-bearing assumption — lexSql blanks literals precisely so their contents can never be seen
+    // as SQL structure — by laundering a whole query through a literal: the statement has zero table tokens,
+    // so both the prefix allowlist and the PROTECTED_TABLES regex pass vacuously, and
+    // `SELECT query_to_xml('select user_pass from users', ...)` reads the users table from a read-scoped
+    // plugin. Same reasoning as the file/extension family above, so deny textually on every driver.
+    if (/\b(?:query_to_xml|query_to_xmlschema|query_to_xml_and_xmlschema|table_to_xml|table_to_xmlschema|table_to_xml_and_xmlschema|schema_to_xml|schema_to_xmlschema|schema_to_xml_and_xmlschema|database_to_xml|database_to_xmlschema|database_to_xml_and_xmlschema|cursor_to_xml|cursor_to_xmlschema)\s*\(/.test(lower)) {
+        throw new Error(`🛡️ Plugin DB access denied: query/table/schema-to-XML functions are not permitted.`);
+    }
     // Single statement only — strip a single trailing ';' then reject any remaining one.
     if (lower.replace(/;\s*$/, '').includes(';')) {
         throw new Error(`🛡️ Plugin DB access denied: multiple statements are not permitted.`);
@@ -327,6 +336,29 @@ function assertSqlAllowed(sql: string, allowedVerbs: string[], tablePrefix?: str
         // an untrusted plugin gets inserted ids via lastID anyway) — deny it outright for untrusted SQL.
         if (/\breturning\b/.test(lower)) {
             throw new Error(`🛡️ Plugin DB access denied: RETURNING is not permitted; use a separate SELECT.`);
+        }
+        // DDL OBJECT CLASS (positive allowlist, mirroring the leading-verb allowlist above). Everything
+        // that scopes DDL to this plugin below — the table-token walk, the INDEX `ON <table>` check, the
+        // VIEW/TRIGGER name check — only ever looks at TABLE, INDEX, VIEW and TRIGGER. A statement whose
+        // object is a SCHEMA, DATABASE, ROLE, FUNCTION, EXTENSION, SYSTEM, ... names no table at all, so
+        // the walker yields zero tokens and the default-deny prefix rule passed VACUOUSLY. `db.run` then
+        // routes create/alter/drop to the ADMIN connection on the stated premise that "the text-guard
+        // above already forced the target under the plugin's own prefix" — true only for those four
+        // classes. `DROP SCHEMA public CASCADE`, `CREATE ROLE ... SUPERUSER` and a SECURITY DEFINER
+        // function reading users (its body is a literal, hence invisible to the guard by design) were all
+        // ALLOWED. Infer nothing from the ABSENCE of tokens: require the object class to be one we can
+        // actually scope, and deny every other class outright.
+        if (/^(?:create|alter|drop)\b/.test(lower)
+            && !/^(?:create|alter|drop)\s+(?:or\s+replace\s+)?(?:temp(?:orary)\s+)?(?:unique\s+)?(?:table|index|view|trigger)\b/.test(lower)) {
+            const obj = (lower.match(/^(?:create|alter|drop)\s+(?:or\s+replace\s+)?(?:temp(?:orary)\s+)?(?:unique\s+)?([a-z_]+)/) || [])[1] || '(unknown)';
+            throw new Error(`🛡️ Plugin DB access denied: DDL on '${obj}' is not permitted — a plugin may only create/alter/drop its own TABLE, INDEX, VIEW or TRIGGER.`);
+        }
+        // A rename retargets an owned table to an arbitrary name, so the pre-rename token (which the walker
+        // sees and accepts) says nothing about where it lands: `ALTER TABLE wjp_x_notes RENAME TO users`
+        // shadows a core table. Scope the DESTINATION too.
+        const renameTo = lower.match(/\brename\s+to\s+([^\s(;]+)/);
+        if (renameTo && (!/^[a-z_][a-z0-9_$.]*$/.test(renameTo[1]) || !renameTo[1].startsWith(tablePrefix))) {
+            throw new Error(`🛡️ Plugin DB access denied: rename target '${renameTo[1]}' must use the '${tablePrefix}' prefix.`);
         }
         // Every TABLE the query references (at any depth, in any clause, via any keyword/comma) must be a
         // table this plugin OWNS. The lexed token-walker catches the comma-join / subquery / UNION / FROM(x)
