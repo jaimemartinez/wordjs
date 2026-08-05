@@ -63,6 +63,20 @@ export default function Header({ disableSticky = false, variant = "classic", sti
         return () => window.removeEventListener("resize", handleResize);
     }, [variant]);
 
+    // The mobile panel is a drawer over the page: Escape must dismiss it (a keyboard user has no
+    // other way back once focus is inside), and the page behind must not scroll under it.
+    useEffect(() => {
+        if (!mobileMenuOpen) return;
+        const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setMobileMenuOpen(false); };
+        const previousOverflow = document.body.style.overflow;
+        document.body.style.overflow = "hidden";
+        document.addEventListener("keydown", onKey);
+        return () => {
+            document.removeEventListener("keydown", onKey);
+            document.body.style.overflow = previousOverflow;
+        };
+    }, [mobileMenuOpen]);
+
     const fetchData = async () => {
         try {
             const { menusApi, settingsApi } = await import("@/lib/api");
