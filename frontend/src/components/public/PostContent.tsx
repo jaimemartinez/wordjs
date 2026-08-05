@@ -1,62 +1,20 @@
-"use client";
-
 /**
- * Unified renderer for a single post / page / category-post.
+ * Unified renderer for a single post / page / category-post — SERVER COMPONENT (perf F3).
  *
- * This is a Client Component, but it receives the already-fetched `post` as a prop from a Server
- * Component, so it RENDERS ON THE SERVER during SSR (real HTML body + sanitized content reach the
- * crawler) and then hydrates for the interactive bits (carousels, comments). The old version fetched
- * inside useEffect, which only runs in the browser — hence the empty-skeleton SSR this replaces.
+ * The Puck body renders through ContentRenderer (server twin of the editor canvas: same shared
+ * block components, same SharedBlockShell wrapper), so the page ships as HTML with no body
+ * hydration. The interactive pieces are their own small islands: comments, the locale-aware date,
+ * the legacy [photo-carousel] initialiser, and whatever interactive/plugin blocks the content
+ * itself contains (each code-split per page). Before F3 this file was a client component that
+ * imported <Render> + the ENTIRE editor config — ~378KB of hydrated JS on every public page.
  */
-import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Render, Config } from "@wordjs/puck";
-import "@wordjs/puck/puck.css";
-import { postConfig, pageConfig } from "@/components/puckConfig";
-import { useRuntimePuckConfig } from "@/lib/useRuntimePuckConfig";
+import ContentRenderer from "@/components/content/ContentRenderer";
+import LocalizedDate from "@/components/content/LocalizedDate";
+import LegacyCarousels from "@/components/content/LegacyCarousels";
 import CommentsSection from "@/components/CommentsSection";
 import { sanitizeHTML } from "@/lib/sanitize";
 import type { Post } from "@/lib/api";
-
-// Wire up any [photo-carousel] widgets rendered inside the post HTML. Returns a disposer that clears
-// autoplay timers so we don't leak intervals across client navigations.
-function initCarousels(): () => void {
-    const intervals: ReturnType<typeof setInterval>[] = [];
-    document.querySelectorAll('.photo-carousel:not([data-initialized])').forEach((el) => {
-        el.setAttribute('data-initialized', 'true');
-        const slides = el.querySelectorAll('.slide');
-        const dots = el.querySelectorAll('.dot');
-        const counter = el.querySelector('.current');
-        const slidesContainer = el.querySelector('.slides') as HTMLElement | null;
-        const total = slides.length;
-        let current = 0;
-
-        const go = (index: number) => {
-            current = ((index % total) + total) % total;
-            if (slidesContainer) slidesContainer.style.transform = `translateX(-${current * 100}%)`;
-            dots.forEach((d, i) => d.classList.toggle('active', i === current));
-            if (counter) counter.textContent = String(current + 1);
-        };
-
-        el.querySelectorAll('.nav-btn').forEach((btn) => {
-            btn.addEventListener('click', () => {
-                const dir = parseInt((btn as HTMLElement).dataset.dir || '1');
-                go(current + dir);
-            });
-        });
-        dots.forEach((dot) => {
-            dot.addEventListener('click', () => {
-                const idx = parseInt((dot as HTMLElement).dataset.index || '0');
-                go(idx);
-            });
-        });
-
-        const autoplay = el.getAttribute('data-autoplay') === 'true';
-        const interval = parseInt(el.getAttribute('data-interval') || '5000');
-        if (autoplay) intervals.push(setInterval(() => go(current + 1), interval));
-    });
-    return () => intervals.forEach(clearInterval);
-}
 
 interface PostContentProps {
     post: Post;
@@ -68,34 +26,7 @@ interface PostContentProps {
 }
 
 export default function PostContent({ post, settings, category, showComments }: PostContentProps) {
-    // Carousels live inside dangerouslySetInnerHTML content; initialise them after mount/hydration.
-    useEffect(() => {
-        let dispose: (() => void) | undefined;
-        const timeoutId = setTimeout(() => { dispose = initCarousels(); }, 100);
-        return () => { clearTimeout(timeoutId); dispose?.(); };
-    }, [post.id]);
-
-    // Hydration-safe date: render a deterministic ISO date on the server + first client render (so the
-    // SSR markup matches), then localize to the visitor's locale after mount. toLocaleDateString() with
-    // no args uses the runtime locale/timezone, which differs between the Node server and the browser.
-    const [dateStr, setDateStr] = useState(() => (post.date ? String(post.date).slice(0, 10) : ""));
-    useEffect(() => {
-        if (post.date) setDateStr(new Date(post.date).toLocaleDateString());
-    }, [post.date]);
-
-    // Merge active marketplace plugins' Puck blocks in at runtime (they aren't compiled into the config).
-    const config: Config = useRuntimePuckConfig(post.type === 'page' ? pageConfig : postConfig);
-
-    // Feed the post's stored meta (title/author/date) into Puck's root props.
-    const dataWithMeta = post.meta?._puck_data ? {
-        ...post.meta._puck_data,
-        root: {
-            ...post.meta._puck_data.root,
-            title: post.meta._puck_data.root?.title || post.title,
-            author: post.author?.displayName || "Admin",
-            date: dateStr,
-        },
-    } : null;
+    const puckData = post.meta?._puck_data || null;
 
     const commentsAllowed =
         showComments &&
@@ -110,9 +41,9 @@ export default function PostContent({ post, settings, category, showComments }: 
             <script
                 dangerouslySetInnerHTML={{ __html: `window.__WJS_PAGE_ID=${JSON.stringify(post.id)};` }}
             />
-            {dataWithMeta ? (
+            {puckData ? (
                 <div className="puck-content">
-                    <Render config={config} data={dataWithMeta} />
+                    <ContentRenderer data={puckData} />
                 </div>
             ) : post.type === 'page' ? (
                 // Page fallback (no card)
@@ -123,6 +54,7 @@ export default function PostContent({ post, settings, category, showComments }: 
                         suppressHydrationWarning
                         dangerouslySetInnerHTML={{ __html: sanitizeHTML(post.content) }}
                     />
+                    <LegacyCarousels postId={post.id} />
                 </div>
             ) : (
                 // Post fallback (card style)
@@ -137,7 +69,7 @@ export default function PostContent({ post, settings, category, showComments }: 
                                     <span>•</span>
                                 </>
                             )}
-                            <span>{dateStr}</span>
+                            <span><LocalizedDate date={post.date} /></span>
                             <span>•</span>
                             <span>{post.author?.displayName || "Admin"}</span>
                         </div>
@@ -155,6 +87,7 @@ export default function PostContent({ post, settings, category, showComments }: 
                         suppressHydrationWarning
                         dangerouslySetInnerHTML={{ __html: sanitizeHTML(post.content) }}
                     />
+                    <LegacyCarousels postId={post.id} />
                 </article>
             )}
 

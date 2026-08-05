@@ -1,17 +1,20 @@
 "use client";
 /**
  * Catch-all client island for block types the server renderer does not own: marketplace-plugin
- * blocks (merged into the config at runtime) and Symbol (whose render binds to the full component
- * map). Renders the single item through the SAME client machinery the whole page used before F3
- * (<Render> + runtime config), so behavior is identical — but the cost is now paid ONLY by pages
- * that actually contain such a block, as its chunk code-splits away from the base page bundle.
+ * blocks and Symbol. A TINY stub on purpose: the actual machinery (<Render> + runtime config,
+ * i.e. the whole editor config graph) lives in PluginBlockHeavy behind React.lazy, so its chunk
+ * is fetched only when a page actually mounts one of these blocks — pages without them ship none
+ * of it. Trade-off (documented): these blocks now paint on the client after hydration instead of
+ * in the SSR HTML; core blocks are unaffected (they render on the server).
  */
-import { Render } from "@wordjs/puck";
-import { pageConfig } from "@/components/puckConfig";
-import { useRuntimePuckConfig } from "@/lib/useRuntimePuckConfig";
+import React from "react";
+
+const Heavy = React.lazy(() => import("./PluginBlockHeavy"));
 
 export default function PluginBlockIsland({ item }: { item: any }) {
-    const config = useRuntimePuckConfig(pageConfig);
-    const data = { content: [item], root: { props: {} } };
-    return <Render config={config} data={data as any} />;
+    return (
+        <React.Suspense fallback={null}>
+            <Heavy item={item} />
+        </React.Suspense>
+    );
 }

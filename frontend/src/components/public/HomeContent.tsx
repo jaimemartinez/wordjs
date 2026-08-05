@@ -1,16 +1,13 @@
-"use client";
-
 /**
- * Renders the configured static home page (Puck layout, or HTML with [shortcode] plugin embeds).
- * Receives the already-fetched `post` from the Server Component, so the text content server-renders
- * for SEO; only the plugin embeds ([cards], [vgallery]) hydrate client-side via PluginLoader.
+ * Renders the configured static home page (Puck layout, or HTML with [shortcode] plugin embeds) —
+ * SERVER COMPONENT (perf F3). The Puck body renders through ContentRenderer (same shared block
+ * components as the editor canvas, wrapped in SharedBlockShell); only the genuinely interactive
+ * pieces hydrate: PluginLoader embeds and whatever islands the content itself contains. Before F3
+ * this was a client component importing <Render> + the entire editor config on every home view.
  */
 import { Fragment } from "react";
 import PluginLoader from "@/components/PluginLoader";
-import { Render } from "@wordjs/puck";
-import "@wordjs/puck/puck.css";
-import { pageConfig } from "@/components/puckConfig";
-import { useRuntimePuckConfig } from "@/lib/useRuntimePuckConfig";
+import ContentRenderer from "@/components/content/ContentRenderer";
 import { sanitizeHTML } from "@/lib/sanitize";
 import type { Post } from "@/lib/api";
 
@@ -60,13 +57,10 @@ function renderContent(htmlContent: string) {
 }
 
 export default function HomeContent({ post }: { post: Post }) {
-    // Merge active marketplace plugins' Puck blocks in at runtime (called before any early return so the
-    // hook order is stable). No-op on first render → SSR/hydration match; blocks appear once loaded.
-    const config = useRuntimePuckConfig(pageConfig);
     if (post.meta?._puck_data) {
         return (
             <div className="puck-content w-full">
-                <Render config={config} data={post.meta._puck_data} />
+                <ContentRenderer data={post.meta._puck_data} />
             </div>
         );
     }
