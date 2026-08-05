@@ -3,7 +3,7 @@
   "source": "backend/public/css/wordjs-ui.css",
   "counts": {
     "tokens": 744,
-    "varUses": 1710,
+    "varUses": 1712,
     "elements": 33
   },
   "tokens": {
@@ -3945,7 +3945,7 @@
           "property": "--wjs-blockquote-border-color"
         },
         {
-          "selector": ".wjs-header-nav a:hover, .wjs-chrome-nav a:hover",
+          "selector": ".wjs-header-nav a:hover, .wjs-header-mobile-panel a:hover",
           "property": "color"
         },
         {
@@ -4392,7 +4392,7 @@
       ],
       "consumers": [
         {
-          "selector": ".wjs-footer-grid a, .wjs-footer-minimal a",
+          "selector": ".wjs-footer-grid a, .wjs-footer-minimal a, .wjs-footer-nav a, .wjs-footer-logo",
           "property": "color"
         }
       ],
@@ -4410,6 +4410,10 @@
         {
           "selector": "footer h3, footer h4",
           "property": "color"
+        },
+        {
+          "selector": ".wjs-footer-logo",
+          "property": "color"
         }
       ]
     },
@@ -4421,7 +4425,7 @@
       ],
       "consumers": [
         {
-          "selector": ".wjs-footer-grid a:hover, .wjs-footer-minimal a:hover",
+          "selector": ".wjs-footer-grid a:hover, .wjs-footer-minimal a:hover, .wjs-footer-nav a:hover, .wjs-footer-logo:hover",
           "property": "color"
         },
         {
@@ -4462,7 +4466,7 @@
           "property": "color"
         },
         {
-          "selector": ".wjs-header-nav a, .wjs-chrome-nav a",
+          "selector": ".wjs-header-nav a, .wjs-header-mobile-panel a",
           "property": "color"
         },
         {
@@ -6060,7 +6064,7 @@
           "property": "--wjs-color-text-footer-dim"
         },
         {
-          "selector": ".wjs-footer-grid a, .wjs-footer-minimal a",
+          "selector": ".wjs-footer-grid a, .wjs-footer-minimal a, .wjs-footer-nav a, .wjs-footer-logo",
           "property": "color"
         }
       ]
@@ -6069,12 +6073,17 @@
       "group": "footer",
       "declaredDefault": null,
       "fallbacks": [
-        "#ffffff"
+        "#ffffff",
+        "var(--wjs-color-text-footer-heading, #ffffff)"
       ],
       "consumers": [
         {
           "selector": ":root",
           "property": "--wjs-color-text-footer-heading"
+        },
+        {
+          "selector": ".wjs-footer-logo",
+          "property": "color"
         }
       ]
     },
@@ -6086,7 +6095,7 @@
       ],
       "consumers": [
         {
-          "selector": ".wjs-footer-grid a:hover, .wjs-footer-minimal a:hover",
+          "selector": ".wjs-footer-grid a:hover, .wjs-footer-minimal a:hover, .wjs-footer-nav a:hover, .wjs-footer-logo:hover",
           "property": "color"
         }
       ]
@@ -8546,7 +8555,7 @@
       ],
       "consumers": [
         {
-          "selector": ".wjs-header-nav a, .wjs-chrome-nav a",
+          "selector": ".wjs-header-nav a, .wjs-header-mobile-panel a",
           "property": "color"
         }
       ]
@@ -8559,7 +8568,7 @@
       ],
       "consumers": [
         {
-          "selector": ".wjs-header-nav a:hover, .wjs-chrome-nav a:hover",
+          "selector": ".wjs-header-nav a:hover, .wjs-header-mobile-panel a:hover",
           "property": "color"
         }
       ]

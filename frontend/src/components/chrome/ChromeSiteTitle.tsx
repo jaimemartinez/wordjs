@@ -19,7 +19,10 @@ export default function ChromeSiteTitle({ showTagline = false, location = "heade
     // emits it on an <a> whose only child is the title span, and themes write `.wjs-header-logo span`.
     // On the wrapper that descendant rule would style the TAGLINE instead. Header slot only — those
     // rules are masthead-specific. See ChromeLogo for the same contract.
-    const hook = location === "header" ? "wjs-header-logo " : "";
+    // In a footer the brand still needs A hook, or it falls through to the bare `a` rule and renders
+    // as an underlined link in the link colour on the footer band. wjs-footer-logo is the footer's
+    // own, coloured from the footer tokens — never the masthead ones.
+    const hook = location === "header" ? "wjs-header-logo " : "wjs-footer-logo ";
     return (
         <div className="wjs-chrome-site-title flex flex-col">
             {siteTitle ? (

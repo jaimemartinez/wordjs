@@ -25,7 +25,11 @@ export default function ChromeNav({ location, orientation, items }: ChromeNavVie
     // Most catalog themes style the header nav through .wjs-header-nav — the hook Header.tsx emits —
     // so a composed header nav emits it TOO, or activating a composition un-styles those themes. A
     // footer nav must not pick it up: those rules (order/width/justify !important) target the masthead.
-    const hook = location === "header" ? " wjs-header-nav" : "";
+    // …and a footer nav gets its OWN hook rather than none: wordjs-ui.css colours chrome navigation
+    // by hook, so a hookless footer nav fell through to the bare `a` rule and came out link-coloured
+    // and underlined on the footer band, while `.wjs-chrome-nav a` (which both locations share) would
+    // have painted it the HEADER's nav colour. Two locations, two hooks, two sets of tokens.
+    const hook = location === "header" ? " wjs-header-nav" : " wjs-footer-nav";
     const links = sorted.map((item) => (
         <Link key={item.id} href={item.url || "#"} className={LINK_CLASS[location]}>
             {item.title}
@@ -45,7 +49,7 @@ export default function ChromeNav({ location, orientation, items }: ChromeNavVie
     // The row therefore has to stay visible at every width, so it wraps instead of hiding below md.
     if (location === "footer") {
         return (
-            <nav aria-label={label} className="wjs-chrome-nav wjs-chrome-nav-horizontal flex flex-wrap items-center gap-8">
+            <nav aria-label={label} className={`wjs-chrome-nav wjs-chrome-nav-horizontal${hook} flex flex-wrap items-center gap-8`}>
                 {links}
             </nav>
         );
