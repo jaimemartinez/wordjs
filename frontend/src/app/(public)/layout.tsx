@@ -49,6 +49,9 @@ export default async function PublicLayout({
     } catch { /* malformed — render without socials */ }
 
     const themeSlug = settings?.template || "default";
+    // Derived server-side (memoized theme scan, no extra SQL/fs per request) — see the settings route's
+    // DERIVED_PUBLIC_SETTINGS. Rides the same ISR window + 'settings' purge tag as the rest of this data.
+    const themeVersion = settings?.active_theme_version || "";
 
     // Composable chrome (contract v1), per part: site option → theme chrome file → the shell's
     // layout-v2 variant/default. The theme files ride the same ISR window + 'settings' tag as the
@@ -90,6 +93,7 @@ export default async function PublicLayout({
             layout={layout}
             mods={settings?.active_theme_mods}
             themeSlug={themeSlug}
+            themeVersion={themeVersion}
             headerSlot={headerSlot}
             footerSlot={footerSlot}
             settings={settings || undefined}

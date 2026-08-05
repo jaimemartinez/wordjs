@@ -23,6 +23,7 @@ export default function PublicLayoutShell({
     layout = {},
     mods,
     themeSlug,
+    themeVersion,
     settings,
     headerMenu,
     footerMenu,
@@ -36,6 +37,10 @@ export default function PublicLayoutShell({
     // Active-theme slug resolved by the async server layout, so the theme stylesheet is server-rendered
     // (no FOUC). Omitted by the editor preview, which resolves it client-side + injects its own iframe CSS.
     themeSlug?: string | null;
+    // theme.json version of that theme (derived `active_theme_version` setting) — it versions the
+    // stylesheet URL so an in-place theme edit busts the browser copy. Server-provided so SSR and
+    // hydration agree on the href.
+    themeVersion?: string | null;
     // SSR-resolved chrome data (live site) forwarded to Header/Footer so they render nav/logo in the
     // initial HTML and skip their per-visitor client fetch. All omitted by the editor preview → the
     // chrome falls back to fetching client-side (unchanged).
@@ -75,7 +80,7 @@ export default function PublicLayoutShell({
                 >
                     Skip to content
                 </a>
-                <ThemeLoader initialSlug={themeSlug} />
+                <ThemeLoader initialSlug={themeSlug} initialThemeVersion={themeVersion} />
                 <ThemeTokenOverlay mods={mods} />
                 {headerSlot ?? <Header initialMenu={headerMenu} initialSettings={settings} variant={header.variant} sticky={header.sticky} transparent={header.transparent} />}
                 <main id="main-content" className="flex-1 pt-24 pb-10 container mx-auto px-4" style={mainStyle}>

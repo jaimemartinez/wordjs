@@ -167,6 +167,19 @@ jobs:
           node scripts/generate-token-manifest.js
           git diff --exit-code -- backend/public/theme-tokens.json \
             || { echo "::error::backend/public/theme-tokens.json is stale — regenerate with 'node scripts/generate-token-manifest.js' and commit the result"; exit 1; }
+      - name: Asset version anti-drift gate
+        # frontend/src/lib/assetVersion.generated.ts is COMMITTED and is just the sha256 of
+        # backend/public/css/wordjs-ui.css (LF-normalized, so Windows checkouts hash the same bytes as
+        # this runner). It is the cache-busting token on the long-cached CSS URLs: shipping a ui.css
+        # change without regenerating it means every browser keeps the stale sheet for a day — exactly
+        # what the old hand-bumped constant did. Same ls-files guard as above: on an untracked file
+        # `git diff --exit-code` is vacuously green.
+        run: |
+          git ls-files --error-unmatch frontend/src/lib/assetVersion.generated.ts >/dev/null \
+            || { echo "::error::frontend/src/lib/assetVersion.generated.ts is not tracked by git — commit it or the drift gate can never fail"; exit 1; }
+          node scripts/generate-asset-version.js
+          git diff --exit-code -- frontend/src/lib/assetVersion.generated.ts \
+            || { echo "::error::frontend/src/lib/assetVersion.generated.ts is stale — regenerate with 'node scripts/generate-asset-version.js' and commit the result"; exit 1; }
       - name: Type check
         working-directory: frontend
         run: npx tsc --noEmit
