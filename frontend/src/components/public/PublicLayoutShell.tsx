@@ -1,7 +1,7 @@
 // Synchronous, presentation-only shell for the public site chrome. It composes the client chrome
 // (ThemeLoader, ThemeTokenOverlay, Header, Footer, SidebarLayout, ActivePluginsProvider) around the
-// page `children` and applies the active theme's structure config (containerWidth/sidebar) + customizer
-// overlay, all passed in as plain props.
+// page `children` and applies the active theme's structure config (layout v2: header/footer variants,
+// sidebar, containerWidth) + customizer overlay, all passed in as plain props.
 //
 // WHY a separate shell: the real route layout (app/(public)/layout.tsx) is an ASYNC server component
 // (it fetches settings via getSettings). The Puck editor preview (PuckEditor.tsx, a "use client"
@@ -16,6 +16,7 @@ import ThemeLoader from "@/components/public/ThemeLoader";
 import ThemeTokenOverlay from "@/components/public/ThemeTokenOverlay";
 import SidebarLayout from "@/components/public/SidebarLayout";
 import { ActivePluginsProvider } from "@/lib/useActivePlugins";
+import { parseThemeLayout } from "@/lib/themeLayout";
 
 export default function PublicLayoutShell({
     children,
@@ -26,6 +27,8 @@ export default function PublicLayoutShell({
     headerMenu,
     footerMenu,
     footerSocials,
+    headerSlot,
+    footerSlot,
 }: {
     children: React.ReactNode;
     layout?: Record<string, unknown>;
@@ -40,14 +43,32 @@ export default function PublicLayoutShell({
     headerMenu?: any[];
     footerMenu?: any[];
     footerSocials?: any[];
+    // Composable chrome (contract v1): when the async layout resolved a composition (site option or
+    // theme chrome file) it passes the ALREADY-RENDERED <header>/<footer> here and it replaces the
+    // built-in Header/Footer for that part. Absent ⇒ today's layout-v2 chrome, byte-for-byte.
+    headerSlot?: React.ReactNode;
+    footerSlot?: React.ReactNode;
 }) {
-    const containerWidth = typeof layout.containerWidth === "string" ? layout.containerWidth : null;
-    const mainStyle = containerWidth ? { maxWidth: containerWidth } : undefined;
-    const sidebar = layout.sidebar === true || layout.sidebar === "true";
+    // Normalized structure config (defaults ≡ today's chrome; invalid values fall back silently —
+    // the theme doctor reports them in its own lane). All from props → deterministic for hydration.
+    const { header, footer, sidebar, containerWidth } = parseThemeLayout(layout);
+    // pt-24 stays on the class list for parity; this inline padding wins over it, so the
+    // offset under the fixed header is themable via --wjs-header-offset (default = pt-24).
+    const mainStyle = {
+        paddingTop: "var(--wjs-header-offset, 6rem)",
+        ...(containerWidth ? { maxWidth: containerWidth } : undefined),
+    };
+    const shellStyle = {
+        backgroundColor: 'var(--wjs-bg-canvas, #f8fafc)',
+        // sticky:false — or a composed headerSlot, which always sits in normal flow — → the main no
+        // longer needs the fixed-header offset; declaring the var here (ancestor) wins over any theme
+        // :root value for descendants.
+        ...(header.sticky && !headerSlot ? undefined : { "--wjs-header-offset": "0rem" }),
+    } as React.CSSProperties;
 
     return (
         <ActivePluginsProvider>
-            <div className="min-h-screen flex flex-col" style={{ backgroundColor: 'var(--wjs-bg-canvas, #f8fafc)' }}>
+            <div className="min-h-screen flex flex-col" style={shellStyle}>
                 <a
                     href="#main-content"
                     className="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-[100] focus:px-4 focus:py-2 focus:rounded-lg focus:bg-[var(--wjs-color-primary,#2563eb)] focus:text-[var(--wjs-color-on-primary,#ffffff)] focus:shadow-lg"
@@ -56,11 +77,11 @@ export default function PublicLayoutShell({
                 </a>
                 <ThemeLoader initialSlug={themeSlug} />
                 <ThemeTokenOverlay mods={mods} />
-                <Header initialMenu={headerMenu} initialSettings={settings} />
+                {headerSlot ?? <Header initialMenu={headerMenu} initialSettings={settings} variant={header.variant} sticky={header.sticky} transparent={header.transparent} />}
                 <main id="main-content" className="flex-1 pt-24 pb-10 container mx-auto px-4" style={mainStyle}>
-                    <SidebarLayout enabled={sidebar}>{children}</SidebarLayout>
+                    <SidebarLayout enabled={sidebar.enabled} position={sidebar.position}>{children}</SidebarLayout>
                 </main>
-                <Footer previewSettings={settings} previewMenu={footerMenu} previewSocials={footerSocials} />
+                {footerSlot ?? <Footer previewSettings={settings} previewMenu={footerMenu} previewSocials={footerSocials} variant={footer.variant} columns={footer.columns} />}
             </div>
         </ActivePluginsProvider>
     );

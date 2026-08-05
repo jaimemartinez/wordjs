@@ -241,6 +241,29 @@ export const getMenuByLocation = cache((location: string): Promise<{ items: Menu
 export interface MenuItem { id: number | string; title: string; url: string; order?: number; }
 
 /**
+ * Active theme's chrome composition file (composable-chrome contract v1, precedence level 2º).
+ * Served STATICALLY by the backend at /themes/<slug>/chrome/<part>.json — an origin-level path,
+ * not under /api/v1, so this strips the API suffix off the same resolved base serverFetch uses
+ * (config is the host authority; no request-header reads — the public tree must stay prerenderable).
+ * Returns the RAW text: budget/JSON/schema validation is parseChromeData's job (fail-closed in the
+ * caller), never this loader's. 404 = the theme ships no composition — normal, silently null.
+ * Cached under the 'settings' tag: switchTheme and the site_chrome_* writers already purge it.
+ */
+export const getThemeChrome = cache(async (slug: string, part: 'header' | 'footer'): Promise<string | null> => {
+    const origin = resolveServerBase().replace(/\/api\/v1$/, '');
+    try {
+        const res = await fetch(`${origin}/themes/${encodeURIComponent(slug)}/chrome/${part}.json`, {
+            next: { revalidate: 60, tags: ['settings'] },
+        } as RequestInit);
+        if (!res.ok) return null;
+        return await res.text();
+    } catch {
+        // Backend unreachable (e.g. build prerender) — fall through to the next precedence level.
+        return null;
+    }
+});
+
+/**
  * Draft-preview loader: forwards the admin's session cookie, so the backend's
  * GET /posts/slug/:slug (optionalAuth) returns non-published posts to their author /
  * editors. A separate cache() entry from getPostBySlug keeps the keying correct.

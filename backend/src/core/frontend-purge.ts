@@ -154,6 +154,7 @@ const SETTINGS_OPTIONS = new Set([
     'blogname', 'blogdescription', 'siteurl', 'home', 'homepage_id', 'posts_per_page',
     'template', 'stylesheet', 'active_theme_layout', 'active_theme_mods', 'theme_mods',
     'site_logo', 'site_icon', 'permalink_structure', 'default_category',
+    'site_chrome_header', 'site_chrome_footer',
 ]);
 
 /** Wire the content hooks. Call ONCE from initialize() after the hook system is up. */
