@@ -474,14 +474,69 @@ class Post {
             params.push(parent);
         }
 
-        // Search
+        // Search — the FTS5 index when this install has one, else the original LIKE scan.
         if (search) {
-            conditions.push(`(${col}post_title LIKE ? OR ${col}post_content LIKE ?)`);
-            const searchTerm = `%${search}%`;
-            params.push(searchTerm, searchTerm);
+            const match = Post._ftsMatchQuery(search);
+            if (Post._ftsAvailable() && match) {
+                // Subquery, not a JOIN: the caller already builds its own FROM/JOIN chain, and a
+                // rowid IN (...) keeps this a pure filter that composes with every other condition
+                // AND with the COUNT(*) query that reuses this same builder.
+                conditions.push(`${col}id IN (SELECT rowid FROM posts_fts WHERE posts_fts MATCH ?)`);
+                params.push(match);
+            } else {
+                conditions.push(`(${col}post_title LIKE ? OR ${col}post_content LIKE ?)`);
+                const searchTerm = `%${search}%`;
+                params.push(searchTerm, searchTerm);
+            }
         }
 
         return { joins, conditions, params };
+    }
+
+    /**
+     * Is the FTS5 index present? Probed ONCE per process against sqlite_master and cached — the
+     * answer only changes when migration 0008 runs, which happens at boot before any query.
+     * Anything that is not a SQLite install with FTS5 compiled in resolves to false, and search
+     * keeps using the LIKE scan with byte-identical behaviour.
+     */
+    static _ftsProbe: boolean | null = null;
+    static _ftsAvailable(): boolean {
+        if (Post._ftsProbe !== null) return Post._ftsProbe;
+        try {
+            const { db, getDbType } = require('../config/database');
+            const type = typeof getDbType === 'function' ? getDbType() : null;
+            if (type && type.driver && !String(type.driver).startsWith('sqlite')) {
+                return (Post._ftsProbe = false);
+            }
+            const row = db.prepare
+                ? db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='posts_fts'").get()
+                : null;
+            return (Post._ftsProbe = !!row);
+        } catch {
+            return (Post._ftsProbe = false);
+        }
+    }
+
+    /**
+     * Turn a user's search box input into an FTS5 MATCH expression.
+     *
+     * User text can NEVER be passed through raw: FTS5 has its own query language (quotes, NEAR,
+     * column filters, `-` negation, `*`), so a stray character is either a SQLITE_ERROR thrown at
+     * the visitor or an operator they did not intend. Every token is therefore stripped of syntax
+     * characters and re-quoted as a literal phrase, and the LAST token gets a `*` so type-ahead
+     * ("word" while typing "wordjs") still matches — the closest honest equivalent of the old
+     * substring LIKE. Returns null when nothing usable survives, and the caller falls back to LIKE.
+     */
+    static _ftsMatchQuery(search: string): string | null {
+        const tokens = String(search)
+            .replace(/["'^*():\-]/g, ' ')   // FTS5 syntax characters — never let them through
+            .split(/\s+/)
+            .map((t) => t.trim())
+            .filter(Boolean);
+        if (!tokens.length) return null;
+        return tokens
+            .map((t, i) => (i === tokens.length - 1 ? `"${t}"*` : `"${t}"`))
+            .join(' AND ');
     }
 
     /**
