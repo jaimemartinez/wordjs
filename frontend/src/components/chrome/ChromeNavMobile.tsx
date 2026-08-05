@@ -5,13 +5,22 @@
 // classes so existing theme CSS keeps applying. Mounted by the SERVER ChromeNav next to the desktop
 // nav (valid server → client island composition) with already-resolved items.
 import Link from "next/link";
+import { createPortal } from "react-dom";
 import { useEffect, useId, useState } from "react";
 import type { ChromeMenuItem } from "@/lib/chromeData";
 
 export default function ChromeNavMobile({ items }: { items: ChromeMenuItem[] }) {
     const [open, setOpen] = useState(false);
+    const [mounted, setMounted] = useState(false);
     // Unique panel id — the composition may mount several horizontal navs (header AND footer).
     const panelId = useId();
+
+    // The drawer is PORTALED to <body>. `position: fixed` resolves against the nearest ancestor with a
+    // transform/filter/backdrop-filter, and the composed header wrapper uses backdrop-blur — inside it
+    // the panel collapsed to the header's own height instead of covering the viewport. Portaling makes
+    // the drawer independent of whatever wrapper (or theme CSS) the composition happens to sit in.
+    // Mount-gated so the server and the first client render agree.
+    useEffect(() => setMounted(true), []);
 
     // Close on resize to desktop, like Header.tsx (the desktop nav takes over at md).
     useEffect(() => {
@@ -21,6 +30,19 @@ export default function ChromeNavMobile({ items }: { items: ChromeMenuItem[] }) 
         window.addEventListener("resize", handleResize);
         return () => window.removeEventListener("resize", handleResize);
     }, []);
+
+    // Drawer semantics, same as Header.tsx: Escape dismisses it and the page behind stays put.
+    useEffect(() => {
+        if (!open) return;
+        const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+        const previousOverflow = document.body.style.overflow;
+        document.body.style.overflow = "hidden";
+        document.addEventListener("keydown", onKey);
+        return () => {
+            document.removeEventListener("keydown", onKey);
+            document.body.style.overflow = previousOverflow;
+        };
+    }, [open]);
 
     return (
         <div className="wjs-chrome-nav-mobile md:hidden">
@@ -42,6 +64,7 @@ export default function ChromeNavMobile({ items }: { items: ChromeMenuItem[] }) 
                 )}
             </button>
 
+            {mounted && createPortal(<>
             {/* Overlay */}
             <div
                 className={`wjs-header-mobile-overlay fixed inset-0 z-40 bg-black/50 backdrop-blur-sm transition-opacity duration-300 md:hidden ${open ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"}`}
@@ -84,6 +107,7 @@ export default function ChromeNavMobile({ items }: { items: ChromeMenuItem[] }) 
                     </nav>
                 </div>
             </div>
+            </>, document.body)}
         </div>
     );
 }

@@ -11,7 +11,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Puck, type Data } from "@wordjs/puck";
 import "@wordjs/puck/puck.css";
 import { chromeApi, settingsApi, type ChromePart } from "@/lib/api";
-import { ASSET_VERSION } from "@/lib/assetVersion";
+import { themeStylesheetHref, uiFrameworkHref } from "@/lib/assetVersion";
 import { parseChromeData, STARTER_TEMPLATES, type ChromeBlock, type ChromeData } from "@/lib/chromeData";
 import { useToast } from "@/contexts/ToastContext";
 import { buildChromeEditorConfig } from "./chromeEditorConfig";
@@ -48,12 +48,28 @@ function toContractData(data: Data): ChromeData {
     return { root: { props: d.root?.props ?? {} }, content: d.content ?? [] };
 }
 
+// The backend validator answers with structured entries ({ code, path, message }), the local one with
+// plain strings. Both end up in the same banner, so flatten to text here: rendering an object as a
+// React child throws and takes the whole editor down — on the very path meant to REPORT a problem.
+// The path is kept in the message because it names the offending block ("content.2.props.href").
+function describeError(entry: unknown): string {
+    if (typeof entry === "string") return entry;
+    if (entry && typeof entry === "object") {
+        const e = entry as { path?: unknown; message?: unknown; code?: unknown };
+        const message = typeof e.message === "string" ? e.message : typeof e.code === "string" ? e.code : "";
+        const path = typeof e.path === "string" && e.path ? `${e.path}: ` : "";
+        if (message) return `${path}${message}`;
+    }
+    return "Error de validación no reconocido";
+}
+
 export default function ChromeEditorPage() {
     const { addToast } = useToast();
     const [part, setPart] = useState<ChromePart>("header");
     const [initialData, setInitialData] = useState<Data | null>(null);
     const [source, setSource] = useState<ChromeSource>("starter");
     const [themeSlug, setThemeSlug] = useState<string>("");
+    const [themeVersion, setThemeVersion] = useState<string>("");
     const [mountKey, setMountKey] = useState(0);
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
@@ -101,6 +117,7 @@ export default function ChromeEditorPage() {
 
             const stamped = withBlockIds(resolved) as unknown as Data;
             setThemeSlug(slug);
+            setThemeVersion(String(settings?.active_theme_version || ""));
             setSource(from);
             latestDataRef.current = stamped;
             baselineJsonRef.current = JSON.stringify(toContractData(stamped));
@@ -133,8 +150,13 @@ export default function ChromeEditorPage() {
             const iframe = document.querySelector(".wjs-chrome-editor iframe") as HTMLIFrameElement | null;
             const doc = iframe?.contentDocument;
             if (!doc?.head) return;
-            const ui = ensureLink(doc, "wjs-ui-framework", `/public/css/wordjs-ui.css?v=${ASSET_VERSION}`);
-            const theme = ensureLink(doc, "wjs-theme-stylesheet", `/themes/${themeSlug}/style.css?v=${themeSlug}-${ASSET_VERSION}`);
+            // Puck creates the canvas iframe itself, so its accessible name has to be set here —
+            // an untitled iframe is announced as just "iframe" by screen readers.
+            if (iframe && !iframe.title) iframe.title = "Lienzo de edición de la cabecera y el pie";
+            const ui = ensureLink(doc, "wjs-ui-framework", uiFrameworkHref());
+            // Same key the public site uses (slug + theme version + ui hash): editing a theme bumps its
+            // version, and without it the canvas kept showing the pre-edit CSS from cache.
+            const theme = ensureLink(doc, "wjs-theme-stylesheet", themeStylesheetHref(themeSlug, themeVersion));
             if (ui.parentNode !== doc.head) doc.head.appendChild(ui);
             if (theme.parentNode !== doc.head || !(ui.compareDocumentPosition(theme) & Node.DOCUMENT_POSITION_FOLLOWING)) {
                 doc.head.appendChild(theme);
@@ -143,7 +165,7 @@ export default function ChromeEditorPage() {
         inject();
         const t = setInterval(inject, 700);
         return () => clearInterval(t);
-    }, [themeSlug, mountKey]);
+    }, [themeSlug, themeVersion, mountKey]);
 
     const handleChange = useCallback((newData: Data) => {
         latestDataRef.current = newData;
@@ -174,8 +196,9 @@ export default function ChromeEditorPage() {
             setSource("site");
             addToast("Composición guardada", "success");
         } catch (e) {
-            const err = e as Error & { errors?: string[] };
-            setErrors(Array.isArray(err.errors) && err.errors.length > 0 ? err.errors : [err.message || "No se pudo guardar"]);
+            const err = e as Error & { errors?: unknown[] };
+            const list = Array.isArray(err.errors) && err.errors.length > 0 ? err.errors.map(describeError) : [];
+            setErrors(list.length > 0 ? list : [err.message || "No se pudo guardar"]);
             addToast("No se pudo guardar la composición", "error");
         } finally {
             setSaving(false);

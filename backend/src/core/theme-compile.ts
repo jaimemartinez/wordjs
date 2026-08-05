@@ -121,6 +121,22 @@ function tokenValueProblem(raw: any): string | null {
   if (value.includes('//')) return 'contains "//"';
   if (/url\s*\(/i.test(value)) return 'contains url() (not allowed in token values)';
   if (!TOKEN_VALUE_RE.test(value)) return 'contains characters outside the portable token charset';
+  // A token value is emitted verbatim into `:root`, so it must be a COMPLETE CSS value on its own.
+  // The charset above admits '(' and quotes, and an unbalanced one keeps the CSS parser inside that
+  // construct: everything after the token — the rest of the block, and every rule following it in
+  // style.css — is swallowed as part of the value. The stylesheet then loads with no error anywhere,
+  // just silently missing most of itself. Cheap structural check; the grammar of the consuming
+  // property is not knowable here (one token feeds many properties).
+  let depth = 0;
+  let quote: string | null = null;
+  for (const ch of value) {
+    if (quote) { if (ch === quote) quote = null; continue; }
+    if (ch === '"' || ch === "'") { quote = ch; continue; }
+    if (ch === '(') depth++;
+    else if (ch === ')' && --depth < 0) return 'closes a parenthesis that was never opened';
+  }
+  if (depth !== 0) return 'leaves a parenthesis unclosed';
+  if (quote) return 'leaves a quote unclosed';
   return null;
 }
 

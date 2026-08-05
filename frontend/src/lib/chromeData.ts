@@ -68,7 +68,10 @@ export const CHROME_MAX_DEPTH = 3;
 // other scheme fail the http(s) test.
 export function isSafeChromeHref(href: unknown): href is string {
     if (typeof href !== "string" || href.length === 0) return false;
-    if (href.startsWith("//")) return false;
+    // '\' counts as '/' during URL parsing, so '/\evil.example' is authority-relative just like
+    // '//evil.example' and navigates off-site. Both spellings are rejected (mirrored in the backend
+    // validator — the parity harness pins the two implementations together).
+    if (/^\/[/\\]/.test(href)) return false;
     if (href.startsWith("/")) return true;
     return /^https?:\/\//i.test(href);
 }

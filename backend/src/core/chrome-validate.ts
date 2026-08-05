@@ -98,7 +98,10 @@ const isPlainObject = (v: any): boolean => typeof v === 'object' && v !== null &
  * matching.
  */
 function isSafeHref(v: string): boolean {
-    if (v.startsWith('/')) return !v.startsWith('//');
+    // A leading '/' followed by another slash OR A BACKSLASH is authority-relative, not site-relative:
+    // browsers normalize '\' to '/' while parsing, so '/\evil.example' navigates OFF-SITE exactly like
+    // '//evil.example'. Rejecting only '//' left that open-redirect spelling through.
+    if (v.startsWith('/')) return !/^\/[/\\]/.test(v);
     return /^https?:\/\//i.test(v);
 }
 
