@@ -1,9 +1,15 @@
 {
   "name": "Sepia Press",
-  "version": "1.0.20",
+  "version": "1.0.25",
   "description": "Warm editorial magazine — serif headlines on paper.",
   "author": "WordJS",
   "generator": "wordjs",
+  "seeds": {
+    "primary": "#9a3328",
+    "secondary": "#5b6c5d",
+    "bg": "#faf8f3",
+    "text": "#141414"
+  },
   "layout": {
     "header": {
       "variant": "classic",
@@ -16,12 +22,6 @@
     },
     "containerWidth": "68rem"
   },
-  "seeds": {
-    "primary": "#9a3328",
-    "secondary": "#5b6c5d",
-    "bg": "#faf8f3",
-    "text": "#141414"
-  },
   "tokens": {
     "--wjs-bg-canvas": "#faf8f3",
     "--wjs-color-primary": "#9a3328",
@@ -32,7 +32,6 @@
     "--wjs-color-on-secondary": "#ffffff",
     "--wjs-color-text-main": "#141414",
     "--wjs-color-heading": "#141414",
-    "--wjs-color-link": "#9a3328",
     "--wjs-font-family-heading": "'Vollkorn', Georgia, 'Times New Roman', serif",
     "--wjs-font-family-base": "'Libre Franklin', 'Segoe UI', system-ui, sans-serif",
     "--wjs-radius": "4px",
@@ -290,7 +289,8 @@
     "--wjs-search-button-color": "#ffffff",
     "--wjs-cta-button-color": "#ffffff",
     "--wjs-pricing-button-color": "#ffffff",
-    "--wjs-social-hover-color": "#ffffff"
+    "--wjs-social-hover-color": "#ffffff",
+    "--wjs-color-link": "#9a3328"
   },
   "styles": {
     "body": {

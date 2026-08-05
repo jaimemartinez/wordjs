@@ -1,404 +1,268 @@
-/* =========================================
-   THEME: AURORA GRADIENT
-   Concept: Flowing mesh gradients, vibrant colors, modern typography.
-   Trend: 2024/2025 - Gradient Mesh / Northern Lights
-   ========================================= */
-
 @import url('fonts.css');
 
+/* @wjs-generated:start — compiled from theme.json; DO NOT EDIT inside. Edit theme.json and run: node backend/cli/wordjs.js build theme aurora-gradient */
 :root {
-  /* --- COLOR PALETTE: Aurora Borealis --- */
-  --wjs-color-primary: #8b5cf6;
-  /* Violet */
-  --wjs-color-primary-dark: #7c3aed;
-  --wjs-color-secondary: #06b6d4;
-  /* Cyan */
-  --wjs-color-accent: #ec4899;
-  /* Pink */
-
-  /* --- COLOR SEMANTICS --- */
-  --wjs-bg-canvas: #0f0f1a;
-  /* the public header reads this; without it a dark theme paints a literal white bar */
-  --wjs-bg-surface-glass: rgba(15, 15, 26, 0.85);
-  /* Deep Space */
-  --wjs-bg-surface: rgba(255, 255, 255, 0.05);
-
-  --wjs-color-text-main: #f8fafc;
-  /* Crisp White */
-  --wjs-color-text-muted: #94a3b8;
-
-  --wjs-border-subtle: rgba(255, 255, 255, 0.1);
-
-  /* --- NAVIGATION CONFIG --- */
-  --wjs-nav-font-family: 'Space Grotesk', sans-serif;
-  --wjs-nav-font-size: 0.95rem;
-  --wjs-nav-font-weight: 500;
-  --wjs-nav-text-transform: none;
-  --wjs-nav-letter-spacing: -0.02em;
-
-  --wjs-nav-color: rgba(255, 255, 255, 0.7);
-  --wjs-nav-color-hover: #ffffff;
-  --wjs-nav-transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-
-  --wjs-logo-color: #ffffff;
-
-  /* --- FOOTER CONFIG --- */
-  --wjs-footer-bg: rgba(15, 15, 26, 0.9);
-  --wjs-footer-text-heading: #ffffff;
-  --wjs-footer-text-body: #94a3b8;
-  --wjs-footer-text-hover: #8b5cf6;
-  --wjs-footer-icon-bg: rgba(139, 92, 246, 0.2);
-  --wjs-footer-icon-color: #8b5cf6;
-
-  /* --- TYPOGRAPHY --- */
-  --wjs-font-family-base: 'Space Grotesk', sans-serif;
-
-  /* --- WordJS UI framework tokens --- */
-  /* Colors (extending the existing Aurora palette) */
-  --wjs-color-secondary-dark: #0891b2;
-  --wjs-color-success: #34d399;
-  --wjs-color-danger: #f87171;
-  --wjs-color-warning: #fbbf24;
-  --wjs-color-info: #38bdf8;
-  --wjs-color-light: #f8fafc;
-  --wjs-color-dark: #0f0f1a;
-  /* --- WordJS UI on-color tokens (auto: max-contrast text on each solid color) --- */
-  --wjs-color-on-primary: #161616;
-  --wjs-color-on-secondary: #161616;
-  --wjs-color-on-success: #161616;
-  --wjs-color-on-danger: #161616;
-  --wjs-color-on-warning: #161616;
-  --wjs-color-on-info: #161616;
-  --wjs-color-on-light: #161616;
-  --wjs-color-on-dark: #ffffff;
-
-  /* Surfaces / text / border */
-  --wjs-bg-muted: #1a1a2e;
-  --wjs-color-heading: #ffffff;
-  --wjs-color-link: #8b5cf6;
-  --wjs-color-link-hover: #ec4899;
-  --wjs-border-width: 1px;
-  --wjs-focus-ring: rgba(139, 92, 246, 0.3);
-
-  /* Typography */
-  --wjs-font-family-heading: 'Space Grotesk', sans-serif;
-  --wjs-font-family-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  --wjs-font-size-base: 1rem;
-  --wjs-line-height-base: 1.65;
-  --wjs-heading-weight: 700;
-  --wjs-heading-line-height: 1.15;
-  --wjs-h1: 3rem;
-  --wjs-h2: 2.25rem;
-  --wjs-h3: 1.75rem;
-  --wjs-h4: 1.375rem;
-  --wjs-h5: 1.125rem;
-  --wjs-h6: 0.95rem;
-
-  /* Spacing / shape (soft glass aesthetic) */
-  --wjs-spacer: 1rem;
-  --wjs-radius-sm: 0.5rem;
-  --wjs-radius: 0.875rem;
-  --wjs-radius-md: 1rem;
-  --wjs-radius-lg: 1.5rem;
-  --wjs-radius-pill: 50px;
-  --wjs-shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.3);
-  --wjs-shadow: 0 8px 24px rgba(139, 92, 246, 0.18);
-  --wjs-shadow-md: 0 16px 40px rgba(139, 92, 246, 0.25);
-  --wjs-shadow-lg: 0 30px 80px rgba(139, 92, 246, 0.35);
-}
-
-/* =========================================
-   VISUAL OVERRIDES
-   ========================================= */
-
-body {
-  background:
-    radial-gradient(ellipse 80% 50% at 20% -20%, rgba(120, 119, 198, 0.3), transparent),
-    radial-gradient(ellipse 60% 50% at 80% -10%, rgba(236, 72, 153, 0.2), transparent),
-    radial-gradient(ellipse 50% 80% at 50% 100%, rgba(6, 182, 212, 0.15), transparent),
-    #0f0f1a !important;
-  background-attachment: fixed !important;
-  color: var(--wjs-color-text-main) !important;
-  font-family: var(--wjs-font-family-base) !important;
-  min-height: 100vh;
-  /* FIX: Push content down for taller centered header */
-  padding-top: 200px !important;
-}
-
-/* Animated Gradient Background (Subtle Movement) */
-body::before {
-  content: '';
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background:
-    radial-gradient(circle at 30% 20%, rgba(139, 92, 246, 0.15) 0%, transparent 50%),
-    radial-gradient(circle at 70% 80%, rgba(6, 182, 212, 0.1) 0%, transparent 50%);
-  pointer-events: none;
-  z-index: -1;
-  animation: auroraShift 20s ease-in-out infinite alternate;
-}
-
-@keyframes auroraShift {
-  0% {
-    opacity: 0.5;
-    transform: scale(1) translateY(0);
-  }
-
-  100% {
-    opacity: 1;
-    transform: scale(1.1) translateY(-20px);
-  }
-}
-
-/* Header: Floating Centered Capsule */
-header {
-  background: rgba(15, 15, 26, 0.7) !important;
-  backdrop-filter: blur(20px) saturate(180%) !important;
-  border-bottom: none !important;
-  margin: 20px auto !important;
-  max-width: 800px !important;
-  border-radius: 50px !important;
-  border: 1px solid rgba(255, 255, 255, 0.1) !important;
-}
-
-header[class*='fixed'] {
-  background: rgba(15, 15, 26, 0.9) !important;
-  margin-top: 10px !important;
-}
-
-/* --- AURORA LAYOUT: Centered Vertical Stack --- */
-.wjs-header-container {
-  flex-direction: column !important;
-  align-items: center !important;
-  gap: 1rem !important;
-  padding: 1.5rem 2rem !important;
-}
-
-/* Logo: Centered, Large, Gradient */
-.wjs-header-logo {
-  order: 1 !important;
-  font-size: 2rem !important;
-  font-weight: 700 !important;
-  background: linear-gradient(135deg, #8b5cf6, #06b6d4, #ec4899) !important;
-  -webkit-background-clip: text !important;
-  -webkit-text-fill-color: transparent !important;
-  background-clip: text !important;
-  text-align: center;
-}
-
-/* Nav: Centered Below Logo */
-.wjs-header-nav {
-  order: 2 !important;
-  justify-content: center !important;
-  gap: 0.5rem !important;
-}
-
-/* Hide Actions for cleaner look — DESKTOP ONLY. Below 768px this slot holds the chrome's mobile
- * hamburger button; the previous unscoped display:none left the theme with no navigation at all
- * on phones. Desktop rendering is identical (the slot is empty there). */
-@media (min-width: 768px) {
-  .wjs-header-actions {
-    display: none !important;
-  }
-}
-
-/* Nav Links: Pill Style */
-.wjs-header-nav a {
-  font-family: var(--wjs-nav-font-family) !important;
-  font-size: var(--wjs-nav-font-size) !important;
-  font-weight: var(--wjs-nav-font-weight) !important;
-  color: var(--wjs-nav-color) !important;
-  transition: var(--wjs-nav-transition) !important;
-  padding: 8px 20px;
-  border-radius: 50px;
-  background: rgba(255, 255, 255, 0.05);
-}
-
-.wjs-header-nav a:hover {
-  color: #ffffff !important;
-  background: linear-gradient(135deg, rgba(139, 92, 246, 0.3), rgba(6, 182, 212, 0.3));
-  box-shadow: 0 0 25px rgba(139, 92, 246, 0.4);
-  transform: translateY(-2px);
-}
-
-/* Cards: Glassmorphism with Gradient Border */article {
-  background: rgba(255, 255, 255, 0.03) !important;
-  backdrop-filter: blur(10px);
-  border: 1px solid rgba(255, 255, 255, 0.1) !important;
-  border-radius: 16px !important;
-  position: relative;
-  overflow: hidden;
-}article::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 2px;
-  background: linear-gradient(90deg, #8b5cf6, #06b6d4, #ec4899);
-}
-
-/* Footer: Dark with subtle gradient */
-footer {
-  background: linear-gradient(180deg, rgba(15, 15, 26, 0.95), #0f0f1a) !important;
-  border-top: 1px solid rgba(255, 255, 255, 0.1) !important;
-}
-
-footer h3,
-footer h4 {
-  color: var(--wjs-footer-text-heading) !important;
-  font-weight: 700 !important;
-}
-
-footer a {
-  color: var(--wjs-footer-text-body) !important;
-  transition: color 0.3s, text-shadow 0.3s;
-}
-
-footer a:hover {
-  color: var(--wjs-footer-text-hover) !important;
-  text-shadow: 0 0 10px rgba(139, 92, 246, 0.5);
-}
-
-footer .w-10 {
-  background: var(--wjs-footer-icon-bg) !important;
-  color: var(--wjs-footer-icon-color) !important;
-  border-radius: 12px !important;
-}
-
-footer .w-10:hover {
-  box-shadow: 0 0 20px rgba(139, 92, 246, 0.4);
-  transform: translateY(-2px);
-}
-
-/* ===== Mobile (auto responsive pass) ===== */
-@media (max-width: 767.98px) {
-
-  /* body carried padding-top:200px !important sized for the tall two-row
-     desktop capsule header (centered logo + inline pill nav). On mobile the
-     chrome collapses the nav into the hamburger drawer, so the header is much
-     shorter — reduce the offset (!important needed to beat the base rule).
-     Also: iOS Safari ignores / paints background-attachment:fixed badly; the
-     fixed aurora glow is already supplied by the position:fixed body::before,
-     so letting the body gradient scroll loses nothing. */
-  body {
-    padding-top: 130px !important;
-    background-attachment: scroll !important;
-  }
-
-  /* Floating capsule header: keep the pill aesthetic but inset it from the
-     viewport edges instead of margin:20px auto full-bleed. */
-  header,
-  header[class*='fixed'] {
-    margin: 12px !important;
-  }
-
-  /* Tighten the capsule's interior so it doesn't eat vertical space at 375px
-     (base rule is 1.5rem 2rem !important). */
-  .wjs-header-container {
-    padding: 1rem 1.25rem !important;
-    gap: 0.75rem !important;
-  }
-
-  /* If the inline pill nav is rendered at this width, let the pills wrap
-     instead of pushing the capsule wider than the viewport. (Does not fight
-     the chrome drawer: no display override here.) */
-  .wjs-header-nav {
-    flex-wrap: wrap !important;
-  }
-
-  /* Video embed: the decorative gradient ring (::before, position:absolute,
-     inset:-2px) overhangs its parent, which cannot take overflow:hidden
-     without clipping the ring concept entirely. When the block sits flush
-     with the viewport edge that overhang widens the page — keep the pseudo
-     inside the box on mobile (it sits at z-index:-1, so no visual glitch). */
-  .wp-block-video-embed::before {
-    inset: 0;
-  }
-
-  /* Featured pricing card ships with an inline style transform:scale(1.05)
-     (the theme styles it via [style*="scale(1.05)"]). In the single-column
-     mobile stack a 105%-wide card forces horizontal scroll — a stylesheet
-     !important beats the non-important inline style. */
-  .wp-block-pricing__plan--highlighted {
-    transform: none;
-  }
-}
-
-/* ══ BLOCK TOKENS ═══════════════════════════════════════════════════════════════════════
- * Lifted from this theme's former `.wp-block-*` rules. wordjs-ui.css owns the block RULES;
- * a theme owns only the VALUES, so a single block can still override any of them.
- * ════════════════════════════════════════════════════════════════════════════════════ */
-:root {
-  --wjs-card-bg: rgba(255, 255, 255, 0.03);
-  --wjs-card-border-width: 1px;
-  --wjs-card-border-color: rgba(255, 255, 255, 0.1);
+  --wjs-bg-canvas: #0a0f1e;
+  --wjs-bg-surface: #191d2c;
+  --wjs-bg-surface-raised: #252937;
+  --wjs-color-primary: #818cf8;
+  --wjs-color-primary-dark: #818cf8;
+  --wjs-color-on-primary: #0b0b0b;
+  --wjs-color-accent: #34d399;
+  --wjs-color-on-accent: #111111;
+  --wjs-color-text-main: #f5f5f6;
+  --wjs-color-text-muted: #9c9ea4;
+  --wjs-color-heading: #f5f5f6;
+  --wjs-color-link: #818cf8;
+  --wjs-color-link-hover: #34d399;
+  --wjs-border-subtle: #343845;
+  --wjs-outline: #636670;
+  --wjs-outline-variant: #2d323e;
+  --wjs-focus-ring: #818cf8;
+  --wjs-color-secondary: #34d399;
+  --wjs-color-secondary-dark: #34d399;
+  --wjs-color-on-secondary: #0b0b0b;
+  --wjs-font-family-heading: 'Plus Jakarta Sans', 'Segoe UI', system-ui, sans-serif;
+  --wjs-font-family-base: 'Plus Jakarta Sans', 'Segoe UI', system-ui, sans-serif;
+  --wjs-radius: 12px;
+  --wjs-radius-sm: 12px;
+  --wjs-radius-md: 12px;
+  --wjs-radius-lg: 12px;
+  --wjs-radius-pill: 12px;
+  --wjs-hero-bg: #0a0f1e;
+  --wjs-hero-gradient-from: #0a0f1e;
+  --wjs-hero-gradient-to: #0a0f1e;
+  --wjs-hero-color: #f5f5f6;
+  --wjs-hero-title-color: #818cf8;
+  --wjs-hero-subtitle-color: #f5f5f6;
+  --wjs-hero-button-outline-color: #818cf8;
+  --wjs-hero-button-outline-border: #818cf8;
+  --wjs-hero-gradient: none;
+  --wjs-button-bg: #818cf8;
+  --wjs-button-color: #0b0b0b;
+  --wjs-button-radius: 999px;
+  --wjs-button-pad-x: 1.75rem;
+  --wjs-button-pad-y: 0.8rem;
+  --wjs-button-border-width: 0;
+  --wjs-button-border-color: transparent;
+  --wjs-button-transform: none;
+  --wjs-button-tracking: 0;
+  --wjs-button-weight: 600;
+  --wjs-button-family: var(--wjs-font-family-base);
+  --wjs-button-shadow: 0 10px 30px -12px rgba(245,245,246,0.6);
+  --wjs-button-hover-bg: #959ef9;
+  --wjs-button-hover-color: #0b0b0b;
+  --wjs-button-hover-shadow: 0 18px 40px -14px rgba(245,245,246,0.7);
+  --wjs-button-hover-transform: translateY(-4px);
+  --wjs-button-secondary-bg: #34d399;
+  --wjs-button-secondary-color: #0b0b0b;
+  --wjs-button-outline-bg: transparent;
+  --wjs-button-outline-color: #818cf8;
+  --wjs-button-outline-border-color: #818cf8;
+  --wjs-button-outline-hover-bg: rgba(129,140,248,0.1);
+  --wjs-card-bg: #1b202e;
+  --wjs-card-color: #f5f5f6;
   --wjs-card-radius: 16px;
-  --wjs-accordion-bg: rgba(255, 255, 255, 0.03);
-  --wjs-accordion-border-width: 1px;
-  --wjs-accordion-border-color: rgba(255, 255, 255, 0.1);
-  --wjs-accordion-radius: 16px;
-  --wjs-accordion-header-bg: transparent;
-  --wjs-accordion-header-color: var(--wjs-color-primary);
-  --wjs-accordion-header-border-width: 1px;
-  --wjs-accordion-header-border-color: rgba(255, 255, 255, 0.1);
-  --wjs-accordion-panel-bg: rgba(139, 92, 246, 0.05);
-  --wjs-accordion-panel-color: var(--wjs-color-text-muted);
-  --wjs-tabs-list-border-width: 1px;
-  --wjs-tabs-list-border-color: rgba(255, 255, 255, 0.1);
-  --wjs-tabs-color: var(--wjs-color-text-muted);
-  --wjs-tabs-radius: 8px;
-  --wjs-tabs-active-color: #ffffff;
-  --wjs-tabs-active-bg: linear-gradient(135deg, rgba(139, 92, 246, 0.3), rgba(236, 72, 153, 0.3));
-  --wjs-tabs-panel-bg: rgba(255, 255, 255, 0.03);
-  --wjs-tabs-panel-radius: 12px;
-  --wjs-video-radius: 16px;
-  --wjs-video-shadow: 0 20px 60px rgba(139, 92, 246, 0.3);
-  --wjs-audio-bg: rgba(255, 255, 255, 0.05);
-  --wjs-audio-border-width: 1px;
-  --wjs-audio-border-color: rgba(255, 255, 255, 0.1);
-  --wjs-audio-radius: 16px;
-  --wjs-pricing-bg: rgba(255, 255, 255, 0.03);
-  --wjs-pricing-border-width: 1px;
-  --wjs-pricing-border-color: rgba(255, 255, 255, 0.1);
-  --wjs-pricing-radius: 20px;
-  --wjs-pricing-hover-border-color: rgba(139, 92, 246, 0.5);
-  --wjs-pricing-hover-shadow: 0 20px 50px rgba(139, 92, 246, 0.2);
-  --wjs-pricing-highlight-bg: linear-gradient(135deg, rgba(139, 92, 246, 0.8), rgba(236, 72, 153, 0.8));
-  --wjs-pricing-highlight-border-width: 0;
-  --wjs-pricing-highlight-border-color: transparent;
-  --wjs-pricing-highlight-shadow: 0 20px 60px rgba(139, 92, 246, 0.4);
-  --wjs-testimonial-bg: rgba(255, 255, 255, 0.03);
-  --wjs-testimonial-border-width: 1px;
-  --wjs-testimonial-border-color: rgba(255, 255, 255, 0.1);
-  --wjs-testimonial-radius: 20px;
-  --wjs-cta-bg: linear-gradient(135deg, rgba(139, 92, 246, 0.9), rgba(6, 182, 212, 0.9), rgba(236, 72, 153, 0.9));
-  --wjs-cta-radius: 32px;
-  --wjs-cta-shadow: 0 30px 80px rgba(139, 92, 246, 0.4);
-  --wjs-cta-button-bg: #ffffff;
-  --wjs-cta-button-color: #8b5cf6;
-  --wjs-cta-button-radius: 50px;
-  --wjs-cta-button-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
-  --wjs-posts-bg: rgba(255, 255, 255, 0.03);
-  --wjs-posts-border-width: 1px;
-  --wjs-posts-border-color: rgba(255, 255, 255, 0.1);
+  --wjs-card-pad: 1.75rem;
+  --wjs-card-border-width: 0;
+  --wjs-card-border-color: transparent;
+  --wjs-card-shadow: 0 10px 30px -12px rgba(245,245,246,0.6);
+  --wjs-card-hover-shadow: 0 18px 40px -14px rgba(245,245,246,0.7);
+  --wjs-card-hover-transform: translateY(-4px);
+  --wjs-card-hover-border-color: transparent;
+  --wjs-card-title-color: #f5f5f6;
+  --wjs-card-title-weight: 700;
+  --wjs-card-title-tracking: -0.01em;
+  --wjs-card-desc-color: #92949b;
+  --wjs-card-desc-family: var(--wjs-font-family-base);
+  --wjs-card-icon-bg: rgba(129,140,248,0.2);
+  --wjs-card-icon-color: #818cf8;
+  --wjs-card-icon-radius: 12px;
+  --wjs-posts-bg: #1b202e;
   --wjs-posts-radius: 16px;
-  --wjs-posts-hover-border-color: rgba(139, 92, 246, 0.5);
+  --wjs-posts-pad: 1.75rem;
+  --wjs-posts-gap: 1.75rem;
+  --wjs-posts-border-width: 0;
+  --wjs-posts-border-color: transparent;
+  --wjs-posts-shadow: 0 10px 30px -12px rgba(245,245,246,0.6);
+  --wjs-posts-hover-shadow: 0 18px 40px -14px rgba(245,245,246,0.7);
   --wjs-posts-hover-transform: translateY(-4px);
-  --wjs-catposts-heading-bg: linear-gradient(135deg, #8b5cf6, #06b6d4);
-  --wjs-catposts-border-color: rgba(255, 255, 255, 0.1);
-  --wjs-search-input-bg: rgba(255, 255, 255, 0.05);
-  --wjs-search-input-border-width: 1px;
-  --wjs-search-input-border-color: rgba(255, 255, 255, 0.1);
-  --wjs-search-input-radius: 50px;
-  --wjs-search-input-color: #ffffff;
-  --wjs-search-focus-color: rgba(139, 92, 246, 0.5);
-  --wjs-search-focus-ring: 0 0 20px rgba(139, 92, 246, 0.2);
-  --wjs-search-button-bg: linear-gradient(135deg, #8b5cf6, #ec4899);
-  --wjs-search-button-color: #ffffff;
-  --wjs-search-button-radius: 50px;
-  --wjs-search-button-shadow: 0 4px 20px rgba(139, 92, 246, 0.4);
+  --wjs-posts-hover-border-color: transparent;
+  --wjs-posts-title-color: #f5f5f6;
+  --wjs-posts-title-weight: 700;
+  --wjs-posts-excerpt-color: #92949b;
+  --wjs-posts-date-color: #92949b;
+  --wjs-posts-thumb-bg: #1e2230;
+  --wjs-posts-thumb-radius: 8px;
+  --wjs-posts-family: var(--wjs-font-family-base);
+  --wjs-quote-family: var(--wjs-font-family-heading);
+  --wjs-quote-color: #f5f5f6;
+  --wjs-quote-accent: #818cf8;
+  --wjs-quote-bar-width: 0;
+  --wjs-quote-style: normal;
+  --wjs-quote-cite-color: #92949b;
+  --wjs-quote-mark-opacity: 0.1;
+  --wjs-testimonial-bg: #1b202e;
+  --wjs-testimonial-radius: 16px;
+  --wjs-testimonial-pad: 1.75rem;
+  --wjs-testimonial-border-width: 0;
+  --wjs-testimonial-border-color: transparent;
+  --wjs-testimonial-shadow: 0 10px 30px -12px rgba(245,245,246,0.6);
+  --wjs-testimonial-quote-color: #f5f5f6;
+  --wjs-testimonial-quote-family: var(--wjs-font-family-heading);
+  --wjs-testimonial-quote-style: normal;
+  --wjs-testimonial-author-color: #f5f5f6;
+  --wjs-testimonial-role-color: #92949b;
+  --wjs-testimonial-role-transform: none;
+  --wjs-testimonial-role-tracking: 0;
+  --wjs-testimonial-avatar-bg: rgba(129,140,248,0.16);
+  --wjs-testimonial-avatar-color: #818cf8;
+  --wjs-testimonial-avatar-radius: 999px;
+  --wjs-testimonial-mark-color: #818cf8;
+  --wjs-testimonial-mark-opacity: 0.14;
+  --wjs-stats-bg: transparent;
+  --wjs-stats-radius: 12px;
+  --wjs-stats-pad: 1.75rem;
+  --wjs-stats-border-width: 0;
+  --wjs-stats-border-color: transparent;
+  --wjs-stats-shadow: 0 10px 30px -12px rgba(245,245,246,0.6);
+  --wjs-stats-value-color: #818cf8;
+  --wjs-stats-value-family: var(--wjs-font-family-heading);
+  --wjs-stats-value-weight: 700;
+  --wjs-stats-label-color: #92949b;
+  --wjs-stats-label-transform: none;
+  --wjs-stats-label-tracking: 0;
+  --wjs-stats-label-size: 0.8rem;
+  --wjs-tabs-family: var(--wjs-font-family-base);
+  --wjs-tabs-color: #92949b;
+  --wjs-tabs-transform: none;
+  --wjs-tabs-tracking: 0;
+  --wjs-tabs-radius: 8px;
+  --wjs-tabs-active-color: #0b0b0b;
+  --wjs-tabs-active-bg: #818cf8;
+  --wjs-tabs-active-weight: 700;
+  --wjs-tabs-list-bg: rgba(245,245,246,0.05);
+  --wjs-tabs-list-radius: 12px;
+  --wjs-tabs-list-border-width: 0;
+  --wjs-tabs-list-border-color: transparent;
+  --wjs-tabs-panel-bg: transparent;
+  --wjs-tabs-panel-color: #f5f5f6;
+  --wjs-tabs-panel-pad: 1.75rem;
+  --wjs-accordion-item-bg: #1b202e;
+  --wjs-accordion-item-radius: 12px;
+  --wjs-accordion-item-border-width: 0;
+  --wjs-accordion-item-border-color: transparent;
+  --wjs-accordion-item-gap: 0.5rem;
+  --wjs-accordion-header-color: #f5f5f6;
+  --wjs-accordion-header-family: var(--wjs-font-family-base);
+  --wjs-accordion-header-weight: 600;
+  --wjs-accordion-header-transform: none;
+  --wjs-accordion-icon-color: #818cf8;
+  --wjs-accordion-panel-color: #92949b;
+  --wjs-accordion-panel-family: var(--wjs-font-family-base);
+  --wjs-accordion-shadow: 0 10px 30px -12px rgba(245,245,246,0.6);
+  --wjs-form-input-bg: #1b202e;
+  --wjs-form-input-color: #f5f5f6;
+  --wjs-form-input-border-color: #393d49;
+  --wjs-form-input-radius: 8px;
+  --wjs-form-label-color: #f5f5f6;
+  --wjs-form-placeholder-color: #686b74;
+  --wjs-form-accent: #818cf8;
+  --wjs-form-submit-bg: #818cf8;
+  --wjs-form-submit-color: #0b0b0b;
+  --wjs-form-submit-radius: 999px;
+  --wjs-form-submit-family: var(--wjs-font-family-base);
+  --wjs-form-submit-weight: 600;
+  --wjs-form-submit-shadow: 0 10px 30px -12px rgba(245,245,246,0.6);
+  --wjs-form-submit-hover-bg: #959ef9;
+  --wjs-search-input-bg: #1b202e;
+  --wjs-search-input-color: #f5f5f6;
+  --wjs-search-input-border-color: #393d49;
+  --wjs-search-input-radius: 999px;
+  --wjs-search-placeholder-color: #686b74;
+  --wjs-search-button-bg: #818cf8;
+  --wjs-search-button-color: #0b0b0b;
+  --wjs-search-button-radius: 999px;
+  --wjs-search-button-transform: none;
+  --wjs-search-button-tracking: 0;
+  --wjs-search-focus-ring: rgba(129,140,248,0.3);
+  --wjs-search-focus-color: #818cf8;
+  --wjs-cta-bg: #818cf8;
+  --wjs-cta-color: #0b0b0b;
+  --wjs-cta-title-color: #0b0b0b;
+  --wjs-cta-title-family: var(--wjs-font-family-heading);
+  --wjs-cta-title-weight: 700;
+  --wjs-cta-title-transform: none;
+  --wjs-cta-title-tracking: -0.01em;
+  --wjs-cta-radius: 16px;
+  --wjs-cta-pad: 1.75rem;
+  --wjs-cta-border-width: 0;
+  --wjs-cta-border-color: transparent;
+  --wjs-cta-shadow: 0 10px 30px -12px rgba(245,245,246,0.6);
+  --wjs-cta-button-bg: #0a0f1e;
+  --wjs-cta-button-color: #818cf8;
+  --wjs-cta-button-radius: 999px;
+  --wjs-cta-button-family: var(--wjs-font-family-base);
+  --wjs-cta-button-weight: 600;
+  --wjs-cta-button-transform: none;
+  --wjs-cta-button-tracking: 0;
+  --wjs-cta-button-shadow: 0 10px 30px -12px rgba(245,245,246,0.6);
+  --wjs-cta-button-hover-bg: #232735;
+  --wjs-cta-button-hover-color: #818cf8;
+  --wjs-cta-button-hover-shadow: 0 18px 40px -14px rgba(245,245,246,0.7);
+  --wjs-cta-subtitle-opacity: 0.78;
+  --wjs-pricing-bg: #1b202e;
+  --wjs-pricing-radius: 16px;
+  --wjs-pricing-pad: 1.75rem;
+  --wjs-pricing-border-width: 0;
+  --wjs-pricing-border-color: transparent;
+  --wjs-pricing-shadow: 0 10px 30px -12px rgba(245,245,246,0.6);
+  --wjs-pricing-hover-shadow: 0 18px 40px -14px rgba(245,245,246,0.7);
+  --wjs-pricing-hover-transform: translateY(-4px);
+  --wjs-pricing-hover-border-color: transparent;
+  --wjs-pricing-accent: #818cf8;
+  --wjs-pricing-name-color: #92949b;
+  --wjs-pricing-name-family: var(--wjs-font-family-base);
+  --wjs-pricing-name-transform: none;
+  --wjs-pricing-name-tracking: 0;
+  --wjs-pricing-price-color: #f5f5f6;
+  --wjs-pricing-price-family: var(--wjs-font-family-heading);
+  --wjs-pricing-price-weight: 700;
+  --wjs-pricing-period-color: #92949b;
+  --wjs-pricing-feature-color: #92949b;
+  --wjs-pricing-button-bg: #818cf8;
+  --wjs-pricing-button-color: #0b0b0b;
+  --wjs-pricing-button-radius: 999px;
+  --wjs-pricing-button-hover-bg: #959ef9;
+  --wjs-pricing-highlight-bg: #181e38;
+  --wjs-pricing-highlight-border-color: #818cf8;
+  --wjs-pricing-highlight-border-width: 1px;
+  --wjs-pricing-highlight-shadow: 0 18px 40px -14px rgba(245,245,246,0.7);
+  --wjs-pricing-highlight-price-color: #818cf8;
+  --wjs-color-text-footer-heading: #111111;
+  --wjs-color-text-footer-main: #111111;
+  --wjs-color-text-footer-dim: #5a5a5a;
+  --wjs-footer-text-heading: #111111;
+  --wjs-footer-text-body: #5a5a5a;
+  --wjs-footer-text-hover: #111111;
+  --wjs-nav-color: #f5f5f6;
+  --wjs-nav-color-hover: #818cf8;
+  --wjs-logo-color: #818cf8;
+  --wjs-logo-color-hover: #a4acfa;
+  --wjs-social-hover-color: #0b0b0b;
+  --wjs-social-bg: rgba(129,140,248,0.12);
+  --wjs-social-color: #818cf8;
+  --wjs-social-hover-bg: #818cf8;
+  --wjs-social-radius: 999px;
+  --wjs-image-radius: 16px;
+  --wjs-image-shadow: 0 10px 30px -12px rgba(245,245,246,0.6);
+  --wjs-table-border-color: #2b2f3c;
+  --wjs-table-head-bg: rgba(245,245,246,0.05);
+  --wjs-table-head-color: #f5f5f6;
+  --wjs-table-head-transform: none;
+  --wjs-table-head-tracking: 0;
+  --wjs-divider-color: #2b2f3c;
 }
+/* @wjs-generated:end */
+
+/* Aurora Gradient — compiled from theme.json. */

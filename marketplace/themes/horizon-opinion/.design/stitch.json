@@ -1,0 +1,29 @@
+{
+  "name": "stitch/horizon-opinion",
+  "designTheme": {
+    "colorMode": "LIGHT",
+    "customColor": "#0f766e",
+    "overridePrimaryColor": "#0f766e",
+    "overrideSecondaryColor": "#7c2d12",
+    "overrideNeutralColor": "#fcfbf7",
+    "headlineFont": "NOTO_SERIF",
+    "headlineFontFamily": "Noto Serif",
+    "bodyFont": "SOURCE_SERIF_4",
+    "bodyFontFamily": "Source Serif 4",
+    "labelFont": "SOURCE_SERIF_4",
+    "labelFontFamily": "Source Serif 4",
+    "roundness": "ROUND_FOUR",
+    "namedColors": {
+      "background": "#fcfbf7",
+      "surface": "#fcfbf7",
+      "on_surface": "#151514",
+      "on_background": "#151514",
+      "primary": "#0f766e",
+      "primary_container": "#0f766e",
+      "on_primary": "#ffffff",
+      "secondary": "#7c2d12",
+      "secondary_container": "#7c2d12",
+      "on_secondary": "#ffffff"
+    }
+  }
+}

@@ -1,9 +1,15 @@
 {
   "name": "Clay Pop",
-  "version": "1.0.19",
+  "version": "1.0.24",
   "description": "Claymorphism pastel con formas 3D blandas, esquinas ultra redondeadas y sombras dobles suaves.",
   "author": "WordJS × Stitch",
   "generator": "wordjs",
+  "seeds": {
+    "primary": "#66558c",
+    "secondary": "#f0a202",
+    "bg": "#efe7fb",
+    "text": "#141414"
+  },
   "layout": {
     "header": {
       "variant": "classic",
@@ -16,12 +22,6 @@
     "sidebar": false,
     "containerWidth": "70rem"
   },
-  "seeds": {
-    "primary": "#66558c",
-    "secondary": "#f0a202",
-    "bg": "#efe7fb",
-    "text": "#141414"
-  },
   "tokens": {
     "--wjs-bg-canvas": "#efe7fb",
     "--wjs-color-primary": "#66558c",
@@ -32,7 +32,6 @@
     "--wjs-color-on-secondary": "#ffffff",
     "--wjs-color-text-main": "#141414",
     "--wjs-color-heading": "#141414",
-    "--wjs-color-link": "#66558c",
     "--wjs-font-family-heading": "'Comfortaa', 'Segoe UI', system-ui, sans-serif",
     "--wjs-font-family-base": "'Quicksand', 'Segoe UI', system-ui, sans-serif",
     "--wjs-radius": "9999px",
@@ -41,15 +40,15 @@
     "--wjs-radius-lg": "9999px",
     "--wjs-radius-pill": "9999px",
     "--wjs-bg-surface-glass": "rgba(239,231,251,0.72)",
-    "--wjs-hero-bg": "#ffffff",
+    "--wjs-hero-bg": "#efe7fb",
     "--wjs-hero-gradient-angle": "160deg",
-    "--wjs-hero-gradient-from": "#ffffff",
-    "--wjs-hero-gradient-to": "#f6f0ff",
+    "--wjs-hero-gradient-from": "#efe7fb",
+    "--wjs-hero-gradient-to": "#efe7fb",
     "--wjs-hero-color": "#141414",
     "--wjs-hero-title-color": "#66558c",
     "--wjs-hero-subtitle-color": "#141414",
     "--wjs-hero-button-outline-color": "#66558c",
-    "--wjs-hero-button-outline-border": "#d9cdf0",
+    "--wjs-hero-button-outline-border": "#66558c",
     "--wjs-hero-button-outline-bg": "#ffffff",
     "--wjs-button-bg": "#66558c",
     "--wjs-button-radius": "999px",
@@ -275,7 +274,8 @@
     "--wjs-search-button-color": "#ffffff",
     "--wjs-cta-button-color": "#66558c",
     "--wjs-pricing-button-color": "#ffffff",
-    "--wjs-social-hover-color": "#ffffff"
+    "--wjs-social-hover-color": "#ffffff",
+    "--wjs-color-link": "#66558c"
   },
   "styles": {
     "hero": {

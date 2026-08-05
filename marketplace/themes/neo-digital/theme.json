@@ -1,6 +1,6 @@
 {
   "name": "Neo Digital",
-  "version": "1.0.17",
+  "version": "1.0.22",
   "description": "Cyberpunk terminal vibes with Matrix green on black.",
   "author": "WordJS",
   "generator": "wordjs",
@@ -32,8 +32,7 @@
     "--wjs-color-on-secondary": "#0b0b0b",
     "--wjs-color-text-main": "#f5f5f4",
     "--wjs-color-heading": "#f5f5f4",
-    "--wjs-color-link": "#00ff41",
-    "--wjs-font-family-heading": "'Anton', 'Oswald', 'Arial Narrow', Impact, sans-serif",
+    "--wjs-font-family-heading": "'Anton', 'Segoe UI', system-ui, sans-serif",
     "--wjs-font-family-base": "'Chivo', 'Segoe UI', system-ui, sans-serif",
     "--wjs-radius": "4px",
     "--wjs-radius-sm": "4px",
@@ -65,7 +64,7 @@
     "--wjs-hero-bg": "#000000",
     "--wjs-hero-gradient-angle": "180deg",
     "--wjs-hero-gradient-from": "#000000",
-    "--wjs-hero-gradient-to": "#0a0010",
+    "--wjs-hero-gradient-to": "#000000",
     "--wjs-hero-color": "#f5f5f4",
     "--wjs-hero-title-color": "#00ff41",
     "--wjs-hero-subtitle-color": "#f5f5f4",
@@ -319,7 +318,16 @@
     "--wjs-color-text-footer-dim": "#949494",
     "--wjs-footer-text-heading": "#ffffff",
     "--wjs-footer-text-body": "#949494",
-    "--wjs-footer-text-hover": "#ffffff"
+    "--wjs-footer-text-hover": "#ffffff",
+    "--wjs-button-color": "#0b0b0b",
+    "--wjs-button-hover-color": "#0b0b0b",
+    "--wjs-tabs-active-color": "#0b0b0b",
+    "--wjs-form-submit-color": "#0b0b0b",
+    "--wjs-search-button-color": "#0b0b0b",
+    "--wjs-cta-button-color": "#0b0b0b",
+    "--wjs-pricing-button-color": "#0b0b0b",
+    "--wjs-social-hover-color": "#0b0b0b",
+    "--wjs-color-link": "#00ff41"
   },
   "styles": {
     "body": {

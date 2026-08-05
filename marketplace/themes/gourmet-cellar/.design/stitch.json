@@ -1,0 +1,29 @@
+{
+  "name": "stitch/gourmet-cellar",
+  "designTheme": {
+    "colorMode": "DARK",
+    "customColor": "#a3661f",
+    "overridePrimaryColor": "#a3661f",
+    "overrideSecondaryColor": "#7f1d1d",
+    "overrideNeutralColor": "#14100c",
+    "headlineFont": "SOURCE_SERIF_4",
+    "headlineFontFamily": "Source Serif 4",
+    "bodyFont": "SOURCE_SANS_3",
+    "bodyFontFamily": "Source Sans 3",
+    "labelFont": "SOURCE_SANS_3",
+    "labelFontFamily": "Source Sans 3",
+    "roundness": "ROUND_FOUR",
+    "namedColors": {
+      "background": "#14100c",
+      "surface": "#14100c",
+      "on_surface": "#f6f5f5",
+      "on_background": "#f6f5f5",
+      "primary": "#a3661f",
+      "primary_container": "#a3661f",
+      "on_primary": "#ffffff",
+      "secondary": "#7f1d1d",
+      "secondary_container": "#7f1d1d",
+      "on_secondary": "#ffffff"
+    }
+  }
+}

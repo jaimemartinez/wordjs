@@ -1,6 +1,6 @@
 {
   "name": "Mono Lab",
-  "version": "1.0.17",
+  "version": "1.0.22",
   "description": "Laboratorio suizo monocromo: reglas visibles, navegación numerada, rejilla de pie a cuatro columnas y acento rojo sobre papel claro.",
   "author": "WordJS × Stitch",
   "generator": "wordjs",
@@ -33,7 +33,6 @@
     "--wjs-color-on-secondary": "#ffffff",
     "--wjs-color-text-main": "#141414",
     "--wjs-color-heading": "#141414",
-    "--wjs-color-link": "#111111",
     "--wjs-font-family-heading": "'Space Grotesk', 'Segoe UI', system-ui, sans-serif",
     "--wjs-font-family-base": "'Space Mono', ui-monospace, SFMono-Regular, Menlo, monospace",
     "--wjs-radius": "4px",
@@ -319,7 +318,16 @@
     "--wjs-color-text-footer-dim": "#5e5e5d",
     "--wjs-footer-text-heading": "#111111",
     "--wjs-footer-text-body": "#5e5e5d",
-    "--wjs-footer-text-hover": "#111111"
+    "--wjs-footer-text-hover": "#111111",
+    "--wjs-button-color": "#ffffff",
+    "--wjs-button-hover-color": "#ffffff",
+    "--wjs-tabs-active-color": "#ffffff",
+    "--wjs-form-submit-color": "#ffffff",
+    "--wjs-search-button-color": "#ffffff",
+    "--wjs-cta-button-color": "#ffffff",
+    "--wjs-pricing-button-color": "#ffffff",
+    "--wjs-social-hover-color": "#ffffff",
+    "--wjs-color-link": "#111111"
   },
   "styles": {
     "body": {

@@ -308,6 +308,14 @@
   --wjs-footer-text-heading: #111111;
   --wjs-footer-text-body: #5e5e5d;
   --wjs-footer-text-hover: #111111;
+  --wjs-button-color: #ffffff;
+  --wjs-button-hover-color: #ffffff;
+  --wjs-tabs-active-color: #ffffff;
+  --wjs-form-submit-color: #ffffff;
+  --wjs-search-button-color: #ffffff;
+  --wjs-cta-button-color: #ffffff;
+  --wjs-pricing-button-color: #ffffff;
+  --wjs-social-hover-color: #ffffff;
   --wjs-nav-font-size: 0.75rem;
   --wjs-nav-font-weight: 500;
   --wjs-nav-letter-spacing: 0.1em;

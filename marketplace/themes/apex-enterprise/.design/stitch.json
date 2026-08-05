@@ -1,0 +1,29 @@
+{
+  "name": "stitch/apex-enterprise",
+  "designTheme": {
+    "colorMode": "LIGHT",
+    "customColor": "#1d4ed8",
+    "overridePrimaryColor": "#1d4ed8",
+    "overrideSecondaryColor": "#0f172a",
+    "overrideNeutralColor": "#ffffff",
+    "headlineFont": "PLUS_JAKARTA_SANS",
+    "headlineFontFamily": "Plus Jakarta Sans",
+    "bodyFont": "PUBLIC_SANS",
+    "bodyFontFamily": "Public Sans",
+    "labelFont": "PUBLIC_SANS",
+    "labelFontFamily": "Public Sans",
+    "roundness": "ROUND_EIGHT",
+    "namedColors": {
+      "background": "#ffffff",
+      "surface": "#ffffff",
+      "on_surface": "#151515",
+      "on_background": "#151515",
+      "primary": "#1d4ed8",
+      "primary_container": "#1d4ed8",
+      "on_primary": "#ffffff",
+      "secondary": "#0f172a",
+      "secondary_container": "#0f172a",
+      "on_secondary": "#ffffff"
+    }
+  }
+}

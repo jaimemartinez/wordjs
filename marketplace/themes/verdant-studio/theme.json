@@ -1,9 +1,15 @@
 {
   "name": "Verdant Studio",
-  "version": "1.0.19",
+  "version": "1.0.24",
   "description": "Botánico fresco con verdes profundos, formas píldora y tipografía Quicksand sobre lienzo marfil.",
   "author": "WordJS × Stitch",
   "generator": "wordjs",
+  "seeds": {
+    "primary": "#2d4b3e",
+    "secondary": "#b08968",
+    "bg": "#faf9f5",
+    "text": "#141414"
+  },
   "layout": {
     "header": {
       "variant": "minimal",
@@ -17,12 +23,6 @@
     "sidebar": false,
     "containerWidth": "88rem"
   },
-  "seeds": {
-    "primary": "#2d4b3e",
-    "secondary": "#b08968",
-    "bg": "#faf9f5",
-    "text": "#141414"
-  },
   "tokens": {
     "--wjs-bg-canvas": "#faf9f5",
     "--wjs-color-primary": "#2d4b3e",
@@ -33,7 +33,6 @@
     "--wjs-color-on-secondary": "#ffffff",
     "--wjs-color-text-main": "#141414",
     "--wjs-color-heading": "#141414",
-    "--wjs-color-link": "#2d4b3e",
     "--wjs-font-family-heading": "'Literata', Georgia, 'Times New Roman', serif",
     "--wjs-font-family-base": "'Epilogue', 'Segoe UI', system-ui, sans-serif",
     "--wjs-radius": "12px",
@@ -42,15 +41,15 @@
     "--wjs-radius-lg": "12px",
     "--wjs-radius-pill": "12px",
     "--wjs-bg-surface-glass": "rgba(250,249,245,0.90)",
-    "--wjs-hero-bg": "#243b31",
+    "--wjs-hero-bg": "#faf9f5",
     "--wjs-hero-gradient-angle": "200deg",
-    "--wjs-hero-gradient-from": "#2d4b3e",
-    "--wjs-hero-gradient-to": "#1b2d25",
-    "--wjs-hero-color": "#faf9f5",
-    "--wjs-hero-title-color": "#faf9f5",
-    "--wjs-hero-subtitle-color": "#cdd8d0",
-    "--wjs-hero-button-outline-color": "#faf9f5",
-    "--wjs-hero-button-outline-border": "#8ea395",
+    "--wjs-hero-gradient-from": "#faf9f5",
+    "--wjs-hero-gradient-to": "#faf9f5",
+    "--wjs-hero-color": "#141414",
+    "--wjs-hero-title-color": "#2d4b3e",
+    "--wjs-hero-subtitle-color": "#141414",
+    "--wjs-hero-button-outline-color": "#2d4b3e",
+    "--wjs-hero-button-outline-border": "#2d4b3e",
     "--wjs-hero-button-outline-bg": "transparent",
     "--wjs-button-bg": "#2d4b3e",
     "--wjs-button-radius": "4px",
@@ -276,7 +275,8 @@
     "--wjs-search-button-color": "#ffffff",
     "--wjs-cta-button-color": "#ffffff",
     "--wjs-pricing-button-color": "#ffffff",
-    "--wjs-social-hover-color": "#ffffff"
+    "--wjs-social-hover-color": "#ffffff",
+    "--wjs-color-link": "#2d4b3e"
   },
   "styles": {
     "hero": {

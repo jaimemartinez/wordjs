@@ -1,6 +1,6 @@
 {
   "name": "Midnight Signal",
-  "version": "1.0.17",
+  "version": "1.0.22",
   "description": "Keynote de lanzamiento: titular gigantesco con tracking negativo, halo azul eléctrico sobre negro medianoche y una barra compacta con llamada principal.",
   "author": "WordJS × Stitch",
   "generator": "wordjs",
@@ -32,7 +32,6 @@
     "--wjs-color-on-secondary": "#0b0b0b",
     "--wjs-color-text-main": "#f5f5f4",
     "--wjs-color-heading": "#f5f5f4",
-    "--wjs-color-link": "#3b82f6",
     "--wjs-font-family-heading": "'Sora', 'Segoe UI', system-ui, sans-serif",
     "--wjs-font-family-base": "'Inter', 'Segoe UI', system-ui, sans-serif",
     "--wjs-radius": "12px",
@@ -44,10 +43,10 @@
     "--wjs-hero-gradient-from": "#020617",
     "--wjs-hero-gradient-to": "#020617",
     "--wjs-hero-color": "#f5f5f4",
-    "--wjs-hero-title-color": "#ffffff",
+    "--wjs-hero-title-color": "#3b82f6",
     "--wjs-hero-subtitle-color": "#f5f5f4",
-    "--wjs-hero-button-outline-color": "#8fb6ff",
-    "--wjs-hero-button-outline-border": "#1e3a8a",
+    "--wjs-hero-button-outline-color": "#3b82f6",
+    "--wjs-hero-button-outline-border": "#3b82f6",
     "--wjs-bg-surface-glass": "rgba(2,6,23,0.82)",
     "--wjs-bg-footer": "#01030c",
     "--wjs-hero-height": "92vh",
@@ -315,7 +314,16 @@
     "--wjs-color-text-footer-dim": "#949599",
     "--wjs-footer-text-heading": "#ffffff",
     "--wjs-footer-text-body": "#949599",
-    "--wjs-footer-text-hover": "#ffffff"
+    "--wjs-footer-text-hover": "#ffffff",
+    "--wjs-button-color": "#0b0b0b",
+    "--wjs-button-hover-color": "#0b0b0b",
+    "--wjs-tabs-active-color": "#0b0b0b",
+    "--wjs-form-submit-color": "#0b0b0b",
+    "--wjs-search-button-color": "#0b0b0b",
+    "--wjs-cta-button-color": "#3b82f6",
+    "--wjs-pricing-button-color": "#0b0b0b",
+    "--wjs-social-hover-color": "#0b0b0b",
+    "--wjs-color-link": "#3b82f6"
   },
   "styles": {
     "headings": {

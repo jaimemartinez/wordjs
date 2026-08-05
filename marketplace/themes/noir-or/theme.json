@@ -1,6 +1,6 @@
 {
   "name": "Noir & Or",
-  "version": "1.0.19",
+  "version": "1.0.24",
   "description": "Club privé: cabecera reducida a la marca y el hamburguesa, oro viejo sobre carbón y una retícula de aire con EB Garamond.",
   "author": "WordJS",
   "generator": "wordjs",
@@ -33,7 +33,6 @@
     "--wjs-color-on-secondary": "#0b0b0b",
     "--wjs-color-text-main": "#f5f5f4",
     "--wjs-color-heading": "#f5f5f4",
-    "--wjs-color-link": "#d4a24c",
     "--wjs-font-family-heading": "'EB Garamond', Georgia, 'Times New Roman', serif",
     "--wjs-font-family-base": "'Raleway', 'Segoe UI', system-ui, sans-serif",
     "--wjs-radius": "4px",
@@ -329,7 +328,8 @@
     "--wjs-search-button-color": "#ffffff",
     "--wjs-cta-button-color": "#ffffff",
     "--wjs-pricing-button-color": "#ffffff",
-    "--wjs-social-hover-color": "#ffffff"
+    "--wjs-social-hover-color": "#ffffff",
+    "--wjs-color-link": "#d4a24c"
   },
   "styles": {
     "body": {

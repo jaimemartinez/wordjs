@@ -13,7 +13,24 @@ const hex2rgb = (h) => { h = h.replace('#', ''); return [0, 2, 4].map((i) => par
 const rgb2hex = (r, g, b) => '#' + [r, g, b].map((v) => Math.round(v).toString(16).padStart(2, '0')).join('');
 const mix = (a, b, t) => { const A = hex2rgb(a), B = hex2rgb(b); return rgb2hex(...A.map((v, i) => v + (B[i] - v) * t)); };
 const lum = (h) => { const [r, g, b] = hex2rgb(h); return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255; };
-const onColor = (h) => (lum(h) < 0.55 ? '#ffffff' : '#111111');
+// Real WCAG luminance/contrast. `lum` stays as it was (other call sites depend on it); these are for
+// the two decisions where the number has to be right rather than merely monotonic.
+const relLum = (h) => { const c = hex2rgb(h).map((v) => { const x = v / 255; return x <= 0.03928 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4); }); return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]; };
+const contrast = (a, b) => { const [hi, lo] = [relLum(a), relLum(b)].sort((x, y) => y - x); return (hi + 0.05) / (lo + 0.05); };
+// Text on a fill: measured, not guessed at a 0.55 luma threshold. White on #ec4899 is 3.53:1.
+const onColor = (h) => (contrast('#ffffff', h) >= contrast('#111111', h) ? '#ffffff' : '#111111');
+// A link is TEXT on the page, not a fill: `primary` used raw gave link text at 1.72:1 on some
+// palettes. Keep the hue, move the level until it clears AA. Mirrors readableOn() in
+// backend/src/core/theme-derive.ts — the parity suite compares the two.
+const readableOn = (colour, bg, min = 4.5) => {
+    if (contrast(colour, bg) >= min) return colour;
+    const toward = relLum(bg) > 0.5 ? '#000000' : '#ffffff';
+    for (let t = 0.08; t <= 0.92; t += 0.08) {
+        const c = mix(colour, toward, t);
+        if (contrast(c, bg) >= min) return c;
+    }
+    return toward === '#000000' ? '#111111' : '#ffffff';
+};
 
 function canonicalAliases(t) {
     const dark = lum(t.bgColor) < 0.35;
@@ -34,8 +51,8 @@ function canonicalAliases(t) {
   --wjs-color-text-main: ${t.textColor};
   --wjs-color-text-muted: ${mix(t.textColor, t.bgColor, 0.38)};
   --wjs-color-heading: ${t.textColor};
-  --wjs-color-link: ${t.primaryColor};
-  --wjs-color-link-hover: ${t.secondaryColor};
+  --wjs-color-link: ${readableOn(t.primaryColor, t.bgColor)};
+  --wjs-color-link-hover: ${readableOn(t.secondaryColor, t.bgColor)};
   --wjs-border-subtle: ${mix(t.textColor, t.bgColor, 0.82)};
   --wjs-outline: ${mix(t.textColor, t.bgColor, 0.62)};
   --wjs-outline-variant: ${mix(t.textColor, t.bgColor, 0.85)};

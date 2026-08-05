@@ -1,0 +1,29 @@
+{
+  "name": "stitch/patisserie-delight",
+  "designTheme": {
+    "colorMode": "LIGHT",
+    "customColor": "#db2777",
+    "overridePrimaryColor": "#db2777",
+    "overrideSecondaryColor": "#0891b2",
+    "overrideNeutralColor": "#fff8fb",
+    "headlineFont": "NUNITO_SANS",
+    "headlineFontFamily": "Nunito Sans",
+    "bodyFont": "LEXEND",
+    "bodyFontFamily": "Lexend",
+    "labelFont": "LEXEND",
+    "labelFontFamily": "Lexend",
+    "roundness": "ROUND_FULL",
+    "namedColors": {
+      "background": "#fff8fb",
+      "surface": "#fff8fb",
+      "on_surface": "#151415",
+      "on_background": "#151415",
+      "primary": "#db2777",
+      "primary_container": "#db2777",
+      "on_primary": "#ffffff",
+      "secondary": "#0891b2",
+      "secondary_container": "#0891b2",
+      "on_secondary": "#0b0b0b"
+    }
+  }
+}

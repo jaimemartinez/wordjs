@@ -1,9 +1,15 @@
 {
   "name": "Pop Studio",
-  "version": "1.0.21",
+  "version": "1.0.26",
   "description": "Bold, vibrant creative theme — pink and cyan, big rounded shapes.",
   "author": "WordJS",
   "generator": "wordjs",
+  "seeds": {
+    "primary": "#ec4899",
+    "secondary": "#06b6d4",
+    "bg": "#ffffff",
+    "text": "#141414"
+  },
   "layout": {
     "header": {
       "variant": "classic",
@@ -17,12 +23,6 @@
     "sidebar": false,
     "containerWidth": "78rem"
   },
-  "seeds": {
-    "primary": "#ec4899",
-    "secondary": "#06b6d4",
-    "bg": "#ffffff",
-    "text": "#141414"
-  },
   "tokens": {
     "--wjs-bg-canvas": "#ffffff",
     "--wjs-color-primary": "#ec4899",
@@ -33,7 +33,6 @@
     "--wjs-color-on-secondary": "#ffffff",
     "--wjs-color-text-main": "#141414",
     "--wjs-color-heading": "#141414",
-    "--wjs-color-link": "#ec4899",
     "--wjs-font-family-heading": "'Bricolage Grotesque', 'Segoe UI', system-ui, sans-serif",
     "--wjs-font-family-base": "'DM Sans', 'Segoe UI', system-ui, sans-serif",
     "--wjs-radius": "9999px",
@@ -44,8 +43,8 @@
     "--wjs-bg-surface-glass": "rgba(255,255,255,0.92)",
     "--wjs-hero-bg": "#ffffff",
     "--wjs-hero-gradient-angle": "115deg",
-    "--wjs-hero-gradient-from": "#fff1f7",
-    "--wjs-hero-gradient-to": "#ecfeff",
+    "--wjs-hero-gradient-from": "#ffffff",
+    "--wjs-hero-gradient-to": "#ffffff",
     "--wjs-hero-color": "#141414",
     "--wjs-hero-title-color": "#141414",
     "--wjs-hero-subtitle-color": "#141414",
@@ -276,7 +275,8 @@
     "--wjs-search-button-color": "#111111",
     "--wjs-cta-button-color": "#111111",
     "--wjs-pricing-button-color": "#111111",
-    "--wjs-social-hover-color": "#111111"
+    "--wjs-social-hover-color": "#111111",
+    "--wjs-color-link": "#c63c81"
   },
   "styles": {
     "hero": {

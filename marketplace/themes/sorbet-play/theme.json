@@ -1,9 +1,15 @@
 {
   "name": "Sorbet Play",
-  "version": "1.0.19",
+  "version": "1.0.24",
   "description": "Tema Memphis pastel y juguetón: fresa, limón, menta y lavanda sobre lunares, con bordes de tinta gruesos, sombras duras y botones píldora.",
   "author": "WordJS × Stitch",
   "generator": "wordjs",
+  "seeds": {
+    "primary": "#ff85a1",
+    "secondary": "#4cc9f0",
+    "bg": "#fff5f7",
+    "text": "#141414"
+  },
   "layout": {
     "header": {
       "variant": "centered",
@@ -17,12 +23,6 @@
     "sidebar": false,
     "containerWidth": "74rem"
   },
-  "seeds": {
-    "primary": "#ff85a1",
-    "secondary": "#4cc9f0",
-    "bg": "#fff5f7",
-    "text": "#141414"
-  },
   "tokens": {
     "--wjs-bg-canvas": "#fff5f7",
     "--wjs-color-primary": "#ff85a1",
@@ -33,7 +33,6 @@
     "--wjs-color-on-secondary": "#ffffff",
     "--wjs-color-text-main": "#141414",
     "--wjs-color-heading": "#141414",
-    "--wjs-color-link": "#ff85a1",
     "--wjs-font-family-heading": "'Comfortaa', 'Segoe UI', system-ui, sans-serif",
     "--wjs-font-family-base": "'Rubik', 'Segoe UI', system-ui, sans-serif",
     "--wjs-radius": "9999px",
@@ -42,10 +41,10 @@
     "--wjs-radius-lg": "9999px",
     "--wjs-radius-pill": "9999px",
     "--wjs-bg-surface-glass": "rgba(255,255,255,0.94)",
-    "--wjs-hero-bg": "#ffffff",
+    "--wjs-hero-bg": "#fff5f7",
     "--wjs-hero-gradient-angle": "135deg",
-    "--wjs-hero-gradient-from": "#fffdf0",
-    "--wjs-hero-gradient-to": "#eafaff",
+    "--wjs-hero-gradient-from": "#fff5f7",
+    "--wjs-hero-gradient-to": "#fff5f7",
     "--wjs-hero-color": "#141414",
     "--wjs-hero-title-color": "#141414",
     "--wjs-hero-subtitle-color": "#141414",
@@ -276,7 +275,8 @@
     "--wjs-search-button-color": "#111111",
     "--wjs-cta-button-color": "#111111",
     "--wjs-pricing-button-color": "#111111",
-    "--wjs-social-hover-color": "#111111"
+    "--wjs-social-hover-color": "#111111",
+    "--wjs-color-link": "#995061"
   },
   "styles": {
     "hero": {

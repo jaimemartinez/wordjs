@@ -1,0 +1,29 @@
+{
+  "name": "stitch/velocity-agency",
+  "designTheme": {
+    "colorMode": "DARK",
+    "customColor": "#f43f5e",
+    "overridePrimaryColor": "#f43f5e",
+    "overrideSecondaryColor": "#fb923c",
+    "overrideNeutralColor": "#141013",
+    "headlineFont": "MONTSERRAT",
+    "headlineFontFamily": "Montserrat",
+    "bodyFont": "ARIMO",
+    "bodyFontFamily": "Arimo",
+    "labelFont": "ARIMO",
+    "labelFontFamily": "Arimo",
+    "roundness": "ROUND_FOUR",
+    "namedColors": {
+      "background": "#141013",
+      "surface": "#141013",
+      "on_surface": "#f6f5f6",
+      "on_background": "#f6f5f6",
+      "primary": "#f43f5e",
+      "primary_container": "#f43f5e",
+      "on_primary": "#0b0b0b",
+      "secondary": "#fb923c",
+      "secondary_container": "#fb923c",
+      "on_secondary": "#0b0b0b"
+    }
+  }
+}

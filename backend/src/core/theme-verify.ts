@@ -214,7 +214,7 @@ function resolveToken(name: string, declared: Map<string, string>, manifestToken
  * so DARK changes exactly one source: the page canvas comes from `surface` instead of
  * `background`. The ink is `on_surface` in both modes.
  */
-function colorRules(colorMode: string): { token: string; key: string }[] {
+function colorRules(colorMode: string): { token: string; key: string; adjust?: string }[] {
   return [
     { token: '--wjs-bg-canvas', key: colorMode === 'DARK' ? 'surface' : 'background' },
     { token: '--wjs-bg-surface', key: 'surface_container_lowest' },
@@ -224,7 +224,10 @@ function colorRules(colorMode: string): { token: string; key: string }[] {
     { token: '--wjs-color-text-muted', key: 'on_surface_variant' },
     { token: '--wjs-color-primary', key: 'primary_container' },
     { token: '--wjs-color-primary-dark', key: 'primary' },
-    { token: '--wjs-color-link', key: 'primary' },
+    // Not the raw primary: the importer adjusts a link that cannot be read on the page canvas
+    // (`readableOn`), so the expectation has to be the adjusted value or every theme whose brand
+    // colour needed moving would report a mismatch against the design it faithfully came from.
+    { token: '--wjs-color-link', key: 'primary', adjust: 'readable-on-canvas' },
     { token: '--wjs-color-on-primary', key: 'on_primary' },
     { token: '--wjs-color-secondary', key: 'secondary_container' },
     { token: '--wjs-color-secondary-dark', key: 'secondary' },
@@ -260,11 +263,23 @@ function buildChecks(dt: any): { checks: Check[]; unmapped: Unmapped[] } {
     const override = rule.token === '--wjs-color-secondary' && typeof dt.overrideSecondaryColor === 'string'
       ? dt.overrideSecondaryColor
       : null;
-    const expected = override !== null ? override : colorOf(rule.key);
+    let expected = override !== null ? override : colorOf(rule.key);
     const source = override !== null ? 'designTheme.overrideSecondaryColor' : `namedColors.${rule.key}`;
     if (expected === null) {
       unmapped.push({ token: rule.token, source, reason: 'design-missing' });
       continue;
+    }
+    // Some tokens are the design value put to a DIFFERENT use — a fill becoming body text — and the
+    // importer adjusts them for it. The expectation has to follow the same adjustment or a faithful
+    // theme reports a mismatch against its own design.
+    if ((rule as any).adjust === 'readable-on-canvas') {
+      const canvas = colorOf(String(dt.colorMode || 'LIGHT') === 'DARK' ? 'surface' : 'background');
+      const neutral = typeof dt.overrideNeutralColor === 'string' ? dt.overrideNeutralColor : null;
+      const against = neutral || canvas;
+      if (against) {
+        const { readableOn } = require('./theme-derive');
+        expected = readableOn(expected, against);
+      }
     }
     checks.push({ token: rule.token, source, expected, kind: 'color' });
   }

@@ -1,0 +1,29 @@
+{
+  "name": "stitch/strata-venture",
+  "designTheme": {
+    "colorMode": "LIGHT",
+    "customColor": "#7c3aed",
+    "overridePrimaryColor": "#7c3aed",
+    "overrideSecondaryColor": "#111827",
+    "overrideNeutralColor": "#ffffff",
+    "headlineFont": "GEIST",
+    "headlineFontFamily": "Geist",
+    "bodyFont": "GEIST",
+    "bodyFontFamily": "Geist",
+    "labelFont": "GEIST",
+    "labelFontFamily": "Geist",
+    "roundness": "ROUND_EIGHT",
+    "namedColors": {
+      "background": "#ffffff",
+      "surface": "#ffffff",
+      "on_surface": "#151515",
+      "on_background": "#151515",
+      "primary": "#7c3aed",
+      "primary_container": "#7c3aed",
+      "on_primary": "#ffffff",
+      "secondary": "#111827",
+      "secondary_container": "#111827",
+      "on_secondary": "#ffffff"
+    }
+  }
+}

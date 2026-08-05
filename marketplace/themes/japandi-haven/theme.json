@@ -1,9 +1,15 @@
 {
   "name": "Japandi Haven",
-  "version": "1.0.19",
+  "version": "1.0.24",
   "description": "Minimalismo cálido japonés-escandinavo con serif Playfair, terracota y hairlines sobre lienzo crema.",
   "author": "WordJS × Stitch",
   "generator": "wordjs",
+  "seeds": {
+    "primary": "#8b4e3b",
+    "secondary": "#7d8471",
+    "bg": "#fcf9f8",
+    "text": "#141414"
+  },
   "layout": {
     "header": {
       "variant": "minimal",
@@ -16,12 +22,6 @@
     },
     "containerWidth": "60rem"
   },
-  "seeds": {
-    "primary": "#8b4e3b",
-    "secondary": "#7d8471",
-    "bg": "#fcf9f8",
-    "text": "#141414"
-  },
   "tokens": {
     "--wjs-bg-canvas": "#fcf9f8",
     "--wjs-color-primary": "#8b4e3b",
@@ -32,7 +32,6 @@
     "--wjs-color-on-secondary": "#ffffff",
     "--wjs-color-text-main": "#141414",
     "--wjs-color-heading": "#141414",
-    "--wjs-color-link": "#8b4e3b",
     "--wjs-font-family-heading": "'Newsreader', Georgia, 'Times New Roman', serif",
     "--wjs-font-family-base": "'Karla', 'Segoe UI', system-ui, sans-serif",
     "--wjs-radius": "4px",
@@ -293,7 +292,8 @@
     "--wjs-search-button-color": "#ffffff",
     "--wjs-cta-button-color": "#ffffff",
     "--wjs-pricing-button-color": "#ffffff",
-    "--wjs-social-hover-color": "#ffffff"
+    "--wjs-social-hover-color": "#ffffff",
+    "--wjs-color-link": "#8b4e3b"
   },
   "styles": {
     "body": {

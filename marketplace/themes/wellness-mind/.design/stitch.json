@@ -1,0 +1,29 @@
+{
+  "name": "stitch/wellness-mind",
+  "designTheme": {
+    "colorMode": "LIGHT",
+    "customColor": "#0d9488",
+    "overridePrimaryColor": "#0d9488",
+    "overrideSecondaryColor": "#f59e0b",
+    "overrideNeutralColor": "#f6fbfa",
+    "headlineFont": "NEWSREADER",
+    "headlineFontFamily": "Newsreader",
+    "bodyFont": "NUNITO_SANS",
+    "bodyFontFamily": "Nunito Sans",
+    "labelFont": "NUNITO_SANS",
+    "labelFontFamily": "Nunito Sans",
+    "roundness": "ROUND_TWELVE",
+    "namedColors": {
+      "background": "#f6fbfa",
+      "surface": "#f6fbfa",
+      "on_surface": "#141515",
+      "on_background": "#141515",
+      "primary": "#0d9488",
+      "primary_container": "#0d9488",
+      "on_primary": "#0b0b0b",
+      "secondary": "#f59e0b",
+      "secondary_container": "#f59e0b",
+      "on_secondary": "#0b0b0b"
+    }
+  }
+}

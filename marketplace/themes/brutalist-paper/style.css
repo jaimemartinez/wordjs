@@ -1,433 +1,268 @@
-/* =========================================
-   THEME: BRUTALIST PAPER
-   Concept: Raw, bold, high contrast, print-inspired.
-   Standardized V2.
-   ========================================= */
+@import url('fonts.css');
 
+/* @wjs-generated:start — compiled from theme.json; DO NOT EDIT inside. Edit theme.json and run: node backend/cli/wordjs.js build theme brutalist-paper */
 :root {
-    /* --- COLOR PALETTE: Cream & Ink --- */
-    --wjs-color-primary: #000000;
-    /* Ink Black */
-    --wjs-color-primary-dark: #333333;
-    /* Soft Black */
-
-    /* --- COLOR SEMANTICS --- */
-    --wjs-bg-canvas: #f4f1ea;
-    /* Recycled Paper */
-    --wjs-bg-surface: #ffffff;
-    /* Crisp White Paper */
-
-    --wjs-color-text-main: #000000;
-    /* Ink */
-    --wjs-color-text-muted: #444444;
-    /* Faded Ink */
-
-    --wjs-border-subtle: #000000;
-    /* Always Black Borders */
-
-    /* --- NAVIGATION CONFIG --- */
-    --wjs-nav-font-family: 'Times New Roman', Times, serif;
-    /* Newspaper Headline style */
-    --wjs-nav-font-size: 1.1rem;
-    --wjs-nav-font-weight: 900;
-    --wjs-nav-text-transform: uppercase;
-    --wjs-nav-letter-spacing: 0.05em;
-
-    --wjs-nav-color: #000000;
-    --wjs-nav-color-hover: #ff3333;
-    /* Alert Red Hover */
-    --wjs-nav-transition: all 0s;
-    /* Brutalist = No Transition */
-
-    --wjs-logo-color: #000000;
-
-    /* --- FOOTER CONFIG (Poster Style) --- */
-    --wjs-footer-bg: #000000;
-    /* Inverse */
-    --wjs-footer-text-heading: #ffffff;
-    --wjs-footer-text-body: #f4f1ea;
-    --wjs-footer-text-hover: #ff3333;
-    /* Red */
-    --wjs-footer-icon-bg: #333333;
-    --wjs-footer-icon-color: #ffffff;
-
-    /* --- TYPOGRAPHY --- */
-    --wjs-font-family-base: 'Helvetica', 'Arial', sans-serif;
-
-    /* --- WordJS UI framework tokens --- */
-    /* Colors */
-    --wjs-color-secondary: #ff3333;
-    --wjs-color-secondary-dark: #cc0000;
-    --wjs-color-accent: #ff3333;
-    --wjs-color-success: #15803d;
-    --wjs-color-danger: #dc2626;
-    --wjs-color-warning: #d97706;
-    --wjs-color-info: #0369a1;
-    --wjs-color-light: #f4f1ea;
-    --wjs-color-dark: #000000;
-  /* --- WordJS UI on-color tokens (auto: max-contrast text on each solid color) --- */
+  --wjs-bg-canvas: #f5f5f0;
+  --wjs-bg-surface: #eeeee9;
+  --wjs-bg-surface-raised: #e6e6e2;
+  --wjs-color-primary: #000000;
+  --wjs-color-primary-dark: #000000;
   --wjs-color-on-primary: #ffffff;
-  --wjs-color-on-secondary: #161616;
-  --wjs-color-on-success: #ffffff;
-  --wjs-color-on-danger: #ffffff;
-  --wjs-color-on-warning: #161616;
-  --wjs-color-on-info: #ffffff;
-  --wjs-color-on-light: #161616;
-  --wjs-color-on-dark: #ffffff;
-
-    /* Surfaces / text / border */
-    --wjs-bg-muted: #e9e5dc;
-    --wjs-color-heading: #000000;
-    --wjs-color-link: #000000;
-    --wjs-color-link-hover: #ff3333;
-    --wjs-border-width: 3px;
-    --wjs-focus-ring: rgba(255, 51, 51, 0.3);
-
-    /* Typography */
-    --wjs-font-family-heading: 'Times New Roman', Times, serif;
-    --wjs-font-family-mono: 'Courier New', Courier, monospace;
-    --wjs-font-size-base: 1rem;
-    --wjs-line-height-base: 1.6;
-    --wjs-heading-weight: 900;
-    --wjs-heading-line-height: 1.05;
-    --wjs-h1: 3rem;
-    --wjs-h2: 2.25rem;
-    --wjs-h3: 1.75rem;
-    --wjs-h4: 1.35rem;
-    --wjs-h5: 1.1rem;
-    --wjs-h6: 0.95rem;
-
-    /* Spacing / shape (brutalist: 0 radius, hard offset shadows) */
-    --wjs-spacer: 1rem;
-    --wjs-radius-sm: 0;
-    --wjs-radius: 0;
-    --wjs-radius-md: 0;
-    --wjs-radius-lg: 0;
-    --wjs-radius-pill: 0;
-    --wjs-shadow-sm: 3px 3px 0px 0px #000000;
-    --wjs-shadow: 6px 6px 0px 0px #000000;
-    --wjs-shadow-md: 8px 8px 0px 0px #000000;
-    --wjs-shadow-lg: 10px 10px 0px 0px #000000;
-}
-
-/* =========================================
-   VISUAL OVERRIDES (No Layout Hacks)
-   ========================================= */
-
-body {
-    background-color: var(--wjs-bg-canvas) !important;
-    background-image: radial-gradient(#d0cec7 1px, transparent 0);
-    background-size: 20px 20px;
-    /* Dot grid */
-    color: var(--wjs-color-text-main) !important;
-    font-family: var(--wjs-font-family-base) !important;
-
-    /* FIX: Push content down because Header is Taller (Vertical Layout) */
-    padding-top: 280px !important;
-}
-
-/* Header: White Box with Black Border */
-/* Header: White Box with Black Border */
-header {
-    background-color: #ffffff !important;
-    border-bottom: 3px solid #000000 !important;
-    box-shadow: 6px 6px 0px 0px #000000;
-    margin-bottom: 20px;
-}
-
-/* --- BRUTALIST ALIGNMENT (SHARPEN EVERYTHING) --- */
-/* Force all elements to have sharp corners to match the theme */
-* {
-    border-radius: 0px !important;
-}
-
-/* Specifically target common rounded elements to be sure */
-[class*='rounded'],
-.rounded-xl,
-.rounded-2xl,
-.rounded-full,
-img,
-button,
-a {
-    border-radius: 0px !important;
-}
-
-/* --- BRUTALIST LAYOUT SHIFTS --- */
-
-/* 1. Header Container: Stack Logo and Nav (Masthead) */
-.wjs-header-container {
-    flex-direction: column !important;
-    gap: 1.5rem !important;
-    padding: 1rem 0 !important;
-}
-
-/* 2. Logo: Center and Gigantic */
-.wjs-header-logo {
-    order: 1 !important;
-    width: 100%;
-    justify-content: center;
-    font-size: 2.5rem !important;
-    border-bottom: 2px solid #000;
-    padding-bottom: 1rem;
-    margin-bottom: 0.5rem;
-    color: var(--wjs-logo-color) !important;
-    font-family: 'Times New Roman', serif !important;
-    font-weight: 900 !important;
-    text-decoration: underline !important;
-    text-decoration-thickness: 3px !important;
-}
-
-/* 3. Nav: Centered below logo */
-.wjs-header-nav {
-    order: 2 !important;
-    width: 100%;
-    justify-content: center !important;
-    margin: 0 !important;
-}
-
-/* 4. Hide Actions (Search/Auth) to clean up Masthead, or put at bottom */
-.wjs-header-actions {
-    display: none !important;
-    /* Brutalist simplification */
-}
-
-header[class*='fixed'] {
-    background-color: #ffffff !important;
-    border-bottom: 3px solid #000000 !important;
-    box-shadow: 6px 6px 0px 0px #000000 !important;
-    backdrop-filter: none !important;
-}
-
-/* Nav Links: Bold & Underlined on Hover */
-.wjs-header-nav a {
-    font-family: var(--wjs-nav-font-family) !important;
-    font-size: var(--wjs-nav-font-size) !important;
-    font-weight: var(--wjs-nav-font-weight) !important;
-    color: var(--wjs-nav-color) !important;
-    text-transform: var(--wjs-nav-text-transform) !important;
-    letter-spacing: var(--wjs-nav-letter-spacing) !important;
-    transition: var(--wjs-nav-transition) !important;
-    text-decoration: none !important;
-    border: 1px solid transparent;
-    padding: 4px 8px;
-}
-
-.wjs-header-nav a:hover {
-    background-color: #000000;
-    color: #ffffff !important;
-    box-shadow: 4px 4px 0px #ff3333;
-    /* Red Shadow */
-}
-
-/* Footer: Bold Block */
-footer {
-    background-color: var(--wjs-footer-bg) !important;
-    border-top: 8px solid #ff3333 !important;
-    /* Thick Red Line */
-    color: #ffffff !important;
-    text-align: center !important;
-}
-
-/* Force centering everything in footer */
-footer .container,
-footer .grid {
-    display: flex !important;
-    flex-direction: column !important;
-    align-items: center !important;
-    gap: 2rem !important;
-}
-
-footer h3,
-footer h4 {
-    color: var(--wjs-footer-text-heading) !important;
-    font-family: 'Times New Roman', serif !important;
-    text-transform: uppercase;
-    font-size: 2rem !important;
-}
-
-footer a {
-    color: var(--wjs-footer-text-body) !important;
-    font-family: 'Courier New', monospace;
-    text-decoration: underline !important;
-    text-decoration-thickness: 1px;
-}
-
-footer a:hover {
-    color: var(--wjs-footer-text-hover) !important;
-    background-color: #ffffff;
-    color: #000000 !important;
-    text-decoration: none !important;
-}
-
-/* Icons */
-footer .w-10 {
-    background-color: #ffffff !important;
-    border: 2px solid #000000;
-    color: #000000 !important;
-    border-radius: 0 !important;
-    box-shadow: 4px 4px 0px #000000;
-}
-
-footer .w-10:hover {
-    transform: translate(2px, 2px);
-    box-shadow: 2px 2px 0px #000000;
-}
-
-/* ===== Mobile (auto responsive pass) ===== */
-/* 767.98px matches the chrome's md breakpoint (768px), where the inline
-   .wjs-header-nav is swapped for the hamburger drawer. */
-@media (max-width: 767.98px) {
-
-    /* CRITICAL: the chrome's mobile hamburger button lives INSIDE
-       .wjs-header-actions, which the desktop masthead rule hides with
-       display:none !important. Without this override the theme has NO
-       navigation at all below 768px. */
-    .wjs-header-actions {
-        display: flex !important;
-    }
-
-    /* The stacked newspaper masthead (logo above nav) only makes sense while
-       the inline nav is visible. Below 768px the nav is in the drawer, so a
-       tall masthead just wastes ~40% of the viewport. Return to a compact
-       single row: logo left, hamburger right. Also restore the horizontal
-       padding that the desktop rule zeroed out (padding: 1rem 0). */
-    .wjs-header-container {
-        flex-direction: row !important;
-        gap: 0.75rem !important;
-        padding: 0.75rem 1rem !important;
-    }
-
-    /* Logo: from gigantic centered masthead (2.5rem !important + full-width
-       rule underneath) to a compact left-aligned title. The ink underline
-       (text-decoration) stays — that is the brutalist mark; only the
-       masthead-sized border/padding goes. Needs !important to beat the
-       desktop !important size. */
-    .wjs-header-logo {
-        order: 0 !important;
-        width: auto;
-        justify-content: flex-start;
-        font-size: 1.5rem !important;
-        border-bottom: none;
-        padding-bottom: 0;
-        margin-bottom: 0;
-    }
-
-    /* Body offset was 280px to clear the tall fixed desktop masthead; the
-       compact mobile header is ~120px tall (header py + row + 3px border),
-       plus slack for a two-line site title. */
-    body {
-        padding-top: 140px !important;
-    }
-
-    /* The featured pricing card ships an inline transform: scale(1.05).
-       Once the pricing columns stack full-width on mobile, the extra 5%
-       pokes past the viewport edge (horizontal scroll). Drop the scale —
-       the red background + heavier border already mark it as featured —
-       and keep the poster shadow chunky but proportionate. (!important is
-       required to beat the inline style.) */
-    .wp-block-pricing__plan--highlighted {
-        transform: none;
-        box-shadow: 6px 6px 0px #000000;
-    }
-
-    /* 10px hard poster shadow reads as clutter at 375px; keep it thick but
-       proportionate (brutalist stays brutalist, just smaller paper). */
-    .wp-block-cta-banner {
-        box-shadow: 6px 6px 0px #000000;
-    }
-
-    /* Tab labels are uppercase + bold and cannot hyphenate; let the tab
-       strip wrap to a second row instead of forcing sideways overflow. */
-    .wp-block-tabs__list {
-        flex-wrap: wrap;
-    }
-}
-
-/* ══ BLOCK TOKENS ═══════════════════════════════════════════════════════════════════════
- * Lifted from this theme's former `.wp-block-*` rules. wordjs-ui.css owns the block RULES;
- * a theme owns only the VALUES, so a single block can still override any of them.
- * ════════════════════════════════════════════════════════════════════════════════════ */
-:root {
-  --wjs-accordion-border-width: 3px;
-  --wjs-accordion-border-color: #000000;
-  --wjs-accordion-radius: 0;
-  --wjs-accordion-shadow: 6px 6px 0px #000000;
-  --wjs-accordion-header-bg: #ffffff;
-  --wjs-accordion-header-color: #000000;
-  --wjs-accordion-header-border-width: 2px;
-  --wjs-accordion-header-border-color: #000000;
-  --wjs-accordion-header-weight: 900;
-  --wjs-accordion-header-transform: uppercase;
-  --wjs-accordion-panel-bg: #f5f5f0;
-  --wjs-accordion-panel-color: #333333;
-  --wjs-tabs-list-border-width: 3px;
-  --wjs-tabs-list-border-color: #000000;
-  --wjs-tabs-color: #000000;
-  --wjs-tabs-border-width: 2px;
-  --wjs-tabs-border-color: transparent;
-  --wjs-tabs-weight: 700;
-  --wjs-tabs-transform: uppercase;
-  --wjs-tabs-active-bg: #000000;
-  --wjs-tabs-active-color: #ffffff;
-  --wjs-tabs-panel-bg: #ffffff;
-  --wjs-tabs-panel-border-width: 0;
-  --wjs-tabs-panel-border-color: transparent;
-  --wjs-video-border-width: 4px;
-  --wjs-video-border-color: #000000;
-  --wjs-video-shadow: 8px 8px 0px #000000;
-  --wjs-audio-bg: #ffffff;
-  --wjs-audio-border-width: 3px;
-  --wjs-audio-border-color: #000000;
-  --wjs-audio-shadow: 6px 6px 0px #000000;
-  --wjs-pricing-bg: #ffffff;
-  --wjs-pricing-border-width: 3px;
-  --wjs-pricing-border-color: #000000;
-  --wjs-pricing-shadow: 6px 6px 0px #000000;
-  --wjs-pricing-hover-transform: translate(-2px, -2px);
-  --wjs-pricing-hover-shadow: 8px 8px 0px #000000;
-  --wjs-pricing-highlight-bg: #ff3333;
-  --wjs-pricing-highlight-color: #ffffff;
-  --wjs-pricing-highlight-border-width: 3px;
-  --wjs-pricing-highlight-border-color: #000000;
-  --wjs-pricing-highlight-shadow: 10px 10px 0px #000000;
-  --wjs-testimonial-bg: #fff9e6;
-  --wjs-testimonial-border-width: 3px;
-  --wjs-testimonial-border-color: #000000;
-  --wjs-testimonial-shadow: 6px 6px 0px #000000;
-  --wjs-testimonial-mark-color: #ff3333;
-  --wjs-testimonial-mark-weight: 900;
-  --wjs-cta-bg: #ff3333;
-  --wjs-cta-border-width: 4px;
-  --wjs-cta-border-color: #000000;
-  --wjs-cta-shadow: 10px 10px 0px #000000;
-  --wjs-cta-title-transform: uppercase;
-  --wjs-cta-title-tracking: -2px;
-  --wjs-cta-button-bg: #000000;
-  --wjs-cta-button-color: #ffffff;
-  --wjs-cta-button-border-width: 2px;
-  --wjs-cta-button-border-color: #ffffff;
-  --wjs-cta-button-shadow: 4px 4px 0px #ffffff;
-  --wjs-posts-bg: #000000;
+  --wjs-color-accent: #dc2626;
+  --wjs-color-on-accent: #ffffff;
+  --wjs-color-text-main: #141414;
+  --wjs-color-text-muted: #6a6a68;
+  --wjs-color-heading: #141414;
+  --wjs-color-link: #000000;
+  --wjs-color-link-hover: #ca2323;
+  --wjs-border-subtle: #cdcdc8;
+  --wjs-outline: #a0a09c;
+  --wjs-outline-variant: #d3d3cf;
+  --wjs-focus-ring: #000000;
+  --wjs-color-secondary: #dc2626;
+  --wjs-color-secondary-dark: #dc2626;
+  --wjs-color-on-secondary: #ffffff;
+  --wjs-radius: 4px;
+  --wjs-radius-sm: 4px;
+  --wjs-radius-md: 4px;
+  --wjs-radius-lg: 4px;
+  --wjs-radius-pill: 4px;
+  --wjs-hero-bg: #f5f5f0;
+  --wjs-hero-gradient-from: #f5f5f0;
+  --wjs-hero-gradient-to: #f5f5f0;
+  --wjs-hero-color: #141414;
+  --wjs-hero-title-color: #000000;
+  --wjs-hero-subtitle-color: #141414;
+  --wjs-hero-button-outline-color: #000000;
+  --wjs-hero-button-outline-border: #000000;
+  --wjs-hero-gradient: none;
+  --wjs-button-bg: #000000;
+  --wjs-button-color: #ffffff;
+  --wjs-button-radius: 0;
+  --wjs-button-pad-x: 1.25rem;
+  --wjs-button-pad-y: 0.6rem;
+  --wjs-button-border-width: 2px;
+  --wjs-button-border-color: #141414;
+  --wjs-button-transform: uppercase;
+  --wjs-button-tracking: 0.06em;
+  --wjs-button-weight: 600;
+  --wjs-button-family: var(--wjs-font-family-heading);
+  --wjs-button-shadow: 4px 4px 0 #141414;
+  --wjs-button-hover-bg: #000000;
+  --wjs-button-hover-color: #ffffff;
+  --wjs-button-hover-shadow: 7px 7px 0 #141414;
+  --wjs-button-hover-transform: translate(-3px,-3px);
+  --wjs-button-secondary-bg: #dc2626;
+  --wjs-button-secondary-color: #ffffff;
+  --wjs-button-outline-bg: transparent;
+  --wjs-button-outline-color: #141414;
+  --wjs-button-outline-border-color: #141414;
+  --wjs-button-outline-hover-bg: rgba(0,0,0,0.1);
+  --wjs-card-bg: #ecece8;
+  --wjs-card-color: #141414;
+  --wjs-card-radius: 0;
+  --wjs-card-pad: 1.25rem;
+  --wjs-card-border-width: 2px;
+  --wjs-card-border-color: #141414;
+  --wjs-card-shadow: 4px 4px 0 #141414;
+  --wjs-card-hover-shadow: 7px 7px 0 #141414;
+  --wjs-card-hover-transform: translate(-3px,-3px);
+  --wjs-card-hover-border-color: #000000;
+  --wjs-card-title-color: #141414;
+  --wjs-card-title-weight: 700;
+  --wjs-card-title-tracking: -0.01em;
+  --wjs-card-desc-color: #737370;
+  --wjs-card-desc-family: var(--wjs-font-family-base);
+  --wjs-card-icon-bg: rgba(0,0,0,0.12);
+  --wjs-card-icon-color: #000000;
+  --wjs-card-icon-radius: 0;
+  --wjs-posts-bg: #ecece8;
+  --wjs-posts-radius: 0;
+  --wjs-posts-pad: 1.25rem;
+  --wjs-posts-gap: 1.75rem;
   --wjs-posts-border-width: 2px;
-  --wjs-posts-border-color: #000000;
-  --wjs-posts-shadow: 4px 4px 0px #000000;
-  --wjs-catposts-heading-weight: 900;
-  --wjs-catposts-heading-transform: uppercase;
-  --wjs-catposts-heading-border-width: 3px;
-  --wjs-catposts-heading-border-color: #000000;
-  --wjs-catposts-heading-pad: 10px;
-  --wjs-catposts-border-color: #000000;
-  --wjs-catposts-link-weight: 700;
-  --wjs-search-input-bg: #ffffff;
-  --wjs-search-input-border-width: 3px;
-  --wjs-search-input-border-color: #000000;
-  --wjs-search-input-shadow: 4px 4px 0px #000000;
-  --wjs-search-input-weight: 600;
+  --wjs-posts-border-color: #141414;
+  --wjs-posts-shadow: 4px 4px 0 #141414;
+  --wjs-posts-hover-shadow: 7px 7px 0 #141414;
+  --wjs-posts-hover-transform: translate(-3px,-3px);
+  --wjs-posts-hover-border-color: #000000;
+  --wjs-posts-title-color: #141414;
+  --wjs-posts-title-weight: 700;
+  --wjs-posts-excerpt-color: #737370;
+  --wjs-posts-date-color: #737370;
+  --wjs-posts-thumb-bg: #e1e1dd;
+  --wjs-posts-thumb-radius: 0;
+  --wjs-posts-family: var(--wjs-font-family-base);
+  --wjs-quote-family: var(--wjs-font-family-heading);
+  --wjs-quote-color: #141414;
+  --wjs-quote-accent: #000000;
+  --wjs-quote-bar-width: 4px;
+  --wjs-quote-style: italic;
+  --wjs-quote-cite-color: #737370;
+  --wjs-quote-mark-opacity: 0.1;
+  --wjs-testimonial-bg: #ecece8;
+  --wjs-testimonial-radius: 0;
+  --wjs-testimonial-pad: 1.25rem;
+  --wjs-testimonial-border-width: 2px;
+  --wjs-testimonial-border-color: #141414;
+  --wjs-testimonial-shadow: 4px 4px 0 #141414;
+  --wjs-testimonial-quote-color: #141414;
+  --wjs-testimonial-quote-family: var(--wjs-font-family-heading);
+  --wjs-testimonial-quote-style: italic;
+  --wjs-testimonial-author-color: #141414;
+  --wjs-testimonial-role-color: #737370;
+  --wjs-testimonial-role-transform: uppercase;
+  --wjs-testimonial-role-tracking: 0.06em;
+  --wjs-testimonial-avatar-bg: rgba(0,0,0,0.16);
+  --wjs-testimonial-avatar-color: #000000;
+  --wjs-testimonial-avatar-radius: 0;
+  --wjs-testimonial-mark-color: #000000;
+  --wjs-testimonial-mark-opacity: 0.14;
+  --wjs-stats-bg: #ecece8;
+  --wjs-stats-radius: 0;
+  --wjs-stats-pad: 1.25rem;
+  --wjs-stats-border-width: 2px;
+  --wjs-stats-border-color: #141414;
+  --wjs-stats-shadow: none;
+  --wjs-stats-value-color: #141414;
+  --wjs-stats-value-family: var(--wjs-font-family-heading);
+  --wjs-stats-value-weight: 700;
+  --wjs-stats-label-color: #737370;
+  --wjs-stats-label-transform: uppercase;
+  --wjs-stats-label-tracking: 0.06em;
+  --wjs-stats-label-size: 0.8rem;
+  --wjs-tabs-family: var(--wjs-font-family-heading);
+  --wjs-tabs-color: #737370;
+  --wjs-tabs-transform: uppercase;
+  --wjs-tabs-tracking: 0.06em;
+  --wjs-tabs-radius: 0;
+  --wjs-tabs-active-color: #ffffff;
+  --wjs-tabs-active-bg: #000000;
+  --wjs-tabs-active-weight: 700;
+  --wjs-tabs-list-bg: transparent;
+  --wjs-tabs-list-radius: 0;
+  --wjs-tabs-list-border-width: 0;
+  --wjs-tabs-list-border-color: #141414;
+  --wjs-tabs-panel-bg: transparent;
+  --wjs-tabs-panel-color: #141414;
+  --wjs-tabs-panel-pad: 1.25rem;
+  --wjs-accordion-item-bg: #ecece8;
+  --wjs-accordion-item-radius: 0;
+  --wjs-accordion-item-border-width: 2px;
+  --wjs-accordion-item-border-color: #141414;
+  --wjs-accordion-item-gap: 0.5rem;
+  --wjs-accordion-header-color: #141414;
+  --wjs-accordion-header-family: var(--wjs-font-family-heading);
+  --wjs-accordion-header-weight: 600;
+  --wjs-accordion-header-transform: none;
+  --wjs-accordion-icon-color: #000000;
+  --wjs-accordion-panel-color: #737370;
+  --wjs-accordion-panel-family: var(--wjs-font-family-base);
+  --wjs-accordion-shadow: none;
+  --wjs-form-input-bg: #fbfbf9;
+  --wjs-form-input-color: #141414;
+  --wjs-form-input-border-color: #141414;
+  --wjs-form-input-radius: 0;
+  --wjs-form-label-color: #141414;
+  --wjs-form-placeholder-color: #9b9b98;
+  --wjs-form-accent: #000000;
+  --wjs-form-submit-bg: #000000;
+  --wjs-form-submit-color: #ffffff;
+  --wjs-form-submit-radius: 0;
+  --wjs-form-submit-family: var(--wjs-font-family-heading);
+  --wjs-form-submit-weight: 600;
+  --wjs-form-submit-shadow: 4px 4px 0 #141414;
+  --wjs-form-submit-hover-bg: #000000;
+  --wjs-search-input-bg: #fbfbf9;
+  --wjs-search-input-color: #141414;
+  --wjs-search-input-border-color: #141414;
+  --wjs-search-input-radius: 0;
+  --wjs-search-placeholder-color: #9b9b98;
   --wjs-search-button-bg: #000000;
   --wjs-search-button-color: #ffffff;
-  --wjs-search-button-border-width: 0;
-  --wjs-search-button-border-color: transparent;
-  --wjs-search-button-shadow: 4px 4px 0px #ff3333;
+  --wjs-search-button-radius: 0;
   --wjs-search-button-transform: uppercase;
-  --wjs-search-button-weight: 900;
+  --wjs-search-button-tracking: 0.06em;
+  --wjs-search-focus-ring: rgba(0,0,0,0.3);
+  --wjs-search-focus-color: #000000;
+  --wjs-cta-bg: #d8d8d3;
+  --wjs-cta-color: #141414;
+  --wjs-cta-title-color: #141414;
+  --wjs-cta-title-family: var(--wjs-font-family-heading);
+  --wjs-cta-title-weight: 700;
+  --wjs-cta-title-transform: none;
+  --wjs-cta-title-tracking: -0.01em;
+  --wjs-cta-radius: 0;
+  --wjs-cta-pad: 1.25rem;
+  --wjs-cta-border-width: 2px;
+  --wjs-cta-border-color: #141414;
+  --wjs-cta-shadow: 4px 4px 0 #141414;
+  --wjs-cta-button-bg: #000000;
+  --wjs-cta-button-color: #ffffff;
+  --wjs-cta-button-radius: 0;
+  --wjs-cta-button-family: var(--wjs-font-family-heading);
+  --wjs-cta-button-weight: 600;
+  --wjs-cta-button-transform: uppercase;
+  --wjs-cta-button-tracking: 0.06em;
+  --wjs-cta-button-shadow: 4px 4px 0 #141414;
+  --wjs-cta-button-hover-bg: #000000;
+  --wjs-cta-button-hover-color: #ffffff;
+  --wjs-cta-button-hover-shadow: 7px 7px 0 #141414;
+  --wjs-cta-subtitle-opacity: 0.78;
+  --wjs-pricing-bg: #ecece8;
+  --wjs-pricing-radius: 0;
+  --wjs-pricing-pad: 1.25rem;
+  --wjs-pricing-border-width: 2px;
+  --wjs-pricing-border-color: #141414;
+  --wjs-pricing-shadow: 4px 4px 0 #141414;
+  --wjs-pricing-hover-shadow: 7px 7px 0 #141414;
+  --wjs-pricing-hover-transform: translate(-3px,-3px);
+  --wjs-pricing-hover-border-color: #000000;
+  --wjs-pricing-accent: #000000;
+  --wjs-pricing-name-color: #737370;
+  --wjs-pricing-name-family: var(--wjs-font-family-heading);
+  --wjs-pricing-name-transform: uppercase;
+  --wjs-pricing-name-tracking: 0.06em;
+  --wjs-pricing-price-color: #141414;
+  --wjs-pricing-price-family: var(--wjs-font-family-heading);
+  --wjs-pricing-price-weight: 700;
+  --wjs-pricing-period-color: #737370;
+  --wjs-pricing-feature-color: #737370;
+  --wjs-pricing-button-bg: #000000;
+  --wjs-pricing-button-color: #ffffff;
+  --wjs-pricing-button-radius: 0;
+  --wjs-pricing-button-hover-bg: #000000;
+  --wjs-pricing-highlight-bg: #e6e6e2;
+  --wjs-pricing-highlight-border-color: #000000;
+  --wjs-pricing-highlight-border-width: 2px;
+  --wjs-pricing-highlight-shadow: 7px 7px 0 #141414;
+  --wjs-pricing-highlight-price-color: #141414;
+  --wjs-color-text-footer-heading: #ffffff;
+  --wjs-color-text-footer-main: #ffffff;
+  --wjs-color-text-footer-dim: #9e9e9e;
+  --wjs-footer-text-heading: #ffffff;
+  --wjs-footer-text-body: #9e9e9e;
+  --wjs-footer-text-hover: #ffffff;
+  --wjs-nav-color: #141414;
+  --wjs-nav-color-hover: #000000;
+  --wjs-logo-color: #141414;
+  --wjs-logo-color-hover: #000000;
+  --wjs-social-hover-color: #ffffff;
+  --wjs-social-bg: transparent;
+  --wjs-social-color: #141414;
+  --wjs-social-hover-bg: #000000;
+  --wjs-social-radius: 0;
+  --wjs-image-radius: 0;
+  --wjs-image-shadow: none;
+  --wjs-table-border-color: #d6d6d1;
+  --wjs-table-head-bg: transparent;
+  --wjs-table-head-color: #141414;
+  --wjs-table-head-transform: uppercase;
+  --wjs-table-head-tracking: 0.06em;
+  --wjs-divider-color: #141414;
+  --wjs-font-family-heading: 'IBM Plex Sans', 'Segoe UI', system-ui, sans-serif;
+  --wjs-font-family-base: 'IBM Plex Sans', 'Segoe UI', system-ui, sans-serif;
 }
+/* @wjs-generated:end */
+
+/* Brutalist Paper — compiled from theme.json. */

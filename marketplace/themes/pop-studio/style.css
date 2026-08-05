@@ -13,7 +13,7 @@
   --wjs-color-text-main: #141414;
   --wjs-color-text-muted: #6d6d6d;
   --wjs-color-heading: #141414;
-  --wjs-color-link: #ec4899;
+  --wjs-color-link: #c63c81;
   --wjs-color-link-hover: #047c90;
   --wjs-border-subtle: #d5d5d5;
   --wjs-outline: #a6a6a6;
@@ -32,8 +32,8 @@
   --wjs-bg-surface-glass: rgba(255,255,255,0.92);
   --wjs-hero-bg: #ffffff;
   --wjs-hero-gradient-angle: 115deg;
-  --wjs-hero-gradient-from: #fff1f7;
-  --wjs-hero-gradient-to: #ecfeff;
+  --wjs-hero-gradient-from: #ffffff;
+  --wjs-hero-gradient-to: #ffffff;
   --wjs-hero-color: #141414;
   --wjs-hero-title-color: #141414;
   --wjs-hero-subtitle-color: #141414;
