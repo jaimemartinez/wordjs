@@ -1,7 +1,11 @@
-"use client";
 /**
  * WordJS - HTML Sanitization Utility
  * Prevents XSS attacks when rendering user-generated content
+ *
+ * SHARED module (no "use client"): server components call sanitizeHTML during RSC render (the
+ * sanitize-html path), client components keep using it through the DOMPurify path — the
+ * typeof-window branches inside each function do the splitting. Marking it "use client" made
+ * every export a client REFERENCE when imported from a server component, which throws on call.
  */
 
 import DOMPurify from 'dompurify';
