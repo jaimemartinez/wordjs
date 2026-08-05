@@ -155,3 +155,23 @@ test('updateMeta inserts once, then updates in place', async () => {
     assert.strictEqual(rows.length, 1, 'updating an existing key must not insert a duplicate');
     assert.strictEqual(rows[0].meta_value, 'second');
 });
+
+// ── cached COUNT(*) must never go stale for the writer ────────────────────────────────────────
+// Listings cache their total (the X-WP-Total header) to avoid repeating the COUNT behind paging
+// and per-keystroke search. Publishing and then looking at the list must show the NEW total — a
+// plain TTL cache would show a stale number for seconds, which is why the key carries a
+// generation that every post write bumps.
+
+test('a cached post count is invalidated by the very next create', async () => {
+    const before = await Post.count({ type: 'post', status: 'publish' });
+
+    // Warm the cache, then write through the model (which bumps the generation).
+    assert.strictEqual(await Post.count({ type: 'post', status: 'publish' }), before);
+    await Post.create({ authorId: 1, title: 'Counted post', content: '', status: 'publish', type: 'post' });
+
+    assert.strictEqual(
+        await Post.count({ type: 'post', status: 'publish' }),
+        before + 1,
+        'the count must reflect a post created after it was cached'
+    );
+});
