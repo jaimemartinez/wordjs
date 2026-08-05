@@ -114,6 +114,32 @@ test('ordinary scoped DML and reads are untouched', () => {
     assert.strictEqual(allowed('SELECT * FROM wjp_evil_notes WHERE v = ?', READ_VERBS), true);
 });
 
+// ── 4. A data-modifying CTE is a WRITE ────────────────────────────────────────────────────────────
+// Callers classify by leading verb and `with` is on the read list, so these demanded only
+// database:read and dispatched as reads — on Postgres the CTE executes regardless of whether the
+// outer query reads its output, silently voiding a revoked write grant.
+
+test('a data-modifying CTE is not accepted as a read', () => {
+    for (const sql of [
+        'WITH t AS (INSERT INTO wjp_evil_notes (v) VALUES (?)) SELECT 1',
+        'WITH t AS (UPDATE wjp_evil_notes SET v = ? WHERE id = ?) SELECT 1',
+        'WITH t AS (DELETE FROM wjp_evil_notes WHERE id = ?) SELECT 1',
+    ]) {
+        assert.strictEqual(allowed(sql, READ_VERBS), false, `must not pass as a read: ${sql}`);
+        // And it does not simply move to the write branch either: `with` is not a WRITE verb, so the
+        // pre-existing leading-verb allowlist already refuses it there. Net effect — a plugin cannot use
+        // a data-modifying CTE at all, which is the right answer: it has db.run for writes.
+        assert.strictEqual(allowed(sql, WRITE_VERBS), false, 'nor pass as a write (verb allowlist)');
+    }
+});
+
+test('an ordinary read-only CTE is unaffected', () => {
+    // The prefix rule denies the CTE ALIAS itself (pre-existing behaviour, unrelated to this rule), so
+    // assert the classification directly: a plain CTE must not trip the data-modifying check.
+    const readOnly = 'WITH wjp_evil_t AS (SELECT id FROM wjp_evil_notes) SELECT * FROM wjp_evil_t';
+    assert.strictEqual(allowed(readOnly, READ_VERBS), true, 'a read-only CTE must still be a read');
+});
+
 test('the pre-existing controls still fail closed', () => {
     assert.strictEqual(allowed('DROP TABLE users', WRITE_VERBS), false);
     assert.strictEqual(allowed('SELECT user_pass FROM users', READ_VERBS), false);

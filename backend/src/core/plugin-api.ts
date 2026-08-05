@@ -314,6 +314,17 @@ function assertSqlAllowed(sql: string, allowedVerbs: string[], tablePrefix?: str
     if (allowedVerbs.length && !allowedVerbs.includes(verb)) {
         throw new Error(`🛡️ Plugin DB access denied: '${verb || '(empty)'}' statements are not permitted here.`);
     }
+    // DATA-MODIFYING CTE. The callers classify a statement as a READ by its leading verb, and `with` is on
+    // the read list — so `WITH t AS (INSERT INTO ... ) SELECT 1` demanded only database:read, was validated
+    // against the READ verbs, and dispatched as a read. On Postgres the CTE executes to completion whether
+    // or not the outer query reads its output, so a plugin whose write grant the admin REVOKED could still
+    // mutate its tables: a permission the UI presents as enforced, silently voided. Decide on the LEXED
+    // token stream (literals and comments already blanked) rather than a second raw-string regex, and only
+    // on the read branch — the write branch legitimately contains these verbs.
+    if (verb === 'with' && allowedVerbs.length && !allowedVerbs.includes('insert')
+        && /\b(?:insert|update|delete|replace|merge)\b/.test(lower)) {
+        throw new Error(`🛡️ Plugin DB access denied: a data-modifying CTE is a write — it requires the 'database:write' permission.`);
+    }
     // Core-table denylist (defense in depth alongside the prefix allowlist below). Anchor the match to a
     // table-INTRODUCING keyword (from/join/into/update/using/table) + optional SQL delimiter, so a
     // legitimate COLUMN named like a core table (e.g. a plugin's own `options`/`status`/`type` column in
