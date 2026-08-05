@@ -6,9 +6,17 @@
 //
 // SECURITY: this emits CSS into the page, so it is strictly sanitized — only keys matching `--wjs-…`
 // and values made of safe CSS characters (no `;{}:<>` that could break out of the declaration block)
-// are emitted; everything else is dropped.
+// are emitted; everything else is dropped. The charset alone is NOT enough: `url(//attacker.example/x)`
+// is a protocol-relative URL — it needs no `:` and fits entirely inside the allowed characters, so a
+// token value could become an exfiltration beacon the moment a browser resolves it. On top of the
+// charset, reject any value containing `//`, matching `url(` (any spacing/case), or containing a
+// backslash (CSS escapes could smuggle either form past a character filter).
+// Mirror: keep isForbiddenTokenValue byte-identical with admin/themes/customize/page.tsx (pinned by test).
 const KEY_RE = /^--wjs-[a-z0-9-]+$/;
 const VALUE_RE = /^[#a-zA-Z0-9 ,.%()/_'"-]+$/;
+function isForbiddenTokenValue(value: string): boolean {
+    return value.includes("//") || /url\s*\(/i.test(value) || value.includes("\\");
+}
 
 export default function ThemeTokenOverlay({ mods }: { mods?: string | Record<string, unknown> | null }) {
     let obj: Record<string, unknown> | null = null;
@@ -20,7 +28,7 @@ export default function ThemeTokenOverlay({ mods }: { mods?: string | Record<str
     if (!obj) return null;
 
     const decls = Object.entries(obj)
-        .filter(([k, v]) => KEY_RE.test(k) && typeof v === "string" && v.length > 0 && v.length <= 120 && VALUE_RE.test(v))
+        .filter(([k, v]) => KEY_RE.test(k) && typeof v === "string" && v.length > 0 && v.length <= 120 && VALUE_RE.test(v) && !isForbiddenTokenValue(v))
         .map(([k, v]) => `${k}:${v as string}`)
         .join(";");
     if (!decls) return null;
