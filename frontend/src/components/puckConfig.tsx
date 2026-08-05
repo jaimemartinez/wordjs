@@ -14,7 +14,7 @@ import { buildSrcSet, sizesForWidth, srcSetBelongsTo, rememberPickedMedia, getPi
 import { puckPluginComponents } from "../lib/puckPluginRegistry";
 import { CSSPropertiesControl } from "./puck/CSSControls";
 import { blockVars, cx, unit } from "./puck/blockVars";
-import { HeadingBlock, TextBlock, ImageBlock, DividerBlock, ButtonBlock, SpacerBlock, SectionBlock, GridBlock, FlexRowBlock, ColumnsBlock, CardBlock, QuoteBlock, TableBlock, IconListBlock, SocialLinksBlock, StatsBlock, HTMLEmbedBlock, PricingTableBlock, TestimonialBlock, CTABannerBlock, VideoEmbedBlock, HeroBlock, PostsGridBlock } from "./content/blocks";
+import { HeadingBlock, TextBlock, ImageBlock, DividerBlock, ButtonBlock, SpacerBlock, SectionBlock, GridBlock, FlexRowBlock, ColumnsBlock, CardBlock, QuoteBlock, TableBlock, IconListBlock, SocialLinksBlock, StatsBlock, HTMLEmbedBlock, PricingTableBlock, TestimonialBlock, CTABannerBlock, VideoEmbedBlock, HeroBlock, PostsGridBlock, CategoryPostsBlock } from "./content/blocks";
 import LinkField from "./puck/LinkField";
 import { withSharedBlockFields } from "./puck/VisibilityField";
 import { sanitizeHTML } from "@/lib/sanitize";
@@ -2036,81 +2036,13 @@ const baseConfig: any = {
                 columns: "", gap: "", bg: "", borderColor: "", radius: "", linkColor: "", headingColor: "",
                 css: {}
             },
-            render: ({ categorySlug, count, layout, columns, gap, bg, borderColor, radius, linkColor, headingColor, css, resolvedPosts, resolvedFiltered, puck }: any) => {
+            render: ({ categorySlug, count, resolvedPosts, puck, ...props }: any) => {
                 // Same contract as PostsGrid: real posts from the server resolver on the public
                 // site, from useEditorPosts (client fetch, same mapper) inside the editor canvas.
+                // Markup shared in content/blocks.tsx with the public server renderer.
                 const editing = !!puck?.isEditing;
                 const posts: any[] = useEditorPosts(editing, resolvedPosts, categorySlug, count);
-
-                const vars = {
-                    ...blockVars('catposts', {
-                        columns,
-                        gap: unit(gap),
-                        bg,
-                        'border-color': borderColor,
-                        radius: unit(radius),
-                        'link-color': linkColor,
-                        'heading-color': headingColor,
-                    }),
-                    ...css,
-                };
-
-                const heading = (
-                    <h3 className="wp-block-category-posts__heading">
-                        <i className="fa-solid fa-folder" aria-hidden="true"></i> {categorySlug}
-                        {/* Say it out loud when the category matched nothing and this is really "latest
-                            posts" — silently showing unrelated entries under a category name is worse
-                            than showing none. */}
-                        {editing && resolvedFiltered === false && (
-                            <span className="wp-block-category-posts__note"> · sin entradas en esta categoría, mostrando las últimas</span>
-                        )}
-                    </h3>
-                );
-
-                if (!posts.length) {
-                    return (
-                        <div className="wp-block-category-posts" style={vars}>
-                            {heading}
-                            <p className="wp-block-category-posts__empty">
-                                {editing ? "Aún no hay entradas publicadas para mostrar aquí." : "No hay entradas en esta categoría."}
-                            </p>
-                        </div>
-                    );
-                }
-
-                if (layout === "grid") {
-                    return (
-                        <div className="wp-block-category-posts wp-block-category-posts--grid" style={vars}>
-                            {posts.map((post) => (
-                                <div key={post.id} className="wp-block-category-posts__card">
-                                    <h4 className="wp-block-category-posts__card-title">
-                                        <a href={post.href} onClick={editing ? (e: React.MouseEvent) => e.preventDefault() : undefined}>{post.title}</a>
-                                    </h4>
-                                    {post.excerpt && <p className="wp-block-category-posts__excerpt">{post.excerpt}</p>}
-                                </div>
-                            ))}
-                        </div>
-                    );
-                }
-
-                return (
-                    <div className="wp-block-category-posts" style={vars}>
-                        {heading}
-                        <ul className="wp-block-category-posts__list">
-                            {posts.map((post) => (
-                                <li key={post.id} className="wp-block-category-posts__item">
-                                    <a
-                                        href={post.href}
-                                        className="wp-block-category-posts__link"
-                                        onClick={editing ? (e: React.MouseEvent) => e.preventDefault() : undefined}
-                                    >
-                                        {post.title}
-                                    </a>
-                                </li>
-                            ))}
-                        </ul>
-                    </div>
-                );
+                return <CategoryPostsBlock {...props} posts={posts} categorySlug={categorySlug} isEditing={editing} />;
             }
         },
 
