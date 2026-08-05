@@ -141,12 +141,17 @@ export default function PostContent({ post, settings, category, showComments }: 
                             <span>•</span>
                             <span>{post.author?.displayName || "Admin"}</span>
                         </div>
+                        {/* Title size intentionally NOT tokenized: every h-scale token (--wjs-h1…) is
+                            pre-declared in ui.css :root (2.5rem), so a var() here would override the
+                            Tailwind-parity fallback and change today's text-4xl/md:text-5xl render. */}
                         <h1 className="text-4xl md:text-5xl font-bold text-[var(--wjs-color-heading,#111827)] leading-tight mb-6 text-center">
                             {post.title}
                         </h1>
                     </div>
+                    {/* Card hooks use UNDECLARED contract tokens (card-*): ui.css :root pre-declares
+                        --wjs-radius-lg at 0.75rem, which would beat a 1rem parity fallback. */}
                     <div
-                        className="wjs-content prose prose-lg mx-auto p-8 rounded-2xl shadow-sm bg-[var(--wjs-bg-surface,#ffffff)] border border-[var(--wjs-border-subtle,#e5e7eb)] overflow-x-auto [&_table]:block [&_table]:overflow-x-auto [&_pre]:overflow-x-auto"
+                        className="wjs-content prose prose-lg mx-auto p-[var(--wjs-card-pad,2rem)] rounded-[var(--wjs-card-radius,1rem)] shadow-[var(--wjs-card-shadow,0_1px_3px_0_rgba(0,0,0,0.1),0_1px_2px_-1px_rgba(0,0,0,0.1))] bg-[var(--wjs-bg-surface,#ffffff)] border border-[var(--wjs-border-subtle,#e5e7eb)] overflow-x-auto [&_table]:block [&_table]:overflow-x-auto [&_pre]:overflow-x-auto"
                         suppressHydrationWarning
                         dangerouslySetInnerHTML={{ __html: sanitizeHTML(post.content) }}
                     />

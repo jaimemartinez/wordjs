@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 import Link from "next/link";
+import { inter } from "./fonts";
 
 export default function GlobalError({
     error,
@@ -16,7 +17,9 @@ export default function GlobalError({
     }, [error]);
 
     return (
-        <div className="min-h-screen w-full flex flex-col items-center justify-center bg-gray-50 text-gray-900 relative overflow-hidden">
+        // Root error boundary renders outside the (public) tree (no wordjs-ui.css) and outside
+        // admin — re-apply Inter here since the root <body> now carries only inter.variable.
+        <div className={`${inter.className} min-h-screen w-full flex flex-col items-center justify-center bg-gray-50 text-gray-900 relative overflow-hidden`}>
             {/* Background Decorations */}
             <div className="absolute top-0 right-0 w-96 h-96 bg-red-500/5 rounded-full blur-3xl translate-x-1/2 -translate-y-1/2" />
             <div className="absolute bottom-0 left-0 w-96 h-96 bg-brand-blue/10 rounded-full blur-3xl -translate-x-1/2 translate-y-1/2" />

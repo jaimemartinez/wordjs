@@ -4,6 +4,28 @@ import { useState, useEffect } from "react";
 import { commentsApi, Comment } from "@/lib/api";
 import { sanitizeHTML } from "@/lib/sanitize";
 
+// Local initials avatar — no request to the external avatar service. Background is a
+// deterministic pick (simple char-code hash of the name) over the theme token palette.
+const AVATAR_BG = [
+    "var(--wjs-color-primary,#2563eb)",
+    "var(--wjs-color-secondary,#6b7280)",
+];
+
+function InitialsAvatar({ name }: { name: string }) {
+    const initials = (name || "").trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase() || "?";
+    let hash = 0;
+    for (let i = 0; i < (name || "").length; i++) hash = (hash + name.charCodeAt(i)) % AVATAR_BG.length;
+    return (
+        <div
+            className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold select-none"
+            style={{ background: AVATAR_BG[hash], color: "var(--wjs-color-on-primary,#fff)" }}
+            aria-hidden="true"
+        >
+            {initials}
+        </div>
+    );
+}
+
 export default function CommentsSection({ postId }: { postId: number }) {
     const [comments, setComments] = useState<Comment[]>([]);
     const [loading, setLoading] = useState(true);
@@ -68,10 +90,14 @@ export default function CommentsSection({ postId }: { postId: number }) {
 
     if (loading) return <div className="py-8 text-center text-[var(--wjs-color-text-muted,#6b7280)]">Loading comments...</div>;
 
-    const inputClass = "w-full px-4 py-2 border border-[var(--wjs-border-subtle,#e5e7eb)] rounded-lg bg-[var(--wjs-bg-surface,#fff)] text-[var(--wjs-color-text-main,#111827)] focus:ring-2 focus:ring-[var(--wjs-color-primary,#2563eb)] focus:border-transparent outline-none transition";
+    // Token hooks below prefer UNDECLARED contract tokens (card-*/button-*/form-*): ui.css :root
+    // pre-declares e.g. --wjs-color-danger (a SOLID color) and would beat any Tailwind-parity
+    // fallback, repainting today's render. Declared tokens are only used where their ui.css
+    // default equals the current Tailwind value (--wjs-radius 0.5rem, --wjs-radius-lg 0.75rem).
+    const inputClass = "w-full px-4 py-2 border border-[var(--wjs-border-subtle,#e5e7eb)] rounded-[var(--wjs-form-input-radius,0.5rem)] bg-[var(--wjs-bg-surface,#fff)] text-[var(--wjs-color-text-main,#111827)] focus:ring-2 focus:ring-[var(--wjs-color-primary,#2563eb)] focus:border-transparent outline-none transition";
 
     return (
-        <div className="max-w-3xl mx-auto py-12 px-4 border-t border-[var(--wjs-border-subtle,#e5e7eb)] mt-12 bg-[var(--wjs-bg-muted,#f9fafb)] rounded-xl">
+        <div className="max-w-3xl mx-auto py-12 px-4 border-t border-[var(--wjs-border-subtle,#e5e7eb)] mt-12 bg-[var(--wjs-bg-muted,#f9fafb)] rounded-[var(--wjs-radius-lg,0.75rem)]">
             <h3 className="text-2xl font-bold text-[var(--wjs-color-heading,#111827)] mb-8">
                 Comments ({comments.length})
             </h3>
@@ -84,14 +110,18 @@ export default function CommentsSection({ postId }: { postId: number }) {
                     comments.map((comment) => (
                         <div key={comment.id} className="flex gap-4">
                             <div className="flex-shrink-0">
-                                <img
-                                    src={comment.authorAvatarUrl || `https://ui-avatars.com/api/?name=${comment.author}&background=random`}
-                                    alt={comment.author}
-                                    className="w-10 h-10 rounded-full"
-                                />
+                                {comment.authorAvatarUrl ? (
+                                    <img
+                                        src={comment.authorAvatarUrl}
+                                        alt={comment.author}
+                                        className="w-10 h-10 rounded-full"
+                                    />
+                                ) : (
+                                    <InitialsAvatar name={comment.author} />
+                                )}
                             </div>
                             <div className="flex-1 min-w-0">
-                                <div className="bg-[var(--wjs-bg-surface,#fff)] p-4 rounded-lg shadow-sm border border-[var(--wjs-border-subtle,#e5e7eb)]">
+                                <div className="bg-[var(--wjs-bg-surface,#fff)] p-4 rounded-[var(--wjs-card-radius,0.5rem)] shadow-[var(--wjs-card-shadow,0_1px_3px_0_rgba(0,0,0,0.1),0_1px_2px_-1px_rgba(0,0,0,0.1))] border border-[var(--wjs-border-subtle,#e5e7eb)]">
                                     <div className="flex justify-between items-start mb-2 gap-2">
                                         <h4 className="font-bold text-[var(--wjs-color-heading,#111827)] break-words min-w-0">{comment.author}</h4>
                                         <span className="text-xs text-[var(--wjs-color-text-muted,#6b7280)] shrink-0">
@@ -107,17 +137,19 @@ export default function CommentsSection({ postId }: { postId: number }) {
             </div>
 
             {/* Comment Form */}
-            <div className="bg-[var(--wjs-bg-surface,#fff)] p-6 rounded-xl shadow-sm border border-[var(--wjs-border-subtle,#e5e7eb)]">
+            <div className="bg-[var(--wjs-bg-surface,#fff)] p-6 rounded-[var(--wjs-card-radius,0.75rem)] shadow-[var(--wjs-card-shadow,0_1px_3px_0_rgba(0,0,0,0.1),0_1px_2px_-1px_rgba(0,0,0,0.1))] border border-[var(--wjs-border-subtle,#e5e7eb)]">
                 <h4 className="text-lg font-bold text-[var(--wjs-color-heading,#111827)] mb-4">Leave a Reply</h4>
 
+                {/* Alert bg tints (red-50/green-50) stay literal: the contract has no undeclared danger/
+                    success-surface token, and --wjs-color-danger/success are pre-declared SOLIDS. */}
                 {error && (
-                    <div role="alert" aria-live="polite" className="bg-red-50 text-red-600 p-3 rounded-lg text-sm mb-4">
+                    <div role="alert" aria-live="polite" className="bg-red-50 text-[var(--wjs-form-error-color,oklch(57.7%_0.245_27.325))] p-3 rounded-[var(--wjs-radius,0.5rem)] text-sm mb-4">
                         {error}
                     </div>
                 )}
 
                 {successMessage && (
-                    <div role="alert" aria-live="polite" className="bg-green-50 text-green-600 p-3 rounded-lg text-sm mb-4">
+                    <div role="alert" aria-live="polite" className="bg-green-50 text-[var(--wjs-form-success-color,oklch(62.7%_0.194_149.214))] p-3 rounded-[var(--wjs-radius,0.5rem)] text-sm mb-4">
                         {successMessage}
                     </div>
                 )}
@@ -174,7 +206,7 @@ export default function CommentsSection({ postId }: { postId: number }) {
                     <button
                         type="submit"
                         disabled={submitting}
-                        className="px-6 py-2 bg-[var(--wjs-color-primary,#2563eb)] text-[var(--wjs-color-on-primary,#ffffff)] font-medium rounded-lg hover:opacity-90 disabled:opacity-50 transition shadow-sm"
+                        className="px-6 py-2 bg-[var(--wjs-color-primary,#2563eb)] text-[var(--wjs-color-on-primary,#ffffff)] font-medium rounded-[var(--wjs-button-radius,0.5rem)] hover:opacity-90 disabled:opacity-50 transition shadow-[var(--wjs-button-shadow,0_1px_3px_0_rgba(0,0,0,0.1),0_1px_2px_-1px_rgba(0,0,0,0.1))]"
                     >
                         {submitting ? "Posting..." : "Post Comment"}
                     </button>

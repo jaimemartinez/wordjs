@@ -16,9 +16,19 @@ const NotFoundState: FC<NotFoundStateProps> = ({
 }) => {
     return (
         <div className="min-h-[60vh] w-full flex flex-col items-center justify-center bg-[var(--wjs-bg-canvas,transparent)] text-[var(--wjs-color-text-main,gray)] relative overflow-hidden py-20">
-            {/* Background Decorations */}
-            <div className="absolute top-0 left-0 w-96 h-96 bg-cyan-500/10 rounded-full blur-3xl -translate-x-1/2 -translate-y-1/2" />
-            <div className="absolute bottom-0 right-0 w-96 h-96 bg-blue-600/10 rounded-full blur-3xl translate-x-1/2 translate-y-1/2" />
+            {/* Background Decorations — --wjs-404-* (token group "404"): theme override hooks for the
+                decorative blobs/glow. The utility classes stay as theme !important targets; the inline
+                fallbacks replicate EXACTLY what bg-cyan-500/10, bg-blue-600/10 and shadow-blue-600/20
+                compute today under Tailwind v4 (the declared --wjs-color-primary/secondary hexes differ
+                from these oklch palette colors, so reusing those tokens would repaint the default). */}
+            <div
+                className="absolute top-0 left-0 w-96 h-96 bg-cyan-500/10 rounded-full blur-3xl -translate-x-1/2 -translate-y-1/2"
+                style={{ background: "var(--wjs-404-blob-a, color-mix(in oklab, oklch(71.5% 0.143 215.221) 10%, transparent))" }}
+            />
+            <div
+                className="absolute bottom-0 right-0 w-96 h-96 bg-blue-600/10 rounded-full blur-3xl translate-x-1/2 translate-y-1/2"
+                style={{ background: "var(--wjs-404-blob-b, color-mix(in oklab, oklch(54.6% 0.245 262.881) 10%, transparent))" }}
+            />
 
             <div className="z-10 text-center px-4 animate-in fade-in zoom-in duration-500">
                 <h1 className="text-[8rem] md:text-[12rem] font-bold leading-none text-transparent bg-clip-text bg-gradient-to-br from-[var(--wjs-color-primary,blue)] to-[var(--wjs-color-secondary,cyan)] opacity-80 select-none">
@@ -36,6 +46,7 @@ const NotFoundState: FC<NotFoundStateProps> = ({
                 <Link
                     href={backLink}
                     className="inline-flex items-center gap-2 px-6 py-3 bg-[var(--wjs-color-primary,blue)] hover:bg-[var(--wjs-color-primary-dark,darkblue)] text-[var(--wjs-color-primary-text,white)] font-medium rounded-full shadow-lg shadow-blue-600/20 transform hover:-translate-y-1 transition-all duration-300"
+                    style={{ boxShadow: "var(--wjs-404-glow, 0 10px 15px -3px color-mix(in oklab, oklch(54.6% 0.245 262.881) 20%, transparent), 0 4px 6px -4px color-mix(in oklab, oklch(54.6% 0.245 262.881) 20%, transparent))" }}
                 >
                     <span className="tracking-wide uppercase text-sm">{backLabel}</span>
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
