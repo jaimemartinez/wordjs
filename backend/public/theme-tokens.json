@@ -2,8 +2,8 @@
   "version": 1,
   "source": "backend/public/css/wordjs-ui.css",
   "counts": {
-    "tokens": 744,
-    "varUses": 1712,
+    "tokens": 753,
+    "varUses": 1724,
     "elements": 33
   },
   "tokens": {
@@ -1351,8 +1351,15 @@
     "--wjs-bg-surface-hover": {
       "group": "bg",
       "declaredDefault": "var(--wjs-bg-surface)",
-      "fallbacks": [],
-      "consumers": [],
+      "fallbacks": [
+        "rgba(255, 255, 255, 0.06)"
+      ],
+      "consumers": [
+        {
+          "selector": ".wjs-footer-social a, .wjs-chrome-socials a",
+          "property": "background-color"
+        }
+      ],
       "flags": [
         "alias"
       ]
@@ -3953,6 +3960,10 @@
           "property": "color"
         },
         {
+          "selector": ".wjs-footer-social a:hover, .wjs-chrome-socials a:hover",
+          "property": "background-color"
+        },
+        {
           "selector": ".wjs-chrome-button--ghost",
           "property": "color"
         },
@@ -6043,6 +6054,45 @@
         {
           "selector": ":root",
           "property": "--wjs-bg-footer"
+        }
+      ]
+    },
+    "--wjs-footer-icon-bg": {
+      "group": "footer",
+      "declaredDefault": null,
+      "fallbacks": [
+        "var(--wjs-bg-surface-hover, rgba(255, 255, 255, 0.06))"
+      ],
+      "consumers": [
+        {
+          "selector": ".wjs-footer-social a, .wjs-chrome-socials a",
+          "property": "background-color"
+        }
+      ]
+    },
+    "--wjs-footer-icon-color": {
+      "group": "footer",
+      "declaredDefault": null,
+      "fallbacks": [
+        "var(--wjs-color-text-footer-main, #ffffff)"
+      ],
+      "consumers": [
+        {
+          "selector": ".wjs-footer-social a, .wjs-chrome-socials a",
+          "property": "color"
+        }
+      ]
+    },
+    "--wjs-footer-icon-hover-bg": {
+      "group": "footer",
+      "declaredDefault": null,
+      "fallbacks": [
+        "var(--wjs-color-primary)"
+      ],
+      "consumers": [
+        {
+          "selector": ".wjs-footer-social a:hover, .wjs-chrome-socials a:hover",
+          "property": "background-color"
         }
       ]
     },
@@ -8573,6 +8623,45 @@
         }
       ]
     },
+    "--wjs-nav-font-family": {
+      "group": "nav",
+      "declaredDefault": null,
+      "fallbacks": [
+        "inherit"
+      ],
+      "consumers": [
+        {
+          "selector": ".wjs-header-nav, .wjs-chrome-nav, .wjs-footer-nav",
+          "property": "font-family"
+        }
+      ]
+    },
+    "--wjs-nav-font-size": {
+      "group": "nav",
+      "declaredDefault": null,
+      "fallbacks": [
+        "inherit"
+      ],
+      "consumers": [
+        {
+          "selector": ".wjs-header-nav, .wjs-chrome-nav, .wjs-footer-nav",
+          "property": "font-size"
+        }
+      ]
+    },
+    "--wjs-nav-font-weight": {
+      "group": "nav",
+      "declaredDefault": null,
+      "fallbacks": [
+        "500"
+      ],
+      "consumers": [
+        {
+          "selector": ".wjs-header-nav, .wjs-chrome-nav, .wjs-footer-nav",
+          "property": "font-weight"
+        }
+      ]
+    },
     "--wjs-nav-hover-decoration": {
       "group": "nav",
       "declaredDefault": null,
@@ -8583,6 +8672,45 @@
         {
           "selector": ".wjs-header-nav a:hover, .wjs-chrome-nav a:hover, .wjs-footer-grid a:hover, .wjs-footer-minimal a:hover",
           "property": "text-decoration"
+        }
+      ]
+    },
+    "--wjs-nav-letter-spacing": {
+      "group": "nav",
+      "declaredDefault": null,
+      "fallbacks": [
+        "normal"
+      ],
+      "consumers": [
+        {
+          "selector": ".wjs-header-nav, .wjs-chrome-nav, .wjs-footer-nav",
+          "property": "letter-spacing"
+        }
+      ]
+    },
+    "--wjs-nav-text-transform": {
+      "group": "nav",
+      "declaredDefault": null,
+      "fallbacks": [
+        "none"
+      ],
+      "consumers": [
+        {
+          "selector": ".wjs-header-nav, .wjs-chrome-nav, .wjs-footer-nav",
+          "property": "text-transform"
+        }
+      ]
+    },
+    "--wjs-nav-transition": {
+      "group": "nav",
+      "declaredDefault": null,
+      "fallbacks": [
+        "color var(--wjs-transition)"
+      ],
+      "consumers": [
+        {
+          "selector": ".wjs-header-nav a, .wjs-chrome-nav a, .wjs-footer-nav a",
+          "property": "transition"
         }
       ]
     },
@@ -13028,6 +13156,10 @@
       "consumers": [
         {
           "selector": "a",
+          "property": "transition"
+        },
+        {
+          "selector": ".wjs-header-nav a, .wjs-chrome-nav a, .wjs-footer-nav a",
           "property": "transition"
         },
         {
