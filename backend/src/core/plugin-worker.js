@@ -270,6 +270,14 @@ const wordjs = {
         all: (sql, p = []) => callHost('db.all', [sql, p]),
         get: (sql, p = []) => callHost('db.get', [sql, p]),
         run: (sql, p = []) => callHost('db.run', [sql, p]),
+        // Several statements in ONE host round-trip. Every statement is validated exactly as its
+        // single-statement counterpart would be (same permission + same SQL guard), so this is a
+        // transport optimisation, not a new capability: a handler that made 20 queries paid 20 IPC
+        // round-trips (~5-12ms of pure messaging) and now pays one.
+        // NOT a transaction: on Postgres/MySQL each statement runs on the plugin's own role
+        // connection, so a host-side BEGIN could not wrap them. Semantics are identical to calling
+        // the individual methods in order — including partial application if one of them throws.
+        batch: (statements) => callHost('db.batch', [statements]),
         createTable: (name, cols) => callHost('db.createTable', [name, cols]),
         getType: () => callHost('db.getType', [])
     },

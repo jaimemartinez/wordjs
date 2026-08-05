@@ -271,3 +271,80 @@ test('bridge provideMail requires the email:provider grant (no bypass)', async (
         assert.throws(() => api.provideMail(() => ({})), /permission|provider|denied|Security Block/i);
     });
 });
+
+// ── db.batch: a transport optimisation, NEVER a wider capability ──────────────────────────────
+// It exists to collapse N IPC round-trips into one. These pin that it cannot be used to reach
+// anything a loop of db.all/db.run could not, and that it refuses to half-apply an illegal batch.
+
+test('db.batch applies the SAME table scoping as single statements', async () => {
+    await runWithContext(SLUG, async () => {
+        const api = createPluginApi(SLUG);
+        await assert.rejects(() => api.db.batch([['SELECT * FROM users']]), /off-limits|not owned/i);
+        await assert.rejects(
+            () => api.db.batch([["UPDATE user_meta SET meta_value='administrator'"]]),
+            /off-limits|not owned/i
+        );
+    });
+});
+
+test('db.batch refuses DDL (ownership + grants must stay on the explicit path)', async () => {
+    await runWithContext(SLUG, async () => {
+        const api = createPluginApi(SLUG);
+        await assert.rejects(
+            () => api.db.batch([[`CREATE TABLE wjp_${SLUG.replace(/[^a-z0-9]+/g, '_')}_x (id INTEGER)`]]),
+            /does not accept DDL/i
+        );
+    });
+});
+
+test('db.batch validates EVERY statement before running ANY of them', async () => {
+    // Asserting only that an illegal batch REJECTS proves nothing: per-statement validation during
+    // execution would reject too — after the legal statements ahead of it had already applied. The
+    // invariant is "nothing executed", so observe the execution seam itself: runScoped must not be
+    // called at all. (This suite runs without an initialized database by design, so counting the
+    // calls is also the only way to assert it here.)
+    const iso = require('../core/plugin-db-isolation');
+    const realRunScoped = iso.runScoped;
+    const calls: string[] = [];
+    iso.runScoped = async (_slug: string, _method: string, sql: string) => { calls.push(sql); return []; };
+    try {
+        await runWithContext(SLUG, async () => {
+            const api = createPluginApi(SLUG);
+            const own = `wjp_${SLUG.replace(/[^a-z0-9]+/g, '_')}_probe`;
+            await assert.rejects(
+                () => api.db.batch([
+                    [`INSERT INTO ${own} (v) VALUES (?)`, ['a']],
+                    ['DELETE FROM users'],
+                ]),
+                /off-limits|not owned/i
+            );
+            assert.deepStrictEqual(calls, [], 'no statement may execute when any statement in the batch is illegal');
+
+            // Sanity: a fully legal batch DOES execute every statement, in order — otherwise the
+            // assertion above could pass for the wrong reason (e.g. batch silently doing nothing).
+            await api.db.batch([
+                [`INSERT INTO ${own} (v) VALUES (?)`, ['a']],
+                [`SELECT * FROM ${own}`],
+            ]);
+            assert.strictEqual(calls.length, 2, 'a legal batch must execute each statement once');
+            assert.match(calls[0], /^INSERT/);
+            assert.match(calls[1], /^SELECT/);
+        });
+    } finally {
+        iso.runScoped = realRunScoped;
+    }
+});
+
+test('db.batch rejects malformed input instead of guessing', async () => {
+    await runWithContext(SLUG, async () => {
+        const api = createPluginApi(SLUG);
+        await assert.rejects(() => api.db.batch([]), /non-empty array/i);
+        await assert.rejects(() => api.db.batch('SELECT 1'), /non-empty array/i);
+        await assert.rejects(() => api.db.batch([['SELECT 1', 'not-an-array']]), /params must be an array/i);
+        await assert.rejects(() => api.db.batch([[123]]), /non-empty sql string/i);
+        await assert.rejects(
+            () => api.db.batch(Array.from({ length: 201 }, () => ['SELECT 1'])),
+            /at most 200/i
+        );
+    });
+});
