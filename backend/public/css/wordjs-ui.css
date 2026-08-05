@@ -287,10 +287,49 @@ a:not([href]):not([class]) { color: inherit; text-decoration: none; }
 .wjs-footer-logo:hover { color: var(--wjs-footer-text-hover, var(--wjs-color-text-footer-main, #ffffff)); }
 /* The composed footer's brand is the heading of that band, not one of its links. */
 .wjs-footer-logo { color: var(--wjs-footer-text-heading, var(--wjs-color-text-footer-heading, #ffffff)); }
+/* Social chips. Their background came from --wjs-bg-surface-hover, a token that lives in the
+ * Puck-ALIAS zone (themes are told not to declare it) and resolves to the page's card surface — so
+ * on a light theme the chip was a pale circle with a near-white glyph. --wjs-footer-icon-* is what
+ * the default theme and four catalogue themes were already using for exactly this, through
+ * `footer .w-10` !important rules targeting a Tailwind utility class; the compiler rejected those
+ * tokens as UNKNOWN because nothing in the framework read them. Now it does, and the themes can
+ * drop the !important. */
 .wjs-footer-social a,
-.wjs-chrome-socials a { color: var(--wjs-color-text-footer-main, #ffffff); text-decoration: none; }
+.wjs-chrome-socials a {
+  background-color: var(--wjs-footer-icon-bg, var(--wjs-bg-surface-hover, rgba(255, 255, 255, 0.06)));
+  color: var(--wjs-footer-icon-color, var(--wjs-color-text-footer-main, #ffffff));
+  text-decoration: none;
+}
 .wjs-footer-social a:hover,
-.wjs-chrome-socials a:hover { color: var(--wjs-social-hover-color, var(--wjs-color-on-primary, #ffffff)); }
+.wjs-chrome-socials a:hover {
+  background-color: var(--wjs-footer-icon-hover-bg, var(--wjs-color-primary));
+  color: var(--wjs-social-hover-color, var(--wjs-color-on-primary, #ffffff));
+}
+
+/* Nav typography, promoted from "something the default theme did with !important" into the contract.
+ * Four catalogue themes were setting --wjs-nav-font-family and friends and getting UNKNOWN_TOKEN
+ * from the compiler, because no framework rule read them — tokens that demonstrably worked and that
+ * the contract denied. They are declared on the CONTAINER, never on the link: `styles.nav` compiles
+ * to `.wjs-header-nav`, so a link-level declaration here would out-specify the theme's own rule and
+ * make styles.nav.font-weight inert. The links then inherit, which is also what neutralises the
+ * Tailwind `font-medium` that was winning over the theme. */
+.wjs-header-nav,
+.wjs-chrome-nav,
+.wjs-footer-nav {
+  font-family: var(--wjs-nav-font-family, inherit);
+  font-size: var(--wjs-nav-font-size, inherit);
+  font-weight: var(--wjs-nav-font-weight, 500);
+  text-transform: var(--wjs-nav-text-transform, none);
+  letter-spacing: var(--wjs-nav-letter-spacing, normal);
+}
+.wjs-header-nav a,
+.wjs-chrome-nav a,
+.wjs-footer-nav a {
+  font-family: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  transition: var(--wjs-nav-transition, color var(--wjs-transition));
+}
 
 .wjs-chrome-button--primary,
 .wjs-chrome-button--primary:hover { color: var(--wjs-color-on-primary, #ffffff); }

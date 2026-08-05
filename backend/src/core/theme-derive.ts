@@ -23,7 +23,49 @@ const hex2rgb = (h: string): number[] => { h = h.replace('#', ''); return [0, 2,
 const rgb2hex = (r: number, g: number, b: number): string => '#' + [r, g, b].map((v: number) => Math.round(v).toString(16).padStart(2, '0')).join('');
 const mix = (a: string, b: string, t: number): string => { const A = hex2rgb(a), B = hex2rgb(b); const [r, g, bl] = A.map((v: number, i: number) => v + (B[i] - v) * t); return rgb2hex(r, g, bl); };
 const lum = (h: string): number => { const [r, g, b] = hex2rgb(h); return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255; };
-const onColor = (h: string): string => (lum(h) < 0.55 ? '#ffffff' : '#111111');
+
+/**
+ * Real WCAG relative luminance and contrast ratio. `lum` above is a plain luma kept byte-identical
+ * to the generator's; these are for the places where the NUMBER has to be right, not merely
+ * monotonic — near the middle of the range the two disagree enough to flip a decision.
+ */
+const relLum = (h: string): number => {
+  const c = hex2rgb(h).map((v: number) => {
+    const x = v / 255;
+    return x <= 0.03928 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4);
+  });
+  return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+};
+const contrast = (a: string, b: string): number => {
+  const [hi, lo] = [relLum(a), relLum(b)].sort((x: number, y: number) => y - x);
+  return (hi + 0.05) / (lo + 0.05);
+};
+
+/**
+ * Text colour for a filled surface. It used to be a bare luma threshold at 0.55, which is a guess
+ * about where white stops working — and on mid-tone brand colours the guess is wrong in both
+ * directions (white on #ec4899 is 3.53:1, black on #22c55e is what you want but luma says white).
+ * Picking whichever candidate has the higher measured ratio is the same one-line decision, made on
+ * the number that actually governs readability.
+ */
+const onColor = (h: string): string => (contrast('#ffffff', h) >= contrast('#111111', h) ? '#ffffff' : '#111111');
+
+/**
+ * A link colour that can be read. The palette's `primary` is chosen as a FILL — the colour behind
+ * white letters — and using it unchanged as the colour OF letters on the page background is how a
+ * catalogue ends up with link text at 1.72:1. Walks the fill toward the page's own ink until it
+ * clears AA, and stops there: the hue is kept, only the level moves, so the link still reads as the
+ * brand colour. Returns `primary` untouched when it already passes, which is the common case.
+ */
+const readableOn = (colour: string, bg: string, min = 4.5): string => {
+  if (contrast(colour, bg) >= min) return colour;
+  const toward = relLum(bg) > 0.5 ? '#000000' : '#ffffff';
+  for (let t = 0.08; t <= 0.92; t += 0.08) {
+    const c = mix(colour, toward, t);
+    if (contrast(c, bg) >= min) return c;
+  }
+  return toward === '#000000' ? '#111111' : '#ffffff';
+};
 
 /**
  * Full canonical --wjs-* palette from the four seeds. Mirrors canonicalAliases() in
@@ -45,8 +87,8 @@ function deriveTokens(seeds: ThemeSeeds): Record<string, string> {
     '--wjs-color-text-main': seeds.text,
     '--wjs-color-text-muted': mix(seeds.text, seeds.bg, 0.38),
     '--wjs-color-heading': seeds.text,
-    '--wjs-color-link': seeds.primary,
-    '--wjs-color-link-hover': seeds.secondary,
+    '--wjs-color-link': readableOn(seeds.primary, seeds.bg),
+    '--wjs-color-link-hover': readableOn(seeds.secondary, seeds.bg),
     '--wjs-border-subtle': mix(seeds.text, seeds.bg, 0.82),
     '--wjs-outline': mix(seeds.text, seeds.bg, 0.62),
     '--wjs-outline-variant': mix(seeds.text, seeds.bg, 0.85),
