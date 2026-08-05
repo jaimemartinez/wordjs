@@ -1,0 +1,60 @@
+/* @wjs-generated:start — compiled from theme.json; DO NOT EDIT inside. Edit theme.json and run: node backend/cli/wordjs.js build theme herbario */
+:root {
+  --wjs-bg-canvas: #fef9ef;
+  --wjs-bg-surface: #ffffff;
+  --wjs-bg-surface-raised: #e7e3d9;
+  --wjs-color-primary: #2f5d50;
+  --wjs-color-primary-dark: #154539;
+  --wjs-color-on-primary: #ffffff;
+  --wjs-color-accent: #b4694a;
+  --wjs-color-on-accent: #ffffff;
+  --wjs-color-text-main: #1d1c16;
+  --wjs-color-text-muted: #404945;
+  --wjs-color-heading: #1d1c16;
+  --wjs-color-link: #154539;
+  --wjs-color-link-hover: #904c2f;
+  --wjs-border-subtle: #c0c8c4;
+  --wjs-outline: #a4a39c;
+  --wjs-outline-variant: #d6d2c9;
+  --wjs-focus-ring: #2f5d50;
+  --wjs-bg-muted: #f2ede3;
+  --wjs-color-secondary: #b4694a;
+  --wjs-color-secondary-dark: #904c2f;
+  --wjs-color-on-secondary: #ffffff;
+  --wjs-color-danger: #ba1a1a;
+  --wjs-color-on-danger: #ffffff;
+  --wjs-font-family-base: 'Work Sans', 'Segoe UI', system-ui, sans-serif;
+  --wjs-font-family-heading: 'EB Garamond', Georgia, 'Times New Roman', serif;
+  --wjs-h1: 3.5rem;
+  --wjs-h2: 2.25rem;
+  --wjs-h3: 1.5rem;
+  --wjs-heading-line-height: 1.15;
+  --wjs-radius: 4px;
+  --wjs-radius-md: 4px;
+  --wjs-radius-lg: 6px;
+  --wjs-radius-pill: 4px;
+  --wjs-xs: 0.25rem;
+  --wjs-sm: 0.5rem;
+  --wjs-md: 1rem;
+  --wjs-lg: 1.5rem;
+  --wjs-xl: 2.5rem;
+  --wjs-bg-footer: #154539;
+  --wjs-color-text-footer-main: #f2ede3;
+  --wjs-color-text-footer-dim: #a0d1c0;
+  --wjs-color-text-footer-heading: #ffffff;
+  --wjs-bg-surface-glass: #fef9ef;
+  --wjs-hero-text-align: left;
+  --wjs-card-border-width: 1px;
+  --wjs-pricing-border-width: 1px;
+}
+h1,h2,h3,h4,h5,h6 { text-wrap: balance }
+a { text-underline-offset: 3px; text-decoration-thickness: 1px }
+.wp-block-hero { min-height: 62vh }
+.wp-block-hero__button { border-radius: 4px; letter-spacing: 0.04em; text-transform: uppercase; font-size: 0.8rem }
+.wp-block-card { border-style: solid; box-shadow: none }
+.wp-block-pricing { border-style: solid; box-shadow: none }
+.wp-block-cta-banner { border-radius: 4px }
+@media (max-width: 767.98px) {
+  .wp-block-hero { min-height: 48vh }
+}
+/* @wjs-generated:end */
