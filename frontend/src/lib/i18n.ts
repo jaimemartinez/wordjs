@@ -1210,7 +1210,6 @@ export const translations: Record<Language, Record<string, string>> = {
         'plugins.extend.functionality': 'Extend your site\'s functionality',
         'plugins.loading': 'Loading your plugins...',
         'plugins.no.plugins.found': 'No plugins installed',
-        'plugins.install.first': 'Install your first plugin to get started',
         'plugins.safe.to.activate': 'Safe to Activate',
         'plugins.no.permissions': 'This plugin requests no special system-level permissions.',
         'plugins.requests.permissions': 'The plugin requests the following permissions to function:',

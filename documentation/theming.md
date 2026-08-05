@@ -11,9 +11,14 @@ plus its own CSS for whatever the tokens don't parameterize (see *What tokens co
 > documented in **[themes.md — Declarative theming (`theme.json`)](themes.md#declarative-theming-themejson)**.
 > The compiler is stricter than plain CSS about what it will emit: token values use a portable
 > charset that has no `+` and no `*` (so `calc()` with addition or multiplication cannot live in a
-> token), and `styles` declaration values cannot contain `var()` (they are matched against the
-> property's grammar, which `var()` defeats). Hand-written CSS outside the generated block — the
-> rest of this page — has neither limit.
+> token) and must have every parenthesis and quote **balanced** (an unclosed one would swallow the
+> rest of the stylesheet into the value, so it is refused as `TOKEN_VALUE_INVALID`), and `styles`
+> declaration values cannot contain `var()` (they are matched against the property's grammar,
+> which `var()` defeats). The compiler additionally *warns* (`TOKEN_VALUE_GRAMMAR`) when a token
+> value matches no grammar of any property the manifest lists as consuming that token — a
+> best-effort check with deliberately partial coverage, described in
+> [themes.md](themes.md#is-the-token-value-valid-for-the-properties-that-read-it). Hand-written CSS
+> outside the generated block — the rest of this page — has none of these limits.
 
 ## How it fits together
 
@@ -36,7 +41,12 @@ public page / editor preview
 - Admins can override individual tokens live in the **theme customizer** (`/admin/themes/customize`).
   The overrides are saved in the `active_theme_mods` option and SSR-injected as an inline
   `<style id="wjs-theme-mods">:root{…}</style>` **after** the theme stylesheet, so they win at equal
-  specificity. Switching themes clears them.
+  specificity. Switching themes clears them. `active_theme_mods` is the one theme-related option the
+  customizer writes through the **generic** settings API (`PUT /api/v1/settings`, admin-gated) —
+  `template`, `stylesheet`, `active_theme_layout` and `site_chrome_*` are refused there and have
+  dedicated endpoints; see
+  [themes.md — Options with a dedicated write API](themes.md#options-with-a-dedicated-write-api).
+  Plugins and site imports cannot write `active_theme_mods` either way.
 
 ## Design tokens (`--wjs-*`)
 

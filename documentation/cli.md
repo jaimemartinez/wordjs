@@ -4,7 +4,7 @@ WordJS includes several utility scripts in `backend/cli/` plus a set of `npm` sc
 
 > **Runtime model:** The backend is TypeScript. For **production** it now **compiles**: `npm run build` (`tsc -p tsconfig.build.json`) emits `dist/`, and `server.js` runs `dist/index.js` when that build exists. `ts-node` is used only in **development** (or when `dist/` hasn't been built yet) — `server.js` falls back to `node -r ts-node/register src/index.ts`. The strict core is enforced (`strictNullChecks`, `strictFunctionTypes`, `strictPropertyInitialization`, etc.), `noImplicitAny: true` is now **enforced**; one sub-flag remains **off**: `useUnknownInCatchVariables: false` (catch bindings stay `any`).
 >
-> **CLI scripts and ts-node:** any `cli/*` script that imports core modules (e.g. `require('../src/config/database')`, which resolves to `.ts`) must be run with ts-node registration, e.g. `node -r ts-node/register cli/force-sync-roles.js`. Scripts that only use plain dependencies (e.g. `check_plugins.js`, which uses `better-sqlite3` directly) run with plain `node`.
+> **CLI scripts and ts-node:** any `cli/*` script that imports core modules (e.g. `require('../src/config/database')`, which resolves to `.ts`) must be run with ts-node registration, e.g. `node -r ts-node/register cli/force-sync-roles.js`. Scripts that only use plain dependencies (e.g. `check_plugins.js`, which uses `better-sqlite3` directly) run with plain `node`. **`cli/wordjs.js` is the exception**: its theme commands need `core/theme-compile` / `theme-derive` / `theme-doctor`, and it resolves them itself — preferring the compiled `backend/dist/core/*.js` (what production runs) and calling `require('ts-node').register({ project: backend/tsconfig.json, transpileOnly: true })` only when that build is absent. Run it with plain `node` either way; it fails with *"ts-node not found — run `npm install` inside backend/ (or `npm run build`) first"* if neither is available.
 
 ## 1. npm Scripts
 
@@ -28,11 +28,11 @@ Run from `backend/`.
 
 > **`migrate`:** the **root** `package.json` declares `npm run migrate` (`node setup/index.js --migrate`), which delegates to `backend/scripts/migrate.js`. It applies any pending **schema migrations** to the configured database without starting the server (prefers compiled `dist/`, falls back to ts-node on `src/`). It is **idempotent** — the same schema migrations also run automatically at boot — so it's safe to run in a deploy pipeline before rolling out new code. It does **not** switch DB *drivers* (the SQLite ↔ PostgreSQL data copy); that is a separate runtime operation in the **DB-Admin** API (`/api/v1/db-migration/*`, see below).
 
-> **First-run install token:** when the **backend** boots while the instance is **not yet installed** (i.e. on `npm start` / `npm run dev`, *not* `npm run setup`), it prints a one-time install token to the console (banner `🔑 WordJS install token:`). That token gates the otherwise-unauthenticated pre-install endpoints `POST /setup/install` and `POST /setup/test-db` (supplied via the `x-install-token` header or an `installToken` body field), so a not-yet-installed instance can't be taken over by whoever reaches it first. The token is held **in memory only** — a fresh one is minted on each boot while the instance remains uninstalled. For headless/Docker deploys it is **also** mirrored to a `0600` file at `backend/data/install-token` and can be overridden via the `WORDJS_INSTALL_TOKEN` env var (which must be **≥ 16 chars**, or it is ignored with a warning and a random token is used instead). The file/token is cleared once the instance is installed.
+> **First-run install token:** when the **backend** boots while the instance is **not yet installed** (i.e. on `npm start` / `npm run dev`, *not* `npm run setup`), it prints a one-time install token to the console (banner `🔑 WordJS is not installed yet — finish setup in your browser:`, followed by a clickable `<siteUrl>/install?token=…` URL, the bare token, and the path of the token file). That token gates the otherwise-unauthenticated pre-install endpoints `POST /setup/install` and `POST /setup/test-db` (supplied via the `x-install-token` header or an `installToken` body field), so a not-yet-installed instance can't be taken over by whoever reaches it first. The token is held **in memory only** — a fresh one is minted on each boot while the instance remains uninstalled. For headless/Docker deploys it is **also** mirrored to a `0600` file at `backend/data/install-token` and can be overridden via the `WORDJS_INSTALL_TOKEN` env var (which must be **≥ 16 chars**, or it is ignored with a warning and a random token is used instead). The file/token is cleared once the instance is installed.
 
 ## 2. One-Command Site Bootstrap (`npx create-wordjs`)
 
-The **published npm package** `create-wordjs` (source in `packages/create-wordjs/`, MIT; its version is kept in lockstep with the release tag by the release workflow — currently `v1.13.6`) bootstraps a complete WordJS site from nothing with a single command — no clone, no build, no TypeScript compilation on your machine:
+The **published npm package** `create-wordjs` (source in `packages/create-wordjs/`, MIT) bootstraps a complete WordJS site from nothing with a single command — no clone, no build, no TypeScript compilation on your machine:
 
 ```bash
 npx create-wordjs@latest my-site
@@ -40,15 +40,20 @@ npx create-wordjs@latest my-site
 
 It (1) looks up the **latest pre-compiled release ZIP** from GitHub (`jaimemartinez/wordjs`, following the release-asset redirect), (2) extracts it into `my-site/` and installs the runtime dependencies (`npm run release:install` in the extracted bundle), then (3) mints a one-time install token and starts the monolith (`npm run start:mono`), printing a clickable `https://localhost:3000/install?token=…` URL — the browser install wizard takes over (pick a database — SQLite, PostgreSQL, or MySQL/MariaDB — and create the admin).
 
-The token is passed to the backend via the `WORDJS_INSTALL_TOKEN` env var (24 random bytes = 48 hex chars; the backend accepts it because it is ≥ 16 chars — see § 1). A fresh release bundle ships **without** `gateway/gateway-config.json` (secrets are never bundled), so the CLI seeds a minimal `{ "ssl": true }` there to enable **self-signed HTTPS** on `:3000` (never overwriting an existing config); pass `--http` to serve plain HTTP (`WORDJS_HTTP=1`) instead. Plain Node, no TypeScript — the only runtime dependency is `adm-zip`. Requires **Node ≥ 20.9** and refuses to run into a non-empty target directory.
+The token is passed to the backend via the `WORDJS_INSTALL_TOKEN` env var (24 random bytes = 48 hex chars; the backend accepts it because it is ≥ 16 chars — see § 1). A fresh release bundle ships **without** `gateway/gateway-config.json` (secrets are never bundled), so the CLI seeds a minimal `{ "ssl": true }` there to enable **self-signed HTTPS** on `:3000` (never overwriting an existing config); pass `--http` to serve plain HTTP (`WORDJS_HTTP=1`) instead. Plain Node, no TypeScript — the only runtime dependency is `adm-zip`. Requires **Node ≥ 20.9** and refuses to run into a non-empty target directory. The version published to npm is set from the release tag at publish time (`npm pkg set version` in `.github/workflows/release.yml`), so the version committed in `packages/create-wordjs/package.json` is not the authoritative one.
+
+An unknown `-`/`--` option is a hard error (`Unknown option: …`), as is an extra positional argument.
 
 | Option | Purpose |
 | :--- | :--- |
 | `--zip <path-or-url>` | Use a local release ZIP (or a direct ZIP URL) instead of the GitHub API — handy offline or when rate-limited. |
-| `--version <tag>` | Install a specific release tag (e.g. `v1.0.0`) instead of the latest (a bare `1.0.0` is accepted and prefixed with `v`). |
-| `--http` | Serve plain HTTP instead of self-signed HTTPS (sets `WORDJS_HTTP=1`). |
+| `--version <tag>` | Install/upgrade to a specific release tag (e.g. `v1.0.0`) instead of the latest (a bare `1.0.0` is accepted and prefixed with `v`). |
+| `--http` | Serve plain HTTP instead of self-signed HTTPS (sets `WORDJS_HTTP=1`). Create flow only. |
 | `--no-start` | Scaffold + install dependencies only; don't start the server. |
-| `-h`, `--help` | Show usage. |
+| `--yes`, `-y` | Skip the confirmation prompt — required when upgrading non-interactively. |
+| `--force` | (`upgrade`) Re-apply even if the install is already on the target version. |
+| `--no-install` | (`upgrade`) Swap the code only; skip `npm run release:install`. |
+| `-h`, `--help` | Show usage (exit 0). |
 
 ### Subcommands (beyond the default scaffold)
 
@@ -56,10 +61,10 @@ The default `npx create-wordjs@latest <dir>` above installs a single-machine sit
 
 | Command | Purpose |
 | :--- | :--- |
-| `npx create-wordjs@latest <dir>` | Fresh single-machine install (monolith), as above. |
-| `npx create-wordjs@latest upgrade [dir]` | Replace the app code in an existing install with the latest release **in place**, preserving `wordjs-config.json`, gateway secrets, the database, and user-installed plugins. |
-| `npx create-wordjs@latest gateway [dir] [opts]` | Stand up a **separate-mode gateway**: fetches the release, then runs the bundled `scripts/cluster.js init` to mint the cluster CA + gateway certs and prints ready-to-paste `join` commands (with fresh single-use tokens). Key option: `--host <ip/dns>` (the address other machines dial to reach this gateway). |
-| `npx create-wordjs@latest join <role> [dir] [opts]` | Join **this** machine to a gateway as `backend` or `frontend`: fetches the release, then runs the bundled `scripts/node-join.js` to enroll over the token listener and register over mTLS. Options: `--gateway <ip/dns>`, `--token <join-token>`, `--ca-hash <sha256>` (MITM guard), `--advertise <ip/dns>` (this node's routable address), `--enroll-port <port>` (default 3101). Needs `openssl` on `PATH`. |
+| `npx create-wordjs@latest <dir>` | Fresh single-machine install (monolith), as above. `<dir>` is **required** here. |
+| `npx create-wordjs@latest upgrade [dir]` | Replace the app code in an existing install with the latest release **in place**, preserving `wordjs-config.json`, gateway secrets, the database, and user-installed plugins. `[dir]` defaults to the current directory. |
+| `npx create-wordjs@latest gateway [dir] [opts]` | Stand up a **separate-mode gateway**: fetches the release, then runs the bundled `scripts/cluster.js init` to mint the cluster CA + gateway certs and prints ready-to-paste `join` commands (with fresh single-use tokens). Key option: `--host <ip/dns>` (the address other machines dial to reach this gateway). `[dir]` defaults to `wordjs-gateway`. |
+| `npx create-wordjs@latest join <role> [dir] [opts]` | Join **this** machine to a gateway as `backend` or `frontend` (the role may also be given as `--role <backend\|frontend>`): fetches the release, then runs the bundled `scripts/node-join.js` to enroll over the token listener and register over mTLS. Options: `--gateway <ip/dns>`, `--token <join-token>`, `--ca-hash <sha256>` (MITM guard), `--advertise <ip/dns>` (this node's routable address), `--enroll-port <port>` (default 3101). `[dir]` defaults to `wordjs-<role>`. Needs `openssl` on `PATH`. |
 
 So `create-wordjs gateway` / `join` are the one-command equivalents of the in-repo `scripts/cluster.js` / `scripts/node-join.js` walkthrough in [§ 6a](#6a-cluster-enrollment-separate-mode-) below — see **[separate-mode.md](separate-mode.md)** for the full flow.
 
@@ -67,7 +72,7 @@ So `create-wordjs gateway` / `join` are the one-command equivalents of the in-re
 
 ## 3. Plugin & Theme Scaffolder + Packer (`cli/wordjs.js`)
 
-The plugin-author DX tool. Plain Node — no ts-node registration needed. There is deliberately **no root npm alias**; invoke it directly from the **repo root**:
+The plugin/theme-author DX tool. Run it with plain `node` — it needs no `-r ts-node/register` of its own (the theme commands resolve `backend/dist/core/*` or self-register ts-node, see the note in § 1). There is deliberately **no root npm alias**; invoke it directly from the **repo root**:
 
 ```bash
 node backend/cli/wordjs.js create plugin my-plugin   # scaffold backend/plugins/my-plugin/
@@ -81,6 +86,16 @@ node backend/cli/wordjs.js help
 ```
 
 Templates live in `backend/cli/templates/{plugin,theme}/` with `__SLUG__` / `__PASCAL__` / `__NAME__` placeholders (replaced in file names and contents).
+
+**Conventions shared by every command:**
+
+| | |
+| :--- | :--- |
+| **Slugs** | `create` requires lowercase kebab-case (`^[a-z][a-z0-9]*(-[a-z0-9]+)*$`), and so does `pack`. `build theme` / `doctor theme` accept any slug the backend routes accept (`^[a-zA-Z0-9_-]+$`), because an *installed* theme need not have been scaffolded here. |
+| **Flags** | `create theme` parses strict `--flag value` pairs: an unknown flag, a flag without a value, and a bare positional argument each abort with a message listing the known flags — a typo can never silently scaffold something else. (`pack` is looser: it just looks for `--build` and `--out` in its arguments.) |
+| **Exit codes** | `0` on success and for `help` / `--help` / `-h`; `1` for every `❌` failure, for a `doctor` report containing errors, for a `build` with compile errors, and when the command line is unrecognized or empty (both print the help text first). |
+| **Where themes are written** | `backend/themes/` by default, or `$WORDJS_THEMES_DIR` when that env var is set (tests/CI point it at a throwaway dir). The token contract is always read from `backend/public/theme-tokens.json`. |
+| **Overwrite safety** | `create` refuses to write into an existing plugin/theme directory. In seeded mode the compile runs as a dry run first and the whole directory is removed if it fails, so a rejected `theme.json` never leaves a half-scaffolded theme behind. |
 
 ### `create plugin <slug>`
 
@@ -104,17 +119,37 @@ node frontend/scripts/generate-puck-plugin-registry.js
 
 ### `create theme <slug>`
 
-Scaffolds `backend/themes/<slug>/` with a `theme.json` (including the `layout` structure config the public shell honors: `containerWidth`, `sidebar`) and a `style.css` pre-seeded with the **full `--wjs-*` token block** — the token contract, copied from `backend/themes/default/style.css` — plus a commented chrome section (`--wjs-nav-*` / `--wjs-footer-*` tokens and the `.wjs-header-*`/footer hooks; see `backend/themes/midnight-luxury/style.css` for a complete real example). `--name` / `--author` / `--description` set the `theme.json` metadata. Details in `documentation/themes.md` / `documentation/theming.md`.
+**Template mode** (no seed colors, no `--archetype`) copies `backend/cli/templates/theme/`, which is exactly two files:
 
-**Seeded (declarative) mode:** pass all four seed colors — `--primary --secondary --bg --text <#rrggbb>` (optionally `--archetype cyber|brutalist|editorial|glassmorphism|organic|obsidian`) — and instead of copying the template the CLI writes a **declarative `theme.json`** (`generator: "wordjs"` + `seeds`), compiles `style.css` from it via `core/theme-compile.ts`, and adds a `functions.js` stub. Contract reference: *Declarative theming (`theme.json`)* in `documentation/themes.md`.
+- `theme.json` — `name` / `version` / `description` / `author` plus the `layout` structure config the public shell honors (`containerWidth: "1100px"`, `sidebar: false`).
+- `style.css` — a `:root` pre-seeded with **53** `--wjs-*` tokens (the contract, seeded from `backend/themes/default/style.css`), followed by a **commented-out** chrome block with 14 more `--wjs-nav-*` / `--wjs-footer-*` tokens to uncomment. That comment points at `backend/themes/midnight-luxury/style.css` as a worked example — the path the theme occupies **once installed** from the marketplace; in the repo the file lives at `marketplace/themes/midnight-luxury/style.css` (only `default` ships in `backend/themes/`).
+
+No `functions.js` is scaffolded in this mode. `--name` sets both the `__NAME__` placeholder and `theme.json`'s `name`; `--author` / `--description` are patched into `theme.json` after the copy. Details in `documentation/themes.md` / `documentation/theming.md`.
+
+**Seeded (declarative) mode:** pass **all four** seed colors — `--primary --secondary --bg --text <#rrggbb>` (the leading `#` is optional, since most shells are happier without it) — and instead of copying the template the CLI writes a **declarative `theme.json`** (`generator: "wordjs"`, `seeds`, the same `layout` defaults), compiles `style.css` from it via `core/theme-compile.ts`, and adds a `functions.js` stub. The resulting `style.css` contains **only** the generated block — the 53-token template is not involved.
+
+`--archetype cyber|brutalist|editorial|glassmorphism|organic|obsidian` selects a personality preset; the list is read from `core/theme-derive`'s `ARCHETYPE_NAMES` at runtime and an unknown name aborts with the available names. **`--archetype` implies seeded mode**: passing it (or any subset of the seed colors) without all four colors fails with *"Seeded creation needs all four colors"*. Contract reference: *Declarative theming (`theme.json`)* in `documentation/themes.md`.
 
 ### `build theme <slug>`
 
-Recompiles an existing theme's `theme.json` (its `seeds` / `archetype` / `tokens` / `styles` sections) into the `/* @wjs-generated:start */ … /* @wjs-generated:end */` block of `backend/themes/<slug>/style.css`, replacing only that block — manual CSS outside the markers is preserved byte for byte (no markers yet → the block is prepended with a warning). Prints every compile diagnostic (`[CODE] path — message`, with closest-match suggestions); on errors it exits `1` **without writing**.
+Recompiles an existing theme's `theme.json` (its `seeds` / `archetype` / `tokens` / `styles` sections) into the `/* @wjs-generated:start */ … /* @wjs-generated:end */` block of `backend/themes/<slug>/style.css`, replacing only that block — manual CSS outside the markers is preserved byte for byte (no markers yet → the block is prepended with a warning). Prints every compile diagnostic as `[CODE] path — message` (`❌` errors, `⚠️` warnings; did-you-mean suggestions are part of the message text); on errors it exits `1` **without writing**.
+
+Two behaviors worth knowing:
+
+- **It bumps `theme.json`'s patch version** after a successful write (`1.0.0` → `1.0.1`), because the public stylesheet URL is keyed by that version — otherwise browsers would keep the pre-build CSS for up to an hour. A `theme.json` that is unreadable or whose version is not `x.y.z` only produces a warning; the CSS is still written.
+- **It refuses to invent a block.** If `theme.json` has none of the declarative keys *and* `style.css` has no `@wjs-generated` markers, it prints an `ℹ️ … nothing to build` line and exits `0` without touching the theme — so running it on a hand-authored theme is a no-op, not a mutilation.
+
+### `doctor theme <slug>`
+
+Lints an installed theme against the machine-readable token contract (`backend/public/theme-tokens.json`), the layout schema (`backend/public/theme-layouts.schema.json`) and, for a declarative theme, the compiler itself. Findings print grouped as `❌`/`⚠️`/`ℹ️` with their code, followed by a `N error(s), M warning(s), K info.` summary; **exit `1` if there is any error**, `0` otherwise. The full code list is in [themes.md — Diagnostics reference](themes.md#diagnostics-reference); the same report is available to admins over `GET /api/v1/themes/:slug/doctor`.
+
+The doctor is **fail-open**: when the token manifest is missing or unreadable it prints `⚠️ Token manifest (backend/public/theme-tokens.json) not found — nothing to lint against.` and exits `0` with no findings.
 
 ### `pack <slug> [--build] [--out <dir>]`
 
-Zips `backend/plugins/<slug>` into `<slug>.zip` with a single `<slug>/` root folder — the exact layout `POST /api/v1/plugins/upload` (Admin → Plugins → Add New) expects — excluding `node_modules/`, `data/`, `.git/` and `os-tmp/` (dependencies reinstall automatically on activation). With `--build` it first runs `backend/scripts/build-plugin.js <slug>` to pre-compile the frontend bundles into `dist/`. Output defaults to the current directory (`--out <dir>` to change).
+Zips `backend/plugins/<slug>` into `<slug>.zip` with a single `<slug>/` root folder — the exact layout `POST /api/v1/plugins/upload` (Admin → Plugins → Add New) expects — excluding `node_modules/`, `data/`, `.git/` and `os-tmp/` (dependencies reinstall automatically on activation), and prints the resulting size. Output defaults to the current directory (`--out <dir>` to change; the directory is created if needed).
+
+It aborts if `backend/plugins/<slug>/manifest.json` does not exist, and if `adm-zip` cannot be resolved (*"run `npm install` inside backend/ first"*) — it is a backend dependency, resolved from `backend/node_modules`. With `--build` it first runs `backend/scripts/build-plugin.js <slug>` to pre-compile the frontend bundles into `dist/`, aborting if that build fails; if the builder script is missing the flag is skipped with a warning instead.
 
 ## 4. Role Manager (`cli/force-sync-roles.js`)
 
@@ -131,19 +166,24 @@ node -r ts-node/register cli/force-sync-roles.js
 ```
 Initializing database connection...
 Syncing roles to database...
+Updating existing roles in DB...          (or "Creating roles option in DB..." on a fresh install)
 Successfully synced roles! Subscribers now have access_admin_panel.
 ```
+
+Exits `0` on success, `1` (printing the error) on failure.
 
 ## 5. Plugin Diagnostic (`cli/check_plugins.js`)
 
 **Use case:** A plugin is causing the server to crash or not loading, and you need to see what's physically active in the DB.
 
-This script opens the default native SQLite file (`backend/data/wordjs-native.db`) with `better-sqlite3` and prints the `active_plugins` option. It has no TS imports, so plain `node` works:
+This script opens the default native SQLite file with `better-sqlite3` and prints the `active_plugins` option. It has no TS imports, so plain `node` works — but it resolves the database as `path.resolve('../data/wordjs-native.db')`, i.e. **relative to the working directory**, so it must be run from `backend/cli/`:
 
 ```bash
-cd backend
-node cli/check_plugins.js
+cd backend/cli
+node check_plugins.js
 ```
+
+Run from `backend/` instead and it looks for `<repo-root>/data/wordjs-native.db`, which does not exist; the script catches the failure and prints `Error: …` rather than the option. It also always reads the **native** SQLite file — a site configured for `sqlite-legacy`, PostgreSQL or MySQL is not what it reports on (see § 7).
 
 Other handy diagnostics in `cli/` include `list-users.js`, `inspect-roles.js`, `inspect-user.js`, `verify-roles.js`, `verify-activation.js`, and `dump-routes.js` (lists every registered Express endpoint). Those that import `src/config/database` need the `-r ts-node/register` flag.
 
@@ -175,8 +215,11 @@ node scripts/cluster.js info            # show CA fingerprint + endpoints
 
 ```bash
 node scripts/node-join.js --role <backend|frontend> --gateway <gw-ip/dns> --token <join-token> \
-     [--enroll-port 3101] [--advertise <this-node-ip>] [--ca-hash <sha256>] [--start]
+     [--enroll-port 3101] [--advertise <this-node-ip>] [--ca-hash <sha256>] \
+     [--port <svc-port>] [--install] [--build] [--start]
 ```
+
+`--role`, `--gateway` and `--token` are required (a missing or non-`backend`/`frontend` role, or a missing gateway/token, exits `1` before anything is generated). `--install` / `--build` run the node's dependency install / production build before `--start` launches it.
 
 It generates a keypair + CSR (via `openssl`), makes the **one** tokened `POST /enroll` call to the gateway's enrollment listener (port **3101** — a separate HTTPS listener that does **not** request a client cert; the strict mTLS `/register` listener on 3100 is untouched). The gateway validates the token, **forces `CN` = the token's role** (the CSR subject is ignored), signs the cert, and returns `{cert, cluster-ca, bootstrap config}`. `node-join` verifies the returned CA against `--ca-hash` (MITM guard), writes `<role>/certs/*` + `<role>/wordjs-config.json` (`advertiseHost`, `gatewayHost`, …), and with `--start` launches the service — which then **registers** with the gateway over mTLS.
 

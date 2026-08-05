@@ -91,7 +91,13 @@ const ALL_SETTINGS = [
 // fires the switch_theme hook that purges the frontend. Written through here the option moved alone —
 // the site then served the new theme's CSS with the old theme's structure and token overrides, and the
 // replaced theme's code kept running. Their dedicated API is POST /themes/:slug/activate.
-const DEDICATED_WRITE_API = new Set(['site_chrome_header', 'site_chrome_footer', 'template', 'stylesheet']);
+// 'active_theme_layout' is DERIVED: switchTheme publishes the active theme.json's `layout` block, and
+// nothing reconciles a value written by hand — the site would render a structure the theme never
+// declared, until the next activation silently replaced it. ('active_theme_mods' is deliberately NOT
+// here: the customizer saves through this very API, and the overlay sanitizes it at render time.)
+const DEDICATED_WRITE_API = new Set([
+    'site_chrome_header', 'site_chrome_footer', 'template', 'stylesheet', 'active_theme_layout',
+]);
 
 // Public settings that are DERIVED, not stored. Computed per request from the memoized theme scan
 // (core/themes), so they add no SQL and no fs to the read path — and deliberately absent from
