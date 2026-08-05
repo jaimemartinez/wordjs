@@ -14,6 +14,29 @@ import { blockVars, cx, unit } from "@/components/puck/blockVars";
 import { sanitizeHTML } from "@/lib/sanitize";
 import { sizesForWidth } from "@/lib/imageSrcset";
 import SelfHostedVideo from "./SelfHostedVideo";
+import AudioTransport from "./AudioTransport";
+
+export function AudioPlayerBlock({ src, title, bg, borderColor, radius, pad, iconSize, iconBg, iconColor, css }: any) {
+    return (
+        <div
+            className="wp-block-audio-player"
+            style={{
+                ...blockVars('audio', {
+                    bg,
+                    'border-color': borderColor,
+                    radius: unit(radius),
+                    pad: unit(pad),
+                    'icon-size': unit(iconSize),
+                    'icon-bg': iconBg,
+                    'icon-color': iconColor,
+                }),
+                ...css,
+            }}
+        >
+            <AudioTransport src={src} title={title} />
+        </div>
+    );
+}
 
 export function HeadingBlock({ title, level, elementId, color, size, weight, tracking, css }: any) {
     const Tag = level as any;
