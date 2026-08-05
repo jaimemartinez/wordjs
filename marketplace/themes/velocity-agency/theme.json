@@ -1,6 +1,6 @@
 {
   "name": "Velocity Agency",
-  "version": "1.0.6",
+  "version": "1.0.8",
   "description": "High-converting agency theme featuring bold typography, dynamic hover cards, and marquee tickers.",
   "author": "WordJS Premium Studio",
   "category": "Agency",
@@ -20,6 +20,8 @@
   ],
   "tokens": {
     "--wjs-font-family-base": "'Public Sans', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif",
-    "--wjs-font-family-heading": "'Space Grotesk', 'Arial Black', 'Segoe UI', Arial, sans-serif"
+    "--wjs-font-family-heading": "'Space Grotesk', 'Arial Black', 'Segoe UI', Arial, sans-serif",
+    "--wjs-heading-transform": "uppercase",
+    "--wjs-heading-tracking": "-1px"
   }
 }

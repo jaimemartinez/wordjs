@@ -187,12 +187,42 @@ async function loadCatalog(source: string, isLocal: boolean, indexFile: string =
     return list;
 }
 
+/**
+ * Cache identity for an ordered source set.
+ *
+ * A REMOTE source is identified by its URL alone — the TTL below is what protects the network, which
+ * is the whole point of this cache. A LOCAL source is a directory on THIS disk: re-reading its index
+ * costs a single file read, and serving a five-minute-old copy of it is actively harmful. After
+ * `npm run build:marketplace` the zips are rewritten with the theme's current version, so a stale
+ * catalog advertises a filename that no longer exists. The failure that produces is genuinely hard to
+ * read, because it surfaces three steps away from its cause:
+ *
+ *     install → 404 "No existe theme-<slug>-<OLD version>.zip en el marketplace local."
+ *     …so the theme never lands in themes/…
+ *     activate → 500 "Theme <slug> not found"
+ *
+ * and the last message is the one the admin sees, pointing at activation rather than at a stale
+ * index. So stamp local sources with their index file's mtime+size: any rebuild changes the key and
+ * the next browse reads fresh, while remote sources keep exactly the behaviour they had.
+ */
+function sourcesCacheKey(srcs: { url: string; isLocal: boolean }[], indexFile: string): string {
+    return srcs.map((s) => {
+        if (!s.isLocal) return s.url;
+        try {
+            const st = fs.statSync(path.join(path.resolve(s.url), indexFile));
+            return `${s.url}#${st.mtimeMs}:${st.size}`;
+        } catch {
+            return `${s.url}#missing`;
+        }
+    }).join('|');
+}
+
 // In-memory catalog cache (keyed by the ordered source set) so browsing doesn't re-hammer the network.
 let catalogCache: { key: string; at: number; merged: any[]; sources: any[] } | null = null;
 
 async function getCatalog(refresh = false): Promise<{ merged: any[]; sources: any[] }> {
     const srcs = await resolveSources();
-    const key = srcs.map((s) => s.url).join('|');
+    const key = sourcesCacheKey(srcs, INDEX_FILE);
     if (!refresh && catalogCache && catalogCache.key === key && Date.now() - catalogCache.at < CACHE_TTL_MS) {
         return { merged: catalogCache.merged, sources: catalogCache.sources };
     }
@@ -460,7 +490,7 @@ let themesCatalogCache: { key: string; at: number; merged: any[]; sources: any[]
 
 async function getThemesCatalog(refresh = false): Promise<{ merged: any[]; sources: any[] }> {
     const srcs = await resolveThemeSources();
-    const key = srcs.map((s) => s.url).join('|');
+    const key = sourcesCacheKey(srcs, THEMES_INDEX_FILE); // see sourcesCacheKey: a local rebuild must invalidate
     if (!refresh && themesCatalogCache && themesCatalogCache.key === key && Date.now() - themesCatalogCache.at < CACHE_TTL_MS) {
         return { merged: themesCatalogCache.merged, sources: themesCatalogCache.sources };
     }

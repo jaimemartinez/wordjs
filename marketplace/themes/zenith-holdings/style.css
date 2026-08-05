@@ -23,5 +23,9 @@
   --wjs-focus-ring: #047857;
   --wjs-font-family-base: 'Montserrat', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
   --wjs-font-family-heading: 'Cinzel', 'Trajan Pro', 'Times New Roman', serif;
+  --wjs-heading-transform: uppercase;
+  --wjs-heading-weight: 800;
+  --wjs-heading-font-weight: 800;
 }
+body { letter-spacing: 0.5px }
 /* @wjs-generated:end */

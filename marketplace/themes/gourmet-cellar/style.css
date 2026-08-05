@@ -23,5 +23,8 @@
   --wjs-focus-ring: #9f1239;
   --wjs-font-family-base: 'Lora', Georgia, 'Times New Roman', serif;
   --wjs-font-family-heading: 'Playfair Display', Didot, 'Bodoni MT', Georgia, serif;
+  --wjs-heading-tracking: -0.01em;
+  --wjs-heading-weight: 800;
+  --wjs-heading-font-weight: 800;
 }
 /* @wjs-generated:end */

@@ -1,6 +1,6 @@
 {
   "name": "Audio Phile",
-  "version": "1.0.6",
+  "version": "1.0.8",
   "description": "High-end audiophile acoustic gear storefront with dark matte finish, frequency curve widgets, and star reviews.",
   "author": "WordJS Premium Studio",
   "category": "Commerce",
@@ -20,6 +20,8 @@
   ],
   "tokens": {
     "--wjs-font-family-base": "'JetBrains Mono', 'Cascadia Code', Consolas, Menlo, monospace",
-    "--wjs-font-family-heading": "'Chakra Petch', 'Bahnschrift', 'Trebuchet MS', 'Segoe UI', sans-serif"
+    "--wjs-font-family-heading": "'Chakra Petch', 'Bahnschrift', 'Trebuchet MS', 'Segoe UI', sans-serif",
+    "--wjs-heading-transform": "uppercase",
+    "--wjs-heading-tracking": "2px"
   }
 }
