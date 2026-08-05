@@ -1,9 +1,16 @@
 {
   "name": "Botanica Organics",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Clean skincare & wellness e-commerce theme with pastel sage hues, ingredient highlight badges, and eco labels.",
   "author": "WordJS Premium Studio",
   "category": "Commerce",
+  "generator": "wordjs",
+  "seeds": {
+    "primary": "#34d399",
+    "secondary": "#059669",
+    "bg": "#022319",
+    "text": "#d1fae5"
+  },
   "archetype": "organic",
   "tags": [
     "premium",

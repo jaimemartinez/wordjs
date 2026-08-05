@@ -1,9 +1,16 @@
 {
   "name": "Wanderlust Journal",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Travel & adventure blog theme with immersive map cards, location tags, and photo narrative layouts.",
   "author": "WordJS Premium Studio",
   "category": "Media",
+  "generator": "wordjs",
+  "seeds": {
+    "primary": "#14b8a6",
+    "secondary": "#0f766e",
+    "bg": "#041f1e",
+    "text": "#ccfbf1"
+  },
   "archetype": "organic",
   "tags": [
     "premium",

@@ -1,9 +1,16 @@
 {
   "name": "Patisserie Delight",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Artisanal bakery & confectionery theme with warm pastel colors, custom order forms, and gallery grids.",
   "author": "WordJS Premium Studio",
   "category": "Commerce",
+  "generator": "wordjs",
+  "seeds": {
+    "primary": "#f472b6",
+    "secondary": "#db2777",
+    "bg": "#1f0914",
+    "text": "#fdf2f8"
+  },
   "archetype": "organic",
   "tags": [
     "premium",

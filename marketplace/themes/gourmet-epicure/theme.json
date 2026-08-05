@@ -1,9 +1,16 @@
 {
   "name": "Gourmet Epicure",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Culinary magazine & recipe blog theme with nutrition info cards, print recipe buttons, and step-by-step galleries.",
   "author": "WordJS Premium Studio",
   "category": "Media",
+  "generator": "wordjs",
+  "seeds": {
+    "primary": "#eab308",
+    "secondary": "#ca8a04",
+    "bg": "#1c1604",
+    "text": "#fef9c3"
+  },
   "archetype": "editorial",
   "tags": [
     "premium",

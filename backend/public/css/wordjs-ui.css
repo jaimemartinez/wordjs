@@ -58,7 +58,10 @@
   --wjs-focus-ring: rgba(37, 99, 235, 0.35);
 
   /* Typography */
-  --wjs-font-family-base: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  /* var(--font-inter, Inter): next/font registers --font-inter on the public tree; the inner
+   * `Inter` fallback is load-bearing — an undefined var() WITHOUT fallback makes the whole
+   * font-family invalid at computed-value time (UA font), e.g. inside the editor preview iframe. */
+  --wjs-font-family-base: var(--font-inter, Inter), system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --wjs-font-family-heading: var(--wjs-font-family-base);
   --wjs-font-family-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
   --wjs-font-size-base: 1rem;        /* 16px */
@@ -91,6 +94,35 @@
   /* Layout */
   --wjs-container-max: 1140px;
   --wjs-transition: 0.15s ease-in-out;
+
+  /* Chrome (public header/footer/sidebar) — consumed by the React chrome via Tailwind
+   * arbitrary values / inline style; every default = the value the chrome rendered before
+   * these tokens existed. The var(--wjs-footer-*) indirection is DELIBERATE: themes declare
+   * the documented --wjs-footer-* convention, and this bridge is what makes it apply. */
+  --wjs-bg-footer: var(--wjs-footer-bg, rgb(17, 24, 39));
+  --wjs-color-text-footer-main: var(--wjs-footer-text-body, white);
+  --wjs-color-text-footer-dim: var(--wjs-footer-text-body, gray);
+  --wjs-color-text-footer-heading: var(--wjs-footer-text-heading, #ffffff);
+  /* (--wjs-bg-surface-glass already has its default in the derived-tokens :root below) */
+  --wjs-header-offset: 6rem;   /* main padding-top under the fixed header (was pt-24) */
+  --wjs-sidebar-width: 20rem;  /* was lg:w-80 */
+  --wjs-sidebar-gap: 2.5rem;   /* was gap-10 */
+
+  /* Display headings / lead / blockquote / mark (defaults = previous fixed values) */
+  --wjs-display-1: 5rem;
+  --wjs-display-2: 4.5rem;
+  --wjs-display-3: 4rem;
+  --wjs-display-4: 3.5rem;
+  --wjs-display-weight: 300;
+  --wjs-display-line-height: 1.1;
+  --wjs-lead-size: 1.25rem;
+  --wjs-lead-weight: 300;
+  --wjs-blockquote-padding: 0.5rem 1.25rem;
+  --wjs-blockquote-border-width: 4px;
+  --wjs-blockquote-border-color: var(--wjs-color-primary);
+  --wjs-blockquote-color: var(--wjs-color-text-muted);
+  --wjs-blockquote-size: 1.125rem;
+  --wjs-mark-bg: #fcf8c3;
 
   /* --- Visual-editor (Puck) block aliases ------------------------------------------------
    * The Puck block renderer references these token NAMES, but the canonical framework/theme
@@ -169,11 +201,16 @@ h6 { font-size: var(--wjs-h6); }
 .h5 { font-size: var(--wjs-h5) !important; }
 .h6 { font-size: var(--wjs-h6) !important; }
 
-.display-1 { font-size: 5rem; font-weight: 300; line-height: 1.1; }
-.display-2 { font-size: 4.5rem; font-weight: 300; line-height: 1.1; }
-.display-3 { font-size: 4rem; font-weight: 300; line-height: 1.1; }
-.display-4 { font-size: 3.5rem; font-weight: 300; line-height: 1.1; }
-.lead { font-size: 1.25rem; font-weight: 300; }
+/* Chrome footer headings: the h1-h6 rule above paints --wjs-color-heading (dark), which is
+ * dark-on-dark over the dark footer chrome. Higher specificity remaps them to the footer
+ * heading token (themes reach it through the --wjs-footer-text-heading bridge in :root). */
+footer h3, footer h4 { color: var(--wjs-color-text-footer-heading, #ffffff); }
+
+.display-1 { font-size: var(--wjs-display-1, 5rem); font-weight: var(--wjs-display-weight, 300); line-height: var(--wjs-display-line-height, 1.1); }
+.display-2 { font-size: var(--wjs-display-2, 4.5rem); font-weight: var(--wjs-display-weight, 300); line-height: var(--wjs-display-line-height, 1.1); }
+.display-3 { font-size: var(--wjs-display-3, 4rem); font-weight: var(--wjs-display-weight, 300); line-height: var(--wjs-display-line-height, 1.1); }
+.display-4 { font-size: var(--wjs-display-4, 3.5rem); font-weight: var(--wjs-display-weight, 300); line-height: var(--wjs-display-line-height, 1.1); }
+.lead { font-size: var(--wjs-lead-size, 1.25rem); font-weight: var(--wjs-lead-weight, 300); }
 
 /* ------------------------------------------------------- TEXT-LEVEL CONTENT - */
 p { margin: 0 0 1rem; }
@@ -188,7 +225,7 @@ a:hover { color: var(--wjs-color-link-hover); }
 a:not([href]):not([class]) { color: inherit; text-decoration: none; }
 
 small, .small { font-size: 0.875em; }
-mark, .mark { padding: 0.1875em; background-color: #fcf8c3; color: #422006; } /* fixed dark text — highlight bg is always light */
+mark, .mark { padding: 0.1875em; background-color: var(--wjs-mark-bg, #fcf8c3); color: #422006; } /* fixed dark text — highlight bg is always light */
 strong, b { font-weight: 700; }
 em, i { font-style: italic; }
 sub, sup { position: relative; font-size: 0.75em; line-height: 0; vertical-align: baseline; }
@@ -210,10 +247,10 @@ dd { margin-bottom: 0.5rem; margin-left: 0; }
 
 blockquote {
   margin: 0 0 1rem;
-  padding: 0.5rem 1.25rem;
-  border-left: 4px solid var(--wjs-color-primary);
-  color: var(--wjs-color-text-muted);
-  font-size: 1.125rem;
+  padding: var(--wjs-blockquote-padding, 0.5rem 1.25rem);
+  border-left: var(--wjs-blockquote-border-width, 4px) solid var(--wjs-blockquote-border-color, var(--wjs-color-primary));
+  color: var(--wjs-blockquote-color, var(--wjs-color-text-muted));
+  font-size: var(--wjs-blockquote-size, 1.125rem);
 }
 blockquote p:last-child { margin-bottom: 0; }
 blockquote cite, blockquote footer { display: block; margin-top: 0.5rem; font-size: 0.875rem; font-style: normal; color: var(--wjs-color-text-muted); }

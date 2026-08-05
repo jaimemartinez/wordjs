@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import DashboardLayoutClient from "./DashboardLayoutClient";
 import { getSettings } from "@/lib/server-api";
+import { inter } from "../fonts";
+import "./admin-globals.css";
 
 // Admin is an authenticated, data-driven dashboard (Sidebar/pages use useSearchParams);
 // render it dynamically instead of static-prerendering, which would bail out on those hooks.
@@ -34,5 +36,13 @@ export default function DashboardLayout({
 }: {
     children: React.ReactNode;
 }) {
-    return <DashboardLayoutClient>{children}</DashboardLayoutClient>;
+    // inter.className re-applies the Inter face to the whole admin tree (the root <body> now
+    // carries only inter.variable so the public tree can resolve fonts through wordjs-ui.css).
+    // The wrapper covers every DashboardLayoutClient return path, including the fullscreen
+    // Puck editor routes that bypass the admin shell.
+    return (
+        <div className={inter.className}>
+            <DashboardLayoutClient>{children}</DashboardLayoutClient>
+        </div>
+    );
 }

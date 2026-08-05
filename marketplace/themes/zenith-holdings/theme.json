@@ -1,9 +1,16 @@
 {
   "name": "Zenith Holdings",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Ultra-luxury private equity theme with deep emerald green, warm cream, and gold accents.",
   "author": "WordJS Premium Studio",
   "category": "Finance",
+  "generator": "wordjs",
+  "seeds": {
+    "primary": "#047857",
+    "secondary": "#065f46",
+    "bg": "#022c22",
+    "text": "#d1fae5"
+  },
   "archetype": "obsidian",
   "tags": [
     "premium",

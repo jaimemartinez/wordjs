@@ -1,9 +1,16 @@
 {
   "name": "Hologram 3D",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Interactive 3D web graphics portfolio with dark ambient glows and floating card physics.",
   "author": "WordJS Premium Studio",
   "category": "Creative",
+  "generator": "wordjs",
+  "seeds": {
+    "primary": "#06b6d4",
+    "secondary": "#0891b2",
+    "bg": "#04151f",
+    "text": "#cffaff"
+  },
   "archetype": "cyber",
   "tags": [
     "premium",

@@ -1,9 +1,16 @@
 {
   "name": "Editorial Vogue",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Luxury magazine theme with drop caps, multi-column editorial spreads, and quote highlights.",
   "author": "WordJS Premium Studio",
   "category": "Editorial",
+  "generator": "wordjs",
+  "seeds": {
+    "primary": "#fb7185",
+    "secondary": "#e11d48",
+    "bg": "#17080c",
+    "text": "#ffe4e6"
+  },
   "archetype": "editorial",
   "tags": [
     "premium",

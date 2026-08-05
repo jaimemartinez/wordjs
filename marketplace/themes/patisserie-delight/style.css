@@ -1,7 +1,7 @@
-/* ── WordJS token contract — canonical palette ─────────────────────────────
- * Derived from this theme's own generator colors (create-40-themes.js). These
- * aliases are what wordjs-ui.css block defaults (forms, search, cards…) read;
- * the theme's original rules below still own its distinctive look. */
+/* Theme: Patisserie Delight (Organic Pastel Archetype) */
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;700&display=swap');
+
+/* @wjs-generated:start — compiled from theme.json; DO NOT EDIT inside. Edit theme.json and run: node backend/cli/wordjs.js build theme patisserie-delight */
 :root {
   --wjs-bg-canvas: #1f0914;
   --wjs-bg-surface: #2c1822;
@@ -21,10 +21,7 @@
   --wjs-outline-variant: #402c36;
   --wjs-focus-ring: #f472b6;
 }
-
-/* Theme: Patisserie Delight (Organic Pastel Archetype) */
-@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;700&display=swap');
-
+/* Archetype: Organic Pastel */
 :root {
     --org-primary: #f472b6;
     --org-secondary: #db2777;
@@ -35,7 +32,7 @@
 body {
     background-color: var(--org-bg);
     color: var(--org-text);
-    font-family: 'Outfit', sans-serif;
+    font-family: 'Outfit', 'Century Gothic', 'Avenir Next', 'Segoe UI', sans-serif;
     margin: 0;
     line-height: 1.6;
 }
@@ -96,3 +93,4 @@ button.theme-btn {
     font-weight: 600;
     cursor: pointer;
 }
+/* @wjs-generated:end */

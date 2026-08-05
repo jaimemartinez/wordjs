@@ -79,6 +79,12 @@ const PROTECTED_OPTION_NAMES = new Set([
     // approved grants + preserved secrets (see core/plugin-origins.ts). A settings:write plugin rewriting
     // it could forge its own provenance / re-open the takeover hole. Off-limits to untrusted plugins.
     'plugin_origins',
+    // 'site_chrome_header'/'site_chrome_footer' hold the composition the public header and footer are
+    // BUILT from. They have a dedicated admin-only write API precisely so every composition passes the
+    // chrome validator; the generic settings writers already refuse them. Without them here a plugin
+    // holding settings:write could still reach them through the options bridge and replace the site's
+    // navigation on every page — same stored-content-on-a-public-surface class as 'admin_notices'.
+    'site_chrome_header', 'site_chrome_footer',
     // 'cron' is the scheduled-events blob. Writing it raw injects hook callbacks (spoofed/omitted
     // pluginSlug runs core & cross-plugin handlers) and bypasses the capacity caps that only sit on the
     // scheduleEvent API. 'plugin_strikes'/'plugin_health' let a plugin clear its own crash record to

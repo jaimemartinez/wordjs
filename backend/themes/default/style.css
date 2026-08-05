@@ -260,8 +260,15 @@ footer .w-10:hover {
 }
 
 /* ============================ BLOCKS ============================ */
-/* Hero */
-.wp-block-hero h1, .wp-block-hero h2 { font-family: var(--wjs-font-family-heading) !important; }
+/* Hero — the blanket `h1..h6 { color: heading !important }` above also hits the title of a hero,
+   which sits on the hero's OWN band (wordjs-ui.css gives .wp-block-hero `color: var(--wjs-hero-color,
+   #fff)` and lets the title inherit it). On the usual dark gradient that painted the title in the dark
+   heading color — invisible. Restore the framework's own declaration verbatim so `--wjs-hero-title-color`
+   still wins when a theme or block instance sets it. Same treatment the footer and CTA bands already get. */
+.wp-block-hero h1, .wp-block-hero h2, .wp-block-hero__title {
+  font-family: var(--wjs-font-family-heading) !important;
+  color: var(--wjs-hero-title-color, inherit) !important;
+}
 
 /* Stats — gradient figures */
 .wp-block-stats .stat-value,

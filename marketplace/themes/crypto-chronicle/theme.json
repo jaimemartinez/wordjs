@@ -1,9 +1,16 @@
 {
   "name": "Crypto Chronicle",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Web3, blockchain, and finance news portal with live market price ticker styling and multi-category tabs.",
   "author": "WordJS Premium Studio",
   "category": "Media",
+  "generator": "wordjs",
+  "seeds": {
+    "primary": "#10b981",
+    "secondary": "#047857",
+    "bg": "#041c14",
+    "text": "#d1fae5"
+  },
   "archetype": "cyber",
   "tags": [
     "premium",

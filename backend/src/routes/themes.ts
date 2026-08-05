@@ -10,6 +10,7 @@ const router = express.Router();
 const AdmZip = require('adm-zip');
 const multer = require('multer');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { assertZipWithinBudget } = require('../core/zip-guard');
 const {
@@ -18,8 +19,14 @@ const {
     createDefaultTheme,
     deleteTheme,
     createThemeZip,
+    installThemeFromDir,
+    invalidateThemeScanCache,
+    getActiveTheme,
     THEMES_DIR
 } = require('../core/themes');
+const { purgeFrontend } = require('../core/frontend-purge');
+const { compileTheme, writeCompiled } = require('../core/theme-compile');
+const { analyzeTheme } = require('../core/theme-doctor');
 const { authenticate } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
@@ -61,6 +68,56 @@ function validateSlug(slug: any) {
     // Ensure the resolved path is still within THEMES_DIR
     const safePath = path.resolve(THEMES_DIR, slug);
     return safePath.startsWith(path.resolve(THEMES_DIR));
+}
+
+// ---------------------------------------------------------------------------
+// Declarative theme writer (theme.json v1: seeds / archetype / tokens / styles)
+// ---------------------------------------------------------------------------
+
+const isPlainObject = (v: any): boolean => typeof v === 'object' && v !== null && !Array.isArray(v);
+// Same on-disk cap theme-compile enforces; checked here BEFORE anything is written.
+const MAX_THEME_JSON = 256 * 1024;
+const DECLARATIVE_KEYS = ['seeds', 'archetype', 'tokens', 'styles'];
+// Written ONCE at creation. The API never writes functions.js again (PUT rebuilds only
+// theme.json + the marked style.css block) — theme logic stays hand-owned.
+const FUNCTIONS_STUB = `/**
+ * Theme logic and hooks
+ */
+module.exports = function () {};
+`;
+
+function bumpPatch(version: any): string {
+    const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(String(version || ''));
+    return m ? `${m[1]}.${m[2]}.${Number(m[3]) + 1}` : '1.0.1';
+}
+
+// Light shape gate for the declarative sections (deep validation is compileTheme's job).
+// null is accepted on PUT to mean "drop this section".
+function declarativeShapeError(body: any): string | null {
+    for (const k of ['seeds', 'tokens', 'styles']) {
+        if (body[k] !== undefined && body[k] !== null && !isPlainObject(body[k])) {
+            return `"${k}" must be an object`;
+        }
+    }
+    if (body.archetype !== undefined && body.archetype !== null && typeof body.archetype !== 'string') {
+        return '"archetype" must be a string';
+    }
+    return null;
+}
+
+const hasCompileErrors = (diagnostics: any[]): boolean => diagnostics.some((d: any) => d.level === 'error');
+
+// Same tmp+rename discipline as theme-compile.writeCompiled, so a mid-flight failure can
+// never leave a torn theme.json behind.
+function writeJsonAtomic(target: string, text: string): void {
+    const tmp = `${target}.tmp-${process.pid}-${Date.now().toString(36)}`;
+    fs.writeFileSync(tmp, text, 'utf8');
+    try {
+        fs.renameSync(tmp, target);
+    } catch (e) {
+        try { fs.unlinkSync(tmp); } catch { /* ignore */ }
+        throw e;
+    }
 }
 
 /**
@@ -129,6 +186,9 @@ router.post('/upload', authenticate, isAdmin, upload.single('theme'), asyncHandl
 
         // Extract zip
         zip.extractAllTo(THEMES_DIR, true);
+        // This route writes into THEMES_DIR without going through core/themes — drop the scan memo
+        // itself, or the theme just uploaded stays missing from GET /themes until the TTL expires.
+        invalidateThemeScanCache();
 
         // Clean up temp file
         fs.unlinkSync(zipPath);
@@ -158,6 +218,221 @@ router.post('/upload', authenticate, isAdmin, upload.single('theme'), asyncHandl
 router.get('/', asyncHandler(async (req: Request, res: Response) => {
     const themes = await getAllThemes();
     res.json(themes);
+}));
+
+/**
+ * @swagger
+ * /themes:
+ *   post:
+ *     summary: Create a theme from the declarative theme.json v1 contract (seeds / archetype / tokens / styles)
+ *     tags: [Themes]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [slug, metadata]
+ *             properties:
+ *               slug:
+ *                 type: string
+ *               metadata:
+ *                 type: object
+ *               seeds:
+ *                 type: object
+ *               archetype:
+ *                 type: string
+ *               tokens:
+ *                 type: object
+ *               styles:
+ *                 type: object
+ *     responses:
+ *       201:
+ *         description: Theme created ({ slug, diagnostics })
+ *       400:
+ *         description: Invalid payload or compilation errors (diagnostics included)
+ *       409:
+ *         description: Theme already exists
+ */
+router.post('/', authenticate, isAdmin, asyncHandler(async (req: any, res: Response) => {
+    const body = isPlainObject(req.body) ? req.body : {};
+    // SECURITY: Validate slug (same gate as the sibling routes; typeof first — the regex
+    // would stringify a missing slug into the literal "undefined", which passes the charset)
+    if (typeof body.slug !== 'string' || !validateSlug(body.slug)) {
+        return res.status(400).json({ error: 'Invalid theme slug' });
+    }
+    const slug = body.slug;
+    const metadata = body.metadata;
+    if (!isPlainObject(metadata) || typeof metadata.name !== 'string' || metadata.name.trim().length === 0) {
+        return res.status(400).json({ error: 'metadata.name is required' });
+    }
+    for (const k of ['description', 'author', 'version']) {
+        if (metadata[k] !== undefined && typeof metadata[k] !== 'string') {
+            return res.status(400).json({ error: `metadata.${k} must be a string` });
+        }
+    }
+    if (body.seeds === undefined && body.tokens === undefined && body.styles === undefined) {
+        return res.status(400).json({ error: 'At least one of seeds, tokens or styles is required' });
+    }
+    const shapeErr = declarativeShapeError(body);
+    if (shapeErr) {
+        return res.status(400).json({ error: shapeErr });
+    }
+
+    const themeJson: any = {
+        name: metadata.name,
+        version: metadata.version || '1.0.0',
+        description: metadata.description || '',
+        author: metadata.author || '',
+        // The writer's mark: only generator:"wordjs" themes accept PUT rebuilds.
+        generator: 'wordjs'
+    };
+    for (const k of DECLARATIVE_KEYS) {
+        if (body[k] !== undefined && body[k] !== null) themeJson[k] = body[k];
+    }
+    const serialized = JSON.stringify(themeJson, null, 2);
+    if (Buffer.byteLength(serialized, 'utf8') > MAX_THEME_JSON) {
+        return res.status(400).json({ error: `theme.json exceeds the ${MAX_THEME_JSON}-byte cap` });
+    }
+
+    // Build in a system temp dir; installThemeFromDir is the ONLY materialization path into
+    // THEMES_DIR (budgets, symlink refusal, THEME_EXISTS, rollback). A rejected payload must
+    // leave no trace on disk.
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wordjs-theme-build-'));
+    try {
+        fs.writeFileSync(path.join(tmpDir, 'theme.json'), serialized);
+        fs.writeFileSync(path.join(tmpDir, 'functions.js'), FUNCTIONS_STUB);
+        const { css, diagnostics } = compileTheme(tmpDir, { slug, dryRun: true });
+        if (hasCompileErrors(diagnostics)) {
+            return res.status(400).json({ error: 'Theme compilation failed', diagnostics });
+        }
+        writeCompiled(tmpDir, css);
+        try {
+            installThemeFromDir(tmpDir, slug);
+        } catch (e: any) {
+            if (e.code === 'THEME_EXISTS') return res.status(409).json({ error: e.message });
+            if (e.code === 'THEME_INVALID') return res.status(400).json({ error: e.message });
+            throw e;
+        }
+        res.status(201).json({ slug, diagnostics });
+    } finally {
+        try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* best effort */ }
+    }
+}));
+
+/**
+ * @swagger
+ * /themes/{slug}:
+ *   put:
+ *     summary: Rebuild a writer-generated theme (generator "wordjs") from updated declarative sections
+ *     tags: [Themes]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: slug
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               seeds:
+ *                 type: object
+ *                 nullable: true
+ *               archetype:
+ *                 type: string
+ *                 nullable: true
+ *               tokens:
+ *                 type: object
+ *                 nullable: true
+ *               styles:
+ *                 type: object
+ *                 nullable: true
+ *     responses:
+ *       200:
+ *         description: Theme rebuilt ({ slug, version, diagnostics })
+ *       400:
+ *         description: Invalid payload or compilation errors (diagnostics included)
+ *       404:
+ *         description: Theme not found
+ *       409:
+ *         description: Theme was not created by the WordJS writer
+ */
+router.put('/:slug', authenticate, isAdmin, asyncHandler(async (req: any, res: Response) => {
+    // SECURITY: Validate slug
+    if (!validateSlug(req.params.slug)) {
+        return res.status(400).json({ error: 'Invalid theme slug' });
+    }
+    const slug = req.params.slug;
+    const themeDir = path.join(THEMES_DIR, slug);
+    if (!fs.existsSync(themeDir)) {
+        return res.status(404).json({ error: `Theme ${slug} not found` });
+    }
+    const themeJsonPath = path.join(themeDir, 'theme.json');
+    let current: any = null;
+    try { current = JSON.parse(fs.readFileSync(themeJsonPath, 'utf8')); } catch { /* missing or invalid */ }
+    if (!isPlainObject(current) || current.generator !== 'wordjs') {
+        return res.status(409).json({
+            error: `Theme "${slug}" was not created by the WordJS theme writer (theme.json lacks generator: "wordjs") — edit its files directly instead`
+        });
+    }
+
+    const body = isPlainObject(req.body) ? req.body : {};
+    if (DECLARATIVE_KEYS.every((k: string) => body[k] === undefined)) {
+        return res.status(400).json({ error: 'Nothing to update: provide at least one of seeds, archetype, tokens or styles' });
+    }
+    const shapeErr = declarativeShapeError(body);
+    if (shapeErr) {
+        return res.status(400).json({ error: shapeErr });
+    }
+
+    const next: any = { ...current, generator: 'wordjs', version: bumpPatch(current.version) };
+    for (const k of DECLARATIVE_KEYS) {
+        if (body[k] === null) delete next[k];
+        else if (body[k] !== undefined) next[k] = body[k];
+    }
+    const serialized = JSON.stringify(next, null, 2);
+    if (Buffer.byteLength(serialized, 'utf8') > MAX_THEME_JSON) {
+        return res.status(400).json({ error: `theme.json exceeds the ${MAX_THEME_JSON}-byte cap` });
+    }
+
+    // Dry-compile the NEW theme.json in a temp dir first: a rejected payload must leave the
+    // installed theme byte-identical.
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wordjs-theme-build-'));
+    let compiled: any;
+    try {
+        fs.writeFileSync(path.join(tmpDir, 'theme.json'), serialized);
+        compiled = compileTheme(tmpDir, { slug, dryRun: true });
+    } finally {
+        try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* best effort */ }
+    }
+    if (hasCompileErrors(compiled.diagnostics)) {
+        return res.status(400).json({ error: 'Theme compilation failed', diagnostics: compiled.diagnostics });
+    }
+
+    // theme.json first (it is the source of truth the block can always be regenerated from),
+    // then the marked block. Both writes are tmp+rename; functions.js is NEVER touched.
+    writeJsonAtomic(themeJsonPath, serialized);
+    writeCompiled(themeDir, compiled.css);
+    // This rebuild edits a theme IN PLACE, behind core/themes' back: drop the scan memo (it still
+    // holds the pre-bump version) before anything can read the old one back.
+    invalidateThemeScanCache();
+
+    // The patch bump is what busts the cached stylesheet URL on the public pages, but the version is
+    // DERIVED from theme.json (no option row), so no updated_option hook fires here — purge
+    // explicitly, exactly like DELETE /api/v1/chrome/:part does. Only the ACTIVE theme is on a public
+    // page, so editing an inactive one must not evict the whole public cache. Resolved through
+    // getActiveTheme (not the raw `template` option) so this matches, case for case, the theme the
+    // settings payload derives active_theme_version from — including its fallback.
+    const active = await getActiveTheme();
+    if (active && active.slug === slug) purgeFrontend(['settings'], ['/']);
+
+    res.json({ slug, version: next.version, diagnostics: compiled.diagnostics });
 }));
 
 /**
@@ -208,6 +483,13 @@ router.post('/default', authenticate, isAdmin, asyncHandler(async (req: Request,
     // Admin explicitly asked to restore the default theme → force overwrite (unlike the boot-time
     // scaffold in index.ts, which must NOT clobber the curated default/style.css).
     createDefaultTheme(true);
+    // Restoring rewrites files inside THEMES_DIR without going through switchTheme, so nothing else
+    // would notice: the memoized scan would keep the pre-restore metadata (including the version the
+    // stylesheet URL is keyed by) and the public HTML would keep its cached copy. createDefaultTheme
+    // bumps the version; these two make the site actually serve the restored theme.
+    invalidateThemeScanCache();
+    const activeAfterRestore = await getActiveTheme();
+    if (activeAfterRestore && activeAfterRestore.slug === 'default') purgeFrontend(['settings'], ['/']);
     res.json({ success: true, message: 'Default theme restored in /themes/default' });
 }));
 
@@ -274,6 +556,32 @@ router.get('/:slug/download', authenticate, isAdmin, asyncHandler(async (req: Re
             fs.unlinkSync(zipPath);
         }
     });
+}));
+
+/**
+ * @swagger
+ * /themes/{slug}/doctor:
+ *   get:
+ *     summary: Lint a theme against the wordjs-ui.css token contract (read-only)
+ *     tags: [Themes]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: slug
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Doctor report ({ available:false } when the token manifest is absent — fail-open)
+ */
+router.get('/:slug/doctor', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+    // SECURITY: Validate slug
+    if (!validateSlug(req.params.slug)) {
+        return res.status(400).json({ error: 'Invalid theme slug' });
+    }
+    res.json(analyzeTheme(req.params.slug));
 }));
 
 module.exports = router;

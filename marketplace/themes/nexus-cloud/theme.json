@@ -1,9 +1,16 @@
 {
   "name": "Nexus Cloud",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Clean tech & cloud infrastructure theme with futuristic grid lines and interactive code preview styling.",
   "author": "WordJS Premium Studio",
   "category": "Tech",
+  "generator": "wordjs",
+  "seeds": {
+    "primary": "#0ea5e9",
+    "secondary": "#0284c7",
+    "bg": "#090d16",
+    "text": "#f0f9ff"
+  },
   "archetype": "cyber",
   "tags": [
     "premium",

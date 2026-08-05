@@ -1,9 +1,16 @@
 {
   "name": "Minimal Canvas",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Ultra-clean Scandinavian design portfolio with spacious white space and sharp micro-interactions.",
   "author": "WordJS Premium Studio",
   "category": "Portfolio",
+  "generator": "wordjs",
+  "seeds": {
+    "primary": "#64748b",
+    "secondary": "#475569",
+    "bg": "#0f172a",
+    "text": "#f8fafc"
+  },
   "archetype": "organic",
   "tags": [
     "premium",

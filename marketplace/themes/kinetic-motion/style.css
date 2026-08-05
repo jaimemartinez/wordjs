@@ -1,7 +1,7 @@
-/* ── WordJS token contract — canonical palette ─────────────────────────────
- * Derived from this theme's own generator colors (create-40-themes.js). These
- * aliases are what wordjs-ui.css block defaults (forms, search, cards…) read;
- * the theme's original rules below still own its distinctive look. */
+/* Theme: Kinetic Motion (Brutalist Archetype) */
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@700&family=Public+Sans:wght@400;700&display=swap');
+
+/* @wjs-generated:start — compiled from theme.json; DO NOT EDIT inside. Edit theme.json and run: node backend/cli/wordjs.js build theme kinetic-motion */
 :root {
   --wjs-bg-canvas: #0a0a0a;
   --wjs-bg-surface: #191919;
@@ -21,10 +21,7 @@
   --wjs-outline-variant: #2f2d2d;
   --wjs-focus-ring: #ef4444;
 }
-
-/* Theme: Kinetic Motion (Brutalist Archetype) */
-@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@700&family=Public+Sans:wght@400;700&display=swap');
-
+/* Archetype: Brutalist */
 :root {
     --brutal-primary: #ef4444;
     --brutal-secondary: #dc2626;
@@ -35,13 +32,13 @@
 body {
     background-color: var(--brutal-bg);
     color: var(--brutal-text);
-    font-family: 'Public Sans', sans-serif;
+    font-family: 'Public Sans', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
     margin: 0;
     padding: 0;
 }
 
 h1, h2, h3 {
-    font-family: 'Space Grotesk', sans-serif;
+    font-family: 'Space Grotesk', 'Arial Black', 'Segoe UI', Arial, sans-serif;
     font-size: 3rem;
     text-transform: uppercase;
     letter-spacing: -1px;
@@ -108,3 +105,4 @@ button.theme-btn:hover {
     background: var(--brutal-primary);
     color: #000;
 }
+/* @wjs-generated:end */

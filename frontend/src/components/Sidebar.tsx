@@ -24,6 +24,9 @@ const coreMenuItems: SidebarMenuItem[] = [
     { href: "/admin/media", label: "nav.media", icon: "fa-images", cap: "upload_files" },
     { href: "/admin/menus", label: "nav.menus", icon: "fa-bars", cap: "edit_theme_options" },
     { href: "/admin/footer", label: "nav.footer", icon: "fa-shoe-prints", cap: "edit_theme_options" },
+    // Composable chrome editor (beta) — literal label like "Formularios" below (no pre-navigation
+    // i18n). The legacy /admin/footer page stays alongside it during the beta.
+    { href: "/admin/chrome", label: "Cabecera y Pie (beta)", icon: "fa-window-maximize", cap: "edit_theme_options" },
     { href: "/admin/widgets", label: "nav.widgets", icon: "fa-shapes", cap: "edit_theme_options" },
     { href: "/admin/comments", label: "nav.comments", icon: "fa-comments", cap: "moderate_comments" },
     // Form submissions viewer — literal label (its page registers forms.* i18n keys at runtime, which
@@ -112,14 +115,16 @@ export default function Sidebar({ isOpen, onClose, isCollapsed = false }: Sideba
     const coreSectionPlugins = uniquePluginMenus.filter((p: any) => p.section !== 'management');
     const managementSectionPlugins = uniquePluginMenus.filter((p: any) => p.section === 'management');
 
+    // Split index 7 = everything up to (and including) the chrome editor entry stays in the core
+    // section; keep it in sync with the coreMenuItems order above.
     const coreSectionItems = [
-        ...coreMenuItems.slice(0, 6).filter(item => can(item.cap)),
+        ...coreMenuItems.slice(0, 7).filter(item => can(item.cap)),
         ...coreSectionPlugins.filter(item => can(item.cap))
     ];
 
     const managementSectionItems = [
         ...managementSectionPlugins.filter(item => can(item.cap)),
-        ...coreMenuItems.slice(6).filter(item => can(item.cap))
+        ...coreMenuItems.slice(7).filter(item => can(item.cap))
     ];
 
     const renderMenuItem = (item: SidebarMenuItem) => {

@@ -1,0 +1,36 @@
+/* Admin-only globals, moved out of app/globals.css so the PUBLIC tree stops receiving them
+ * (they fought the wordjs-ui.css theme contract: Arial body font, --background dark flip,
+ * iframe height !important). Imported only by app/admin/layout.tsx — Next scopes the load to
+ * /admin routes. The public body is owned by the wordjs-ui.css body rule. */
+
+:root {
+  --background: #ffffff;
+  --foreground: #171717;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0a0a0a;
+    --foreground: #ededed;
+  }
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  /* --font-inter is always defined (inter.variable on the root <body>), so this resolves to the
+   * next/font Inter stack — same render as the old inter.className on <body>. Portaled admin UI
+   * (modals/toasts mounted on <body>, outside the layout's inter.className wrapper) relies on it.
+   * Arial… is the pre-next/font fallback, kept verbatim. */
+  font-family: var(--font-inter, Arial, Helvetica, sans-serif);
+}
+
+/* Puck editor preview + customizer live-preview iframes fill their container. !important kept
+ * from the original global rule; public embeds size themselves via .wp-block-video-embed. */
+iframe {
+  height: 100% !important;
+}

@@ -58,7 +58,8 @@ router.get('/', (req: Request, res: Response) => {
             roles: '/api/v1/roles',
             notifications: '/api/v1/notifications',
             hooks: '/api/v1/hooks',
-            forms: '/api/v1/forms'
+            forms: '/api/v1/forms',
+            chrome: '/api/v1/chrome'
         }
     });
 });
@@ -75,6 +76,7 @@ router.use('/settings', settingsRoutes);
 router.use('/plugins', pluginsRoutes);
 router.use('/marketplace', require('./marketplace'));
 router.use('/themes', themesRoutes);
+router.use('/chrome', require('./chrome'));
 router.use('/menus', menusRoutes);
 router.use('/widgets', widgetsRoutes);
 router.use('/revisions', revisionsRoutes);

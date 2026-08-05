@@ -46,7 +46,7 @@ const IGNORE_PATTERNS = [
     '.gemini',
     'ssl-auto.crt',    // Exclude local certs
     'ssl-auto.key',
-    'backend/cli',     // Exclude test/debug scripts
+    'backend/cli',     // Exclude test/debug scripts (see CLI_SHIPPED for the product CLI carve-out)
     'backend/uploads', // Exclude local uploads
     'backend/check_plugins.js', // Legacy debug
     'check_plugins.js',
@@ -75,6 +75,15 @@ const IGNORE_PATTERNS = [
 // frontend/src/lib/data/. A plugin's theme/ (its COMPANION THEME, installable via
 // POST /plugins/<slug>/install-theme) is SOURCE, not runtime state — it must keep shipping, so never
 // widen this regex (or IGNORE_PATTERNS) to match theme/ or themes/.
+// CARVE-OUT of the `backend/cli` exclusion above. That directory is mostly one-off debug scripts that
+// dump users, roles and tokens — they must never ship. But it ALSO holds `wordjs.js`, the product CLI
+// the docs point operators at (`create theme --primary …`, `build theme`, `doctor theme`, plugin
+// scaffolding) plus the templates it writes from. Excluding the whole directory made every documented
+// CLI command absent from the artifact operators actually deploy. Only these paths escape the
+// exclusion; the secret/extension checks below still run on them.
+const CLI_SHIPPED = new Set(['backend/cli', 'backend/cli/wordjs.js', 'backend/cli/templates']);
+const isShippedCli = (rel) => CLI_SHIPPED.has(rel) || rel.startsWith('backend/cli/templates/');
+
 const SECRET_DIR_RE = /^(?:backend\/|gateway\/)?(?:data|certs)\/|^gateway\/ssl\/|(?:^|\/)plugins\/[^/]+\/data\//;
 const SECRET_EXTENSIONS = ['.db', '.sqlite', '.sqlite3', '.key', '.pem', '.mailenc'];
 
@@ -218,8 +227,10 @@ function shouldIgnore(filePath) {
     // (`Cannot find module './marketplace'`). Segment matching keeps the top-level `marketplace/`
     // catalog excluded while preserving `routes/marketplace.js`.
     const segments = relativePath.split('/');
+    const shippedCli = isShippedCli(relativePath);
     for (const pattern of IGNORE_PATTERNS) {
         if (pattern.startsWith('*')) continue;                 // extension globs are handled above
+        if (pattern === 'backend/cli' && shippedCli) continue;  // product CLI carve-out (see CLI_SHIPPED)
         if (pattern.includes('/')) {                           // path fragment (e.g. backend/cli, .next/cache)
             if (relativePath === pattern || relativePath.startsWith(pattern + '/') ||
                 relativePath.includes('/' + pattern + '/') || relativePath.endsWith('/' + pattern)) return true;

@@ -1,0 +1,313 @@
+#!/usr/bin/env node
+/* =============================================================================
+ * generate-token-manifest.js — wordjs-ui.css → backend/public/theme-tokens.json
+ * -----------------------------------------------------------------------------
+ * Hand-rolled CSS scan (zero dependencies) over the token framework stylesheet.
+ * A token exists if it is DECLARED in the top-level `:root` of ui.css or
+ * CONSUMED through some `var(--wjs-...)`. Nested fallbacks count too:
+ * `var(--wjs-a, var(--wjs-b, x))` records the fallback on --wjs-a AND registers
+ * --wjs-b as consumed.
+ *
+ * DETERMINISM IS A CONTRACT (CI drift gate): token/element keys sorted
+ * alphabetically, consumers in file order, no timestamps, no randomness —
+ * the output must be byte-identical between runs on the same input.
+ *
+ * Usage: node scripts/generate-token-manifest.js
+ * ========================================================================== */
+const fs = require('fs');
+const path = require('path');
+
+const CSS_PATH = path.resolve(__dirname, '../backend/public/css/wordjs-ui.css');
+const OUT_PATH = path.resolve(__dirname, '../backend/public/theme-tokens.json');
+const SOURCE_REL = 'backend/public/css/wordjs-ui.css';
+const TOKEN_PREFIX = '--wjs-';
+
+// ── Alias zone ────────────────────────────────────────────────────────────────
+// The `alias` flag is anchored to the "Visual-editor (Puck) block aliases"
+// comment inside :root, NOT to the "value is exactly var()" shape alone: the
+// canonical derived defaults earlier in :root (--wjs-color-heading,
+// --wjs-color-link, --wjs-shadow-md, ...) are also plain var() remaps but ARE
+// meant to be overridden by themes. Only the Puck-block remap zone is
+// do-not-override for theme authors.
+const ALIAS_ZONE_MARKER = 'Visual-editor (Puck) block aliases';
+
+// Consumed by the React chrome via Tailwind arbitrary values — invisible to any
+// CSS scan, so they are force-included in the manifest.
+const CHROME_PHANTOM_TOKENS = [
+    '--wjs-bg-footer',
+    '--wjs-color-text-footer-main',
+    '--wjs-color-text-footer-dim',
+    '--wjs-bg-surface-glass',
+];
+
+// Seeded chrome entries for the future declarations layer (F3). A .wp-block-*
+// entry with the same key keeps its platform selector; seeds only fill gaps.
+const CHROME_ELEMENT_SEEDS = {
+    header: '.wjs-header',
+    logo: '.wjs-header-logo',
+    nav: '.wjs-header-nav',
+    footer: 'footer',
+};
+
+const FLAG_ORDER = ['alias', 'editor-internal', 'chrome-phantom'];
+
+const collapse = (s) => s.replace(/\s+/g, ' ').trim();
+
+// Replace comments with same-length whitespace so character offsets survive
+// (the alias-zone marker offset is taken on the RAW file).
+function stripComments(css) {
+    return css.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '));
+}
+
+// Minimal block tokenizer: tracks the open-rule stack ({} nesting), quotes and
+// parens (so `;` inside url(...)/data URIs never splits a declaration), and
+// emits every `prop: value` declaration with its enclosing stack + file offset.
+function walkDeclarations(css, onRuleOpen, onDeclaration) {
+    const stack = []; // { prelude, openOffset }
+    let buf = '';
+    let bufStart = -1;
+    let quote = null;
+    let paren = 0;
+
+    const flushDeclaration = () => {
+        const text = buf.trim();
+        buf = '';
+        const start = bufStart;
+        bufStart = -1;
+        if (!text || stack.length === 0) return;
+        const colon = text.indexOf(':');
+        // Skip pseudo-selector fragments etc. — a declaration needs `name: value`.
+        if (colon <= 0) return;
+        onDeclaration({
+            property: text.slice(0, colon).trim(),
+            value: collapse(text.slice(colon + 1)),
+            stack,
+            offset: start,
+        });
+    };
+
+    for (let i = 0; i < css.length; i++) {
+        const ch = css[i];
+        if (quote) {
+            buf += ch;
+            if (ch === quote && css[i - 1] !== '\\') quote = null;
+            continue;
+        }
+        if (ch === '"' || ch === "'") {
+            if (bufStart < 0) bufStart = i;
+            quote = ch;
+            buf += ch;
+            continue;
+        }
+        if (ch === '(') {
+            paren++;
+        } else if (ch === ')') {
+            paren = Math.max(0, paren - 1);
+        } else if (paren === 0) {
+            if (ch === '{') {
+                const frame = { prelude: collapse(buf), openOffset: i };
+                stack.push(frame);
+                onRuleOpen(frame, stack);
+                buf = '';
+                bufStart = -1;
+                continue;
+            }
+            if (ch === '}') {
+                flushDeclaration();
+                stack.pop();
+                continue;
+            }
+            if (ch === ';') {
+                flushDeclaration();
+                continue;
+            }
+        }
+        if (bufStart < 0 && !/\s/.test(ch)) bufStart = i;
+        buf += ch;
+    }
+}
+
+// Effective consumer context: selector path (keyframe steps keep their
+// `@keyframes <name>` prefix), plus the @media condition when present.
+function contextOf(stack) {
+    const media = [];
+    const sel = [];
+    for (const frame of stack) {
+        const p = frame.prelude;
+        if (p.startsWith('@media')) media.push(p.slice('@media'.length).trim());
+        else if (p.startsWith('@keyframes')) sel.push(p);
+        else if (p.startsWith('@')) continue; // @supports etc. — no selector part
+        else sel.push(p);
+    }
+    return { selector: sel.join(' '), media: media.length ? media.join(' and ') : null };
+}
+
+// Find every var(--wjs-...) use, including uses nested inside fallbacks.
+function scanVarUses(value, cb) {
+    let idx = 0;
+    while ((idx = value.indexOf('var(', idx)) !== -1) {
+        // guard against identifiers ending in "var" (e.g. `myvar(`)
+        if (idx > 0 && /[A-Za-z0-9_-]/.test(value[idx - 1])) {
+            idx += 4;
+            continue;
+        }
+        const start = idx + 4;
+        let depth = 1;
+        let comma = -1;
+        let j = start;
+        while (j < value.length && depth > 0) {
+            const c = value[j];
+            if (c === '(') depth++;
+            else if (c === ')') depth--;
+            else if (c === ',' && depth === 1 && comma === -1) comma = j;
+            j++;
+        }
+        const name = value.slice(start, comma === -1 ? j - 1 : comma).trim();
+        const fallback = comma === -1 ? null : value.slice(comma + 1, j - 1).trim();
+        if (name.startsWith(TOKEN_PREFIX)) cb(name, fallback);
+        idx = start; // re-scan from inside so nested var() uses are found too
+    }
+}
+
+const BASE_RE = /\.wp-block-((?:[A-Za-z0-9]+-)*[A-Za-z0-9]+)/g; // stops before `--` modifiers and `__` children
+const CHILD_RE = /\.wp-block-((?:[A-Za-z0-9]+-)*[A-Za-z0-9]+)__((?:[A-Za-z0-9]+-)*[A-Za-z0-9]+)/g;
+
+function main() {
+    const raw = fs.readFileSync(CSS_PATH, 'utf8');
+    const aliasMarkerOffset = raw.indexOf(ALIAS_ZONE_MARKER);
+    if (aliasMarkerOffset === -1) {
+        console.warn(`WARN: alias-zone marker not found ("${ALIAS_ZONE_MARKER}"); falling back to exact-var() heuristic for the alias flag.`);
+    }
+    const css = stripComments(raw);
+
+    const tokens = new Map();
+    const ensureToken = (name) => {
+        let t = tokens.get(name);
+        if (!t) {
+            t = { declaredDefault: null, fallbacks: [], consumers: [], consumerKeys: new Set(), flags: new Set() };
+            if (name.startsWith('--wjs-r-')) t.flags.add('editor-internal');
+            tokens.set(name, t);
+        }
+        return t;
+    };
+
+    let varUses = 0;
+    const elementBases = new Set();
+    const childPairs = new Set();
+
+    walkDeclarations(
+        css,
+        // element registry: one entry per .wp-block-<x> class seen anywhere
+        (frame) => {
+            if (frame.prelude.startsWith('@')) return;
+            for (const m of frame.prelude.matchAll(BASE_RE)) elementBases.add(m[1]);
+        },
+        ({ property, value, stack, offset }) => {
+            const topRoot = stack.length === 1 && stack[0].prelude === ':root';
+            if (topRoot && property.startsWith(TOKEN_PREFIX)) {
+                const t = ensureToken(property);
+                t.declaredDefault = value; // last :root declaration wins (cascade)
+                const isAlias = aliasMarkerOffset !== -1
+                    ? offset > aliasMarkerOffset && stack[0].openOffset < aliasMarkerOffset
+                    : /^var\(\s*--wjs-[A-Za-z0-9-]+\s*\)$/.test(value);
+                if (isAlias) t.flags.add('alias');
+            }
+            const { selector, media } = contextOf(stack);
+            scanVarUses(value, (name, fallback) => {
+                varUses++;
+                const t = ensureToken(name);
+                if (fallback !== null && !t.fallbacks.includes(fallback)) t.fallbacks.push(fallback);
+                const key = `${selector} ${property} ${media || ''}`;
+                if (!t.consumerKeys.has(key)) {
+                    t.consumerKeys.add(key);
+                    const consumer = { selector, property };
+                    if (media) consumer.media = media;
+                    t.consumers.push(consumer);
+                }
+                // children only from selectors observed consuming tokens
+                for (const m of selector.matchAll(CHILD_RE)) childPairs.add(`${m[1]} ${m[2]}`);
+            });
+        }
+    );
+
+    for (const name of CHROME_PHANTOM_TOKENS) {
+        const existed = tokens.has(name);
+        const t = ensureToken(name);
+        t.flags.add('chrome-phantom');
+        if (!existed) t.consumers.push({ selector: '(react-chrome)', property: '(tailwind-arbitrary)' });
+    }
+
+    // ── tokens: sorted keys, stable field order ──────────────────────────────
+    const tokensOut = {};
+    for (const name of [...tokens.keys()].sort()) {
+        const t = tokens.get(name);
+        const entry = {
+            group: name.slice(TOKEN_PREFIX.length).split('-')[0],
+            declaredDefault: t.declaredDefault,
+            fallbacks: t.fallbacks,
+            consumers: t.consumers,
+        };
+        const flags = FLAG_ORDER.filter((f) => t.flags.has(f));
+        if (flags.length) entry.flags = flags;
+        tokensOut[name] = entry;
+    }
+
+    // ── elements: .wp-block-* registry + BEM children + chrome seeds ─────────
+    const elements = {};
+    for (const base of elementBases) elements[base] = { selector: `.wp-block-${base}` };
+    for (const pair of childPairs) {
+        const [base, child] = pair.split(' ');
+        const el = elements[base] || (elements[base] = { selector: `.wp-block-${base}` });
+        (el.children || (el.children = {}))[child] = { selector: `.wp-block-${base}__${child}` };
+    }
+    for (const [key, selector] of Object.entries(CHROME_ELEMENT_SEEDS)) {
+        if (!elements[key]) elements[key] = { selector };
+    }
+    const elementsOut = {};
+    for (const key of Object.keys(elements).sort()) {
+        const el = elements[key];
+        const entry = { selector: el.selector };
+        if (el.children) {
+            entry.children = {};
+            for (const child of Object.keys(el.children).sort()) entry.children[child] = el.children[child];
+        }
+        elementsOut[key] = entry;
+    }
+
+    const manifest = {
+        version: 1,
+        source: SOURCE_REL,
+        counts: {
+            tokens: Object.keys(tokensOut).length,
+            varUses,
+            elements: Object.keys(elementsOut).length,
+        },
+        tokens: tokensOut,
+        elements: elementsOut,
+    };
+
+    fs.writeFileSync(OUT_PATH, JSON.stringify(manifest, null, 2) + '\n');
+
+    // ── sanity report ────────────────────────────────────────────────────────
+    const aliasNames = Object.keys(tokensOut).filter((n) => (tokensOut[n].flags || []).includes('alias'));
+    const heroNames = Object.keys(tokensOut).filter((n) => n.startsWith('--wjs-hero-'));
+    const heroGroupsOk = heroNames.length > 0 && heroNames.every((n) => tokensOut[n].group === 'hero');
+    const editorInternal = Object.keys(tokensOut).filter((n) => (tokensOut[n].flags || []).includes('editor-internal'));
+    const phantomsOk = CHROME_PHANTOM_TOKENS.every((n) => (tokensOut[n].flags || []).includes('chrome-phantom'));
+
+    console.log(`theme-tokens.json written: ${path.relative(process.cwd(), OUT_PATH)}`);
+    console.log(`counts: tokens=${manifest.counts.tokens} varUses=${manifest.counts.varUses} elements=${manifest.counts.elements}`);
+    console.log(`alias flags: ${aliasNames.length}`);
+    console.log(`hero tokens: ${heroNames.length} (group "hero": ${heroGroupsOk ? 'OK' : 'FAIL'})`);
+    console.log(`editor-internal (--wjs-r-*): ${editorInternal.length}`);
+    console.log(`chrome-phantom present: ${phantomsOk ? 'OK' : 'FAIL'}`);
+
+    let failed = false;
+    if (manifest.counts.tokens < 700) { console.error(`FAIL: expected ~700+ unique tokens, got ${manifest.counts.tokens}`); failed = true; }
+    if (!heroGroupsOk) { console.error('FAIL: --wjs-hero-* tokens missing or not grouped as "hero"'); failed = true; }
+    if (!phantomsOk) { console.error('FAIL: chrome-phantom tokens missing'); failed = true; }
+    if (aliasNames.length !== 21) console.warn(`WARN: alias-flagged tokens = ${aliasNames.length} (expected 21): ${aliasNames.join(', ')}`);
+    if (failed) process.exitCode = 1;
+}
+
+main();

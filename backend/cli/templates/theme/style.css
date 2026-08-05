@@ -71,7 +71,8 @@
 /*
  * OPTIONAL — site chrome (header nav / footer). The live Next.js site renders the chrome with
  * stable .wjs-header-* / footer hooks and honors the --wjs-nav-* / --wjs-footer-* tokens.
- * Uncomment and adjust; see backend/themes/midnight-luxury/style.css for a complete example.
+ * Uncomment and adjust; backend/themes/default/style.css is the worked example (it ships with
+ * every install — midnight-luxury only exists after installing it from the marketplace).
  *
  * :root {
  *   --wjs-nav-font-family: var(--wjs-font-family-base);
