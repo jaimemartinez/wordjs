@@ -85,7 +85,13 @@ const ALL_SETTINGS = [
 // Publicly readable, but NOT writable through the generic settings writers: these have a
 // dedicated API that validates before storing (chrome-validate is the write authority for
 // site_chrome_* — see routes/chrome.ts). Writing them here would bypass that validation.
-const DEDICATED_WRITE_API = new Set(['site_chrome_header', 'site_chrome_footer']);
+// 'template'/'stylesheet' name the ACTIVE THEME, and switching one is far more than an option write:
+// switchTheme also republishes the new theme's `layout`, clears the previous theme's customizer mods,
+// re-initializes the theme engine (which retires the outgoing theme's isolated functions.js child) and
+// fires the switch_theme hook that purges the frontend. Written through here the option moved alone —
+// the site then served the new theme's CSS with the old theme's structure and token overrides, and the
+// replaced theme's code kept running. Their dedicated API is POST /themes/:slug/activate.
+const DEDICATED_WRITE_API = new Set(['site_chrome_header', 'site_chrome_footer', 'template', 'stylesheet']);
 
 // Public settings that are DERIVED, not stored. Computed per request from the memoized theme scan
 // (core/themes), so they add no SQL and no fs to the read path — and deliberately absent from

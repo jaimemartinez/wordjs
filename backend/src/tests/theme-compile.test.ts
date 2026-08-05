@@ -98,10 +98,19 @@ describe('compileTheme (declarative theme compiler)', () => {
     });
 
     it('emits the archetype CSS inside the block for a known archetype', () => {
-        const slug = writeTheme({ archetype: 'cyber' });
+        const slug = writeTheme({ archetype: 'cyber', seeds: { primary: '#7c3aed', secondary: '#06b6d4', bg: '#0f0f23', text: '#e2e8f0' } });
         const r = compile(slug, { derive: STUB_DERIVE });
         assert.strictEqual(r.stats.errors, 0, JSON.stringify(r.diagnostics));
         assert.ok(r.css.includes('.wjs-archetype-cyber'), r.css);
+    });
+
+    // The presets interpolate the seeds into their CSS, so a missing one used to reach the stylesheet
+    // as the literal "undefined" with zero diagnostics — this asserts the archetype is refused instead.
+    it('refuses an archetype declared without its seeds', () => {
+        const slug = writeTheme({ archetype: 'cyber' });
+        const r = compile(slug, { derive: STUB_DERIVE });
+        assert.strictEqual(errsOf(r, 'ARCHETYPE_NEEDS_SEEDS').length, 1, JSON.stringify(r.diagnostics));
+        assert.ok(!r.css.includes('undefined'), r.css);
     });
 
     it('rejects an unknown archetype with a suggestion', () => {

@@ -71,6 +71,7 @@ const SLUG_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
 const TOKEN_VALUE_RE = /^[#a-zA-Z0-9 ,.%()/_'"-]+$/;
 const TOKEN_NAME_RE = /^--wjs-[a-zA-Z0-9_-]+$/;
 const SEED_RE = /^#[0-9a-fA-F]{6}$/;
+const SEED_KEYS = ['primary', 'secondary', 'bg', 'text'];
 const MAX_TOKEN_VALUE = 120;
 const MAX_DECL_VALUE = 300;
 const MAX_DECLARATIONS = 2000;
@@ -249,7 +250,7 @@ function compileTheme(dirOrSlug: string, opts: CompileOpts = {}): CompileResult 
       error('SEEDS_INVALID', 'seeds', '"seeds" must be an object of #rrggbb colors');
     } else {
       let seedsOk = true;
-      for (const k of ['primary', 'secondary', 'bg', 'text']) {
+      for (const k of SEED_KEYS) {
         if (seeds[k] !== undefined && !SEED_RE.test(String(seeds[k]))) {
           seedsOk = false;
           error('SEED_INVALID', `seeds.${k}`, `seeds.${k} must be a #rrggbb color (got ${JSON.stringify(seeds[k])})`);
@@ -290,6 +291,11 @@ function compileTheme(dirOrSlug: string, opts: CompileOpts = {}): CompileResult 
       error('ARCHETYPE_UNKNOWN', 'archetype', `"${archetype}" is not an archetype (${names.join(', ')})${suggestion ? ` — did you mean ${suggestion}?` : ''}`, suggestion);
     } else if (!derive || typeof derive.archetypeCss !== 'function') {
       error('DERIVE_UNAVAILABLE', 'archetype', 'theme-derive is not available — archetype CSS cannot be generated');
+    } else if (!isPlainObject(seeds) || SEED_KEYS.some((k) => typeof (seeds as any)[k] !== 'string')) {
+      // The presets interpolate the four seeds into their CSS by template literal, so a missing one
+      // reaches the stylesheet as the literal text "undefined" — a value that parses, compiles with
+      // zero diagnostics and silently breaks whatever it feeds. The CLI already demands all four.
+      error('ARCHETYPE_NEEDS_SEEDS', 'archetype', `archetype "${archetype}" needs all four seeds (${SEED_KEYS.join(', ')})`);
     } else {
       try { archetypeCssText = String(derive.archetypeCss(archetype, isPlainObject(seeds) ? seeds : {}) || ''); } catch (e) {
         error('DERIVE_FAILED', 'archetype', `archetypeCss threw: ${e.message}`);

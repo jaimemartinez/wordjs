@@ -96,7 +96,10 @@ export default function ChromeEditorPage() {
             // 3º starter template. Every level is fail-closed via parseChromeData.
             let resolved: ChromeData | null = null;
             let from: ChromeSource = "starter";
-            const settings = await settingsApi.get().catch(() => null);
+            // A FAILED settings read is not "nothing configured": falling through to the starter here
+            // showed a pristine composition over a site that has a real one, and the next Save wrote
+            // the starter on top of it. Treat it as an error and leave the editor empty instead.
+            const settings = await settingsApi.get();
             const slug = settings?.template || "default";
             if (!opts.skipSite) {
                 const site = parseChromeData(settings?.[`site_chrome_${target}`], { source: "site" });
@@ -124,6 +127,11 @@ export default function ChromeEditorPage() {
             setDirty(false);
             setInitialData(stamped);
             setMountKey((k) => k + 1); // remount <Puck> with a fresh store for the new data
+        } catch (e) {
+            // No editable state: initialData stays null, so the editor (and Save with it) never mounts.
+            setInitialData(null);
+            latestDataRef.current = null;
+            setErrors([`No se pudo cargar la composición actual: ${(e as Error).message || "error de red"}. Recarga la página antes de editar — guardar ahora sobrescribiría la composición del sitio.`]);
         } finally {
             setLoading(false);
         }
