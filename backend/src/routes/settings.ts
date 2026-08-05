@@ -42,6 +42,8 @@ const PUBLIC_SETTINGS = [
                             // the slug is visible in the /themes/<slug>/style.css URL anyway.
     'active_theme_layout',  // active theme's structure config (JSON) for the SSR public layout
     'active_theme_mods',    // active theme's live token overrides (JSON) from the customizer
+    'site_chrome_header',   // site-level composable chrome (JSON, contract v1) — the SSR public
+    'site_chrome_footer',   //   layout renders these; written ONLY via PUT /api/v1/chrome/:part
     'users_can_register',
     // 'admin_email' - SECURITY: Removed from public to prevent email harvesting
     'default_role',
@@ -78,6 +80,11 @@ const ALL_SETTINGS = [
     'backup_time',     // Backup Time of Day (HH:mm)
     'backup_day'       // Backup Day (0-6)
 ];
+
+// Publicly readable, but NOT writable through the generic settings writers: these have a
+// dedicated API that validates before storing (chrome-validate is the write authority for
+// site_chrome_* — see routes/chrome.ts). Writing them here would bypass that validation.
+const DEDICATED_WRITE_API = new Set(['site_chrome_header', 'site_chrome_footer']);
 
 /**
  * @swagger
@@ -186,7 +193,7 @@ router.put('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: Re
     const updated: Record<string, any> = {};
 
     for (const [key, value] of Object.entries(updates)) {
-        if (ALL_SETTINGS.includes(key)) {
+        if (ALL_SETTINGS.includes(key) && !DEDICATED_WRITE_API.has(key)) {
             await updateOption(key, value);
             updated[key] = value;
         }
@@ -225,10 +232,12 @@ router.put('/:key', authenticate, isAdmin, asyncHandler(async (req: Request, res
     const { key } = req.params as { key: string };
     const { value } = req.body;
 
-    if (!ALL_SETTINGS.includes(key)) {
+    if (!ALL_SETTINGS.includes(key) || DEDICATED_WRITE_API.has(key)) {
         return res.status(400).json({
             code: 'rest_invalid_param',
-            message: 'Invalid setting key.',
+            message: DEDICATED_WRITE_API.has(key)
+                ? 'This setting is managed by its dedicated API (PUT /api/v1/chrome/:part).'
+                : 'Invalid setting key.',
             data: { status: 400 }
         });
     }

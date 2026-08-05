@@ -2,9 +2,15 @@
 
 import Link from "next/link";
 import { useEffect, useState, useRef } from "react";
+import type { HeaderVariant } from "@/lib/themeLayout";
 
 interface HeaderProps {
     disableSticky?: boolean;
+    // Structure config from theme.json `layout` v2 (normalized upstream by PublicLayoutShell). The
+    // defaults reproduce today's markup exactly, so a theme without `layout` renders unchanged.
+    variant?: HeaderVariant;
+    sticky?: boolean;
+    transparent?: boolean;
     // SSR-provided chrome data (live site): when present the Header renders from it in the initial HTML
     // and SKIPS the client fetch — no per-visitor double-fetch of menu+settings. Omitted by the editor
     // preview, which falls back to fetching client-side.
@@ -12,7 +18,7 @@ interface HeaderProps {
     initialSettings?: Record<string, any>;
 }
 
-export default function Header({ disableSticky = false, initialMenu, initialSettings }: HeaderProps) {
+export default function Header({ disableSticky = false, variant = "classic", sticky = true, transparent = false, initialMenu, initialSettings }: HeaderProps) {
     const hasSSR = initialSettings !== undefined;
     const [isScrolled, setIsScrolled] = useState(false);
     const [menuItems, setMenuItems] = useState<any[]>(() =>
@@ -46,6 +52,8 @@ export default function Header({ disableSticky = false, initialMenu, initialSett
 
     // Close mobile menu on resize to desktop
     useEffect(() => {
+        // minimal keeps the nav in the panel at every width — never auto-close it on desktop resize.
+        if (variant === "minimal") return;
         const handleResize = () => {
             if (window.innerWidth >= 768) {
                 setMobileMenuOpen(false);
@@ -53,7 +61,7 @@ export default function Header({ disableSticky = false, initialMenu, initialSett
         };
         window.addEventListener("resize", handleResize);
         return () => window.removeEventListener("resize", handleResize);
-    }, []);
+    }, [variant]);
 
     const fetchData = async () => {
         try {
@@ -120,63 +128,97 @@ export default function Header({ disableSticky = false, initialMenu, initialSett
         }
     };
 
+    const isMinimal = variant === "minimal";
+    // sticky:false → header in normal flow (the Shell zeroes --wjs-header-offset so the main loses
+    // the fixed-header padding). Default: fixed (absolute in the editor preview) — unchanged.
+    const positionClass = sticky ? (disableSticky ? 'absolute' : 'fixed') : 'relative';
+    const scrolledBg = "bg-[var(--wjs-bg-surface-glass,white)] backdrop-blur-md shadow-sm py-4";
+    // transparent:true → background-free over the top of the page even where the chrome would
+    // otherwise render solid (editor preview / static header); data-scrolled restores it on scroll.
+    const topBg = transparent ? "bg-transparent py-6" : (disableSticky || !sticky ? scrolledBg : "bg-transparent py-6");
+
+    const logo = (
+        <Link href="/" className="wjs-header-logo flex items-center gap-2">
+            {logoUrl ? (
+                <img src={logoUrl} alt={siteTitle} width={160} height={40} className="h-10 w-auto object-contain" />
+            ) : siteTitle ? (
+                <span className="text-2xl font-bold text-[var(--wjs-color-text-main,gray)]">
+                    {siteTitle}
+                </span>
+            ) : null}
+        </Link>
+    );
+
+    // Desktop Navigation
+    const desktopNav = (
+        <nav aria-label="Primary" className="wjs-header-nav hidden md:flex items-center gap-8">
+            {menuItems.length > 0 ? (
+                menuItems.map((item) => (
+                    <Link
+                        key={item.id}
+                        href={item.url}
+                        onClick={(e) => handleNavClick(e, item.url)}
+                        className="text-[var(--wjs-color-text-main,gray)] hover:text-[var(--wjs-color-primary,blue)] font-medium transition-colors"
+                    >
+                        {item.title}
+                    </Link>
+                ))
+            ) : null}
+        </nav>
+    );
+
+    // Mobile Menu Button (always visible in the minimal variant — its nav lives in the panel)
+    const menuButton = (
+        <button
+            className={`${isMinimal ? "" : "md:hidden "}w-11 h-11 rounded-full bg-[var(--wjs-color-primary,#2F6D86)] text-[var(--wjs-color-on-primary,#ffffff)] flex items-center justify-center shadow-lg hover:bg-[var(--wjs-color-primary-dark,#266073)] transition-colors`}
+            onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+            aria-label="Toggle menu"
+            aria-expanded={mobileMenuOpen}
+            aria-controls="mobile-menu-panel"
+        >
+            {mobileMenuOpen ? (
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-6 h-6">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+            ) : (
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-6 h-6">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
+                </svg>
+            )}
+        </button>
+    );
+
     return (
         <>
-            <header ref={headerRef} className={`${disableSticky ? 'absolute' : 'fixed'} top-0 left-0 right-0 z-50 transition-all duration-300 ${isScrolled ? "bg-[var(--wjs-bg-surface-glass,white)] backdrop-blur-md shadow-sm py-4" : (disableSticky ? "bg-[var(--wjs-bg-surface-glass,white)] backdrop-blur-md shadow-sm py-4" : "bg-transparent py-6")
-                }`}>
-                <div className="wjs-header-container container mx-auto px-4 flex justify-between items-center">
-                    <Link href="/" className="wjs-header-logo flex items-center gap-2">
-                        {logoUrl ? (
-                            <img src={logoUrl} alt={siteTitle} width={160} height={40} className="h-10 w-auto object-contain" />
-                        ) : siteTitle ? (
-                            <span className="text-2xl font-bold text-[var(--wjs-color-text-main,gray)]">
-                                {siteTitle}
-                            </span>
-                        ) : null}
-                    </Link>
-
-                    {/* Desktop Navigation */}
-                    <nav aria-label="Primary" className="wjs-header-nav hidden md:flex items-center gap-8">
-                        {menuItems.length > 0 ? (
-                            menuItems.map((item) => (
-                                <Link
-                                    key={item.id}
-                                    href={item.url}
-                                    onClick={(e) => handleNavClick(e, item.url)}
-                                    className="text-[var(--wjs-color-text-main,gray)] hover:text-[var(--wjs-color-primary,blue)] font-medium transition-colors"
-                                >
-                                    {item.title}
-                                </Link>
-                            ))
-                        ) : null}
-                    </nav>
-
-                    <div className="wjs-header-actions flex items-center gap-4">
-                        {/* Mobile Menu Button */}
-                        <button
-                            className="md:hidden w-11 h-11 rounded-full bg-[var(--wjs-color-primary,#2F6D86)] text-[var(--wjs-color-on-primary,#ffffff)] flex items-center justify-center shadow-lg hover:bg-[var(--wjs-color-primary-dark,#266073)] transition-colors"
-                            onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-                            aria-label="Toggle menu"
-                            aria-expanded={mobileMenuOpen}
-                            aria-controls="mobile-menu-panel"
-                        >
-                            {mobileMenuOpen ? (
-                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-6 h-6">
-                                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                                </svg>
-                            ) : (
-                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-6 h-6">
-                                    <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
-                                </svg>
-                            )}
-                        </button>
+            {/* data-scrolled mirrors the class swap below as a stable target for theme CSS */}
+            <header ref={headerRef} data-scrolled={isScrolled ? "true" : "false"} className={`${positionClass} top-0 left-0 right-0 z-50 transition-all duration-300 ${isScrolled ? scrolledBg : topBg}`}>
+                {variant === "centered" ? (
+                    /* centered: logo on top, nav in a row below; mobile keeps logo-left + burger-right */
+                    <div className="wjs-header-container container mx-auto px-4 flex flex-col items-center gap-4">
+                        <div className="w-full flex justify-between items-center md:justify-center">
+                            {logo}
+                            <div className="wjs-header-actions flex items-center gap-4 md:hidden">{menuButton}</div>
+                        </div>
+                        {desktopNav}
                     </div>
-                </div>
+                ) : isMinimal ? (
+                    /* minimal: logo + hamburger only, nav always in the panel */
+                    <div className="wjs-header-container container mx-auto px-4 flex justify-between items-center">
+                        {logo}
+                        <div className="wjs-header-actions flex items-center gap-4">{menuButton}</div>
+                    </div>
+                ) : (
+                    <div className="wjs-header-container container mx-auto px-4 flex justify-between items-center">
+                        {logo}
+                        {desktopNav}
+                        <div className="wjs-header-actions flex items-center gap-4">{menuButton}</div>
+                    </div>
+                )}
             </header>
 
             {/* Mobile Menu Overlay */}
             <div
-                className={`fixed inset-0 z-40 bg-black/50 backdrop-blur-sm transition-opacity duration-300 md:hidden ${mobileMenuOpen ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"
+                className={`wjs-header-mobile-overlay fixed inset-0 z-40 bg-black/50 backdrop-blur-sm transition-opacity duration-300${isMinimal ? "" : " md:hidden"} ${mobileMenuOpen ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"
                     }`}
                 onClick={() => setMobileMenuOpen(false)}
             />
@@ -186,7 +228,7 @@ export default function Header({ disableSticky = false, initialMenu, initialSett
                 id="mobile-menu-panel"
                 inert={!mobileMenuOpen}
                 aria-hidden={!mobileMenuOpen}
-                className={`fixed top-0 right-0 z-50 h-full w-72 bg-[var(--wjs-bg-surface,white)] shadow-2xl transform transition-transform duration-300 ease-out md:hidden ${mobileMenuOpen ? "translate-x-0" : "translate-x-full"
+                className={`wjs-header-mobile-panel fixed top-0 right-0 z-50 h-full w-72 bg-[var(--wjs-bg-surface,white)] shadow-2xl transform transition-transform duration-300 ease-out${isMinimal ? "" : " md:hidden"} ${mobileMenuOpen ? "translate-x-0" : "translate-x-full"
                     }`}
             >
                 <div className="p-6">
@@ -232,4 +274,3 @@ export default function Header({ disableSticky = false, initialMenu, initialSett
         </>
     );
 }
-
