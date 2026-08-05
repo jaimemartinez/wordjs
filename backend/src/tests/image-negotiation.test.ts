@@ -21,6 +21,14 @@ before(async () => {
     await sharp({ create: { width: 400, height: 300, channels: 3, background: { r: 120, g: 80, b: 200 } } })
         .jpeg().toFile(path.join(dir, 'pic.jpg'));
     fs.writeFileSync(path.join(dir, 'icon.svg'), '<svg xmlns="http://www.w3.org/2000/svg"><rect width="1" height="1"/></svg>');
+    // In a SUBDIRECTORY, so a request can carry an INTERNAL duplicate slash (leading ones were already
+    // stripped) — the shape that used to mint a fresh cache key for the same file.
+    fs.mkdirSync(path.join(dir, 'sub'), { recursive: true });
+    await sharp({ create: { width: 400, height: 300, channels: 3, background: { r: 10, g: 200, b: 90 } } })
+        .jpeg().toFile(path.join(dir, 'sub', 'nested.jpg'));
+    // Over the decoded-size budget (3500*2400*3 = 25.2MB > 24MB) so negotiation must decline it.
+    await sharp({ create: { width: 3500, height: 2400, channels: 3, background: { r: 200, g: 30, b: 30 } } })
+        .jpeg().toFile(path.join(dir, 'huge.jpg'));
     app = express();
     app.use('/uploads', imageNegotiation(dir));
     // mark anything the static handler serves so tests can tell a fall-through from a transcode
@@ -67,4 +75,43 @@ test('caches the derivative on disk (second request is a cache hit)', async () =
     const res = await request(app).get('/uploads/pic.jpg').set('Accept', 'image/avif');
     assert.strictEqual(res.headers['content-type'], 'image/avif');
     assert.match(res.headers['cache-control'] || '', /immutable/);
+});
+
+const walkDerivatives = (): string[] => {
+    const derivDir = path.join(dir, '.derivatives');
+    if (!fs.existsSync(derivDir)) return [];
+    const walk = (d: string): string[] => fs.readdirSync(d, { withFileTypes: true })
+        .flatMap((e: any) => (e.isDirectory() ? walk(path.join(d, e.name)) : [path.join(d, e.name)]));
+    return walk(derivDir);
+};
+
+// SECURITY (DoS) — the cache key hashed the RAW request path while the source lookup used path.join,
+// which normalizes. So '/sub/nested.jpg' and '/sub//nested.jpg' resolved to the same file on disk under
+// DIFFERENT keys: each spelling was a cache MISS that started another full-resolution transcode. The
+// slash count is unbounded, so one publicly-linked image was an unlimited supply of misses for an
+// ANONYMOUS client — no account, no crafted upload, and /uploads is behind no rate limiter.
+test('duplicate slashes do NOT mint a new derivative for the same file', async () => {
+    const first = await request(app).get('/uploads/sub/nested.jpg').set('Accept', 'image/avif');
+    assert.strictEqual(first.headers['content-type'], 'image/avif');
+    const after1 = walkDerivatives().length;
+
+    for (const url of ['/uploads/sub//nested.jpg', '/uploads/sub///nested.jpg', '/uploads//sub////nested.jpg']) {
+        const res = await request(app).get(url).set('Accept', 'image/avif');
+        assert.strictEqual(res.headers['content-type'], 'image/avif', `${url} must still serve the derivative`);
+    }
+    assert.strictEqual(walkDerivatives().length, after1,
+        'every spelling of the same path must hit the SAME cached derivative, not transcode again');
+});
+
+// SECURITY (DoS) — limitInputPixels bounds PIXELS, but the cost that OOMs a host is the decoded buffer
+// plus the encoder's working set. Measured: a 24MP source cost 1120MB peak RSS and 18.3s for ONE
+// anonymous GET, well under the 40MP pixel cap. Over the decoded-byte budget we must decline and let
+// express.static serve the original — identical bytes and dimensions for every client.
+test('an over-budget image is NOT transcoded — the original is served instead', async () => {
+    const before = walkDerivatives().length;
+    const res = await request(app).get('/uploads/huge.jpg').set('Accept', 'image/avif,image/webp,*/*');
+    assert.strictEqual(res.status, 200, 'it must still be served, just not transcoded');
+    assert.strictEqual(res.headers['x-served-by'], 'static', 'must fall through to the original');
+    assert.match(res.headers['content-type'] || '', /image\/jpeg/);
+    assert.strictEqual(walkDerivatives().length, before, 'no derivative may be produced for an over-budget source');
 });
