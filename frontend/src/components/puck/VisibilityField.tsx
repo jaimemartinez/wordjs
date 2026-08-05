@@ -16,12 +16,11 @@ import { Appearance, AppearanceControl, appearanceToStyle } from "./AppearanceFi
  * mobile <768px, tablet 768–1023px, desktop ≥1024px (rules live in wordjs-ui.css).
  */
 
-export type Hide = { mobile?: boolean; tablet?: boolean; desktop?: boolean };
-
-export const hideClasses = (hide?: Hide): string =>
-    [hide?.mobile && "wjs-hide-mobile", hide?.tablet && "wjs-hide-tablet", hide?.desktop && "wjs-hide-desktop"]
-        .filter(Boolean)
-        .join(" ");
+// Hide + hideClasses live in blockShell.ts (pure, server-safe) — re-exported here.
+import { hideClasses } from "./blockShell";
+import type { Hide } from "./blockShell";
+export { hideClasses };
+export type { Hide };
 
 const DEVICES: { key: keyof Hide; icon: string; label: string }[] = [
     { key: "mobile", icon: "smartphone", label: "Móvil" },
