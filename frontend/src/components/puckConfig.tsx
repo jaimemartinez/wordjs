@@ -14,7 +14,7 @@ import { buildSrcSet, sizesForWidth, srcSetBelongsTo, rememberPickedMedia, getPi
 import { puckPluginComponents } from "../lib/puckPluginRegistry";
 import { CSSPropertiesControl } from "./puck/CSSControls";
 import { blockVars, cx, unit } from "./puck/blockVars";
-import { HeadingBlock, TextBlock, ImageBlock, DividerBlock, ButtonBlock, SpacerBlock, SectionBlock, GridBlock, FlexRowBlock, ColumnsBlock } from "./content/blocks";
+import { HeadingBlock, TextBlock, ImageBlock, DividerBlock, ButtonBlock, SpacerBlock, SectionBlock, GridBlock, FlexRowBlock, ColumnsBlock, CardBlock, QuoteBlock, TableBlock, IconListBlock, SocialLinksBlock, StatsBlock, HTMLEmbedBlock } from "./content/blocks";
 import LinkField from "./puck/LinkField";
 import { withSharedBlockFields } from "./puck/VisibilityField";
 import { sanitizeHTML } from "@/lib/sanitize";
@@ -1288,38 +1288,7 @@ const baseConfig: any = {
                 titleSize: "", titleWeight: "", titleTransform: "",
                 css: {}
             },
-            render: ({ title, description, icon, theme, bg, color, borderColor, radius, pad, shadow, iconSize, iconBg, iconColor, titleSize, titleWeight, titleTransform, css }: any) => (
-                <div
-                    className={cx('wp-block-card', `card-theme-${theme}`)}
-                    style={{
-                        ...blockVars('card', {
-                            bg,
-                            color,
-                            'border-color': borderColor,
-                            radius: unit(radius),
-                            pad: unit(pad),
-                            shadow,
-                            'icon-size': unit(iconSize),
-                            'icon-bg': iconBg,
-                            'icon-color': iconColor,
-                            'title-size': unit(titleSize),
-                            'title-weight': titleWeight,
-                            'title-transform': titleTransform,
-                        }),
-                        ...css,
-                    }}
-                >
-                    {icon && (
-                        // Legacy class kept alongside the __ one so themes written against
-                        // `wp-block-card-icon` keep matching.
-                        <div className="wp-block-card__icon wp-block-card-icon">
-                            <i className={`fa-solid ${icon}`}></i>
-                        </div>
-                    )}
-                    <h3 className="wp-block-card__title wp-block-card-title">{title}</h3>
-                    <p className="wp-block-card__description wp-block-card-description">{description}</p>
-                </div>
-            )
+            render: (props: any) => <CardBlock {...props} />
         },
         Divider: {
             label: translate('editor.block.divider', getStoredLanguage()),
@@ -2755,34 +2724,7 @@ const baseConfig: any = {
                 accent: "", size: "", color: "", quoteStyle: "",
                 css: {}
             },
-            render: ({ text, cite, style, accent, size, color, quoteStyle, css }: any) => {
-                const vars = {
-                    ...blockVars('quote', {
-                        accent,
-                        size: unit(size),
-                        color,
-                        style: quoteStyle,
-                    }),
-                    ...css,
-                };
-                if (style === "large") {
-                    return (
-                        <figure className="wp-block-quote wp-block-quote--large" style={vars}>
-                            <i className="fa-solid fa-quote-left wp-block-quote__mark" aria-hidden="true"></i>
-                            <blockquote className="wp-block-quote__body">{text}</blockquote>
-                            {cite && <figcaption className="wp-block-quote__cite">— {cite}</figcaption>}
-                        </figure>
-                    );
-                }
-                return (
-                    <figure className="wp-block-quote wp-block-quote--bar" style={vars}>
-                        <blockquote className="wp-block-quote__body">
-                            {text}
-                            {cite && <footer className="wp-block-quote__cite">— {cite}</footer>}
-                        </blockquote>
-                    </figure>
-                );
-            }
+            render: (props: any) => <QuoteBlock {...props} />
         },
 
         Table: {
@@ -2824,36 +2766,7 @@ const baseConfig: any = {
                 stripeBg: "",
                 css: {}
             },
-            render: ({ header, rows, striped, stripeBg, css }: any) => {
-                const split = (s: string) => String(s || "").split("|").map((c) => c.trim());
-                const head = split(header);
-                const cols = head.length;
-                return (
-                    <div
-                        className={cx('wp-block-table', striped === "true" && 'wp-block-table--striped')}
-                        style={{ ...blockVars('table', { 'stripe-bg': stripeBg }), ...css }}
-                    >
-                        {/* Bare <table> — the WordJS UI framework styles it with theme tokens. */}
-                        <table className="wp-block-table__table">
-                            <thead>
-                                <tr>
-                                    {head.map((h, i) => <th key={i}>{h}</th>)}
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {(rows || []).map((r: any, ri: number) => {
-                                    const cells = split(r?.cells);
-                                    return (
-                                        <tr key={ri}>
-                                            {Array.from({ length: cols }).map((_, ci) => <td key={ci}>{cells[ci] ?? ""}</td>)}
-                                        </tr>
-                                    );
-                                })}
-                            </tbody>
-                        </table>
-                    </div>
-                );
-            }
+            render: (props: any) => <TableBlock {...props} />
         },
 
         IconList: {
@@ -2900,33 +2813,7 @@ const baseConfig: any = {
                 gap: "", iconSize: "", iconBg: "", iconColor: "",
                 css: {}
             },
-            render: ({ items, columns, gap, iconSize, iconBg, iconColor, css }: any) => (
-                <div
-                    className="wp-block-icon-list"
-                    style={{
-                        ...blockVars('icon-list', {
-                            columns: parseInt(columns || "3", 10),
-                            gap: unit(gap),
-                            'icon-size': unit(iconSize),
-                            'icon-bg': iconBg,
-                            'icon-color': iconColor,
-                        }),
-                        ...css,
-                    }}
-                >
-                    {(items || []).map((it: any, i: number) => (
-                        <div key={i} className="wp-block-icon-list__item">
-                            <span className="wp-block-icon-list__icon">
-                                <i className={`fa-solid ${it.icon || "fa-check"}`}></i>
-                            </span>
-                            <span>
-                                <span className="wp-block-icon-list__title">{it.title}</span>
-                                {it.text && <span className="wp-block-icon-list__text">{it.text}</span>}
-                            </span>
-                        </div>
-                    ))}
-                </div>
-            )
+            render: (props: any) => <IconListBlock {...props} />
         },
 
         SocialLinks: {
@@ -2987,37 +2874,7 @@ const baseConfig: any = {
                 size: "", radius: "", bg: "", color: "", hoverBg: "", gap: "",
                 css: {}
             },
-            render: ({ items, align, size, radius, bg, color, hoverBg, gap, css, puck }: any) => (
-                <div
-                    className="wp-block-social-links"
-                    style={{
-                        ...blockVars('social', {
-                            justify: align,
-                            size: unit(size),
-                            radius: unit(radius),
-                            bg,
-                            color,
-                            'hover-bg': hoverBg,
-                            gap: unit(gap),
-                        }),
-                        ...css,
-                    }}
-                >
-                    {(items || []).map((it: any, i: number) => (
-                        <a
-                            key={i}
-                            href={it.url || "#"}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            aria-label={it.network}
-                            className="wp-block-social-links__link"
-                            onClick={puck?.isEditing ? (e: React.MouseEvent) => e.preventDefault() : undefined}
-                        >
-                            <i className={`fa-brands fa-${it.network || "link"}`}></i>
-                        </a>
-                    ))}
-                </div>
-            )
+            render: ({ puck, ...props }: any) => <SocialLinksBlock {...props} isEditing={puck?.isEditing} />
         },
 
         Stats: {
@@ -3062,29 +2919,7 @@ const baseConfig: any = {
                 gap: "", valueSize: "", valueColor: "", labelColor: "", labelTransform: "",
                 css: {}
             },
-            render: ({ items, gap, valueSize, valueColor, labelColor, labelTransform, css }: any) => (
-                <div
-                    className="wp-block-stats"
-                    style={{
-                        ...blockVars('stats', {
-                            columns: (items || []).length || 1,
-                            gap: unit(gap),
-                            'value-size': unit(valueSize),
-                            'value-color': valueColor,
-                            'label-color': labelColor,
-                            'label-transform': labelTransform,
-                        }),
-                        ...css,
-                    }}
-                >
-                    {(items || []).map((it: any, i: number) => (
-                        <div key={i} className="wp-block-stats__item">
-                            <div className="wp-block-stats__value">{it.value}</div>
-                            <div className="wp-block-stats__label">{it.label}</div>
-                        </div>
-                    ))}
-                </div>
-            )
+            render: (props: any) => <StatsBlock {...props} />
         },
 
         HTMLEmbed: {
@@ -3104,16 +2939,7 @@ const baseConfig: any = {
                 html: "<p>Pega aquí tu HTML. Se limpia automáticamente (sin scripts).</p>",
                 css: {}
             },
-            render: ({ html, css }: any) => (
-                // Double-sanitized: the backend cleans the `html` meta field on save (PUCK_HTML_FIELDS)
-                // and sanitizeHTML (DOMPurify allowlist, no scripts/handlers) runs again at render.
-                <div
-                    className="wp-block-html-embed"
-                    style={css}
-                    suppressHydrationWarning
-                    dangerouslySetInnerHTML={{ __html: sanitizeHTML(html || "") }}
-                />
-            )
+            render: (props: any) => <HTMLEmbedBlock {...props} />
         },
 
         ...puckPluginComponents,
