@@ -31,7 +31,7 @@
   --wjs-heading-line-height: 1.15;
   --wjs-radius: 4px;
   --wjs-radius-md: 4px;
-  --wjs-radius-lg: 6px;
+  --wjs-radius-lg: 4px;
   --wjs-radius-pill: 4px;
   --wjs-xs: 0.25rem;
   --wjs-sm: 0.5rem;
@@ -43,8 +43,15 @@
   --wjs-color-text-footer-dim: #a0d1c0;
   --wjs-color-text-footer-heading: #ffffff;
   --wjs-bg-surface-glass: #fef9ef;
-  --wjs-hero-text-align: left;
+  --wjs-h1-tracking: -0.02em;
+  --wjs-h2-tracking: -0.01em;
+  --wjs-h1-leading: 1.1;
+  --wjs-radius-sm: 4px;
+  --wjs-card-radius: 4px;
   --wjs-card-border-width: 1px;
+  --wjs-card-border-color: #c0c8c4;
+  --wjs-line-height-base: 1.7;
+  --wjs-hero-text-align: left;
   --wjs-pricing-border-width: 1px;
 }
 h1,h2,h3,h4,h5,h6 { text-wrap: balance }
