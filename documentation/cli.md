@@ -82,6 +82,8 @@ node backend/cli/wordjs.js create theme  neon-shop --primary "#7c3aed" --seconda
 node backend/cli/wordjs.js build theme  neon-shop    # recompile theme.json → style.css block
 node backend/cli/wordjs.js pack my-plugin --build    # zip a plugin for distribution
 node backend/cli/wordjs.js doctor theme default      # lint a theme against the token contract
+node backend/cli/wordjs.js import stitch neon-shop   # Stitch design system → theme.json tokens
+node backend/cli/wordjs.js verify theme neon-shop    # compiled CSS vs. the design it came from
 node backend/cli/wordjs.js help
 ```
 
@@ -144,6 +146,35 @@ Two behaviors worth knowing:
 Lints an installed theme against the machine-readable token contract (`backend/public/theme-tokens.json`), the layout schema (`backend/public/theme-layouts.schema.json`) and, for a declarative theme, the compiler itself. Findings print grouped as `❌`/`⚠️`/`ℹ️` with their code, followed by a `N error(s), M warning(s), K info.` summary; **exit `1` if there is any error**, `0` otherwise. The full code list is in [themes.md — Diagnostics reference](themes.md#diagnostics-reference); the same report is available to admins over `GET /api/v1/themes/:slug/doctor`.
 
 The doctor is **fail-open**: when the token manifest is missing or unreadable it prints `⚠️ Token manifest (backend/public/theme-tokens.json) not found — nothing to lint against.` and exits `0` with no findings.
+
+### `import stitch <slug> [--from <file>] [--name/--author/--description <text>]`
+
+Turns a [Stitch](https://stitch.withgoogle.com) design system into the theme's `theme.json` tokens, then recompiles — so `style.css` never lags behind the design. The theme directory must already exist (`create theme <slug>` first).
+
+The design is read from `themes/<slug>/.design/stitch.json` unless `--from` points elsewhere; the default location doubles as **provenance**, which is what lets `verify theme` re-check the theme later with no arguments. Save the `get_project` / `list_design_systems` payload there verbatim — the resolved `namedColors` palette it carries is the authority, not the seed colours that were typed into Stitch.
+
+The mapping is mechanical and deliberately narrow:
+
+- **Only manifest-known tokens are written.** Anything the mapper produces that `theme-tokens.json` does not list is skipped and reported (`⚠️ N mapped token(s) are not in the manifest`), never silently emitted.
+- **Hand-written values survive.** Keys the design does not own are preserved and listed back (`kept N value(s) the design does not own`), so an imported theme can still carry decisions Stitch has no concept of — `layout`, `styles`, chrome composition.
+- **Hero tokens are always emitted**, with their contrast asserted at ≥ 4.5:1. They were the tokens most often left to inherit, which is how a hero title once ended up the same colour as the band behind it.
+
+Exits `1` if the design file is unreadable, if the mapping throws, or if the recompile that follows has errors.
+
+### `verify theme <slug> [--against <file>]`
+
+Compares the theme's **compiled** `style.css` against the design system it claims to come from, and reports what does not match. It reads the built stylesheet, not a dry run — the question it answers is "does what ships equal the design", which a dry run cannot answer.
+
+Output has four parts, and the last three exist so a gap can never read as a pass:
+
+| | |
+| :--- | :--- |
+| `❌ <token>` | Mismatch: `expected` (with the design field it came from) vs `actual` (or `(nothing declares it)`). |
+| `⚠️ N value(s) the design does not pin` | The design has nothing to compare against for these. |
+| `⚠️ <source> has no mapping rule` | The verifier itself has no rule for this design field — a known blind spot, printed rather than skipped. Stitch's `spacingScale` is currently here. |
+| `ℹ️ N design value(s) no token consumes` | The design defines them; no `--wjs-*` token wants them. |
+
+Closes with `N matched, M mismatched, K not comparable.` and exits `1` on any mismatch, pointing at `build theme <slug>` as the fix. Same `--against` semantics as `import stitch --from`: without it, the design is read from `themes/<slug>/.design/stitch.json`.
 
 ### `pack <slug> [--build] [--out <dir>]`
 

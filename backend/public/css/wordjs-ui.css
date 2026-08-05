@@ -224,6 +224,64 @@ a {
 a:hover { color: var(--wjs-color-link-hover); }
 a:not([href]):not([class]) { color: inherit; text-decoration: none; }
 
+/* ------------------------------------------------------------------ PUBLIC CHROME -
+ *
+ * Everything in the public header and footer is an <a>, so the two rules above owned it: every nav
+ * item, logo, footer link, social icon and CTA pill was painted --wjs-color-link, hovered to
+ * --wjs-color-link-hover, and underlined.
+ *
+ * The React chrome does ask for the right thing — `text-[var(--wjs-color-text-main)]`,
+ * `hover:text-[var(--wjs-color-primary)]`, footer links in --wjs-color-text-footer-dim, buttons in
+ * --wjs-color-on-primary. None of it ever applied: those are Tailwind utilities, Tailwind puts them
+ * in `@layer utilities`, and an UNLAYERED rule (this file) beats a layered one regardless of
+ * specificity. The utility never had a chance, in any theme, since the day the chrome was written.
+ *
+ * What it looked like: a filled CTA whose label is the same colour as its own fill (invisible
+ * whenever link == primary, which is most palettes), a dark-rust footer link list on a dark footer,
+ * a permanently underlined menu, and a hover that jumps to an unrelated accent everywhere at once.
+ *
+ * Fixed here, next to the rules that were winning, through the --wjs-nav-* / --wjs-footer-text-*
+ * families the default theme already uses — so a theme keeps full control and no longer needs
+ * !important to get it, and :hover keeps working (an inline style would win but would freeze it).
+ * The fallbacks are the components' own stated intent, not the accident they were getting. */
+.wjs-header-nav a,
+.wjs-chrome-nav a,
+.wjs-header-logo,
+.wjs-footer-grid a,
+.wjs-footer-minimal a,
+.wjs-chrome-button { text-decoration: none; }
+.wjs-header-nav a:hover,
+.wjs-chrome-nav a:hover,
+.wjs-footer-grid a:hover,
+.wjs-footer-minimal a:hover { text-decoration: var(--wjs-nav-hover-decoration, none); }
+
+/* A menu item is one unit: the ROW may wrap between items (the nav containers are flex-wrap), never
+ * a label down its middle — "PORTAL PARA CLIENTES" was coming out as three stacked lines in any
+ * header that also carries a search field or two buttons. */
+.wjs-header-nav a,
+.wjs-chrome-nav a { white-space: nowrap; }
+
+.wjs-header-nav a,
+.wjs-chrome-nav a { color: var(--wjs-nav-color, var(--wjs-color-text-main)); }
+.wjs-header-nav a:hover,
+.wjs-chrome-nav a:hover { color: var(--wjs-nav-color-hover, var(--wjs-color-primary)); }
+.wjs-header-logo { color: var(--wjs-logo-color, var(--wjs-color-text-main)); }
+.wjs-header-logo:hover { color: var(--wjs-logo-color-hover, var(--wjs-color-primary)); }
+
+.wjs-footer-grid a,
+.wjs-footer-minimal a { color: var(--wjs-footer-text-body, var(--wjs-color-text-footer-dim, #94a3b8)); }
+.wjs-footer-grid a:hover,
+.wjs-footer-minimal a:hover { color: var(--wjs-footer-text-hover, var(--wjs-color-text-footer-main, #ffffff)); }
+.wjs-footer-social a,
+.wjs-chrome-socials a { color: var(--wjs-color-text-footer-main, #ffffff); text-decoration: none; }
+.wjs-footer-social a:hover,
+.wjs-chrome-socials a:hover { color: var(--wjs-social-hover-color, var(--wjs-color-on-primary, #ffffff)); }
+
+.wjs-chrome-button--primary,
+.wjs-chrome-button--primary:hover { color: var(--wjs-color-on-primary, #ffffff); }
+.wjs-chrome-button--ghost { color: var(--wjs-color-primary, #2F6D86); }
+.wjs-chrome-button--ghost:hover { color: var(--wjs-color-on-primary, #ffffff); }
+
 small, .small { font-size: 0.875em; }
 mark, .mark { padding: 0.1875em; background-color: var(--wjs-mark-bg, #fcf8c3); color: #422006; } /* fixed dark text — highlight bg is always light */
 strong, b { font-weight: 700; }

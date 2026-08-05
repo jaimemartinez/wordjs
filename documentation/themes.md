@@ -437,6 +437,21 @@ header {
 
 Add a `screenshot.png` (400x300px recommended) for the theme picker.
 
+### 5. Self-host the webfonts (required for any non-system family)
+
+A theme that names `'Bodoni Moda'` in `--wjs-font-family-heading` gets it **only if the theme ships the font**. There is no automatic fetch, by design: the public site keeps zero external origins, so the compiler rejects `url()`s outside `/themes/<slug>/` and a remote `@import` never survives.
+
+```bash
+node scripts/vendor-catalog-fonts.mjs <slug>
+```
+
+It reads the families out of the theme's own `--wjs-font-family-*` tokens, downloads the `latin` + `latin-ext` subsets from Google Fonts into `themes/<slug>/fonts/`, writes the `@font-face` rules to `themes/<slug>/fonts.css`, and puts `@import url('fonts.css');` at the top of `style.css` — **above** the `@wjs-generated` marker, in the region `build theme` preserves, so rebuilding never unwires it.
+
+- `--check` exits non-zero for any theme that declares a family it does not ship (CI/doctor use). Run it over the whole catalog by passing no slug.
+- `--root <dir>` points it at a theme tree other than `marketplace/themes` (use `backend/themes` for an installed theme).
+- Fonts live **inside each theme**, not in a shared store: a catalog theme installs by unpacking its zip, so a theme whose faces lived elsewhere would come up with no type at all when installed by hand or restored from a backup.
+- The sibling script `scripts/vendor-theme-fonts.mjs <slug>` does the same job for a hand-written theme that already has a remote Google Fonts `@import` to rewrite.
+
 ## Declarative theming (`theme.json`)
 
 Instead of hand-writing the whole `style.css`, a theme can describe itself **declaratively** in

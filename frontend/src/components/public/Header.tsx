@@ -205,7 +205,11 @@ export default function Header({ disableSticky = false, variant = "classic", sti
     return (
         <>
             {/* data-scrolled mirrors the class swap below as a stable target for theme CSS */}
-            <header ref={headerRef} data-scrolled={isScrolled ? "true" : "false"} className={`${positionClass} top-0 left-0 right-0 z-50 transition-all duration-300 ${isScrolled ? scrolledBg : topBg}`}>
+            {/* wjs-header is the selector the theme contract maps `styles.header` to (the manifest's
+                CHROME_ELEMENT_SEEDS). It was seeded but never emitted, so every theme that declared
+                a header style compiled a rule matching nothing — silently. The children hooks
+                (.wjs-header-logo / -nav / -container) were emitted all along; only the root was missing. */}
+            <header ref={headerRef} data-scrolled={isScrolled ? "true" : "false"} className={`wjs-header ${positionClass} top-0 left-0 right-0 z-50 transition-all duration-300 ${isScrolled ? scrolledBg : topBg}`}>
                 {variant === "centered" ? (
                     /* centered: logo on top, nav in a row below; mobile keeps logo-left + burger-right */
                     <div className="wjs-header-container container mx-auto px-4 flex flex-col items-center gap-4">
