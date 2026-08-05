@@ -1,6 +1,156 @@
 {
   "name": "Pop Studio",
-  "version": "1.0.1",
+  "version": "1.0.5",
   "description": "Bold, vibrant creative theme — pink and cyan, big rounded shapes.",
-  "author": "WordJS"
+  "author": "WordJS",
+  "generator": "wordjs",
+  "layout": {
+    "header": {
+      "variant": "classic",
+      "sticky": true,
+      "transparent": false
+    },
+    "footer": {
+      "variant": "columns",
+      "columns": 3
+    },
+    "sidebar": false,
+    "containerWidth": "78rem"
+  },
+  "seeds": {
+    "primary": "#ec4899",
+    "secondary": "#06b6d4",
+    "bg": "#ffffff",
+    "text": "#141414"
+  },
+  "tokens": {
+    "--wjs-bg-canvas": "#ffffff",
+    "--wjs-color-primary": "#ec4899",
+    "--wjs-color-primary-dark": "#ec4899",
+    "--wjs-color-on-primary": "#ffffff",
+    "--wjs-color-secondary": "#06b6d4",
+    "--wjs-color-secondary-dark": "#06b6d4",
+    "--wjs-color-on-secondary": "#ffffff",
+    "--wjs-color-text-main": "#141414",
+    "--wjs-color-heading": "#141414",
+    "--wjs-color-link": "#ec4899",
+    "--wjs-font-family-heading": "'Bricolage Grotesque', 'Segoe UI', system-ui, sans-serif",
+    "--wjs-font-family-base": "'DM Sans', 'Segoe UI', system-ui, sans-serif",
+    "--wjs-radius": "9999px",
+    "--wjs-radius-sm": "9999px",
+    "--wjs-radius-md": "9999px",
+    "--wjs-radius-lg": "9999px",
+    "--wjs-radius-pill": "9999px",
+    "--wjs-bg-surface-glass": "rgba(255,255,255,0.92)",
+    "--wjs-hero-bg": "#ffffff",
+    "--wjs-hero-gradient-angle": "115deg",
+    "--wjs-hero-gradient-from": "#fff1f7",
+    "--wjs-hero-gradient-to": "#ecfeff",
+    "--wjs-hero-color": "#141414",
+    "--wjs-hero-title-color": "#141414",
+    "--wjs-hero-subtitle-color": "#141414",
+    "--wjs-hero-button-outline-color": "#141414",
+    "--wjs-hero-button-outline-border": "#141414",
+    "--wjs-hero-button-outline-hover-bg": "#141414"
+  },
+  "styles": {
+    "hero": {
+      "height": "78vh",
+      "pad": "6rem 3rem",
+      "justify": "flex-start",
+      "text-align": "left",
+      "measure": "62rem",
+      "radius": "0",
+      "title": {
+        "size": "clamp(3.5rem, 9vw, 7rem)",
+        "weight": "800",
+        "tracking": "-0.045em"
+      },
+      "subtitle": {
+        "size": "1.2rem",
+        "opacity": "0.72"
+      },
+      "actions": {
+        "justify": "flex-start"
+      },
+      "button": {
+        "pad": "1.15rem 2.5rem",
+        "size": "1.05rem",
+        "weight": "700",
+        "radius": "9999px",
+        "leading": "1.1"
+      },
+      "mobile": {
+        "min-height": "58vh",
+        "padding": "3.5rem 1.5rem"
+      }
+    },
+    "button": {
+      "pad-x": "1.7rem",
+      "pad-y": "0.95rem",
+      "size": "1rem",
+      "weight": "700",
+      "radius": "9999px",
+      "tracking": "-0.01em",
+      "shadow": "0 10px 24px rgba(236,72,153,0.28)",
+      "hover-transform": "translateY(-2px)",
+      "hover-shadow": "0 16px 32px rgba(236,72,153,0.34)",
+      "outline-border-color": "#141414",
+      "outline-color": "#141414"
+    },
+    "card": {
+      "radius": "28px",
+      "pad": "2.1rem",
+      "border-width": "0",
+      "shadow": "0 18px 40px rgba(20,20,20,0.08)",
+      "hover-shadow": "0 26px 50px rgba(236,72,153,0.18)",
+      "hover-transform": "translateY(-6px)",
+      "desc-leading": "1.65",
+      "icon": {
+        "radius": "9999px",
+        "bg": "#ecfeff",
+        "color": "#06b6d4",
+        "size": "3.25rem"
+      },
+      "title": {
+        "size": "1.45rem",
+        "weight": "700",
+        "tracking": "-0.02em"
+      }
+    },
+    "quote": {
+      "size": "1.55rem",
+      "style": "normal",
+      "weight": "600",
+      "tracking": "-0.02em",
+      "accent": "#06b6d4",
+      "bar-width": "6px",
+      "mark-size": "5rem",
+      "mark-opacity": "0.14"
+    },
+    "stats": {
+      "value": {
+        "size": "clamp(2.75rem, 6vw, 4.5rem)",
+        "weight": "800",
+        "color": "#ec4899"
+      },
+      "label": {
+        "size": "0.82rem",
+        "transform": "uppercase",
+        "tracking": "0.16em"
+      }
+    },
+    "footer": {
+      "bg": "#141414",
+      "text-body": "#b9b9b9",
+      "text-heading": "#ffffff"
+    },
+    "headings": {
+      "letter-spacing": "-0.035em"
+    },
+    "links": {
+      "font-weight": "600",
+      "text-underline-offset": "0.22em"
+    }
+  }
 }

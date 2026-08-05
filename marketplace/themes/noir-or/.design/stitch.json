@@ -1,0 +1,29 @@
+{
+  "name": "stitch/noir-or",
+  "designTheme": {
+    "colorMode": "DARK",
+    "customColor": "#d4a24c",
+    "overridePrimaryColor": "#d4a24c",
+    "overrideSecondaryColor": "#6b5836",
+    "overrideNeutralColor": "#14110f",
+    "headlineFont": "EB_GARAMOND",
+    "headlineFontFamily": "EB Garamond",
+    "bodyFont": "RALEWAY",
+    "bodyFontFamily": "Raleway",
+    "labelFont": "RALEWAY",
+    "labelFontFamily": "Raleway",
+    "roundness": "ROUND_FOUR",
+    "namedColors": {
+      "background": "#14110f",
+      "surface": "#14110f",
+      "on_surface": "#f5f5f4",
+      "on_background": "#f5f5f4",
+      "primary": "#d4a24c",
+      "primary_container": "#d4a24c",
+      "on_primary": "#0b0b0b",
+      "secondary": "#6b5836",
+      "secondary_container": "#6b5836",
+      "on_secondary": "#0b0b0b"
+    }
+  }
+}

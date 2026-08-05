@@ -1,0 +1,73 @@
+{
+  "root": { "props": {} },
+  "content": [
+    {
+      "type": "ChromeRow",
+      "props": {
+        "id": "ml-f-cols",
+        "align": "between",
+        "gap": "lg",
+        "wrap": true,
+        "items": [
+          {
+            "type": "ChromeRow",
+            "props": {
+              "id": "ml-f-c1",
+              "align": "start",
+              "gap": "sm",
+              "items": [
+                { "type": "ChromeSiteTitle", "props": { "id": "ml-f-title", "showTagline": true } }
+              ]
+            }
+          },
+          {
+            "type": "ChromeRow",
+            "props": {
+              "id": "ml-f-c2",
+              "align": "start",
+              "gap": "sm",
+              "items": [
+                { "type": "ChromeNav", "props": { "id": "ml-f-menu", "location": "footer", "orientation": "vertical" } }
+              ]
+            }
+          },
+          {
+            "type": "ChromeRow",
+            "props": {
+              "id": "ml-f-c3",
+              "align": "start",
+              "gap": "sm",
+              "items": [
+                { "type": "ChromeText", "props": { "id": "ml-f-desk", "text": "Recepción 24 h · Conserjería · Traslado privado" } }
+              ]
+            }
+          },
+          {
+            "type": "ChromeRow",
+            "props": {
+              "id": "ml-f-c4",
+              "align": "end",
+              "gap": "sm",
+              "items": [
+                { "type": "ChromeSocials", "props": { "id": "ml-f-social", "source": "settings" } }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "ChromeRow",
+      "props": {
+        "id": "ml-f-legal",
+        "align": "between",
+        "gap": "md",
+        "wrap": true,
+        "items": [
+          { "type": "ChromeText", "props": { "id": "ml-f-copy", "text": "© Midnight Luxury Hotels & Resorts" } },
+          { "type": "ChromeText", "props": { "id": "ml-f-terms", "text": "Aviso legal · Privacidad · Cookies" } }
+        ]
+      }
+    }
+  ]
+}

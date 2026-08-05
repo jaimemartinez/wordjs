@@ -1,0 +1,29 @@
+{
+  "name": "stitch/verdant-studio",
+  "designTheme": {
+    "colorMode": "LIGHT",
+    "customColor": "#2d4b3e",
+    "overridePrimaryColor": "#2d4b3e",
+    "overrideSecondaryColor": "#b08968",
+    "overrideNeutralColor": "#faf9f5",
+    "headlineFont": "LITERATA",
+    "headlineFontFamily": "Literata",
+    "bodyFont": "EPILOGUE",
+    "bodyFontFamily": "Epilogue",
+    "labelFont": "EPILOGUE",
+    "labelFontFamily": "Epilogue",
+    "roundness": "ROUND_TWELVE",
+    "namedColors": {
+      "background": "#faf9f5",
+      "surface": "#faf9f5",
+      "on_surface": "#141414",
+      "on_background": "#141414",
+      "primary": "#2d4b3e",
+      "primary_container": "#2d4b3e",
+      "on_primary": "#ffffff",
+      "secondary": "#b08968",
+      "secondary_container": "#b08968",
+      "on_secondary": "#ffffff"
+    }
+  }
+}

@@ -1,400 +1,97 @@
-@import url('https://fonts.googleapis.com/css2?family=Libre+Bodoni:wght@400;500;600;700&family=Public+Sans:wght@300;400;500;600;700&display=swap');
-
-/* =========================================
-   THEME: SEPIA PRESS (Warm Editorial Magazine)
-   Concept: Print-like, light mode. Warm paper canvas,
-   refined Libre Bodoni headlines, Public Sans body,
-   brick/terracotta accent, hairline rules, squared
-   2px corners, near-flat soft shadows.
-   Standardized V2 — sets all --wjs-* vars + overrides
-   the full reference component set.
-   ========================================= */
-
+/* @wjs-generated:start — compiled from theme.json; DO NOT EDIT inside. Edit theme.json and run: node backend/cli/wordjs.js build theme sepia-press */
 :root {
-  /* --- COLOR PALETTE: Brick / Terracotta accent --- */
-  --wjs-color-primary: #9a3328;
-  /* Brick / terracotta */
-  --wjs-color-primary-dark: #7a2820;
-  /* Deep brick */
-
-  /* --- COLOR SEMANTICS --- */
   --wjs-bg-canvas: #faf8f3;
-  /* Warm paper */
-  --wjs-bg-surface: #ffffff;
-
-  --wjs-color-text-main: #211c17;
-  /* Ink */
-  --wjs-color-text-muted: #6f6358;
-  /* Warm muted brown */
-
-  --wjs-border-subtle: #e7decf;
-  /* Warm hairline */
-
-  /* --- NAVIGATION CONFIG --- */
-  --wjs-nav-font-family: 'Public Sans', system-ui, sans-serif;
-  --wjs-nav-font-size: 0.78rem;
-  --wjs-nav-font-weight: 600;
-  --wjs-nav-text-transform: uppercase;
-  --wjs-nav-letter-spacing: 0.18em;
-  /* Small-caps feel */
-
-  --wjs-nav-color: #211c17;
-  --wjs-nav-color-hover: #9a3328;
-  /* Terracotta on hover */
-  --wjs-nav-transition: color 0.2s ease;
-
-  --wjs-logo-color: #211c17;
-
-  /* --- FOOTER CONFIG --- */
-  --wjs-footer-bg: #2a231d;
-  /* Dark roasted brown */
-  --wjs-footer-text-heading: #faf8f3;
-  --wjs-footer-text-body: #c9bca9;
-  --wjs-footer-text-hover: #d98e5a;
-  /* Warm amber hover */
-  --wjs-footer-icon-bg: #3a322a;
-  --wjs-footer-icon-color: #faf8f3;
-
-  /* --- TYPOGRAPHY --- */
-  --wjs-font-family-base: 'Public Sans', system-ui, -apple-system, sans-serif;
-
-  /* --- THEME-LOCAL SCALES (editorial / print) --- */
-  --wjs-radius: 2px;
-  /* Squared corners */
-  --wjs-radius-pill: 2px;
-  --wjs-hairline: 1px solid var(--wjs-border-subtle);
-  --wjs-shadow-soft: 0 1px 2px rgba(33, 28, 23, 0.06);
-  --wjs-shadow-raised: 0 2px 8px rgba(33, 28, 23, 0.08);
-  --wjs-font-heading: 'Libre Bodoni', Georgia, 'Times New Roman', serif;
-
-  /* --- WordJS UI framework tokens --- */
-  /* Colors */
-  --wjs-color-secondary: #2a231d;
-  --wjs-color-secondary-dark: #1b1611;
-  --wjs-color-accent: #d98e5a;
-  --wjs-color-success: #4f7a3f;
-  --wjs-color-danger: #b23b2e;
-  --wjs-color-warning: #c98a2b;
-  --wjs-color-info: #4a7a86;
-  --wjs-color-light: #faf8f3;
-  --wjs-color-dark: #211c17;
-  /* --- WordJS UI on-color tokens (auto: max-contrast text on each solid color) --- */
+  --wjs-bg-surface: #f3f1ec;
+  --wjs-bg-surface-raised: #ebe9e4;
+  --wjs-color-primary: #9a3328;
+  --wjs-color-primary-dark: #9a3328;
   --wjs-color-on-primary: #ffffff;
-  --wjs-color-on-secondary: #ffffff;
-  --wjs-color-on-success: #ffffff;
-  --wjs-color-on-danger: #ffffff;
-  --wjs-color-on-warning: #161616;
-  --wjs-color-on-info: #ffffff;
-  --wjs-color-on-light: #161616;
-  --wjs-color-on-dark: #ffffff;
-
-  /* Surfaces / text / border */
-  --wjs-bg-muted: #f1ece2;
-  --wjs-color-heading: #211c17;
+  --wjs-color-accent: #5b6c5d;
+  --wjs-color-on-accent: #ffffff;
+  --wjs-color-text-main: #141414;
+  --wjs-color-text-muted: #6b6b69;
+  --wjs-color-heading: #141414;
   --wjs-color-link: #9a3328;
-  --wjs-color-link-hover: #7a2820;
-  --wjs-border-width: 1px;
-  --wjs-focus-ring: rgba(154, 51, 40, 0.3);
-
-  /* Typography */
-  --wjs-font-family-heading: 'Libre Bodoni', Georgia, 'Times New Roman', serif;
-  --wjs-font-family-mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
-  --wjs-font-size-base: 1rem;
-  --wjs-line-height-base: 1.65;
-  --wjs-heading-weight: 600;
-  --wjs-heading-line-height: 1.15;
-  --wjs-h1: 2.6rem;
-  --wjs-h2: 2.05rem;
-  --wjs-h3: 1.6rem;
-  --wjs-h4: 1.3rem;
-  --wjs-h5: 1.1rem;
-  --wjs-h6: 0.95rem;
-
-  /* Spacing / shape */
-  --wjs-spacer: 1rem;
-  --wjs-radius-sm: 1px;
-  --wjs-radius-md: 3px;
+  --wjs-color-link-hover: #5b6c5d;
+  --wjs-border-subtle: #d1cfcb;
+  --wjs-outline: #a3a19e;
+  --wjs-outline-variant: #d8d6d2;
+  --wjs-focus-ring: #9a3328;
+  --wjs-color-secondary: #5b6c5d;
+  --wjs-color-secondary-dark: #5b6c5d;
+  --wjs-color-on-secondary: #ffffff;
+  --wjs-font-family-heading: 'Vollkorn', Georgia, 'Times New Roman', serif;
+  --wjs-font-family-base: 'Libre Franklin', 'Segoe UI', system-ui, sans-serif;
+  --wjs-radius: 4px;
+  --wjs-radius-sm: 4px;
+  --wjs-radius-md: 4px;
   --wjs-radius-lg: 4px;
-  --wjs-shadow-sm: 0 1px 2px rgba(33, 28, 23, 0.06);
-  --wjs-shadow: 0 2px 8px rgba(33, 28, 23, 0.08);
-  --wjs-shadow-md: 0 4px 14px rgba(33, 28, 23, 0.1);
-  --wjs-shadow-lg: 0 10px 28px rgba(33, 28, 23, 0.14);
+  --wjs-radius-pill: 4px;
+  --wjs-hero-bg: #faf8f3;
+  --wjs-hero-gradient-from: #faf8f3;
+  --wjs-hero-gradient-to: #faf8f3;
+  --wjs-hero-color: #141414;
+  --wjs-hero-title-color: #9a3328;
+  --wjs-hero-subtitle-color: #141414;
+  --wjs-hero-button-outline-color: #9a3328;
+  --wjs-hero-button-outline-border: #9a3328;
+  --wjs-bg-surface-glass: #faf8f3;
+  --wjs-bg-footer: #2b211c;
+  --wjs-color-text-footer-main: #f4ede2;
+  --wjs-color-text-footer-dim: #b6a48e;
+  --wjs-hero-gradient: none;
+  --wjs-hero-height: auto;
+  --wjs-hero-pad: 5.5rem 1.5rem 4.5rem;
+  --wjs-hero-measure: 36rem;
+  --wjs-hero-text-align: left;
+  --wjs-hero-justify: flex-start;
+  --wjs-hero-title-size: clamp(2.25rem, 4.5vw, 3.5rem);
+  --wjs-hero-title-weight: 600;
+  --wjs-hero-title-tracking: -0.015em;
+  --wjs-hero-subtitle-size: 1.28rem;
+  --wjs-hero-subtitle-opacity: 0.86;
+  --wjs-hero-border-width: 0px;
+  --wjs-hero-radius: 0px;
+  --wjs-hero-shadow: none;
+  --wjs-hero-actions-justify: flex-start;
+  --wjs-hero-button-radius: 2px;
+  --wjs-hero-button-pad: 0.8rem 1.6rem;
+  --wjs-quote-family: 'Vollkorn', Georgia, 'Times New Roman', serif;
+  --wjs-quote-style: italic;
+  --wjs-quote-size: 1.6rem;
+  --wjs-quote-weight: 500;
+  --wjs-quote-bar-width: 2px;
+  --wjs-quote-mark-size: 5rem;
+  --wjs-quote-mark-opacity: 0.12;
+  --wjs-card-radius: 2px;
+  --wjs-card-shadow: none;
+  --wjs-card-border-width: 1px;
+  --wjs-card-pad: 1.75rem;
+  --wjs-testimonial-quote-family: 'Vollkorn', Georgia, 'Times New Roman', serif;
+  --wjs-testimonial-quote-style: italic;
+  --wjs-testimonial-quote-size: 1.35rem;
+  --wjs-testimonial-radius: 2px;
+  --wjs-testimonial-shadow: none;
+  --wjs-testimonial-border-width: 1px;
+  --wjs-testimonial-role-transform: none;
+  --wjs-testimonial-role-tracking: 0.02em;
 }
+body { font-size: 17px; line-height: 1.72 }
+h1,h2,h3,h4,h5,h6 { letter-spacing: -0.012em; line-height: 1.22 }
+.wjs-header-logo { font-family: "Vollkorn",Georgia,"Times New Roman",serif; letter-spacing: -0.01em }
+.wjs-header-nav { font-family: "Vollkorn",Georgia,"Times New Roman",serif; font-size: 1.02rem; font-style: italic; letter-spacing: 0.005em; text-transform: none }
+footer { font-size: 0.94rem; line-height: 1.7 }
+.wp-block-hero__title { line-height: 1.1; margin-bottom: 1.35rem }
+.wp-block-hero__subtitle { line-height: 1.72; max-width: 34rem }
+.wp-block-hero__inner { margin-left: 0; margin-right: auto }
+.wp-block-quote__cite { font-style: normal; font-size: 0.86rem; letter-spacing: 0.05em }
+.wp-block-card__title { font-family: "Vollkorn",Georgia,"Times New Roman",serif; font-size: 1.35rem }
+.wp-block-card__description { font-size: 0.98rem; line-height: 1.68 }
+.wp-block-button__link { border-radius: 2px; text-transform: none; letter-spacing: 0.01em; font-size: 0.95rem; font-weight: 600; padding: 0.75rem 1.5rem }
+.wp-block-posts-grid__card { border-radius: 2px; box-shadow: none }
+.wp-block-posts-grid__title { font-family: "Vollkorn",Georgia,"Times New Roman",serif; font-size: 1.5rem; line-height: 1.25 }
+.wp-block-posts-grid__date { font-style: italic; font-size: 0.85rem; letter-spacing: 0.02em }
+.wp-block-posts-grid__excerpt { font-size: 1rem; line-height: 1.68 }
+/* @wjs-generated:end */
 
-/* =========================================
-   VISUAL OVERRIDES
-   ========================================= */
-
-body {
-  background-color: var(--wjs-bg-canvas) !important;
-  color: var(--wjs-color-text-main) !important;
-  font-family: var(--wjs-font-family-base) !important;
-  font-weight: 400;
-  line-height: 1.65;
-  -webkit-font-smoothing: antialiased;
-  text-rendering: optimizeLegibility;
-}
-
-/* GLOBAL: Consistent squared radius scale */
-* {
-  border-radius: var(--wjs-radius) !important;
-}
-
-/* Header: Warm paper bar with hairline + terracotta keyline */
-header {
-  background-color: var(--wjs-bg-surface) !important;
-  border-bottom: 1px solid var(--wjs-border-subtle) !important;
-  box-shadow: inset 0 -3px 0 var(--wjs-color-primary), var(--wjs-shadow-soft) !important;
-}
-
-header[class*='fixed'] {
-  background-color: rgba(255, 255, 255, 0.94) !important;
-  backdrop-filter: saturate(1.1) blur(8px) !important;
-  border-bottom: 1px solid var(--wjs-border-subtle) !important;
-}
-
-/* Logo: Refined serif masthead */
-.wjs-header-logo {
-  color: var(--wjs-logo-color) !important;
-  font-family: var(--wjs-font-heading) !important;
-  font-weight: 700 !important;
-  font-size: 1.5rem !important;
-  letter-spacing: -0.01em;
-}
-
-/* Nav Links: Uppercase small-caps, spaced */
-.wjs-header-nav a {
-  font-family: var(--wjs-nav-font-family) !important;
-  font-size: var(--wjs-nav-font-size) !important;
-  font-weight: var(--wjs-nav-font-weight) !important;
-  color: var(--wjs-nav-color) !important;
-  text-transform: var(--wjs-nav-text-transform) !important;
-  letter-spacing: var(--wjs-nav-letter-spacing) !important;
-  transition: var(--wjs-nav-transition) !important;
-  text-decoration: none !important;
-  padding-bottom: 2px !important;
-  border-bottom: 1px solid transparent !important;
-}
-
-.wjs-header-nav a:hover {
-  color: var(--wjs-nav-color-hover) !important;
-  border-bottom-color: var(--wjs-color-primary) !important;
-}
-
-/* Content: Generous refined serif headlines */
-h1,
-h2,
-h3 {
-  font-family: var(--wjs-font-heading) !important;
-  font-weight: 600 !important;
-  color: var(--wjs-color-text-main) !important;
-  letter-spacing: -0.005em;
-  line-height: 1.15 !important;
-}
-
-h1 {
-  font-weight: 700 !important;
-}
-
-/* Editorial top rule above section headings */
-h2 {
-  padding-top: 0.6rem;
-  border-top: 1px solid var(--wjs-border-subtle);
-}
-
-/* Subtle drop-cap on the leading article paragraph */
-article > p:first-of-type::first-letter {
-  font-family: var(--wjs-font-heading);
-  font-size: 3.1em;
-  line-height: 0.82;
-  font-weight: 700;
-  float: left;
-  margin: 0.05em 0.08em 0 0;
-  color: var(--wjs-color-primary);
-}
-
-/* Cards: Flat paper with hairline */article {
-  background: var(--wjs-bg-surface) !important;
-  border: var(--wjs-hairline) !important;
-  box-shadow: var(--wjs-shadow-soft) !important;
-}
-
-/* Footer: Dark roasted brown */
-footer {
-  background-color: var(--wjs-footer-bg) !important;
-  color: var(--wjs-footer-text-body) !important;
-  border-top: 3px solid var(--wjs-color-primary) !important;
-}
-
-footer h3,
-footer h4 {
-  color: var(--wjs-footer-text-heading) !important;
-  font-family: var(--wjs-font-heading) !important;
-  font-weight: 600 !important;
-  letter-spacing: 0.01em;
-}
-
-footer a {
-  color: var(--wjs-footer-text-body) !important;
-  text-decoration: none !important;
-  transition: color 0.2s ease !important;
-}
-
-footer a:hover {
-  color: var(--wjs-footer-text-hover) !important;
-}
-
-/* Icons */
-footer .w-10 {
-  background-color: var(--wjs-footer-icon-bg) !important;
-  color: var(--wjs-footer-icon-color) !important;
-  transition: background-color 0.2s ease, color 0.2s ease !important;
-}
-
-footer .w-10:hover {
-  background-color: var(--wjs-color-primary) !important;
-  color: #faf8f3 !important;
-}
-
-/* ===== Mobile (auto responsive pass) ===== */
-@media (max-width: 767.98px) {
-
-  /* Nav drawer links: the desktop small-caps treatment (uppercase + 0.18em
-     tracking, both !important) makes long labels very wide; tighten the
-     tracking a touch and let labels wrap inside the 375px drawer.
-     !important required to beat the base rule's !important. */
-  .wjs-header-nav a {
-    letter-spacing: 0.12em !important;
-    white-space: normal !important;
-    overflow-wrap: break-word;
-  }
-
-  /* Drop cap: 3.1em (~50px) overwhelms a phone-width first paragraph —
-     keep the editorial flourish, scale it to the narrower column. */
-  article > p:first-of-type::first-letter {
-    font-size: 2.5em;
-  }
-
-  /* Accordion titles / tab labels: uppercase + 0.08em tracking widens long
-     labels; relax tracking and let them wrap instead of pushing width. */
-  .wp-block-accordion__header,
-  .wp-block-tabs__tab {
-    letter-spacing: 0.04em;
-    white-space: normal;
-  }
-
-  /* CTA + search buttons: the framework's button base sets
-     white-space: nowrap and the theme adds uppercase + wide tracking, so a
-     long label can exceed 375px. Allow wrapping and ease the tracking. */
-  .wp-block-cta-banner__button,
-  .wp-block-search__button {
-    letter-spacing: 0.08em;
-    white-space: normal;
-    overflow-wrap: break-word;
-  }
-}
-
-/* ══ BLOCK TOKENS ═══════════════════════════════════════════════════════════════════════
- * Lifted from this theme's former `.wp-block-*` rules. wordjs-ui.css owns the block RULES;
- * a theme owns only the VALUES, so a single block can still override any of them.
- * ════════════════════════════════════════════════════════════════════════════════════ */
-:root {
-  --wjs-card-bg: var(--wjs-bg-surface);
-  --wjs-card-border-color: var(--wjs-hairline);
-  --wjs-card-shadow: var(--wjs-shadow-soft);
-  --wjs-accordion-border-color: var(--wjs-hairline);
-  --wjs-accordion-bg: var(--wjs-bg-surface);
-  --wjs-accordion-shadow: var(--wjs-shadow-soft);
-  --wjs-accordion-header-bg: #faf8f3;
-  --wjs-accordion-header-color: var(--wjs-color-primary);
-  --wjs-accordion-header-border-width: 1px;
-  --wjs-accordion-header-border-color: var(--wjs-border-subtle);
-  --wjs-accordion-header-family: var(--wjs-nav-font-family);
-  --wjs-accordion-header-weight: 600;
-  --wjs-accordion-header-transform: uppercase;
-  --wjs-accordion-header-tracking: 0.08em;
-  --wjs-accordion-panel-bg: #faf8f3;
-  --wjs-accordion-panel-color: var(--wjs-color-text-muted);
-  --wjs-tabs-list-border-width: 1px;
-  --wjs-tabs-list-border-color: var(--wjs-border-subtle);
-  --wjs-tabs-color: var(--wjs-color-text-muted);
-  --wjs-tabs-family: var(--wjs-nav-font-family);
-  --wjs-tabs-weight: 600;
-  --wjs-tabs-transform: uppercase;
-  --wjs-tabs-tracking: 0.08em;
-  --wjs-tabs-border-width: 2px;
-  --wjs-tabs-border-color: transparent;
-  --wjs-tabs-active-color: var(--wjs-color-primary);
-  --wjs-tabs-active-border-color: var(--wjs-color-primary);
-  --wjs-tabs-panel-bg: var(--wjs-bg-surface);
-  --wjs-tabs-panel-border-color: transparent;
-  --wjs-tabs-panel-border-width: 0;
-  --wjs-video-border-width: 1px;
-  --wjs-video-border-color: var(--wjs-color-text-main);
-  --wjs-video-shadow: var(--wjs-shadow-raised);
-  --wjs-audio-bg: var(--wjs-bg-surface);
-  --wjs-audio-border-color: var(--wjs-hairline);
-  --wjs-audio-shadow: var(--wjs-shadow-soft);
-  --wjs-pricing-bg: var(--wjs-bg-surface);
-  --wjs-pricing-border-color: var(--wjs-hairline);
-  --wjs-pricing-shadow: var(--wjs-shadow-soft);
-  --wjs-pricing-name-family: var(--wjs-font-heading);
-  --wjs-pricing-name-tracking: 0.005em;
-  --wjs-pricing-highlight-bg: var(--wjs-color-primary);
-  --wjs-pricing-highlight-color: #faf8f3;
-  --wjs-pricing-highlight-scale: 1;
-  --wjs-pricing-highlight-border-width: 1px;
-  --wjs-pricing-highlight-border-color: var(--wjs-color-primary-dark);
-  --wjs-pricing-highlight-shadow: var(--wjs-shadow-raised);
-  --wjs-pricing-highlight-name-color: #faf8f3;
-  --wjs-testimonial-bg: var(--wjs-bg-surface);
-  --wjs-testimonial-border-color: var(--wjs-color-primary);
-  --wjs-testimonial-border-width: 4px;
-  --wjs-testimonial-shadow: var(--wjs-shadow-soft);
-  --wjs-testimonial-family: var(--wjs-font-heading);
-  --wjs-testimonial-mark-color: var(--wjs-color-primary);
-  --wjs-cta-bg: var(--wjs-color-primary);
-  --wjs-cta-border-width: 0;
-  --wjs-cta-border-color: transparent;
-  --wjs-cta-shadow: var(--wjs-shadow-raised);
-  --wjs-cta-title-family: var(--wjs-font-heading);
-  --wjs-cta-title-color: #faf8f3;
-  --wjs-cta-title-border-width: 0;
-  --wjs-cta-title-border-color: transparent;
-  --wjs-cta-title-pad: 0;
-  --wjs-cta-title-tracking: 0.005em;
-  --wjs-cta-button-bg: #faf8f3;
-  --wjs-cta-button-color: var(--wjs-color-primary-dark);
-  --wjs-cta-button-transform: uppercase;
-  --wjs-cta-button-tracking: 0.14em;
-  --wjs-cta-button-family: var(--wjs-nav-font-family);
-  --wjs-cta-button-weight: 600;
-  --wjs-cta-button-hover-bg: #211c17;
-  --wjs-cta-button-hover-color: #faf8f3;
-  --wjs-posts-bg: var(--wjs-bg-surface);
-  --wjs-posts-border-color: var(--wjs-hairline);
-  --wjs-posts-shadow: var(--wjs-shadow-soft);
-  --wjs-posts-hover-border-color: var(--wjs-color-primary);
-  --wjs-posts-hover-shadow: var(--wjs-shadow-raised);
-  --wjs-catposts-heading-family: var(--wjs-font-heading);
-  --wjs-catposts-heading-weight: 600;
-  --wjs-catposts-heading-tracking: 0.005em;
-  --wjs-catposts-heading-border-width: 2px;
-  --wjs-catposts-heading-border-color: var(--wjs-color-primary);
-  --wjs-catposts-heading-pad: 8px;
-  --wjs-catposts-border-color: var(--wjs-border-subtle);
-  --wjs-catposts-link-weight: 500;
-  --wjs-catposts-link-hover-color: var(--wjs-color-primary);
-  --wjs-search-input-bg: var(--wjs-bg-surface);
-  --wjs-search-input-border-width: 1px;
-  --wjs-search-input-border-color: var(--wjs-border-subtle);
-  --wjs-search-input-color: var(--wjs-color-text-main);
-  --wjs-search-focus-color: var(--wjs-color-primary);
-  --wjs-search-focus-ring: 0 0 0 3px rgba(154, 51, 40, 0.18);
-  --wjs-search-button-bg: var(--wjs-color-primary-dark);
-  --wjs-search-button-color: #faf8f3;
-  --wjs-search-button-transform: uppercase;
-  --wjs-search-button-tracking: 0.1em;
-  --wjs-search-button-family: var(--wjs-nav-font-family);
-  --wjs-search-button-weight: 600;
-}
+/* Sepia Press — generated from a Stitch design system. Edit theme.json, then: wordjs build theme sepia-press */

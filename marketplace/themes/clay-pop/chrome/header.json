@@ -1,0 +1,19 @@
+{
+  "root": { "props": {} },
+  "content": [
+    {
+      "type": "ChromeRow",
+      "props": {
+        "id": "cp-bar",
+        "align": "between",
+        "gap": "md",
+        "wrap": false,
+        "items": [
+          { "type": "ChromeLogo", "props": { "id": "cp-logo", "size": "md" } },
+          { "type": "ChromeNav", "props": { "id": "cp-nav", "location": "header", "orientation": "horizontal" } },
+          { "type": "ChromeButton", "props": { "id": "cp-cta", "label": "Descargar", "href": "/descargar", "variant": "primary" } }
+        ]
+      }
+    }
+  ]
+}

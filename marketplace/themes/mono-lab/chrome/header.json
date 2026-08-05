@@ -1,0 +1,27 @@
+{
+  "root": { "props": {} },
+  "content": [
+    {
+      "type": "ChromeRow",
+      "props": {
+        "id": "ml-header-row",
+        "align": "between",
+        "gap": "lg",
+        "items": [
+          {
+            "type": "ChromeRow",
+            "props": {
+              "id": "ml-header-brand",
+              "align": "start",
+              "gap": "sm",
+              "items": [
+                { "type": "ChromeSiteTitle", "props": { "id": "ml-title", "showTagline": true } }
+              ]
+            }
+          },
+          { "type": "ChromeNav", "props": { "id": "ml-nav", "location": "header", "orientation": "horizontal" } }
+        ]
+      }
+    }
+  ]
+}

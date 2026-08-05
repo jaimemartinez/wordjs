@@ -1,0 +1,29 @@
+{
+  "name": "stitch/mono-lab",
+  "designTheme": {
+    "colorMode": "LIGHT",
+    "customColor": "#111111",
+    "overridePrimaryColor": "#111111",
+    "overrideSecondaryColor": "#e11d48",
+    "overrideNeutralColor": "#f9f9f9",
+    "headlineFont": "SPACE_GROTESK",
+    "headlineFontFamily": "Space Grotesk",
+    "bodyFont": "SPACE_MONO",
+    "bodyFontFamily": "Space Mono",
+    "labelFont": "SPACE_MONO",
+    "labelFontFamily": "Space Mono",
+    "roundness": "ROUND_FOUR",
+    "namedColors": {
+      "background": "#f9f9f9",
+      "surface": "#f9f9f9",
+      "on_surface": "#141414",
+      "on_background": "#141414",
+      "primary": "#111111",
+      "primary_container": "#111111",
+      "on_primary": "#ffffff",
+      "secondary": "#e11d48",
+      "secondary_container": "#e11d48",
+      "on_secondary": "#ffffff"
+    }
+  }
+}

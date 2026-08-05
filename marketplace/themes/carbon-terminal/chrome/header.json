@@ -1,0 +1,39 @@
+{
+  "root": { "props": {} },
+  "content": [
+    {
+      "type": "ChromeRow",
+      "props": {
+        "id": "ct-header-row",
+        "align": "between",
+        "gap": "md",
+        "items": [
+          {
+            "type": "ChromeRow",
+            "props": {
+              "id": "ct-header-brand",
+              "align": "start",
+              "gap": "sm",
+              "items": [
+                { "type": "ChromeText", "props": { "id": "ct-prompt", "text": "~$" } },
+                { "type": "ChromeLogo", "props": { "id": "ct-logo", "size": "sm" } }
+              ]
+            }
+          },
+          {
+            "type": "ChromeRow",
+            "props": {
+              "id": "ct-header-tools",
+              "align": "end",
+              "gap": "md",
+              "items": [
+                { "type": "ChromeNav", "props": { "id": "ct-nav", "location": "header", "orientation": "horizontal" } },
+                { "type": "ChromeSearch", "props": { "id": "ct-search", "placeholder": "search the docs" } }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

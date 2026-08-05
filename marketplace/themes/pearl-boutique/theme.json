@@ -1,6 +1,201 @@
 {
   "name": "Pearl Boutique",
-  "version": "1.0.0",
+  "version": "1.0.3",
   "description": "Lujo perla claro con serif Bodoni, degradados rosados iridiscentes y micro-etiquetas en mayúsculas espaciadas.",
-  "author": "WordJS × Stitch"
+  "author": "WordJS × Stitch",
+  "generator": "wordjs",
+  "layout": {
+    "header": {
+      "variant": "centered",
+      "sticky": false,
+      "transparent": false
+    },
+    "footer": {
+      "variant": "minimal"
+    },
+    "containerWidth": "64rem"
+  },
+  "seeds": {
+    "primary": "#7b5455",
+    "secondary": "#c9a227",
+    "bg": "#fff8f7",
+    "text": "#141414"
+  },
+  "tokens": {
+    "--wjs-bg-canvas": "#fff8f7",
+    "--wjs-color-primary": "#7b5455",
+    "--wjs-color-primary-dark": "#7b5455",
+    "--wjs-color-on-primary": "#ffffff",
+    "--wjs-color-secondary": "#c9a227",
+    "--wjs-color-secondary-dark": "#c9a227",
+    "--wjs-color-on-secondary": "#ffffff",
+    "--wjs-color-text-main": "#141414",
+    "--wjs-color-heading": "#141414",
+    "--wjs-color-link": "#7b5455",
+    "--wjs-font-family-heading": "'Libre Caslon Text', Georgia, 'Times New Roman', serif",
+    "--wjs-font-family-base": "'Questrial', 'Segoe UI', system-ui, sans-serif",
+    "--wjs-radius": "4px",
+    "--wjs-radius-sm": "4px",
+    "--wjs-radius-md": "4px",
+    "--wjs-radius-lg": "4px",
+    "--wjs-radius-pill": "4px",
+    "--wjs-hero-bg": "#fff8f7",
+    "--wjs-hero-gradient-from": "#fff8f7",
+    "--wjs-hero-gradient-to": "#fff8f7",
+    "--wjs-hero-color": "#141414",
+    "--wjs-hero-title-color": "#7b5455",
+    "--wjs-hero-subtitle-color": "#141414",
+    "--wjs-hero-button-outline-color": "#7b5455",
+    "--wjs-hero-button-outline-border": "#7b5455",
+    "--wjs-bg-surface-glass": "#fff8f7",
+    "--wjs-bg-footer": "#f7ecea",
+    "--wjs-color-text-footer-main": "#3a2c2c",
+    "--wjs-color-text-footer-dim": "#8a7574",
+    "--wjs-hero-gradient": "none",
+    "--wjs-hero-height": "auto",
+    "--wjs-hero-pad": "8.5rem 1.5rem 8rem",
+    "--wjs-hero-measure": "44rem",
+    "--wjs-hero-text-align": "center",
+    "--wjs-hero-justify": "center",
+    "--wjs-hero-actions-justify": "center",
+    "--wjs-hero-title-size": "clamp(2.1rem, 4vw, 3.25rem)",
+    "--wjs-hero-title-weight": "300",
+    "--wjs-hero-title-tracking": "0.02em",
+    "--wjs-hero-subtitle-size": "0.98rem",
+    "--wjs-hero-subtitle-opacity": "0.72",
+    "--wjs-hero-border-width": "0px",
+    "--wjs-hero-radius": "0px",
+    "--wjs-hero-shadow": "none",
+    "--wjs-hero-button-bg": "transparent",
+    "--wjs-hero-button-color": "#7b5455",
+    "--wjs-hero-button-radius": "0px",
+    "--wjs-hero-button-pad": "0.95rem 2.75rem",
+    "--wjs-hero-button-size": "0.72rem",
+    "--wjs-hero-button-weight": "500",
+    "--wjs-hero-button-outline-bg": "transparent"
+  },
+  "styles": {
+    "body": {
+      "font-size": "16px",
+      "line-height": "1.8"
+    },
+    "headings": {
+      "letter-spacing": "0.015em",
+      "line-height": "1.3",
+      "font-weight": "400"
+    },
+    "logo": {
+      "font-family": "'Libre Caslon Text', Georgia, 'Times New Roman', serif",
+      "text-transform": "lowercase",
+      "letter-spacing": "0.01em",
+      "font-style": "italic"
+    },
+    "nav": {
+      "font-size": "0.72rem",
+      "letter-spacing": "0.26em",
+      "text-transform": "lowercase",
+      "padding-top": "0.9rem",
+      "padding-bottom": "0.35rem"
+    },
+    "footer": {
+      "font-size": "0.78rem",
+      "letter-spacing": "0.18em",
+      "text-transform": "uppercase",
+      "text-align": "center"
+    },
+    "hero": {
+      "title": {
+        "line-height": "1.26",
+        "margin-bottom": "1.6rem"
+      },
+      "subtitle": {
+        "letter-spacing": "0.14em",
+        "text-transform": "uppercase",
+        "line-height": "1.9"
+      },
+      "actions": {
+        "margin-top": "3rem"
+      },
+      "button": {
+        "border": "1px solid #7b5455",
+        "text-transform": "uppercase",
+        "letter-spacing": "0.22em"
+      }
+    },
+    "quote": {
+      "family": "'Libre Caslon Text', Georgia, 'Times New Roman', serif",
+      "style": "italic",
+      "size": "1.35rem",
+      "weight": "400",
+      "bar-width": "1px",
+      "tracking": "0.01em",
+      "cite": {
+        "text-transform": "uppercase",
+        "letter-spacing": "0.24em",
+        "font-size": "0.66rem",
+        "font-style": "normal"
+      }
+    },
+    "card": {
+      "radius": "0px",
+      "shadow": "none",
+      "border-width": "0px",
+      "bg": "transparent",
+      "pad": "2rem 1rem",
+      "title": {
+        "text-transform": "uppercase",
+        "letter-spacing": "0.2em",
+        "font-size": "0.82rem",
+        "font-weight": "500"
+      },
+      "description": {
+        "font-size": "0.9rem",
+        "line-height": "1.85"
+      }
+    },
+    "button": {
+      "link": {
+        "border-radius": "0px",
+        "text-transform": "uppercase",
+        "letter-spacing": "0.22em",
+        "font-size": "0.7rem",
+        "font-weight": "500",
+        "padding": "0.9rem 2.4rem"
+      }
+    },
+    "posts-grid": {
+      "card": {
+        "border-radius": "0px",
+        "box-shadow": "none",
+        "background": "transparent"
+      },
+      "title": {
+        "font-family": "'Libre Caslon Text', Georgia, 'Times New Roman', serif",
+        "font-size": "1.15rem",
+        "font-weight": "400",
+        "line-height": "1.4"
+      },
+      "date": {
+        "text-transform": "uppercase",
+        "letter-spacing": "0.22em",
+        "font-size": "0.64rem"
+      },
+      "excerpt": {
+        "font-size": "0.9rem",
+        "line-height": "1.85"
+      }
+    },
+    "pricing": {
+      "radius": "0px",
+      "shadow": "none",
+      "border-width": "1px",
+      "name-transform": "uppercase",
+      "name-tracking": "0.24em",
+      "name-size": "0.7rem",
+      "price-family": "'Libre Caslon Text', Georgia, 'Times New Roman', serif",
+      "price-weight": "300",
+      "button-radius": "0px",
+      "highlight-scale": "1"
+    }
+  }
 }

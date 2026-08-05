@@ -1,495 +1,231 @@
-@import url('https://fonts.googleapis.com/css2?family=Quicksand:wght@400;500;700&display=swap');
-
-/* =========================================
-   THEME: SORBET PLAY (Kids / Playful)
-   Concept: Memphis pastel sorbet — strawberry,
-   lemon, mint and lavender on a polka-dot cream
-   canvas, thick 4px ink borders, hard offset
-   shadows, pill buttons and rounded Quicksand
-   type. Light only.
-   ========================================= */
-
+/* @wjs-generated:start — compiled from theme.json; DO NOT EDIT inside. Edit theme.json and run: node backend/cli/wordjs.js build theme sorbet-play */
 :root {
-  /* --- CANONICAL COLORS --- */
+  --wjs-bg-canvas: #fff5f7;
+  --wjs-bg-surface: #f7eef0;
+  --wjs-bg-surface-raised: #f0e6e8;
   --wjs-color-primary: #ff85a1;
-  /* Memphis strawberry — every main action in the markup */
-  --wjs-color-primary-dark: #a03b56;
-  /* The config's accessible strawberry (brand text, hovers) */
-  --wjs-color-secondary: #fff380;
-  /* Memphis lemon — hero CTA + highlighted plan */
-  --wjs-color-secondary-dark: #d4c95c;
-  --wjs-color-accent: #b2f7ef;
-  /* Memphis mint — form panel, hovers, quote marks */
-  --wjs-color-success: #206963;
-  --wjs-color-danger: #ba1a1a;
-  --wjs-color-warning: #ffc53d;
-  --wjs-color-info: #74b7b0;
-  --wjs-color-light: #fcf9f8;
-  --wjs-color-dark: #2d2d2d;
-  /* Memphis ink */
-
-  /* --- ON-COLORS (max-contrast text per solid, by luminance) --- */
-  --wjs-color-on-primary: #2d2d2d;
-  --wjs-color-on-secondary: #2d2d2d;
-  --wjs-color-on-accent: #2d2d2d;
-  --wjs-color-on-success: #ffffff;
-  --wjs-color-on-danger: #ffffff;
-  --wjs-color-on-warning: #2d2d2d;
-  --wjs-color-on-info: #1b1c1c;
-  --wjs-color-on-light: #1b1c1c;
-  --wjs-color-on-dark: #ffffff;
-
-  /* --- SURFACES / TEXT / BORDERS --- */
-  --wjs-bg-canvas: #fcf9f8;
-  --wjs-bg-surface: #ffffff;
-  --wjs-bg-surface-glass: rgba(255, 255, 255, 0.95);
-  /* nav: bg-white/95 + backdrop-blur */
-  --wjs-bg-muted: #f0eded;
-  --wjs-color-text-main: #1b1c1c;
-  --wjs-color-text-muted: #554245;
-  --wjs-color-heading: #1b1c1c;
-  --wjs-color-link: #a03b56;
-  --wjs-color-link-hover: #81233f;
-  --wjs-border-subtle: #2d2d2d;
-  /* everything is outlined in ink */
-  --wjs-border-width: 2px;
-  --wjs-focus-ring: rgba(255, 133, 161, 0.4);
-
-  /* --- TYPOGRAPHY (Quicksand everywhere, chunky 700 headings) --- */
-  --wjs-font-family-base: 'Quicksand', 'Comic Sans MS', system-ui, sans-serif;
-  --wjs-font-family-heading: 'Quicksand', 'Comic Sans MS', system-ui, sans-serif;
-  --wjs-font-size-base: 1rem;
-  --wjs-line-height-base: 1.5;
-  /* measured body: 24px/16px */
-  --wjs-heading-weight: 700;
-  --wjs-heading-line-height: 1.18;
-  --wjs-h1-tracking: -0.02em;
-  /* measured h1: -0.96px/48px */
-  /* display-lg 48/56 → h1; headline-md 32/40 → h2; title-lg 24/32 → h3 */
-  --wjs-h1: 3rem;
-  --wjs-h2: 2rem;
-  --wjs-h3: 1.5rem;
-  --wjs-h4: 1.25rem;
-  --wjs-h5: 1.125rem;
-  --wjs-h6: 1rem;
-
-  /* --- SHAPE / SHADOW (fat radii + HARD offset ink shadows, never blur) --- */
-  --wjs-radius-sm: 0.5rem;
-  --wjs-radius: 0.75rem;
-  --wjs-radius-md: 1rem;
-  --wjs-radius-lg: 1.5rem;
+  --wjs-color-primary-dark: #ff85a1;
+  --wjs-color-on-primary: #ffffff;
+  --wjs-color-accent: #4cc9f0;
+  --wjs-color-on-accent: #111111;
+  --wjs-color-text-main: #141414;
+  --wjs-color-text-muted: #6d6a6a;
+  --wjs-color-heading: #141414;
+  --wjs-color-link: #ff85a1;
+  --wjs-color-link-hover: #4cc9f0;
+  --wjs-border-subtle: #d5cdce;
+  --wjs-outline: #a6a0a1;
+  --wjs-outline-variant: #dcd3d5;
+  --wjs-focus-ring: #ff85a1;
+  --wjs-color-secondary: #4cc9f0;
+  --wjs-color-secondary-dark: #4cc9f0;
+  --wjs-color-on-secondary: #ffffff;
+  --wjs-font-family-heading: 'Comfortaa', 'Segoe UI', system-ui, sans-serif;
+  --wjs-font-family-base: 'Rubik', 'Segoe UI', system-ui, sans-serif;
+  --wjs-radius: 9999px;
+  --wjs-radius-sm: 9999px;
+  --wjs-radius-md: 9999px;
+  --wjs-radius-lg: 9999px;
   --wjs-radius-pill: 9999px;
-  --wjs-shadow-sm: 4px 4px 0 0 #2d2d2d;
-  --wjs-shadow: 8px 8px 0 0 #2d2d2d;
-  --wjs-shadow-md: 8px 8px 0 0 #2d2d2d;
-  --wjs-shadow-lg: 12px 12px 0 0 #2d2d2d;
-
-  /* ══ BLOCK TOKENS (derived from the design markup) ═══════════════════════ */
-
-  /* Buttons — hero primary CTA: lemon pill, ink border + hard shadow, bold */
-  --wjs-button-bg: var(--wjs-color-secondary);
-  --wjs-button-color: #1b1c1c;
-  --wjs-button-radius: 9999px;
-  --wjs-button-pad-x: 2.5rem;
-  --wjs-button-pad-y: 1rem;
-  --wjs-button-weight: 700;
-  --wjs-button-size: 1.5rem;
-  /* measured CTAs: 24px Quicksand 700 across the design */
-  --wjs-button-border-width: 4px;
-  --wjs-button-border-color: #2d2d2d;
-  --wjs-button-shadow: 8px 8px 0 0 #2d2d2d;
-  --wjs-button-hover-bg: var(--wjs-color-accent);
-  /* secondary hero button hovers to mint */
-  --wjs-button-hover-color: #1b1c1c;
-  --wjs-button-hover-transform: translate(4px, 4px);
-  --wjs-button-hover-shadow: 4px 4px 0 0 #2d2d2d;
-  /* the design's btn-press, half-pressed */
-  /* Secondary / outline variants = the measured white ink-ring pill */
-  --wjs-button-secondary-bg: #ffffff;
-  --wjs-button-secondary-color: #1b1c1c;
-  --wjs-button-outline-bg: #ffffff;
-  --wjs-button-outline-color: #1b1c1c;
-  --wjs-button-outline-border-color: #2d2d2d;
-  --wjs-button-outline-hover-bg: var(--wjs-color-accent);
-
-  /* Feature cards — white, 4px ink border, lavender hard shadow, candy icon dots */
-  --wjs-card-bg: #ffffff;
-  --wjs-card-border-width: 4px;
-  --wjs-card-border-color: #2d2d2d;
-  --wjs-card-radius: 1rem;
-  --wjs-card-shadow: 8px 8px 0 0 #d6bcfa;
-  --wjs-card-pad: 2rem;
-  --wjs-card-title-color: #1b1c1c;
-  --wjs-card-title-size: 1.5rem;
-  --wjs-card-title-weight: 700;
-  --wjs-card-title-leading: 1.333;
-  /* measured: 32px/24px */
-  --wjs-card-desc-color: var(--wjs-color-text-muted);
-  --wjs-card-icon-bg: var(--wjs-color-primary);
-  --wjs-card-icon-color: #1b1c1c;
-  /* measured glyph: ink on strawberry (also the higher-contrast pair) */
-  --wjs-card-icon-radius: 9999px;
-  --wjs-card-icon-size: 4rem;
-  --wjs-card-hover-border-color: #2d2d2d;
-  --wjs-card-hover-shadow: 8px 8px 0 0 #d6bcfa;
-  --wjs-card-hover-transform: translateY(-8px);
-
-  /* Hero — measured TRANSPARENT: it sits on the body's polka canvas instead of
-     painting its own copy (a second dot grid never aligns with the fixed one) */
-  --wjs-hero-bg: transparent;
-  --wjs-hero-bg-image: none;
-  --wjs-hero-radius: 0;
-  --wjs-hero-text-align: center;
-  --wjs-hero-actions-justify: center;
-  --wjs-hero-title-color: #1b1c1c;
-  --wjs-hero-title-weight: 700;
-  --wjs-hero-title-tracking: -0.02em;
-  --wjs-hero-subtitle-color: var(--wjs-color-text-muted);
-  --wjs-hero-subtitle-size: 1.125rem;
-  /* measured: 18px */
-  --wjs-hero-subtitle-opacity: 1;
-  /* measured: solid #554245, no fade */
-  --wjs-hero-button-bg: var(--wjs-color-secondary);
-  --wjs-hero-button-color: #1b1c1c;
-  --wjs-hero-button-radius: 9999px;
-  --wjs-hero-button-size: 1.5rem;
-  /* measured: 24px (framework default is 15px) */
-  --wjs-hero-button-weight: 700;
-  --wjs-hero-button-pad: 1rem 2.5rem;
+  --wjs-bg-surface-glass: rgba(255,255,255,0.94);
+  --wjs-hero-bg: #ffffff;
+  --wjs-hero-gradient-angle: 135deg;
+  --wjs-hero-gradient-from: #fffdf0;
+  --wjs-hero-gradient-to: #eafaff;
+  --wjs-hero-color: #141414;
+  --wjs-hero-title-color: #141414;
+  --wjs-hero-subtitle-color: #141414;
+  --wjs-hero-button-outline-color: #141414;
+  --wjs-hero-button-outline-border: #141414;
   --wjs-hero-button-outline-bg: #ffffff;
-  --wjs-hero-button-outline-color: #1b1c1c;
-  --wjs-hero-button-outline-border: #2d2d2d;
-  --wjs-hero-button-outline-hover-bg: var(--wjs-color-accent);
-
-  /* Pricing — white plans w/ ink shadow; the favorite: lemon, 6px border, 12px shadow, tilted badge energy */
-  --wjs-pricing-bg: #ffffff;
-  --wjs-pricing-border-width: 4px;
-  --wjs-pricing-border-color: #2d2d2d;
-  --wjs-pricing-radius: 1.5rem;
-  --wjs-pricing-pad: 2rem;
-  --wjs-pricing-shadow: 8px 8px 0 0 #2d2d2d;
-  --wjs-pricing-name-color: #1b1c1c;
-  --wjs-pricing-name-size: 1.5rem;
-  --wjs-pricing-name-weight: 700;
-  --wjs-pricing-price-color: #1b1c1c;
-  --wjs-pricing-price-size: 3rem;
-  --wjs-pricing-price-weight: 900;
-  /* measured: font-black (Quicksand synthesizes past 700, as in the design) */
-  --wjs-pricing-period-color: var(--wjs-color-text-muted);
-  --wjs-pricing-feature-color: #1b1c1c;
-  --wjs-pricing-button-bg: #fcf9f8;
-  --wjs-pricing-button-color: #1b1c1c;
-  --wjs-pricing-button-border-color: #2d2d2d;
-  --wjs-pricing-button-radius: 9999px;
-  --wjs-pricing-button-weight: 700;
-  --wjs-pricing-button-pad: 1rem 1.5rem;
-  /* measured featured CTA: 16px 24px */
-  --wjs-pricing-button-hover-bg: var(--wjs-color-accent);
-  --wjs-pricing-highlight-bg: var(--wjs-color-secondary);
-  --wjs-pricing-highlight-color: #1b1c1c;
-  --wjs-pricing-highlight-border-width: 6px;
-  --wjs-pricing-highlight-border-color: #2d2d2d;
-  --wjs-pricing-highlight-shadow: 12px 12px 0 0 #2d2d2d;
-  --wjs-pricing-highlight-scale: 1.05;
-  --wjs-pricing-highlight-name-color: #1b1c1c;
-  --wjs-pricing-highlight-feature-color: #1b1c1c;
-  --wjs-pricing-highlight-button-bg: var(--wjs-color-primary);
-  --wjs-pricing-highlight-button-shadow: 8px 8px 0 0 #2d2d2d;
-  --wjs-pricing-button-on-accent: #2d2d2d;
-
-  /* Quote / testimonial — white 3rem-radius card, strawberry hard shadow,
-     giant mint quote marks, accessible-strawberry quote text */
-  --wjs-quote-accent: var(--wjs-color-accent);
-  --wjs-quote-bar-width: 6px;
-  --wjs-quote-color: var(--wjs-color-primary-dark);
-  --wjs-quote-size: 1.5rem;
+  --wjs-hero-height: 62vh;
+  --wjs-hero-pad: 4.5rem 2.5rem;
+  --wjs-hero-justify: center;
+  --wjs-hero-text-align: center;
+  --wjs-hero-measure: 46rem;
+  --wjs-hero-radius: 36px;
+  --wjs-hero-border-width: 3px;
+  --wjs-hero-border-color: #141414;
+  --wjs-hero-shadow: 10px 10px 0 #ff85a1;
+  --wjs-hero-title-size: clamp(2.5rem, 7vw, 5rem);
+  --wjs-hero-title-weight: 700;
+  --wjs-hero-title-tracking: -0.015em;
+  --wjs-hero-subtitle-size: 1.15rem;
+  --wjs-hero-subtitle-opacity: 0.8;
+  --wjs-hero-actions-justify: center;
+  --wjs-hero-button-pad: 1.2rem 2.8rem;
+  --wjs-hero-button-size: 1.08rem;
+  --wjs-hero-button-weight: 700;
+  --wjs-hero-button-radius: 9999px;
+  --wjs-hero-button-leading: 1.1;
+  --wjs-button-pad-x: 1.9rem;
+  --wjs-button-pad-y: 1rem;
+  --wjs-button-size: 1rem;
+  --wjs-button-weight: 700;
+  --wjs-button-radius: 9999px;
+  --wjs-button-border-width: 3px;
+  --wjs-button-border-color: #141414;
+  --wjs-button-shadow: 4px 4px 0 #141414;
+  --wjs-button-hover-transform: translate(2px, 2px);
+  --wjs-button-hover-shadow: 2px 2px 0 #141414;
+  --wjs-button-outline-bg: #ffffff;
+  --wjs-button-outline-border-color: #141414;
+  --wjs-button-outline-color: #141414;
+  --wjs-card-radius: 30px;
+  --wjs-card-pad: 2rem;
+  --wjs-card-bg: #ffffff;
+  --wjs-card-border-width: 3px;
+  --wjs-card-shadow: 8px 8px 0 #4cc9f0;
+  --wjs-card-hover-shadow: 4px 4px 0 #4cc9f0;
+  --wjs-card-hover-transform: translate(4px, 4px);
+  --wjs-card-desc-leading: 1.65;
+  --wjs-card-icon-radius: 9999px;
+  --wjs-card-icon-bg: #fff0f4;
+  --wjs-card-icon-color: #141414;
+  --wjs-card-icon-size: 3.4rem;
+  --wjs-card-title-size: 1.4rem;
+  --wjs-card-title-weight: 700;
+  --wjs-stats-value-size: clamp(2.5rem, 6vw, 4rem);
+  --wjs-stats-value-weight: 700;
+  --wjs-stats-value-color: #ff85a1;
+  --wjs-stats-label-size: 0.85rem;
+  --wjs-stats-label-weight: 600;
+  --wjs-stats-label-transform: uppercase;
+  --wjs-stats-label-tracking: 0.12em;
+  --wjs-quote-size: 1.45rem;
+  --wjs-quote-style: normal;
   --wjs-quote-weight: 700;
-  --wjs-quote-cite-color: #1b1c1c;
-  --wjs-testimonial-bg: #ffffff;
-  --wjs-testimonial-border-width: 4px;
-  --wjs-testimonial-border-color: #2d2d2d;
-  --wjs-testimonial-radius: 3rem;
-  --wjs-testimonial-shadow: 8px 8px 0 0 #ff85a1;
-  --wjs-testimonial-pad: 3rem;
-  --wjs-testimonial-quote-color: var(--wjs-color-primary-dark);
-  --wjs-testimonial-quote-size: 1.5rem;
-  --wjs-testimonial-mark-color: var(--wjs-color-accent);
-  --wjs-testimonial-mark-size: 80px;
-  --wjs-testimonial-mark-opacity: 0.6;
-  --wjs-testimonial-author-color: #1b1c1c;
-  --wjs-testimonial-author-weight: 700;
-  --wjs-testimonial-role-color: var(--wjs-color-text-muted);
-  --wjs-testimonial-avatar-bg: #d6bcfa;
-  --wjs-testimonial-avatar-radius: 9999px;
+  --wjs-quote-accent: #4cc9f0;
+  --wjs-quote-bar-width: 8px;
+  --wjs-quote-mark-size: 4.5rem;
+  --wjs-quote-mark-opacity: 0.18;
+  --wjs-footer-bg: #4cc9f0;
+  --wjs-footer-text-body: #0b3a47;
+  --wjs-footer-text-heading: #08252d;
+}
+h1,h2,h3,h4,h5,h6 { letter-spacing: -0.015em }
+a { font-weight: 600; text-decoration-thickness: 2px; text-underline-offset: 0.2em }
+@media (max-width: 767.98px) {
+  .wp-block-hero { min-height: 54vh; padding: 3rem 1.4rem; box-shadow: 6px 6px 0#ff85a1 }
+}
+/* @wjs-generated:end */
 
-  /* Search (= the design's contact form inputs: white, measured 1px gray-500
-     hairline — the ink lives in the 4px hard shadow, not the border). */
-  --wjs-search-input-bg: #ffffff;
-  --wjs-search-input-color: #1b1c1c;
-  --wjs-search-input-border-width: 1px;
-  --wjs-search-input-border-color: #6b7280;
-  --wjs-search-input-radius: 0.75rem;
-  --wjs-search-input-pad: 1rem 1rem;
-  --wjs-search-input-shadow: 4px 4px 0 0 #2d2d2d;
-  --wjs-search-placeholder-color: #887175;
-  --wjs-search-focus-color: var(--wjs-color-primary);
-  --wjs-search-focus-ring: 8px 8px 0 0 #2d2d2d;
-  --wjs-search-button-bg: var(--wjs-color-primary);
-  --wjs-search-button-color: #2d2d2d;
-  --wjs-search-button-weight: 700;
-  --wjs-search-button-radius: 9999px;
-  --wjs-search-button-pad: 1rem 2rem;
-  /* measured submit: 16px 32px */
-  --wjs-search-button-border-width: 4px;
-  --wjs-search-button-border-color: #2d2d2d;
-  --wjs-search-button-shadow: 8px 8px 0 0 #2d2d2d;
-  /* measured: full 8px offset */
+/* Sorbet Play — generated from a Stitch design system. Edit theme.json, then: wordjs build theme sorbet-play */
 
-  /* Form extras where the design differs from the inherited input language */
-  --wjs-form-label-color: #1b1c1c;
-  --wjs-form-label-weight: 700;
-  --wjs-form-label-size: 0.875rem;
-  --wjs-form-accent: var(--wjs-color-primary);
-  --wjs-form-submit-radius: 9999px;
-  --wjs-form-submit-weight: 700;
-  --wjs-form-submit-size: 1.5rem;
-  --wjs-form-submit-pad: 1rem 2rem;
-  --wjs-form-submit-shadow: 8px 8px 0 0 #2d2d2d;
+/* ============================================================================
+   SORBET PLAY — composed chrome (hand-authored; lives OUTSIDE the generated
+   block, so `build theme` never rewrites it).
 
-  /* Accordion — candy panels: mint headers, ink borders, strawberry icon */
-  --wjs-accordion-bg: #ffffff;
-  --wjs-accordion-border-width: 4px;
-  --wjs-accordion-border-color: #2d2d2d;
-  --wjs-accordion-radius: 1rem;
-  --wjs-accordion-shadow: 4px 4px 0 0 #2d2d2d;
-  --wjs-accordion-header-bg: var(--wjs-color-accent);
-  --wjs-accordion-header-color: #1b1c1c;
-  --wjs-accordion-header-weight: 700;
-  --wjs-accordion-icon-color: var(--wjs-color-primary-dark);
-  /* Roles de TEXTO en rosa: el pastel #ff85a1 no lee sobre claro - usar rosa profundo AA */
-  --wjs-accordion-active-color: #c2255c;
-  --wjs-tabs-active-color: #c2255c;
-  --wjs-cta-button-color: #c2255c;
-  --wjs-stats-value-color: #c2255c;
-  --wjs-accordion-panel-bg: #ffffff;
-  --wjs-accordion-panel-color: var(--wjs-color-text-muted);
+   Two-tier masthead: the wordmark sits alone on the first line, the navigation
+   rides below it as a row of round ink-outlined chips with a hard candy
+   shadow. The footer is a LIGHT sky slab with three centred columns — the
+   opposite of the usual dark colophon.
+   ============================================================================ */
 
-  /* Posts grid — card language; hover flips the shadow to strawberry */
-  --wjs-posts-bg: #ffffff;
-  --wjs-posts-border-width: 4px;
-  --wjs-posts-border-color: #2d2d2d;
-  --wjs-posts-radius: 1rem;
-  --wjs-posts-shadow: 8px 8px 0 0 #d6bcfa;
-  --wjs-posts-hover-border-color: #2d2d2d;
-  --wjs-posts-hover-shadow: 8px 8px 0 0 #ff85a1;
-  --wjs-posts-hover-transform: translateY(-8px);
-  --wjs-posts-title-color: #1b1c1c;
-  --wjs-posts-title-weight: 700;
-  --wjs-posts-excerpt-color: var(--wjs-color-text-muted);
-  --wjs-posts-date-color: var(--wjs-color-primary-dark);
-  --wjs-posts-thumb-bg: #b2f7ef;
-  --wjs-posts-thumb-radius: 0.75rem;
-
-  /* --- FOOTER / NAV CONFIG (consumed by the public chrome) --- */
-  --wjs-bg-footer: #f0eded;
-  --wjs-color-text-footer-main: #1b1c1c;
-  --wjs-color-text-footer-dim: #554245;
-  --wjs-bg-surface-hover: #ffffff;
-  /* social dots: white circles w/ ink border */
-  --wjs-logo-color: #a03b56;
+/* --- Masthead: wordmark over a row of round chips -------------------------- */
+header.wjs-chrome-header {
+  background: #ffffff;
+  box-shadow: 0 4px 0 var(--wjs-color-secondary);
+  padding-block: 1.4rem 1.6rem;
 }
 
-/* (Body voice: measured Quicksand 400 — the old blanket 500 was not in the
-   design; the 500 weight belongs to the subtitle and footer, set below.) */
-
-/* =========================================
-   PUBLIC CHROME — header
-   ========================================= */
-
-/* Sticky bar: thick ink underline + measured hard offset shadow and soft blur.
-   [class] lifts shadow/blur over the chrome's shadow-sm / backdrop-blur-md
-   utilities without !important. */
-header {
-  border-bottom: 4px solid #1b1c1c;
+.wjs-chrome-header .wjs-header-container > .wjs-chrome-row + .wjs-chrome-row {
+  margin-top: 1rem;
 }
 
-header[class] {
-  box-shadow: 8px 8px 0 0 #1b1c1c;
-  -webkit-backdrop-filter: blur(4px);
-  backdrop-filter: blur(4px);
-}
-
-/* Brand: chunky accessible-strawberry wordmark ("Chiquitín") */
-.wjs-header-logo span {
-  color: var(--wjs-logo-color);
+.wjs-chrome-header .wjs-header-logo span {
+  font-family: var(--wjs-font-family-heading);
+  font-size: 2.1rem;
   font-weight: 700;
-  font-size: 1.75rem;
+  letter-spacing: -0.02em;
 }
 
-/* Nav links: big friendly Quicksand pills; hover fills lemon inside an ink ring */
+nav.wjs-header-nav {
+  gap: 0.65rem;
+}
+
 .wjs-header-nav a {
-  font-size: 1.125rem;
-  font-weight: 500;
-  color: #1b1c1c;
-  padding: 0.25rem 0.75rem;
-  border: 2px solid transparent;
+  padding: 0.5rem 1.25rem;
+  border: 3px solid var(--wjs-color-text-main);
   border-radius: 9999px;
-  transition: all 0.2s ease;
+  background: #ffffff;
+  box-shadow: 3px 3px 0 var(--wjs-color-text-main);
+  font-weight: 700;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease;
 }
 
 .wjs-header-nav a:hover {
-  color: #1b1c1c;
-  background: #eee372;
-  border-color: #1b1c1c;
+  background: var(--wjs-color-primary);
+  color: var(--wjs-color-text-main);
+  transform: translate(2px, 2px);
+  box-shadow: 1px 1px 0 var(--wjs-color-text-main);
 }
 
-.wjs-header-nav a:focus-visible {
-  outline: none;
-  background: #eee372;
-  border-color: #1b1c1c;
+/* --- Footer: a sky slab, three centred columns ---------------------------- */
+footer.wjs-chrome-footer {
+  padding-block: 3.5rem 2rem;
+  border-top: 4px solid var(--wjs-color-text-main);
 }
 
-/* Hamburger / header actions: strawberry pill with measured 4px ink border and
-   8px hard shadow.
-   (Never `display:none` on .wjs-header-actions outside a media query — it holds the hamburger.) */
-.wjs-header-actions button {
-  border: 4px solid #2d2d2d;
-  box-shadow: 8px 8px 0 0 #2d2d2d;
+.wjs-chrome-footer .wjs-chrome-row {
+  align-items: flex-start;
 }
 
-.wjs-header-actions button:active {
-  transform: translate(8px, 8px);
-  box-shadow: none;
+.wjs-chrome-footer .wjs-chrome-row .wjs-chrome-row {
+  flex: 1 1 14rem;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.85rem;
+  text-align: center;
 }
 
-/* Mobile fit (design mobile spec: 32px display headline, smaller brand) */
-@media (max-width: 767.98px) {
-  :root {
-    --wjs-h1: 2rem;
-  }
-
-  .wjs-header-logo span {
-    font-size: 1.375rem;
-  }
-}
-
-/* =========================================
-   PUBLIC CHROME — footer (soft gray slab, rounded top, ink border, playful links)
-   ========================================= */
-
-/* [class] lifts the 4px ink border over the chrome's 1px border-t utility */
-footer[class] {
-  border-top: 4px solid #1b1c1c;
-  border-radius: 0.75rem 0.75rem 0 0;
-}
-
-/* Measured footer voice: Quicksand 500, strawberry links */
-footer {
-  font-weight: 500;
-}
-
-footer a {
-  color: var(--wjs-color-primary-dark);
-}
-
-/* Brand line in the footer */
-footer h3 {
-  color: var(--wjs-logo-color);
+.wjs-chrome-footer .wjs-chrome-row .wjs-chrome-row > .wjs-chrome-text:first-child {
+  font-family: var(--wjs-font-family-heading);
+  font-size: 0.85rem;
   font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--wjs-color-text-footer-heading, #08252d);
 }
 
-footer h4 {
-  color: #1b1c1c;
+.wjs-chrome-footer .wjs-chrome-site-title {
+  align-items: center;
+}
+
+.wjs-chrome-footer .wjs-chrome-site-title a {
+  font-family: var(--wjs-font-family-heading);
+  font-size: 1.7rem;
   font-weight: 700;
+  color: var(--wjs-color-text-footer-heading, #08252d);
 }
 
-/* Link hover → accessible strawberry + underline. Doubled :hover lifts
-   specificity above the component's hover utility (0,2,0) without !important. */
-footer a:hover:hover {
-  color: var(--wjs-color-primary-dark);
-  text-decoration: underline;
+.wjs-chrome-footer .wjs-chrome-nav-vertical {
+  align-items: center;
+  gap: 0.5rem;
 }
 
-/* Social dots: ink ring + jump on hover */
-footer .w-10 {
-  border: 3px solid #2d2d2d;
+.wjs-chrome-footer .wjs-chrome-nav a {
+  font-weight: 600;
 }
 
-footer .w-10:hover {
-  transform: translateY(-4px);
-  box-shadow: 4px 4px 0 0 #2d2d2d;
+/* Round white badges with the same ink outline the navigation chips use. */
+.wjs-chrome-footer .wjs-chrome-socials a {
+  background: #ffffff;
+  border: 3px solid var(--wjs-color-text-main);
+  box-shadow: 3px 3px 0 var(--wjs-color-text-main);
+  color: var(--wjs-color-text-main);
 }
 
-/* =========================================
-   DISTINCTIVE RULES — the Memphis sorbet language
-   ========================================= */
-
-/* Polka-dot canvas: two offset dot grids, fixed while scrolling (from the design) */
-body {
-  background-image: radial-gradient(rgba(45, 45, 45, 0.16) 2px, transparent 2px),
-    radial-gradient(rgba(45, 45, 45, 0.16) 2px, transparent 2px);
-  background-size: 60px 60px;
-  background-position: 0 0, 30px 30px;
-  background-attachment: fixed;
+.wjs-chrome-footer .wjs-chrome-socials a:hover {
+  background: var(--wjs-color-primary);
+  color: var(--wjs-color-text-main);
 }
 
-/* (Hero paints nothing of its own — measured transparent — so the fixed body
-   dots show through without a misaligned second grid.) */
-
-/* Hero subtitle: measured Quicksand 500 (body is 400) */
-.wp-block-hero__subtitle {
-  font-weight: 500;
-}
-
-/* Secondary hero CTA: measured 4px ink ring + full hard shadow (the framework
-   pins outline buttons to 1px / no shadow) */
-.wp-block-hero__button--outline {
-  border-width: 4px;
-  box-shadow: 8px 8px 0 0 #2d2d2d;
-}
-
-/* Candy icon dots: measured 4px ink ring + 4px hard shadow (no icon-border token) */
-.wp-block-card__icon {
-  border: 4px solid #2d2d2d;
-  box-shadow: 4px 4px 0 0 #2d2d2d;
-}
-
-/* CTAs speak at 24px; the search submit has no size token */
-.wp-block-search__button {
-  font-size: 1.5rem;
-}
-
-/* Pricing: measured plan CTAs are 24px with a 4px ring (framework pins 1px);
-   the favorite plan swells to 40px corners and 40px padding, and its strawberry
-   CTA keeps the ink ring the framework strips to transparent */
-.wp-block-pricing__button {
-  border-width: 4px;
-  font-size: 1.5rem;
-}
-
-.wp-block-pricing__plan--highlighted {
-  border-radius: 2.5rem;
-  padding: 2.5rem;
-}
-
-.wp-block-pricing__plan--highlighted .wp-block-pricing__button {
-  border-color: #2d2d2d;
-}
-
-/* btn-press: buttons physically push in when clicked (translate onto the shadow) */
-.wp-block-button a:active {
-  transform: translate(8px, 8px);
-  box-shadow: none;
-}
-
-/* Sorbet text selection */
-::selection {
-  background: rgba(255, 133, 161, 0.45);
-  color: #1b1c1c;
-}
-
-/* Images get the ink treatment too */
-.wjs-content img {
-  border: 4px solid #2d2d2d;
-  border-radius: 1rem;
+.wjs-chrome-footer > .wjs-footer-container > .wjs-chrome-row + .wjs-chrome-row {
+  align-items: center;
+  margin-top: 2.75rem;
+  padding-top: 1.35rem;
+  border-top: 3px dashed rgba(8, 37, 45, 0.35);
+  font-size: 0.9rem;
+  font-weight: 600;
 }

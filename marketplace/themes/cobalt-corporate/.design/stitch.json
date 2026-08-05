@@ -1,0 +1,29 @@
+{
+  "name": "stitch/cobalt-corporate",
+  "designTheme": {
+    "colorMode": "LIGHT",
+    "customColor": "#00327d",
+    "overridePrimaryColor": "#00327d",
+    "overrideSecondaryColor": "#0ea5e9",
+    "overrideNeutralColor": "#f8f9ff",
+    "headlineFont": "OUTFIT",
+    "headlineFontFamily": "Outfit",
+    "bodyFont": "PUBLIC_SANS",
+    "bodyFontFamily": "Public Sans",
+    "labelFont": "PUBLIC_SANS",
+    "labelFontFamily": "Public Sans",
+    "roundness": "ROUND_FOUR",
+    "namedColors": {
+      "background": "#f8f9ff",
+      "surface": "#f8f9ff",
+      "on_surface": "#141414",
+      "on_background": "#141414",
+      "primary": "#00327d",
+      "primary_container": "#00327d",
+      "on_primary": "#ffffff",
+      "secondary": "#0ea5e9",
+      "secondary_container": "#0ea5e9",
+      "on_secondary": "#ffffff"
+    }
+  }
+}

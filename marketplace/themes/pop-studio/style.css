@@ -1,348 +1,221 @@
-@import url('https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800;900&family=Space+Grotesk:wght@300;400;500;600;700&display=swap');
-
-/* =========================================
-   THEME: POP STUDIO
-   Concept: Bold vibrant creative / portfolio. Light mode.
-   Hot-pink primary, punchy cyan secondary, heavy Archivo
-   headings, chunky neo-pop solid-offset + soft shadows,
-   large rounded corners.
-   ========================================= */
-
+/* @wjs-generated:start — compiled from theme.json; DO NOT EDIT inside. Edit theme.json and run: node backend/cli/wordjs.js build theme pop-studio */
 :root {
-  /* --- COLOR PALETTE: Vibrant Pop --- */
-  --wjs-color-primary: #ec4899;
-  /* Hot Pink */
-  --wjs-color-primary-dark: #db2777;
-  /* Deep Pink */
-
-  /* --- SECONDARY ACCENT (theme-local) --- */
-  --wjs-color-secondary: #0891b2;
-  /* Punchy Cyan */
-  --wjs-color-secondary-dark: #0e7490;
-
-  /* --- COLOR SEMANTICS --- */
   --wjs-bg-canvas: #ffffff;
-  --wjs-bg-surface: #ffffff;
-
-  --wjs-color-text-main: #18181b;
-  /* Near Black */
-  --wjs-color-text-muted: #52525b;
-  /* Slate Gray */
-
-  --wjs-border-subtle: #ececef;
-
-  /* --- NAVIGATION CONFIG --- */
-  --wjs-nav-font-family: 'Space Grotesk', system-ui, sans-serif;
-  --wjs-nav-font-size: 0.9375rem;
-  --wjs-nav-font-weight: 600;
-  --wjs-nav-text-transform: none;
-  --wjs-nav-letter-spacing: 0.01em;
-
-  --wjs-nav-color: #18181b;
-  --wjs-nav-color-hover: #ec4899;
-  --wjs-nav-transition: color 0.18s ease, opacity 0.18s ease;
-
-  --wjs-logo-color: #18181b;
-
-  /* --- FOOTER CONFIG --- */
-  --wjs-footer-bg: #18181b;
-  --wjs-footer-text-heading: #ffffff;
-  --wjs-footer-text-body: #a1a1aa;
-  --wjs-footer-text-hover: #ec4899;
-  --wjs-footer-icon-bg: #27272a;
-  --wjs-footer-icon-color: #ffffff;
-
-  /* --- TYPOGRAPHY --- */
-  --wjs-font-family-base: 'Space Grotesk', system-ui, -apple-system, sans-serif;
-  --wjs-font-family-heading: 'Archivo', 'Space Grotesk', sans-serif;
-
-  /* --- POP DESIGN TOKENS --- */
-  --wjs-radius-sm: 10px;
-  --wjs-radius-md: 16px;
-  --wjs-radius-lg: 20px;
-  --wjs-radius-pill: 999px;
-
-  /* Soft big shadow scale */
-  --wjs-shadow-soft: 0 10px 30px -12px rgba(24, 24, 27, 0.22);
-  --wjs-shadow-soft-lg: 0 24px 60px -20px rgba(24, 24, 27, 0.30);
-  /* Neo-pop 4px solid-offset shadow */
-  --wjs-shadow-pop: 4px 4px 0 0 #18181b;
-  --wjs-shadow-pop-pink: 4px 4px 0 0 #ec4899;
-  --wjs-shadow-pop-cyan: 4px 4px 0 0 #0891b2;
-
-  /* --- WordJS UI framework tokens --- */
-  --wjs-color-accent: #f59e0b;
-  --wjs-color-success: #16a34a;
-  --wjs-color-danger: #e11d48;
-  --wjs-color-warning: #f59e0b;
-  --wjs-color-info: #0891b2;
-  --wjs-color-light: #fafafa;
-  --wjs-color-dark: #18181b;
-  /* --- WordJS UI on-color tokens (auto: max-contrast text on each solid color) --- */
-  --wjs-color-on-primary: #161616;
-  --wjs-color-on-secondary: #161616;
-  --wjs-color-on-success: #161616;
-  --wjs-color-on-danger: #ffffff;
-  --wjs-color-on-warning: #161616;
-  --wjs-color-on-info: #161616;
-  --wjs-color-on-light: #161616;
-  --wjs-color-on-dark: #ffffff;
-
-  --wjs-bg-muted: #f4f4f5;
-  --wjs-color-heading: #18181b;
+  --wjs-bg-surface: #f7f7f7;
+  --wjs-bg-surface-raised: #f0f0f0;
+  --wjs-color-primary: #ec4899;
+  --wjs-color-primary-dark: #ec4899;
+  --wjs-color-on-primary: #ffffff;
+  --wjs-color-accent: #06b6d4;
+  --wjs-color-on-accent: #111111;
+  --wjs-color-text-main: #141414;
+  --wjs-color-text-muted: #6d6d6d;
+  --wjs-color-heading: #141414;
   --wjs-color-link: #ec4899;
-  --wjs-color-link-hover: #db2777;
-  --wjs-border-width: 2px;
-  --wjs-focus-ring: rgba(236, 72, 153, 0.3);
+  --wjs-color-link-hover: #06b6d4;
+  --wjs-border-subtle: #d5d5d5;
+  --wjs-outline: #a6a6a6;
+  --wjs-outline-variant: #dcdcdc;
+  --wjs-focus-ring: #ec4899;
+  --wjs-color-secondary: #06b6d4;
+  --wjs-color-secondary-dark: #06b6d4;
+  --wjs-color-on-secondary: #ffffff;
+  --wjs-font-family-heading: 'Bricolage Grotesque', 'Segoe UI', system-ui, sans-serif;
+  --wjs-font-family-base: 'DM Sans', 'Segoe UI', system-ui, sans-serif;
+  --wjs-radius: 9999px;
+  --wjs-radius-sm: 9999px;
+  --wjs-radius-md: 9999px;
+  --wjs-radius-lg: 9999px;
+  --wjs-radius-pill: 9999px;
+  --wjs-bg-surface-glass: rgba(255,255,255,0.92);
+  --wjs-hero-bg: #ffffff;
+  --wjs-hero-gradient-angle: 115deg;
+  --wjs-hero-gradient-from: #fff1f7;
+  --wjs-hero-gradient-to: #ecfeff;
+  --wjs-hero-color: #141414;
+  --wjs-hero-title-color: #141414;
+  --wjs-hero-subtitle-color: #141414;
+  --wjs-hero-button-outline-color: #141414;
+  --wjs-hero-button-outline-border: #141414;
+  --wjs-hero-button-outline-hover-bg: #141414;
+  --wjs-hero-height: 78vh;
+  --wjs-hero-pad: 6rem 3rem;
+  --wjs-hero-justify: flex-start;
+  --wjs-hero-text-align: left;
+  --wjs-hero-measure: 62rem;
+  --wjs-hero-radius: 0;
+  --wjs-hero-title-size: clamp(3.5rem, 9vw, 7rem);
+  --wjs-hero-title-weight: 800;
+  --wjs-hero-title-tracking: -0.045em;
+  --wjs-hero-subtitle-size: 1.2rem;
+  --wjs-hero-subtitle-opacity: 0.72;
+  --wjs-hero-actions-justify: flex-start;
+  --wjs-hero-button-pad: 1.15rem 2.5rem;
+  --wjs-hero-button-size: 1.05rem;
+  --wjs-hero-button-weight: 700;
+  --wjs-hero-button-radius: 9999px;
+  --wjs-hero-button-leading: 1.1;
+  --wjs-button-pad-x: 1.7rem;
+  --wjs-button-pad-y: 0.95rem;
+  --wjs-button-size: 1rem;
+  --wjs-button-weight: 700;
+  --wjs-button-radius: 9999px;
+  --wjs-button-tracking: -0.01em;
+  --wjs-button-shadow: 0 10px 24px rgba(236,72,153,0.28);
+  --wjs-button-hover-transform: translateY(-2px);
+  --wjs-button-hover-shadow: 0 16px 32px rgba(236,72,153,0.34);
+  --wjs-button-outline-border-color: #141414;
+  --wjs-button-outline-color: #141414;
+  --wjs-card-radius: 28px;
+  --wjs-card-pad: 2.1rem;
+  --wjs-card-border-width: 0;
+  --wjs-card-shadow: 0 18px 40px rgba(20,20,20,0.08);
+  --wjs-card-hover-shadow: 0 26px 50px rgba(236,72,153,0.18);
+  --wjs-card-hover-transform: translateY(-6px);
+  --wjs-card-desc-leading: 1.65;
+  --wjs-card-icon-radius: 9999px;
+  --wjs-card-icon-bg: #ecfeff;
+  --wjs-card-icon-color: #06b6d4;
+  --wjs-card-icon-size: 3.25rem;
+  --wjs-card-title-size: 1.45rem;
+  --wjs-card-title-weight: 700;
+  --wjs-card-title-tracking: -0.02em;
+  --wjs-quote-size: 1.55rem;
+  --wjs-quote-style: normal;
+  --wjs-quote-weight: 600;
+  --wjs-quote-tracking: -0.02em;
+  --wjs-quote-accent: #06b6d4;
+  --wjs-quote-bar-width: 6px;
+  --wjs-quote-mark-size: 5rem;
+  --wjs-quote-mark-opacity: 0.14;
+  --wjs-stats-value-size: clamp(2.75rem, 6vw, 4.5rem);
+  --wjs-stats-value-weight: 800;
+  --wjs-stats-value-color: #ec4899;
+  --wjs-stats-label-size: 0.82rem;
+  --wjs-stats-label-transform: uppercase;
+  --wjs-stats-label-tracking: 0.16em;
+  --wjs-footer-bg: #141414;
+  --wjs-footer-text-body: #b9b9b9;
+  --wjs-footer-text-heading: #ffffff;
+}
+h1,h2,h3,h4,h5,h6 { letter-spacing: -0.035em }
+a { font-weight: 600; text-underline-offset: 0.22em }
+@media (max-width: 767.98px) {
+  .wp-block-hero { min-height: 58vh; padding: 3.5rem 1.5rem }
+}
+/* @wjs-generated:end */
 
-  --wjs-font-family-mono: 'SFMono-Regular', 'Menlo', 'Consolas', monospace;
-  --wjs-font-size-base: 1rem;
-  --wjs-line-height-base: 1.65;
-  --wjs-heading-weight: 900;
-  --wjs-heading-line-height: 1.05;
-  --wjs-h1: 3rem;
-  --wjs-h2: 2.25rem;
-  --wjs-h3: 1.75rem;
-  --wjs-h4: 1.375rem;
-  --wjs-h5: 1.125rem;
-  --wjs-h6: 0.9375rem;
+/* Pop Studio — generated from a Stitch design system. Edit theme.json, then: wordjs build theme pop-studio */
 
-  --wjs-spacer: 1rem;
-  --wjs-radius: 16px;
-  --wjs-shadow-sm: 0 1px 2px 0 rgba(24, 24, 27, 0.08);
-  --wjs-shadow: 0 10px 30px -12px rgba(24, 24, 27, 0.22);
-  --wjs-shadow-md: 0 16px 40px -16px rgba(24, 24, 27, 0.26);
-  --wjs-shadow-lg: 0 24px 60px -20px rgba(24, 24, 27, 0.30);
+/* ============================================================================
+   POP STUDIO — composed chrome (hand-authored; lives OUTSIDE the generated
+   block, so `build theme` never rewrites it).
+
+   Structure comes from chrome/header.json + chrome/footer.json; this file only
+   gives those blocks their character. Every selector carries at least one
+   element or extra class so it outranks the renderer's utility classes on
+   specificity alone — no importance overrides anywhere in this stylesheet.
+   ============================================================================ */
+
+/* --- Masthead: a white sheet ruled in ink, navigation as pills ------------- */
+header.wjs-chrome-header {
+  background: var(--wjs-bg-canvas);
+  border-bottom: 2px solid var(--wjs-color-text-main);
+  box-shadow: none;
+  padding-block: 1.1rem;
 }
 
-/* =========================================
-   VISUAL OVERRIDES
-   ========================================= */
-
-body {
-  background-color: var(--wjs-bg-canvas) !important;
-  color: var(--wjs-color-text-main) !important;
-  font-family: var(--wjs-font-family-base) !important;
-  line-height: 1.65;
-  -webkit-font-smoothing: antialiased;
+.wjs-chrome-header .wjs-header-logo span {
+  font-family: var(--wjs-font-family-heading);
+  font-size: 1.8rem;
+  letter-spacing: -0.045em;
 }
 
-/* Header: clean white bar with chunky pink underline */
-header {
-  background-color: rgba(255, 255, 255, 0.92) !important;
-  border-bottom: 3px solid var(--wjs-color-primary) !important;
-  box-shadow: var(--wjs-shadow-soft) !important;
+nav.wjs-header-nav {
+  gap: 0.35rem;
 }
 
-header[class*='fixed'] {
-  background-color: rgba(255, 255, 255, 0.85) !important;
-  backdrop-filter: saturate(180%) blur(12px) !important;
-  -webkit-backdrop-filter: saturate(180%) blur(12px) !important;
-}
-
-/* Logo: heavy, tight, pop-black */
-.wjs-header-logo {
-  color: var(--wjs-logo-color) !important;
-  font-family: var(--wjs-font-family-heading) !important;
-  font-weight: 900 !important;
-  font-size: 1.4rem !important;
-  letter-spacing: -0.04em;
-}
-
-/* Nav Links: clean Space Grotesk, pink on hover */
 .wjs-header-nav a {
-  font-family: var(--wjs-nav-font-family) !important;
-  font-size: var(--wjs-nav-font-size) !important;
-  font-weight: var(--wjs-nav-font-weight) !important;
-  color: var(--wjs-nav-color) !important;
-  text-transform: var(--wjs-nav-text-transform) !important;
-  letter-spacing: var(--wjs-nav-letter-spacing) !important;
-  transition: var(--wjs-nav-transition) !important;
-  text-decoration: none !important;
+  padding: 0.55rem 1.15rem;
+  border-radius: 999px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  transition: background-color 0.18s ease, color 0.18s ease;
 }
 
 .wjs-header-nav a:hover {
-  color: var(--wjs-nav-color-hover) !important;
+  background: var(--wjs-color-secondary);
+  color: var(--wjs-color-on-secondary);
 }
 
-.wjs-header-nav a:focus-visible {
-  outline: 3px solid var(--wjs-color-secondary) !important;
-  outline-offset: 3px;
-  border-radius: var(--wjs-radius-sm);
+.wjs-chrome-header .wjs-chrome-button {
+  padding: 0.7rem 1.6rem;
+  font-size: 0.95rem;
+  font-weight: 700;
+  box-shadow: 0 8px 20px rgba(236, 72, 153, 0.35);
 }
 
-/* Content: heavy Archivo headings */
-h1,
-h2,
-h3 {
-  font-family: var(--wjs-font-family-heading) !important;
-  font-weight: 900 !important;
-  letter-spacing: -0.03em;
-  line-height: 1.05 !important;
-  color: var(--wjs-color-text-main) !important;
+.wjs-chrome-header .wjs-chrome-button:hover {
+  box-shadow: 0 12px 26px rgba(236, 72, 153, 0.42);
 }
 
-/* Cards: rounded surface with neo-pop solid-offset shadow */article {
-  background: var(--wjs-bg-surface) !important;
-  border: 2px solid var(--wjs-color-text-main) !important;
-  border-radius: var(--wjs-radius-lg) !important;
-  box-shadow: var(--wjs-shadow-pop) !important;
-  transition: box-shadow 0.2s ease, border-color 0.2s ease !important;
-}article:hover {
-  border-color: var(--wjs-color-primary) !important;
-  box-shadow: var(--wjs-shadow-pop-pink) !important;
+/* --- Footer: three ink columns + a hairline colophon ----------------------- */
+footer.wjs-chrome-footer {
+  padding-block: 4.5rem 2.25rem;
+  border-top: 0;
 }
 
-/* Footer: solid near-black */
-footer {
-  background-color: var(--wjs-footer-bg) !important;
-  color: var(--wjs-footer-text-body) !important;
-  border-top: none !important;
+.wjs-chrome-footer .wjs-chrome-row {
+  align-items: flex-start;
 }
 
-footer h3,
-footer h4 {
-  color: var(--wjs-footer-text-heading) !important;
-  font-family: var(--wjs-font-family-heading) !important;
-  font-weight: 800 !important;
-  letter-spacing: -0.01em;
+.wjs-chrome-footer .wjs-chrome-row .wjs-chrome-row {
+  flex: 1 1 15rem;
+  flex-direction: column;
+  gap: 1rem;
 }
 
-footer a {
-  color: var(--wjs-footer-text-body) !important;
-  text-decoration: none !important;
-  transition: color 0.18s ease !important;
+.wjs-chrome-footer .wjs-chrome-row .wjs-chrome-row > .wjs-chrome-text:first-child {
+  font-family: var(--wjs-font-family-heading);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--wjs-color-primary);
 }
 
-footer a:hover {
-  color: var(--wjs-footer-text-hover) !important;
+.wjs-chrome-footer .wjs-chrome-site-title a {
+  font-family: var(--wjs-font-family-heading);
+  font-size: 2rem;
+  letter-spacing: -0.045em;
+  color: var(--wjs-color-text-footer-heading, #ffffff);
 }
 
-/* Footer social icons: pill chips */
-footer .w-10 {
-  background-color: var(--wjs-footer-icon-bg) !important;
-  color: var(--wjs-footer-icon-color) !important;
-  border-radius: var(--wjs-radius-pill) !important;
-  transition: background-color 0.18s ease, color 0.18s ease !important;
+.wjs-chrome-footer .wjs-chrome-site-title span {
+  max-width: 22rem;
+  color: var(--wjs-color-text-footer-dim, #b9b9b9);
 }
 
-footer .w-10:hover {
-  background-color: var(--wjs-color-primary) !important;
-  color: #ffffff !important;
+.wjs-chrome-footer .wjs-chrome-nav-vertical {
+  gap: 0.6rem;
 }
 
-/* ══ BLOCK TOKENS ═══════════════════════════════════════════════════════════════════════
- * Lifted from this theme's former `.wp-block-*` rules. wordjs-ui.css owns the block RULES;
- * a theme owns only the VALUES, so a single block can still override any of them.
- * ════════════════════════════════════════════════════════════════════════════════════ */
-:root {
-  --wjs-card-bg: var(--wjs-bg-surface);
-  --wjs-card-border-width: 2px;
-  --wjs-card-border-color: var(--wjs-color-text-main);
-  --wjs-card-radius: var(--wjs-radius-lg);
-  --wjs-card-shadow: var(--wjs-shadow-pop);
-  --wjs-card-hover-border-color: var(--wjs-color-primary);
-  --wjs-card-hover-shadow: var(--wjs-shadow-pop-pink);
-  --wjs-accordion-border-width: 2px;
-  --wjs-accordion-border-color: var(--wjs-color-text-main);
-  --wjs-accordion-radius: var(--wjs-radius-md);
-  --wjs-accordion-shadow: var(--wjs-shadow-pop);
-  --wjs-accordion-header-bg: #fdf2f8;
-  --wjs-accordion-header-color: var(--wjs-color-primary);
-  --wjs-accordion-header-border-width: 1px;
-  --wjs-accordion-header-border-color: var(--wjs-border-subtle);
-  --wjs-accordion-header-family: var(--wjs-font-family-heading);
-  --wjs-accordion-header-weight: 700;
-  --wjs-accordion-header-tracking: -0.01em;
-  --wjs-accordion-panel-bg: #fafafa;
-  --wjs-accordion-panel-color: var(--wjs-color-text-muted);
-  --wjs-tabs-list-border-width: 2px;
-  --wjs-tabs-list-border-color: var(--wjs-color-text-main);
-  --wjs-tabs-color: var(--wjs-color-text-main);
-  --wjs-tabs-family: var(--wjs-font-family-heading);
-  --wjs-tabs-weight: 700;
-  --wjs-tabs-tracking: -0.01em;
-  --wjs-tabs-radius: var(--wjs-radius-sm) var(--wjs-radius-sm) 0 0;
-  --wjs-tabs-active-color: var(--wjs-color-primary);
-  --wjs-tabs-panel-bg: var(--wjs-bg-surface);
-  --wjs-tabs-panel-border-width: 0;
-  --wjs-tabs-panel-border-color: transparent;
-  --wjs-tabs-panel-radius: 0 0 var(--wjs-radius-md) var(--wjs-radius-md);
-  --wjs-video-border-width: 2px;
-  --wjs-video-border-color: var(--wjs-color-text-main);
-  --wjs-video-radius: var(--wjs-radius-lg);
-  --wjs-video-shadow: var(--wjs-shadow-pop);
-  --wjs-audio-bg: var(--wjs-bg-surface);
-  --wjs-audio-border-width: 2px;
-  --wjs-audio-border-color: var(--wjs-color-text-main);
-  --wjs-audio-radius: var(--wjs-radius-md);
-  --wjs-audio-shadow: var(--wjs-shadow-pop);
-  --wjs-pricing-bg: var(--wjs-bg-surface);
-  --wjs-pricing-border-width: 2px;
-  --wjs-pricing-border-color: var(--wjs-color-text-main);
-  --wjs-pricing-radius: var(--wjs-radius-lg);
-  --wjs-pricing-shadow: var(--wjs-shadow-pop);
-  --wjs-pricing-hover-shadow: var(--wjs-shadow-pop-cyan);
-  --wjs-pricing-name-tracking: -0.02em;
-  --wjs-pricing-highlight-bg: var(--wjs-color-primary);
-  --wjs-pricing-highlight-color: #ffffff;
-  --wjs-pricing-highlight-scale: 1;
-  --wjs-pricing-highlight-border-width: 2px;
-  --wjs-pricing-highlight-border-color: var(--wjs-color-text-main);
-  --wjs-pricing-highlight-shadow: var(--wjs-shadow-pop);
-  --wjs-pricing-highlight-name-color: #ffffff;
-  --wjs-pricing-highlight-hover-shadow: 4px 4px 0 0 var(--wjs-color-secondary);
-  --wjs-testimonial-bg: var(--wjs-bg-surface);
-  --wjs-testimonial-border-width: 8px;
-  --wjs-testimonial-border-color: var(--wjs-color-secondary);
-  --wjs-testimonial-radius: var(--wjs-radius-lg);
-  --wjs-testimonial-shadow: var(--wjs-shadow-soft);
-  --wjs-testimonial-mark-color: var(--wjs-color-primary);
-  --wjs-cta-bg: var(--wjs-color-primary);
-  --wjs-cta-border-width: 0;
-  --wjs-cta-border-color: transparent;
-  --wjs-cta-radius: var(--wjs-radius-lg);
-  --wjs-cta-shadow: var(--wjs-shadow-soft-lg);
-  --wjs-cta-title-color: #ffffff;
-  --wjs-cta-title-tracking: -0.02em;
-  --wjs-cta-button-bg: var(--wjs-color-text-main);
-  --wjs-cta-button-color: #ffffff;
-  --wjs-cta-button-family: var(--wjs-font-family-heading);
-  --wjs-cta-button-weight: 700;
-  --wjs-cta-button-tracking: 0.01em;
-  --wjs-cta-button-radius: var(--wjs-radius-pill);
-  --wjs-cta-button-hover-bg: var(--wjs-color-secondary);
-  --wjs-cta-button-hover-shadow: 0 8px 20px -6px rgba(0, 0, 0, 0.35);
-  --wjs-posts-bg: var(--wjs-bg-surface);
-  --wjs-posts-border-width: 2px;
-  --wjs-posts-border-color: var(--wjs-color-text-main);
-  --wjs-posts-radius: var(--wjs-radius-lg);
-  --wjs-posts-shadow: var(--wjs-shadow-pop);
-  --wjs-posts-hover-border-color: var(--wjs-color-primary);
-  --wjs-posts-hover-shadow: var(--wjs-shadow-pop-pink);
-  --wjs-catposts-heading-family: var(--wjs-font-family-heading);
-  --wjs-catposts-heading-weight: 900;
-  --wjs-catposts-heading-tracking: -0.02em;
-  --wjs-catposts-heading-border-width: 3px;
-  --wjs-catposts-heading-border-color: var(--wjs-color-primary);
-  --wjs-catposts-heading-pad: 8px;
-  --wjs-catposts-border-color: var(--wjs-border-subtle);
-  --wjs-catposts-link-weight: 600;
-  --wjs-catposts-link-color: var(--wjs-color-text-main);
-  --wjs-catposts-link-hover-color: var(--wjs-color-secondary);
-  --wjs-search-input-bg: var(--wjs-bg-surface);
-  --wjs-search-input-border-width: 2px;
-  --wjs-search-input-border-color: var(--wjs-color-text-main);
-  --wjs-search-input-radius: var(--wjs-radius-pill);
-  --wjs-search-input-color: var(--wjs-color-text-main);
-  --wjs-search-placeholder-color: var(--wjs-color-text-muted);
-  --wjs-search-focus-color: var(--wjs-color-primary);
-  --wjs-search-focus-ring: 0 0 0 4px rgba(236, 72, 153, 0.22);
-  --wjs-search-button-bg: var(--wjs-color-primary-dark);
-  --wjs-search-button-color: #ffffff;
-  --wjs-search-button-family: var(--wjs-font-family-heading);
-  --wjs-search-button-weight: 700;
-  --wjs-search-button-tracking: 0.01em;
-  --wjs-search-button-radius: var(--wjs-radius-pill);
-  --wjs-search-button-shadow: 0 8px 18px -6px rgba(219, 39, 119, 0.5);
+/* The social chips default to --wjs-bg-surface-hover, a LIGHT surface here —
+   invisible on the ink footer. Re-tint them against the footer instead. */
+.wjs-chrome-footer .wjs-chrome-socials a {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+}
+
+.wjs-chrome-footer .wjs-chrome-socials a:hover {
+  background: var(--wjs-color-primary);
+  border-color: var(--wjs-color-primary);
+}
+
+.wjs-chrome-footer > .wjs-footer-container > .wjs-chrome-row + .wjs-chrome-row {
+  align-items: center;
+  margin-top: 3.25rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.14);
+  font-size: 0.85rem;
 }

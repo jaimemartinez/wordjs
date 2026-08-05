@@ -1,6 +1,180 @@
 {
   "name": "Sepia Press",
-  "version": "1.0.1",
+  "version": "1.0.4",
   "description": "Warm editorial magazine — serif headlines on paper.",
-  "author": "WordJS"
+  "author": "WordJS",
+  "generator": "wordjs",
+  "layout": {
+    "header": {
+      "variant": "classic",
+      "sticky": false,
+      "transparent": false
+    },
+    "footer": {
+      "variant": "columns",
+      "columns": 2
+    },
+    "containerWidth": "68rem"
+  },
+  "seeds": {
+    "primary": "#9a3328",
+    "secondary": "#5b6c5d",
+    "bg": "#faf8f3",
+    "text": "#141414"
+  },
+  "tokens": {
+    "--wjs-bg-canvas": "#faf8f3",
+    "--wjs-color-primary": "#9a3328",
+    "--wjs-color-primary-dark": "#9a3328",
+    "--wjs-color-on-primary": "#ffffff",
+    "--wjs-color-secondary": "#5b6c5d",
+    "--wjs-color-secondary-dark": "#5b6c5d",
+    "--wjs-color-on-secondary": "#ffffff",
+    "--wjs-color-text-main": "#141414",
+    "--wjs-color-heading": "#141414",
+    "--wjs-color-link": "#9a3328",
+    "--wjs-font-family-heading": "'Vollkorn', Georgia, 'Times New Roman', serif",
+    "--wjs-font-family-base": "'Libre Franklin', 'Segoe UI', system-ui, sans-serif",
+    "--wjs-radius": "4px",
+    "--wjs-radius-sm": "4px",
+    "--wjs-radius-md": "4px",
+    "--wjs-radius-lg": "4px",
+    "--wjs-radius-pill": "4px",
+    "--wjs-hero-bg": "#faf8f3",
+    "--wjs-hero-gradient-from": "#faf8f3",
+    "--wjs-hero-gradient-to": "#faf8f3",
+    "--wjs-hero-color": "#141414",
+    "--wjs-hero-title-color": "#9a3328",
+    "--wjs-hero-subtitle-color": "#141414",
+    "--wjs-hero-button-outline-color": "#9a3328",
+    "--wjs-hero-button-outline-border": "#9a3328",
+    "--wjs-bg-surface-glass": "#faf8f3",
+    "--wjs-bg-footer": "#2b211c",
+    "--wjs-color-text-footer-main": "#f4ede2",
+    "--wjs-color-text-footer-dim": "#b6a48e",
+    "--wjs-hero-gradient": "none",
+    "--wjs-hero-height": "auto",
+    "--wjs-hero-pad": "5.5rem 1.5rem 4.5rem",
+    "--wjs-hero-measure": "36rem",
+    "--wjs-hero-text-align": "left",
+    "--wjs-hero-justify": "flex-start",
+    "--wjs-hero-title-size": "clamp(2.25rem, 4.5vw, 3.5rem)",
+    "--wjs-hero-title-weight": "600",
+    "--wjs-hero-title-tracking": "-0.015em",
+    "--wjs-hero-subtitle-size": "1.28rem",
+    "--wjs-hero-subtitle-opacity": "0.86",
+    "--wjs-hero-border-width": "0px",
+    "--wjs-hero-radius": "0px",
+    "--wjs-hero-shadow": "none",
+    "--wjs-hero-actions-justify": "flex-start",
+    "--wjs-hero-button-radius": "2px",
+    "--wjs-hero-button-pad": "0.8rem 1.6rem"
+  },
+  "styles": {
+    "body": {
+      "font-size": "17px",
+      "line-height": "1.72"
+    },
+    "headings": {
+      "letter-spacing": "-0.012em",
+      "line-height": "1.22"
+    },
+    "logo": {
+      "font-family": "'Vollkorn', Georgia, 'Times New Roman', serif",
+      "letter-spacing": "-0.01em"
+    },
+    "nav": {
+      "font-family": "'Vollkorn', Georgia, 'Times New Roman', serif",
+      "font-size": "1.02rem",
+      "font-style": "italic",
+      "letter-spacing": "0.005em",
+      "text-transform": "none"
+    },
+    "footer": {
+      "font-size": "0.94rem",
+      "line-height": "1.7"
+    },
+    "hero": {
+      "title": {
+        "line-height": "1.1",
+        "margin-bottom": "1.35rem"
+      },
+      "subtitle": {
+        "line-height": "1.72",
+        "max-width": "34rem"
+      },
+      "inner": {
+        "margin-left": "0",
+        "margin-right": "auto"
+      }
+    },
+    "quote": {
+      "family": "'Vollkorn', Georgia, 'Times New Roman', serif",
+      "style": "italic",
+      "size": "1.6rem",
+      "weight": "500",
+      "bar-width": "2px",
+      "mark-size": "5rem",
+      "mark-opacity": "0.12",
+      "cite": {
+        "font-style": "normal",
+        "font-size": "0.86rem",
+        "letter-spacing": "0.05em"
+      }
+    },
+    "card": {
+      "radius": "2px",
+      "shadow": "none",
+      "border-width": "1px",
+      "pad": "1.75rem",
+      "title": {
+        "font-family": "'Vollkorn', Georgia, 'Times New Roman', serif",
+        "font-size": "1.35rem"
+      },
+      "description": {
+        "font-size": "0.98rem",
+        "line-height": "1.68"
+      }
+    },
+    "button": {
+      "link": {
+        "border-radius": "2px",
+        "text-transform": "none",
+        "letter-spacing": "0.01em",
+        "font-size": "0.95rem",
+        "font-weight": "600",
+        "padding": "0.75rem 1.5rem"
+      }
+    },
+    "posts-grid": {
+      "card": {
+        "border-radius": "2px",
+        "box-shadow": "none"
+      },
+      "title": {
+        "font-family": "'Vollkorn', Georgia, 'Times New Roman', serif",
+        "font-size": "1.5rem",
+        "line-height": "1.25"
+      },
+      "date": {
+        "font-style": "italic",
+        "font-size": "0.85rem",
+        "letter-spacing": "0.02em"
+      },
+      "excerpt": {
+        "font-size": "1rem",
+        "line-height": "1.68"
+      }
+    },
+    "testimonial": {
+      "quote-family": "'Vollkorn', Georgia, 'Times New Roman', serif",
+      "quote-style": "italic",
+      "quote-size": "1.35rem",
+      "radius": "2px",
+      "shadow": "none",
+      "border-width": "1px",
+      "role-transform": "none",
+      "role-tracking": "0.02em"
+    }
+  }
 }

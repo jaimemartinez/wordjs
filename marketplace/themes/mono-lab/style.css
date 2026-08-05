@@ -1,462 +1,291 @@
-@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;700;800;900&family=Space+Mono:ital,wght@0,400;0,700;1,400;1,700&display=swap');
-
-/* =========================================
-   THEME: MONO LAB (Brutalismo Monocromo)
-   Concept: Neo-brutalist studio. White paper, solid
-   black 2px borders everywhere, acid yellow #eaea00
-   accent, Outfit black-weight uppercase headlines,
-   Space Mono uppercase labels. Zero radius, zero
-   shadows, instant hover inversions.
-   Converted from the Stitch "Estudio Brutal" design.
-   ========================================= */
-
+/* @wjs-generated:start — compiled from theme.json; DO NOT EDIT inside. Edit theme.json and run: node backend/cli/wordjs.js build theme mono-lab */
 :root {
-  /* --- CANONICAL COLORS (from tailwind.config + markup) --- */
-  --wjs-color-primary: #000000;
-  /* Ink (design "primary") */
-  --wjs-color-primary-dark: #1b1b1b;
-  /* Design primary-container */
-  --wjs-color-secondary: #5d5f5f;
-  /* Design "secondary" gray */
-  --wjs-color-secondary-dark: #454747;
-  /* Design on-secondary-fixed-variant */
-  --wjs-color-accent: #eaea00;
-  /* Acid yellow (design tertiary-fixed / selection) */
-  --wjs-color-success: #16a34a;
-  --wjs-color-danger: #ba1a1a;
-  /* Design "error" */
-  --wjs-color-warning: #cdcd00;
-  /* Design tertiary-fixed-dim */
-  --wjs-color-info: #0ea5e9;
-  --wjs-color-light: #f9f9f9;
-  /* Design surface */
-  --wjs-color-dark: #000000;
-
-  /* --- ON-COLORS (max-contrast text per luminance) --- */
-  --wjs-color-on-primary: #ffffff;
-  --wjs-color-on-secondary: #ffffff;
-  --wjs-color-on-accent: #1d1d00;
-  /* Ink on acid yellow (design on-tertiary-fixed) */
-  --wjs-color-on-success: #161616;
-  --wjs-color-on-danger: #ffffff;
-  --wjs-color-on-warning: #1d1d00;
-  --wjs-color-on-info: #161616;
-  --wjs-color-on-light: #1b1b1b;
-  --wjs-color-on-dark: #ffffff;
-
-  /* --- SURFACES / TEXT / BORDERS --- */
   --wjs-bg-canvas: #f9f9f9;
-  /* Measured: the design's page wrap paints #f9f9f9 over the white body */
-  --wjs-bg-surface: #ffffff;
-  --wjs-bg-muted: #eeeeee;
-  /* Design surface-container */
+  --wjs-bg-surface: #f2f2f2;
+  --wjs-bg-surface-raised: #eaeaea;
+  --wjs-color-primary: #111111;
+  --wjs-color-primary-dark: #111111;
+  --wjs-color-on-primary: #ffffff;
+  --wjs-color-accent: #e11d48;
+  --wjs-color-on-accent: #ffffff;
+  --wjs-color-text-main: #141414;
+  --wjs-color-text-muted: #6b6b6b;
+  --wjs-color-heading: #141414;
+  --wjs-color-link: #111111;
+  --wjs-color-link-hover: #e11d48;
+  --wjs-border-subtle: #d0d0d0;
+  --wjs-outline: #a2a2a2;
+  --wjs-outline-variant: #d7d7d7;
+  --wjs-focus-ring: #111111;
+  --wjs-color-secondary: #e11d48;
+  --wjs-color-secondary-dark: #e11d48;
+  --wjs-color-on-secondary: #ffffff;
+  --wjs-font-family-heading: 'Space Grotesk', 'Segoe UI', system-ui, sans-serif;
+  --wjs-font-family-base: 'Space Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --wjs-radius: 4px;
+  --wjs-radius-sm: 4px;
+  --wjs-radius-md: 4px;
+  --wjs-radius-lg: 4px;
+  --wjs-radius-pill: 4px;
+  --wjs-header-offset: 0rem;
   --wjs-bg-surface-glass: #f9f9f9;
-  /* Opaque nav — no glass in brutalism */
-  --wjs-bg-footer: #f9f9f9;
-  /* Measured footer: paper panel, black ink */
-  --wjs-color-text-footer-main: #000000;
-  --wjs-color-text-footer-dim: #000000;
-  --wjs-color-text-main: #1b1b1b;
-  --wjs-color-text-muted: #5d5f5f;
-  --wjs-color-heading: #000000;
-  --wjs-color-link: #000000;
-  --wjs-color-link-hover: #1b1b1b;
-  --wjs-border-subtle: #000000;
-  /* ALL structural borders are black */
-  --wjs-border-width: 2px;
-  /* ...and 2px thick */
-  --wjs-focus-ring: rgba(234, 234, 0, 0.7);
-
-  /* --- TYPOGRAPHY (Outfit display / Space Mono labels) --- */
-  --wjs-font-family-base: 'Outfit', system-ui, -apple-system, sans-serif;
-  --wjs-font-family-heading: 'Outfit', system-ui, sans-serif;
-  --wjs-font-family-mono: 'Space Mono', ui-monospace, Menlo, Consolas, monospace;
-  --wjs-font-size-base: 1rem;
-  --wjs-line-height-base: 1.5;
-  --wjs-heading-weight: 900;
-  --wjs-heading-line-height: 1.05;
-  --wjs-heading-transform: uppercase;
-  --wjs-h1: 5rem;
-  /* Measured display 80px desktop (framework caps mobile at 2.25rem) */
+  --wjs-footer-bg: #f2f2f0;
+  --wjs-footer-text-body: #54544f;
+  --wjs-footer-text-heading: #111111;
+  --wjs-color-text-footer-dim: #8a8a84;
+  --wjs-xs: 4px;
+  --wjs-sm: 8px;
+  --wjs-md: 16px;
+  --wjs-lg: 28px;
+  --wjs-xl: 44px;
+  --wjs-2xl: 72px;
+  --wjs-h1: 3rem;
+  --wjs-h1-tracking: -0.045em;
   --wjs-h1-leading: 1;
-  /* Measured 80px/80px */
-  --wjs-h2: 2.5rem;
-  /* headline-lg 40px */
-  --wjs-h3: 1.5rem;
-  /* headline-sm 24px */
-  --wjs-h4: 1.25rem;
-  --wjs-h5: 1.125rem;
-  --wjs-h6: 1rem;
-  --wjs-h1-tracking: -0.04em;
-  --wjs-h2-tracking: -0.01em;
-
-  /* --- SHAPE / SHADOW: none. Brutal. --- */
-  --wjs-spacer: 1rem;
-  --wjs-radius-sm: 0;
-  --wjs-radius: 0;
-  --wjs-radius-md: 0;
-  --wjs-radius-lg: 0;
-  --wjs-radius-pill: 0;
-  --wjs-shadow-sm: none;
+  --wjs-h2: 1.9rem;
+  --wjs-h2-tracking: -0.03em;
+  --wjs-h3: 1.3rem;
+  --wjs-border-width: 1px;
   --wjs-shadow: none;
+  --wjs-shadow-sm: none;
   --wjs-shadow-md: none;
   --wjs-shadow-lg: none;
-
-  /* ── BLOCK TOKENS (derived from the design markup) ─────────────── */
-
-  /* Buttons — acid yellow slab, 2px black border, Space Mono caps,
-     hover inverts to solid black (design CTA) */
-  --wjs-button-bg: #eaea00;
-  --wjs-button-color: #000000;
-  --wjs-button-family: 'Space Mono', ui-monospace, monospace;
-  --wjs-button-size: 0.875rem;
-  --wjs-button-weight: 700;
-  --wjs-button-transform: uppercase;
-  --wjs-button-leading: 1;
-  --wjs-button-radius: 0;
-  --wjs-button-pad-x: 32px;
-  --wjs-button-pad-y: 16px;
-  --wjs-button-border-width: 2px;
-  --wjs-button-border-color: #000000;
-  --wjs-button-shadow: none;
-  --wjs-button-hover-bg: #000000;
-  --wjs-button-hover-color: #ffffff;
-  --wjs-button-hover-shadow: none;
-  --wjs-button-hover-transform: none;
-
-  /* Cards — white cells with 2px black frames; hover floods yellow */
-  --wjs-card-bg: #ffffff;
-  --wjs-card-border-width: 2px;
-  --wjs-card-border-color: #000000;
-  --wjs-card-radius: 0;
-  --wjs-card-pad: 2rem;
-  --wjs-card-shadow: none;
-  --wjs-card-title-color: #000000;
-  --wjs-card-title-size: 1.5rem;
-  /* Measured 24px (framework default is 20px) */
-  --wjs-card-title-weight: 900;
-  --wjs-card-title-transform: uppercase;
-  --wjs-card-desc-color: #1b1b1b;
-  --wjs-card-icon-bg: transparent;
-  --wjs-card-icon-color: #000000;
-  --wjs-card-icon-radius: 0;
-  --wjs-card-icon-size: 4rem;
-  --wjs-card-icon-glyph: 4rem;
-  /* Measured: bare 64px glyph, no box */
-  --wjs-card-hover-bg: #eaea00;
-  --wjs-card-hover-border-color: #000000;
-  --wjs-card-hover-shadow: none;
-  --wjs-card-hover-transform: none;
-
-  /* Hero — paper canvas, left aligned, giant black uppercase display */
-  --wjs-hero-bg: transparent;
-  --wjs-hero-gradient: none;
-  --wjs-hero-color: #000000;
+  --wjs-shadow-2: none;
+  --wjs-shadow-3: none;
+  --wjs-hero-bg: #f9f9f9;
+  --wjs-hero-gradient-from: #f9f9f9;
+  --wjs-hero-gradient-to: #f9f9f9;
+  --wjs-hero-color: #141414;
+  --wjs-hero-title-color: #111111;
+  --wjs-hero-subtitle-color: #141414;
+  --wjs-hero-button-outline-color: #111111;
+  --wjs-hero-button-outline-border: #111111;
+  --wjs-hero-height: auto;
+  --wjs-hero-pad: 0 0 2rem;
+  --wjs-hero-justify: flex-start;
   --wjs-hero-text-align: left;
-  --wjs-hero-actions-justify: flex-start;
-  --wjs-hero-title-color: #000000;
-  --wjs-hero-title-size: 5rem;
-  --wjs-hero-title-weight: 900;
-  --wjs-hero-title-tracking: -0.04em;
-  --wjs-hero-subtitle-color: #1b1b1b;
-  --wjs-hero-subtitle-size: 1.125rem;
-  --wjs-hero-subtitle-opacity: 1;
+  --wjs-hero-measure: 56rem;
+  --wjs-hero-border-width: 0;
   --wjs-hero-radius: 0;
   --wjs-hero-shadow: none;
-  --wjs-hero-button-bg: #eaea00;
-  --wjs-hero-button-color: #000000;
+  --wjs-hero-actions-justify: flex-start;
+  --wjs-hero-title-size: clamp(2.5rem, 7vw, 4.5rem);
+  --wjs-hero-title-tracking: -0.05em;
+  --wjs-hero-title-weight: 700;
+  --wjs-hero-subtitle-size: 0.9375rem;
+  --wjs-hero-subtitle-opacity: 0.7;
+  --wjs-hero-button-pad: 12px 22px;
   --wjs-hero-button-radius: 0;
-  --wjs-hero-button-pad: 16px 32px;
-  --wjs-hero-button-size: 0.875rem;
-  --wjs-hero-button-weight: 700;
-  --wjs-hero-button-outline-bg: #ffffff;
-  --wjs-hero-button-outline-border: #000000;
-  --wjs-hero-button-outline-color: #000000;
-  --wjs-hero-button-outline-hover-bg: #eaea00;
-
-  /* Pricing — 2px black frames; highlighted plan floods yellow with a
-     black button (design "Pro") */
-  --wjs-pricing-accent: #000000;
-  --wjs-pricing-bg: #ffffff;
-  --wjs-pricing-border-width: 2px;
-  --wjs-pricing-border-color: #000000;
+  --wjs-hero-button-size: 0.8125rem;
+  --wjs-hero-button-weight: 600;
+  --wjs-hero-button-outline-hover-bg: rgba(17, 17, 17, 0.06);
+  --wjs-card-bg: #ffffff;
+  --wjs-card-border-width: 1px;
+  --wjs-card-border-color: #111111;
+  --wjs-card-radius: 0;
+  --wjs-card-shadow: none;
+  --wjs-card-pad: 1.5rem;
+  --wjs-card-hover-bg: #ffffff;
+  --wjs-card-hover-border-color: #e11d48;
+  --wjs-card-hover-transform: none;
+  --wjs-card-hover-shadow: none;
+  --wjs-card-title-size: 0.9375rem;
+  --wjs-card-title-transform: uppercase;
+  --wjs-card-title-tracking: 0.06em;
+  --wjs-card-icon-radius: 0;
+  --wjs-button-radius: 0;
+  --wjs-button-pad-x: 22px;
+  --wjs-button-pad-y: 12px;
+  --wjs-button-size: 0.75rem;
+  --wjs-button-weight: 600;
+  --wjs-button-tracking: 0.12em;
+  --wjs-button-transform: uppercase;
+  --wjs-button-shadow: none;
+  --wjs-button-hover-shadow: none;
+  --wjs-button-hover-transform: none;
+  --wjs-button-border-width: 1px;
+  --wjs-search-input-bg: #ffffff;
+  --wjs-search-input-border-color: #111111;
+  --wjs-search-input-border-width: 1px;
+  --wjs-search-input-radius: 0;
+  --wjs-search-button-radius: 0;
+  --wjs-search-button-transform: uppercase;
+  --wjs-search-button-tracking: 0.1em;
+  --wjs-quote-style: normal;
+  --wjs-quote-bar-width: 4px;
+  --wjs-quote-accent: #e11d48;
+  --wjs-quote-tracking: -0.02em;
+  --wjs-stats-bg: transparent;
+  --wjs-stats-border-width: 1px;
+  --wjs-stats-border-color: #111111;
+  --wjs-stats-radius: 0;
+  --wjs-stats-shadow: none;
+  --wjs-stats-value-tracking: -0.04em;
+  --wjs-stats-label-transform: uppercase;
+  --wjs-stats-label-tracking: 0.16em;
+  --wjs-stats-label-size: 0.6875rem;
+  --wjs-tabs-radius: 0;
+  --wjs-tabs-list-radius: 0;
+  --wjs-tabs-list-border-width: 1px;
+  --wjs-tabs-active-border-width: 2px;
+  --wjs-tabs-transform: uppercase;
+  --wjs-tabs-tracking: 0.1em;
+  --wjs-tabs-active-shadow: none;
+  --wjs-accordion-radius: 0;
+  --wjs-accordion-item-radius: 0;
+  --wjs-accordion-shadow: none;
+  --wjs-accordion-separator-width: 1px;
+  --wjs-accordion-header-transform: uppercase;
+  --wjs-accordion-header-tracking: 0.08em;
+  --wjs-cta-radius: 0;
+  --wjs-cta-button-radius: 0;
+  --wjs-cta-button-transform: uppercase;
   --wjs-pricing-radius: 0;
   --wjs-pricing-shadow: none;
-  --wjs-pricing-hover-shadow: none;
-  --wjs-pricing-hover-transform: none;
-  --wjs-pricing-name-family: 'Space Mono', ui-monospace, monospace;
-  --wjs-pricing-name-transform: uppercase;
-  --wjs-pricing-name-size: 0.875rem;
-  --wjs-pricing-name-color: #000000;
-  --wjs-pricing-price-color: #000000;
-  --wjs-pricing-price-weight: 900;
-  --wjs-pricing-feature-color: #1b1b1b;
-  --wjs-pricing-button-bg: #ffffff;
-  --wjs-pricing-button-color: #000000;
-  --wjs-pricing-button-border-color: #000000;
-  --wjs-pricing-button-radius: 0;
-  --wjs-pricing-button-weight: 700;
-  --wjs-pricing-highlight-bg: #eaea00;
-  --wjs-pricing-highlight-border-width: 2px;
-  --wjs-pricing-highlight-border-color: #000000;
+  --wjs-pricing-border-width: 1px;
   --wjs-pricing-highlight-scale: 1;
   --wjs-pricing-highlight-shadow: none;
-  --wjs-pricing-highlight-hover-shadow: none;
-  --wjs-pricing-highlight-name-color: #000000;
-  --wjs-pricing-highlight-feature-color: #1d1d00;
-  --wjs-pricing-highlight-button-bg: #000000;
-  --wjs-pricing-button-on-accent: #ffffff;
-
-  /* Testimonial — full acid-yellow slab, black uppercase shout,
-     square framed avatar */
-  --wjs-testimonial-bg: #eaea00;
-  --wjs-testimonial-border-width: 2px;
-  --wjs-testimonial-border-color: #000000;
-  --wjs-testimonial-radius: 0;
-  --wjs-testimonial-shadow: none;
-  --wjs-testimonial-quote-family: 'Outfit', system-ui, sans-serif;
-  --wjs-testimonial-quote-style: normal;
-  --wjs-testimonial-quote-color: #000000;
-  --wjs-testimonial-quote-size: 1.5rem;
-  --wjs-testimonial-mark-color: #000000;
-  --wjs-testimonial-mark-opacity: 1;
-  --wjs-testimonial-author-color: #000000;
-  --wjs-testimonial-author-family: 'Space Mono', ui-monospace, monospace;
-  --wjs-testimonial-role-color: #1b1b1b;
-  --wjs-testimonial-role-transform: uppercase;
-  --wjs-testimonial-avatar-radius: 0;
-
-  /* Blockquote — thick black bar, no italics */
-  --wjs-quote-accent: #000000;
-  --wjs-quote-bar-width: 8px;
-  --wjs-quote-style: normal;
-  --wjs-quote-weight: 700;
-  --wjs-quote-color: #000000;
-  --wjs-quote-cite-color: #1b1b1b;
-
-  /* Search — inheritance source for inputs: white slabs with 2px
-     black borders, yellow flash on focus, yellow mono button */
-  --wjs-search-input-bg: #ffffff;
-  --wjs-search-input-border-width: 2px;
-  --wjs-search-input-border-color: #000000;
-  --wjs-search-input-radius: 0;
-  --wjs-search-input-pad: 16px;
-  --wjs-search-input-color: #000000;
-  --wjs-search-input-family: 'Outfit', system-ui, sans-serif;
-  --wjs-search-placeholder-color: #7e7576;
-  --wjs-search-focus-color: #000000;
-  --wjs-search-focus-ring: 0 0 0 3px rgba(234, 234, 0, 0.8);
-  --wjs-search-button-bg: #eaea00;
-  --wjs-search-button-color: #000000;
-  --wjs-search-button-border-width: 2px;
-  --wjs-search-button-border-color: #000000;
-  --wjs-search-button-radius: 0;
-  --wjs-search-button-family: 'Space Mono', ui-monospace, monospace;
-  --wjs-search-button-weight: 700;
-  --wjs-search-button-transform: uppercase;
-
-  /* Forms — mono caps labels, yellow submit (inherits button) */
-  --wjs-form-label-color: #000000;
-  --wjs-form-label-size: 0.75rem;
-  --wjs-form-label-weight: 700;
-
-  /* Accordion — black-framed cells, mono caps headers, yellow hover */
-  --wjs-accordion-bg: #ffffff;
-  --wjs-accordion-border-width: 2px;
-  --wjs-accordion-border-color: #000000;
-  --wjs-accordion-radius: 0;
-  --wjs-accordion-header-bg: #ffffff;
-  --wjs-accordion-header-color: #000000;
-  --wjs-accordion-header-family: 'Space Mono', ui-monospace, monospace;
-  --wjs-accordion-header-weight: 700;
-  --wjs-accordion-header-transform: uppercase;
-  --wjs-accordion-header-hover-bg: #eaea00;
-  --wjs-accordion-panel-bg: #f9f9f9;
-  --wjs-accordion-panel-color: #1b1b1b;
-
-  /* Tabs — black underline strip, yellow active cell */
-  --wjs-tabs-list-border-width: 2px;
-  --wjs-tabs-list-border-color: #000000;
-  --wjs-tabs-family: 'Space Mono', ui-monospace, monospace;
-  --wjs-tabs-transform: uppercase;
-  --wjs-tabs-weight: 700;
-  --wjs-tabs-color: #000000;
-  --wjs-tabs-active-bg: #eaea00;
-  --wjs-tabs-active-color: #000000;
-
-  /* Posts grid — black frames, no float */
-  --wjs-posts-bg: #ffffff;
-  --wjs-posts-border-width: 2px;
-  --wjs-posts-border-color: #000000;
-  --wjs-posts-radius: 0;
-  --wjs-posts-shadow: none;
-  --wjs-posts-hover-border-color: #000000;
-  --wjs-posts-hover-shadow: none;
-  --wjs-posts-hover-transform: none;
-  --wjs-posts-title-color: #000000;
-  --wjs-posts-thumb-radius: 0;
-
-  /* CTA banner — yellow slab, black button */
-  --wjs-cta-bg: #eaea00;
-  --wjs-cta-color: #000000;
-  --wjs-cta-border-width: 2px;
-  --wjs-cta-border-color: #000000;
-  --wjs-cta-radius: 0;
-  --wjs-cta-title-color: #000000;
-  --wjs-cta-title-transform: uppercase;
-  --wjs-cta-title-tracking: -0.01em;
-  --wjs-cta-button-bg: #000000;
-  --wjs-cta-button-color: #ffffff;
-  --wjs-cta-button-family: 'Space Mono', ui-monospace, monospace;
-  --wjs-cta-button-transform: uppercase;
-  --wjs-cta-button-weight: 700;
-  --wjs-cta-button-radius: 0;
+  --wjs-pricing-name-transform: uppercase;
+  --wjs-pricing-name-tracking: 0.12em;
 }
-
-/* =========================================
-   SITE CHROME (no !important)
-   ========================================= */
-
-/* Header: flat bar over a 2px black rule */
-header {
-  border-bottom: 2px solid #000000;
-}
-
-.wjs-header-logo span {
-  font-family: 'Outfit', system-ui, sans-serif;
-  font-weight: 900;
-  text-transform: uppercase;
-  letter-spacing: -0.02em;
-  color: #000000;
-}
-
-.wjs-header-nav a {
-  font-family: 'Outfit', system-ui, sans-serif;
-  font-size: 1rem;
-  text-transform: uppercase;
-  color: #000000;
-  padding: 4px 8px;
-  transition: background-color 0.1s linear, color 0.1s linear;
-}
-
-.wjs-header-nav a:hover {
-  background-color: #000000;
-  color: #ffffff;
-}
-
-/* Hamburger: square, not a pill */
-.wjs-header-actions button {
-  border-radius: 0;
-}
-
-/* Footer: paper panel over black rule, mono caps links */
-footer[class] {
-  /* Measured 2px black top rule (the chrome's border-t utility is 1px) */
-  border-top-width: 2px;
-}
-
-footer h3,
-footer h4 {
-  font-size: 1.5rem;
-  /* Measured footer headings 24px */
-  font-weight: 900;
-  text-transform: uppercase;
-}
-
-footer a {
-  font-family: 'Space Mono', ui-monospace, monospace;
-  font-size: 0.875rem;
-  /* Measured footer links 14px */
-  text-transform: uppercase;
-  transition: background-color 0.075s linear, color 0.075s linear;
-}
-
-footer a:hover {
-  background-color: #eaea00;
-  color: #1d1d00;
-}
-
-/* ===== Mobile fit ===== */
+body { line-height: 1.6 }
+.wjs-header-nav { gap: 2rem; font-size: 0.75rem; font-weight: 500; letter-spacing: 0.1em; text-transform: uppercase; align-items: baseline }
+.wjs-header-logo { font-weight: 700; letter-spacing: -0.03em }
+footer { margin-top: 5rem; padding-top: 3rem; padding-bottom: 2rem; border-top-width: 2px; border-top-style: solid; border-top-color: #111111; font-size: 0.8125rem }
+.wp-block-hero__title { display: block; text-transform: none; padding-bottom: 1rem; border-bottom-width: 2px; border-bottom-style: solid; border-bottom-color: #111111 }
+.wp-block-hero__subtitle { max-width: 38rem; letter-spacing: 0.01em }
+.wp-block-card__title { line-height: 1.25 }
+.wp-block-stats__item { text-align: left }
 @media (max-width: 767.98px) {
-
-  .wjs-header-logo span {
-    font-size: 1.125rem;
-    letter-spacing: 0;
-  }
-
-  /* Uppercase mono labels never force a single unbreakable line */
-  .wp-block-cta-banner__button,
-  .wp-block-search__button,
-  .wp-block-accordion__header,
-  .wp-block-tabs__tab {
-    white-space: normal;
-    max-width: 100%;
-  }
-
-  .wjs-header-nav a {
-    white-space: normal;
-  }
+  .wp-block-hero { padding: 0 0 1.5rem }
 }
+/* @wjs-generated:end */
 
-/* =========================================
-   DISTINCTIVE RULES (brutalist signature)
-   ========================================= */
+/* Mono Lab — generated from a Stitch design system. Edit theme.json, then: wordjs build theme mono-lab */
 
-/* Acid selection (design ::selection) */
-::selection {
-  background: #eaea00;
-  color: #000000;
+/* =====================================================================
+   CHROME FINISH — hand-written, outside the generated block on purpose.
+   Targets the composable-chrome hook classes (.wjs-chrome-*), the
+   documented styling surface for a theme's chrome/*.json composition
+   (documentation/themes.md, "Composable chrome"). No !important: the
+   theme sheet is UNLAYERED and Tailwind utilities live in
+   @layer utilities, so these rules already win the cascade.
+   ===================================================================== */
+
+/* --- Masthead: paper, no shadow, closed by a visible DOUBLE rule. ---- */
+.wjs-chrome-header {
+  position: static;
+  padding: 0;
+  background: var(--wjs-bg-canvas);
+  box-shadow: none;
+  backdrop-filter: none;
+  border-bottom: 4px double #111111;
 }
-
-/* Uppercase headline voice on content headings */
-h1,
-h2,
-h3 {
+.wjs-chrome-header .wjs-header-container {
+  padding-top: 1.25rem;
+  padding-bottom: 1.25rem;
+}
+.wjs-chrome-header .wjs-chrome-site-title { gap: 0.15rem; }
+.wjs-chrome-header .wjs-chrome-site-title a {
+  font-family: var(--wjs-font-family-heading);
+  font-size: 1.25rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  color: var(--wjs-color-heading);
+}
+.wjs-chrome-header .wjs-chrome-site-title span {
+  font-size: 0.6875rem;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
-  letter-spacing: -0.02em;
+  color: var(--wjs-color-text-muted);
 }
 
-/* Hero sits on a hard black baseline; its buttons carry the 2px frame */
-.wp-block-hero {
-  border-bottom: 2px solid #000000;
+/* Nav: every entry is an indexed specimen — 01, 02, 03… */
+.wjs-chrome-header .wjs-header-nav { counter-reset: wjs-nav; align-items: baseline; }
+.wjs-header-nav a {
+  counter-increment: wjs-nav;
+  color: var(--wjs-color-text-main);
+  padding-bottom: 0.2rem;
+  border-bottom: 1px solid transparent;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+.wjs-header-nav a::before {
+  content: counter(wjs-nav, decimal-leading-zero) " ";
+  margin-right: 0.35rem;
+  font-size: 0.625rem;
+  letter-spacing: 0;
+  color: var(--wjs-color-secondary);
+}
+.wjs-header-nav a:hover {
+  color: var(--wjs-color-secondary);
+  border-bottom-color: var(--wjs-color-secondary);
 }
 
-/* Measured display leading is a hard 1.0 (framework hardcodes 1.1) */
-.wp-block-hero__title {
-  line-height: 1;
+/* --- Footer: a real four-column grid with the rules left showing. ---- */
+.wjs-chrome-footer .wjs-footer-container > .wjs-chrome-row {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0;
+  align-items: stretch;
 }
-
-.wp-block-hero__button {
-  border: 2px solid #000000;
+.wjs-chrome-footer .wjs-footer-container > .wjs-chrome-row > .wjs-chrome-row {
+  display: block;
+  width: auto;
+  padding: 0 1.5rem;
+  border-left: 1px solid #cfcfc9;
 }
-
-.wp-block-hero__button:hover {
-  filter: none;
-  transform: none;
-  background: #000000;
-  color: #ffffff;
+.wjs-chrome-footer .wjs-footer-container > .wjs-chrome-row > .wjs-chrome-row:first-child {
+  padding-left: 0;
+  border-left: 0;
 }
-
-/* Testimonial quotes shout in black caps */
-.wp-block-testimonial__quote {
+.wjs-chrome-footer .wjs-chrome-site-title a {
+  font-family: var(--wjs-font-family-heading);
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  color: var(--wjs-footer-text-heading);
+}
+.wjs-chrome-footer .wjs-chrome-nav-vertical { gap: 0.55rem; }
+.wjs-chrome-footer .wjs-chrome-nav a {
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
-  font-weight: 900;
+}
+.wjs-chrome-footer .wjs-chrome-search input { width: 100%; }
+.wjs-chrome-footer .wjs-chrome-socials {
+  gap: 0.5rem;
+}
+.wjs-chrome-footer .wjs-chrome-socials a {
+  border-radius: 0;
+  width: 2.25rem;
+  height: 2.25rem;
+  border: 1px solid #111111;
+  background: transparent;
+  color: var(--wjs-footer-text-heading);
 }
 
-/* Mono caps form labels; focus floods the field gray (design inputs) */
-.wjs-form-label {
-  font-family: 'Space Mono', ui-monospace, monospace;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+@media (max-width: 1023.98px) {
+  .wjs-chrome-footer .wjs-footer-container > .wjs-chrome-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    row-gap: 2rem;
+  }
+  .wjs-chrome-footer .wjs-footer-container > .wjs-chrome-row > .wjs-chrome-row:nth-child(3) {
+    padding-left: 0;
+    border-left: 0;
+  }
+}
+@media (max-width: 767.98px) {
+  .wjs-chrome-footer .wjs-footer-container > .wjs-chrome-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .wjs-chrome-footer .wjs-footer-container > .wjs-chrome-row > .wjs-chrome-row {
+    padding: 1.25rem 0 0;
+    border-left: 0;
+    border-top: 1px solid #cfcfc9;
+  }
+  .wjs-chrome-footer .wjs-footer-container > .wjs-chrome-row > .wjs-chrome-row:first-child {
+    padding-top: 0;
+    border-top: 0;
+  }
 }
 
-.wjs-form-input:focus,
-.wjs-form-textarea:focus {
-  background: #e2e2e2;
-}
-
-/* Media keeps the 2px frame */
-.wp-block-image img,
-.wp-block-video {
-  border: 2px solid #000000;
-}

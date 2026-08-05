@@ -1,324 +1,192 @@
-/* =========================================
-   THEME: MIDNIGHT LUXURY
-   Concept: Premium dark, gold accents, serif elegance.
-   Standardized V2.
-   ========================================= */
-
-@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700;900&family=Lato:wght@400;700&display=swap');
-
+/* @wjs-generated:start — compiled from theme.json; DO NOT EDIT inside. Edit theme.json and run: node backend/cli/wordjs.js build theme midnight-luxury */
 :root {
-  /* --- COLOR PALETTE: Black & Gold --- */
-  --wjs-color-primary: #d4af37;
-  /* Luxurious Gold */
-  --wjs-color-primary-dark: #c5a028;
-  /* Deep Gold */
-
-  /* --- COLOR SEMANTICS --- */
   --wjs-bg-canvas: #0a0a0a;
-  /* the public header reads this; without it a dark theme paints a literal white bar */
-  --wjs-bg-surface-glass: rgba(10, 10, 10, 0.85);
-  /* Deep Black */
-  --wjs-bg-surface: #141414;
-  /* Card Background */
-
-  --wjs-color-text-main: #f5f5f5;
-  /* Off-white */
-  --wjs-color-text-muted: #a3a3a3;
-  /* Gray */
-
-  --wjs-border-subtle: #262626;
-  /* Dark Border */
-
-  /* --- NAVIGATION CONFIG --- */
-  --wjs-nav-font-family: 'Lato', sans-serif;
-  --wjs-nav-font-size: 0.9rem;
-  --wjs-nav-font-weight: 400;
-  --wjs-nav-text-transform: uppercase;
-  --wjs-nav-letter-spacing: 0.2em;
-  /* Very wide */
-
-  --wjs-nav-color: #a3a3a3;
-  /* Gray Links */
-  --wjs-nav-color-hover: #d4af37;
-  /* Gold on Hover */
-  --wjs-nav-transition: all 0.3s ease;
-
-  --wjs-logo-color: #d4af37;
-  /* Gold Logo */
-
-  /* --- FOOTER CONFIG --- */
-  --wjs-footer-bg: #050505;
-  /* Even darker */
-  --wjs-footer-text-heading: #d4af37;
-  --wjs-footer-text-body: #a3a3a3;
-  --wjs-footer-text-hover: #f5f5f5;
-  --wjs-footer-icon-bg: #262626;
-  --wjs-footer-icon-color: #d4af37;
-
-  /* --- TYPOGRAPHY --- */
-  --wjs-font-family-base: 'Lato', sans-serif;
-  --wjs-font-family-heading: 'Playfair Display', serif;
-
-  /* --- WordJS UI framework tokens --- */
-  /* Colors */
-  --wjs-color-secondary: #8c7a3a;
-  --wjs-color-secondary-dark: #6f6029;
-  --wjs-color-accent: #e8c95a;
-  --wjs-color-success: #4caf7a;
-  --wjs-color-danger: #e0564f;
-  --wjs-color-warning: #e8b04a;
-  --wjs-color-info: #4fa8d8;
-  --wjs-color-light: #f5f5f5;
-  --wjs-color-dark: #0a0a0a;
-  /* --- WordJS UI on-color tokens (auto: max-contrast text on each solid color) --- */
-  --wjs-color-on-primary: #161616;
-  --wjs-color-on-secondary: #161616;
-  --wjs-color-on-success: #161616;
-  --wjs-color-on-danger: #161616;
-  --wjs-color-on-warning: #161616;
-  --wjs-color-on-info: #161616;
-  --wjs-color-on-light: #161616;
-  --wjs-color-on-dark: #ffffff;
-
-  /* Surfaces / text / border */
-  --wjs-bg-muted: #1f1f1f;
-  --wjs-color-heading: #f5f5f5;
+  --wjs-bg-surface: #191919;
+  --wjs-bg-surface-raised: #252525;
+  --wjs-color-primary: #d4af37;
+  --wjs-color-primary-dark: #d4af37;
+  --wjs-color-on-primary: #0b0b0b;
+  --wjs-color-accent: #8a6f2e;
+  --wjs-color-on-accent: #ffffff;
+  --wjs-color-text-main: #f5f5f4;
+  --wjs-color-text-muted: #9c9c9b;
+  --wjs-color-heading: #f5f5f4;
   --wjs-color-link: #d4af37;
-  --wjs-color-link-hover: #e8c95a;
-  --wjs-border-width: 1px;
-  --wjs-focus-ring: rgba(212, 175, 55, 0.3);
-
-  /* Typography scale */
-  --wjs-font-family-mono: 'SFMono-Regular', Menlo, Consolas, 'Liberation Mono', monospace;
-  --wjs-font-size-base: 1rem;
-  --wjs-line-height-base: 1.7;
-  --wjs-heading-weight: 700;
-  --wjs-heading-line-height: 1.2;
-  --wjs-h1: 2.75rem;
-  --wjs-h2: 2.25rem;
-  --wjs-h3: 1.75rem;
-  --wjs-h4: 1.4rem;
-  --wjs-h5: 1.15rem;
-  --wjs-h6: 1rem;
-
-  /* Spacing / shape */
-  --wjs-spacer: 1rem;
-  --wjs-radius-sm: 4px;
+  --wjs-color-link-hover: #8a6f2e;
+  --wjs-border-subtle: #343434;
+  --wjs-outline: #636363;
+  --wjs-outline-variant: #2d2d2d;
+  --wjs-focus-ring: #d4af37;
+  --wjs-color-secondary: #8a6f2e;
+  --wjs-color-secondary-dark: #8a6f2e;
+  --wjs-color-on-secondary: #0b0b0b;
+  --wjs-font-family-heading: 'Playfair Display', Georgia, 'Times New Roman', serif;
+  --wjs-font-family-base: 'Montserrat', 'Segoe UI', system-ui, sans-serif;
   --wjs-radius: 8px;
-  --wjs-radius-md: 12px;
-  --wjs-radius-lg: 16px;
-  --wjs-radius-pill: 9999px;
-  --wjs-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
-  --wjs-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
-  --wjs-shadow-md: 0 12px 32px rgba(0, 0, 0, 0.55);
-  --wjs-shadow-lg: 0 20px 50px rgba(0, 0, 0, 0.6);
-}
-
-/* =========================================
-   VISUAL OVERRIDES
-   ========================================= */
-
-body {
-  background-color: var(--wjs-bg-canvas) !important;
-  color: var(--wjs-color-text-main) !important;
-  font-family: var(--wjs-font-family-base) !important;
-  line-height: 1.7;
-}
-
-/* Header: Dark with Gold accent border */
-header {
-  background-color: var(--wjs-bg-canvas) !important;
-  border-bottom: 1px solid var(--wjs-border-subtle) !important;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
-}
-
-header[class*='fixed'] {
-  background-color: rgba(10, 10, 10, 0.95) !important;
-  backdrop-filter: blur(10px) !important;
-}
-
-/* Logo: Gold, Elegant Serif */
-.wjs-header-logo {
-  color: var(--wjs-logo-color) !important;
-  font-family: 'Playfair Display', serif !important;
-  font-weight: 700 !important;
-  font-size: 1.75rem !important;
-  letter-spacing: 0.02em;
-}
-
-/* Nav Links: Spaced, Uppercase, Subtle */
-.wjs-header-nav a {
-  font-family: var(--wjs-nav-font-family) !important;
-  font-size: var(--wjs-nav-font-size) !important;
-  font-weight: var(--wjs-nav-font-weight) !important;
-  color: var(--wjs-nav-color) !important;
-  text-transform: var(--wjs-nav-text-transform) !important;
-  letter-spacing: var(--wjs-nav-letter-spacing) !important;
-  transition: var(--wjs-nav-transition) !important;
-  text-decoration: none !important;
-}
-
-.wjs-header-nav a:hover {
-  color: var(--wjs-nav-color-hover) !important;
-}
-
-/* Headings: Elegant Serif */
-h1,
-h2,
-h3 {
-  font-family: 'Playfair Display', serif !important;
-  font-weight: 700 !important;
-  letter-spacing: 0.02em;
-  color: var(--wjs-color-text-main) !important;
-}
-
-/* Cards: Dark Surface with Gold Border on Hover */article {
-  background: var(--wjs-bg-surface) !important;
-  border: 1px solid var(--wjs-border-subtle) !important;
-  transition: border-color 0.3s ease;
-}article:hover {
-  border-color: var(--wjs-color-primary) !important;
-}
-
-/* Footer: Dark with Gold Headings */
-footer {
-  background-color: var(--wjs-footer-bg) !important;
-  color: var(--wjs-footer-text-body) !important;
-  border-top: 1px solid var(--wjs-border-subtle) !important;
-}
-
-footer h3,
-footer h4 {
-  color: var(--wjs-footer-text-heading) !important;
-  font-family: 'Playfair Display', serif !important;
-  font-weight: 700 !important;
-}
-
-footer a {
-  color: var(--wjs-footer-text-body) !important;
-  text-decoration: none !important;
-  transition: color 0.3s ease;
-}
-
-footer a:hover {
-  color: var(--wjs-footer-text-hover) !important;
-}
-
-/* Icons: Gold on Dark */
-footer .w-10 {
-  background-color: var(--wjs-footer-icon-bg) !important;
-  color: var(--wjs-footer-icon-color) !important;
-  border: 1px solid var(--wjs-border-subtle);
-}
-
-footer .w-10:hover {
-  background-color: var(--wjs-color-primary) !important;
-  color: #000 !important;
-}
-
-/* ===== Mobile (auto responsive pass) ===== */
-@media (max-width: 767.98px) {
-
-  /* Nav links: the desktop 0.2em tracking + uppercase (declared !important
-     above) can push long menu labels past a 375px hamburger drawer.
-     Tighten the tracking slightly and allow labels to wrap — the uppercase
-     luxury look is kept, but a label can never widen the drawer. */
-  .wjs-header-nav a {
-    letter-spacing: 0.1em !important;
-    white-space: normal !important;
-    overflow-wrap: break-word;
-  }
-
-  /* Featured pricing tier: the block ships an inline transform: scale(1.05)
-     that this theme targets for its gold-border treatment. Once tiers stack
-     full-width on mobile, that 5% up-scale makes the card wider than the
-     viewport (horizontal overflow). Neutralize the scale on small screens
-     only — the gold border + glow still distinguish the featured tier. */
-  .wp-block-pricing__plan--highlighted {
-    transform: none;
-  }
-}
-
-/* ══ BLOCK TOKENS ═══════════════════════════════════════════════════════════════════════
- * Lifted from this theme's former `.wp-block-*` rules. wordjs-ui.css owns the block RULES;
- * a theme owns only the VALUES, so a single block can still override any of them.
- * ════════════════════════════════════════════════════════════════════════════════════ */
-:root {
-  --wjs-card-bg: var(--wjs-bg-surface);
+  --wjs-radius-sm: 8px;
+  --wjs-radius-md: 8px;
+  --wjs-radius-lg: 8px;
+  --wjs-radius-pill: 8px;
+  --wjs-hero-bg: #0a0a0a;
+  --wjs-hero-gradient-from: #0a0a0a;
+  --wjs-hero-gradient-to: #0a0a0a;
+  --wjs-hero-color: #f5f5f4;
+  --wjs-hero-title-color: #d4af37;
+  --wjs-hero-subtitle-color: #f5f5f4;
+  --wjs-hero-button-outline-color: #d4af37;
+  --wjs-hero-button-outline-border: #d4af37;
+  --wjs-bg-surface-glass: rgba(10,10,10,0.72);
+  --wjs-bg-footer: #050505;
+  --wjs-color-text-footer-main: #efece4;
+  --wjs-color-text-footer-dim: #9a9082;
+  --wjs-color-text-footer-heading: #d4af37;
+  --wjs-hero-height: 72vh;
+  --wjs-hero-pad: 7.5rem 2rem;
+  --wjs-hero-measure: 52rem;
+  --wjs-hero-justify: center;
+  --wjs-hero-text-align: center;
+  --wjs-hero-actions-justify: center;
+  --wjs-hero-radius: 0;
+  --wjs-hero-shadow: none;
+  --wjs-hero-overlay: 0.35;
+  --wjs-hero-overlay-color: #000000;
+  --wjs-hero-gradient: radial-gradient(85% 120% at 50% 0%, #171208 0%, #0a0a0a 62%);
+  --wjs-hero-title-size: clamp(2.75rem, 6.5vw, 5.5rem);
+  --wjs-hero-title-weight: 400;
+  --wjs-hero-title-tracking: 0.005em;
+  --wjs-hero-subtitle-size: 0.8125rem;
+  --wjs-hero-subtitle-opacity: 0.8;
+  --wjs-hero-button-radius: 3px;
+  --wjs-hero-button-pad: 1.15rem 2.6rem;
+  --wjs-hero-button-size: 12px;
+  --wjs-hero-button-weight: 600;
+  --wjs-hero-button-outline-bg: transparent;
+  --wjs-hero-button-outline-hover-bg: rgba(212,175,55,0.12);
+  --wjs-button-family: 'Montserrat', 'Segoe UI', system-ui, sans-serif;
+  --wjs-button-radius: 3px;
+  --wjs-button-transform: uppercase;
+  --wjs-button-tracking: 0.2em;
+  --wjs-button-size: 12px;
+  --wjs-button-weight: 600;
+  --wjs-button-pad-x: 2.2rem;
+  --wjs-button-pad-y: 0.95rem;
+  --wjs-button-shadow: none;
+  --wjs-button-hover-shadow: 0 14px 30px -18px rgba(212,175,55,0.85);
+  --wjs-button-hover-transform: translateY(-1px);
+  --wjs-card-bg: #101010;
+  --wjs-card-radius: 4px;
+  --wjs-card-pad: 2.5rem;
   --wjs-card-border-width: 1px;
-  --wjs-card-border-color: var(--wjs-border-subtle);
-  --wjs-card-hover-border-color: var(--wjs-color-primary);
-  --wjs-accordion-bg: var(--wjs-bg-surface);
-  --wjs-accordion-border-width: 1px;
-  --wjs-accordion-border-color: var(--wjs-border-subtle);
-  --wjs-accordion-radius: 8px;
-  --wjs-accordion-header-bg: transparent;
-  --wjs-accordion-header-color: var(--wjs-color-primary);
-  --wjs-accordion-header-border-width: 1px;
-  --wjs-accordion-header-border-color: var(--wjs-border-subtle);
-  --wjs-accordion-panel-bg: rgba(212, 175, 55, 0.05);
-  --wjs-accordion-panel-color: var(--wjs-color-text-muted);
-  --wjs-tabs-list-border-width: 1px;
-  --wjs-tabs-list-border-color: var(--wjs-border-subtle);
-  --wjs-tabs-color: var(--wjs-color-text-muted);
-  --wjs-tabs-active-color: var(--wjs-color-primary);
-  --wjs-tabs-active-border-color: var(--wjs-color-primary);
-  --wjs-tabs-panel-bg: var(--wjs-bg-surface);
-  --wjs-tabs-panel-radius: 8px;
-  --wjs-video-radius: 8px;
-  --wjs-video-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
-  --wjs-video-border-width: 1px;
-  --wjs-video-border-color: var(--wjs-border-subtle);
-  --wjs-audio-bg: var(--wjs-bg-surface);
-  --wjs-audio-border-width: 1px;
-  --wjs-audio-border-color: var(--wjs-border-subtle);
-  --wjs-audio-radius: 8px;
-  --wjs-audio-icon-bg: var(--wjs-color-primary);
-  --wjs-audio-icon-color: #000;
-  --wjs-pricing-bg: var(--wjs-bg-surface);
-  --wjs-pricing-border-width: 1px;
-  --wjs-pricing-border-color: var(--wjs-border-subtle);
-  --wjs-pricing-radius: 12px;
-  --wjs-pricing-hover-border-color: rgba(212, 175, 55, 0.3);
-  --wjs-pricing-name-family: 'Playfair Display', serif;
-  --wjs-pricing-highlight-bg: linear-gradient(180deg, #1a1510, var(--wjs-bg-surface));
-  --wjs-pricing-highlight-border-width: 2px;
-  --wjs-pricing-highlight-border-color: var(--wjs-color-primary);
-  --wjs-pricing-highlight-shadow: 0 0 60px rgba(212, 175, 55, 0.2);
-  --wjs-testimonial-bg: var(--wjs-bg-surface);
-  --wjs-testimonial-border-width: 1px;
-  --wjs-testimonial-border-color: var(--wjs-border-subtle);
-  --wjs-testimonial-radius: 12px;
-  --wjs-testimonial-mark-color: var(--wjs-color-primary);
-  --wjs-testimonial-mark-family: 'Playfair Display', serif;
-  --wjs-testimonial-quote-family: 'Playfair Display', serif;
-  --wjs-testimonial-quote-style: italic;
-  --wjs-cta-bg: linear-gradient(180deg, rgba(212, 175, 55, 0.15), var(--wjs-bg-surface));
+  --wjs-card-shadow: none;
+  --wjs-card-hover-bg: #141210;
+  --wjs-card-hover-shadow: 0 26px 60px -34px rgba(212,175,55,0.55);
+  --wjs-card-hover-transform: translateY(-4px);
+  --wjs-card-icon-bg: rgba(212,175,55,0.12);
+  --wjs-card-icon-color: #d4af37;
+  --wjs-card-icon-radius: 50%;
+  --wjs-card-icon-size: 3.25rem;
+  --wjs-card-title-size: 1.4rem;
+  --wjs-card-title-weight: 400;
+  --wjs-card-title-tracking: 0.01em;
+  --wjs-card-desc-size: 0.95rem;
+  --wjs-card-desc-leading: 1.85;
+  --wjs-quote-family: 'Playfair Display', Georgia, 'Times New Roman', serif;
+  --wjs-quote-style: italic;
+  --wjs-quote-size: 1.7rem;
+  --wjs-quote-weight: 400;
+  --wjs-quote-bar-width: 2px;
+  --wjs-quote-accent: #d4af37;
+  --wjs-quote-cite-size: 0.75rem;
+  --wjs-quote-tracking: 0.01em;
+  --wjs-stats-bg: transparent;
+  --wjs-stats-border-width: 0;
+  --wjs-stats-shadow: none;
+  --wjs-stats-value-family: 'Playfair Display', Georgia, 'Times New Roman', serif;
+  --wjs-stats-value-size: 3.25rem;
+  --wjs-stats-value-weight: 400;
+  --wjs-stats-value-color: #d4af37;
+  --wjs-stats-label-size: 0.6875rem;
+  --wjs-stats-label-transform: uppercase;
+  --wjs-stats-label-tracking: 0.28em;
+  --wjs-tabs-radius: 3px;
+  --wjs-tabs-list-radius: 3px;
+  --wjs-tabs-size: 0.75rem;
+  --wjs-tabs-transform: uppercase;
+  --wjs-tabs-tracking: 0.18em;
+  --wjs-tabs-active-color: #d4af37;
+  --wjs-tabs-active-border-color: #d4af37;
+  --wjs-accordion-radius: 3px;
+  --wjs-accordion-item-radius: 3px;
+  --wjs-accordion-header-size: 1rem;
+  --wjs-accordion-header-family: 'Playfair Display', Georgia, 'Times New Roman', serif;
+  --wjs-accordion-header-weight: 400;
+  --wjs-accordion-icon-color: #d4af37;
+  --wjs-accordion-shadow: none;
+  --wjs-search-input-radius: 3px;
+  --wjs-search-button-radius: 3px;
+  --wjs-search-button-transform: uppercase;
+  --wjs-search-button-tracking: 0.2em;
+  --wjs-posts-radius: 4px;
+  --wjs-posts-shadow: none;
+  --wjs-posts-hover-shadow: 0 30px 60px -40px rgba(212,175,55,0.6);
+  --wjs-posts-hover-transform: translateY(-4px);
+  --wjs-posts-thumb-radius: 2px;
+  --wjs-posts-thumb-height: 17rem;
+  --wjs-posts-title-size: 1.45rem;
+  --wjs-posts-title-weight: 400;
+  --wjs-pricing-radius: 4px;
+  --wjs-pricing-shadow: none;
+  --wjs-pricing-highlight-border-color: #d4af37;
+  --wjs-pricing-highlight-border-width: 1px;
+  --wjs-pricing-name-transform: uppercase;
+  --wjs-pricing-name-tracking: 0.24em;
+  --wjs-pricing-name-size: 0.75rem;
+  --wjs-pricing-price-family: 'Playfair Display', Georgia, 'Times New Roman', serif;
+  --wjs-pricing-price-weight: 400;
+  --wjs-pricing-price-color: #d4af37;
+  --wjs-pricing-button-radius: 3px;
+  --wjs-cta-radius: 4px;
+  --wjs-cta-shadow: none;
+  --wjs-cta-gradient: linear-gradient(100deg, #14100a 0%, #0a0a0a 70%);
   --wjs-cta-border-width: 1px;
-  --wjs-cta-border-color: var(--wjs-color-primary);
-  --wjs-cta-radius: 16px;
-  --wjs-cta-title-family: 'Playfair Display', serif;
-  --wjs-cta-button-bg: var(--wjs-color-primary);
-  --wjs-cta-button-color: #000;
-  --wjs-cta-button-radius: 8px;
-  --wjs-posts-bg: var(--wjs-bg-surface);
-  --wjs-posts-border-width: 1px;
-  --wjs-posts-border-color: var(--wjs-border-subtle);
-  --wjs-posts-radius: 12px;
-  --wjs-posts-hover-border-color: var(--wjs-color-primary);
-  --wjs-posts-family: 'Playfair Display', serif;
-  --wjs-catposts-heading-color: var(--wjs-color-primary);
-  --wjs-catposts-heading-family: 'Playfair Display', serif;
-  --wjs-catposts-border-color: var(--wjs-border-subtle);
-  --wjs-catposts-link-hover-color: var(--wjs-color-primary);
-  --wjs-search-input-bg: var(--wjs-bg-surface);
-  --wjs-search-input-border-width: 1px;
-  --wjs-search-input-border-color: var(--wjs-border-subtle);
-  --wjs-search-input-radius: 8px;
-  --wjs-search-input-color: var(--wjs-color-text-main);
-  --wjs-search-focus-color: var(--wjs-color-primary);
-  --wjs-search-focus-ring: 0 0 0 3px rgba(212, 175, 55, 0.1);
-  --wjs-search-button-bg: var(--wjs-color-primary);
-  --wjs-search-button-color: #000;
-  --wjs-search-button-radius: 8px;
+  --wjs-cta-border-color: #2a2113;
+  --wjs-cta-pad: 4rem;
+  --wjs-cta-title-family: 'Playfair Display', Georgia, 'Times New Roman', serif;
+  --wjs-cta-title-weight: 400;
+  --wjs-cta-title-size: 2.4rem;
+  --wjs-cta-button-radius: 3px;
+  --wjs-cta-button-transform: uppercase;
+  --wjs-cta-button-tracking: 0.2em;
+  --wjs-testimonial-radius: 4px;
+  --wjs-testimonial-bg: #101010;
+  --wjs-testimonial-border-width: 1px;
+  --wjs-testimonial-quote-family: 'Playfair Display', Georgia, 'Times New Roman', serif;
+  --wjs-testimonial-quote-style: italic;
+  --wjs-testimonial-quote-size: 1.35rem;
+  --wjs-testimonial-avatar-radius: 50%;
+  --wjs-testimonial-mark-color: #d4af37;
+  --wjs-testimonial-role-size: 0.6875rem;
+  --wjs-testimonial-role-transform: uppercase;
+  --wjs-testimonial-role-tracking: 0.22em;
+  --wjs-form-input-radius: 3px;
+  --wjs-form-submit-radius: 3px;
+  --wjs-form-label-size: 0.6875rem;
+  --wjs-form-label-weight: 600;
+  --wjs-image-radius: 3px;
+  --wjs-social-radius: 50%;
+  --wjs-social-size: 42px;
 }
+h1,h2,h3,h4,h5,h6 { font-weight: 400; letter-spacing: 0.004em }
+.wjs-header-logo { font-family: "Playfair Display",Georgia,"Times New Roman",serif; letter-spacing: 0.2em; text-transform: uppercase }
+.wjs-header-nav { font-family: "Montserrat","Segoe UI",system-ui,sans-serif; font-size: 0.75rem; letter-spacing: 0.2em; text-transform: uppercase }
+footer { font-size: 0.8125rem; letter-spacing: 0.04em; box-shadow: inset 0 1px 0 0#2a2113; background-image: linear-gradient(180deg,#0d0b07 0%,#050505 55%) }
+.wp-block-hero__title { line-height: 1.04 }
+.wp-block-hero__subtitle { text-transform: uppercase; letter-spacing: 0.34em; font-weight: 500; margin-top: 1.75rem }
+.wp-block-hero__actions { margin-top: 2.75rem }
+.wp-block-hero__button { text-transform: uppercase; letter-spacing: 0.2em; box-shadow: none }
+.wp-block-hero__inner { margin: 0 auto }
+.wp-block-card { border-style: solid }
+.wp-block-card:hover { border-color: #d4af37 }
+/* @wjs-generated:end */
+
+/* Midnight Luxury — generated from a Stitch design system. Edit theme.json, then: wordjs build theme midnight-luxury */
