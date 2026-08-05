@@ -1,9 +1,16 @@
 {
   "name": "Cinema Reel",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Movie reviews, film criticism, and entertainment portal with dark theater background, rating meters, and trailer modals.",
   "author": "WordJS Premium Studio",
   "category": "Media",
+  "generator": "wordjs",
+  "seeds": {
+    "primary": "#e11d48",
+    "secondary": "#9f1239",
+    "bg": "#170308",
+    "text": "#ffe4e6"
+  },
   "archetype": "obsidian",
   "tags": [
     "premium",

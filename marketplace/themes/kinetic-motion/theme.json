@@ -1,9 +1,16 @@
 {
   "name": "Kinetic Motion",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Animator and video producer portfolio with dark cinematic tone, video reels, and custom play controls.",
   "author": "WordJS Premium Studio",
   "category": "Creative",
+  "generator": "wordjs",
+  "seeds": {
+    "primary": "#ef4444",
+    "secondary": "#dc2626",
+    "bg": "#0a0a0a",
+    "text": "#fef2f2"
+  },
   "archetype": "brutalist",
   "tags": [
     "premium",

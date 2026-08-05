@@ -1,9 +1,16 @@
 {
   "name": "Velvet Fashion",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "High-fashion lookbook theme with tall aspect ratios, subtle page slide transitions, and serif titles.",
   "author": "WordJS Premium Studio",
   "category": "Fashion",
+  "generator": "wordjs",
+  "seeds": {
+    "primary": "#f472b6",
+    "secondary": "#e11d48",
+    "bg": "#12050a",
+    "text": "#fff1f2"
+  },
   "archetype": "editorial",
   "tags": [
     "premium",

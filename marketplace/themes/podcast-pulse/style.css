@@ -1,7 +1,7 @@
-/* ── WordJS token contract — canonical palette ─────────────────────────────
- * Derived from this theme's own generator colors (create-40-themes.js). These
- * aliases are what wordjs-ui.css block defaults (forms, search, cards…) read;
- * the theme's original rules below still own its distinctive look. */
+/* Theme: Podcast Pulse (Glassmorphism Aurora Archetype) */
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;800&display=swap');
+
+/* @wjs-generated:start — compiled from theme.json; DO NOT EDIT inside. Edit theme.json and run: node backend/cli/wordjs.js build theme podcast-pulse */
 :root {
   --wjs-bg-canvas: #160926;
   --wjs-bg-surface: #241833;
@@ -21,10 +21,7 @@
   --wjs-outline-variant: #372a47;
   --wjs-focus-ring: #a855f7;
 }
-
-/* Theme: Podcast Pulse (Glassmorphism Aurora Archetype) */
-@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;800&display=swap');
-
+/* Archetype: Glassmorphism Aurora */
 :root {
     --glass-primary: #a855f7;
     --glass-secondary: #7e22ce;
@@ -35,7 +32,7 @@
 body {
     background-color: var(--glass-bg);
     color: var(--glass-text);
-    font-family: 'Plus Jakarta Sans', sans-serif;
+    font-family: 'Plus Jakarta Sans', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
     margin: 0;
     background-image: radial-gradient(at 10% 10%, var(--glass-primary) 0px, transparent 50%),
                       radial-gradient(at 90% 90%, var(--glass-secondary) 0px, transparent 50%);
@@ -118,3 +115,4 @@ button.theme-btn:hover {
     transform: scale(1.04);
     box-shadow: 0 15px 30px rgba(0,0,0,0.4);
 }
+/* @wjs-generated:end */

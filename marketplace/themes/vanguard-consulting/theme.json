@@ -1,9 +1,16 @@
 {
   "name": "Vanguard Consulting",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Executive advisory theme with serif headers, rich navy palette, and elegant testimonial carousels.",
   "author": "WordJS Premium Studio",
   "category": "Corporate",
+  "generator": "wordjs",
+  "seeds": {
+    "primary": "#1e3a8a",
+    "secondary": "#1d4ed8",
+    "bg": "#0f172a",
+    "text": "#eff6ff"
+  },
   "archetype": "editorial",
   "tags": [
     "premium",

@@ -1,9 +1,16 @@
 {
   "name": "Audio Phile",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "High-end audiophile acoustic gear storefront with dark matte finish, frequency curve widgets, and star reviews.",
   "author": "WordJS Premium Studio",
   "category": "Commerce",
+  "generator": "wordjs",
+  "seeds": {
+    "primary": "#f43f5e",
+    "secondary": "#e11d48",
+    "bg": "#140306",
+    "text": "#ffe4e6"
+  },
   "archetype": "cyber",
   "tags": [
     "premium",
