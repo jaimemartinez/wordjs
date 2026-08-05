@@ -22,23 +22,45 @@ const LAYOUTS = path.join(ROOT, 'backend/public/theme-layouts.schema.json');
 const CHROME = path.join(ROOT, 'backend/src/core/chrome-validate.ts');
 const OUT = path.join(ROOT, 'documentation/stitch-brief.md');
 
-// The surfaces a theme is read from, in the order the brief asks for them. Each entry names the
-// manifest elements it must show, so the design never omits a component we need values for. Elements
-// absent from the manifest are dropped rather than invented (the registry is the authority).
-const SECTIONS = [
-    { title: 'Site header', elements: ['header', 'logo', 'nav', 'button'], note: 'wordmark left, horizontal nav, one small outlined button at the right end' },
-    { title: 'Hero band', elements: ['hero'], note: 'display headline, one paragraph, a solid primary button and an outlined one side by side' },
-    { title: 'Body copy and headings', elements: ['heading', 'text', 'quote'], note: 'H1 through H4 in order, a paragraph, an inline link, and a pull quote with its citation' },
-    { title: 'Card grid', elements: ['card', 'grid'], note: 'three cards in a row: icon, title, description' },
-    { title: 'Pricing row', elements: ['pricing'], note: 'three tiers, the middle one visually featured' },
-    { title: 'Stats strip', elements: ['stats'], note: 'three figures with captions' },
-    { title: 'Testimonial', elements: ['testimonial'], note: 'quote, author name, role' },
-    { title: 'Accordion and tabs', elements: ['accordion', 'tabs'], note: 'one open item and one closed; one selected tab and two idle' },
-    { title: 'Form and search', elements: ['search', 'search-wrap'], note: 'a text input in rest AND focus state, plus a submit button' },
-    { title: 'Call to action banner', elements: ['cta-banner'], note: 'full-width band, headline, one button' },
-    { title: 'Post list', elements: ['posts-grid', 'category-posts'], note: 'three post cards: image slot, date, title, excerpt' },
-    { title: 'Site footer', elements: ['footer', 'social-links'], note: 'wordmark, three link columns, social icons, fine top border' },
+// ONE SCREEN PER GROUP, and each group is small.
+//
+// Measured on this repo, not assumed. One prompt listing all twelve surfaces DOES come back — well
+// after the tool's own timeout — but it drops roughly half: pricing, testimonial, accordion, tabs,
+// the search field and the CTA band were all missing from the screen it returned. A prompt asking
+// for four components delivered four out of four. Stitch generates PRODUCT SCREENS, so a long rigid
+// inventory gets condensed into a plausible page; small asks are honoured literally.
+const SCREENS = [
+    {
+        title: 'Chrome and hero',
+        elements: ['header', 'logo', 'nav', 'button', 'hero'],
+        note: 'A landing top: slim header with a wordmark left, a horizontal nav and one small outlined button at the right end; below it a hero band with a display headline, one paragraph and two buttons side by side (one solid, one outlined)',
+    },
+    {
+        title: 'Editorial column',
+        elements: ['heading', 'text', 'quote'],
+        note: 'An article page: H1 through H4 in order, body paragraphs with one inline link, and a pull quote with its citation',
+    },
+    {
+        title: 'Cards, pricing and figures',
+        elements: ['card', 'grid', 'pricing', 'stats'],
+        note: 'A plans page: a row of three feature cards (icon, title, description), a pricing row of three tiers with the middle one featured, and a strip of three big figures with captions',
+    },
+    {
+        title: 'Disclosure and forms',
+        elements: ['accordion', 'tabs', 'search', 'testimonial'],
+        note: 'A support page: an FAQ accordion with one item open and one closed, a tab bar with one tab selected, a search field, and a single customer testimonial with author and role',
+    },
+    {
+        title: 'Post list and footer',
+        elements: ['posts-grid', 'category-posts', 'cta-banner', 'footer', 'social-links'],
+        note: 'A blog index: three post cards (placeholder image, date, title, excerpt), a full-width call-to-action band with a headline and one button, and the site footer with a wordmark, three link columns and social icons',
+    },
 ];
+
+// Components Stitch has no vocabulary for. Asking makes the screen worse, not better: the request is
+// dropped and the rest of the page drifts to fill the space. They inherit the framework's defaults,
+// already driven by the same tokens the design system supplies, so nothing is lost by not asking.
+const DERIVED_ONLY = ['audio-player', 'video-embed', 'html-embed', 'divider', 'spacer', 'columns', 'flex-row', 'section', 'table', 'icon-list', 'image', 'search-wrap'];
 
 // Token groups worth calling out by name: these are the ones a designer decides, as opposed to the
 // per-block plumbing a theme inherits.
@@ -110,34 +132,44 @@ function build() {
     L('Map those verbatim — they are exact values, so nothing has to be eyeballed from a screenshot.');
     L();
 
-    L('## 2. Screen prompt');
+    L('## 2. What to ask Stitch for, and what not to');
     L();
-    L('> Generate ONE desktop screen, a single scrolling page, containing the following sections in');
-    L('> this exact order and nothing else. This is a component specimen sheet for a design system,');
-    L('> not a marketing page: every section must be present even if it would not appear on a real');
-    L('> home page, and no section may be added, merged, reordered or replaced.');
-    L('>');
-    for (const section of SECTIONS) {
-        const present = section.elements.filter((el) => elements[el]);
-        if (present.length === 0) continue;
-        const children = present
-            .map((el) => Object.keys((elements[el] || {}).children || {}))
-            .flat();
-        const detail = children.length > 0 ? ` Show its parts: ${[...new Set(children)].join(', ')}.` : '';
-        L(`> - **${section.title}** — ${section.note}.${detail}`);
+    L('**The design system above is the deliverable.** It maps onto a theme field by field and its');
+    L('resolved palette is exact — a theme can be finished from it without a single screen.');
+    L();
+    L('**Screens are reference, and they must be asked for in small pieces.** Measured here: asking');
+    L('for all twelve surfaces in one prompt returns a screen — long after the tool times out — that');
+    L('is missing about half of them (pricing, testimonial, accordion, tabs, search field, CTA band).');
+    L('Asking for four components returned four out of four. Stitch generates product screens, so a');
+    L('long inventory gets condensed into a plausible page while a short one is honoured literally.');
+    L('Generate the screens below ONE AT A TIME with the same design system id, and expect each call');
+    L('to outlive its timeout: poll `list_screens` afterwards instead of retrying.');
+    L();
+    SCREENS.forEach((screen, i) => {
+        const present = screen.elements.filter((el) => elements[el]);
+        if (present.length === 0) return;
+        const children = present.map((el) => Object.keys((elements[el] || {}).children || {})).flat();
+        const parts = [...new Set(children)];
+        L(`### Screen ${i + 1} — ${screen.title}`);
+        L();
+        L(`> ${screen.note}.`);
+        if (parts.length > 0) L(`> Make these parts visible: ${parts.join(', ')}.`);
+        L('> Show each button and link at rest and hovered. Flat fills, hairline borders, no drop');
+        L('> shadows, one accent used sparingly, body copy on the neutral ink colour. No carousels,');
+        L('> collages, overlapping cards or diagonal dividers, and no sidebar — the renderer owns the');
+        L('> markup and cannot reproduce them.');
+        L();
+    });
+
+    const derived = DERIVED_ONLY.filter((el) => elements[el]);
+    if (derived.length > 0) {
+        L('### Do not ask for these');
+        L();
+        L(`${derived.map((el) => `\`${el}\``).join(', ')} — Stitch has no vocabulary for them, so the`);
+        L('request is dropped and the rest of the screen drifts to fill the space. They inherit the');
+        L('framework defaults, already driven by the same tokens the design system supplies.');
+        L();
     }
-    L('>');
-    L('> Rules:');
-    L('> - Show interaction states explicitly: every button and link appears twice, once at rest and');
-    L('>   once hovered, labelled. The search input appears at rest and focused.');
-    L('> - Use flat fills and hairline borders. No drop shadows unless the brand genuinely uses them,');
-    L('>   and then only one elevation level.');
-    L('> - One accent colour, used sparingly. Body copy stays on the neutral ink colour.');
-    L('> - No bespoke section: no carousels, no split-screen collages, no overlapping cards, no');
-    L('>   diagonal dividers. The renderer owns the markup and cannot reproduce them.');
-    L('> - No sidebar in this screen; sidebars are a layout switch, listed below.');
-    L('> - Do not embed images beyond simple placeholder rectangles for the post cards.');
-    L();
 
     L('## 3. Structure the theme can switch on');
     L();
@@ -177,8 +209,8 @@ function build() {
     L();
 
     fs.writeFileSync(OUT, lines.join('\n') + '\n');
-    return { sections: SECTIONS.length, elements: manifest.counts.elements, tokens: manifest.counts.tokens };
+    return { screens: SCREENS.length, elements: manifest.counts.elements, tokens: manifest.counts.tokens };
 }
 
 const result = build();
-console.log(`✅ documentation/stitch-brief.md — ${result.sections} sections, ${result.elements} elements, ${result.tokens} tokens`);
+console.log(`✅ documentation/stitch-brief.md — ${result.screens} screens, ${result.elements} elements, ${result.tokens} tokens`);
