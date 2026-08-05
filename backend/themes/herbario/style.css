@@ -51,6 +51,21 @@
   --wjs-card-border-width: 1px;
   --wjs-card-border-color: #c0c8c4;
   --wjs-line-height-base: 1.7;
+  --wjs-hero-bg: #fef9ef;
+  --wjs-hero-gradient-from: #fef9ef;
+  --wjs-hero-gradient-to: #fef9ef;
+  --wjs-hero-color: #1d1c16;
+  --wjs-hero-title-color: #2f5d50;
+  --wjs-hero-title-size: 4.5rem;
+  --wjs-hero-title-tracking: -0.02em;
+  --wjs-hero-subtitle-color: #404945;
+  --wjs-hero-subtitle-size: 1.125rem;
+  --wjs-hero-subtitle-opacity: 1;
+  --wjs-hero-button-bg: #2f5d50;
+  --wjs-hero-button-color: #ffffff;
+  --wjs-hero-button-radius: 4px;
+  --wjs-hero-button-outline-color: #2f5d50;
+  --wjs-hero-button-outline-border: #2f5d50;
   --wjs-hero-text-align: left;
   --wjs-pricing-border-width: 1px;
 }
