@@ -21,6 +21,8 @@ type MigrationCtx = {
     get: (sql: string, params?: any[]) => Promise<any>;
     all: (sql: string, params?: any[]) => Promise<any>;
     isPostgres: boolean;
+    /** Raw driver name, so a migration can target one engine (e.g. SQLite-only FTS5). */
+    driverName: string;
 };
 
 type Migration = { id: string; up: (ctx: MigrationCtx) => Promise<void> };
@@ -328,6 +330,51 @@ const MIGRATIONS: Migration[] = [
             // the filter and the ORDER BY id DESC walk.
             await ctx.exec('CREATE INDEX IF NOT EXISTS idx_form_submissions_name ON form_submissions (form_name, id)');
         }
+    },
+    {
+        id: '0008_posts_fts5',
+        up: async (ctx: MigrationCtx) => {
+            // FULL-TEXT SEARCH for the default (SQLite) install.
+            //
+            // Search was `post_title LIKE '%q%' OR post_content LIKE '%q%'` — a full table scan that
+            // reads every post's body, run twice per request (rows + COUNT). This builds an FTS5
+            // index over title+content instead.
+            //
+            // EXTERNAL-CONTENT table (content='posts'): the index stores only the inverted terms and
+            // reads the columns back from `posts`, so the post bodies are NOT duplicated on disk.
+            // Triggers keep it in sync; the search path is skipped entirely when this table is
+            // absent, so an install where FTS5 is compiled out (or a Postgres/MySQL install) keeps
+            // the LIKE behaviour with no error.
+            if (ctx.isPostgres) return;              // tsvector is its own migration, not this one
+            if (ctx.driverName === 'mysql') return;  // FULLTEXT likewise
+
+            // FTS5 may be missing from a custom SQLite build: probe, and leave the DB untouched if so.
+            try {
+                await ctx.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS posts_fts USING fts5(
+                    post_title, post_content, content='posts', content_rowid='id', tokenize='unicode61'
+                )`);
+            } catch (e: any) {
+                console.warn(`   [migration 0008] FTS5 unavailable (${e && e.message}) — search keeps using LIKE.`);
+                return;
+            }
+
+            // Sync triggers. `delete` rows carry the OLD values, which is how an external-content
+            // FTS5 index is told to retract a document.
+            await ctx.exec(`CREATE TRIGGER IF NOT EXISTS posts_fts_ai AFTER INSERT ON posts BEGIN
+                INSERT INTO posts_fts(rowid, post_title, post_content) VALUES (new.id, new.post_title, new.post_content);
+            END`);
+            await ctx.exec(`CREATE TRIGGER IF NOT EXISTS posts_fts_ad AFTER DELETE ON posts BEGIN
+                INSERT INTO posts_fts(posts_fts, rowid, post_title, post_content) VALUES('delete', old.id, old.post_title, old.post_content);
+            END`);
+            await ctx.exec(`CREATE TRIGGER IF NOT EXISTS posts_fts_au AFTER UPDATE ON posts BEGIN
+                INSERT INTO posts_fts(posts_fts, rowid, post_title, post_content) VALUES('delete', old.id, old.post_title, old.post_content);
+                INSERT INTO posts_fts(rowid, post_title, post_content) VALUES (new.id, new.post_title, new.post_content);
+            END`);
+
+            // Backfill the posts that already exist (a no-op on a fresh install).
+            await ctx.exec(`INSERT INTO posts_fts(posts_fts) VALUES('rebuild')`);
+            console.log('   ✓ [migration 0008] full-text index built over posts(title, content)');
+        }
     }
 ];
 
@@ -353,7 +400,7 @@ async function runSchemaMigrations(db: any, isAsync: boolean, driverName: string
     if (pending.length === 0) return;
 
     console.log(`🧬 Schema migrations: applying ${pending.length} pending...`);
-    const ctx: MigrationCtx = { exec, run, get, all, isPostgres };
+    const ctx: MigrationCtx = { exec, run, get, all, isPostgres, driverName };
     for (const m of pending) {
         try {
             await m.up(ctx);
