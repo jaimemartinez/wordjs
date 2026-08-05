@@ -38,12 +38,23 @@ export function AudioPlayerBlock({ src, title, bg, borderColor, radius, pad, ico
     );
 }
 
+// SECURITY: the ONLY allowed element types for a heading. `level` arrives from _puck_data, which is
+// author-controlled, and the write-side sanitizer (backend core/sanitize-meta.ts) classifies string
+// leaves as HTML-bearing or URL-bearing only — a STRUCTURAL prop like this one passes through
+// untouched by design. Using it as the element type therefore let an author pick the tag: `script`
+// turned the dangerouslySetInnerHTML below into an executing <script> in the server-rendered public
+// HTML (F3 made this a server component, so it lands in the parsed initial document, and F1 then
+// caches that HTML for every anonymous visitor), and a void tag like `img` threw during SSR and 500'd
+// the page. Untrusted data may fill a slot; it may never choose the structure around it.
+const HEADING_TAGS = new Set(['h1', 'h2', 'h3', 'h4', 'h5', 'h6']);
+
 export function HeadingBlock({ title, level, elementId, color, size, weight, tracking, css }: any) {
-    const Tag = level as any;
+    const tag = HEADING_TAGS.has(String(level)) ? String(level) : 'h2';
+    const Tag = tag as any;
     return (
         <Tag
             id={elementId || undefined}
-            className={`wp-block-heading heading-${level}`}
+            className={`wp-block-heading heading-${tag}`}
             style={{
                 ...blockVars('heading', {
                     color,
