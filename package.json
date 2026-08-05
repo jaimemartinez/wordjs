@@ -33,7 +33,7 @@
     "perf:bench": "node scripts/perf-bench.mjs"
   },
   "dependencies": {
-    "@types/react": "^19.2.8",
+    "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.3",
     "axios": "^1.13.2",
     "better-sqlite3": "^12.6.0",
