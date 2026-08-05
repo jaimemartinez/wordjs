@@ -1,18 +1,12 @@
 import type { Metadata } from "next";
 import { Suspense } from "react";
-import { Inter } from "next/font/google";
+import { inter } from "./fonts";
 import "./globals.css";
 import { SystemFontsLoader } from "@/components/SystemFontsLoader";
 import { ModalProvider } from "@/contexts/ModalContext";
 import { AnalyticsTracker } from '@/components/AnalyticsTracker';
 import { getSettings, getFonts } from "@/lib/server-api";
 import { buildFontFaceCss } from "@/lib/fontFaceCss";
-
-// `variable` exposes the real (hashed) family through --font-inter. next/font registers the face
-// as "__Inter_<hash>", never the literal "Inter" — so any stylesheet that says font-family: "Inter"
-// (the Puck editor chrome via --puck-font-family) silently fell back to system-ui. Referencing
-// var(--font-inter) resolves to the loaded webfont.
-const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
 
 export async function generateMetadata(): Promise<Metadata> {
     // Use the shared server data layer (mono/split-aware base URL + request-deduped) instead of a
@@ -63,7 +57,11 @@ export default async function RootLayout({
     const fontFaceCss = buildFontFaceCss(await getFonts());
 
     return (
-        <html lang="en" suppressHydrationWarning>
+        // inter.variable must live on <html>, not <body>: --wjs-font-family-base is declared in
+        // ui.css :root, and a custom property's var() references substitute AT THE DECLARING
+        // element — with --font-inter defined only on <body>, the :root token silently used its
+        // literal 'Inter' fallback, which next/font never registers (system-font regression).
+        <html lang="en" className={inter.variable} suppressHydrationWarning>
             <head>
                 <link
                     rel="stylesheet"
@@ -73,7 +71,11 @@ export default async function RootLayout({
                     <style id="wjs-server-fonts" dangerouslySetInnerHTML={{ __html: fontFaceCss }} />
                 )}
             </head>
-            <body className={`${inter.className} ${inter.variable}`} suppressHydrationWarning>
+            {/* No font class on <body>: the public tree's body font is owned by the wordjs-ui.css
+                body rule (--wjs-font-family-base → var(--font-inter, …)); putting inter.className
+                on <body> would win over it and lock every theme out of the base font. Non-(public)
+                trees (admin, login, …) re-apply inter.className in their own layouts. */}
+            <body suppressHydrationWarning>
                 <ModalProvider>
                     <SystemFontsLoader />
                     {/* AnalyticsTracker uses useSearchParams → must be Suspense-wrapped to not

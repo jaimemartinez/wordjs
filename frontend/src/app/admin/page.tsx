@@ -22,6 +22,29 @@ interface ChartData {
 
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
+// Local initials avatar — no external avatar-service request. Deterministic gradient pick
+// via a simple char-code hash (Tailwind needs literal class names, hence the map).
+const AVATAR_GRADIENTS = [
+    "from-blue-500 to-indigo-600",
+    "from-purple-500 to-pink-600",
+    "from-emerald-500 to-teal-600",
+    "from-orange-500 to-amber-600",
+];
+
+const InitialsAvatar = ({ name }: { name: string }) => {
+    const initials = (name || "").trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase() || "?";
+    let hash = 0;
+    for (let i = 0; i < (name || "").length; i++) hash = (hash + name.charCodeAt(i)) % AVATAR_GRADIENTS.length;
+    return (
+        <div
+            className={`w-10 h-10 rounded-xl shadow-sm bg-gradient-to-br ${AVATAR_GRADIENTS[hash]} flex items-center justify-center text-white text-sm font-black select-none`}
+            aria-hidden="true"
+        >
+            {initials}
+        </div>
+    );
+};
+
 // Premium Stat Card Component
 const StatCard = ({ label, value, icon, gradient }: { label: string, value: number, icon: string, color: string, gradient: string }) => (
     <div className="group relative overflow-hidden bg-white rounded-[40px] p-8 border-2 border-gray-50 shadow-xl shadow-gray-100/50 hover:shadow-2xl hover:shadow-blue-500/10 hover:-translate-y-2 transition-all duration-500">
@@ -404,11 +427,15 @@ export default function DashboardPage() {
                                 <div key={comment.id} className="group relative bg-gray-50/50 hover:bg-white p-4 rounded-[32px] transition-all duration-300 hover:shadow-lg border border-transparent hover:border-gray-100">
                                     <div className="flex gap-4">
                                         <div className="flex-shrink-0">
-                                            <img
-                                                src={comment.authorAvatarUrl || `https://ui-avatars.com/api/?name=${comment.author}&background=random`}
-                                                alt=""
-                                                className="w-10 h-10 rounded-xl shadow-sm"
-                                            />
+                                            {comment.authorAvatarUrl ? (
+                                                <img
+                                                    src={comment.authorAvatarUrl}
+                                                    alt=""
+                                                    className="w-10 h-10 rounded-xl shadow-sm"
+                                                />
+                                            ) : (
+                                                <InitialsAvatar name={comment.author} />
+                                            )}
                                         </div>
                                         <div className="flex-1 min-w-0">
                                             <div className="flex justify-between items-start">

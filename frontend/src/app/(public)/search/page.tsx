@@ -46,11 +46,11 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
                         name="q"
                         defaultValue={query}
                         placeholder="Search again..."
-                        className="flex-1 min-w-0 px-5 py-4 text-lg border border-[var(--wjs-border-subtle,#e5e7eb)] rounded-xl bg-[var(--wjs-bg-surface,#fff)] focus:outline-none focus:ring-2 focus:ring-[var(--wjs-color-primary,#2563eb)] focus:border-transparent transition-all"
+                        className="flex-1 min-w-0 p-[var(--wjs-search-input-pad,1rem_1.25rem)] text-lg border border-[var(--wjs-border-subtle,#e5e7eb)] rounded-[var(--wjs-search-input-radius,0.75rem)] bg-[var(--wjs-bg-surface,#fff)] focus:outline-none focus:ring-2 focus:ring-[var(--wjs-color-primary,#2563eb)] focus:border-transparent transition-all"
                     />
                     <button
                         type="submit"
-                        className="px-8 py-4 bg-[var(--wjs-color-primary,#2563eb)] text-white rounded-xl font-semibold hover:opacity-90 transition-opacity flex items-center gap-2"
+                        className="p-[var(--wjs-search-button-pad,1rem_2rem)] bg-[var(--wjs-color-primary,#2563eb)] text-[var(--wjs-color-on-primary,#ffffff)] rounded-[var(--wjs-search-button-radius,0.75rem)] font-semibold hover:opacity-90 transition-opacity flex items-center gap-2"
                     >
                         <i className="fa-solid fa-search"></i>
                         Search
@@ -59,8 +59,10 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
             </form>
 
             {/* No query */}
+            {/* rounded-2xl (1rem) maps to the UNDECLARED --wjs-card-radius: ui.css :root pre-declares
+                --wjs-radius-lg at 0.75rem, which would beat a 1rem parity fallback. */}
             {!query && (
-                <div className="text-center py-16 bg-[var(--wjs-bg-surface,#f9fafb)] rounded-2xl">
+                <div className="text-center py-16 bg-[var(--wjs-bg-surface,#f9fafb)] rounded-[var(--wjs-card-radius,1rem)]">
                     <div className="text-6xl mb-6 text-[var(--wjs-color-text-muted,#9ca3af)]">
                         <i className="fa-solid fa-magnifying-glass"></i>
                     </div>
@@ -75,7 +77,7 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
 
             {/* No results */}
             {query && results.length === 0 && (
-                <div className="text-center py-16 bg-[var(--wjs-bg-surface,#f9fafb)] rounded-2xl">
+                <div className="text-center py-16 bg-[var(--wjs-bg-surface,#f9fafb)] rounded-[var(--wjs-card-radius,1rem)]">
                     <div className="text-6xl mb-6 text-[var(--wjs-color-text-muted,#9ca3af)]">
                         <i className="fa-solid fa-face-meh"></i>
                     </div>
@@ -97,7 +99,7 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
                     {results.map((post) => (
                         <article
                             key={post.id}
-                            className="group bg-[var(--wjs-bg-surface,#fff)] rounded-2xl border border-[var(--wjs-border-subtle,#e5e7eb)] p-6 hover:shadow-lg hover:border-[var(--wjs-color-primary,#2563eb)] transition-all duration-300"
+                            className="group bg-[var(--wjs-bg-surface,#fff)] rounded-[var(--wjs-card-radius,1rem)] border border-[var(--wjs-border-subtle,#e5e7eb)] p-[var(--wjs-card-pad,1.5rem)] hover:shadow-lg hover:border-[var(--wjs-color-primary,#2563eb)] transition-all duration-300"
                         >
                             <div className="flex items-center gap-3 mb-3">
                                 <span className={`px-3 py-1 rounded-full text-xs font-semibold uppercase tracking-wide ${post.type === "page"
