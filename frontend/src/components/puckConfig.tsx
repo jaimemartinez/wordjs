@@ -14,6 +14,7 @@ import { buildSrcSet, sizesForWidth, srcSetBelongsTo, rememberPickedMedia, getPi
 import { puckPluginComponents } from "../lib/puckPluginRegistry";
 import { CSSPropertiesControl } from "./puck/CSSControls";
 import { blockVars, cx, unit } from "./puck/blockVars";
+import SearchBarBlockIsland from "./content/SearchBarBlock";
 import { HeadingBlock, TextBlock, ImageBlock, DividerBlock, ButtonBlock, SpacerBlock, SectionBlock, GridBlock, FlexRowBlock, ColumnsBlock, CardBlock, QuoteBlock, TableBlock, IconListBlock, SocialLinksBlock, StatsBlock, HTMLEmbedBlock, PricingTableBlock, TestimonialBlock, CTABannerBlock, VideoEmbedBlock, HeroBlock, PostsGridBlock, CategoryPostsBlock } from "./content/blocks";
 import LinkField from "./puck/LinkField";
 import { withSharedBlockFields } from "./puck/VisibilityField";
@@ -2096,60 +2097,7 @@ const baseConfig: any = {
                 buttonBg: "", buttonColor: "", buttonRadius: "",
                 css: {}
             },
-            render: ({ placeholder, buttonText, searchPage, align, width, inputBg, inputBorderColor, inputRadius, buttonBg, buttonColor, buttonRadius, css }: any) => {
-                const [query, setQuery] = React.useState("");
-
-                const handleSubmit = (e: React.FormEvent) => {
-                    e.preventDefault();
-                    if (query.trim()) {
-                        // Restrict navigation to a same-origin relative path. `searchPage` is
-                        // editor-controlled, so an absolute/scheme URL (https://evil.com, javascript:)
-                        // or a protocol-relative //host must never reach window.location — that would be
-                        // an open redirect / javascript: navigation. Resolve against the current origin
-                        // and keep only the same-origin pathname; otherwise fall back to '/search'.
-                        let dest = '/search';
-                        try {
-                            const u = new URL(searchPage || '/search', window.location.origin);
-                            if (u.origin === window.location.origin) dest = u.pathname;
-                        } catch { /* malformed searchPage → keep default '/search' */ }
-                        const searchUrl = `${dest}?q=${encodeURIComponent(query.trim())}`;
-                        window.location.assign(searchUrl);
-                    }
-                };
-
-                return (
-                    <div
-                        className="wp-block-search-wrap"
-                        style={{
-                            ...blockVars('search', {
-                                align,
-                                width,
-                                'input-bg': inputBg,
-                                'input-border-color': inputBorderColor,
-                                'input-radius': unit(inputRadius),
-                                'button-bg': buttonBg,
-                                'button-color': buttonColor,
-                                'button-radius': unit(buttonRadius),
-                            }),
-                            ...css,
-                        }}
-                    >
-                        <form className="wp-block-search" onSubmit={handleSubmit}>
-                            <input
-                                type="search"
-                                className="wp-block-search__input"
-                                placeholder={placeholder}
-                                value={query}
-                                onChange={(e) => setQuery(e.target.value)}
-                            />
-                            <button type="submit" className="wp-block-search__button">
-                                <i className="fa-solid fa-search" aria-hidden="true"></i>
-                                {buttonText && <span>{buttonText}</span>}
-                            </button>
-                        </form>
-                    </div>
-                );
-            }
+            render: (props: any) => <SearchBarBlockIsland {...props} />
         },
 
         // ==========================================
