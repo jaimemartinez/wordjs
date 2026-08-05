@@ -7,6 +7,7 @@ import { ModalProvider } from "@/contexts/ModalContext";
 import { AnalyticsTracker } from '@/components/AnalyticsTracker';
 import { getSettings, getFonts } from "@/lib/server-api";
 import { buildFontFaceCss } from "@/lib/fontFaceCss";
+import { ASSET_VERSION } from "@/lib/assetVersion";
 
 export async function generateMetadata(): Promise<Metadata> {
     // Use the shared server data layer (mono/split-aware base URL + request-deduped) instead of a
@@ -63,9 +64,15 @@ export default async function RootLayout({
         // literal 'Inter' fallback, which next/font never registers (system-font regression).
         <html lang="en" className={inter.variable} suppressHydrationWarning>
             <head>
+                {/* SELF-HOSTED Font Awesome (scripts/vendor-fontawesome.mjs → backend/public/vendor).
+                    It used to come from cdnjs: a render-blocking stylesheet behind a third-party
+                    DNS+TLS handshake on the critical path, a single point of failure for every page,
+                    and a request that told a CDN who visits this site. Served from our own origin it
+                    is same-connection, cacheable by us, and works offline/air-gapped. Not subsetted
+                    on purpose: block content takes free-text `fa-*` names from authors. */}
                 <link
                     rel="stylesheet"
-                    href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css"
+                    href={`/public/vendor/fontawesome/css/all.min.css?v=${ASSET_VERSION}`}
                 />
                 {fontFaceCss && (
                     <style id="wjs-server-fonts" dangerouslySetInnerHTML={{ __html: fontFaceCss }} />
