@@ -1,7 +1,7 @@
-/* ── WordJS token contract — canonical palette ─────────────────────────────
- * Derived from this theme's own generator colors (create-40-themes.js). These
- * aliases are what wordjs-ui.css block defaults (forms, search, cards…) read;
- * the theme's original rules below still own its distinctive look. */
+/* Theme: Omni Stack (Cyber Archetype) */
+@import url('https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;700&family=JetBrains+Mono:wght@400;700&display=swap');
+
+/* @wjs-generated:start — compiled from theme.json; DO NOT EDIT inside. Edit theme.json and run: node backend/cli/wordjs.js build theme omni-stack */
 :root {
   --wjs-bg-canvas: #042f2e;
   --wjs-bg-surface: #133b3b;
@@ -21,10 +21,7 @@
   --wjs-outline-variant: #224e4b;
   --wjs-focus-ring: #14b8a6;
 }
-
-/* Theme: Omni Stack (Cyber Archetype) */
-@import url('https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;700&family=JetBrains+Mono:wght@400;700&display=swap');
-
+/* Archetype: Cyber */
 :root {
     --cyber-primary: #14b8a6;
     --cyber-secondary: #0d9488;
@@ -35,7 +32,7 @@
 body {
     background-color: var(--cyber-bg);
     color: var(--cyber-text);
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'JetBrains Mono', 'Cascadia Code', Consolas, Menlo, monospace;
     background-image: linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px),
                       linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px);
     background-size: 30px 30px;
@@ -44,7 +41,7 @@ body {
 }
 
 h1, h2, h3, .brand {
-    font-family: 'Chakra Petch', sans-serif;
+    font-family: 'Chakra Petch', 'Bahnschrift', 'Trebuchet MS', 'Segoe UI', sans-serif;
     text-transform: uppercase;
     letter-spacing: 2px;
     color: var(--cyber-primary);
@@ -103,7 +100,7 @@ button.theme-btn {
     color: var(--cyber-primary);
     border: 2px solid var(--cyber-primary);
     padding: 12px 24px;
-    font-family: 'Chakra Petch', sans-serif;
+    font-family: 'Chakra Petch', 'Bahnschrift', 'Trebuchet MS', 'Segoe UI', sans-serif;
     font-weight: bold;
     cursor: pointer;
     clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);
@@ -115,3 +112,4 @@ button.theme-btn:hover {
     color: #000;
     box-shadow: 0 0 15px var(--cyber-primary);
 }
+/* @wjs-generated:end */

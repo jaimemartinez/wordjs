@@ -1,9 +1,16 @@
 {
   "name": "Quantum Fintech",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Sleek obsidian & gold theme designed for financial technologies, crypto platforms, and hedge funds.",
   "author": "WordJS Premium Studio",
   "category": "Finance",
+  "generator": "wordjs",
+  "seeds": {
+    "primary": "#eab308",
+    "secondary": "#ca8a04",
+    "bg": "#0c0a09",
+    "text": "#fef08a"
+  },
   "archetype": "obsidian",
   "tags": [
     "premium",

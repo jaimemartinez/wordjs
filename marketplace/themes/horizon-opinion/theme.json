@@ -1,9 +1,16 @@
 {
   "name": "Horizon Opinion",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Thought leadership & essay publication theme with focused reader mode, clean serif body fonts, and subscribe cards.",
   "author": "WordJS Premium Studio",
   "category": "Media",
+  "generator": "wordjs",
+  "seeds": {
+    "primary": "#6366f1",
+    "secondary": "#4338ca",
+    "bg": "#0c0e1a",
+    "text": "#e0e7ff"
+  },
   "archetype": "editorial",
   "tags": [
     "premium",

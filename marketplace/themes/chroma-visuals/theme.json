@@ -1,9 +1,16 @@
 {
   "name": "Chroma Visuals",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Vibrant 3D digital artist portfolio featuring dark mode neon accents and video background frames.",
   "author": "WordJS Premium Studio",
   "category": "Creative",
+  "generator": "wordjs",
+  "seeds": {
+    "primary": "#8b5cf6",
+    "secondary": "#7c3aed",
+    "bg": "#090514",
+    "text": "#f5f3ff"
+  },
   "archetype": "cyber",
   "tags": [
     "premium",

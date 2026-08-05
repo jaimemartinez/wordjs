@@ -1,7 +1,7 @@
-/* ── WordJS token contract — canonical palette ─────────────────────────────
- * Derived from this theme's own generator colors (create-40-themes.js). These
- * aliases are what wordjs-ui.css block defaults (forms, search, cards…) read;
- * the theme's original rules below still own its distinctive look. */
+/* Theme: Gourmet Epicure (Editorial Luxury Archetype) */
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,600;0,800;1,400&family=Lora:ital,wght@0,400;0,500;1,400&display=swap');
+
+/* @wjs-generated:start — compiled from theme.json; DO NOT EDIT inside. Edit theme.json and run: node backend/cli/wordjs.js build theme gourmet-epicure */
 :root {
   --wjs-bg-canvas: #1c1604;
   --wjs-bg-surface: #2a2413;
@@ -21,10 +21,7 @@
   --wjs-outline-variant: #3e3821;
   --wjs-focus-ring: #eab308;
 }
-
-/* Theme: Gourmet Epicure (Editorial Luxury Archetype) */
-@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,600;0,800;1,400&family=Lora:ital,wght@0,400;0,500;1,400&display=swap');
-
+/* Archetype: Editorial Luxury */
 :root {
     --edit-primary: #eab308;
     --edit-secondary: #ca8a04;
@@ -35,14 +32,14 @@
 body {
     background-color: var(--edit-bg);
     color: var(--edit-text);
-    font-family: 'Lora', serif;
+    font-family: 'Lora', Georgia, 'Times New Roman', serif;
     font-size: 1.1rem;
     line-height: 1.8;
     margin: 0;
 }
 
 h1, h2, h3 {
-    font-family: 'Playfair Display', serif;
+    font-family: 'Playfair Display', Didot, 'Bodoni MT', Georgia, serif;
     font-weight: 800;
     letter-spacing: -0.01em;
     color: var(--edit-primary);
@@ -84,7 +81,7 @@ h1, h2, h3 {
 }
 
 .theme-badge {
-    font-family: 'Playfair Display', serif;
+    font-family: 'Playfair Display', Didot, 'Bodoni MT', Georgia, serif;
     font-style: italic;
     color: var(--edit-secondary);
     font-size: 0.9rem;
@@ -96,7 +93,7 @@ button.theme-btn {
     color: var(--edit-primary);
     border: 1px solid var(--edit-primary);
     padding: 10px 24px;
-    font-family: 'Playfair Display', serif;
+    font-family: 'Playfair Display', Didot, 'Bodoni MT', Georgia, serif;
     font-style: italic;
     cursor: pointer;
     transition: all 0.3s ease;
@@ -106,3 +103,4 @@ button.theme-btn:hover {
     background: var(--edit-primary);
     color: var(--edit-bg);
 }
+/* @wjs-generated:end */

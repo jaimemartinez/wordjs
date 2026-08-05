@@ -1,9 +1,16 @@
 {
   "name": "Prism Studio",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Creative agency portfolio with dynamic color shifts, kinetic typography, and masonry image galleries.",
   "author": "WordJS Premium Studio",
   "category": "Portfolio",
+  "generator": "wordjs",
+  "seeds": {
+    "primary": "#ec4899",
+    "secondary": "#db2777",
+    "bg": "#111827",
+    "text": "#fdf2f8"
+  },
   "archetype": "glassmorphism",
   "tags": [
     "premium",

@@ -635,33 +635,90 @@ const themes = [
     { slug: 'cinema-reel', name: 'Cinema Reel', description: 'Movie reviews, film criticism, and entertainment portal with dark theater background, rating meters, and trailer modals.', author: 'WordJS Premium Studio', category: 'Media', primaryColor: '#e11d48', secondaryColor: '#9f1239', bgColor: '#170308', textColor: '#ffe4e6', archetype: 'obsidian' }
 ];
 
-console.log(`Generating ${themes.length} Distinct Ultra-Premium Themes with Unique Archetype CSS...`);
+// CLI behavior only when executed directly — core (backend/src/core/theme-derive.ts and
+// its parity tests) requires this file as a module for the helpers below without
+// regenerating the marketplace catalog.
+//
+// The catalog is emitted in the HYBRID declarative format: theme.json carries the
+// compiler contract (generator/seeds/archetype) and style.css = manual CSS (theme header
+// + the Google Fonts @imports each archetype has always shipped, now in the spec-valid
+// position before any rule) followed by the @wjs-generated block that theme-compile
+// produces from theme.json. deriveTokens() has byte parity with canonicalAliases() and
+// the compiler appends the archetype CSS verbatim, so the rendered catalog is unchanged.
+// Font vendoring is a separate program — the @import stays manual ON PURPOSE (the theme
+// doctor reports it as EXTERNAL_REF, which is honest).
+if (require.main === module) {
+    // Prefer the compiled build (what prod runs); fall back to transpiling src via ts-node.
+    const BACKEND_DIR = path.join(__dirname, '../backend');
+    const MANIFEST_PATH = path.join(BACKEND_DIR, 'public', 'theme-tokens.json');
+    const distCompile = path.join(BACKEND_DIR, 'dist', 'core', 'theme-compile.js');
+    let themeCompile;
+    if (fs.existsSync(distCompile)) {
+        themeCompile = require(distCompile);
+    } else {
+        require('ts-node').register({ project: path.join(BACKEND_DIR, 'tsconfig.json'), transpileOnly: true });
+        themeCompile = require(path.join(BACKEND_DIR, 'src', 'core', 'theme-compile.ts'));
+    }
+    const { compileTheme, writeCompiled } = themeCompile;
 
-for (const t of themes) {
-    const dir = path.join(THEMES_DIR, t.slug);
-    fs.mkdirSync(dir, { recursive: true });
+    console.log(`Generating ${themes.length} Distinct Ultra-Premium Themes (hybrid declarative format)...`);
 
-    // 1. theme.json
-    const themeJson = {
-        name: t.name,
-        version: "1.0.0",
-        description: t.description,
-        author: t.author,
-        category: t.category,
-        archetype: t.archetype,
-        tags: ["premium", t.category.toLowerCase(), t.archetype, "responsive"]
-    };
-    fs.writeFileSync(path.join(dir, 'theme.json'), JSON.stringify(themeJson, null, 2));
+    for (const t of themes) {
+        const dir = path.join(THEMES_DIR, t.slug);
+        fs.mkdirSync(dir, { recursive: true });
 
-    // 2. style.css (Generated dynamically per Archetype!)
-    // Every theme leads with the WordJS token-contract aliases derived from its own palette —
-    // wordjs-ui.css block defaults (forms, search, cards…) read these, so a generated theme is
-    // contract-complete from birth; the archetype CSS below still owns the distinctive look.
-    const generator = ARCHETYPES[t.archetype] || ARCHETYPES.glassmorphism;
-    fs.writeFileSync(path.join(dir, 'style.css'), canonicalAliases(t) + generator(t));
+        // 1. theme.json — the entry's palette becomes compiler seeds. Patch-bump against
+        // whatever version the catalog already carries (fresh checkout → 1.0.0) and keep
+        // any layout key the theme may have gained since generation.
+        let version = '1.0.0';
+        let layout;
+        try {
+            const prev = JSON.parse(fs.readFileSync(path.join(dir, 'theme.json'), 'utf8'));
+            const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(String(prev.version || ''));
+            if (m) version = `${m[1]}.${m[2]}.${Number(m[3]) + 1}`;
+            if (prev.layout !== undefined) layout = prev.layout;
+        } catch { /* no previous theme.json — first generation */ }
 
-    // 3. functions.js
-    const js = `/**
+        const themeJson = {
+            name: t.name,
+            version,
+            description: t.description,
+            author: t.author,
+            category: t.category,
+            generator: "wordjs",
+            seeds: { primary: t.primaryColor, secondary: t.secondaryColor, bg: t.bgColor, text: t.textColor },
+            archetype: t.archetype,
+            tags: ["premium", t.category.toLowerCase(), t.archetype, "responsive"]
+        };
+        if (layout !== undefined) themeJson.layout = layout;
+        fs.writeFileSync(path.join(dir, 'theme.json'), JSON.stringify(themeJson, null, 2));
+
+        // 2. style.css — manual CSS first (the archetype's own header comment + the
+        // @import lines it has always emitted), then an empty marker pair for the
+        // compiler to fill. theme-compile never emits @import (core CSS must not reach
+        // the network), so the fonts live OUTSIDE the markers and survive recompiles.
+        const archetypeSrc = (ARCHETYPES[t.archetype] || ARCHETYPES.glassmorphism)(t);
+        const headerComment = archetypeSrc.split('\n', 1)[0];
+        const fontImports = archetypeSrc.match(/^@import .*$/gm) || [];
+        fs.writeFileSync(
+            path.join(dir, 'style.css'),
+            `${headerComment}\n${fontImports.join('\n')}\n\n/* @wjs-generated:start */\n/* @wjs-generated:end */\n`
+        );
+
+        // dryRun first (diagnose without touching the file), then swap only the marked
+        // block — same sequence as backend/cli/wordjs.js build theme.
+        const result = compileTheme(dir, { slug: t.slug, manifestPath: MANIFEST_PATH, dryRun: true });
+        for (const d of result.diagnostics) {
+            console.error(`  ${d.level === 'error' ? '❌' : '⚠️'} [${d.code}] ${t.slug} ${d.path}: ${d.message}`);
+        }
+        if (result.stats.errors > 0) {
+            console.error(`❌ ${t.slug}: compile failed with ${result.stats.errors} error(s) — catalog left half-regenerated, fix and re-run.`);
+            process.exit(1);
+        }
+        writeCompiled(dir, result.css);
+
+        // 3. functions.js
+        const js = `/**
  * ${t.name} Theme Hooks & Dynamic Functions (${t.archetype.toUpperCase()} Archetype)
  */
 
@@ -669,17 +726,20 @@ module.exports = function registerThemeHooks(wp) {
     console.log('[Theme: ${t.name}] (${t.archetype}) Registered successfully.');
 };
 `;
-    fs.writeFileSync(path.join(dir, 'functions.js'), js);
+        fs.writeFileSync(path.join(dir, 'functions.js'), js);
+    }
+
+    console.log('✅ Successfully generated 40 radically distinct premium themes!');
+
+    // Rebuild marketplace catalog
+    console.log('Building Marketplace Dist Catalog...');
+    const res = spawnSync(process.execPath, [path.join(__dirname, '../backend/scripts/build-marketplace.js')], {
+        encoding: 'utf8'
+    });
+    console.log(res.stdout || '');
+    if (res.stderr) console.error(res.stderr);
+
+    console.log('✅ Marketplace Catalog Build Finished!');
 }
 
-console.log('✅ Successfully generated 40 radically distinct premium themes!');
-
-// Rebuild marketplace catalog
-console.log('Building Marketplace Dist Catalog...');
-const res = spawnSync(process.execPath, [path.join(__dirname, '../backend/scripts/build-marketplace.js')], {
-    encoding: 'utf8'
-});
-console.log(res.stdout || '');
-if (res.stderr) console.error(res.stderr);
-
-console.log('✅ Marketplace Catalog Build Finished!');
+module.exports = { hex2rgb, rgb2hex, mix, lum, onColor, canonicalAliases, ARCHETYPES, themes };
