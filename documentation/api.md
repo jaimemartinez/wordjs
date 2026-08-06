@@ -17,7 +17,7 @@ The backend follows a layered architecture inspired by WordPress but implemented
     *   `MfaComplianceGate`: Mounted on the API prefix (`backend/src/index.ts`); blocks a user who is required to enrol under the admin MFA-by-role policy (once past their grace period) until they complete MFA enrollment.
 4.  **Security Layers:**
     *   `AST Scanner`: Static analysis (acorn, fail-closed) of plugin code at install time.
-    *   `Process Isolation`: Every plugin marked `"isolated": true` runs in a **separate OS process** (`child_process.fork` of `backend/src/core/plugin-worker.js`, IPC via v8 structured clone) and reaches the host only through the permission-checked `wordjs` capability bridge — a crash/OOM is contained to the child, never the host. There is **no "trusted" tier**: every plugin is sandboxed and the admin grants each capability per-plugin (Android-style, default-deny). First-party plugins are pre-granted their *declared* capabilities on first activation but are **not** privileged. A `network`-granted plugin's outbound connections are confined to **public IPs only** by `backend/src/core/egress-guard.ts` (loopback / link-local incl. cloud-metadata `169.254.169.254` / RFC1918 / CGNAT / IPv6 ULA are blocked, validated at connect time). Plugin DB tables are scoped to a `wjp_<slug>_` prefix. See `documentation/plugins.md` / `documentation/security.md`.
+    *   `Process Isolation`: Every plugin marked `"isolated": true` runs in a **separate OS process** (`child_process.fork` of `backend/src/core/plugin-worker.js`, IPC via v8 structured clone) and reaches the host only through the permission-checked `wordjs` capability bridge — a crash/OOM is contained to the child, never the host. There is **no "trusted" tier**: every plugin is sandboxed and the admin grants each capability per-plugin (Android-style, default-deny). Activation is the grant step — for **any** plugin, not just first-party ones: an admin activating a plugin that holds no grant record grants exactly its *declared* capabilities (see §6.3). No plugin is privileged. A `network`-granted plugin's outbound connections are confined to **public IPs only** by `backend/src/core/egress-guard.ts` (loopback / link-local incl. cloud-metadata `169.254.169.254` / RFC1918 / CGNAT / IPv6 ULA are blocked, validated at connect time). Plugin DB tables are scoped to a `wjp_<slug>_` prefix. See `documentation/plugins.md` / `documentation/security.md`.
 5.  **Routing:** `backend/src/routes/index.ts` dispatches to controllers.
 6.  **Controller/Handler:** Executes business logic, interacts with Models/DB.
 7.  **Response:** JSON response sent back.
@@ -161,11 +161,12 @@ All errors should follow the structure defined in `backend/src/middleware/errorH
 ### 6.1 Core Modules
 - **Authentication**: `/auth` - Login, Register, Session management.
 - **Content**: `/posts`, `/pages` (alias for `?type=page`), `/media`, `/categories`, `/tags`, `/comments`.
-- **Users**: `/users`, `/roles` - Role-Based Access Control.
-- **System**: `/settings`, `/plugins`, `/marketplace` (plugin **and theme** catalogs — see §6.3.1), `/themes`, `/menus`, `/fonts`, `/health`, `/seo`, `/hooks`, `/notifications`, `/webhooks` (outgoing HMAC-signed webhooks — see §6.10), `/system/certs`.
+- **Users**: `/users`, `/roles` (see §6.11) - Role-Based Access Control.
+- **System**: `/settings`, `/plugins`, `/marketplace` (plugin **and theme** catalogs — see §6.3.1), `/themes`, `/menus` (§6.12), `/fonts` (§6.15), `/health` (§6.17), `/seo` (§6.16), `/hooks` (§6.18), `/notifications` (§6.19), `/webhooks` (outgoing HMAC-signed webhooks — see §6.10), `/system/certs`.
 - **Observability**: `/metrics` (Prometheus, root-path, scrape-token-gated — see §6.8), `/analytics` (see §6.4).
-- **Extensions**: `/widgets`, `/types` (Post Types), `/revisions`.
-- **Site & editor**: `/chrome` (site-level header/footer compositions — `PUT`/`DELETE /chrome/:part` where `part` is `header` or `footer`, admin-only; reads travel through the public `/settings` payload), `/forms` (public `POST /forms/submit` + the `manage_options`-gated submissions viewer), `/presence` (`POST /presence/:postId` editing-heartbeat soft-lock, `edit_posts`).
+- **Extensions**: `/widgets` (§6.13), `/types` (Post Types, §6.14), `/revisions`.
+- **Site & editor**: `/chrome` (site-level header/footer compositions — `PUT`/`DELETE /chrome/:part` where `part` is `header` or `footer`, admin-only; reads travel through the public `/settings` payload), `/forms` and `/presence` (§6.20).
+- **Internal**: `/api/internal/gateway-update` — gateway-to-backend only, outside the `/api/v1` prefix (§6.21).
 - **Data**: `/export`, `/export/wxr`, `/import`, `/import/wordpress` (WordPress WXR migration — see §6.9), `/backups`, `/db-migration` (engine migration).
 
 ### 6.2.1 Authentication Flow (JWT)
@@ -319,7 +320,7 @@ Base path: `/api/v1/marketplace` (`backend/src/routes/marketplace.ts`). Plugins 
 | Method | Endpoint           | Auth  | Description                        |
 | :----- | :----------------- | :---- | :--------------------------------- |
 | `POST` | `/analytics/track` | No    | Log a page view or event           |
-| `GET`  | `/analytics/stats` | Admin | Get aggregated stats for dashboard |
+| `GET`  | `/analytics/stats` | Admin | Get aggregated stats for dashboard (`?period=weekly` \| `monthly`, default `weekly`) |
 
 
 ### 6.5 Certificate Management (SSL) 🔒
@@ -446,6 +447,134 @@ Base path: `/api/v1/webhooks` (`backend/src/routes/webhooks.ts`; core `backend/s
 | `GET`    | `/:id/deliveries`                   | Admin | Recent delivery attempts for a webhook (audit log)                 |
 | `POST`   | `/deliveries/:deliveryId/redeliver` | Admin (session) | Re-queue a specific delivery for another attempt         |
 
+### 6.11 Roles & Capabilities 🛡️
+Base path: `/api/v1/roles` (`backend/src/routes/roles.ts`). Every route is `authenticate` + `isAdmin`. Roles live in the `wordjs_user_roles` option (§2.3).
+
+| Method   | Endpoint        | Auth  | Description                                                                 |
+| :------- | :-------------- | :---- | :-------------------------------------------------------------------------- |
+| `GET`    | `/`             | Admin | All roles with their capability sets                                        |
+| `GET`    | `/capabilities` | Admin | Every capability identifier known to the system (core + plugin-contributed) — the checklist the Roles UI renders |
+| `GET`    | `/:slug`        | Admin | One role; `404 rest_role_invalid_id` if unknown                             |
+| `POST`   | `/`             | Admin | Create **or overwrite** a role. Body `{ slug, name, capabilities }`; `400 rest_missing_param` without `slug`+`name`; returns `201` with the stored role |
+| `DELETE` | `/:slug`        | Admin | Delete a role. The five core roles (`administrator`, `editor`, `author`, `contributor`, `subscriber`) are refused with `400 rest_role_protected` |
+
+### 6.12 Menus 🧭
+Base path: `/api/v1/menus` (`backend/src/routes/menus.ts`). Reads are public (`optionalAuth`); every mutation is `authenticate` + `isAdmin`. Item URLs are scheme-validated on create **and** update (see the note in §6.2).
+
+| Method   | Endpoint               | Auth   | Description                                                        |
+| :------- | :--------------------- | :----- | :----------------------------------------------------------------- |
+| `GET`    | `/`                    | Opt.   | List menus                                                         |
+| `GET`    | `/locations`           | No     | The registered theme menu locations                                |
+| `GET`    | `/:id`                 | Opt.   | One menu with its items                                            |
+| `GET`    | `/location/:location`  | Opt.   | The menu assigned to a location (what the public shell reads)      |
+| `POST`   | `/`                    | Admin  | Create a menu. Body `{ name, slug?, description? }`                |
+| `PUT`    | `/:id`                 | Admin  | Rename / re-slug a menu                                            |
+| `DELETE` | `/:id`                 | Admin  | Delete a menu                                                      |
+| `POST`   | `/:id/location`        | Admin  | Assign the menu to a location. Body `{ location }`                 |
+| `POST`   | `/:id/items`           | Admin  | Add an item. Body `{ title, url, target, type, objectId, parent, order, classes }` |
+| `PUT`    | `/items/:itemId`       | Admin  | Update one item (note: **not** nested under the menu id)           |
+| `DELETE` | `/items/:itemId`       | Admin  | Delete one item                                                    |
+
+### 6.13 Widgets & Sidebars 🧱
+Base path: `/api/v1/widgets` (`backend/src/routes/widgets.ts`; core `backend/src/core/widgets.ts`, see §12). Reads are public; every mutation is `authenticate` + `isAdmin`.
+
+| Method   | Endpoint                            | Auth  | Description                                                     |
+| :------- | :---------------------------------- | :---- | :--------------------------------------------------------------- |
+| `GET`    | `/`                                 | No    | Registered widget types (`id`, `name`, `description`)            |
+| `GET`    | `/sidebars`                         | No    | Registered sidebars, each with its resolved widget instances     |
+| `GET`    | `/sidebars/:id/render`              | No    | Server-rendered **HTML** of a sidebar (`text/html`, not JSON)    |
+| `POST`   | `/sidebars/:id`                     | Admin | Add a widget instance to a sidebar. Body `{ widgetId, settings }` |
+| `POST`   | `/sidebars/:id/reorder`             | Admin | Reorder a sidebar. Body `{ widgets: [instanceKey, …] }`          |
+| `DELETE` | `/sidebars/:sidebarId/:instanceKey` | Admin | Remove one instance from a sidebar                              |
+| `PUT`    | `/:widgetId/instances/:instanceId`  | Admin | Update one instance's settings. Body `{ settings }`              |
+
+### 6.14 Post Types 🗂️
+Base path: `/api/v1/types` (`backend/src/routes/post-types.ts`). Reads are public; mutations are `authenticate` + `isAdmin`.
+
+| Method   | Endpoint  | Auth  | Description                                                                    |
+| :------- | :-------- | :---- | :----------------------------------------------------------------------------- |
+| `GET`    | `/`       | No    | Registered post types. Returns only types with `showInRest: true`; `?rest=false` inverts the filter and returns only the types **not** exposed in the REST API |
+| `GET`    | `/:name`  | No    | One post type                                                                  |
+| `POST`   | `/`       | Admin | Register a **custom** post type. Body `{ name, label?, labels?, supports?, taxonomies?, … }`; `400` without `name`, `409` if it already exists (`supports` defaults to `['title','editor']`) |
+| `DELETE` | `/:name`  | Admin | Delete a custom post type; `400` for one that cannot be deleted (e.g. a built-in) |
+
+### 6.15 Fonts 🔤
+Base path: `/api/v1/fonts` (`backend/src/routes/fonts.ts`). Files live under `<uploads>/fonts/` and are served from `/uploads/fonts/<file>`.
+
+| Method   | Endpoint      | Auth             | Description                                                                |
+| :------- | :------------ | :--------------- | :-------------------------------------------------------------------------- |
+| `GET`    | `/`           | Opt.             | Flat array of the installed fonts (`.ttf`/`.otf`/`.woff`/`.woff2`/`.eot`), each `{ filename, family, variant, url, size, modified, protected }` with family/variant parsed from the filename, sorted protected-first then family then variant. `url` is **origin-relative** (`/uploads/fonts/…`) on purpose — an absolute URL embeds the upload-era host and breaks `@font-face` on any other origin. This is the read the SSR `@font-face` injection and the editor font pickers use |
+| `POST`   | `/`           | `manage_options` | Upload a font (`multipart`, single file); `201 { file, url }`, `400` without a file |
+| `DELETE` | `/:filename`  | `manage_options` | Delete a font (basename-only, so no traversal); bundled system fonts are refused with `403` |
+
+### 6.16 SEO Endpoints 🔎
+Base path: `/api/v1/seo` (`backend/src/routes/seo.ts`). The three public documents are what the gateway (and the monolith's local middleware) rewrite the pretty root paths onto — `/sitemap.xml`, `/robots.txt` and `/feed` \| `/feed.xml` \| `/rss.xml`.
+
+| Method | Endpoint         | Auth         | Description                                            |
+| :----- | :--------------- | :----------- | :------------------------------------------------------ |
+| `GET`  | `/sitemap.xml`   | No           | XML sitemap of published content                       |
+| `GET`  | `/robots.txt`    | No           | `robots.txt` (points at the sitemap)                   |
+| `GET`  | `/feed.xml`      | No           | RSS feed                                               |
+| `GET`  | `/meta/:postId`  | `edit_posts` | The SEO meta an editor sees for one post               |
+
+### 6.17 Health Probes ❤️
+Two different things share the word "health". The **root** probes are for orchestrators and the gateway; the `/api/v1/health` pair is the app-level report.
+
+| Method | Endpoint                | Auth  | Description                                                                 |
+| :----- | :---------------------- | :---- | :-------------------------------------------------------------------------- |
+| `GET`  | `/healthz`              | No    | Liveness (root path). Never touches the DB                                  |
+| `GET`  | `/readyz`               | No    | Readiness (root path). `503` `setup_required` / `starting` / `not_ready` until the instance is installed, `appReady` is set, and the DB answers |
+| `GET`  | `/health`               | No    | Root-path health summary                                                    |
+| `GET`  | `/api/v1/health`        | No    | Database reachability (`{ status: 'ok' \| 'error' }`)                        |
+| `GET`  | `/api/v1/health/details`| Admin | Full system status: `{ database, mtls, filesystem, sandbox, timestamp }`. The `sandbox` object is the live plugin-sandbox state — `{ status, hardening, netns, permission, requireHardening }` (+ a `note`/`permissionNote` when degraded), see `documentation/deployment.md` |
+
+### 6.18 Hooks Introspection 🪝
+Base path: `/api/v1/hooks` (`backend/src/routes/hooks.ts`). Both routes are `authenticate` + `isAdmin`. This is the **introspection** surface for the action/filter system of §3 — not to be confused with the outgoing `/webhooks` resource of §6.10.
+
+| Method | Endpoint   | Auth  | Description                                              |
+| :----- | :--------- | :---- | :-------------------------------------------------------- |
+| `GET`  | `/`        | Admin | Every registered action/filter with its callbacks         |
+| `GET`  | `/stream`  | Admin | SSE stream of hook activity (`text/event-stream`)         |
+
+### 6.19 Notifications 🔔
+Base path: `/api/v1/notifications` (`backend/src/routes/notifications.ts`). All routes require a session; the single-item mutators are **owner-scoped** (a uuid is not a capability), so a caller can only touch their own rows — plus broadcasts (`user_id = 0`), which any user may dismiss.
+
+| Method   | Endpoint        | Auth                     | Description                                                        |
+| :------- | :-------------- | :----------------------- | :----------------------------------------------------------------- |
+| `GET`    | `/stream`       | `authenticateAllowQuery` | SSE push stream — accepts the cookie/Bearer **or** a `?token=` query param, because `EventSource` cannot set headers |
+| `GET`    | `/`             | Yes                      | Bounded list: unread first, plus the 5 most recent read            |
+| `POST`   | `/:uuid/read`   | Yes                      | Mark one read; `404` if it isn't the caller's                      |
+| `POST`   | `/read-all`     | Yes                      | Mark every one of the caller's notifications read                  |
+| `DELETE` | `/:uuid`        | Yes                      | Delete one; `404` if it isn't the caller's                         |
+
+The transports, cluster bus and plugin-facing `wordjs.notify(...)` bridge are documented in `documentation/notifications.md`.
+
+### 6.20 Forms & Editing Presence 📝
+Base paths `/api/v1/forms` (`backend/src/routes/forms.ts`) and `/api/v1/presence` (`backend/src/routes/presence.ts`).
+
+| Method   | Endpoint              | Auth             | Description                                                            |
+| :------- | :-------------------- | :--------------- | :---------------------------------------------------------------------- |
+| `POST`   | `/forms/submit`       | No               | The **public** endpoint a page's form block posts to. Body `{ formName, pageId?, fields }` |
+| `GET`    | `/forms/submissions`  | `manage_options` | Paginated submissions (`formName`, `page`, `per_page` — capped at 100)  |
+| `DELETE` | `/forms/submissions/:id` | `manage_options` | Delete one submission                                               |
+| `GET`    | `/forms/names`        | `manage_options` | The distinct form names seen so far (the viewer's filter picker)       |
+| `POST`   | `/presence/:postId`   | `edit_posts`     | Editing-presence heartbeat (or `{ action: "leave" }`); answers with the **other** active editors. In-memory, 25s TTL |
+
+> **Public-endpoint posture (`POST /forms/submit`), in order:** a per-IP rate limit (10/min, mounted in `backend/src/index.ts`); hard input bounds (≤30 fields, keys ≤60, values ≤5000 chars, ≤64KB total) checked **before** the honeypot so a bot sees byte-identical behavior either way; the `_hp` honeypot field, which returns the **exact** success payload while storing nothing; and tag-stripping of stored values so a submission can never carry markup into the admin viewer. Submissions can contain visitor PII, which is why the viewer is `manage_options` rather than an editor-level read.
+
+> **Presence is a soft-lock signal, not co-editing.** State is per-process and in-memory on purpose, so on a multi-node backend each node only sees its own editors — the warning can *miss*, it can never false-positive.
+
+### 6.21 Internal (gateway-only) 🔒
+Base path `/api/internal` — note this is **outside** the `/api/v1` prefix, so it carries none of the API middleware chain (`backend/src/routes/internal.ts`).
+
+| Method | Endpoint           | Auth               | Description                                                        |
+| :----- | :----------------- | :----------------- | :----------------------------------------------------------------- |
+| `POST` | `/gateway-update`  | `x-gateway-secret` | The gateway telling the backend its public port changed. Body `{ gatewayPort }` |
+
+The secret is compared in **constant time** and a request is refused when no secret is configured (rather than matching an empty default); `401` on mismatch, `400` on a missing/out-of-range port. A port identical to the current one is acknowledged **without** restarting, so a flood of repeats can't force a restart loop; a real change is persisted and the process exits so the supervisor respawns it.
+
+> **Not an endpoint:** `backend/src/routes/frontend.ts` (the legacy Handlebars public renderer) is **deliberately not mounted** — the public site is rendered by Next.js in both split and monolith mode. It stays on disk only as a legacy/monolith-render fallback (`backend/src/index.ts`).
+
 ---
 
 ## 8. Cron System ⏰
@@ -569,9 +698,9 @@ registerWidget('clock_widget', 'Analog Clock', {
 ```
 
 
-## 7. Developing Extensions
+## 13. Developing Extensions
 
-### 6.1 Creating Endpoints
+### 13.1 Creating Endpoints
 Use the `asyncHandler` wrapper to automatically catch Promise rejections.
 
 ```javascript
@@ -584,7 +713,7 @@ router.get('/my-endpoint', asyncHandler(async (req, res) => {
 }));
 ```
 
-### 6.2 Security Best Practices
+### 13.2 Security Best Practices
 *   **Sanitize:** Use `sanitize-html` for any HTML input.
 *   **Validate:** Check all `req.body` params.
 *   **Zip Slip:** Use the provided validation middleware for file uploads.
@@ -592,11 +721,11 @@ router.get('/my-endpoint', asyncHandler(async (req, res) => {
 
 ---
 
-## 7. Developer Cheatsheet (Cookbook) 🧑‍🍳
+## 14. Developer Cheatsheet (Cookbook) 🧑‍🍳
 
 Quick copy-paste snippets for common tasks.
 
-### 7.1 How to... Add a New API Endpoint
+### 14.1 How to... Add a New API Endpoint
 In your plugin's `index.js`:
 ```javascript
 const express = require('express');
@@ -618,7 +747,7 @@ const { getApp } = require('../../src/core/appRegistry');
 getApp().use('/api/v1/my-plugin', router);
 ```
 
-### 7.2 How to... Save/Load Settings
+### 14.2 How to... Save/Load Settings
 Use the global Options API.
 ```javascript
 const { getOption, updateOption } = require('../../src/core/options');
@@ -630,7 +759,7 @@ updateOption('my_plugin_color', '#ff0000');
 const color = getOption('my_plugin_color', '#000000');
 ```
 
-### 7.3 How to... Hook into Events
+### 14.3 How to... Hook into Events
 Run code when something happens (e.g., a post is saved).
 ```javascript
 const { addAction } = require('../../src/core/hooks');
@@ -641,7 +770,7 @@ addAction('wp_insert_post', (postId, data) => {
 });
 ```
 
-### 7.4 How to... Fetch Data in React (Admin)
+### 14.4 How to... Fetch Data in React (Admin)
 **CRITICAL:** The auth token is an **HttpOnly cookie** (`wordjs_token`) — it is **not** in `localStorage` and cannot be read from JS. Send it by passing `credentials: 'include'` so the browser attaches the cookie.
 ```javascript
 const getData = async () => {

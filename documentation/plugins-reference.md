@@ -8,7 +8,7 @@ This document lists the official plugins available in the WordJS ecosystem and t
 > clone) and permission-checked **on the host** in the plugin's context. A crash, OOM, or heap
 > escape is contained to the child; the host process (secrets, DB handle, other plugins)
 > survives and is unreachable from the child. See **[Plugin Isolation](plugin-isolation-proposal.md)**
-> and the **[wordjs Bridge API Reference](#0-the-wordjs-bridge-api-reference)** below.
+> and the **[wordjs Bridge API Reference](#0-the-wordjs-bridge--api-reference-)** below.
 > **There is one plugin model and no trust tier.** Every plugin is sandboxed; capabilities are
 > **admin-granted per plugin, Android-style** (the manifest *requests*, an admin *grants* each one in
 > `/admin/plugins`, default-deny — persisted in the `plugin_grants` option). A bridge call works only if
@@ -107,7 +107,9 @@ Manages image carousels for Hero sections or content sliders.
 ## 2. Card Gallery 🃏
 **ID:** `card-gallery` | **Version:** 1.0.0
 
-Displays event or promo cards in a zigzag or grid layout.
+Displays event or promo cards as a full-width stack whose content alternates left/right by index (the
+"zigzag"). There is no grid mode — the block's only fields are the gallery to show and an optional
+anchor id.
 
 *   **Rendering:** via the `PromoCards` / `CardGalleryPuck` frontend component (no shortcode is registered at runtime — `index.js` calls no `shortcodes.add`).
 *   **Puck Component:** `CardGalleryPuck` (PromoCards)
@@ -119,9 +121,15 @@ Displays event or promo cards in a zigzag or grid layout.
 ## 3. Video Gallery 🎬
 **ID:** `video-gallery` | **Version:** 1.0.0
 
-Manages YouTube video carousels.
+Manages YouTube video carousels. Galleries and their videos are stored in **options**
+(`vgallery_galleries_list`, `vgallery_data_<id>`), not in a `wjp_` table.
 
-*   **Shortcode:** `[vgallery]`
+*   **Shortcode:** `[vgallery]` — registered, but the handler returns the tag text rather than markup:
+    the public frontend (`HomeContent.tsx`) matches the bare `[vgallery]` literal in the home page's
+    HTML body and swaps it for the plugin's client component.
+*   **Puck Component:** `VideoGalleryPuck` (registry key `VideoGallery`). Note its manifest sets
+    `frontend.puckComponents` to `null`; the block is picked up by the generator's **convention
+    fallback** on `client/puck/<Pascal>Puck.tsx`.
 *   **Permissions:** `settings` (read/write), `database` (write).
 *   **Sandbox:** isolated (like every plugin). Routes namespaced under `/api/v1/plugin/video-gallery/*`. Default-deny: an admin grants its declared `settings`/`database` capabilities in `/admin/plugins`.
 
@@ -267,7 +275,7 @@ Test Schema are bundled with core):
 | `auctions` | Auction listings with bidding, anti-snipe extension, live polling, winner reporting | `database` r/w, routes, admin menu, `email:admin` |
 | `bookings` | Appointment booking: services, weekly availability, race-safe slot reservations, email confirmations, admin agenda | `database` r/w, `settings` r/w, routes, admin menu, `email:admin` |
 | `breadcrumbs` | Breadcrumbs Puck block with optional BreadcrumbList JSON-LD | — (frontend-only) |
-| `card-gallery` | Event/promo cards in a zigzag or grid layout via the CardGalleryPuck block | `settings` r/w, `database` write |
+| `card-gallery` | Event/promo cards as an alternating-alignment ("zigzag") stack via the CardGalleryPuck block | `settings` r/w, `database` write |
 | `conference-manager` | Conference inscriptions/registration, hotel & room auto-assignment, per-inscription payments, attendee portal, reports + CSV export | `database` r/w, routes, admin menu |
 | `contact-forms` | Form builder with Puck embed block, submissions inbox, CSV export, email notification | `database` r/w, routes, admin menu, `email:admin` |
 | `cookie-consent` | GDPR cookie banner, anonymous consent logging, version-based re-consent | `database` r/w, `settings` r/w, routes, admin menu, `assets:write` |
@@ -282,13 +290,13 @@ Test Schema are bundled with core):
 | `mail-server` | Full SMTP server: inbound listener + direct-MX outbound delivery, DKIM signing, host-wide mail sender + email notification transport | `settings` r/w, `database` r/w, `email:admin`+provider, `notifications`, `filesystem` r/w, `users` read, `network` |
 | `newsletter` | Subscriptions (double opt-in when mail is configured), subscriber CSV, HTML campaigns with unsubscribe links | `database` r/w, routes, admin menu, `email:admin` |
 | `notification-bar` | Slim site-wide announcement bar with CTA, dismissal versioning, schedule window | `settings` r/w, routes, admin menu, `assets:write` |
-| `online-store` | Product catalog + cart + checkout with server-side price validation, coupons, orders admin, optional Stripe | `database` r/w, `settings` r/w, routes, admin menu, `email:admin`, `network` |
+| `online-store` | Product catalog (variants, galleries, categories) + cart + checkout with server-side price validation, coupons, shipping zones and taxes, orders admin with refunds and transactional emails, sales reports + CSV, optional Stripe Checkout | `database` r/w, `settings` r/w, routes, admin menu, `email:admin`, `network` |
 | `photo-carousel` | Image carousels for Hero sections / content sliders via the PhotoCarousel Puck block + `[carousel]` shortcode | `settings` r/w, `database` write |
 | `polls` | WP-Polls-style polls with a voting + animated-results Puck block | `database` r/w, routes, admin menu |
 | `popup-builder` | Site-wide popups with triggers (delay/scroll/exit intent), frequency capping, view/click stats | `database` r/w, routes, admin menu, `assets:write` |
 | `related-posts` | Automatic per-post related articles via the core public REST API (YARPP parity) | — (frontend-only) |
-| `restaurant-menu` | Menu sections/dishes with photos and diet tags; optional cart with WhatsApp order hand-off | `database` r/w, `settings` r/w, routes, admin menu, `email:admin`, `notifications:send`, `network` |
-| `social-share` | Share buttons Puck block (Facebook, X, WhatsApp, LinkedIn, Telegram, Email, copy link) — fully client-side | — (frontend-only) |
+| `restaurant-menu` | Menu sections/dishes with photos, diet tags and EU-14 allergens; priced modifier groups; opening-hours gating; cart with WhatsApp hand-off, cash, or Stripe Checkout; QR table ordering, table reservations, a live kitchen board and sales reports | `database` r/w, `settings` r/w, routes, admin menu, `email:admin`, `notifications:send`, `network` |
+| `social-share` | Share buttons Puck block (Facebook, X, WhatsApp, LinkedIn, Telegram, Email, copy link) — the sharing itself is entirely client-side (share intents via `window.open`, copy via the Clipboard API) | — (declares no permissions; its `init` only registers the sidebar item) |
 | `table-of-contents` | Automatic nested TOC from page H2/H3 with anchors, smooth scroll, active highlighting | — (frontend-only) |
 | `testimonials` | Database-backed testimonials with moderation and optional public submission form; carousel/grid Puck block | `database` r/w, `settings` r/w, routes, admin menu |
 | `vendor-marketplace` | Multi-vendor directory: vendor applications, admin approval, self-service listings, per-product inquiries | `database` r/w, routes, admin menu, `email:admin` |

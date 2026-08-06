@@ -80,7 +80,7 @@ Manages SSL/TLS certificates via Let's Encrypt (ACME) or manual uploads.
 
 An Android-style, admin-controlled, **default-deny** grant registry. The plugin's manifest only **REQUESTS** permissions; this registry records what an operator has actually **GRANTED** per plugin in **/admin/plugins**. A bridge capability is allowed only if the manifest declares it **AND** the admin granted it (`plugin-context.hasPermission` → `isGranted`), so a plugin gets nothing until an admin approves it.
 
-> **There is NO "trusted" tier.** The old trust tier was removed (PR#62; `plugin-trust.ts` is deleted). Every plugin runs in the `child_process` sandbox and gets **only** what an admin granted — no plugin bypasses DB scoping, `io-guard`, or these grants. First-party plugins are pre-granted their **declared** capabilities, but are **not** privileged.
+> **There is NO "trusted" tier.** The old trust tier was removed (PR#62; `plugin-trust.ts` is deleted). Every plugin runs in the `child_process` sandbox and gets **only** what an admin granted — no plugin bypasses DB scoping, `io-guard`, or these grants. Activation grants a plugin exactly its **declared** capabilities — that applies to **every** plugin, not just first-party ones, and only while it holds no grant record — but no plugin is **privileged**.
 
 ### Logic
 *   **Server-side store:** grants live in the `plugin_grants` option (never self-declarable) and are mirrored in an in-memory `Map<slug, Set<token>>` so host-side security gates read them synchronously. `loadGrants()` runs once at boot **after the DB is up**.

@@ -8,7 +8,10 @@ plus its own CSS for whatever the tokens don't parameterize (see *What tokens co
 > **Declarative alternative — and what every first-party marketplace theme uses:** instead of
 > hand-writing the token block, a theme declares `seeds` / `tokens` / `styles` in its `theme.json`
 > and WordJS compiles the `style.css` block (`node backend/cli/wordjs.js build theme <slug>`). All
-> 64 marketplace themes are built this way; only the bundled `default` is still hand-authored.
+> 64 marketplace themes are built this way; only the bundled `default` is authored entirely by
+> hand. (The compiler replaces only the region between the `@wjs-generated` markers and preserves
+> every byte outside them, so a declarative theme *can* still carry hand-written CSS: 54 of the 64
+> are pure generated output and the other 10 use that region only for chrome decoration.)
 > (`archetype` is a fourth declarative key, but it is a validated *label* — it emits no CSS.) The full contract is
 > documented in **[themes.md — Declarative theming (`theme.json`)](themes.md#declarative-theming-themejson)**.
 > The compiler is stricter than plain CSS about what it will emit: token values use a portable

@@ -22,11 +22,22 @@ themes/
 ├── my-theme/
 │   ├── style.css         # Generated from theme.json (the file the Next.js frontend loads)
 │   ├── theme.json        # The theme: generator, seeds, tokens, styles, layout + metadata
+│   ├── fonts.css         # @font-face rules for the theme's own families, @import-ed from style.css
+│   ├── fonts/            # The .woff2 files those rules point at — one copy per theme
+│   ├── chrome/           # Optional: header.json / footer.json composable-chrome compositions
 │   ├── functions.js      # Optional: Theme logic/hooks, loaded by the backend theme engine
+│   ├── screenshot.png    # Optional: Theme preview (also .jpg/.webp)
 │   ├── templates/        # Optional: Handlebars page templates (index.html, single.html, archive.html)
 │   ├── partials/         # Optional: Shared Handlebars partials (header.html, footer.html)
-│   └── screenshot.png    # Optional: Theme preview (also .jpg/.webp); 20 marketplace themes ship one
+│   └── .design/          # Marketplace source only: stitch.json, the design system the theme was built
+│                         # from — read by `verify theme` and the catalogue authoring scripts
 ```
+
+What the 64 catalog themes actually ship: **all 64** carry `style.css`, `theme.json`, `fonts.css`,
+`fonts/` and `.design/stitch.json`; **20** add a `chrome/` directory and a `screenshot.png`, **19**
+a `functions.js`, and **8** still carry `templates/` + `partials/` for the legacy engine. `fonts.css`
+and `fonts/` are not optional in practice — a theme that names a non-system family gets it only if it
+ships the files (see *Self-host the webfonts* below).
 
 > **One live renderer: Next.js.** The public site is rendered entirely by Next.js
 > (`frontend/src/app/(public)/`) in **both** the split and monolith modes. WordJS still ships a
@@ -76,18 +87,28 @@ marketplace catalog.) A representative selection:
 | Theme               | Aesthetic          | Key Features                                |
 | ------------------- | ------------------ | ------------------------------------------- |
 | **default** (WordJS)| Clean, Modern      | Indigo→violet gradient, Space Grotesk, deep-indigo footer |
-| **neo-digital**     | Cyberpunk/Terminal | Green glow, monospace fonts, dark mode      |
+| **neo-digital**     | Cyberpunk/Terminal | Matrix green `#00ff41` on pure black, Anton display type, square corners, hard offset shadows |
 | **brutalist-paper** | Neo-brutalist      | Sharp corners, bold borders, offset shadows |
-| **soft-glass**      | Glassmorphism      | Blur effects, transparency, pastels         |
+| **soft-glass**      | Soft, Pastel       | Pale-blue canvas, sky→violet, wide diffuse shadows, pill buttons |
 | **swiss-minimal**   | Bauhaus/Flat       | No shadows, high contrast B/W/Red           |
-| **midnight-luxury** | Dark Premium       | Gold accents, serif fonts, elegant          |
-| **aurora-gradient** | Mesh Gradient      | Flowing gradients, purple/cyan/magenta      |
-| **neon-pulse**      | Tech Noir          | Neon glow, dark mode, rose accents          |
+| **midnight-luxury** | Dark Premium       | Gold `#d4af37` on near-black, Playfair Display headings over Montserrat body |
+| **aurora-gradient** | Dark, Borderless   | Indigo `#818cf8` → mint `#34d399` on deep navy, no borders, pale diffuse glow |
+| **neon-pulse**      | Club-flyer Dark    | Fuchsia `#f0abfc` + cyan on near-black, 2px outlines, hard fuchsia offsets |
 | **carbon-terminal** | OLED Dev/Docs      | OLED-dark, terminal-green accent            |
 | **noir-or**         | Luxury             | Gold accents on deep charcoal               |
 | **pop-studio**      | Bold Creative      | Vibrant pink/cyan, big rounded shapes       |
 | **sage-calm**       | Wellness           | Organic sage greens on soft cream           |
 | **sepia-press**     | Editorial Magazine | Serif headlines on warm paper               |
+
+> **These descriptions are read from each theme's `theme.json`** (`seeds` + `tokens`), not from an
+> intended look. The whole catalogue is now built from per-theme Stitch design systems (the last 44
+> in commit `aac7f49`, the other 20 before it), and that repainted several themes past their old
+> names: `neo-digital` uses no monospace family and no glow (Anton headings over Chivo,
+> `--wjs-shadow: none`, hard `4px 4px 0` offsets); `soft-glass` compiles no `blur()` or
+> `backdrop-filter` anywhere — its "glass" is wide, soft `rgba` shadows on a pale-blue canvas; and
+> `aurora-gradient` emits no gradient at all (`--wjs-hero-gradient: none`, `-from` and `-to` set to
+> the same color) — its aurora is an indigo-to-mint palette with borderless cards and a pale diffuse
+> glow. A slug is the identity an installed site is pinned to, so the names stayed.
 
 > **`--wjs-` variable adoption.** All first-party themes ship the `--wjs-*` token set documented in
 > [`theming.md`](./theming.md) — every marketplace theme now compiles its whole `:root` from
@@ -368,24 +389,49 @@ even though a CSS-only audit would report them unused.
 
 ## Creating a Custom Theme
 
-### 1. Scaffold with the CLI
+### 1. Generate the theme from four seed colors
 
 ```bash
-node backend/cli/wordjs.js create theme my-custom-theme
+node backend/cli/wordjs.js create theme my-custom-theme \
+  --primary "#7c3aed" --secondary "#0ea5e9" --bg "#0b1020" --text "#e5e7eb" \
+  --name "My Custom Theme"
 ```
 
-This creates `backend/themes/my-custom-theme/` from the CLI template
-(`backend/cli/templates/theme/`): a `style.css` whose `:root` is pre-filled with **53** `--wjs-*`
-tokens (plus a commented-out chrome block with 14 more `--wjs-nav-*`/`--wjs-footer-*` tokens — 67
-names in the file), and a `theme.json` carrying `name`/`version`/`description`/`author` and a
-`layout` block (`containerWidth: "1100px"`, `sidebar: false`). Restart the backend once so the theme is discovered, then
-activate it in **Admin → Themes**. (Creating the folder by hand still works — the CLI just writes
-the boilerplate for you.)
+This is the path that matches the model at the top of this file. The CLI writes a **declarative
+`theme.json`** — `generator: "wordjs"`, the four `seeds`, a `layout` block (`containerWidth:
+"1100px"`, `sidebar: false`) and the `name`/`version`/`description`/`author` metadata — plus a
+`functions.js` stub, and then compiles `style.css` from it. The stylesheet it produces is nothing
+but the `@wjs-generated` block; from here on `theme.json` is the file you edit
+(`createSeededTheme()` in `backend/cli/wordjs.js`).
 
-Prefer generating instead of editing boilerplate? Pass the four seed colors
-(`--primary --secondary --bg --text`, optionally `--archetype`) and the CLI writes a
-**declarative `theme.json`** and compiles `style.css` from it — see
+Four details worth knowing:
+
+- **All four seeds are required.** Pass one to three of them and the CLI stops before writing
+  anything ("Seeded creation needs all four colors"). `--archetype` on its own selects this path
+  too, so it fails the same way — the label is not a substitute for seeds.
+- The leading `#` is optional on the command line, but each seed must still be a strict `#rrggbb`.
+- `--name` / `--author` / `--description` fill the metadata; `--archetype` records the validated
+  label and nothing else (see [`archetype`](#archetype--personality-label)).
+- **A failed compile leaves nothing behind.** The compile runs in `dryRun` mode first; if it reports
+  any error the CLI removes the half-written directory and exits 1.
+
+Restart the backend once so the theme is discovered, then activate it in **Admin → Themes**.
+
+### 2. Edit `theme.json`, then rebuild
+
+The look lives entirely in `theme.json` — `seeds`, `tokens`, `styles`, `layout`. Edit it and
+recompile in place:
+
+```bash
+node backend/cli/wordjs.js build theme my-custom-theme
+```
+
+Only the `@wjs-generated` block of `style.css` is rewritten; every byte outside the markers is
+preserved, so hand-written CSS and the compiler coexist in one file. The full contract — every key,
+cap and diagnostic — is in
 [Declarative theming (`theme.json`)](#declarative-theming-themejson) below.
+
+### 3. Lint with the doctor
 
 At any point, lint your theme against the machine-readable contract with the doctor:
 
@@ -402,57 +448,6 @@ prefixed `DECLARATIVE_`. A hand-authored theme also gets an informational `LEGAC
 The complete list is in [Diagnostics reference](#diagnostics-reference) below. The command exits
 **1** when the report contains any error, **0** otherwise. Admins can fetch the same report from
 `GET /api/v1/themes/:slug/doctor`.
-
-### 2. Edit style.css
-
-```css
-/* =========================================
-   THEME: My Custom Theme
-   ========================================= */
-
-/* Avoid external @import (Google Fonts etc.) — the doctor flags it (EXTERNAL_REF): it adds a
-   render-blocking third-party request on every page view. Ship font files with the theme (or use
-   the framework's font tokens) instead. */
-
-:root {
-  /* Override variables here */
-  --wjs-color-primary: #your-color;
-  --wjs-bg-canvas: #your-bg;
-  /* ... */
-}
-
-/* Visual Overrides */
-body {
-  background-color: var(--wjs-bg-canvas) !important;
-  font-family: 'YourFont', sans-serif !important;
-}
-
-/* Header Customization */
-header {
-  background-color: var(--wjs-bg-surface) !important;
-  /* Add your styles */
-}
-
-/* Component Overrides */
-.wp-block-accordion {
-  /* Your accordion styles */
-}
-
-.wp-block-search input {
-  /* Your search input styles */
-}
-```
-
-### 3. Edit theme.json (Optional)
-
-```json
-{
-  "name": "My Custom Theme",
-  "version": "1.0.0",
-  "description": "A beautiful custom theme",
-  "author": "Your Name"
-}
-```
 
 ### 4. Add a Screenshot (Optional)
 
@@ -472,6 +467,49 @@ It reads the families out of the theme's own `--wjs-font-family-*` tokens, downl
 - `--root <dir>` points it at a theme tree other than `marketplace/themes` (use `backend/themes` for an installed theme).
 - Fonts live **inside each theme**, not in a shared store: a catalog theme installs by unpacking its zip, so a theme whose faces lived elsewhere would come up with no type at all when installed by hand or restored from a backup.
 - The sibling script `scripts/vendor-theme-fonts.mjs <slug>` does the same job for a hand-written theme that already has a remote Google Fonts `@import` to rewrite.
+
+### The other path: the static template (no seed colors)
+
+```bash
+node backend/cli/wordjs.js create theme my-custom-theme
+```
+
+With no seed flags, `create theme` takes a different branch: it copies
+`backend/cli/templates/theme/` verbatim — exactly two files — and compiles nothing. This is the
+**hand-authored** starting point, and it is worth being precise about what you get, because it is
+not a declarative theme:
+
+- **`style.css`** is a plain stylesheet with **no** `@wjs-generated` markers. Its `:root` is
+  pre-filled with **53** `--wjs-*` tokens — the full token contract, at neutral starter values —
+  plus a commented-out chrome block holding 14 more `--wjs-nav-*`/`--wjs-footer-*` names, 67 in the
+  file. You edit this file directly; nothing generates it.
+- **`theme.json`** is metadata only: `name`/`version`/`description`/`author` and a `layout` block
+  (`containerWidth: "1100px"`, `sidebar: false`). No `generator`, no `seeds`, no `tokens`, no
+  `styles`.
+- **No `functions.js`** is written (only the seeded path writes the stub).
+- `--name` substitutes into both files; `--author`/`--description` are patched into `theme.json`
+  after the copy.
+
+Avoid an external `@import` (Google Fonts etc.) in that `style.css`. On the declarative path the
+compiler rejects it outright, but nothing rewrites a hand-authored file, so it survives and adds a
+render-blocking third-party request on every page view. The doctor flags it as `EXTERNAL_REF`; ship
+the font files with the theme instead (step 5 above).
+
+Because that `theme.json` carries no `generator` stamp and no declarative keys, the template theme
+sits outside the compiler contract until you add them:
+
+- `build theme` prints an informational "nothing to build" and touches neither file — there are no
+  declarative keys to compile and no generated block to refresh.
+- `PUT /api/v1/themes/:slug` refuses it: the missing `generator` stamp is exactly what stops the
+  write API from overwriting hand-crafted CSS.
+- `doctor theme` still lints every declared token, and adds the informational `LEGACY_THEME` nudge.
+
+Choose this path when you intend to write the CSS yourself. Choose the seeded path in step 1 when
+you want `theme.json` to be the source of truth. Migrating later is not a rewrite: add the
+declarative keys to `theme.json` (plus `generator: "wordjs"` if you also want the write API to
+accept it) and run `build theme` — with no markers in the file yet, the compiler **prepends** its
+block and keeps your existing CSS below it, and the doctor's `GENERATED_MARKERS`/`STALE_GENERATED`
+findings tell you if the two ever drift apart.
 
 ## Declarative theming (`theme.json`)
 
@@ -817,11 +855,13 @@ independent of the plugin marketplace via `GET`/`PUT /marketplace/themes/sources
 `marketplace_theme_sources` option).
 
 > **The first-party catalog is fully declarative.** All **64** marketplace themes ship a
-> `theme.json` with `generator: "wordjs"` plus `seeds`, `tokens` and `styles`, and a `style.css`
+> `theme.json` with `generator: "wordjs"`, `seeds`, `tokens` and `layout`, and a `style.css`
 > that is a relative `@import url('fonts.css');` followed by the compiled `@wjs-generated` block —
-> 260–325 tokens each. None of them declares an `archetype`. Ten (`carbon-terminal`, `clay-pop`,
-> `cobalt-corporate`, `mono-lab`, `neo-digital`, …) add hand-written chrome CSS **below** the
-> generated block, targeting the `.wjs-chrome-*` hook classes. The bundled `default` is the one
+> 260–325 tokens each. `styles` is the optional fourth key: **20** of the 64 declare it, the other
+> **44** are tokens-only. None of them declares an `archetype`. Ten (`carbon-terminal`, `clay-pop`,
+> `cobalt-corporate`, `mono-lab`, `neo-digital`, `pop-studio`, `sage-calm`, `sorbet-play`,
+> `swiss-minimal`, `verdant-studio` — all of them also `styles` users) add hand-written chrome CSS
+> **below** the generated block, targeting the `.wjs-chrome-*` hook classes. The bundled `default` is the one
 > hand-authored first-party theme. New marketplace themes must follow the declarative
 > `theme.json` contract; hand-authored themes keep working everywhere else, but the doctor flags
 > them with an informational `LEGACY_THEME` finding to encourage migration.

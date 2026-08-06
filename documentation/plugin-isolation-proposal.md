@@ -1,5 +1,13 @@
 # Plugin Isolation (child_process / OS process) — IMPLEMENTED
 
+> **How to read this document — it is both halves at once.** Sections 1–7 are a **historical design
+> record**: the original proposal, kept for its threat model and for *why* a hard, host-owned-capability
+> boundary was chosen, with inline "As built" notes marking where reality diverged from it. The **status
+> banner** immediately below, and those "As built" notes, are the **current** as-built description. For
+> the operator-facing reference — what each knob is called, what its default is, and what happens when
+> the host can't support it — read [plugins.md §7.3](./plugins.md) and the commented `sandbox` block in
+> `backend/src/config/app.ts`, which is the authoritative list of the config surface.
+
 > This document started life as a design *proposal* for hard plugin isolation. It is now **shipped and
 > mandatory**: every plugin runs in a **separate OS process** (`child_process.fork`) behind the
 > `wordjs` capability bridge. The original proposal text is kept below (sections 1–7) for the threat
@@ -24,8 +32,11 @@
 > `child_process` IPC channel and a legacy `worker_threads` `parentPort` to one API, and a Worker-like
 > adapter in `plugin-isolate.ts` keeps the RPC code unchanged. IPC uses v8 structured clone
 > (`serialization: 'advanced'`) so `Buffer`/`Date`/`Map` survive — no live references cross the boundary.
-> Deeper kernel-surface hardening (seccomp/landlock + dropped uid) can layer on top of the already-
-> separate process (see §2/§6).
+> Deeper kernel-surface hardening (seccomp + dropped uid + namespaces) is **not** a someday item: it
+> layers on top of that already-separate process today and is **default-on** wherever the host supports
+> it (`sandbox.useKernelHardening` / `sandbox.unshareNetwork` on Linux, `sandbox.usePermissionModel`
+> everywhere), with `sandbox.requireHardening` available to fail closed. See the canonical list in the
+> residual-risk note at the end of this banner, and §2/§6.
 >
 > **Bridge surface (complete, tested):** options.get/set, db.all/get/run/batch/createTable/getType (scoped
 > to the plugin's OWN `wjp_<slug>_` tables — no tier is exempt), hooks.add{Action,Filter}/doAction,
@@ -199,7 +210,14 @@
 > `worker_threads` runtime, which shared the host heap/rss and could OOM-crash it. Memory is bounded in
 > LAYERS: (a) an **OPT-IN preventive cgroup v2 `memory.max`** via `systemd-run --user --scope`
 > (`config.sandbox.useCgroupMemoryCap`, Linux-only, probe-gated, no root) that kernel-OOM-kills only the
-> offending child at 768 MB; (b) a **reactive host-side RSS poll** on every platform (Linux `/proc`,
+> offending child at 768 MB — the same transient scope also carries `MemorySwapMax=0` and `TasksMax=512`,
+> so a fork/thread-bomb hits its OWN cgroup rather than the host task table, and, when
+> **`config.sandbox.cpuQuotaPercent`** is > 0 (**OPT-IN**, default 0 = off), a `CPUQuota=N%`-of-ONE-core
+> anti-DoS cap so a runaway or malicious plugin cannot peg every core. The CPU quota is emitted **only
+> together with** the memory cap — `cgroupResourceProps()` returns nothing at all unless
+> `useCgroupMemoryCap` is on — and the probe validates that EXACT property set before cgroup mode
+> activates, so enabling it on a host whose `cpu` controller isn't delegated falls back instead of
+> failing to start; (b) a **reactive host-side RSS poll** on every platform (Linux `/proc`,
 > Windows `tasklist`, macOS `ps`) that SIGKILLs at 768 MB; (c) a **loose `RLIMIT_AS` virtual backstop**
 > (`config.sandbox.addressSpaceCapMb`, default 16384 MB) via a `sh -c 'ulimit -v N; exec node …'` wrapper
 > + `--max-old-space-size=256` for the JS heap; and (d) a **preventive Windows Job Object** with
@@ -207,19 +225,63 @@
 > probe-gated, opt-out via `config.sandbox.useJobObjectMemoryCap`. A one-shot PowerShell P/Invoke (no
 > native dep) assigns the forked child to a 768 MB-capped job, so the kernel FAILS any commit past the
 > budget; the job + limit persist for the child's lifetime via the kernel job refcount, and the brief
-> post-fork assign window is covered by the RSS poll exactly as before. What the OS process still does **not** buy by itself is
+> post-fork assign window is covered by the RSS poll exactly as before. What the OS process does **not** buy **by itself** is
 > **capability-minimal syscall confinement**: the child has a full Node runtime, so capability denial
-> still relies on the in-child guards (secure-require proxies `fs`/`child_process`/raw-net modules and
+> rests first on the in-child guards (secure-require proxies `fs`/`child_process`/raw-net modules and
 > blocks `worker_threads`/`vm`/`module`/`inspector`; the bootstrap traps `fetch`/`WebSocket`/
 > `EventSource`; **when `network` is granted, egress-guard patches and LOCKS
 > `net.Socket.prototype.connect` so every outbound connection — incl. fetch redirect hops — is validated
 > at connect time against the resolved IP and confined to public destinations**; io-guard confines fs to
 > the plugin's own dir; the table-scoped DB confines SQL). A *novel* Node global or native
 > binding that reaches the disk/network without going through those proxies would be an escape **of the
-> userspace policy** (it could not escape the process or its memory cap). By-construction, OS-enforced
-> confinement now ships as a **default-on** Linux layer (bubblewrap: dropped uid + capabilities + no-new-privs
-> + PID/IPC/UTS namespaces + read-only fs + a seccomp syscall denylist; `sandbox.useKernelHardening`,
-> default-on/opt-out, probe-gated — see the status banner). The Windows preventive memory cap (Job Object) is
+> userspace policy** (it could not escape the process or its memory cap) — which is exactly why the child
+> no longer rests on that userspace policy alone.
+>
+> **OS-enforced confinement — the canonical list.** Four fields of the `sandbox` block in
+> `wordjs-config.json` govern it (the block itself is documented in `backend/src/config/app.ts`, which is
+> the authoritative list of every knob); **each is PROBE-VALIDATED on this host before it activates** and
+> falls back cleanly when the kernel feature is missing, which is what lets the defaults be hardened
+> without breaking a stock install:
+> - **`useKernelHardening` — DEFAULT-ON (opt-out), Linux only.** bubblewrap runs the child as an
+>   unprivileged uid (65534) inside a rootless **user** namespace, with Linux capabilities dropped,
+>   `no-new-privs`, PID/IPC/UTS (+ `--unshare-cgroup-try`) namespaces, a **read-only root filesystem** in
+>   which only the plugin's own dir and the io-guard write zones (`uploads`/`data`/`logs`/`os-tmp`/
+>   `themes`) are bound writable and `/tmp` is a private tmpfs, plus a **seccomp-bpf syscall denylist**
+>   (EPERM on `ptrace`/`mount`/`pivot_root`/`setns`/`kexec_*`/`*_module`/`bpf`/`keyctl`/`userfaultfd`/
+>   `process_vm_*`, the `io_uring` trio and the new mount API — `clone3` is deliberately NOT blocked,
+>   because glibc's `pthread_create` uses it and an EPERM there SIGABRTs Node at startup). The probe boots
+>   a node child through the FULL profile *including* that seccomp filter and requires the same fork-IPC
+>   round-trip the real launch uses; any failure falls back to the plain fork.
+> - **`unshareNetwork` — DEFAULT-ON (opt-out), Linux + bwrap only.** A plugin **without** the `network`
+>   grant is additionally dropped into its OWN EMPTY network namespace (`bwrap --unshare-net`), so it
+>   cannot reach cloud metadata, host loopback or the public internet **at the kernel level** — not merely
+>   through the in-child JS neuter. **Separately** probe-gated by a second `--unshare-net` IPC round-trip,
+>   so a host that restricts `CLONE_NEWNET` keeps full bwrap hardening and just skips this leg (the
+>   non-network plugin then has the JS neuter alone). A `network`-GRANTED plugin is **never** net-unshared
+>   — its sockets have to work — and stays bounded by egress-guard at the socket layer. Reported as
+>   `netns` on admin `GET /health/details`.
+> - **`usePermissionModel` — DEFAULT-ON (opt-out), EVERY PLATFORM.** This is the only OS-level
+>   confinement Windows and macOS get at all, and it closes the asymmetry in which a JS-guard bypass there
+>   cost the whole user account. Node's own permission model is enforced in **C++, below JavaScript**,
+>   with no API to re-grant from inside the process: reads are scoped to the app root
+>   (`--allow-fs-read=<APP_ROOT>`), writes to exactly the io-guard zones listed above (one
+>   `--allow-fs-write=` per zone), and `child_process` / `worker_threads` / native addons / WASI are
+>   simply **never granted** — denied without knowing their names, which is the property a by-name
+>   denylist cannot have. Probe-gated because the flag was renamed across Node versions (`--permission`
+>   vs `--experimental-permission`) **and a build can accept it without enforcing it**: it activates only
+>   after a real child is actually refused a read (`ERR_ACCESS_DENIED`). Applied to **compiled** children
+>   only (skipped under ts-node, the same carve-out as `blockCodeGen`). It has no `--allow-net` token —
+>   that flag does not exist — so the JS egress guard remains the sole authority on outbound traffic.
+>   Reported as `permission` on admin `GET /health/details`, separately from the Linux-only states,
+>   because a host can be un-hardened (no bwrap) and still have capability confinement.
+> - **`requireHardening` — OPT-IN (default off): FAIL-CLOSED.** When on, the isolate **refuses to launch**
+>   a plugin unless kernel hardening is actually ACTIVE, rather than silently degrading to the
+>   JS-guards-only fork — the "looks secure but isn't" state. It gates on the bwrap probe, so on a
+>   non-Linux host (where that probe can never pass) turning it on refuses **every** plugin; it is meant
+>   for Linux hosts that must never run an untrusted plugin without the OS backstop. Health then reports
+>   `status: REFUSING`.
+>
+> The Windows preventive memory cap (Job Object) is
 > now **shipped** (layer (d) above), so the resident budget is kernel-enforced on Linux (cgroup) AND
 > Windows (Job Object). An independent security audit is recommended before relying on this for
 > genuinely hostile multi-tenant input.
@@ -282,12 +344,20 @@ architecture below is the same — only the isolate primitive differs.
 > half of that recommendation — chosen over `isolated-vm` because it needs **zero native dependencies**
 > and works on any platform, and over `worker_threads` because a separate process gives true OS-level
 > crash/OOM/resource isolation (the host always survives) where a worker shared the host heap/rss. The
-> **OS-sandbox layer** of the gold standard (dropped uid + dropped capabilities + no-new-privs + namespaces
-> + a seccomp syscall denylist) now ships as a **default-on** Linux layer (bubblewrap, `sandbox.useKernelHardening`,
-> default-on/opt-out, probe-gated); the Landlock LSM is intentionally omitted (the read-only mount namespace covers
-> its fs-confinement goal, and it would need a native dep). The kernel resource
+> **OS-sandbox layer** of the gold standard (dropped uid + dropped capabilities + no-new-privs +
+> user/PID/IPC/UTS namespaces + read-only fs + a seccomp syscall denylist) now ships as a **default-on**
+> Linux layer (bubblewrap, `sandbox.useKernelHardening`, default-on/opt-out, probe-gated), and it is not
+> the only OS-enforced layer any more — a plugin **without** the `network` grant also gets an **empty
+> network namespace** (`sandbox.unshareNetwork`, default-on, separately probe-gated), and on **every**
+> platform the child runs under **Node's own permission model** (`sandbox.usePermissionModel`,
+> default-on, probe-gated, compiled builds only), which denies `child_process`/`worker_threads`/native
+> addons/WASI and scopes the filesystem in C++ below JavaScript. `sandbox.requireHardening` (opt-in,
+> default off) makes the whole thing **fail closed** — no bwrap, no plugin. The Landlock LSM is
+> intentionally omitted (the read-only mount namespace covers its fs-confinement goal, and it would need a
+> native dep). The kernel resource
 > limits ARE in place today: an OPT-IN cgroup v2 `memory.max` (Linux, `systemd-run --user
-> --scope`), a default-on preventive **Windows Job Object** memory cap, and a loose `RLIMIT_AS` virtual
+> --scope`) with an OPT-IN `CPUQuota` (`sandbox.cpuQuotaPercent`, effective only alongside that memory
+> cap), a default-on preventive **Windows Job Object** memory cap, and a loose `RLIMIT_AS` virtual
 > backstop, plus a cross-platform RSS poll (see §6 and the status banner).
 
 ---
@@ -338,8 +408,11 @@ Async by necessity (crosses the boundary). Each maps to a current direct use:
 - **Resource limits (as built):** layered memory caps on the child — OPT-IN preventive cgroup v2
   `memory.max` (Linux), default-on preventive Windows **Job Object** `ProcessMemoryLimit`, reactive
   cross-platform RSS poll → SIGKILL at 768 MB, loose `RLIMIT_AS`
-  backstop + `--max-old-space-size=256` — plus per-RPC timeout, bridge-call rate/concurrency token
-  buckets, IPC message-rate caps, payload/disk caps and registration caps. Closes the DoS class the
+  backstop + `--max-old-space-size=256` — plus **CPU** (`config.sandbox.cpuQuotaPercent`, OPT-IN, a
+  `CPUQuota=N%`-of-one-core cap that rides in the SAME systemd scope as the cgroup memory cap and is
+  emitted only when that cap is on) and **task/fd** caps (`TasksMax=512` in the cgroup scope,
+  `RLIMIT_NOFILE=4096` on the rlimit launch path), plus per-RPC timeout, bridge-call rate/concurrency
+  token buckets, IPC message-rate caps, payload/disk caps and registration caps. Closes the DoS class the
   in-process model can't. `config.sandbox.blockCodeGen` additionally passes
   `--disallow-code-generation-from-strings` to the child (engine-level `eval`/`new Function(string)`
   block; **default-on**, opt-out, skipped under ts-node).
@@ -413,9 +486,9 @@ The phased migration the proposal laid out has all landed; for the record:
 |---|---|---|---|---|
 | `vm` | ❌ none | partial | low | low |
 | `worker_threads` (was shipped, now replaced) | ❌ (full Node in worker; shares host heap/rss) | ✅ crash, ⚠️ off-heap OOM can take the host down | medium (IPC + clone) | medium |
-| **`child_process.fork` (shipped)** | ❌ (full Node in child) but separate OS process: own heap/rss/pid, host always survives | ✅✅ (separate process + layered mem caps: cgroup/RLIMIT_AS/RSS-poll) | higher (process + IPC) | medium-high |
+| **`child_process.fork` (shipped)** | ⚠️ full Node in the child, but a separate OS process (own heap/rss/pid, host always survives) **plus** the default-on Node permission model, which denies `child_process`/`worker_threads`/native addons/WASI and scopes fs in C++ on every platform | ✅✅ (separate process + layered mem/CPU/task caps: cgroup `memory.max`+`CPUQuota`+`TasksMax` / Job Object / `RLIMIT_AS`+`RLIMIT_NOFILE` / RSS-poll) | higher (process + IPC) | medium-high |
 | **`isolated-vm`** | ✅ (no bindings) | ✅ (mem/cpu caps) | medium | medium-high (async API rewrite, native build) |
-| **child-process + OS sandbox (seccomp/uid)** | ✅✅ (OS-enforced syscalls) | ✅✅ | higher (process + IPC) | high (= shipped child-process + **default-on** bwrap kernel layer, Linux) |
+| **child-process + OS sandbox (seccomp/uid)** | ✅✅ (OS-enforced syscalls) | ✅✅ | higher (process + IPC) | high (= shipped child-process + **default-on** bwrap kernel layer + an empty netns for non-network plugins, Linux) |
 
 **Decision (as built):** shipped the **bridge API + `child_process.fork` (separate OS process)** for
 **all** plugins. The proposal leaned toward `isolated-vm`; a process was chosen instead because it has
@@ -423,13 +496,23 @@ The phased migration the proposal laid out has all landed; for the record:
 giving **true OS-level crash/OOM/resource isolation** — a worker_threads version shipped first but was
 replaced because a worker shares the host heap/rss and an off-heap OOM in it can't be capped without
 crashing the host. The **OS-sandbox layer** that makes capability denial by-construction — dropped uid +
-dropped capabilities + no-new-privs + PID/IPC/UTS namespaces + a seccomp syscall denylist — now ships as a
-**default-on** Linux layer (bubblewrap, `sandbox.useKernelHardening`, default-on/opt-out, probe-gated) on top of the
+dropped capabilities + no-new-privs + user/PID/IPC/UTS namespaces + read-only fs + a seccomp syscall
+denylist — now ships as a
+**default-on** Linux layer (bubblewrap, `sandbox.useKernelHardening`, default-on/opt-out, probe-gated),
+extended by an **empty network namespace** for any plugin without the `network` grant
+(`sandbox.unshareNetwork`, default-on, separately probe-gated) and — on **every** platform, this one not
+Linux-only — by **Node's own permission model** (`sandbox.usePermissionModel`, default-on, probe-gated,
+compiled builds only: fs scoped to the app root / the io-guard write zones, and
+`child_process`/`worker_threads`/native addons/WASI never granted, enforced in C++ below JS). An operator
+who cannot accept the degraded fallback sets `sandbox.requireHardening=true` (opt-in) and the isolate
+refuses to launch a plugin at all unless the kernel layer is genuinely active. All of it sits on top of the
 in-child guards (secure-require module proxies + the `fetch`/`WebSocket`/`EventSource` global trap), without
 changing the bridge. The Landlock LSM is intentionally omitted (the read-only mount namespace covers its
 fs-confinement goal, and it would need a native dep); a preventive Windows memory cap (Job Object) is now
 shipped (default-on, probe-gated). Kernel resource limits in place today: OPT-IN cgroup v2 `memory.max`
-(Linux) + preventive Job Object `ProcessMemoryLimit` (Windows), loose `RLIMIT_AS`, cross-platform RSS poll.
++ OPT-IN `CPUQuota` (`sandbox.cpuQuotaPercent`, Linux, only effective in the same scope as that memory
+cap) + `TasksMax`, preventive Job Object `ProcessMemoryLimit` (Windows), loose `RLIMIT_AS` +
+`RLIMIT_NOFILE`, cross-platform RSS poll.
 
 ## 7. Cost & non-goals
 - **Cost (actual):** the bridge API + the `child_process` OS-process isolate runner (+ layered memory
@@ -440,12 +523,19 @@ shipped (default-on, probe-gated). Kernel resource limits in place today: OPT-IN
   components are build-time assets, bundled and reviewed as before); it does not replace code review of
   first-party plugins (activating them grants their declared caps, so review them as you would any code you ship); and a separate
   OS process gains a **default-on** bubblewrap layer (dropped uid + capabilities + `no-new-privs` +
-  PID/IPC/UTS namespaces + read-only fs + a **`seccomp` syscall denylist**; `sandbox.useKernelHardening`,
-  Linux, default-on/opt-out, probe-gated). The `Landlock` LSM is not used (the read-only mount namespace already
+  user/PID/IPC/UTS namespaces + read-only fs + a **`seccomp` syscall denylist**;
+  `sandbox.useKernelHardening`, Linux, default-on/opt-out, probe-gated) — plus an **empty network
+  namespace** for any plugin without the `network` grant (`sandbox.unshareNetwork`, default-on,
+  separately probe-gated), **Node's own permission model** on every platform
+  (`sandbox.usePermissionModel`, default-on, probe-gated, compiled builds only), and an opt-in
+  fail-closed switch (`sandbox.requireHardening`) for hosts that must never run a plugin without the
+  kernel backstop. The `Landlock` LSM is not used (the read-only mount namespace already
   provides its fs-confinement goal, and the LSM needs a native dep).
 - **Net:** moves plugin security from "we blocked every trick we found" (soft, enumerated)
   toward "core capabilities are reached only through a permission-checked bridge, the plugin runs in a
-  separate OS process (own heap/rss, host survives any crash/OOM, layered memory caps), and raw fs/net are
-  proxied/trapped in the child, with a default-on bubblewrap deprivileging layer (dropped uid/caps/
-  no-new-privs/namespaces/read-only-fs + a `seccomp` syscall denylist)" — a hard process boundary plus
-  guarded capabilities and a by-construction-shrunk syscall surface.
+  separate OS process (own heap/rss, host survives any crash/OOM, layered memory/CPU/task caps), and raw
+  fs/net are proxied/trapped in the child, with a default-on bubblewrap deprivileging layer (dropped
+  uid/caps/no-new-privs/user+PID/IPC/UTS-namespaces/read-only-fs + a `seccomp` syscall denylist, plus an
+  empty netns for non-network plugins) and a default-on, cross-platform Node permission model beneath the
+  JS guards" — a hard process boundary plus guarded capabilities and a by-construction-shrunk syscall
+  surface.

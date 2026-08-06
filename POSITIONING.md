@@ -108,7 +108,9 @@ defense-in-depth *inside* that process. We still don't oversell — the remainin
   contrary to the no-native-deps design. (The uid-drop trades away privileged-port binding.) A
   **fail-closed** mode (`sandbox.requireHardening`, opt-in, default off) refuses to launch an isolated
   plugin unless kernel hardening is actually **active** on the host, and the live hardening state
-  ('active' / 'degraded' / 'unsupported') is surfaced on admin `GET /health/details`.
+  ('unknown' / 'unsupported' / 'disabled' / 'active' / 'degraded') is surfaced on admin
+  `GET /health/details` as `sandbox.hardening`, alongside the separate `netns` and `permission`
+  states. It stays 'unknown' until the first isolated plugin activates — the probe runs lazily.
 - The per-child memory cap is layered: (a) **preventive** — on systemd Linux each child can run in a
   transient **cgroup v2 scope with `MemoryMax`** (`systemd-run --user --scope`, no root; operator
   opt-in via `sandbox.useCgroupMemoryCap` and additionally probe-gated so it only activates where

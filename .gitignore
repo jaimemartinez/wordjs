@@ -107,3 +107,13 @@ gateway/cluster-tokens.json
 # Stitch MCP config (contains API key — never commit)
 .mcp.json
 .claude/mcp.json
+
+# Generated per-machine from the plugins that happen to be INSTALLED (frontend prebuild/predev,
+# and regenerated in CI before type-check). Committing them snapshots one developer's local plugin
+# set into the public repo — which is how a private client plugin's name reached HEAD. The build
+# always regenerates them, so they must never be tracked.
+# NOTE: assetVersion.generated.ts is deliberately NOT here — it is a deterministic hash of
+# wordjs-ui.css and CI has a drift gate that fails if it is untracked.
+frontend/src/lib/pluginRegistry.ts
+frontend/src/lib/puckPluginRegistry.ts
+frontend/src/app/admin/plugin/\[slug\]/page.tsx
