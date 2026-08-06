@@ -29,7 +29,15 @@ export function MenuProvider({ children }: { children: React.ReactNode }) {
             const data = await apiGet<MenuItem[]>("/plugins/menus");
             setPluginMenus(data || []);
         } catch (error) {
-            console.error("Error refreshing menus:", error);
+            const { isSessionEnded } = await import("@/lib/api");
+            // An expired or revoked session is an EXPECTED end state, not a failure of this fetch: the
+            // menus are simply not ours to load any more. api() has already announced it so AuthContext
+            // can sign the user out, and reporting it here as well surfaced a routine sign-out as a red
+            // console error ("Token has expired.") coming from a background refresh. Clear the menus and
+            // stay quiet; keep the log for failures that genuinely need looking at.
+            if (!isSessionEnded(error)) {
+                console.error("Error refreshing menus:", error);
+            }
             setPluginMenus([]);
         } finally {
             setIsLoading(false);

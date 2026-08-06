@@ -57,6 +57,41 @@ const getBaseUrl = () => {
 
 const API_URL = getBaseUrl();
 
+/**
+ * Fired once on `window` when a request discovers the session is over, so session state is cleared in
+ * ONE place (AuthContext) rather than by whichever request happened to notice first.
+ */
+export const SESSION_ENDED_EVENT = "wjs:session-ended";
+
+/**
+ * The 401 codes that mean THE SESSION IS OVER — the credential is missing, expired, revoked, or its
+ * user no longer exists — as opposed to a request that failed while the session is perfectly valid.
+ *
+ * Deliberately NOT included:
+ *   • `rest_csrf_invalid` — a CSRF rejection is a security signal. Quietly logging the user out would
+ *     bury it, and the session itself is fine.
+ *   • `rest_token_scope_insufficient` — an API token missing a scope; the browser session is unaffected.
+ * A 403 is never here either: authenticated-but-forbidden is not a session problem, which is the same
+ * distinction AuthContext.fetchUser already documents.
+ */
+const SESSION_ENDED_CODES = new Set([
+    "rest_token_expired",
+    "rest_token_revoked",
+    "rest_token_invalid",
+    "rest_not_logged_in",
+    "rest_user_invalid",
+]);
+
+/**
+ * True when an error thrown by `api()` means the session ended. Callers use this to stay quiet about an
+ * expected sign-out instead of reporting it as a failure — an expired session is not a bug in the
+ * request that tripped over it.
+ */
+export function isSessionEnded(error: unknown): boolean {
+    return !!error && typeof error === "object"
+        && SESSION_ENDED_CODES.has((error as { code?: string }).code ?? "");
+}
+
 type RequestMethod = "GET" | "POST" | "PUT" | "DELETE" | "PATCH";
 
 interface ApiOptions {
@@ -115,12 +150,27 @@ export async function api<T>(endpoint: string, options: ApiOptions = {}): Promis
                 }
             }
 
+            // A DEAD SESSION is a global condition, like the two above — not a failure of whichever
+            // request happened to notice it first. Announce it once so the session is cleared centrally
+            // (AuthContext owns that state) instead of every caller inventing its own handling, which is
+            // how a routine expiry ended up logged as an application error by a background refresh.
+            //
+            // Deliberately NOT a redirect from here: this fires from background polling too, and yanking
+            // the location out from under someone mid-form would be worse than the bug. The admin layout
+            // already routes an unauthenticated user to /login once AuthContext clears the user.
+            if (typeof window !== 'undefined' && res.status === 401 && SESSION_ENDED_CODES.has(error.code)) {
+                window.dispatchEvent(new CustomEvent(SESSION_ENDED_EVENT, { detail: { code: error.code } }));
+            }
+
             errorMessage = error.message || error.error || errorMessage;
         } else if (raw) {
             // Not JSON (e.g. HTML 500 error): include the raw text snippet.
             errorMessage += `: ${raw.slice(0, 100)}`;
         }
-        const thrown: Error & { details?: unknown; status?: number; errors?: string[] } = new Error(errorMessage);
+        const thrown: Error & { details?: unknown; status?: number; errors?: string[]; code?: string } = new Error(errorMessage);
+        // Carry the backend's STABLE error code. Callers that need to tell one 401 from another must key
+        // on this, never on the human-readable message (which is copy, and translated).
+        if (error && typeof error.code === 'string') thrown.code = error.code;
         // Preserve any structured `details` (e.g. a plugin activation reject's
         // missingPermissions/dangerousCalls) so callers can render more than a flat string.
         if (error && error.details !== undefined) thrown.details = error.details;

@@ -2,6 +2,7 @@
 
 import { createContext, useContext, useState, useEffect, useCallback, useMemo, ReactNode } from "react";
 import { useRouter } from "next/navigation";
+import { SESSION_ENDED_EVENT } from "@/lib/api";
 
 interface MfaStatus {
     required: boolean;      // the user's role is subject to the enforced-MFA policy
@@ -95,6 +96,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             clearInterval(intervalId);
         };
     }, [user?.id]);
+
+    // Any request may be the one that discovers the session is over — it is not always this context's
+    // own /auth/me poll. api() announces that centrally, and the response is exactly what fetchUser
+    // already does for a 401: clear the user. Without this the app kept rendering as if signed in until
+    // the next poll, and every caller was left to interpret the failure on its own.
+    useEffect(() => {
+        const onSessionEnded = () => setUser(null);
+        window.addEventListener(SESSION_ENDED_EVENT, onSessionEnded);
+        return () => window.removeEventListener(SESSION_ENDED_EVENT, onSessionEnded);
+    }, []);
 
     const fetchUser = async () => {
         try {
