@@ -5,9 +5,11 @@ HTML element and ships Bootstrap-like components and utilities. A theme customiz
 primarily by declaring **design tokens** (`--wjs-*` CSS custom properties) in its own stylesheet,
 plus its own CSS for whatever the tokens don't parameterize (see *What tokens cover today* below).
 
-> **Declarative alternative:** instead of hand-writing the token block, a theme can declare
-> `seeds` / `archetype` / `tokens` / `styles` in its `theme.json` and have WordJS compile the
-> `style.css` block (`node backend/cli/wordjs.js build theme <slug>`). The full contract is
+> **Declarative alternative — and what every first-party marketplace theme uses:** instead of
+> hand-writing the token block, a theme declares `seeds` / `tokens` / `styles` in its `theme.json`
+> and WordJS compiles the `style.css` block (`node backend/cli/wordjs.js build theme <slug>`). All
+> 64 marketplace themes are built this way; only the bundled `default` is still hand-authored.
+> (`archetype` is a fourth declarative key, but it is a validated *label* — it emits no CSS.) The full contract is
 > documented in **[themes.md — Declarative theming (`theme.json`)](themes.md#declarative-theming-themejson)**.
 > The compiler is stricter than plain CSS about what it will emit: token values use a portable
 > charset that has no `+` and no `*` (so `calc()` with addition or multiplication cannot live in a
@@ -50,8 +52,9 @@ public page / editor preview
 
 ## Design tokens (`--wjs-*`)
 
-Declare these in your theme's `themes/<slug>/style.css` under `:root`. Anything you omit falls back to
-the framework default shown below.
+These live in your theme's `themes/<slug>/style.css` under `:root` — written there by the compiler
+from `theme.json` for a declarative theme, or by hand for a legacy one. Anything you omit falls back
+to the framework default shown below.
 
 ### Colors
 | Token | Default | Purpose |

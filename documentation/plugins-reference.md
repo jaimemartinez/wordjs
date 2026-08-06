@@ -287,7 +287,7 @@ Test Schema are bundled with core):
 | `polls` | WP-Polls-style polls with a voting + animated-results Puck block | `database` r/w, routes, admin menu |
 | `popup-builder` | Site-wide popups with triggers (delay/scroll/exit intent), frequency capping, view/click stats | `database` r/w, routes, admin menu, `assets:write` |
 | `related-posts` | Automatic per-post related articles via the core public REST API (YARPP parity) | — (frontend-only) |
-| `restaurant-menu` | Menu sections/dishes with photos and diet tags; optional cart with WhatsApp order hand-off | `database` r/w, `settings` r/w, routes, admin menu, `email:admin` |
+| `restaurant-menu` | Menu sections/dishes with photos and diet tags; optional cart with WhatsApp order hand-off | `database` r/w, `settings` r/w, routes, admin menu, `email:admin`, `notifications:send`, `network` |
 | `social-share` | Share buttons Puck block (Facebook, X, WhatsApp, LinkedIn, Telegram, Email, copy link) — fully client-side | — (frontend-only) |
 | `table-of-contents` | Automatic nested TOC from page H2/H3 with anchors, smooth scroll, active highlighting | — (frontend-only) |
 | `testimonials` | Database-backed testimonials with moderation and optional public submission form; carousel/grid Puck block | `database` r/w, `settings` r/w, routes, admin menu |

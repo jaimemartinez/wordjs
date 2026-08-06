@@ -363,7 +363,12 @@ time** assets, unaffected by runtime isolation — they keep being bundled (and 
   25) and does outbound MX delivery (connecting to recipient mail servers on :25) **inside its own OS
   process**. secure-require opens the **egress-guarded** `net`/`tls`/`http`/`https`/`http2`/`dgram`
   only when the
-  **`network`** capability is granted (resolved host-side at spawn and passed in
+  **`network`** capability is granted. `dns` is guarded rather than passed through: the raw c-ares
+  resolver surface (`resolve*`/`Resolver`/`setServers`) is **denied** even with the grant — it does direct
+  UDP/TCP to arbitrary servers and would bypass both egress chokepoints — leaving only `dns.lookup`
+  (getaddrinfo), which the connect-time guard covers. An MTA still needs MX/TXT, so those go through the
+  **host-mediated** `wordjs.dns.*` bridge, which runs the query host-side and strips any answer pointing
+  at a private/internal address. (The grant is resolved host-side at spawn and passed in
   the child's config argument, surfaced in-child as the frozen `global.__WORDJS_PLUGIN_NETWORK__` that
   secure-require's net branch reads, re-resolved on a grant change via `reloadIsolatedPlugin`). Even
   granted, its raw sockets and global `fetch`/`WebSocket` are confined to **public** IPs at connect time

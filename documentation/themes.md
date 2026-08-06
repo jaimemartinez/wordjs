@@ -12,7 +12,10 @@ WordJS uses a **CSS Variable-based theming system** that allows complete visual 
 
 Each theme is located in `backend/themes/{theme-slug}/`. **`theme.json` is the source of truth**: it
 declares the theme's tokens, and `style.css` is compiled from it (see *Declarative themes* below).
-The stylesheet is generated output — a theme does not ship hand-written CSS.
+The stylesheet is generated output. Hand-written CSS is still possible — the compiler only ever
+replaces the region between the `@wjs-generated` markers and preserves every byte outside them
+(`writeCompiled()`) — but it is the exception: 54 of the 64 marketplace themes are pure generated
+output, and the 10 that are not use it only for chrome decoration.
 
 ```
 themes/
@@ -22,7 +25,7 @@ themes/
 │   ├── functions.js      # Optional: Theme logic/hooks, loaded by the backend theme engine
 │   ├── templates/        # Optional: Handlebars page templates (index.html, single.html, archive.html)
 │   ├── partials/         # Optional: Shared Handlebars partials (header.html, footer.html)
-│   └── screenshot.png    # Optional: Theme preview (also .jpg/.webp); none shipped today
+│   └── screenshot.png    # Optional: Theme preview (also .jpg/.webp); 20 marketplace themes ship one
 ```
 
 > **One live renderer: Next.js.** The public site is rendered entirely by Next.js
@@ -63,8 +66,9 @@ themes/
 
 ## Available Themes
 
-WordJS offers **65 catalog themes**. Only **default** (WordJS) ships bundled in
-`backend/themes/`; the other 64 (`marketplace/themes/`) install on demand through the **theme
+WordJS offers **65 first-party themes**. Only **default** (WordJS) ships bundled in
+`backend/themes/`; the other 64 (`marketplace/themes/`, the exact contents of the marketplace
+catalog index) install on demand through the **theme
 marketplace** (see *Installing a Theme* below). (`backend/themes/herbario` is also committed —
 the reference theme built by `import stitch` / checked by `verify theme`; it is not in the
 marketplace catalog.) A representative selection:
@@ -107,8 +111,8 @@ Beyond a theme's own `style.css`, WordJS ships **one shared, token-driven CSS fr
 
 Everything in the framework is driven by the same `--wjs-*` design tokens (see the *CSS Variables
 Reference* below and the manifest `backend/public/theme-tokens.json`), each with
-a sensible fallback. Because the tokens are declared in each theme's **`style.css :root`** (not
-`theme.json`), a theme re-skins the entire framework — every element, component, and utility — just by
+a sensible fallback. Because the tokens land in each theme's **`style.css :root`** (compiled there
+from `theme.json`), a theme re-skins the entire framework — every element, component, and utility — just by
 overriding tokens. Per-variant `--wjs-color-on-*` tokens carry the max-contrast text color
 (black/white) for each solid color, computed per theme so text on `.btn-primary`, `.badge`, etc.
 stays legible against that theme's palette.
@@ -477,6 +481,7 @@ Instead of hand-writing the whole `style.css`, a theme can describe itself **dec
 
 ```bash
 # create a theme from four seed colors (writes theme.json + compiled style.css + functions.js stub)
+# --archetype is optional and only records a label in theme.json — it emits no CSS (see below)
 node backend/cli/wordjs.js create theme neon-shop \
   --primary "#7c3aed" --secondary "#0ea5e9" --bg "#0b1020" --text "#e5e7eb" \
   --archetype cyber --name "Neon Shop"
