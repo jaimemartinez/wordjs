@@ -183,7 +183,7 @@ function createTheme(slug, args) {
         createThemeFromTemplate(slug, flags);
         return;
     }
-    // theme-derive needs all four seeds (and every archetype interpolates them into its CSS).
+    // theme-derive needs all four seeds to derive the token set.
     if (seedCount < 4) {
         die('Seeded creation needs all four colors: --primary --secondary --bg --text (#rrggbb).');
     }
@@ -531,9 +531,10 @@ Usage (from the repo root):
     --primary --secondary --bg --text <#rrggbb>   All 4 together: write a DECLARATIVE theme.json
                                                   (generator "wordjs" + seeds) and compile style.css
                                                   from it instead of copying the static template
-    --archetype <name>                            Personality preset compiled into style.css: cyber,
+    --archetype <name>                            Personality LABEL recorded in theme.json: cyber,
                                                   brutalist, editorial, glassmorphism, organic,
-                                                  obsidian (requires the 4 seed colors)
+                                                  obsidian. Validated, but emits no CSS and derives
+                                                  no token — the look comes from the seeds/tokens
     --name / --author / --description <text>      theme.json metadata (both modes)
   node backend/cli/wordjs.js build theme <slug>                Recompile theme.json → the @wjs-generated
                                                                block in style.css (manual CSS outside the
