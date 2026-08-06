@@ -4,6 +4,95 @@ All notable changes to WordJS are documented here. This project follows
 [Semantic Versioning](https://semver.org/). Each release is published as a pre-compiled bundle
 on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
+## [1.14.0] - 2026-08-06
+
+A security audit, and the theme system becomes what it always claimed to be: a theme is its token
+contract and nothing else. The minor bump carries **two breaking changes to themes** — a custom theme
+must be recompiled, and one that relied on the archetype preset stylesheet must move those values into
+its tokens.
+
+### Security
+
+- **Stored XSS: an author could ship an executing `<script>` to every visitor (critical).** The Heading
+  block used its `level` prop as the React element *type* and then set `dangerouslySetInnerHTML` on it.
+  `level` comes from `_puck_data`, which any holder of `edit_posts` writes, and the write-side sanitizer
+  classifies string leaves as HTML-bearing or URL-bearing only — a *structural* prop like this one passed
+  through untouched by design. `level: "script"` therefore rendered a script element whose body was the
+  (HTML-)sanitized title; an HTML sanitizer is inert when the sink is JavaScript. Author → Administrator:
+  the script ran for every visitor of the public page, the admin included. Fixed with an allowlist of the
+  six heading tags. The same line also 500'd the page on a void tag such as `img`.
+- **The plugin SQL guard scoped DDL by the tables it named — so DDL that names none passed vacuously
+  (critical).** A statement whose object class is a SCHEMA, DATABASE, ROLE, FUNCTION, EXTENSION or SYSTEM
+  yields no table tokens, so the default-deny prefix rule was satisfied by an empty loop while `db.run`
+  routed create/alter/drop to the **admin** connection. `DROP SCHEMA public CASCADE`, `CREATE ROLE …
+  SUPERUSER` and a `SECURITY DEFINER` function reading `user_pass` were all permitted. Now a positive
+  object-class allowlist: a plugin may only create/alter/drop its own TABLE, INDEX, VIEW or TRIGGER, and
+  `RENAME TO` is prefix-checked.
+- **Postgres' `*_to_xml` family let a read-only plugin read anything (high).** The guard blanks string
+  literals precisely so their contents can never be read as SQL structure; these functions take a SQL
+  *query* as a string argument and execute it, laundering a whole statement past both the prefix rule and
+  the core-table denylist. Denied textually on every driver, as the file/extension functions already are.
+- **An anonymous GET could force an unbounded full-resolution transcode (high).** `/uploads` sits behind
+  no rate limiter, and `limitInputPixels` bounds *pixels* while the cost that OOMs a host is the decoded
+  buffer plus the encoder's working set — a 24MP source cost **1120 MB and 18 s** for one request. Worse,
+  the derivative cache key hashed the raw request path while the lookup used `path.join`, which
+  normalizes: `/a/b.jpg` and `/a//b.jpg` were the same file under different keys, so one image was an
+  unlimited supply of cache misses. The path is now canonicalized before the key is derived, and a source
+  over a decoded-byte budget is served as-is rather than transcoded.
+- **A plugin route registered with the `all` verb outlived its worker (medium).** Express implements
+  `app.all()` by looping the concrete methods, so `route.methods` never has an `all` key and the
+  verb-keyed unmount never matched. The endpoint of a deactivated plugin stayed live, and each request
+  reached a dead child whose IPC failure is asynchronous — so it held a socket for the full 30 s RPC
+  timeout. Teardown now matches the handler it mounted, and `rpcSend` fails fast when the child is gone.
+- **A data-modifying CTE counted as a read (low).** `WITH t AS (INSERT …) SELECT 1` demanded only
+  `database:read`; on Postgres the CTE executes regardless, so a plugin whose write grant had been revoked
+  could still mutate its own tables.
+
+### Themes
+
+- **BREAKING — the legacy theme model is retired.** The archetype presets appended a stylesheet to every
+  compiled theme: `.theme-container`, `.theme-hero`, `.theme-card-grid`, `.theme-card`, `.theme-badge`,
+  `button.theme-btn`, plus bare `body` and `h1, h2, h3` rules. Nothing in the CMS renders those demo
+  classes — they were dead bytes shipped to every visitor of 58 of the 64 catalogue themes — and the two
+  element rules duplicated what `wordjs-ui.css` already derives from the tokens while leaking into
+  surfaces a theme has no business styling. **3663 lines of CSS removed.** `archetype` remains a validated
+  label; it emits no CSS and never fed a token.
+- **BREAKING — the 44 archetype themes are rebuilt from their Stitch design systems**, and font family
+  names are no longer mangled on import.
+- **Heading typography moved into the token contract.** Retiring the preset stylesheet dropped
+  `text-transform` and `letter-spacing`, which no theme's tokens covered, so 40 themes silently lost their
+  heading treatment. The values are recovered verbatim from the retired presets and expressed as
+  `--wjs-heading-transform` / `--wjs-heading-tracking` / weight — as *tokens*, because the framework
+  styles headings through class selectors that outrank an element rule.
+- **A stale marketplace catalog made installs fail, and the error surfaced three steps away.** The catalog
+  was cached for 5 minutes keyed on source URLs alone, treating a local directory like a remote host.
+  After `npm run build:marketplace` it advertised a zip filename that no longer existed: install 404'd,
+  the theme never landed in `themes/`, and **activating it then reported "Theme not found"** — the only
+  message an admin ever saw. Local sources are now stamped with their index file's mtime+size.
+- **A missing active theme no longer promotes an arbitrary one.** `getActiveTheme()` fell back to whatever
+  directory enumeration listed first, so deleting the active theme silently switched the site to an
+  unrelated look while every derived answer disagreed with the `template` option. It now returns `null`.
+- New `syncActiveThemeLayout()` reconciles `active_theme_layout` at boot — idempotently, since that option
+  is on the purge allowlist and a needless write would evict the public cache on every restart.
+
+### Frontend
+
+- **An expired session is handled as the expected end state it is.** A dead session is now a global
+  condition — like the install redirect and the MFA gate — announced once on `wjs:session-ended` and
+  consumed by `AuthContext`, instead of surfacing as a console error from whichever background refresh
+  happened to notice first. Classification keys on the backend's stable error code, never on the message;
+  `rest_csrf_invalid` is deliberately excluded, because quietly signing a user out would bury a security
+  signal.
+
+### Documentation
+
+- **Reconciled the whole set against the shipped code again** (18 files): the retired theme model, the
+  theme token counts (753 tokens / 1724 `var()` uses across 73 groups, and 260–325 tokens per marketplace
+  theme), and the chrome token family — 9 `--wjs-nav-*`, 2 `--wjs-logo-*`, 7 `--wjs-footer-*` — which the
+  docs previously said did not exist.
+- **Three new diagrams** (`docs/media/`): the declarative theme model, the plugin sandbox, and the three
+  deployment modes. Animated SVG — diffable, ~8 KB each, and labelled for screen readers.
+
 ## [1.13.7] - 2026-08-01
 
 Makes the v1.13.6 runtime code-generation block actually take effect, and reconciles the entire
