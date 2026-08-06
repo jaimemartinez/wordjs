@@ -22,7 +22,7 @@ The backend follows a layered architecture inspired by WordPress but implemented
 6.  **Controller/Handler:** Executes business logic, interacts with Models/DB.
 7.  **Response:** JSON response sent back.
 
-> **Static uploads & image negotiation:** `GET /uploads/*.{jpg,jpeg,png}` passes through the `imageNegotiation` middleware (`backend/src/middleware/image-negotiation.ts`, mounted on `/uploads` ahead of `express.static`) before the static file is served. When the client's `Accept` header advertises AVIF/WebP, it transparently serves an on-demand AVIF/WebP derivative at the **same URL** (cached under `<uploads>/.derivatives`, `Vary: Accept`), failing safe to the original bytes on any error.
+> **Static uploads & image negotiation:** `GET /uploads/*.{jpg,jpeg,png}` passes through the `imageNegotiation` middleware (`backend/src/middleware/image-negotiation.ts`, mounted on `/uploads` ahead of `express.static`) before the static file is served. When the client's `Accept` header advertises AVIF/WebP, it transparently serves an on-demand AVIF/WebP derivative at the **same URL** (cached under `<uploads>/.derivatives`, `Vary: Accept`), failing safe to the original bytes on any error. It also **declines** to transcode — serving the original — when the source's decoded size would exceed `MAX_DECODED_BYTES` (24MB, ~8MP RGB) or when `MAX_CONCURRENT_TRANSCODES` (**2**) transcodes are already in flight. The cache key is derived from the **canonicalized** request path, so `/a/b.jpg` and `/a//b.jpg` map to one derivative instead of growing `.derivatives` without bound.
 
 ### 1.2 Database Abstraction
 WordJS loads a database **driver** behind a common interface (`backend/src/drivers/interface.ts`: `connect/get/all/run/exec/transaction/close`). Drivers are selected by the top-level `dbDriver` key (in `wordjs-config.json`) via the DB manager in `backend/src/config/database.ts`.
@@ -162,9 +162,10 @@ All errors should follow the structure defined in `backend/src/middleware/errorH
 - **Authentication**: `/auth` - Login, Register, Session management.
 - **Content**: `/posts`, `/pages` (alias for `?type=page`), `/media`, `/categories`, `/tags`, `/comments`.
 - **Users**: `/users`, `/roles` - Role-Based Access Control.
-- **System**: `/settings`, `/plugins`, `/marketplace` (plugin catalog — see §6.3.1), `/themes`, `/menus`, `/fonts`, `/health`, `/seo`, `/hooks`, `/notifications`, `/webhooks` (outgoing HMAC-signed webhooks — see §6.10), `/system/certs`.
-- **Observability**: `/metrics` (Prometheus, root-path, scrape-token-gated — see §6.8).
+- **System**: `/settings`, `/plugins`, `/marketplace` (plugin **and theme** catalogs — see §6.3.1), `/themes`, `/menus`, `/fonts`, `/health`, `/seo`, `/hooks`, `/notifications`, `/webhooks` (outgoing HMAC-signed webhooks — see §6.10), `/system/certs`.
+- **Observability**: `/metrics` (Prometheus, root-path, scrape-token-gated — see §6.8), `/analytics` (see §6.4).
 - **Extensions**: `/widgets`, `/types` (Post Types), `/revisions`.
+- **Site & editor**: `/chrome` (site-level header/footer compositions — `PUT`/`DELETE /chrome/:part` where `part` is `header` or `footer`, admin-only; reads travel through the public `/settings` payload), `/forms` (public `POST /forms/submit` + the `manage_options`-gated submissions viewer), `/presence` (`POST /presence/:postId` editing-heartbeat soft-lock, `edit_posts`).
 - **Data**: `/export`, `/export/wxr`, `/import`, `/import/wordpress` (WordPress WXR migration — see §6.9), `/backups`, `/db-migration` (engine migration).
 
 ### 6.2.1 Authentication Flow (JWT)
@@ -185,9 +186,9 @@ All errors should follow the structure defined in `backend/src/middleware/errorH
 | `GET`  | `/password-reset-available` | No   | Public probe: whether self-service password reset can work (mail configured + reachable recovery address model) |
 | `POST` | `/forgot-password`          | No   | Body `{ login }` (username or email). **Always returns 200** (anti-enumeration); emails a single-use reset link (30-min TTL; only the SHA-256 of the token is stored). Rate-limited by the auth limiter |
 | `POST` | `/reset-password`           | No   | Body `{ uid, token, password }`. Consumes the single-use token (constant-time hash compare) and revokes all existing sessions; `400 rest_invalid_reset` / `rest_weak_password` on failure |
-| `GET`  | `/tokens`                   | Session | List the caller's scoped API tokens (metadata only; secrets are never re-shown) |
-| `POST` | `/tokens`                   | Session | Mint a scoped API token. Body `{ name?, scopes?, expiresInDays? }`; the raw `wjt_…` secret is returned **once** (`201`). Unknown scopes → `400 rest_invalid_scope`; over the active-token cap → `400 rest_token_limit` |
-| `DELETE` | `/tokens/:id`             | Session | Revoke one of the caller's tokens (`404` if not the caller's or already gone) |
+| `GET`  | `/tokens`                   | Session + `manage_api_tokens` | List the caller's scoped API tokens (metadata only; secrets are never re-shown) |
+| `POST` | `/tokens`                   | Session + `manage_api_tokens` | Mint a scoped API token. Body `{ name?, scopes?, expiresInDays? }`; the raw `wjt_…` secret is returned **once** (`201`). Unknown scopes → `400 rest_invalid_scope`; over the active-token cap → `400 rest_token_limit` |
+| `DELETE` | `/tokens/:id`             | Session + `manage_api_tokens` | Revoke one of the caller's tokens (`404` if not the caller's or already gone) |
 | `POST` | `/mfa`                      | No   | Complete a login that requires a second factor. Body `{ mfaToken, code }` (TOTP or backup code); issues the session cookie on success (own `mfa:` lockout bucket) |
 | `GET`  | `/mfa/status`               | Yes  | Whether MFA is enabled for the caller + remaining backup-code count |
 | `POST` | `/mfa/setup`                | Session | Begin TOTP enrollment: returns a new `secret` + `otpauthUri` (for the QR) |
@@ -266,6 +267,8 @@ Base path: `/api/v1/users` (`backend/src/routes/users.ts`). `PUT /me` is declare
 | `GET`  | `/plugins/:slug/status`     | Admin | Runtime health of a loaded isolate (state, restarts, last error); `404` if not a loaded isolate |
 | `POST` | `/plugins/:slug/reload`     | Admin | Hot-reload an isolated plugin's child process (re-runs the full AST-scan pipeline) |
 | `POST` | `/plugins/:slug/permissions` | Admin | Set the per-permission grants (Android-style, default-deny). Body `{ granted: ["scope:access", ...], network: boolean }`; re-spawns the isolate so a `network` grant takes effect |
+| `GET`/`POST` | `/plugins/:slug/egress-hosts` | Admin | Read / set a plugin's outbound host allowlist (only meaningful once `network` is granted). Body `{ hosts: [...] }`; **empty** = every public host allowed, **non-empty** = default-deny except those hosts and their subdomains. Setting it re-spawns the isolate so the child re-installs the list |
+| `POST` | `/plugins/:slug/install-theme` | Admin | Install the companion theme a plugin bundles in its own `theme/` folder (optionally activating it); `404` if the plugin bundles none, `409` if the theme is already installed |
 | `DELETE` | `/plugins/:slug`          | Admin | Uninstall a plugin. Body `{ password, dropData }`: password-confirmed, refuses an **active** plugin, always clears grants + crash strikes, and drops the plugin's `wjp_<slug>_` tables only when `dropData` is set |
 | `GET`  | `/plugins/:slug/download`   | Admin | Download an installed plugin as a ZIP (`authenticateAllowQuery`: cookie/Bearer **or** a `?token=` query param) |
 | `GET`  | `/plugins/:slug/port-conflicts` | Admin | Which process holds the ports the plugin's manifest claims, and whether WordJS can free them |
@@ -274,10 +277,13 @@ Base path: `/api/v1/users` (`backend/src/routes/users.ts`). `PUT /me` is declare
 | `GET`  | `/plugins/menus`            | Auth  | Admin-menu items contributed by active plugins. Any logged-in user; visibility is filtered **per capability** (`item.cap`, default `manage_options`), so non-admin roles only see items whose capability they hold |
 | `GET`  | `/themes`                   | No    | List available themes (public)                      |
 | `POST` | `/themes/upload`            | Admin | Install a theme from ZIP                            |
+| `POST` | `/themes`                   | Admin | Create a theme from a declarative token contract (body carries `slug`, `tokens`, `styles`, …). `201 { slug, diagnostics }`; `400` with diagnostics on a compile error; `409` if the slug already exists |
+| `PUT`  | `/themes/:slug`             | Admin | Rebuild an existing theme from its token contract. `200 { slug, version, diagnostics }`; `404` if unknown; `409` if the theme was not created by the WordJS writer |
 | `POST` | `/themes/:slug/activate`    | Admin | Change active theme                                 |
 | `POST` | `/themes/default`           | Admin | Restore (force-overwrite) the default theme         |
 | `DELETE` | `/themes/:slug`           | Admin | Delete a theme                                      |
 | `GET`  | `/themes/:slug/download`    | Admin | Download a theme as a ZIP                           |
+| `GET`  | `/themes/:slug/doctor`      | Admin | Token-contract diagnostics for a theme; returns `{ available: false }` (fail-open) when the token manifest is absent |
 | `GET`  | `/setup/status`             | No    | Check if site is installed (not token-gated)        |
 | `POST` | `/setup/test-db`            | Token | Validate a DB connection before install (install-token gated) |
 | `POST` | `/setup/install`            | Token | Run the installation wizard (install-token gated)   |
@@ -296,12 +302,18 @@ Base path: `/api/v1/marketplace` (`backend/src/routes/marketplace.ts`). Plugins 
 
 | Method | Endpoint   | Auth  | Description                                                                 |
 | :----- | :--------- | :---- | :-------------------------------------------------------------------------- |
-| `GET`  | `/catalog` | Admin | Merged catalog (all configured sources) annotated with local state (`installed`, `active`, `installedVersion`, `updateAvailable`). Also returns a `sources[]` array with per-source `ok`/`count`/`error` status. `?refresh=1` bypasses the 5-minute in-memory cache. `502` if the catalog can't be fetched |
+| `GET`  | `/catalog` | Admin | Merged catalog (all configured sources) annotated with local state (`installed`, `active`, `installedVersion`, `updateAvailable`, `updatable`, `installedFrom`). Also returns a `sources[]` array with per-source `ok`/`count`/`added`/`error` status. `?refresh=1` bypasses the in-memory cache. `502` if the catalog can't be fetched |
 | `POST` | `/install` | Admin | Body `{ id }`: downloads the catalog entry's ZIP (from the source that entry was listed under), **sha256-verifies** it against the catalog, and installs it through the **same pipeline as `POST /plugins/upload`** (`installPluginFromZip`: zip-bomb budget, Zip Slip, slug validation, manifest + AST scan). `404` if the id isn't in the catalog; `400` on filename/sha256 failure; `502` on download failure |
+| `POST` | `/update`  | Admin | **Same handler as `/install`** (mounted on both paths so any client works). When the plugin is already installed, either path performs an **in-place update** via `runPluginUpdate` — preserving `data/`, the plugin's tables and its grants — and refuses an update whose catalog entry comes from a different source than the one the plugin was installed from |
 | `GET`  | `/sources` | Admin | The admin-configured source URLs (`{ configured, default, usingDefault }`) |
-| `PUT`  | `/sources` | Admin | Body `{ sources: string[] }`: replace the source list. Each entry must be `https` (or `http://localhost` for dev), deduped, capped at 12; clears the catalog cache |
+| `PUT`  | `/sources` | Admin | Body `{ sources: string[] }`: replace the source list. Each entry must be `https` (or `http://localhost` for dev), deduped, capped at 12; clears the catalog cache. Body `{ reset: true }` instead **forgets** the configured list entirely (back to the fallback chain) — distinct from saving an **empty** list, which is honored as "no sources at all" |
+| `GET`  | `/themes/catalog` | Admin | The **theme** catalog, annotated with `installed`/`active`/`installedVersion`/`updateAvailable`. `?refresh=1`, `502` on failure |
+| `POST` | `/themes/install` | Admin | Body `{ id }`: download + **sha256-verify** the catalog theme ZIP and install it through the hardened theme pipeline (`installThemeFromZip`) |
+| `GET`/`PUT` | `/themes/sources` | Admin | Read / replace the **theme** source list (option `marketplace_theme_sources`) — independent from the plugin list, same `{ configured, default, usingDefault }` shape and same `reset` / empty-list semantics |
 
-> **Catalog source resolution (admin-configurable, multi-source):** sources are resolved in order — (1) the `marketplace_sources` option, a JSON array of `https` catalogs managed from the Marketplace UI via `GET`/`PUT /marketplace/sources`; (2) the legacy single `marketplace_source` option (back-compat; may also be a local directory for dev / air-gapped installs); (3) the repo-local `marketplace/dist/` if present; (4) the built-in GitHub release default. Every configured source is fetched and **merged** (dedup by plugin `id`, earlier sources win) with **per-source error isolation** — one unreachable URL is reported as `ok:false` but never hides the rest. Remote fetches are `https` only (`http` allowed for localhost), downloaded ZIPs are capped at 10MB, and catalog filenames are validated against a strict `<slug>-<version>.zip` shape.
+> **Catalog source resolution (admin-configurable, multi-source):** sources are resolved in order — (1) the `marketplace_sources` option, a JSON array of `https` catalogs managed from the Marketplace UI via `GET`/`PUT /marketplace/sources`; (2) the legacy single `marketplace_source` option (back-compat; may also be a local directory for dev / air-gapped installs); (3) the repo-local `marketplace/dist/` if present; (4) the built-in GitHub release default. Every configured source is fetched and **merged** (dedup by plugin `id`, earlier sources win) with **per-source error isolation** — one unreachable URL is reported as `ok:false` but never hides the rest. Remote fetches are `https` only (`http` allowed for localhost), downloaded ZIPs are capped at 10MB, and catalog filenames are validated against a strict `<slug>-<version>.zip` shape. Themes use the **same** chain against `marketplace-themes-index.json`, minus the legacy single-option step.
+
+> **Catalog caching:** the merged catalog is cached in memory, keyed by the ordered source set. A **remote** source is keyed by its URL alone and keeps the **5-minute TTL** (the TTL is what protects the network). A **local** source is additionally stamped with its index file's **mtime + size**, so a `npm run build:marketplace` changes the key and the next browse reads fresh — without that, a stale index advertised a ZIP filename that no longer existed and the failure surfaced three steps later, at theme activation.
 
 ### 6.4 Analytics System 📊
 | Method | Endpoint           | Auth  | Description                        |

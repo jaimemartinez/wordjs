@@ -17,7 +17,10 @@ This document lists the official plugins available in the WordJS ecosystem and t
 > capability. A `network`-granted plugin is confined to **public IPs only** — the egress guard validates
 > each outbound connection **at connect time** (anti DNS-rebinding) and blocks loopback, link-local
 > (incl. `169.254.169.254` cloud metadata), RFC1918, CGNAT (`100.64/10`), IPv6 ULA/loopback/mapped, and
-> unresolvable hosts (fail-closed). Bundled (first-party) plugins are **not privileged** — no plugin
+> unresolvable hosts (fail-closed). An admin can narrow that further with a **per-plugin egress host
+> allowlist** (`GET`/`POST /api/v1/plugins/:slug/egress-hosts`, stored server-side in the
+> `plugin_egress_hosts` option): empty/absent = allow-all-public, a non-empty list flips that plugin to
+> default-deny (only the listed hosts + their subdomains). Bundled (first-party) plugins are **not privileged** — no plugin
 > bypasses the sandbox. Nothing is granted out of the box: **activation** grants a plugin exactly the
 > capabilities its manifest *declares* (the admin approves them in the activation dialog, only if the
 > plugin has no prior grant record), and the admin can refine or revoke every grant afterward in
@@ -25,8 +28,8 @@ This document lists the official plugins available in the WordJS ecosystem and t
 > the default-deny model landed; fresh activations get their declared set and nothing more.) (The old
 > trusted tier and its bypass machinery were removed.) **Every plugin — bundled ones included — is AST-scanned on activation,
 > fail-closed:** a file that is loaded but parses as dangerous (or cannot be parsed) blocks activation,
-> and there is no scan-skip for any plugin. The runtime `eval`/`Function` block is opt-in via
-> `config.sandbox.blockCodeGen` (skipped under `ts-node`).
+> and there is no scan-skip for any plugin. The runtime `eval`/`Function` block is **default-on** (opt
+> OUT with `config.sandbox.blockCodeGen: false`; skipped under `ts-node`).
 
 ## 0. The `wordjs` Bridge — API Reference 🌉
 
@@ -41,28 +44,32 @@ Two enforcement gates live on the host (`backend/src/core/plugin-isolate.ts`):
     (`callApi` rejects anything not in the set, default-deny). A malicious child can send any method
     string, so this is the gate that keeps it from walking the host `api` object to arbitrary methods.
 *   **Dedicated registration kinds** — hook/route/shortcode/mail-provider/notify-transport registration
-    flow through their OWN IPC kinds (NOT through `call`), each with its own capability check. They
-    are deliberately absent from `ALLOWED_BRIDGE_METHODS`.
+    flow through their OWN IPC kinds (NOT through `call`), each with its own host-side gate: an explicit
+    capability check for the mail provider and the notification transport, and caps/denylists/path- and
+    verb-allowlists for hooks, routes and shortcodes. They are deliberately absent from
+    `ALLOWED_BRIDGE_METHODS`.
 
 ### Data / call methods (`kind:'call'`, gated by `ALLOWED_BRIDGE_METHODS`)
 
 | `wordjs` member | Bridge method | Notes |
 | --- | --- | --- |
-| `options.get(key, default)` | `options.get` | Secret-named/protected options are scrubbed for **every** plugin. |
-| `options.set(key, value)` | `options.set` | Protected/secret-named options are write-blocked for **every** plugin. |
-| `db.all(sql, params)` | `db.all` | Always confined to `wjp_<slug>_` tables; ATTACH/PRAGMA/schema-catalog/stacked/comma-join/USING/RETURNING rejected. |
+| `options.get(key, default)` | `options.get` | `settings:read` grant. Secret-named/protected options are scrubbed for **every** plugin. |
+| `options.set(key, value)` | `options.set` | `settings:write` grant. Protected/secret-named options are write-blocked for **every** plugin. |
+| `db.all(sql, params)` | `db.all` | `database:read` grant. Always confined to `wjp_<slug>_` tables — EVERY table token the statement references is prefix-checked (comma-joins, `USING`, subqueries and CTEs included, at any depth). ATTACH/DETACH/PRAGMA/VACUUM, schema catalogs, the file/extension SQL functions, the Postgres `*_to_xml` family, stacked statements and `RETURNING` are rejected outright. A data-modifying CTE (a `WITH` containing insert/update/delete/replace/merge) is treated as a write and demands `database:write`. |
 | `db.get(sql, params)` | `db.get` | Same scoping as `db.all`. |
-| `db.run(sql, params)` | `db.run` | Same scoping. |
-| `db.createTable(name, cols)` | `db.createTable` | Creates a `wjp_<slug>_`-prefixed table. |
-| `db.getType()` | `db.getType` | Returns `{ isPostgres, isMySQL, isSQLite, driver }` for dialect branches (`driver` ∈ `sqlite-native`/`sqlite-legacy`/`postgres`/`mysql`/`mariadb`; `isSQLite` stays true under MySQL, so gate `PRAGMA`/`sqlite_master` on `isMySQL` — MariaDB reports `driver: 'mariadb'` but `isMySQL` is true, so branch on `isMySQL` not the raw `driver` string). |
-| `users.findByEmail / findByLogin / findById / search` | `users.*` | `users:read` grant. Returns a **safe projection** `{id, userLogin, username, userEmail, displayName, role}` — never `user_pass`. |
+| `db.run(sql, params)` | `db.run` | `database:write` grant. Same scoping. DDL is limited by a positive OBJECT-CLASS allowlist — a plugin may only create/alter/drop its own `TABLE`, `INDEX`, `VIEW` or `TRIGGER` (SCHEMA/DATABASE/ROLE/FUNCTION/EXTENSION/… are denied), and an `ALTER … RENAME TO` destination must itself carry the `wjp_<slug>_` prefix. |
+| `db.batch(statements)` | `db.batch` | Run up to 200 `[sql, params]` pairs in ONE host round-trip. Purely a transport optimisation: every statement is re-validated with the SAME permission check + SQL guard its single-statement counterpart would use, and DDL (`CREATE`/`ALTER`/`DROP`) is refused — use `db.run`/`db.createTable` so ownership and grants are recorded. The whole batch is validated before any of it runs, but it is **NOT** a transaction: a failure mid-batch leaves the earlier statements applied. |
+| `db.createTable(name, cols)` | `db.createTable` | `database:write` grant. Creates a `wjp_<slug>_`-prefixed table and records this plugin as its authoritative creator. |
+| `db.getType()` | `db.getType` | `database:read` grant. Returns `{ isPostgres, isMySQL, isSQLite, driver }` for dialect branches (`driver` ∈ `sqlite-native`/`sqlite-legacy`/`postgres`/`mysql`/`mariadb`; `isSQLite` stays true under MySQL, so gate `PRAGMA`/`sqlite_master` on `isMySQL` — MariaDB reports `driver: 'mariadb'` but `isMySQL` is true, so branch on `isMySQL` not the raw `driver` string). |
+| `users.findByEmail / findByLogin / findById / search` | `users.*` | `users:read` grant. Returns a **safe projection** `{id, userLogin, username, userEmail, displayName, role, hasProfessionalMailbox}` — never `user_pass`. (`hasProfessionalMailbox` is the admin-owned corporate-mailbox grant, projected as a boolean; read it, never re-derive it from `userEmail`.) |
 | `site.url / domain / adminEmail` | `site.*` | `settings:read` grant. Read-only site identity. |
+| `dns.resolveMx / resolveTxt / resolve4 / resolve6 / resolve` | `dns.*` | **`network` grant.** Host-mediated record lookups — the raw c-ares surface (`dns.resolve*`) is denied inside the isolate, so an MTA reaches MX (direct delivery) and TXT (SPF/DKIM/DMARC) through here. The host runs the query and STRIPS every A/AAAA answer pointing at a private/internal/special address, so `resolve4`/`resolve6`/`resolve` return public addresses only (a domain resolving solely to internal IPs comes back empty). |
 | `db.tablePrefix` | (local) | A string property (`wjp_<slug>_`), not an RPC — the required prefix for the plugin's own tables. |
-| `hooks.doAction(hook, ...args)` | `hooks.doAction` | Fire a core action from the plugin. |
-| `fs.read(path, enc)` | `fs.read` | Confined to the plugin dir; `.env`/secret files and the DB files are blocked. |
-| `fs.write(path, data)` | `fs.write` | Same confinement, plus per-write size cap + per-plugin disk quota. |
-| `mail(msg)` | `mail` | Send through the host-wide mail sender. |
-| `notify(notification)` | `notify` | Dispatch a core notification. |
+| `hooks.doAction(hook, ...args)` | `hooks.doAction` | Fire an action — but only the plugin's OWN registered callbacks run (`doActionForPlugin`), never core or another plugin's handlers. |
+| `fs.read(path, enc)` | `fs.read` | `filesystem:read` grant. Confined to the plugin's OWN dir (never the shared `uploads/`); `.env`/secret files and the DB files are blocked. |
+| `fs.write(path, data)` | `fs.write` | `filesystem:write` grant. Same confinement, plus a 16 MB per-write cap and a 100 MB per-plugin disk quota; `manifest.json` is immutable. |
+| `mail(msg)` | `mail` | `email:admin` grant. Send through the host-wide mail sender. |
+| `notify(notification)` | `notify` | `notifications:send` grant. Dispatch a core notification. |
 | `adminMenu.add(item)` | `adminMenu.add` | Add a Sidebar item (capped per plugin). |
 | `cron.schedule(ts, recurring, hook, args)` | `cron.schedule` | Schedule a recurring/one-shot hook fire. |
 | `crypto.randomToken(bytes=16)` / `crypto.randomInt(min, max)` | `crypto.randomToken` / `crypto.randomInt` | CSPRNG helpers (no data access, no permission gate) — use instead of `Math.random` for tokens/access codes. **Async** in an isolated plugin (RPC to host), so `await` them. |
@@ -71,7 +78,7 @@ Two enforcement gates live on the host (`backend/src/core/plugin-isolate.ts`):
 
 ### Registration methods (dedicated IPC kinds — NOT in the call allowlist)
 
-| `wordjs` member | IPC kind | Capability (manifest-declared AND admin-granted) |
+| `wordjs` member | IPC kind | Host-side gate (a capability here means manifest-declared AND admin-granted) |
 | --- | --- | --- |
 | `hooks.addAction(hook, cb, priority)` / `hooks.addFilter(...)` | `register` | Raw-HTML hooks (`wordjs_head`/`wordjs_footer`/`wp_head`/`wp_footer`) denied to **every** plugin; capped per-plugin (`MAX_HOOKS`) and per-hook-name (`MAX_PER_HOOK`); each shim runs with a 2 s timeout. |
 | `http.route(method, routePath, opts, handler)` | `register-route` | HTTP verb allowlisted; `opts.auth`/`opts.admin` apply real middleware; `opts.multipart` parsed host-side (10 MB cap). Always namespaced under `/api/v1/plugin/<slug>`, auth/session cookies stripped, Set-Cookie/CSP/HSTS/Location dropped, plugin cookies namespaced + path-confined. (No absolute-path mode.) |
@@ -79,9 +86,11 @@ Two enforcement gates live on the host (`backend/src/core/plugin-isolate.ts`):
 | `provideMail(handler)` | `register-mail-provider` | `email:provider` grant — becomes the host-wide mail sender (sandboxed). |
 | `notify.registerTransport(name, handler)` | `register-notify-transport` | `notifications:provider` grant — registers a core notification transport (sandboxed). |
 
-All registrations are tracked and torn down on unload/reload. RPCs have a timeout and a wedged child is
-recycled; per-child bridge-call and global IPC message rates are token-bucket capped, with inbound/outbound
-payload caps.
+All registrations are tracked and torn down on unload/reload (routes are unmounted by matching the HANDLER
+the host installed, never the registration verb — `app.all()` expands to every method, so a verb match
+missed them). RPCs have a 30 s timeout and a wedged child is recycled; an RPC to a child that is already
+gone **fails fast** ("… is not running") instead of waiting the timeout out. Per-child bridge-call and
+global IPC message rates are token-bucket capped, with inbound/outbound payload caps.
 
 ## 1. Photo Carousel 📸
 **ID:** `photo-carousel` | **Version:** 2.0.0
@@ -119,7 +128,7 @@ Manages YouTube video carousels.
 ---
 
 ## 4. Mail Server 📧
-**ID:** `mail-server` | **Version:** 2.0.0
+**ID:** `mail-server` | **Version:** 2.2.2
 
 A complete SMTP server and email manager. Allows sending and receiving emails directly within WordJS.
 
@@ -229,8 +238,10 @@ Test Schema are bundled with core):
     resolves to the newest published catalog — decoupled from any local checkout. Pin a fixed catalog by
     pointing a source at a specific release tag.
 *   **Backend API:** `backend/src/routes/marketplace.ts` — `GET /api/v1/marketplace/catalog` (annotated
-    with installed/active/updateAvailable state), `POST /api/v1/marketplace/install` (admin-only), and
-    `GET`/`PUT /api/v1/marketplace/sources` to read/replace the configured source list.
+    with installed/active/updateAvailable state), `POST /api/v1/marketplace/install` and
+    `POST /api/v1/marketplace/update` (both admin-only, sharing one apply handler), and
+    `GET`/`PUT /api/v1/marketplace/sources` to read/replace the configured source list. (Themes have the
+    parallel set: `GET /themes/catalog`, `POST /themes/install`, `GET`/`PUT /themes/sources`.)
     The catalog **sources are admin-configurable** and stored as a **list** in the `marketplace_sources`
     option (managed from the Marketplace UI; the legacy singular `marketplace_source` is still honored for
     back-compat). Every configured source is fetched and **merged** (dedup by id, earlier sources win) with
@@ -285,4 +296,7 @@ Test Schema are bundled with core):
 | `youtube-videos` | Pulls a YouTube channel's videos (keyless RSS or Data API v3) into a filterable, count-limited Puck carousel block | `settings` r/w, `database` r/w, `network` |
 
 *(“routes” = `express:register_route`; “admin menu” = `admin_menu:register`. Every capability is
-manifest-requested and admin-granted, default-deny, exactly like the bundled plugins.)*
+manifest-requested and admin-granted, default-deny, exactly like the bundled plugins. Note that
+`express:register_route` and `admin_menu:register` are validated manifest vocabulary but carry no bridge
+gate of their own — route and sidebar registration are policed by their own caps/allowlists in
+`plugin-isolate.ts`, not by a `verifyPermission` check.)*

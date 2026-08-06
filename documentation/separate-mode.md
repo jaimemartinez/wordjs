@@ -53,9 +53,10 @@ no repo checkout, no build step.
 npx create-wordjs@latest gateway --host <gateway-ip>
 ```
 
-This scaffolds `wordjs-gateway/`, initializes the cluster CA, starts the gateway, mints one
-single-use token per role (2 h TTL) and prints the exact **ready-to-paste** `join` commands for the
-other machines — gateway address, enroll port, token and CA fingerprint included.
+This scaffolds `wordjs-gateway/`, initializes the cluster CA, mints one single-use token per role
+(2 h TTL), prints the exact **ready-to-paste** `join` commands for the other machines — gateway
+address, token and CA fingerprint included — and then starts the gateway (`--no-start` leaves it to
+you: `cd wordjs-gateway && npm run prod:gateway`).
 
 **Machine 2 — backend** (paste what the gateway printed; it looks like this):
 
@@ -71,9 +72,10 @@ npx create-wordjs@latest join frontend --gateway <gateway-ip> --token <token> \
      --ca-hash <fingerprint> --advertise <frontend-ip>
 ```
 
-Each `join` downloads the release into `wordjs-<role>/`, generates a keypair + CSR, enrolls against
-the gateway (writes `certs/*` and the node's `wordjs-config.json`), installs dependencies, then starts
-the service, which registers with the gateway over mTLS. Startup logs land in
+Each `join` downloads the release into `wordjs-<role>/`, installs the runtime dependencies
+(`npm run release:install`), then generates a keypair + CSR and enrolls against the gateway (writing
+`wordjs-<role>/<role>/certs/*` and that node's `wordjs-config.json`), and finally starts the service,
+which registers with the gateway over mTLS. Startup logs land in
 `wordjs-<role>/<role>/cluster-start.log`.
 
 Options: `--enroll-port <port>` if you changed the default `3101`; `--no-start` to scaffold + enroll
@@ -160,7 +162,7 @@ backend through the gateway) and `/api`, `/uploads`, `/themes` to the backend.
 |---|---|---|
 | `gatewaySecret` | all three configs | written automatically by `init`/`node-join` |
 | cluster CA (`cluster-ca.crt`) | all three `certs/` | distributed automatically by enrollment |
-| `siteUrl` | gateway + backend | must equal the gateway's public origin or the migration guard 409s |
+| `siteUrl` | gateway + backend | its **hostname** must match the host browsers reach the gateway on, or the backend's migration guard 409s `migration_required` (scheme and port are ignored; loopback is always exempt) |
 | `jwtSecret` | backend only | only needs to match if you run **multiple** backends |
 
 The SQLite DB and `uploads/` stay on the **backend** node; the frontend reaches uploads through the

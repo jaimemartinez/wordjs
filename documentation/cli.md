@@ -4,7 +4,7 @@ WordJS includes several utility scripts in `backend/cli/` plus a set of `npm` sc
 
 > **Runtime model:** The backend is TypeScript. For **production** it now **compiles**: `npm run build` (`tsc -p tsconfig.build.json`) emits `dist/`, and `server.js` runs `dist/index.js` when that build exists. `ts-node` is used only in **development** (or when `dist/` hasn't been built yet) — `server.js` falls back to `node -r ts-node/register src/index.ts`. The strict core is enforced (`strictNullChecks`, `strictFunctionTypes`, `strictPropertyInitialization`, etc.), `noImplicitAny: true` is now **enforced**; one sub-flag remains **off**: `useUnknownInCatchVariables: false` (catch bindings stay `any`).
 >
-> **CLI scripts and ts-node:** any `cli/*` script that imports core modules (e.g. `require('../src/config/database')`, which resolves to `.ts`) must be run with ts-node registration, e.g. `node -r ts-node/register cli/force-sync-roles.js`. Scripts that only use plain dependencies (e.g. `check_plugins.js`, which uses `better-sqlite3` directly) run with plain `node`. **`cli/wordjs.js` is the exception**: its theme commands need `core/theme-compile` / `theme-derive` / `theme-doctor`, and it resolves them itself — preferring the compiled `backend/dist/core/*.js` (what production runs) and calling `require('ts-node').register({ project: backend/tsconfig.json, transpileOnly: true })` only when that build is absent. Run it with plain `node` either way; it fails with *"ts-node not found — run `npm install` inside backend/ (or `npm run build`) first"* if neither is available.
+> **CLI scripts and ts-node:** any `cli/*` script that imports core modules (e.g. `require('../src/config/database')`, which resolves to `.ts`) must be run with ts-node registration, e.g. `node -r ts-node/register cli/force-sync-roles.js`. Scripts that only use plain dependencies (e.g. `check_plugins.js`, which uses `better-sqlite3` directly) run with plain `node`. **`cli/wordjs.js` is the exception**: its theme commands need `core/theme-compile` / `theme-derive` / `theme-doctor` / `stitch-import` / `theme-verify`, and it resolves them itself (`loadCore()`, per module) — preferring the compiled `backend/dist/core/*.js` (what production runs) and calling `require('ts-node').register({ project: backend/tsconfig.json, transpileOnly: true })` only when that build is absent. Run it with plain `node` either way; it fails with *"ts-node not found — run `npm install` inside backend/ (or `npm run build`) first"* if neither is available.
 
 ## 1. npm Scripts
 
@@ -124,13 +124,13 @@ node frontend/scripts/generate-puck-plugin-registry.js
 **Template mode** (no seed colors, no `--archetype`) copies `backend/cli/templates/theme/`, which is exactly two files:
 
 - `theme.json` — `name` / `version` / `description` / `author` plus the `layout` structure config the public shell honors (`containerWidth: "1100px"`, `sidebar: false`).
-- `style.css` — a `:root` pre-seeded with **53** `--wjs-*` tokens (the contract, seeded from `backend/themes/default/style.css`), followed by a **commented-out** chrome block with 14 more `--wjs-nav-*` / `--wjs-footer-*` tokens to uncomment. That comment points at `backend/themes/midnight-luxury/style.css` as a worked example — the path the theme occupies **once installed** from the marketplace; in the repo the file lives at `marketplace/themes/midnight-luxury/style.css` (only `default` ships in `backend/themes/`).
+- `style.css` — a `:root` pre-seeded with **53** `--wjs-*` tokens (the contract, seeded from `backend/themes/default/style.css`), followed by a **commented-out** chrome block with 14 more `--wjs-nav-*` / `--wjs-footer-*` tokens to uncomment. That comment points at `backend/themes/default/style.css` as the worked example, because it is the one theme that ships with every install (everything else arrives from the marketplace).
 
 No `functions.js` is scaffolded in this mode. `--name` sets both the `__NAME__` placeholder and `theme.json`'s `name`; `--author` / `--description` are patched into `theme.json` after the copy. Details in `documentation/themes.md` / `documentation/theming.md`.
 
 **Seeded (declarative) mode:** pass **all four** seed colors — `--primary --secondary --bg --text <#rrggbb>` (the leading `#` is optional, since most shells are happier without it) — and instead of copying the template the CLI writes a **declarative `theme.json`** (`generator: "wordjs"`, `seeds`, the same `layout` defaults), compiles `style.css` from it via `core/theme-compile.ts`, and adds a `functions.js` stub. The resulting `style.css` contains **only** the generated block — the 53-token template is not involved.
 
-`--archetype cyber|brutalist|editorial|glassmorphism|organic|obsidian` selects a personality preset; the list is read from `core/theme-derive`'s `ARCHETYPE_NAMES` at runtime and an unknown name aborts with the available names. **`--archetype` implies seeded mode**: passing it (or any subset of the seed colors) without all four colors fails with *"Seeded creation needs all four colors"*. Contract reference: *Declarative theming (`theme.json`)* in `documentation/themes.md`.
+`--archetype cyber|brutalist|editorial|glassmorphism|organic|obsidian` records a personality **label** in `theme.json`; the list is read from `core/theme-derive`'s `ARCHETYPE_NAMES` at runtime and an unknown name aborts with the available names. The label **emits no CSS** — `theme-compile` only validates it (`ARCHETYPE_UNKNOWN`), and it feeds no token either (`deriveTokens()` takes the four seeds and nothing else). The archetype preset stylesheets (`.theme-container` / `.theme-hero` / `.theme-card` / `button.theme-btn` plus bare `body` and `h1, h2, h3` rules) belonged to the retired legacy theme model and are gone. **`--archetype` implies seeded mode**: passing it (or any subset of the seed colors) without all four colors fails with *"Seeded creation needs all four colors"*. Contract reference: *Declarative theming (`theme.json`)* in `documentation/themes.md`.
 
 ### `build theme <slug>`
 
@@ -207,14 +207,13 @@ Exits `0` on success, `1` (printing the error) on failure.
 
 **Use case:** A plugin is causing the server to crash or not loading, and you need to see what's physically active in the DB.
 
-This script opens the default native SQLite file with `better-sqlite3` and prints the `active_plugins` option. It has no TS imports, so plain `node` works — but it resolves the database as `path.resolve('../data/wordjs-native.db')`, i.e. **relative to the working directory**, so it must be run from `backend/cli/`:
+This script opens the SQLite file(s) with `better-sqlite3` (read-only) and prints the `active_plugins` option for each. It has no TS imports, so plain `node` works, and it resolves paths from **its own location** (`__dirname`), not the working directory — so it runs correctly from anywhere:
 
 ```bash
-cd backend/cli
-node check_plugins.js
+node backend/cli/check_plugins.js
 ```
 
-Run from `backend/` instead and it looks for `<repo-root>/data/wordjs-native.db`, which does not exist; the script catches the failure and prints `Error: …` rather than the option. It also always reads the **native** SQLite file — a site configured for `sqlite-legacy`, PostgreSQL or MySQL is not what it reports on (see § 7).
+Which file it opens, in order: the `database.path` declared in the `wordjs-config.json` two directories up from the script — i.e. the **repo root**, not `backend/` — resolved relative to that config, then the two well-known names `backend/data/wordjs-native.db` and `backend/data/wordjs.db`. Duplicates and non-existent paths are dropped, and **every** surviving candidate is printed (prefixed by its basename) — the two SQLite drivers keep separate files, so reporting only one of them named the wrong install's plugins. If none exists it prints `Error: no SQLite database found (looked in …)` and exits `1`. It only ever reads SQLite: a site configured for PostgreSQL or MySQL is not what it reports on (see § 7).
 
 Other handy diagnostics in `cli/` include `list-users.js`, `inspect-roles.js`, `inspect-user.js`, `verify-roles.js`, `verify-activation.js`, and `dump-routes.js` (lists every registered Express endpoint). Those that import `src/config/database` need the `-r ts-node/register` flag.
 

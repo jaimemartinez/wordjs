@@ -19,7 +19,7 @@
 npx create-wordjs@latest my-site
 ```
 
-No PHP, no MySQL, no build step — it downloads a ready-to-run bundle, starts a single process, and opens the setup wizard in your browser.
+No PHP, no MySQL, no build step — it downloads a ready-to-run bundle, starts a single process, and prints a one-time setup-wizard URL for you to open in your browser.
 
 </div>
 
@@ -44,6 +44,12 @@ Think about apps on your phone. A flashlight app can't read your bank messages u
 So a plugin that turns out to be buggy, greedy, or outright malicious **stays in its box**. It can't read your passwords, steal your config, or take the site down. That safety is enforced by the operating system itself — not by trusting the plugin to behave.
 
 *Every other major CMS runs plugins with full trust. This is the one thing they can't copy without breaking their entire ecosystem — and it's what WordJS is built around.*
+
+<div align="center">
+
+<img src="docs/media/plugin-sandbox.svg" alt="A plugin runs in its own OS process; every capability crosses a default-deny bridge the administrator granted, and anything ungranted is refused at the host" width="900">
+
+</div>
 
 <div align="center">
 
@@ -150,11 +156,11 @@ The **same codebase** runs three ways — switch anytime, no data migration:
 
 ```bash
 # The whole thing, one process:
-npx create-wordjs@latest my-site          # then open the browser wizard
+npx create-wordjs@latest my-site          # then open the printed wizard URL
 
 # Or, from a source checkout:
 npm run install:all
-npm run dev:mono      # monolith on http://localhost:3000
+npm run dev:mono      # monolith on https://localhost:3000 (self-signed)
 npm run dev           # or the 3-service split
 ```
 
@@ -176,7 +182,7 @@ graph TD
 - **[Backend](backend/)** — the core engine (content, users, roles, the plugin/theme system, mail, certificates, and the sandbox). TypeScript, compiled to JS for production.
 - **[Frontend](frontend/)** — the public site and the Next.js admin, including the Puck visual builder.
 
-**Monolith** runs the backend (with its isolated plugins) and the Next.js frontend **in one process** on `:3000` — no loopback proxy, no cluster — while still handling TLS, security headers, compression, and SEO rewrites locally. **Split** runs them as three cooperating processes behind the gateway. **Separate** spreads those three across machines: `create-wordjs gateway --host <ip>` makes the first box the cluster CA and prints ready-to-paste join commands with single-use, role-bound tokens; each other box enrolls over mutual TLS with no cert hand-copying.
+**Monolith** runs the backend (with its isolated plugins) and the Next.js frontend **in one process** on `:3000` — no gateway proxy, no cluster — while still handling TLS, security headers, compression, and SEO rewrites locally. **Split** runs them as three cooperating processes behind the gateway. **Separate** spreads those three across machines: `create-wordjs gateway --host <ip>` makes the first box the cluster CA and prints ready-to-paste join commands with single-use, role-bound tokens; each other box enrolls over mutual TLS with no cert hand-copying.
 
 See the [Separate-mode guide](documentation/separate-mode.md) for the walkthrough.
 
@@ -245,7 +251,7 @@ npm run dev               # split: gateway + backend + frontend
 npm run dev:mono          # or everything in one process, one port
 ```
 
-Public site at `http://localhost:3000`, admin at `/admin`. First-run setup (database + admin user) runs in the browser wizard, or via `npm run setup`.
+Public site on port `3000`, admin at `/admin` — `dev:mono` self-signs a localhost certificate (`https://localhost:3000`; `WORDJS_HTTP=1` for plain HTTP), and the split gateway switches to HTTPS once setup writes `ssl.enabled`. First-run setup (database + admin user) runs in the browser wizard, or via `npm run setup`.
 
 In production the backend is **compiled** (`tsc` → `dist/`) and run as plain JS. From `backend/`:
 

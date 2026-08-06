@@ -57,7 +57,7 @@ All async drivers extend `DatabaseDriverInterface` (`backend/src/drivers/interfa
 
 The base `interface.ts` default `transaction()` throws `transaction() not implemented`; every async driver (`sqlite-native-async`, `postgres`, `mysql`, `sqlite-legacy`) overrides it with a real atomic implementation — see [§1.2.1](#121-atomic-transactionfn) below.
 
-A **conformance test** (`backend/src/tests/driver-conformance.test.ts`) runs the *same* contract (create → insert → get → all → update → delete → drop) against the drivers it carries a dialect descriptor block for, asserting `run()` returns a truthy `lastID` and correct `changes`, that params bind, and that mutations persist. Today that is **`sqlite-native`, `postgres`, and `mysql`** (adding a driver = add a descriptor block). Drivers whose backend isn't reachable **skip gracefully**: if `better-sqlite3` can't load it's treated as the sql.js-fallback case, and if no Postgres is reachable that block is skipped (3s connect timeout). The legacy sync `sqlite-legacy` driver is intentionally out of scope (the suite validates the async interface implementers).
+A **conformance test** (`backend/src/tests/driver-conformance.test.ts`) runs the *same* contract (create → insert → get → all → update → delete → drop) against the drivers it carries a dialect descriptor block for, asserting `run()` returns a truthy `lastID` and correct `changes`, that params bind, and that mutations persist. Today that is **`sqlite-native`, `postgres`, and `mysql`** (adding a driver = add a descriptor block). Drivers whose backend isn't reachable **skip gracefully locally**: if `better-sqlite3` can't load it's treated as the sql.js-fallback case, and if no Postgres/MySQL is reachable that block is skipped (3s connect timeout). **In CI this inverts.** When `WORDJS_CI_DB=1` the service containers are wired precisely so the driver *is* exercised, so `skipOrFail()` turns an unreachable or unloadable Postgres/MySQL into a hard **failure** rather than a silent green — the conformance blocks cannot quietly no-op. The legacy sync `sqlite-legacy` driver is intentionally out of scope (the suite validates the async interface implementers).
 
 #### 1.2.1 Atomic `transaction(fn)`
 
@@ -90,12 +90,12 @@ WordJS includes a **Zero Data Loss** migration tool for switching drivers withou
 1. Go to the **DB Migration** entry in the admin sidebar (route `/admin/db-migration`). It is a native admin route, always available — it is not tied to plugin activation.
 2. Select your target engine (e.g., switch from SQLite to Postgres).
 3. The system will:
-    - **Verify** source data integrity.
-    - **Stream** data in chunks to the new driver (preventing RAM spikes).
-    - **Swap** configuration atomically.
+    - **Stream** data per table to the new driver (preventing RAM spikes).
+    - **Reconcile** each table's row count against the source immediately after copying it. A mismatch **throws on the first offending table** and aborts the migration — the original database is left untouched. (This is a fail-closed check *after* each copy, not a pre-flight scan; it used to be a mere warning that still switched the live DB.)
+    - **Swap** the data file into place and update the configuration.
     - **Restart** the backend automatically to apply changes.
 
-> **Note:** For SQLite-to-SQLite migrations (e.g. Legacy -> Native), the system uses an atomic file swap mechanism to ensure no corruption.
+> **Note:** For a file-based SQLite target (e.g. Legacy -> Native) the copy goes to a temporary file which is then moved onto the real filename (`fs.renameSync`) — so a half-written database never becomes the live one. If that move fails because the target file is locked, the migration does **not** fail: it keeps the temporary file as the new active database and points the config at it, so no data is lost even though the filename ends up non-standard.
 
 > **MySQL/MariaDB is now a supported migration target.** The DB-Admin migration tool's `availableDrivers` are `sqlite-legacy`, `sqlite-native`, `postgres`, and `mysql` — you can migrate existing data *into* MySQL/MariaDB from the admin UI just like Postgres (it is also a first-class **runtime** driver, §1.1). The tool recreates the non-core schema on the target, then performs an atomic, fail-closed row copy (`SET FOREIGN_KEY_CHECKS` off during the copy, `TEXT`→`LONGTEXT` for long-content columns via the target CREATE).
 
@@ -117,11 +117,24 @@ To change the driver, edit `backend/wordjs-config.json`. The flat `db*` keys (`d
   "dbDriver": "postgres",
   "dbHost": "localhost",
   "dbPort": 5432,
-  "dbUser": "postgres",
+  "dbUser": "wordjs",
   "dbPassword": "change-me",
   "dbName": "wordjs"
 }
 ```
+
+> ⚠️ **Do NOT point `dbUser` at the `postgres` superuser.** Create a dedicated role that owns only the
+> WordJS database (`CREATE ROLE wordjs LOGIN PASSWORD '…'; CREATE DATABASE wordjs OWNER wordjs;`). The
+> app issues DDL of its own (`initializeSchema`, schema migrations, `createPluginTable`), so the role
+> needs ownership of its database — but nothing beyond it. Note the config layer's fallback when
+> `dbUser`/`db.user` is **absent** is the literal `'postgres'` (`backend/src/config/app.ts`), so an
+> incomplete config silently reaches for the superuser: set the key explicitly.
+>
+> One trade-off to know about: the per-plugin Postgres **role** isolation (`core/plugin-db-isolation.ts`)
+> provisions a NOLOGIN role per plugin and needs `CREATEROLE` to do it. Without that privilege it
+> **fails gracefully** — plugin SQL is still confined to the plugin's `wjp_<slug>_` tables by the
+> text-guard (`assertSqlAllowed`), it just loses the second, database-enforced layer. Grant `CREATEROLE`
+> to the WordJS role if you want that layer; do **not** reach for the superuser to get it.
 
 **Example — SQLite (default):**
 ```json
@@ -132,7 +145,9 @@ To change the driver, edit `backend/wordjs-config.json`. The flat `db*` keys (`d
 ```
 > Each SQLite driver defaults to its **own** file (`sqlite-native` → `data/wordjs-native.db`, `sqlite-legacy` → `data/wordjs.db`). If you set `dbPath` explicitly, point it at the file for the driver you selected. See [§1.7](#17-sqlite-drivers-use-different-files).
 
-> **Secrets:** on boot the config layer auto-generates and persists a secure `jwtSecret` and `dbPassword` if the existing config still holds the insecure defaults. Operators should still review these.
+> **Secrets:** on boot the config layer auto-generates and persists a secure `jwtSecret` and `dbPassword` if `wordjs-config.json` already exists and the value is **missing** or is the known-insecure literal (`wordjs-default-secret-change-me` / `password`). The new value is written back into the file. Operators should still review these.
+
+> ⚠️ **`dbPassword` (flat) outranks `db.password` (nested), and the auto-generation only looks at the flat key.** The normalizer resolves the password as `dbPassword || db.password || 'password'` (`backend/src/config/app.ts`). So if you configure an external Postgres/MySQL password **only** in the nested form, boot sees no flat `dbPassword`, generates a random one, persists it — and that generated value then **shadows** your nested `db.password`, leaving the app unable to authenticate. When you set a real database password, set the flat **`dbPassword`** key (or set both to the same value). The same precedence applies to `dbHost`/`dbPort`/`dbUser`/`dbName`/`dbSsl` over their nested twins, but only the password is auto-generated.
 
 ### 1.7 SQLite Drivers Use Different Files
 
@@ -147,7 +162,7 @@ PostgreSQL (via `pg`) is a **separate engine** entirely, not a file under `data/
 
 > ⚠️ **Switching `dbDriver` points the app at a different file/engine.** Data written under one driver is **not** visible under another until it is migrated. Flipping `dbDriver` in `backend/wordjs-config.json` alone makes your existing data look **"missing"** — nothing is lost, the app is just reading a different file (or engine). The same applies when switching between SQLite and PostgreSQL.
 
-To actually **move your data between drivers/engines** (e.g. `sqlite-legacy` → `sqlite-native`, or SQLite → Postgres), use the admin **DB Migration** route described in [§1.4](#14-live-data-migration) — it streams the data into the target driver and, for SQLite-to-SQLite, performs an atomic file swap so the data ends up in the new driver's file. Do **not** edit `dbDriver` by hand for this.
+To actually **move your data between drivers/engines** (e.g. `sqlite-legacy` → `sqlite-native`, or SQLite → Postgres), use the admin **DB Migration** route described in [§1.4](#14-live-data-migration) — it streams the data into the target driver and, for a file-based SQLite target, moves a fully-written temporary file onto the new driver's filename (see the note in [§1.4](#14-live-data-migration)). Do **not** edit `dbDriver` by hand for this.
 
 > **`npm run migrate` is a different thing — it does *not* switch drivers.** The root `npm run migrate` (`node setup/index.js --migrate` → `backend/scripts/migrate.js`) applies any pending **schema** migrations to the *currently configured* database and exits, without copying data between drivers or starting the server. It is idempotent and useful in deploy pipelines (apply migrations before rolling out new code); the same schema migrations also run automatically at boot.
 
@@ -173,7 +188,7 @@ erDiagram
 
 ## 2. Core Tables
 
-> **Naming note:** the tables below follow WordPress conventions, but the **actual** schema (`initializeSchema` in `backend/src/config/database.ts`) uses lowercase, snake_case identifiers: the primary keys are `id` (not `ID`), meta/relationship tables are `post_meta` / `user_meta` / `comment_meta` / `term_relationships` (with underscores), and the comment columns are `comment_id` / `comment_post_id`. Column names in the tables below are illustrative of the WordPress mapping.
+> **Naming note:** the tables below follow WordPress conventions, but the **actual** schema (`initializeSchema` in `backend/src/config/database.ts`) uses lowercase, snake_case identifiers: the primary keys are `id` (not `ID`), meta/relationship tables are `post_meta` / `user_meta` / `comment_meta` / `term_relationships` (with underscores), the comment columns are `comment_id` / `comment_post_id`, and the post author column is **`author_id`** (not `post_author`) — which is why the index in §2.9 reads `posts (author_id)`. Column names in the tables below are illustrative of the WordPress mapping.
 
 ### 2.1 `users`
 Stores user authentication and profile data.
@@ -302,14 +317,19 @@ On boot, the schema (`backend/src/config/database.ts`) creates a set of indexes 
 | :----------------------------- | :----------------------------------------- |
 | `idx_post_meta_post_id`        | `post_meta (post_id)`                      |
 | `idx_post_meta_post_id_key`    | `post_meta (post_id, meta_key)`            |
+| `idx_post_meta_key_post`       | `post_meta (meta_key, post_id)` — key-first, for meta lookups BY KEY across posts |
 | `idx_user_meta_user_id`        | `user_meta (user_id)`                      |
 | `idx_user_meta_user_id_key`    | `user_meta (user_id, meta_key)`            |
 | `idx_term_rel_object_id`       | `term_relationships (object_id)`           |
 | `idx_term_rel_tt_id`           | `term_relationships (term_taxonomy_id)`    |
 | `idx_term_taxonomy_taxonomy`   | `term_taxonomy (taxonomy)`                 |
+| `idx_term_taxonomy_term_tax`   | `term_taxonomy (term_id, taxonomy)`        |
+| `idx_terms_slug`               | `terms (slug)` — category/tag archive lookups |
 | `idx_posts_status_type`        | `posts (post_status, post_type)`           |
+| `idx_posts_type_status_date`   | `posts (post_type, post_status, post_date)` — the hottest public listing, incl. the `ORDER BY post_date` |
 | `idx_posts_name`               | `posts (post_name)`                        |
 | `idx_posts_parent`             | `posts (post_parent)`                      |
+| `idx_posts_author`             | `posts (author_id)`                        |
 | `idx_comments_post_approved`   | `comments (comment_post_id, comment_approved)` |
 | `idx_options_name` (UNIQUE)    | `options (option_name)`                    |
 | `idx_options_autoload`         | `options (autoload)`                       |
@@ -322,11 +342,22 @@ On boot, the schema (`backend/src/config/database.ts`) creates a set of indexes 
 
 > **UNIQUE constraints (TOCTOU-closing).** `users (user_login)`, `users (LOWER(user_email))`, and `posts (post_name, post_type)` [partial, `WHERE post_name <> ''` — real slugs only] now carry UNIQUE indexes that close the check-then-insert race for duplicate logins/emails/slugs. The non-unique `idx_posts_name` (above) coexists with the new partial-unique `idx_posts_name_type` — both are real. **Fresh installs** create all three in `initializeSchema`. **Existing installs** get them via schema migration `0001_unique_constraints_users_posts`, which is **defensive**: it first detects and logs any duplicate groups, then attempts each `CREATE UNIQUE INDEX` in its own `try/catch`, and **never throws** — a residual duplicate logs a warning and boot continues (the migration is still recorded as applied so it doesn't retry every boot). This is a deliberate exception: the schema-migration runner is otherwise **fail-closed** (a failing migration aborts boot to avoid a half-migrated schema).
 
-> **Platform tables (migrations `0002`–`0005`).** Later schema migrations create the tables backing the scoped API tokens and outgoing HMAC-signed webhooks: `0002_create_api_tokens` (`api_tokens` + UNIQUE `idx_api_tokens_hash` and `idx_api_tokens_user`), `0003_create_webhooks` (`webhooks` + `idx_webhooks_active` and `idx_webhooks_user`), and `0004_create_webhook_deliveries` (`webhook_deliveries` + `idx_wh_deliveries_due` and `idx_wh_deliveries_webhook`), with `0005_webhook_secret_plaintext` adjusting how the webhook signing secret is stored. Unlike the defensive `0001`, these run under the normal **fail-closed** migration policy.
+> **Platform tables (migrations `0002`–`0005`).** Later schema migrations create the tables backing the scoped API tokens and outgoing HMAC-signed webhooks: `0002_create_api_tokens` (`api_tokens` + UNIQUE `idx_api_tokens_hash` and `idx_api_tokens_user`), `0003_create_webhooks` (`webhooks` + `idx_webhooks_active` and `idx_webhooks_user`), and `0004_create_webhook_deliveries` (`webhook_deliveries` + `idx_wh_deliveries_due` and `idx_wh_deliveries_webhook`), with `0005_webhook_secret_plaintext` renaming `webhooks.secret_enc` → `secret` (the signing secret is now stored in plaintext — encrypting it under the rotatable app secret dead-lettered every delivery on rotation). Unlike the defensive `0001`, `0002`–`0004` run under the normal **fail-closed** migration policy; `0005` swallows a failed `RENAME COLUMN` as a non-fatal no-op.
+
+> **Migrations `0006`–`0008`.** `0006_professional_mailbox_flag` converts the corporate-mailbox grant from "derived from the account's email domain" into an explicit `user_meta.professional_mailbox` flag, auto-granting it **only** to accounts that could already set it themselves (administrators and holders of `edit_users`) and recording every other on-domain account in the `professional_mailbox_migration_pending` option for the operator to re-enable by hand. Like `0001` it **never throws** (the un-granted state is the deny direction). `0007_create_form_submissions` creates `form_submissions` + `idx_form_submissions_name` for the public form block. `0008_posts_fts5` builds the full-text index — see [§2.10](#210-full-text-search-sqlite-fts5).
 
 ### Batched Meta Loading (N+1 avoidance)
 
 Post listing (`Post.findAllWithRelations`) **batch-loads** post meta for the whole result set in a single query rather than issuing one query per post, eliminating the previous N+1 pattern on listing pages.
+
+## 2.10 Full-Text Search (SQLite FTS5)
+
+Post search used to be `post_title LIKE '%q%' OR post_content LIKE '%q%'` — a full table scan reading every post body, run twice per request (rows + `COUNT`). Schema migration **`0008_posts_fts5`** replaces that with an FTS5 index on SQLite installs:
+
+*   **`posts_fts`** is a **virtual table**, created `USING fts5(post_title, post_content, content='posts', content_rowid='id', tokenize='unicode61')`. Because it is an **external-content** table it stores only the inverted terms and reads the columns back from `posts` — post bodies are **not** duplicated on disk.
+*   Three triggers keep it in sync: `posts_fts_ai` (AFTER INSERT), `posts_fts_ad` (AFTER DELETE) and `posts_fts_au` (AFTER UPDATE); the delete/update triggers write the `'delete'` command row carrying the OLD values, which is how an external-content index retracts a document. Existing rows are backfilled once with `INSERT INTO posts_fts(posts_fts) VALUES('rebuild')`.
+*   **Engine-scoped.** The migration returns early on Postgres (`ctx.isPostgres`) and on MySQL (`ctx.driverName === 'mysql'`) — tsvector / `FULLTEXT` are separate work, not this migration. This is what the `driverName` field on the migration context exists for.
+*   **Degrades, never fails.** The `CREATE VIRTUAL TABLE` is wrapped in a `try/catch`, so a SQLite build with FTS5 compiled out logs a warning and leaves the database untouched. At query time `Post` probes `sqlite_master` for `posts_fts`: present → `id IN (SELECT rowid FROM posts_fts WHERE posts_fts MATCH ?)`; absent (or Postgres/MySQL) → the original `LIKE` scan, byte-identical to before.
 
 ---
 
@@ -334,7 +365,11 @@ Post listing (`Post.findAllWithRelations`) **batch-loads** post meta for the who
 
 Plugins should generally stick to `post_meta` or `user_meta` for storing extra data. For high-performance needs they can create their **own** tables.
 
-Plugins do this through the permission-checked `wordjs` capability bridge (`wordjs.db.createTable(...)` / `wordjs.db.run(...)`), **not** by reaching into the raw driver. Plugin SQL is **table-scoped by prefix (default-deny)**: every table a query touches must be one the plugin owns under its `wjp_<slug>_` prefix (`wordjs.db.tablePrefix`), so core tables (`users`, `user_meta`, `options`, `roles`, `sessions`, …) and other plugins' tables are unreachable, and `createTable` refuses non-prefixed names. Two practical consequences of the guard: **`RETURNING` is rejected** in plugin SQL (use a separate `SELECT` — the guard blocks `RETURNING` as a scalar-exfil channel), and the bridge exposes only `get`/`all`/`run`/`createTable`/`getType` — **no `transaction()`**, so multi-statement plugin writes are not atomic. The full rules, the driver-agnostic type aliases (`INT_PK`, `DATETIME`, …), and examples live in **[plugin-database.md](./plugin-database.md)**.
+Plugins do this through the permission-checked `wordjs` capability bridge (`wordjs.db.createTable(...)` / `wordjs.db.run(...)`), **not** by reaching into the raw driver. Plugin SQL is **table-scoped by prefix (default-deny)**: every table a query touches must be one the plugin owns under its `wjp_<slug>_` prefix (`wordjs.db.tablePrefix`), so core tables (`users`, `user_meta`, `options`, `roles`, `sessions`, …) and other plugins' tables are unreachable, and `createTable` refuses non-prefixed names. DDL is additionally bounded by a positive **object-class allowlist**: a plugin may only create/alter/drop its own **TABLE, INDEX, VIEW or TRIGGER** — those are exactly the four classes the prefix scoping can actually check, so every other class (`SCHEMA`, `DATABASE`, `ROLE`, `FUNCTION`, `EXTENSION`, …) is denied outright rather than passing vacuously for naming no table. `ALTER … RENAME TO` has its **destination** prefix-checked too, so an owned table can't be renamed on top of a core one. Two practical consequences of the guard: **`RETURNING` is rejected** in plugin SQL (use a separate `SELECT` — the guard blocks `RETURNING` as a scalar-exfil channel), and the bridge exposes only `get`/`all`/`run`/`batch`/`createTable`/`getType` (plus the `tablePrefix` string) — **no `transaction()`**, so multi-statement plugin writes are not atomic.
+
+`db.batch([[sql, params], …])` runs several statements in **one** host round-trip. It is purely a transport optimisation: every statement goes through the same permission check and the same SQL guard as its single-statement counterpart, and the whole array is validated **before** any of it runs, so an illegal statement in the middle cannot half-apply the legal ones ahead of it. It is capped at **200 statements**, rejects DDL (`CREATE`/`ALTER`/`DROP` must stay on `db.run`/`db.createTable`, which record table ownership and issue the `GRANT`), and is explicitly **not atomic** — on Postgres/MySQL each statement runs on the plugin's own role connection, so a failure leaves the preceding statements applied, exactly as a sequential loop would.
+
+The full rules, the driver-agnostic type aliases (`INT_PK`, `DATETIME`, …), and examples live in **[plugin-database.md](./plugin-database.md)**.
 
 ## 4. Adding a New Database Driver
 
@@ -342,7 +377,7 @@ Multi-DB support is designed to be a contained, **verifiable** unit. The `mysql`
 
 1. **Implement the interface.** Create `backend/src/drivers/<name>.ts` exporting a singleton that extends `DatabaseDriverInterface` (`interface.ts`) and implements all seven methods. `run()` must return `{ lastID, changes }`; `get`/`all` must return a row / array of rows. If the engine uses non-`?` placeholders, normalize SQLite-style `?` internally (see `postgres.ts`'s `normalizeSql`, or `mysql.ts`'s fuller `translateSql`) so callers keep writing SQLite-style SQL.
 2. **Register it in the DB Manager.** Add the `<name>` branch in `loadDriver` (`config/database.ts`) so it's loaded as the async driver (see the `mysql`/`mariadb` branch), extend `getDbType()` (the `isPostgres`/`isMySQL`/`isSQLite` flags), and extend the dialect handling (`createPluginTable` type map, `clearDatabase` truncate syntax) if the new engine needs different DDL.
-3. **Add a conformance block.** Add a `test(...)` block in `backend/src/tests/driver-conformance.test.ts` with the engine's dialect descriptor (placeholder style, auto-increment PK, INSERT-returns-id mechanism). The shared `runContract` then validates the whole contract — and skips gracefully if the backend isn't reachable in CI.
+3. **Add a conformance block.** Add a `test(...)` block in `backend/src/tests/driver-conformance.test.ts` with the engine's dialect descriptor (placeholder style, auto-increment PK, INSERT-returns-id mechanism). The shared `runContract` then validates the whole contract — skipping gracefully when the backend isn't reachable locally, but **failing hard** under `WORDJS_CI_DB=1` so CI can't go green on an un-exercised driver.
 
 ### Dialect Handling Today
 

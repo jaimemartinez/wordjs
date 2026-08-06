@@ -205,15 +205,20 @@ node scripts/build-plugin.js hello-world
 ```
 
 ### Step 2: Verification
-This script uses **esbuild** to create a `dist/` folder in your plugin with:
-- `admin.bundle.js`: Your admin UI.
-- `hooks.bundle.js`: Your frontend hooks.
+This script uses **esbuild** to create a `dist/` folder in your plugin with one bundle per declared
+frontend entry:
+- `admin.bundle.js`: Your admin UI (`frontend.adminPage.entry`).
+- `component.bundle.js`: Your Puck block (`frontend.puckComponents.entry`, or the conventional `client/puck/<Pascal>Puck.tsx`).
+- `hooks.bundle.js`: Your frontend hooks (`frontend.hooks`).
 - `manifest.build.json`: Build metadata.
+
+> A declared entry whose file is missing is a **build error**, not a skip — the build fails loudly
+> instead of shipping a plugin whose UI is silently absent at runtime.
 
 ### 🛑 Critical: The React Singleton
 WordJS is highly sophisticated about how it handles React. 
 - **The Core Problem:** If your plugin bundles its own copy of React, Hooks will fail (Singleton violation).
-- **The WordJS Solution:** The build script automatically marks `react`, `react-dom`, and all `@/*` (core components) as **externals**.
+- **The WordJS Solution:** The build script never lets React into your bundle. `react`, `react-dom`, `react-dom/client` and the JSX runtimes — plus the host modules a plugin page actually uses (`@/lib/api`, `@/lib/i18n`, `@/lib/plugin-hooks`, `@/contexts/*`, `@/components/ui/*`, `@/components/MediaPickerModal`) — are **rewritten to `globalThis.WordJS.*`**, which the frontend's plugin-bundle loader populates. They are deliberately **not** left as plain esbuild `external`: a bare `import … from "react"` cannot be resolved by the blob-URL module the loader evaluates. Other `@/*` and `next/*` imports do stay genuine externals.
 - **Runtime Injection:** WordJS injects its own unified React instance into the plugin bundle at runtime. **Never try to bundle React yourself.**
 
 ---
@@ -333,8 +338,9 @@ When you activate a plugin, WordJS runs a **Static Analysis Scan**. It parses yo
 This static scan is **mandatory** — it runs on **every** plugin at activation and re-runs on each boot,
 fail-closed (an unparseable file blocks the plugin). The separate **engine-level runtime block** of
 dynamic code generation (`--disallow-code-generation-from-strings`, which kills a runtime-constructed
-`eval`/`new Function(string)`) is **opt-in** via `config.sandbox.blockCodeGen` and is skipped under
-ts-node (dev needs codegen to compile TS) — see §7.3.
+`eval`/`new Function(string)`) is **default-on** — an operator opts OUT with
+`config.sandbox.blockCodeGen: false` — and is skipped under ts-node (dev needs codegen to compile
+TS) — see §7.3.
 
 ### 7.3 The Sandbox (where isolation actually lives)
 
@@ -384,6 +390,10 @@ native addons, and an ESM resolution hook fails closed for the same builtins. Th
 > fork where `bwrap` / unprivileged user-namespaces are unavailable; a no-op on Windows/macOS): bwrap
 > runs the child as an unprivileged uid with all Linux capabilities dropped,
 > no-new-privs, PID/IPC/UTS namespaces and a read-only filesystem, plus a **seccomp-bpf syscall denylist**.
+> With that active, a plugin **without** the `network` grant is additionally dropped into its own **empty
+> network namespace** (`bwrap --unshare-net`, `config.sandbox.unshareNetwork`, default-on and separately
+> probe-gated), so the JS egress neuter is backed by the kernel; a `network`-granted plugin is never
+> net-unshared (its sockets must work). Its state is reported as `netns` on `GET /health/details`.
 > Landlock is intentionally **not** used (the read-only mount namespace already meets its fs-confinement
 > goal and the LSM would need a native dep, against this sandbox's no-native-deps design). With hardening
 > off, the child is **not** capability-minimal at the syscall level. Set
@@ -391,7 +401,13 @@ native addons, and an ESM resolution hook fails closed for the same builtins. Th
 > refuse to launch unless kernel hardening is actually active on the host, rather than silently degrading
 > to the JS-guards-only fork. The live hardening state (`active` / `degraded` / `unsupported`) is surfaced
 > on admin `GET /health/details`. A *preventive* memory cap on Windows
-> ships as a Job Object (default-on, probe-gated, pure-JS; the reactive RSS poll remains a backstop). The
+> ships as a Job Object (default-on, probe-gated, pure-JS; the reactive RSS poll remains a backstop).
+> The one OS-level confinement that is **not** Linux-only is Node's own **permission model**
+> (`config.sandbox.usePermissionModel`, default-on, probe-gated, compiled builds only — skipped under
+> ts-node): filesystem reads are scoped to the app root, writes to the zones io-guard permits, and
+> `child_process` / `worker_threads` / native addons / WASI are simply never granted. It is reported
+> separately as `permission` on `GET /health/details`, because a host can be un-hardened (no bwrap) and
+> still have capability confinement. The
 > outstanding gap is an **independent external security audit** — the sandbox is candidly **self-audited**.
 > See **[Plugin Isolation](plugin-isolation-proposal.md)**.
 
@@ -498,12 +514,14 @@ Every call is permission-checked on the host against your manifest.
 | Bridge call | Permission | Notes |
 | :--- | :--- | :--- |
 | `wordjs.options.get(key, default)` / `set(key, value)` | `settings:read` / `write` | Secret-named keys (`*secret*`, `*password*`, `*key*`, `*token*`, `dkim`, certs…) are **never** exposed — to any plugin. |
-| `wordjs.db.all(sql, params)` / `get(...)` / `run(...)` | `database:read` / `write` | Always scoped to your own `wjp_<slug>_` tables; SQL referencing core tables (`users`, `options`, `sessions`, …) is rejected. There is no unscoped mode. |
+| `wordjs.db.all(sql, params)` / `get(...)` / `run(...)` | `database:read` / `write` | Always scoped to your own `wjp_<slug>_` tables; SQL referencing core tables (`users`, `options`, `sessions`, …) is rejected. There is no unscoped mode. DDL is limited to your OWN `TABLE`/`INDEX`/`VIEW`/`TRIGGER` (SCHEMA/DATABASE/ROLE/FUNCTION/EXTENSION/… denied), an `ALTER … RENAME TO` target must keep your prefix, and a data-modifying `WITH` (a CTE containing insert/update/delete/replace/merge) counts as a write and needs `database:write`. |
+| `wordjs.db.batch(statements)` | `database:read` / `write` | Up to 200 `[sql, params]` pairs in ONE host round-trip — a transport optimisation only: each statement is re-checked with the same permission + SQL guard as the single-statement call, and DDL is refused (use `db.run` / `db.createTable`). Validated as a whole before anything runs, but **not** a transaction — a mid-batch failure leaves the earlier statements applied. |
 | `wordjs.db.createTable(name, columns)` | `database:write` | Always creates a `wjp_<slug>_`-prefixed table; core table names blocked. |
 | `wordjs.db.getType()` | `database:read` | Returns `{ isPostgres, isMySQL, isSQLite, driver }` (`driver` is the full driver name, e.g. `'sqlite-native'`, `'sqlite-legacy'`, `'postgres'`, `'mysql'`, or `'mariadb'`) — branch your DDL on the `isPostgres`/`isMySQL` booleans rather than the raw `driver` string (`isMySQL` is `true` for both `'mysql'` and `'mariadb'`). Note `isSQLite` stays `true` under MySQL (the MySQL driver translates the SQLite dialect), so gate SQLite-only queries (`PRAGMA`/`sqlite_master`) on `isMySQL` explicitly. |
-| `wordjs.users.findByEmail / findByLogin / findById / search(...)` | `users:read` | **Safe projection** only: `{ id, userLogin, username, userEmail, displayName, role }` — never `user_pass` or other credential fields. The sanctioned way to read users without core-table access. |
+| `wordjs.users.findByEmail / findByLogin / findById / search(...)` | `users:read` | **Safe projection** only: `{ id, userLogin, username, userEmail, displayName, role, hasProfessionalMailbox }` — never `user_pass` or other credential fields. The sanctioned way to read users without core-table access. (`hasProfessionalMailbox` is the admin-owned corporate-mailbox grant as a boolean — read it, never re-derive it from `userEmail`, which the account itself can write.) |
 | `wordjs.site.url / domain / adminEmail` | `settings:read` | Read-only site identity. |
-| `wordjs.hooks.addAction/addFilter(hook, cb, priority)` · `doAction(hook, ...args)` | — | Callback runs in the child process; host installs an RPC shim. Raw-HTML hooks (`wordjs_head`/`wordjs_footer`) are denied to every plugin. |
+| `wordjs.dns.resolveMx / resolveTxt / resolve4 / resolve6 / resolve(...)` | `network` | Host-mediated DNS. The raw resolver (`dns.resolve*`) is denied inside the child, so MX (direct delivery) and TXT (SPF/DKIM/DMARC) lookups go through here. The host strips every A/AAAA answer pointing at a private/internal address, so the address lookups return public IPs only. |
+| `wordjs.hooks.addAction/addFilter(hook, cb, priority)` · `doAction(hook, ...args)` | — | Callback runs in the child process; host installs an RPC shim. Raw-HTML hooks (`wordjs_head`/`wordjs_footer`) are denied to every plugin. `doAction` fires only your OWN registered callbacks — never core's or another plugin's. |
 | `wordjs.http.route(method, path, [opts,] handler)` | — | Mounted at `/api/v1/plugin/<slug>/path` (always namespaced — no absolute mode). `opts`: `{ auth, admin }` (host runs the real auth middleware), `{ multipart: 'field' }`. Handler gets a mock `(req,res)` over RPC. |
 | `wordjs.shortcodes.add(tag, handler)` | — | Handler may be async; expanded via `doShortcodeAsync`. |
 | `wordjs.fs.read(relPath, enc)` / `write(relPath, data)` | `filesystem:read` / `write` | Confined to your **own** plugin dir only (realpath-checked) — never the shared `uploads/` dir. `manifest.json` is immutable. |
@@ -526,12 +544,25 @@ an admin *grants* each one in the **Plugins** admin page (`/admin/plugins`,
 `POST /plugins/:slug/permissions`, persisted in the `plugin_grants` option). A bridge call works only if
 the capability is BOTH declared in the manifest AND granted.
 
-**Grantable capabilities:** `database` (read/write — own tables only), `settings` (read/write — non-secret
-options), `filesystem` (read/write — own dir), `users:read` (the safe user projection), `assets:write`
-(enqueue own scripts/styles on public pages), `email:provider`,
-`notifications:provider` / `notifications:send`, and **`network`** (outbound access to **public IPs only**
+**Grantable capabilities** (the canonical manifest vocabulary is `KNOWN_PERMISSIONS` in
+`backend/src/core/plugins.ts`): `database` (read/write — own tables only), `settings` (read/write —
+non-secret options), `filesystem` (read/write — own dir), `users:read` (the safe user projection),
+`assets:write` (enqueue own scripts/styles on public pages), `email:admin` (send through the active mail
+provider) / `email:provider` (*become* the provider), `notifications:send` / `notifications:provider`,
+`express:register_route`, `admin_menu:register`, and **`network`** (outbound access to **public IPs only**
 — the egress guard blocks loopback/link-local/`169.254.169.254` metadata/RFC1918/CGNAT/ULA and validates
 the resolved IP at connect time; opt-in, with an exfiltration warning — declare `scope: "network"`).
+An admin may narrow a `network` plugin further with a per-plugin **egress host allowlist**
+(`GET`/`POST /api/v1/plugins/:slug/egress-hosts`, stored in the `plugin_egress_hosts` option): empty =
+allow-all-public, a non-empty list flips that plugin to default-deny for everything but the listed hosts
+and their subdomains.
+
+> `scope: "admin"` on a capability implies only its ordinary `read`+`write` verbs — it never subsumes the
+> high-power verbs (`provider`, `register`, `register_route`), which must be granted explicitly.
+> `express:register_route` and `admin_menu:register` are validated, grantable manifest vocabulary but
+> have no `verifyPermission` gate behind them today: route and sidebar registration are policed by the
+> caps and allowlists in `plugin-isolate.ts` / `adminMenu.ts` instead (which is why they show `—` in the
+> bridge table above).
 
 There is no first-party pre-seeding: **activation** grants a plugin exactly the capabilities its
 manifest declares (idempotent — only when the plugin has no prior grant record), and that applies

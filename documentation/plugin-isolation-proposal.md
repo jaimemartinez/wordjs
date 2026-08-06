@@ -27,14 +27,18 @@
 > Deeper kernel-surface hardening (seccomp/landlock + dropped uid) can layer on top of the already-
 > separate process (see §2/§6).
 >
-> **Bridge surface (complete, tested):** options.get/set, db.all/get/run/createTable/getType (core-table
-> scoped for untrusted), hooks.add{Action,Filter}/doAction, **http.route (host runs auth, forwards JSON
+> **Bridge surface (complete, tested):** options.get/set, db.all/get/run/batch/createTable/getType (scoped
+> to the plugin's OWN `wjp_<slug>_` tables — no tier is exempt), hooks.add{Action,Filter}/doAction,
+> **http.route (host runs auth, forwards JSON
 > over RPC)**, **shortcodes.add (async, RPC'd + expanded by doShortcodeAsync)**, fs.read/write (confined),
-> mail, notify, adminMenu.add, cron.schedule, assets.enqueue{Script,Style}. The dispatch is split by design: data calls travel as a
+> mail, notify, adminMenu.add, cron.schedule, crypto.randomToken/randomInt, assets.enqueue{Script,Style},
+> and the host-mediated dns.resolve* lookups (network-gated). The dispatch is split by design: data calls travel as a
 > generic `kind:'call'` IPC message that `callApi` checks against an **EXACT method allowlist**
-> (`ALLOWED_BRIDGE_METHODS`: options.get/set, db.all/get/run/createTable/getType, hooks.doAction,
-> fs.read/write, mail, notify, adminMenu.add, cron.schedule, `assets.enqueueScript`/`assets.enqueueStyle`,
-> the safe `users.findByEmail/findByLogin/findById/search` projection, and `site.url/domain/adminEmail`) — a child sends ANY method string and
+> (`ALLOWED_BRIDGE_METHODS`: options.get/set, db.all/get/run/batch/createTable/getType, hooks.doAction,
+> fs.read/write, mail, notify, adminMenu.add, cron.schedule, `crypto.randomToken`/`crypto.randomInt`,
+> `assets.enqueueScript`/`assets.enqueueStyle`,
+> the safe `users.findByEmail/findByLogin/findById/search` projection, `site.url/domain/adminEmail`, and
+> `dns.resolveMx/resolveTxt/resolve4/resolve6/resolve`) — a child sends ANY method string and
 > `callApi` walks it as a dotted path, so without this gate it could reach a registration method or a
 > prototype-chain segment directly. **Registration** (hooks/filters, routes, shortcodes, mail-provider,
 > notify-transport) flows ONLY through its own dedicated IPC kinds (`register`, `register-route`,
@@ -56,10 +60,14 @@
 > an admin *grants* each one in `/admin/plugins` (persisted in the `plugin_grants` option, mirrored in
 > memory), and a bridge call works only if the capability is BOTH declared AND granted.
 > - **Always enforced, for every plugin:** DB default-denied to its own `wjp_<slug>_` tables only,
->   enforced host-side by `assertSqlAllowed` (per-plugin prefix attribution; ATTACH/DETACH/PRAGMA, schema
->   catalogs `sqlite_master`/`information_schema`/`pg_catalog`, stacked statements, comma-joins, the
->   Postgres `USING` clause and `RETURNING` are all rejected; core tables `users`/`options`/`sessions`/…
->   off-limits). Non-secret options only. Routes always namespaced under `/api/v1/plugin/<slug>/*`. It
+>   enforced host-side by `assertSqlAllowed` — every table the statement names (through FROM/JOIN/INTO/
+>   UPDATE/`USING`/`STRAIGHT_JOIN`, a comma table-list, or a subquery at any depth) is attributed and must
+>   carry the plugin's prefix, and on top of that ATTACH/DETACH/PRAGMA/VACUUM, the schema catalogs
+>   (`sqlite_master`/`information_schema`/`pg_catalog`), the file/extension functions, Postgres' `*_to_xml`
+>   family, stacked statements, `RETURNING`, a data-modifying CTE on the read path, and DDL on any object
+>   class other than TABLE/INDEX/VIEW/TRIGGER are rejected outright; core tables
+>   `users`/`options`/`sessions`/… are off-limits as a second barrier. (Full rule list:
+>   [plugin-database.md](./plugin-database.md).) Non-secret options only. Routes always namespaced under `/api/v1/plugin/<slug>/*`. It
 >   cannot shim the raw-HTML output hooks (`wordjs_head`/`wordjs_footer`/`wp_head`/`wp_footer`); the host
 >   auth JWT cookie (`wordjs_token`) is stripped from forwarded route requests and dangerous response
 >   headers (Set-Cookie/CSP/HSTS/Location) are stripped from its replies; fs read/write is confined to its
@@ -122,16 +130,22 @@
 > on **every boot** (re-validated to catch code poisoning); a parse failure or a dangerous call blocks
 > activation. There is **no scan-skip for any plugin** — the `system:admin` skip and the trusted-slug
 > exemption were removed. The scanner catches `eval`/`Function` **statically**; for runtime-constructed
-> or downloaded-then-eval'd code there is an **OPT-IN engine-level hard block** —
+> or downloaded-then-eval'd code there is an engine-level hard block —
 > `config.sandbox.blockCodeGen` adds `--disallow-code-generation-from-strings` to the child so V8 refuses
-> all runtime codegen. It is **OFF by default** (some plugin deps legitimately use `Function()`) and is
+> all runtime codegen. It is **DEFAULT-ON** (opt out with `sandbox.blockCodeGen: false`, for a trusted
+> plugin whose deps legitimately use `Function()`) and is
 > **never applied under ts-node** (dev needs codegen to compile TS).
 >
 > **Full teardown on unload/reload:** `unloadIsolatedPlugin` terminates the worker AND runs a teardown
 > that removes every host-side registration the plugin made — Express route layers are spliced out,
 > hook/filter/shortcode shims removed, a provided mail sender / notification transport unregistered, and
 > its admin-menu entries dropped — so no stale shim can RPC a dead worker. Teardown is idempotent and
-> also runs as a crash safety-net on worker `exit`.
+> also runs as a crash safety-net on worker `exit`. Route layers are matched by **handler identity**, not
+> by the verb they were registered with: `app.all()` is implemented by looping the HTTP method list, so
+> `route.methods` never contains a key named `all` and a verb-keyed unmount silently left every `all`
+> route mounted after the worker died. As a second line, `rpcSend` **fails fast** when `postMessage`
+> reports the child is gone — rejecting immediately instead of waiting out the 30 s RPC timeout, which is
+> what turned a stale registration into a socket-exhaustion lever.
 >
 > **Themes now isolate too (SHIPPED, 2026-07-18).** The proposal only covered plugins, but a theme's
 > `functions.js` was executed **in-process on the host** — with no runtime `eval`/`Function`/dynamic-`import`
@@ -156,7 +170,7 @@
 > | photo-carousel | **isolated** | routes + options + **async shortcode** (`[carousel]`) |
 > | video-gallery | **isolated** | routes + options + shortcode (`[vgallery]`) |
 > | conference-manager | **isolated** | own-table DB (`wjp_conference_manager_*`), namespaced routes (granted its declared caps on activation) |
-> | mail-server | **isolated** | inbound SMTP listener (configurable `smtp_listen_port`, default 2525) + outbound MX delivery (to recipient :25) in the worker (granted `network`); Email model → own-table `db`, DKIM key in own DB/files, multipart upload, `provideMail` (`email:provider`) + `notify.registerTransport` (`notifications:provider`) |
+> | mail-server | **isolated** | inbound SMTP listener (configurable `smtp_listen_port`, default 25) + outbound MX delivery (to recipient :25) in the worker (granted `network`); Email model → own-table `db`, DKIM key in own DB/files, multipart upload, `provideMail` (`email:provider`) + `notify.registerTransport` (`notifications:provider`) |
 > | ~~db-migration~~ | **moved to core (de-pluginized)** | was DB infrastructure, not a feature plugin (runs schema migrations at boot, around the DB lifecycle). Backend → `src/core/db-admin/` (wired in at boot, routes still `/api/v1/db-migration/*`); admin UI → native frontend route `frontend/src/app/admin/db-migration/page.tsx` reached via a permanent **core** Sidebar item (`/admin/db-migration`), NOT a toggleable plugin. Removed from `plugins/` and all generated registries. |
 >
 > (The table above is the inventory at the time the model was finalized. Every plugin added since —
@@ -168,7 +182,7 @@
 > in-process execution path was removed (`loadActivePlugins`/`activatePlugin` reject non-isolated plugins,
 > `deactivatePlugin` terminates the child). All feature plugins are isolated (verified in-browser
 > serving real data — incl. the mail server's inbox and its inbound SMTP listener on its configured
-> port (`smtp_listen_port`, default 2525)). db-migration is no
+> port (`smtp_listen_port`, default 25)). db-migration is no
 > longer a plugin at all: its backend moved into core (it manages the database server itself) and its
 > admin UI is a native frontend route reached from a permanent core Sidebar item. **Every** plugin —
 > first-party or uploaded — isolates and is hard-blocked from core tables/secrets regardless of the
@@ -326,9 +340,9 @@ Async by necessity (crosses the boundary). Each maps to a current direct use:
   cross-platform RSS poll → SIGKILL at 768 MB, loose `RLIMIT_AS`
   backstop + `--max-old-space-size=256` — plus per-RPC timeout, bridge-call rate/concurrency token
   buckets, IPC message-rate caps, payload/disk caps and registration caps. Closes the DoS class the
-  in-process model can't. An OPT-IN `config.sandbox.blockCodeGen` additionally passes
+  in-process model can't. `config.sandbox.blockCodeGen` additionally passes
   `--disallow-code-generation-from-strings` to the child (engine-level `eval`/`new Function(string)`
-  block; off by default, skipped under ts-node).
+  block; **default-on**, opt-out, skipped under ts-node).
 - **Deactivate:** terminate (SIGKILL) the child process → all its memory/handles gone, deterministically;
   `teardown()` splices out every host-side registration it made.
 
@@ -346,9 +360,9 @@ time** assets, unaffected by runtime isolation — they keep being bundled (and 
 > per plugin, admin-controlled, default-deny — instead of exempting anything from isolation or handing out
 > raw OS primitives. So:
 - **mail-server**: runs its inbound SMTP server on its configured port (`smtp_listen_port`, default
-  2525) and does outbound MX delivery (connecting to recipient mail servers on :25) **inside its own OS
+  25) and does outbound MX delivery (connecting to recipient mail servers on :25) **inside its own OS
   process**. secure-require opens the **egress-guarded** `net`/`tls`/`http`/`https`/`http2`/`dgram`
-  (plus raw `dns` for resolution — the connect, not the lookup, is the guarded sink) only when the
+  only when the
   **`network`** capability is granted (resolved host-side at spawn and passed in
   the child's config argument, surfaced in-child as the frozen `global.__WORDJS_PLUGIN_NETWORK__` that
   secure-require's net branch reads, re-resolved on a grant change via `reloadIsolatedPlugin`). Even
