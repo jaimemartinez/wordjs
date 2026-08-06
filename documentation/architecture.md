@@ -108,6 +108,21 @@ SPLIT run on **different hosts** — a gateway box, a backend box, and a fronten
 
 Key files: `gateway/src/cluster-ca.js`, `scripts/cluster.js`, `scripts/node-join.js`. Key config keys: `advertiseHost` (this node's routable address), `gatewayHost`, `gatewayInternalBind`, `gatewayEnrollPort`, and — on the frontend — `internalApiUrl` (its SSR base = the gateway's public origin, trusted via `NODE_EXTRA_CA_CERTS` since that origin's cert is cluster-CA-signed). The SQLite DB and `uploads/` stay on the single backend node — no shared filesystem is needed for one replica per role. Full step-by-step: **[separate-mode.md](separate-mode.md)**; scaling a role to **N** replicas (Postgres + Redis + shared FS): **[multi-node.md](multi-node.md)**.
 
+### Boot order — the listener opens BEFORE plugins finish loading
+
+`backend/src/index.ts` builds the Express app at module scope (helmet → CORS → rate limiters → CSRF → body parsers → static mounts → the `/health`, `/healthz`, `/readyz`, `/metrics` probes → the install/migration guard → the `/api/v1/plugin/*` readiness guard → `mfaComplianceGate` → the anonymous-public `Cache-Control` stamper → the routers → `core/db-admin`), then `initialize()` runs the async boot:
+
+1. `core/frontend-purge`'s `initFrontendPurge()` is wired **unconditionally and first**, so even a fresh in-process install purges the frontend cache.
+2. `notFound` + `errorHandler` are registered, and (unless `WORDJS_EMBEDDED=1`) **the server starts listening and registers with the gateway** — both *before* plugins load. Plugin isolates fork **one at a time** (CrashGuard must be able to blame exactly one plugin for a boot crash), so that phase dominates boot; opening the listener early means core routes serve during it.
+3. Database init, then the seeding section (schema migrations, default options, roles, bootstrap admin, default category/theme) runs inside the `wordjs:boot` distributed-lock lease so concurrent replicas can't double-seed; the lease is released once seeding completes.
+4. `loadActivePlugins()`, then `fixMiddlewareOrder()` — plugin routes registered after step 2 would otherwise sit *behind* the 404 handler, so the two terminal handlers are pushed back to the end of the stack. `pluginsReady` flips true here.
+5. Cron, cluster coherence, webhooks, theme engine, `doAction('init')`, then `appReady = true`.
+
+Externally visible consequences:
+
+- **`GET /healthz`** — liveness, never touches the DB. **`GET /readyz`** — readiness; returns **503** (`setup_required` / `starting` / `not_ready`) until the instance is installed, `appReady` is set, and the DB answers.
+- **`/api/v1/plugin/*` answers `503 plugins_starting`** with `Retry-After: 5` and `Cache-Control: no-store` while the isolates are still forking — an honest "not yet" instead of a 404 that reads as "this endpoint does not exist" (and that a CDN would cache as such). The guard is scoped to `/plugin/*` only; every core route is fully functional in that window.
+
 ### Observability — `/metrics`
 
 The backend exposes a Prometheus endpoint at **`GET /metrics`** (`backend/src/core/metrics.ts`): the default Node/process metrics (CPU, RSS/heap, event-loop lag, GC, handles, prefixed `wordjs_`) plus app-level gauges including **`wordjs_sse_clients`** (active SSE clients on this node).
@@ -229,9 +244,9 @@ graph TD
 
 On top of per-theme `style.css`, the theme system ships **one shared static stylesheet**, `backend/public/css/wordjs-ui.css` — a token-driven, Bootstrap-like CSS framework. It auto-styles **every** HTML element and provides Bootstrap-compatible components (`.btn` / `.card` / `.alert` / `.badge` / `.table` / `.nav` / `.list-group` / `.pagination` / `.progress` / `.modal` / `.dropdown`, a flexbox grid `.container` / `.row` / `.col-*`) plus a utility layer (spacing / display / flex / text / colors / borders / sizing / shadow).
 
-- **Driven by `--wjs-*` design tokens** declared in each theme's `style.css :root` (not `theme.json`). The framework carries safe fallbacks, so a theme re-skins everything just by setting tokens. Per-variant `--wjs-color-on-*` tokens hold the max-contrast (black/white) text computed per theme for each solid color.
-- **Where it loads:** on **public** pages (frontend `ThemeLoader.tsx`) and inside the **editor preview iframe** (frontend `PuckEditor.tsx`, for true WYSIWYG) — never the admin chrome. It is linked **before** `core.css` and the theme's own `style.css` so the theme wins at equal specificity. (The *legacy* Handlebars engine links it the same way in `wordjs_head` (`core/theme-engine.ts`), but that public path is no longer mounted — Next.js renders the live site.)
-- The `default` theme ships bundled and 64 first-party themes are available through the theme marketplace — each tunes a full `--wjs-*` token set to its palette (the `default` theme also keeps a few legacy bare aliases like `--primary` for backward-compat). Full reference: **[theming.md](theming.md)**.
+- **Driven by `--wjs-*` design tokens.** A theme *declares* them in its `theme.json` (`seeds` / `tokens`); `core/theme-compile.ts` compiles that contract into a marked `/* @wjs-generated:start … */` block inside the theme's `style.css`, where the tokens land verbatim in `:root`. The framework carries safe fallbacks, so a theme re-skins everything just by setting tokens. Per-variant `--wjs-color-on-*` tokens hold the max-contrast (black/white) text computed per theme for each solid color.
+- **Where it loads:** on **public** pages (frontend `ThemeLoader.tsx`) and inside the **editor preview iframe** (frontend `PuckEditor.tsx`, for true WYSIWYG) — never the admin chrome. `ThemeLoader.tsx` emits it (React 19 `precedence="wjs-base"`) **before** the theme's own `style.css` (`precedence="wjs-theme"`) so the theme wins at equal specificity. (`core.css` is linked only by the *legacy* Handlebars engine's `wordjs_head` (`core/theme-engine.ts`), and that public path is no longer mounted — Next.js renders the live site.)
+- The `default` theme ships bundled and 64 first-party themes are available through the theme marketplace — each tunes a full `--wjs-*` token set to its palette. Full reference: **[theming.md](theming.md)**.
 
 ---
 
@@ -252,6 +267,10 @@ graph TB
         Plugins[Plugin Components]
     end
 
+    subgraph "Shared Block Markup"
+        Blocks[content/blocks.tsx]
+    end
+
     subgraph "Component Categories"
         Content[📄 Content]
         Layout[📐 Layout]
@@ -262,7 +281,7 @@ graph TB
 
     subgraph "Output"
         PuckData[📦 _puck_data JSON]
-        Render[⚛️ Puck Render]
+        Render[⚛️ content/ContentRenderer.tsx server render]
         HTML[🌐 Final HTML]
     end
 
@@ -272,6 +291,8 @@ graph TB
     Sidebar --> Config
     Config --> Core
     Config --> Plugins
+    Config --> Blocks
+    Blocks --> Render
     Core --> Content
     Core --> Layout
     Core --> Media
@@ -382,7 +403,7 @@ Plugins reach a site two ways:
 - **Bundled** (`backend/plugins/`) — first-party plugins that ship with core (hello-world, test-schema).
 - **Marketplace** — first-party plugins whose sources live in `marketplace/plugins/`, distributed **outside** the core build. `backend/scripts/build-marketplace.js` (run as `npm run build:marketplace` from the repo root) packs each into `marketplace/dist/<slug>-<version>.zip` and emits `marketplace/dist/marketplace-index.json` — the catalog (id/name/version/category/permissions/size + a **sha256** per zip). The `marketplace/dist/` output is a **build artifact and is NOT committed** (it is `.gitignore`d); `.github/workflows/release.yml` runs `build:marketplace` and publishes the catalog + zips as **GitHub Release assets**. So plugin releases are decoupled from core releases, and by default a site fetches the catalog from the release-assets URL `https://github.com/jaimemartinez/wordjs/releases/latest/download` (a dev/full checkout with a local `marketplace/dist/` uses that instead). Sources are **admin-configurable** — see below.
 
-The backend exposes it at **`/api/v1/marketplace`** (`backend/src/routes/marketplace.ts`, admin-only): `GET /catalog` fetches **every** configured source and returns the **merged** catalog (deduped by id, earlier sources winning, each source's errors isolated so one bad URL can't hide the rest) annotated with each entry's installed/active/update state (with a 5-minute in-memory cache); `POST /install` downloads the zip **server-side from the source the entry was listed under** (https-only, size-capped, strict filename shape), verifies its **sha256** against the catalog entry, and hands it to the **same** `installPluginFromZip()` pipeline as a manual upload (zip-bomb budget, Zip Slip/slug validation, manifest + AST security scan) — the marketplace adds no new install surface beyond the catalog fetch itself. **Sources are admin-configurable** via `GET`/`PUT /api/v1/marketplace/sources`, which read/write the `marketplace_sources` option (a JSON list of https catalogs, max 12; each must be https or `http://localhost`); precedence is that list → the legacy single `marketplace_source` option (back-compat) → the repo-local `marketplace/dist/` → the built-in release-assets default. The admin UI is the **Marketplace tab** of `/admin/plugins` (`frontend/src/app/admin/plugins/MarketplaceTab.tsx`); an installed plugin lands **inactive with default-deny grants**, exactly like any other install.
+The backend exposes it at **`/api/v1/marketplace`** (`backend/src/routes/marketplace.ts`, admin-only): `GET /catalog` fetches **every** configured source and returns the **merged** catalog (deduped by id, earlier sources winning, each source's errors isolated so one bad URL can't hide the rest) annotated with each entry's installed/active/update state (cached in memory for 5 minutes, keyed by the source set — a **local** source's key additionally carries its index file's `mtime`+`size`, so a `npm run build:marketplace` invalidates it immediately); `POST /install` downloads the zip **server-side from the source the entry was listed under** (https-only, size-capped, strict filename shape), verifies its **sha256** against the catalog entry, and hands it to the **same** `installPluginFromZip()` pipeline as a manual upload (zip-bomb budget, Zip Slip/slug validation, manifest + AST security scan) — the marketplace adds no new install surface beyond the catalog fetch itself. **Sources are admin-configurable** via `GET`/`PUT /api/v1/marketplace/sources`, which read/write the `marketplace_sources` option (a JSON list of https catalogs, max 12; each must be https or `http://localhost`); precedence is that list → the legacy single `marketplace_source` option (back-compat) → the repo-local `marketplace/dist/` → the built-in release-assets default. The admin UI is the **Marketplace tab** of `/admin/plugins` (`frontend/src/app/admin/plugins/MarketplaceTab.tsx`); an installed plugin lands **inactive with default-deny grants**, exactly like any other install.
 
 The **same mechanism also distributes first-party themes.** Theme sources live in `marketplace/themes/`; `build-marketplace.js` packs each into `marketplace/dist/theme-<slug>-<version>.zip` and emits a parallel `marketplace/dist/marketplace-themes-index.json` catalog. The backend serves them via a separate theme catalog on `GET /api/v1/marketplace/themes/catalog` and installs through `POST /api/v1/marketplace/themes/install` (the same hardened `installThemeFromZip()` pipeline, browsed from the Marketplace tab of `/admin/themes`). Theme sources are **independently** admin-configurable via `GET`/`PUT /api/v1/marketplace/themes/sources`, which read/write the `marketplace_theme_sources` option — separate from the plugin source list, so themes can point at a different origin than plugins.
 
@@ -392,18 +413,18 @@ Plugin server code marked `"isolated": true` does **not** run in the host proces
 
 The plugin reaches core **only** through the injected `wordjs` capability bridge (`createPluginApi` in `src/core/plugin-api.ts`), whose calls are RPC'd to the host over the IPC channel (v8 structured clone, `serialization: 'advanced'`, so `Buffer`/`Date`/`Map` survive) and **permission-checked on the host** in the plugin's `AsyncLocalStorage` context (`src/core/plugin-context.ts`). The host's heap (secrets, DB handle, other plugins) is unreachable from the child; only a secret-free env allowlist crosses the boundary.
 
-**Exact-method bridge allowlist.** `kind:'call'` IPC messages can reach only an exact allowlist of bridge methods (`options.get/set`, `db.all/get/run/createTable/getType`, `hooks.doAction`, `fs.read/write`, `mail`, `notify`, `adminMenu.add`, `cron.schedule`, plus the safe read-only bridges `users.findByEmail/findByLogin/findById/search` and `site.url/domain/adminEmail`). Registration (hooks/filters, routes, shortcodes, mail provider, notify transport) flows **only** through its own dedicated IPC kinds — never a generic call — so privileged surface like `provideMail` can't be reached past its admin-grant gate.
+**Exact-method bridge allowlist.** `kind:'call'` IPC messages can reach only an exact allowlist of bridge methods (`ALLOWED_BRIDGE_METHODS`: `options.get/set`, `db.all/get/run/batch/createTable/getType`, `hooks.doAction`, `fs.read/write`, `mail`, `notify`, `adminMenu.add`, `cron.schedule`, `crypto.randomToken/randomInt`, `assets.enqueueScript/enqueueStyle`, the host-mediated `dns.resolveMx/resolveTxt/resolve4/resolve6/resolve`, plus the safe read-only bridges `users.findByEmail/findByLogin/findById/search` and `site.url/domain/adminEmail`). Registration (hooks/filters, routes, shortcodes, mail provider, notify transport) flows **only** through its own dedicated IPC kinds — never a generic call — so privileged surface like `provideMail` can't be reached past its admin-grant gate.
 
 **No trust tiers — Android-style per-capability grants (default-deny).** `plugin-trust.ts` was removed: there is no "operator-trusted"/privileged tier and no plugin bypasses the sandbox. **Every** plugin runs in the child process, DB-scoped to its own `wjp_<slug>_` tables with non-secret options only, routes namespaced under `/api/v1/plugin/<slug>`. A plugin's manifest **REQUESTS** capabilities; an admin **GRANTS** each one per plugin in the Plugins UI (`/admin/plugins`), and a bridge capability is allowed only if the manifest requested it **AND** an admin granted it (`src/core/plugin-permissions.ts`, `isGranted`). Grants are stored server-side in the `plugin_grants` option — never self-declarable. No plugin gets raw-HTML hooks (`wordjs_head`/`wordjs_footer`); the host auth JWT cookie (`wordjs_token`) is stripped from forwarded route requests, and dangerous response headers (`Set-Cookie`/CSP/HSTS/`Location`) are stripped from its replies. `fs` read/write is confined to its own directory.
 
-Host-level capabilities each gate on their own grant: becoming the host mail sender (`register-mail-provider`) requires the `email:provider` grant, registering a core notification transport requires `notifications:provider`, and outbound network requires the separate, manifest-independent `network` grant. First-party/bundled plugins are pre-granted their **declared** capabilities via a one-time non-breaking backfill (`backfillActive`) so flipping to default-deny doesn't break a running site — but they are **not** privileged and an admin can revoke. When a plugin's grants change, the child is **hot-reloaded** (`reloadIsolatedPlugin`) so it re-registers routes and re-evaluates host-capability gates (mail/notify providers, network) without a server restart; unload/reload does a full teardown. The former `db-migration` plugin has moved into core at `src/core/db-admin/`.
+Host-level capabilities each gate on their own grant: becoming the host mail sender (`register-mail-provider`) requires the `email:provider` grant, registering a core notification transport requires `notifications:provider`, and outbound network requires the separate, manifest-independent `network` grant. First-party/bundled plugins are pre-granted their **declared** capabilities via a one-time non-breaking backfill (`backfillActive`) so flipping to default-deny doesn't break a running site — but they are **not** privileged and an admin can revoke. When a plugin's grants change, the child is **hot-reloaded** (`reloadIsolatedPlugin`) so it re-registers routes and re-evaluates host-capability gates (mail/notify providers, network) without a server restart; unload/reload does a full teardown. Teardown splices the plugin's Express layers out by **handler identity**, not by the verb they were registered under (`app.all()` expands to every concrete verb and never leaves a `route.methods.all` key, so verb-keyed unmounting silently left `all` routes mounted on a dead child), and `rpcSend` rejects **immediately** when `postMessage` reports the child is gone instead of waiting out the 30 s RPC timeout. The former `db-migration` plugin has moved into core at `src/core/db-admin/`.
 
 #### Defense in depth
 
 - **AST static scanner at install** (`validatePluginPermissions` in `src/core/plugins.ts`, via acorn): flags `eval`/`Function`/`exec`/`spawn`/`fork`, `require()`/`import()` of sensitive builtins (`child_process`/`worker_threads`/`vm`/…), dynamic `import()`, the `.constructor` Function build, and `process`/`global`/`require` aliasing. **Fail-closed** — an unparseable file is treated as a violation and blocked. Beyond this static scan there is an **opt-in runtime block**: `config.sandbox.blockCodeGen` forks the child with `--disallow-code-generation-from-strings`, hard-blocking `eval`/`new Function(string)` at the V8 level. It is **OFF by default** (some plugin deps legitimately use `Function()`) and is never applied under ts-node (dev needs codegen to compile TS).
 - **In-child runtime guards.** `src/core/secure-require.ts` blocks `worker_threads`/`vm`/`module`/`inspector`/`repl`/`test`/`trace_events`/`cluster`/`async_hooks`/`v8`, `process.binding`/`_linkedBinding`/`getBuiltinModule`, native `.node` addons, and (by default) the network modules `net`/`tls`/`dgram`/`http`/`https`/`http2`. `src/core/io-guard.ts` blocks `fs` writes to plugin code and reads of `.env`/secret files **and** the live database files (any `.db`/`.sqlite`/`.sqlite3` file plus `-wal`/`-shm`/`-journal` sidecars, e.g. `data/wordjs.db`); reads are confined to the plugin's **own** directory, so a plugin cannot read a **sibling** plugin's source/data/secrets (any `package.json`/`node_modules` path stays readable so module resolution works, but never inside a sibling plugin's dir — IO-1). These run inside the child too, so the plugin's own `fs`/`child_process` are sandboxed even there.
 - **Egress confinement (network grant → public IPs only).** When an admin grants the `network` permission, the network modules are not opened raw — they are replaced with **egress-guarded** versions (`src/core/egress-guard.ts`) that confine outbound sockets to **public** destinations. It blocks loopback, link-local (incl. `169.254.169.254` cloud-metadata), RFC1918, CGNAT (`100.64/10`), IPv6 ULA/loopback, IPv4-mapped-v6, and multicast/reserved, and **fails closed** on unresolvable/garbage hosts. Validation happens **at connect time** (anti DNS-rebinding) across `net`/`tls`/`http`/`https`/`http2`/`dgram` plus global `fetch`/`WebSocket`; IPC / unix-socket / named-pipe targets (e.g. `/var/run/docker.sock`, the `path` option) are denied. The guard patches **and locks** `net.Socket.prototype.connect` inside the child (non-writable, non-configurable) as the single chokepoint a plugin cannot reassign or un-patch, with TOCTOU-hardened option snapshotting (host/hostname/path read once, validated, then frozen as own data-properties). The `dns` module itself stays available — the connect, not resolution, is the SSRF sink.
-- **DB SQL guard** (`assertSqlAllowed` in `src/core/plugin-api.ts`), applied to every plugin (no trusted bypass): default-deny per-plugin `wjp_<slug>_` prefix attribution; rejects `ATTACH`/`DETACH`/`PRAGMA`, schema catalogs (`sqlite_master`/`information_schema`/`pg_catalog`), stacked statements, comma-joins, the Postgres `USING` clause, and `RETURNING`. Core tables (users/options/roles/sessions/…) are off-limits.
+- **DB SQL guard** (`assertSqlAllowed` in `src/core/plugin-api.ts`), applied to every plugin (no trusted bypass): default-deny per-plugin `wjp_<slug>_` prefix attribution — every table token the statement references, at any depth and via any keyword (including a comma-join or the Postgres `USING` list), must carry the plugin's own prefix. It rejects `ATTACH`/`DETACH`/`PRAGMA`/`VACUUM`, schema catalogs (`sqlite_master`/`information_schema`/`pg_catalog`), file/extension SQL functions, the Postgres `*_to_xml` family (which executes a query smuggled inside a string literal), stacked statements and `RETURNING`. DDL is constrained by a **positive object-class allowlist** — a plugin may only create/alter/drop its own `TABLE`, `INDEX`, `VIEW` or `TRIGGER`; `SCHEMA`/`DATABASE`/`ROLE`/`FUNCTION`/`EXTENSION`/… name no table, so the prefix walk would have passed vacuously and they are denied outright — and an `ALTER … RENAME TO` must land on a prefixed destination. A **data-modifying CTE** (a `WITH` containing `insert`/`update`/`delete`/`replace`/`merge`) is classified as a write and needs `database:write`, not `database:read`. Core tables (users/options/roles/sessions/…) are off-limits.
 - **DoS containment** (in `plugin-isolate.ts`): per-child bridge-call rate (token bucket) + concurrency cap (200 inflight), a global inbound IPC message-rate cap, registration caps (hooks/routes/shortcodes + per-hook + adminMenu), a 30 s RPC timeout that recycles a wedged child, inbound call-arg + outbound reply size caps, and `fs.write` per-write size + per-plugin disk quota.
 
 #### Memory caps (layered, per child)
@@ -580,7 +601,9 @@ wordjs/
 │   │   │   ├── 📁 admin/       # Admin Dashboard
 │   │   │   └── 📁 api/         # API Routes
 │   │   ├── 📁 components/      # React Components
-│   │   │   ├── puckConfig.tsx  # Puck Component Registry
+│   │   │   ├── puckConfig.tsx  # Puck Component Registry (editor-side)
+│   │   │   ├── 📁 content/     # Public block rendering: blocks.tsx (shared markup),
+│   │   │   │                   #   ContentRenderer.tsx (server) + the client islands
 │   │   │   ├── 📁 public/      # Public site components (Header.tsx, Footer.tsx, …)
 │   │   │   └── 📁 admin/       # Admin components (Header.tsx, …)
 │   │   └── 📁 lib/             # Utilities
@@ -588,19 +611,28 @@ wordjs/
 │
 ├── 📁 backend/                  # Express.js Backend (TypeScript, compiled for prod)
 │   ├── 📁 src/                 # All .ts; `npm run build` emits dist/
+│   │   ├── index.ts            # App assembly + initialize() (listens BEFORE plugins load)
+│   │   ├── 📁 config/          # app.ts (config schema/defaults) + database.ts (driver manager)
 │   │   ├── 📁 core/            # Core Modules (incl. db-admin/, plugin-worker.js)
 │   │   ├── 📁 drivers/         # DB driver interface + implementations
-│   │   └── 📁 routes/          # API Routes (incl. marketplace.ts)
+│   │   ├── 📁 middleware/      # auth.ts (authenticate/csrfProtection/mfaComplianceGate),
+│   │   │                       #   permissions.ts (can/canAny/canAll), errorHandler.ts,
+│   │   │                       #   image-negotiation.ts
+│   │   ├── 📁 models/          # Post, User, Term, Comment, Media, Menu, Email,
+│   │   │                       #   Analytics, ApiToken, Webhook, WebhookDelivery, FormSubmission
+│   │   ├── 📁 routes/          # API Routes (incl. marketplace.ts)
+│   │   ├── 📁 types/           # Ambient .d.ts
+│   │   ├── 📁 tests/           # node:test suite (npm test)
+│   │   └── 📁 tests-integration/ # node:test suite (npm run test:integration)
 │   ├── 📁 plugins/             # Installed/bundled plugins (plugin code stays .js)
+│   ├── 📁 cli/                 # wordjs.js CLI + one-off maintenance/debug scripts — see cli.md
 │   ├── 📁 scripts/             # Maintenance scripts (incl. build-marketplace.js)
 │   ├── dist/                   # Compiled output (npm run build) — prod entry
 │   ├── tsconfig.json           # strict typecheck config (commonjs)
 │   ├── tsconfig.build.json     # production build config (emits dist/)
-│   ├── 📁 themes/              # Theme Files
-│   │   ├── 📁 default/
-│   │   ├── 📁 neo-digital/
-│   │   ├── 📁 soft-glass/
-│   │   └── 📁 .../
+│   ├── 📁 themes/              # Runtime theme dir — `default` ships in the repo; every other
+│   │   ├── 📁 default/         #   theme lands here when installed from the marketplace
+│   │   └── 📁 .../             #   (each: theme.json + the compiled style.css)
 │   ├── 📁 public/              # Static Assets
 │   │   └── 📁 css/
 │   │       ├── wordjs-ui.css   # Shared token-driven UI framework (--wjs-*)

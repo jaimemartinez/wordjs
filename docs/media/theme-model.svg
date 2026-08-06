@@ -1,0 +1,127 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 430" role="img"
+     aria-label="The WordJS theme model: theme.json declares seeds, tokens and styles; the compiler emits a generated CSS block of --wjs-* custom properties; the UI framework consumes those tokens to paint every block. A theme ships no hand-written CSS."
+     font-family="'Segoe UI', Helvetica, Arial, sans-serif">
+  <defs>
+    <linearGradient id="tm-bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#171436"/>
+      <stop offset="1" stop-color="#241c56"/>
+    </linearGradient>
+    <linearGradient id="tm-sheen" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.07"/>
+      <stop offset="0.6" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <marker id="tm-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#a5b4fc"/>
+    </marker>
+  </defs>
+
+  <rect width="1200" height="430" rx="24" fill="url(#tm-bg)"/>
+  <rect width="1200" height="430" rx="24" fill="url(#tm-sheen)"/>
+
+  <text x="44" y="52" fill="#ffffff" font-size="25" font-weight="700">A theme is its token contract</text>
+  <text x="44" y="80" fill="#c7d2fe" font-size="15">One declarative source. Everything else is generated.</text>
+
+  <!-- ── 1. theme.json ─────────────────────────────────────────────── -->
+  <g>
+    <rect x="44" y="112" width="290" height="252" rx="16" fill="#0f0c29" stroke="#4c1d95" stroke-width="1.5"/>
+    <rect x="44" y="112" width="290" height="40" rx="16" fill="#312e81"/>
+    <rect x="44" y="138" width="290" height="14" fill="#312e81"/>
+    <text x="66" y="139" fill="#e0e7ff" font-size="14" font-weight="600" font-family="ui-monospace, 'Cascadia Code', Consolas, monospace">theme.json</text>
+    <text x="292" y="139" fill="#a5b4fc" font-size="11">authored</text>
+
+    <text x="66" y="182" fill="#c4b5fd" font-size="12.5" font-family="ui-monospace, Consolas, monospace">"seeds":</text>
+    <text x="150" y="182" fill="#f5d0fe" font-size="12.5" font-family="ui-monospace, Consolas, monospace">4 colours</text>
+    <rect x="240" y="172" width="14" height="14" rx="3" fill="#fbbf24"/>
+    <rect x="258" y="172" width="14" height="14" rx="3" fill="#d97706"/>
+    <rect x="276" y="172" width="14" height="14" rx="3" fill="#181204"/>
+    <rect x="294" y="172" width="14" height="14" rx="3" fill="#fef3c7"/>
+
+    <text x="66" y="214" fill="#c4b5fd" font-size="12.5" font-family="ui-monospace, Consolas, monospace">"tokens":</text>
+    <text x="152" y="214" fill="#e9d5ff" font-size="12.5" font-family="ui-monospace, Consolas, monospace">--wjs-*</text>
+    <text x="66" y="238" fill="#8b8ac7" font-size="11.5" font-family="ui-monospace, Consolas, monospace">--wjs-color-primary</text>
+    <text x="66" y="258" fill="#8b8ac7" font-size="11.5" font-family="ui-monospace, Consolas, monospace">--wjs-heading-transform</text>
+    <text x="66" y="278" fill="#8b8ac7" font-size="11.5" font-family="ui-monospace, Consolas, monospace">--wjs-radius, …</text>
+
+    <text x="66" y="310" fill="#c4b5fd" font-size="12.5" font-family="ui-monospace, Consolas, monospace">"styles":</text>
+    <text x="150" y="310" fill="#e9d5ff" font-size="12.5" font-family="ui-monospace, Consolas, monospace">body · headings · links</text>
+    <text x="66" y="336" fill="#c4b5fd" font-size="12.5" font-family="ui-monospace, Consolas, monospace">"layout":</text>
+    <text x="150" y="336" fill="#e9d5ff" font-size="12.5" font-family="ui-monospace, Consolas, monospace">structure</text>
+  </g>
+
+  <!-- ── arrow 1: the compiler ─────────────────────────────────────── -->
+  <g>
+    <line x1="348" y1="238" x2="424" y2="238" stroke="#a5b4fc" stroke-width="2.5" marker-end="url(#tm-arrow)"/>
+    <text x="386" y="222" fill="#c7d2fe" font-size="11.5" text-anchor="middle" font-family="ui-monospace, Consolas, monospace">build theme</text>
+    <circle r="4.5" fill="#f0abfc">
+      <animateMotion dur="2.6s" repeatCount="indefinite" path="M348,238 L418,238"/>
+      <animate attributeName="opacity" values="0;1;1;0" dur="2.6s" repeatCount="indefinite"/>
+    </circle>
+  </g>
+
+  <!-- ── 2. generated style.css ────────────────────────────────────── -->
+  <g>
+    <rect x="438" y="112" width="304" height="252" rx="16" fill="#0f0c29" stroke="#4c1d95" stroke-width="1.5"/>
+    <rect x="438" y="112" width="304" height="40" rx="16" fill="#312e81"/>
+    <rect x="438" y="138" width="304" height="14" fill="#312e81"/>
+    <text x="460" y="139" fill="#e0e7ff" font-size="14" font-weight="600" font-family="ui-monospace, Consolas, monospace">style.css</text>
+    <text x="686" y="139" fill="#a5b4fc" font-size="11" text-anchor="end">generated</text>
+
+    <rect x="458" y="168" width="264" height="176" rx="10" fill="#1e1b4b" stroke="#6d28d9" stroke-width="1.5" stroke-dasharray="5 4">
+      <animate attributeName="stroke-opacity" values="0.45;1;0.45" dur="2.6s" repeatCount="indefinite"/>
+    </rect>
+    <text x="470" y="190" fill="#a78bfa" font-size="10.5" font-family="ui-monospace, Consolas, monospace">/* @wjs-generated:start */</text>
+    <text x="470" y="216" fill="#e9d5ff" font-size="11.5" font-family="ui-monospace, Consolas, monospace">:root {</text>
+    <text x="482" y="238" fill="#8b8ac7" font-size="11" font-family="ui-monospace, Consolas, monospace">--wjs-color-primary: #fbbf24;</text>
+    <text x="482" y="258" fill="#8b8ac7" font-size="11" font-family="ui-monospace, Consolas, monospace">--wjs-heading-transform: …</text>
+    <text x="482" y="278" fill="#8b8ac7" font-size="11" font-family="ui-monospace, Consolas, monospace">--wjs-radius: 4px;</text>
+    <text x="470" y="300" fill="#e9d5ff" font-size="11.5" font-family="ui-monospace, Consolas, monospace">}</text>
+    <text x="470" y="330" fill="#a78bfa" font-size="10.5" font-family="ui-monospace, Consolas, monospace">/* @wjs-generated:end */</text>
+  </g>
+
+  <!-- ── arrow 2: consumed ─────────────────────────────────────────── -->
+  <g>
+    <line x1="756" y1="238" x2="832" y2="238" stroke="#a5b4fc" stroke-width="2.5" marker-end="url(#tm-arrow)"/>
+    <text x="794" y="222" fill="#c7d2fe" font-size="11.5" text-anchor="middle">var()</text>
+    <circle r="4.5" fill="#f0abfc">
+      <animateMotion dur="2.6s" begin="0.7s" repeatCount="indefinite" path="M756,238 L826,238"/>
+      <animate attributeName="opacity" values="0;1;1;0" dur="2.6s" begin="0.7s" repeatCount="indefinite"/>
+    </circle>
+  </g>
+
+  <!-- ── 3. the framework paints every block ───────────────────────── -->
+  <g>
+    <rect x="846" y="112" width="310" height="252" rx="16" fill="#0f0c29" stroke="#4c1d95" stroke-width="1.5"/>
+    <rect x="846" y="112" width="310" height="40" rx="16" fill="#312e81"/>
+    <rect x="846" y="138" width="310" height="14" fill="#312e81"/>
+    <text x="868" y="139" fill="#e0e7ff" font-size="14" font-weight="600" font-family="ui-monospace, Consolas, monospace">wordjs-ui.css</text>
+    <text x="1100" y="139" fill="#a5b4fc" font-size="11" text-anchor="end">framework</text>
+
+    <text x="868" y="176" fill="#c7d2fe" font-size="11.5">Every block reads the tokens</text>
+
+    <!-- mini rendered page -->
+    <rect x="868" y="190" width="266" height="154" rx="10" fill="#181204" stroke="#3f3a24"/>
+    <rect x="884" y="206" width="118" height="13" rx="3" fill="#fbbf24"/>
+    <rect x="884" y="228" width="234" height="7" rx="3" fill="#6b6350"/>
+    <rect x="884" y="242" width="206" height="7" rx="3" fill="#6b6350"/>
+    <rect x="884" y="266" width="74" height="52" rx="5" fill="#262013" stroke="#413b27"/>
+    <rect x="964" y="266" width="74" height="52" rx="5" fill="#262013" stroke="#413b27"/>
+    <rect x="1044" y="266" width="74" height="52" rx="5" fill="#262013" stroke="#413b27"/>
+    <rect x="884" y="266" width="74" height="4" rx="2" fill="#fbbf24">
+      <animate attributeName="opacity" values="0.25;1;0.25" dur="2.6s" begin="1.3s" repeatCount="indefinite"/>
+    </rect>
+    <rect x="964" y="266" width="74" height="4" rx="2" fill="#fbbf24">
+      <animate attributeName="opacity" values="0.25;1;0.25" dur="2.6s" begin="1.45s" repeatCount="indefinite"/>
+    </rect>
+    <rect x="1044" y="266" width="74" height="4" rx="2" fill="#fbbf24">
+      <animate attributeName="opacity" values="0.25;1;0.25" dur="2.6s" begin="1.6s" repeatCount="indefinite"/>
+    </rect>
+  </g>
+
+  <!-- ── footer note ───────────────────────────────────────────────── -->
+  <g>
+    <rect x="44" y="382" width="1112" height="30" rx="8" fill="#3b1259" fill-opacity="0.55"/>
+    <text x="64" y="402" fill="#f5d0fe" font-size="12.5">
+      A theme ships <tspan font-weight="700">no hand-written CSS</tspan>. Change a value in theme.json, recompile — nothing else edits the stylesheet.
+    </text>
+  </g>
+</svg>

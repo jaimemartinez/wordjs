@@ -112,14 +112,14 @@ token. These 21 are flagged `"alias"` in the manifest (see below).
 
 ### Per-block tokens (~600 more — see the manifest)
 
-The tables above are only the **core** tokens. Most of the framework's **738** tokens style
+The tables above are only the **core** tokens. Most of the framework's **753** tokens style
 individual visual-editor blocks (`--wjs-<block>-*`); they are documented exhaustively in the
 machine-readable manifest (next section), not here. Real group sizes, read from the manifest:
 `cta` 55 · `pricing` 49 · `card` 40 · `accordion` 38 · `form` 37 · `hero` 37 · `audio` 34 ·
 `tabs` 29 · `testimonial` 29 · `search` 26 · `button` 25 · `catposts` 24 · `stats` 22 ·
 `posts` 20 · `video` 20 · `heading` 14 · `table` 13 · `icon` 12 · `quote` 12 · `social` 8 ·
 `divider` 6 — plus smaller layout/shape groups (`columns`, `col`, `flex`, `grid`, `section`,
-`image`, `spacer`, …), 71 groups in total (a token's group is the first segment of its name).
+`image`, `spacer`, …), 73 groups in total (a token's group is the first segment of its name).
 
 ### Editor-internal tokens (`--wjs-r-*`) — never set these in a theme
 
@@ -136,6 +136,15 @@ Four tokens are read only by the React chrome (via Tailwind arbitrary values), s
 `--wjs-color-text-footer-dim`, `--wjs-bg-surface-glass`. They are force-included in the manifest
 with the `"chrome-phantom"` flag; themes **may** set them (footer surface/text colors, translucent
 header surface) even though a CSS-only audit would report them unused.
+
+Separately, `wordjs-ui.css` *does* style the chrome hook classes from an opt-in family that has no
+`:root` default (every use is a `var()` fallback chain, so a theme that sets none keeps today's
+look): 9 `--wjs-nav-*` (`.wjs-header-nav`/`.wjs-chrome-nav`/`.wjs-footer-nav` — font family, size,
+weight, transform, letter-spacing, color, hover color, hover decoration, transition), 2
+`--wjs-logo-*` (`--wjs-logo-color`, `--wjs-logo-color-hover` on `.wjs-header-logo`) and 7
+`--wjs-footer-*` (`-bg`, `-text-heading`, `-text-body`, `-text-hover`, `-icon-bg`, `-icon-color`,
+`-icon-hover-bg`). `--wjs-footer-bg`/`-text-body`/`-text-heading` are also the bridge the
+`chrome-phantom` tokens above read through, which is what makes the theme convention apply.
 
 ### Minimal theme example
 
@@ -156,22 +165,23 @@ header surface) even though a CSS-only audit would report them unused.
 A token block like the one above re-skins everything **the framework owns**: the auto-styled HTML
 elements, the components and utilities below, `.wjs-content` long-form rules, and the visual-editor
 `.wp-block-*` blocks. The public React chrome (header, footer, blog roll) reads the core tokens
-too. That makes tokens a real starting point — but no first-party theme is tokens-only:
+too. Tokens are now the normal way to build a theme — **44 of the 64** marketplace themes are
+tokens-only, their whole `style.css` being a `fonts.css` `@import` plus a compiled `:root` block:
 
 - **Covered by tokens** — everything styled through `wordjs-ui.css`, i.e. content HTML, components,
   utilities and the editor blocks, plus the chrome colors/typography listed above.
-- **Still the theme's own CSS** — a distinctive chrome (header/nav/footer layout and decorations),
-  hero/section flourishes, narrow-viewport header-fit rules, and any look the 738 tokens don't
-  parameterize. In practice first-party `style.css` files run ~95–525 lines, with `:root` blocks
-  declaring anywhere from 17 to 270 tokens (the bundled **default** declares 75 tokens in a
-  ~400-line stylesheet).
+- **Beyond tokens** — 10 more themes add compiled `styles` declarations (element/child/state/
+  breakpoint rules, still generated from `theme.json`), and 10 ship hand-written CSS *outside* the
+  generated block for a distinctive chrome (they target the `.wjs-chrome-*` hook classes). In
+  practice first-party `style.css` files run 269–465 lines with 260–325 `--wjs-*` declarations; the
+  hand-authored bundled **default** declares 75 tokens in a 397-line stylesheet.
 
 The complete machine-readable contract is `backend/public/theme-tokens.json` (next section).
 
 ## The machine-readable contract (`theme-tokens.json`)
 
 `backend/public/theme-tokens.json` is the generated, complete token contract — the source of truth
-whenever this document and the CSS disagree. Current counts: **738 tokens**, **1691 `var()` uses**,
+whenever this document and the CSS disagree. Current counts: **753 tokens**, **1724 `var()` uses**,
 **33 element entries**. For every token it records:
 
 - `group` — first segment of the name (`hero`, `cta`, `color`, `radius`, …);

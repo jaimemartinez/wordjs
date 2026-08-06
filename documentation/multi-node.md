@@ -42,7 +42,7 @@ diverge. (A single-replica-per-role split across machines needs none of them —
 | Requirement | Why | How |
 |---|---|---|
 | **External PostgreSQL** | SQLite is a single-host file; every node must share one database. | Set `dbDriver: "postgres"` + `db: { host, port, user, password, name }` in `wordjs-config.json` and point every node at the SAME server. |
-| **Shared Redis** | Cross-node cache coherence, shared rate limiting, and realtime (SSE) fan-out. | Set `redis: { "enabled": true, host, port, password }` identically on every node, all pointing at ONE Redis. |
+| **Shared Redis** | Cross-node cache coherence, shared rate limiting, and realtime (SSE) fan-out. | Set `redis: { "enabled": true, host, port, password }` identically on every node, all pointing at ONE Redis. (`db` selects the Redis database index; it defaults to `0`.) |
 | **Shared filesystem** | Uploads, themes, plugins, backups, ACME challenge files and certs are written to local disk. | Mount shared storage (NFS / EFS / SMB) at the backend's `uploads/`, `themes/`, `plugins/`, `backups/`, `public/` and `ssl/` directories on every node (see below). |
 
 ### Shared filesystem mount points
@@ -84,11 +84,18 @@ Each backend registers `https://<advertiseHost>:<port>` with the gateway; the ga
 registered backends in its route group and round-robins across them. (`advertiseHost` defaults to
 `127.0.0.1`, which is correct only when the gateway and backend are co-located.)
 
+> ⚠️ **Set the database password as the flat `dbPassword` key, not only inside `db`.** The config
+> normalizer resolves it as `dbPassword || db.password`, and on boot it **generates and persists a
+> random `dbPassword`** whenever that flat key is missing — which would then shadow the `db.password`
+> shown above and break every replica's connection to the shared Postgres. Add
+> `"dbPassword": "…"` alongside the `db` block (or set both to the same value) on every node. See
+> [database.md §1.6](database.md#16-configuration).
+
 > The `advertiseHost` / `gatewayHost` / `gatewaySecret` / mTLS-cert plumbing per node is written for you
 > by `scripts/node-join.js` when you enroll each node with a join token (**[separate-mode.md](separate-mode.md)**).
-> For an N-replica role, run `cluster.js token <role>` + `node-join` once **per replica** (each with its
-> own `--advertise`), then layer the shared Postgres/Redis and `jwtSecret` from this guide onto every
-> replica's `wordjs-config.json`.
+> For an N-replica role, run `node scripts/cluster.js token <backend|frontend>` + `node-join` once **per
+> replica** (each with its own `--advertise`), then layer the shared Postgres/Redis and `jwtSecret` from
+> this guide onto every replica's `wordjs-config.json`.
 
 ## How coordination works (automatic)
 
@@ -100,6 +107,10 @@ registered backends in its route group and round-robins across them. (`advertise
   This is what keeps Let's Encrypt renewal from firing N concurrent orders.
 - **Role/permission edits** — propagated across nodes over Redis (`wordjs:option-changed`), so a
   capability change on one node is reflected everywhere without a restart.
+- **In-process (L1) cache invalidation** — every node keeps a small in-process cache in front of
+  Redis, so a write must drop it on the *peers* too: `cache.del()`/`cache.flush()` broadcast the key
+  (or `'*'`) on `wordjs:cache-del` and each node evicts its own L1. When Redis is configured, L1
+  entries additionally self-expire within **30s** as the bound on any missed broadcast.
 - **Plugin activate/deactivate** — the handling node writes the active set under the
   `wordjs:active-plugins` lock and publishes `wordjs:plugin-changed`; every other node loads/unloads
   that one isolated plugin **live** (forked child + routes/hooks/menus) via `coherence.ts` →
@@ -113,6 +124,11 @@ registered backends in its route group and round-robins across them. (`advertise
 
 The lease locks are DB-clock based (immune to node clock skew) and auto-expire, so a crashed node never
 deadlocks the cluster.
+
+> All of the pub/sub above is gated on Redis being **configured**, independently of the admin's object-cache
+> master switch (the `redis_cache_enabled` option). Turning the object cache off disables the Redis
+> *caching* tier only — coherence, plugin propagation, SSE fan-out and the shared rate-limit store
+> keep working, because a cluster must stay coherent whether or not it is caching.
 
 ## TLS / ACME (one gateway)
 
@@ -155,8 +171,8 @@ Point your L4/L7 load balancer at the gateway. Health probes (added for orchestr
   local-write epoch stops a stale background TTL refresh from clobbering a just-applied local edit.
   But there is no **cross-node** epoch: if Redis drops a publish, a lagging replica corrects itself
   only via the in-process roles-cache TTL self-heal fallback — a missed cross-node revocation is
-  bounded by the TTL (the fail-open direction), not corrected instantly. Strengthening this into a
-  cross-node coherence epoch is on the roadmap.
+  bounded by that TTL (`ROLES_CACHE_TTL_MS`, **10s**, in `core/roles.ts`), the fail-open direction,
+  not corrected instantly. Strengthening this into a cross-node coherence epoch is on the roadmap.
 - **Residual multi-node lost-update edges.** The `active_plugins` read-modify-write **is** serialized
   across nodes (best-effort, under the `wordjs:active-plugins` distributed lock), but general
   concurrent option/row writes across nodes are not yet fully guarded against lost updates.

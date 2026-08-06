@@ -2,15 +2,23 @@
 
 WordJS uses a **CSS Variable-based theming system** that allows complete visual customization without code changes.
 
+<div align="center">
+
+<img src="../docs/media/theme-model.svg" alt="theme.json declares seeds, tokens and styles; the compiler emits the generated --wjs-* block in style.css; the UI framework consumes those tokens to paint every block" width="900">
+
+</div>
+
 ## Theme Structure
 
-Each theme is located in `backend/themes/{theme-slug}/`. A theme can be as simple as a single `style.css`, or include the full server-side template set:
+Each theme is located in `backend/themes/{theme-slug}/`. **`theme.json` is the source of truth**: it
+declares the theme's tokens, and `style.css` is compiled from it (see *Declarative themes* below).
+The stylesheet is generated output — a theme does not ship hand-written CSS.
 
 ```
 themes/
 ├── my-theme/
-│   ├── style.css         # Main stylesheet (the file the Next.js frontend loads)
-│   ├── theme.json        # Optional: Theme metadata (name, version, description, author) + a `layout` block
+│   ├── style.css         # Generated from theme.json (the file the Next.js frontend loads)
+│   ├── theme.json        # The theme: generator, seeds, tokens, styles, layout + metadata
 │   ├── functions.js      # Optional: Theme logic/hooks, loaded by the backend theme engine
 │   ├── templates/        # Optional: Handlebars page templates (index.html, single.html, archive.html)
 │   ├── partials/         # Optional: Shared Handlebars partials (header.html, footer.html)
@@ -55,9 +63,11 @@ themes/
 
 ## Available Themes
 
-WordJS offers **65 first-party themes**. Only **default** (WordJS) ships bundled in
+WordJS offers **65 catalog themes**. Only **default** (WordJS) ships bundled in
 `backend/themes/`; the other 64 (`marketplace/themes/`) install on demand through the **theme
-marketplace** (see *Installing a Theme* below). A representative selection:
+marketplace** (see *Installing a Theme* below). (`backend/themes/herbario` is also committed —
+the reference theme built by `import stitch` / checked by `verify theme`; it is not in the
+marketplace catalog.) A representative selection:
 
 | Theme               | Aesthetic          | Key Features                                |
 | ------------------- | ------------------ | ------------------------------------------- |
@@ -76,9 +86,10 @@ marketplace** (see *Installing a Theme* below). A representative selection:
 | **sepia-press**     | Editorial Magazine | Serif headlines on warm paper               |
 
 > **`--wjs-` variable adoption.** All first-party themes ship the `--wjs-*` token set documented in
-> [`theming.md`](./theming.md) — from compact token-first themes (17 declarations in `artisan-craft`)
-> up to heavily parameterized ones (270 in `paper-press`; `carbon-terminal` declares 172, the bundled
-> `default` 75) —
+> [`theming.md`](./theming.md) — every marketplace theme now compiles its whole `:root` from
+> `theme.json`, declaring **260** (`artisan-craft`, `apex-enterprise`) to **325** (`sunset-drive`)
+> tokens (`paper-press` 281, `carbon-terminal` 316); the hand-authored bundled `default` declares
+> **75** —
 > including the `--wjs-color-on-*` contrast set. The **default** theme's `:root` is entirely
 > `--wjs-*` (no older bare `--primary`/`--text` aliases remain). Copy any theme as a starting point.
 
@@ -296,8 +307,8 @@ nothing when empty, and `switchTheme()` resets it, so changing themes starts fro
 The narrative reference (core tables, alias/editor-internal rules, per-block groups) lives in
 [`theming.md`](./theming.md); the **complete machine-readable contract** is
 `backend/public/theme-tokens.json`, regenerated from `wordjs-ui.css` with
-`node scripts/generate-token-manifest.js`. The manifest currently tracks **738 tokens** and
-**1691 `var()` uses** across 71 name groups — mostly per-block groups such as `cta` (55),
+`node scripts/generate-token-manifest.js`. The manifest currently tracks **753 tokens** and
+**1724 `var()` uses** across 73 name groups — mostly per-block groups such as `cta` (55),
 `pricing` (49), `card` (40), `accordion` (38), `form` (37), `hero` (37), `audio` (34), `tabs` and
 `testimonial` (29 each), `search` (26), `button` (25).
 
@@ -326,8 +337,14 @@ The narrative reference (core tables, alias/editor-internal rules, per-block gro
 ### Chrome (header/footer) tokens
 
 The React chrome reads the **canonical** tokens (`--wjs-bg-surface`, `--wjs-color-heading`,
-`--wjs-color-primary`, `--wjs-color-text-muted`, …) — there are no separate
-`--wjs-nav-*`/`--wjs-logo-*` tokens. Four tokens are consumed *only* by the React chrome (no CSS
+`--wjs-color-primary`, `--wjs-color-text-muted`, …). On top of those, `wordjs-ui.css` styles the
+chrome hook classes (`.wjs-header-nav`, `.wjs-header-logo`, `.wjs-footer-*`, `.wjs-chrome-*`) from a
+dedicated, opt-in family — 9 `--wjs-nav-*` (family/size/weight/transform/letter-spacing/color/
+hover color/hover decoration/transition), 2 `--wjs-logo-*` (`-color`, `-color-hover`) and 7
+`--wjs-footer-*` (`-bg`, `-text-heading`, `-text-body`, `-text-hover`, `-icon-bg`, `-icon-color`,
+`-icon-hover-bg`). All are in the manifest, and every one is declared **only** as a `var()` fallback
+chain (no `:root` default), so a theme that sets none keeps today's look. Four further tokens are
+consumed *only* by the React chrome (no CSS
 rule in `wordjs-ui.css` references them) and carry the `chrome-phantom` flag in the manifest:
 `--wjs-bg-footer`, `--wjs-color-text-footer-main`, `--wjs-color-text-footer-dim`,
 `--wjs-bg-surface-glass`. Themes may set them (footer surface/text, translucent header surface)
@@ -499,17 +516,27 @@ generator uses: `--wjs-bg-canvas`, `--wjs-bg-surface`, `--wjs-bg-surface-raised`
 Surfaces mix toward white on dark canvases (luminance of `bg` < 0.35) and toward black on light
 ones; the `on-*` colors are picked for contrast against their base color.
 
-### `archetype` — personality preset
+### `archetype` — personality label
 
 ```json
 "archetype": "cyber"
 ```
 
-One of `cyber`, `brutalist`, `editorial`, `glassmorphism`, `organic`, `obsidian`. Appends the
-preset's CSS (interpolating your seeds) inside the generated block. Presets contain **no external
-`@import`** — font stacks lead with the intended family and fall back to system fonts; the
-compiler additionally strips any `@import` structurally. An unknown name is an error with a
+One of `cyber`, `brutalist`, `editorial`, `glassmorphism`, `organic`, `obsidian` (the list is
+`ARCHETYPE_NAMES` in `backend/src/core/theme-derive.ts`). An unknown name is an error with a
 closest-match suggestion.
+
+> **It emits no CSS.** The field is validated **metadata** only — a grouping label for the
+> catalogue and the CLI's `--archetype` flag. It used to append a preset stylesheet
+> (`.theme-container`, `.theme-hero`, `.theme-card-grid`, `.theme-card`, `.theme-badge`,
+> `button.theme-btn`, plus bare `body` and `h1, h2, h3` rules) to every compiled block; that is
+> the **legacy theme model and it is retired** (`backend/src/core/theme-compile.ts`, the
+> `archetype` section). The `.theme-*` classes were demo markup nothing in the CMS renders, and
+> the `body`/`h1,h2,h3` rules duplicated what `wordjs-ui.css` already sets from
+> `--wjs-font-family-base` / `--wjs-color-text-main` / `--wjs-bg-canvas` /
+> `--wjs-font-family-heading` / `--wjs-color-heading`. A theme's look now comes from the
+> `--wjs-*` token contract alone. `archetype` never fed a token either: `deriveTokens()` reads
+> the four seeds and nothing else, so no palette depends on it.
 
 ### `tokens` — explicit token overrides
 
@@ -518,7 +545,7 @@ closest-match suggestion.
 ```
 
 A flat map. The name must exist in the token manifest (`backend/public/theme-tokens.json`,
-738 tokens) — or be one of the documented `--wjs-footer-*` chrome-bridge tokens, which are valid
+753 tokens) — or be one of the documented `--wjs-footer-*` chrome-bridge tokens, which are valid
 even before the manifest learns them. Editor-internal `--wjs-r-*` tokens are rejected. Values
 follow the portable token rules: non-empty, ≤ 120 chars, charset `#a-zA-Z0-9 ,.%()/_'"-`
 (spaces allowed), no backslash, no `//`, no `url()`, and every parenthesis and quote **balanced**.
@@ -685,8 +712,7 @@ never be confused with the doctor's own).
 | `MANIFEST_MISSING` | `backend/public/theme-tokens.json` is missing or unreadable — there is no contract to resolve tokens/elements against. |
 | `SEEDS_INVALID` / `SEED_INVALID` | `seeds` is not an object / a seed is not a strict `#rrggbb`. |
 | `SEEDS_INCOMPLETE` | `seeds` is present but missing one or more of `primary`, `secondary`, `bg`, `text`. All four are required: the derivation reads them unconditionally, and a partial map used to surface as a raw `TypeError` under `DERIVE_FAILED`. The message names what is missing. |
-| `ARCHETYPE_UNKNOWN` | Not one of the archetype names (with a did-you-mean). |
-| `ARCHETYPE_NEEDS_SEEDS` | A valid `archetype` without all four seeds. The presets interpolate the seeds into their CSS by template literal, so a missing one reaches the stylesheet as the literal text `undefined` — a value that parses, compiles with zero diagnostics and silently breaks whatever it feeds. |
+| `ARCHETYPE_UNKNOWN` | Not one of the archetype names (with a did-you-mean). It is the *only* archetype diagnostic left: the field is a validated label and emits nothing, so it has no relationship to `seeds` any more. |
 | `DERIVE_UNAVAILABLE` / `DERIVE_FAILED` | `core/theme-derive` could not be loaded, or it threw / returned a non-map. |
 | `TOKENS_INVALID` / `TOKEN_NAME_INVALID` / `TOKEN_UNKNOWN` / `TOKEN_EDITOR_INTERNAL` | The `tokens` map, a token name, a name absent from the manifest (and not a `--wjs-footer-*` bridge token), or an editor-internal `--wjs-r-*`. |
 | `TOKEN_VALUE_INVALID` | A token value breaks the portable rules above (charset, length, `//`, `url()`, backslash, unbalanced parenthesis/quote) — including a `styles` key that resolves to a token. |
@@ -700,7 +726,6 @@ never be confused with the doctor's own).
 | --- | --- |
 | `TOKEN_VALUE_GRAMMAR` | The value matches no consuming property's grammar (see the section above, including why coverage is partial). |
 | `DERIVED_TOKEN_INVALID` | A token coming back from `deriveTokens()` has an invalid name or value; that one token is skipped. |
-| `ARCHETYPE_IMPORT_STRIPPED` | The preset CSS contained an `@import`; it is removed structurally. |
 
 **Doctor-only findings** (`doctor theme <slug>` / `GET /api/v1/themes/:slug/doctor`) — everything
 above still shows up here as `DECLARATIVE_*`:
@@ -786,14 +811,15 @@ unpack via `installThemeFromZip()`), both admin-gated. The catalog origin is adm
 independent of the plugin marketplace via `GET`/`PUT /marketplace/themes/sources` (backed by the
 `marketplace_theme_sources` option).
 
-> **The first-party catalog is migrating to the declarative format.** **40 of the 64**
-> marketplace themes ship it today: a `theme.json` with `generator: "wordjs"` plus `seeds` and
-> `archetype`, and a `style.css` whose manual section (header + font `@import`s) sits above the
-> compiled `@wjs-generated` block. The remaining 24 (`neo-digital`, `carbon-terminal`,
-> `paper-press`, …) are still hand-authored, as is the bundled `default`. New marketplace themes
-> must follow the declarative `theme.json` contract; hand-authored themes keep working everywhere
-> else, but the doctor flags them with an informational `LEGACY_THEME` finding to encourage
-> migration.
+> **The first-party catalog is fully declarative.** All **64** marketplace themes ship a
+> `theme.json` with `generator: "wordjs"` plus `seeds`, `tokens` and `styles`, and a `style.css`
+> that is a relative `@import url('fonts.css');` followed by the compiled `@wjs-generated` block —
+> 260–325 tokens each. None of them declares an `archetype`. Ten (`carbon-terminal`, `clay-pop`,
+> `cobalt-corporate`, `mono-lab`, `neo-digital`, …) add hand-written chrome CSS **below** the
+> generated block, targeting the `.wjs-chrome-*` hook classes. The bundled `default` is the one
+> hand-authored first-party theme. New marketplace themes must follow the declarative
+> `theme.json` contract; hand-authored themes keep working everywhere else, but the doctor flags
+> them with an informational `LEGACY_THEME` finding to encourage migration.
 
 ### From a ZIP upload
 

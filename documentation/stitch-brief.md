@@ -5,7 +5,7 @@ Paste the two blocks below into Stitch: the **design system** fields first, then
 prompt**. They are generated from the live contract, so what comes back maps onto a theme
 without leftovers — every component listed is one WordJS styles, and nothing else is asked for.
 
-Contract at time of generation: **738 tokens**, **33 styleable elements**, source `backend/public/css/wordjs-ui.css`.
+Contract at time of generation: **753 tokens**, **33 styleable elements**, source `backend/public/css/wordjs-ui.css`.
 
 ## 1. Design system
 
