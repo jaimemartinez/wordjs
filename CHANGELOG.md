@@ -6,10 +6,12 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [1.14.0] - 2026-08-06
 
-A security audit, and the theme system becomes what it always claimed to be: a theme is its token
-contract and nothing else. The minor bump carries **two breaking changes to themes** — a custom theme
-must be recompiled, and one that relied on the archetype preset stylesheet must move those values into
-its tokens.
+A security audit, and the theme system moves decisively onto its token contract: `theme.json` is the
+theme, and `style.css` is compiled from it. 54 of the 64 catalogue themes are now pure generated output
+(the other 10 keep a little hand-written CSS for chrome decoration, which the compiler preserves
+untouched outside its markers). The minor bump carries **two breaking changes to themes** — a custom
+theme must be recompiled, and one that relied on the archetype preset stylesheet must move those values
+into its tokens.
 
 ### Security
 

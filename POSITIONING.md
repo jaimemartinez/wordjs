@@ -43,9 +43,10 @@ defense-in-depth *inside* that process. We still don't oversell — the remainin
   exposed, and routes are *always* namespaced under `/api/v1/plugin/<slug>`. Grantable
   capabilities include `database`, `settings`, `filesystem`, **`users:read`** (a safe user
   projection — never `user_pass`), **`email:provider`**, **`notifications:provider`**, and
-  **`network`** (outbound access, opt-in with an exfiltration warning). First-party plugins are
-  **pre-granted** their declared capabilities for a working out-of-box experience, but they are
-  **not privileged** — same sandbox, same grant checks. Shell/`child_process`, native addons,
+  **`network`** (outbound access, opt-in with an exfiltration warning). The grant is an admin act:
+  `POST /plugins/:slug/activate` shows the requested capabilities and grants exactly the declared set,
+  and only while the plugin holds no grant record — so a per-permission revoke survives a
+  re-activation. First-party plugins get no extra privilege — same sandbox, same grant checks. Shell/`child_process`, native addons,
   AST-scan skip, raw cookie/header control, raw-HTML hooks, unscoped/core-table DB, and
   secret-named options were **removed** — no plugin can be granted them.
 - **Themes are contained too.** A theme's optional server-side `functions.js` now runs in the
@@ -61,8 +62,8 @@ defense-in-depth *inside* that process. We still don't oversell — the remainin
   undeclared capabilities vs. the manifest. **Fail-closed**: an unparseable source file is a
   violation. The scan runs on **every** plugin — there is no scan-skip for any plugin. (Runtime
   code generation can additionally be hard-disabled at the engine level via
-  `--disallow-code-generation-from-strings` — opt-in through `config.sandbox.blockCodeGen`, OFF by
-  default since some plugin deps legitimately use `Function()`, and never applied under `ts-node`.)
+  `--disallow-code-generation-from-strings` — `config.sandbox.blockCodeGen`, DEFAULT-ON / opt-out via
+  `=false` for a plugin whose deps legitimately need `Function()`, and never applied under `ts-node`.)
 - **Network egress trap** (`plugin-worker.js`): the binding-backed globals `fetch` /
   `WebSocket` / `EventSource` are trapped to throw, and raw socket modules
   (`net` / `tls` / `dns` / `http` / `https` / …) are denied by `secure-require`, **unless** the
@@ -247,7 +248,7 @@ enlarges the trust surface:
 
 - **Mail / MTA → optional add-on.** The mail-server runs an inbound SMTP listener (configurable
   `smtp_listen_port`, default 25) + outbound MX delivery on port 25 + DKIM. With the trust tier gone, it ships as a normal sandboxed first-party
-  plugin pre-granted the capabilities it declares (`network` for SMTP/MX, `email:provider`).
+  plugin, granted at activation exactly the capabilities it declares (`network` for SMTP/MX, `email:provider`).
   It should ship as an **optional add-on**, not a core dependency: direct-MX deliverability is
   an ops liability most users don't want in core, and a high-capability plugin enlarges the
   capability surface even though it stays sandboxed.

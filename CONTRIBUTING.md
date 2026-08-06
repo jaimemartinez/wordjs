@@ -45,8 +45,10 @@ the [Separate-mode guide](documentation/separate-mode.md).
 
 ## Before you push
 
-CI runs three gates — **Backend (typecheck + test)**, **Frontend (lint + build)**, and
-**Gateway (test)**. Run the equivalent locally so review is about the change, not a red check:
+CI runs four gates — **Backend (typecheck + test)**, **Frontend (lint + build)**, **Gateway (test)**,
+and **Compiled bundle smoke-boot** (builds the real release ZIP and deploys it in mono, split and
+enrollment mode via `scripts/smoke-deploy.sh`). Run the equivalent locally so review is about the
+change, not a red check:
 
 ```bash
 # Backend
@@ -69,8 +71,8 @@ CI also runs a few gates that usually don't need a local equivalent: `npm audit`
 high/critical prod vulns in each service), a license check (`license-checker --production`, blocks
 AGPL/SSPL), backend **integration tests** (`npm run test:integration`, against real Postgres + Redis
 service containers), and a **marketplace catalog integrity** check — if you touch anything under
-`marketplace/plugins/`, rebuild the catalog with `npm run build:marketplace` from the repo root so it
-stays consistent. `marketplace/dist/` is a **gitignored build output** (not committed) that the
+`marketplace/plugins/` or `marketplace/themes/`, rebuild the catalog with `npm run build:marketplace`
+from the repo root (and re-check it with `npm run verify:marketplace`) so it stays consistent. `marketplace/dist/` is a **gitignored build output** (not committed) that the
 release workflow republishes as GitHub Release assets — don't try to commit it.
 
 A green local run isn't a guarantee CI passes (Linux vs. your OS can differ), but it catches the
@@ -83,8 +85,11 @@ common cases.
 A few conventions keep the project coherent and reviewable:
 
 - **Don't edit core to customize a site.** WordJS is built to be extended, not forked:
-  - **Themes** style the site through their own `style.css` targeting the existing `.wjs-*` hooks and
-    `--wjs-*` tokens — copy an existing theme (e.g. `default/` or `midnight-luxury/`) for the pattern.
+  - **Themes** are a declarative token contract: `theme.json` (generator / seeds / tokens / styles /
+    layout) is compiled into the `@wjs-generated` block of the theme's `style.css` by
+    `node backend/cli/wordjs.js build theme <slug>` — never hand-edit inside that block. Scaffold one
+    with `node backend/cli/wordjs.js create theme <slug>`, or copy an existing theme (e.g.
+    `marketplace/themes/midnight-luxury/`) for the pattern.
   - **Plugins** add functionality through their `manifest.json` (routes, hooks, `puckComponents`) —
     copy a bundled example like `hello-world` or `test-schema`.
   - If you find yourself editing `backend/src/core/*` to change how one site looks or behaves, that's

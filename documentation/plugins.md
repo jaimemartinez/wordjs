@@ -218,7 +218,7 @@ frontend entry:
 ### 🛑 Critical: The React Singleton
 WordJS is highly sophisticated about how it handles React. 
 - **The Core Problem:** If your plugin bundles its own copy of React, Hooks will fail (Singleton violation).
-- **The WordJS Solution:** The build script never lets React into your bundle. `react`, `react-dom`, `react-dom/client` and the JSX runtimes — plus the host modules a plugin page actually uses (`@/lib/api`, `@/lib/i18n`, `@/lib/plugin-hooks`, `@/contexts/*`, `@/components/ui/*`, `@/components/MediaPickerModal`) — are **rewritten to `globalThis.WordJS.*`**, which the frontend's plugin-bundle loader populates. They are deliberately **not** left as plain esbuild `external`: a bare `import … from "react"` cannot be resolved by the blob-URL module the loader evaluates. Other `@/*` and `next/*` imports do stay genuine externals.
+- **The WordJS Solution:** The build script never lets React into your bundle. `react`, `react-dom`, `react-dom/client` and the JSX runtimes — plus a fixed list of host modules (`HOST_MODULES` in `backend/scripts/build-plugin.js`: `@/lib/api`, `@/lib/i18n`, `@/lib/plugin-hooks`, the Modal/I18n/Toast/Auth contexts, `@/components/MediaPickerModal`, and the `StatCard`/`PageHeader`/`Card`/`ActionCard` UI components) — are **rewritten to the `WordJS.*` runtime globals** that `frontend/src/lib/pluginBundleLoader.ts` populates. They are deliberately **not** left as plain esbuild `external`: a bare `import … from "react"` cannot be resolved by the blob-URL module the loader evaluates. Any other `@/*` and `next/*` import does stay a genuine external.
 - **Runtime Injection:** WordJS injects its own unified React instance into the plugin bundle at runtime. **Never try to bundle React yourself.**
 
 ---
@@ -362,7 +362,9 @@ JS heap.
 
 **Network egress:** by default you get **no outbound network**. The raw socket modules
 (`net`/`tls`/`dgram`/`http`/`https`/`http2`/`dns`) are denied, and the globals `fetch` / `WebSocket` /
-`EventSource` are trapped (they throw). Outbound access opens **only** when an admin grants your plugin
+`EventSource` are trapped (they throw). The raw resolver stays denied even *with* `network` (it would
+bypass egress filtering), so MX/TXT lookups go through the host-mediated `wordjs.dns.*` bridge in §11.
+Outbound access opens **only** when an admin grants your plugin
 the **`network`** capability (declare `scope: "network"` in your manifest; the grant carries an
 exfiltration warning). This is the only network path — there is no trusted tier that bypasses it.
 
