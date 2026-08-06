@@ -1142,6 +1142,21 @@ async function initialize() {
         const themeEngine = require('./core/theme-engine');
         await themeEngine.init();
 
+        // Republish the ACTIVE theme's manifest `layout` into active_theme_layout. switchTheme already
+        // writes it when an admin activates a theme, but the option goes stale on every path that
+        // changes the layout WITHOUT a switch — a theme update, an edit to theme.json, a restore. This
+        // is the reconciliation for those.
+        //
+        // Safe to run on every boot because it is IDEMPOTENT: active_theme_layout is on the
+        // frontend-purge allowlist, so a needless write would evict the public cache on each restart.
+        // syncActiveThemeLayout compares in the serialized form and writes only on a real change.
+        // Best-effort — a themes-dir hiccup must never stop the server from finishing its boot.
+        try {
+            await require('./core/themes').syncActiveThemeLayout();
+        } catch (e: any) {
+            console.warn(`⚠️  Could not reconcile the active theme layout: ${e && e.message}`);
+        }
+
         // Fire init action
         await doAction('init');
     } else {
