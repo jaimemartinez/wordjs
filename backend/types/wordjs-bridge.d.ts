@@ -25,6 +25,33 @@ export interface WordJSSafeUser {
     userEmail: string;
     displayName?: string;
     role: string;
+    /**
+     * The ACTIVE CORPORATE MAILBOX grant (`user_meta.professional_mailbox`), projected as a plain
+     * boolean. It is ADMIN-OWNED: read this field, never re-derive it from `userEmail` (the account
+     * itself can write its own email, which would make the grant self-issuable). A row loaded
+     * without meta projects `false` (fail-closed).
+     */
+    hasProfessionalMailbox: boolean;
+}
+
+/** Metadata for a file uploaded through a `{ multipart: '<field>' }` route. */
+export interface WordJSUploadedFile {
+    /** Absolute path of the host's temp file. It is unlinked once the response completes — read it inside your handler. */
+    path: string;
+    originalname: string;
+    mimetype: string;
+    size: number;
+    filename: string;
+}
+
+/** The authenticated identity forwarded to a `{ auth: true }` route. Rebuilt per request. */
+export interface WordJSRouteUser {
+    id: number | string;
+    role: string;
+    userEmail: string;
+    userLogin: string;
+    /** Same admin-owned grant as {@link WordJSSafeUser.hasProfessionalMailbox} — gate on this, don't re-derive it. */
+    hasProfessionalMailbox: boolean;
 }
 
 /**
@@ -37,10 +64,19 @@ export interface WordJSRouteRequest {
     query: Record<string, any>;
     params: Record<string, string>;
     body: any;
-    /** Present when the route was registered with `{ auth: true }` — the authenticated user. */
-    user?: any;
+    /**
+     * A stable, privacy-preserving per-client key (HMAC of the caller's IP with a per-install secret)
+     * so you can rate-limit or dedup by caller WITHOUT ever seeing the raw IP. `''` when no IP.
+     */
+    clientKey: string;
+    /** Request cookies, with the host's auth/session cookies (e.g. `wordjs_token`) always stripped. */
+    cookies: Record<string, string>;
+    /** Only selected non-sensitive headers are forwarded — today that is `x-portal-token` alone. */
+    headers: { 'x-portal-token'?: string };
+    /** The authenticated user for a `{ auth: true }` route; `null` when the request is anonymous. */
+    user: WordJSRouteUser | null;
     /** Present when the route was registered with `{ multipart: '<field>' }` — saved file metadata. */
-    file?: any;
+    file?: WordJSUploadedFile;
     [key: string]: any;
 }
 
@@ -92,9 +128,19 @@ export interface WordJSAdminMenuItem {
     /** Capability required to see the item. */
     cap?: string;
     /**
-     * When true, core hides this item from any user who does NOT own a professional mailbox on the
-     * site domain (their account email is not `@<site-domain>`). Use it for per-user features that are
-     * empty/meaningless without such a mailbox — e.g. a webmail inbox. Administrators always see it.
+     * Which sidebar block the item lands in: 'management' puts it in the lower (Settings/Users…)
+     * group, anything else — the default 'core' — puts it in the upper one.
+     */
+    section?: 'core' | 'management';
+    /**
+     * When true, core hides this item from any user who does not hold the professional-mailbox
+     * grant. Use it for per-user features that are empty without one — e.g. a webmail inbox.
+     * Administrators always see it.
+     *
+     * The grant is the ADMIN-OWNED `user_meta.professional_mailbox` flag, the same one a mail
+     * plugin's route gate reads, so the menu can never show a page that will only 403. It is
+     * deliberately NOT derived from the account's email domain: the account writes its own email,
+     * which made the old rule self-grantable. Slug-agnostic — any plugin may set it.
      */
     requiresProfessionalMailbox?: boolean;
     [key: string]: any;
@@ -103,8 +149,15 @@ export interface WordJSAdminMenuItem {
 /** Active SQL dialect info so a plugin can branch its DDL. */
 export interface WordJSDbType {
     isPostgres: boolean;
+    /** True for both the 'mysql' and 'mariadb' drivers. */
+    isMySQL: boolean;
+    /**
+     * True for everything that is NOT Postgres — including MySQL, whose driver translates the
+     * SQLite dialect at the boundary. Gate genuinely SQLite-only queries (`PRAGMA`, `sqlite_master`)
+     * on `isMySQL` being false, not on this flag alone.
+     */
     isSQLite: boolean;
-    /** Full driver name: 'sqlite-native' | 'sqlite-legacy' | 'postgres'. */
+    /** Full driver name: 'sqlite-native' | 'sqlite-legacy' | 'postgres' | 'mysql' | 'mariadb'. */
     driver: string;
 }
 
@@ -164,7 +217,7 @@ export interface WordJS {
      * Database access, ALWAYS scoped to your own `wjp_<slug>_` tables (host-enforced).
      * SQL referencing core tables (users/options/sessions/…) is rejected; there is no
      * unscoped mode. Permissions: `database:read` (all/get/getType), `database:write`
-     * (run/createTable).
+     * (run/createTable); `batch` needs whichever of the two each of its statements implies.
      */
     db: {
         /** The prefix your table names MUST start with, e.g. 'wjp_my_plugin_'. */
@@ -175,10 +228,36 @@ export interface WordJS {
         get(sql: string, params?: any[]): Promise<any>;
         /** INSERT/UPDATE/DELETE/CREATE/ALTER/DROP/REPLACE. Permission: `database:write`. */
         run(sql: string, params?: any[]): Promise<any>;
+        /**
+         * Run up to 200 statements — each a bare `sql` string or an `[sql, params]` pair — in ONE
+         * host round-trip, returning one result per statement in order (a SELECT/WITH yields the
+         * `all()` row array).
+         *
+         * A transport optimisation, NOT a new capability: every statement is re-checked with the
+         * same permission (`database:read` for select/with, `database:write` otherwise) and the same
+         * SQL guard its single-statement counterpart would use. DDL (CREATE/ALTER/DROP) is refused —
+         * use `run`/`createTable`, which record table ownership and grant the new table.
+         *
+         * The whole array is validated before anything runs, but it is NOT a transaction: if a
+         * statement throws, the ones ahead of it have already applied.
+         */
+        batch(statements: (string | [string, any[]?])[]): Promise<any[]>;
         /** Create a table named with `tablePrefix`. Permission: `database:write`. */
         createTable(name: string, columns: string[]): Promise<any>;
         /** Which SQL dialect is active. Permission: `database:read`. */
         getType(): Promise<WordJSDbType>;
+    };
+
+    /**
+     * CSPRNG bridge. The static validator blocks `crypto` / `globalThis` in plugin CODE, so this is
+     * where a plugin gets UNGUESSABLE tokens and codes — never `Math.random`, whose state is
+     * reconstructable from a few outputs. No permission required (no data access).
+     */
+    crypto: {
+        /** Hex token of `bytes` random bytes; `bytes` is clamped to 8..64 (default 16). */
+        randomToken(bytes?: number): Promise<string>;
+        /** Uniform integer in `[min, max)`. Throws on a non-finite, empty or >1e9-wide range. */
+        randomInt(min: number, max: number): Promise<number>;
     };
 
     /**
@@ -224,11 +303,15 @@ export interface WordJS {
     };
 
     /**
-     * Schedule a cron event; the host fires the hook back into this child process.
-     * No permission required.
+     * Schedule a cron event; the host fires the hook back into this child process (only YOUR
+     * callbacks, never core's). No permission required.
+     *
+     * `recurrence` is one of the registered schedules — 'hourly', 'twicedaily', 'daily', 'weekly',
+     * 'off' — and an unregistered name is stored with a 0 interval, i.e. it never repeats. Pass a
+     * falsy `recurrence` (`false`) for a one-off event at `timestamp`.
      */
     cron: {
-        schedule(timestamp: number, recurrence: string, hook: string, args?: any[]): Promise<any>;
+        schedule(timestamp: number, recurrence: string | false, hook: string, args?: any[]): Promise<any>;
     };
 
     /**
@@ -250,6 +333,26 @@ export interface WordJS {
         url(): Promise<string>;
         domain(): Promise<string>;
         adminEmail(): Promise<string>;
+    };
+
+    /**
+     * Host-mediated DNS record lookups. Gated on the `network` grant — the same grant that opens the
+     * socket modules, not a separate scope.
+     *
+     * The raw c-ares resolver (`dns.resolve*` / `Resolver` / `setServers`) is DENIED inside the
+     * isolate because it bypasses egress filtering, and the one resolver left (`dns.lookup`) can only
+     * do A/AAAA — so MX (direct-to-MX delivery) and TXT (SPF/DKIM/DMARC) queries come through here.
+     * The host runs them with the system resolver and STRIPS every address answer pointing at a
+     * private/internal/special IP, so `resolve4`/`resolve6`/`resolve` return PUBLIC addresses only
+     * and a host that resolves solely to internal IPs comes back as an empty array.
+     */
+    dns: {
+        resolveMx(domain: string): Promise<{ priority: number; exchange: string }[]>;
+        resolveTxt(name: string): Promise<string[][]>;
+        resolve4(host: string): Promise<string[]>;
+        resolve6(host: string): Promise<string[]>;
+        /** Like Node's `dns.promises.resolve()` with no rrtype: A records (string IPs). */
+        resolve(host: string): Promise<string[]>;
     };
 
     /**

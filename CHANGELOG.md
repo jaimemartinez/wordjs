@@ -579,7 +579,8 @@ bundle.
 
 - **All first-party plugins now ship from the marketplace, not the core release bundle** (`card-gallery`,
   `photo-carousel`, `video-gallery` moved to `marketplace/plugins/`). A fresh install ships with no
-  pre-bundled plugins; install what you need from the marketplace. (`toscano` stays private, unpublished.)
+  pre-bundled plugins; install what you need from the marketplace. (Unpublished private plugins are
+  unaffected — they are never part of the catalog.)
 
 Validated end-to-end on a clean production install (Proxmox LXC): a plugin installed from the marketplace
 renders its styled admin page, its block appears in the editor palette and canvas, and a published page

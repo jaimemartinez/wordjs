@@ -183,14 +183,30 @@ export const registerMyHooks = () => {
 WordJS uses a hybrid loading system to balance developer productivity and production performance.
 
 ### 3.1 Development Mode (`npm run dev`)
-In development, the system uses **Next.js Dynamic Imports** pointing directly to your `client/` source files.
-- **Benefit:** Hot Module Replacement (HMR) works perfectly. When you save a `.tsx` file, the UI updates instantly.
-- **How:** The `generate-plugin-registry.js` script maps slugs to local source paths.
+When `process.env.NODE_ENV === 'development'`, the generated registry
+(`frontend/src/lib/pluginRegistry.ts`) resolves your admin page through a `next/dynamic` import of the
+**source file** — `import("../../../backend/plugins/<folder>/client/admin/page")`. Your `.tsx` is
+therefore a normal node in the dev server's module graph, so Fast Refresh applies to it exactly as it
+does to app code.
+- **How:** `frontend/scripts/generate-plugin-registry.js` writes one entry per **active** plugin into
+  the registry's `DEV_DEFINITIONS` map, keyed by slug and pointing at the path its manifest declares.
+- **Caveat:** that map is generated, not dynamic. Adding, activating or deactivating a plugin has to
+  re-run the generator (the backend spawns it with the active list in `WORDJS_ACTIVE_PLUGINS`). It
+  writes only when the content actually changed, because an identical rewrite still bumps the file's
+  mtime and makes Next/Turbopack invalidate and full-reload the browser for nothing.
 
 ### 3.2 Production Mode (`npm start`)
-In production, WordJS avoids the heavy `next build` process when activating plugins. Instead, it uses **Pre-compiled Bundles**.
-- **Benefit:** Activating a plugin is instant. No server downtime or high CPU usage.
-- **How:** The frontend loads a minified `.js` bundle from the backend API and evaluates it at runtime.
+In production the registry does not import your source at all. `loadProductionBundle()` fetches
+`GET /api/v1/plugins/<slug>/bundle?type=admin`, wraps the returned text in a `Blob`, and `import()`s
+the resulting `blob:` URL (marked `webpackIgnore`), so your pre-compiled `dist/admin.bundle.js` is
+evaluated inside the already-running page.
+- **What that buys you:** no `next build` is needed to serve a plugin's admin UI. A plugin installed at
+  runtime (from the Marketplace, say) can never be in the build-time import map, so
+  `frontend/src/app/admin/plugin/[slug]/page.tsx` falls back to the same runtime loader
+  (`createRemotePluginComponent` in `frontend/src/lib/pluginBundleLoader.ts`) instead of rendering
+  "Plugin Not Found".
+- **What it requires:** the plugin must ship a built `dist/` (see §4). The fetch asks the backend for a
+  pre-compiled bundle, never for your source.
 
 ---
 
@@ -267,15 +283,15 @@ When you upload a plugin ZIP, WordJS validates it **before** reporting success, 
 
 Each active plugin runs in its own OS process, and WordJS now **supervises** it:
 
-- The admin **Plugins** screen shows each plugin's live state (running / restarting / crashed / crash-looping), memory (RSS), uptime, restart count, and the last error.
+- The admin **Plugins** screen shows each plugin's live state (Running / Restarting / Crashed / Crash-looping / Stopped), memory (RSS), restart count, last exit code, the last error, and the child's pid.
 - If a child crashes at runtime it is **auto-restarted** with exponential backoff (1s → 5s → 15s → 60s). After too many crashes in a short window it is marked **crash-looping** and left stopped (fix it and hit **Reload**).
-- `GET /api/v1/plugins/:slug/status` returns the same telemetry programmatically.
+- `GET /api/v1/plugins/:slug/status` returns that telemetry programmatically, plus the `uptimeMs` and `startedAt` the screen does not render.
 
 ### Uninstalling a plugin (and its data)
 
 Deleting a plugin (admin **Plugins** → delete, password-confirmed) removes its folder **and** always purges its permission grants (so a later re-upload of the same slug can't silently inherit old, possibly-revoked grants) and its crash-guard strikes.
 
-By default your plugin's **data tables are kept** (WordPress parity). Tick **"Also delete this plugin's data/tables"** in the delete dialog to additionally `DROP` the plugin's own `wjp_<slug>_*` tables. Only those prefixed tables are dropped — core and other plugins are never touched.
+By default your plugin's **data tables are kept** (WordPress parity). Tick **"Also delete this plugin's data / tables"** in the delete dialog to additionally `DROP` the plugin's own `wjp_<slug>_*` tables. Only those prefixed tables are dropped — core and other plugins are never touched.
 
 > Options written via `wordjs.options.set` live in a **global** key space with no per-plugin namespace, so they are **not** auto-purged on delete. If your plugin stores option keys, prefix them with your slug and document how to remove them, or clean them up yourself.
 
@@ -329,11 +345,38 @@ In `manifest.json`, you must declare every capability your plugin needs:
 ```
 
 ### 7.2 The AST Scanner
-When you activate a plugin, WordJS runs a **Static Analysis Scan**. It parses your code and blocks it if it finds:
-*   `eval()` or shell commands (`exec`).
-*   Direct access to `global` or `module`.
-*   Obfuscated property access (e.g., `global["ev"+"al"]`).
-*   Unauthorized `require()` of sensitive Node modules.
+When you activate a plugin, WordJS runs a **Static Analysis Scan** (`validatePluginPermissions` in
+`backend/src/core/plugins.ts`). It parses every `.js`/`.ts`/`.cjs`/`.mjs` file in your plugin — skipping
+`node_modules/`, dot-dirs, and the browser-only `client/`, `frontend/` and `dist/` folders — and blocks
+the plugin if it finds:
+*   A call whose callee is named `eval`, `Function`, `exec`, `execSync`, `spawn` or `fork`. The match is
+    on the **name**, so `anything.spawn()` trips it too. The one exemption is a regex literal's
+    `.exec()` (`/re/.exec(s)`), which is `RegExp.prototype.exec`, not `child_process`.
+*   Any other way to build code from a string: `new Function(…)`, indirect `(0, eval)(x)`,
+    `(()=>{}).constructor('…')`, and `const F = [].constructor.constructor`.
+*   **Reading** a restricted global as an object — `process`, `global`, `globalThis`, `require`,
+    `module`, `arguments`, `__dirname`, `__filename` — or aliasing one (`const p = process`,
+    `const { getBuiltinModule } = process`). Assigning to them is deliberately allowed, which is why
+    `exports.init = …` and `module.exports = …` still work; the block is on reads. `process` is
+    stricter: every property except `process.env` is flagged, assignment or not.
+*   Obfuscated property access on one of those globals — a computed member whose key is not a literal,
+    e.g. `global["ev"+"al"]`. (Separately, **any** computed member *call*, `obj[k]()`, is flagged as a
+    dynamic call regardless of the object.)
+*   Sensitive Node builtins, whether reached by `require()`, a static `import`, or a dynamic `import()`
+    — a `node:` prefix is stripped first, so `node:child_process` is caught. Hard-blocked:
+    `child_process`, `fs/promises`, `http`, `https`, `dgram`, `cluster`, `async_hooks`, `vm`,
+    `worker_threads`, `module`, `inspector`, `v8`, `repl`, `sqlite`, `wasi`. `dns` and `net` are the
+    two that are **fixable rather than fatal**: they are reported as a *missing capability* instead of a
+    hard block. Watch the exact shape that clears them — the scan looks for a manifest entry with
+    `"access": "admin"` on `network` or `email`. The scope-only `{ "scope": "network" }` form that §12
+    documents (and that every first-party plugin uses) does **not** satisfy it; `mail-server` gets its
+    `require('net')` through on the strength of its `email: admin` entry.
+    A non-literal specifier (`require(x)`, `import('child'+'_process')`) is itself flagged as
+    obfuscation.
+*   Undeclared capabilities inferred from call sites: `fs.readFileSync`/`fs.writeFile`/… require
+    `filesystem:read`/`write` in your manifest, and `getOption`/`updateOption`/`dbAsync` require the
+    matching `settings`/`database` access. (Plain `require('fs')` is not itself a violation — the fs
+    call sites are what the scan gates.)
 
 This static scan is **mandatory** — it runs on **every** plugin at activation and re-runs on each boot,
 fail-closed (an unparseable file blocks the plugin). The separate **engine-level runtime block** of
@@ -359,6 +402,15 @@ only); (b) a **reactive** host-side RSS poll on every platform (Linux `/proc`, W
 `ps`) that `SIGKILL`s a child whose resident set exceeds **768 MB**; (c) a loose `RLIMIT_AS` virtual
 backstop (`config.sandbox.addressSpaceCapMb`, default 16384 MB) plus `--max-old-space-size=256` for the
 JS heap.
+
+**CPU and kernel tables are capped too.** When the cgroup scope in (a) is on, it also carries
+`MemorySwapMax=0` and `TasksMax=512` — so a fork/thread-bomb exhausts your **own** cgroup, not the host
+task table — and, if the operator sets **`config.sandbox.cpuQuotaPercent`** (**opt-in**, default `0` =
+off), a `CPUQuota=N%` cap where 100 = one full core, so a runaway plugin cannot peg every core. The CPU
+quota only takes effect **together with** `useCgroupMemoryCap`: both share one `systemd --user` scope and
+the probe validates that exact property set before the mode activates, so enabling it on a host whose
+`cpu` controller is not delegated falls back to the normal launch instead of failing to start. On the
+non-cgroup Linux path the child also gets `RLIMIT_NOFILE=4096` alongside the `RLIMIT_AS` backstop.
 
 **Network egress:** by default you get **no outbound network**. The raw socket modules
 (`net`/`tls`/`dgram`/`http`/`https`/`http2`/`dns`) are denied, and the globals `fetch` / `WebSocket` /
@@ -390,8 +442,12 @@ native addons, and an ESM resolution hook fails closed for the same builtins. Th
 > **Kernel hardening** ships **default-on** on Linux (`config.sandbox.useKernelHardening`, **opt-out
 > via `config.sandbox.useKernelHardening=false`, probe-gated** — it falls back to the plain isolated
 > fork where `bwrap` / unprivileged user-namespaces are unavailable; a no-op on Windows/macOS): bwrap
-> runs the child as an unprivileged uid with all Linux capabilities dropped,
-> no-new-privs, PID/IPC/UTS namespaces and a read-only filesystem, plus a **seccomp-bpf syscall denylist**.
+> runs the child as an unprivileged uid (65534) in a rootless **user** namespace with all Linux
+> capabilities dropped, no-new-privs, PID/IPC/UTS namespaces and a read-only root filesystem — only your
+> own plugin dir and the io-guard write zones are bound writable, and `/tmp` is a private tmpfs — plus a
+> **seccomp-bpf syscall denylist** (`ptrace`, `mount`, `pivot_root`, `setns`, `bpf`, `keyctl`,
+> `userfaultfd`, `process_vm_*`, the `io_uring` calls, the new mount API…). The probe boots a child
+> through that full profile, seccomp filter included, before the mode activates.
 > With that active, a plugin **without** the `network` grant is additionally dropped into its own **empty
 > network namespace** (`bwrap --unshare-net`, `config.sandbox.unshareNetwork`, default-on and separately
 > probe-gated), so the JS egress neuter is backed by the kernel; a `network`-granted plugin is never
@@ -401,17 +457,29 @@ native addons, and an ESM resolution hook fails closed for the same builtins. Th
 > off, the child is **not** capability-minimal at the syscall level. Set
 > `config.sandbox.requireHardening=true` (opt-in, default off) to **fail closed** — isolated plugins then
 > refuse to launch unless kernel hardening is actually active on the host, rather than silently degrading
-> to the JS-guards-only fork. The live hardening state (`active` / `degraded` / `unsupported`) is surfaced
-> on admin `GET /health/details`. A *preventive* memory cap on Windows
+> to the JS-guards-only fork. It gates on the bwrap probe, so it is a **Linux** switch: on Windows/macOS
+> that probe can never pass, and turning it on there refuses **every** plugin. The live hardening state
+> (`active` / `degraded` / `disabled` / `unsupported` / `unknown` — `unknown` until the first isolated
+> plugin activates, since the probe runs lazily) is surfaced
+> on admin `GET /health/details`, where `requireHardening` + `degraded` reports `status: REFUSING`.
+> A *preventive* memory cap on Windows
 > ships as a Job Object (default-on, probe-gated, pure-JS; the reactive RSS poll remains a backstop).
 > The one OS-level confinement that is **not** Linux-only is Node's own **permission model**
 > (`config.sandbox.usePermissionModel`, default-on, probe-gated, compiled builds only — skipped under
-> ts-node): filesystem reads are scoped to the app root, writes to the zones io-guard permits, and
-> `child_process` / `worker_threads` / native addons / WASI are simply never granted. It is reported
+> ts-node): it is enforced in **C++ below JavaScript**, with no API to re-grant from inside the process,
+> so a plugin that defeats a JS guard still meets it. Filesystem reads are scoped to the app root, writes
+> to the zones io-guard permits, and `child_process` / `worker_threads` / native addons / WASI are simply
+> never granted — denied without the runtime having to know their names, which is the property a by-name
+> denylist cannot have. It is probed rather than assumed, because the flag was renamed between Node
+> versions (`--permission` vs `--experimental-permission`) **and a build can accept it without enforcing
+> it**: it activates only once a real child has actually been refused a read. Note it does **not** gate
+> the network — Node's permission model has no `--allow-net` token, so the JS egress guard above remains
+> the sole authority on outbound traffic. It is reported
 > separately as `permission` on `GET /health/details`, because a host can be un-hardened (no bwrap) and
 > still have capability confinement. The
 > outstanding gap is an **independent external security audit** — the sandbox is candidly **self-audited**.
-> See **[Plugin Isolation](plugin-isolation-proposal.md)**.
+> See **[Plugin Isolation](plugin-isolation-proposal.md)** — read its status banner for the as-built
+> detail; sections 1–7 of that file are the original design record, kept for the threat model.
 
 > **The AST scan runs on every plugin — there is no skip.** With the trusted tier removed, no plugin is exempt from the scan, and `system:admin` no longer exists as a scan-skip. The scan re-runs on **every server boot** to catch code poisoning. (`db-migration` is no longer a plugin — it moved into core; see below.)
 
@@ -532,7 +600,7 @@ Every call is permission-checked on the host against your manifest.
 | `wordjs.notify(n)` | `notifications:send` | Push an admin notification. |
 | `wordjs.notify.registerTransport(name, handler)` | `notifications:provider` | Register a notification transport (sandboxed; needs the `notifications:provider` grant). |
 | `wordjs.adminMenu.add(item)` | — | Declarative sidebar item. |
-| `wordjs.cron.schedule(ts, recurrence, hook, args)` | — | Host fires the hook back into the child process. |
+| `wordjs.cron.schedule(ts, recurrence, hook, args)` | — | Host fires the hook back into the child process — only **your** callbacks, never core's. `recurrence` is a registered schedule name (`'hourly'`, `'twicedaily'`, `'daily'`, `'weekly'`, `'off'`); pass `false` for a one-off event at `ts`. An unregistered name is stored with a 0 interval, so it never repeats. |
 | `wordjs.crypto.randomToken(bytes=16)` / `randomInt(min, max)` | — | CSPRNG (no data access, no permission gate). Use instead of `Math.random` for tokens/access codes. **Async** in an isolated plugin (RPC to host) — `await` it. |
 | `wordjs.assets.enqueueScript(spec)` / `enqueueStyle(spec)` | `assets:write` | Load a `<script>`/`<style>` from **inside your plugin dir** onto public pages. `spec = { handle, src (relative path), inFooter?, strategy?:'async'\|'defer', media? }`. The host validates the file exists + can't escape and emits a **sanitized** tag served from `/plugins/<slug>/` — you never control raw markup (the raw-HTML head/footer hooks stay denied). |
 
@@ -573,9 +641,13 @@ anything you upload. First-party plugins are **not privileged** — they run in 
 the same checks.
 
 Changing a plugin's grants **hot-reloads its child process** so the bridge gates re-evaluate and a
-`network` change takes effect — no server restart. Granting a higher-risk capability (`network`,
-`email:provider`, `notifications:provider`) is a real security decision: the UI warns accordingly. Only
-grant capabilities to code you have audited.
+`network` change takes effect — no server restart. Granting a higher-risk capability is a real security
+decision, and the UI says so: `frontend/src/lib/permissionMeta.ts` classifies `database:write`,
+`settings:write`, `filesystem:write`, `email:admin`, `email:provider`, `notifications:provider` and
+`network` as **high risk**, and both grant screens (the activation dialog and the per-permission
+toggles) render those rows with a `HIGH RISK` badge, a platform-authored explanation, and — separately
+labelled — the plugin's own stated reason from its manifest. `network` carries the explicit wording
+that data can leave your server. Only grant capabilities to code you have audited.
 
 > **Removed for good:** there is no shell/`child_process`, native addons, unscoped/core-table DB,
 > secret-named options, absolute routes, raw cookie/header control, raw-HTML hooks, or "trusted" tier —
