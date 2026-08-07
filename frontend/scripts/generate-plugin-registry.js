@@ -308,6 +308,7 @@ export function loadPluginHooks(): Promise<void> {
         console.log(`\n✅ Registry unchanged (${includedPlugins.length} plugin(s)) — write skipped, no rebuild`);
         return;
     }
+    fs.mkdirSync(path.dirname(OUTPUT_FILE), { recursive: true }); // generated + untracked: the dir may not exist
     fs.writeFileSync(OUTPUT_FILE, content, 'utf8');
     console.log(`\n✅ Registry generated with ${includedPlugins.length} plugin(s)`);
 }

@@ -188,6 +188,7 @@ ${exports}
         console.log(`\n✅ Puck Registry unchanged (${includedPlugins.length} component(s)) — write skipped, no rebuild`);
         return;
     }
+    fs.mkdirSync(path.dirname(OUTPUT_FILE), { recursive: true }); // generated + untracked: the dir may not exist
     fs.writeFileSync(OUTPUT_FILE, fileContent, 'utf8');
     console.log(`\n✅ Puck Registry generated with ${includedPlugins.length} component(s)`);
 }

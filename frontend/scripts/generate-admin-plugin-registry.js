@@ -270,6 +270,10 @@ export default function PluginAdminPage() {
         console.log(`\n✅ Admin registry unchanged (${availablePlugins.length} plugin(s)) — write skipped, no rebuild`);
         return;
     }
+    // Create the output directory. This file is GENERATED and untracked, and it is the only thing in
+    // `src/app/admin/plugin/[slug]/` — so on a fresh checkout that directory does not exist at all and
+    // writeFileSync fails with ENOENT. It used to work only because the file was committed.
+    fs.mkdirSync(path.dirname(OUTPUT_FILE), { recursive: true });
     fs.writeFileSync(OUTPUT_FILE, content, 'utf8');
     console.log(`\n✅ Admin registry generated with ${availablePlugins.length} plugin(s)`);
 }
