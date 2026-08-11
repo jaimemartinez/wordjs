@@ -421,6 +421,70 @@ describe('analyzeTheme (theme doctor)', () => {
         assert.ok(codes.includes('UNKNOWN_TOKEN'), JSON.stringify(codes));
     });
 
+    // Declarative page templates (templates/<name>.json). These tests exist because the wiring shipped
+    // INERT the first time: the CLI loads core from backend/dist, so an un-rebuilt dist reported
+    // "0 errors" on a template that violated the contract in three separate ways. A check nobody can
+    // observe failing is not a check.
+    const writeTemplate = (slug: string, name: string, body: string): void => {
+        const dir = path.join(THEMES_DIR, slug, 'templates');
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(path.join(dir, `${name}.json`), body);
+    };
+    const VALID_TEMPLATE = JSON.stringify({
+        content: [{ type: 'Section', props: { maxWidth: '72rem', items: [{ type: 'PageContent', props: {} }] } }]
+    });
+
+    it('accepts a valid page template silently', () => {
+        const slug = writeTheme(CLEAN_CSS);
+        writeTemplate(slug, 'home', VALID_TEMPLATE);
+        const rep = doctor(slug);
+        const codes = [...rep.errors, ...rep.warnings].map((f: any) => String(f.code));
+        assert.ok(!codes.some((c: string) => c.startsWith('TEMPLATE_')), JSON.stringify(codes));
+    });
+
+    it('reports TEMPLATE_INVALID for each contract violation, naming the file', () => {
+        const slug = writeTheme(CLEAN_CSS);
+        // Three distinct violations: a prop outside its enum (the shape of the stored-XSS this contract
+        // exists to prevent), a real-but-forbidden block, and no content slot at all.
+        writeTemplate(slug, 'home', JSON.stringify({
+            content: [{ type: 'Section', props: { align: 'script', items: [{ type: 'HTMLEmbed', props: {} }] } }]
+        }));
+        const rep = doctor(slug);
+        const errs = rep.errors.filter((e: any) => e.code === 'TEMPLATE_INVALID');
+        assert.strictEqual(errs.length, 3, JSON.stringify(rep.errors));
+        assert.ok(errs.every((e: any) => /templates\/home\.json/.test(e.message)), JSON.stringify(errs));
+        const rules = errs.map((e: any) => e.detail && e.detail.rule).sort();
+        assert.deepStrictEqual(rules, ['TPL_FORBIDDEN_TYPE', 'TPL_INVALID_PROP', 'TPL_SLOT_MISSING']);
+    });
+
+    it('warns TEMPLATE_UNREADABLE on a template that is not JSON', () => {
+        const slug = writeTheme(CLEAN_CSS);
+        writeTemplate(slug, 'home', '{ this is not json');
+        const rep = doctor(slug);
+        assert.strictEqual(rep.errors.length, 0, JSON.stringify(rep.errors));
+        assert.ok(rep.warnings.some((w: any) => w.code === 'TEMPLATE_UNREADABLE'), JSON.stringify(rep.warnings));
+    });
+
+    it('a theme with no templates/ directory is not a finding', () => {
+        const slug = writeTheme(CLEAN_CSS);
+        const codes = [...doctor(slug).errors, ...doctor(slug).warnings].map((f: any) => String(f.code));
+        assert.ok(!codes.some((c: string) => c.startsWith('TEMPLATE_')), JSON.stringify(codes));
+    });
+
+    it('fails open on template checks when template-validate is absent (other checks intact)', () => {
+        const slug = writeTheme(':root { --wjs-color-primry: #123456; }');
+        writeTemplate(slug, 'home', JSON.stringify({ content: [{ type: 'Nope', props: {} }] }));
+        const rep = analyzeTheme(slug, {
+            themesDir: THEMES_DIR,
+            manifestPath: MANIFEST_PATH,
+            layoutSchemaPath: LAYOUT_SCHEMA_PATH,
+            templateValidate: null // simulate require('./template-validate') failing
+        });
+        const codes = [...rep.errors, ...rep.warnings].map((f: any) => String(f.code));
+        assert.ok(!codes.some((c: string) => c.startsWith('TEMPLATE_')), JSON.stringify(codes));
+        assert.ok(codes.includes('UNKNOWN_TOKEN'), JSON.stringify(codes));
+    });
+
     it('does not report LEGACY_THEME for declarative or generator-stamped themes', () => {
         // Declarative sections present → not legacy.
         const declarative = writeTheme('', undefined, CLEAN_DECLARATIVE);
