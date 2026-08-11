@@ -7,7 +7,9 @@ export default defineConfig({
   // Vitest does NOT read tsconfig `paths`, so any module under test that imports a sibling as `@/…`
   // (e.g. pluginBundleLoader's host-module set) fails to resolve without this mirror of that alias.
   resolve: {
-    alias: { '@': path.resolve(__dirname, 'src') },
+    // import.meta.dirname, not __dirname: this file is .mts, so Vite's native (ESM) config loader —
+    // which is planned to become the default — has no CommonJS __dirname to give it.
+    alias: { '@': path.resolve(import.meta.dirname, 'src') },
   },
   test: {
     environment: 'node',
