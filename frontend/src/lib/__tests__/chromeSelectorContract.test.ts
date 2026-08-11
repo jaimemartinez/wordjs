@@ -49,18 +49,39 @@ describe('chrome selector contract', () => {
 
     // Only the .wjs-* chrome entries: the .wp-block-* ones come from wordjs-ui.css, which the
     // generator scrapes — those cannot be promised without existing. `footer` is a bare tag name.
-    const chromeSelectors = Object.entries(manifest.elements as Record<string, { selector: string }>)
-        .map(([name, def]) => [name, def.selector] as const)
-        .filter(([, selector]) => selector.startsWith('.wjs-'));
+    // CHILDREN ARE CHECKED TOO. This used to read only each element's own `selector`, which left the
+    // named composites — chromeFooter.socialLink, chromeHeader.logoText, … — promised to theme authors
+    // and verified by nothing. That is the same gap this file was written to close, one level down.
+    //
+    // And a chrome selector is no longer necessarily a single class: a composite like
+    // `.wjs-chrome-footer .wjs-chrome-row > .wjs-chrome-text` scopes a part to its container, so the
+    // check is per CLASS TOKEN. (The previous version did `selector.slice(1)` and searched the whole
+    // string as one class name, which silently failed the moment a compound selector appeared.)
+    const chromeSelectors: (readonly [string, string])[] = [];
+    for (const [name, def] of Object.entries(manifest.elements as Record<string, { selector: string; children?: Record<string, { selector: string }> }>)) {
+        if (def.selector && def.selector.startsWith('.wjs-')) chromeSelectors.push([name, def.selector] as const);
+        for (const [child, cd] of Object.entries(def.children || {})) {
+            if (cd.selector && cd.selector.includes('.wjs-')) chromeSelectors.push([`${name}.${child}`, cd.selector] as const);
+        }
+    }
 
     it('has chrome entries to check (guards against an empty-filter false pass)', () => {
         expect(chromeSelectors.length).toBeGreaterThanOrEqual(3);
+        // The composites must be in scope, or this file is back to checking only the easy half.
+        expect(chromeSelectors.some(([n]) => n.includes('.'))).toBe(true);
     });
 
     it.each(chromeSelectors)('%s → %s is emitted by the chrome markup', (_name, selector) => {
-        const className = selector.slice(1);
-        // Word-boundary match so `.wjs-header` is not "found" inside `wjs-header-logo`.
-        const re = new RegExp(`(^|[\\s"'\`])${className}([\\s"'\`$]|$)`, 'm');
-        expect(re.test(sources)).toBe(true);
+        // Every .wjs-* class the selector names must exist in the chrome source. Bare tags (a, span,
+        // input, button, nav) and combinators are structure, not promises — the framework's own markup
+        // decides those, and a tag is not something a grep can meaningfully confirm.
+        const classes = selector.match(/\.wjs-[a-z0-9-]+/gi) || [];
+        expect(classes.length).toBeGreaterThan(0);
+        for (const cls of classes) {
+            const className = cls.slice(1);
+            // Word-boundary match so `.wjs-header` is not "found" inside `wjs-header-logo`.
+            const re = new RegExp(`(^|[\\s"'\`])${className}([\\s"'\`$]|$)`, 'm');
+            expect(re.test(sources), `${className} is promised by the manifest but never emitted`).toBe(true);
+        }
     });
 });

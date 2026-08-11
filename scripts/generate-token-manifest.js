@@ -83,8 +83,9 @@ const CHROME_ELEMENT_SEEDS = {
         selector: '.wjs-chrome-search',
         children: { input: { selector: '.wjs-chrome-search input' } },
     },
-    // The header's nav is `.wjs-header-nav` (NOT `.wjs-chrome-nav`, which is the composable nav part) —
-    // two different classes that are easy to confuse, so both get a name.
+
+    // The composed header's nav keeps the PLATFORM class `.wjs-header-nav` (ChromeNav emits it), not
+    // `.wjs-chrome-nav` — two different classes in the same region, which is exactly why both get a name.
     headerNav: { selector: '.wjs-chrome-header .wjs-header-nav' },
 
     chromeHeader: {
