@@ -4,6 +4,36 @@ All notable changes to WordJS are documented here. This project follows
 [Semantic Versioning](https://semver.org/). Each release is published as a pre-compiled bundle
 on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
+## [1.14.1] - 2026-08-07
+
+Ships the dependency fix that v1.14.0 was published without, and closes the pipeline hole that let it
+be published at all. **Anyone on v1.14.0 should upgrade.**
+
+### Security
+
+- **A HIGH-severity advisory in a production dependency was bundled into the v1.14.0 release ZIP.**
+  `js-yaml` (reached through `swagger-jsdoc` → `@apidevtools/swagger-parser` →
+  `json-schema-ref-parser`) was pinned at 4.3.0, which carries **CVE-2026-59870** — quadratic CPU
+  consumption resolving `!!omap`, with the fix not backported. Bumped to 4.3.1. `nanoid` 3.3.16 →
+  3.3.18 in the same pass (GHSA-2v37-7h3g-55p8: a custom generator can loop indefinitely when size is
+  zero). Two transitive version bumps, no API change.
+
+- **The release pipeline could publish while CI was red — that is how the above shipped.**
+  `release.yml` and `ci.yml` are independent workflows: both fire on the tag push, neither waits for
+  the other, and nothing in the release ever asked whether CI had passed. CI *did* catch the advisory
+  — `npm audit --omit=dev --audit-level=high` failed on the very tag that published — and the release
+  went out regardless.
+
+  The gates release.yml already had (smoke-boot the built bundle in all three deploy modes, verify the
+  marketplace catalog against its artifacts) answer *"does this artifact boot, and is it
+  self-consistent?"*. They cannot answer *"is the code correct and are its dependencies safe?"*.
+
+  A `verify` job now runs the prod audit in every workspace CI audits, plus the backend typecheck and
+  test suite, and `build-release` **needs** it — so nothing is built and nothing is published unless
+  that gate is green (`npm-publish` was already downstream of `build-release`). The checks are
+  duplicated here rather than waiting on `ci.yml` deliberately: the two workflows start together, so a
+  cross-workflow wait would be a race, while this is deterministic and self-contained.
+
 ## [1.14.0] - 2026-08-06
 
 A security audit, and the theme system moves decisively onto its token contract: `theme.json` is the
