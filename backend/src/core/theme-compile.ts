@@ -70,6 +70,8 @@ interface WalkCtx {
   selector: string;
   media: string | null;
   state: string | null;
+  position: string | null; // :first-child / :last-child
+  pseudo: string | null;   // ::before / ::after / ::placeholder — always the LAST thing in a selector
   children: any;
 }
 
@@ -91,6 +93,19 @@ const GLOBAL_ELEMENTS: Record<string, string> = {
   links: 'a'
 };
 const STATES: Record<string, string> = { hover: ':hover', focus: ':focus', active: ':active', disabled: ':disabled' };
+// Pseudo-elements a theme may target, BY NAME. Measured against what the catalogue actually reaches
+// for in its hand-written CSS: ::before (5 uses), ::placeholder (2), ::after (1) — nothing else. Kept
+// to that set on purpose: every name here is a surface a theme can paint, so the list grows only when
+// a real theme needs it, not speculatively.
+const PSEUDO_ELEMENTS: Record<string, string> = {
+  before: '::before',
+  after: '::after',
+  placeholder: '::placeholder',
+};
+// Structural position. `:first-child` / `:last-child` are the only ones the catalogue uses (4 and 2
+// uses), and they are the one bit of "where am I in the list" a theme genuinely cannot express by
+// naming a part — a footer's first row is styled differently from the rest in six themes.
+const POSITIONS: Record<string, string> = { first: ':first-child', last: ':last-child' };
 // The framework's breakpoints — declaration order is also the emission order.
 const BREAKPOINTS: Record<string, string> = {
   mobile: '(max-width: 767.98px)',
@@ -452,8 +467,9 @@ function compileTheme(dirOrSlug: string, opts: CompileOpts = {}): CompileResult 
 
   function handleProp(key: string, value: string, ctx: WalkCtx, p: string): void {
     const prop = key.toLowerCase();
-    // Token resolution only at the base level: states/breakpoints are ALWAYS declarations.
-    if (!ctx.media && !ctx.state) {
+    // Token resolution only at the base level: a state, breakpoint, position or pseudo-element is a
+    // narrower selector than the token it would otherwise feed, so those are ALWAYS declarations.
+    if (!ctx.media && !ctx.state && !ctx.position && !ctx.pseudo) {
       const candidates = ctx.child
         ? [`--wjs-${ctx.el}-${ctx.child}-${prop}`, `--wjs-${ctx.el}-${prop}`]
         : [`--wjs-${ctx.el}-${prop}`];
@@ -467,7 +483,13 @@ function compileTheme(dirOrSlug: string, opts: CompileOpts = {}): CompileResult 
     }
     const cssValue = validateDeclaration(prop, value, p);
     if (cssValue === null) return;
-    const selector = ctx.state ? `${ctx.selector}${STATES[ctx.state]}` : ctx.selector;
+    // CSS order is fixed: structural position, then state, then the pseudo-element LAST
+    // (`.x:first-child:hover::before`). Composed here rather than at each nesting site so the order
+    // cannot drift depending on which the theme happened to write first.
+    const selector = ctx.selector
+      + (ctx.position ? POSITIONS[ctx.position] : '')
+      + (ctx.state ? STATES[ctx.state] : '')
+      + (ctx.pseudo ? PSEUDO_ELEMENTS[ctx.pseudo] : '');
     addDecl(ctx.media || '', selector, prop, cssValue, p);
   }
 
@@ -475,18 +497,33 @@ function compileTheme(dirOrSlug: string, opts: CompileOpts = {}): CompileResult 
     for (const [key, raw] of Object.entries(node)) {
       const p = `${pathPrefix}.${key}`;
       if (isPlainObject(raw)) {
-        if (Object.prototype.hasOwnProperty.call(STATES, key)) {
+        if (Object.prototype.hasOwnProperty.call(PSEUDO_ELEMENTS, key)) {
+          // Nothing may nest INSIDE a pseudo-element: it is the last thing a selector can name, so a
+          // child/state/breakpoint under it would have nowhere to go and would silently emit an
+          // impossible selector.
+          if (ctx.pseudo) error('STYLE_UNKNOWN_KEY', p, 'pseudo-elements cannot nest inside pseudo-elements');
+          else walkStyleNode(raw, { ...ctx, pseudo: key, children: null }, p);
+        } else if (Object.prototype.hasOwnProperty.call(POSITIONS, key)) {
+          if (ctx.position) error('STYLE_UNKNOWN_KEY', p, 'positions cannot nest inside positions');
+          else if (ctx.pseudo) error('STYLE_UNKNOWN_KEY', p, 'a position cannot nest inside a pseudo-element');
+          else walkStyleNode(raw, { ...ctx, position: key }, p);
+        } else if (Object.prototype.hasOwnProperty.call(STATES, key)) {
           if (ctx.state) error('STYLE_UNKNOWN_KEY', p, 'states cannot nest inside states');
+          else if (ctx.pseudo) error('STYLE_UNKNOWN_KEY', p, 'a state cannot nest inside a pseudo-element');
+          // NOTE: children:null is kept — a child under a state was never allowed and still is not,
+          // but a PSEUDO-ELEMENT under a state is (`a:hover::after`, which one theme uses).
           else walkStyleNode(raw, { ...ctx, state: key, children: null }, p);
         } else if (Object.prototype.hasOwnProperty.call(BREAKPOINTS, key)) {
           if (ctx.media || ctx.state) error('STYLE_UNKNOWN_KEY', p, 'breakpoints cannot nest inside states or other breakpoints');
           else walkStyleNode(raw, { ...ctx, media: key }, p);
-        } else if (!ctx.child && ctx.children && isPlainObject(ctx.children[key]) && typeof ctx.children[key].selector === 'string') {
+        } else if (!ctx.child && !ctx.pseudo && ctx.children && isPlainObject(ctx.children[key]) && typeof ctx.children[key].selector === 'string') {
           walkStyleNode(raw, { ...ctx, child: key, selector: ctx.children[key].selector }, p);
         } else {
           const valid = [
-            ...(ctx.children && !ctx.child ? Object.keys(ctx.children) : []),
-            ...Object.keys(STATES),
+            ...(ctx.children && !ctx.child && !ctx.pseudo ? Object.keys(ctx.children) : []),
+            ...(ctx.pseudo ? [] : Object.keys(STATES)),
+            ...(ctx.pseudo || ctx.position ? [] : Object.keys(POSITIONS)),
+            ...(ctx.pseudo ? [] : Object.keys(PSEUDO_ELEMENTS)),
             ...Object.keys(BREAKPOINTS)
           ];
           const suggestion = closestToken(key, valid);
@@ -524,7 +561,7 @@ function compileTheme(dirOrSlug: string, opts: CompileOpts = {}): CompileResult 
           error('STYLE_INVALID_VALUE', p, `styles.${el} must be an object`);
           continue;
         }
-        walkStyleNode(node, { el, child: null, selector, media: null, state: null, children }, p);
+        walkStyleNode(node, { el, child: null, selector, media: null, state: null, position: null, pseudo: null, children }, p);
       }
     }
   }
