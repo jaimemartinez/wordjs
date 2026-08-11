@@ -296,27 +296,31 @@
   --wjs-search-button-pad: 0.95rem 1.75rem;
   --wjs-search-button-weight: 700;
   --wjs-footer-bg: #66558c;
+  --wjs-nav-font-weight: 700;
+  --wjs-nav-transition: background-color 0.2s ease, color 0.2s ease;
 }
 h1,h2,h3,h4,h5,h6 { letter-spacing: -0.005em }
 body { letter-spacing: 0.005em }
+.wjs-chrome-header .wjs-header-logo span { font-family: var(--wjs-font-family-heading); font-size: 1.55rem; font-weight: 700; color: var(--wjs-color-primary) }
+.wjs-chrome-header .wjs-chrome-button { padding: 0.85rem 1.9rem; font-size: 0.98rem; font-weight: 700; background: var(--wjs-color-secondary); color: #141414; box-shadow: 0 10px 22px rgba(240,162,2,0.36),inset 0-4px 0 rgba(0,0,0,0.12) }
+.wjs-chrome-header .wjs-chrome-button:hover { background: var(--wjs-color-secondary); color: #141414; transform: translateY(-2px); box-shadow: 0 14px 28px rgba(240,162,2,0.42),inset 0-4px 0 rgba(0,0,0,0.12) }
+.wjs-header-nav a { padding: 0.5rem 1rem; border-radius: 9999px }
+.wjs-header-nav a:hover { background: #f4efff; color: var(--wjs-color-primary) }
+.wjs-chrome-footer .wjs-chrome-row { align-items: center }
+.wjs-chrome-footer .wjs-chrome-site-title a { font-family: var(--wjs-font-family-heading); font-size: 1.4rem; font-weight: 700; color: var(--wjs-color-text-footer-heading, #ffffff) }
+.wjs-chrome-footer .wjs-chrome-nav-horizontal { gap: 1.75rem }
+.wjs-chrome-footer .wjs-chrome-nav a { font-weight: 600 }
+.wjs-chrome-footer .wjs-chrome-socials a { background: rgba(255,255,255,0.14); box-shadow: inset 0-3px 0 rgba(0,0,0,0.12) }
+.wjs-chrome-footer .wjs-chrome-socials a:hover { background: var(--wjs-color-secondary); color: #141414 }
 @media (max-width: 767.98px) {
   .wp-block-hero { min-height: 56vh; padding: 3.25rem 1.5rem; border-radius: 32px }
+  .wjs-chrome-footer .wjs-chrome-row { justify-content: center; text-align: center }
 }
 /* @wjs-generated:end */
 
-/* Clay Pop — generated from a Stitch design system. Edit theme.json, then: wordjs build theme clay-pop */
-
-/* ============================================================================
-   CLAY POP — composed chrome (hand-authored; lives OUTSIDE the generated
-   block, so `build theme` never rewrites it).
-
-   The masthead is not a bar: the header strip itself goes invisible and the
-   composition row becomes a floating clay pill — soft double shadow, ultra
-   round, lifted off the lavender canvas. The footer answers it with a single
-   row on a rounded plum slab.
-   ============================================================================ */
-
-/* --- Masthead: a floating clay pill --------------------------------------- */
+/* Not expressible in theme.json's `styles` grammar — left hand-written on purpose.
+   Converted by scripts/themes-chrome-to-declarative.mjs; everything it could name now lives
+   in theme.json. What remains needs a selector shape the grammar has no name for. */
 header.wjs-chrome-header {
   background: transparent;
   box-shadow: none;
@@ -331,85 +335,12 @@ header.wjs-chrome-header {
   box-shadow: 0 20px 40px rgba(102, 85, 140, 0.18), inset 0 -4px 0 rgba(102, 85, 140, 0.10);
 }
 
-.wjs-chrome-header .wjs-header-logo span {
-  font-family: var(--wjs-font-family-heading);
-  font-size: 1.55rem;
-  font-weight: 700;
-  color: var(--wjs-color-primary);
-}
-
-.wjs-header-nav a {
-  padding: 0.5rem 1rem;
-  border-radius: 9999px;
-  font-weight: 700;
-  transition: background-color 0.2s ease, color 0.2s ease;
-}
-
-.wjs-header-nav a:hover {
-  background: #f4efff;
-  color: var(--wjs-color-primary);
-}
-
-/* The "Descargar" call to action is the one amber object on the page. */
-.wjs-chrome-header .wjs-chrome-button {
-  padding: 0.85rem 1.9rem;
-  font-size: 0.98rem;
-  font-weight: 700;
-  background: var(--wjs-color-secondary);
-  color: #141414;
-  box-shadow: 0 10px 22px rgba(240, 162, 2, 0.36), inset 0 -4px 0 rgba(0, 0, 0, 0.12);
-}
-
-.wjs-chrome-header .wjs-chrome-button:hover {
-  background: var(--wjs-color-secondary);
-  color: #141414;
-  transform: translateY(-2px);
-  box-shadow: 0 14px 28px rgba(240, 162, 2, 0.42), inset 0 -4px 0 rgba(0, 0, 0, 0.12);
-}
-
-/* --- Footer: one soft row on a rounded plum slab --------------------------- */
 footer.wjs-chrome-footer {
   padding-block: 2.5rem;
   border-top: 0;
   border-radius: 44px 44px 0 0;
 }
 
-.wjs-chrome-footer .wjs-chrome-row {
-  align-items: center;
-}
-
-.wjs-chrome-footer .wjs-chrome-site-title a {
-  font-family: var(--wjs-font-family-heading);
-  font-size: 1.4rem;
-  font-weight: 700;
-  color: var(--wjs-color-text-footer-heading, #ffffff);
-}
-
-.wjs-chrome-footer .wjs-chrome-nav-horizontal {
-  gap: 1.75rem;
-}
-
-.wjs-chrome-footer .wjs-chrome-nav a {
-  font-weight: 600;
-}
-
-.wjs-chrome-footer .wjs-chrome-socials a {
-  background: rgba(255, 255, 255, 0.14);
-  box-shadow: inset 0 -3px 0 rgba(0, 0, 0, 0.12);
-}
-
-.wjs-chrome-footer .wjs-chrome-socials a:hover {
-  background: var(--wjs-color-secondary);
-  color: #141414;
-}
-
-@media (max-width: 767.98px) {
-  footer.wjs-chrome-footer {
+footer.wjs-chrome-footer {
     border-radius: 32px 32px 0 0;
   }
-
-  .wjs-chrome-footer .wjs-chrome-row {
-    justify-content: center;
-    text-align: center;
-  }
-}

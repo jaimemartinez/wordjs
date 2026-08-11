@@ -288,7 +288,7 @@
   --wjs-table-head-tracking: 0;
   --wjs-divider-color: #aebdd8;
   --wjs-hero-gradient: none;
-  --wjs-nav-color: #363637;
+  --wjs-nav-color: #3f4a5c;
   --wjs-nav-color-hover: #00327d;
   --wjs-logo-color: #00327d;
   --wjs-logo-color-hover: #00245a;
@@ -309,147 +309,44 @@
   --wjs-nav-font-size: 0.9375rem;
   --wjs-nav-font-weight: 500;
   --wjs-nav-letter-spacing: 0;
+  --wjs-nav-transition: color 0.15s ease, background-color 0.15s ease;
 }
 body { line-height: 1.65 }
 .wjs-header-nav { gap: 2rem }
+.wjs-header-nav a { padding: 0.45rem 0.65rem; border-radius: 8px }
+.wjs-header-nav a:hover { color: var(--wjs-color-primary); background-color: #eef3fd }
 .wjs-header-logo { font-weight: 700; letter-spacing: -0.02em }
 footer { margin-top: 0; padding-top: 4rem; padding-bottom: 1.75rem; border-top-width: 0; font-size: 0.9375rem }
 .wp-block-hero__subtitle { max-width: 36rem; margin-left: auto; margin-right: auto }
 .wp-block-card__title { letter-spacing: -0.01em; line-height: 1.35 }
 h1,h2,h3,h4,h5,h6 { letter-spacing: -0.02em }
+.wjs-chrome-header { position: sticky; top: 0; padding: 0; background: #ffffff; box-shadow: 0 1px 0#e5eaf5,0 8px 24px rgba(16,24,40,0.05); border-bottom: 0 }
+.wjs-chrome-header .wjs-header-container { padding-top: 0.875rem; padding-bottom: 0.875rem }
+.wjs-chrome-header .wjs-header-logo span { font-family: var(--wjs-font-family-heading); font-size: 1.25rem; font-weight: 700; letter-spacing: -0.02em; color: var(--wjs-color-primary) }
+.wjs-chrome-header .wjs-chrome-button { border-radius: 10px; padding: 0.625rem 1.25rem; font-weight: 600; box-shadow: 0 1px 2px rgba(16,24,40,0.08); transition: transform 0.15s ease,box-shadow 0.15s ease,background-color 0.15s ease }
+.wjs-chrome-header .wjs-chrome-button:hover { transform: translateY(-1px); box-shadow: 0 10px 24px rgba(0,50,125,0.22) }
+.wjs-chrome-footer .wjs-footer-container > .wjs-chrome-row:first-child { display: grid; grid-template-columns: minmax(0,1fr); gap: 2rem; align-items: start }
+.wjs-chrome-footer .wjs-footer-container > .wjs-chrome-row:last-child { padding-top: 1.5rem; border-top: 1px solid rgba(255,255,255,0.14); font-size: 0.8125rem; color: var(--wjs-color-text-footer-dim) }
+.wjs-chrome-footer .wjs-chrome-site-title a { font-family: var(--wjs-font-family-heading); font-size: 1.25rem; font-weight: 700; letter-spacing: -0.02em; color: var(--wjs-footer-text-heading) }
+.wjs-chrome-footer .wjs-chrome-site-title span { max-width: 22rem; opacity: 0.75 }
+.wjs-chrome-footer .wjs-chrome-nav-vertical { gap: 0.65rem }
+.wjs-chrome-footer .wjs-chrome-search input { width: 100%; background: rgba(255,255,255,0.08); border-color: rgba(255,255,255,0.18); color: #ffffff }
+.wjs-chrome-footer .wjs-chrome-search input::placeholder { color: #7f92b3 }
+.wjs-chrome-footer .wjs-chrome-socials a { background: rgba(255,255,255,0.08); border-radius: 10px }
+.wjs-chrome-footer .wjs-chrome-spacer { display: block; width: 100%; height: 2.5rem }
+.wjs-chrome-footer .wjs-chrome-button { padding: 0; border: 0; border-radius: 0; background: transparent; font-size: 0.8125rem; font-weight: 400; color: var(--wjs-color-text-footer-dim); text-decoration: underline; text-underline-offset: 3px }
+.wjs-chrome-footer .wjs-chrome-button:hover { background: transparent; color: #ffffff }
+.wjs-chrome-footer .wjs-chrome-row .wjs-chrome-row { gap: 1.25rem }
 @media (max-width: 767.98px) {
   .wp-block-hero { padding: 3rem 1.25rem }
+  .wjs-chrome-header .wjs-chrome-button { padding: 0.5rem 0.9rem; font-size: 0.8125rem }
 }
 /* @wjs-generated:end */
 
-/* Cobalt Corporate — generated from a Stitch design system. Edit theme.json, then: wordjs build theme cobalt-corporate */
-
-/* =====================================================================
-   CHROME FINISH — hand-written, outside the generated block on purpose.
-   Targets the composable-chrome hook classes (.wjs-chrome-*), the
-   documented styling surface for a theme's chrome/*.json composition
-   (documentation/themes.md, "Composable chrome"). No !important: the
-   theme sheet is UNLAYERED and Tailwind utilities live in
-   @layer utilities, so these rules already win the cascade.
-   ===================================================================== */
-
-/* --- Masthead: a solid white bar PINNED to the top of the viewport. --
-   sticky (not fixed) keeps the header in flow, so no page ever slides
-   underneath it and no scroll listener is needed on the server render. */
-.wjs-chrome-header {
-  position: sticky;
-  top: 0;
-  padding: 0;
-  background: #ffffff;
-  box-shadow: 0 1px 0 #e5eaf5, 0 8px 24px rgba(16, 24, 40, 0.05);
-  border-bottom: 0;
-}
-.wjs-chrome-header .wjs-header-container {
-  padding-top: 0.875rem;
-  padding-bottom: 0.875rem;
-}
-.wjs-chrome-header .wjs-header-logo span {
-  font-family: var(--wjs-font-family-heading);
-  font-size: 1.25rem;
-  font-weight: 700;
-  letter-spacing: -0.02em;
-  color: var(--wjs-color-primary);
-}
-.wjs-header-nav a {
-  color: #3f4a5c;
-  padding: 0.45rem 0.65rem;
-  border-radius: 8px;
-  transition: color 0.15s ease, background-color 0.15s ease;
-}
-.wjs-header-nav a:hover {
-  color: var(--wjs-color-primary);
-  background-color: #eef3fd;
-}
-
-/* The one call to action in the masthead. */
-.wjs-chrome-header .wjs-chrome-button {
-  border-radius: 10px;
-  padding: 0.625rem 1.25rem;
-  font-weight: 600;
-  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.08);
-  transition: transform 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease;
-}
-.wjs-chrome-header .wjs-chrome-button:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 10px 24px rgba(0, 50, 125, 0.22);
-}
-
-/* --- Footer: four columns of links, then a quiet legal band. --------- */
-.wjs-chrome-footer .wjs-footer-container > .wjs-chrome-row:first-child {
-  display: grid;
-  grid-template-columns: 1.4fr 1fr 1fr 1fr;
-  gap: 2.5rem;
-  align-items: start;
-}
+/* Not expressible in theme.json's `styles` grammar — left hand-written on purpose.
+   Converted by scripts/themes-chrome-to-declarative.mjs; everything it could name now lives
+   in theme.json. What remains needs a selector shape the grammar has no name for. */
 .wjs-chrome-footer .wjs-footer-container > .wjs-chrome-row:first-child > .wjs-chrome-row {
   display: block;
   width: auto;
 }
-.wjs-chrome-footer .wjs-chrome-site-title a {
-  font-family: var(--wjs-font-family-heading);
-  font-size: 1.25rem;
-  font-weight: 700;
-  letter-spacing: -0.02em;
-  color: var(--wjs-footer-text-heading);
-}
-.wjs-chrome-footer .wjs-chrome-site-title span { max-width: 22rem; opacity: 0.75; }
-.wjs-chrome-footer .wjs-chrome-nav-vertical { gap: 0.65rem; }
-.wjs-chrome-footer .wjs-chrome-search input {
-  width: 100%;
-  background: rgba(255, 255, 255, 0.08);
-  border-color: rgba(255, 255, 255, 0.18);
-  color: #ffffff;
-}
-.wjs-chrome-footer .wjs-chrome-search input::placeholder { color: #7f92b3; }
-.wjs-chrome-footer .wjs-chrome-socials a {
-  background: rgba(255, 255, 255, 0.08);
-  border-radius: 10px;
-}
-
-.wjs-chrome-footer .wjs-chrome-spacer {
-  display: block;
-  width: 100%;
-  height: 2.5rem;
-}
-/* The legal band: same blocks, read as links rather than as buttons. */
-.wjs-chrome-footer .wjs-footer-container > .wjs-chrome-row:last-child {
-  padding-top: 1.5rem;
-  border-top: 1px solid rgba(255, 255, 255, 0.14);
-  font-size: 0.8125rem;
-  color: var(--wjs-color-text-footer-dim);
-}
-.wjs-chrome-footer .wjs-chrome-button {
-  padding: 0;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  font-size: 0.8125rem;
-  font-weight: 400;
-  color: var(--wjs-color-text-footer-dim);
-  text-decoration: underline;
-  text-underline-offset: 3px;
-}
-.wjs-chrome-footer .wjs-chrome-button:hover {
-  background: transparent;
-  color: #ffffff;
-}
-.wjs-chrome-footer .wjs-chrome-row .wjs-chrome-row { gap: 1.25rem; }
-
-@media (max-width: 1023.98px) {
-  .wjs-chrome-footer .wjs-footer-container > .wjs-chrome-row:first-child {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 2rem;
-  }
-}
-@media (max-width: 767.98px) {
-  .wjs-chrome-footer .wjs-footer-container > .wjs-chrome-row:first-child {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .wjs-chrome-header .wjs-chrome-button { padding: 0.5rem 0.9rem; font-size: 0.8125rem; }
-}
-

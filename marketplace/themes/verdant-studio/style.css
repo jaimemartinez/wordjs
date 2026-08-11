@@ -306,132 +306,30 @@
 .wp-block-posts-grid__date { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.18em }
 h1,h2,h3,h4,h5,h6 { font-weight: 400; letter-spacing: -0.022em }
 a { text-underline-offset: 0.26em; text-decoration-thickness: 1px }
+.wjs-header-logo span { font-family: var(--wjs-font-family-heading); font-size: 1.1rem; font-weight: 400; letter-spacing: 0.32em; text-transform: uppercase }
+.wjs-header-actions button { width: 2.75rem; height: 2.75rem; border-radius: 2px; background: transparent; color: var(--wjs-color-primary); border: 1px solid var(--wjs-color-primary); box-shadow: none }
+.wjs-header-actions button:hover { background: var(--wjs-color-primary); color: var(--wjs-color-on-primary) }
+.wjs-header-mobile-panel nav a { font-size: 0.78rem; font-weight: 500; letter-spacing: 0.2em; text-transform: uppercase }
+.wjs-chrome-footer .wjs-chrome-row { align-items: flex-start }
+.wjs-chrome-footer .wjs-chrome-row .wjs-chrome-row { flex: 1 1 12rem; flex-direction: column; gap: 1.1rem }
+.wjs-chrome-footer .wjs-chrome-row .wjs-chrome-row > .wjs-chrome-text:first-child { font-size: 0.66rem; font-weight: 600; letter-spacing: 0.24em; text-transform: uppercase; color: var(--wjs-color-text-footer-heading, #faf9f5) }
+.wjs-chrome-footer .wjs-chrome-text { white-space: pre-line; line-height: 1.75 }
+.wjs-chrome-footer .wjs-chrome-site-title a { font-family: var(--wjs-font-family-heading); font-size: 1rem; font-weight: 400; letter-spacing: 0.28em; text-transform: uppercase; color: var(--wjs-color-text-footer-heading, #faf9f5) }
+.wjs-chrome-footer .wjs-chrome-site-title span { max-width: 20rem; line-height: 1.75; color: var(--wjs-color-text-footer-dim, #b6c4bb) }
+.wjs-chrome-footer .wjs-chrome-nav-vertical { gap: 0.7rem }
+.wjs-chrome-footer .wjs-chrome-nav a { font-size: 0.9rem }
+.wjs-chrome-footer .wjs-chrome-socials a { border-radius: 2px; background: transparent; border: 1px solid rgba(250,249,245,0.28); color: var(--wjs-color-text-footer-main, #faf9f5) }
+.wjs-chrome-footer .wjs-chrome-socials a:hover { background: var(--wjs-color-secondary); border-color: var(--wjs-color-secondary); color: #1b2d25 }
+.wjs-chrome-footer > .wjs-footer-container > .wjs-chrome-row + .wjs-chrome-row { align-items: center; margin-top: 4.5rem; padding-top: 1.75rem; border-top: 1px solid rgba(250,249,245,0.16); font-size: 0.7rem; letter-spacing: 0.2em; text-transform: uppercase }
 @media (max-width: 767.98px) {
   .wp-block-hero { min-height: 78vh; padding: 3rem 1.5rem }
 }
 /* @wjs-generated:end */
 
-/* Verdant Studio — generated from a Stitch design system. Edit theme.json, then: wordjs build theme verdant-studio */
-
-/* ============================================================================
-   VERDANT STUDIO — chrome (hand-authored; lives OUTSIDE the generated block,
-   so `build theme` never rewrites it).
-
-   HEADER — deliberately NOT composed. `layout.header.variant` is `minimal`:
-   wordmark plus a single disclosure control, nav always inside the panel, so
-   the photography below is never competing with a link row. A composition
-   cannot express that — ChromeNav always emits its desktop row — so this theme
-   styles the built-in masthead and composes only the footer.
-   ============================================================================ */
-
-/* --- Masthead: a rule, a wordmark, one control ---------------------------- */
-.wjs-header-logo span {
-  font-family: var(--wjs-font-family-heading);
-  font-size: 1.1rem;
-  font-weight: 400;
-  letter-spacing: 0.32em;
-  text-transform: uppercase;
-}
-
-/* The burger defaults to a filled primary disc; an architecture studio gets a
-   square hairline control instead. */
-.wjs-header-actions button {
-  width: 2.75rem;
-  height: 2.75rem;
-  border-radius: 2px;
-  background: transparent;
-  color: var(--wjs-color-primary);
-  border: 1px solid var(--wjs-color-primary);
-  box-shadow: none;
-}
-
-.wjs-header-actions button:hover {
-  background: var(--wjs-color-primary);
-  color: var(--wjs-color-on-primary);
-}
-
-/* The nav lives in the slide-over panel at every width — give it the same
-   quiet, letterspaced voice as the wordmark. */
-.wjs-header-mobile-panel nav a {
-  font-size: 0.78rem;
-  font-weight: 500;
-  letter-spacing: 0.2em;
-  text-transform: uppercase;
-}
-
-/* --- Footer: four columns on deep forest ---------------------------------- */
+/* Not expressible in theme.json's `styles` grammar — left hand-written on purpose.
+   Converted by scripts/themes-chrome-to-declarative.mjs; everything it could name now lives
+   in theme.json. What remains needs a selector shape the grammar has no name for. */
 footer.wjs-chrome-footer {
   padding-block: 5.5rem 2.5rem;
   border-top: 0;
-}
-
-.wjs-chrome-footer .wjs-chrome-row {
-  align-items: flex-start;
-}
-
-.wjs-chrome-footer .wjs-chrome-row .wjs-chrome-row {
-  flex: 1 1 12rem;
-  flex-direction: column;
-  gap: 1.1rem;
-}
-
-.wjs-chrome-footer .wjs-chrome-row .wjs-chrome-row > .wjs-chrome-text:first-child {
-  font-size: 0.66rem;
-  font-weight: 600;
-  letter-spacing: 0.24em;
-  text-transform: uppercase;
-  color: var(--wjs-color-text-footer-heading, #faf9f5);
-}
-
-/* The address block is authored with line breaks — honour them. */
-.wjs-chrome-footer .wjs-chrome-text {
-  white-space: pre-line;
-  line-height: 1.75;
-}
-
-.wjs-chrome-footer .wjs-chrome-site-title a {
-  font-family: var(--wjs-font-family-heading);
-  font-size: 1rem;
-  font-weight: 400;
-  letter-spacing: 0.28em;
-  text-transform: uppercase;
-  color: var(--wjs-color-text-footer-heading, #faf9f5);
-}
-
-.wjs-chrome-footer .wjs-chrome-site-title span {
-  max-width: 20rem;
-  line-height: 1.75;
-  color: var(--wjs-color-text-footer-dim, #b6c4bb);
-}
-
-.wjs-chrome-footer .wjs-chrome-nav-vertical {
-  gap: 0.7rem;
-}
-
-.wjs-chrome-footer .wjs-chrome-nav a {
-  font-size: 0.9rem;
-}
-
-/* Square hairline chips, matching the masthead control. */
-.wjs-chrome-footer .wjs-chrome-socials a {
-  border-radius: 2px;
-  background: transparent;
-  border: 1px solid rgba(250, 249, 245, 0.28);
-  color: var(--wjs-color-text-footer-main, #faf9f5);
-}
-
-.wjs-chrome-footer .wjs-chrome-socials a:hover {
-  background: var(--wjs-color-secondary);
-  border-color: var(--wjs-color-secondary);
-  color: #1b2d25;
-}
-
-.wjs-chrome-footer > .wjs-footer-container > .wjs-chrome-row + .wjs-chrome-row {
-  align-items: center;
-  margin-top: 4.5rem;
-  padding-top: 1.75rem;
-  border-top: 1px solid rgba(250, 249, 245, 0.16);
-  font-size: 0.7rem;
-  letter-spacing: 0.2em;
-  text-transform: uppercase;
 }

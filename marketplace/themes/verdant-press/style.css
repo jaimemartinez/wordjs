@@ -1,0 +1,49 @@
+/* @wjs-generated:start — compiled from theme.json; DO NOT EDIT inside. Edit theme.json and run: node backend/cli/wordjs.js build theme verdant-press */
+:root {
+  --wjs-bg-canvas: #faf9f5;
+  --wjs-bg-surface: #ffffff;
+  --wjs-bg-surface-raised: #ebeae6;
+  --wjs-color-primary: #556b2f;
+  --wjs-color-primary-dark: #3e5219;
+  --wjs-color-on-primary: #ffffff;
+  --wjs-color-accent: #1a1a1a;
+  --wjs-color-on-accent: #ffffff;
+  --wjs-color-text-main: #1b1c1a;
+  --wjs-color-text-muted: #45483c;
+  --wjs-color-heading: #1b1c1a;
+  --wjs-color-link: #3e5219;
+  --wjs-color-link-hover: #1a1a1a;
+  --wjs-border-subtle: #c5c8b8;
+  --wjs-outline: #75796b;
+  --wjs-outline-variant: #d9d8d4;
+  --wjs-focus-ring: #556b2f;
+  --wjs-bg-muted: #efeeea;
+  --wjs-color-secondary: #1a1a1a;
+  --wjs-color-secondary-dark: #5f5e5e;
+  --wjs-color-on-secondary: #ffffff;
+  --wjs-card-border-color: #c5c8b8;
+  --wjs-color-danger: #ba1a1a;
+  --wjs-color-on-danger: #ffffff;
+  --wjs-font-family-heading: 'Playfair Display', Georgia, 'Times New Roman', serif;
+  --wjs-font-family-base: 'Public Sans', 'Segoe UI', system-ui, sans-serif;
+  --wjs-radius: 4px;
+  --wjs-radius-sm: 4px;
+  --wjs-radius-md: 4px;
+  --wjs-radius-lg: 4px;
+  --wjs-radius-pill: 4px;
+  --wjs-xs: 0.25rem;
+  --wjs-sm: 0.5rem;
+  --wjs-md: 1rem;
+  --wjs-lg: 1.5rem;
+  --wjs-xl: 2.5rem;
+  --wjs-2xl: 4.5rem;
+  --wjs-hero-bg: #faf9f5;
+  --wjs-hero-gradient-from: #faf9f5;
+  --wjs-hero-gradient-to: #faf9f5;
+  --wjs-hero-color: #1b1c1a;
+  --wjs-hero-title-color: #556b2f;
+  --wjs-hero-subtitle-color: #45483c;
+  --wjs-hero-button-outline-color: #556b2f;
+  --wjs-hero-button-outline-border: #556b2f;
+}
+/* @wjs-generated:end */

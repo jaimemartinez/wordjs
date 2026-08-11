@@ -299,7 +299,7 @@
   --wjs-table-head-tracking: 0.06em;
   --wjs-divider-color: #f5f5f4;
   --wjs-hero-gradient: none;
-  --wjs-nav-color: #f5f5f4;
+  --wjs-nav-color: var(--wjs-color-text-muted);
   --wjs-nav-color-hover: #00ff41;
   --wjs-logo-color: #f5f5f4;
   --wjs-logo-color-hover: #00ff41;
@@ -321,103 +321,32 @@
   --wjs-nav-font-weight: 700;
   --wjs-nav-letter-spacing: 0.24em;
   --wjs-nav-text-transform: uppercase;
+  --wjs-nav-transition: color 0.18s ease;
 }
 body { line-height: 1.7 }
 .wjs-header-nav { gap: 2.25rem }
+.wjs-header-nav a { position: relative; padding-bottom: 0.35rem }
+.wjs-header-nav a::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 1px; background: var(--wjs-color-primary); transform: scaleX(0); transform-origin: left center; transition: transform 0.22s ease }
+.wjs-header-nav a:hover { color: var(--wjs-color-primary) }
+.wjs-header-nav a:hover::after { transform: scaleX(1) }
 .wjs-header-logo { font-weight: 400; letter-spacing: 0.18em; text-transform: uppercase }
 footer { margin-top: 0; padding-top: 2rem; padding-bottom: 2rem; border-top-width: 1px; border-top-style: solid; border-top-color: #1c1c1c; font-size: 0.75rem; letter-spacing: 0.12em; text-transform: uppercase }
 .wp-block-hero__title { text-transform: uppercase }
 .wp-block-hero__subtitle { letter-spacing: 0.22em; text-transform: uppercase; max-width: 42rem; margin-left: auto; margin-right: auto }
 .wp-block-card__title { line-height: 1.2 }
 h1,h2,h3,h4,h5,h6 { line-height: 1.05 }
+.wjs-chrome-header { position: sticky; top: 0; padding: 0; background: rgba(0,0,0,0.72); box-shadow: none; border-bottom: 1px solid #1c1c1c }
+.wjs-chrome-header .wjs-header-container { padding-top: 1rem; padding-bottom: 1rem }
+.wjs-chrome-header .wjs-chrome-site-title a { font-family: var(--wjs-font-family-heading); font-size: 1.05rem; font-weight: 400; letter-spacing: 0.16em; text-transform: uppercase; color: var(--wjs-color-text-main) }
+.wjs-chrome-header .wjs-chrome-site-title a:hover { color: var(--wjs-color-primary) }
+.wjs-chrome-header .wjs-header-logo span { font-family: var(--wjs-font-family-heading); font-size: 1.35rem; font-weight: 400; letter-spacing: 0.2em; text-transform: uppercase; color: var(--wjs-color-text-main) }
+.wjs-chrome-footer .wjs-chrome-row { row-gap: 1.25rem }
+.wjs-chrome-footer .wjs-chrome-site-title a { font-family: var(--wjs-font-family-heading); font-size: 1.1rem; letter-spacing: 0.22em; text-transform: uppercase; color: var(--wjs-footer-text-heading) }
+.wjs-chrome-footer .wjs-chrome-nav a { font-size: 0.6875rem; letter-spacing: 0.2em; text-transform: uppercase }
+.wjs-chrome-footer .wjs-chrome-nav a:hover { color: var(--wjs-color-secondary) }
+.wjs-chrome-footer .wjs-chrome-socials a { border-radius: 0; width: 2.25rem; height: 2.25rem; border: 1px solid #1c1c1c }
 @media (max-width: 767.98px) {
   .wp-block-hero { padding: 0 1.25rem }
+  .wjs-chrome-footer .wjs-chrome-row { justify-content: flex-start }
 }
 /* @wjs-generated:end */
-
-/* Neo Digital — generated from a Stitch design system. Edit theme.json, then: wordjs build theme neo-digital */
-
-/* =====================================================================
-   CHROME FINISH — hand-written, outside the generated block on purpose.
-   Targets the composable-chrome hook classes (.wjs-chrome-*), the
-   documented styling surface for a theme's chrome/*.json composition
-   (documentation/themes.md, "Composable chrome"). No !important: the
-   theme sheet is UNLAYERED and Tailwind utilities live in
-   @layer utilities, so these rules already win the cascade.
-   ===================================================================== */
-
-/* --- Masthead: a translucent HUD bar riding over a full-bleed hero. -- */
-.wjs-chrome-header {
-  position: sticky;
-  top: 0;
-  padding: 0;
-  background: rgba(0, 0, 0, 0.72);
-  box-shadow: none;
-  border-bottom: 1px solid #1c1c1c;
-}
-.wjs-chrome-header .wjs-header-container {
-  padding-top: 1rem;
-  padding-bottom: 1rem;
-}
-
-/* Wordmark: condensed display caps, wide tracking, no ornament. */
-.wjs-chrome-header .wjs-chrome-site-title a,
-.wjs-chrome-header .wjs-header-logo span {
-  font-family: var(--wjs-font-family-heading);
-  font-size: 1.35rem;
-  font-weight: 400;
-  letter-spacing: 0.2em;
-  text-transform: uppercase;
-  color: var(--wjs-color-text-main);
-}
-.wjs-chrome-header .wjs-chrome-site-title a:hover { color: var(--wjs-color-primary); }
-
-/* Nav: a neon underline that scans in from the left on hover. */
-.wjs-header-nav a {
-  position: relative;
-  padding-bottom: 0.35rem;
-  color: var(--wjs-color-text-muted);
-  transition: color 0.18s ease;
-}
-.wjs-header-nav a::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: 1px;
-  background: var(--wjs-color-primary);
-  transform: scaleX(0);
-  transform-origin: left center;
-  transition: transform 0.22s ease;
-}
-.wjs-header-nav a:hover { color: var(--wjs-color-primary); }
-.wjs-header-nav a:hover::after { transform: scaleX(1); }
-
-/* --- Footer: exactly one uppercase row. ----------------------------- */
-.wjs-chrome-footer .wjs-chrome-row { row-gap: 1.25rem; }
-.wjs-chrome-footer .wjs-chrome-site-title a {
-  font-family: var(--wjs-font-family-heading);
-  font-size: 1.1rem;
-  letter-spacing: 0.22em;
-  text-transform: uppercase;
-  color: var(--wjs-footer-text-heading);
-}
-.wjs-chrome-footer .wjs-chrome-nav a {
-  font-size: 0.6875rem;
-  letter-spacing: 0.2em;
-  text-transform: uppercase;
-}
-.wjs-chrome-footer .wjs-chrome-nav a:hover { color: var(--wjs-color-secondary); }
-.wjs-chrome-footer .wjs-chrome-socials a {
-  border-radius: 0;
-  width: 2.25rem;
-  height: 2.25rem;
-  border: 1px solid #1c1c1c;
-}
-
-@media (max-width: 767.98px) {
-  .wjs-chrome-header .wjs-chrome-site-title a { font-size: 1.05rem; letter-spacing: 0.16em; }
-  .wjs-chrome-footer .wjs-chrome-row { justify-content: flex-start; }
-}
-

@@ -460,6 +460,43 @@ function compileTheme(dirOrSlug: string, opts: CompileOpts = {}): CompileResult 
       error('URL_FORBIDDEN', p, `url(${badUrl}) — only this theme's own /themes/${slug}/ assets are allowed`);
       return null;
     }
+    // TOKEN REFERENCES. A theme's whole vocabulary is the --wjs-* contract, so `color:
+    // var(--wjs-color-primary)` is the NORMAL thing for it to write — and it was rejected outright,
+    // because css-tree's lexer cannot match a value tree containing var() ("Matching for a tree with
+    // var() is not supported"). That is a limitation of the matcher, not a property error.
+    //
+    // It mattered more than a missing feature: with var() unavailable, the only way to express a token
+    // was to inline the value it currently resolves to — which compiles identically and then BREAKS THE
+    // LIVE CUSTOMIZER, because a customizer override reaches the token and a hard-coded literal ignores
+    // it. A conversion pass did exactly that, silently, across several themes.
+    //
+    // So: collect every var() reference, verify each one is a REAL token in the manifest, and skip the
+    // property matcher for that value. Verifying the reference is stricter than plain CSS, not looser —
+    // hand-written CSS never told a theme author that `var(--wjs-color-primry)` resolves to nothing.
+    const varRefs: string[] = [];
+    csstree.walk(ast, {
+      visit: 'Function',
+      enter(node: any) {
+        if (String(node.name).toLowerCase() !== 'var') return;
+        const first = node.children && node.children.first;
+        varRefs.push(first && first.name ? String(first.name) : '');
+      }
+    });
+    if (varRefs.length) {
+      for (const ref of varRefs) {
+        if (!ref.startsWith('--wjs-')) {
+          error('VALUE_INVALID', p, `var(${ref || '?'}) — a theme may only reference the --wjs-* token contract`);
+          return null;
+        }
+        if (!Object.prototype.hasOwnProperty.call(manifestTokens, ref)) {
+          const suggestion = closestToken(ref, Object.keys(manifestTokens));
+          error('TOKEN_UNKNOWN', p, `var(${ref}) is not a token in the contract${suggestion ? ` — did you mean ${suggestion}?` : ''}`, suggestion);
+          return null;
+        }
+      }
+      // Every reference checked; the surrounding value already parsed as CSS and passed the url() guard.
+      return csstree.generate(ast);
+    }
     const match = csstree.lexer.matchProperty(prop, ast);
     if (match.error) {
       error('VALUE_INVALID', p, `value rejected for "${prop}": ${String(match.error.rawMessage || match.error.message).split('\n')[0]}`);

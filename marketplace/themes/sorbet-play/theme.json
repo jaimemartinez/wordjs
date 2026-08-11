@@ -1,6 +1,6 @@
 {
   "name": "Sorbet Play",
-  "version": "1.0.24",
+  "version": "1.0.26",
   "description": "Tema Memphis pastel y juguetón: fresa, limón, menta y lavanda sobre lunares, con bordes de tinta gruesos, sombras duras y botones píldora.",
   "author": "WordJS × Stitch",
   "generator": "wordjs",
@@ -383,6 +383,87 @@
       "font-weight": "600",
       "text-decoration-thickness": "2px",
       "text-underline-offset": "0.2em"
+    },
+    "chromeHeader": {
+      "logoText": {
+        "font-family": "var(--wjs-font-family-heading)",
+        "font-size": "2.1rem",
+        "font-weight": "700",
+        "letter-spacing": "-0.02em"
+      }
+    },
+    "nav": {
+      "link": {
+        "padding": "0.5rem 1.25rem",
+        "border": "3px solid var(--wjs-color-text-main)",
+        "border-radius": "9999px",
+        "background": "#ffffff",
+        "box-shadow": "3px 3px 0 var(--wjs-color-text-main)",
+        "font-weight": "700",
+        "transition": "transform 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease",
+        "hover": {
+          "background": "var(--wjs-color-primary)",
+          "color": "var(--wjs-color-text-main)",
+          "transform": "translate(2px, 2px)",
+          "box-shadow": "1px 1px 0 var(--wjs-color-text-main)"
+        }
+      }
+    },
+    "chromeFooter": {
+      "row": {
+        "align-items": "flex-start"
+      },
+      "rowNested": {
+        "flex": "1 1 14rem",
+        "flex-direction": "column",
+        "align-items": "center",
+        "gap": "0.85rem",
+        "text-align": "center"
+      },
+      "rowNestedText": {
+        "first": {
+          "font-family": "var(--wjs-font-family-heading)",
+          "font-size": "0.85rem",
+          "font-weight": "700",
+          "letter-spacing": "0.1em",
+          "text-transform": "uppercase",
+          "color": "var(--wjs-color-text-footer-heading, #08252d)"
+        }
+      },
+      "siteTitle": {
+        "align-items": "center"
+      },
+      "siteTitleLink": {
+        "font-family": "var(--wjs-font-family-heading)",
+        "font-size": "1.7rem",
+        "font-weight": "700",
+        "color": "var(--wjs-color-text-footer-heading, #08252d)"
+      },
+      "navVertical": {
+        "align-items": "center",
+        "gap": "0.5rem"
+      },
+      "navLink": {
+        "font-weight": "600"
+      },
+      "socialLink": {
+        "background": "#ffffff",
+        "border": "3px solid var(--wjs-color-text-main)",
+        "box-shadow": "3px 3px 0 var(--wjs-color-text-main)",
+        "color": "var(--wjs-color-text-main)",
+        "hover": {
+          "background": "var(--wjs-color-primary)",
+          "color": "var(--wjs-color-text-main)"
+        }
+      },
+      "containerRowAfterFirst": {
+        "align-items": "center",
+        "margin-top": "2.75rem",
+        "padding-top": "1.35rem",
+        "border-top": "3px dashed rgba(8, 37, 45, 0.35)",
+        "font-size": "0.9rem",
+        "font-weight": "600"
+      }
     }
   }
 }

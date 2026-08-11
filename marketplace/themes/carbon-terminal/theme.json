@@ -1,6 +1,6 @@
 {
   "name": "Carbon Terminal",
-  "version": "1.0.25",
+  "version": "1.0.27",
   "description": "OLED-dark developer & docs theme with a terminal-green accent.",
   "author": "WordJS",
   "generator": "wordjs",
@@ -336,11 +336,33 @@
       "font-size": "0.8125rem",
       "font-weight": "500",
       "letter-spacing": "0.02em",
-      "text-transform": "lowercase"
+      "text-transform": "lowercase",
+      "link": {
+        "color": "var(--wjs-color-text-muted)",
+        "padding": "0.25rem 0",
+        "border-bottom": "1px solid transparent",
+        "transition": "color 0.15s ease, border-color 0.15s ease",
+        "before": {
+          "content": "\"/\"",
+          "margin-right": "0.3rem",
+          "color": "#3a3f4a"
+        },
+        "hover": {
+          "color": "var(--wjs-color-primary)",
+          "border-bottom-color": "var(--wjs-color-primary)"
+        }
+      }
     },
     "logo": {
       "font-weight": "700",
-      "letter-spacing": "0.02em"
+      "letter-spacing": "0.02em",
+      "text": {
+        "font-family": "var(--wjs-font-family-heading)",
+        "font-size": "1rem",
+        "font-weight": "700",
+        "letter-spacing": "0.02em",
+        "color": "var(--wjs-color-text-main)"
+      }
     },
     "footer": {
       "margin-top": "4rem",
@@ -372,6 +394,75 @@
     "stats": {
       "label": {
         "line-height": "1.4"
+      }
+    },
+    "chromeHeader": {
+      "padding": "0",
+      "background": "var(--wjs-bg-canvas)",
+      "box-shadow": "none",
+      "backdrop-filter": "none",
+      "border-bottom": "1px solid var(--wjs-border-subtle)",
+      "container": {
+        "padding-top": "0.625rem",
+        "padding-bottom": "0.625rem"
+      },
+      "text": {
+        "color": "var(--wjs-color-primary)",
+        "font-family": "var(--wjs-font-family-mono)",
+        "font-size": "0.875rem",
+        "font-weight": "700",
+        "line-height": "1"
+      },
+      "searchInput": {
+        "min-width": "0",
+        "width": "8.5rem"
+      }
+    },
+    "chromeSearch": {
+      "input": {
+        "min-width": "13rem",
+        "font-family": "var(--wjs-font-family-mono)",
+        "font-size": "0.8125rem",
+        "background": "#11141d",
+        "border-color": "#2a2e38",
+        "border-radius": "4px",
+        "color": "var(--wjs-color-text-main)",
+        "placeholder": {
+          "color": "#5b6068"
+        },
+        "focus": {
+          "border-color": "var(--wjs-color-primary)"
+        }
+      }
+    },
+    "chromeFooter": {
+      "rowChild": {
+        "flex": "1 1 0",
+        "align-items": "flex-start",
+        "mobile": {
+          "flex-basis": "100%"
+        }
+      },
+      "siteTitleLink": {
+        "font-family": "var(--wjs-font-family-heading)",
+        "font-size": "1rem",
+        "letter-spacing": "0.02em",
+        "color": "var(--wjs-footer-text-heading)"
+      },
+      "navVertical": {
+        "gap": "0.5rem"
+      },
+      "navLink": {
+        "font-size": "0.8125rem",
+        "before": {
+          "content": "\"· \"",
+          "color": "#3a3f4a"
+        }
+      },
+      "socialLink": {
+        "border-radius": "4px",
+        "width": "2rem",
+        "height": "2rem"
       }
     }
   }

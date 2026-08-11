@@ -1,6 +1,6 @@
 {
   "name": "Cobalt Corporate",
-  "version": "1.0.22",
+  "version": "1.0.24",
   "description": "SaaS corporativo: barra fija con botón de contacto, tarjetas redondeadas sobre lienzo azulado y pie de cuatro columnas con banda legal.",
   "author": "WordJS × Stitch",
   "generator": "wordjs",
@@ -327,7 +327,17 @@
       "gap": "2rem",
       "font-size": "0.9375rem",
       "font-weight": "500",
-      "letter-spacing": "0"
+      "letter-spacing": "0",
+      "link": {
+        "color": "#3f4a5c",
+        "padding": "0.45rem 0.65rem",
+        "border-radius": "8px",
+        "transition": "color 0.15s ease, background-color 0.15s ease",
+        "hover": {
+          "color": "var(--wjs-color-primary)",
+          "background-color": "#eef3fd"
+        }
+      }
     },
     "logo": {
       "font-weight": "700",
@@ -358,6 +368,106 @@
     },
     "headings": {
       "letter-spacing": "-0.02em"
+    },
+    "chromeHeader": {
+      "position": "sticky",
+      "top": "0",
+      "padding": "0",
+      "background": "#ffffff",
+      "box-shadow": "0 1px 0 #e5eaf5, 0 8px 24px rgba(16, 24, 40, 0.05)",
+      "border-bottom": "0",
+      "container": {
+        "padding-top": "0.875rem",
+        "padding-bottom": "0.875rem"
+      },
+      "logoText": {
+        "font-family": "var(--wjs-font-family-heading)",
+        "font-size": "1.25rem",
+        "font-weight": "700",
+        "letter-spacing": "-0.02em",
+        "color": "var(--wjs-color-primary)"
+      },
+      "button": {
+        "border-radius": "10px",
+        "padding": "0.625rem 1.25rem",
+        "font-weight": "600",
+        "box-shadow": "0 1px 2px rgba(16, 24, 40, 0.08)",
+        "transition": "transform 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease",
+        "hover": {
+          "transform": "translateY(-1px)",
+          "box-shadow": "0 10px 24px rgba(0, 50, 125, 0.22)"
+        },
+        "mobile": {
+          "padding": "0.5rem 0.9rem",
+          "font-size": "0.8125rem"
+        }
+      }
+    },
+    "chromeFooter": {
+      "containerRow": {
+        "first": {
+          "display": "grid",
+          "grid-template-columns": "minmax(0, 1fr)",
+          "gap": "2rem",
+          "align-items": "start"
+        },
+        "last": {
+          "padding-top": "1.5rem",
+          "border-top": "1px solid rgba(255, 255, 255, 0.14)",
+          "font-size": "0.8125rem",
+          "color": "var(--wjs-color-text-footer-dim)"
+        }
+      },
+      "siteTitleLink": {
+        "font-family": "var(--wjs-font-family-heading)",
+        "font-size": "1.25rem",
+        "font-weight": "700",
+        "letter-spacing": "-0.02em",
+        "color": "var(--wjs-footer-text-heading)"
+      },
+      "siteTitleText": {
+        "max-width": "22rem",
+        "opacity": "0.75"
+      },
+      "navVertical": {
+        "gap": "0.65rem"
+      },
+      "searchInput": {
+        "width": "100%",
+        "background": "rgba(255, 255, 255, 0.08)",
+        "border-color": "rgba(255, 255, 255, 0.18)",
+        "color": "#ffffff",
+        "placeholder": {
+          "color": "#7f92b3"
+        }
+      },
+      "socialLink": {
+        "background": "rgba(255, 255, 255, 0.08)",
+        "border-radius": "10px"
+      },
+      "spacer": {
+        "display": "block",
+        "width": "100%",
+        "height": "2.5rem"
+      },
+      "button": {
+        "padding": "0",
+        "border": "0",
+        "border-radius": "0",
+        "background": "transparent",
+        "font-size": "0.8125rem",
+        "font-weight": "400",
+        "color": "var(--wjs-color-text-footer-dim)",
+        "text-decoration": "underline",
+        "text-underline-offset": "3px",
+        "hover": {
+          "background": "transparent",
+          "color": "#ffffff"
+        }
+      },
+      "rowNested": {
+        "gap": "1.25rem"
+      }
     }
   }
 }
