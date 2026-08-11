@@ -398,7 +398,10 @@ describe('compileTheme (declarative theme compiler)', () => {
     it('integration: seeds + archetype compile with the real theme-derive', (t: any) => {
         let real: any = null;
         try { real = require('../core/theme-derive'); } catch { /* not landed yet */ }
-        if (!real || typeof real.deriveTokens !== 'function' || typeof real.archetypeCss !== 'function' || !Array.isArray(real.ARCHETYPE_NAMES) || real.ARCHETYPE_NAMES.length === 0) {
+        // NOTE: archetypeCss is deliberately NOT in this guard any more. It was removed from core with
+        // the legacy theme model, and leaving it here would have made this integration test SKIP ITSELF
+        // for ever — silently, and looking green.
+        if (!real || typeof real.deriveTokens !== 'function' || !Array.isArray(real.ARCHETYPE_NAMES) || real.ARCHETYPE_NAMES.length === 0) {
             t.skip('theme-derive not available yet');
             return;
         }
