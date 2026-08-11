@@ -110,7 +110,11 @@ const POSITIONS: Record<string, string> = { first: ':first-child', last: ':last-
 const BREAKPOINTS: Record<string, string> = {
   mobile: '(max-width: 767.98px)',
   tablet: '(min-width: 768px) and (max-width: 1023.98px)',
-  desktop: '(min-width: 1024px)'
+  desktop: '(min-width: 1024px)',
+  // `tablet` is a BAND, not "up to tablet" — a distinction that already cost a real regression: a rule
+  // written for (max-width: 1023.98px) was moved to `tablet` and silently stopped applying below 768px.
+  // Two catalogue themes write that query, so it gets its own name instead of an approximation.
+  belowDesktop: '(max-width: 1023.98px)'
 };
 // Used only until theme-derive lands (it exports the authoritative ARCHETYPE_NAMES).
 const ARCHETYPE_FALLBACK = ['cyber', 'brutalist', 'editorial', 'glassmorphism', 'organic', 'obsidian'];
