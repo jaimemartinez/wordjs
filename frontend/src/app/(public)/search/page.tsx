@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { Metadata } from "next";
 import { searchPosts } from "@/lib/server-api";
+import ThemeTemplate from "@/components/content/ThemeTemplate";
 
 interface SearchParams {
     q?: string | string[];
@@ -25,6 +26,7 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
     const results = query ? await searchPosts(query) : [];
 
     return (
+        <ThemeTemplate kind="search">
         <div className="max-w-4xl mx-auto px-4 py-12">
             {/* Header */}
             <div className="mb-12">
@@ -147,5 +149,6 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
                 </Link>
             </div>
         </div>
+        </ThemeTemplate>
     );
 }

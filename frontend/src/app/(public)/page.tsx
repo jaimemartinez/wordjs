@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import HomeContent from "@/components/public/HomeContent";
 import JsonLd from "@/components/public/JsonLd";
 import { getSettings, getPostById, getPosts, htmlToText, buildWebSiteJsonLd, resolveSiteBase } from "@/lib/server-api";
+import ThemeTemplate from "@/components/content/ThemeTemplate";
 
 // Server-rendered AND cached: the homepage serves from the Full-Route Cache (crawlers and first
 // paint still get the real blog roll / static page), revalidating every 60s + purged on publish.
@@ -61,7 +62,9 @@ export default async function HomePage() {
             return (
                 <div className="space-y-4">
                     {siteJsonLd}
-                    <HomeContent post={page} />
+                    <ThemeTemplate kind="home">
+                        <HomeContent post={page} />
+                    </ThemeTemplate>
                 </div>
             );
         }
@@ -72,6 +75,7 @@ export default async function HomePage() {
     const published = posts.filter((p) => p.status === "publish");
 
     return (
+        <ThemeTemplate kind="home">
         <div className="space-y-4">
             {siteJsonLd}
             <div className="border-b border-[var(--wjs-border-subtle,#e5e7eb)] pb-4 mb-8">
@@ -114,5 +118,6 @@ export default async function HomePage() {
                 </div>
             )}
         </div>
+        </ThemeTemplate>
     );
 }
