@@ -4,6 +4,7 @@ import PostContent from "@/components/public/PostContent";
 import JsonLd from "@/components/public/JsonLd";
 import { getPostBySlug, getSettings, buildPostMetadata, buildPostJsonLd, resolveSiteBase } from "@/lib/server-api";
 import { withResolvedBlocks } from "@/lib/resolveDynamicBlocks";
+import ThemeTemplate from "@/components/content/ThemeTemplate";
 
 // Public content: on-demand ISR like /[slug] (no gSP — the category/post combinations are open).
 export const revalidate = 60;
@@ -35,7 +36,9 @@ export default async function CategoryPostPage({ params }: { params: Promise<Rou
     return (
         <>
             <JsonLd data={buildPostJsonLd(post, base, settings?.blogname)} />
-            <PostContent post={withBlocks} settings={settings} category={slug} />
+            <ThemeTemplate kind="single">
+                <PostContent post={withBlocks} settings={settings} category={slug} />
+            </ThemeTemplate>
         </>
     );
 }

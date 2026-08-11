@@ -873,13 +873,16 @@ The renderer takes the first template the theme actually ships, most specific fi
 
 | Route | Tried in order |
 | --- | --- |
-| Home | `home.json` → `archive.json` → `page.json` |
+| Home (blog roll or static front page) | `home.json` → `archive.json` → `page.json` |
 | Single post | `single.json` → `page.json` |
 | Page | `page.json` |
-| Archive / category | `archive.json` → `page.json` |
 | Search | `search.json` → `archive.json` → `page.json` |
 
 Every chain ends at `page.json`, so a theme that ships only that one file affects every route.
+
+`archive.json` has no route of its own — WordJS has no standalone archive page today — so it exists
+only as the shared fallback for home and search. Ship it when you want those two to look alike without
+also changing single posts and pages.
 
 ### The blocks a template may use
 
