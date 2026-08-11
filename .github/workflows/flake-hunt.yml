@@ -1,0 +1,83 @@
+name: Flake hunt (backend suite, N times)
+
+# Reproduces the intermittent node:test runner failure ON THE PLATFORM WHERE IT HAPPENS.
+#
+#   not ok N - src/tests/<file>.test.ts
+#     error: 'Unable to deserialize cloned data due to invalid or unsupported version.'
+#
+# It has been seen on three different files (sandbox-route-redos, driver-conformance) and the reported
+# test COUNT drops when it hits, because that file's results never arrive — so it is the runner's IPC
+# framing, not an assertion. The same commit passes on one run and fails on another.
+#
+# Why here and not on a developer machine: the flake shows up on ubuntu-latest + Node 22, which is what
+# CI and the release `verify` job run. Chasing it on Windows with a different Node major reproduces a
+# different environment. This also costs the developer's machine nothing — a repeated full suite is
+# ~80s a run and saturates a laptop.
+#
+# Manual only: this is a diagnostic, not a gate.
+on:
+  workflow_dispatch:
+    inputs:
+      runs:
+        description: 'How many times to run the backend suite in each shard'
+        required: false
+        default: '8'
+      concurrency:
+        description: "node:test concurrency ('default' or a number like 1)"
+        required: false
+        default: 'default'
+
+jobs:
+  hunt:
+    name: "Shard ${{ matrix.shard }}"
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false # every shard must finish: we want the FREQUENCY, not the first failure
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install
+        working-directory: backend
+        run: npm ci || npm install
+
+      # Run the suite N times, recording the outcome and the TOTAL TEST COUNT of each run. The count is
+      # the tell: a run that reports fewer tests than the others lost a whole file to the flake, even
+      # when the exit code looks benign.
+      - name: Run the suite ${{ inputs.runs }}x and record every outcome
+        working-directory: backend
+        env:
+          RUNS: ${{ inputs.runs }}
+          CONC: ${{ inputs.concurrency }}
+        run: |
+          set -uo pipefail
+          fails=0
+          echo "shard=${{ matrix.shard }} runs=$RUNS concurrency=$CONC"
+          for i in $(seq 1 "$RUNS"); do
+            if [ "$CONC" = "default" ]; then
+              out="$(npm test 2>&1)" || true
+            else
+              out="$(node --test --test-force-exit --test-concurrency="$CONC" -r ts-node/register src/tests/*.test.ts 2>&1)" || true
+            fi
+            total="$(printf '%s' "$out" | grep -oE '^ℹ tests [0-9]+' | grep -oE '[0-9]+' | head -1)"
+            bad="$(printf '%s' "$out"  | grep -oE '^ℹ fail [0-9]+'  | grep -oE '[0-9]+' | head -1)"
+            # The signature we are hunting, plus which file lost its results.
+            sig="$(printf '%s' "$out" | grep -E "Unable to deserialize cloned data" -B2 | grep -oE 'src/tests/[a-z0-9.-]+\.test\.ts' | head -1)"
+            if [ -n "$sig" ] || [ "${bad:-0}" != "0" ]; then
+              fails=$((fails+1))
+              echo "::warning::run $i FAILED  tests=${total:-?}  fail=${bad:-?}  file=${sig:-none}"
+              printf '%s\n' "$out" | grep -E "Unable to deserialize|not ok |# fail" | head -20
+            else
+              echo "run $i ok  tests=${total:-?}"
+            fi
+          done
+          echo "SHARD ${{ matrix.shard }} RESULT: $fails failure(s) in $RUNS runs"
+          # Never fail the job on a reproduction — the whole point is to COUNT them across shards.
+          exit 0
