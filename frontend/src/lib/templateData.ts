@@ -32,18 +32,27 @@ const N: PropSpec = { kind: 'number' };
 const B: PropSpec = { kind: 'boolean' };
 const en = (...values: string[]): PropSpec => ({ kind: 'enum', values });
 
-/** Closed allowlist — mirrors BLOCKS in backend/src/core/template-validate.ts. */
+/**
+ * Closed allowlist — mirrors BLOCKS in backend/src/core/template-validate.ts.
+ *
+ * Every prop here is one the PAGE BLOCK behind it actually honours (see TemplateRenderer, which renders
+ * a template through those same components). A prop the block ignores would validate and do nothing,
+ * so `minColumnWidth` and Section's `align` are absent rather than accepted-and-dropped.
+ */
 const BLOCKS: Record<string, { props: Record<string, PropSpec>; slot: string | null }> = {
     [CONTENT_SLOT]: { props: {}, slot: null },
-    Section: { props: { background: S, padding: S, maxWidth: S, align: en('left', 'center', 'right') }, slot: 'items' },
-    Grid: { props: { columns: N, gap: S, minColumnWidth: S }, slot: 'items' },
-    FlexRow: { props: { gap: S, align: en('start', 'center', 'end', 'stretch'), justify: en('start', 'center', 'end', 'between', 'around'), wrap: B }, slot: 'items' },
-    Columns: { props: { gap: S }, slot: 'items' },
+    Section: { props: { background: S, padding: S, maxWidth: S }, slot: 'items' },
+    Grid: { props: { columns: N, gap: S, columnsTablet: N, columnsMobile: N }, slot: 'items' },
+    FlexRow: { props: { gap: S, align: en('start', 'center', 'end', 'stretch'), justify: en('start', 'center', 'end', 'between', 'around'), wrap: B, direction: en('row', 'column', 'row-reverse', 'column-reverse') }, slot: 'items' },
+    Columns: { props: { columns: N, gap: S }, slot: 'items' },
     Spacer: { props: { height: S }, slot: null },
-    Divider: { props: { color: S, thickness: S }, slot: null },
-    PostsGrid: { props: { count: N, columns: N, category: S, showExcerpt: B, showDate: B }, slot: null },
-    CategoryPosts: { props: { category: S, count: N, columns: N }, slot: null },
-    SearchBar: { props: { placeholder: S }, slot: null },
+    Divider: { props: { color: S, width: S, length: S, gap: S }, slot: null },
+    // NOT IN v1: PostsGrid, CategoryPosts and SearchBar. They are the obvious things a theme wants in a
+    // template, and they are deliberately held back — each derives its content from the site, which
+    // after F3 arrives as a PROP the PAGE supplies, and that data path does not exist for a template
+    // yet. Allowing them now would validate cleanly and render an empty block, which is the failure
+    // mode this whole contract is built to avoid. They join the allowlist with their data path, not
+    // before.
 };
 
 export interface TemplateBlock { type: string; props: Record<string, unknown> }

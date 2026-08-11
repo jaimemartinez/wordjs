@@ -837,6 +837,98 @@ tokens; `letter-spacing` (no token candidate) as a declaration on `.wp-block-her
 `hover` block as `.wp-block-hero__button:hover { background: #0ea5e9; transform: translateY(-2px) }`;
 and the `body.mobile` block inside `@media (max-width: 767.98px)`.
 
+## Page templates (`templates/<name>.json`)
+
+Tokens decide how a theme *looks*. A page template decides how a page is **arranged** — the one thing
+the token contract could not express. A theme drops a JSON block tree in `templates/`, marks the single
+spot where the page's own content goes, and every matching route renders inside that arrangement.
+
+```json
+{
+    "$schema": "wordjs-page-template-v1",
+    "content": [
+        { "type": "Spacer", "props": { "height": "2rem" } },
+        {
+            "type": "Section",
+            "props": {
+                "maxWidth": "68rem",
+                "items": [
+                    { "type": "PageContent", "props": {} },
+                    { "type": "Spacer", "props": { "height": "3rem" } },
+                    { "type": "Divider", "props": { "color": "var(--wjs-border)", "width": "1px" } }
+                ]
+            }
+        }
+    ]
+}
+```
+
+`PageContent` is the hole the page drops into, and there must be **exactly one** of it: with none the
+page's content would vanish, with two it would render twice — duplicating every heading and `id` on the
+page.
+
+### Which file a route picks
+
+The renderer takes the first template the theme actually ships, most specific first:
+
+| Route | Tried in order |
+| --- | --- |
+| Home | `home.json` → `archive.json` → `page.json` |
+| Single post | `single.json` → `page.json` |
+| Page | `page.json` |
+| Archive / category | `archive.json` → `page.json` |
+| Search | `search.json` → `archive.json` → `page.json` |
+
+Every chain ends at `page.json`, so a theme that ships only that one file affects every route.
+
+### The blocks a template may use
+
+Structure only, and each block is rendered by the **same component a page uses** — so a template emits
+the same markup and inherits every `--wjs-*` token without a second layout system to keep in step.
+
+| Block | Props | Children |
+| --- | --- | --- |
+| `Section` | `maxWidth`, `padding`, `background` | `items` |
+| `Grid` | `columns`, `gap`, `columnsTablet`, `columnsMobile` | `items` |
+| `FlexRow` | `gap`, `align`, `justify`, `wrap`, `direction` | `items` |
+| `Columns` | `columns`, `gap` | `items` (filled round-robin) |
+| `Spacer` | `height` | — |
+| `Divider` | `color`, `width`, `length`, `gap` | — |
+| `PageContent` | — | — |
+
+`PostsGrid`, `CategoryPosts` and `SearchBar` are **not** in v1. They are the obvious things to want, and
+they are held back deliberately: each derives its content from the site, that content reaches a block as
+a prop the *page* supplies, and no such path exists for a template yet. Allowing them today would give
+you a template that validates and then renders an empty block.
+
+### What a template cannot do
+
+This is the whole reason the contract is a closed allowlist rather than "render the theme's block tree":
+
+- **No prop can name an element.** Every prop is a primitive type or a closed enum. A stored-XSS
+  vulnerability shipped in this codebase from a block that used an author-controlled prop as its React
+  element type (`level: "script"` rendered an executing `<script>` into server HTML), and a template is
+  theme-supplied data on exactly that footing.
+- **No content blocks.** `HTMLEmbed`, `Symbol`, `Form`, `Heading`, `Text` and `Image` all render fine in
+  a *page*; a theme-shipped template is a different trust question, so none of them is allowed.
+- **No unknown props.** A prop the block would ignore is a rejection, not a shrug — otherwise you would
+  spend an afternoon on a template that validates and quietly does nothing.
+- **Budgets:** 64 KB, 100 blocks, 4 levels deep.
+
+It **fails closed**. A template that breaks any of these renders as if it did not exist, and the page
+falls back to the default arrangement — half a layout looks like a broken site, no layout looks like a
+site without a template.
+
+`wordjs doctor theme <slug>` reports every violation with the JSON path that caused it:
+
+```
+❌ [TEMPLATE_INVALID] templates/page.json $.content[1].props.align: "Section" has no prop "align"
+```
+
+> **Note on the directory.** `templates/` also holds `index.html`, `single.html` and `archive.html` from
+> the Handlebars theme renderer, which is not mounted. Block templates are the `.json` files; the
+> extension picks the system, and nothing reads the `.html` ones.
+
 ## Installing a Theme
 
 Building a theme by hand isn't the only way to add one. The **`default`** theme ships bundled in
