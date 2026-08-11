@@ -201,7 +201,7 @@ function parseWjsDeclarations(css: string): WjsDeclaration[] {
  * `opts.compile` is a test escape hatch mirroring compileTheme's `derive`: pass null to
  * simulate an absent compiler; production resolves ./theme-compile lazily (fail-open).
  */
-function analyzeTheme(slug: string, opts: { themesDir?: string; manifestPath?: string; layoutSchemaPath?: string; compile?: any; chromeValidate?: any } = {}): DoctorReport {
+function analyzeTheme(slug: string, opts: { themesDir?: string; manifestPath?: string; layoutSchemaPath?: string; compile?: any; chromeValidate?: any; templateValidate?: any } = {}): DoctorReport {
   const report: DoctorReport = { slug, available: false, errors: [], warnings: [], info: [] };
 
   // FAIL-OPEN: no manifest (or a corrupt one) → no contract to lint against.
@@ -289,6 +289,49 @@ function analyzeTheme(slug: string, opts: { themesDir?: string; manifestPath?: s
             code: 'CHROME_INVALID',
             message: `chrome/${part}.json ${e.path}: ${e.message}`,
             detail: { part, path: e.path, rule: e.code }
+          });
+        }
+      }
+    }
+  }
+
+  // TEMPLATE_INVALID / TEMPLATE_UNREADABLE — declarative page templates the theme ships
+  // (templates/<name>.json, contract v1). Same reasoning as the chrome block above: the renderer
+  // fail-closes on a bad tree (the page falls back to the default arrangement), so at authoring time a
+  // contract violation is an ERROR — the file is inert and the author would otherwise never be told.
+  // A theme with NO templates/ is the normal case, not a finding.
+  let templateValidate: any;
+  if (Object.prototype.hasOwnProperty.call(opts, 'templateValidate')) templateValidate = (opts as any).templateValidate;
+  else { try { templateValidate = require('./template-validate'); } catch { templateValidate = null; } }
+  if (templateValidate && typeof templateValidate.validateTemplate === 'function') {
+    const tplDir = path.join(themeDir, 'templates');
+    let tplFiles: string[] = [];
+    try {
+      tplFiles = fs.existsSync(tplDir)
+        ? fs.readdirSync(tplDir).filter((f: string) => f.endsWith('.json')).sort()
+        : [];
+    } catch { tplFiles = []; }
+    for (const file of tplFiles) {
+      let raw: string | null = null;
+      try { raw = fs.readFileSync(path.join(tplDir, file), 'utf8'); } catch { /* unreadable */ }
+      let verdict: any = null;
+      if (raw !== null) {
+        try { verdict = templateValidate.validateTemplate(raw); } catch { continue; } // fail-open
+      }
+      if (raw === null
+        || (verdict && Array.isArray(verdict.errors) && verdict.errors.some((e: any) => e.code === 'TPL_INVALID_JSON'))) {
+        report.warnings.push({
+          code: 'TEMPLATE_UNREADABLE',
+          message: `templates/${file} is unreadable or not valid JSON — the page falls back to the default arrangement`
+        });
+        continue;
+      }
+      if (verdict && verdict.ok === false && Array.isArray(verdict.errors)) {
+        for (const e of verdict.errors) {
+          report.errors.push({
+            code: 'TEMPLATE_INVALID',
+            message: `templates/${file} ${e.path}: ${e.message}`,
+            detail: { file, path: e.path, rule: e.code }
           });
         }
       }
