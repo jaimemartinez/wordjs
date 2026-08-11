@@ -38,7 +38,18 @@ const MANIFEST = {
     },
     elements: {
         hero: { selector: '.wp-block-hero', children: { button: { selector: '.wp-block-hero__button' } } },
-        card: { selector: '.wp-block-card' }
+        card: { selector: '.wp-block-card' },
+        // A chrome seed, shaped like the real ones: a container plus children whose selectors are
+        // already SCOPED to it. The theme names `row`; the manifest decides that means
+        // ".wjs-chrome-footer .wjs-chrome-row". That is the whole contract — a theme never writes a
+        // selector, so it can never leak onto a surface it does not own.
+        chromeFooter: {
+            selector: '.wjs-chrome-footer',
+            children: {
+                row: { selector: '.wjs-chrome-footer .wjs-chrome-row' },
+                navLink: { selector: '.wjs-chrome-footer .wjs-chrome-nav a' }
+            }
+        }
     }
 };
 
@@ -413,5 +424,38 @@ describe('compileTheme (declarative theme compiler)', () => {
         assert.strictEqual(r.stats.errors, 0, JSON.stringify(r.diagnostics));
         assert.ok(r.css.includes(':root {'), r.css.slice(0, 400));
         assert.ok(/--wjs-[a-z0-9_-]+: /.test(r.css), r.css.slice(0, 400));
+    });
+
+    // The composable chrome's hook classes live in the React components, not in wordjs-ui.css, so the
+    // .wp-block-* scan that builds the element registry cannot discover them. They are seeded by name
+    // instead. Without that, a theme wanting to style its own header/footer had no name to say and
+    // fell back to hand-written CSS — which is exactly what 10 of the 64 catalogue themes did.
+    it('a theme styles the composable chrome by NAME, never by selector', () => {
+        const slug = writeTheme({
+            styles: {
+                chromeFooter: {
+                    'border-top': '1px solid #333',
+                    row: { gap: '2rem' },
+                    navLink: { color: '#6ee7b7', hover: { color: '#ffffff' } }
+                }
+            }
+        });
+        const r = compile(slug, { derive: STUB_DERIVE });
+        assert.strictEqual(r.stats.errors, 0, JSON.stringify(r.diagnostics));
+
+        // The container, a child scoped by the manifest, and a state nested under that child.
+        assert.match(r.css, /\.wjs-chrome-footer \{[^}]*border-top: 1px solid #333/);
+        assert.match(r.css, /\.wjs-chrome-footer \.wjs-chrome-row \{[^}]*gap: 2rem/);
+        assert.match(r.css, /\.wjs-chrome-footer \.wjs-chrome-nav a \{[^}]*color: #6ee7b7/);
+        assert.match(r.css, /\.wjs-chrome-footer \.wjs-chrome-nav a:hover \{[^}]*color: #ffffff/);
+    });
+
+    it('a chrome child the manifest does not name is refused, with a suggestion', () => {
+        // The point of naming is that the set is CLOSED. An unknown child must be an error rather than
+        // silently emitting nothing (which would look like a theme bug) or being taken as a selector.
+        const slug = writeTheme({ styles: { chromeFooter: { rowz: { gap: '1rem' } } } });
+        const r = compile(slug, { derive: STUB_DERIVE });
+        assert.ok(r.stats.errors > 0, JSON.stringify(r.diagnostics));
+        assert.match(JSON.stringify(r.diagnostics), /rowz/);
     });
 });

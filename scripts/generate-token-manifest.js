@@ -42,11 +42,64 @@ const CHROME_PHANTOM_TOKENS = [
 
 // Seeded chrome entries for the future declarations layer (F3). A .wp-block-*
 // entry with the same key keeps its platform selector; seeds only fill gaps.
+// Chrome elements the .wp-block-* scan cannot discover.
+//
+// The block registry is derived by parsing wordjs-ui.css, which only works for surfaces the FRAMEWORK
+// stylesheet actually styles. The composable chrome does not qualify: its hook classes (.wjs-chrome-*)
+// are emitted by the React chrome components and styled there, so ui.css contains almost nothing for
+// them and the parser sees nothing to register.
+//
+// The consequence was concrete: 10 of the 64 catalogue themes carry hand-written CSS purely because
+// there was no NAME to say. One of them documents it in its own stylesheet — "the declarative `styles`
+// registry has no entry for those hooks, so this is the seam." Seeding the names closes that seam for
+// the rules a theme can express as an element (+ state); rules that need a combinator or a
+// pseudo-element still cannot be said, and this does not pretend otherwise.
+//
+// A seed may be a bare selector string or { selector, children }. Children carry a FULL selector, so a
+// part that appears inside both regions (a row, a text run) is scoped by its container here rather
+// than by the theme writing a descendant selector itself — the whole point is that a theme names
+// things and never writes a selector.
 const CHROME_ELEMENT_SEEDS = {
     header: '.wjs-header',
     logo: '.wjs-header-logo',
     nav: '.wjs-header-nav',
     footer: 'footer',
+
+    chromeHeader: {
+        selector: '.wjs-chrome-header',
+        children: {
+            container: { selector: '.wjs-chrome-header .wjs-header-container' },
+            logo: { selector: '.wjs-chrome-header .wjs-header-logo' },
+            nav: { selector: '.wjs-chrome-header .wjs-chrome-nav' },
+            navLink: { selector: '.wjs-chrome-header .wjs-header-nav a' },
+            actions: { selector: '.wjs-chrome-header .wjs-header-actions' },
+            button: { selector: '.wjs-chrome-header .wjs-chrome-button' },
+            search: { selector: '.wjs-chrome-header .wjs-chrome-search' },
+            searchInput: { selector: '.wjs-chrome-header .wjs-chrome-search input' },
+            siteTitle: { selector: '.wjs-chrome-header .wjs-chrome-site-title' },
+            socials: { selector: '.wjs-chrome-header .wjs-chrome-socials' },
+            text: { selector: '.wjs-chrome-header .wjs-chrome-text' },
+            row: { selector: '.wjs-chrome-header .wjs-chrome-row' },
+            spacer: { selector: '.wjs-chrome-header .wjs-chrome-spacer' },
+            mobilePanel: { selector: '.wjs-header-mobile-panel' },
+        },
+    },
+    chromeFooter: {
+        selector: '.wjs-chrome-footer',
+        children: {
+            container: { selector: '.wjs-chrome-footer .wjs-footer-container' },
+            nav: { selector: '.wjs-chrome-footer .wjs-chrome-nav' },
+            navLink: { selector: '.wjs-chrome-footer .wjs-chrome-nav a' },
+            button: { selector: '.wjs-chrome-footer .wjs-chrome-button' },
+            search: { selector: '.wjs-chrome-footer .wjs-chrome-search' },
+            searchInput: { selector: '.wjs-chrome-footer .wjs-chrome-search input' },
+            siteTitle: { selector: '.wjs-chrome-footer .wjs-chrome-site-title' },
+            socials: { selector: '.wjs-chrome-footer .wjs-chrome-socials' },
+            text: { selector: '.wjs-chrome-footer .wjs-chrome-text' },
+            row: { selector: '.wjs-chrome-footer .wjs-chrome-row' },
+            spacer: { selector: '.wjs-chrome-footer .wjs-chrome-spacer' },
+        },
+    },
 };
 
 const FLAG_ORDER = ['alias', 'editor-internal', 'chrome-phantom'];
@@ -260,8 +313,11 @@ function main() {
         const el = elements[base] || (elements[base] = { selector: `.wp-block-${base}` });
         (el.children || (el.children = {}))[child] = { selector: `.wp-block-${base}__${child}` };
     }
-    for (const [key, selector] of Object.entries(CHROME_ELEMENT_SEEDS)) {
-        if (!elements[key]) elements[key] = { selector };
+    for (const [key, seed] of Object.entries(CHROME_ELEMENT_SEEDS)) {
+        if (elements[key]) continue; // a real .wp-block-* registration always wins over a seed
+        elements[key] = typeof seed === 'string'
+            ? { selector: seed }
+            : { selector: seed.selector, ...(seed.children ? { children: { ...seed.children } } : {}) };
     }
     const elementsOut = {};
     for (const key of Object.keys(elements).sort()) {

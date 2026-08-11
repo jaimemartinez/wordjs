@@ -4,7 +4,7 @@
   "counts": {
     "tokens": 753,
     "varUses": 1724,
-    "elements": 33
+    "elements": 35
   },
   "tokens": {
     "--wjs-2xl": {
@@ -13677,6 +13677,91 @@
         },
         "note": {
           "selector": ".wp-block-category-posts__note"
+        }
+      }
+    },
+    "chromeFooter": {
+      "selector": ".wjs-chrome-footer",
+      "children": {
+        "button": {
+          "selector": ".wjs-chrome-footer .wjs-chrome-button"
+        },
+        "container": {
+          "selector": ".wjs-chrome-footer .wjs-footer-container"
+        },
+        "nav": {
+          "selector": ".wjs-chrome-footer .wjs-chrome-nav"
+        },
+        "navLink": {
+          "selector": ".wjs-chrome-footer .wjs-chrome-nav a"
+        },
+        "row": {
+          "selector": ".wjs-chrome-footer .wjs-chrome-row"
+        },
+        "search": {
+          "selector": ".wjs-chrome-footer .wjs-chrome-search"
+        },
+        "searchInput": {
+          "selector": ".wjs-chrome-footer .wjs-chrome-search input"
+        },
+        "siteTitle": {
+          "selector": ".wjs-chrome-footer .wjs-chrome-site-title"
+        },
+        "socials": {
+          "selector": ".wjs-chrome-footer .wjs-chrome-socials"
+        },
+        "spacer": {
+          "selector": ".wjs-chrome-footer .wjs-chrome-spacer"
+        },
+        "text": {
+          "selector": ".wjs-chrome-footer .wjs-chrome-text"
+        }
+      }
+    },
+    "chromeHeader": {
+      "selector": ".wjs-chrome-header",
+      "children": {
+        "actions": {
+          "selector": ".wjs-chrome-header .wjs-header-actions"
+        },
+        "button": {
+          "selector": ".wjs-chrome-header .wjs-chrome-button"
+        },
+        "container": {
+          "selector": ".wjs-chrome-header .wjs-header-container"
+        },
+        "logo": {
+          "selector": ".wjs-chrome-header .wjs-header-logo"
+        },
+        "mobilePanel": {
+          "selector": ".wjs-header-mobile-panel"
+        },
+        "nav": {
+          "selector": ".wjs-chrome-header .wjs-chrome-nav"
+        },
+        "navLink": {
+          "selector": ".wjs-chrome-header .wjs-header-nav a"
+        },
+        "row": {
+          "selector": ".wjs-chrome-header .wjs-chrome-row"
+        },
+        "search": {
+          "selector": ".wjs-chrome-header .wjs-chrome-search"
+        },
+        "searchInput": {
+          "selector": ".wjs-chrome-header .wjs-chrome-search input"
+        },
+        "siteTitle": {
+          "selector": ".wjs-chrome-header .wjs-chrome-site-title"
+        },
+        "socials": {
+          "selector": ".wjs-chrome-header .wjs-chrome-socials"
+        },
+        "spacer": {
+          "selector": ".wjs-chrome-header .wjs-chrome-spacer"
+        },
+        "text": {
+          "selector": ".wjs-chrome-header .wjs-chrome-text"
         }
       }
     },
