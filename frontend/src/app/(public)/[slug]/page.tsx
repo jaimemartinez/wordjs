@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import type { Metadata } from "next";
 import PostContent from "@/components/public/PostContent";
 import JsonLd from "@/components/public/JsonLd";
+import ThemeTemplate from "@/components/content/ThemeTemplate";
 import { getPostBySlug, getSettings, buildPostMetadata, buildPostJsonLd, resolveSiteBase } from "@/lib/server-api";
 import { withResolvedBlocks } from "@/lib/resolveDynamicBlocks";
 
@@ -54,7 +55,9 @@ export default async function SinglePostPage(
     return (
         <>
             <JsonLd data={buildPostJsonLd(post, base, settings?.blogname)} />
-            <PostContent post={withBlocks} settings={settings} showComments />
+            <ThemeTemplate kind="single">
+                <PostContent post={withBlocks} settings={settings} showComments />
+            </ThemeTemplate>
         </>
     );
 }

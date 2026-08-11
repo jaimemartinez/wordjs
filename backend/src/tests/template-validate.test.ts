@@ -36,10 +36,10 @@ test('a real layout a theme could not previously express is valid', () => {
     const r = validateTemplate(tpl([
         {
             type: 'Section', props: {
-                maxWidth: '80rem', align: 'center', items: [
-                    { type: 'Grid', props: { columns: 2, gap: '2rem', items: [slot, { type: 'PostsGrid', props: { count: 6, columns: 1, showExcerpt: true } }] } },
-                    { type: 'Divider', props: { thickness: '3px' } },
-                    { type: 'FlexRow', props: { gap: '1rem', justify: 'between', wrap: true, items: [{ type: 'SearchBar', props: { placeholder: 'Search' } }] } }
+                maxWidth: '80rem', padding: '4rem', items: [
+                    { type: 'Grid', props: { columns: 2, gap: '2rem', columnsMobile: 1, items: [slot, { type: 'Spacer', props: { height: '4rem' } }] } },
+                    { type: 'Divider', props: { width: '3px', color: '#eee' } },
+                    { type: 'FlexRow', props: { gap: '1rem', justify: 'between', wrap: true, direction: 'row', items: [{ type: 'Columns', props: { columns: 3, gap: '1rem' } }] } }
                 ]
             }
         }
@@ -51,9 +51,21 @@ test('a real layout a theme could not previously express is valid', () => {
 
 test('a prop outside its enum is refused — this is what stops a prop naming an element', () => {
     // The shape of the XSS that shipped: a value that looks like a tag reaching a structural prop.
-    const r = validateTemplate(tpl([{ type: 'Section', props: { align: 'script', items: [slot] } }]));
+    const r = validateTemplate(tpl([{ type: 'FlexRow', props: { justify: 'script', items: [slot] } }]));
     assert.strictEqual(r.ok, false);
     assert.ok(codes(r).includes('TPL_INVALID_PROP'), JSON.stringify(r.errors));
+
+    // And a prop no block HONOURS is refused too, not silently ignored. `align` on a Section and
+    // `minColumnWidth` on a Grid were both in an earlier draft of this contract; neither reached the
+    // component that renders it, so a template using them validated and did nothing.
+    for (const bad of [
+        { type: 'Section', props: { align: 'center', items: [slot] } },
+        { type: 'Grid', props: { minColumnWidth: '20rem', items: [slot] } },
+    ]) {
+        const rr = validateTemplate(tpl([bad]));
+        assert.strictEqual(rr.ok, false, JSON.stringify(bad));
+        assert.ok(codes(rr).includes('TPL_UNKNOWN_PROP'), JSON.stringify(rr.errors));
+    }
 });
 
 test('a prop the block does not define is refused, never ignored', () => {
@@ -92,7 +104,7 @@ test('a REAL block that a theme template may not ship is refused, and says why',
 });
 
 test('a leaf block may not smuggle children', () => {
-    const r = validateTemplate(tpl([{ type: 'PostsGrid', props: { items: [{ type: 'Section', props: {} }] } }, slot]));
+    const r = validateTemplate(tpl([{ type: 'Spacer', props: { items: [{ type: 'Section', props: {} }] } }, slot]));
     assert.strictEqual(r.ok, false);
     assert.ok(codes(r).includes('TPL_INVALID_PROP'), JSON.stringify(r.errors));
 });
@@ -100,7 +112,7 @@ test('a leaf block may not smuggle children', () => {
 // ── 3. exactly one content slot ───────────────────────────────────────────────────────────────────
 
 test('no content slot is an error — the page content would silently vanish', () => {
-    const r = validateTemplate(tpl([{ type: 'Section', props: { items: [{ type: 'PostsGrid', props: {} }] } }]));
+    const r = validateTemplate(tpl([{ type: 'Section', props: { items: [{ type: 'Spacer', props: {} }] } }]));
     assert.strictEqual(r.ok, false);
     assert.ok(codes(r).includes('TPL_SLOT_MISSING'), JSON.stringify(r.errors));
 });

@@ -249,6 +249,32 @@ export interface MenuItem { id: number | string; title: string; url: string; ord
  * caller), never this loader's. 404 = the theme ships no composition — normal, silently null.
  * Cached under the 'settings' tag: switchTheme and the site_chrome_* writers already purge it.
  */
+/**
+ * Active theme's declarative PAGE TEMPLATE (template contract v1).
+ *
+ * Same shape and the same reasoning as getThemeChrome below: served statically by the backend at
+ * /themes/<slug>/templates/<name>.json, raw text returned, validation left to parseTemplate (which
+ * fail-closes in the caller), 404 = the theme ships no template for this route, which is the normal
+ * case and silently null. Cached under the 'settings' tag so a theme switch purges it.
+ *
+ * `name` is caller-supplied and lands in a URL, so it is restricted to the shape a template file may
+ * have — no dots, no slashes. A traversal here would be a path-injection into the static tree.
+ */
+export const getThemeTemplate = cache(async (slug: string, name: string): Promise<string | null> => {
+    if (!/^[a-z0-9-]{1,40}$/.test(name)) return null;
+    const origin = resolveServerBase().replace(/\/api\/v1$/, '');
+    try {
+        const res = await fetch(`${origin}/themes/${encodeURIComponent(slug)}/templates/${name}.json`, {
+            next: { revalidate: 60, tags: ['settings'] },
+        } as RequestInit);
+        if (!res.ok) return null;
+        return await res.text();
+    } catch {
+        // Backend unreachable (e.g. build prerender) — the page keeps its default arrangement.
+        return null;
+    }
+});
+
 export const getThemeChrome = cache(async (slug: string, part: 'header' | 'footer'): Promise<string | null> => {
     const origin = resolveServerBase().replace(/\/api\/v1$/, '');
     try {

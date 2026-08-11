@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import type { Metadata } from "next";
 import PostContent from "@/components/public/PostContent";
 import JsonLd from "@/components/public/JsonLd";
+import ThemeTemplate from "@/components/content/ThemeTemplate";
 import { getPostBySlug, getPostById, getSettings, buildPostMetadata, buildPostJsonLd, resolveSiteBase } from "@/lib/server-api";
 import { withResolvedBlocks } from "@/lib/resolveDynamicBlocks";
 import type { Post } from "@/lib/api";
@@ -54,7 +55,9 @@ export default async function SinglePage({ params }: { params: Promise<RoutePara
     return (
         <>
             <JsonLd data={buildPostJsonLd(page, base, settings?.blogname)} />
-            <PostContent post={withBlocks} settings={settings} />
+            <ThemeTemplate kind="page">
+                <PostContent post={withBlocks} settings={settings} />
+            </ThemeTemplate>
         </>
     );
 }

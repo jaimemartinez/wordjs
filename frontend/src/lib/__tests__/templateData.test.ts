@@ -23,9 +23,9 @@ describe('parseTemplate', () => {
     it('accepts a layout a theme could not previously express', () => {
         const t = parseTemplate(raw([{
             type: 'Section', props: {
-                align: 'center', items: [
-                    { type: 'Grid', props: { columns: 2, gap: '2rem', items: [slot, { type: 'PostsGrid', props: { count: 6, showExcerpt: true } }] } },
-                    { type: 'FlexRow', props: { justify: 'between', wrap: true, items: [{ type: 'SearchBar', props: { placeholder: 'Buscar' } }] } },
+                maxWidth: '80rem', items: [
+                    { type: 'Grid', props: { columns: 2, gap: '2rem', columnsMobile: 1, items: [slot, { type: 'Spacer', props: { height: '4rem' } }] } },
+                    { type: 'FlexRow', props: { justify: 'between', wrap: true, direction: 'row', items: [{ type: 'Divider', props: { color: '#eee' } }] } },
                 ]
             }
         }]));
@@ -34,11 +34,15 @@ describe('parseTemplate', () => {
 
     // ── data never chooses structure ───────────────────────────────────────────────────────────────
     it('rejects a prop outside its enum — the shape of the XSS this contract prevents', () => {
-        expect(parseTemplate(raw([{ type: 'Section', props: { align: 'script', items: [slot] } }]))).toBeNull();
+        expect(parseTemplate(raw([{ type: 'FlexRow', props: { justify: 'script', items: [slot] } }]))).toBeNull();
     });
 
     it('rejects an undeclared prop rather than ignoring it', () => {
         expect(parseTemplate(raw([{ type: 'Section', props: { as: 'iframe', items: [slot] } }]))).toBeNull();
+        // Including props an EARLIER draft of the contract accepted but no block honours. These
+        // validated and rendered nothing, which reads to an author as a broken framework.
+        expect(parseTemplate(raw([{ type: 'Grid', props: { minColumnWidth: '20rem', items: [slot] } }]))).toBeNull();
+        expect(parseTemplate(raw([{ type: 'Section', props: { align: 'center', items: [slot] } }]))).toBeNull();
     });
 
     it('rejects a prop of the wrong primitive type', () => {
@@ -49,18 +53,21 @@ describe('parseTemplate', () => {
     it('rejects a block outside the allowlist, including ones a PAGE may use', () => {
         // HTMLEmbed, Symbol, Form, Heading, Text and Image all render fine in page content; a
         // theme-shipped template is a different trust question, so none of them is in this allowlist.
-        for (const type of ['ScriptBlock', 'HTMLEmbed', 'Symbol', 'Form', 'Heading', 'Text', 'Image']) {
+        // PostsGrid/CategoryPosts/SearchBar are held back from v1 too: they have no data path in a
+        // template yet, and a block that validates then renders empty is the failure this prevents.
+        for (const type of ['ScriptBlock', 'HTMLEmbed', 'Symbol', 'Form', 'Heading', 'Text', 'Image',
+            'PostsGrid', 'CategoryPosts', 'SearchBar']) {
             expect(parseTemplate(raw([{ type, props: {} }, slot])), type).toBeNull();
         }
     });
 
     it('rejects children smuggled into a leaf', () => {
-        expect(parseTemplate(raw([{ type: 'PostsGrid', props: { items: [slot] } }, slot]))).toBeNull();
+        expect(parseTemplate(raw([{ type: 'Spacer', props: { items: [slot] } }, slot]))).toBeNull();
     });
 
     // ── exactly one content slot ───────────────────────────────────────────────────────────────────
     it('rejects a template with no content slot — the page content would vanish', () => {
-        expect(parseTemplate(raw([{ type: 'Section', props: { items: [{ type: 'PostsGrid', props: {} }] } }]))).toBeNull();
+        expect(parseTemplate(raw([{ type: 'Section', props: { items: [{ type: 'Spacer', props: {} }] } }]))).toBeNull();
     });
 
     it('rejects two content slots — the content would render twice', () => {

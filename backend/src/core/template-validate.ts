@@ -44,6 +44,12 @@ const MAX_DEPTH = 4; // one deeper than chrome: a page arranges sections > rows 
 
 interface TemplateError { code: string; path: string; message: string }
 interface TemplateResult { ok: boolean; errors: TemplateError[] }
+/**
+ * NAMING NOTE — `templates/` also holds the legacy Handlebars files (`index.html`, `single.html`,
+ * `archive.html`) from the theme renderer that is not mounted. Block templates are the `.json` files in
+ * that directory and nothing reads the `.html` ones; the two never collide because the extension picks
+ * the system. Retiring the dead `.html` set is its own change, not a prerequisite for this one.
+ */
 
 /**
  * The hole the page's own content renders into. Exactly one per template: none and the content
@@ -73,17 +79,19 @@ const BLOCKS: Record<string, { props: Record<string, PropSpec>; slot: string | n
     [CONTENT_SLOT]: { props: {}, slot: null },
 
     // Layout
-    Section: { props: { background: LEN, padding: LEN, maxWidth: LEN, align: en('left', 'center', 'right') }, slot: 'items' },
-    Grid: { props: { columns: NUM, gap: LEN, minColumnWidth: LEN }, slot: 'items' },
-    FlexRow: { props: { gap: LEN, align: en('start', 'center', 'end', 'stretch'), justify: en('start', 'center', 'end', 'between', 'around'), wrap: BOOL }, slot: 'items' },
-    Columns: { props: { gap: LEN }, slot: 'items' },
+    Section: { props: { background: LEN, padding: LEN, maxWidth: LEN }, slot: 'items' },
+    Grid: { props: { columns: NUM, gap: LEN, columnsTablet: NUM, columnsMobile: NUM }, slot: 'items' },
+    FlexRow: { props: { gap: LEN, align: en('start', 'center', 'end', 'stretch'), justify: en('start', 'center', 'end', 'between', 'around'), wrap: BOOL, direction: en('row', 'column', 'row-reverse', 'column-reverse') }, slot: 'items' },
+    Columns: { props: { columns: NUM, gap: LEN }, slot: 'items' },
     Spacer: { props: { height: LEN }, slot: null },
-    Divider: { props: { color: LEN, thickness: LEN }, slot: null },
+    Divider: { props: { color: LEN, width: LEN, length: LEN, gap: LEN }, slot: null },
 
-    // Dynamic — content comes from the site, not from the theme
-    PostsGrid: { props: { count: NUM, columns: NUM, category: LEN, showExcerpt: BOOL, showDate: BOOL }, slot: null },
-    CategoryPosts: { props: { category: LEN, count: NUM, columns: NUM }, slot: null },
-    SearchBar: { props: { placeholder: LEN }, slot: null },
+    // NOT IN v1: PostsGrid, CategoryPosts and SearchBar. They are the obvious things a theme wants in a
+    // template, and they are deliberately held back — each derives its content from the site, which
+    // after F3 arrives as a PROP the PAGE supplies, and that data path does not exist for a template
+    // yet. Allowing them now would validate cleanly and render an empty block, which is the failure
+    // mode this whole contract is built to avoid. They join the allowlist with their data path, not
+    // before.
 };
 
 /**

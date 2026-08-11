@@ -447,7 +447,7 @@ describe('analyzeTheme (theme doctor)', () => {
         // Three distinct violations: a prop outside its enum (the shape of the stored-XSS this contract
         // exists to prevent), a real-but-forbidden block, and no content slot at all.
         writeTemplate(slug, 'home', JSON.stringify({
-            content: [{ type: 'Section', props: { align: 'script', items: [{ type: 'HTMLEmbed', props: {} }] } }]
+            content: [{ type: 'FlexRow', props: { justify: 'script', items: [{ type: 'HTMLEmbed', props: {} }] } }]
         }));
         const rep = doctor(slug);
         const errs = rep.errors.filter((e: any) => e.code === 'TEMPLATE_INVALID');

@@ -1,0 +1,17 @@
+{
+    "$schema": "wordjs-page-template-v1",
+    "content": [
+        { "type": "Spacer", "props": { "height": "2rem" } },
+        {
+            "type": "Section",
+            "props": {
+                "maxWidth": "68rem",
+                "items": [
+                    { "type": "PageContent", "props": {} },
+                    { "type": "Spacer", "props": { "height": "3rem" } },
+                    { "type": "Divider", "props": { "color": "var(--wjs-border)", "width": "1px" } }
+                ]
+            }
+        }
+    ]
+}
