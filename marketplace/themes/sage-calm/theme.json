@@ -1,6 +1,6 @@
 {
   "name": "Sage Calm",
-  "version": "1.0.25",
+  "version": "1.0.27",
   "description": "Calm wellness theme — organic sage greens on soft cream.",
   "author": "WordJS",
   "generator": "wordjs",
@@ -409,6 +409,94 @@
     "links": {
       "text-underline-offset": "0.28em",
       "text-decoration-thickness": "1px"
+    },
+    "logo": {
+      "text": {
+        "font-family": "var(--wjs-font-family-heading)",
+        "font-size": "1.45rem",
+        "font-weight": "400",
+        "letter-spacing": "0.02em"
+      }
+    },
+    "nav": {
+      "link": {
+        "font-size": "0.74rem",
+        "font-weight": "600",
+        "letter-spacing": "0.18em",
+        "text-transform": "uppercase",
+        "padding-bottom": "0.25rem",
+        "border-bottom": "1px solid transparent",
+        "transition": "border-color 0.25s ease, color 0.25s ease",
+        "hover": {
+          "border-bottom-color": "var(--wjs-color-primary)"
+        }
+      }
+    },
+    "header": {
+      "actionButton": {
+        "background": "transparent",
+        "color": "var(--wjs-color-primary)",
+        "border": "1px solid var(--wjs-color-primary)",
+        "box-shadow": "none",
+        "hover": {
+          "background": "var(--wjs-color-primary)",
+          "color": "var(--wjs-color-on-primary)"
+        }
+      }
+    },
+    "chromeFooter": {
+      "row": {
+        "align-items": "flex-start"
+      },
+      "rowNested": {
+        "flex": "1 1 18rem",
+        "flex-direction": "column",
+        "gap": "1.1rem"
+      },
+      "rowNestedText": {
+        "first": {
+          "font-size": "0.72rem",
+          "font-weight": "600",
+          "letter-spacing": "0.2em",
+          "text-transform": "uppercase",
+          "color": "var(--wjs-color-text-footer-heading, #284b38)"
+        }
+      },
+      "siteTitleLink": {
+        "font-family": "var(--wjs-font-family-heading)",
+        "font-size": "1.75rem",
+        "font-weight": "400",
+        "color": "var(--wjs-color-text-footer-heading, #284b38)"
+      },
+      "siteTitleText": {
+        "max-width": "24rem",
+        "line-height": "1.8",
+        "color": "var(--wjs-color-text-footer-dim, #4d5c51)"
+      },
+      "navVertical": {
+        "gap": "0.75rem"
+      },
+      "navLink": {
+        "font-size": "0.95rem"
+      },
+      "socialLink": {
+        "background": "transparent",
+        "border": "1px solid #cfdccd",
+        "color": "var(--wjs-color-primary)",
+        "hover": {
+          "background": "var(--wjs-color-primary)",
+          "border-color": "var(--wjs-color-primary)",
+          "color": "var(--wjs-color-on-primary)"
+        }
+      },
+      "containerRowAfterFirst": {
+        "align-items": "center",
+        "margin-top": "4rem",
+        "padding-top": "1.75rem",
+        "border-top": "1px solid #dde6dc",
+        "font-size": "0.85rem",
+        "letter-spacing": "0.04em"
+      }
     }
   }
 }

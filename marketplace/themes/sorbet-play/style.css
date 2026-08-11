@@ -295,27 +295,32 @@
   --wjs-quote-weight: 700;
   --wjs-quote-mark-size: 4.5rem;
   --wjs-footer-bg: #4cc9f0;
+  --wjs-nav-font-weight: 700;
+  --wjs-nav-transition: transform 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease;
 }
 h1,h2,h3,h4,h5,h6 { letter-spacing: -0.015em }
 a { font-weight: 600; text-decoration-thickness: 2px; text-underline-offset: 0.2em }
+.wjs-chrome-header .wjs-header-logo span { font-family: var(--wjs-font-family-heading); font-size: 2.1rem; font-weight: 700; letter-spacing: -0.02em }
+.wjs-header-nav a { padding: 0.5rem 1.25rem; border: 3px solid var(--wjs-color-text-main); border-radius: 9999px; background: #ffffff; box-shadow: 3px 3px 0 var(--wjs-color-text-main) }
+.wjs-header-nav a:hover { background: var(--wjs-color-primary); color: var(--wjs-color-text-main); transform: translate(2px,2px); box-shadow: 1px 1px 0 var(--wjs-color-text-main) }
+.wjs-chrome-footer .wjs-chrome-row { align-items: flex-start }
+.wjs-chrome-footer .wjs-chrome-row .wjs-chrome-row { flex: 1 1 14rem; flex-direction: column; align-items: center; gap: 0.85rem; text-align: center }
+.wjs-chrome-footer .wjs-chrome-row .wjs-chrome-row > .wjs-chrome-text:first-child { font-family: var(--wjs-font-family-heading); font-size: 0.85rem; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--wjs-color-text-footer-heading, #08252d) }
+.wjs-chrome-footer .wjs-chrome-site-title { align-items: center }
+.wjs-chrome-footer .wjs-chrome-site-title a { font-family: var(--wjs-font-family-heading); font-size: 1.7rem; font-weight: 700; color: var(--wjs-color-text-footer-heading, #08252d) }
+.wjs-chrome-footer .wjs-chrome-nav-vertical { align-items: center; gap: 0.5rem }
+.wjs-chrome-footer .wjs-chrome-nav a { font-weight: 600 }
+.wjs-chrome-footer .wjs-chrome-socials a { background: #ffffff; border: 3px solid var(--wjs-color-text-main); box-shadow: 3px 3px 0 var(--wjs-color-text-main); color: var(--wjs-color-text-main) }
+.wjs-chrome-footer .wjs-chrome-socials a:hover { background: var(--wjs-color-primary); color: var(--wjs-color-text-main) }
+.wjs-chrome-footer > .wjs-footer-container > .wjs-chrome-row + .wjs-chrome-row { align-items: center; margin-top: 2.75rem; padding-top: 1.35rem; border-top: 3px dashed rgba(8,37,45,0.35); font-size: 0.9rem; font-weight: 600 }
 @media (max-width: 767.98px) {
   .wp-block-hero { min-height: 54vh; padding: 3rem 1.4rem; box-shadow: 6px 6px 0#ff85a1 }
 }
 /* @wjs-generated:end */
 
-/* Sorbet Play — generated from a Stitch design system. Edit theme.json, then: wordjs build theme sorbet-play */
-
-/* ============================================================================
-   SORBET PLAY — composed chrome (hand-authored; lives OUTSIDE the generated
-   block, so `build theme` never rewrites it).
-
-   Two-tier masthead: the wordmark sits alone on the first line, the navigation
-   rides below it as a row of round ink-outlined chips with a hard candy
-   shadow. The footer is a LIGHT sky slab with three centred columns — the
-   opposite of the usual dark colophon.
-   ============================================================================ */
-
-/* --- Masthead: wordmark over a row of round chips -------------------------- */
+/* Not expressible in theme.json's `styles` grammar — left hand-written on purpose.
+   Converted by scripts/themes-chrome-to-declarative.mjs; everything it could name now lives
+   in theme.json. What remains needs a selector shape the grammar has no name for. */
 header.wjs-chrome-header {
   background: #ffffff;
   box-shadow: 0 4px 0 var(--wjs-color-secondary);
@@ -326,99 +331,11 @@ header.wjs-chrome-header {
   margin-top: 1rem;
 }
 
-.wjs-chrome-header .wjs-header-logo span {
-  font-family: var(--wjs-font-family-heading);
-  font-size: 2.1rem;
-  font-weight: 700;
-  letter-spacing: -0.02em;
-}
-
 nav.wjs-header-nav {
   gap: 0.65rem;
 }
 
-.wjs-header-nav a {
-  padding: 0.5rem 1.25rem;
-  border: 3px solid var(--wjs-color-text-main);
-  border-radius: 9999px;
-  background: #ffffff;
-  box-shadow: 3px 3px 0 var(--wjs-color-text-main);
-  font-weight: 700;
-  transition: transform 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease;
-}
-
-.wjs-header-nav a:hover {
-  background: var(--wjs-color-primary);
-  color: var(--wjs-color-text-main);
-  transform: translate(2px, 2px);
-  box-shadow: 1px 1px 0 var(--wjs-color-text-main);
-}
-
-/* --- Footer: a sky slab, three centred columns ---------------------------- */
 footer.wjs-chrome-footer {
   padding-block: 3.5rem 2rem;
   border-top: 4px solid var(--wjs-color-text-main);
-}
-
-.wjs-chrome-footer .wjs-chrome-row {
-  align-items: flex-start;
-}
-
-.wjs-chrome-footer .wjs-chrome-row .wjs-chrome-row {
-  flex: 1 1 14rem;
-  flex-direction: column;
-  align-items: center;
-  gap: 0.85rem;
-  text-align: center;
-}
-
-.wjs-chrome-footer .wjs-chrome-row .wjs-chrome-row > .wjs-chrome-text:first-child {
-  font-family: var(--wjs-font-family-heading);
-  font-size: 0.85rem;
-  font-weight: 700;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--wjs-color-text-footer-heading, #08252d);
-}
-
-.wjs-chrome-footer .wjs-chrome-site-title {
-  align-items: center;
-}
-
-.wjs-chrome-footer .wjs-chrome-site-title a {
-  font-family: var(--wjs-font-family-heading);
-  font-size: 1.7rem;
-  font-weight: 700;
-  color: var(--wjs-color-text-footer-heading, #08252d);
-}
-
-.wjs-chrome-footer .wjs-chrome-nav-vertical {
-  align-items: center;
-  gap: 0.5rem;
-}
-
-.wjs-chrome-footer .wjs-chrome-nav a {
-  font-weight: 600;
-}
-
-/* Round white badges with the same ink outline the navigation chips use. */
-.wjs-chrome-footer .wjs-chrome-socials a {
-  background: #ffffff;
-  border: 3px solid var(--wjs-color-text-main);
-  box-shadow: 3px 3px 0 var(--wjs-color-text-main);
-  color: var(--wjs-color-text-main);
-}
-
-.wjs-chrome-footer .wjs-chrome-socials a:hover {
-  background: var(--wjs-color-primary);
-  color: var(--wjs-color-text-main);
-}
-
-.wjs-chrome-footer > .wjs-footer-container > .wjs-chrome-row + .wjs-chrome-row {
-  align-items: center;
-  margin-top: 2.75rem;
-  padding-top: 1.35rem;
-  border-top: 3px dashed rgba(8, 37, 45, 0.35);
-  font-size: 0.9rem;
-  font-weight: 600;
 }

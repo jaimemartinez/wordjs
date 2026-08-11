@@ -260,7 +260,13 @@ describe('compileTheme (declarative theme compiler)', () => {
             assert.strictEqual(warnsOf(r, 'TOKEN_VALUE_GRAMMAR').length, 0, JSON.stringify(r.diagnostics));
         });
 
-        it('has no opinion on var() token values, while var() in a declaration stays VALUE_INVALID', () => {
+        // A DECLARATION MAY NOW CARRY var(). This test previously asserted the opposite, and the old
+        // behaviour was not a neutral limitation: with var() rejected, the only way to express a token in
+        // a style rule was to inline the value it currently resolves to — which compiles identically and
+        // then IGNORES a customizer override, because the override reaches the token and not the literal.
+        // css-tree's matchProperty genuinely cannot match a tree containing var(), so the reference is
+        // validated directly instead: it must name a real token in the contract.
+        it('accepts var() in a declaration and verifies the reference against the contract', () => {
             const slug = writeTheme({
                 tokens: { '--wjs-color-primary': 'var(--wjs-hero-bg)' },
                 styles: { card: { color: 'var(--wjs-color-primary)' } }
@@ -268,10 +274,26 @@ describe('compileTheme (declarative theme compiler)', () => {
             const r = compile(slug);
             assert.strictEqual(warnsOf(r, 'TOKEN_VALUE_GRAMMAR').length, 0, JSON.stringify(r.diagnostics));
             assert.ok(r.css.includes('  --wjs-color-primary: var(--wjs-hero-bg);'), r.css);
-            // Documented limitation: matchProperty models no substitution, so declarations
-            // cannot carry var() — the tokens map is the route for it.
-            assert.strictEqual(errsOf(r, 'VALUE_INVALID').length, 1, JSON.stringify(r.diagnostics));
+            assert.strictEqual(r.stats.errors, 0, JSON.stringify(r.diagnostics));
+            // The reference survives VERBATIM — that indirection is the whole point.
+            assert.match(r.css, /\.wp-block-card \{[^}]*color: var\(--wjs-color-primary\)/);
+        });
+
+        it('rejects a var() reference that is not a token in the contract', () => {
+            // Stricter than hand-written CSS, which would silently resolve to nothing.
+            const slug = writeTheme({ styles: { card: { color: 'var(--wjs-color-primry)' } } });
+            const r = compile(slug);
+            assert.strictEqual(errsOf(r, 'TOKEN_UNKNOWN').length, 1, JSON.stringify(r.diagnostics));
+            assert.match(JSON.stringify(r.diagnostics), /--wjs-color-primary/); // suggests the real one
             assert.ok(!r.css.includes('.wp-block-card'), r.css);
+        });
+
+        it('refuses a var() that reaches outside the --wjs-* contract', () => {
+            // A theme must not be able to pull in an arbitrary custom property set by someone else.
+            const slug = writeTheme({ styles: { card: { color: 'var(--admin-secret)' } } });
+            const r = compile(slug);
+            assert.strictEqual(errsOf(r, 'VALUE_INVALID').length, 1, JSON.stringify(r.diagnostics));
+            assert.ok(!r.css.includes('admin-secret'), r.css);
         });
     });
 

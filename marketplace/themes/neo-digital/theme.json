@@ -1,6 +1,6 @@
 {
   "name": "Neo Digital",
-  "version": "1.0.22",
+  "version": "1.0.24",
   "description": "Cyberpunk terminal vibes with Matrix green on black.",
   "author": "WordJS",
   "generator": "wordjs",
@@ -338,7 +338,31 @@
       "font-size": "0.6875rem",
       "font-weight": "700",
       "letter-spacing": "0.24em",
-      "text-transform": "uppercase"
+      "text-transform": "uppercase",
+      "link": {
+        "position": "relative",
+        "padding-bottom": "0.35rem",
+        "color": "var(--wjs-color-text-muted)",
+        "transition": "color 0.18s ease",
+        "after": {
+          "content": "\"\"",
+          "position": "absolute",
+          "left": "0",
+          "right": "0",
+          "bottom": "0",
+          "height": "1px",
+          "background": "var(--wjs-color-primary)",
+          "transform": "scaleX(0)",
+          "transform-origin": "left center",
+          "transition": "transform 0.22s ease"
+        },
+        "hover": {
+          "color": "var(--wjs-color-primary)",
+          "after": {
+            "transform": "scaleX(1)"
+          }
+        }
+      }
     },
     "logo": {
       "font-weight": "400",
@@ -378,6 +402,66 @@
     },
     "headings": {
       "line-height": "1.05"
+    },
+    "chromeHeader": {
+      "position": "sticky",
+      "top": "0",
+      "padding": "0",
+      "background": "rgba(0, 0, 0, 0.72)",
+      "box-shadow": "none",
+      "border-bottom": "1px solid #1c1c1c",
+      "container": {
+        "padding-top": "1rem",
+        "padding-bottom": "1rem"
+      },
+      "siteTitleLink": {
+        "font-family": "var(--wjs-font-family-heading)",
+        "font-size": "1.05rem",
+        "font-weight": "400",
+        "letter-spacing": "0.16em",
+        "text-transform": "uppercase",
+        "color": "var(--wjs-color-text-main)",
+        "hover": {
+          "color": "var(--wjs-color-primary)"
+        }
+      },
+      "logoText": {
+        "font-family": "var(--wjs-font-family-heading)",
+        "font-size": "1.35rem",
+        "font-weight": "400",
+        "letter-spacing": "0.2em",
+        "text-transform": "uppercase",
+        "color": "var(--wjs-color-text-main)"
+      }
+    },
+    "chromeFooter": {
+      "row": {
+        "row-gap": "1.25rem",
+        "mobile": {
+          "justify-content": "flex-start"
+        }
+      },
+      "siteTitleLink": {
+        "font-family": "var(--wjs-font-family-heading)",
+        "font-size": "1.1rem",
+        "letter-spacing": "0.22em",
+        "text-transform": "uppercase",
+        "color": "var(--wjs-footer-text-heading)"
+      },
+      "navLink": {
+        "font-size": "0.6875rem",
+        "letter-spacing": "0.2em",
+        "text-transform": "uppercase",
+        "hover": {
+          "color": "var(--wjs-color-secondary)"
+        }
+      },
+      "socialLink": {
+        "border-radius": "0",
+        "width": "2.25rem",
+        "height": "2.25rem",
+        "border": "1px solid #1c1c1c"
+      }
     }
   }
 }

@@ -1,6 +1,6 @@
 {
   "name": "Verdant Studio",
-  "version": "1.0.24",
+  "version": "1.0.26",
   "description": "Botánico fresco con verdes profundos, formas píldora y tipografía Quicksand sobre lienzo marfil.",
   "author": "WordJS × Stitch",
   "generator": "wordjs",
@@ -415,6 +415,100 @@
     "links": {
       "text-underline-offset": "0.26em",
       "text-decoration-thickness": "1px"
+    },
+    "logo": {
+      "text": {
+        "font-family": "var(--wjs-font-family-heading)",
+        "font-size": "1.1rem",
+        "font-weight": "400",
+        "letter-spacing": "0.32em",
+        "text-transform": "uppercase"
+      }
+    },
+    "header": {
+      "actionButton": {
+        "width": "2.75rem",
+        "height": "2.75rem",
+        "border-radius": "2px",
+        "background": "transparent",
+        "color": "var(--wjs-color-primary)",
+        "border": "1px solid var(--wjs-color-primary)",
+        "box-shadow": "none",
+        "hover": {
+          "background": "var(--wjs-color-primary)",
+          "color": "var(--wjs-color-on-primary)"
+        }
+      }
+    },
+    "chromeHeader": {
+      "mobilePanelLink": {
+        "font-size": "0.78rem",
+        "font-weight": "500",
+        "letter-spacing": "0.2em",
+        "text-transform": "uppercase"
+      }
+    },
+    "chromeFooter": {
+      "row": {
+        "align-items": "flex-start"
+      },
+      "rowNested": {
+        "flex": "1 1 12rem",
+        "flex-direction": "column",
+        "gap": "1.1rem"
+      },
+      "rowNestedText": {
+        "first": {
+          "font-size": "0.66rem",
+          "font-weight": "600",
+          "letter-spacing": "0.24em",
+          "text-transform": "uppercase",
+          "color": "var(--wjs-color-text-footer-heading, #faf9f5)"
+        }
+      },
+      "text": {
+        "white-space": "pre-line",
+        "line-height": "1.75"
+      },
+      "siteTitleLink": {
+        "font-family": "var(--wjs-font-family-heading)",
+        "font-size": "1rem",
+        "font-weight": "400",
+        "letter-spacing": "0.28em",
+        "text-transform": "uppercase",
+        "color": "var(--wjs-color-text-footer-heading, #faf9f5)"
+      },
+      "siteTitleText": {
+        "max-width": "20rem",
+        "line-height": "1.75",
+        "color": "var(--wjs-color-text-footer-dim, #b6c4bb)"
+      },
+      "navVertical": {
+        "gap": "0.7rem"
+      },
+      "navLink": {
+        "font-size": "0.9rem"
+      },
+      "socialLink": {
+        "border-radius": "2px",
+        "background": "transparent",
+        "border": "1px solid rgba(250, 249, 245, 0.28)",
+        "color": "var(--wjs-color-text-footer-main, #faf9f5)",
+        "hover": {
+          "background": "var(--wjs-color-secondary)",
+          "border-color": "var(--wjs-color-secondary)",
+          "color": "#1b2d25"
+        }
+      },
+      "containerRowAfterFirst": {
+        "align-items": "center",
+        "margin-top": "4.5rem",
+        "padding-top": "1.75rem",
+        "border-top": "1px solid rgba(250, 249, 245, 0.16)",
+        "font-size": "0.7rem",
+        "letter-spacing": "0.2em",
+        "text-transform": "uppercase"
+      }
     }
   }
 }

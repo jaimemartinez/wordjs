@@ -1,6 +1,6 @@
 {
   "name": "Mono Lab",
-  "version": "1.0.22",
+  "version": "1.0.24",
   "description": "Laboratorio suizo monocromo: reglas visibles, navegación numerada, rejilla de pie a cuatro columnas y acento rojo sobre papel claro.",
   "author": "WordJS × Stitch",
   "generator": "wordjs",
@@ -339,7 +339,25 @@
       "font-weight": "500",
       "letter-spacing": "0.1em",
       "text-transform": "uppercase",
-      "align-items": "baseline"
+      "align-items": "baseline",
+      "link": {
+        "counter-increment": "wjs-nav",
+        "color": "var(--wjs-color-text-main)",
+        "padding-bottom": "0.2rem",
+        "border-bottom": "1px solid transparent",
+        "transition": "color 0.15s ease, border-color 0.15s ease",
+        "before": {
+          "content": "counter(wjs-nav, decimal-leading-zero) \" \"",
+          "margin-right": "0.35rem",
+          "font-size": "0.625rem",
+          "letter-spacing": "0",
+          "color": "var(--wjs-color-secondary)"
+        },
+        "hover": {
+          "color": "var(--wjs-color-secondary)",
+          "border-bottom-color": "var(--wjs-color-secondary)"
+        }
+      }
     },
     "logo": {
       "font-weight": "700",
@@ -379,6 +397,95 @@
     "stats": {
       "item": {
         "text-align": "left"
+      }
+    },
+    "chromeHeader": {
+      "position": "static",
+      "padding": "0",
+      "background": "var(--wjs-bg-canvas)",
+      "box-shadow": "none",
+      "backdrop-filter": "none",
+      "border-bottom": "4px double #111111",
+      "container": {
+        "padding-top": "1.25rem",
+        "padding-bottom": "1.25rem"
+      },
+      "siteTitle": {
+        "gap": "0.15rem"
+      },
+      "siteTitleLink": {
+        "font-family": "var(--wjs-font-family-heading)",
+        "font-size": "1.25rem",
+        "font-weight": "700",
+        "letter-spacing": "-0.03em",
+        "color": "var(--wjs-color-heading)"
+      },
+      "siteTitleText": {
+        "font-size": "0.6875rem",
+        "letter-spacing": "0.14em",
+        "text-transform": "uppercase",
+        "color": "var(--wjs-color-text-muted)"
+      }
+    },
+    "headerNav": {
+      "counter-reset": "wjs-nav",
+      "align-items": "baseline"
+    },
+    "chromeFooter": {
+      "containerRow": {
+        "display": "grid",
+        "grid-template-columns": "minmax(0, 1fr)",
+        "gap": "0",
+        "align-items": "stretch",
+        "row-gap": "2rem"
+      },
+      "containerRowNested": {
+        "display": "block",
+        "width": "auto",
+        "padding": "0 1.5rem",
+        "border-left": "1px solid #cfcfc9",
+        "first": {
+          "padding-left": "0",
+          "border-left": "0"
+        },
+        "mobile": {
+          "padding": "1.25rem 0 0",
+          "border-left": "0",
+          "border-top": "1px solid #cfcfc9",
+          "first": {
+            "padding-top": "0",
+            "border-top": "0"
+          }
+        }
+      },
+      "siteTitleLink": {
+        "font-family": "var(--wjs-font-family-heading)",
+        "font-size": "1.05rem",
+        "font-weight": "700",
+        "letter-spacing": "-0.03em",
+        "color": "var(--wjs-footer-text-heading)"
+      },
+      "navVertical": {
+        "gap": "0.55rem"
+      },
+      "navLink": {
+        "font-size": "0.75rem",
+        "letter-spacing": "0.08em",
+        "text-transform": "uppercase"
+      },
+      "searchInput": {
+        "width": "100%"
+      },
+      "socials": {
+        "gap": "0.5rem"
+      },
+      "socialLink": {
+        "border-radius": "0",
+        "width": "2.25rem",
+        "height": "2.25rem",
+        "border": "1px solid #111111",
+        "background": "transparent",
+        "color": "var(--wjs-footer-text-heading)"
       }
     }
   }

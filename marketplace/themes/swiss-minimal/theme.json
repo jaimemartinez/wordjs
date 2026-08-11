@@ -1,6 +1,6 @@
 {
   "name": "Swiss Minimal",
-  "version": "1.0.23",
+  "version": "1.0.25",
   "description": "Clean, grid-based, international style.",
   "author": "WordJS",
   "generator": "wordjs",
@@ -340,7 +340,17 @@
       "gap": "2.5rem",
       "font-size": "0.9375rem",
       "font-weight": "500",
-      "letter-spacing": "-0.01em"
+      "letter-spacing": "-0.01em",
+      "link": {
+        "color": "var(--wjs-color-text-main)",
+        "padding-bottom": "0.15rem",
+        "border-bottom": "1px solid transparent",
+        "transition": "border-color 0.15s ease",
+        "hover": {
+          "color": "var(--wjs-color-text-main)",
+          "border-bottom-color": "var(--wjs-color-primary)"
+        }
+      }
     },
     "logo": {
       "font-weight": "700",
@@ -386,6 +396,92 @@
     },
     "headings": {
       "letter-spacing": "-0.035em"
+    },
+    "chromeHeader": {
+      "position": "static",
+      "padding": "0",
+      "background": "var(--wjs-bg-canvas)",
+      "box-shadow": "none",
+      "backdrop-filter": "none",
+      "border-bottom": "0",
+      "container": {
+        "padding-top": "1.25rem",
+        "padding-bottom": "1.25rem"
+      },
+      "logoText": {
+        "font-family": "var(--wjs-font-family-heading)",
+        "font-size": "1.125rem",
+        "font-weight": "700",
+        "letter-spacing": "-0.045em",
+        "color": "var(--wjs-color-heading)"
+      },
+      "button": {
+        "border-radius": "0",
+        "padding": "0.5rem 1.1rem",
+        "font-size": "0.875rem",
+        "font-weight": "500",
+        "border-color": "var(--wjs-color-heading)",
+        "color": "var(--wjs-color-heading)",
+        "transition": "background-color 0.15s ease, color 0.15s ease",
+        "hover": {
+          "background-color": "var(--wjs-color-heading)",
+          "color": "#ffffff"
+        }
+      }
+    },
+    "headerNav": {
+      "flex": "0 0 auto"
+    },
+    "chromeFooter": {
+      "rowChild": {
+        "flex-direction": "column",
+        "align-items": "flex-start",
+        "gap": "1.5rem",
+        "width": "auto"
+      },
+      "siteTitle": {
+        "gap": "0.5rem"
+      },
+      "siteTitleLink": {
+        "font-family": "var(--wjs-font-family-heading)",
+        "font-size": "2rem",
+        "font-weight": "700",
+        "letter-spacing": "-0.045em",
+        "line-height": "1.05",
+        "color": "var(--wjs-footer-text-heading)",
+        "mobile": {
+          "font-size": "1.5rem"
+        }
+      },
+      "siteTitleText": {
+        "max-width": "22rem",
+        "font-size": "0.9375rem",
+        "color": "#5b5b5b",
+        "opacity": "1"
+      },
+      "navVertical": {
+        "gap": "0.5rem",
+        "align-items": "flex-start"
+      },
+      "navLink": {
+        "font-size": "0.9375rem",
+        "color": "#5b5b5b",
+        "hover": {
+          "color": "var(--wjs-color-primary)"
+        }
+      },
+      "socialLink": {
+        "width": "2.25rem",
+        "height": "2.25rem",
+        "border-radius": "0",
+        "background": "transparent",
+        "border": "1px solid #141414",
+        "color": "#141414",
+        "hover": {
+          "background": "#141414",
+          "color": "#ffffff"
+        }
+      }
     }
   }
 }

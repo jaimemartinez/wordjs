@@ -292,27 +292,34 @@
   --wjs-quote-mark-size: 5rem;
   --wjs-stats-value-size: clamp(2.75rem, 6vw, 4.5rem);
   --wjs-footer-bg: #141414;
+  --wjs-nav-font-weight: 600;
+  --wjs-nav-letter-spacing: -0.01em;
+  --wjs-nav-transition: background-color 0.18s ease, color 0.18s ease;
 }
 h1,h2,h3,h4,h5,h6 { letter-spacing: -0.035em }
 a { font-weight: 600; text-underline-offset: 0.22em }
+.wjs-chrome-header .wjs-header-logo span { font-family: var(--wjs-font-family-heading); font-size: 1.8rem; letter-spacing: -0.045em }
+.wjs-chrome-header .wjs-chrome-button { padding: 0.7rem 1.6rem; font-size: 0.95rem; font-weight: 700; box-shadow: 0 8px 20px rgba(236,72,153,0.35) }
+.wjs-chrome-header .wjs-chrome-button:hover { box-shadow: 0 12px 26px rgba(236,72,153,0.42) }
+.wjs-header-nav a { padding: 0.55rem 1.15rem; border-radius: 999px }
+.wjs-header-nav a:hover { background: var(--wjs-color-secondary); color: var(--wjs-color-on-secondary) }
+.wjs-chrome-footer .wjs-chrome-row { align-items: flex-start }
+.wjs-chrome-footer .wjs-chrome-row .wjs-chrome-row { flex: 1 1 15rem; flex-direction: column; gap: 1rem }
+.wjs-chrome-footer .wjs-chrome-row .wjs-chrome-row > .wjs-chrome-text:first-child { font-family: var(--wjs-font-family-heading); font-size: 0.78rem; font-weight: 700; letter-spacing: 0.18em; text-transform: uppercase; color: var(--wjs-color-primary) }
+.wjs-chrome-footer .wjs-chrome-site-title a { font-family: var(--wjs-font-family-heading); font-size: 2rem; letter-spacing: -0.045em; color: var(--wjs-color-text-footer-heading, #ffffff) }
+.wjs-chrome-footer .wjs-chrome-site-title span { max-width: 22rem; color: var(--wjs-color-text-footer-dim, #b9b9b9) }
+.wjs-chrome-footer .wjs-chrome-nav-vertical { gap: 0.6rem }
+.wjs-chrome-footer .wjs-chrome-socials a { background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.16) }
+.wjs-chrome-footer .wjs-chrome-socials a:hover { background: var(--wjs-color-primary); border-color: var(--wjs-color-primary) }
+.wjs-chrome-footer > .wjs-footer-container > .wjs-chrome-row + .wjs-chrome-row { align-items: center; margin-top: 3.25rem; padding-top: 1.5rem; border-top: 1px solid rgba(255,255,255,0.14); font-size: 0.85rem }
 @media (max-width: 767.98px) {
   .wp-block-hero { min-height: 58vh; padding: 3.5rem 1.5rem }
 }
 /* @wjs-generated:end */
 
-/* Pop Studio — generated from a Stitch design system. Edit theme.json, then: wordjs build theme pop-studio */
-
-/* ============================================================================
-   POP STUDIO — composed chrome (hand-authored; lives OUTSIDE the generated
-   block, so `build theme` never rewrites it).
-
-   Structure comes from chrome/header.json + chrome/footer.json; this file only
-   gives those blocks their character. Every selector carries at least one
-   element or extra class so it outranks the renderer's utility classes on
-   specificity alone — no importance overrides anywhere in this stylesheet.
-   ============================================================================ */
-
-/* --- Masthead: a white sheet ruled in ink, navigation as pills ------------- */
+/* Not expressible in theme.json's `styles` grammar — left hand-written on purpose.
+   Converted by scripts/themes-chrome-to-declarative.mjs; everything it could name now lives
+   in theme.json. What remains needs a selector shape the grammar has no name for. */
 header.wjs-chrome-header {
   background: var(--wjs-bg-canvas);
   border-bottom: 2px solid var(--wjs-color-text-main);
@@ -320,97 +327,11 @@ header.wjs-chrome-header {
   padding-block: 1.1rem;
 }
 
-.wjs-chrome-header .wjs-header-logo span {
-  font-family: var(--wjs-font-family-heading);
-  font-size: 1.8rem;
-  letter-spacing: -0.045em;
-}
-
 nav.wjs-header-nav {
   gap: 0.35rem;
 }
 
-.wjs-header-nav a {
-  padding: 0.55rem 1.15rem;
-  border-radius: 999px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  transition: background-color 0.18s ease, color 0.18s ease;
-}
-
-.wjs-header-nav a:hover {
-  background: var(--wjs-color-secondary);
-  color: var(--wjs-color-on-secondary);
-}
-
-.wjs-chrome-header .wjs-chrome-button {
-  padding: 0.7rem 1.6rem;
-  font-size: 0.95rem;
-  font-weight: 700;
-  box-shadow: 0 8px 20px rgba(236, 72, 153, 0.35);
-}
-
-.wjs-chrome-header .wjs-chrome-button:hover {
-  box-shadow: 0 12px 26px rgba(236, 72, 153, 0.42);
-}
-
-/* --- Footer: three ink columns + a hairline colophon ----------------------- */
 footer.wjs-chrome-footer {
   padding-block: 4.5rem 2.25rem;
   border-top: 0;
-}
-
-.wjs-chrome-footer .wjs-chrome-row {
-  align-items: flex-start;
-}
-
-.wjs-chrome-footer .wjs-chrome-row .wjs-chrome-row {
-  flex: 1 1 15rem;
-  flex-direction: column;
-  gap: 1rem;
-}
-
-.wjs-chrome-footer .wjs-chrome-row .wjs-chrome-row > .wjs-chrome-text:first-child {
-  font-family: var(--wjs-font-family-heading);
-  font-size: 0.78rem;
-  font-weight: 700;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  color: var(--wjs-color-primary);
-}
-
-.wjs-chrome-footer .wjs-chrome-site-title a {
-  font-family: var(--wjs-font-family-heading);
-  font-size: 2rem;
-  letter-spacing: -0.045em;
-  color: var(--wjs-color-text-footer-heading, #ffffff);
-}
-
-.wjs-chrome-footer .wjs-chrome-site-title span {
-  max-width: 22rem;
-  color: var(--wjs-color-text-footer-dim, #b9b9b9);
-}
-
-.wjs-chrome-footer .wjs-chrome-nav-vertical {
-  gap: 0.6rem;
-}
-
-/* The social chips default to --wjs-bg-surface-hover, a LIGHT surface here —
-   invisible on the ink footer. Re-tint them against the footer instead. */
-.wjs-chrome-footer .wjs-chrome-socials a {
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.16);
-}
-
-.wjs-chrome-footer .wjs-chrome-socials a:hover {
-  background: var(--wjs-color-primary);
-  border-color: var(--wjs-color-primary);
-}
-
-.wjs-chrome-footer > .wjs-footer-container > .wjs-chrome-row + .wjs-chrome-row {
-  align-items: center;
-  margin-top: 3.25rem;
-  padding-top: 1.5rem;
-  border-top: 1px solid rgba(255, 255, 255, 0.14);
-  font-size: 0.85rem;
 }

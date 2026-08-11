@@ -298,7 +298,7 @@
   --wjs-table-head-tracking: 0;
   --wjs-divider-color: #d9d9d9;
   --wjs-hero-gradient: none;
-  --wjs-nav-color: #141414;
+  --wjs-nav-color: var(--wjs-color-text-main);
   --wjs-nav-color-hover: #111111;
   --wjs-logo-color: #141414;
   --wjs-logo-color-hover: #111111;
@@ -320,145 +320,45 @@
   --wjs-nav-font-weight: 500;
   --wjs-nav-letter-spacing: 0.1em;
   --wjs-nav-text-transform: uppercase;
+  --wjs-nav-transition: color 0.15s ease, border-color 0.15s ease;
 }
 body { line-height: 1.6 }
 .wjs-header-nav { gap: 2rem; align-items: baseline }
+.wjs-header-nav a { counter-increment: wjs-nav; padding-bottom: 0.2rem; border-bottom: 1px solid transparent }
+.wjs-header-nav a::before { content: counter(wjs-nav,decimal-leading-zero)" "; margin-right: 0.35rem; font-size: 0.625rem; letter-spacing: 0; color: var(--wjs-color-secondary) }
+.wjs-header-nav a:hover { color: var(--wjs-color-secondary); border-bottom-color: var(--wjs-color-secondary) }
 .wjs-header-logo { font-weight: 700; letter-spacing: -0.03em }
 footer { margin-top: 5rem; padding-top: 3rem; padding-bottom: 2rem; border-top-width: 2px; border-top-style: solid; border-top-color: #111111; font-size: 0.8125rem }
 .wp-block-hero__title { display: block; text-transform: none; padding-bottom: 1rem; border-bottom-width: 2px; border-bottom-style: solid; border-bottom-color: #111111 }
 .wp-block-hero__subtitle { max-width: 38rem; letter-spacing: 0.01em }
 .wp-block-card__title { line-height: 1.25 }
 .wp-block-stats__item { text-align: left }
+.wjs-chrome-header { position: static; padding: 0; background: var(--wjs-bg-canvas); box-shadow: none; backdrop-filter: none; border-bottom: 4px double #111111 }
+.wjs-chrome-header .wjs-header-container { padding-top: 1.25rem; padding-bottom: 1.25rem }
+.wjs-chrome-header .wjs-chrome-site-title { gap: 0.15rem }
+.wjs-chrome-header .wjs-chrome-site-title a { font-family: var(--wjs-font-family-heading); font-size: 1.25rem; font-weight: 700; letter-spacing: -0.03em; color: var(--wjs-color-heading) }
+.wjs-chrome-header .wjs-chrome-site-title span { font-size: 0.6875rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--wjs-color-text-muted) }
+.wjs-chrome-header .wjs-header-nav { counter-reset: wjs-nav; align-items: baseline }
+.wjs-chrome-footer .wjs-footer-container > .wjs-chrome-row { display: grid; grid-template-columns: minmax(0,1fr); gap: 0; align-items: stretch; row-gap: 2rem }
+.wjs-chrome-footer .wjs-footer-container > .wjs-chrome-row > .wjs-chrome-row { display: block; width: auto; padding: 0 1.5rem; border-left: 1px solid #cfcfc9 }
+.wjs-chrome-footer .wjs-footer-container > .wjs-chrome-row > .wjs-chrome-row:first-child { padding-left: 0; border-left: 0 }
+.wjs-chrome-footer .wjs-chrome-site-title a { font-family: var(--wjs-font-family-heading); font-size: 1.05rem; font-weight: 700; letter-spacing: -0.03em; color: var(--wjs-footer-text-heading) }
+.wjs-chrome-footer .wjs-chrome-nav-vertical { gap: 0.55rem }
+.wjs-chrome-footer .wjs-chrome-nav a { font-size: 0.75rem; letter-spacing: 0.08em; text-transform: uppercase }
+.wjs-chrome-footer .wjs-chrome-search input { width: 100% }
+.wjs-chrome-footer .wjs-chrome-socials { gap: 0.5rem }
+.wjs-chrome-footer .wjs-chrome-socials a { border-radius: 0; width: 2.25rem; height: 2.25rem; border: 1px solid #111111; background: transparent; color: var(--wjs-footer-text-heading) }
 @media (max-width: 767.98px) {
   .wp-block-hero { padding: 0 0 1.5rem }
+  .wjs-chrome-footer .wjs-footer-container > .wjs-chrome-row > .wjs-chrome-row { padding: 1.25rem 0 0; border-left: 0; border-top: 1px solid #cfcfc9 }
+  .wjs-chrome-footer .wjs-footer-container > .wjs-chrome-row > .wjs-chrome-row:first-child { padding-top: 0; border-top: 0 }
 }
 /* @wjs-generated:end */
 
-/* Mono Lab — generated from a Stitch design system. Edit theme.json, then: wordjs build theme mono-lab */
-
-/* =====================================================================
-   CHROME FINISH — hand-written, outside the generated block on purpose.
-   Targets the composable-chrome hook classes (.wjs-chrome-*), the
-   documented styling surface for a theme's chrome/*.json composition
-   (documentation/themes.md, "Composable chrome"). No !important: the
-   theme sheet is UNLAYERED and Tailwind utilities live in
-   @layer utilities, so these rules already win the cascade.
-   ===================================================================== */
-
-/* --- Masthead: paper, no shadow, closed by a visible DOUBLE rule. ---- */
-.wjs-chrome-header {
-  position: static;
-  padding: 0;
-  background: var(--wjs-bg-canvas);
-  box-shadow: none;
-  backdrop-filter: none;
-  border-bottom: 4px double #111111;
-}
-.wjs-chrome-header .wjs-header-container {
-  padding-top: 1.25rem;
-  padding-bottom: 1.25rem;
-}
-.wjs-chrome-header .wjs-chrome-site-title { gap: 0.15rem; }
-.wjs-chrome-header .wjs-chrome-site-title a {
-  font-family: var(--wjs-font-family-heading);
-  font-size: 1.25rem;
-  font-weight: 700;
-  letter-spacing: -0.03em;
-  color: var(--wjs-color-heading);
-}
-.wjs-chrome-header .wjs-chrome-site-title span {
-  font-size: 0.6875rem;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--wjs-color-text-muted);
-}
-
-/* Nav: every entry is an indexed specimen — 01, 02, 03… */
-.wjs-chrome-header .wjs-header-nav { counter-reset: wjs-nav; align-items: baseline; }
-.wjs-header-nav a {
-  counter-increment: wjs-nav;
-  color: var(--wjs-color-text-main);
-  padding-bottom: 0.2rem;
-  border-bottom: 1px solid transparent;
-  transition: color 0.15s ease, border-color 0.15s ease;
-}
-.wjs-header-nav a::before {
-  content: counter(wjs-nav, decimal-leading-zero) " ";
-  margin-right: 0.35rem;
-  font-size: 0.625rem;
-  letter-spacing: 0;
-  color: var(--wjs-color-secondary);
-}
-.wjs-header-nav a:hover {
-  color: var(--wjs-color-secondary);
-  border-bottom-color: var(--wjs-color-secondary);
-}
-
-/* --- Footer: a real four-column grid with the rules left showing. ---- */
-.wjs-chrome-footer .wjs-footer-container > .wjs-chrome-row {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 0;
-  align-items: stretch;
-}
-.wjs-chrome-footer .wjs-footer-container > .wjs-chrome-row > .wjs-chrome-row {
-  display: block;
-  width: auto;
-  padding: 0 1.5rem;
-  border-left: 1px solid #cfcfc9;
-}
-.wjs-chrome-footer .wjs-footer-container > .wjs-chrome-row > .wjs-chrome-row:first-child {
-  padding-left: 0;
-  border-left: 0;
-}
-.wjs-chrome-footer .wjs-chrome-site-title a {
-  font-family: var(--wjs-font-family-heading);
-  font-size: 1.05rem;
-  font-weight: 700;
-  letter-spacing: -0.03em;
-  color: var(--wjs-footer-text-heading);
-}
-.wjs-chrome-footer .wjs-chrome-nav-vertical { gap: 0.55rem; }
-.wjs-chrome-footer .wjs-chrome-nav a {
-  font-size: 0.75rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-.wjs-chrome-footer .wjs-chrome-search input { width: 100%; }
-.wjs-chrome-footer .wjs-chrome-socials {
-  gap: 0.5rem;
-}
-.wjs-chrome-footer .wjs-chrome-socials a {
-  border-radius: 0;
-  width: 2.25rem;
-  height: 2.25rem;
-  border: 1px solid #111111;
-  background: transparent;
-  color: var(--wjs-footer-text-heading);
-}
-
-@media (max-width: 1023.98px) {
-  .wjs-chrome-footer .wjs-footer-container > .wjs-chrome-row {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    row-gap: 2rem;
-  }
-  .wjs-chrome-footer .wjs-footer-container > .wjs-chrome-row > .wjs-chrome-row:nth-child(3) {
+/* Not expressible in theme.json's `styles` grammar — left hand-written on purpose.
+   Converted by scripts/themes-chrome-to-declarative.mjs; everything it could name now lives
+   in theme.json. What remains needs a selector shape the grammar has no name for. */
+@media (max-width: 1023.98px) { .wjs-chrome-footer .wjs-footer-container > .wjs-chrome-row > .wjs-chrome-row:nth-child(3) {
     padding-left: 0;
     border-left: 0;
-  }
-}
-@media (max-width: 767.98px) {
-  .wjs-chrome-footer .wjs-footer-container > .wjs-chrome-row {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .wjs-chrome-footer .wjs-footer-container > .wjs-chrome-row > .wjs-chrome-row {
-    padding: 1.25rem 0 0;
-    border-left: 0;
-    border-top: 1px solid #cfcfc9;
-  }
-  .wjs-chrome-footer .wjs-footer-container > .wjs-chrome-row > .wjs-chrome-row:first-child {
-    padding-top: 0;
-    border-top: 0;
-  }
-}
-
+  } }
