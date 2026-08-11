@@ -60,10 +60,32 @@ const CHROME_PHANTOM_TOKENS = [
 // than by the theme writing a descendant selector itself — the whole point is that a theme names
 // things and never writes a selector.
 const CHROME_ELEMENT_SEEDS = {
-    header: '.wjs-header',
-    logo: '.wjs-header-logo',
-    nav: '.wjs-header-nav',
+    header: {
+        selector: '.wjs-header',
+        // UNSCOPED variants, because that is what the catalogue actually writes: `.wjs-header-nav a`
+        // appears 22 times bare, never scoped to the chrome container. Functionally the scoped form
+        // under chromeHeader is equivalent (the nav only exists there), but a theme should be able to
+        // say the thing it means, and the shorter name is the one it reaches for.
+        children: { actionButton: { selector: '.wjs-header-actions button' } },
+    },
+    logo: {
+        selector: '.wjs-header-logo',
+        children: { text: { selector: '.wjs-header-logo span' } }, // the wordmark — 6 themes
+    },
+    nav: {
+        selector: '.wjs-header-nav',
+        children: { link: { selector: '.wjs-header-nav a' } }, // the single most hand-written selector
+    },
     footer: 'footer',
+    // The chrome's own search field, unscoped — three themes style it without naming a region, because
+    // the same field appears in the header and the footer and they want it to match.
+    chromeSearch: {
+        selector: '.wjs-chrome-search',
+        children: { input: { selector: '.wjs-chrome-search input' } },
+    },
+    // The header's nav is `.wjs-header-nav` (NOT `.wjs-chrome-nav`, which is the composable nav part) —
+    // two different classes that are easy to confuse, so both get a name.
+    headerNav: { selector: '.wjs-chrome-header .wjs-header-nav' },
 
     chromeHeader: {
         selector: '.wjs-chrome-header',
@@ -82,6 +104,20 @@ const CHROME_ELEMENT_SEEDS = {
             row: { selector: '.wjs-chrome-header .wjs-chrome-row' },
             spacer: { selector: '.wjs-chrome-header .wjs-chrome-spacer' },
             mobilePanel: { selector: '.wjs-header-mobile-panel' },
+            // Composites. The catalogue's hand-written CSS is dominated by a bare TAG under a hook
+            // class — `a` 24 times, `span` 16, `input` 6 — because that is where the link, the wordmark
+            // and the field actually live. Naming those composites is what lets a theme reach them
+            // without writing a selector, and it is why the COMBINATOR lives here (framework-owned)
+            // rather than in the theme's grammar.
+            logoText: { selector: '.wjs-chrome-header .wjs-header-logo span' },
+            siteTitleLink: { selector: '.wjs-chrome-header .wjs-chrome-site-title a' },
+            siteTitleText: { selector: '.wjs-chrome-header .wjs-chrome-site-title span' },
+            socialLink: { selector: '.wjs-chrome-header .wjs-chrome-socials a' },
+            actionButton: { selector: '.wjs-chrome-header .wjs-header-actions button' },
+            navHorizontal: { selector: '.wjs-chrome-header .wjs-chrome-nav-horizontal' },
+            navVertical: { selector: '.wjs-chrome-header .wjs-chrome-nav-vertical' },
+            rowNested: { selector: '.wjs-chrome-header .wjs-chrome-row .wjs-chrome-row' },
+            mobilePanelLink: { selector: '.wjs-header-mobile-panel nav a' },
         },
     },
     chromeFooter: {
@@ -98,6 +134,25 @@ const CHROME_ELEMENT_SEEDS = {
             text: { selector: '.wjs-chrome-footer .wjs-chrome-text' },
             row: { selector: '.wjs-chrome-footer .wjs-chrome-row' },
             spacer: { selector: '.wjs-chrome-footer .wjs-chrome-spacer' },
+            // Same composites as the header (see there). socialLink and siteTitleLink are used by 10 of
+            // 10 themes and rowNested by 7 — these are not speculative names, they are the selectors
+            // every theme was already writing by hand.
+            socials: { selector: '.wjs-chrome-footer .wjs-chrome-socials' },
+            socialLink: { selector: '.wjs-chrome-footer .wjs-chrome-socials a' },
+            siteTitleLink: { selector: '.wjs-chrome-footer .wjs-chrome-site-title a' },
+            siteTitleText: { selector: '.wjs-chrome-footer .wjs-chrome-site-title span' },
+            navHorizontal: { selector: '.wjs-chrome-footer .wjs-chrome-nav-horizontal' },
+            navVertical: { selector: '.wjs-chrome-footer .wjs-chrome-nav-vertical' },
+            rowNested: { selector: '.wjs-chrome-footer .wjs-chrome-row .wjs-chrome-row' },
+            rowChild: { selector: '.wjs-chrome-footer .wjs-chrome-row > .wjs-chrome-row' },
+            rowNestedText: { selector: '.wjs-chrome-footer .wjs-chrome-row .wjs-chrome-row > .wjs-chrome-text' },
+            // The container's DIRECT rows. Themes reach for `> .wjs-chrome-row` (7 uses) and the nested
+            // `> row > row` (5) to build the footer's column grid, and for `row + row` (4) to style
+            // "every row after the first" — the divider idiom. Named here so the combinator stays
+            // framework-owned; `containerRow.first` / `.last` now cover part of what `+` was doing.
+            containerRow: { selector: '.wjs-chrome-footer .wjs-footer-container > .wjs-chrome-row' },
+            containerRowNested: { selector: '.wjs-chrome-footer .wjs-footer-container > .wjs-chrome-row > .wjs-chrome-row' },
+            containerRowAfterFirst: { selector: '.wjs-chrome-footer > .wjs-footer-container > .wjs-chrome-row + .wjs-chrome-row' },
         },
     },
 };

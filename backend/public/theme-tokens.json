@@ -4,7 +4,7 @@
   "counts": {
     "tokens": 753,
     "varUses": 1724,
-    "elements": 35
+    "elements": 37
   },
   "tokens": {
     "--wjs-2xl": {
@@ -13689,14 +13689,38 @@
         "container": {
           "selector": ".wjs-chrome-footer .wjs-footer-container"
         },
+        "containerRow": {
+          "selector": ".wjs-chrome-footer .wjs-footer-container > .wjs-chrome-row"
+        },
+        "containerRowAfterFirst": {
+          "selector": ".wjs-chrome-footer > .wjs-footer-container > .wjs-chrome-row + .wjs-chrome-row"
+        },
+        "containerRowNested": {
+          "selector": ".wjs-chrome-footer .wjs-footer-container > .wjs-chrome-row > .wjs-chrome-row"
+        },
         "nav": {
           "selector": ".wjs-chrome-footer .wjs-chrome-nav"
+        },
+        "navHorizontal": {
+          "selector": ".wjs-chrome-footer .wjs-chrome-nav-horizontal"
         },
         "navLink": {
           "selector": ".wjs-chrome-footer .wjs-chrome-nav a"
         },
+        "navVertical": {
+          "selector": ".wjs-chrome-footer .wjs-chrome-nav-vertical"
+        },
         "row": {
           "selector": ".wjs-chrome-footer .wjs-chrome-row"
+        },
+        "rowChild": {
+          "selector": ".wjs-chrome-footer .wjs-chrome-row > .wjs-chrome-row"
+        },
+        "rowNested": {
+          "selector": ".wjs-chrome-footer .wjs-chrome-row .wjs-chrome-row"
+        },
+        "rowNestedText": {
+          "selector": ".wjs-chrome-footer .wjs-chrome-row .wjs-chrome-row > .wjs-chrome-text"
         },
         "search": {
           "selector": ".wjs-chrome-footer .wjs-chrome-search"
@@ -13706,6 +13730,15 @@
         },
         "siteTitle": {
           "selector": ".wjs-chrome-footer .wjs-chrome-site-title"
+        },
+        "siteTitleLink": {
+          "selector": ".wjs-chrome-footer .wjs-chrome-site-title a"
+        },
+        "siteTitleText": {
+          "selector": ".wjs-chrome-footer .wjs-chrome-site-title span"
+        },
+        "socialLink": {
+          "selector": ".wjs-chrome-footer .wjs-chrome-socials a"
         },
         "socials": {
           "selector": ".wjs-chrome-footer .wjs-chrome-socials"
@@ -13721,6 +13754,9 @@
     "chromeHeader": {
       "selector": ".wjs-chrome-header",
       "children": {
+        "actionButton": {
+          "selector": ".wjs-chrome-header .wjs-header-actions button"
+        },
         "actions": {
           "selector": ".wjs-chrome-header .wjs-header-actions"
         },
@@ -13733,17 +13769,32 @@
         "logo": {
           "selector": ".wjs-chrome-header .wjs-header-logo"
         },
+        "logoText": {
+          "selector": ".wjs-chrome-header .wjs-header-logo span"
+        },
         "mobilePanel": {
           "selector": ".wjs-header-mobile-panel"
+        },
+        "mobilePanelLink": {
+          "selector": ".wjs-header-mobile-panel nav a"
         },
         "nav": {
           "selector": ".wjs-chrome-header .wjs-chrome-nav"
         },
+        "navHorizontal": {
+          "selector": ".wjs-chrome-header .wjs-chrome-nav-horizontal"
+        },
         "navLink": {
           "selector": ".wjs-chrome-header .wjs-header-nav a"
         },
+        "navVertical": {
+          "selector": ".wjs-chrome-header .wjs-chrome-nav-vertical"
+        },
         "row": {
           "selector": ".wjs-chrome-header .wjs-chrome-row"
+        },
+        "rowNested": {
+          "selector": ".wjs-chrome-header .wjs-chrome-row .wjs-chrome-row"
         },
         "search": {
           "selector": ".wjs-chrome-header .wjs-chrome-search"
@@ -13754,6 +13805,15 @@
         "siteTitle": {
           "selector": ".wjs-chrome-header .wjs-chrome-site-title"
         },
+        "siteTitleLink": {
+          "selector": ".wjs-chrome-header .wjs-chrome-site-title a"
+        },
+        "siteTitleText": {
+          "selector": ".wjs-chrome-header .wjs-chrome-site-title span"
+        },
+        "socialLink": {
+          "selector": ".wjs-chrome-header .wjs-chrome-socials a"
+        },
         "socials": {
           "selector": ".wjs-chrome-header .wjs-chrome-socials"
         },
@@ -13762,6 +13822,14 @@
         },
         "text": {
           "selector": ".wjs-chrome-header .wjs-chrome-text"
+        }
+      }
+    },
+    "chromeSearch": {
+      "selector": ".wjs-chrome-search",
+      "children": {
+        "input": {
+          "selector": ".wjs-chrome-search input"
         }
       }
     },
@@ -13810,7 +13878,15 @@
       }
     },
     "header": {
-      "selector": ".wjs-header"
+      "selector": ".wjs-header",
+      "children": {
+        "actionButton": {
+          "selector": ".wjs-header-actions button"
+        }
+      }
+    },
+    "headerNav": {
+      "selector": ".wjs-chrome-header .wjs-header-nav"
     },
     "heading": {
       "selector": ".wp-block-heading"
@@ -13862,10 +13938,20 @@
       "selector": ".wp-block-image"
     },
     "logo": {
-      "selector": ".wjs-header-logo"
+      "selector": ".wjs-header-logo",
+      "children": {
+        "text": {
+          "selector": ".wjs-header-logo span"
+        }
+      }
     },
     "nav": {
-      "selector": ".wjs-header-nav"
+      "selector": ".wjs-header-nav",
+      "children": {
+        "link": {
+          "selector": ".wjs-header-nav a"
+        }
+      }
     },
     "posts-grid": {
       "selector": ".wp-block-posts-grid",

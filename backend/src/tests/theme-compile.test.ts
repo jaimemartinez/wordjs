@@ -450,6 +450,41 @@ describe('compileTheme (declarative theme compiler)', () => {
         assert.match(r.css, /\.wjs-chrome-footer \.wjs-chrome-nav a:hover \{[^}]*color: #ffffff/);
     });
 
+    // Pseudo-elements and structural positions, added because the catalogue could not say them: 8 uses
+    // of ::before/::after/::placeholder and 6 of :first-child/:last-child were the reason several themes
+    // kept a hand-written block. Named keys, never selector syntax.
+    it('composes position, state and pseudo-element in the order CSS requires', () => {
+        const slug = writeTheme({
+            styles: {
+                chromeFooter: {
+                    row: { first: { 'padding-top': '2rem' }, last: { 'border-top': '1px solid #333' } },
+                    navLink: {
+                        before: { content: '"·"' },
+                        hover: { after: { transform: 'scaleX(1)' } }
+                    }
+                }
+            }
+        });
+        const r = compile(slug, { derive: STUB_DERIVE });
+        assert.strictEqual(r.stats.errors, 0, JSON.stringify(r.diagnostics));
+        assert.match(r.css, /\.wjs-chrome-footer \.wjs-chrome-row:first-child \{/);
+        assert.match(r.css, /\.wjs-chrome-footer \.wjs-chrome-row:last-child \{/);
+        assert.match(r.css, /\.wjs-chrome-footer \.wjs-chrome-nav a::before \{/);
+        // The pseudo-element MUST come last, after the state — `a:hover::after`, never `a::after:hover`,
+        // which is not a valid selector and would silently match nothing.
+        assert.match(r.css, /\.wjs-chrome-footer \.wjs-chrome-nav a:hover::after \{/);
+    });
+
+    it('refuses to nest anything inside a pseudo-element', () => {
+        // ::before is the end of a selector. Allowing a state or a child under it would emit something
+        // that parses as CSS and matches nothing — the worst failure mode, because it looks fine.
+        for (const inner of ['hover', 'first', 'before']) {
+            const slug = writeTheme({ styles: { chromeFooter: { navLink: { before: { [inner]: { color: '#fff' } } } } } });
+            const r = compile(slug, { derive: STUB_DERIVE });
+            assert.ok(r.stats.errors > 0, `nesting ${inner} inside ::before must be refused`);
+        }
+    });
+
     it('a chrome child the manifest does not name is refused, with a suggestion', () => {
         // The point of naming is that the set is CLOSED. An unknown child must be an error rather than
         // silently emitting nothing (which would look like a theme bug) or being taken as a selector.
