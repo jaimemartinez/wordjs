@@ -12,7 +12,7 @@ const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
 
-const { deriveTokens, archetypeCss, ARCHETYPE_NAMES, lum, onColor } = require('../core/theme-derive');
+const { deriveTokens, ARCHETYPE_NAMES, lum, onColor } = require('../core/theme-derive');
 // The require.main guard in the generator makes this side-effect free (no marketplace writes).
 const generator = require(path.join(__dirname, '..', '..', '..', 'scripts', 'create-40-themes.js'));
 
@@ -131,26 +131,21 @@ describe('lum / onColor — parity and limits', () => {
     });
 });
 
-describe('archetypeCss — presets without external imports', () => {
-    it('exposes the same archetype set as the generator', () => {
-        assert.deepStrictEqual([...ARCHETYPE_NAMES].sort(), Object.keys(generator.ARCHETYPES).sort());
-        assert.strictEqual(ARCHETYPE_NAMES.length, 6);
+// The archetype is a LABEL now. It used to be a CSS generator, and this block used to assert that
+// every preset interpolated the seeds and reached no network. Those presets are gone with the legacy
+// theme model (nothing rendered their .theme-* classes, and their body/h1,h2,h3 rules duplicated what
+// wordjs-ui.css already derives from the tokens), so what is left to pin is the only part still
+// load-bearing: the NAME LIST that theme-compile validates against and the CLI offers for --archetype.
+describe('ARCHETYPE_NAMES — the label set', () => {
+    it('is the six names the compiler and the CLI accept', () => {
+        assert.deepStrictEqual([...ARCHETYPE_NAMES].sort(),
+            ['brutalist', 'cyber', 'editorial', 'glassmorphism', 'obsidian', 'organic']);
     });
 
-    it('every archetype renders the seeds and never reaches the network', () => {
-        const seeds: Seeds = { primary: '#6366f1', secondary: '#4f46e5', bg: '#0f172a', text: '#f8fafc' };
-        for (const name of ARCHETYPE_NAMES) {
-            const css = archetypeCss(name, seeds);
-            assert.ok(css.includes(seeds.primary), `${name}: primary seed missing`);
-            assert.ok(css.includes(seeds.bg), `${name}: bg seed missing`);
-            assert.ok(!css.includes('@import'), `${name}: @import must be stripped in core output`);
-            assert.ok(!/url\s*\(/i.test(css), `${name}: no url() in core archetype CSS`);
-            assert.ok(!/https?:/i.test(css), `${name}: no external URLs in core archetype CSS`);
-        }
-    });
-
-    it('rejects unknown archetype names', () => {
-        assert.throws(() => archetypeCss('vaporwave', { primary: '#000000', secondary: '#000000', bg: '#ffffff', text: '#000000' }), /Unknown archetype/);
+    it('no longer exports a CSS generator — the label must not be able to emit styling again', () => {
+        const core = require('../core/theme-derive');
+        assert.strictEqual(typeof core.archetypeCss, 'undefined',
+            'archetypeCss is retired: re-exporting it would put 526 lines of unrendered CSS one require() away');
     });
 
     // This test used to REQUIRE the remote @import to survive into every catalog theme ("font
