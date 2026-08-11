@@ -14,8 +14,67 @@ permissions:
   contents: write # required to create the GitHub Release and upload assets
 
 jobs:
+  # GATE THE PUBLISH ON THE SAME CHECKS CI RUNS.
+  #
+  # release.yml and ci.yml are independent workflows: both fire on the tag push, neither waits for the
+  # other, and nothing here ever asked whether CI was green. The existing gates below (smoke-boot in
+  # every mode, marketplace integrity) answer "does the artifact BOOT and is it self-consistent?" —
+  # they cannot answer "is the code correct and are its dependencies safe?".
+  #
+  # That gap shipped v1.14.0: `npm audit --omit=dev --audit-level=high` was failing in CI on a HIGH
+  # advisory in a production dependency (js-yaml, CVE-2026-59870 — quadratic CPU consumption), and the
+  # release published anyway, bundling the vulnerable dependency into the ZIP every operator downloads.
+  #
+  # Duplicating the checks here rather than waiting on ci.yml is deliberate: a cross-workflow wait is a
+  # race (the two start together, and a polling step would have to guess how long to wait), while this
+  # is deterministic and self-contained — if it cannot pass, nothing is built and nothing is published.
+  verify:
+    name: Verify before publishing (audit + typecheck + tests)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            backend/package-lock.json
+            frontend/package-lock.json
+            gateway/package-lock.json
+            setup/package-lock.json
+
+      - name: Install all workspaces
+        run: npm run install:all
+
+      # The audit that v1.14.0 shipped past. Same command and threshold as ci.yml, in every workspace
+      # ci.yml audits — a HIGH advisory in a production dependency must never reach a release asset.
+      - name: Audit backend (block high/critical prod vulns)
+        working-directory: backend
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Audit gateway (block high/critical prod vulns)
+        working-directory: gateway
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Audit frontend (block high/critical prod vulns)
+        working-directory: frontend
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Backend type check (strict)
+        working-directory: backend
+        run: npx tsc --noEmit
+
+      - name: Backend tests
+        working-directory: backend
+        run: npm test
+
   build-release:
     name: Build & publish compiled bundle
+    needs: verify # nothing is built, and nothing is published, unless the gate above is green
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
