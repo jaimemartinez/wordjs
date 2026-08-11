@@ -57,7 +57,12 @@ jobs:
           RUNS: ${{ inputs.runs }}
           CONC: ${{ inputs.concurrency }}
         run: |
-          set -uo pipefail
+          # GitHub runs `run:` blocks as `bash -e`, so the FIRST grep that finds nothing kills the step.
+          # This script greps for things that are usually absent (that is the point — a run with no
+          # failure signature is the good case), so -e must go. Without this the job died before its
+          # first suite run and reported "failure" while having measured nothing.
+          set +e
+          set -u
           fails=0
           echo "shard=${{ matrix.shard }} runs=$RUNS concurrency=$CONC"
           for i in $(seq 1 "$RUNS"); do
