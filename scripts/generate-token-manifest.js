@@ -156,6 +156,115 @@ const CHROME_ELEMENT_SEEDS = {
             containerRowAfterFirst: { selector: '.wjs-chrome-footer > .wjs-footer-container > .wjs-chrome-row + .wjs-chrome-row' },
         },
     },
+
+    // ── Public content surfaces ───────────────────────────────────────────────
+    // Same gap as the chrome, one floor down: the blog roll, the search results, the single post's
+    // meta row and the comment thread are hardcoded React with Tailwind utilities and no framework
+    // class, so ui.css contains nothing for them and the .wp-block-* scan finds nothing to register.
+    // A theme therefore had NO NAME for the four surfaces a blog is mostly made of — the only handle
+    // was a utility like `rounded-2xl`, which is unscoped and changes the next time anyone edits the
+    // JSX. (The post BODY was the exception: it already carried `.wjs-content`.)
+    //
+    // The classes are appended alongside the Tailwind utilities and carry no styling of their own, so
+    // the default render is unchanged; frontend/src/lib/__tests__/chromeSelectorContract.test.ts is
+    // what keeps every name below matching a real element.
+    postList: {
+        selector: '.wjs-post-list',
+        // NOTE: header/title/empty are UNSCOPED and are DOM siblings of `.wjs-post-list`, not
+        // descendants — the roll's heading sits above the grid and the empty state replaces it. They
+        // are grouped here because that is the surface a theme author means, and children carry a full
+        // selector precisely so grouping can follow meaning rather than nesting (same reason
+        // `header.actionButton` is the bare `.wjs-header-actions button`).
+        children: {
+            header: { selector: '.wjs-post-list-header' },
+            title: { selector: '.wjs-post-list-title' },
+            empty: { selector: '.wjs-post-list-empty' },
+        },
+    },
+    postCard: {
+        selector: '.wjs-post-card',
+        children: {
+            body: { selector: '.wjs-post-card-body' },
+            meta: { selector: '.wjs-post-card-meta' },
+            badge: { selector: '.wjs-post-card-badge' },
+            titleLink: { selector: '.wjs-post-card-link' },
+            title: { selector: '.wjs-post-card-title' },
+            excerpt: { selector: '.wjs-post-card-excerpt' },
+            more: { selector: '.wjs-post-card-more' },
+        },
+    },
+    // `search` and `search-wrap` are already taken by the .wp-block-search registration (the Puck
+    // block), hence the longer keys — a seed never overwrites a real block entry, it is skipped.
+    searchPage: {
+        selector: '.wjs-search-page',
+        children: {
+            header: { selector: '.wjs-search-header' },
+            title: { selector: '.wjs-search-title' },
+            summary: { selector: '.wjs-search-summary' },
+            empty: { selector: '.wjs-search-empty' },
+        },
+    },
+    searchForm: {
+        selector: '.wjs-search-form',
+        children: {
+            input: { selector: '.wjs-search-form input' },
+            submit: { selector: '.wjs-search-form button' },
+        },
+    },
+    searchResults: { selector: '.wjs-search-results' },
+    searchResult: {
+        selector: '.wjs-search-result',
+        children: {
+            meta: { selector: '.wjs-search-result-meta' },
+            badge: { selector: '.wjs-search-result-badge' },
+            titleLink: { selector: '.wjs-search-result-link' },
+            title: { selector: '.wjs-search-result-title' },
+            excerpt: { selector: '.wjs-search-result-excerpt' },
+            more: { selector: '.wjs-search-result-more' },
+        },
+    },
+    singlePost: {
+        selector: '.wjs-post',
+        children: {
+            header: { selector: '.wjs-post-header' },
+            title: { selector: '.wjs-post-title' },
+            // The body hook predates this seed; naming it here is what makes it addressable
+            // declaratively, scoped to the single-post frame.
+            body: { selector: '.wjs-post .wjs-content' },
+        },
+    },
+    postMeta: {
+        selector: '.wjs-post-meta',
+        children: {
+            category: { selector: '.wjs-post-meta-category' },
+            date: { selector: '.wjs-post-meta-date' },
+            author: { selector: '.wjs-post-meta-author' },
+        },
+    },
+    comments: {
+        selector: '.wjs-comments',
+        children: {
+            title: { selector: '.wjs-comments-title' },
+            list: { selector: '.wjs-comment-list' },
+            empty: { selector: '.wjs-comments-empty' },
+            form: { selector: '.wjs-comment-form' },
+            formTitle: { selector: '.wjs-comment-form-title' },
+            field: { selector: '.wjs-comment-field' },
+            submit: { selector: '.wjs-comment-submit' },
+        },
+    },
+    comment: {
+        selector: '.wjs-comment',
+        children: {
+            avatar: { selector: '.wjs-comment-avatar' },
+            avatarImage: { selector: '.wjs-comment-avatar img' },
+            body: { selector: '.wjs-comment-body' },
+            head: { selector: '.wjs-comment-head' },
+            author: { selector: '.wjs-comment-author' },
+            date: { selector: '.wjs-comment-date' },
+            content: { selector: '.wjs-comment-content' },
+        },
+    },
 };
 
 const FLAG_ORDER = ['alias', 'editor-internal', 'chrome-phantom'];

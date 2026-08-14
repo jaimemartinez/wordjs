@@ -27,21 +27,24 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
 
     return (
         <ThemeTemplate kind="search">
-        <div className="max-w-4xl mx-auto px-4 py-12">
+        {/* `wjs-*` hooks are the theme contract: STABLE names alongside the Tailwind utilities. They add
+            no styling of their own — the manifest promises them and the chrome-selector contract test
+            proves the markup still emits them. */}
+        <div className="wjs-search-page max-w-4xl mx-auto px-4 py-12">
             {/* Header */}
-            <div className="mb-12">
-                <h1 className="text-4xl font-bold text-[var(--wjs-color-text-main,#1a1a1a)] mb-4">
+            <div className="wjs-search-header mb-12">
+                <h1 className="wjs-search-title text-4xl font-bold text-[var(--wjs-color-text-main,#1a1a1a)] mb-4">
                     Search Results
                 </h1>
                 {query && (
-                    <p className="text-lg text-[var(--wjs-color-text-muted,#6b7280)] break-words">
+                    <p className="wjs-search-summary text-lg text-[var(--wjs-color-text-muted,#6b7280)] break-words">
                         {results.length} result{results.length !== 1 ? "s" : ""} for &quot;{query}&quot;
                     </p>
                 )}
             </div>
 
             {/* Search form — a plain GET form, so it works with JavaScript disabled. */}
-            <form className="mb-12" action="/search" method="get">
+            <form className="wjs-search-form mb-12" action="/search" method="get">
                 <div className="flex gap-3">
                     <input
                         type="search"
@@ -64,7 +67,7 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
             {/* rounded-2xl (1rem) maps to the UNDECLARED --wjs-card-radius: ui.css :root pre-declares
                 --wjs-radius-lg at 0.75rem, which would beat a 1rem parity fallback. */}
             {!query && (
-                <div className="text-center py-16 bg-[var(--wjs-bg-surface,#f9fafb)] rounded-[var(--wjs-card-radius,1rem)]">
+                <div className="wjs-search-empty text-center py-16 bg-[var(--wjs-bg-surface,#f9fafb)] rounded-[var(--wjs-card-radius,1rem)]">
                     <div className="text-6xl mb-6 text-[var(--wjs-color-text-muted,#9ca3af)]">
                         <i className="fa-solid fa-magnifying-glass"></i>
                     </div>
@@ -79,7 +82,7 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
 
             {/* No results */}
             {query && results.length === 0 && (
-                <div className="text-center py-16 bg-[var(--wjs-bg-surface,#f9fafb)] rounded-[var(--wjs-card-radius,1rem)]">
+                <div className="wjs-search-empty text-center py-16 bg-[var(--wjs-bg-surface,#f9fafb)] rounded-[var(--wjs-card-radius,1rem)]">
                     <div className="text-6xl mb-6 text-[var(--wjs-color-text-muted,#9ca3af)]">
                         <i className="fa-solid fa-face-meh"></i>
                     </div>
@@ -97,14 +100,14 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
 
             {/* Results */}
             {results.length > 0 && (
-                <div className="space-y-6">
+                <div className="wjs-search-results space-y-6">
                     {results.map((post) => (
                         <article
                             key={post.id}
-                            className="group bg-[var(--wjs-bg-surface,#fff)] rounded-[var(--wjs-card-radius,1rem)] border border-[var(--wjs-border-subtle,#e5e7eb)] p-[var(--wjs-card-pad,1.5rem)] hover:shadow-lg hover:border-[var(--wjs-color-primary,#2563eb)] transition-all duration-300"
+                            className="wjs-search-result group bg-[var(--wjs-bg-surface,#fff)] rounded-[var(--wjs-card-radius,1rem)] border border-[var(--wjs-border-subtle,#e5e7eb)] p-[var(--wjs-card-pad,1.5rem)] hover:shadow-lg hover:border-[var(--wjs-color-primary,#2563eb)] transition-all duration-300"
                         >
-                            <div className="flex items-center gap-3 mb-3">
-                                <span className={`px-3 py-1 rounded-full text-xs font-semibold uppercase tracking-wide ${post.type === "page"
+                            <div className="wjs-search-result-meta flex items-center gap-3 mb-3">
+                                <span className={`wjs-search-result-badge px-3 py-1 rounded-full text-xs font-semibold uppercase tracking-wide ${post.type === "page"
                                     ? "bg-purple-100 text-purple-700"
                                     : "bg-blue-100 text-blue-700"
                                     }`}>
@@ -117,19 +120,19 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
                                 </span>
                             </div>
 
-                            <Link href={`/${post.slug || post.id}`}>
-                                <h2 className="text-2xl font-bold text-[var(--wjs-color-text-main,#1a1a1a)] mb-3 group-hover:text-[var(--wjs-color-primary,#2563eb)] transition-colors">
+                            <Link href={`/${post.slug || post.id}`} className="wjs-search-result-link">
+                                <h2 className="wjs-search-result-title text-2xl font-bold text-[var(--wjs-color-text-main,#1a1a1a)] mb-3 group-hover:text-[var(--wjs-color-primary,#2563eb)] transition-colors">
                                     {post.title}
                                 </h2>
                             </Link>
 
-                            <p className="text-[var(--wjs-color-text-muted,#6b7280)] line-clamp-2 mb-4">
+                            <p className="wjs-search-result-excerpt text-[var(--wjs-color-text-muted,#6b7280)] line-clamp-2 mb-4">
                                 {post.excerpt || post.content?.substring(0, 200).replace(/<[^>]*>?/gm, "") + "..."}
                             </p>
 
                             <Link
                                 href={`/${post.slug || post.id}`}
-                                className="inline-flex items-center text-[var(--wjs-color-primary,#2563eb)] font-semibold hover:gap-2 transition-all"
+                                className="wjs-search-result-more inline-flex items-center text-[var(--wjs-color-primary,#2563eb)] font-semibold hover:gap-2 transition-all"
                             >
                                 Read more <i className="fa-solid fa-arrow-right ml-2 text-sm"></i>
                             </Link>

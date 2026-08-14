@@ -58,25 +58,29 @@ export default function PostContent({ post, settings, category, showComments }: 
                 </div>
             ) : (
                 // Post fallback (card style)
-                <article className="max-w-3xl mx-auto py-8">
-                    <div className="mb-8 text-center">
-                        <div className="flex flex-wrap items-center justify-center gap-3 text-sm text-[var(--wjs-color-text-muted,#6b7280)] mb-4">
+                // `wjs-post*` hooks are the theme contract: STABLE names alongside the Tailwind
+                // utilities. They carry no styling themselves; the manifest promises them and the
+                // chrome-selector contract test proves this markup still emits them. (The body already
+                // had one — `wjs-content` — which is why only the frame around it needed naming.)
+                <article className="wjs-post max-w-3xl mx-auto py-8">
+                    <div className="wjs-post-header mb-8 text-center">
+                        <div className="wjs-post-meta flex flex-wrap items-center justify-center gap-3 text-sm text-[var(--wjs-color-text-muted,#6b7280)] mb-4">
                             {category && (
                                 <>
-                                    <span className="font-semibold text-[var(--wjs-color-primary,#2563eb)] uppercase tracking-wide">
+                                    <span className="wjs-post-meta-category font-semibold text-[var(--wjs-color-primary,#2563eb)] uppercase tracking-wide">
                                         {decodeURIComponent(category).replace(/-/g, ' ')}
                                     </span>
                                     <span>•</span>
                                 </>
                             )}
-                            <span><LocalizedDate date={post.date} /></span>
+                            <span className="wjs-post-meta-date"><LocalizedDate date={post.date} /></span>
                             <span>•</span>
-                            <span>{post.author?.displayName || "Admin"}</span>
+                            <span className="wjs-post-meta-author">{post.author?.displayName || "Admin"}</span>
                         </div>
                         {/* Title size intentionally NOT tokenized: every h-scale token (--wjs-h1…) is
                             pre-declared in ui.css :root (2.5rem), so a var() here would override the
                             Tailwind-parity fallback and change today's text-4xl/md:text-5xl render. */}
-                        <h1 className="text-4xl md:text-5xl font-bold text-[var(--wjs-color-heading,#111827)] leading-tight mb-6 text-center">
+                        <h1 className="wjs-post-title text-4xl md:text-5xl font-bold text-[var(--wjs-color-heading,#111827)] leading-tight mb-6 text-center">
                             {post.title}
                         </h1>
                     </div>

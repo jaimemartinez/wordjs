@@ -4,7 +4,7 @@
   "counts": {
     "tokens": 753,
     "varUses": 1724,
-    "elements": 37
+    "elements": 47
   },
   "tokens": {
     "--wjs-2xl": {
@@ -13841,6 +13841,58 @@
         }
       }
     },
+    "comment": {
+      "selector": ".wjs-comment",
+      "children": {
+        "author": {
+          "selector": ".wjs-comment-author"
+        },
+        "avatar": {
+          "selector": ".wjs-comment-avatar"
+        },
+        "avatarImage": {
+          "selector": ".wjs-comment-avatar img"
+        },
+        "body": {
+          "selector": ".wjs-comment-body"
+        },
+        "content": {
+          "selector": ".wjs-comment-content"
+        },
+        "date": {
+          "selector": ".wjs-comment-date"
+        },
+        "head": {
+          "selector": ".wjs-comment-head"
+        }
+      }
+    },
+    "comments": {
+      "selector": ".wjs-comments",
+      "children": {
+        "empty": {
+          "selector": ".wjs-comments-empty"
+        },
+        "field": {
+          "selector": ".wjs-comment-field"
+        },
+        "form": {
+          "selector": ".wjs-comment-form"
+        },
+        "formTitle": {
+          "selector": ".wjs-comment-form-title"
+        },
+        "list": {
+          "selector": ".wjs-comment-list"
+        },
+        "submit": {
+          "selector": ".wjs-comment-submit"
+        },
+        "title": {
+          "selector": ".wjs-comments-title"
+        }
+      }
+    },
     "cta-banner": {
       "selector": ".wp-block-cta-banner",
       "children": {
@@ -13953,6 +14005,60 @@
         }
       }
     },
+    "postCard": {
+      "selector": ".wjs-post-card",
+      "children": {
+        "badge": {
+          "selector": ".wjs-post-card-badge"
+        },
+        "body": {
+          "selector": ".wjs-post-card-body"
+        },
+        "excerpt": {
+          "selector": ".wjs-post-card-excerpt"
+        },
+        "meta": {
+          "selector": ".wjs-post-card-meta"
+        },
+        "more": {
+          "selector": ".wjs-post-card-more"
+        },
+        "title": {
+          "selector": ".wjs-post-card-title"
+        },
+        "titleLink": {
+          "selector": ".wjs-post-card-link"
+        }
+      }
+    },
+    "postList": {
+      "selector": ".wjs-post-list",
+      "children": {
+        "empty": {
+          "selector": ".wjs-post-list-empty"
+        },
+        "header": {
+          "selector": ".wjs-post-list-header"
+        },
+        "title": {
+          "selector": ".wjs-post-list-title"
+        }
+      }
+    },
+    "postMeta": {
+      "selector": ".wjs-post-meta",
+      "children": {
+        "author": {
+          "selector": ".wjs-post-meta-author"
+        },
+        "category": {
+          "selector": ".wjs-post-meta-category"
+        },
+        "date": {
+          "selector": ".wjs-post-meta-date"
+        }
+      }
+    },
     "posts-grid": {
       "selector": ".wp-block-posts-grid",
       "children": {
@@ -14027,11 +14133,79 @@
     "search-wrap": {
       "selector": ".wp-block-search-wrap"
     },
+    "searchForm": {
+      "selector": ".wjs-search-form",
+      "children": {
+        "input": {
+          "selector": ".wjs-search-form input"
+        },
+        "submit": {
+          "selector": ".wjs-search-form button"
+        }
+      }
+    },
+    "searchPage": {
+      "selector": ".wjs-search-page",
+      "children": {
+        "empty": {
+          "selector": ".wjs-search-empty"
+        },
+        "header": {
+          "selector": ".wjs-search-header"
+        },
+        "summary": {
+          "selector": ".wjs-search-summary"
+        },
+        "title": {
+          "selector": ".wjs-search-title"
+        }
+      }
+    },
+    "searchResult": {
+      "selector": ".wjs-search-result",
+      "children": {
+        "badge": {
+          "selector": ".wjs-search-result-badge"
+        },
+        "excerpt": {
+          "selector": ".wjs-search-result-excerpt"
+        },
+        "meta": {
+          "selector": ".wjs-search-result-meta"
+        },
+        "more": {
+          "selector": ".wjs-search-result-more"
+        },
+        "title": {
+          "selector": ".wjs-search-result-title"
+        },
+        "titleLink": {
+          "selector": ".wjs-search-result-link"
+        }
+      }
+    },
+    "searchResults": {
+      "selector": ".wjs-search-results"
+    },
     "section": {
       "selector": ".wp-block-section",
       "children": {
         "inner": {
           "selector": ".wp-block-section__inner"
+        }
+      }
+    },
+    "singlePost": {
+      "selector": ".wjs-post",
+      "children": {
+        "body": {
+          "selector": ".wjs-post .wjs-content"
+        },
+        "header": {
+          "selector": ".wjs-post-header"
+        },
+        "title": {
+          "selector": ".wjs-post-title"
         }
       }
     },
