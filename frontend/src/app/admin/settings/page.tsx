@@ -9,6 +9,29 @@ import { useModal } from "@/contexts/ModalContext";
 import { PageHeader } from "@/components/ui";
 
 
+/**
+ * Locales offered in the picker. Mirrors backend/src/core/i18n.ts `languages` (the set WordJS ships
+ * plural rules and translation loading for) plus the RTL locales that were the whole point of the
+ * `dir` work — Hebrew, Persian and Urdu — so the feature is reachable from the UI and not only from
+ * the API. Native names, because that is what a site owner recognises.
+ */
+const SITE_LOCALES: { value: string; label: string }[] = [
+    { value: "en_US", label: "English (US)" },
+    { value: "es_ES", label: "Español" },
+    { value: "fr_FR", label: "Français" },
+    { value: "de_DE", label: "Deutsch" },
+    { value: "it_IT", label: "Italiano" },
+    { value: "pt_BR", label: "Português do Brasil" },
+    { value: "ru_RU", label: "Русский" },
+    { value: "zh_CN", label: "简体中文" },
+    { value: "ja", label: "日本語" },
+    { value: "ko_KR", label: "한국어" },
+    { value: "ar", label: "العربية" },
+    { value: "he_IL", label: "עברית" },
+    { value: "fa_IR", label: "فارسی" },
+    { value: "ur", label: "اردو" },
+];
+
 export default function SettingsPage() {
     const { t } = useI18n();
     const [settings, setSettings] = useState({
@@ -24,6 +47,8 @@ export default function SettingsPage() {
         default_role: "subscriber",
         comment_registration: "0",
         redis_cache_enabled: "0",
+        WPLANG: "en_US",
+        site_text_direction: "",
     });
     const [roles, setRoles] = useState<Record<string, Role>>({});
     const [saving, setSaving] = useState(false);
@@ -71,6 +96,8 @@ export default function SettingsPage() {
                 default_role: data.default_role || "subscriber",
                 comment_registration: data.comment_registration !== undefined ? String(data.comment_registration) : "0",
                 redis_cache_enabled: data.redis_cache_enabled !== undefined ? String(data.redis_cache_enabled) : "0",
+                WPLANG: data.WPLANG || "en_US",
+                site_text_direction: data.site_text_direction || "",
             });
         } catch (error) {
             console.error("Failed to load settings:", error);
@@ -248,6 +275,37 @@ export default function SettingsPage() {
                                         />
                                     </div>
                                     <p className="text-xs text-gray-400 mt-1">{t('settings.admin.email.help')}</p>
+                                </div>
+
+                                {/* Site locale + writing direction — the two options that become
+                                    <html lang> and <html dir> (frontend/src/lib/documentLanguage.ts).
+                                    The locale list is short and curated rather than fetched: it is a
+                                    convenience, not the authority. The backend accepts any well-formed
+                                    language tag (routes/settings.ts SETTING_VALIDATORS), so a site on
+                                    an unlisted locale can still set it through the API. */}
+                                <div className="space-y-2">
+                                    <ModernSelect
+                                        label={t('settings.site.language')}
+                                        value={settings.WPLANG}
+                                        onChange={(e) => setSettings({ ...settings, WPLANG: e.target.value })}
+                                        options={SITE_LOCALES.map((l) => ({ value: l.value, label: l.label }))}
+                                    />
+                                    <p className="text-xs text-gray-400 mt-1">{t('settings.site.language.help')}</p>
+                                </div>
+
+                                <div className="space-y-2">
+                                    <ModernSelect
+                                        label={t('settings.text.direction')}
+                                        value={settings.site_text_direction}
+                                        onChange={(e) => setSettings({ ...settings, site_text_direction: e.target.value })}
+                                        options={[
+                                            { value: "", label: t('settings.text.direction.derived') },
+                                            { value: "ltr", label: t('settings.text.direction.ltr') },
+                                            { value: "rtl", label: t('settings.text.direction.rtl') },
+                                            { value: "auto", label: t('settings.text.direction.auto') },
+                                        ]}
+                                    />
+                                    <p className="text-xs text-gray-400 mt-1">{t('settings.text.direction.help')}</p>
                                 </div>
                             </div>
                         </div>

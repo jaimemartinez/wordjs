@@ -264,8 +264,64 @@ function analyzeTheme(slug: string, opts: { themesDir?: string; manifestPath?: s
   let chromeValidate: any;
   if (Object.prototype.hasOwnProperty.call(opts, 'chromeValidate')) chromeValidate = opts.chromeValidate;
   else { try { chromeValidate = require('./chrome-validate'); } catch { chromeValidate = null; } }
+
+  // TEMPLATE_PART_* — theme.json `templateParts`, the declaration that lets a theme ship compositions
+  // beyond the site's own header/footer. It is the ONLY way a chrome/<name>.json becomes reachable:
+  // the renderer refuses a part a theme did not declare, so everything below is about the gap between
+  // what is declared, what is on disk, and what the templates ask for.
+  //
+  // FAIL-CLOSED at runtime means one bad entry disables ALL of a theme's parts, so an invalid
+  // declaration is an ERROR here — the author would otherwise be debugging parts that silently
+  // vanished. A theme with no declaration at all is the normal case, not a finding.
+  const declaredParts = new Map<string, string>(); // name → area
+  if (chromeValidate && typeof chromeValidate.validateTemplateParts === 'function'
+    && themeJson && typeof themeJson === 'object' && !Array.isArray(themeJson)
+    && themeJson.templateParts !== undefined) {
+    let verdict: any;
+    try { verdict = chromeValidate.validateTemplateParts(themeJson.templateParts); } catch { verdict = null; }
+    if (verdict && Array.isArray(verdict.errors)) {
+      for (const e of verdict.errors) {
+        report.errors.push({
+          code: 'TEMPLATE_PART_INVALID',
+          message: `theme.json ${e.path}: ${e.message}`,
+          detail: { path: e.path, rule: e.code }
+        });
+      }
+    }
+    for (const p of (verdict && Array.isArray(verdict.parts) ? verdict.parts : [])) declaredParts.set(p.name, p.area);
+    // TEMPLATE_PART_MISSING — declared, but there is no file to render. The block renders nothing.
+    for (const [name] of declaredParts) {
+      if (!fs.existsSync(path.join(themeDir, 'chrome', `${name}.json`))) {
+        report.errors.push({
+          code: 'TEMPLATE_PART_MISSING',
+          message: `theme.json declares template part "${name}" but chrome/${name}.json does not exist — a TemplatePart referencing it renders nothing`,
+          detail: { name }
+        });
+      }
+    }
+  }
+
+  // TEMPLATE_PART_UNDECLARED — a composition on disk that nothing can ever reach. Only the site's own
+  // header/footer are resolved without a declaration; any other chrome/*.json is dead weight until it
+  // is declared. A warning, not an error: the file is valid, it is simply unreachable.
+  try {
+    const chromeDir = path.join(themeDir, 'chrome');
+    const onDisk = fs.existsSync(chromeDir)
+      ? fs.readdirSync(chromeDir).filter((f: string) => f.endsWith('.json')).sort()
+      : [];
+    for (const file of onDisk) {
+      const name = file.slice(0, -'.json'.length);
+      if (name === 'header' || name === 'footer' || declaredParts.has(name)) continue;
+      report.warnings.push({
+        code: 'TEMPLATE_PART_UNDECLARED',
+        message: `chrome/${file} is neither the site header/footer nor declared in theme.json "templateParts" — nothing can reference it`,
+        detail: { name }
+      });
+    }
+  } catch { /* unreadable directory — the chrome checks below report what matters */ }
+
   if (chromeValidate && typeof chromeValidate.validateChromeData === 'function') {
-    for (const part of ['header', 'footer']) {
+    for (const part of ['header', 'footer'].concat(Array.from(declaredParts.keys()))) {
       const chromeJsonPath = path.join(themeDir, 'chrome', `${part}.json`);
       if (!fs.existsSync(chromeJsonPath)) continue;
       let rawChrome: string | null = null;
@@ -303,6 +359,9 @@ function analyzeTheme(slug: string, opts: { themesDir?: string; manifestPath?: s
   let templateValidate: any;
   if (Object.prototype.hasOwnProperty.call(opts, 'templateValidate')) templateValidate = (opts as any).templateValidate;
   else { try { templateValidate = require('./template-validate'); } catch { templateValidate = null; } }
+  // class name → the first template file that puts it on a container. Fed to the VARIATION_* pairing
+  // below; only templates that VALIDATED contribute, since an invalid one never renders at all.
+  const templateClasses = new Map<string, string>();
   if (templateValidate && typeof templateValidate.validateTemplate === 'function') {
     const tplDir = path.join(themeDir, 'templates');
     let tplFiles: string[] = [];
@@ -332,6 +391,29 @@ function analyzeTheme(slug: string, opts: { themesDir?: string; manifestPath?: s
             code: 'TEMPLATE_INVALID',
             message: `templates/${file} ${e.path}: ${e.message}`,
             detail: { file, path: e.path, rule: e.code }
+          });
+        }
+      }
+
+      // TEMPLATE_PART_UNKNOWN — the cross-file check neither validator can make on its own: a
+      // TemplatePart naming something theme.json never declared. The renderer refuses it (that is what
+      // keeps a template from naming an arbitrary file), so the block renders nothing and the author
+      // sees a hole with no explanation anywhere. Only meaningful for a template that parsed.
+      if (verdict && verdict.ok === true && typeof templateValidate.collectTemplateClasses === 'function') {
+        let classes: string[];
+        try { classes = templateValidate.collectTemplateClasses(raw) || []; } catch { classes = []; }
+        for (const c of classes) if (!templateClasses.has(c)) templateClasses.set(c, file);
+      }
+
+      if (verdict && verdict.ok === true && typeof templateValidate.templatePartRefs === 'function') {
+        let refs: string[];
+        try { refs = templateValidate.templatePartRefs(raw) || []; } catch { refs = []; }
+        for (const name of refs) {
+          if (declaredParts.has(name)) continue;
+          report.errors.push({
+            code: 'TEMPLATE_PART_UNKNOWN',
+            message: `templates/${file} references template part "${name}", which theme.json "templateParts" does not declare — the renderer refuses an undeclared part, so it renders nothing`,
+            detail: { file, name, declared: Array.from(declaredParts.keys()) }
           });
         }
       }
@@ -531,6 +613,57 @@ function analyzeTheme(slug: string, opts: { themesDir?: string; manifestPath?: s
       message: `style.css has ${starts} @wjs-generated:start and ${ends} @wjs-generated:end marker(s) — expected one matched pair; a duplicate block wins the cascade and an unclosed one is left as-is — recompile: node backend/cli/wordjs.js build theme ${slug}`,
       detail: { starts, ends }
     });
+  }
+
+  // VARIATION_UNUSED / VARIATION_UNDECLARED — the pairing that makes `styles.variations` worth
+  // having, and the only check in this file that reads theme.json and templates/ TOGETHER.
+  //
+  // A style variation is half a statement on its own. Declared but never used, it compiles to a rule
+  // that matches nothing; used but never declared, the class reaches the DOM carrying no style. Both
+  // halves validate perfectly on their own file — which is exactly the "compiles cleanly and does
+  // nothing" failure this theme system keeps paying for, and neither validator can see it, because
+  // one is handed theme.json and the other a single template.
+  //
+  // Warnings, not errors: the theme renders either way. The declared set is read straight from
+  // theme.json rather than from the compiler, so this still fires for a theme whose ONLY declarative
+  // key is `styles` — and it is filtered by the compiler's two acceptance conditions (the shared
+  // class-token shape, and a node the compiler would walk), so a name the compiler already rejected is
+  // not reported a second time under a different code.
+  if (templateValidate && templateValidate.TEMPLATE_CLASS && templateValidate.TEMPLATE_CLASS.TOKEN) {
+    const classToken: RegExp = templateValidate.TEMPLATE_CLASS.TOKEN;
+    const isObj = (v: any): boolean => typeof v === 'object' && v !== null && !Array.isArray(v);
+    const variationsNode = isObj(themeJson) && isObj(themeJson.styles) ? themeJson.styles.variations : undefined;
+    const declaredVariations = isObj(variationsNode)
+      ? Object.keys(variationsNode).filter((n: string) => classToken.test(n) && isObj(variationsNode[n]))
+      : [];
+
+    for (const name of declaredVariations) {
+      if (templateClasses.has(name)) continue;
+      report.warnings.push({
+        code: 'VARIATION_UNUSED',
+        message: `theme.json declares styles.variations.${name} but no template in this theme puts className "${name}" on a container — the compiled rule matches nothing`,
+        detail: { name }
+      });
+    }
+
+    // The other half has one legitimate excuse: the class may be styled by HAND, outside the
+    // @wjs-generated markers, which is how this was done before variations existed. Migrating is the
+    // advice, not the requirement, so a class the stylesheet already selects is not reported.
+    const genStart = css.indexOf(GENERATED_START_PREFIX);
+    const genEnd = css.indexOf(GENERATED_END);
+    const outside = (genStart !== -1 && genEnd >= genStart
+      ? css.slice(0, genStart) + css.slice(genEnd + GENERATED_END.length)
+      : css).replace(/\/\*[\s\S]*?\*\//g, '');
+    for (const [name, file] of templateClasses) {
+      if (declaredVariations.includes(name)) continue;
+      // The name passed CLASS_TOKEN ([a-z][a-z0-9-]{0,39}), so it carries no regex metacharacter.
+      if (new RegExp(`\\.${name}(?![a-zA-Z0-9_-])`).test(outside)) continue;
+      report.warnings.push({
+        code: 'VARIATION_UNDECLARED',
+        message: `templates/${file} puts className "${name}" on a container, but theme.json declares no styles.variations.${name} and style.css never selects .${name} — the class renders with no style at all`,
+        detail: { name, file }
+      });
+    }
   }
 
   // --- declarative sections (theme-compile v1 contract) × compiler ---------------------

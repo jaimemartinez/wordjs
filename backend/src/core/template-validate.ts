@@ -31,6 +31,7 @@
  *   TPL_UNKNOWN_TYPE      block type outside the closed allowlist
  *   TPL_FORBIDDEN_TYPE    a real block type deliberately not allowed in a THEME-shipped template
  *   TPL_UNKNOWN_PROP      prop the block's contract does not define
+ *   TPL_MISSING_PROP      a prop the block cannot render without
  *   TPL_INVALID_PROP      wrong type, or a value outside its enum
  *   TPL_SLOT_MISSING      no PageContent slot — the page's content would have nowhere to render
  *   TPL_SLOT_DUPLICATE    more than one PageContent slot
@@ -68,7 +69,8 @@ const CONTENT_SLOT = 'PageContent';
 type PropSpec =
     | { kind: 'string' | 'number' | 'boolean' }
     | { kind: 'enum'; values: string[] }
-    | { kind: 'classlist' };
+    | { kind: 'classlist' }
+    | { kind: 'partname' };
 
 const LEN = { kind: 'string' } as const;
 const NUM = { kind: 'number' } as const;
@@ -127,12 +129,26 @@ const TAG = en(...TAGS);
 const CLASSNAME = { kind: 'classlist' } as const;
 
 /**
+ * NAMED TEMPLATE PARTS — the two constants below MIRROR core/chrome-validate.ts, which owns the
+ * theme.json `templateParts` declaration. They are re-declared rather than required so this module
+ * keeps loading on its own (the doctor stubs either validator independently in its tests);
+ * backend/src/tests/template-parts.test.ts asserts the two copies are identical, so they cannot drift.
+ *
+ * The name is the chrome/<name>.json FILE NAME and lands in a URL, so it is shape-checked exactly like
+ * a template name is — that, and the fact that the renderer refuses any name the theme did not
+ * declare, is what keeps a prop from ever choosing a path.
+ */
+const PART_NAME = /^[a-z0-9-]{1,40}$/;
+const PART_AREAS = ['header', 'footer', 'sidebar', 'general'];
+const PARTNAME = { kind: 'partname' } as const;
+
+/**
  * CLOSED allowlist. A template is STRUCTURE plus the dynamic blocks that derive their content from
  * the site, so this is deliberately narrower than the 30 types the page renderer knows.
  *
  * `slot` names the child list a block may nest, or null for a leaf.
  */
-const BLOCKS: Record<string, { props: Record<string, PropSpec>; slot: string | null }> = {
+const BLOCKS: Record<string, { props: Record<string, PropSpec>; slot: string | null; required?: string[] }> = {
     [CONTENT_SLOT]: { props: {}, slot: null },
 
     // Layout. `tag` + `className` are the container affordance — see TAGS/CLASS_TOKEN above.
@@ -149,6 +165,16 @@ const BLOCKS: Record<string, { props: Record<string, PropSpec>; slot: string | n
     PostsGrid: { props: { count: NUM, columns: NUM, gap: LEN, bg: LEN, borderColor: LEN, radius: LEN, pad: LEN, thumbHeight: LEN }, slot: null },
     CategoryPosts: { props: { count: NUM, categorySlug: LEN, layout: en('grid', 'list'), columns: NUM, gap: LEN, bg: LEN, borderColor: LEN, radius: LEN, linkColor: LEN, headingColor: LEN }, slot: null },
     SearchBar: { props: { placeholder: LEN, buttonText: LEN, align: en('left', 'center', 'right'), width: LEN, inputBg: LEN, inputBorderColor: LEN, inputRadius: LEN, buttonBg: LEN, buttonColor: LEN, buttonRadius: LEN }, slot: null },
+
+    // A NAMED TEMPLATE PART — chrome/<name>.json pulled into the page, the thing that makes the
+    // theme.json `templateParts` declaration worth writing. Both props are REQUIRED: a part with no
+    // name resolves to nothing and a part with no area has no wrapper to render into, and either
+    // would be a block that validates cleanly and does nothing.
+    //
+    // `name` must be DECLARED in theme.json — the validator cannot see theme.json from here (it is
+    // handed one file at a time), so that cross-check is the doctor's (TEMPLATE_PART_UNKNOWN) and the
+    // renderer's, which refuses an undeclared name outright.
+    TemplatePart: { props: { name: PARTNAME, area: en(...PART_AREAS) }, slot: null, required: ['name', 'area'] },
 };
 
 /**
@@ -192,9 +218,23 @@ function checkProps(type: string, props: any, path: string, errors: TemplateErro
             }
             continue;
         }
+        if (ps.kind === 'partname') {
+            if (typeof value !== 'string' || !PART_NAME.test(value)) {
+                errors.push({ code: 'TPL_INVALID_PROP', path: `${path}.props.${key}`, message: `must be a template-part name matching ${PART_NAME.source}, declared in theme.json "templateParts"` });
+            }
+            continue;
+        }
         // eslint-disable-next-line valid-typeof
         if (typeof value !== ps.kind) {
             errors.push({ code: 'TPL_INVALID_PROP', path: `${path}.props.${key}`, message: `must be a ${ps.kind}` });
+        }
+    }
+    // Most blocks render fine with nothing set — a Section with no props is a plain container. A block
+    // that names something (TemplatePart) cannot, so its props are declared required and their absence
+    // is an error rather than a block that validates and renders nothing.
+    for (const key of BLOCKS[type].required || []) {
+        if (props[key] === undefined) {
+            errors.push({ code: 'TPL_MISSING_PROP', path: `${path}.props.${key}`, message: `"${type}" requires "${key}"` });
         }
     }
 }
@@ -255,6 +295,43 @@ function walk(list: any, path: string, depth: number, state: { blocks: number; s
 }
 
 /**
+ * Every class name this template puts on a container, deduplicated, in first-appearance order.
+ *
+ * The doctor pairs this against the theme's `styles.variations.<name>` declarations: a class with no
+ * variation is inert markup, a variation with no class is CSS that matches nothing. Only tokens that
+ * pass CLASS_TOKEN are returned — a value the validator rejects never reaches the DOM either, so
+ * reporting it as an unstyled class would be a second, wronger message about the same mistake.
+ *
+ * Deliberately NOT part of walk(): it must read a tree whose validity is decided elsewhere (the
+ * doctor calls it only for templates that already validated), and folding a collector into the
+ * validator would make the validation depend on the order it happens to visit blocks in.
+ */
+function collectTemplateClasses(input: any): string[] {
+    let data: any = input;
+    if (typeof input === 'string') {
+        try { data = JSON.parse(input); } catch { return []; }
+    }
+    if (!isPlainObject(data)) return [];
+    const seen = new Set<string>();
+    const visit = (list: any, depth: number): void => {
+        if (!Array.isArray(list) || depth > MAX_DEPTH) return;
+        for (const block of list) {
+            if (!isPlainObject(block)) continue;
+            const props = isPlainObject(block.props) ? block.props : {};
+            if (typeof props.className === 'string' && classListOk(props.className)) {
+                for (const t of props.className.split(' ')) seen.add(t);
+            }
+            const slotKey = typeof block.type === 'string' && Object.prototype.hasOwnProperty.call(BLOCKS, block.type)
+                ? BLOCKS[block.type].slot
+                : null;
+            if (slotKey) visit(props[slotKey], depth + 1);
+        }
+    };
+    visit(data.content, 1);
+    return Array.from(seen);
+}
+
+/**
  * Validate a page template. Accepts the parsed object or its raw JSON text.
  * FAIL-CLOSED: any error rejects the WHOLE template, so a page never renders half a layout.
  */
@@ -295,8 +372,39 @@ function validateTemplate(input: any): TemplateResult {
     return { ok: errors.length === 0, errors };
 }
 
+/**
+ * Every template-part name a (already-validated) template references, in document order, deduped.
+ * The doctor uses it to cross-check a template against theme.json's `templateParts`: a reference to
+ * an undeclared part renders NOTHING at runtime, and that is precisely the silent failure a theme
+ * author must be told about at authoring time. Defensive about shape so it can be called on any tree.
+ */
+function templatePartRefs(input: any): string[] {
+    let data: any = input;
+    if (typeof input === 'string') { try { data = JSON.parse(input); } catch { return []; } }
+    const out: string[] = [];
+    const seen = new Set<string>();
+    const walkRefs = (list: any, depth: number): void => {
+        if (!Array.isArray(list) || depth > MAX_DEPTH) return;
+        for (const block of list) {
+            if (!isPlainObject(block)) continue;
+            const props = isPlainObject(block.props) ? block.props : {};
+            if (block.type === 'TemplatePart' && typeof props.name === 'string' && !seen.has(props.name)) {
+                seen.add(props.name);
+                out.push(props.name);
+            }
+            walkRefs(props.items, depth + 1);
+        }
+    };
+    walkRefs(isPlainObject(data) ? data.content : null, 1);
+    return out;
+}
+
 module.exports = {
     validateTemplate,
+    templatePartRefs,
+    collectTemplateClasses,
+    TEMPLATE_PART_NAME: PART_NAME,
+    TEMPLATE_PART_AREAS: PART_AREAS.slice(),
     CONTENT_SLOT,
     TEMPLATE_BLOCKS: Object.keys(BLOCKS),
     FORBIDDEN_TEMPLATE_BLOCKS: Object.keys(FORBIDDEN),

@@ -184,9 +184,9 @@ const CHROME_ELEMENT_SEEDS = {
     postCard: {
         selector: '.wjs-post-card',
         children: {
+            badge: { selector: '.wjs-post-card-badge' },
             body: { selector: '.wjs-post-card-body' },
             meta: { selector: '.wjs-post-card-meta' },
-            badge: { selector: '.wjs-post-card-badge' },
             titleLink: { selector: '.wjs-post-card-link' },
             title: { selector: '.wjs-post-card-title' },
             excerpt: { selector: '.wjs-post-card-excerpt' },
@@ -228,9 +228,14 @@ const CHROME_ELEMENT_SEEDS = {
         children: {
             header: { selector: '.wjs-post-header' },
             title: { selector: '.wjs-post-title' },
-            // The body hook predates this seed; naming it here is what makes it addressable
-            // declaratively, scoped to the single-post frame.
-            body: { selector: '.wjs-post .wjs-content' },
+            // The body REGION, not the framework's content styling. This was `.wjs-post .wjs-content`,
+            // which held on the classic body only: a post opened in the visual editor renders through
+            // ContentRenderer, which emits `.puck-content` and no `.wjs-content` — so the promise
+            // evaporated exactly when an author touched the post. `.wjs-content` cannot simply be added
+            // to Puck output either, because ui.css STYLES it (heading margins, image radii, tables,
+            // form fields) and that would restyle every block. So the region gets its own name, emitted
+            // on both paths by PostContent.tsx.
+            body: { selector: '.wjs-post-body' },
         },
     },
     postMeta: {
@@ -531,4 +536,11 @@ function main() {
     if (failed) process.exitCode = 1;
 }
 
-main();
+// The seed table is the SOURCE of every chrome/public-surface element in the manifest, so the contract
+// test derives its expectations from it rather than hand-copying a list that drifts (a hand-copied list
+// covered 17 of 108 names, and deleting any seed outside those 17 just made the test smaller).
+// Exported behind a require.main guard — same pattern as scripts/create-40-themes.js — so requiring
+// this file cannot rewrite backend/public/theme-tokens.json as a side effect.
+module.exports = { CHROME_ELEMENT_SEEDS, CHROME_PHANTOM_TOKENS };
+
+if (require.main === module) main();

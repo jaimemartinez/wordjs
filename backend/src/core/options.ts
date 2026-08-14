@@ -240,6 +240,12 @@ async function initDefaultOptions(fullConfig: any) {
         date_format: 'Y-m-d',
         time_format: 'H:i',
         timezone_string: 'UTC',
+        // Site locale + writing direction. WPLANG already existed (core/i18n reads it, routes/seo
+        // puts it in the RSS <language>); it now also drives <html lang>. site_text_direction is the
+        // explicit <html dir> override — '' means "derive from WPLANG", which is what an Arabic or
+        // Hebrew locale needs and what nothing in the tree could express before.
+        WPLANG: 'en_US',
+        site_text_direction: '',
         posts_per_page: 10,
         default_category: 1,
         default_post_format: '',

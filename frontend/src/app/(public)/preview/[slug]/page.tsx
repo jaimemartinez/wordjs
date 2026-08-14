@@ -47,7 +47,7 @@ export default async function PostPreviewPage(
         <>
             {post.status !== "publish" && (
                 <div className="sticky top-24 z-40 bg-amber-500 text-amber-950 text-center text-sm font-semibold px-4 py-2 shadow rounded-lg">
-                    <i className="fa-solid fa-eye mr-2" aria-hidden="true"></i>
+                    <i className="fa-solid fa-eye me-2" aria-hidden="true"></i>
                     Draft preview — only you can see this. Publish it to make it public.
                 </div>
             )}

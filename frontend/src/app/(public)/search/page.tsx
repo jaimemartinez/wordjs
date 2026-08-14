@@ -136,7 +136,7 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
                                 href={`/${post.slug || post.id}`}
                                 className="wjs-search-result-more inline-flex items-center text-[var(--wjs-color-primary,#2563eb)] font-semibold hover:gap-2 transition-all"
                             >
-                                Read more <i className="fa-solid fa-arrow-right ml-2 text-sm"></i>
+                                Read more <i className="fa-solid fa-arrow-right ms-2 text-sm"></i>
                             </Link>
                         </article>
                     ))}
@@ -149,7 +149,7 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
                     href="/"
                     className="inline-flex items-center text-[var(--wjs-color-text-muted,#6b7280)] hover:text-[var(--wjs-color-primary,#2563eb)] transition-colors"
                 >
-                    <i className="fa-solid fa-arrow-left mr-2"></i>
+                    <i className="fa-solid fa-arrow-left me-2"></i>
                     Back to Home
                 </Link>
             </div>

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
+import { createRequire } from 'node:module';
 
 /**
  * The token manifest (backend/public/theme-tokens.json) tells theme authors which elements they may
@@ -20,6 +21,17 @@ import path from 'node:path';
 
 const REPO = path.resolve(__dirname, '../../../..');
 const MANIFEST = path.join(REPO, 'backend/public/theme-tokens.json');
+const GENERATOR = path.join(REPO, 'scripts/generate-token-manifest.js');
+
+/**
+ * The generator's OWN seed table, required (not re-typed) so the coverage check below cannot drift
+ * from it. The script is CommonJS and lives outside the frontend package, hence createRequire; it
+ * exports the table behind a `require.main === module` guard, so this import writes nothing.
+ */
+type Seed = string | { selector: string; children?: Record<string, { selector: string }> };
+const { CHROME_ELEMENT_SEEDS } = createRequire(GENERATOR)(GENERATOR) as {
+    CHROME_ELEMENT_SEEDS: Record<string, Seed>;
+};
 
 // Where chrome markup can legitimately live. The composed header/footer wrapper is in the public
 // layout; the per-block classes are in components/chrome; the default chrome is in components/public.
@@ -56,7 +68,11 @@ function readSources(): string {
         if (!fs.existsSync(dir)) return;
         for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
             const p = path.join(dir, e.name);
-            if (e.isDirectory()) walk(p);
+            // TESTS ARE NOT MARKUP. A test file that asserts `wjs-post` is emitted lives inside these
+            // same directories, so walking it let the suite satisfy its own promise: delete the class
+            // from the component and this check still found the name — in the test that was checking
+            // for it. Same class of false pass as the code comments stripped below, one level up.
+            if (e.isDirectory()) { if (e.name !== '__tests__') walk(p); }
             else if (/\.tsx?$/.test(e.name)) out.push(stripComments(fs.readFileSync(p, 'utf8')));
         }
     };
@@ -98,23 +114,153 @@ describe('chrome selector contract', () => {
         expect(chromeSelectors.some(([n]) => n.includes('.'))).toBe(true);
     });
 
-    // The manifest now names the four PUBLIC CONTENT surfaces too — blog roll, search results, the
-    // single post's meta row, the comment thread — which until then had no framework class at all and
-    // so could not be styled by a theme except through Tailwind utilities. Those hooks are `className`
-    // strings in React with nothing else referencing them: delete one while renaming and the manifest
-    // keeps promising a selector that matches zero elements, which is the exact failure this file
-    // exists to catch. Asserting the ELEMENT KEYS are present is what keeps them inside the walk above
-    // — dropping a seed would otherwise just shrink the it.each list and still pass green.
-    it('covers the public content surfaces, not just the chrome', () => {
-        const names = new Set(chromeSelectors.map(([n]) => n));
-        for (const required of [
-            'postList', 'postCard', 'postCard.title', 'postCard.excerpt', 'postCard.meta',
-            'searchResults', 'searchResult', 'searchResult.title', 'searchForm',
-            'singlePost', 'postMeta', 'postMeta.author',
-            'comments', 'comments.form', 'comment', 'comment.author', 'comment.content',
-        ]) {
-            expect(names.has(required), `manifest element "${required}" is missing — the public-surface hooks are no longer covered`).toBe(true);
+    // ── Nothing may vanish silently ───────────────────────────────────────────────────────────────
+    //
+    // The it.each below only checks the selectors it is HANDED. Delete a seed and the manifest loses
+    // an element, the list gets shorter, and the suite still passes green — a test that passes without
+    // checking, which is precisely the failure this file exists to prevent. This used to be guarded by
+    // a hand-copied list of 17 required keys while the manifest carried 108, so 91 of them could be
+    // deleted in silence.
+    //
+    // Two layers, because they fail on different mistakes:
+    //   1. DERIVED from the generator's seed table — catches a manifest that no longer matches the
+    //      seeds (a stale regeneration, or a seed silently dropped because a .wp-block-* registration
+    //      took its key: the generator skips those on purpose, and skipping one must be loud).
+    //   2. FROZEN snapshot of the whole set — catches deleting the seed AND regenerating, where layer
+    //      1 agrees with itself. A reviewer has to update this list on purpose.
+
+    it('contains every element the generator seeds, with the same selector', () => {
+        const seeds = Object.entries(CHROME_ELEMENT_SEEDS);
+        expect(seeds.length, 'the generator exported no seeds — this check would be vacuous').toBeGreaterThan(10);
+        const elements = manifest.elements as Record<string, { selector: string; children?: Record<string, { selector: string }> }>;
+        for (const [key, seed] of seeds) {
+            const want = typeof seed === 'string' ? { selector: seed, children: undefined } : seed;
+            const got = elements[key];
+            expect(got, `manifest element "${key}" is missing — the generator seeds it`).toBeTruthy();
+            expect(got.selector, `manifest element "${key}" does not carry its seeded selector (a .wp-block-* registration would have displaced the seed silently)`)
+                .toBe(want.selector);
+            for (const [child, cd] of Object.entries(want.children || {})) {
+                expect(got.children?.[child]?.selector, `manifest element "${key}.${child}" is missing or renamed`).toBe(cd.selector);
+            }
         }
+    });
+
+    it('matches the frozen chrome-selector snapshot (update deliberately, never to make CI green)', () => {
+        const actual = chromeSelectors.map(([n, s]) => `${n} -> ${s}`).sort();
+        // Adding a hook: add its line. REMOVING one: that is a promise being withdrawn from every
+        // theme that styles it — say so in the commit message, then delete the line.
+        const frozen = `
+chromeFooter -> .wjs-chrome-footer
+chromeFooter.button -> .wjs-chrome-footer .wjs-chrome-button
+chromeFooter.container -> .wjs-chrome-footer .wjs-footer-container
+chromeFooter.containerRow -> .wjs-chrome-footer .wjs-footer-container > .wjs-chrome-row
+chromeFooter.containerRowAfterFirst -> .wjs-chrome-footer > .wjs-footer-container > .wjs-chrome-row + .wjs-chrome-row
+chromeFooter.containerRowNested -> .wjs-chrome-footer .wjs-footer-container > .wjs-chrome-row > .wjs-chrome-row
+chromeFooter.nav -> .wjs-chrome-footer .wjs-chrome-nav
+chromeFooter.navHorizontal -> .wjs-chrome-footer .wjs-chrome-nav-horizontal
+chromeFooter.navLink -> .wjs-chrome-footer .wjs-chrome-nav a
+chromeFooter.navVertical -> .wjs-chrome-footer .wjs-chrome-nav-vertical
+chromeFooter.row -> .wjs-chrome-footer .wjs-chrome-row
+chromeFooter.rowChild -> .wjs-chrome-footer .wjs-chrome-row > .wjs-chrome-row
+chromeFooter.rowNested -> .wjs-chrome-footer .wjs-chrome-row .wjs-chrome-row
+chromeFooter.rowNestedText -> .wjs-chrome-footer .wjs-chrome-row .wjs-chrome-row > .wjs-chrome-text
+chromeFooter.search -> .wjs-chrome-footer .wjs-chrome-search
+chromeFooter.searchInput -> .wjs-chrome-footer .wjs-chrome-search input
+chromeFooter.siteTitle -> .wjs-chrome-footer .wjs-chrome-site-title
+chromeFooter.siteTitleLink -> .wjs-chrome-footer .wjs-chrome-site-title a
+chromeFooter.siteTitleText -> .wjs-chrome-footer .wjs-chrome-site-title span
+chromeFooter.socialLink -> .wjs-chrome-footer .wjs-chrome-socials a
+chromeFooter.socials -> .wjs-chrome-footer .wjs-chrome-socials
+chromeFooter.spacer -> .wjs-chrome-footer .wjs-chrome-spacer
+chromeFooter.text -> .wjs-chrome-footer .wjs-chrome-text
+chromeHeader -> .wjs-chrome-header
+chromeHeader.actionButton -> .wjs-chrome-header .wjs-header-actions button
+chromeHeader.actions -> .wjs-chrome-header .wjs-header-actions
+chromeHeader.button -> .wjs-chrome-header .wjs-chrome-button
+chromeHeader.container -> .wjs-chrome-header .wjs-header-container
+chromeHeader.logo -> .wjs-chrome-header .wjs-header-logo
+chromeHeader.logoText -> .wjs-chrome-header .wjs-header-logo span
+chromeHeader.mobilePanel -> .wjs-header-mobile-panel
+chromeHeader.mobilePanelLink -> .wjs-header-mobile-panel nav a
+chromeHeader.nav -> .wjs-chrome-header .wjs-chrome-nav
+chromeHeader.navHorizontal -> .wjs-chrome-header .wjs-chrome-nav-horizontal
+chromeHeader.navLink -> .wjs-chrome-header .wjs-header-nav a
+chromeHeader.navVertical -> .wjs-chrome-header .wjs-chrome-nav-vertical
+chromeHeader.row -> .wjs-chrome-header .wjs-chrome-row
+chromeHeader.rowNested -> .wjs-chrome-header .wjs-chrome-row .wjs-chrome-row
+chromeHeader.search -> .wjs-chrome-header .wjs-chrome-search
+chromeHeader.searchInput -> .wjs-chrome-header .wjs-chrome-search input
+chromeHeader.siteTitle -> .wjs-chrome-header .wjs-chrome-site-title
+chromeHeader.siteTitleLink -> .wjs-chrome-header .wjs-chrome-site-title a
+chromeHeader.siteTitleText -> .wjs-chrome-header .wjs-chrome-site-title span
+chromeHeader.socialLink -> .wjs-chrome-header .wjs-chrome-socials a
+chromeHeader.socials -> .wjs-chrome-header .wjs-chrome-socials
+chromeHeader.spacer -> .wjs-chrome-header .wjs-chrome-spacer
+chromeHeader.text -> .wjs-chrome-header .wjs-chrome-text
+chromeSearch -> .wjs-chrome-search
+chromeSearch.input -> .wjs-chrome-search input
+comment -> .wjs-comment
+comment.author -> .wjs-comment-author
+comment.avatar -> .wjs-comment-avatar
+comment.avatarImage -> .wjs-comment-avatar img
+comment.body -> .wjs-comment-body
+comment.content -> .wjs-comment-content
+comment.date -> .wjs-comment-date
+comment.head -> .wjs-comment-head
+comments -> .wjs-comments
+comments.empty -> .wjs-comments-empty
+comments.field -> .wjs-comment-field
+comments.form -> .wjs-comment-form
+comments.formTitle -> .wjs-comment-form-title
+comments.list -> .wjs-comment-list
+comments.submit -> .wjs-comment-submit
+comments.title -> .wjs-comments-title
+header -> .wjs-header
+header.actionButton -> .wjs-header-actions button
+headerNav -> .wjs-chrome-header .wjs-header-nav
+logo -> .wjs-header-logo
+logo.text -> .wjs-header-logo span
+nav -> .wjs-header-nav
+nav.link -> .wjs-header-nav a
+postCard -> .wjs-post-card
+postCard.badge -> .wjs-post-card-badge
+postCard.body -> .wjs-post-card-body
+postCard.excerpt -> .wjs-post-card-excerpt
+postCard.meta -> .wjs-post-card-meta
+postCard.more -> .wjs-post-card-more
+postCard.title -> .wjs-post-card-title
+postCard.titleLink -> .wjs-post-card-link
+postList -> .wjs-post-list
+postList.empty -> .wjs-post-list-empty
+postList.header -> .wjs-post-list-header
+postList.title -> .wjs-post-list-title
+postMeta -> .wjs-post-meta
+postMeta.author -> .wjs-post-meta-author
+postMeta.category -> .wjs-post-meta-category
+postMeta.date -> .wjs-post-meta-date
+searchForm -> .wjs-search-form
+searchForm.input -> .wjs-search-form input
+searchForm.submit -> .wjs-search-form button
+searchPage -> .wjs-search-page
+searchPage.empty -> .wjs-search-empty
+searchPage.header -> .wjs-search-header
+searchPage.summary -> .wjs-search-summary
+searchPage.title -> .wjs-search-title
+searchResult -> .wjs-search-result
+searchResult.badge -> .wjs-search-result-badge
+searchResult.excerpt -> .wjs-search-result-excerpt
+searchResult.meta -> .wjs-search-result-meta
+searchResult.more -> .wjs-search-result-more
+searchResult.title -> .wjs-search-result-title
+searchResult.titleLink -> .wjs-search-result-link
+searchResults -> .wjs-search-results
+singlePost -> .wjs-post
+singlePost.body -> .wjs-post-body
+singlePost.header -> .wjs-post-header
+singlePost.title -> .wjs-post-title
+`.trim().split('\n').map((l) => l.trim());
+
+        expect(actual).toEqual(frozen);
     });
 
     it.each(chromeSelectors)('%s → %s is emitted by the chrome markup', (_name, selector) => {

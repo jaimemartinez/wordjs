@@ -7,6 +7,7 @@ import { ModalProvider } from "@/contexts/ModalContext";
 import { AnalyticsTracker } from '@/components/AnalyticsTracker';
 import { getSettings, getFonts } from "@/lib/server-api";
 import { buildFontFaceCss } from "@/lib/fontFaceCss";
+import { resolveDocumentLanguage } from "@/lib/documentLanguage";
 import { ASSET_VERSION } from "@/lib/assetVersion";
 
 export async function generateMetadata(): Promise<Metadata> {
@@ -57,12 +58,22 @@ export default async function RootLayout({
     // fallback whenever client JS was slow/blocked. getFonts is request-deduped + ISR-cached (300s).
     const fontFaceCss = buildFontFaceCss(await getFonts());
 
+    // The document's language and writing direction, from the SITE's own options — not a constant.
+    // `lang="en"` was hardcoded here and there was no `dir` at all, so every site claimed to be
+    // English and laid out left-to-right whatever it published, and no theme could fix it (a theme
+    // gets one stylesheet and no head input; `direction: rtl` in CSS does not change what the
+    // browser's bidi/hyphenation/quote behaviour thinks the document is). getSettings() is the same
+    // request-deduped + ISR-cached read generateMetadata above already performs, so this adds no
+    // fetch. resolveDocumentLanguage is fail-closed: an unparseable locale or an out-of-enum
+    // direction yields en/ltr rather than reaching the attribute.
+    const { lang, dir } = resolveDocumentLanguage(await getSettings());
+
     return (
         // inter.variable must live on <html>, not <body>: --wjs-font-family-base is declared in
         // ui.css :root, and a custom property's var() references substitute AT THE DECLARING
         // element — with --font-inter defined only on <body>, the :root token silently used its
         // literal 'Inter' fallback, which next/font never registers (system-font regression).
-        <html lang="en" className={inter.variable} suppressHydrationWarning>
+        <html lang={lang} dir={dir} className={inter.variable} suppressHydrationWarning>
             <head>
                 {/* SELF-HOSTED Font Awesome (scripts/vendor-fontawesome.mjs → backend/public/vendor).
                     It used to come from cdnjs: a render-blocking stylesheet behind a third-party

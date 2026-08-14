@@ -1076,9 +1076,38 @@ async function initialize() {
             });
         }
 
-        // Create default theme if none exist
-        const { createDefaultTheme } = require('./core/themes');
-        createDefaultTheme();
+        // THEME HEALTH — VERIFY AND WARN. Boot must not write inside themes/.
+        //
+        // This used to be an unconditional createDefaultTheme(): the comment said "if none exist" and
+        // the code checked nothing, so every restart rewrote files in a directory the user owns. Five
+        // of them (partials/{header,footer}.html, templates/{index,single,archive}.html) were written
+        // with a bare fs.writeFileSync, so hand edits to them did not survive a restart. Of twelve CMSs
+        // surveyed, none re-creates theme files at runtime; they ship a fallback, refuse to delete it,
+        // and degrade. Provisioning now happens only where a user asked for it — the install wizard and
+        // POST /api/v1/themes/default. Both problems below are non-fatal by design: the site still
+        // renders (the framework's own :root tokens in public/css/wordjs-ui.css are the floor), so the
+        // job here is to make the degradation LOUD instead of silent.
+        const { verifyDefaultTheme, isActiveThemeMissing, getCurrentTheme } = require('./core/themes');
+        const defaultTheme = verifyDefaultTheme();
+        if (!defaultTheme.ok) {
+            const what = defaultTheme.exists
+                ? `is missing ${defaultTheme.missing.join(', ')}`
+                : 'does not exist';
+            console.warn('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+            console.warn(`⚠️  The bundled default theme ${what}: ${defaultTheme.dir}`);
+            console.warn('   Boot no longer re-creates theme files. Restore it deliberately with:');
+            console.warn('     POST /api/v1/themes/default   (admin — "Restore default theme")');
+            console.warn('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        }
+        if (await isActiveThemeMissing()) {
+            const slug = await getCurrentTheme();
+            console.warn('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+            console.warn(`⚠️  The active theme "${slug}" is NOT installed — no theme.json was found for it.`);
+            console.warn('   The public site is rendering with the framework default tokens only.');
+            console.warn('   Activate an installed theme (POST /api/v1/themes/:slug/activate) or restore');
+            console.warn('   the bundled default (POST /api/v1/themes/default).');
+            console.warn('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        }
 
         // Seeding done — release the boot guard (stops the heartbeat + frees the lease) so waiting
         // nodes proceed; the rest of init (plugins, cron) is per-node. On a throw before here the

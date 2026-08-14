@@ -485,6 +485,76 @@ describe('analyzeTheme (theme doctor)', () => {
         assert.ok(codes.includes('UNKNOWN_TOKEN'), JSON.stringify(codes));
     });
 
+    // STYLE VARIATIONS × TEMPLATES — the cross-file pairing. Neither validator can see this on its
+    // own: one is handed theme.json, the other a single template, and each half validates perfectly
+    // while doing nothing. That is the failure mode this whole check exists for.
+    const CLASSED_TEMPLATE = (className: string) => JSON.stringify({
+        content: [{ type: 'Section', props: { className, items: [{ type: 'PageContent', props: {} }] } }]
+    });
+    const variationCodes = (slug: string) => [...doctor(slug).errors, ...doctor(slug).warnings]
+        .map((f: any) => String(f.code)).filter((c: string) => c.startsWith('VARIATION_'));
+
+    it('warns VARIATION_UNUSED for a variation no template puts on a container', () => {
+        const slug = writeTheme(CLEAN_CSS, undefined, { styles: { variations: { hero: { padding: '4rem' } } } });
+        writeTemplate(slug, 'page', VALID_TEMPLATE); // a template, but it names no class
+        const w = doctor(slug).warnings.filter((f: any) => f.code === 'VARIATION_UNUSED');
+        assert.strictEqual(w.length, 1, JSON.stringify(doctor(slug).warnings));
+        assert.match(w[0].message, /styles\.variations\.hero/);
+        assert.deepStrictEqual(w[0].detail, { name: 'hero' });
+    });
+
+    it('warns VARIATION_UNDECLARED for a className no variation declares and no CSS selects', () => {
+        const slug = writeTheme(CLEAN_CSS);
+        writeTemplate(slug, 'page', CLASSED_TEMPLATE('site-hero'));
+        const w = doctor(slug).warnings.filter((f: any) => f.code === 'VARIATION_UNDECLARED');
+        assert.strictEqual(w.length, 1, JSON.stringify(doctor(slug).warnings));
+        assert.match(w[0].message, /templates\/page\.json/);
+        assert.deepStrictEqual(w[0].detail, { name: 'site-hero', file: 'page.json' });
+    });
+
+    it('reports nothing when the two halves match', () => {
+        const slug = writeTheme(CLEAN_CSS, undefined, { styles: { variations: { 'site-hero': { padding: '4rem' } } } });
+        writeTemplate(slug, 'page', CLASSED_TEMPLATE('site-hero'));
+        assert.deepStrictEqual(variationCodes(slug), []);
+    });
+
+    it('reports BOTH halves when a theme declares one name and its template uses another', () => {
+        const slug = writeTheme(CLEAN_CSS, undefined, { styles: { variations: { hero: { padding: '4rem' } } } });
+        writeTemplate(slug, 'page', CLASSED_TEMPLATE('site-hero'));
+        assert.deepStrictEqual(variationCodes(slug).sort(), ['VARIATION_UNDECLARED', 'VARIATION_UNUSED']);
+    });
+
+    it('does not report a className the hand-written CSS already selects', () => {
+        // Migrating to a variation is the advice, not the requirement — style.css outside the
+        // @wjs-generated markers is still a legitimate place to style a template class.
+        const slug = writeTheme(`${CLEAN_CSS}\n.site-hero { padding: 4rem }\n`);
+        writeTemplate(slug, 'page', CLASSED_TEMPLATE('site-hero'));
+        assert.deepStrictEqual(variationCodes(slug), []);
+        // …but a DIFFERENT class in that stylesheet must not silence it (the check is per name).
+        const other = writeTheme(`${CLEAN_CSS}\n.site-heroic { padding: 4rem }\n`);
+        writeTemplate(other, 'page', CLASSED_TEMPLATE('site-hero'));
+        assert.deepStrictEqual(variationCodes(other), ['VARIATION_UNDECLARED']);
+    });
+
+    it('ignores classes in a template that does not validate (it never renders)', () => {
+        const slug = writeTheme(CLEAN_CSS);
+        writeTemplate(slug, 'page', JSON.stringify({
+            content: [{ type: 'Section', props: { className: 'site-hero', align: 'nope', items: [{ type: 'PageContent', props: {} }] } }]
+        }));
+        const rep = doctor(slug);
+        assert.ok(rep.errors.some((e: any) => e.code === 'TEMPLATE_INVALID'), JSON.stringify(rep.errors));
+        assert.deepStrictEqual(variationCodes(slug), []);
+    });
+
+    it('does not report a variation name the compiler already rejected', () => {
+        // One mistake, one message: a name outside the class-token shape is a compiler error, not
+        // also an "unused variation".
+        const slug = writeTheme(CLEAN_CSS, undefined, { styles: { variations: { 'Hero:hover': { padding: '4rem' } } } });
+        const rep = doctor(slug);
+        assert.ok(rep.errors.some((e: any) => e.code === 'DECLARATIVE_VARIATION_NAME_INVALID'), JSON.stringify(rep.errors));
+        assert.deepStrictEqual(variationCodes(slug), []);
+    });
+
     it('does not report LEGACY_THEME for declarative or generator-stamped themes', () => {
         // Declarative sections present → not legacy.
         const declarative = writeTheme('', undefined, CLEAN_DECLARATIVE);
@@ -495,5 +565,88 @@ describe('analyzeTheme (theme doctor)', () => {
         const stamped = writeTheme(CLEAN_CSS, undefined, { generator: 'wordjs' });
         assert.ok(!doctor(stamped).info.some((f: any) => f.code === 'LEGACY_THEME'),
             JSON.stringify(doctor(stamped).info));
+    });
+
+    // NAMED TEMPLATE PARTS — theme.json `templateParts` × chrome/<name>.json × a template referencing
+    // one. Three files have to agree and no single validator can see more than one of them, which is
+    // exactly why these live in the doctor: every mismatch below renders as SILENCE at runtime (the
+    // renderer refuses an undeclared part and skips an unresolvable one), so this is the only place a
+    // theme author is ever told.
+    const PART_TEMPLATE = (name: string) => JSON.stringify({
+        content: [{ type: 'Section', props: { items: [
+            { type: 'PageContent', props: {} },
+            { type: 'TemplatePart', props: { name, area: 'sidebar' } },
+        ] } }]
+    });
+    const partCodes = (slug: string) => [...doctor(slug).errors, ...doctor(slug).warnings]
+        .map((f: any) => String(f.code)).filter((c: string) => c.startsWith('TEMPLATE_PART_'));
+
+    it('reports nothing when the declaration, the file and the template all agree', () => {
+        const slug = writeTheme(CLEAN_CSS, undefined, { templateParts: [{ name: 'sidebar-blog', area: 'sidebar' }] });
+        writeChrome(slug, 'sidebar-blog', VALID_CHROME);
+        writeTemplate(slug, 'page', PART_TEMPLATE('sidebar-blog'));
+        assert.deepStrictEqual(partCodes(slug), []);
+    });
+
+    it('validates a declared part FILE against the chrome contract, like header/footer', () => {
+        const slug = writeTheme(CLEAN_CSS, undefined, { templateParts: [{ name: 'promo', area: 'general' }] });
+        writeChrome(slug, 'promo', JSON.stringify({
+            root: { props: {} },
+            content: [{ type: 'ChromeButton', props: { label: 'Go', href: 'javascript:alert(1)', variant: 'primary' } }]
+        }));
+        const errs = doctor(slug).errors.filter((e: any) => e.code === 'CHROME_INVALID');
+        assert.strictEqual(errs.length, 1, JSON.stringify(doctor(slug).errors));
+        assert.match(errs[0].message, /chrome\/promo\.json/);
+        assert.strictEqual(errs[0].detail.rule, 'CHROME_UNSAFE_HREF');
+    });
+
+    it('errors TEMPLATE_PART_MISSING when a declared part has no file to render', () => {
+        const slug = writeTheme(CLEAN_CSS, undefined, { templateParts: [{ name: 'promo', area: 'general' }] });
+        const e = doctor(slug).errors.find((f: any) => f.code === 'TEMPLATE_PART_MISSING');
+        assert.ok(e, JSON.stringify(doctor(slug).errors));
+        assert.deepStrictEqual(e.detail, { name: 'promo' });
+    });
+
+    it('warns TEMPLATE_PART_UNDECLARED for a chrome file nothing can reach', () => {
+        const slug = writeTheme(CLEAN_CSS);
+        writeChrome(slug, 'header', VALID_CHROME);   // the site chrome needs no declaration…
+        writeChrome(slug, 'footer', VALID_CHROME);
+        writeChrome(slug, 'promo', VALID_CHROME);    // …this one does.
+        const w = doctor(slug).warnings.filter((f: any) => f.code === 'TEMPLATE_PART_UNDECLARED');
+        assert.strictEqual(w.length, 1, JSON.stringify(doctor(slug).warnings));
+        assert.deepStrictEqual(w[0].detail, { name: 'promo' });
+    });
+
+    it('errors TEMPLATE_PART_UNKNOWN when a template names a part theme.json never declared', () => {
+        const slug = writeTheme(CLEAN_CSS, undefined, { templateParts: [{ name: 'promo', area: 'general' }] });
+        writeChrome(slug, 'promo', VALID_CHROME);
+        writeTemplate(slug, 'page', PART_TEMPLATE('sidebar-blog'));
+        const e = doctor(slug).errors.find((f: any) => f.code === 'TEMPLATE_PART_UNKNOWN');
+        assert.ok(e, JSON.stringify(doctor(slug).errors));
+        assert.match(e.message, /templates\/page\.json/);
+        assert.strictEqual(e.detail.name, 'sidebar-blog');
+        assert.deepStrictEqual(e.detail.declared, ['promo']);
+    });
+
+    it('errors TEMPLATE_PART_INVALID on a bad declaration — and the invalid one declares NOTHING', () => {
+        // Fail-closed as a whole is the runtime behaviour, so the doctor must report it as such:
+        // "sidebar-blog" is perfectly fine and still unusable, because the entry beside it is not.
+        const slug = writeTheme(CLEAN_CSS, undefined, {
+            templateParts: [{ name: 'sidebar-blog', area: 'sidebar' }, { name: '../escape', area: 'general' }]
+        });
+        writeChrome(slug, 'sidebar-blog', VALID_CHROME);
+        writeTemplate(slug, 'page', PART_TEMPLATE('sidebar-blog'));
+        const rep = doctor(slug);
+        assert.ok(rep.errors.some((f: any) => f.code === 'TEMPLATE_PART_INVALID'), JSON.stringify(rep.errors));
+        const unknown = rep.errors.find((f: any) => f.code === 'TEMPLATE_PART_UNKNOWN');
+        assert.ok(unknown, 'the template reference must go unknown too — nothing is declared');
+        assert.deepStrictEqual(unknown.detail.declared, []);
+    });
+
+    it('a theme with no templateParts and no extra chrome files is not a finding', () => {
+        const slug = writeTheme(CLEAN_CSS);
+        writeChrome(slug, 'header', VALID_CHROME);
+        writeTemplate(slug, 'page', VALID_TEMPLATE);
+        assert.deepStrictEqual(partCodes(slug), []);
     });
 });

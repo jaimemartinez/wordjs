@@ -273,10 +273,102 @@ function validateChromeData(raw: any, opts: { part?: string } = {}): ChromeValid
     return { ok: errors.length === 0, errors };
 }
 
+/* ────────────────────────────────────────────────────────────────────────────────────────────────
+ * NAMED TEMPLATE PARTS — theme.json `templateParts`
+ *
+ * Until now a theme could ship exactly two compositions, because the public layout asked for exactly
+ * two names: chrome/header.json and chrome/footer.json. `templateParts` is the declaration that lets a
+ * theme ship MORE of them and have a page template pull one in (the `TemplatePart` block in
+ * core/template-validate.ts).
+ *
+ * ADAPTED FROM WORDPRESS, whose theme.json declares `templateParts: [{ name, title, area }]` with
+ * `area` a small closed enum. We keep the shape and drop `title`: nothing in this system would render
+ * it, and a declared field no consumer honours is the exact failure this contract exists to prevent.
+ * `area` stays because it IS consumed — the renderer picks the part's wrapper element from it.
+ *
+ * THE NAME IS THE FILE NAME, so it is the same shape a template name must have — the very pattern
+ * frontend/src/lib/server-api.ts guards before a name reaches a URL. Keep the two identical: this is
+ * what stops a declaration from ever becoming a path.
+ *
+ * `header` and `footer` are REJECTED as part names. Those two files are the site's chrome, resolved
+ * by the public layout on every page; letting a template pull one in would render a second masthead
+ * inside <main> — an invalid landmark and a duplicated nav, from a declaration that looked harmless.
+ *
+ * Error codes (stable contract):
+ *   PARTS_INVALID_SHAPE   not an array / an entry that is not an object
+ *   PARTS_UNKNOWN_KEY     a key outside { name, area }
+ *   PARTS_INVALID_NAME    missing name, or one outside ^[a-z0-9-]{1,40}$
+ *   PARTS_RESERVED_NAME   "header" / "footer" — the site chrome, not a template part
+ *   PARTS_DUPLICATE_NAME  the same name declared twice
+ *   PARTS_INVALID_AREA    missing area, or one outside the enum
+ *   PARTS_TOO_MANY        more than 16 declared parts
+ */
+const TEMPLATE_PART_AREAS = ['header', 'footer', 'sidebar', 'general'];
+/** Identical to the template-name guard in frontend/src/lib/server-api.ts — a name becomes a URL. */
+const TEMPLATE_PART_NAME = /^[a-z0-9-]{1,40}$/;
+const TEMPLATE_PART_RESERVED = ['header', 'footer'];
+const MAX_TEMPLATE_PARTS = 16;
+const TEMPLATE_PART_KEYS = ['name', 'area'];
+
+/**
+ * Validate a theme.json `templateParts` declaration. FAIL-CLOSED as a WHOLE: the renderer's mirror
+ * drops every part when the declaration is invalid, so a single bad entry disables the lot rather
+ * than half-loading a theme's parts. Returns { ok, errors, parts } — `parts` is the normalized
+ * [{ name, area }] list, empty whenever ok is false.
+ */
+function validateTemplateParts(decl: any): { ok: boolean; errors: ChromeValidationError[]; parts: { name: string; area: string }[] } {
+    const errors: ChromeValidationError[] = [];
+    if (!Array.isArray(decl)) {
+        return { ok: false, errors: [{ code: 'PARTS_INVALID_SHAPE', path: 'templateParts', message: '"templateParts" must be an array of { name, area }' }], parts: [] };
+    }
+    if (decl.length > MAX_TEMPLATE_PARTS) {
+        errors.push({ code: 'PARTS_TOO_MANY', path: 'templateParts', message: `${decl.length} parts declared — the budget is ${MAX_TEMPLATE_PARTS}` });
+    }
+    const parts: { name: string; area: string }[] = [];
+    const seen = new Set<string>();
+    decl.forEach((entry: any, i: number) => {
+        const p = `templateParts[${i}]`;
+        if (!isPlainObject(entry)) {
+            errors.push({ code: 'PARTS_INVALID_SHAPE', path: p, message: 'a template part must be an object { name, area }' });
+            return;
+        }
+        for (const key of Object.keys(entry)) {
+            if (!TEMPLATE_PART_KEYS.includes(key)) {
+                errors.push({ code: 'PARTS_UNKNOWN_KEY', path: `${p}.${key}`, message: `"${key}" is not a template-part key — allowed: ${TEMPLATE_PART_KEYS.join(', ')}` });
+            }
+        }
+        const name = entry.name;
+        const area = entry.area;
+        let nameOk = true;
+        if (typeof name !== 'string' || !TEMPLATE_PART_NAME.test(name)) {
+            errors.push({ code: 'PARTS_INVALID_NAME', path: `${p}.name`, message: `"name" must match ${TEMPLATE_PART_NAME.source} — it is the chrome/<name>.json file name` });
+            nameOk = false;
+        } else if (TEMPLATE_PART_RESERVED.includes(name)) {
+            errors.push({ code: 'PARTS_RESERVED_NAME', path: `${p}.name`, message: `"${name}" is the site chrome (chrome/${name}.json), not a template part — a template pulling it in would render a second ${name} inside the page` });
+            nameOk = false;
+        } else if (seen.has(name)) {
+            errors.push({ code: 'PARTS_DUPLICATE_NAME', path: `${p}.name`, message: `"${name}" is declared more than once` });
+            nameOk = false;
+        }
+        if (typeof area !== 'string' || !TEMPLATE_PART_AREAS.includes(area)) {
+            errors.push({ code: 'PARTS_INVALID_AREA', path: `${p}.area`, message: `"area" must be one of: ${TEMPLATE_PART_AREAS.join(', ')}` });
+            nameOk = false;
+        }
+        if (nameOk) { seen.add(name); parts.push({ name, area }); }
+    });
+    const ok = errors.length === 0;
+    return { ok, errors, parts: ok ? parts : [] };
+}
+
 module.exports = {
     validateChromeData,
     CHROME_MAX_BYTES: MAX_BYTES,
     CHROME_MAX_BLOCKS: MAX_BLOCKS,
     CHROME_MAX_DEPTH: MAX_DEPTH,
     CHROME_BLOCK_TYPES: Object.keys(BLOCKS),
+    validateTemplateParts,
+    TEMPLATE_PART_AREAS: TEMPLATE_PART_AREAS.slice(),
+    TEMPLATE_PART_NAME,
+    TEMPLATE_PART_RESERVED: TEMPLATE_PART_RESERVED.slice(),
+    MAX_TEMPLATE_PARTS,
 };

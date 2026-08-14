@@ -55,7 +55,9 @@ export default async function SinglePage({ params }: { params: Promise<RoutePara
     return (
         <>
             <JsonLd data={buildPostJsonLd(page, base, settings?.blogname)} />
-            <ThemeTemplate kind="page">
+            {/* page-<slug> → page: a theme can arrange /pages/about differently without a second
+                template system. `page.slug` (not the URL param) so the numeric-id fallback agrees. */}
+            <ThemeTemplate kind="page" slug={page.slug}>
                 <PostContent post={withBlocks} settings={settings} />
             </ThemeTemplate>
         </>

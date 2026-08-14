@@ -507,6 +507,160 @@ describe('compileTheme (declarative theme compiler)', () => {
         }
     });
 
+    // STYLE VARIATIONS. A page template may put a `className` on a container; until this landed the
+    // only way to style it was raw CSS outside the @wjs-generated markers, so half the theme lived in
+    // a file no validator reads. These tests pin the two things that make the feature safe: the exact
+    // selector it emits, and the fact that a name is a CLASS TOKEN and nothing else.
+    describe('style variations (styles.variations)', () => {
+        it('compiles to `#main-content .<name>` and reuses states, pseudo-elements and breakpoints', () => {
+            const slug = writeTheme({
+                styles: {
+                    variations: {
+                        hero: {
+                            padding: '4rem',
+                            hover: { opacity: '0.9' },
+                            before: { content: '"·"' },
+                            mobile: { padding: '1rem' }
+                        }
+                    }
+                }
+            });
+            const r = compile(slug);
+            assert.strictEqual(r.stats.errors, 0, JSON.stringify(r.diagnostics));
+            assert.strictEqual(r.stats.variations, 1);
+            // EXACT emitted CSS, markers excluded — the selector is the whole security argument here,
+            // so this asserts the bytes rather than "contains .hero".
+            const body = r.css.split('\n').slice(1, -1).join('\n');
+            assert.strictEqual(body, [
+                '#main-content .hero { padding: 4rem }',
+                '#main-content .hero:hover { opacity: 0.9 }',
+                '#main-content .hero::before { content: "·" }',
+                '@media (max-width: 767.98px) {',
+                '  #main-content .hero { padding: 1rem }',
+                '}'
+            ].join('\n'));
+        });
+
+        // The candidate token name is built from the key AS WRITTEN, so a variation called `hero`
+        // would otherwise find the real --wjs-hero-bg and repaint every hero on the site from :root.
+        it('never resolves a variation property to a :root token', () => {
+            const slug = writeTheme({ styles: { variations: { hero: { bg: '#fafafa' } } } });
+            const r = compile(slug);
+            // `bg` is not a CSS property, so with token resolution off it is a plain rejection…
+            assert.strictEqual(errsOf(r, 'PROPERTY_UNKNOWN').length, 1, JSON.stringify(r.diagnostics));
+            // …and, crucially, the manifest token it would have hit is nowhere in the output.
+            assert.ok(!r.css.includes('--wjs-hero-bg'), r.css);
+            assert.ok(!r.css.includes(':root'), r.css);
+        });
+
+        it('emits a real declaration for a variation whose name matches a token family', () => {
+            // Same name, a property that IS standard CSS: it must land on the scoped selector, never
+            // in :root. (Control for the test above — that one must fail for the right reason.)
+            const slug = writeTheme({ styles: { variations: { hero: { background: '#fafafa' } } } });
+            const r = compile(slug);
+            assert.strictEqual(r.stats.errors, 0, JSON.stringify(r.diagnostics));
+            assert.ok(r.css.includes('#main-content .hero { background: #fafafa }'), r.css);
+            assert.ok(!r.css.includes(':root'), r.css);
+        });
+
+        it('refuses every name that is not a bare class token, and emits nothing for it', () => {
+            // Each of these, spliced into `.<name>`, would be a selector the theme was never allowed to
+            // write: a second class, a descendant, a pseudo-class, an attribute, an id, an element.
+            const hostile = [
+                '.hero', 'hero:hover', 'hero,body', 'hero body', 'hero>*', 'hero[data-x]',
+                '#hero', 'HERO', 'hero_unit', '1hero', 'hero ', '*', '', 'hero{}', 'a'.repeat(41)
+            ];
+            for (const name of hostile) {
+                const slug = writeTheme({ styles: { variations: { [name]: { color: '#ff0000' } } } });
+                const r = compile(slug);
+                assert.strictEqual(errsOf(r, 'VARIATION_NAME_INVALID').length, 1,
+                    `${JSON.stringify(name)} must be refused: ${JSON.stringify(r.diagnostics)}`);
+                assert.ok(!r.css.includes('#ff0000'), `${JSON.stringify(name)} leaked a declaration: ${r.css}`);
+                assert.ok(!r.css.includes('#main-content'), `${JSON.stringify(name)} emitted a selector: ${r.css}`);
+                assert.strictEqual(r.stats.variations, 0);
+            }
+        });
+
+        // The pairing the doctor reports only means something if BOTH sides accept exactly the same
+        // names. They share one regex; this asserts the two ends agree in both directions, so a future
+        // widening of either has to be done in the one place.
+        it('accepts exactly the names a template className accepts', () => {
+            const { validateTemplate } = require('../core/template-validate');
+            const templateAccepts = (name: string): boolean => validateTemplate({
+                content: [{ type: 'Section', props: { className: name, items: [{ type: 'PageContent', props: {} }] } }]
+            }).ok;
+            for (const name of ['hero', 'a', 'x-1', 'site-hero-band', '.hero', 'Hero', 'hero_x', '9lives', 'a'.repeat(40), 'a'.repeat(41)]) {
+                const slug = writeTheme({ styles: { variations: { [name]: { color: '#ff0000' } } } });
+                const compilerAccepts = errsOf(compile(slug), 'VARIATION_NAME_INVALID').length === 0;
+                assert.strictEqual(compilerAccepts, templateAccepts(name),
+                    `${JSON.stringify(name)}: compiler=${compilerAccepts} template=${templateAccepts(name)}`);
+            }
+        });
+
+        it('a variation owns its box, not the markup inside it: no children may be named', () => {
+            // There is no children map for a variation, so a nested object can only be a state,
+            // position, pseudo-element or breakpoint. `button` is a real child of the `hero` ELEMENT —
+            // under a variation it must be refused rather than emitting a descendant selector.
+            const slug = writeTheme({ styles: { variations: { hero: { button: { color: '#ffffff' } } } } });
+            const r = compile(slug);
+            assert.strictEqual(errsOf(r, 'STYLE_UNKNOWN_KEY').length, 1, JSON.stringify(r.diagnostics));
+            assert.ok(!r.css.includes('#main-content'), r.css);
+        });
+
+        it('rejects a non-object variations node and a non-object variation', () => {
+            const bad = compile(writeTheme({ styles: { variations: 'hero' } }));
+            assert.strictEqual(errsOf(bad, 'VARIATIONS_INVALID').length, 1, JSON.stringify(bad.diagnostics));
+            const leaf = compile(writeTheme({ styles: { variations: { hero: 'red' } } }));
+            assert.strictEqual(errsOf(leaf, 'STYLE_INVALID_VALUE').length, 1, JSON.stringify(leaf.diagnostics));
+            assert.strictEqual(leaf.stats.variations, 0);
+        });
+
+        // `variations` is a reserved key inside `styles`. If the manifest ever grew an element of that
+        // name it would be silently unreachable, so the real registry is checked here rather than left
+        // to be discovered by a theme author whose styles stopped applying.
+        it('the REAL token manifest has no element named "variations"', () => {
+            const real = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'public', 'theme-tokens.json'), 'utf8'));
+            assert.ok(!Object.prototype.hasOwnProperty.call(real.elements || {}, 'variations'),
+                'an element named "variations" would be shadowed by the reserved styles key');
+        });
+
+        // THE RENDER-TIME PROOF. A variation's selector is only worth anything if it matches markup
+        // that really exists, and the two halves live in different packages: the scope is a constant
+        // in theme-compile.ts, the element it names is emitted by the public layout shell. Nothing
+        // else pins them together, and a rename on either side would leave every variation compiling
+        // cleanly and matching NOTHING — the exact failure the doctor's pairing cannot see either,
+        // because both files would still be internally consistent.
+        it('the scope it emits is the content root the public shell actually renders', (t: any) => {
+            const frontendSrc = path.join(__dirname, '..', '..', '..', 'frontend', 'src');
+            if (!fs.existsSync(frontendSrc)) { t.skip('no frontend package in this checkout'); return; }
+            // NOT try/catch: if the shell moved, this test must go red rather than skip itself.
+            const shell = fs.readFileSync(path.join(frontendSrc, 'components', 'public', 'PublicLayoutShell.tsx'), 'utf8');
+            assert.match(shell, /<main id="main-content"/,
+                'the compiled variation scope #main-content no longer names the shell\'s content root');
+            const slug = writeTheme({ styles: { variations: { 'site-hero': { padding: '1rem' } } } });
+            assert.ok(compile(slug).css.includes('#main-content .site-hero { padding: 1rem }'));
+            // The other half of the pair — `className` reaching the DOM as its own class token, next to
+            // the block's own — is asserted where it renders:
+            // frontend/src/components/content/__tests__/templateRenderer.test.tsx
+            // ("APPENDS the theme's class — the framework's own hook always survives").
+            const blocks = fs.readFileSync(path.join(frontendSrc, 'components', 'content', 'blocks.tsx'), 'utf8');
+            assert.match(blocks, /cx\('wp-block-section', extraClass\(className\)\)/,
+                'the container no longer appends the template class the variation is written against');
+        });
+
+        it('the whole block stays idempotent with variations in it', () => {
+            const slug = writeTheme({
+                styles: { hero: { 'text-align': 'center' }, variations: { 'site-hero': { padding: '2rem', desktop: { padding: '6rem' } } } }
+            });
+            const r1 = compile(slug, { dryRun: false });
+            const bytes1 = fs.readFileSync(stylePath(slug), 'utf8');
+            const r2 = compile(slug, { dryRun: false });
+            assert.strictEqual(r1.css, r2.css);
+            assert.strictEqual(bytes1, fs.readFileSync(stylePath(slug), 'utf8'));
+            assert.ok(r1.css.includes('#main-content .site-hero { padding: 2rem }'), r1.css);
+        });
+    });
+
     it('a chrome child the manifest does not name is refused, with a suggestion', () => {
         // The point of naming is that the set is CLOSED. An unknown child must be an error rather than
         // silently emitting nothing (which would look like a theme bug) or being taken as a selector.

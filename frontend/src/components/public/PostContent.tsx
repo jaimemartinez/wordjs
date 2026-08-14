@@ -27,6 +27,10 @@ interface PostContentProps {
 
 export default function PostContent({ post, settings, category, showComments }: PostContentProps) {
     const puckData = post.meta?._puck_data || null;
+    // A PAGE keeps its own two shapes (Puck body, or plain HTML with no card). Everything else is a
+    // POST and gets the post frame — see the comment on <article className="wjs-post"> below for why
+    // the frame is now outside the Puck/classic branch instead of inside the classic one.
+    const isPage = post.type === 'page';
 
     const commentsAllowed =
         showComments &&
@@ -41,29 +45,44 @@ export default function PostContent({ post, settings, category, showComments }: 
             <script
                 dangerouslySetInnerHTML={{ __html: `window.__WJS_PAGE_ID=${JSON.stringify(post.id)};` }}
             />
-            {puckData ? (
-                <div className="puck-content">
-                    <ContentRenderer data={puckData} />
-                </div>
-            ) : post.type === 'page' ? (
-                // Page fallback (no card)
-                <div className="w-full px-4 py-8">
-                    <h1 className="text-4xl font-bold mb-8 text-center">{post.title}</h1>
-                    <div
-                        className="wjs-content prose prose-lg max-w-none mx-auto overflow-x-auto [&_table]:block [&_table]:overflow-x-auto [&_pre]:overflow-x-auto"
-                        suppressHydrationWarning
-                        dangerouslySetInnerHTML={{ __html: sanitizeHTML(post.content) }}
-                    />
-                    <LegacyCarousels postId={post.id} />
-                </div>
+            {isPage ? (
+                puckData ? (
+                    <div className="wjs-post-body puck-content">
+                        <ContentRenderer data={puckData} />
+                    </div>
+                ) : (
+                    // Page fallback (no card)
+                    <div className="w-full px-4 py-8">
+                        <h1 className="text-4xl font-bold mb-8 text-center">{post.title}</h1>
+                        <div
+                            className="wjs-content prose prose-lg max-w-none mx-auto overflow-x-auto [&_table]:block [&_table]:overflow-x-auto [&_pre]:overflow-x-auto"
+                            suppressHydrationWarning
+                            dangerouslySetInnerHTML={{ __html: sanitizeHTML(post.content) }}
+                        />
+                        <LegacyCarousels postId={post.id} />
+                    </div>
+                )
             ) : (
-                // Post fallback (card style)
+                // THE POST FRAME — emitted on BOTH body paths, deliberately.
+                //
                 // `wjs-post*` hooks are the theme contract: STABLE names alongside the Tailwind
                 // utilities. They carry no styling themselves; the manifest promises them and the
-                // chrome-selector contract test proves this markup still emits them. (The body already
-                // had one — `wjs-content` — which is why only the frame around it needed naming.)
-                <article className="wjs-post max-w-3xl mx-auto py-8">
-                    <div className="wjs-post-header mb-8 text-center">
+                // contract tests prove this markup emits them.
+                //
+                // The frame used to live INSIDE the classic branch, so the moment an author opened the
+                // post in the visual editor (`_puck_data` appears) the whole frame vanished from the
+                // public page and every rule a theme had compiled for `.wjs-post`, `-header`, `-title`
+                // and `.wjs-post-meta*` silently stopped matching. A manifest selector that sometimes
+                // matches nothing is the same defect as one that never matches, so the frame is now
+                // outside the branch and only the BODY differs.
+                //
+                // It also restores what the editor already promises: postConfig's root render draws the
+                // title above the blocks in the canvas, and the public page drew nothing — a Puck-edited
+                // post shipped with no <h1>, no date and no byline. Only the body is author-composed.
+                <article className={`wjs-post ${puckData ? 'w-full' : 'max-w-3xl mx-auto py-8'}`}>
+                    {/* Puck bodies are full-bleed (heroes, full-width sections), so the frame must not
+                        constrain them — the header carries its own measure instead of the article's. */}
+                    <div className={`wjs-post-header mb-8 text-center${puckData ? ' max-w-3xl mx-auto px-4 pt-8' : ''}`}>
                         <div className="wjs-post-meta flex flex-wrap items-center justify-center gap-3 text-sm text-[var(--wjs-color-text-muted,#6b7280)] mb-4">
                             {category && (
                                 <>
@@ -84,14 +103,29 @@ export default function PostContent({ post, settings, category, showComments }: 
                             {post.title}
                         </h1>
                     </div>
-                    {/* Card hooks use UNDECLARED contract tokens (card-*): ui.css :root pre-declares
-                        --wjs-radius-lg at 0.75rem, which would beat a 1rem parity fallback. */}
-                    <div
-                        className="wjs-content prose prose-lg mx-auto p-[var(--wjs-card-pad,2rem)] rounded-[var(--wjs-card-radius,1rem)] shadow-[var(--wjs-card-shadow,0_1px_3px_0_rgba(0,0,0,0.1),0_1px_2px_-1px_rgba(0,0,0,0.1))] bg-[var(--wjs-bg-surface,#ffffff)] border border-[var(--wjs-border-subtle,#e5e7eb)] overflow-x-auto [&_table]:block [&_table]:overflow-x-auto [&_pre]:overflow-x-auto"
-                        suppressHydrationWarning
-                        dangerouslySetInnerHTML={{ __html: sanitizeHTML(post.content) }}
-                    />
-                    <LegacyCarousels postId={post.id} />
+                    {/* `wjs-post-body` names the body REGION on both paths — the manifest's
+                        singlePost.body. It cannot be `.wjs-post .wjs-content`: `.wjs-content` is
+                        framework-STYLED in ui.css (heading margins, image radii, table and field
+                        rules), so putting it on Puck output would restyle every block. The Puck body
+                        keeps `.puck-content`, which is what ui.css already treats as its twin. */}
+                    {puckData ? (
+                        <div className="wjs-post-body puck-content">
+                            <ContentRenderer data={puckData} />
+                        </div>
+                    ) : (
+                        <>
+                            {/* Card hooks use UNDECLARED contract tokens (card-*): ui.css :root pre-declares
+                                --wjs-radius-lg at 0.75rem, which would beat a 1rem parity fallback. */}
+                            <div
+                                className="wjs-post-body wjs-content prose prose-lg mx-auto p-[var(--wjs-card-pad,2rem)] rounded-[var(--wjs-card-radius,1rem)] shadow-[var(--wjs-card-shadow,0_1px_3px_0_rgba(0,0,0,0.1),0_1px_2px_-1px_rgba(0,0,0,0.1))] bg-[var(--wjs-bg-surface,#ffffff)] border border-[var(--wjs-border-subtle,#e5e7eb)] overflow-x-auto [&_table]:block [&_table]:overflow-x-auto [&_pre]:overflow-x-auto"
+                                suppressHydrationWarning
+                                dangerouslySetInnerHTML={{ __html: sanitizeHTML(post.content) }}
+                            />
+                            {/* Classic-only: it initialises [photo-carousel] shortcodes inside the
+                                sanitized HTML body, which Puck content has no equivalent of. */}
+                            <LegacyCarousels postId={post.id} />
+                        </>
+                    )}
                 </article>
             )}
 

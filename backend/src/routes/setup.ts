@@ -350,6 +350,10 @@ router.post('/install', async (req: any, res: Response) => {
             const Term = require('../models/Term');
             await Term.create({ name: 'Uncategorized', taxonomy: 'category', slug: 'uncategorized', description: 'Default category' });
 
+            // The ONE moment the product provisions a theme on its own: install. This is Ghost shipping
+            // casper with the package — a site must not finish the wizard with an empty themes dir.
+            // Boot deliberately does NOT do this any more (it verifies and warns); the only other caller
+            // is POST /api/v1/themes/default, where an admin asked for a restore.
             const { createDefaultTheme } = require('../core/themes');
             createDefaultTheme();
 

@@ -205,6 +205,60 @@ async function getActiveTheme() {
   return themes.find(t => t.slug === currentSlug) || null;
 }
 
+/**
+ * Is the configured active theme absent from disk?
+ *
+ * getActiveTheme() resolves honestly or not at all (see above), and every downstream caller degrades
+ * quietly: getActiveThemeVersion returns '', the SSR layout ships no theme stylesheet, and the public
+ * site falls back to the framework's own :root tokens in public/css/wordjs-ui.css. That fallback is
+ * CORRECT — the site keeps rendering — but until now it was also SILENT: nothing told the admin that
+ * the `template` option names a directory that no longer exists. This is the observable that makes it
+ * visible; it is served in the public settings payload (routes/settings.ts) and logged at boot.
+ *
+ * NEVER THROWS: it is on the settings read path, and a themes-dir hiccup must not 500 it. A scan that
+ * cannot be performed reports "not missing" — an unknown is not evidence of breakage, and a false
+ * alarm on every settings read would train the admin to ignore the banner.
+ */
+async function isActiveThemeMissing(): Promise<boolean> {
+  try {
+    return (await getActiveTheme()) === null;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The files a theme directory MUST carry to be usable, and the slug of the fallback theme.
+ *
+ * Only these two. functions.js is OPTIONAL by design — theme-engine.loadThemeLogic treats a theme
+ * with no functions.js as one that simply owns no logic — and the five legacy Handlebars files
+ * (partials/{header,footer}.html, templates/{index,single,archive}.html) feed a renderer with no live
+ * callers, so their absence is not a fault worth warning about on every boot. theme.json (metadata,
+ * layout, version) and style.css (the --wjs-* tokens the live site actually loads) are the theme.
+ */
+const DEFAULT_THEME_SLUG = 'default';
+const REQUIRED_THEME_FILES = ['theme.json', 'style.css'];
+
+/**
+ * READ-ONLY health check of the bundled fallback theme. Writes NOTHING.
+ *
+ * Boot used to call createDefaultTheme() unconditionally to "guarantee a default theme exists" —
+ * which meant the process rewrote files inside a user-owned directory on every restart. No comparable
+ * CMS does that: WordPress falls back to WP_DEFAULT_THEME (validate_current_theme), Ghost ships
+ * casper in the package and refuses to delete it, Drupal's ThemeInstaller refuses to uninstall the
+ * default, Joomla marks core templates locked. Ship a fallback, refuse to delete it, degrade
+ * gracefully — never rewrite. So boot now VERIFIES and warns; provisioning stayed where a user asked
+ * for it: the install wizard (routes/setup.ts) and POST /api/v1/themes/default (the admin restore).
+ */
+function verifyDefaultTheme(): { ok: boolean; dir: string; exists: boolean; missing: string[] } {
+  const dir = path.join(THEMES_DIR, DEFAULT_THEME_SLUG);
+  const exists = fs.existsSync(dir);
+  const missing = exists
+    ? REQUIRED_THEME_FILES.filter(file => !fs.existsSync(path.join(dir, file)))
+    : REQUIRED_THEME_FILES.slice();
+  return { ok: exists && missing.length === 0, dir, exists, missing };
+}
+
 /** getOption may hand back a parsed OBJECT or the raw JSON STRING — normalize to the string form. */
 function serializeOptionValue(value: any): string {
   if (value === null || value === undefined || value === '') return '';
@@ -351,15 +405,22 @@ async function renderTemplate(templateName: string, data = {}) {
 }
 
 /**
- * Create default theme.
+ * Provision the default theme. USER-INITIATED ONLY — boot does not call this.
  *
- * Called on EVERY boot (index.ts) to guarantee a default theme exists. It must therefore be an
- * idempotent SCAFFOLD, not a clobber: the committed default/style.css carries the curated `--wjs-*`
- * design tokens (94 lines), but the `styleCss` fallback below is the old token-less version. Writing
- * it unconditionally stripped the tokens on every restart (the recurring "default theme tokens=0"
- * corruption — previously misattributed to subagents; it was actually this boot-time write). So the
- * fallback is only written when the file is MISSING. `force` (used by the admin "restore default
- * theme" endpoint) overwrites deliberately.
+ * Two callers, both of them a person asking for the theme to be put on disk: the install wizard
+ * (routes/setup.ts, the Ghost-style "ship a fallback at install time") and POST /api/v1/themes/default,
+ * the admin's explicit "restore default theme", which passes force=true. Boot instead calls
+ * verifyDefaultTheme() and warns — see that function for why no comparable CMS rewrites theme files at
+ * runtime.
+ *
+ * EVERY file goes through writeIfAbsent, and that is load-bearing, not tidiness. The committed
+ * default/style.css carries the curated `--wjs-*` design tokens (94 lines) while the `styleCss`
+ * fallback below is the old token-less version; writing it unconditionally stripped the tokens on
+ * every restart (the recurring "default theme tokens=0" corruption — long misattributed to subagents,
+ * it was this write). The same trap was still live for the five legacy Handlebars files
+ * (partials/{header,footer}.html, templates/{index,single,archive}.html), which were written with a
+ * bare fs.writeFileSync and so destroyed any hand edit on every call. They are guarded now too.
+ * `force` overwrites all eight deliberately — that is what "restore" means.
  */
 function createDefaultTheme(force = false) {
   const defaultDir = path.join(THEMES_DIR, 'default');
@@ -827,7 +888,7 @@ footer .w-10:hover {
   </header>
   <main>
     <div class="container">`;
-  fs.writeFileSync(path.join(defaultDir, 'partials', 'header.html'), headerPartial);
+  writeIfAbsent(path.join(defaultDir, 'partials', 'header.html'), headerPartial);
 
   // partials/footer.html
   const footerPartial = `    </div>
@@ -840,7 +901,7 @@ footer .w-10:hover {
   {{wordjs_footer}}
 </body>
 </html>`;
-  fs.writeFileSync(path.join(defaultDir, 'partials', 'footer.html'), footerPartial);
+  writeIfAbsent(path.join(defaultDir, 'partials', 'footer.html'), footerPartial);
 
   // templates/index.html
   const indexTemplate = `{{> header}}
@@ -852,7 +913,7 @@ footer .w-10:hover {
       </article>
       {{/each}}
 {{> footer}}`;
-  fs.writeFileSync(path.join(defaultDir, 'templates', 'index.html'), indexTemplate);
+  writeIfAbsent(path.join(defaultDir, 'templates', 'index.html'), indexTemplate);
 
   // templates/single.html
   const singleTemplate = `{{> header}}
@@ -862,7 +923,7 @@ footer .w-10:hover {
         <div class="content">{{{content}}}</div>
       </article>
 {{> footer}}`;
-  fs.writeFileSync(path.join(defaultDir, 'templates', 'single.html'), singleTemplate);
+  writeIfAbsent(path.join(defaultDir, 'templates', 'single.html'), singleTemplate);
 
   // templates/archive.html
   const archiveTemplate = `{{> header}}
@@ -875,26 +936,59 @@ footer .w-10:hover {
       </article>
       {{/each}}
 {{> footer}}`;
-  fs.writeFileSync(path.join(defaultDir, 'templates', 'archive.html'), archiveTemplate);
+  writeIfAbsent(path.join(defaultDir, 'templates', 'archive.html'), archiveTemplate);
 
-  // Unconditional: the scaffold writes on `force` AND whenever a file was missing (first boot),
-  // and a boot-time scan may already have observed the dir half-populated.
+  // Unconditional: the scaffold writes on `force` AND whenever a file was missing (first install),
+  // and an earlier scan may already have observed the dir half-populated.
   invalidateThemeScanCache();
 }
 
+/** A refusal the API layer can turn into a real status + code instead of a generic 500. */
+function refuse(message: string, code: string, status = 409) {
+  const err: any = new Error(message);
+  err.code = code;
+  err.status = status;
+  return err;
+}
+
 /**
- * Delete a theme
+ * Delete a theme.
+ *
+ * TWO REFUSALS, and they live HERE rather than in routes/themes.ts on purpose: switchTheme, the admin
+ * UI, and any API client all funnel through this function, so a guard placed in the route would only
+ * cover one of them.
+ *
+ *  - the ACTIVE theme: deleting it leaves `template` naming a directory that no longer exists, and the
+ *    site renders with no theme at all (getActiveTheme deliberately refuses to promote an arbitrary
+ *    replacement).
+ *  - the LAST remaining theme: this is the sibling guard. Every comparable CMS keeps a floor — Ghost's
+ *    service layer throws "Deleting the default theme is not allowed.", Drupal's ThemeInstaller throws
+ *    for the default theme, Joomla marks core templates locked=1 — because an empty themes directory
+ *    is a state the product cannot recover from through its own UI: there is nothing left to activate,
+ *    and (since boot no longer rewrites theme files) nothing re-creates one behind the admin's back.
+ *    The escape hatch is deliberate and named in the message: POST /api/v1/themes/default.
+ *
+ * Both carry `status`/`code`, so callers get 409 + a specific code instead of an unhandled 500.
  */
 async function deleteTheme(slug: string) {
   const current = await getCurrentTheme();
   if (slug === current) {
-    throw new Error('Cannot delete the currently active theme');
+    throw refuse('Cannot delete the currently active theme. Activate another theme first.', 'theme_active');
   }
 
   const themes = scanThemes();
   const theme = themes.find(t => t.slug === slug);
   if (!theme) {
-    throw new Error(`Theme ${slug} not found`);
+    throw refuse(`Theme ${slug} not found`, 'theme_not_found', 404);
+  }
+
+  // Counted from the SAME scan the lookup used, so the decision cannot straddle two views of the dir.
+  if (themes.length <= 1) {
+    throw refuse(
+      `Cannot delete "${theme.name}" — it is the last theme installed, and the site would be left with none. ` +
+      'Install or restore another theme first (POST /api/v1/themes/default restores the bundled default).',
+      'theme_last_remaining'
+    );
   }
 
   // Security: Ensure we only delete from themes directory
@@ -1106,6 +1200,10 @@ module.exports = {
   getActiveTheme,
   getActiveThemeVersion,
   getActiveThemeSnapshot,
+  isActiveThemeMissing,
+  verifyDefaultTheme,
+  DEFAULT_THEME_SLUG,
+  REQUIRED_THEME_FILES,
   syncActiveThemeLayout,
   switchTheme,
   getAllThemes,

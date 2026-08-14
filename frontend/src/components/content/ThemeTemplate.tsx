@@ -1,6 +1,6 @@
 import React from 'react';
 import { getSettings, getThemeTemplate } from '@/lib/server-api';
-import { parseTemplate, templateCandidates } from '@/lib/templateData';
+import { parseTemplate, templateCandidates, type TemplateKind } from '@/lib/templateData';
 import { TemplateRenderer } from './TemplateRenderer';
 import { resolveTemplateBlocks, type RouteContext } from '@/lib/resolveTemplateBlocks';
 
@@ -17,7 +17,14 @@ import { resolveTemplateBlocks, type RouteContext } from '@/lib/resolveTemplateB
  */
 
 export interface ThemeTemplateProps {
-    kind: 'home' | 'single' | 'page' | 'archive' | 'search';
+    kind: TemplateKind;
+    /**
+     * What makes a template name more specific than `single`/`page`: the thing's own slug and, for a
+     * single, its post type. The route knows both; the hierarchy composes `single-post-hello` /
+     * `page-about` out of them and drops any name that is not a legal file name.
+     */
+    slug?: string;
+    postType?: string;
     /**
      * What this route is already about, forwarded to any listing the template contains. A search
      * route passes its results; an archive passes its category's posts. Omit it and a listing falls
@@ -28,19 +35,20 @@ export interface ThemeTemplateProps {
     children: React.ReactNode;
 }
 
-export async function ThemeTemplate({ kind, context, children }: ThemeTemplateProps) {
+export async function ThemeTemplate({ kind, slug, postType, context, children }: ThemeTemplateProps) {
     const settings = await getSettings();          // cache()d — the layout already fetched this
-    const slug = (settings?.template as string) || 'default';
+    const themeSlug = (settings?.template as string) || 'default';
 
     // Most specific first, stopping at the first template the theme actually ships. Sequential on
-    // purpose: the common case is one hit (or three misses that the ISR window turns into zero fetches),
-    // and firing all three in parallel would fetch templates we then throw away.
-    for (const name of templateCandidates(kind)) {
-        const tree = parseTemplate(await getThemeTemplate(slug, name));
+    // purpose: the common case is one hit (or a few misses that the ISR window turns into zero fetches),
+    // and firing the whole chain in parallel would fetch templates we then throw away.
+    for (const name of templateCandidates(kind, { slug, postType })) {
+        const tree = parseTemplate(await getThemeTemplate(themeSlug, name));
         if (!tree) continue;
-        // Resolve BEFORE rendering: the posts must be in the server HTML, not fetched by the browser.
-        // A template made only of structure costs nothing here — the resolver returns it untouched.
-        const resolved = await resolveTemplateBlocks(tree, context);
+        // Resolve BEFORE rendering: the posts and the template parts must be in the server HTML, not
+        // fetched by the browser. A template made only of structure costs nothing here — the resolver
+        // returns it untouched.
+        const resolved = await resolveTemplateBlocks(tree, context, themeSlug);
         return <TemplateRenderer template={resolved}>{children}</TemplateRenderer>;
     }
     return <>{children}</>;

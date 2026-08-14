@@ -248,8 +248,8 @@ describe('ARCHETYPE_NAMES — the label set', () => {
             // exist. Gating it on that file made the check vacuous in the one case it exists for: a
             // theme that NAMES a webfont family and ships no faces at all passed, and the browser
             // silently fell back to a system face. "Ships no fonts.css" is the failure, not the excuse.
-            const allCss = fs.readdirSync(dir).filter(f => f.endsWith('.css'))
-                .map(f => fs.readFileSync(path.join(dir, f), 'utf8')).join('\n');
+            const allCss = fs.readdirSync(dir).filter((f: string) => f.endsWith('.css'))
+                .map((f: string) => fs.readFileSync(path.join(dir, f), 'utf8')).join('\n');
             const declared = new Set<string>();
             for (const m of allCss.matchAll(/@font-face\s*\{[^}]*?font-family:\s*(['"]?)([^;'"}]+)\1/gi)) {
                 declared.add(m[2].trim().toLowerCase());
@@ -273,17 +273,22 @@ describe('ARCHETYPE_NAMES — the label set', () => {
             }
         }
 
-        // The catalogue's own extra promise, checked only while a catalogue is installed: it covers
-        // every archetype. With no catalogue there is nothing to be complete about; the invariant
-        // above is what still applies, and it is not allowed to run over an empty list.
-        if (fs.existsSync(CATALOG_DIR)) {
-            const seen = new Set<string>();
-            for (const entry of generator.themes) {
-                if (!fs.existsSync(path.join(CATALOG_DIR, entry.slug, 'style.css'))) continue;
-                seen.add(entry.archetype);
-            }
-            assert.strictEqual(seen.size, ARCHETYPE_NAMES.length, 'catalog no longer covers every archetype');
-        }
+        // The catalogue's archetype-coverage promise used to be checked here behind
+        // `if (fs.existsSync(CATALOG_DIR))`. marketplace/themes was deleted on purpose, so that branch
+        // stopped running the day it was written — a silently dead assertion, which this suite treats
+        // as worse than a deleted one (it reads as coverage and is none).
+        //
+        // It is not deleted, it is RE-AIMED at the subject that still exists. "The catalogue covers
+        // every archetype" was never a fact about a directory: the catalogue IS the generator's theme
+        // table, and the directory was only its rendering. Asserted against the table, the invariant
+        // runs unconditionally on every CI run, with or without themes on disk — and it is the half
+        // that can actually regress, because a new archetype added to ARCHETYPE_NAMES with no theme
+        // using it is a name the compiler accepts and nothing exercises.
+        const seen = new Set<string>();
+        for (const entry of generator.themes) seen.add(entry.archetype);
+        assert.ok(generator.themes.length > 0, 'the generator declares no themes — this would pass vacuously');
+        assert.deepStrictEqual([...seen].sort(), [...ARCHETYPE_NAMES].sort(),
+            'the theme catalogue no longer covers every archetype (or names one that does not exist)');
     });
 
     // Every theme, every stylesheet in it: this is the assertion that would have caught 43 of 64

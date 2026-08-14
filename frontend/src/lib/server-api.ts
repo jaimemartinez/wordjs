@@ -275,7 +275,35 @@ export const getThemeTemplate = cache(async (slug: string, name: string): Promis
     }
 });
 
-export const getThemeChrome = cache(async (slug: string, part: 'header' | 'footer'): Promise<string | null> => {
+/**
+ * Active theme's `theme.json`, raw. Served statically from the same tree as chrome/ and templates/.
+ *
+ * The renderer needs exactly one thing out of it: the `templateParts` declaration, which is what makes
+ * a chrome/<name>.json reachable from a page template at all. Parsing (and fail-closing) is
+ * parseTemplateParts's job in templateData.ts, never this loader's — same division as the two below.
+ * Cached under the 'settings' tag so activating a theme purges it.
+ */
+export const getThemeManifest = cache(async (slug: string): Promise<string | null> => {
+    const origin = resolveServerBase().replace(/\/api\/v1$/, '');
+    try {
+        const res = await fetch(`${origin}/themes/${encodeURIComponent(slug)}/theme.json`, {
+            next: { revalidate: 60, tags: ['settings'] },
+        } as RequestInit);
+        if (!res.ok) return null;
+        return await res.text();
+    } catch {
+        return null;
+    }
+});
+
+/**
+ * A chrome composition the theme ships. `part` is the site's own 'header'/'footer' for the public
+ * layout, or a NAMED TEMPLATE PART a page template pulls in — which is why the name is shape-checked
+ * here exactly like getThemeTemplate's is: it lands in a URL, so a name that is not [a-z0-9-] never
+ * reaches the fetch. (Being declared in theme.json is a SEPARATE gate, enforced by the resolver.)
+ */
+export const getThemeChrome = cache(async (slug: string, part: string): Promise<string | null> => {
+    if (!/^[a-z0-9-]{1,40}$/.test(part)) return null;
     const origin = resolveServerBase().replace(/\/api\/v1$/, '');
     try {
         const res = await fetch(`${origin}/themes/${encodeURIComponent(slug)}/chrome/${part}.json`, {

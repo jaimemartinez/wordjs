@@ -629,8 +629,22 @@ export const themesApi = {
     },
 };
 
+// The public settings payload also carries DERIVED, non-string fields (see DERIVED_PUBLIC_SETTINGS in
+// backend/src/routes/settings.ts). `get()` keeps its string typing — every other caller reads stored
+// options through it — and `getPublicHealth()` reads the same URL with honest types for those.
+// active_theme_missing MUST stay a boolean end to end: as a string, `Boolean("false")` is true.
+export interface PublicSettingsHealth {
+    /** true when the `template` option names a theme that is not installed on disk. */
+    active_theme_missing?: boolean;
+    /** active theme.json version, '' when there is no active theme. */
+    active_theme_version?: string;
+    /** slug of the configured active theme, so a warning can name it. */
+    template?: string;
+}
+
 export const settingsApi = {
     get: () => apiGet<Record<string, string>>("/settings"),
+    getPublicHealth: () => apiGet<PublicSettingsHealth>("/settings"),
     getAll: () => apiGet<Record<string, string>>("/settings/all"),
     update: (data: Record<string, string>) => apiPut("/settings", data),
 };
