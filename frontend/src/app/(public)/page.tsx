@@ -78,38 +78,42 @@ export default async function HomePage() {
         <ThemeTemplate kind="home">
         <div className="space-y-4">
             {siteJsonLd}
-            <div className="border-b border-[var(--wjs-border-subtle,#e5e7eb)] pb-4 mb-8">
-                <h1 className="text-2xl font-bold text-[var(--wjs-color-heading,#1f2937)]">Latest Posts</h1>
+            {/* `wjs-*` hooks are the theme contract: STABLE names alongside the Tailwind utilities, so a
+                theme can style the blog roll declaratively instead of guessing at `rounded-2xl`. They add
+                no styling of their own — the manifest (backend/public/theme-tokens.json) promises them and
+                frontend/src/lib/__tests__/chromeSelectorContract.test.ts proves they are still emitted. */}
+            <div className="wjs-post-list-header border-b border-[var(--wjs-border-subtle,#e5e7eb)] pb-4 mb-8">
+                <h1 className="wjs-post-list-title text-2xl font-bold text-[var(--wjs-color-heading,#1f2937)]">Latest Posts</h1>
             </div>
 
             {published.length === 0 ? (
-                <div className="text-center py-12 bg-[var(--wjs-bg-muted,#f9fafb)] rounded-lg">
+                <div className="wjs-post-list-empty text-center py-12 bg-[var(--wjs-bg-muted,#f9fafb)] rounded-lg">
                     <p className="text-[var(--wjs-color-text-muted,#6b7280)]">No posts found. Go to Admin to create one!</p>
                 </div>
             ) : (
-                <div className="grid grid-cols-1 gap-12">
+                <div className="wjs-post-list grid grid-cols-1 gap-12">
                     {published.map((post) => (
-                        <article key={post.id} className="group bg-[var(--wjs-bg-surface,#ffffff)] rounded-2xl shadow-sm hover:shadow-md transition-all duration-300 border border-[var(--wjs-border-subtle,#f3f4f6)] overflow-hidden">
-                            <div className="p-8">
-                                <div className="flex flex-wrap items-center gap-3 text-sm text-[var(--wjs-color-text-muted,#6b7280)] mb-4">
-                                    <span className="bg-[var(--wjs-bg-muted,#eff6ff)] text-[var(--wjs-color-primary,#1d4ed8)] px-3 py-1 rounded-full font-medium">Article</span>
+                        <article key={post.id} className="wjs-post-card group bg-[var(--wjs-bg-surface,#ffffff)] rounded-2xl shadow-sm hover:shadow-md transition-all duration-300 border border-[var(--wjs-border-subtle,#f3f4f6)] overflow-hidden">
+                            <div className="wjs-post-card-body p-8">
+                                <div className="wjs-post-card-meta flex flex-wrap items-center gap-3 text-sm text-[var(--wjs-color-text-muted,#6b7280)] mb-4">
+                                    <span className="wjs-post-card-badge bg-[var(--wjs-bg-muted,#eff6ff)] text-[var(--wjs-color-primary,#1d4ed8)] px-3 py-1 rounded-full font-medium">Article</span>
                                     <span>•</span>
                                     <span>{post.date ? new Date(post.date).toLocaleDateString() : ''}</span>
                                     <span>•</span>
                                     <span>{post.author?.displayName || "Admin"}</span>
                                 </div>
 
-                                <Link href={`/${post.slug || post.id}`} className="block group-hover:text-[var(--wjs-color-primary,#2563eb)] transition-colors">
-                                    <h2 className="text-3xl font-bold text-[var(--wjs-color-heading,#111827)] mb-4 leading-tight">
+                                <Link href={`/${post.slug || post.id}`} className="wjs-post-card-link block group-hover:text-[var(--wjs-color-primary,#2563eb)] transition-colors">
+                                    <h2 className="wjs-post-card-title text-3xl font-bold text-[var(--wjs-color-heading,#111827)] mb-4 leading-tight">
                                         {post.title}
                                     </h2>
                                 </Link>
 
-                                <p className="text-[var(--wjs-color-text-muted,#4b5563)] mb-6 line-clamp-3 leading-relaxed">
+                                <p className="wjs-post-card-excerpt text-[var(--wjs-color-text-muted,#4b5563)] mb-6 line-clamp-3 leading-relaxed">
                                     {post.excerpt || post.content.substring(0, 200).replace(/<[^>]*>?/gm, "") + "..."}
                                 </p>
 
-                                <Link href={`/${post.slug || post.id}`} className="inline-flex items-center text-[var(--wjs-color-primary,#2563eb)] font-semibold hover:gap-2 transition-all">
+                                <Link href={`/${post.slug || post.id}`} className="wjs-post-card-more inline-flex items-center text-[var(--wjs-color-primary,#2563eb)] font-semibold hover:gap-2 transition-all">
                                     Read Article <i className="fa-solid fa-arrow-right ml-2 text-sm"></i>
                                 </Link>
                             </div>

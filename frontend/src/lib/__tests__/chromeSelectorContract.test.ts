@@ -29,6 +29,27 @@ const SOURCE_DIRS = [
     'frontend/src/app/(public)',
 ];
 
+// Individual public-surface components that live OUTSIDE those trees. Listed one by one rather than
+// widening the walk to all of frontend/src/components: that directory is mostly ADMIN markup, and a
+// selector "found" in the admin UI would be a false pass — the manifest only promises public surfaces.
+const SOURCE_FILES = [
+    'frontend/src/components/CommentsSection.tsx',
+];
+
+/**
+ * Comments are NOT markup. A selector named only in a code comment — `wjs-content`, say, written
+ * while explaining why a class was not added — satisfied the grep below and let the manifest promise
+ * a selector that matches zero elements. That is the precise failure this file exists to catch, so
+ * comments come out before anything is searched.
+ *
+ * Deliberately naive: this strips `//…`, `/*…*` + `/` and nothing else. It can mangle a `//` inside a
+ * string literal, which for THIS test only risks a false FAILURE (a class that is emitted looking
+ * absent) — never a false pass. Erring that way round is the whole point.
+ */
+function stripComments(src: string): string {
+    return src.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+}
+
 function readSources(): string {
     const out: string[] = [];
     const walk = (dir: string) => {
@@ -36,10 +57,16 @@ function readSources(): string {
         for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
             const p = path.join(dir, e.name);
             if (e.isDirectory()) walk(p);
-            else if (/\.tsx?$/.test(e.name)) out.push(fs.readFileSync(p, 'utf8'));
+            else if (/\.tsx?$/.test(e.name)) out.push(stripComments(fs.readFileSync(p, 'utf8')));
         }
     };
     for (const d of SOURCE_DIRS) walk(path.join(REPO, d));
+    for (const f of SOURCE_FILES) {
+        const p = path.join(REPO, f);
+        // A listed file that has moved would silently stop being scanned, so fail loudly instead.
+        if (!fs.existsSync(p)) throw new Error(`SOURCE_FILES entry does not exist: ${f}`);
+        out.push(stripComments(fs.readFileSync(p, 'utf8')));
+    }
     return out.join('\n');
 }
 
@@ -69,6 +96,25 @@ describe('chrome selector contract', () => {
         expect(chromeSelectors.length).toBeGreaterThanOrEqual(3);
         // The composites must be in scope, or this file is back to checking only the easy half.
         expect(chromeSelectors.some(([n]) => n.includes('.'))).toBe(true);
+    });
+
+    // The manifest now names the four PUBLIC CONTENT surfaces too — blog roll, search results, the
+    // single post's meta row, the comment thread — which until then had no framework class at all and
+    // so could not be styled by a theme except through Tailwind utilities. Those hooks are `className`
+    // strings in React with nothing else referencing them: delete one while renaming and the manifest
+    // keeps promising a selector that matches zero elements, which is the exact failure this file
+    // exists to catch. Asserting the ELEMENT KEYS are present is what keeps them inside the walk above
+    // — dropping a seed would otherwise just shrink the it.each list and still pass green.
+    it('covers the public content surfaces, not just the chrome', () => {
+        const names = new Set(chromeSelectors.map(([n]) => n));
+        for (const required of [
+            'postList', 'postCard', 'postCard.title', 'postCard.excerpt', 'postCard.meta',
+            'searchResults', 'searchResult', 'searchResult.title', 'searchForm',
+            'singlePost', 'postMeta', 'postMeta.author',
+            'comments', 'comments.form', 'comment', 'comment.author', 'comment.content',
+        ]) {
+            expect(names.has(required), `manifest element "${required}" is missing — the public-surface hooks are no longer covered`).toBe(true);
+        }
     });
 
     it.each(chromeSelectors)('%s → %s is emitted by the chrome markup', (_name, selector) => {

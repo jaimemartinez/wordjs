@@ -94,22 +94,25 @@ export default function CommentsSection({ postId }: { postId: number }) {
     // pre-declares e.g. --wjs-color-danger (a SOLID color) and would beat any Tailwind-parity
     // fallback, repainting today's render. Declared tokens are only used where their ui.css
     // default equals the current Tailwind value (--wjs-radius 0.5rem, --wjs-radius-lg 0.75rem).
-    const inputClass = "w-full px-4 py-2 border border-[var(--wjs-border-subtle,#e5e7eb)] rounded-[var(--wjs-form-input-radius,0.5rem)] bg-[var(--wjs-bg-surface,#fff)] text-[var(--wjs-color-text-main,#111827)] focus:ring-2 focus:ring-[var(--wjs-color-primary,#2563eb)] focus:border-transparent outline-none transition";
+    // `wjs-comment*` hooks are the theme contract: STABLE names alongside the Tailwind utilities, so a
+    // theme can style the thread declaratively. They carry no styling themselves; the manifest promises
+    // them and the chrome-selector contract test proves this markup still emits them.
+    const inputClass = "wjs-comment-field w-full px-4 py-2 border border-[var(--wjs-border-subtle,#e5e7eb)] rounded-[var(--wjs-form-input-radius,0.5rem)] bg-[var(--wjs-bg-surface,#fff)] text-[var(--wjs-color-text-main,#111827)] focus:ring-2 focus:ring-[var(--wjs-color-primary,#2563eb)] focus:border-transparent outline-none transition";
 
     return (
-        <div className="max-w-3xl mx-auto py-12 px-4 border-t border-[var(--wjs-border-subtle,#e5e7eb)] mt-12 bg-[var(--wjs-bg-muted,#f9fafb)] rounded-[var(--wjs-radius-lg,0.75rem)]">
-            <h3 className="text-2xl font-bold text-[var(--wjs-color-heading,#111827)] mb-8">
+        <div className="wjs-comments max-w-3xl mx-auto py-12 px-4 border-t border-[var(--wjs-border-subtle,#e5e7eb)] mt-12 bg-[var(--wjs-bg-muted,#f9fafb)] rounded-[var(--wjs-radius-lg,0.75rem)]">
+            <h3 className="wjs-comments-title text-2xl font-bold text-[var(--wjs-color-heading,#111827)] mb-8">
                 Comments ({comments.length})
             </h3>
 
             {/* Comments List */}
-            <div className="space-y-8 mb-12">
+            <div className="wjs-comment-list space-y-8 mb-12">
                 {comments.length === 0 ? (
-                    <p className="text-[var(--wjs-color-text-muted,#6b7280)] italic">No comments yet. Be the first to share your thoughts!</p>
+                    <p className="wjs-comments-empty text-[var(--wjs-color-text-muted,#6b7280)] italic">No comments yet. Be the first to share your thoughts!</p>
                 ) : (
                     comments.map((comment) => (
-                        <div key={comment.id} className="flex gap-4">
-                            <div className="flex-shrink-0">
+                        <div key={comment.id} className="wjs-comment flex gap-4">
+                            <div className="wjs-comment-avatar flex-shrink-0">
                                 {comment.authorAvatarUrl ? (
                                     <img
                                         src={comment.authorAvatarUrl}
@@ -121,14 +124,14 @@ export default function CommentsSection({ postId }: { postId: number }) {
                                 )}
                             </div>
                             <div className="flex-1 min-w-0">
-                                <div className="bg-[var(--wjs-bg-surface,#fff)] p-4 rounded-[var(--wjs-card-radius,0.5rem)] shadow-[var(--wjs-card-shadow,0_1px_3px_0_rgba(0,0,0,0.1),0_1px_2px_-1px_rgba(0,0,0,0.1))] border border-[var(--wjs-border-subtle,#e5e7eb)]">
-                                    <div className="flex justify-between items-start mb-2 gap-2">
-                                        <h4 className="font-bold text-[var(--wjs-color-heading,#111827)] break-words min-w-0">{comment.author}</h4>
-                                        <span className="text-xs text-[var(--wjs-color-text-muted,#6b7280)] shrink-0">
+                                <div className="wjs-comment-body bg-[var(--wjs-bg-surface,#fff)] p-4 rounded-[var(--wjs-card-radius,0.5rem)] shadow-[var(--wjs-card-shadow,0_1px_3px_0_rgba(0,0,0,0.1),0_1px_2px_-1px_rgba(0,0,0,0.1))] border border-[var(--wjs-border-subtle,#e5e7eb)]">
+                                    <div className="wjs-comment-head flex justify-between items-start mb-2 gap-2">
+                                        <h4 className="wjs-comment-author font-bold text-[var(--wjs-color-heading,#111827)] break-words min-w-0">{comment.author}</h4>
+                                        <span className="wjs-comment-date text-xs text-[var(--wjs-color-text-muted,#6b7280)] shrink-0">
                                             {new Date(comment.date).toLocaleDateString()}
                                         </span>
                                     </div>
-                                    <div className="prose prose-sm text-[var(--wjs-color-text-main,#374151)] max-w-none break-words overflow-x-auto [&_table]:block [&_table]:overflow-x-auto [&_pre]:overflow-x-auto" dangerouslySetInnerHTML={{ __html: sanitizeHTML(comment.content) }} />
+                                    <div className="wjs-comment-content prose prose-sm text-[var(--wjs-color-text-main,#374151)] max-w-none break-words overflow-x-auto [&_table]:block [&_table]:overflow-x-auto [&_pre]:overflow-x-auto" dangerouslySetInnerHTML={{ __html: sanitizeHTML(comment.content) }} />
                                 </div>
                             </div>
                         </div>
@@ -137,8 +140,8 @@ export default function CommentsSection({ postId }: { postId: number }) {
             </div>
 
             {/* Comment Form */}
-            <div className="bg-[var(--wjs-bg-surface,#fff)] p-6 rounded-[var(--wjs-card-radius,0.75rem)] shadow-[var(--wjs-card-shadow,0_1px_3px_0_rgba(0,0,0,0.1),0_1px_2px_-1px_rgba(0,0,0,0.1))] border border-[var(--wjs-border-subtle,#e5e7eb)]">
-                <h4 className="text-lg font-bold text-[var(--wjs-color-heading,#111827)] mb-4">Leave a Reply</h4>
+            <div className="wjs-comment-form bg-[var(--wjs-bg-surface,#fff)] p-6 rounded-[var(--wjs-card-radius,0.75rem)] shadow-[var(--wjs-card-shadow,0_1px_3px_0_rgba(0,0,0,0.1),0_1px_2px_-1px_rgba(0,0,0,0.1))] border border-[var(--wjs-border-subtle,#e5e7eb)]">
+                <h4 className="wjs-comment-form-title text-lg font-bold text-[var(--wjs-color-heading,#111827)] mb-4">Leave a Reply</h4>
 
                 {/* Alert bg tints (red-50/green-50) stay literal: the contract has no undeclared danger/
                     success-surface token, and --wjs-color-danger/success are pre-declared SOLIDS. */}
@@ -206,7 +209,7 @@ export default function CommentsSection({ postId }: { postId: number }) {
                     <button
                         type="submit"
                         disabled={submitting}
-                        className="px-6 py-2 bg-[var(--wjs-color-primary,#2563eb)] text-[var(--wjs-color-on-primary,#ffffff)] font-medium rounded-[var(--wjs-button-radius,0.5rem)] hover:opacity-90 disabled:opacity-50 transition shadow-[var(--wjs-button-shadow,0_1px_3px_0_rgba(0,0,0,0.1),0_1px_2px_-1px_rgba(0,0,0,0.1))]"
+                        className="wjs-comment-submit px-6 py-2 bg-[var(--wjs-color-primary,#2563eb)] text-[var(--wjs-color-on-primary,#ffffff)] font-medium rounded-[var(--wjs-button-radius,0.5rem)] hover:opacity-90 disabled:opacity-50 transition shadow-[var(--wjs-button-shadow,0_1px_3px_0_rgba(0,0,0,0.1),0_1px_2px_-1px_rgba(0,0,0,0.1))]"
                     >
                         {submitting ? "Posting..." : "Post Comment"}
                     </button>
