@@ -17,7 +17,8 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 
 const {
-    validateTemplate, CONTENT_SLOT, TEMPLATE_BLOCKS, FORBIDDEN_TEMPLATE_BLOCKS, TEMPLATE_LIMITS
+    validateTemplate, CONTENT_SLOT, TEMPLATE_BLOCKS, FORBIDDEN_TEMPLATE_BLOCKS, TEMPLATE_LIMITS,
+    TEMPLATE_TAGS, TEMPLATE_CLASS
 } = require('../core/template-validate');
 
 const tpl = (content: any) => ({ content });
@@ -80,6 +81,106 @@ test('a prop of the wrong primitive type is refused', () => {
     const r = validateTemplate(tpl([{ type: 'Grid', props: { columns: 'three', items: [slot] } }]));
     assert.strictEqual(r.ok, false);
     assert.ok(codes(r).includes('TPL_INVALID_PROP'), JSON.stringify(r.errors));
+});
+
+// ── 1b. the container wrapper: `tag` and `className` ──────────────────────────────────────────────
+//
+// Borrowed from Shopify, where a section's schema may declare `tag` (from a closed list of six) and
+// `class` (appended to the platform's own wrapper class). It is safe for the same reason the rest of
+// this file is: the theme picks from a set WE own and appends to a hook WE emit. These tests pin both
+// halves of that — the enum, and the fact that the class cannot be anything but a class.
+
+test('a container may pick its element NAME from the closed set, and only from it', () => {
+    for (const tag of TEMPLATE_TAGS) {
+        for (const type of ['Section', 'Grid', 'FlexRow', 'Columns']) {
+            const r = validateTemplate(tpl([{ type, props: { tag, items: [slot] } }]));
+            assert.strictEqual(r.ok, true, `${type}/${tag}: ${JSON.stringify(r.errors)}`);
+        }
+    }
+    // The set is Shopify's six exactly — and `main` is NOT in it: the public layout already emits
+    // <main id="main-content"> around every template, so a second one would be a nested landmark.
+    assert.deepStrictEqual([...TEMPLATE_TAGS].sort(), ['article', 'aside', 'div', 'footer', 'header', 'section']);
+    assert.ok(!TEMPLATE_TAGS.includes('main'));
+});
+
+test('a tag outside the enum is refused — the enum IS the security property', () => {
+    // Every one of these is a real element or a plausible-looking string. If any were accepted, the
+    // template would be choosing structure, which is the exact shape of the stored-XSS that shipped.
+    for (const tag of ['script', 'main', 'iframe', 'style', 'Section', 'SECTION', 'div ', 'svg', 'object',
+        'section><script>alert(1)</script', '', 'a']) {
+        const r = validateTemplate(tpl([{ type: 'Section', props: { tag, items: [slot] } }]));
+        assert.strictEqual(r.ok, false, `tag ${JSON.stringify(tag)} must be refused`);
+        assert.ok(codes(r).includes('TPL_INVALID_PROP'), `${tag}: ${JSON.stringify(r.errors)}`);
+    }
+    // …and a non-string cannot slip past the enum check either.
+    for (const tag of [1, true, null, ['div'], { toString: 'div' }]) {
+        assert.strictEqual(validateTemplate(tpl([{ type: 'Section', props: { tag, items: [slot] } }])).ok, false, JSON.stringify(tag));
+    }
+});
+
+test('`tag` and `className` are CONTAINERS-only — a leaf has no wrapper to name', () => {
+    for (const type of ['Spacer', 'Divider', CONTENT_SLOT]) {
+        for (const props of [{ tag: 'div' }, { className: 'hero' }]) {
+            const r = validateTemplate(tpl([{ type, props }, slot]));
+            assert.strictEqual(r.ok, false, `${type} ${JSON.stringify(props)}`);
+            assert.ok(codes(r).includes('TPL_UNKNOWN_PROP'), JSON.stringify(r.errors));
+        }
+    }
+});
+
+test('a className of up to three plain tokens is accepted', () => {
+    for (const className of ['hero', 'site-hero', 'hero site-hero', 'a b c', 'x'.repeat(1) + 'y'.repeat(39)]) {
+        const r = validateTemplate(tpl([{ type: 'Section', props: { className, items: [slot] } }]));
+        assert.strictEqual(r.ok, true, `${JSON.stringify(className)}: ${JSON.stringify(r.errors)}`);
+    }
+    assert.strictEqual(TEMPLATE_CLASS.MAX_TOKENS, 3);
+});
+
+test('a className that tries to be anything other than a class is REFUSED, not sanitized', () => {
+    // Sanitizing would turn an attack into a silently-different class name and tell the author nothing.
+    // Each entry is an escape a class-name field has historically been asked to survive.
+    for (const className of [
+        'hero" onclick="alert(1)',          // close the attribute
+        "hero' onmouseover='x",             // …with the other quote
+        'hero><script>alert(1)</script>',   // close the element
+        'hero{color:red}',                  // a rule body
+        '.hero',                            // a SELECTOR, not a class
+        '#hero',
+        'hero[data-x]',                     // an attribute selector
+        'hero:hover',
+        'hero,div',                         // a second selector via the comma
+        'hero/**/x',
+        'HERO',                             // uppercase
+        'Hero-Unit',
+        '1hero',                            // must start with a letter
+        '-hero',
+        'hero_unit',                        // underscore is outside the token
+        'hero\tunit',                       // tab, not a space
+        'hero\nunit',
+        'hero  unit',                       // double space: an empty token, refused not normalised
+        ' hero',                            // padded
+        'hero ',
+        'a b c d',                          // too many tokens
+        'one two three four five',
+        '',                                 // a no-op prop is a mistake worth reporting
+        'x'.repeat(41),                     // over the 40-char token cap
+        'hero ',
+        'héro',                             // non-ASCII
+    ]) {
+        const r = validateTemplate(tpl([{ type: 'Section', props: { className, items: [slot] } }]));
+        assert.strictEqual(r.ok, false, `className ${JSON.stringify(className)} must be refused`);
+        assert.ok(codes(r).includes('TPL_INVALID_PROP'), `${JSON.stringify(className)}: ${JSON.stringify(r.errors)}`);
+    }
+    // A non-string is not "no className" — it is a broken template.
+    for (const className of [1, true, null, ['hero'], { hero: true }]) {
+        assert.strictEqual(validateTemplate(tpl([{ type: 'Section', props: { className, items: [slot] } }])).ok, false, JSON.stringify(className));
+    }
+});
+
+test('the token pattern itself is the narrow one the contract advertises', () => {
+    // Pinned directly, because every rejection above is only as strong as this regex.
+    assert.strictEqual(TEMPLATE_CLASS.TOKEN.source, '^[a-z][a-z0-9-]{0,39}$');
+    assert.ok(!TEMPLATE_CLASS.TOKEN.flags.includes('m'), 'the `m` flag would let $ match before a newline');
 });
 
 // ── 2. the allowlist is closed, and "not here" differs from "no such thing" ────────────────────────

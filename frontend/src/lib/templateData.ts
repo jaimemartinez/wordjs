@@ -26,11 +26,43 @@ const MAX_BYTES = 64 * 1024;
 const MAX_BLOCKS = 100;
 const MAX_DEPTH = 4;
 
-type PropSpec = { kind: 'string' | 'number' | 'boolean' } | { kind: 'enum'; values: string[] };
+type PropSpec =
+    | { kind: 'string' | 'number' | 'boolean' }
+    | { kind: 'enum'; values: string[] }
+    | { kind: 'classlist' };
 const S: PropSpec = { kind: 'string' };
 const N: PropSpec = { kind: 'number' };
 const B: PropSpec = { kind: 'boolean' };
 const en = (...values: string[]): PropSpec => ({ kind: 'enum', values });
+
+/**
+ * The container wrapper affordance — MIRRORS TAGS/CLASS_TOKEN in backend/src/core/template-validate.ts.
+ *
+ * Adapted from Shopify, whose section `{% schema %}` may declare `tag` (the wrapper's element name, from
+ * a closed list of six) and `class` (APPENDED to the wrapper class Shopify emits). The enum is what makes
+ * it safe: the theme picks a name the platform owns, it never supplies structure.
+ *
+ * `main` is excluded on purpose — PublicLayoutShell already renders `<main id="main-content">` around
+ * every template, and a nested <main> is an invalid landmark.
+ */
+export const TEMPLATE_TAGS = ['article', 'aside', 'div', 'footer', 'header', 'section'] as const;
+export type TemplateTag = (typeof TEMPLATE_TAGS)[number];
+
+/** One class name. Narrow on purpose: no space, quote, bracket, dot, colon or slash can appear. */
+export const CLASS_TOKEN = /^[a-z][a-z0-9-]{0,39}$/;
+export const MAX_CLASS_TOKENS = 3;
+
+/** Space-separated, at most MAX_CLASS_TOKENS. Split on a single space so tabs/newlines/doubles FAIL. */
+export function classListOk(value: unknown): value is string {
+    if (typeof value !== 'string') return false;
+    if (value === '' || value !== value.trim()) return false;
+    const tokens = value.split(' ');
+    if (tokens.length > MAX_CLASS_TOKENS) return false;
+    return tokens.every((t) => CLASS_TOKEN.test(t));
+}
+
+const TAG: PropSpec = en(...TEMPLATE_TAGS);
+const CLASSNAME: PropSpec = { kind: 'classlist' };
 
 /**
  * Closed allowlist — mirrors BLOCKS in backend/src/core/template-validate.ts.
@@ -41,10 +73,10 @@ const en = (...values: string[]): PropSpec => ({ kind: 'enum', values });
  */
 const BLOCKS: Record<string, { props: Record<string, PropSpec>; slot: string | null }> = {
     [CONTENT_SLOT]: { props: {}, slot: null },
-    Section: { props: { background: S, padding: S, maxWidth: S }, slot: 'items' },
-    Grid: { props: { columns: N, gap: S, columnsTablet: N, columnsMobile: N }, slot: 'items' },
-    FlexRow: { props: { gap: S, align: en('start', 'center', 'end', 'stretch'), justify: en('start', 'center', 'end', 'between', 'around'), wrap: B, direction: en('row', 'column', 'row-reverse', 'column-reverse') }, slot: 'items' },
-    Columns: { props: { columns: N, gap: S }, slot: 'items' },
+    Section: { props: { background: S, padding: S, maxWidth: S, tag: TAG, className: CLASSNAME }, slot: 'items' },
+    Grid: { props: { columns: N, gap: S, columnsTablet: N, columnsMobile: N, tag: TAG, className: CLASSNAME }, slot: 'items' },
+    FlexRow: { props: { gap: S, align: en('start', 'center', 'end', 'stretch'), justify: en('start', 'center', 'end', 'between', 'around'), wrap: B, direction: en('row', 'column', 'row-reverse', 'column-reverse'), tag: TAG, className: CLASSNAME }, slot: 'items' },
+    Columns: { props: { columns: N, gap: S, tag: TAG, className: CLASSNAME }, slot: 'items' },
     Spacer: { props: { height: S }, slot: null },
     Divider: { props: { color: S, width: S, length: S, gap: S }, slot: null },
     // NOT IN v1: PostsGrid, CategoryPosts and SearchBar. They are the obvious things a theme wants in a
@@ -71,6 +103,10 @@ function propsOk(type: string, props: Record<string, unknown>): boolean {
         if (!ps) return false;
         if (ps.kind === 'enum') {
             if (typeof value !== 'string' || !ps.values.includes(value)) return false;
+            continue;
+        }
+        if (ps.kind === 'classlist') {
+            if (!classListOk(value)) return false;
             continue;
         }
         if (typeof value !== ps.kind) return false;
