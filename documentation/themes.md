@@ -928,10 +928,24 @@ by the validator *and* re-checked inside the block itself:
   `HERO`, `hero:hover`, `hero_unit`, `hero" onclick="…`, four tokens, a tab instead of a space — all of
   them fail the template rather than becoming a quietly different class name.
 
-`PostsGrid`, `CategoryPosts` and `SearchBar` are **not** in v1. They are the obvious things to want, and
-they are held back deliberately: each derives its content from the site, that content reaches a block as
-a prop the *page* supplies, and no such path exists for a template yet. Allowing them today would give
-you a template that validates and then renders an empty block.
+### The listing — a template's query loop
+
+`PostsGrid`, `CategoryPosts` and `SearchBar` may appear in a template, and this is what turns it from
+an arrangement of empty space into a blog layout.
+
+| Block | Props |
+| --- | --- |
+| `PostsGrid` | `count`, `columns`, `gap`, `bg`, `borderColor`, `radius`, `pad`, `thumbHeight` |
+| `CategoryPosts` | `count`, `categorySlug`, `layout` (`grid`/`list`), `columns`, `gap`, `bg`, `borderColor`, `radius`, `linkColor`, `headingColor` |
+| `SearchBar` | `placeholder`, `buttonText`, `align`, `width`, `inputBg`, `inputBorderColor`, `inputRadius`, `buttonBg`, `buttonColor`, `buttonRadius` |
+
+**The route decides which posts a listing shows.** On a search template the listing shows the search
+results; elsewhere it falls back to the latest published posts. A `categorySlug` that matches nothing
+falls back to the newest posts rather than showing an empty grid, and the block knows which of the two
+it got. Everything is resolved on the server, so the posts are in the HTML a crawler sees.
+
+These three were deliberately excluded until this data path existed, because a block that validates
+and then renders empty is exactly the failure the contract is built to prevent.
 
 ### What a template cannot do
 

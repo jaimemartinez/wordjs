@@ -25,8 +25,10 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
     const query = readQuery((await searchParams).q);
     const results = query ? await searchPosts(query) : [];
 
+    // The route hands the template its OWN results: a listing a theme places on the search template
+    // must answer the search, not show the newest posts.
     return (
-        <ThemeTemplate kind="search">
+        <ThemeTemplate kind="search" context={{ posts: results }}>
         {/* `wjs-*` hooks are the theme contract: STABLE names alongside the Tailwind utilities. They add
             no styling of their own — the manifest promises them and the chrome-selector contract test
             proves the markup still emits them. */}

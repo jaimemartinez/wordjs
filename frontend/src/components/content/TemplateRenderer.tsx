@@ -7,7 +7,10 @@ import {
     ColumnsBlock,
     SpacerBlock,
     DividerBlock,
+    PostsGridBlock,
+    CategoryPostsBlock,
 } from './blocks';
+import SearchBarBlock from './SearchBarBlock';
 
 /**
  * Renders a theme's page template: the arrangement comes from `templates/<name>.json`, and the page's
@@ -132,6 +135,24 @@ function renderBlock(block: TemplateBlock, content: Rendered, key: string): Rend
 
         case 'Divider':
             return <DividerBlock key={key} color={p.color} width={p.width} length={p.length} gap={p.gap} />;
+
+        // ── the query loop ─────────────────────────────────────────────────────────────────────────
+        //
+        // `resolvedPosts` is put on the props by resolveTemplateBlocks BEFORE this renders, and the
+        // `resolvedPosts → posts` mapping is the same one ContentRenderer does for a page — same
+        // component, same prop, so a listing in a template and a listing on a page are one thing.
+        //
+        // An unresolved tree reaches here with resolvedPosts undefined, and the block renders its own
+        // honest empty state rather than inventing titles. That is deliberate: this file must not be
+        // the thing that decides what a listing contains.
+        case 'PostsGrid':
+            return <PostsGridBlock key={key} {...p} posts={(p as any).resolvedPosts} />;
+
+        case 'CategoryPosts':
+            return <CategoryPostsBlock key={key} {...p} posts={(p as any).resolvedPosts} />;
+
+        case 'SearchBar':
+            return <SearchBarBlock key={key} {...p} />;
 
         default:
             // Unreachable for a validated tree. Rendering nothing (rather than throwing) keeps a drift

@@ -2,6 +2,7 @@ import React from 'react';
 import { getSettings, getThemeTemplate } from '@/lib/server-api';
 import { parseTemplate, templateCandidates } from '@/lib/templateData';
 import { TemplateRenderer } from './TemplateRenderer';
+import { resolveTemplateBlocks, type RouteContext } from '@/lib/resolveTemplateBlocks';
 
 /**
  * Wraps a route's content in the active theme's page template, when it ships one.
@@ -17,10 +18,17 @@ import { TemplateRenderer } from './TemplateRenderer';
 
 export interface ThemeTemplateProps {
     kind: 'home' | 'single' | 'page' | 'archive' | 'search';
+    /**
+     * What this route is already about, forwarded to any listing the template contains. A search
+     * route passes its results; an archive passes its category's posts. Omit it and a listing falls
+     * back to latest-published — right for a home page, wrong for a search page, which is exactly
+     * why this is the route's job to say and not the resolver's to guess.
+     */
+    context?: RouteContext;
     children: React.ReactNode;
 }
 
-export async function ThemeTemplate({ kind, children }: ThemeTemplateProps) {
+export async function ThemeTemplate({ kind, context, children }: ThemeTemplateProps) {
     const settings = await getSettings();          // cache()d — the layout already fetched this
     const slug = (settings?.template as string) || 'default';
 
@@ -29,7 +37,11 @@ export async function ThemeTemplate({ kind, children }: ThemeTemplateProps) {
     // and firing all three in parallel would fetch templates we then throw away.
     for (const name of templateCandidates(kind)) {
         const tree = parseTemplate(await getThemeTemplate(slug, name));
-        if (tree) return <TemplateRenderer template={tree}>{children}</TemplateRenderer>;
+        if (!tree) continue;
+        // Resolve BEFORE rendering: the posts must be in the server HTML, not fetched by the browser.
+        // A template made only of structure costs nothing here — the resolver returns it untouched.
+        const resolved = await resolveTemplateBlocks(tree, context);
+        return <TemplateRenderer template={resolved}>{children}</TemplateRenderer>;
     }
     return <>{children}</>;
 }
