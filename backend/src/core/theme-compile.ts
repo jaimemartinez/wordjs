@@ -9,13 +9,14 @@
  * which is what kills `red;} body{...}` style injection. url() is allowed only for the
  * theme's own /themes/<slug>/ assets. @import and author selectors cannot be expressed.
  *
- * LIMITATION — var() cannot appear in a "styles" DECLARATION value: substitution is only
- * resolved at render time, so css-tree answers matchProperty() with "Matching for a tree
- * with var() is not supported" and the declaration is refused as VALUE_INVALID. The route
- * for var() is the "tokens" map instead: token values land verbatim in `:root`, which is
- * where a reference to another token belongs — and a style key that RESOLVES to a token
- * takes that route too (the token grammar check below has no opinion on var() values for
- * the same reason). Same limitation, author-facing, in documentation/themes.md.
+ * var() IS accepted in a "styles" declaration value, and referencing a token is the normal
+ * thing for a theme to write. css-tree cannot match a value tree containing var() ("Matching
+ * for a tree with var() is not supported"), so instead of refusing the declaration the
+ * compiler collects every var() reference, requires each to be a REAL --wjs-* token in the
+ * manifest, and skips the property matcher for that value — stricter than plain CSS, not
+ * looser. See the TOKEN REFERENCES block below for why this is load-bearing: without it the
+ * only way to express a token was to inline its current value, which compiles identically and
+ * then ignores customizer overrides.
  *
  * compileTheme(dirOrSlug, { slug?, themesDir?, manifestPath?, dryRun?, derive? })
  *   → { css, diagnostics, stats }        (css = the complete marked block)

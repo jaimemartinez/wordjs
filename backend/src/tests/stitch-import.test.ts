@@ -1,15 +1,22 @@
 /**
  * Stitch import — the converter that replaces the by-hand Stitch → theme.json mapping.
  *
- * Driven by the REAL payload backend/themes/herbario/.design/stitch.json: expectations are
- * read back OUT of that fixture (never copied as literals), so the suite fails if either the
- * payload or the mapping drifts — the fixture-vs-producer trap the repo has hit before.
+ * Driven by a REAL Stitch export payload (tests/fixtures/stitch-fixture.ts) that the suite
+ * MATERIALISES itself into a throwaway .design/stitch.json: expectations are read back OUT of
+ * that file (never copied as literals), so the suite fails if either the payload or the mapping
+ * drifts — the fixture-vs-producer trap the repo has hit before.
+ *
+ * The payload used to be read out of an installed theme (backend/themes/herbario) at MODULE
+ * SCOPE. When that theme was deleted the file threw while being imported and all 22 cases below
+ * vanished from the run as a single failure. Hence two rules here: the fixture is self-contained
+ * (no installed theme is required), and every read of it happens INSIDE a test case, so a missing
+ * fixture is a loud failure per case instead of a silent disappearance.
  *
  * The contrast maths is re-implemented here on purpose. Hero legibility is the CLAIM this
  * converter makes, and a claim checked with the producer's own helper checks nothing.
  */
 
-const { describe, it } = require('node:test');
+const { describe, it, after } = require('node:test');
 const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
@@ -17,16 +24,34 @@ const path = require('path');
 
 const { designToTheme, applyDesignToTheme } = require('../core/stitch-import');
 const { compileTheme } = require('../core/theme-compile');
+const { STITCH_DESIGN } = require('./fixtures/stitch-fixture');
 
 const BACKEND_DIR = path.join(__dirname, '..', '..');
 const MANIFEST_PATH = path.join(BACKEND_DIR, 'public', 'theme-tokens.json');
-const FIXTURE_PATH = path.join(BACKEND_DIR, 'themes', 'herbario', '.design', 'stitch.json');
 
-const readFixture = (): any => JSON.parse(fs.readFileSync(FIXTURE_PATH, 'utf8'));
-const FIXTURE = readFixture();
-const NAMED: Record<string, string> = FIXTURE.designTheme.namedColors;
-const OPTS = { slug: 'herbario', manifestPath: MANIFEST_PATH };
-const MANIFEST_TOKENS: Set<string> = new Set(Object.keys(JSON.parse(fs.readFileSync(MANIFEST_PATH, 'utf8')).tokens));
+// Materialised lazily, on the first read from inside a test — nothing touches the disk while this
+// module is being imported, so no failure here can ever cost the run a registered case.
+let TMP_ROOT: string | null = null;
+const fixturePath = (root: string): string => path.join(root, '.design', 'stitch.json');
+
+function fixtureRoot(): string {
+    if (TMP_ROOT !== null) return TMP_ROOT;
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wordjs-stitch-fixture-'));
+    fs.mkdirSync(path.join(root, '.design'), { recursive: true });
+    fs.writeFileSync(fixturePath(root), JSON.stringify(STITCH_DESIGN, null, 2) + '\n');
+    TMP_ROOT = root;
+    return root;
+}
+
+after(() => { if (TMP_ROOT) { try { fs.rmSync(TMP_ROOT, { recursive: true, force: true }); } catch { /* best effort */ } } });
+
+const readFixture = (): any => {
+    const file = fixturePath(fixtureRoot());
+    assert.ok(fs.existsSync(file), `the stitch fixture was not materialised at ${file} — this suite verifies nothing without it`);
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
+};
+
+const OPTS = { slug: 'stitch-fixture', manifestPath: MANIFEST_PATH };
 
 const clone = (v: any): any => JSON.parse(JSON.stringify(v));
 const tmpDir = (tag: string): string => fs.mkdtempSync(path.join(os.tmpdir(), `wordjs-stitch-${tag}-`));
@@ -51,6 +76,8 @@ const dropReason = (dropped: any[], token: string): string | null => {
 
 describe('stitch-import — designToTheme', () => {
     it('maps the resolved Stitch palette onto the agreed tokens', () => {
+        const FIXTURE = readFixture();
+        const NAMED: Record<string, string> = FIXTURE.designTheme.namedColors;
         const { theme, dropped } = designToTheme(readFixture(), OPTS);
 
         // documentation/stitch-brief.md §1 — every pair read back from the fixture itself.
@@ -81,6 +108,8 @@ describe('stitch-import — designToTheme', () => {
     });
 
     it('seeds the palette from the overrides and the colour mode', () => {
+        const FIXTURE = readFixture();
+        const NAMED: Record<string, string> = FIXTURE.designTheme.namedColors;
         const { theme } = designToTheme(readFixture(), OPTS);
         assert.deepStrictEqual(theme.seeds, {
             primary: FIXTURE.designTheme.overridePrimaryColor.toLowerCase(),
@@ -116,6 +145,7 @@ describe('stitch-import — designToTheme', () => {
 
     it('applies the roundness to every radius, pill included', () => {
         const radii = ['--wjs-radius', '--wjs-radius-sm', '--wjs-radius-md', '--wjs-radius-lg', '--wjs-radius-pill'];
+        const FIXTURE = readFixture();
         const { theme } = designToTheme(readFixture(), OPTS);
         // ROUND_FOUR: crisp corners means the pill is 4px too, not 9999px.
         for (const token of radii) assert.strictEqual(theme.tokens[token], '4px', token);
@@ -136,6 +166,7 @@ describe('stitch-import — designToTheme', () => {
 
     it('lays out the spacing ladder from spacingScale', () => {
         const steps = ['--wjs-xs', '--wjs-sm', '--wjs-md', '--wjs-lg', '--wjs-xl', '--wjs-2xl'];
+        const FIXTURE = readFixture();
         const { theme } = designToTheme(readFixture(), OPTS);
         // Scale 2 is the framework's own rhythm (4/8/16/24px …).
         assert.deepStrictEqual(steps.map((t: string) => theme.tokens[t]), ['0.25rem', '0.5rem', '1rem', '1.5rem', '2.5rem', '4.5rem']);
@@ -181,6 +212,8 @@ describe('stitch-import — designToTheme', () => {
 
 describe('stitch-import — nothing invented', () => {
     it('writes no token the manifest does not know', () => {
+        const MANIFEST_TOKENS: Set<string> = new Set(Object.keys(JSON.parse(fs.readFileSync(MANIFEST_PATH, 'utf8')).tokens));
+        assert.ok(MANIFEST_TOKENS.size > 0, `${MANIFEST_PATH} declares no tokens — this test would check nothing`);
         const full = designToTheme(readFixture(), OPTS);
         for (const token of Object.keys(full.theme.tokens)) {
             assert.ok(MANIFEST_TOKENS.has(token), `${token} is not in the contract manifest`);
@@ -204,7 +237,7 @@ describe('stitch-import — nothing invented', () => {
     });
 
     it('drops the heading tokens the contract has no room for', () => {
-        const design = clone(FIXTURE);
+        const design = clone(readFixture());
         design.designTheme.typography = [
             { name: 'h1', fontSize: '3.5rem', letterSpacing: '-0.02em', lineHeight: '1.1' },
             { name: 'h4', fontSize: '1.5rem', letterSpacing: '0.02em' },   // --wjs-h4-tracking does not exist
@@ -222,8 +255,9 @@ describe('stitch-import — nothing invented', () => {
     });
 
     it('refuses a malformed seed colour outright', () => {
+        const NAMED: Record<string, string> = readFixture().designTheme.namedColors;
         for (const bad of ['#12345', 'rgb(47, 93, 80)', '2f5d50', '#2f5d5g', 42, null]) {
-            const design = clone(FIXTURE);
+            const design = clone(readFixture());
             design.designTheme.overridePrimaryColor = bad;
             design.designTheme.customColor = bad;
             if (bad === null) {
@@ -236,7 +270,8 @@ describe('stitch-import — nothing invented', () => {
     });
 
     it('skips the tokens a malformed or missing namedColor feeds', () => {
-        const design = clone(FIXTURE);
+        const NAMED: Record<string, string> = readFixture().designTheme.namedColors;
+        const design = clone(readFixture());
         design.designTheme.namedColors.outline = 'rgb(113, 121, 117)';
         delete design.designTheme.namedColors.error;
         const { theme, dropped, notes } = designToTheme(design, OPTS);
@@ -250,7 +285,7 @@ describe('stitch-import — nothing invented', () => {
     });
 
     it('normalises hex input to the shape theme-compile accepts', () => {
-        const design = clone(FIXTURE);
+        const design = clone(readFixture());
         design.designTheme.namedColors.background = '#FEF';
         design.designTheme.namedColors.on_surface = '#1D1C16';
         const { theme } = designToTheme(design, OPTS);
@@ -264,6 +299,7 @@ describe('stitch-import — the hero is readable', () => {
     const MIN = 4.5;
 
     it('puts the light-palette hero on the paper and keeps every word on it legible', () => {
+        const NAMED: Record<string, string> = readFixture().designTheme.namedColors;
         const { theme } = designToTheme(readFixture(), OPTS);
         const bg = theme.tokens['--wjs-hero-bg'];
         assert.strictEqual(bg, NAMED.background.toLowerCase(), 'no hero band in the design → the hero is the page');
@@ -285,7 +321,7 @@ describe('stitch-import — the hero is readable', () => {
     });
 
     it('walks the fallback chain when the design colour cannot be read on the band', () => {
-        const design = clone(FIXTURE);
+        const design = clone(readFixture());
         design.designTheme.namedColors.primary_container = '#f4efe4';       // barely off the paper
         design.designTheme.namedColors.on_surface_variant = '#efe9df';
         const { theme, notes } = designToTheme(design, OPTS);
@@ -297,7 +333,7 @@ describe('stitch-import — the hero is readable', () => {
     });
 
     it('stays legible on any palette, including one with no readable colour at all', () => {
-        const design = clone(FIXTURE);
+        const design = clone(readFixture());
         // Every text-ish colour collapsed onto a mid grey where neither black nor white is
         // comfortable: the chain must still terminate above 4.5:1.
         for (const key of Object.keys(design.designTheme.namedColors)) design.designTheme.namedColors[key] = '#777777';
@@ -310,7 +346,7 @@ describe('stitch-import — the hero is readable', () => {
     });
 
     it('honours a hero band the design does declare', () => {
-        const design = clone(FIXTURE);
+        const design = clone(readFixture());
         design.designTheme.hero = { background: '#12211C' };
         const { theme } = designToTheme(design, OPTS);
         assert.strictEqual(theme.tokens['--wjs-hero-bg'], '#12211c');
@@ -335,11 +371,12 @@ describe('stitch-import — applyDesignToTheme', () => {
     });
 
     it('refreshes what the design owns and preserves everything the author wrote', () => {
+        const NAMED: Record<string, string> = readFixture().designTheme.namedColors;
         const root = tmpDir('merge');
-        const dir = path.join(root, 'herbario');
+        const dir = path.join(root, 'stitch-fixture');
         fs.mkdirSync(dir, { recursive: true });
         const authored = {
-            name: 'Herbario',
+            name: 'Stitch Fixture',
             version: '1.0.4',
             description: 'Botica herbal.',
             author: 'Someone Real',
@@ -373,7 +410,7 @@ describe('stitch-import — applyDesignToTheme', () => {
         assert.deepStrictEqual(written.styles, authored.styles, 'styles are authorial');
         assert.deepStrictEqual(written.layout, authored.layout, 'layout is authorial');
         assert.strictEqual(written.screenshot, 'screenshot.png', 'unknown keys survive');
-        assert.strictEqual(written.name, 'Herbario');
+        assert.strictEqual(written.name, 'Stitch Fixture');
         assert.strictEqual(written.version, '1.0.4', 'the version is the author\'s to bump');
         assert.strictEqual(written.author, 'Someone Real');
         // Existing tokens keep their position; the new ones are appended.
@@ -388,11 +425,11 @@ describe('stitch-import — applyDesignToTheme', () => {
 
     it('lets an explicit option override the metadata already on disk', () => {
         const root = tmpDir('meta');
-        const dir = path.join(root, 'herbario');
+        const dir = path.join(root, 'stitch-fixture');
         fs.mkdirSync(dir, { recursive: true });
         fs.writeFileSync(path.join(dir, 'theme.json'), JSON.stringify({ name: 'Old', version: '2.0.0', tokens: {} }, null, 2));
-        const out = applyDesignToTheme(dir, readFixture(), { manifestPath: MANIFEST_PATH, name: 'Herbario', author: 'WordJS' });
-        assert.strictEqual(out.theme.name, 'Herbario');
+        const out = applyDesignToTheme(dir, readFixture(), { manifestPath: MANIFEST_PATH, name: 'Stitch Fixture', author: 'WordJS' });
+        assert.strictEqual(out.theme.name, 'Stitch Fixture');
         assert.strictEqual(out.theme.author, 'WordJS');
         assert.strictEqual(out.theme.version, '2.0.0');
         fs.rmSync(root, { recursive: true, force: true });
@@ -400,7 +437,7 @@ describe('stitch-import — applyDesignToTheme', () => {
 
     it('refuses a theme.json it cannot read rather than overwriting it', () => {
         const root = tmpDir('broken');
-        const dir = path.join(root, 'herbario');
+        const dir = path.join(root, 'stitch-fixture');
         fs.mkdirSync(dir, { recursive: true });
         const broken = '{ "tokens": { "--wjs-color-primary": "#000000" ';
         fs.writeFileSync(path.join(dir, 'theme.json'), broken);
@@ -413,9 +450,9 @@ describe('stitch-import — applyDesignToTheme', () => {
 describe('stitch-import — the output is a theme the compiler accepts', () => {
     it('compiles with no diagnostics at all', () => {
         const root = tmpDir('compile');
-        const dir = path.join(root, 'herbario');
-        applyDesignToTheme(dir, readFixture(), { slug: 'herbario', manifestPath: MANIFEST_PATH });
-        const result = compileTheme(dir, { slug: 'herbario', themesDir: root, manifestPath: MANIFEST_PATH, dryRun: true });
+        const dir = path.join(root, 'stitch-fixture');
+        applyDesignToTheme(dir, readFixture(), { slug: 'stitch-fixture', manifestPath: MANIFEST_PATH });
+        const result = compileTheme(dir, { slug: 'stitch-fixture', themesDir: root, manifestPath: MANIFEST_PATH, dryRun: true });
         assert.deepStrictEqual(result.diagnostics, [], 'the converter must not hand the compiler anything to complain about');
         assert.strictEqual(result.stats.errors, 0);
         assert.ok(result.stats.tokens > 40);
