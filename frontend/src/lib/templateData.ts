@@ -227,8 +227,25 @@ export interface TemplateQuery {
     postType?: string;
 }
 
-/** Lower-cased and trimmed, then shape-checked by TEMPLATE_NAME when the name is assembled. */
-const seg = (v: string | undefined): string => String(v ?? '').trim().toLowerCase();
+/**
+ * A name segment has to CARRY something. `bits.every(Boolean)` rejected an empty segment and nothing
+ * else, so a slug of `-` or `--` still composed `page--`: a name that passes TEMPLATE_NAME (a hyphen
+ * run is legal in it), can never match a file any theme would ship, and costs a guaranteed-404 fetch
+ * on every render of that route. Nothing unsafe was escaping — TEMPLATE_NAME is still the shape gate
+ * and nothing outside [a-z0-9-] ever reaches a URL — but the chain claimed to compose "ONLY from a
+ * part the route actually supplied", and a hyphen run is not a part.
+ *
+ * At least one alphanumeric, checked on EVERY bit (not only the ones that came through `seg`), so a
+ * future literal in the chain is held to the same rule as a route-supplied slug.
+ */
+const MEANINGFUL = /[a-z0-9]/;
+
+/** Lower-cased and trimmed, then shape-checked by TEMPLATE_NAME when the name is assembled. A
+ * segment with no alphanumeric collapses to '' here, which is what `join` then drops. */
+const seg = (v: string | undefined): string => {
+    const s = String(v ?? '').trim().toLowerCase();
+    return MEANINGFUL.test(s) ? s : '';
+};
 
 /**
  * Which templates a route asks for, MOST SPECIFIC FIRST. The renderer takes the first one the theme
@@ -240,8 +257,9 @@ export function templateCandidates(kind: TemplateKind, query: TemplateQuery = {}
     const type = seg(query.postType);
     // Compose ONLY from a part the route actually supplied. An empty slug would otherwise yield
     // `single-post-`, which passes the name pattern (a trailing hyphen is legal) and asks the theme
-    // for a file whose name means nothing — a candidate that can only ever be a mistake.
-    const join = (...bits: string[]): string => (bits.every(Boolean) ? bits.join('-') : '');
+    // for a file whose name means nothing — a candidate that can only ever be a mistake. MEANINGFUL,
+    // not Boolean: `-` and `--` are non-empty and just as meaningless (see the comment on `seg`).
+    const join = (...bits: string[]): string => (bits.every((b) => MEANINGFUL.test(b)) ? bits.join('-') : '');
     let chain: string[];
     switch (kind) {
         case 'home':
@@ -276,8 +294,11 @@ export function templateCandidates(kind: TemplateKind, query: TemplateQuery = {}
             chain = ['page'];
     }
     const out: string[] = [];
+    // The same two gates on the finished name: it must be a legal file name AND it must say something.
+    // Every literal above passes both; the pair is here so a name can never leave this function on one
+    // check alone, whichever branch produced it.
     for (const name of chain) {
-        if (!TEMPLATE_NAME.test(name) || out.includes(name)) continue;
+        if (!TEMPLATE_NAME.test(name) || !MEANINGFUL.test(name) || out.includes(name)) continue;
         out.push(name);
     }
     // Belt and braces: `page` is always a legal name, so this can only fire if the switch ever grows a

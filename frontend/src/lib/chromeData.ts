@@ -28,9 +28,28 @@ export interface ChromeData {
     content: ChromeBlock[];
 }
 
+// POSITION — MIRRORS DOCUMENT_SCOPED_BLOCKS / chromePositionFor in backend/src/core/chrome-validate.ts
+// (the authority; read the long comment there for the audit of all nine blocks).
+//
+// "chrome" is chrome/header.json + chrome/footer.json: the layout resolves each ONCE per document.
+// "part" is a NAMED TEMPLATE PART a page template pulls in — a page body may hold N of them. A block
+// that owns document-level state has no single-instance guarantee there, so it is refused.
+//
+// ChromeNav is the only one: its header/horizontal form mounts ChromeNavMobile, which portals into
+// document.body, writes document.body.style.overflow to lock page scroll, and binds a document
+// keydown listener. Two drawers restore overflow from each other's saved value and the page ends up
+// permanently unscrollable. Barred wholesale, not only for the prop pair that mounts the island —
+// which prop combination reaches the island is an internal of the block, not part of this contract.
+export const CHROME_DOCUMENT_SCOPED_BLOCKS: readonly ChromeBlockType[] = ["ChromeNav"];
+
+export type ChromePosition = "chrome" | "part";
+
 export interface ChromeParseContext {
     // Label prefixed to every error, e.g. "site" / "theme" — purely diagnostic.
     source?: string;
+    // Where this composition will render. Defaults to "chrome" (the site header/footer), the only
+    // position the write API can reach; the template-part resolver passes "part" explicitly.
+    position?: ChromePosition;
 }
 
 export interface ChromeParseResult {
@@ -124,6 +143,7 @@ const BLOCK_SPECS: Record<ChromeBlockType, Record<string, PropCheck>> = {
 
 export function parseChromeData(raw: unknown, ctx: ChromeParseContext = {}): ChromeParseResult {
     const where = ctx.source ? `${ctx.source}: ` : "";
+    const position: ChromePosition = ctx.position === "part" ? "part" : "chrome";
     const errors: string[] = [];
 
     if (raw === null || raw === undefined || raw === "") {
@@ -192,6 +212,13 @@ export function parseChromeData(raw: unknown, ctx: ChromeParseContext = {}): Chr
         // would slip past the closed allowlist (backend parity vector).
         if (typeof type !== "string" || !Object.prototype.hasOwnProperty.call(BLOCK_SPECS, type)) {
             errors.push(`${where}${path}: unknown block type "${String(type)}"`);
+            return;
+        }
+        // Position gate at EVERY depth — a barred block is just as document-scoped three ChromeRows
+        // down. Fail-closed like every other violation here: the whole part falls back to nothing
+        // rather than render a second scroll-lock owner into the page.
+        if (position === "part" && (CHROME_DOCUMENT_SCOPED_BLOCKS as readonly string[]).includes(type)) {
+            errors.push(`${where}${path}: ${type} may not appear in a named template part — it owns document-level state (body scroll-lock, a document keydown listener and a portal into document.body) and a page may render the part more than once`);
             return;
         }
         const spec = BLOCK_SPECS[type as ChromeBlockType];

@@ -10,6 +10,7 @@ const router = express.Router();
 const Post = require('../models/Post');
 const { getOption } = require('../core/options');
 const { generateSitemap, generateRobotsTxt, generateRssFeed } = require('../core/seo-helper');
+const { toLanguageTag } = require('../core/language-tag');
 const { authenticate } = require('../middleware/auth');
 const { can } = require('../middleware/permissions');
 
@@ -110,7 +111,10 @@ router.get('/feed.xml', async (req: Request, res: Response) => {
         const siteUrl = await getOption('siteurl', `${req.protocol}://${req.get('host')}`);
         const title = await getOption('blogname', 'WordJS Site');
         const description = await getOption('blogdescription', '');
-        const language = await getOption('WPLANG', 'en');
+        // WPLANG holds a LOCALE (`en_US` — core/i18n keys the translation files by that exact
+        // spelling); RSS <language> wants a BCP 47 TAG, whose subtag separator is a hyphen. Convert
+        // here, at the boundary, instead of storing a second spelling that could drift from the first.
+        const language = toLanguageTag(await getOption('WPLANG', 'en'));
 
         const posts = await Post.findAll({ type: 'post', status: 'publish', limit: 20 });
         const xml = generateRssFeed(posts, { siteUrl, title, description, language });

@@ -136,6 +136,22 @@ describe('site language + text direction (settings contract)', () => {
             { toString: 'x' },
             ['en'],
             true,
+            // A TRAILING NEWLINE, pinned explicitly. In Perl, Python and PHP `$` also matches just
+            // before a final line terminator, so an anchored regex that looks airtight there lets
+            // "en\n<script>…" through on the last line. JavaScript's `$` (without /m) does not — but
+            // that is a property of this language, not of this pattern, and the moment someone adds
+            // /m to LOCALE_RE or ports the check, every value below starts passing. So the four
+            // shapes that would exploit that are asserted rather than assumed.
+            'en\n',
+            'en\r\n',
+            'en\nes',
+            'en\n<script>alert(1)</script>',
+            '\nen',
+            'en\u0000',                     // NUL — truncates in anything C-ish downstream
+            'en\u2028',                     // LINE SEPARATOR: a line break to a JS parser
+            'en\u202Ertl',                  // RIGHT-TO-LEFT OVERRIDE smuggled into the tag
+            '\uFF45\uFF4E',                // full-width homoglyphs: looks like "en", is not [A-Za-z]
+            'a'.repeat(5000),                // an option row used as a payload
         ];
         for (const value of hostile) {
             const res = await asAdmin(request(app).put('/api/v1/settings/WPLANG')).send({ value });
@@ -149,7 +165,15 @@ describe('site language + text direction (settings contract)', () => {
         const before = await optionValue('site_text_direction');
         assert.strictEqual(before, 'rtl');
 
-        for (const value of ['RTL', 'rtl ', 'inherit', 'rtl" dir="ltr', 'ltr;', 'rtl><script>', 0, 1, {}, ['rtl']]) {
+        // `site_text_direction` is compared against a three-literal array, so the only way to defeat
+        // it is to smuggle something a LATER reader trims, folds or truncates back into one of the
+        // three. Case, surrounding space, a trailing newline (see the `$` note above — the same trap
+        // in list form) and a NUL are all exactly that, and none of them may be stored.
+        for (const value of [
+            'RTL', 'rtl ', 'inherit', 'rtl" dir="ltr', 'ltr;', 'rtl><script>',
+            'rtl\n', '\nltr', 'auto\r\n', 'ltr\u0000', '\u202Ertl', 'Rtl',
+            0, 1, {}, ['rtl'],
+        ]) {
             const res = await asAdmin(request(app).put('/api/v1/settings/site_text_direction')).send({ value });
             assert.strictEqual(res.status, 400, `${JSON.stringify(value)} must be rejected, got ${res.status}`);
             assert.strictEqual(await optionValue('site_text_direction'), before, `${JSON.stringify(value)} must not have been stored`);

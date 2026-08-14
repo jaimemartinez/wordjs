@@ -163,6 +163,18 @@
   --wjs-border-radius: var(--wjs-radius);
   --wjs-space-md: var(--wjs-spacer);
   --wjs-space-sm: calc(var(--wjs-spacer) * 0.5);
+
+  /* --- RTL renames -----------------------------------------------------------------------
+   * Same mechanism, different reason: the RTL pass turned a physical declaration into a LOGICAL
+   * one, which left the token's name saying the opposite of what it now sets. The manifest is the
+   * contract a theme author reads, so the canonical name follows the property
+   * (`--wjs-cta-button-margin-start` → `margin-inline-start`) and the old physical name stays here
+   * as an alias: a theme that already declares `--wjs-cta-button-ml` keeps working unchanged, and
+   * the doctor's ALIAS_OVERRIDE points its author at the canonical name.
+   * The `, 0` is NOT redundant — without it this declaration is invalid-at-computed-value-time
+   * whenever no theme sets the canonical, and the alias would resolve to the guaranteed-invalid
+   * value rather than to a real length. */
+  --wjs-cta-button-ml: var(--wjs-cta-button-margin-start, 0);
 }
 
 /* ------------------------------------------------------------------ REBOOT - */
@@ -1989,6 +2001,8 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   align-items: center;
   justify-content: center;
   order: var(--wjs-cta-button-order, 0);
+  /* Reads the ALIAS on purpose: the alias is what carries a theme that still declares the old
+   * `-ml` name, and it defaults to the canonical `--wjs-cta-button-margin-start`. */
   margin-inline-start: var(--wjs-cta-button-ml, 0);
   gap: var(--wjs-sm);
   padding: var(--wjs-cta-button-pad, 14px 28px);

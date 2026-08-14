@@ -137,7 +137,9 @@ const derivedSetting = (key: string) =>
 // locale. The three real values are exactly HTML's `dir` enum.
 const TEXT_DIRECTIONS = ['', 'ltr', 'rtl', 'auto'];
 // language [ - script ] [ - region ]. Underscore form ('es_ES') is what the WPLANG option has
-// always used, so it is accepted and normalized on read by the frontend resolver. Deliberately
+// always used (core/i18n keys the translation files by it), so it is accepted and normalized to a
+// BCP 47 tag on READ by whoever renders it — core/language-tag for the RSS <language>, the frontend
+// resolver for <html lang>. Both hyphenate; neither rewrites the stored value. Deliberately
 // narrower than full BCP 47: extensions/variants/private-use have no consumer here and every
 // character admitted ends up in an attribute.
 const LOCALE_RE = /^[A-Za-z]{2,3}([-_][A-Za-z]{4})?([-_]([A-Za-z]{2}|[0-9]{3}))?$/;

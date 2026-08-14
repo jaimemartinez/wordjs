@@ -176,7 +176,12 @@ function getPluralForm(n: number, locale: string) {
 }
 
 /**
- * Set the current locale
+ * Set the current locale.
+ *
+ * WPLANG holds the LOCALE spelling (`es_ES`), and it must keep holding it: the translation files and
+ * getAvailableLocales() above are keyed by exactly that string. Renderers that need a BCP 47 LANGUAGE
+ * TAG (`es-ES`) — the RSS <language>, <html lang> — convert on read (core/language-tag,
+ * frontend/src/lib/documentLanguage), so do not "normalize" the stored value here.
  */
 function setLocale(locale: string) {
     currentLocale = locale;

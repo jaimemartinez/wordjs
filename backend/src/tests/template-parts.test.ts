@@ -14,6 +14,9 @@
  *      half-load its parts.
  *   4. THE TWO COPIES OF THE CONSTANTS ARE IDENTICAL. template-validate re-declares the name pattern
  *      and the area enum so it keeps loading alone; nothing but a test stops those from drifting.
+ *   5. THE ALLOWLIST IS NARROWER IN A PART THAN IN THE SITE CHROME. A part renders inside the page
+ *      body and a template may place it N times, so a block that owns DOCUMENT-LEVEL state has no
+ *      single-instance guarantee there. See the POSITION section at the bottom of this file.
  */
 
 const { test } = require('node:test');
@@ -21,7 +24,9 @@ const assert = require('node:assert');
 
 const {
     validateTemplateParts, TEMPLATE_PART_AREAS, TEMPLATE_PART_NAME, TEMPLATE_PART_RESERVED,
-    MAX_TEMPLATE_PARTS
+    MAX_TEMPLATE_PARTS,
+    validateChromeData, chromePositionFor, CHROME_SITE_PARTS, CHROME_BLOCK_TYPES,
+    CHROME_DOCUMENT_SCOPED_BLOCKS
 } = require('../core/chrome-validate');
 const {
     validateTemplate, CONTENT_SLOT, templatePartRefs,
@@ -148,4 +153,104 @@ test('the part-name pattern is the one the renderer guards a URL with', () => {
     // frontend/src/lib/server-api.ts (getThemeTemplate / getThemeChrome) tests names against this exact
     // literal before fetching. If this assertion has to change, that guard changes with it.
     assert.strictEqual(TEMPLATE_PART_NAME.source, '^[a-z0-9-]{1,40}$');
+});
+
+// ── the POSITION gate ──────────────────────────────────────────────────────────────────────────────
+//
+// Template parts widened chrome from "two files the layout renders ONCE" to "arbitrary files a page
+// body can pull in N times". ChromeNav's mobile drawer was written for the first world: it portals to
+// document.body, writes document.body.style.overflow to lock page scroll, and binds a document-level
+// keydown listener. Two instances save and restore that one global from each other, so closing one
+// drawer can leave the page permanently unscrollable. The allowlist is therefore NARROWER in the
+// template-part position than in the site header/footer, where a single instance is guaranteed.
+
+const nav = { type: 'ChromeNav', props: { location: 'header', orientation: 'horizontal' } };
+const comp = (content: any) => ({ root: { props: {} }, content });
+
+test('ChromeNav is allowed in the site header and footer — one instance per document is guaranteed', () => {
+    for (const part of CHROME_SITE_PARTS) {
+        const r = validateChromeData(comp([nav]), { part });
+        assert.strictEqual(r.ok, true, `${part}: ${JSON.stringify(r.errors)}`);
+    }
+    // No name at all is the site chrome too — the only position PUT /api/v1/chrome/:part can write.
+    assert.strictEqual(validateChromeData(comp([nav])).ok, true);
+});
+
+test('ChromeNav is REFUSED in a named template part, and the message says which block and why', () => {
+    const r = validateChromeData(comp([nav]), { part: 'promo' });
+    assert.strictEqual(r.ok, false);
+    assert.deepStrictEqual(codes(r), ['CHROME_BLOCK_NOT_IN_PART']);
+    const [e] = r.errors;
+    assert.strictEqual(e.path, 'content[0]');
+    assert.match(e.message, /ChromeNav/);
+    assert.match(e.message, /document\.body/);          // names the state that is fought over
+    assert.match(e.message, /more than once/);          // names the reason the guarantee is gone
+    assert.match(e.message, /chrome\/header\.json/);    // tells the author where it DOES belong
+});
+
+test('the bar holds at every depth — a ChromeRow is not a laundering route', () => {
+    const nested = comp([{
+        type: 'ChromeRow',
+        props: {
+            align: 'between', gap: 'md', items: [
+                { type: 'ChromeRow', props: { align: 'start', gap: 'sm', items: [nav] } }
+            ]
+        }
+    }]);
+    const r = validateChromeData(nested, { part: 'promo' });
+    assert.strictEqual(r.ok, false);
+    assert.deepStrictEqual(codes(r), ['CHROME_BLOCK_NOT_IN_PART']);
+    assert.strictEqual(r.errors[0].path, 'content[0].props.items[0].props.items[0]');
+    // …and the very same tree is fine as the site header.
+    assert.strictEqual(validateChromeData(nested, { part: 'header' }).ok, true);
+});
+
+test('a ChromeNav of ANY shape is refused in a part — the rule is the block, not a prop pair', () => {
+    // Only location:'header' + orientation:'horizontal' mounts the drawer TODAY. Pinning the rule to
+    // that pair would make this contract depend on an internal of the component, so a later change
+    // inside ChromeNav would re-open the hole with the validator still green.
+    for (const location of ['header', 'footer']) {
+        for (const orientation of ['horizontal', 'vertical']) {
+            const r = validateChromeData(comp([{ type: 'ChromeNav', props: { location, orientation } }]), { part: 'promo' });
+            assert.strictEqual(r.ok, false, `${location}/${orientation} must be refused`);
+            assert.deepStrictEqual(codes(r), ['CHROME_BLOCK_NOT_IN_PART']);
+        }
+    }
+});
+
+test('every OTHER block in the allowlist is still legal in a part — this narrows, it does not gut', () => {
+    // The audit behind CHROME_DOCUMENT_SCOPED_BLOCKS: the other eight blocks are presentational server
+    // components with no "use client", no hooks and no document/window access, so N instances are fine.
+    const legal: Record<string, any> = {
+        ChromeLogo: { size: 'md' },
+        ChromeSiteTitle: { showTagline: true },
+        ChromeSearch: { placeholder: 'Search' },
+        ChromeSocials: { source: 'settings' },
+        ChromeText: { text: 'hello' },
+        ChromeButton: { label: 'Go', href: '/x', variant: 'primary' },
+        ChromeSpacer: { size: 'sm' },
+        ChromeRow: { align: 'center', gap: 'md', items: [] },
+    };
+    for (const type of CHROME_BLOCK_TYPES) {
+        if (CHROME_DOCUMENT_SCOPED_BLOCKS.includes(type)) continue;
+        const r = validateChromeData(comp([{ type, props: legal[type] }]), { part: 'promo' });
+        assert.strictEqual(r.ok, true, `${type}: ${JSON.stringify(r.errors)}`);
+    }
+    // And the barred set is exactly the one the audit found — a silent addition here is a contract change.
+    assert.deepStrictEqual(CHROME_DOCUMENT_SCOPED_BLOCKS, ['ChromeNav']);
+});
+
+test('the position is DERIVED from the name, and no part name can reach the lenient branch', () => {
+    assert.strictEqual(chromePositionFor(undefined), 'chrome');
+    assert.strictEqual(chromePositionFor('header'), 'chrome');
+    assert.strictEqual(chromePositionFor('footer'), 'chrome');
+    assert.strictEqual(chromePositionFor('promo'), 'part');
+    assert.strictEqual(chromePositionFor(''), 'part');
+    // The lenient branch is reachable only by the two names validateTemplateParts REFUSES as part
+    // names, which is what closes the loop: a declared part can never be called 'header'/'footer'.
+    for (const name of CHROME_SITE_PARTS) {
+        assert.deepStrictEqual(codes(validateTemplateParts([{ name, area: 'general' }])), ['PARTS_RESERVED_NAME']);
+        assert.strictEqual(chromePositionFor(name), 'chrome');
+    }
+    assert.deepStrictEqual(CHROME_SITE_PARTS, TEMPLATE_PART_RESERVED);
 });

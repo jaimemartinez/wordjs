@@ -1087,15 +1087,20 @@ async function initialize() {
         // POST /api/v1/themes/default. Both problems below are non-fatal by design: the site still
         // renders (the framework's own :root tokens in public/css/wordjs-ui.css are the floor), so the
         // job here is to make the degradation LOUD instead of silent.
-        const { verifyDefaultTheme, isActiveThemeMissing, getCurrentTheme } = require('./core/themes');
+        //
+        // WARN ONLY WHERE THERE IS SOMETHING TO DO. A site may legitimately not have themes/default at
+        // all — deleteTheme() permits removing it when it is neither active nor the last theme — so
+        // "the default theme does not exist" is not a fault and must not be reported on every restart:
+        // a warning that fires forever on a legal configuration teaches the admin to ignore the
+        // console, and then the real one below goes unread too. defaultThemeNeedsAttention() keeps the
+        // case no supported operation can produce (the directory is there but incomplete → corruption);
+        // absent-and-active is reported by the active-theme warning instead, which names the slug.
+        const { verifyDefaultTheme, defaultThemeNeedsAttention, isActiveThemeMissing, getCurrentTheme } = require('./core/themes');
         const defaultTheme = verifyDefaultTheme();
-        if (!defaultTheme.ok) {
-            const what = defaultTheme.exists
-                ? `is missing ${defaultTheme.missing.join(', ')}`
-                : 'does not exist';
+        if (defaultThemeNeedsAttention(defaultTheme)) {
             console.warn('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-            console.warn(`⚠️  The bundled default theme ${what}: ${defaultTheme.dir}`);
-            console.warn('   Boot no longer re-creates theme files. Restore it deliberately with:');
+            console.warn(`⚠️  The bundled default theme is missing ${defaultTheme.missing.join(', ')}: ${defaultTheme.dir}`);
+            console.warn('   An incomplete theme directory is not something WordJS creates — restore it with:');
             console.warn('     POST /api/v1/themes/default   (admin — "Restore default theme")');
             console.warn('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         }

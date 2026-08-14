@@ -21,6 +21,16 @@ const chromeFiles: Record<string, string> = {
     promo: JSON.stringify({ root: { props: {} }, content: [{ type: 'ChromeText', props: { text: 'Promo' } }] }),
     secret: JSON.stringify({ root: { props: {} }, content: [{ type: 'ChromeText', props: { text: 'Not yours' } }] }),
     broken: JSON.stringify({ root: { props: {} }, content: [{ type: 'ChromeIframe', props: {} }] }),
+    // Every block, prop and href below is legal — as the SITE HEADER. In a template part it is not:
+    // ChromeNav mounts the mobile drawer, which owns document.body's scroll-lock, and a template may
+    // place a part more than once. Nested, so the gate is exercised below the top level.
+    navpart: JSON.stringify({
+        root: { props: {} },
+        content: [{ type: 'ChromeRow', props: { align: 'between', gap: 'md', items: [
+            { type: 'ChromeLogo', props: { size: 'md' } },
+            { type: 'ChromeNav', props: { location: 'header', orientation: 'horizontal' } },
+        ] } }],
+    }),
 };
 const getThemeChrome = vi.fn(async (_slug: string, part: string) => chromeFiles[part] ?? null);
 vi.mock('@/lib/server-api', () => ({
@@ -138,6 +148,23 @@ describe('resolveTemplateBlocks — named template parts', () => {
         manifest.mockResolvedValueOnce(JSON.stringify({ templateParts: [{ name: 'broken', area: 'general' }] }));
         const out = await resolveTemplateBlocks(tree([part('broken')]), {}, 'my-theme');
         expect(firstPart(out).props.resolvedPart).toBeUndefined();
+    });
+
+    // THE RUNTIME HALF OF THE POSITION GATE. A theme is installed by copying files, so the doctor is
+    // advice — this is the thing that actually stops a document-scoped block from reaching a page.
+    it('leaves a declared part unresolved when it holds a block barred from the part position', async () => {
+        manifest.mockResolvedValueOnce(JSON.stringify({ templateParts: [{ name: 'navpart', area: 'general' }] }));
+        const out = await resolveTemplateBlocks(tree([part('navpart')]), {}, 'my-theme');
+        expect(firstPart(out).props.resolvedPart).toBeUndefined();
+    });
+
+    it('the SAME composition is fine as site chrome — the bar is the position, not the block', async () => {
+        // parseChromeData with no position is the site-chrome branch, which is what the public layout
+        // uses for chrome/header.json. If this ever failed, the gate would be barring a block outright
+        // instead of narrowing it by position.
+        const { parseChromeData } = await import('../chromeData');
+        expect(parseChromeData(chromeFiles.navpart).ok).toBe(true);
+        expect(parseChromeData(chromeFiles.navpart, { position: 'part' }).ok).toBe(false);
     });
 
     it('drops EVERY part when the declaration itself is invalid (fail-closed as a whole)', async () => {

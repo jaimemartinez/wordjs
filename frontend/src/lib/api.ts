@@ -588,6 +588,18 @@ export interface Theme {
 export const themesApi = {
     list: () => apiGet<Theme[]>("/themes"),
     activate: (slug: string) => apiPost(`/themes/${slug}/activate`, {}),
+    /**
+     * Rewrite all eight files of `themes/default` (theme.json, functions.js, style.css, the two
+     * partials and the three templates) from the literals embedded in backend/src/core/themes.ts,
+     * bump its version, and drop the memoized theme scan + the public HTML cache. DESTRUCTIVE: this
+     * is the one path that clobbers, and any hand edit to those files is overwritten.
+     *
+     * This is the site's only recovery path when the active theme is gone from disk — boot no longer
+     * re-creates the default (createDefaultTheme runs at install and from here, nowhere else), so
+     * without this call the `active_theme_missing` state has no way out inside the product. It is the
+     * escape hatch the backend names in its own error messages and boot warnings.
+     */
+    restoreDefault: () => apiPost<{ success: boolean; message: string }>("/themes/default", {}),
     upload: (file: File, onProgress?: (percent: number) => void) => {
         return new Promise<{ success: boolean; message: string; slug: string }>((resolve, reject) => {
             const formData = new FormData();

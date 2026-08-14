@@ -261,7 +261,7 @@ level falls through to the next — fail-closed, never a partial render):
 | --- | --- |
 | `ChromeLogo` | `size?: "sm" \| "md" \| "lg"` |
 | `ChromeSiteTitle` | `showTagline?: boolean` |
-| `ChromeNav` | `location: "header" \| "footer"`, `orientation: "horizontal" \| "vertical"` |
+| `ChromeNav` | `location: "header" \| "footer"`, `orientation: "horizontal" \| "vertical"` — **site chrome only**, see the position rule below |
 | `ChromeSearch` | `placeholder?: string` |
 | `ChromeSocials` | `source: "settings"` |
 | `ChromeText` | `text: string` (plain text — always rendered escaped) |
@@ -299,6 +299,24 @@ chrome — the only two the public layout resolves on every page. Any other `chr
 declared in `theme.json` `templateParts` and referenced by a page template, and it is validated by
 this very contract. An undeclared file is unreachable and the doctor says so
 (`TEMPLATE_PART_UNDECLARED`).
+
+**…but the allowlist is NARROWER in a template part.** The site header and footer are resolved
+**once per document** by the public layout. A template part is not: a page template may place it more
+than once, and it renders inside the page body. A block that owns **document-level state** therefore
+has no single-instance guarantee there, so it is refused in that position:
+
+| Block | Refused in a template part because |
+| --- | --- |
+| `ChromeNav` | its mobile drawer portals into `document.body`, writes `document.body.style.overflow` to lock page scroll, and binds a document-level `keydown` listener. Two instances save and restore that one global from each other, so closing one drawer can leave the page permanently unscrollable. |
+
+The bar is on the **block**, not on a prop combination: only `location: "header"` +
+`orientation: "horizontal"` mounts the drawer today, but which props reach it is an internal of the
+component rather than part of this contract. Every other block in the table above is a presentational
+server component and stays legal in a part at any count.
+
+Violating this is `CHROME_INVALID` in the doctor with rule `CHROME_BLOCK_NOT_IN_PART`, and at runtime
+the part resolves to nothing. Keep the site's navigation in `chrome/header.json` /
+`chrome/footer.json`, which is also where a nav belongs as a landmark.
 
 ### Options with a dedicated write API
 
@@ -901,7 +919,7 @@ above still shows up here as `DECLARATIVE_*`:
 | Level | Code | Meaning |
 | --- | --- | --- |
 | error | `THEME_NOT_FOUND`, `STYLE_UNREADABLE` | No such theme dir (or a bad slug); `style.css` missing/unreadable. |
-| error | `CHROME_INVALID` | A composition the theme ships — `chrome/header.json`, `chrome/footer.json`, or any declared template part — violates the chrome contract, so the file is inert (the renderer falls through to the next level, or renders nothing for a part). One finding per offending block path. |
+| error | `CHROME_INVALID` | A composition the theme ships — `chrome/header.json`, `chrome/footer.json`, or any declared template part — violates the chrome contract, so the file is inert (the renderer falls through to the next level, or renders nothing for a part). One finding per offending block path. `detail.rule` carries the contract code — including `CHROME_BLOCK_NOT_IN_PART`, a block that owns document-level state placed in a **template part** rather than the site chrome. |
 | warning | `CHROME_UNREADABLE` | The chrome file cannot be read, or is not valid JSON. |
 | error | `TEMPLATE_PART_INVALID` | `theme.json` `templateParts` breaks its contract (bad name/area, a duplicate, `header`/`footer`, an unknown key, over 16). The declaration fails closed as a whole, so **no** part loads. |
 | error | `TEMPLATE_PART_MISSING` | A declared part has no `chrome/<name>.json` — a `TemplatePart` referencing it renders nothing. |
@@ -1298,13 +1316,22 @@ That is fixed, and the fix is a rule, not a patch:
 | Moment | What happens |
 | --- | --- |
 | **Install** (setup wizard) | Provisions `themes/default`. A site must not finish the wizard with an empty themes dir. |
-| **Boot** | **Verifies only.** `verifyDefaultTheme()` checks that `themes/default` exists and carries `theme.json` + `style.css`, and warns on the console if not. Writes nothing, ever. |
+| **Boot** | **Verifies only.** `verifyDefaultTheme()` checks that `themes/default` exists and carries `theme.json` + `style.css`. Writes nothing, ever, and warns only where there is something to do (below). |
 | **`POST /api/v1/themes/default`** | The admin's explicit *Restore default theme* — `createDefaultTheme(true)`, which overwrites all eight scaffold files and bumps the `theme.json` patch. The only path that clobbers. |
 
 `functions.js` and the five legacy Handlebars files
 (`partials/{header,footer}.html`, `templates/{index,single,archive}.html`) are **not** part of the
 completeness check: a theme with no `functions.js` legitimately owns no logic, and the Handlebars
 renderer has no live callers on the public site.
+
+**Boot warns only where an admin can act.** `themes/default` being **absent** is a supported
+configuration — `deleteTheme()` permits removing it once it is neither active nor the last theme
+installed — so boot says nothing about it: a warning that fires forever on a legal setup only teaches
+you to skim past the console, and then the real one goes unread too. `defaultThemeNeedsAttention()`
+(`backend/src/core/themes.ts`) keeps the state no supported operation can produce — the directory is
+**there but incomplete** (missing `theme.json` or `style.css`), i.e. corruption from a half-copied
+upload or an interrupted restore. The remaining bad state, *default absent **and** active*, is
+reported by the missing-active-theme warning below instead, which names the slug and both ways out.
 
 **The site always has a theme to fall back to.** `deleteTheme()` refuses twice, in core — so the admin
 UI and any API client hit the same wall — and both refusals answer **409** with a specific `code`

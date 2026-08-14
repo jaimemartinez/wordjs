@@ -532,7 +532,8 @@ function main() {
     if (manifest.counts.tokens < 700) { console.error(`FAIL: expected ~700+ unique tokens, got ${manifest.counts.tokens}`); failed = true; }
     if (!heroGroupsOk) { console.error('FAIL: --wjs-hero-* tokens missing or not grouped as "hero"'); failed = true; }
     if (!phantomsOk) { console.error('FAIL: chrome-phantom tokens missing'); failed = true; }
-    if (aliasNames.length !== 21) console.warn(`WARN: alias-flagged tokens = ${aliasNames.length} (expected 21): ${aliasNames.join(', ')}`);
+    // 21 Puck block aliases + 1 RTL rename alias (--wjs-cta-button-ml → --wjs-cta-button-margin-start).
+    if (aliasNames.length !== 22) console.warn(`WARN: alias-flagged tokens = ${aliasNames.length} (expected 22): ${aliasNames.join(', ')}`);
     if (failed) process.exitCode = 1;
 }
 

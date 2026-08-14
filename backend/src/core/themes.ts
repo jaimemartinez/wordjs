@@ -259,6 +259,30 @@ function verifyDefaultTheme(): { ok: boolean; dir: string; exists: boolean; miss
   return { ok: exists && missing.length === 0, dir, exists, missing };
 }
 
+/**
+ * Of the states verifyDefaultTheme() can report, which one is worth an admin's attention at boot?
+ *
+ * NOT "themes/default is absent". That is a SUPPORTED configuration: deleteTheme() deliberately
+ * permits removing the bundled default once it is neither active nor the last theme installed, and a
+ * site running a different, healthy theme is not broken by its absence — nothing renders from it, and
+ * `POST /api/v1/themes/default` can put it back at any time. Warning on every restart about a state
+ * the API grants on request is how an admin learns to skim past the console; the same change that
+ * added this check declined to fault the five legacy Handlebars files for exactly that reason.
+ *
+ * What IS actionable is a default directory that is THERE but incomplete — missing theme.json or
+ * style.css. No supported path produces that (createDefaultTheme writes all eight files, and delete
+ * removes the tree), so it is corruption: a half-copied upload, an interrupted restore, an editor
+ * that removed a file. Activating it would then degrade the whole site to the framework tokens.
+ *
+ * The remaining bad state — default absent AND the theme the site is configured to render — is not
+ * this function's to report: isActiveThemeMissing() already covers it, by slug, with the same restore
+ * instruction, and boot prints that warning instead. Two warnings for one fault is the same noise
+ * problem in a different shape.
+ */
+function defaultThemeNeedsAttention(report = verifyDefaultTheme()): boolean {
+  return !report.ok && report.exists;
+}
+
 /** getOption may hand back a parsed OBJECT or the raw JSON STRING — normalize to the string form. */
 function serializeOptionValue(value: any): string {
   if (value === null || value === undefined || value === '') return '';
@@ -1202,6 +1226,7 @@ module.exports = {
   getActiveThemeSnapshot,
   isActiveThemeMissing,
   verifyDefaultTheme,
+  defaultThemeNeedsAttention,
   DEFAULT_THEME_SLUG,
   REQUIRED_THEME_FILES,
   syncActiveThemeLayout,
