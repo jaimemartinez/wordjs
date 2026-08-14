@@ -114,7 +114,7 @@ export default async function HomePage() {
                                 </p>
 
                                 <Link href={`/${post.slug || post.id}`} className="wjs-post-card-more inline-flex items-center text-[var(--wjs-color-primary,#2563eb)] font-semibold hover:gap-2 transition-all">
-                                    Read Article <i className="fa-solid fa-arrow-right ml-2 text-sm"></i>
+                                    Read Article <i className="fa-solid fa-arrow-right ms-2 text-sm"></i>
                                 </Link>
                             </div>
                         </article>

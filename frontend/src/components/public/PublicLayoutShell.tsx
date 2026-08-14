@@ -85,7 +85,7 @@ export default function PublicLayoutShell({
             <div className="min-h-screen flex flex-col" style={shellStyle}>
                 <a
                     href="#main-content"
-                    className="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-[100] focus:px-4 focus:py-2 focus:rounded-lg focus:bg-[var(--wjs-color-primary,#2563eb)] focus:text-[var(--wjs-color-on-primary,#ffffff)] focus:shadow-lg"
+                    className="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:start-4 focus:z-[100] focus:px-4 focus:py-2 focus:rounded-lg focus:bg-[var(--wjs-color-primary,#2563eb)] focus:text-[var(--wjs-color-on-primary,#ffffff)] focus:shadow-lg"
                 >
                     Skip to content
                 </a>

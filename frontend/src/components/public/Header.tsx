@@ -209,7 +209,7 @@ export default function Header({ disableSticky = false, variant = "classic", sti
                 CHROME_ELEMENT_SEEDS). It was seeded but never emitted, so every theme that declared
                 a header style compiled a rule matching nothing — silently. The children hooks
                 (.wjs-header-logo / -nav / -container) were emitted all along; only the root was missing. */}
-            <header ref={headerRef} data-scrolled={isScrolled ? "true" : "false"} className={`wjs-header ${positionClass} top-0 left-0 right-0 z-50 transition-all duration-300 ${isScrolled ? scrolledBg : topBg}`}>
+            <header ref={headerRef} data-scrolled={isScrolled ? "true" : "false"} className={`wjs-header ${positionClass} top-0 inset-x-0 z-50 transition-all duration-300 ${isScrolled ? scrolledBg : topBg}`}>
                 {variant === "centered" ? (
                     /* centered: logo on top, nav in a row below; mobile keeps logo-left + burger-right */
                     <div className="wjs-header-container container mx-auto px-4 flex flex-col items-center gap-4">
@@ -246,13 +246,13 @@ export default function Header({ disableSticky = false, variant = "classic", sti
                 id="mobile-menu-panel"
                 inert={!mobileMenuOpen}
                 aria-hidden={!mobileMenuOpen}
-                className={`wjs-header-mobile-panel fixed top-0 right-0 z-50 h-full w-72 bg-[var(--wjs-bg-surface,white)] shadow-2xl transform transition-transform duration-300 ease-out${isMinimal ? "" : " md:hidden"} ${mobileMenuOpen ? "translate-x-0" : "translate-x-full"
+                className={`wjs-header-mobile-panel fixed top-0 end-0 z-50 h-full w-72 bg-[var(--wjs-bg-surface,white)] shadow-2xl transform transition-transform duration-300 ease-out${isMinimal ? "" : " md:hidden"} ${mobileMenuOpen ? "translate-x-0" : "translate-x-full rtl:-translate-x-full"
                     }`}
             >
                 <div className="p-6">
                     {/* Close Button */}
                     <button
-                        className="absolute top-4 right-4 w-10 h-10 rounded-full bg-[var(--wjs-bg-muted,#f3f4f6)] text-[var(--wjs-color-text-muted,#4b5563)] flex items-center justify-center hover:bg-[var(--wjs-border-subtle,#e5e7eb)] transition-colors"
+                        className="absolute top-4 end-4 w-10 h-10 rounded-full bg-[var(--wjs-bg-muted,#f3f4f6)] text-[var(--wjs-color-text-muted,#4b5563)] flex items-center justify-center hover:bg-[var(--wjs-border-subtle,#e5e7eb)] transition-colors"
                         onClick={() => setMobileMenuOpen(false)}
                         aria-label="Close menu"
                     >

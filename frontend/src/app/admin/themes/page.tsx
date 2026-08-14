@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useRef } from "react";
-import { themesApi, themesMarketplaceApi, Theme, ThemeMarketplaceEntry } from "@/lib/api";
+import { themesApi, themesMarketplaceApi, settingsApi, Theme, ThemeMarketplaceEntry } from "@/lib/api";
 import { useModal } from "@/contexts/ModalContext";
 import { useI18n } from "@/contexts/I18nContext";
 import { PageHeader, Button, EmptyState } from "@/components/ui";
@@ -14,6 +14,13 @@ export default function ThemesPage() {
     const [uploadProgress, setUploadProgress] = useState(0);
     const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
+
+    // Theme health. The `template` option can name a theme that is no longer on disk (deleted or
+    // renamed outside the app). The public site degrades correctly — it falls back to the framework's
+    // own :root tokens — but that degradation used to be invisible here: the list simply showed no
+    // "Active" badge and the site "looked wrong". The backend reports it as a derived boolean in the
+    // public settings payload (active_theme_missing); this banner is its consumer.
+    const [missingSlug, setMissingSlug] = useState<string | null>(null);
 
     // Theme marketplace (same catalog system as plugins, with its OWN configurable sources)
     const [tab, setTab] = useState<"installed" | "market">("installed");
@@ -125,6 +132,14 @@ export default function ThemesPage() {
             console.error("Failed to load themes:", error);
         } finally {
             setLoading(false);
+        }
+        // Re-read after every list refresh: activating or restoring a theme is exactly what CLEARS
+        // this, so the banner has to be able to go away on its own. Never blocks the list.
+        try {
+            const health = await settingsApi.getPublicHealth();
+            setMissingSlug(health.active_theme_missing === true ? (health.template || "?") : null);
+        } catch {
+            /* health is advisory — a failed read must not hide the themes */
         }
     };
 
@@ -285,6 +300,16 @@ export default function ThemesPage() {
                         <div className="flex items-center justify-between gap-2 pt-3 border-t border-gray-100">
                             <button type="button" onClick={resetSources} disabled={savingSrc} className="text-[11px] font-bold text-gray-500 hover:text-gray-800 disabled:opacity-50 uppercase tracking-widest">{t('themes.sources.resetDefault')}</button>
                             <Button onClick={saveSources} disabled={savingSrc}>{savingSrc ? t('common.saving') : t('themes.sources.save')}</Button>
+                        </div>
+                    </div>
+                )}
+
+                {missingSlug && (
+                    <div className="max-w-7xl mx-auto mb-8 p-5 rounded-2xl flex items-start gap-4 bg-amber-50 border border-amber-200 text-amber-800">
+                        <i className="fa-solid fa-triangle-exclamation text-xl mt-0.5"></i>
+                        <div>
+                            <p className="font-bold">{t('themes.missingActiveTitle')} <code className="font-mono bg-amber-100 px-1.5 py-0.5 rounded">{missingSlug}</code></p>
+                            <p className="text-sm mt-1">{t('themes.missingActiveHelp')}</p>
                         </div>
                     </div>
                 )}

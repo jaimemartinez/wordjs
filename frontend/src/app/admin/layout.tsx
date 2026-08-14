@@ -40,8 +40,16 @@ export default function DashboardLayout({
     // carries only inter.variable so the public tree can resolve fonts through wordjs-ui.css).
     // The wrapper covers every DashboardLayoutClient return path, including the fullscreen
     // Puck editor routes that bypass the admin shell.
+    //
+    // dir="ltr" is deliberate and TEMPORARY. The root layout now drives <html dir> from the site
+    // locale, which is right for the published site — but this dashboard is hand-built from
+    // physical Tailwind utilities (`left-4`, `pl-12`, `translate-x-6`, `-translate-y-1/2`) that do
+    // NOT follow the writing direction, so an RTL site would get an admin whose text flows one way
+    // and whose icons, toggles and sidebars flow the other. Pinning the subtree to ltr keeps the
+    // admin exactly as it is today instead of shipping a half-mirrored one; remove this the moment
+    // the dashboard's utilities are audited. The public tree is unaffected.
     return (
-        <div className={inter.className}>
+        <div dir="ltr" className={inter.className}>
             <DashboardLayoutClient>{children}</DashboardLayoutClient>
         </div>
     );

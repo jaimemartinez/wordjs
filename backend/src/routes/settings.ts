@@ -8,7 +8,7 @@ import type { Request, Response } from 'express';
 const express = require('express');
 const router = express.Router();
 const { getOption, updateOption } = require('../core/options');
-const { getActiveThemeVersion } = require('../core/themes');
+const { getActiveThemeVersion, isActiveThemeMissing } = require('../core/themes');
 const { authenticate } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
@@ -48,7 +48,9 @@ const PUBLIC_SETTINGS = [
     'users_can_register',
     // 'admin_email' - SECURITY: Removed from public to prevent email harvesting
     'default_role',
-    'comment_registration'
+    'comment_registration',
+    'WPLANG',               // site locale — drives <html lang> (and the RSS <language>, see routes/seo)
+    'site_text_direction'   // explicit <html dir> override: '' (derive from WPLANG) | ltr | rtl | auto
 ];
 
 // All settings that can be modified
@@ -106,12 +108,60 @@ const DERIVED_PUBLIC_SETTINGS: Record<string, () => Promise<any>> = {
     // theme.json `version` of the ACTIVE theme. The frontend appends it to the theme stylesheet URL
     // so an in-place theme edit (PUT /api/v1/themes/:slug bumps the patch) busts the browser/CDN
     // copy — the build-time asset version cannot see that edit. That route purges the 'settings' tag.
-    active_theme_version: getActiveThemeVersion
+    active_theme_version: getActiveThemeVersion,
+    // TRUE when the `template` option names a theme that is not on disk. The site keeps rendering —
+    // the framework's own :root tokens in public/css/wordjs-ui.css are the floor, and that fallback is
+    // correct — but nothing used to SAY so, so a deleted or renamed theme looked like a styling bug.
+    // Consumed by the admin themes screen (frontend/src/app/admin/themes/page.tsx), which renders a
+    // banner naming the missing slug, and mirrored by a boot-time warning in index.ts.
+    // Boolean, not a string: `Boolean("false")` is true, and a health flag that reads backwards when
+    // stringified is worse than no flag. Derived, so it can never drift from the directory on disk.
+    active_theme_missing: isActiveThemeMissing
 };
 
 const derivedSetting = (key: string) =>
     // hasOwnProperty, not `in`: `constructor`/`toString` must not resolve through the prototype.
     Object.prototype.hasOwnProperty.call(DERIVED_PUBLIC_SETTINGS, key) ? DERIVED_PUBLIC_SETTINGS[key] : null;
+
+// ---------------------------------------------------------------------------
+// Per-key write validation
+// ---------------------------------------------------------------------------
+// Most options are free text that only ever renders as TEXT. These two do not: they are written
+// verbatim into the `lang` and `dir` ATTRIBUTES of <html>, i.e. they choose document structure
+// rather than content. So they are validated here, at the write, against a closed shape — the same
+// posture as chrome-validate and template-validate, and a second independent gate in front of the
+// frontend's own fail-closed resolver (frontend/src/lib/documentLanguage.ts). A key with no entry
+// here keeps its existing unvalidated behaviour; adding one is opt-in and fail-closed.
+//
+// `site_text_direction` admits '' as the DERIVE sentinel: no override, take the direction from the
+// locale. The three real values are exactly HTML's `dir` enum.
+const TEXT_DIRECTIONS = ['', 'ltr', 'rtl', 'auto'];
+// language [ - script ] [ - region ]. Underscore form ('es_ES') is what the WPLANG option has
+// always used, so it is accepted and normalized on read by the frontend resolver. Deliberately
+// narrower than full BCP 47: extensions/variants/private-use have no consumer here and every
+// character admitted ends up in an attribute.
+const LOCALE_RE = /^[A-Za-z]{2,3}([-_][A-Za-z]{4})?([-_]([A-Za-z]{2}|[0-9]{3}))?$/;
+
+const SETTING_VALIDATORS: Record<string, (v: any) => string | null> = {
+    WPLANG: (v: any) => {
+        if (v === '' || v === null || v === undefined) return null; // unset → the resolver's "en"
+        if (typeof v !== 'string' || !LOCALE_RE.test(v)) {
+            return 'WPLANG must be a language tag like "en", "es_ES" or "ar-SA".';
+        }
+        return null;
+    },
+    site_text_direction: (v: any) => {
+        const s = v === null || v === undefined ? '' : v;
+        if (typeof s !== 'string' || !TEXT_DIRECTIONS.includes(s)) {
+            return 'site_text_direction must be one of "", "ltr", "rtl", "auto".';
+        }
+        return null;
+    },
+};
+
+/** null when the value is acceptable (or the key carries no validator), else the reason. */
+const settingWriteProblem = (key: string, value: any): string | null =>
+    Object.prototype.hasOwnProperty.call(SETTING_VALIDATORS, key) ? SETTING_VALIDATORS[key](value) : null;
 
 /**
  * @swagger
@@ -229,6 +279,20 @@ router.put('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: Re
     const updates = req.body;
     const updated: Record<string, any> = {};
 
+    // Validate the WHOLE payload before writing any of it: a bulk save that stored half its keys and
+    // then 400'd would leave the site in a state the admin never asked for.
+    for (const [key, value] of Object.entries(updates)) {
+        if (!ALL_SETTINGS.includes(key) || DEDICATED_WRITE_API.has(key)) continue;
+        const problem = settingWriteProblem(key, value);
+        if (problem) {
+            return res.status(400).json({
+                code: 'rest_invalid_param',
+                message: problem,
+                data: { status: 400, params: [key] }
+            });
+        }
+    }
+
     for (const [key, value] of Object.entries(updates)) {
         if (ALL_SETTINGS.includes(key) && !DEDICATED_WRITE_API.has(key)) {
             await updateOption(key, value);
@@ -276,6 +340,15 @@ router.put('/:key', authenticate, isAdmin, asyncHandler(async (req: Request, res
                 ? 'This setting is managed by its dedicated API (PUT /api/v1/chrome/:part).'
                 : 'Invalid setting key.',
             data: { status: 400 }
+        });
+    }
+
+    const problem = settingWriteProblem(key, value);
+    if (problem) {
+        return res.status(400).json({
+            code: 'rest_invalid_param',
+            message: problem,
+            data: { status: 400, params: [key] }
         });
     }
 

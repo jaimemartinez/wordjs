@@ -117,11 +117,11 @@ export default function ChromeNavMobile({ items }: { items: ChromeMenuItem[] }) 
                 id={panelId}
                 inert={!open}
                 aria-hidden={!open}
-                className={`wjs-header-mobile-panel fixed top-0 right-0 z-50 h-full w-72 bg-[var(--wjs-bg-surface,white)] shadow-2xl transform transition-transform duration-300 ease-out md:hidden ${open ? "translate-x-0" : "translate-x-full"}`}
+                className={`wjs-header-mobile-panel fixed top-0 end-0 z-50 h-full w-72 bg-[var(--wjs-bg-surface,white)] shadow-2xl transform transition-transform duration-300 ease-out md:hidden ${open ? "translate-x-0" : "translate-x-full rtl:-translate-x-full"}`}
             >
                 <div className="p-6">
                     <button
-                        className="absolute top-4 right-4 w-10 h-10 rounded-full bg-[var(--wjs-bg-muted,#f3f4f6)] text-[var(--wjs-color-text-muted,#4b5563)] flex items-center justify-center hover:bg-[var(--wjs-border-subtle,#e5e7eb)] transition-colors"
+                        className="absolute top-4 end-4 w-10 h-10 rounded-full bg-[var(--wjs-bg-muted,#f3f4f6)] text-[var(--wjs-color-text-muted,#4b5563)] flex items-center justify-center hover:bg-[var(--wjs-border-subtle,#e5e7eb)] transition-colors"
                         onClick={() => setOpen(false)}
                         aria-label="Close menu"
                     >

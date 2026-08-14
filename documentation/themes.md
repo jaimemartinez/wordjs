@@ -24,10 +24,12 @@ themes/
 │   ├── theme.json        # The theme: generator, seeds, tokens, styles, layout + metadata
 │   ├── fonts.css         # @font-face rules for the theme's own families, @import-ed from style.css
 │   ├── fonts/            # The .woff2 files those rules point at — one copy per theme
-│   ├── chrome/           # Optional: header.json / footer.json composable-chrome compositions
+│   ├── chrome/           # Optional: header.json / footer.json compositions, plus any NAMED TEMPLATE
+│   │                     # PART declared in theme.json `templateParts`
 │   ├── functions.js      # Optional: Theme logic/hooks, loaded by the backend theme engine
+│   ├── templates/        # Optional: <name>.json page templates (the hierarchy below); also the dead
+│   │                     # Handlebars index.html/single.html/archive.html — extension picks the system
 │   ├── screenshot.png    # Optional: Theme preview (also .jpg/.webp)
-│   ├── templates/        # Optional: Handlebars page templates (index.html, single.html, archive.html)
 │   ├── partials/         # Optional: Shared Handlebars partials (header.html, footer.html)
 │   └── .design/          # Marketplace source only: stitch.json, the design system the theme was built
 │                         # from — read by `verify theme` and the catalogue authoring scripts
@@ -291,6 +293,13 @@ Minimal `chrome/header.json`:
 violations are **errors** (`CHROME_INVALID`, with the offending block path); a file that cannot
 be read or parsed is a **warning** (`CHROME_UNREADABLE`).
 
+**`chrome/` can hold more than those two files.** `header.json` and `footer.json` are the *site*
+chrome — the only two the public layout resolves on every page. Any other `chrome/<name>.json` is a
+[named template part](#named-template-parts-themejson-templateparts--chromenamejson): it must be
+declared in `theme.json` `templateParts` and referenced by a page template, and it is validated by
+this very contract. An undeclared file is unreachable and the doctor says so
+(`TEMPLATE_PART_UNDECLARED`).
+
 ### Options with a dedicated write API
 
 **Five** theme-related options are **readable** through `GET /api/v1/settings` (the SSR public layout
@@ -332,8 +341,8 @@ nothing when empty, and `switchTheme()` resets it, so changing themes starts fro
 The narrative reference (core tables, alias/editor-internal rules, per-block groups) lives in
 [`theming.md`](./theming.md); the **complete machine-readable contract** is
 `backend/public/theme-tokens.json`, regenerated from `wordjs-ui.css` with
-`node scripts/generate-token-manifest.js`. The manifest currently tracks **753 tokens** and
-**1724 `var()` uses** across 73 name groups — mostly per-block groups such as `cta` (55),
+`node scripts/generate-token-manifest.js`. The manifest currently tracks **754 tokens** and
+**1715 `var()` uses** across 73 name groups — mostly per-block groups such as `cta` (55),
 `pricing` (49), `card` (40), `accordion` (38), `form` (37), `hero` (37), `audio` (34), `tabs` and
 `testimonial` (29 each), `search` (26), `button` (25).
 
@@ -358,6 +367,44 @@ The narrative reference (core tables, alias/editor-internal rules, per-block gro
   --wjs-border-subtle: #e5e7eb;
 }
 ```
+
+### `--wjs-color-scheme` — the browser's own widgets
+
+The one token that does not paint anything WordJS draws. It reaches the parts the **browser** draws:
+the viewport scrollbar, `<select>` / date / checkbox / radio widgets, the autofill background, the
+spellcheck underline, the default `Highlight` colours. A dark theme could restyle every surface it
+owned and still ship bright chrome bolted to a dark page, because `color-scheme` has to sit on the
+**root element** and a theme has no way to reach the root except through this contract.
+
+```jsonc
+// theme.json
+"tokens": {
+  "--wjs-color-scheme": "dark"       // normal (default) | light | dark | "light dark"
+}
+```
+
+`wordjs-ui.css` consumes it with `html { color-scheme: var(--wjs-color-scheme); }`. The default is
+`normal`, i.e. today's behaviour, so a theme that says nothing is unaffected.
+
+One honest limit: CSS's grammar for `color-scheme` is
+`normal | [ light | dark | <custom-ident> ]+ && only?`, and `<custom-ident>` matches **any**
+identifier — so the compiler cannot tell you that `"darc"` is a typo. It only rejects values that
+are not identifiers at all (a colour, a length, a quoted string).
+
+### Right-to-left
+
+`<html lang>` and `<html dir>` come from the **site**, not the theme: the *Site language* and *Text
+direction* settings (options `WPLANG` and `site_text_direction`) drive them, and the direction is
+derived from the locale unless overridden — Arabic, Hebrew, Persian, Urdu, Pashto, Sindhi, Uyghur,
+Yiddish, Divehi and Sorani Kurdish all resolve to `rtl`. A theme does not (and cannot) set them.
+
+What a theme *should* do is stay direction-agnostic. `wordjs-ui.css` uses logical properties
+(`margin-inline`, `padding-inline-start`, `border-inline-start`, `inset-inline-*`, `text-align:
+start`, `float: inline-start`) for everything structural, and the `.ms-*` / `.me-*` / `.ps-*` /
+`.pe-*` / `.border-start` / `.border-end` / `.start-0` / `.end-0` / `.float-start` / `.float-end`
+utilities are implemented on the inline axis, as their names claim. **Declarations written in a
+theme's `styles` block are passed through as-is**, so a theme that writes `margin-left` gets
+`margin-left` — prefer `margin-inline-start` if the theme is meant to work in both directions.
 
 ### Chrome (header/footer) tokens
 
@@ -588,7 +635,7 @@ closest-match suggestion.
 ```
 
 A flat map. The name must exist in the token manifest (`backend/public/theme-tokens.json`,
-753 tokens) — or be one of the documented `--wjs-footer-*` chrome-bridge tokens, which are valid
+754 tokens) — or be one of the documented `--wjs-footer-*` chrome-bridge tokens, which are valid
 even before the manifest learns them. Editor-internal `--wjs-r-*` tokens are rejected. Values
 follow the portable token rules: non-empty, ≤ 120 chars, charset `#a-zA-Z0-9 ,.%()/_'"-`
 (spaces allowed), no backslash, no `//`, no `url()`, and every parenthesis and quote **balanced**.
@@ -684,16 +731,93 @@ Inside states and breakpoints everything is a declaration — `styles.hero.butto
 becomes `.wp-block-hero__button:hover { background: … }` even though a `bg` token exists for the
 base level.
 
-> **`var()` is not accepted in a `styles` declaration value.** Grammar matching is what makes the
-> AST re-serialization safe, and a value containing `var()` cannot be matched against a property's
-> grammar — its substitution is only known at render time. css-tree reports *"Matching for a tree
-> with `var()` is not supported"*, which the compiler surfaces as `VALUE_INVALID`. So
-> `"styles": { "hero": { "box-shadow": "0 0 0 1px var(--wjs-border-subtle)" } }` fails to compile.
-> Workarounds, in order of preference: (1) use a key that **resolves to a token** so the value
-> lands in `:root` instead of in a declaration — token values *do* accept `var()`; (2) declare the
-> indirection in the `tokens` map and let `wordjs-ui.css` consume it; (3) write the literal value.
-> Hand-written CSS outside the `@wjs-generated` markers is unaffected — this limit applies only to
-> values the compiler generates.
+> **`var()` *is* accepted in a `styles` declaration value**, and referencing a token is the normal
+> thing for a theme to write: `"styles": { "hero": { "box-shadow": "0 0 0 1px var(--wjs-border-subtle)" } }`
+> compiles. css-tree cannot match a value tree containing `var()` (*"Matching for a tree with
+> `var()` is not supported"*), so instead of refusing the declaration the compiler collects every
+> `var()` reference and requires each to be a **real `--wjs-*` token in the manifest**, skipping the
+> property matcher for that value — stricter than plain CSS, not looser, since hand-written CSS
+> never told anyone that `var(--wjs-color-primry)` resolves to nothing. This matters beyond
+> convenience: with `var()` unavailable the only way to express a token was to inline the value it
+> currently resolves to, which compiles identically and then **ignores customizer overrides**,
+> because an override reaches the token and not the literal.
+
+### `styles.variations` — styling a class your own template names
+
+A page template may put a `className` on a container ([`tag` and `className`](#tag-and-classname--naming-a-container)),
+which is how a theme marks *this* Section as its hero. `styles.variations.<name>` is how it **styles**
+that class without leaving `theme.json`:
+
+```json
+"styles": {
+  "variations": {
+    "site-hero": {
+      "padding": "6rem 2rem",
+      "background": "var(--wjs-color-primary)",
+      "before": { "content": "\"\"", "display": "block" },
+      "mobile": { "padding": "3rem 1rem" }
+    }
+  }
+}
+```
+
+compiles to
+
+```css
+#main-content .site-hero { padding: 6rem 2rem; background: var(--wjs-color-primary) }
+#main-content .site-hero::before { content: ""; display: block }
+@media (max-width: 767.98px) {
+  #main-content .site-hero { padding: 3rem 1rem }
+}
+```
+
+`variations` is a **reserved key** inside `styles` — it is not an element name, and the manifest has
+no element called that. It is the same idea WordPress 6.6 shipped as block style variations in its
+own `theme.json`: a look, declared as data, with no code anywhere.
+
+**The name is a class token, not a selector.** `<name>` must match `^[a-z][a-z0-9-]{0,39}$` — the
+*same* pattern a template's `className` must match, imported from the template validator rather than
+restated, so a variation and the class it styles can only ever be the same string. That charset has
+no dot, colon, bracket, comma, space, `#`, `>` or quote, so `.<name>` is always **exactly one class
+selector**: a variation cannot grow an element selector, an id, an attribute selector, a pseudo-class
+of its own, a second selector after a comma, or a combinator. Anything else is rejected outright
+(`VARIATION_NAME_INVALID`) — never sanitized into a quietly different class.
+
+**The scope is the framework's content root.** `#main-content` is the `<main>` the public layout
+renders (`frontend/src/components/public/PublicLayoutShell.tsx`) and the element every page template
+renders inside — it is also why `main` is not in the template's `tag` enum. The prefix is a constant
+of the compiler and never derived from theme data, so it costs the theme nothing while bounding the
+blast radius: the class shape overlaps the utility classes the chrome uses (`container`, `grid` and
+`flex` are all valid variation names), and unscoped, a variation called `container` would repaint the
+header, the footer and every admin screen served the same stylesheet. Scoped, it can only reach what
+the theme's own template renders. The specificity that comes with it — (1,1,0) — is deliberate too: a
+variation is a *narrower* statement than `styles.<element>` and must win over it.
+
+Inside a variation you get the **same vocabulary** as an element, through the same compiler paths:
+states (`hover`, `focus`, `active`, `disabled`), positions (`first`, `last`), pseudo-elements
+(`before`, `after`, `placeholder`) and breakpoints (`mobile`, `tablet`, `desktop`, `belowDesktop`),
+composed in the order CSS requires. Two differences, both deliberate:
+
+- **No children.** The manifest describes the parts of a *framework block*; a variation is a
+  container the theme placed, so it owns its box and not the markup inside it. A nested key can only
+  be a state, position, pseudo-element or breakpoint — nothing that would emit a descendant selector.
+- **No token resolution.** Every property is a declaration on the scoped selector, never a `:root`
+  token. This is load-bearing rather than tidy: candidates are built from the key as written, so
+  `styles.variations.hero.bg` would otherwise find the real `--wjs-hero-bg` and repaint *every* hero
+  on the site instead of the containers the template marked.
+
+**The doctor pairs the two halves**, and this is the point of the feature rather than a nicety —
+each half validates perfectly on its own file while doing nothing:
+
+| Finding | Raised when |
+| --- | --- |
+| `VARIATION_UNUSED` | `theme.json` declares `styles.variations.<name>` but no template in the theme puts `className="<name>"` on a container — the compiled rule matches nothing. |
+| `VARIATION_UNDECLARED` | A template puts `className="<name>"` on a container, but there is no `styles.variations.<name>` **and** `style.css` never selects `.<name>` by hand — the class reaches the DOM with no style at all. |
+
+Both are warnings: the theme still renders. Classes in a template that fails the contract are
+ignored (an invalid template never renders), and a class the hand-written CSS outside the
+`@wjs-generated` markers already selects is not reported — migrating it into a variation is the
+advice, not the requirement.
 
 #### Caps
 
@@ -760,6 +884,7 @@ never be confused with the doctor's own).
 | `TOKENS_INVALID` / `TOKEN_NAME_INVALID` / `TOKEN_UNKNOWN` / `TOKEN_EDITOR_INTERNAL` | The `tokens` map, a token name, a name absent from the manifest (and not a `--wjs-footer-*` bridge token), or an editor-internal `--wjs-r-*`. |
 | `TOKEN_VALUE_INVALID` | A token value breaks the portable rules above (charset, length, `//`, `url()`, backslash, unbalanced parenthesis/quote) — including a `styles` key that resolves to a token. |
 | `STYLES_INVALID` / `ELEMENT_UNKNOWN` / `STYLE_UNKNOWN_KEY` / `STYLE_INVALID_VALUE` | The `styles` tree: not an object, an element outside the manifest's registry, a key that is not a child/state/breakpoint here (states cannot nest in states; breakpoints cannot nest in states or breakpoints), or a value that is neither string/number nor object. |
+| `VARIATIONS_INVALID` / `VARIATION_NAME_INVALID` | `styles.variations` is not an object, or a variation name is not a bare class token (`^[a-z][a-z0-9-]{0,39}$`, the same shape a template's `className` accepts). A rejected name emits **nothing** — no selector, no declaration. |
 | `PROPERTY_UNKNOWN` / `VALUE_TOO_LONG` / `VALUE_INVALID` / `URL_FORBIDDEN` | A declaration: non-standard property (or a `--custom` one, which only `tokens` may write), value over 300 chars, value that does not parse or does not match the property grammar (this is where `var()` lands), or a `url()` outside `/themes/<slug>/`. |
 | `TOO_MANY_DECLARATIONS` | Over the 2,000-declaration cap; the remaining declarations are dropped. |
 
@@ -776,8 +901,12 @@ above still shows up here as `DECLARATIVE_*`:
 | Level | Code | Meaning |
 | --- | --- | --- |
 | error | `THEME_NOT_FOUND`, `STYLE_UNREADABLE` | No such theme dir (or a bad slug); `style.css` missing/unreadable. |
-| error | `CHROME_INVALID` | `chrome/header.json` / `chrome/footer.json` violates the chrome contract — the file is inert (the renderer falls through to the next precedence level). One finding per offending block path. |
+| error | `CHROME_INVALID` | A composition the theme ships — `chrome/header.json`, `chrome/footer.json`, or any declared template part — violates the chrome contract, so the file is inert (the renderer falls through to the next level, or renders nothing for a part). One finding per offending block path. |
 | warning | `CHROME_UNREADABLE` | The chrome file cannot be read, or is not valid JSON. |
+| error | `TEMPLATE_PART_INVALID` | `theme.json` `templateParts` breaks its contract (bad name/area, a duplicate, `header`/`footer`, an unknown key, over 16). The declaration fails closed as a whole, so **no** part loads. |
+| error | `TEMPLATE_PART_MISSING` | A declared part has no `chrome/<name>.json` — a `TemplatePart` referencing it renders nothing. |
+| error | `TEMPLATE_PART_UNKNOWN` | A template references a part `theme.json` never declared. The renderer refuses undeclared names, so it renders nothing. |
+| warning | `TEMPLATE_PART_UNDECLARED` | A `chrome/*.json` that is neither the site header/footer nor declared — nothing can ever reference it. |
 | warning | `THEME_JSON_INVALID` | `theme.json` is not valid JSON — a warning here (not an error) because the site still renders from `parseThemeMetadata()`'s defaults. |
 | warning | `LAYOUT_UNKNOWN_KEY` / `LAYOUT_INVALID_VALUE` | The `layout` block against `backend/public/theme-layouts.schema.json`. |
 | warning | `UNKNOWN_TOKEN` / `ALIAS_OVERRIDE` / `EDITOR_INTERNAL` | A declared `--wjs-*` name that is not in the contract (with a did-you-mean), one of the 21 aliases, one of the 22 `--wjs-r-*`. |
@@ -785,6 +914,7 @@ above still shows up here as `DECLARATIVE_*`:
 | warning | `EXTERNAL_REF` | `http(s)://` or protocol-relative `//` in an `@import`/`url()`. |
 | warning | `GENERATED_MARKERS` | Not exactly one matched marker pair — a duplicate block wins the cascade, an unclosed one is never rewritten. Fix by recompiling. |
 | warning | `STALE_GENERATED` | `theme.json` has declarative sections but `style.css` has no generated block at all. |
+| warning | `VARIATION_UNUSED` / `VARIATION_UNDECLARED` | The [`styles.variations`](#stylesvariations--styling-a-class-your-own-template-names) × template pairing: a variation no template names, or a template class nothing styles. The only check that reads `theme.json` and `templates/` together — neither validator can see it alone. |
 | info | `LEGACY_THEME` | A `theme.json` with no `generator` stamp and none of the declarative sections — i.e. a hand-authored theme that predates the v1 contract. Purely a nudge: legacy themes keep working everywhere. |
 | info | `GENERATED_DRIFT` | The block on disk differs from what `theme.json` compiles to today. |
 | info | `IMPORTANT_CENSUS` / `UNPORTABLE_VALUE` | How many `!important`s the stylesheet uses; `:root` values the declarative sanitizer could not express. |
@@ -867,22 +997,46 @@ spot where the page's own content goes, and every matching route renders inside 
 page's content would vanish, with two it would render twice — duplicating every heading and `id` on the
 page.
 
-### Which file a route picks
+### Which file a route picks — the template hierarchy
 
-The renderer takes the first template the theme actually ships, most specific first:
+The renderer takes the first template the theme actually ships, **most specific first**. The shape is
+WordPress's (`single-{post_type}-{slug}` → `single-{post_type}` → `single` → `index`) and Shopify's
+alternate templates (`product.tall.json`), with the grammar kept closed: names are composed only from
+a route's own slug and post type, and nothing else.
 
-| Route | Tried in order |
-| --- | --- |
-| Home (blog roll or static front page) | `home.json` → `archive.json` → `page.json` |
-| Single post | `single.json` → `page.json` |
-| Page | `page.json` |
-| Search | `search.json` → `archive.json` → `page.json` |
+**Reachable today** — these five kinds have a route under `frontend/src/app/(public)`:
 
-Every chain ends at `page.json`, so a theme that ships only that one file affects every route.
+| Route | File | Tried in order |
+| --- | --- | --- |
+| Home (blog roll or static front page) | `page.tsx` | `home.json` → `archive.json` → `page.json` |
+| Single post, `/{slug}` and `/{category}/{slug}` | `[slug]/page.tsx`, `[slug]/[postSlug]/page.tsx` | `single-{post_type}-{slug}.json` → `single-{post_type}.json` → `single.json` → `page.json` |
+| Page, `/pages/{slug}` | `pages/[slug]/page.tsx` | `page-{slug}.json` → `page.json` |
+| Search | `search/page.tsx` | `search.json` → `archive.json` → `page.json` |
+| **404** | `not-found.tsx` | `404.json` → `page.json` |
 
-`archive.json` has no route of its own — WordJS has no standalone archive page today — so it exists
-only as the shared fallback for home and search. Ship it when you want those two to look alike without
-also changing single posts and pages.
+**Not reachable — no such route exists in WordJS.** The hierarchy knows these kinds, but nothing asks
+for them today, so shipping one of these files has **no effect**:
+
+| Kind | Would try | Status |
+| --- | --- | --- |
+| Category archive | `category-{slug}.json` → `category.json` → `archive.json` → `page.json` | No category-archive route. `/{category}/{slug}` is a *post* under a category path, not a listing. |
+| Tag archive | `tag-{slug}.json` → `tag.json` → `archive.json` → `page.json` | No tag route. |
+| Author archive | `author-{slug}.json` → `author.json` → `archive.json` → `page.json` | No author route. |
+| Date archive | `date.json` → `archive.json` → `page.json` | No date route. |
+
+That table is deliberately explicit: an earlier version of this document promised an "Archive" route
+that did not exist, and a theme author has no way to tell a template that never matches from one that
+matches and does nothing. `archive.json` itself **is** reachable — as the shared fallback for home and
+search — so ship it when you want those two to look alike without touching single posts and pages.
+
+**Every chain ends at `page.json`.** It is this system's `index.php`: a theme that ships only that one
+file affects every route, 404 included.
+
+**A name that cannot be a file name is dropped, not cleaned up.** Composed names are checked against
+`^[a-z0-9-]{1,40}$` — the same guard `server-api.ts` applies before a name becomes a URL — so a post
+slug with an accent, a space, a dot or a `../` simply falls back to the next name in the chain
+(`single-post`), and nothing a slug contains can ever reach the fetch. Slugs and post types are
+lower-cased first, so `/About` and `/about` resolve to the same `page-about.json`.
 
 ### The blocks a template may use
 
@@ -898,6 +1052,7 @@ the same markup and inherits every `--wjs-*` token without a second layout syste
 | `Spacer` | `height` | — |
 | `Divider` | `color`, `width`, `length`, `gap` | — |
 | `PageContent` | — | — |
+| `TemplatePart` | `name`, `area` (both required — see [named template parts](#named-template-parts-themejson-templateparts--chromenamejson)) | — |
 
 #### `tag` and `className` — naming a container
 
@@ -928,6 +1083,11 @@ by the validator *and* re-checked inside the block itself:
   `HERO`, `hero:hover`, `hero_unit`, `hero" onclick="…`, four tokens, a tab instead of a space — all of
   them fail the template rather than becoming a quietly different class name.
 
+**Style the class from `theme.json`, not from raw CSS.** A class the template names is styled by
+declaring [`styles.variations.<name>`](#stylesvariations--styling-a-class-your-own-template-names) —
+same name, same shape, checked as a pair by the doctor. Writing the rule by hand outside the
+`@wjs-generated` markers still works, but then half the theme lives in a file no validator reads.
+
 ### The listing — a template's query loop
 
 `PostsGrid`, `CategoryPosts` and `SearchBar` may appear in a template, and this is what turns it from
@@ -946,6 +1106,65 @@ it got. Everything is resolved on the server, so the posts are in the HTML a cra
 
 These three were deliberately excluded until this data path existed, because a block that validates
 and then renders empty is exactly the failure the contract is built to prevent.
+
+### Named template parts (`theme.json` `templateParts` + `chrome/<name>.json`)
+
+Until now a theme could ship exactly **two** compositions, because the public layout asked for exactly
+two names: `chrome/header.json` and `chrome/footer.json`. A theme can now ship more of them and have a
+page template pull one in.
+
+This is WordPress's `templateParts` with `title` dropped — nothing here would render a title, and a
+declared field no consumer honours is the failure this whole contract exists to prevent. `area` stays
+because it **is** consumed: it picks the part's wrapper element.
+
+**1. Declare it in `theme.json`:**
+
+```json
+{
+  "name": "My theme",
+  "templateParts": [
+    { "name": "sidebar-blog", "area": "sidebar" },
+    { "name": "promo", "area": "general" }
+  ]
+}
+```
+
+| Key | Value |
+| --- | --- |
+| `name` | The `chrome/<name>.json` file name — `^[a-z0-9-]{1,40}$`, the *same* pattern a template name must match, because it becomes a URL. `header` and `footer` are **rejected**: those two files are the site chrome the layout renders on every page, and a template pulling one in would put a second masthead inside `<main>`. |
+| `area` | One of `header`, `footer`, `sidebar`, `general`. |
+
+At most **16** parts, no duplicate names, no other keys. The declaration **fails closed as a whole**:
+one bad entry drops *every* part, so a theme can never half-load its furniture.
+
+**2. Write `chrome/<name>.json`** — the same composable-chrome contract v1 as the header and footer
+(same closed block allowlist, same `href` rules, same 64 KB / 100 block / depth-3 budgets).
+
+**3. Reference it from a template:**
+
+```json
+{ "type": "TemplatePart", "props": { "name": "sidebar-blog", "area": "sidebar" } }
+```
+
+Both props are **required** — a part with no name resolves to nothing and one with no area has no
+wrapper to render into. `area` maps to the element the part renders in, from a table WordJS owns:
+
+| `area` | Element | Class |
+| --- | --- | --- |
+| `header` | `<header>` | `wjs-template-part wjs-template-part--header` |
+| `footer` | `<footer>` | `wjs-template-part wjs-template-part--footer` |
+| `sidebar` | `<aside>` | `wjs-template-part wjs-template-part--sidebar` |
+| `general` | `<div>` | `wjs-template-part wjs-template-part--general` |
+
+**The declaration is the gate, and it is the whole security story.** Without it, `name` would be a
+theme-supplied string choosing which file the server fetches, and the rule in this codebase is that
+data fills slots and never chooses structure. So the renderer resolves a part **only** when the active
+theme's `theme.json` declares that exact name; an undeclared name is never even fetched. Everything is
+resolved on the server, before render, like a listing is.
+
+**It renders nothing rather than something wrong.** An undeclared name, a missing file, a composition
+that breaks the chrome contract, an invalid declaration — all four render as silence, and the page's
+own content is untouched. The doctor is where the author is told which of the four it was.
 
 ### What a template cannot do
 
@@ -1066,6 +1285,51 @@ in the source, which would move it backwards). `ASSET_VERSION` is no longer hand
 sha256 of `backend/public/css/wordjs-ui.css`, generated into the committed
 `frontend/src/lib/assetVersion.generated.ts` by `scripts/generate-asset-version.js` (run in the
 frontend `prebuild`, diff-gated in CI). Nothing to bump — edit the CSS and the token follows.
+
+## Theme lifecycle guarantees (what WordJS will and will not do to `themes/`)
+
+**Your files are yours. The server never rewrites a theme on its own.**
+
+Boot used to call `createDefaultTheme()` unconditionally — the comment said "if none exist", the code
+checked nothing — and five of the eight files it writes went out through a bare `fs.writeFileSync`.
+Editing `themes/default/partials/header.html` and restarting therefore silently reverted the edit.
+That is fixed, and the fix is a rule, not a patch:
+
+| Moment | What happens |
+| --- | --- |
+| **Install** (setup wizard) | Provisions `themes/default`. A site must not finish the wizard with an empty themes dir. |
+| **Boot** | **Verifies only.** `verifyDefaultTheme()` checks that `themes/default` exists and carries `theme.json` + `style.css`, and warns on the console if not. Writes nothing, ever. |
+| **`POST /api/v1/themes/default`** | The admin's explicit *Restore default theme* — `createDefaultTheme(true)`, which overwrites all eight scaffold files and bumps the `theme.json` patch. The only path that clobbers. |
+
+`functions.js` and the five legacy Handlebars files
+(`partials/{header,footer}.html`, `templates/{index,single,archive}.html`) are **not** part of the
+completeness check: a theme with no `functions.js` legitimately owns no logic, and the Handlebars
+renderer has no live callers on the public site.
+
+**The site always has a theme to fall back to.** `deleteTheme()` refuses twice, in core — so the admin
+UI and any API client hit the same wall — and both refusals answer **409** with a specific `code`
+rather than an unhandled 500:
+
+| `code` | Refusal |
+| --- | --- |
+| `theme_active` | You cannot delete the theme that is currently active. Activate another one first. |
+| `theme_last_remaining` | You cannot delete the last theme installed. An empty themes dir is unrecoverable through the UI — there is nothing left to activate, and boot no longer re-creates one behind your back. Restore with `POST /api/v1/themes/default`. |
+
+This is the posture every comparable CMS takes: WordPress falls back to `WP_DEFAULT_THEME`
+(`validate_current_theme`), Ghost ships casper in the package and its service layer refuses to delete
+the default, Drupal's `ThemeInstaller::uninstall()` throws for the default theme, and Joomla marks
+core templates `locked=1`. Ship a fallback, refuse to delete it, degrade gracefully — never rewrite.
+
+**A missing active theme is reported, not hidden.** If the `template` option names a theme that is not
+on disk (deleted or renamed outside the app), `getActiveTheme()` returns `null` on purpose — it will
+not promote an arbitrary replacement — and the public site renders with the framework's own `:root`
+tokens from `backend/public/css/wordjs-ui.css`. That fallback is correct and unchanged; what changed is
+that it is no longer silent:
+
+- the public settings payload carries a derived boolean **`active_theme_missing`**
+  (`GET /api/v1/settings`, alongside `template` so a message can name the slug);
+- **Admin → Themes** renders a banner from it;
+- boot logs a framed warning naming the missing slug and both ways out.
 
 ## Theme Previews in Admin
 

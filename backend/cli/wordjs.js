@@ -474,7 +474,8 @@ function buildTheme(slug) {
     }
 
     console.log(`\n✅ themes/${slug}/style.css — @wjs-generated block ${hasBlock ? 'regenerated' : 'added'}: ` +
-        `${result.stats.tokens} token(s), ${result.stats.rules} rule(s), ${result.stats.declarations} declaration(s), ${result.stats.warnings} warning(s).` +
+        `${result.stats.tokens} token(s), ${result.stats.rules} rule(s), ${result.stats.declarations} declaration(s), ` +
+        `${result.stats.variations} variation(s), ${result.stats.warnings} warning(s).` +
         (bumped ? `\n   theme.json version → ${bumped} (busts the cached stylesheet).` : ''));
 }
 

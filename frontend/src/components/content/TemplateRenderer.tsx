@@ -11,6 +11,8 @@ import {
     CategoryPostsBlock,
 } from './blocks';
 import SearchBarBlock from './SearchBarBlock';
+import ChromeRenderer from '@/components/chrome/ChromeRenderer';
+import type { ChromeBindings, ChromeData } from '@/lib/chromeData';
 
 /**
  * Renders a theme's page template: the arrangement comes from `templates/<name>.json`, and the page's
@@ -41,6 +43,19 @@ import SearchBarBlock from './SearchBarBlock';
 type Rendered = React.ReactNode;
 /** A slot the way the page blocks expect it: `(className?) => ReactNode`, emitting a wrapper div. */
 type SlotFn = (className?: string) => Rendered;
+
+/**
+ * The wrapper a template part renders into, chosen by its `area` — the closed enum theme.json and the
+ * template both declare. A LOOKUP, never the value itself: `area` is data, and data does not name
+ * elements here. `main` is absent for the same reason `tag` excludes it — the layout already wraps
+ * every template in one.
+ */
+const PART_TAGS: Record<string, 'header' | 'footer' | 'aside' | 'div'> = {
+    header: 'header',
+    footer: 'footer',
+    sidebar: 'aside',
+    general: 'div',
+};
 
 /** Equal-width distribution for a Columns block — the contract exposes a count, not pixel widths. */
 function distribution(count: number) {
@@ -153,6 +168,31 @@ function renderBlock(block: TemplateBlock, content: Rendered, key: string): Rend
 
         case 'SearchBar':
             return <SearchBarBlock key={key} {...p} />;
+
+        // ── a named template part ──────────────────────────────────────────────────────────────────
+        //
+        // `resolvedPart` is the VALIDATED chrome composition resolveTemplateBlocks fetched, and it is
+        // only ever there when theme.json declared the name — a template cannot supply it (the
+        // validator rejects props a block does not declare, on both sides of the mirror), so an
+        // undeclared or invalid part arrives unresolved and renders NOTHING. That silence is the
+        // fail-closed behaviour; the doctor is where the author is told why.
+        //
+        // `area` is the one thing the block decides for itself, and it is a closed enum, so the
+        // wrapper element comes from a table WordJS owns. ChromeRenderer's `location` only governs
+        // whether ChromeLogo/ChromeSiteTitle emit the MASTHEAD css hooks: those belong to the site
+        // header alone, so every area other than 'header' passes 'footer' — "not the masthead".
+        case 'TemplatePart': {
+            const data = (p as { resolvedPart?: ChromeData }).resolvedPart;
+            const bindings = (p as { resolvedBindings?: ChromeBindings }).resolvedBindings;
+            if (!data || !bindings) return null;
+            const area = String(p.area ?? 'general');
+            const Wrapper = PART_TAGS[area] || 'div';
+            return (
+                <Wrapper key={key} className={`wjs-template-part wjs-template-part--${area}`}>
+                    <ChromeRenderer data={data} bindings={bindings} location={area === 'header' ? 'header' : 'footer'} />
+                </Wrapper>
+            );
+        }
 
         default:
             // Unreachable for a validated tree. Rendering nothing (rather than throwing) keeps a drift

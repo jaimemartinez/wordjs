@@ -118,7 +118,7 @@ token. These 21 are flagged `"alias"` in the manifest (see below).
 
 ### Per-block tokens (~600 more — see the manifest)
 
-The tables above are only the **core** tokens. Most of the framework's **753** tokens style
+The tables above are only the **core** tokens. Most of the framework's **754** tokens style
 individual visual-editor blocks (`--wjs-<block>-*`); they are documented exhaustively in the
 machine-readable manifest (next section), not here. Real group sizes, read from the manifest:
 `cta` 55 · `pricing` 49 · `card` 40 · `accordion` 38 · `form` 37 · `hero` 37 · `audio` 34 ·
@@ -187,7 +187,7 @@ The complete machine-readable contract is `backend/public/theme-tokens.json` (ne
 ## The machine-readable contract (`theme-tokens.json`)
 
 `backend/public/theme-tokens.json` is the generated, complete token contract — the source of truth
-whenever this document and the CSS disagree. Current counts: **753 tokens**, **1724 `var()` uses**,
+whenever this document and the CSS disagree. Current counts: **754 tokens**, **1715 `var()` uses**,
 **33 element entries**. For every token it records:
 
 - `group` — first segment of the name (`hero`, `cta`, `color`, `radius`, …);

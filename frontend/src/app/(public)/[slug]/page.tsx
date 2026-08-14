@@ -55,7 +55,19 @@ export default async function SinglePostPage(
     return (
         <>
             <JsonLd data={buildPostJsonLd(post, base, settings?.blogname)} />
-            <ThemeTemplate kind="single">
+            {/* The hierarchy needs what this route knows: single-<type>-<slug> → single-<type> →
+                single → page. The post's own slug, not the URL param, so /42 and /hello-world (the
+                numeric-id fallback) resolve to the same template. */}
+            {/* This route serves BOTH posts and pages — a page's canonical URL is `/{slug}`, not
+                `/pages/{slug}` (see canonicalPath in generateMetadata above). Passing "single"
+                unconditionally meant a page here asked for `single-page-about` and never for
+                `page-about`, so the per-slug page template documented in the route table applied on
+                no URL a visitor or a crawler ever sees. The kind follows what was actually loaded. */}
+            <ThemeTemplate
+                kind={post.type === "page" ? "page" : "single"}
+                postType={post.type}
+                slug={post.slug}
+            >
                 <PostContent post={withBlocks} settings={settings} showComments />
             </ThemeTemplate>
         </>

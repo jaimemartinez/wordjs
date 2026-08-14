@@ -2,8 +2,8 @@
   "version": 1,
   "source": "backend/public/css/wordjs-ui.css",
   "counts": {
-    "tokens": 753,
-    "varUses": 1724,
+    "tokens": 754,
+    "varUses": 1715,
     "elements": 47
   },
   "tokens": {
@@ -1435,7 +1435,7 @@
       "consumers": [
         {
           "selector": "blockquote",
-          "property": "border-left"
+          "property": "border-inline-start"
         }
       ]
     },
@@ -1448,7 +1448,7 @@
       "consumers": [
         {
           "selector": "blockquote",
-          "property": "border-left"
+          "property": "border-inline-start"
         }
       ]
     },
@@ -1617,11 +1617,11 @@
         },
         {
           "selector": ".border-start",
-          "property": "border-left"
+          "property": "border-inline-start"
         },
         {
           "selector": ".border-end",
-          "property": "border-right"
+          "property": "border-inline-end"
         },
         {
           "selector": ".img-thumbnail",
@@ -1908,11 +1908,11 @@
         },
         {
           "selector": ".border-start",
-          "property": "border-left"
+          "property": "border-inline-start"
         },
         {
           "selector": ".border-end",
-          "property": "border-right"
+          "property": "border-inline-end"
         },
         {
           "selector": ".img-thumbnail",
@@ -3969,7 +3969,7 @@
         },
         {
           "selector": "blockquote",
-          "property": "border-left"
+          "property": "border-inline-start"
         },
         {
           "selector": ".form-control:focus, .form-select:focus, .wjs-content input:focus, .wjs-content textarea:focus, .wjs-content select:focus",
@@ -4201,7 +4201,7 @@
         },
         {
           "selector": ".wp-block-quote--bar",
-          "property": "border-left"
+          "property": "border-inline-start"
         },
         {
           "selector": ".wp-block-quote--large .wp-block-quote__mark",
@@ -4259,6 +4259,17 @@
       "consumers": [],
       "flags": [
         "alias"
+      ]
+    },
+    "--wjs-color-scheme": {
+      "group": "color",
+      "declaredDefault": "normal",
+      "fallbacks": [],
+      "consumers": [
+        {
+          "selector": "html",
+          "property": "color-scheme"
+        }
       ]
     },
     "--wjs-color-secondary": {
@@ -5070,7 +5081,7 @@
       "consumers": [
         {
           "selector": ".wp-block-cta-banner__button",
-          "property": "margin-left"
+          "property": "margin-inline-start"
         }
       ]
     },
@@ -8424,7 +8435,7 @@
         },
         {
           "selector": ".wp-block-quote--bar",
-          "property": "padding-left"
+          "property": "padding-inline-start"
         },
         {
           "selector": ".wp-block-quote--large",
@@ -8529,7 +8540,7 @@
         },
         {
           "selector": ".wp-block-video-embed__chip",
-          "property": "right"
+          "property": "inset-inline-end"
         },
         {
           "selector": ".wp-block-video-embed__chip",
@@ -9745,7 +9756,7 @@
       "consumers": [
         {
           "selector": ".wp-block-quote--bar",
-          "property": "border-left"
+          "property": "border-inline-start"
         },
         {
           "selector": ".wp-block-quote--large .wp-block-quote__mark",
@@ -9762,7 +9773,7 @@
       "consumers": [
         {
           "selector": ".wp-block-quote--bar",
-          "property": "border-left"
+          "property": "border-inline-start"
         }
       ]
     },
@@ -10253,19 +10264,19 @@
         },
         {
           "selector": ".btn-group > .btn:first-child",
-          "property": "border-top-left-radius"
+          "property": "border-start-start-radius"
         },
         {
           "selector": ".btn-group > .btn:first-child",
-          "property": "border-bottom-left-radius"
+          "property": "border-end-start-radius"
         },
         {
           "selector": ".btn-group > .btn:last-child",
-          "property": "border-top-right-radius"
+          "property": "border-start-end-radius"
         },
         {
           "selector": ".btn-group > .btn:last-child",
-          "property": "border-bottom-right-radius"
+          "property": "border-end-end-radius"
         },
         {
           "selector": ".alert",
@@ -10277,19 +10288,19 @@
         },
         {
           "selector": ".page-item:first-child .page-link",
-          "property": "border-top-left-radius"
+          "property": "border-start-start-radius"
         },
         {
           "selector": ".page-item:first-child .page-link",
-          "property": "border-bottom-left-radius"
+          "property": "border-end-start-radius"
         },
         {
           "selector": ".page-item:last-child .page-link",
-          "property": "border-top-right-radius"
+          "property": "border-start-end-radius"
         },
         {
           "selector": ".page-item:last-child .page-link",
-          "property": "border-bottom-right-radius"
+          "property": "border-end-end-radius"
         },
         {
           "selector": ".nav-tabs .nav-link",
@@ -11470,83 +11481,63 @@
         },
         {
           "selector": ".ms-1",
-          "property": "margin-left"
+          "property": "margin-inline-start"
         },
         {
           "selector": ".ms-2",
-          "property": "margin-left"
+          "property": "margin-inline-start"
         },
         {
           "selector": ".ms-3",
-          "property": "margin-left"
+          "property": "margin-inline-start"
         },
         {
           "selector": ".ms-4",
-          "property": "margin-left"
+          "property": "margin-inline-start"
         },
         {
           "selector": ".ms-5",
-          "property": "margin-left"
+          "property": "margin-inline-start"
         },
         {
           "selector": ".me-1",
-          "property": "margin-right"
+          "property": "margin-inline-end"
         },
         {
           "selector": ".me-2",
-          "property": "margin-right"
+          "property": "margin-inline-end"
         },
         {
           "selector": ".me-3",
-          "property": "margin-right"
+          "property": "margin-inline-end"
         },
         {
           "selector": ".me-4",
-          "property": "margin-right"
+          "property": "margin-inline-end"
         },
         {
           "selector": ".me-5",
-          "property": "margin-right"
+          "property": "margin-inline-end"
         },
         {
           "selector": ".mx-1",
-          "property": "margin-left"
-        },
-        {
-          "selector": ".mx-1",
-          "property": "margin-right"
+          "property": "margin-inline"
         },
         {
           "selector": ".mx-2",
-          "property": "margin-left"
-        },
-        {
-          "selector": ".mx-2",
-          "property": "margin-right"
+          "property": "margin-inline"
         },
         {
           "selector": ".mx-3",
-          "property": "margin-left"
-        },
-        {
-          "selector": ".mx-3",
-          "property": "margin-right"
+          "property": "margin-inline"
         },
         {
           "selector": ".mx-4",
-          "property": "margin-left"
-        },
-        {
-          "selector": ".mx-4",
-          "property": "margin-right"
+          "property": "margin-inline"
         },
         {
           "selector": ".mx-5",
-          "property": "margin-left"
-        },
-        {
-          "selector": ".mx-5",
-          "property": "margin-right"
+          "property": "margin-inline"
         },
         {
           "selector": ".my-1",
@@ -11650,83 +11641,63 @@
         },
         {
           "selector": ".ps-1",
-          "property": "padding-left"
+          "property": "padding-inline-start"
         },
         {
           "selector": ".ps-2",
-          "property": "padding-left"
+          "property": "padding-inline-start"
         },
         {
           "selector": ".ps-3",
-          "property": "padding-left"
+          "property": "padding-inline-start"
         },
         {
           "selector": ".ps-4",
-          "property": "padding-left"
+          "property": "padding-inline-start"
         },
         {
           "selector": ".ps-5",
-          "property": "padding-left"
+          "property": "padding-inline-start"
         },
         {
           "selector": ".pe-1",
-          "property": "padding-right"
+          "property": "padding-inline-end"
         },
         {
           "selector": ".pe-2",
-          "property": "padding-right"
+          "property": "padding-inline-end"
         },
         {
           "selector": ".pe-3",
-          "property": "padding-right"
+          "property": "padding-inline-end"
         },
         {
           "selector": ".pe-4",
-          "property": "padding-right"
+          "property": "padding-inline-end"
         },
         {
           "selector": ".pe-5",
-          "property": "padding-right"
+          "property": "padding-inline-end"
         },
         {
           "selector": ".px-1",
-          "property": "padding-left"
-        },
-        {
-          "selector": ".px-1",
-          "property": "padding-right"
+          "property": "padding-inline"
         },
         {
           "selector": ".px-2",
-          "property": "padding-left"
-        },
-        {
-          "selector": ".px-2",
-          "property": "padding-right"
+          "property": "padding-inline"
         },
         {
           "selector": ".px-3",
-          "property": "padding-left"
-        },
-        {
-          "selector": ".px-3",
-          "property": "padding-right"
+          "property": "padding-inline"
         },
         {
           "selector": ".px-4",
-          "property": "padding-left"
-        },
-        {
-          "selector": ".px-4",
-          "property": "padding-right"
+          "property": "padding-inline"
         },
         {
           "selector": ".px-5",
-          "property": "padding-left"
-        },
-        {
-          "selector": ".px-5",
-          "property": "padding-right"
+          "property": "padding-inline"
         },
         {
           "selector": ".py-1",
@@ -13575,7 +13546,7 @@
         },
         {
           "selector": ".wp-block-pricing__period",
-          "property": "margin-left"
+          "property": "margin-inline-start"
         },
         {
           "selector": ".wp-block-icon-list__title",
@@ -14199,7 +14170,7 @@
       "selector": ".wjs-post",
       "children": {
         "body": {
-          "selector": ".wjs-post .wjs-content"
+          "selector": ".wjs-post-body"
         },
         "header": {
           "selector": ".wjs-post-header"

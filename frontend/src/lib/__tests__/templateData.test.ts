@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { parseTemplate, templateCandidates, CONTENT_SLOT, TEMPLATE_TAGS, CLASS_TOKEN, MAX_CLASS_TOKENS } from '../templateData';
+import {
+    parseTemplate, templateCandidates, parseTemplateParts, CONTENT_SLOT, TEMPLATE_TAGS, CLASS_TOKEN,
+    MAX_CLASS_TOKENS, TEMPLATE_NAME, TEMPLATE_PART_AREAS,
+} from '../templateData';
 
 /**
  * The renderer's mirror of the page-template contract.
@@ -171,14 +174,138 @@ describe('parseTemplate', () => {
     });
 });
 
-describe('templateCandidates', () => {
-    it('falls back from most specific to page, so one page.json can serve a whole theme', () => {
+const ALL_KINDS = ['home', 'single', 'page', 'search', 'notFound', 'category', 'tag', 'author', 'date'] as const;
+
+describe('templateCandidates — the template hierarchy', () => {
+    it('goes most specific first, WordPress-style, and always ends at page', () => {
+        expect(templateCandidates('single', { postType: 'post', slug: 'hello-world' }))
+            .toEqual(['single-post-hello-world', 'single-post', 'single', 'page']);
+        expect(templateCandidates('page', { slug: 'about' })).toEqual(['page-about', 'page']);
+        expect(templateCandidates('category', { slug: 'news' })).toEqual(['category-news', 'category', 'archive', 'page']);
+        expect(templateCandidates('tag', { slug: 'js' })).toEqual(['tag-js', 'tag', 'archive', 'page']);
+        expect(templateCandidates('author', { slug: 'ada' })).toEqual(['author-ada', 'author', 'archive', 'page']);
         expect(templateCandidates('home')).toEqual(['home', 'archive', 'page']);
-        expect(templateCandidates('single')).toEqual(['single', 'page']);
         expect(templateCandidates('search')).toEqual(['search', 'archive', 'page']);
-        // Every chain ENDS at 'page' — a theme shipping only page.json affects every route.
-        for (const kind of ['home', 'single', 'page', 'archive', 'search'] as const) {
-            expect(templateCandidates(kind).at(-1)).toBe('page');
+        expect(templateCandidates('date')).toEqual(['date', 'archive', 'page']);
+        expect(templateCandidates('notFound')).toEqual(['404', 'page']);
+    });
+
+    it('EVERY chain ends at page — a theme shipping only page.json affects every route', () => {
+        for (const kind of ALL_KINDS) {
+            expect(templateCandidates(kind).at(-1), kind).toBe('page');
+            expect(templateCandidates(kind, { slug: 'x', postType: 'y' }).at(-1), kind).toBe('page');
         }
+    });
+
+    it('a slug that cannot be a file name is DROPPED, never cleaned up — the chain just falls back', () => {
+        // Each of these would be a path, a second file, or a name outside the guard if it were pasted
+        // into a URL. server-api.ts re-checks the same pattern; this is the first of the two gates.
+        for (const slug of ['../secret', 'a/b', 'Hello World', 'niño', 'x'.repeat(60), '', '   ', 'a.json']) {
+            const chain = templateCandidates('single', { postType: 'post', slug });
+            expect(chain, slug).toEqual(['single-post', 'single', 'page']);
+            for (const name of chain) expect(name, `${slug} → ${name}`).toMatch(TEMPLATE_NAME);
+        }
+        // …and the same for a page slug, which has no intermediate name to fall back to.
+        expect(templateCandidates('page', { slug: '../../etc/passwd' })).toEqual(['page']);
+    });
+
+    it('every generated name matches the guard server-api enforces before it becomes a URL', () => {
+        const hostile = ['../x', '%2e%2e', 'a b', 'A', '?q=1', '#frag', 'a\\b', ' ', 'post'];
+        for (const kind of ALL_KINDS) {
+            for (const slug of hostile) {
+                for (const postType of hostile) {
+                    for (const name of templateCandidates(kind, { slug, postType })) {
+                        expect(name, `${kind}/${slug}/${postType} → ${name}`).toMatch(TEMPLATE_NAME);
+                    }
+                }
+            }
+        }
+    });
+
+    it('lower-cases what a route hands it, so /About and /about pick the same template', () => {
+        expect(templateCandidates('page', { slug: 'About' })).toEqual(['page-about', 'page']);
+        expect(templateCandidates('single', { postType: 'POST', slug: 'Hi' })[0]).toBe('single-post-hi');
+    });
+
+    it('never repeats a name (a post typed "post" with slug "post" would have)', () => {
+        for (const kind of ALL_KINDS) {
+            const chain = templateCandidates(kind, { slug: 'post', postType: 'post' });
+            expect(new Set(chain).size, chain.join()).toBe(chain.length);
+        }
+    });
+});
+
+describe('parseTemplateParts', () => {
+    const decl = (templateParts: unknown) => JSON.stringify({ name: 'T', templateParts });
+
+    it('reads a declaration into name → area', () => {
+        const parts = parseTemplateParts(decl([
+            { name: 'sidebar-blog', area: 'sidebar' },
+            { name: 'promo', area: 'general' },
+        ]));
+        expect([...parts.entries()]).toEqual([['sidebar-blog', 'sidebar'], ['promo', 'general']]);
+    });
+
+    it('FAILS CLOSED AS A WHOLE — one bad entry drops the good ones, so no theme half-loads', () => {
+        const parts = parseTemplateParts(decl([{ name: 'good', area: 'general' }, { name: '../bad', area: 'general' }]));
+        expect(parts.size).toBe(0);
+    });
+
+    it('refuses header/footer (the site chrome), duplicates, unknown keys and bad areas', () => {
+        for (const bad of [
+            [{ name: 'header', area: 'header' }],
+            [{ name: 'footer', area: 'footer' }],
+            [{ name: 'p', area: 'general' }, { name: 'p', area: 'sidebar' }],
+            [{ name: 'p', area: 'general', title: 'Promo' }],
+            [{ name: 'p', area: 'main' }],
+            [{ name: 'p' }],
+            [{ area: 'general' }],
+            ['promo'],
+            { p: 'general' },
+        ]) {
+            expect(parseTemplateParts(decl(bad)), JSON.stringify(bad)).toEqual(new Map());
+        }
+    });
+
+    it('an absent declaration, an unreadable manifest and an oversized one are all just "no parts"', () => {
+        expect(parseTemplateParts(JSON.stringify({ name: 'T' }))).toEqual(new Map());
+        expect(parseTemplateParts('{ not json')).toEqual(new Map());
+        expect(parseTemplateParts(null)).toEqual(new Map());
+        expect(parseTemplateParts(undefined)).toEqual(new Map());
+        expect(parseTemplateParts('   ')).toEqual(new Map());
+        expect(parseTemplateParts(`{"templateParts":[],"pad":"${'x'.repeat(70_000)}"}`)).toEqual(new Map());
+    });
+});
+
+describe('the TemplatePart block', () => {
+    const part = (props: Record<string, unknown>) => raw([slot, { type: 'TemplatePart', props }]);
+
+    it('accepts a declared-shaped name with an area from the enum', () => {
+        expect(parseTemplate(part({ name: 'sidebar-blog', area: 'sidebar' }))).not.toBeNull();
+        for (const area of TEMPLATE_PART_AREAS) {
+            expect(parseTemplate(part({ name: 'promo', area })), area).not.toBeNull();
+        }
+    });
+
+    it('requires BOTH props — a part with neither would validate and render nothing', () => {
+        expect(parseTemplate(part({}))).toBeNull();
+        expect(parseTemplate(part({ name: 'promo' }))).toBeNull();
+        expect(parseTemplate(part({ area: 'general' }))).toBeNull();
+    });
+
+    it('refuses a name that could be a path and an area outside the enum', () => {
+        for (const name of ['../../etc/passwd', 'chrome/header', 'Promo', '', 'x'.repeat(41)]) {
+            expect(parseTemplate(part({ name, area: 'general' })), name).toBeNull();
+        }
+        for (const area of ['main', 'aside', 'HEADER', 1, null]) {
+            expect(parseTemplate(part({ name: 'promo', area })), JSON.stringify(area)).toBeNull();
+        }
+    });
+
+    it('cannot smuggle the resolver\'s own props — resolvedPart is ours, never the theme\'s', () => {
+        // The renderer trusts `resolvedPart` because only resolveTemplateBlocks can put it there. If a
+        // template could carry one, a theme would be handing the chrome renderer unvalidated data.
+        expect(parseTemplate(part({ name: 'promo', area: 'general', resolvedPart: { root: {}, content: [] } }))).toBeNull();
+        expect(parseTemplate(part({ name: 'promo', area: 'general', resolvedBindings: {} }))).toBeNull();
     });
 });

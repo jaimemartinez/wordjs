@@ -36,7 +36,9 @@ export default async function CategoryPostPage({ params }: { params: Promise<Rou
     return (
         <>
             <JsonLd data={buildPostJsonLd(post, base, settings?.blogname)} />
-            <ThemeTemplate kind="single">
+            {/* Same post, same template chain as /[slug] — the category segment is a path, not a
+                different kind of thing, so it must not resolve to a different arrangement. */}
+            <ThemeTemplate kind="single" postType={post.type} slug={post.slug}>
                 <PostContent post={withBlocks} settings={settings} category={slug} />
             </ThemeTemplate>
         </>

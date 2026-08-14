@@ -18,6 +18,10 @@
  * only way to express a token was to inline its current value, which compiles identically and
  * then ignores customizer overrides.
  *
+ * `styles.variations.<name>` is the one selector shape a theme names itself: a class its own page
+ * template put on a container, scoped under the framework's content root. It cannot express anything
+ * else — see the VARIATIONS block below for the charset argument and the containment argument.
+ *
  * compileTheme(dirOrSlug, { slug?, themesDir?, manifestPath?, dryRun?, derive? })
  *   → { css, diagnostics, stats }        (css = the complete marked block)
  * writeCompiled(dir, blockCss) swaps only the marked block in style.css (prepends when
@@ -28,6 +32,10 @@ const fs = require('fs');
 const path = require('path');
 const csstree = require('css-tree');
 const { closestToken } = require('./theme-doctor');
+// The SAME class-name shape a page template's `className` accepts. Imported, never re-declared:
+// a variation and the template class it styles must be able to refer to one another, and two
+// copies of the pattern is exactly how they would stop doing that. See VARIATIONS below.
+const { TEMPLATE_CLASS } = require('./template-validate');
 
 // Same cwd conventions as core/themes.ts (the backend always runs from backend/).
 const THEMES_DIR = path.resolve('./themes');
@@ -45,6 +53,7 @@ interface CompileStats {
   tokens: number;
   declarations: number;
   rules: number;
+  variations: number;
   errors: number;
   warnings: number;
 }
@@ -74,6 +83,10 @@ interface WalkCtx {
   position: string | null; // :first-child / :last-child
   pseudo: string | null;   // ::before / ::after / ::placeholder — always the LAST thing in a selector
   children: any;
+  // A style variation (styles.variations.<name>) rather than a manifest element. Its selector is a
+  // class the theme's own template puts on a container, so NOTHING here may resolve to a :root token
+  // — see handleProp and the VARIATIONS block.
+  variation: boolean;
 }
 
 // Same slug shape installThemeFromDir/theme-doctor enforce — containment under themesDir.
@@ -117,6 +130,44 @@ const BREAKPOINTS: Record<string, string> = {
   // Two catalogue themes write that query, so it gets its own name instead of an approximation.
   belowDesktop: '(max-width: 1023.98px)'
 };
+
+// --- VARIATIONS ------------------------------------------------------------------------------
+//
+// A page template may mark a container with `className` (the Shopify section-class affordance:
+// template-validate.ts, appended to the block's own wp-block-* class). Until now the only way to
+// STYLE that class was raw CSS outside the @wjs-generated markers — the theme's source of truth
+// split across two files and the doctor could see only half of it. `styles.variations.<name>`
+// closes that: it is the same idea WordPress 6.6 shipped as block style variations in theme.json,
+// i.e. data, no code.
+//
+// THE NAME is TEMPLATE_CLASS.TOKEN — literally the pattern the template's className must match,
+// imported rather than restated so a variation and the class it styles can only ever be the same
+// thing. It is `^[a-z][a-z0-9-]{0,39}$`: no dot, colon, bracket, space, quote, `>` or `,`, so
+// `'.' + name` is always exactly ONE class selector. A variation therefore cannot express an
+// element selector, an id, an attribute selector, a pseudo-class of its own, a second selector
+// after a comma, or a combinator — the same "a theme never writes a selector" rule the elements
+// registry enforces, obtained here from the charset instead of from a lookup table.
+//
+// THE SCOPE is `#main-content .<name>`. `#main-content` is the framework's content root — the
+// `<main id="main-content">` in frontend/src/components/public/PublicLayoutShell.tsx that every
+// page template renders inside (it is also why `main` is excluded from the template's `tag` enum).
+// The prefix is a constant of this file and never derived from theme data, so it costs the theme
+// no expressiveness while bounding the blast radius: the class shape overlaps the utility classes
+// the chrome uses (`container`, `grid`, `flex` are all valid variation names), and unscoped, a
+// variation called `container` would repaint the header, the footer and every page of the admin
+// shell that ships the same stylesheet. Scoped, it can reach only what the theme's own template
+// renders. The specificity that comes with it (1,1,0) is the point too: a variation is a NARROWER
+// statement than `styles.<element>` and must win over it, exactly as a WordPress block style
+// variation outranks the block's own styles.
+//
+// A variation has NO children map on purpose: the manifest describes the parts of a framework
+// block, and a variation is a container the theme placed — it owns its box, not the markup inside
+// it. So the only things that may nest are the ones that stay on the SAME element: states,
+// positions, pseudo-elements and breakpoints, all through the existing walk.
+const VARIATIONS_KEY = 'variations';
+const VARIATION_NAME_RE: RegExp = TEMPLATE_CLASS.TOKEN;
+const CONTENT_ROOT = '#main-content';
+
 // Used only until theme-derive lands (it exports the authoritative ARCHETYPE_NAMES).
 const ARCHETYPE_FALLBACK = ['cyber', 'brutalist', 'editorial', 'glassmorphism', 'organic', 'obsidian'];
 
@@ -207,7 +258,7 @@ function tokenGrammarProblem(entry: any, value: string): string | null {
 
 function compileTheme(dirOrSlug: string, opts: CompileOpts = {}): CompileResult {
   const diagnostics: Diagnostic[] = [];
-  const stats: CompileStats = { tokens: 0, declarations: 0, rules: 0, errors: 0, warnings: 0 };
+  const stats: CompileStats = { tokens: 0, declarations: 0, rules: 0, variations: 0, errors: 0, warnings: 0 };
 
   const push = (level: 'error' | 'warning', code: string, p: string, message: string, suggestion?: string | null): void => {
     const d: Diagnostic = { level, code, path: p, message };
@@ -511,7 +562,13 @@ function compileTheme(dirOrSlug: string, opts: CompileOpts = {}): CompileResult 
     const prop = key.toLowerCase();
     // Token resolution only at the base level: a state, breakpoint, position or pseudo-element is a
     // narrower selector than the token it would otherwise feed, so those are ALWAYS declarations.
-    if (!ctx.media && !ctx.state && !ctx.position && !ctx.pseudo) {
+    //
+    // A VARIATION never resolves to a token, and this guard is load-bearing rather than tidy: the
+    // candidate is built from the key as written, so `styles.variations.hero.bg` would find the real
+    // manifest token --wjs-hero-bg and quietly repaint EVERY hero on the site from :root instead of
+    // emitting the scoped rule the theme asked for. A variation styles the containers its template
+    // marked; it is never a global.
+    if (!ctx.variation && !ctx.media && !ctx.state && !ctx.position && !ctx.pseudo) {
       const candidates = ctx.child
         ? [`--wjs-${ctx.el}-${ctx.child}-${prop}`, `--wjs-${ctx.el}-${prop}`]
         : [`--wjs-${ctx.el}-${prop}`];
@@ -579,6 +636,43 @@ function compileTheme(dirOrSlug: string, opts: CompileOpts = {}): CompileResult 
     }
   }
 
+  /**
+   * styles.variations.<name> — the theme's own style variations. See the VARIATIONS block above for
+   * the name shape and the scope. Everything past the selector is the EXISTING walk: states,
+   * positions, pseudo-elements, breakpoints and declaration validation are the same code paths the
+   * elements use, so a variation can never grow a second, weaker grammar.
+   */
+  const compileVariations = (node: any, pathPrefix: string): void => {
+    if (!isPlainObject(node)) {
+      error('VARIATIONS_INVALID', pathPrefix, '"styles.variations" must be an object keyed by variation name');
+      return;
+    }
+    for (const [name, vnode] of Object.entries(node)) {
+      const p = `${pathPrefix}.${name}`;
+      if (!VARIATION_NAME_RE.test(name)) {
+        error('VARIATION_NAME_INVALID', p,
+          `"${name}" is not a valid variation name — it must match ${VARIATION_NAME_RE.source}, the same shape a template's className accepts (a variation and the class it styles are the same name)`);
+        continue;
+      }
+      if (!isPlainObject(vnode)) {
+        error('STYLE_INVALID_VALUE', p, `${p} must be an object`);
+        continue;
+      }
+      stats.variations++;
+      walkStyleNode(vnode, {
+        el: name,
+        child: null,
+        selector: `${CONTENT_ROOT} .${name}`,
+        media: null,
+        state: null,
+        position: null,
+        pseudo: null,
+        children: null,
+        variation: true
+      }, p);
+    }
+  };
+
   const styles: any = themeJson.styles;
   if (styles !== undefined) {
     if (!isPlainObject(styles)) {
@@ -586,6 +680,10 @@ function compileTheme(dirOrSlug: string, opts: CompileOpts = {}): CompileResult 
     } else {
       for (const [el, node] of Object.entries(styles)) {
         const p = `styles.${el}`;
+        // RESERVED KEY: `variations` is not an element and never becomes one — the manifest's
+        // registry is checked against it by a test, so a future element of that name is caught at
+        // build time rather than silently shadowed here.
+        if (el === VARIATIONS_KEY) { compileVariations(node, p); continue; }
         let selector: string | null = null;
         let children: any = null;
         if (Object.prototype.hasOwnProperty.call(GLOBAL_ELEMENTS, el)) {
@@ -595,7 +693,7 @@ function compileTheme(dirOrSlug: string, opts: CompileOpts = {}): CompileResult 
           children = isPlainObject(manifestElements[el].children) ? manifestElements[el].children : null;
         }
         if (selector === null) {
-          const suggestion = closestToken(el, [...Object.keys(manifestElements), ...Object.keys(GLOBAL_ELEMENTS)]);
+          const suggestion = closestToken(el, [...Object.keys(manifestElements), ...Object.keys(GLOBAL_ELEMENTS), VARIATIONS_KEY]);
           error('ELEMENT_UNKNOWN', p, `"${el}" is not a themable element${suggestion ? ` — did you mean ${suggestion}?` : ''}`, suggestion);
           continue;
         }
@@ -603,7 +701,7 @@ function compileTheme(dirOrSlug: string, opts: CompileOpts = {}): CompileResult 
           error('STYLE_INVALID_VALUE', p, `styles.${el} must be an object`);
           continue;
         }
-        walkStyleNode(node, { el, child: null, selector, media: null, state: null, position: null, pseudo: null, children }, p);
+        walkStyleNode(node, { el, child: null, selector, media: null, state: null, position: null, pseudo: null, children, variation: false }, p);
       }
     }
   }

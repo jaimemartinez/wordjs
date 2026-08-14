@@ -149,4 +149,44 @@ describe('TemplateRenderer', () => {
         expect(html).toContain('id="page-content"');
         expect(html).not.toContain('FutureBlock');
     });
+
+    // NAMED TEMPLATE PARTS. `resolvedPart` is injected by resolveTemplateBlocks and can only exist for
+    // a part theme.json declared, so these fixtures are hand-built the way the resolver hands them over.
+    describe('TemplatePart', () => {
+        const chrome = { root: { props: {} }, content: [{ type: 'ChromeText', props: { text: 'From the part' } }] };
+        const bindings = { menus: { header: [], footer: [] }, settings: { blogname: 'Site' } };
+        const renderPart = (props: Record<string, unknown>) => renderToStaticMarkup(
+            React.createElement(TemplateRenderer, {
+                template: { content: [slot, { type: 'TemplatePart', props }] } as any,
+                children: content,
+            }),
+        );
+
+        it('renders the resolved composition inside the wrapper its AREA chooses', () => {
+            const html = renderPart({ name: 'promo', area: 'sidebar', resolvedPart: chrome, resolvedBindings: bindings });
+            expect(html).toContain('From the part');
+            expect(html).toMatch(/<aside class="wjs-template-part wjs-template-part--sidebar"/);
+        });
+
+        it('maps every area to an element WordJS owns — never to the value itself', () => {
+            const cases: [string, string][] = [['header', 'header'], ['footer', 'footer'], ['sidebar', 'aside'], ['general', 'div']];
+            for (const [area, tag] of cases) {
+                const html = renderPart({ name: 'p', area, resolvedPart: chrome, resolvedBindings: bindings });
+                expect(html, area).toMatch(new RegExp(`<${tag} class="wjs-template-part wjs-template-part--${area}"`));
+            }
+            // An area outside the enum (only reachable through a validator/renderer drift) falls back to
+            // a div rather than becoming an element name.
+            const drifted = renderPart({ name: 'p', area: 'script', resolvedPart: chrome, resolvedBindings: bindings });
+            expect(drifted).toMatch(/<div class="wjs-template-part wjs-template-part--script"/);
+            expect(drifted).not.toContain('<script');
+        });
+
+        it('renders NOTHING when the part did not resolve — the fail-closed half of the feature', () => {
+            // What an undeclared name, a missing file or a composition that broke the chrome contract
+            // all arrive as. The page's own content must still be there.
+            const html = renderPart({ name: 'undeclared', area: 'general' });
+            expect(html).toContain('id="page-content"');
+            expect(html).not.toContain('wjs-template-part');
+        });
+    });
 });
