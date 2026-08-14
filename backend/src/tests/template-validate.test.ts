@@ -48,6 +48,31 @@ test('a real layout a theme could not previously express is valid', () => {
     assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
 });
 
+test('the dynamic blocks are allowed now that a template has a data path', () => {
+    // Held back for as long as a template could not feed them: they derive content from the site, and
+    // a listing that validates and then renders empty is worse than one that is refused. The renderer
+    // side (frontend/src/lib/resolveTemplateBlocks.ts) is that data path, so the reason expired.
+    const r = validateTemplate(tpl([
+        { type: 'PostsGrid', props: { count: 6, columns: 3, gap: '2rem' } },
+        { type: 'CategoryPosts', props: { count: 4, categorySlug: 'recetas', layout: 'list' } },
+        { type: 'SearchBar', props: { placeholder: 'Buscar', align: 'center' } },
+        slot,
+    ]));
+    assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+});
+
+test('a dynamic block still cannot carry a prop its component ignores, or children', () => {
+    // The rule does not soften for these: a prop exists only if the block honours it.
+    for (const bad of [
+        { type: 'PostsGrid', props: { showExcerpt: true } },
+        { type: 'CategoryPosts', props: { layout: 'carousel' } },
+        { type: 'PostsGrid', props: { items: [] } },
+    ]) {
+        const r = validateTemplate(tpl([bad, slot]));
+        assert.strictEqual(r.ok, false, JSON.stringify(bad));
+    }
+});
+
 // ── 1. data never chooses structure ───────────────────────────────────────────────────────────────
 
 test('a prop outside its enum is refused — this is what stops a prop naming an element', () => {

@@ -79,12 +79,12 @@ const BLOCKS: Record<string, { props: Record<string, PropSpec>; slot: string | n
     Columns: { props: { columns: N, gap: S, tag: TAG, className: CLASSNAME }, slot: 'items' },
     Spacer: { props: { height: S }, slot: null },
     Divider: { props: { color: S, width: S, length: S, gap: S }, slot: null },
-    // NOT IN v1: PostsGrid, CategoryPosts and SearchBar. They are the obvious things a theme wants in a
-    // template, and they are deliberately held back — each derives its content from the site, which
-    // after F3 arrives as a PROP the PAGE supplies, and that data path does not exist for a template
-    // yet. Allowing them now would validate cleanly and render an empty block, which is the failure
-    // mode this whole contract is built to avoid. They join the allowlist with their data path, not
-    // before.
+    // DYNAMIC — the query loop. These derive their content from the SITE, so they may appear only now
+    // that a template has a data path (lib/resolveTemplateBlocks.ts) and the route hands them its own
+    // posts. Every prop below is one the block actually honours; `count` is consumed by the resolver.
+    PostsGrid: { props: { count: N, columns: N, gap: S, bg: S, borderColor: S, radius: S, pad: S, thumbHeight: S }, slot: null },
+    CategoryPosts: { props: { count: N, categorySlug: S, layout: en('grid', 'list'), columns: N, gap: S, bg: S, borderColor: S, radius: S, linkColor: S, headingColor: S }, slot: null },
+    SearchBar: { props: { placeholder: S, buttonText: S, align: en('left', 'center', 'right'), width: S, inputBg: S, inputBorderColor: S, inputRadius: S, buttonBg: S, buttonColor: S, buttonRadius: S }, slot: null },
 };
 
 export interface TemplateBlock { type: string; props: Record<string, unknown> }

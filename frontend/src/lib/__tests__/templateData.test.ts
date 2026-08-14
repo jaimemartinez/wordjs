@@ -108,10 +108,7 @@ describe('parseTemplate', () => {
     it('rejects a block outside the allowlist, including ones a PAGE may use', () => {
         // HTMLEmbed, Symbol, Form, Heading, Text and Image all render fine in page content; a
         // theme-shipped template is a different trust question, so none of them is in this allowlist.
-        // PostsGrid/CategoryPosts/SearchBar are held back from v1 too: they have no data path in a
-        // template yet, and a block that validates then renders empty is the failure this prevents.
-        for (const type of ['ScriptBlock', 'HTMLEmbed', 'Symbol', 'Form', 'Heading', 'Text', 'Image',
-            'PostsGrid', 'CategoryPosts', 'SearchBar']) {
+        for (const type of ['ScriptBlock', 'HTMLEmbed', 'Symbol', 'Form', 'Heading', 'Text', 'Image']) {
             expect(parseTemplate(raw([{ type, props: {} }, slot])), type).toBeNull();
         }
     });
@@ -127,6 +124,29 @@ describe('parseTemplate', () => {
 
     it('rejects two content slots — the content would render twice', () => {
         expect(parseTemplate(raw([slot, { type: 'Section', props: { items: [slot] } }]))).toBeNull();
+    });
+
+    it('accepts the dynamic blocks now that a template has a data path', () => {
+        // These were refused for as long as a template could not feed them: they derive content from
+        // the site, and a listing that validates and renders empty is worse than one that is refused.
+        // resolveTemplateBlocks is that data path, so the reason expired — and this asserts it did.
+        const t = parseTemplate(raw([
+            { type: 'PostsGrid', props: { count: 6, columns: 3, gap: '2rem' } },
+            { type: 'CategoryPosts', props: { count: 4, categorySlug: 'recetas', layout: 'list' } },
+            { type: 'SearchBar', props: { placeholder: 'Buscar', align: 'center' } },
+            slot,
+        ]));
+        expect(t).not.toBeNull();
+        expect(t!.content.map(b => b.type)).toContain('PostsGrid');
+    });
+
+    it('still refuses a dynamic block prop its component would ignore', () => {
+        // The same rule as everywhere else in this contract: a prop exists only if the block honours
+        // it. `showExcerpt` reads like it should work and no component reads it.
+        expect(parseTemplate(raw([{ type: 'PostsGrid', props: { showExcerpt: true } }, slot]))).toBeNull();
+        expect(parseTemplate(raw([{ type: 'CategoryPosts', props: { layout: 'carousel' } }, slot]))).toBeNull();
+        // …and a listing is a LEAF: it has no slot, so children must not be smuggled into it.
+        expect(parseTemplate(raw([{ type: 'PostsGrid', props: { items: [slot] } }, slot]))).toBeNull();
     });
 
     // ── budgets and junk ───────────────────────────────────────────────────────────────────────────
