@@ -209,6 +209,28 @@ describe('templateCandidates — the template hierarchy', () => {
         expect(templateCandidates('page', { slug: '../../etc/passwd' })).toEqual(['page']);
     });
 
+    it('a DEGENERATE slug is dropped too — non-empty is not the same as meaningful', () => {
+        // These are all non-empty, so `bits.every(Boolean)` waved them through and composed
+        // `single-post--`, `page---` and friends: names that PASS TEMPLATE_NAME (a hyphen run is
+        // legal in it) yet can never match a file, i.e. one guaranteed-404 fetch per render.
+        for (const slug of ['-', '--', '---', ' - ', '-\t-']) {
+            expect(templateCandidates('single', { postType: 'post', slug }), slug)
+                .toEqual(['single-post', 'single', 'page']);
+            expect(templateCandidates('page', { slug }), slug).toEqual(['page']);
+            expect(templateCandidates('category', { slug }), slug).toEqual(['category', 'archive', 'page']);
+        }
+        // A degenerate postType collapses the type-bearing names, exactly like an absent one.
+        expect(templateCandidates('single', { postType: '--', slug: 'hello' }))
+            .toEqual(['single', 'page']);
+        // …and one meaningful bit does not rescue a degenerate sibling.
+        expect(templateCandidates('single', { postType: '-', slug: '-' })).toEqual(['single', 'page']);
+    });
+
+    it('a slug that is meaningful only in part still composes — the rule is at-least-one, not all', () => {
+        expect(templateCandidates('page', { slug: '-a-' })).toEqual(['page--a-', 'page']);
+        expect(templateCandidates('page', { slug: '2' })).toEqual(['page-2', 'page']);
+    });
+
     it('every generated name matches the guard server-api enforces before it becomes a URL', () => {
         const hostile = ['../x', '%2e%2e', 'a b', 'A', '?q=1', '#frag', 'a\\b', ' ', 'post'];
         for (const kind of ALL_KINDS) {

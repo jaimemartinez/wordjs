@@ -12,6 +12,7 @@ export default function ThemesPage() {
     const [loading, setLoading] = useState(true);
     const [uploading, setUploading] = useState(false);
     const [uploadProgress, setUploadProgress] = useState(0);
+    const [restoring, setRestoring] = useState(false);
     const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -158,6 +159,37 @@ export default function ThemesPage() {
         themesApi.download(slug);
     };
 
+    /**
+     * Restore the bundled default theme (POST /api/v1/themes/default).
+     *
+     * This is the recovery the backend names in its own boot warning and in the "you cannot delete the
+     * last theme" error, and until now it had no button anywhere — the only way to run it was curl.
+     * That mattered more than it looks: boot no longer re-creates themes/default (it would clobber a
+     * curated stylesheet), so a site whose active theme was deleted from disk had NO in-product way
+     * back. The `missingSlug` banner below is exactly that state, so it offers this too.
+     *
+     * Confirmed as DANGEROUS, not merely as "are you sure": the call rewrites three files in place
+     * from the literals embedded in the backend and bumps the theme version. An admin who edited
+     * themes/default/style.css by hand loses that edit, and the confirmation says so in those words.
+     */
+    const handleRestoreDefault = async () => {
+        if (!await confirm(t('themes.restoreDefaultConfirm'), t('themes.restoreDefaultTitle'), true)) return;
+
+        setRestoring(true);
+        setMessage(null);
+        try {
+            const res = await themesApi.restoreDefault();
+            setMessage({ type: "success", text: res?.message || t('themes.restoreDefaultSuccess') });
+            // Reloads the list AND re-reads active_theme_missing: when the restore is what fixed the
+            // site, the banner has to disappear on its own.
+            await loadThemes();
+        } catch (error: any) {
+            setMessage({ type: "error", text: error.message || t('themes.restoreDefaultError') });
+        } finally {
+            setRestoring(false);
+        }
+    };
+
     const handleDelete = async (slug: string) => {
         if (!await confirm(t('themes.deleteConfirm'), t('themes.deleteTitle'), true)) return;
 
@@ -207,6 +239,17 @@ export default function ThemesPage() {
                             >
                                 <i className="fa-solid fa-sliders"></i> {t('themes.customize')}
                             </a>
+                            {/* Always available, not only while the banner is up: restoring is also
+                                how you undo a hand edit to themes/default that broke the stylesheet. */}
+                            <Button
+                                variant="secondary"
+                                onClick={handleRestoreDefault}
+                                disabled={restoring}
+                                loading={restoring}
+                                icon={restoring ? undefined : "fa-rotate-left"}
+                            >
+                                {restoring ? t('themes.restoring') : t('themes.restoreDefault')}
+                            </Button>
                             <Button
                                 onClick={() => fileInputRef.current?.click()}
                                 disabled={uploading}
@@ -310,6 +353,19 @@ export default function ThemesPage() {
                         <div>
                             <p className="font-bold">{t('themes.missingActiveTitle')} <code className="font-mono bg-amber-100 px-1.5 py-0.5 rounded">{missingSlug}</code></p>
                             <p className="text-sm mt-1">{t('themes.missingActiveHelp')}</p>
+                            {/* The help text above has always ENDED with "or restore the default
+                                theme" — this is the button that sentence was describing. Restoring is
+                                the one recovery that works when no other theme is installed either,
+                                which is the worst version of this state. */}
+                            <button
+                                type="button"
+                                onClick={handleRestoreDefault}
+                                disabled={restoring}
+                                className="mt-3 inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-100 border border-amber-300 text-amber-900 font-bold text-xs uppercase tracking-widest hover:bg-amber-200 transition-colors disabled:opacity-50"
+                            >
+                                <i className={`fa-solid ${restoring ? 'fa-circle-notch fa-spin' : 'fa-rotate-left'} text-[10px]`}></i>
+                                {restoring ? t('themes.restoring') : t('themes.restoreDefault')}
+                            </button>
                         </div>
                     </div>
                 )}

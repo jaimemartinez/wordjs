@@ -2,8 +2,8 @@
   "version": 1,
   "source": "backend/public/css/wordjs-ui.css",
   "counts": {
-    "tokens": 754,
-    "varUses": 1715,
+    "tokens": 755,
+    "varUses": 1716,
     "elements": 47
   },
   "tokens": {
@@ -5072,9 +5072,22 @@
         }
       ]
     },
-    "--wjs-cta-button-ml": {
+    "--wjs-cta-button-margin-start": {
       "group": "cta",
       "declaredDefault": null,
+      "fallbacks": [
+        "0"
+      ],
+      "consumers": [
+        {
+          "selector": ":root",
+          "property": "--wjs-cta-button-ml"
+        }
+      ]
+    },
+    "--wjs-cta-button-ml": {
+      "group": "cta",
+      "declaredDefault": "var(--wjs-cta-button-margin-start, 0)",
       "fallbacks": [
         "0"
       ],
@@ -5083,6 +5096,9 @@
           "selector": ".wp-block-cta-banner__button",
           "property": "margin-inline-start"
         }
+      ],
+      "flags": [
+        "alias"
       ]
     },
     "--wjs-cta-button-order": {

@@ -82,6 +82,20 @@ const VALID_CHROME = JSON.stringify({
     ]
 });
 
+// A composition legal in the NARROWER template-part position: no ChromeNav. VALID_CHROME carries one,
+// and a nav is barred from a part because its mobile drawer owns document-level state that two
+// instances would fight over — so the site chrome and a part need different fixtures.
+const VALID_PART_CHROME = JSON.stringify({
+    root: { props: {} },
+    content: [
+        { type: 'ChromeRow', props: { align: 'between', gap: 'md', items: [
+            { type: 'ChromeLogo', props: { size: 'md' } },
+            { type: 'ChromeButton', props: { label: 'Go', href: '/go', variant: 'primary' } }
+        ] } },
+        { type: 'ChromeText', props: { text: 'Hello' } }
+    ]
+});
+
 // Declarative sections whose compiled :root tokens are exactly the clean token set.
 const CLEAN_DECLARATIVE = {
     tokens: {
@@ -583,9 +597,36 @@ describe('analyzeTheme (theme doctor)', () => {
 
     it('reports nothing when the declaration, the file and the template all agree', () => {
         const slug = writeTheme(CLEAN_CSS, undefined, { templateParts: [{ name: 'sidebar-blog', area: 'sidebar' }] });
-        writeChrome(slug, 'sidebar-blog', VALID_CHROME);
+        writeChrome(slug, 'sidebar-blog', VALID_PART_CHROME);
         writeTemplate(slug, 'page', PART_TEMPLATE('sidebar-blog'));
         assert.deepStrictEqual(partCodes(slug), []);
+        assert.deepStrictEqual(doctor(slug).errors, []);
+    });
+
+    // THE POSITION GATE, end to end. Three files agree, every name is legal, every prop is in its
+    // enum — and the part still must not ship, because ChromeNav's mobile drawer owns
+    // document.body.style.overflow, a document keydown listener and a portal into document.body.
+    // A template may place the part N times, so the single instance the block assumes is gone. This
+    // is the only place an author is told: at runtime the part simply renders as nothing.
+    it('errors CHROME_INVALID/CHROME_BLOCK_NOT_IN_PART for a ChromeNav inside a declared part', () => {
+        const slug = writeTheme(CLEAN_CSS, undefined, { templateParts: [{ name: 'promo', area: 'general' }] });
+        writeChrome(slug, 'promo', VALID_CHROME);   // legal as the site header — not as a part
+        writeTemplate(slug, 'page', PART_TEMPLATE('promo'));
+        const errs = doctor(slug).errors.filter((e: any) => e.code === 'CHROME_INVALID');
+        assert.strictEqual(errs.length, 1, JSON.stringify(doctor(slug).errors));
+        assert.strictEqual(errs[0].detail.rule, 'CHROME_BLOCK_NOT_IN_PART');
+        assert.strictEqual(errs[0].detail.part, 'promo');
+        assert.match(errs[0].message, /chrome\/promo\.json/);
+        assert.match(errs[0].message, /ChromeNav/);
+        // Found nested inside the ChromeRow, not only at the top level.
+        assert.match(errs[0].message, /content\[0\]\.props\.items\[1\]/);
+    });
+
+    it('the SAME composition is clean as the site header — the bar is the position, not the block', () => {
+        const slug = writeTheme(CLEAN_CSS);
+        writeChrome(slug, 'header', VALID_CHROME);
+        writeChrome(slug, 'footer', VALID_CHROME);
+        assert.deepStrictEqual(doctor(slug).errors.filter((e: any) => e.code === 'CHROME_INVALID'), []);
     });
 
     it('validates a declared part FILE against the chrome contract, like header/footer', () => {

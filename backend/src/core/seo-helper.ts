@@ -4,6 +4,7 @@
  */
 
 const { getOption } = require('./options');
+const { toLanguageTag } = require('./language-tag');
 
 interface SeoOptions {
     siteUrl?: string;
@@ -231,6 +232,13 @@ function escapeHtml(text: any) {
 /**
  * Generate an RSS 2.0 feed for the latest published posts.
  * URL scheme matches the live pages' rel=canonical: /<slug>.
+ *
+ * `options.language` is a stored LOCALE, not a finished tag: `<language>` is a BCP 47 language tag,
+ * so it goes through toLanguageTag() here rather than being escaped and hoped for. That is also why
+ * it needs no escapeHtml — the tag is rebuilt from matched subtags, so only [A-Za-z0-9-] can survive,
+ * and an unparseable locale becomes `en` instead of an escaped invalid value. This is the last line
+ * before the markup; the caller (routes/seo) converts too, and both must, because a second caller
+ * with a raw option is exactly how the invalid value got in.
  */
 function generateRssFeed(posts: any[], options: { siteUrl?: string; title?: string; description?: string; language?: string } = {}) {
     const siteUrl = options.siteUrl || '';
@@ -261,7 +269,7 @@ function generateRssFeed(posts: any[], options: { siteUrl?: string; title?: stri
     <title>${escapeHtml(options.title || 'WordJS Site')}</title>
     <link>${siteUrl}/</link>
     <description>${escapeHtml(options.description || '')}</description>
-    <language>${escapeHtml(options.language || 'en')}</language>
+    <language>${toLanguageTag(options.language)}</language>
     <lastBuildDate>${new Date().toUTCString()}</lastBuildDate>
     <atom:link href="${siteUrl}/feed" rel="self" type="application/rss+xml"/>
 ${items}  </channel>

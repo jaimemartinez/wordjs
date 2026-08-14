@@ -9,13 +9,16 @@
  * ThemeInstaller refuses to uninstall the default, Joomla locks core templates. Ship a fallback, refuse
  * to delete it, degrade gracefully — never rewrite.
  *
- * Three properties are asserted, each the way it can actually rot:
+ * Four properties are asserted, each the way it can actually rot:
  *   1. boot writes NOTHING inside themes/ — proved both as a source-drift gate on index.ts (the call
  *      is gone) and behaviourally on all EIGHT files (even a stray call must not clobber an edit);
  *   2. the LAST remaining theme cannot be deleted — in core AND through the HTTP route, because the
  *      admin UI and an API client must hit the same wall;
  *   3. a missing active theme is REPORTED — the site's fallback to the framework's own :root tokens
- *      is correct and stays, but it must no longer be silent.
+ *      is correct and stays, but it must no longer be silent;
+ *   4. and the OTHER boot warning stays ACTIONABLE — an absent themes/default is a state deleteTheme()
+ *      grants on request (property 2 refuses only the active and the last theme), so warning about it
+ *      on every restart trains the admin to ignore the console, and property 3 goes unread with it.
  *
  * Same CWD-sandbox ordering as theme-scan-cache.test.ts: THEMES_DIR ('./themes') resolves from the CWD
  * at module load, so we chdir into a temp root BEFORE requiring anything that loads core/themes.
@@ -46,6 +49,7 @@ const jwt = require('jsonwebtoken');
 const {
     createDefaultTheme,
     verifyDefaultTheme,
+    defaultThemeNeedsAttention,
     deleteTheme,
     getActiveTheme,
     isActiveThemeMissing,
@@ -312,5 +316,77 @@ describe('theme provisioning guards', () => {
         const payload = await request(app).get('/api/v1/settings');
         assert.strictEqual(payload.body.active_theme_missing, false);
         assert.strictEqual(typeof payload.body.active_theme_missing, 'boolean');
+    });
+
+    // ------------------------------------------------------------------ 4. the warning is actionable
+
+    // A warning that fires forever on a LEGAL configuration is how an admin learns to ignore the
+    // console — and then the genuinely actionable one two sections up goes unread as well. Boot warned
+    // whenever themes/default was absent, but deleteTheme() deliberately PERMITS deleting it (see the
+    // section above: only the active and the last-remaining theme are refused), so a site that removed
+    // the bundled theme and runs another one was told off on every restart with nothing to fix.
+
+    it('says NOTHING when the default theme was deliberately deleted through the supported path', async () => {
+        removeAllThemes();
+        seedTheme(DEFAULT_THEME_SLUG);
+        seedTheme('chosen-theme');
+        await updateOption('template', 'chosen-theme');
+        invalidateThemeScanCache();
+
+        // The supported operation itself — not a hand-made directory state.
+        const result = await deleteTheme(DEFAULT_THEME_SLUG);
+        assert.strictEqual(result.success, true, 'precondition: deleting an inactive, non-last default is allowed');
+
+        const report = verifyDefaultTheme();
+        assert.strictEqual(report.exists, false);
+        assert.strictEqual(report.ok, false, 'the health check still reports the truth…');
+        assert.strictEqual(
+            defaultThemeNeedsAttention(report), false,
+            '…but boot must not warn: an absent default beside a healthy active theme is a supported state',
+        );
+        assert.strictEqual(await isActiveThemeMissing(), false, 'and the site has a theme, so nothing else warns either');
+    });
+
+    it('DOES warn when the default directory is there but incomplete — nothing supported produces that', () => {
+        fs.mkdirSync(defaultDir(), { recursive: true });
+        fs.writeFileSync(path.join(defaultDir(), 'theme.json'), JSON.stringify({ name: 'WordJS', version: '2.0.0' }));
+        invalidateThemeScanCache();
+
+        const report = verifyDefaultTheme();
+        assert.deepStrictEqual(report.missing, ['style.css']);
+        assert.strictEqual(defaultThemeNeedsAttention(report), true);
+
+        // Completing it silences it again — the warning tracks the fault, not the calendar.
+        fs.writeFileSync(path.join(defaultDir(), 'style.css'), ':root { --wjs-color-primary: #123456; }\n');
+        assert.strictEqual(defaultThemeNeedsAttention(verifyDefaultTheme()), false);
+    });
+
+    it('leaves an absent-AND-active default to the missing-active-theme warning, which names the slug', async () => {
+        removeAllThemes();
+        seedTheme('chosen-theme');
+        await updateOption('template', DEFAULT_THEME_SLUG);
+        invalidateThemeScanCache();
+
+        assert.strictEqual(await isActiveThemeMissing(), true, 'this IS a real fault and must still be loud');
+        assert.strictEqual(
+            defaultThemeNeedsAttention(verifyDefaultTheme()), false,
+            'one fault, one warning: the active-theme warning already names the slug and the way out',
+        );
+    });
+
+    it('boot GUARDS the default-theme warning with that predicate instead of warning on !ok', () => {
+        const source = fs.readFileSync(BOOT_SOURCE, 'utf8')
+            .split('\n')
+            .filter((line: string) => !/^\s*(\/\/|\/\*|\*)/.test(line))
+            .join('\n');
+        assert.match(
+            source, /if\s*\(defaultThemeNeedsAttention\(/,
+            'the warning must be gated on defaultThemeNeedsAttention() — a bare !defaultTheme.ok fires ' +
+            'forever on a configuration deleteTheme() grants on request',
+        );
+        assert.ok(
+            !/if\s*\(!\s*defaultTheme\.ok\s*\)/.test(source),
+            'the old unconditional-on-!ok warning must be gone, not merely shadowed',
+        );
     });
 });

@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { readFileSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
 import {
     parseChromeData,
     resolveEffectiveChrome,
@@ -7,6 +9,7 @@ import {
     isSafeChromeHref,
     STARTER_TEMPLATES,
     CHROME_MAX_BLOCKS,
+    CHROME_DOCUMENT_SCOPED_BLOCKS,
 } from '../chromeData';
 
 // A representative valid composition with a nested Row (depth 3 at the deepest leaf).
@@ -183,6 +186,83 @@ describe('parseChromeData', () => {
         expect(parseChromeData([]).ok).toBe(false);
         expect(parseChromeData({ content: [] }).ok).toBe(false);
         expect(parseChromeData({ root: { props: {} } }).ok).toBe(false);
+    });
+});
+
+// THE POSITION GATE — mirrors backend/src/core/chrome-validate.ts (the authority).
+//
+// chrome/header.json and chrome/footer.json are resolved ONCE per document by the layout. A NAMED
+// TEMPLATE PART is not: a page template may place it N times, inside the page body. A block written
+// for the first world — one that owns a document-level global — therefore has no single-instance
+// guarantee in the second, and is refused there.
+describe('parseChromeData — the template-part position', () => {
+    const nav = { type: 'ChromeNav', props: { location: 'header', orientation: 'horizontal' } };
+    const wrap = (content: unknown[]) => ({ root: { props: {} }, content });
+
+    it('refuses ChromeNav in a part and accepts the identical tree as site chrome', () => {
+        // VALID nests its ChromeNav two Rows deep — the gate has to hold at every depth, not just
+        // at the top level, or a ChromeRow is a laundering route.
+        expect(parseChromeData(VALID, { position: 'part' }).ok).toBe(false);
+        expect(parseChromeData(VALID, { position: 'chrome' }).ok).toBe(true);
+        expect(parseChromeData(VALID).ok).toBe(true); // default is the site chrome
+    });
+
+    it('names the block and the reason, so the fallback-to-nothing is explainable', () => {
+        const r = parseChromeData(wrap([nav]), { position: 'part', source: 'template part "promo"' });
+        expect(r.ok).toBe(false);
+        expect(r.errors).toHaveLength(1);
+        expect(r.errors[0]).toContain('template part "promo"');
+        expect(r.errors[0]).toContain('ChromeNav');
+        expect(r.errors[0]).toContain('document-level state');
+    });
+
+    it('bars a ChromeNav of ANY shape — the rule is the block, not the prop pair', () => {
+        for (const location of ['header', 'footer']) {
+            for (const orientation of ['horizontal', 'vertical']) {
+                const r = parseChromeData(wrap([{ type: 'ChromeNav', props: { location, orientation } }]), { position: 'part' });
+                expect(r.ok, `${location}/${orientation}`).toBe(false);
+            }
+        }
+    });
+
+    it('leaves every other block legal in a part — this narrows the allowlist, it does not gut it', () => {
+        const legal = [
+            { type: 'ChromeLogo', props: { size: 'md' } },
+            { type: 'ChromeSiteTitle', props: { showTagline: true } },
+            { type: 'ChromeSearch', props: { placeholder: 'Search' } },
+            { type: 'ChromeSocials', props: { source: 'settings' } },
+            { type: 'ChromeText', props: { text: 'hi' } },
+            { type: 'ChromeButton', props: { label: 'Go', href: '/x', variant: 'primary' } },
+            { type: 'ChromeSpacer', props: { size: 'sm' } },
+            { type: 'ChromeRow', props: { align: 'center', gap: 'md', items: [] } },
+        ];
+        expect(parseChromeData(wrap(legal), { position: 'part' }).ok).toBe(true);
+        expect(CHROME_DOCUMENT_SCOPED_BLOCKS).toEqual(['ChromeNav']);
+    });
+
+    // ANTI-DRIFT. The barred list is the output of an audit of the chrome components, and an audit
+    // rots: someone adds a `useEffect` that touches `document` to a block nobody re-checked, and the
+    // validator stays green while a second instance starts fighting over a global. So derive the
+    // audit from the SOURCE and pin the two together. `useId` is exempt — React makes it unique per
+    // instance, which is the opposite of a shared global.
+    it('the barred list still matches what the components actually do', () => {
+        const dir = join(__dirname, '..', '..', 'components', 'chrome');
+        const DOC_STATE = /\bdocument\b|\bwindow\b|createPortal/;
+        const offenders = new Set<string>();
+        const files = readdirSync(dir).filter((f) => f.endsWith('.tsx'));
+        // Every module that touches document-level APIs, plus every block that IMPORTS one — the
+        // state is ChromeNavMobile's, but ChromeNav is what a composition can name.
+        const dirty = new Set(files.filter((f) => DOC_STATE.test(readFileSync(join(dir, f), 'utf8'))).map((f) => f.replace(/\.tsx$/, '')));
+        for (const f of files) {
+            const name = f.replace(/\.tsx$/, '');
+            if (name === 'ChromeRenderer') continue; // the renderer, not a nameable block
+            const src = readFileSync(join(dir, f), 'utf8');
+            const importsDirty = [...dirty].some((d) => d !== name && new RegExp(`["'./]${d}["']`).test(src));
+            if (dirty.has(name) || importsDirty) offenders.add(name);
+        }
+        // ChromeNavMobile is not itself a block type — it is reachable only through ChromeNav.
+        offenders.delete('ChromeNavMobile');
+        expect([...offenders].sort()).toEqual([...CHROME_DOCUMENT_SCOPED_BLOCKS].sort());
     });
 });
 

@@ -88,7 +88,10 @@ function decorate(list: unknown, posts: Post[], ctx: RouteContext): unknown {
  *   1. the name must be DECLARED in the active theme's theme.json `templateParts` (fail-closed: an
  *      invalid declaration drops every part, so a theme cannot half-load its furniture);
  *   2. the file must validate against the chrome contract v1 — the same closed allowlist, the same
- *      href rules and the same budgets the site's own header and footer go through.
+ *      href rules and the same budgets the site's own header and footer go through, IN THE "part"
+ *      POSITION, which is stricter: a part renders inside the page body and a template may place it
+ *      more than once, so blocks that own document-level state (ChromeNav's mobile drawer owns the
+ *      body scroll-lock) are refused here and allowed only in the site's own header/footer.
  * The declaration gate is the important one: without it, `name` would be a theme-supplied string
  * choosing which file to fetch, and this codebase's rule is that data fills slots and never chooses.
  */
@@ -143,7 +146,9 @@ async function resolveParts(names: Set<string>, themeSlug: string): Promise<Map<
     const bindings = buildChromeBindings(settings, headerMenu?.items, footerMenu?.items);
     const raws = await Promise.all(usable.map((n) => getThemeChrome(themeSlug, n).catch(() => null)));
     usable.forEach((name, i) => {
-        const parsed = parseChromeData(raws[i]);
+        // position: "part" — the runtime half of the position gate. A theme is installed by copying
+        // files, so the doctor is advice and THIS is the thing that actually stops a barred block.
+        const parsed = parseChromeData(raws[i], { source: `template part "${name}"`, position: "part" });
         if (parsed.ok && parsed.data) out.set(name, { data: parsed.data, bindings });
     });
     return out;

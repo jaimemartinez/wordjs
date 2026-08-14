@@ -320,6 +320,12 @@ function analyzeTheme(slug: string, opts: { themesDir?: string; manifestPath?: s
     }
   } catch { /* unreadable directory — the chrome checks below report what matters */ }
 
+  // THE NAME CARRIES THE POSITION. validateChromeData derives it from `part`: 'header'/'footer' are the
+  // site chrome the layout renders once, and every other name is a template part a page body may pull
+  // in N times — which is what makes the document-scoped blocks (CHROME_BLOCK_NOT_IN_PART) illegal in
+  // it. Do not "simplify" this call by dropping `part`: the site-chrome rule is the LENIENT one, so a
+  // part validated without its name would come back clean and the author would ship a second
+  // body-scroll-lock owner into the page.
   if (chromeValidate && typeof chromeValidate.validateChromeData === 'function') {
     for (const part of ['header', 'footer'].concat(Array.from(declaredParts.keys()))) {
       const chromeJsonPath = path.join(themeDir, 'chrome', `${part}.json`);

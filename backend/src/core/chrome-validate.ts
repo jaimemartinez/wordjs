@@ -24,6 +24,7 @@
  *   CHROME_UNSAFE_HREF      href neither site-relative ('/', never '//') nor http(s)://
  *   CHROME_TOO_MANY_BLOCKS  more than 100 blocks in the whole composition
  *   CHROME_TOO_DEEP         nesting deeper than 3 levels
+ *   CHROME_BLOCK_NOT_IN_PART  a document-scoped block in a NAMED TEMPLATE PART (see POSITION below)
  *
  * Dependency-free (no fs/db/npm) so the doctor and the CLI can load it anywhere.
  */
@@ -89,6 +90,59 @@ const BLOCKS: Record<string, Record<string, PropSpec>> = {
     },
 };
 
+/* ────────────────────────────────────────────────────────────────────────────────────────────────
+ * POSITION — the same composition format, two very different render positions.
+ *
+ * 'chrome'  chrome/header.json and chrome/footer.json. The public layout resolves each ONCE per
+ *           document, so a block in this position is guaranteed a single instance.
+ * 'part'    a NAMED TEMPLATE PART (theme.json `templateParts`) that a page template pulls in with a
+ *           `TemplatePart` block. A template may place N of them, and a page body renders inside
+ *           <main> — so a block here has NEITHER a single-instance nor a top-of-document guarantee.
+ *
+ * Template parts widened chrome from "two files the layout renders once" to "arbitrary files a page
+ * body can pull in N times". The blocks were written for the first world. A block that owns
+ * DOCUMENT-LEVEL STATE — one global that two instances then fight over — is therefore refused in the
+ * 'part' position and still allowed in 'chrome'.
+ *
+ * THE AUDIT (all nine blocks in frontend/src/components/chrome/, contract v1):
+ *   ChromeLogo, ChromeSiteTitle, ChromeSearch, ChromeSocials, ChromeText, ChromeButton, ChromeSpacer
+ *   and ChromeRow are presentational server components — no "use client", no hooks, no document or
+ *   window access at all. Any number of instances is fine.
+ *   ChromeNav is the one exception. Its horizontal/header form mounts the ChromeNavMobile client
+ *   island, which portals its overlay to document.body, writes document.body.style.overflow to lock
+ *   the page scroll while open, and binds a document-level keydown listener. Two open drawers restore
+ *   overflow from each other's saved value, so closing one leaves the page permanently unscrollable.
+ *
+ * ChromeNav is barred WHOLESALE rather than only in the prop combination that mounts the island. The
+ * island is an internal of the block, not part of this contract: pinning the rule to `location` +
+ * `orientation` would mean a future change inside ChromeNav silently re-opens the hole with the
+ * validator still green. It is also the rule this contract already made once — PARTS_RESERVED_NAME
+ * refuses `header`/`footer` as part names because "a template pulling it in would render a second
+ * masthead inside <main> — an invalid landmark and a duplicated nav" — and a ChromeNav in a part is
+ * that same duplicated site nav by another route.
+ *
+ * The frontend keeps the mirror of this list in lib/chromeData.ts, and a vitest asserts the set
+ * against what the components actually do, so the list cannot quietly drift from the audit above.
+ */
+const DOCUMENT_SCOPED_BLOCKS: Record<string, string> = {
+    ChromeNav: 'it mounts the mobile drawer, which owns document.body scroll-lock, a document keydown '
+        + 'listener and a portal into document.body — two instances on one page fight over that single global',
+};
+
+/** The two names the public layout resolves itself. Everything else is a named template part. */
+const CHROME_SITE_PARTS = ['header', 'footer'];
+
+/**
+ * Which position a composition is being validated for. DERIVED from the part name, because the name
+ * is the only thing that decides it: `header`/`footer` are the site chrome, and validateTemplateParts
+ * REJECTS those two as template-part names, so no part can ever launder itself into the lenient
+ * branch. An absent name is the site chrome — the only position PUT /api/v1/chrome/:part can write.
+ */
+function chromePositionFor(part?: string): 'chrome' | 'part' {
+    if (typeof part !== 'string' || CHROME_SITE_PARTS.includes(part)) return 'chrome';
+    return 'part';
+}
+
 const isPlainObject = (v: any): boolean => typeof v === 'object' && v !== null && !Array.isArray(v);
 
 /**
@@ -115,7 +169,7 @@ function describeProp(spec: PropSpec): string {
     }
 }
 
-interface WalkState { blocks: number; tooMany: boolean; tooDeep: boolean; }
+interface WalkState { blocks: number; tooMany: boolean; tooDeep: boolean; position: 'chrome' | 'part'; }
 
 function validateBlock(node: any, blockPath: string, depth: number, state: WalkState, errors: ChromeValidationError[]): void {
     // Budget caps report ONCE and stop the walk — a hostile 10k-item payload costs O(cap), and
@@ -150,6 +204,20 @@ function validateBlock(node: any, blockPath: string, depth: number, state: WalkS
             code: 'CHROME_UNKNOWN_TYPE',
             path: blockPath,
             message: `unknown block type "${node.type}" — allowed: ${Object.keys(BLOCKS).join(', ')}`
+        });
+        return;
+    }
+    // POSITION gate, at EVERY depth: a barred block is just as document-scoped nested three
+    // ChromeRows down as it is at the top level. Rejected here and not merely warned about — the
+    // whole point is that the second instance is what breaks, so an author who cannot see it in a
+    // preview of one page must be stopped at authoring time.
+    if (state.position === 'part' && Object.prototype.hasOwnProperty.call(DOCUMENT_SCOPED_BLOCKS, node.type)) {
+        errors.push({
+            code: 'CHROME_BLOCK_NOT_IN_PART',
+            path: blockPath,
+            message: `${node.type} may not appear in a named template part: ${DOCUMENT_SCOPED_BLOCKS[node.type]}. `
+                + `A template may place the part more than once and it renders inside the page body, so the single `
+                + `instance the block assumes is not guaranteed — keep ${node.type} in chrome/header.json or chrome/footer.json.`
         });
         return;
     }
@@ -220,11 +288,13 @@ function validateBlock(node: any, blockPath: string, depth: number, state: WalkS
  * because a validator that only takes one shape invites the classic JSON.parse(object) bug.
  * The 64KB budget is measured on the serialized bytes either way.
  *
- * `opts.part` ('header' | 'footer') is reserved for part-specific rules; v1 validates both
- * parts identically.
+ * `opts.part` is the composition's NAME. It selects the POSITION (see chromePositionFor): 'header'
+ * and 'footer' are the site chrome the layout renders once, and any other name is a named template
+ * part a page body may pull in N times — which is what bars the document-scoped blocks. Passing no
+ * name means the site chrome, the only position the write API can reach.
  */
 function validateChromeData(raw: any, opts: { part?: string } = {}): ChromeValidationResult {
-    void opts;
+    const position = chromePositionFor(opts.part);
     const errors: ChromeValidationError[] = [];
 
     let text: string | undefined;
@@ -267,7 +337,7 @@ function validateChromeData(raw: any, opts: { part?: string } = {}): ChromeValid
         return { ok: false, errors };
     }
 
-    const state: WalkState = { blocks: 0, tooMany: false, tooDeep: false };
+    const state: WalkState = { blocks: 0, tooMany: false, tooDeep: false, position };
     data.content.forEach((node: any, i: number) => validateBlock(node, `content[${i}]`, 1, state, errors));
 
     return { ok: errors.length === 0, errors };
@@ -366,6 +436,9 @@ module.exports = {
     CHROME_MAX_BLOCKS: MAX_BLOCKS,
     CHROME_MAX_DEPTH: MAX_DEPTH,
     CHROME_BLOCK_TYPES: Object.keys(BLOCKS),
+    CHROME_SITE_PARTS: CHROME_SITE_PARTS.slice(),
+    CHROME_DOCUMENT_SCOPED_BLOCKS: Object.keys(DOCUMENT_SCOPED_BLOCKS),
+    chromePositionFor,
     validateTemplateParts,
     TEMPLATE_PART_AREAS: TEMPLATE_PART_AREAS.slice(),
     TEMPLATE_PART_NAME,

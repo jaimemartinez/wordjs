@@ -480,8 +480,11 @@ router.post('/:slug/activate', authenticate, isAdmin, asyncHandler(async (req: R
  *         description: Default theme restored
  */
 router.post('/default', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
-    // Admin explicitly asked to restore the default theme → force overwrite (unlike the boot-time
-    // scaffold in index.ts, which must NOT clobber the curated default/style.css).
+    // Admin explicitly asked to restore the default theme → force overwrite. This is the ONLY path
+    // that clobbers files inside themes/: boot no longer scaffolds anything (it verifies and warns —
+    // see index.ts), and the install wizard provisions once, without force. A plain
+    // createDefaultTheme() would leave every existing file exactly as the user edited it, which is
+    // the opposite of what "restore" was asked for.
     createDefaultTheme(true);
     // Restoring rewrites files inside THEMES_DIR without going through switchTheme, so nothing else
     // would notice: the memoized scan would keep the pre-restore metadata (including the version the
