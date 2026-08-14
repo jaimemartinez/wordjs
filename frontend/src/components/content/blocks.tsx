@@ -159,15 +159,58 @@ export function ButtonBlock({ label, href, variant, align, bg, color, radius, pa
 }
 
 /**
+ * THE CONTAINER WRAPPER — which element a container renders, and what extra classes it carries.
+ *
+ * Adapted from Shopify, where a section's `{% schema %}` may declare `tag` (chosen from a closed list of
+ * six) and `class` (APPENDED to the wrapper class the platform emits). A theme's page template can now
+ * say the same things (backend/src/core/template-validate.ts is the authority, frontend/src/lib/
+ * templateData.ts mirrors it), which is what lets a theme mark one Section as its hero instead of
+ * shipping four identical ones.
+ *
+ * BOTH CHECKS ARE ENFORCED AGAIN HERE, and that is not belt-and-braces — it is load-bearing. These
+ * components are also rendered by ContentRenderer/puckConfig with `{...props}` spread straight out of
+ * `_puck_data`, which is AUTHOR-controlled and whose write-side sanitizer only classifies string leaves
+ * as HTML- or URL-bearing: a structural prop passes through it untouched. That is precisely the hole
+ * that produced the `level: "script"` stored-XSS (see HEADING_TAGS above). So `tag` is resolved through
+ * a closed Set with a fallback, and `className` is accepted only in the exact shape the validator
+ * allows — anything else is DROPPED rather than repaired, so a rejected value can never become a
+ * different-but-valid class.
+ *
+ * `main` is absent from the set on purpose: the public shell already renders `<main id="main-content">`
+ * around all of this, and a nested <main> is an invalid landmark.
+ */
+const CONTAINER_TAGS = new Set(['article', 'aside', 'div', 'footer', 'header', 'section']);
+// `typeof tag === 'string'` BEFORE the Set lookup, not String(tag). Coercing first meant
+// `tag: ["header"]` stringified to "header" and sailed through a guard both validators reject —
+// harmless in itself, since the result is always a member of the closed Set, but this is the
+// fail-closed layer for the _puck_data path, where the value is author-controlled and never went
+// through a validator at all. A guard that accepts what its own contract refuses is not a guard.
+const containerTag = (tag: any, fallback: 'section' | 'div'): any =>
+    typeof tag === 'string' && CONTAINER_TAGS.has(tag) ? tag : fallback;
+
+/** Mirrors CLASS_TOKEN/MAX_CLASS_TOKENS in the validators: ≤3 tokens of `[a-z][a-z0-9-]{0,39}`. */
+const CLASS_TOKEN = /^[a-z][a-z0-9-]{0,39}$/;
+const extraClass = (value: any): string | undefined => {
+    if (typeof value !== 'string' || value === '' || value !== value.trim()) return undefined;
+    const tokens = value.split(' '); // single space, so a tab/newline/double-space FAILS the pattern
+    if (tokens.length > 3 || !tokens.every((t) => CLASS_TOKEN.test(t))) return undefined;
+    return value;
+};
+
+/**
  * CONTAINER blocks: the slot arrives as a render function `(className?) => ReactNode` so both
  * surfaces keep their own slot machinery — the editor passes Puck's slot component, the public
  * ContentRenderer passes a plain wrapper div with recursively rendered items (same DOM: Puck's
  * SlotRender emits `<div className>…</div>`).
+ *
+ * The framework's own class always comes FIRST and is never replaced — a theme appends, so every
+ * `.wp-block-*` selector, token and stylesheet hook keeps working on a container the theme has named.
  */
-export function SectionBlock({ maxWidth, pad, bg, css, slot }: any) {
+export function SectionBlock({ maxWidth, pad, bg, css, slot, tag, className }: any) {
+    const Tag = containerTag(tag, 'section');
     return (
-        <section
-            className="wp-block-section"
+        <Tag
+            className={cx('wp-block-section', extraClass(className))}
             style={{
                 ...blockVars('section', { pad: unit(pad), bg, 'max-width': maxWidth }),
                 ...css,
@@ -176,14 +219,15 @@ export function SectionBlock({ maxWidth, pad, bg, css, slot }: any) {
             <div className="wp-block-section__inner">
                 {slot()}
             </div>
-        </section>
+        </Tag>
     );
 }
 
-export function GridBlock({ columns, gap, columnsTablet, columnsMobile, css, slot }: any) {
+export function GridBlock({ columns, gap, columnsTablet, columnsMobile, css, slot, tag, className }: any) {
+    const Tag = containerTag(tag, 'div');
     return (
-        <div
-            className="wp-block-grid"
+        <Tag
+            className={cx('wp-block-grid', extraClass(className))}
             style={{
                 ...blockVars('grid', {
                     columns,
@@ -200,14 +244,15 @@ export function GridBlock({ columns, gap, columnsTablet, columnsMobile, css, slo
                 1 while the other tracks sat empty. Both the editor DropZone and the public
                 SlotRender accept a className, so the layout goes where the children are. */}
             {slot("wp-block-grid__items")}
-        </div>
+        </Tag>
     );
 }
 
-export function FlexRowBlock({ justify, align, gap, wrap, direction, css, slot }: any) {
+export function FlexRowBlock({ justify, align, gap, wrap, direction, css, slot, tag, className }: any) {
+    const Tag = containerTag(tag, 'div');
     return (
-        <div
-            className="wp-block-flex-row"
+        <Tag
+            className={cx('wp-block-flex-row', extraClass(className))}
             style={{
                 ...blockVars('flex', {
                     justify,
@@ -222,11 +267,12 @@ export function FlexRowBlock({ justify, align, gap, wrap, direction, css, slot }
             {/* Same reason as Grid: the flex row must be the slot's own wrapper, or all
                 children become one flex item and justify/align/gap do nothing. */}
             {slot("wp-block-flex-row__items")}
-        </div>
+        </Tag>
     );
 }
 
-export function ColumnsBlock({ distribution, columnStyles, gap, minHeight, bg, radius, elementId, css, slots }: any) {
+export function ColumnsBlock({ distribution, columnStyles, gap, minHeight, bg, radius, elementId, css, slots, tag, className }: any) {
+    const Tag = containerTag(tag, 'div');
     const dist = distribution || { columnCount: 2, widths: [50, 50] };
     const columnCount = dist.columnCount || 2;
     const widths = dist.widths || [50, 50];
@@ -236,9 +282,9 @@ export function ColumnsBlock({ distribution, columnStyles, gap, minHeight, bg, r
     // its class name identical across SSR and hydration). The contract's own media query
     // does it for every Columns block, so the injected stylesheet is gone.
     return (
-        <div
+        <Tag
             id={elementId || undefined}
-            className="wp-block-columns"
+            className={cx('wp-block-columns', extraClass(className))}
             style={{
                 ...blockVars('columns', {
                     template: widths.slice(0, columnCount).map((w: number) => `${w}%`).join(' '),
@@ -275,7 +321,7 @@ export function ColumnsBlock({ distribution, columnStyles, gap, minHeight, bg, r
                     </div>
                 );
             })}
-        </div>
+        </Tag>
     );
 }
 

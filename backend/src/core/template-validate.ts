@@ -61,13 +61,70 @@ const CONTENT_SLOT = 'PageContent';
  * Props are declared as a TYPE or a closed ENUM — never free-form. `enum` is what makes a structural
  * prop impossible to abuse: a value outside the set is rejected, so nothing here can become an
  * element name, a selector or a tag.
+ *
+ * `classlist` is the one shape-checked string: a class name is not a primitive we can leave open,
+ * because the value lands in an attribute. See CLASS_TOKEN below.
  */
-type PropSpec = { kind: 'string' | 'number' | 'boolean' } | { kind: 'enum'; values: string[] };
+type PropSpec =
+    | { kind: 'string' | 'number' | 'boolean' }
+    | { kind: 'enum'; values: string[] }
+    | { kind: 'classlist' };
 
 const LEN = { kind: 'string' } as const;
 const NUM = { kind: 'number' } as const;
 const BOOL = { kind: 'boolean' } as const;
 const en = (...values: string[]): PropSpec => ({ kind: 'enum', values });
+
+/**
+ * THE WRAPPER AFFORDANCE, borrowed from Shopify and cut down to this contract's grammar.
+ *
+ * A Shopify section's `{% schema %}` may declare `tag` and `class`: `tag` picks the wrapper's element
+ * NAME from a closed list of six, and `class` is APPENDED to the wrapper class Shopify itself emits.
+ * That is safe for exactly the reason this whole file is safe — the theme chooses from a set the
+ * platform owns and never supplies structure, and appending means the framework's own hook survives.
+ * Without it every Section a theme places is indistinguishable from every other, so a theme cannot even
+ * mark one as its hero.
+ *
+ * TAGS is Shopify's six verbatim. `main` is deliberately NOT here: the public layout already emits
+ * `<main id="main-content">` (frontend/src/components/public/PublicLayoutShell.tsx) and a template
+ * renders INSIDE it, so allowing `main` would let a well-meaning theme nest a second one — an invalid
+ * landmark and a screen-reader regression, from a prop that looked like good semantics.
+ *
+ * Both props are CONTAINERS-ONLY (Section, Grid, FlexRow, Columns). A Spacer or a Divider has no
+ * content to label and no wrapper worth naming, and PageContent is a hole, not an element.
+ */
+const TAGS = ['article', 'aside', 'div', 'footer', 'header', 'section'];
+
+/**
+ * A single class name: lower-case, starts with a letter, then letters/digits/hyphens, 40 chars max.
+ * Deliberately narrower than what CSS permits. It cannot carry a space, a quote, a bracket, a dot, a
+ * colon or a slash, so nothing written here can close the attribute, name a second selector, or read
+ * as anything but a class — and REJECTION, not sanitizing, is the response to a value that tries. A
+ * sanitizer turns an attack into a silently-different class name; a rejection tells the theme author.
+ *
+ * NOTE for anyone porting this: `$` in a JavaScript regex without the `m` flag matches END OF INPUT
+ * only (unlike Perl/Python, where it also matches before a trailing newline). The whitespace check in
+ * classListOk covers that anyway, belt and braces.
+ */
+const CLASS_TOKEN = /^[a-z][a-z0-9-]{0,39}$/;
+const MAX_CLASS_TOKENS = 3;
+
+/**
+ * Space-separated, at most MAX_CLASS_TOKENS. Split on a single space rather than /\s+/ on purpose: a
+ * double space, a tab or a newline then yields a token the pattern refuses, instead of being quietly
+ * normalised away.
+ */
+function classListOk(value: any): boolean {
+    if (typeof value !== 'string') return false;
+    if (value === '' || value !== value.trim()) return false; // an empty/padded class is a no-op prop
+    const tokens = value.split(' ');
+    if (tokens.length > MAX_CLASS_TOKENS) return false;
+    return tokens.every((t) => CLASS_TOKEN.test(t));
+}
+
+/** The wrapper props every CONTAINER block carries. Spread into each container's prop table below. */
+const TAG = en(...TAGS);
+const CLASSNAME = { kind: 'classlist' } as const;
 
 /**
  * CLOSED allowlist. A template is STRUCTURE plus the dynamic blocks that derive their content from
@@ -78,11 +135,11 @@ const en = (...values: string[]): PropSpec => ({ kind: 'enum', values });
 const BLOCKS: Record<string, { props: Record<string, PropSpec>; slot: string | null }> = {
     [CONTENT_SLOT]: { props: {}, slot: null },
 
-    // Layout
-    Section: { props: { background: LEN, padding: LEN, maxWidth: LEN }, slot: 'items' },
-    Grid: { props: { columns: NUM, gap: LEN, columnsTablet: NUM, columnsMobile: NUM }, slot: 'items' },
-    FlexRow: { props: { gap: LEN, align: en('start', 'center', 'end', 'stretch'), justify: en('start', 'center', 'end', 'between', 'around'), wrap: BOOL, direction: en('row', 'column', 'row-reverse', 'column-reverse') }, slot: 'items' },
-    Columns: { props: { columns: NUM, gap: LEN }, slot: 'items' },
+    // Layout. `tag` + `className` are the container affordance — see TAGS/CLASS_TOKEN above.
+    Section: { props: { background: LEN, padding: LEN, maxWidth: LEN, tag: TAG, className: CLASSNAME }, slot: 'items' },
+    Grid: { props: { columns: NUM, gap: LEN, columnsTablet: NUM, columnsMobile: NUM, tag: TAG, className: CLASSNAME }, slot: 'items' },
+    FlexRow: { props: { gap: LEN, align: en('start', 'center', 'end', 'stretch'), justify: en('start', 'center', 'end', 'between', 'around'), wrap: BOOL, direction: en('row', 'column', 'row-reverse', 'column-reverse'), tag: TAG, className: CLASSNAME }, slot: 'items' },
+    Columns: { props: { columns: NUM, gap: LEN, tag: TAG, className: CLASSNAME }, slot: 'items' },
     Spacer: { props: { height: LEN }, slot: null },
     Divider: { props: { color: LEN, width: LEN, length: LEN, gap: LEN }, slot: null },
 
@@ -126,6 +183,12 @@ function checkProps(type: string, props: any, path: string, errors: TemplateErro
         if (ps.kind === 'enum') {
             if (typeof value !== 'string' || !ps.values.includes(value)) {
                 errors.push({ code: 'TPL_INVALID_PROP', path: `${path}.props.${key}`, message: `must be one of: ${ps.values.join(', ')}` });
+            }
+            continue;
+        }
+        if (ps.kind === 'classlist') {
+            if (!classListOk(value)) {
+                errors.push({ code: 'TPL_INVALID_PROP', path: `${path}.props.${key}`, message: `must be up to ${MAX_CLASS_TOKENS} space-separated class names, each matching ${CLASS_TOKEN.source} — it is APPENDED to the block's own classes, never a replacement` });
             }
             continue;
         }
@@ -238,4 +301,7 @@ module.exports = {
     TEMPLATE_BLOCKS: Object.keys(BLOCKS),
     FORBIDDEN_TEMPLATE_BLOCKS: Object.keys(FORBIDDEN),
     TEMPLATE_LIMITS: { MAX_BYTES, MAX_BLOCKS, MAX_DEPTH },
+    /** The container wrapper affordance, exported so the doctor and the tests read the real set. */
+    TEMPLATE_TAGS: TAGS.slice(),
+    TEMPLATE_CLASS: { TOKEN: CLASS_TOKEN, MAX_TOKENS: MAX_CLASS_TOKENS },
 };

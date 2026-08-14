@@ -70,6 +70,75 @@ describe('TemplateRenderer', () => {
         expect(html).toContain('id="page-content"');
     });
 
+    // ── the container wrapper ──────────────────────────────────────────────────────────────────────
+    //
+    // A prop that validates and does nothing is a defect in this contract, so these assert the DOM,
+    // not the props: the chosen element must actually be the one that renders, and the theme's class
+    // must actually appear next to the framework's.
+
+    it('renders the element the template chose, for every tag and every container', () => {
+        for (const tag of ['article', 'aside', 'div', 'footer', 'header', 'section']) {
+            const html = render([{ type: 'Section', props: { tag, items: [slot] } }]);
+            expect(html.startsWith(`<${tag} class="wp-block-section"`), `${tag}: ${html.slice(0, 80)}`).toBe(true);
+            expect(html).toContain('wp-block-section__inner'); // the inner wrapper is untouched
+        }
+        // The other three containers default to <div> and must honour the prop just the same.
+        expect(render([{ type: 'Grid', props: { tag: 'header', columns: 2, items: [slot] } }]))
+            .toMatch(/^<header class="wp-block-grid"/);
+        expect(render([{ type: 'FlexRow', props: { tag: 'footer', items: [slot] } }]))
+            .toMatch(/^<footer class="wp-block-flex-row"/);
+        expect(render([{ type: 'Columns', props: { tag: 'aside', columns: 2, items: [slot] } }]))
+            .toMatch(/^<aside class="wp-block-columns"/);
+    });
+
+    it('keeps each container default when no tag is given', () => {
+        expect(render([{ type: 'Section', props: { items: [slot] } }])).toMatch(/^<section /);
+        expect(render([{ type: 'Grid', props: { items: [slot] } }])).toMatch(/^<div /);
+        expect(render([{ type: 'FlexRow', props: { items: [slot] } }])).toMatch(/^<div /);
+        expect(render([{ type: 'Columns', props: { items: [slot] } }])).toMatch(/^<div /);
+    });
+
+    it("APPENDS the theme's class — the framework's own hook always survives", () => {
+        const html = render([{
+            type: 'Section', props: {
+                tag: 'header', className: 'site-hero brand',
+                items: [{ type: 'Grid', props: { columns: 2, className: 'cards', items: [slot] } }],
+            },
+        }]);
+        // Framework class FIRST, theme's appended. If it ever replaced instead, every .wp-block-*
+        // selector, token and stylesheet rule would come off the element at once.
+        expect(html).toContain('class="wp-block-section site-hero brand"');
+        expect(html).toContain('class="wp-block-grid cards"');
+        // …and the slot wrapper the grid layout lives on is untouched by the theme's class.
+        expect(html).toContain('class="wp-block-grid__items"');
+    });
+
+    it('drops a malformed className rather than emitting it — these components also get _puck_data', () => {
+        // ContentRenderer and puckConfig spread AUTHOR-controlled `_puck_data` into these same
+        // components, and the write-side sanitizer does not touch a structural prop. So the block must
+        // be fail-closed on its own, not merely downstream of parseTemplate. Hand-built for that
+        // reason: parseTemplate would (and does, in its own suite) reject all of this first.
+        const template = {
+            content: [{
+                type: 'Section',
+                props: {
+                    tag: 'script',                       // not in the closed set
+                    className: 'hero" onclick="alert(1)', // tries to close the attribute
+                    items: [slot],
+                },
+            }],
+        } as any;
+        const html = renderToStaticMarkup(
+            React.createElement(TemplateRenderer, { template, children: content }),
+        );
+        expect(html).not.toContain('<script');
+        expect(html).not.toContain('onclick');
+        expect(html).not.toContain('alert(1)');
+        // Falls back to the block's own element and its own class, alone.
+        expect(html).toMatch(/^<section class="wp-block-section"/);
+        expect(html).toContain('id="page-content"');
+    });
+
     it('survives a validator/renderer drift instead of taking the page down', () => {
         // Hand-built (parseTemplate would reject it): if the two contracts ever diverge, an unknown
         // block must render as nothing, not throw and 500 the whole public page.

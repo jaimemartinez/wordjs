@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseTemplate, templateCandidates, CONTENT_SLOT } from '../templateData';
+import { parseTemplate, templateCandidates, CONTENT_SLOT, TEMPLATE_TAGS, CLASS_TOKEN, MAX_CLASS_TOKENS } from '../templateData';
 
 /**
  * The renderer's mirror of the page-template contract.
@@ -47,6 +47,61 @@ describe('parseTemplate', () => {
 
     it('rejects a prop of the wrong primitive type', () => {
         expect(parseTemplate(raw([{ type: 'Grid', props: { columns: 'three', items: [slot] } }]))).toBeNull();
+    });
+
+    // ── the container wrapper: `tag` and `className` ───────────────────────────────────────────────
+    //
+    // The backend is the authority for these; the point of repeating them here is that the two must
+    // agree EXACTLY. A tree this mirror accepts and the backend rejects means the renderer draws a
+    // layout the doctor calls invalid — and a tree the backend accepts and this rejects means a valid
+    // theme silently falls back to the default arrangement.
+
+    it('accepts every tag in the closed set, on every container', () => {
+        for (const tag of TEMPLATE_TAGS) {
+            for (const type of ['Section', 'Grid', 'FlexRow', 'Columns']) {
+                expect(parseTemplate(raw([{ type, props: { tag, items: [slot] } }])), `${type}/${tag}`).not.toBeNull();
+            }
+        }
+        // Shopify's six, and deliberately NOT `main` — the public shell already emits
+        // <main id="main-content"> around every template, so a second one is a nested landmark.
+        expect([...TEMPLATE_TAGS].sort()).toEqual(['article', 'aside', 'div', 'footer', 'header', 'section']);
+        expect(TEMPLATE_TAGS).not.toContain('main');
+    });
+
+    it('rejects a tag outside the enum — data may fill a slot, never name an element', () => {
+        for (const tag of ['script', 'main', 'iframe', 'style', 'svg', 'object', 'Section', 'SECTION',
+            'div ', 'a', '', 'section><script>alert(1)</script', 1, true, null, ['div']]) {
+            expect(parseTemplate(raw([{ type: 'Section', props: { tag, items: [slot] } }])), JSON.stringify(tag)).toBeNull();
+        }
+    });
+
+    it('accepts a className of up to three plain tokens, and only on containers', () => {
+        for (const className of ['hero', 'site-hero', 'hero site-hero', 'a b c']) {
+            expect(parseTemplate(raw([{ type: 'Section', props: { className, items: [slot] } }])), className).not.toBeNull();
+        }
+        // A leaf has no wrapper worth naming, so neither prop exists there.
+        for (const type of ['Spacer', 'Divider', CONTENT_SLOT]) {
+            expect(parseTemplate(raw([{ type, props: { className: 'hero' } }, slot])), type).toBeNull();
+            expect(parseTemplate(raw([{ type, props: { tag: 'div' } }, slot])), type).toBeNull();
+        }
+    });
+
+    it('rejects a className that tries to be anything other than a class', () => {
+        for (const className of [
+            'hero" onclick="alert(1)', "hero' onmouseover='x", 'hero><script>alert(1)</script>',
+            'hero{color:red}', '.hero', '#hero', 'hero[data-x]', 'hero:hover', 'hero,div', 'hero/**/x',
+            'HERO', 'Hero-Unit', '1hero', '-hero', 'hero_unit', 'hero\tunit', 'hero\nunit', 'hero  unit',
+            ' hero', 'hero ', 'a b c d', 'one two three four five', '', 'x'.repeat(41), 'héro',
+            1, true, null, ['hero'], { hero: true },
+        ]) {
+            expect(parseTemplate(raw([{ type: 'Section', props: { className, items: [slot] } }])), JSON.stringify(className)).toBeNull();
+        }
+    });
+
+    it('pins the token rule the mirror shares with the backend', () => {
+        expect(CLASS_TOKEN.source).toBe('^[a-z][a-z0-9-]{0,39}$');
+        expect(CLASS_TOKEN.flags).not.toContain('m'); // `m` would let $ match before a newline
+        expect(MAX_CLASS_TOKENS).toBe(3);
     });
 
     // ── the allowlist is closed ────────────────────────────────────────────────────────────────────

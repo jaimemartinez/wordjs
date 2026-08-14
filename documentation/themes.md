@@ -891,13 +891,42 @@ the same markup and inherits every `--wjs-*` token without a second layout syste
 
 | Block | Props | Children |
 | --- | --- | --- |
-| `Section` | `maxWidth`, `padding`, `background` | `items` |
-| `Grid` | `columns`, `gap`, `columnsTablet`, `columnsMobile` | `items` |
-| `FlexRow` | `gap`, `align`, `justify`, `wrap`, `direction` | `items` |
-| `Columns` | `columns`, `gap` | `items` (filled round-robin) |
+| `Section` | `maxWidth`, `padding`, `background`, `tag`, `className` | `items` |
+| `Grid` | `columns`, `gap`, `columnsTablet`, `columnsMobile`, `tag`, `className` | `items` |
+| `FlexRow` | `gap`, `align`, `justify`, `wrap`, `direction`, `tag`, `className` | `items` |
+| `Columns` | `columns`, `gap`, `tag`, `className` | `items` (filled round-robin) |
 | `Spacer` | `height` | — |
 | `Divider` | `color`, `width`, `length`, `gap` | — |
 | `PageContent` | — | — |
+
+#### `tag` and `className` — naming a container
+
+The four **container** blocks accept two extra props, so a theme can say *this* Section is the hero
+instead of shipping four identical ones. They are borrowed from Shopify, whose section schema declares
+`tag` and `class` the same way, and they are safe for the same reason the rest of this contract is: the
+theme picks from a set WordJS owns, and it appends to a hook WordJS emits.
+
+| Prop | Value | Default |
+| --- | --- | --- |
+| `tag` | one of `article`, `aside`, `div`, `footer`, `header`, `section` | `section` for `Section`, `div` for the rest |
+| `className` | up to **3** space-separated class names, each `^[a-z][a-z0-9-]{0,39}$` | none |
+
+```json
+{ "type": "Section", "props": { "tag": "header", "className": "site-hero", "items": [] } }
+```
+
+renders `<header class="wp-block-section site-hero">`. Two rules make that safe, and both are enforced
+by the validator *and* re-checked inside the block itself:
+
+- **`tag` is an enum, never a string you supply.** `main` is deliberately not in it — the public layout
+  already wraps every template in `<main id="main-content">`, and a nested `<main>` is an invalid
+  landmark. Leaf blocks (`Spacer`, `Divider`, `PageContent`) have no wrapper worth naming and accept
+  neither prop.
+- **`className` is appended, never a replacement.** The block's own `wp-block-*` class always comes
+  first, so every framework selector, `--wjs-*` token and stylesheet rule keeps its grip on the element.
+  The shape is checked strictly and a value that misses it is **rejected, not cleaned up**: `.hero`,
+  `HERO`, `hero:hover`, `hero_unit`, `hero" onclick="…`, four tokens, a tab instead of a space — all of
+  them fail the template rather than becoming a quietly different class name.
 
 `PostsGrid`, `CategoryPosts` and `SearchBar` are **not** in v1. They are the obvious things to want, and
 they are held back deliberately: each derives its content from the site, that content reaches a block as
@@ -908,7 +937,8 @@ you a template that validates and then renders an empty block.
 
 This is the whole reason the contract is a closed allowlist rather than "render the theme's block tree":
 
-- **No prop can name an element.** Every prop is a primitive type or a closed enum. A stored-XSS
+- **No prop can name an element.** Every prop is a primitive type or a closed enum — `tag` included,
+  which is why it is a list of six and not "the element you want". A stored-XSS
   vulnerability shipped in this codebase from a block that used an author-controlled prop as its React
   element type (`level: "script"` rendered an executing `<script>` into server HTML), and a template is
   theme-supplied data on exactly that footing.

@@ -24,6 +24,13 @@ import {
  * accepting `minColumnWidth` and dropping it on the floor would validate cleanly and do nothing, which
  * is the failure this contract exists to prevent.
  *
+ * `tag` and `className` are the one place a template touches the wrapper itself, and they are the
+ * Shopify affordance adapted to this grammar: the element name comes from a closed enum, and the class
+ * is APPENDED to the block's own `wp-block-*` class rather than replacing it — so a theme can mark one
+ * Section as its hero without any framework selector, token or stylesheet hook losing its grip. Both are
+ * re-checked inside the block components (see CONTAINER_TAGS in blocks.tsx), because those same
+ * components are also fed author-controlled `_puck_data` by ContentRenderer.
+ *
  * The tree is already validated (parseTemplate) before it gets here, so this file does no checking of
  * its own beyond skipping a type it does not know — belt and braces if the two ever drift.
  */
@@ -73,6 +80,8 @@ function renderBlock(block: TemplateBlock, content: Rendered, key: string): Rend
                     maxWidth={p.maxWidth}
                     pad={p.padding}
                     bg={p.background}
+                    tag={p.tag}
+                    className={p.className}
                     slot={slot}
                 />
             );
@@ -85,6 +94,8 @@ function renderBlock(block: TemplateBlock, content: Rendered, key: string): Rend
                     gap={p.gap}
                     columnsTablet={p.columnsTablet}
                     columnsMobile={p.columnsMobile}
+                    tag={p.tag}
+                    className={p.className}
                     slot={slot}
                 />
             );
@@ -98,6 +109,8 @@ function renderBlock(block: TemplateBlock, content: Rendered, key: string): Rend
                     justify={p.justify}
                     wrap={p.wrap}
                     direction={p.direction}
+                    tag={p.tag}
+                    className={p.className}
                     slot={slot}
                 />
             );
@@ -111,7 +124,7 @@ function renderBlock(block: TemplateBlock, content: Rendered, key: string): Rend
             const buckets: TemplateBlock[][] = Array.from({ length: dist.columnCount }, () => []);
             items.forEach((child, i) => buckets[i % dist.columnCount].push(child));
             const slots: SlotFn[] = buckets.map((bucket, i) => () => renderList(bucket, content, `${key}-c${i}`));
-            return <ColumnsBlock key={key} distribution={dist} gap={p.gap} slots={slots} />;
+            return <ColumnsBlock key={key} distribution={dist} gap={p.gap} tag={p.tag} className={p.className} slots={slots} />;
         }
 
         case 'Spacer':
