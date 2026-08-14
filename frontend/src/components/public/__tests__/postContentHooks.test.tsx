@@ -117,4 +117,21 @@ describe('PostContent — the post frame is emitted on both body paths', () => {
         expect(emits(page, 'wjs-post')).toBe(false);
         expect(page).toContain('classic body');
     });
+
+    it("leaves a CUSTOM post type alone too — we do not own a plugin's content type", () => {
+        // The branch used to be "anything that is not a page", so every CPT a plugin registers had a
+        // title, a date and a byline prepended to content whose presentation the plugin owns —
+        // duplicating a heading its own blocks may already draw. The allowlist matches the one this
+        // component already applies to comments (`type === 'post'`).
+        for (const type of ['wjs_symbol', 'product', 'event', 'attachment']) {
+            const cpt = render({ ...basePost, type } as unknown as Post);
+            expect(emits(cpt, 'wjs-post'), type).toBe(false);
+            expect(emits(cpt, 'wjs-post-header'), type).toBe(false);
+            expect(emits(cpt, 'wjs-post-meta'), type).toBe(false);
+            // …and its content still renders: no frame is not the same as no page.
+            expect(cpt, type).toContain('classic body');
+        }
+        // The body hook survives on every type, so `singlePost.body` never stops matching.
+        expect(emits(render({ ...basePost, type: 'product' } as unknown as Post), 'wjs-post-body')).toBe(true);
+    });
 });
