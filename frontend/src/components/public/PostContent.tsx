@@ -27,10 +27,23 @@ interface PostContentProps {
 
 export default function PostContent({ post, settings, category, showComments }: PostContentProps) {
     const puckData = post.meta?._puck_data || null;
-    // A PAGE keeps its own two shapes (Puck body, or plain HTML with no card). Everything else is a
-    // POST and gets the post frame — see the comment on <article className="wjs-post"> below for why
-    // the frame is now outside the Puck/classic branch instead of inside the classic one.
-    const isPage = post.type === 'page';
+    // WHICH TYPES GET THE POST FRAME (title + date + byline), by an explicit allowlist rather than
+    // "anything that is not a page".
+    //
+    // The negative form was accidental in its reach: every CUSTOM post type a plugin registers fell
+    // into it and had a title, a date and an author prepended to content whose presentation the
+    // plugin owns — silently duplicating a heading its own blocks may already render. We do not own
+    // a plugin's content type, so we do not decide it needs our furniture.
+    //
+    // The rule is not invented here: `commentsAllowed` below already gates on `type === 'post'`.
+    // This file was deciding one piece of post furniture by an allowlist and another by a denylist,
+    // for the same question. Now they agree, and `singlePost` in the token manifest means what its
+    // name says.
+    //
+    // Consequence worth naming: a CPT whose own content carries no heading renders without a title.
+    // That is the plugin's call to make, and it is what the Puck path already did before the frame
+    // was lifted out of the classic branch.
+    const isFramedPost = post.type === 'post';
 
     const commentsAllowed =
         showComments &&
@@ -45,14 +58,17 @@ export default function PostContent({ post, settings, category, showComments }: 
             <script
                 dangerouslySetInnerHTML={{ __html: `window.__WJS_PAGE_ID=${JSON.stringify(post.id)};` }}
             />
-            {isPage ? (
+            {!isFramedPost ? (
                 puckData ? (
                     <div className="wjs-post-body puck-content">
                         <ContentRenderer data={puckData} />
                     </div>
                 ) : (
-                    // Page fallback (no card)
-                    <div className="w-full px-4 py-8">
+                    // Page fallback (no card). `wjs-post-body` rides here too: the FRAME is post-only,
+                    // but the body hook must match wherever a body renders, or `singlePost.body` would
+                    // stop applying depending on whether the content happens to be Puck data or HTML —
+                    // a selector that matches sometimes is the defect this file exists to catch.
+                    <div className="wjs-post-body w-full px-4 py-8">
                         <h1 className="text-4xl font-bold mb-8 text-center">{post.title}</h1>
                         <div
                             className="wjs-content prose prose-lg max-w-none mx-auto overflow-x-auto [&_table]:block [&_table]:overflow-x-auto [&_pre]:overflow-x-auto"
