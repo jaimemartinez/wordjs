@@ -18,6 +18,57 @@ const generator = require(path.join(__dirname, '..', '..', '..', 'scripts', 'cre
 
 interface Seeds { primary: string; secondary: string; bg: string; text: string }
 
+// ---------------------------------------------------------------------------------------------
+// The population the "no theme reaches the network" invariants run over.
+//
+// They used to enumerate marketplace/themes and nothing else. That directory is gone, and the
+// tempting repairs — skip when it is missing, or just iterate whatever readdir returns — would let
+// both tests report PASS while examining zero themes. A vacuous green is the failure mode this repo
+// hunts, so the population is (a) widened to every theme actually shipped, wherever it lives, and
+// (b) asserted non-empty at the point of use, with a message that says why.
+//
+// `toscano` is a private client theme; it is not ours to police and is excluded on purpose.
+// ---------------------------------------------------------------------------------------------
+const CATALOG_DIR = path.join(__dirname, '..', '..', '..', 'marketplace', 'themes');
+const THEME_ROOTS: Array<{ label: string; dir: string; skip: string[] }> = [
+    { label: 'backend/themes', dir: path.join(__dirname, '..', '..', 'themes'), skip: ['toscano'] },
+    { label: 'marketplace/themes', dir: CATALOG_DIR, skip: [] }
+];
+
+function shippedThemes(): Array<{ id: string; dir: string }> {
+    const out: Array<{ id: string; dir: string }> = [];
+    for (const root of THEME_ROOTS) {
+        if (!fs.existsSync(root.dir)) continue;
+        for (const slug of fs.readdirSync(root.dir).sort()) {
+            if (root.skip.includes(slug)) continue;
+            const dir = path.join(root.dir, slug);
+            if (!fs.statSync(dir).isDirectory()) continue;
+            if (!fs.existsSync(path.join(dir, 'theme.json'))) continue;   // a directory, but not a theme
+            out.push({ id: `${root.label}/${slug}`, dir });
+        }
+    }
+    return out;
+}
+
+// Never call shippedThemes() directly from a test: an empty list must be a loud failure, not a
+// silent pass over nothing.
+function themesToCheck(): Array<{ id: string; dir: string }> {
+    const themes = shippedThemes();
+    assert.ok(themes.length > 0,
+        `no theme found under ${THEME_ROOTS.map((r) => r.label).join(' or ')} — this invariant cannot be checked against ` +
+        'anything, so it would pass VACUOUSLY. Failing loudly instead: restore a theme, or retire the invariant on purpose.');
+    return themes;
+}
+
+// Every @import the hand-written section of a style.css declares, as written.
+function importTargets(css: string): string[] {
+    const out: string[] = [];
+    const re = /@import\s+(?:url\(\s*)?['"]([^'"]+)['"]/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(css)) !== null) out.push(m[1]);
+    return out;
+}
+
 // deriveTokens takes seeds {primary,secondary,bg,text}; canonicalAliases takes the
 // generator's palette-entry shape.
 const toGeneratorShape = (s: Seeds) => ({ primaryColor: s.primary, secondaryColor: s.secondary, bgColor: s.bg, textColor: s.text });
@@ -160,39 +211,101 @@ describe('ARCHETYPE_NAMES — the label set', () => {
             assert.ok(generator.ARCHETYPES[key](t).includes("@import url('https://fonts.googleapis.com/"), `${key}: generator @import disappeared — vendoring would not know which families to fetch`);
         }
 
-        const catalogDir = path.join(__dirname, '..', '..', '..', 'marketplace', 'themes');
-        const seen = new Set<string>();
-        for (const entry of generator.themes) {
-            if (seen.has(entry.archetype)) continue;
-            seen.add(entry.archetype);
-            const dir = path.join(catalogDir, entry.slug);
-            const css = fs.readFileSync(path.join(dir, 'style.css'), 'utf8');
+        // Not "one theme per archetype out of the catalogue" any more — EVERY theme on disk, so the
+        // rule keeps biting after the catalogue was deleted. What each must satisfy is unchanged:
+        // its faces come from files it ships, and the compiled block never imports anything.
+        for (const { id, dir } of themesToCheck()) {
+            const cssPath = path.join(dir, 'style.css');
+            assert.ok(fs.existsSync(cssPath), `${id}: ships a theme.json but no style.css`);
+            const css = fs.readFileSync(cssPath, 'utf8');
             const start = css.indexOf('/* @wjs-generated:start');
             const end = css.indexOf('/* @wjs-generated:end */');
-            assert.ok(start !== -1 && end > start, `${entry.slug}: catalog style.css has no @wjs-generated block`);
-            const manual = css.slice(0, start);
-            const block = css.slice(start, end);
-            assert.ok(manual.includes("@import url('fonts.css')"), `${entry.slug}: manual section does not import its own fonts.css`);
-            assert.ok(fs.existsSync(path.join(dir, 'fonts.css')), `${entry.slug}: imports fonts.css but does not ship it`);
-            assert.ok(!/https?:\/\//.test(css), `${entry.slug}: style.css still reaches an external origin`);
-            assert.ok(!block.includes('@import'), `${entry.slug}: compiled block must never contain @import`);
-        }
-        assert.strictEqual(seen.size, ARCHETYPE_NAMES.length, 'catalog no longer covers every archetype');
-    });
 
-    // The whole catalogue, not just one theme per archetype: this is the assertion that would have
-    // caught 43 of 64 themes shipping a live Google Fonts import for as long as they did.
-    it('no catalog theme references an external origin', () => {
-        const catalogDir = path.join(__dirname, '..', '..', '..', 'marketplace', 'themes');
-        const offenders: string[] = [];
-        for (const slug of fs.readdirSync(catalogDir)) {
-            for (const file of ['style.css', 'fonts.css']) {
-                const p = path.join(catalogDir, slug, file);
-                if (!fs.existsSync(p)) continue;
-                const m = fs.readFileSync(p, 'utf8').match(/https?:\/\/[^\s'")]+/);
-                if (m) offenders.push(`${slug}/${file} → ${m[0]}`);
+            // A theme whose theme.json carries tokens is compiled, so it must carry the block those
+            // tokens compile into; a hand-written theme legitimately has none.
+            const tokens = JSON.parse(fs.readFileSync(path.join(dir, 'theme.json'), 'utf8')).tokens || {};
+            if (Object.keys(tokens).length > 0) {
+                assert.ok(start !== -1 && end > start, `${id}: theme.json declares tokens but style.css has no @wjs-generated block`);
+            }
+            const manual = start === -1 ? css : css.slice(0, start) + css.slice(end === -1 ? css.length : end);
+            if (start !== -1 && end > start) {
+                assert.ok(!css.slice(start, end).includes('@import'), `${id}: compiled block must never contain @import`);
+            }
+
+            // Every face is served from this repo: no remote origin anywhere, every @import points at
+            // a file the theme actually ships, and a vendored fonts.css is imported rather than dead.
+            assert.ok(!/https?:\/\//.test(css), `${id}: style.css still reaches an external origin`);
+            const imports = importTargets(manual);
+            for (const target of imports) {
+                assert.ok(!/^(https?:)?\/\//.test(target), `${id}: style.css imports the network (${target})`);
+                assert.ok(fs.existsSync(path.join(dir, target)), `${id}: imports ${target} but does not ship it`);
+            }
+            if (fs.existsSync(path.join(dir, 'fonts.css'))) {
+                assert.ok(imports.includes('fonts.css'), `${id}: ships fonts.css but never imports it — its faces would not load`);
+            }
+
+            // SELF-HOSTING, asserted unconditionally rather than only when a fonts.css happens to
+            // exist. Gating it on that file made the check vacuous in the one case it exists for: a
+            // theme that NAMES a webfont family and ships no faces at all passed, and the browser
+            // silently fell back to a system face. "Ships no fonts.css" is the failure, not the excuse.
+            const allCss = fs.readdirSync(dir).filter(f => f.endsWith('.css'))
+                .map(f => fs.readFileSync(path.join(dir, f), 'utf8')).join('\n');
+            const declared = new Set<string>();
+            for (const m of allCss.matchAll(/@font-face\s*\{[^}]*?font-family:\s*(['"]?)([^;'"}]+)\1/gi)) {
+                declared.add(m[2].trim().toLowerCase());
+            }
+            // Generic families the browser always has; a stack made only of these needs no @font-face.
+            const GENERIC = new Set(['sans-serif', 'serif', 'monospace', 'cursive', 'fantasy', 'system-ui',
+                'ui-sans-serif', 'ui-serif', 'ui-monospace', 'ui-rounded', 'inherit', 'initial', 'unset',
+                '-apple-system', 'blinkmacsystemfont', 'segoe ui', 'roboto', 'helvetica', 'helvetica neue',
+                'arial', 'georgia', 'times new roman', 'courier new', 'emoji', 'math', 'fangsong']);
+            for (const m of allCss.matchAll(/(?:^|[;{])\s*font-family:\s*([^;}]+)/gi)) {
+                const value = m[1];
+                // A var() reference resolves to a token whose value is checked on its own line if it
+                // is concrete; nothing here can resolve it, so it is skipped rather than guessed at.
+                if (/var\s*\(/i.test(value)) continue;
+                for (const raw of value.split(',')) {
+                    const family = raw.replace(/!important/i, '').trim().replace(/^['"]|['"]$/g, '').toLowerCase();
+                    if (!family || GENERIC.has(family)) continue;
+                    assert.ok(declared.has(family),
+                        `${id}: names the font family "${family}" but ships no @font-face for it — it is not self-hosted, it is a silent fallback`);
+                }
             }
         }
+
+        // The catalogue's own extra promise, checked only while a catalogue is installed: it covers
+        // every archetype. With no catalogue there is nothing to be complete about; the invariant
+        // above is what still applies, and it is not allowed to run over an empty list.
+        if (fs.existsSync(CATALOG_DIR)) {
+            const seen = new Set<string>();
+            for (const entry of generator.themes) {
+                if (!fs.existsSync(path.join(CATALOG_DIR, entry.slug, 'style.css'))) continue;
+                seen.add(entry.archetype);
+            }
+            assert.strictEqual(seen.size, ARCHETYPE_NAMES.length, 'catalog no longer covers every archetype');
+        }
+    });
+
+    // Every theme, every stylesheet in it: this is the assertion that would have caught 43 of 64
+    // themes shipping a live Google Fonts import for as long as they did.
+    it('no shipped theme references an external origin', () => {
+        const themes = themesToCheck();
+        const offenders: string[] = [];
+        let scanned = 0;
+        for (const { id, dir } of themes) {
+            for (const file of fs.readdirSync(dir)) {
+                if (!file.endsWith('.css')) continue;
+                scanned++;
+                // PROTOCOL-RELATIVE COUNTS. `//fonts.googleapis.com/…` reaches the network exactly as
+                // an https:// URL does — the browser just borrows the page's scheme — and the previous
+                // pattern let it straight through, which made this guard weaker than its own title.
+                const m = fs.readFileSync(path.join(dir, file), 'utf8').match(/(?:https?:)?\/\/[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/);
+                if (m) offenders.push(`${id}/${file} → ${m[0]}`);
+            }
+        }
+        assert.ok(scanned > 0,
+            `${themes.length} theme(s) enumerated but not one stylesheet among them was read — nothing was actually ` +
+            'scanned, so a pass here would mean nothing.');
         assert.deepStrictEqual(offenders, [], `themes reaching the network:\n  ${offenders.join('\n  ')}`);
     });
 });

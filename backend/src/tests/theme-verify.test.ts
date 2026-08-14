@@ -1,11 +1,17 @@
 /**
- * Theme verifier — verifyTheme() against the REAL Stitch export shipped with herbario
- * (backend/themes/herbario/.design/stitch.json) and the REAL token manifest.
+ * Theme verifier — verifyTheme() against a REAL Stitch export payload
+ * (tests/fixtures/stitch-fixture.ts) and the REAL token manifest.
  *
- * Fixture-vs-producer: the theme under test is a copy of the installed herbario (its
- * compiled style.css, byte for byte) dropped into a throwaway themes dir, so the tests
- * exercise the values a browser would actually get instead of a hand-written stand-in.
- * Nothing here writes inside backend/themes.
+ * Fixture-vs-producer: the theme under test is the compiled style.css that payload really
+ * produced, byte for byte, dropped into a throwaway themes dir — so the tests exercise the
+ * values a browser would actually get instead of a hand-written stand-in.
+ *
+ * That trio used to be read out of an INSTALLED theme (backend/themes/herbario) at module
+ * scope. When the theme was deleted this file threw while being imported and all 21 cases
+ * below vanished from the run as one failure. So: the fixture is self-contained (no installed
+ * theme is required, and nothing here writes inside backend/themes), it is materialised into a
+ * temp dir on first use and torn down after, and every read of it happens INSIDE a test case,
+ * where a missing fixture fails loudly instead of quietly deleting coverage.
  */
 
 const { describe, it, after } = require('node:test');
@@ -15,33 +21,59 @@ const os = require('os');
 const path = require('path');
 
 const { verifyTheme, normalizeColor } = require('../core/theme-verify');
+const { STITCH_DESIGN, THEME_JSON, STYLE_CSS } = require('./fixtures/stitch-fixture');
 
 // __dirname works from both src/tests and dist/tests — ../.. is backend either way.
 const BACKEND_DIR = path.join(__dirname, '..', '..');
 const MANIFEST_PATH = path.join(BACKEND_DIR, 'public', 'theme-tokens.json');
-const HERBARIO_DIR = path.join(BACKEND_DIR, 'themes', 'herbario');
-const DESIGN = JSON.parse(fs.readFileSync(path.join(HERBARIO_DIR, '.design', 'stitch.json'), 'utf8'));
 
-const TMP_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'wordjs-theme-verify-'));
-const THEMES_DIR = path.join(TMP_ROOT, 'themes');
-fs.mkdirSync(THEMES_DIR, { recursive: true });
-after(() => { try { fs.rmSync(TMP_ROOT, { recursive: true, force: true }); } catch { /* best effort */ } });
+// Materialised lazily, from inside the first test that needs it: importing this module must not
+// be able to fail, or the cases below stop existing instead of failing.
+let TMP_ROOT: string | null = null;
+
+function root(): string {
+    if (TMP_ROOT !== null) return TMP_ROOT;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wordjs-theme-verify-'));
+    fs.mkdirSync(path.join(dir, 'themes'), { recursive: true });
+    fs.mkdirSync(path.join(dir, 'source', '.design'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'source', '.design', 'stitch.json'), JSON.stringify(STITCH_DESIGN, null, 2) + '\n');
+    fs.writeFileSync(path.join(dir, 'source', 'theme.json'), JSON.stringify(THEME_JSON, null, 2) + '\n');
+    fs.writeFileSync(path.join(dir, 'source', 'style.css'), STYLE_CSS);
+    TMP_ROOT = dir;
+    return dir;
+}
+
+const themesDir = (): string => path.join(root(), 'themes');
+const sourceDir = (): string => path.join(root(), 'source');
+
+function readDesign(): any {
+    const file = path.join(sourceDir(), '.design', 'stitch.json');
+    assert.ok(fs.existsSync(file), `the stitch fixture was not materialised at ${file} — this suite verifies nothing without it`);
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
+}
+
+after(() => { if (TMP_ROOT) { try { fs.rmSync(TMP_ROOT, { recursive: true, force: true }); } catch { /* best effort */ } } });
 
 const clone = (v: any): any => JSON.parse(JSON.stringify(v));
-const verify = (slug: string, design: any = DESIGN): any =>
-    verifyTheme(slug, design, { themesDir: THEMES_DIR, manifestPath: MANIFEST_PATH });
+const verify = (slug: string, design: any = readDesign()): any =>
+    verifyTheme(slug, design, { themesDir: themesDir(), manifestPath: MANIFEST_PATH });
 
 let counter = 0;
 
-// Copy the installed herbario into the temp themes dir, optionally hand-editing its CSS
-// or theme.json first — the way a theme author would.
+// Copy the fixture theme into the temp themes dir, optionally hand-editing its CSS or
+// theme.json first — the way a theme author would.
 function fixture(editCss?: (css: string) => string, editJson?: (json: any) => any): string {
-    const slug = `herbario-${counter++}`;
-    const dir = path.join(THEMES_DIR, slug);
+    const slug = `fixture-${counter++}`;
+    const dir = path.join(themesDir(), slug);
     fs.mkdirSync(dir, { recursive: true });
-    const css = fs.readFileSync(path.join(HERBARIO_DIR, 'style.css'), 'utf8');
+    const cssPath = path.join(sourceDir(), 'style.css');
+    const jsonPath = path.join(sourceDir(), 'theme.json');
+    for (const p of [cssPath, jsonPath]) {
+        assert.ok(fs.existsSync(p), `the theme fixture was not materialised at ${p} — this suite verifies nothing without it`);
+    }
+    const css = fs.readFileSync(cssPath, 'utf8');
     fs.writeFileSync(path.join(dir, 'style.css'), editCss ? editCss(css) : css);
-    const json = JSON.parse(fs.readFileSync(path.join(HERBARIO_DIR, 'theme.json'), 'utf8'));
+    const json = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
     fs.writeFileSync(path.join(dir, 'theme.json'), JSON.stringify(editJson ? editJson(json) : json, null, 2));
     return slug;
 }
@@ -49,13 +81,13 @@ function fixture(editCss?: (css: string) => string, editJson?: (json: any) => an
 // Rewrite one declared token value in place (the token is always present in the block).
 function setToken(css: string, name: string, value: string): string {
     const re = new RegExp(`(${name}\\s*:\\s*)[^;\\n]*`);
-    assert.ok(re.test(css), `fixture precondition: ${name} is declared in herbario/style.css`);
+    assert.ok(re.test(css), `fixture precondition: ${name} is declared in the fixture style.css`);
     return css.replace(re, `$1${value}`);
 }
 
-// herbario leaves --wjs-outline to the seed derivation, so the shipped theme differs from
+// A theme may leave --wjs-outline to the seed derivation, so a shipped theme can differ from
 // the design there. Every "theme matches" case starts from that one correction.
-const FAITHFUL = (css: string): string => setToken(css, '--wjs-outline', DESIGN.designTheme.namedColors.outline);
+const FAITHFUL = (css: string): string => setToken(css, '--wjs-outline', readDesign().designTheme.namedColors.outline);
 
 const find = (list: any[], token: string): any => list.find((e: any) => e.token === token);
 
@@ -69,7 +101,7 @@ describe('theme-verify — a theme that matches its design', () => {
 
     it('checks each namedColor against the token the brief maps it to', () => {
         const { matches } = verify(fixture(FAITHFUL));
-        const named = DESIGN.designTheme.namedColors;
+        const named = readDesign().designTheme.namedColors;
         assert.deepStrictEqual(find(matches, '--wjs-bg-canvas'),
             { token: '--wjs-bg-canvas', expected: named.background, actual: named.background, source: 'namedColors.background' });
         assert.deepStrictEqual(find(matches, '--wjs-color-primary'),
@@ -86,7 +118,7 @@ describe('theme-verify — a theme that matches its design', () => {
         const { matches } = verify(fixture(FAITHFUL));
         const entry = find(matches, '--wjs-color-secondary');
         assert.strictEqual(entry.source, 'designTheme.overrideSecondaryColor');
-        assert.strictEqual(entry.expected, DESIGN.designTheme.overrideSecondaryColor.toLowerCase());
+        assert.strictEqual(entry.expected, readDesign().designTheme.overrideSecondaryColor.toLowerCase());
     });
 
     it('compares fonts by family, not by stack: "Eb Garamond" satisfies \'EB Garamond\', Georgia, serif', () => {
@@ -108,6 +140,7 @@ describe('theme-verify — a theme that matches its design', () => {
     // that input through its tonal system and its own screens paint namedColors.background, so a theme
     // that reproduces the design exactly carries the resolved value and must not be failed for it.
     it('checks the theme.json seeds against the resolved palette', () => {
+        const DESIGN = readDesign();
         const { matches } = verify(fixture(FAITHFUL));
         assert.strictEqual(find(matches, 'seeds.primary').expected, DESIGN.designTheme.overridePrimaryColor.toLowerCase());
         assert.strictEqual(find(matches, 'seeds.bg').source, 'namedColors.background');
@@ -115,6 +148,7 @@ describe('theme-verify — a theme that matches its design', () => {
     });
 
     it('accepts the bare designTheme as well as the whole stitch.json', () => {
+        const DESIGN = readDesign();
         const slug = fixture(FAITHFUL);
         assert.deepStrictEqual(verify(slug, DESIGN.designTheme).matches, verify(slug, DESIGN).matches);
     });
@@ -127,7 +161,7 @@ describe('theme-verify — a hand-edited token', () => {
         assert.strictEqual(report.ok, false);
         assert.deepStrictEqual(report.mismatches, [{
             token: '--wjs-color-primary',
-            expected: DESIGN.designTheme.namedColors.primary_container,
+            expected: readDesign().designTheme.namedColors.primary_container,
             actual: '#ff0000',
             source: 'namedColors.primary_container'
         }]);
@@ -138,7 +172,7 @@ describe('theme-verify — a hand-edited token', () => {
         const slug = fixture(FAITHFUL, (json: any) => { json.seeds.secondary = '#000000'; return json; });
         const mismatch = find(verify(slug).mismatches, 'seeds.secondary');
         assert.strictEqual(mismatch.actual, '#000000');
-        assert.strictEqual(mismatch.expected, DESIGN.designTheme.overrideSecondaryColor.toLowerCase());
+        assert.strictEqual(mismatch.expected, readDesign().designTheme.overrideSecondaryColor.toLowerCase());
     });
 
     it('is caught when the theme swaps the headline font family', () => {
@@ -156,7 +190,7 @@ describe('theme-verify — a hand-edited token', () => {
 
 describe('theme-verify — what the design does not say', () => {
     it('lists a token whose namedColor is absent as unmapped, not as a mismatch', () => {
-        const design = clone(DESIGN);
+        const design = clone(readDesign());
         delete design.designTheme.namedColors.error;
         const report = verify(fixture(FAITHFUL), design);
         assert.deepStrictEqual(find(report.unmapped, '--wjs-color-danger'),
@@ -185,7 +219,7 @@ describe('theme-verify — what the design does not say', () => {
     });
 
     it('refuses to invent a size for an unknown roundness', () => {
-        const design = clone(DESIGN);
+        const design = clone(readDesign());
         design.designTheme.roundness = 'ROUND_SEVENTEEN';
         const report = verify(fixture(FAITHFUL), design);
         assert.strictEqual(find(report.unmapped, '--wjs-radius-pill').reason, 'no-rule');
@@ -196,9 +230,9 @@ describe('theme-verify — what the design does not say', () => {
 describe('theme-verify — resolution', () => {
     it('follows the framework alias: --wjs-color-heading defaults to --wjs-color-text-main', () => {
         const slug = `alias-${counter++}`;
-        fs.mkdirSync(path.join(THEMES_DIR, slug), { recursive: true });
-        fs.writeFileSync(path.join(THEMES_DIR, slug, 'style.css'),
-            `:root { --wjs-color-text-main: ${DESIGN.designTheme.namedColors.on_surface}; }`);
+        fs.mkdirSync(path.join(themesDir(), slug), { recursive: true });
+        fs.writeFileSync(path.join(themesDir(), slug, 'style.css'),
+            `:root { --wjs-color-text-main: ${readDesign().designTheme.namedColors.on_surface}; }`);
         const { matches, mismatches } = verify(slug);
         assert.ok(find(matches, '--wjs-color-heading'), 'heading inherits text-main through the manifest default');
         assert.strictEqual(find(mismatches, '--wjs-color-heading'), undefined);
@@ -210,17 +244,18 @@ describe('theme-verify — resolution', () => {
     });
 
     it('reports a token nothing declares as a mismatch with no actual value', () => {
-        const emptyManifest = path.join(TMP_ROOT, 'empty-manifest.json');
+        const emptyManifest = path.join(root(), 'empty-manifest.json');
         fs.writeFileSync(emptyManifest, JSON.stringify({ version: 1, tokens: {} }));
         const slug = `bare-${counter++}`;
-        fs.mkdirSync(path.join(THEMES_DIR, slug), { recursive: true });
-        fs.writeFileSync(path.join(THEMES_DIR, slug, 'style.css'), 'body { color: red }');
-        const report = verifyTheme(slug, DESIGN, { themesDir: THEMES_DIR, manifestPath: emptyManifest });
+        fs.mkdirSync(path.join(themesDir(), slug), { recursive: true });
+        fs.writeFileSync(path.join(themesDir(), slug, 'style.css'), 'body { color: red }');
+        const report = verifyTheme(slug, readDesign(), { themesDir: themesDir(), manifestPath: emptyManifest });
         assert.strictEqual(find(report.mismatches, '--wjs-bg-canvas').actual, null);
         assert.deepStrictEqual(report.matches, []);
     });
 
     it('switches the canvas source in DARK mode', () => {
+        const DESIGN = readDesign();
         const design = clone(DESIGN);
         design.designTheme.colorMode = 'DARK';
         design.designTheme.namedColors.surface = '#101010';
@@ -246,9 +281,9 @@ describe('theme-verify — nothing to verify fails closed', () => {
     it('throws instead of returning a clean report', () => {
         assert.throws(() => verify('../escape'), /Invalid theme slug/);
         assert.throws(() => verify('no-such-theme'), /style\.css/);
-        assert.throws(() => verifyTheme('herbario', 'not-a-design' as any, { themesDir: THEMES_DIR, manifestPath: MANIFEST_PATH }), /not an object/);
+        assert.throws(() => verifyTheme('fixture', 'not-a-design' as any, { themesDir: themesDir(), manifestPath: MANIFEST_PATH }), /not an object/);
         assert.throws(
-            () => verifyTheme(fixture(), DESIGN, { themesDir: THEMES_DIR, manifestPath: path.join(TMP_ROOT, 'missing.json') }),
+            () => verifyTheme(fixture(), readDesign(), { themesDir: themesDir(), manifestPath: path.join(root(), 'missing.json') }),
             /Token manifest/
         );
     });
