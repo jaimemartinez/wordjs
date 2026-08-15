@@ -196,14 +196,22 @@ class MysqlDriver extends DatabaseDriverInterface {
             // Every physical connection speaks the same dialect as SQLite/Postgres: "x" is an identifier
             // (ANSI_QUOTES), and STRICT is relaxed so the SQLite-style '' / 0 defaults and loose typing
             // don't reject inserts the other drivers accept.
+            //
+            // NO_BACKSLASH_ESCAPES was REMOVED (was: a data-corruption + syntax bug). node-mysql2 escapes
+            // string parameters with BACKSLASH escaping (a value's `'` becomes `\'`, `\` becomes `\\`).
+            // With NO_BACKSLASH_ESCAPES the server treats `\` as a literal, so `\'` ended the string one
+            // char early — any value with a quote broke the SQL (an apostrophe in a title; the FULLTEXT
+            // search term `'1'='1'` is what CI caught) and any value with a backslash was stored doubled.
+            // Default (backslash-escapes ON) is exactly what mysql2's escaping assumes, so this is the
+            // correct mode; ANSI_QUOTES/NO_ENGINE_SUBSTITUTION stay.
             // NOTE: the pool's 'connection' event hands back the RAW (callback-style) connection, not a
             // promise wrapper — so use a callback here, never .then/.catch (that throws "not a promise").
             this.pool.on('connection', (conn: any) => {
-                conn.query("SET SESSION sql_mode='ANSI_QUOTES,NO_BACKSLASH_ESCAPES,NO_ENGINE_SUBSTITUTION'", () => { });
+                conn.query("SET SESSION sql_mode='ANSI_QUOTES,NO_ENGINE_SUBSTITUTION'", () => { });
             });
 
             const conn = await this.pool.getConnection();
-            await conn.query("SET SESSION sql_mode='ANSI_QUOTES,NO_BACKSLASH_ESCAPES,NO_ENGINE_SUBSTITUTION'");
+            await conn.query("SET SESSION sql_mode='ANSI_QUOTES,NO_ENGINE_SUBSTITUTION'");
             const [rows] = await conn.query('SELECT VERSION() AS v');
             conn.release();
             console.log('✅ MySQL: Connected successfully to', rows[0].v);
