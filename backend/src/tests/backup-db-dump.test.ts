@@ -256,7 +256,7 @@ describe('SQLite backup still produces a complete archive', () => {
     after(async () => {
         try { if (made) deleteBackup(made); } catch { /* */ }
         try { await database.closeDatabase(); } catch { /* */ }
-        for (const f of [TMP_DB, TMP_DB + '-wal', TMP_DB + '-shm']) { try { fs.existsSync(f) && fs.unlinkSync(f); } catch { /* */ } }
+        for (const f of [TMP_DB, TMP_DB + '-wal', TMP_DB + '-shm']) { try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch { /* */ } }
         for (const k of S3_KEYS) { if (savedEnv[k] === undefined) delete process.env[k]; else process.env[k] = savedEnv[k]; }
     });
 

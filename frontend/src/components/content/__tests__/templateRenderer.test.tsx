@@ -19,7 +19,7 @@ const content = React.createElement('article', { id: 'page-content' }, 'the page
 function render(tree: unknown): string {
     const t = parseTemplate(JSON.stringify({ content: tree }));
     expect(t, 'the fixture must be a VALID template, or this asserts nothing').not.toBeNull();
-    return renderToStaticMarkup(React.createElement(TemplateRenderer, { template: t!, children: content }));
+    return renderToStaticMarkup(<TemplateRenderer template={t!}>{content}</TemplateRenderer>);
 }
 
 describe('TemplateRenderer', () => {
@@ -128,9 +128,7 @@ describe('TemplateRenderer', () => {
                 },
             }],
         } as any;
-        const html = renderToStaticMarkup(
-            React.createElement(TemplateRenderer, { template, children: content }),
-        );
+        const html = renderToStaticMarkup(<TemplateRenderer template={template}>{content}</TemplateRenderer>);
         expect(html).not.toContain('<script');
         expect(html).not.toContain('onclick');
         expect(html).not.toContain('alert(1)');
@@ -143,9 +141,7 @@ describe('TemplateRenderer', () => {
         // Hand-built (parseTemplate would reject it): if the two contracts ever diverge, an unknown
         // block must render as nothing, not throw and 500 the whole public page.
         const template = { content: [{ type: 'FutureBlock', props: {} }, slot] } as any;
-        const html = renderToStaticMarkup(
-            React.createElement(TemplateRenderer, { template, children: content }),
-        );
+        const html = renderToStaticMarkup(<TemplateRenderer template={template}>{content}</TemplateRenderer>);
         expect(html).toContain('id="page-content"');
         expect(html).not.toContain('FutureBlock');
     });
@@ -156,10 +152,7 @@ describe('TemplateRenderer', () => {
         const chrome = { root: { props: {} }, content: [{ type: 'ChromeText', props: { text: 'From the part' } }] };
         const bindings = { menus: { header: [], footer: [] }, settings: { blogname: 'Site' } };
         const renderPart = (props: Record<string, unknown>) => renderToStaticMarkup(
-            React.createElement(TemplateRenderer, {
-                template: { content: [slot, { type: 'TemplatePart', props }] } as any,
-                children: content,
-            }),
+            <TemplateRenderer template={{ content: [slot, { type: 'TemplatePart', props }] } as any}>{content}</TemplateRenderer>,
         );
 
         it('renders the resolved composition inside the wrapper its AREA chooses', () => {
