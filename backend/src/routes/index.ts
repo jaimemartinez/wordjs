@@ -90,6 +90,7 @@ router.use('/health', healthRoutes);
 router.use('/seo', seoRoutes);
 router.use('/hooks', hooksRoutes);
 router.use('/webhooks', require('./webhooks'));
+router.use('/audit', require('./audit'));
 router.use('/forms', require('./forms'));
 router.use('/presence', require('./presence'));
 router.use('/import', require('./import'));

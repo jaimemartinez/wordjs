@@ -30,6 +30,7 @@ const { analyzeTheme } = require('../core/theme-doctor');
 const { authenticate } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
+const { recordAudit } = require('../core/audit');
 
 /**
  * @swagger
@@ -464,6 +465,8 @@ router.post('/:slug/activate', authenticate, isAdmin, asyncHandler(async (req: R
     // re-init). core/themes.switchTheme joins a duplicate activation of the SAME slug, and
     // theme-engine.init() is serialized process-wide; guarding the route alone would leave both open.
     const result = await switchTheme(req.params.slug);
+    // AUDIT: an admin activated a theme. Slug only — no secret material.
+    await recordAudit((req as any).user && (req as any).user.id, 'theme.activate', 'theme', req.params.slug, {});
     res.json(result);
 }));
 

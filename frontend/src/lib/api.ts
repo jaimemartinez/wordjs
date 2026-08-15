@@ -654,10 +654,22 @@ export interface PublicSettingsHealth {
     template?: string;
 }
 
+// The ADMIN settings payload (/settings/all) also carries DERIVED, non-string flags (see
+// DERIVED_ADMIN_SETTINGS in backend/src/routes/settings.ts) that must stay boolean end to end.
+export interface AdminSettingsHealth extends Record<string, unknown> {
+    /** true only while a mail-provider plugin has registered a host-wide sender; when false the core
+     *  cannot send email and self-service password recovery is unavailable. */
+    email_provider_available?: boolean;
+    /** true when kernel hardening was enabled but the bwrap probe failed (OS backstop off). */
+    sandbox_hardening_degraded?: boolean;
+}
+
 export const settingsApi = {
     get: () => apiGet<Record<string, string>>("/settings"),
     getPublicHealth: () => apiGet<PublicSettingsHealth>("/settings"),
     getAll: () => apiGet<Record<string, string>>("/settings/all"),
+    /** Admin payload read with honest boolean typing for the derived health flags. */
+    getAdminHealth: () => apiGet<AdminSettingsHealth>("/settings/all"),
     update: (data: Record<string, string>) => apiPut("/settings", data),
 };
 

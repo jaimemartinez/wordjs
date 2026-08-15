@@ -219,8 +219,8 @@ export default function ContentTable({ type, basePath, emptyIcon, emptyTitle, ne
                                     </td>
                                     <td className="px-6 py-6">
                                         <StatusBadge
-                                            status={post.status === "publish" ? "published" : post.status}
-                                            label={post.status === "publish" ? t('posts.published') : post.status === "draft" ? t('posts.draft') : post.status}
+                                            status={post.status === "publish" ? "published" : post.status === "future" ? "scheduled" : post.status}
+                                            label={post.status === "publish" ? t('posts.published') : post.status === "draft" ? t('posts.draft') : post.status === "future" ? (t('posts.scheduled') || 'Scheduled') : post.status}
                                         />
                                     </td>
                                     <td className="px-6 py-6">

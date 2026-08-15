@@ -14,6 +14,7 @@ const { getActiveThemeVersion, isActiveThemeMissing } = require('../core/themes'
 const { authenticate } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
+const { recordAudit } = require('../core/audit');
 
 /**
  * @swagger
@@ -83,7 +84,11 @@ const ALL_SETTINGS = [
     'large_size_h',
     'backup_schedule', // Backup Scheduler Frequency
     'backup_time',     // Backup Time of Day (HH:mm)
-    'backup_day'       // Backup Day (0-6)
+    'backup_day',      // Backup Day (0-6)
+    // Opt-in email verification on self-registration (FRENTE C-3). '1' requires a newly self-registered
+    // user to confirm their email via a tokenized link before they can log in; the auth layer fails this
+    // CLOSED (treats it as OFF) when no mail provider can deliver. Admin-only (not in PUBLIC_SETTINGS).
+    'require_email_verification'
 ];
 
 // Publicly readable, but NOT writable through the generic settings writers: these have a
@@ -138,6 +143,15 @@ const DERIVED_ADMIN_SETTINGS: Record<string, () => Promise<any>> = {
     // i.e. kernel hardening was enabled but the bwrap probe failed and plugins run without the OS backstop.
     sandbox_hardening_degraded: async () => {
         try { return require('../core/plugin-isolate').isSandboxHardeningDegraded() === true; } catch { return false; }
+    },
+    // Derived BOOLEAN: TRUE only while a mail-PROVIDER plugin has registered a host-wide send function
+    // (email:provider capability → global.wordjs_send_mail). The core cannot send email itself, so when
+    // this is FALSE password recovery fails closed and silently — a fresh install with no mail plugin has
+    // NO self-service password reset. Surfacing it here lets the admin UI say so instead of leaving a
+    // dead "Forgot password?" flow. Live/fail-closed: the host deletes the global when the provider
+    // unloads. Mirrors the active_theme_missing / sandbox_hardening_degraded derived-boolean pattern.
+    email_provider_available: async () => {
+        try { return require('../core/mail-provider').isEmailProviderAvailable() === true; } catch { return false; }
     }
 };
 
@@ -328,6 +342,13 @@ router.put('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: Re
             await updateOption(key, value);
             updated[key] = value;
         }
+    }
+
+    // AUDIT: record WHICH settings changed — the key names only, never their values (a value could be
+    // admin_email / other sensitive config). One row per bulk save.
+    const changedKeys = Object.keys(updated);
+    if (changedKeys.length) {
+        await recordAudit((req as any).user && (req as any).user.id, 'settings.update', 'settings', '', { keys: changedKeys });
     }
 
     res.json(updated);

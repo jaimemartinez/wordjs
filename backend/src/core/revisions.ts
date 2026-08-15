@@ -4,6 +4,7 @@
  */
 
 const { db, dbAsync } = require('../config/database');
+const { diffText, diffStats } = require('./text-diff');
 
 /**
  * Save a revision of a post
@@ -202,7 +203,17 @@ async function countRevisions(postId: number) {
 }
 
 /**
- * Compare two revisions
+ * Compare two revisions.
+ *
+ * Historically this returned only three "changed y/n" booleans, which told the revisions UI THAT a
+ * field changed but never WHAT. It now also returns a structured, per-field diff: an ordered list of
+ * {type: 'same'|'added'|'removed', value} segments (word-level LCS, dependency-free — see
+ * core/text-diff) that the admin UI can render as inline added/removed text. The booleans are kept
+ * verbatim for back-compat; `diff` is purely additive.
+ *
+ * Direction: revision1 is the OLD side, revision2 the NEW side — an 'added' segment is text present
+ * in rev2 but not rev1, 'removed' is present in rev1 but not rev2. (This matches the ordering the
+ * route passes: /compare/:id1/:id2.)
  */
 async function compareRevisions(revisionId1: number, revisionId2: number) {
   const rev1 = await getRevision(revisionId1);
@@ -210,12 +221,30 @@ async function compareRevisions(revisionId1: number, revisionId2: number) {
 
   if (!rev1 || !rev2) return null;
 
+  // Content is HTML and may be one long line, so a word-level diff (whitespace-lossless) gives the
+  // granular per-word added/removed segments a reader wants; title/excerpt diff the same way.
+  const titleDiff = diffText(rev1.title || '', rev2.title || '', 'word');
+  const contentDiff = diffText(rev1.content || '', rev2.content || '', 'word');
+  const excerptDiff = diffText(rev1.excerpt || '', rev2.excerpt || '', 'word');
+
   return {
     revision1: rev1,
     revision2: rev2,
     titleChanged: rev1.title !== rev2.title,
     contentChanged: rev1.content !== rev2.content,
-    excerptChanged: rev1.excerpt !== rev2.excerpt
+    excerptChanged: rev1.excerpt !== rev2.excerpt,
+    // Structured word-level diff. Each field is a DiffSegment[]; `stats` gives added/removed counts
+    // per field so a caller can badge the change size without re-walking the segments.
+    diff: {
+      title: titleDiff,
+      content: contentDiff,
+      excerpt: excerptDiff,
+      stats: {
+        title: diffStats(titleDiff),
+        content: diffStats(contentDiff),
+        excerpt: diffStats(excerptDiff)
+      }
+    }
   };
 }
 

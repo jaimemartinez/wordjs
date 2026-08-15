@@ -29,6 +29,8 @@ const statusMap: Record<string, StatusType> = {
     pending: "warning",
     partial: "warning",
     draft: "warning",
+    future: "info",
+    scheduled: "info",
     unpaid: "error",
     error: "error",
     failed: "error",

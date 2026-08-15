@@ -6,7 +6,7 @@
 const { db, dbAsync } = require('../config/database');
 const { doAction, applyFilters } = require('../core/hooks');
 const { doShortcode, doShortcodeAsync, stripShortcodes } = require('../core/shortcodes');
-const { sanitizeTitle, sanitizeContent, generateExcerpt, currentTimeGMT, currentTime } = require('../core/formatting');
+const { sanitizeTitle, sanitizeContent, generateExcerpt, currentTimeGMT, currentTime, formatDate } = require('../core/formatting');
 const config = require('../config/app');
 const cache = require('../core/cache');
 const { saveRevision } = require('../core/revisions');
@@ -218,7 +218,8 @@ class Post {
             commentStatus = 'open',
             pingStatus = 'open',
             password = '',
-            mimeType = ''
+            mimeType = '',
+            date
         } = data;
 
         // Generate slug from title if not provided
@@ -233,6 +234,24 @@ class Post {
         const now = currentTime();
         const nowGmt = currentTimeGMT();
 
+        // Scheduled publishing (WordPress parity): a caller-supplied post_date decides post_date /
+        // post_date_gmt, and a 'publish' whose date is in the FUTURE is stored as 'future' + armed with a
+        // one-off cron event that flips it live at that moment. A past/now date publishes immediately.
+        const scheduledPublish = require('../core/scheduled-publish');
+        let postDate = now;
+        let postDateGmt = nowGmt;
+        let effectiveStatus = status;
+        let scheduledWhenMs: number | null = null;
+        if (date !== undefined && date !== null && date !== '') {
+            const d = new Date(date);
+            if (!Number.isNaN(d.getTime())) {
+                postDate = formatDate(d);
+                postDateGmt = d.toISOString().slice(0, 19).replace('T', ' ');
+                effectiveStatus = scheduledPublish.resolveScheduledStatus(status, d.getTime());
+                if (effectiveStatus === 'future') scheduledWhenMs = d.getTime();
+            }
+        }
+
         // Generate GUID
         const guid = `${config.site.url}/?p=${Date.now()}`;
 
@@ -246,12 +265,12 @@ class Post {
       RETURNING id
     `, [
             authorId || 0,
-            now,
-            nowGmt,
+            postDate,
+            postDateGmt,
             sanitizedContent,
             title,
             excerpt,
-            status,
+            effectiveStatus,
             commentStatus,
             pingStatus,
             password,
@@ -269,6 +288,11 @@ class Post {
 
         // Update GUID with actual post ID
         await dbAsync.run('UPDATE posts SET guid = ? WHERE id = ?', [`${config.site.url}/?p=${postId}`, postId]);
+
+        // Arm the flip event for a scheduled post (only once we know its id).
+        if (scheduledWhenMs !== null) {
+            await scheduledPublish.scheduleFuturePublish(postId, scheduledWhenMs);
+        }
 
         // A 404 for this slug may be negative-cached (findBySlug) — the new post must resolve on
         // the very next read, not when the sentinel expires.
@@ -475,16 +499,20 @@ class Post {
             params.push(parent);
         }
 
-        // Search — the FTS5 index when this install has one, else the original LIKE scan.
+        // Search — the engine's native full-text index when this install has one, else the LIKE scan.
+        // The concrete engine is resolved ONCE (async) by findAll/count and threaded in as
+        // `options._searchEngine`; a direct, synchronous buildWhere caller (e.g. a unit test) gets the
+        // SQLite answer from the sync probe. Either way the FILTER produced here composes with every
+        // other condition AND with the COUNT(*) that reuses this builder.
         if (search) {
-            const match = Post._ftsMatchQuery(search);
-            if (Post._ftsAvailable() && match) {
-                // Subquery, not a JOIN: the caller already builds its own FROM/JOIN chain, and a
-                // rowid IN (...) keeps this a pure filter that composes with every other condition
-                // AND with the COUNT(*) query that reuses this same builder.
-                conditions.push(`${col}id IN (SELECT rowid FROM posts_fts WHERE posts_fts MATCH ?)`);
-                params.push(match);
+            const engine = options._searchEngine !== undefined ? options._searchEngine : Post._syncSearchEngine();
+            const clauses = Post._searchClauses(engine, search, col);
+            if (clauses) {
+                conditions.push(clauses.filterSql);
+                params.push(...clauses.filterParams);
             } else {
+                // Best-effort fallback: no usable FTS engine (sqlite-legacy, FTS5 compiled out, a term
+                // too short for MySQL's min token size, or nothing indexable survived sanitisation).
                 conditions.push(`(${col}post_title LIKE ? OR ${col}post_content LIKE ?)`);
                 const searchTerm = `%${search}%`;
                 params.push(searchTerm, searchTerm);
@@ -492,6 +520,130 @@ class Post {
         }
 
         return { joins, conditions, params };
+    }
+
+    /**
+     * The full-text engine backing THIS install's search, or null when none applies (→ LIKE).
+     *
+     *   'fts5'  → SQLite with the posts_fts index (bm25 relevance)
+     *   'pg'    → Postgres with the search_vector tsvector column (ts_rank relevance)
+     *   'mysql' → MySQL/InnoDB with the FULLTEXT index (MATCH…AGAINST relevance)
+     *
+     * Resolved ONCE per process and cached. Postgres/MySQL need an async catalog probe (their drivers
+     * expose no synchronous handle), so the async resolver is what findAll/count call; the sync probe
+     * below only ever answers for SQLite and is the default for direct buildWhere callers.
+     */
+    static _searchEngineCache: string | null | undefined = undefined;
+
+    static _syncSearchEngine(): string | null {
+        // Synchronous best-effort: only SQLite exposes a sync handle here. Anything else stays null
+        // until the async resolver has run (which findAll/count always do before a search query).
+        return Post._ftsAvailable() ? 'fts5' : null;
+    }
+
+    static async _resolveSearchEngine(): Promise<string | null> {
+        if (Post._searchEngineCache !== undefined) return Post._searchEngineCache;
+        try {
+            const { getDbType } = require('../config/database');
+            const driver = typeof getDbType === 'function' ? getDbType().driver : null;
+            if (driver && String(driver).startsWith('sqlite')) {
+                return (Post._searchEngineCache = Post._ftsAvailable() ? 'fts5' : null);
+            }
+            if (driver === 'postgres') {
+                const row = await dbAsync.get(
+                    `SELECT 1 AS ok FROM information_schema.columns ` +
+                    `WHERE table_name = 'posts' AND column_name = 'search_vector' LIMIT 1`
+                );
+                return (Post._searchEngineCache = row ? 'pg' : null);
+            }
+            if (driver === 'mysql' || driver === 'mariadb') {
+                const row = await dbAsync.get(
+                    `SELECT 1 AS ok FROM information_schema.statistics ` +
+                    `WHERE table_schema = DATABASE() AND table_name = 'posts' AND index_name = 'ftidx_posts_search' LIMIT 1`
+                );
+                return (Post._searchEngineCache = row ? 'mysql' : null);
+            }
+            return (Post._searchEngineCache = null);
+        } catch {
+            return (Post._searchEngineCache = null);
+        }
+    }
+
+    /**
+     * The per-engine SEARCH clauses for one query string, or null to signal "fall back to LIKE".
+     *
+     * Returns a filter (used by the WHERE of both the rows query and COUNT(*)) and a relevance order
+     * (used only by the rows query) so that EVERY engine returns the more-relevant document first
+     * behind one uniform interface — callers never branch on the driver.
+     *
+     *   fts5  : filter = rowid IN (MATCH …); order = bm25() ASC (more negative = better match)
+     *   pg    : filter = search_vector @@ plainto_tsquery(…); order = ts_rank(…) DESC
+     *   mysql : filter = MATCH…AGAINST(… NATURAL LANGUAGE); order = the same score DESC
+     *
+     * INJECTION / PARSE SAFETY — the whole point of the sanitising here:
+     *   • fts5  strips FTS5 syntax characters and re-quotes each token as a literal phrase, so a stray
+     *           `"` or `NEAR(` is text, never an operator or a SQLITE_ERROR thrown at the visitor.
+     *   • pg    uses plainto_tsquery, which parses the input as PLAIN TEXT (operators are ignored, it
+     *           never raises the syntax error that raw to_tsquery would) and the value is a bound param.
+     *   • mysql uses NATURAL LANGUAGE MODE, where + - * and quotes are NOT operators, and a bound param.
+     * In all three the query value is a placeholder, so SQL injection is structurally impossible.
+     */
+    static _searchClauses(
+        engine: string | null,
+        search: string,
+        col: string
+    ): { filterSql: string; filterParams: any[]; orderSql: string; orderParams: any[] } | null {
+        if (!engine) return null;
+
+        if (engine === 'fts5') {
+            const match = Post._ftsMatchQuery(search);
+            if (!match) return null;
+            return {
+                filterSql: `${col}id IN (SELECT rowid FROM posts_fts WHERE posts_fts MATCH ?)`,
+                filterParams: [match],
+                // bm25() lives inside a query over posts_fts; a correlated subquery pulls the score for
+                // each already-matched row. bm25 returns a negative number where MORE negative = better,
+                // so ASC orders best-first. Only the matched set is walked, so this stays cheap.
+                orderSql: `(SELECT bm25(posts_fts) FROM posts_fts WHERE posts_fts MATCH ? AND rowid = ${col}id) ASC`,
+                orderParams: [match]
+            };
+        }
+
+        if (engine === 'pg') {
+            const q = String(search).trim();
+            if (!q) return null;
+            const cols = `${col}search_vector`;
+            return {
+                filterSql: `${cols} @@ plainto_tsquery('english', ?)`,
+                filterParams: [q],
+                orderSql: `ts_rank(${cols}, plainto_tsquery('english', ?)) DESC`,
+                orderParams: [q]
+            };
+        }
+
+        if (engine === 'mysql') {
+            const q = String(search).trim();
+            // MySQL's InnoDB FULLTEXT ignores tokens below innodb_ft_min_token_size (default 3). A query
+            // with no indexable token (e.g. "hi", "a b") would MATCH nothing in NATURAL LANGUAGE mode, so
+            // fall back to LIKE for those — documented, graceful, never an empty result where LIKE finds one.
+            if (!Post._mysqlHasIndexableToken(q)) return null;
+            const expr = `MATCH(${col}post_title, ${col}post_content, ${col}post_excerpt) AGAINST(? IN NATURAL LANGUAGE MODE)`;
+            return {
+                filterSql: expr,
+                filterParams: [q],
+                orderSql: `${expr} DESC`,
+                orderParams: [q]
+            };
+        }
+
+        return null;
+    }
+
+    /** True when a query has at least one token long enough for MySQL's FULLTEXT min token size. */
+    static _mysqlHasIndexableToken(search: string, minLen = 3): boolean {
+        return String(search)
+            .split(/[^0-9A-Za-zÀ-￿]+/)
+            .some((t) => t.length >= minLen);
     }
 
     /**
@@ -554,7 +706,12 @@ class Post {
 
         let sql = 'SELECT p.* FROM posts p';
 
-        const { joins, conditions, params } = Post.buildWhere(options, 'p');
+        // Resolve the full-text engine ONCE per search so the WHERE filter (here and in COUNT) and the
+        // relevance ORDER BY below agree on the same backend. Non-search queries never pay the probe.
+        const searchEngine = options.search ? await Post._resolveSearchEngine() : null;
+        const whereOptions = options.search ? { ...options, _searchEngine: searchEngine } : options;
+
+        const { joins, conditions, params } = Post.buildWhere(whereOptions, 'p');
 
         if (joins.length > 0) {
             sql += ' ' + joins.join(' ');
@@ -569,7 +726,17 @@ class Post {
         const allowedOrderBy = ['id', 'post_date', 'post_title', 'post_modified', 'menu_order', 'comment_count'];
         const safeOrderBy = allowedOrderBy.includes(orderBy) ? `p.${orderBy}` : 'p.post_date';
         const safeOrder = order.toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
-        sql += ` ORDER BY ${safeOrderBy} ${safeOrder}`;
+
+        // RELEVANCE FIRST for a search: every engine returns the more-relevant document ahead of the
+        // less-relevant one, with the requested column (date by default) only breaking ties. The order
+        // params sit between the WHERE params and LIMIT/OFFSET — exactly their `?` position in the SQL.
+        const searchOrder = options.search ? Post._searchClauses(searchEngine, options.search, 'p.') : null;
+        if (searchOrder && searchOrder.orderSql) {
+            sql += ` ORDER BY ${searchOrder.orderSql}, ${safeOrderBy} ${safeOrder}`;
+            params.push(...searchOrder.orderParams);
+        } else {
+            sql += ` ORDER BY ${safeOrderBy} ${safeOrder}`;
+        }
 
         // Pagination
         // Use params for limit/offset
@@ -579,6 +746,19 @@ class Post {
         const rows = await dbAsync.all(sql, params);
 
         return rows.map((row: any) => new Post(row));
+    }
+
+    /**
+     * UNIFIED search entry point — engine-agnostic full-text search with relevance ordering.
+     *
+     * Callers hand it a query string and the usual listing options (type/status/author/paging); it
+     * returns Post rows most-relevant first on WHATEVER engine backs this install (SQLite FTS5,
+     * Postgres tsvector, MySQL FULLTEXT) and degrades to a LIKE scan where none is available. This is
+     * the single path the REST list route and the public /search page flow through, so improving the
+     * engine here improves every caller at once — none of them branch on the driver.
+     */
+    static async search(query: string, options: any = {}) {
+        return Post.findAllWithRelations({ ...options, search: query });
     }
 
     /**
@@ -598,7 +778,12 @@ class Post {
         // Use bare columns (no alias) since this is a single-table COUNT(*).
         let sql = 'SELECT COUNT(*) as count FROM posts';
 
-        const { conditions, params } = Post.buildWhere(options, '');
+        // Same engine resolution as findAll so the COUNT filter matches the rows filter exactly — a
+        // drift here would report a total that disagrees with the page it accompanies.
+        const searchEngine = options.search ? await Post._resolveSearchEngine() : null;
+        const whereOptions = options.search ? { ...options, _searchEngine: searchEngine } : options;
+
+        const { conditions, params } = Post.buildWhere(whereOptions, '');
 
         if (conditions.length > 0) {
             sql += ' WHERE ' + conditions.join(' AND ');
@@ -632,6 +817,45 @@ class Post {
         const updates: string[] = [];
         const values: any[] = [];
 
+        // Scheduled publishing (WordPress parity). Resolve the target date + status BEFORE building the
+        // UPDATE so the row is written with the correct 'future'/'publish' state, then arm/cancel the
+        // flip event AFTER the write. `scheduledWhenMs` is the moment to (re)arm for; `cancelSchedule`
+        // marks a post leaving 'future' so its pending event is cleared (no orphan events).
+        const scheduledPublish = require('../core/scheduled-publish');
+        let whenMs: number | null = null;
+        if (data.date !== undefined && data.date !== null && data.date !== '') {
+            const d = new Date(data.date);
+            if (!Number.isNaN(d.getTime())) {
+                whenMs = d.getTime();
+                updates.push('post_date = ?', 'post_date_gmt = ?');
+                values.push(formatDate(d), d.toISOString().slice(0, 19).replace('T', ' '));
+            }
+        }
+        // The status we intend the post to end up in: an explicit request wins; a date-only edit
+        // re-evaluates the CURRENT status against the new date (publish→future or future→publish); a
+        // bare re-save of a still-'future' post re-evaluates too (so a passed date self-heals to publish).
+        let intendedStatus: any;
+        if (data.status !== undefined) intendedStatus = data.status;
+        else if (whenMs !== null) intendedStatus = post.postStatus;
+        else if (post.postStatus === 'future') intendedStatus = 'future';
+        else intendedStatus = undefined;
+
+        let effectiveStatus: string | undefined;
+        let scheduledWhenMs: number | null = null;
+        let cancelSchedule = false;
+        if (intendedStatus !== undefined) {
+            const evalWhen = whenMs !== null
+                ? whenMs
+                : scheduledPublish.parseDbDateMs(post.postDateGmt, true);
+            effectiveStatus = scheduledPublish.resolveScheduledStatus(intendedStatus, evalWhen);
+            if (effectiveStatus === 'future') {
+                scheduledWhenMs = evalWhen;
+            } else if (post.postStatus === 'future') {
+                // Leaving 'future' (published now, or moved to draft/pending/trash) → drop the event.
+                cancelSchedule = true;
+            }
+        }
+
         if (data.title !== undefined) {
             updates.push('post_title = ?');
             values.push(data.title);
@@ -647,9 +871,9 @@ class Post {
             values.push(data.excerpt);
         }
 
-        if (data.status !== undefined) {
+        if (effectiveStatus !== undefined) {
             updates.push('post_status = ?');
-            values.push(data.status);
+            values.push(effectiveStatus);
         }
 
         if (data.slug !== undefined) {
@@ -685,6 +909,13 @@ class Post {
         if (updates.length > 0) {
             values.push(id);
             await dbAsync.run(`UPDATE posts SET ${updates.join(', ')} WHERE id = ?`, values);
+        }
+
+        // (Re)arm or cancel the flip event now that the row reflects the target state.
+        if (scheduledWhenMs !== null) {
+            await scheduledPublish.scheduleFuturePublish(id, scheduledWhenMs);
+        } else if (cancelSchedule) {
+            await scheduledPublish.cancelFuturePublish(id);
         }
 
         // Invalidate Cache

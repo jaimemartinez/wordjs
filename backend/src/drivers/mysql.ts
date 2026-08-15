@@ -46,7 +46,8 @@ const LONG_TEXT_COLUMNS = new Set([
     'post_content', 'post_content_filtered', 'post_excerpt', 'post_title', 'guid', 'to_ping', 'pinged',
     'meta_value', 'comment_content', 'comment_agent', 'description', 'message', 'data', 'option_value',
     'link_description', 'link_notes', 'link_image', 'link_url', 'action_url', 'metadata',
-    'fields' // form_submissions.fields — the submitted key→value map as JSON (route-bounded at 64KB)
+    'fields', // form_submissions.fields — the submitted key→value map as JSON (route-bounded at 64KB)
+    'detail' // audit_log.detail — the small sanitized JSON blob for an audit event (never a secret)
 ]);
 
 // Strip `-- line` and `/* block */` comments (string-literal aware). Core DDL sometimes carries inline
