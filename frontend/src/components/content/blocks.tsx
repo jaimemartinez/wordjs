@@ -821,10 +821,17 @@ export function PostsGridBlock({ posts, columns, gap, bg, borderColor, radius, p
         >
             {list.map((post) => (
                 <article key={post.id} className="wp-block-posts-grid__card">
+                    {/* The image travels as a CUSTOM PROPERTY (same bridge HeroBlock uses for its
+                        bg-image): a literal inline background-image would beat the stylesheet and
+                        lock the treatment, whereas the var lets wordjs-ui.css own the layering —
+                        its thumb rule paints var(--wjs-posts-thumb-scrim) ABOVE this image, so a
+                        theme can composite a gradient scrim without touching the content's photo. */}
                     <div
                         className="wp-block-posts-grid__thumb"
                         aria-hidden="true"
-                        style={post.image ? { backgroundImage: `url(${post.image})` } : undefined}
+                        style={post.image
+                            ? ({ "--wjs-posts-thumb-image": `url(${post.image})` } as React.CSSProperties)
+                            : undefined}
                     ></div>
                     {post.date && <div className="wp-block-posts-grid__date">{fmtPostDate(post.date)}</div>}
                     <h3 className="wp-block-posts-grid__title">

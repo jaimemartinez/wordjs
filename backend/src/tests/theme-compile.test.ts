@@ -33,6 +33,9 @@ const MANIFEST = {
         '--wjs-color-primary': { group: 'color', declaredDefault: '#3b82f6', fallbacks: [], consumers: [{ selector: '.btn-primary', property: 'color' }] },
         '--wjs-color-on-primary': { group: 'color', declaredDefault: '#ffffff', fallbacks: [], consumers: [] },
         '--wjs-hero-bg': { group: 'hero', declaredDefault: '#ffffff', fallbacks: [], consumers: [{ selector: '.wp-block-hero', property: 'background' }] },
+        // A GLOBAL element token whose name is a real CSS property, so a child prop of the same name
+        // would (wrongly) fall back to it if the compiler let it — the regression this pins.
+        '--wjs-hero-color': { group: 'hero', declaredDefault: '#111827', fallbacks: [], consumers: [{ selector: '.wp-block-hero', property: 'color' }] },
         '--wjs-hero-button-background': { group: 'hero', declaredDefault: '#111827', fallbacks: [], consumers: [] },
         '--wjs-focus-ring': { group: 'color', declaredDefault: 'rgba(37, 99, 235, 0.35)', fallbacks: [], consumers: [{ selector: '.btn:focus-visible', property: 'box-shadow' }] }
     },
@@ -659,6 +662,23 @@ describe('compileTheme (declarative theme compiler)', () => {
             assert.strictEqual(bytes1, fs.readFileSync(stylePath(slug), 'utf8'));
             assert.ok(r1.css.includes('#main-content .site-hero { padding: 2rem }'), r1.css);
         });
+    });
+
+    it('a child prop never falls back to the PARENT element token — a narrower selector must not write a broader one', () => {
+        // The fixture: hero has a child `button` and a global token --wjs-hero-color, but NO
+        // --wjs-hero-button-color. Styling the button's `color` must NOT resolve to --wjs-hero-color
+        // (which would repaint the whole hero from :root); it must emit a literal rule on the button's
+        // own selector. This was a live bug — state/variant children like accordion.itemOpen took
+        // exactly this wrong fallback and repainted every item.
+        const slug = writeTheme({ styles: { hero: { button: { color: '#ff0000' } } } });
+        const r = compile(slug, { derive: STUB_DERIVE });
+        assert.strictEqual(r.stats.errors, 0, JSON.stringify(r.diagnostics));
+        assert.ok(!/--wjs-hero-color\s*:/.test(r.css), `must NOT write the parent token: ${r.css}`);
+        assert.match(r.css, /\.wp-block-hero__button\s*\{[^}]*color:\s*#ff0000/);
+        // The child's OWN token still resolves when it exists (button.background → --wjs-hero-button-background).
+        const slug2 = writeTheme({ styles: { hero: { button: { background: '#00ff00' } } } });
+        const r2 = compile(slug2, { derive: STUB_DERIVE });
+        assert.match(r2.css, /--wjs-hero-button-background:\s*#00ff00/, r2.css);
     });
 
     it('a chrome child the manifest does not name is refused, with a suggestion', () => {

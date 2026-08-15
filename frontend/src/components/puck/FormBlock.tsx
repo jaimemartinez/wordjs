@@ -15,7 +15,11 @@ import React, { useId, useState } from "react";
  * El envío hace POST a /api/v1/forms/submit con
  * { formName, pageId?, fields: { [label]: value }, _hp }.
  * Los estilos los poseen los temas vía clases wjs-form* en
- * wordjs-ui.css (aquí solo estructura mínima inline).
+ * wordjs-ui.css — TAMBIÉN la estructura (display/gap): un estilo
+ * inline aquí ganaría a la hoja y mataría --wjs-form-gap /
+ * --wjs-form-field-gap para todos los temas (el candado que
+ * quitó WAVE 2). El único inline restante es el honeypot, que
+ * es ocultación funcional, no apariencia tematizable.
  * ============================================================ */
 
 export type FormBlockFieldType = "text" | "email" | "tel" | "textarea" | "select" | "checkbox";
@@ -173,7 +177,6 @@ export function FormBlockRender(props: FormBlockProps & { puck?: any }) {
             className="wjs-form"
             data-form-name={formName}
             onSubmit={handleSubmit}
-            style={{ display: "grid", gap: "1rem" }}
         >
             {(fields || []).map((f, i) => {
                 const fieldId = `${uid}-f${i}`;
@@ -200,7 +203,6 @@ export function FormBlockRender(props: FormBlockProps & { puck?: any }) {
                         <div
                             key={i}
                             className="wjs-form-field wjs-form-field--checkbox"
-                            style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}
                         >
                             <input type="checkbox" className="wjs-form-checkbox" {...commonProps} />
                             {labelNode}
@@ -209,7 +211,7 @@ export function FormBlockRender(props: FormBlockProps & { puck?: any }) {
                 }
 
                 return (
-                    <div key={i} className="wjs-form-field" style={{ display: "grid", gap: "0.375rem" }}>
+                    <div key={i} className="wjs-form-field">
                         {labelNode}
                         {f.type === "textarea" ? (
                             <textarea

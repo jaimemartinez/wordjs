@@ -272,6 +272,116 @@ const CHROME_ELEMENT_SEEDS = {
     },
 };
 
+// ── .wp-block-* CHILD seeds (WAVE 1a) ─────────────────────────────────────────
+// The scraped children only cover BEM parts that CONSUME a token somewhere in ui.css, which leaves
+// three whole classes of real, rendered markup unreachable by name:
+//
+//   1. PARTS ui.css never styles with a var() — `.wp-block-quote__body` holds the quote's text and no
+//      framework rule touches it, so a theme had no name for the text of a quote.
+//   2. COMPONENT STATES — the client islands toggle `is-open` / `is-active` / `is-playing` /
+//      `is-scrolling`, always scoped to their block part. The full sweep of `is-*` across
+//      frontend/src/components/content is exactly those four; a theme could style the closed
+//      accordion header but not the open one.
+//   3. VARIANT MODIFIERS — the closed enums a block's props admit (`button-variant-${x}` with
+//      x ∈ {primary, secondary, outline} in puckConfig's radio field, `card-theme-${x}`,
+//      `cta-variant-${x}`, and the `--modifier` classes blocks.tsx emits literally). Each enum is
+//      covered COMPLETELY: a partial list would make the manifest lie about which variants exist.
+//   4. SPECIFICITY-DEAD COMPOUNDS — ui.css styles headings per level as `h1.wp-block-heading` …
+//      `h6.wp-block-heading` (higher specificity than the bare class a theme's `styles.heading`
+//      compiles to), and the table's th/td live under `__table` with no class of their own.
+//
+// A seed here NEVER overwrites a scraped child (same rule as the chrome seeds: the scrape is derived
+// from real CSS and wins; displacement is made loud by the sanity check in main() and by
+// frontend/src/lib/__tests__/chromeSelectorContract.test.ts). Every selector below is proven against
+// the rendered markup by frontend/src/components/content/__tests__/blockChildSeeds.test.tsx — a class
+// no component emits fails that suite, so the manifest cannot promise dead selectors.
+//
+// Child keys deliberately avoid the compiler's reserved nesting names (hover/focus/active/disabled,
+// before/after/placeholder, first/last, mobile/tablet/desktop/belowDesktop): theme-compile.ts checks
+// those maps BEFORE the children map, so a colliding key would be silently unreachable.
+const BLOCK_ELEMENT_CHILD_SEEDS = {
+    accordion: {
+        itemOpen: { selector: '.wp-block-accordion__item.is-open' },
+        iconOpen: { selector: '.wp-block-accordion__item.is-open .wp-block-accordion__icon' },
+    },
+    'audio-player': {
+        body: { selector: '.wp-block-audio-player__body' },
+        scrolling: { selector: '.wp-block-audio-player__track.is-scrolling' },
+    },
+    button: {
+        // puckConfig's `variant` radio: primary | secondary | outline — the whole enum.
+        linkPrimary: { selector: '.wp-block-button__link.button-variant-primary' },
+        linkSecondary: { selector: '.wp-block-button__link.button-variant-secondary' },
+        linkOutline: { selector: '.wp-block-button__link.button-variant-outline' },
+    },
+    card: {
+        // puckConfig's `theme` select: light | dark | accent — the whole enum.
+        themeLight: { selector: '.wp-block-card.card-theme-light' },
+        themeDark: { selector: '.wp-block-card.card-theme-dark' },
+        themeAccent: { selector: '.wp-block-card.card-theme-accent' },
+    },
+    'category-posts': {
+        list: { selector: '.wp-block-category-posts__list' },
+        grid: { selector: '.wp-block-category-posts--grid' },
+    },
+    'cta-banner': {
+        // puckConfig's `variant` select: primary | dark | gradient — the whole enum.
+        variantPrimary: { selector: '.wp-block-cta-banner.cta-variant-primary' },
+        variantDark: { selector: '.wp-block-cta-banner.cta-variant-dark' },
+        variantGradient: { selector: '.wp-block-cta-banner.cta-variant-gradient' },
+    },
+    divider: {
+        // DividerBlock's `type`: solid | dashed | gradient — solid/dashed render an <hr>, gradient a <div>.
+        solid: { selector: '.wp-block-divider--solid' },
+        dashed: { selector: '.wp-block-divider--dashed' },
+        gradient: { selector: '.wp-block-divider--gradient' },
+    },
+    heading: {
+        // ui.css's own per-level selectors (h1.wp-block-heading … h6.wp-block-heading) outrank the bare
+        // `.wp-block-heading` a theme's styles.heading compiles to, so per-level theming was
+        // specificity-dead. These carry the SAME compound ui.css uses, so a theme's rule ties on
+        // specificity and wins by load order.
+        h1: { selector: 'h1.wp-block-heading' },
+        h2: { selector: 'h2.wp-block-heading' },
+        h3: { selector: 'h3.wp-block-heading' },
+        h4: { selector: 'h4.wp-block-heading' },
+        h5: { selector: 'h5.wp-block-heading' },
+        h6: { selector: 'h6.wp-block-heading' },
+    },
+    hero: {
+        // Hero button `variant`: primary | outline. Primary IS the unmodified `hero.button` child the
+        // scrape already registers; only outline emits a modifier class.
+        buttonOutline: { selector: '.wp-block-hero__button--outline' },
+    },
+    pricing: {
+        planHighlighted: { selector: '.wp-block-pricing__plan--highlighted' },
+    },
+    quote: {
+        body: { selector: '.wp-block-quote__body' },
+        large: { selector: '.wp-block-quote--large' },
+        bar: { selector: '.wp-block-quote--bar' },
+    },
+    table: {
+        striped: { selector: '.wp-block-table--striped' },
+        head: { selector: '.wp-block-table__table th' },
+        cell: { selector: '.wp-block-table__table td' },
+    },
+    tabs: {
+        tabActive: { selector: '.wp-block-tabs__tab.is-active' },
+    },
+    testimonial: {
+        avatarInitials: { selector: '.wp-block-testimonial__avatar--initials' },
+    },
+    'video-embed': {
+        playing: { selector: '.wp-block-video-embed.is-playing' },
+        // A selector LIST: the embed path renders an <iframe>, the self-hosted path a <video>. NOTE for
+        // theme authors: nesting a state/pseudo under a list-selector child appends it to the LAST
+        // alternative only (theme-compile concatenates onto the whole string) — base declarations are
+        // what this child is for.
+        frame: { selector: '.wp-block-video-embed iframe, .wp-block-video-embed video' },
+    },
+};
+
 const FLAG_ORDER = ['alias', 'editor-internal', 'chrome-phantom'];
 
 const collapse = (s) => s.replace(/\s+/g, ' ').trim();
@@ -483,6 +593,17 @@ function main() {
         const el = elements[base] || (elements[base] = { selector: `.wp-block-${base}` });
         (el.children || (el.children = {}))[child] = { selector: `.wp-block-${base}__${child}` };
     }
+    // Block-child seeds merge INTO the scraped .wp-block-* entries (chrome seeds below only fill
+    // whole-element gaps). A scraped child with the same key wins — it is derived from real CSS —
+    // and the sanity check at the end makes any displacement loud instead of silent.
+    for (const [base, kids] of Object.entries(BLOCK_ELEMENT_CHILD_SEEDS)) {
+        const el = elements[base] || (elements[base] = { selector: `.wp-block-${base}` });
+        const children = el.children || (el.children = {});
+        for (const [key, def] of Object.entries(kids)) {
+            if (children[key]) continue;
+            children[key] = { selector: def.selector };
+        }
+    }
     for (const [key, seed] of Object.entries(CHROME_ELEMENT_SEEDS)) {
         if (elements[key]) continue; // a real .wp-block-* registration always wins over a seed
         elements[key] = typeof seed === 'string'
@@ -520,6 +641,15 @@ function main() {
     const heroGroupsOk = heroNames.length > 0 && heroNames.every((n) => tokensOut[n].group === 'hero');
     const editorInternal = Object.keys(tokensOut).filter((n) => (tokensOut[n].flags || []).includes('editor-internal'));
     const phantomsOk = CHROME_PHANTOM_TOKENS.every((n) => (tokensOut[n].flags || []).includes('chrome-phantom'));
+    // Every block-child seed must have landed with ITS selector — a scraped child taking the key with
+    // a different selector would silently withdraw the promise, so it fails the build instead.
+    const displacedBlockChildren = [];
+    for (const [base, kids] of Object.entries(BLOCK_ELEMENT_CHILD_SEEDS)) {
+        for (const [key, def] of Object.entries(kids)) {
+            const got = elementsOut[base] && elementsOut[base].children && elementsOut[base].children[key];
+            if (!got || got.selector !== def.selector) displacedBlockChildren.push(`${base}.${key}`);
+        }
+    }
 
     console.log(`theme-tokens.json written: ${path.relative(process.cwd(), OUT_PATH)}`);
     console.log(`counts: tokens=${manifest.counts.tokens} varUses=${manifest.counts.varUses} elements=${manifest.counts.elements}`);
@@ -532,6 +662,7 @@ function main() {
     if (manifest.counts.tokens < 700) { console.error(`FAIL: expected ~700+ unique tokens, got ${manifest.counts.tokens}`); failed = true; }
     if (!heroGroupsOk) { console.error('FAIL: --wjs-hero-* tokens missing or not grouped as "hero"'); failed = true; }
     if (!phantomsOk) { console.error('FAIL: chrome-phantom tokens missing'); failed = true; }
+    if (displacedBlockChildren.length) { console.error(`FAIL: block-child seeds missing or displaced by a scraped child with another selector: ${displacedBlockChildren.join(', ')}`); failed = true; }
     // 21 Puck block aliases + 1 RTL rename alias (--wjs-cta-button-ml → --wjs-cta-button-margin-start).
     if (aliasNames.length !== 22) console.warn(`WARN: alias-flagged tokens = ${aliasNames.length} (expected 22): ${aliasNames.join(', ')}`);
     if (failed) process.exitCode = 1;
@@ -542,6 +673,6 @@ function main() {
 // covered 17 of 108 names, and deleting any seed outside those 17 just made the test smaller).
 // Exported behind a require.main guard — same pattern as scripts/create-40-themes.js — so requiring
 // this file cannot rewrite backend/public/theme-tokens.json as a side effect.
-module.exports = { CHROME_ELEMENT_SEEDS, CHROME_PHANTOM_TOKENS };
+module.exports = { CHROME_ELEMENT_SEEDS, CHROME_PHANTOM_TOKENS, BLOCK_ELEMENT_CHILD_SEEDS };
 
 if (require.main === module) main();

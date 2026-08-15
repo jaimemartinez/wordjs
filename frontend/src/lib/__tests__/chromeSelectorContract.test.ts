@@ -29,8 +29,9 @@ const GENERATOR = path.join(REPO, 'scripts/generate-token-manifest.js');
  * exports the table behind a `require.main === module` guard, so this import writes nothing.
  */
 type Seed = string | { selector: string; children?: Record<string, { selector: string }> };
-const { CHROME_ELEMENT_SEEDS } = createRequire(GENERATOR)(GENERATOR) as {
+const { CHROME_ELEMENT_SEEDS, BLOCK_ELEMENT_CHILD_SEEDS } = createRequire(GENERATOR)(GENERATOR) as {
     CHROME_ELEMENT_SEEDS: Record<string, Seed>;
+    BLOCK_ELEMENT_CHILD_SEEDS: Record<string, Record<string, { selector: string }>>;
 };
 
 // Where chrome markup can legitimately live. The composed header/footer wrapper is in the public
@@ -258,6 +259,77 @@ singlePost -> .wjs-post
 singlePost.body -> .wjs-post-body
 singlePost.header -> .wjs-post-header
 singlePost.title -> .wjs-post-title
+`.trim().split('\n').map((l) => l.trim());
+
+        expect(actual).toEqual(frozen);
+    });
+
+    // ── .wp-block-* CHILD SEEDS (WAVE 1a) ─────────────────────────────────────────────────────────
+    //
+    // The scraped .wp-block-* entries "cannot be promised without existing" because they come from
+    // ui.css — but the SEEDED block children (states, variant modifiers, unstyled parts, per-level
+    // heading compounds) exist only in the generator's table, so they get the same two layers the
+    // chrome seeds get. Markup existence is proven separately, AT RENDER TIME, by
+    // frontend/src/components/content/__tests__/blockChildSeeds.test.tsx — a grep cannot see
+    // template-built classes like `card-theme-${theme}`, so no grep layer is attempted here.
+
+    it('contains every seeded .wp-block-* child, with the same selector', () => {
+        const seeds = Object.entries(BLOCK_ELEMENT_CHILD_SEEDS);
+        expect(seeds.length, 'the generator exported no block-child seeds — this check would be vacuous').toBeGreaterThan(5);
+        const elements = manifest.elements as Record<string, { selector: string; children?: Record<string, { selector: string }> }>;
+        for (const [base, kids] of seeds) {
+            expect(elements[base], `manifest element "${base}" is missing — its child seeds have nowhere to land`).toBeTruthy();
+            for (const [child, cd] of Object.entries(kids)) {
+                expect(elements[base].children?.[child]?.selector,
+                    `manifest child "${base}.${child}" is missing or does not carry its seeded selector (a scraped ui.css child would have displaced the seed silently)`)
+                    .toBe(cd.selector);
+            }
+        }
+    });
+
+    it('matches the frozen block-child snapshot (update deliberately, never to make CI green)', () => {
+        const actual = Object.entries(BLOCK_ELEMENT_CHILD_SEEDS)
+            .flatMap(([base, kids]) => Object.entries(kids).map(([child, cd]) => `${base}.${child} -> ${cd.selector}`))
+            .sort();
+        // Same contract as the chrome snapshot above: removing a line is withdrawing a promise from
+        // every theme that styles it — say so in the commit message.
+        const frozen = `
+accordion.iconOpen -> .wp-block-accordion__item.is-open .wp-block-accordion__icon
+accordion.itemOpen -> .wp-block-accordion__item.is-open
+audio-player.body -> .wp-block-audio-player__body
+audio-player.scrolling -> .wp-block-audio-player__track.is-scrolling
+button.linkOutline -> .wp-block-button__link.button-variant-outline
+button.linkPrimary -> .wp-block-button__link.button-variant-primary
+button.linkSecondary -> .wp-block-button__link.button-variant-secondary
+card.themeAccent -> .wp-block-card.card-theme-accent
+card.themeDark -> .wp-block-card.card-theme-dark
+card.themeLight -> .wp-block-card.card-theme-light
+category-posts.grid -> .wp-block-category-posts--grid
+category-posts.list -> .wp-block-category-posts__list
+cta-banner.variantDark -> .wp-block-cta-banner.cta-variant-dark
+cta-banner.variantGradient -> .wp-block-cta-banner.cta-variant-gradient
+cta-banner.variantPrimary -> .wp-block-cta-banner.cta-variant-primary
+divider.dashed -> .wp-block-divider--dashed
+divider.gradient -> .wp-block-divider--gradient
+divider.solid -> .wp-block-divider--solid
+heading.h1 -> h1.wp-block-heading
+heading.h2 -> h2.wp-block-heading
+heading.h3 -> h3.wp-block-heading
+heading.h4 -> h4.wp-block-heading
+heading.h5 -> h5.wp-block-heading
+heading.h6 -> h6.wp-block-heading
+hero.buttonOutline -> .wp-block-hero__button--outline
+pricing.planHighlighted -> .wp-block-pricing__plan--highlighted
+quote.bar -> .wp-block-quote--bar
+quote.body -> .wp-block-quote__body
+quote.large -> .wp-block-quote--large
+table.cell -> .wp-block-table__table td
+table.head -> .wp-block-table__table th
+table.striped -> .wp-block-table--striped
+tabs.tabActive -> .wp-block-tabs__tab.is-active
+testimonial.avatarInitials -> .wp-block-testimonial__avatar--initials
+video-embed.frame -> .wp-block-video-embed iframe, .wp-block-video-embed video
+video-embed.playing -> .wp-block-video-embed.is-playing
 `.trim().split('\n').map((l) => l.trim());
 
         expect(actual).toEqual(frozen);
