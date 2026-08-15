@@ -158,7 +158,7 @@ const SETTINGS_OPTIONS = new Set([
     'blogname', 'blogdescription', 'siteurl', 'home', 'homepage_id', 'posts_per_page',
     'template', 'stylesheet', 'active_theme_layout', 'active_theme_mods', 'theme_mods',
     'site_logo', 'site_icon', 'permalink_structure', 'default_category',
-    'site_chrome_header', 'site_chrome_footer',
+    'site_chrome_header', 'site_chrome_footer', 'site_chrome_announcement',
     // These two land on <html> itself, so a change repaints every cached page — and being absent here
     // is worse than it sounds: switching a site to Arabic would have left every already-rendered page
     // announcing lang="en" and laying out LTR until the ISR window happened to expire.

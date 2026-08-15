@@ -129,17 +129,35 @@ const DOCUMENT_SCOPED_BLOCKS: Record<string, string> = {
         + 'listener and a portal into document.body — two instances on one page fight over that single global',
 };
 
-/** The two names the public layout resolves itself. Everything else is a named template part. */
+/** The two names the public layout resolves itself into a header/footer landmark. Position 'chrome'. */
 const CHROME_SITE_PARTS = ['header', 'footer'];
 
 /**
- * Which position a composition is being validated for. DERIVED from the part name, because the name
- * is the only thing that decides it: `header`/`footer` are the site chrome, and validateTemplateParts
- * REJECTS those two as template-part names, so no part can ever launder itself into the lenient
- * branch. An absent name is the site chrome — the only position PUT /api/v1/chrome/:part can write.
+ * The optional announcement/top bar — a THIRD name the public layout resolves itself, rendered
+ * full-bleed ABOVE the header when the theme or site ships it, emitting nothing when absent. It is a
+ * single-instance site slot exactly like header/footer, but it does NOT get position 'chrome': the
+ * header already mounts the one ChromeNav mobile drawer, so a second ChromeNav in the announcement bar
+ * would fight over the very body-scroll-lock global the template-part rule bars. Its own position
+ * therefore reuses the document-scoped bar (ChromeNav is refused) while staying a resolved site slot.
  */
-function chromePositionFor(part?: string): 'chrome' | 'part' {
+const ANNOUNCEMENT_PART = 'announcement';
+
+/**
+ * Every name the public layout resolves ITSELF (no theme.json `templateParts` declaration needed).
+ * These are the names that are NOT template parts — the reserved set validateTemplateParts refuses.
+ */
+const CHROME_LAYOUT_SLOTS = [...CHROME_SITE_PARTS, ANNOUNCEMENT_PART];
+
+/**
+ * Which position a composition is being validated for. DERIVED from the part name, because the name
+ * is the only thing that decides it: `header`/`footer` are the site chrome, `announcement` is the top
+ * bar, and validateTemplateParts REJECTS all three as template-part names, so no part can ever launder
+ * itself into a laxer branch. An absent name is the site chrome — the position PUT /api/v1/chrome/:part
+ * writes header/footer with (and 'announcement' when that part is written).
+ */
+function chromePositionFor(part?: string): 'chrome' | 'part' | 'announcement' {
     if (typeof part !== 'string' || CHROME_SITE_PARTS.includes(part)) return 'chrome';
+    if (part === ANNOUNCEMENT_PART) return 'announcement';
     return 'part';
 }
 
@@ -169,7 +187,7 @@ function describeProp(spec: PropSpec): string {
     }
 }
 
-interface WalkState { blocks: number; tooMany: boolean; tooDeep: boolean; position: 'chrome' | 'part'; }
+interface WalkState { blocks: number; tooMany: boolean; tooDeep: boolean; position: 'chrome' | 'part' | 'announcement'; }
 
 function validateBlock(node: any, blockPath: string, depth: number, state: WalkState, errors: ChromeValidationError[]): void {
     // Budget caps report ONCE and stop the walk — a hostile 10k-item payload costs O(cap), and
@@ -211,14 +229,17 @@ function validateBlock(node: any, blockPath: string, depth: number, state: WalkS
     // ChromeRows down as it is at the top level. Rejected here and not merely warned about — the
     // whole point is that the second instance is what breaks, so an author who cannot see it in a
     // preview of one page must be stopped at authoring time.
-    if (state.position === 'part' && Object.prototype.hasOwnProperty.call(DOCUMENT_SCOPED_BLOCKS, node.type)) {
-        errors.push({
-            code: 'CHROME_BLOCK_NOT_IN_PART',
-            path: blockPath,
-            message: `${node.type} may not appear in a named template part: ${DOCUMENT_SCOPED_BLOCKS[node.type]}. `
+    if ((state.position === 'part' || state.position === 'announcement')
+        && Object.prototype.hasOwnProperty.call(DOCUMENT_SCOPED_BLOCKS, node.type)) {
+        const reason = DOCUMENT_SCOPED_BLOCKS[node.type];
+        const message = state.position === 'announcement'
+            ? `${node.type} may not appear in the site announcement bar: ${reason}. The announcement bar renders once `
+                + `above the header — which already mounts the one drawer — so a second ${node.type} would fight over that `
+                + `same document.body global. Keep ${node.type} in chrome/header.json or chrome/footer.json.`
+            : `${node.type} may not appear in a named template part: ${reason}. `
                 + `A template may place the part more than once and it renders inside the page body, so the single `
-                + `instance the block assumes is not guaranteed — keep ${node.type} in chrome/header.json or chrome/footer.json.`
-        });
+                + `instance the block assumes is not guaranteed — keep ${node.type} in chrome/header.json or chrome/footer.json.`;
+        errors.push({ code: 'CHROME_BLOCK_NOT_IN_PART', path: blockPath, message });
         return;
     }
 
@@ -360,9 +381,10 @@ function validateChromeData(raw: any, opts: { part?: string } = {}): ChromeValid
  * frontend/src/lib/server-api.ts guards before a name reaches a URL. Keep the two identical: this is
  * what stops a declaration from ever becoming a path.
  *
- * `header` and `footer` are REJECTED as part names. Those two files are the site's chrome, resolved
- * by the public layout on every page; letting a template pull one in would render a second masthead
- * inside <main> — an invalid landmark and a duplicated nav, from a declaration that looked harmless.
+ * `header`, `footer` and `announcement` are REJECTED as part names. Those files are the site's chrome,
+ * resolved by the public layout on every page; letting a template pull one in would render a second
+ * masthead (or a second announcement bar) inside <main> — a duplicated landmark from a declaration
+ * that looked harmless. The reserved set is exactly CHROME_LAYOUT_SLOTS — the names the layout owns.
  *
  * Error codes (stable contract):
  *   PARTS_INVALID_SHAPE   not an array / an entry that is not an object
@@ -376,7 +398,7 @@ function validateChromeData(raw: any, opts: { part?: string } = {}): ChromeValid
 const TEMPLATE_PART_AREAS = ['header', 'footer', 'sidebar', 'general'];
 /** Identical to the template-name guard in frontend/src/lib/server-api.ts — a name becomes a URL. */
 const TEMPLATE_PART_NAME = /^[a-z0-9-]{1,40}$/;
-const TEMPLATE_PART_RESERVED = ['header', 'footer'];
+const TEMPLATE_PART_RESERVED = CHROME_LAYOUT_SLOTS.slice();
 const MAX_TEMPLATE_PARTS = 16;
 const TEMPLATE_PART_KEYS = ['name', 'area'];
 
@@ -438,6 +460,8 @@ module.exports = {
     CHROME_BLOCK_TYPES: Object.keys(BLOCKS),
     CHROME_SITE_PARTS: CHROME_SITE_PARTS.slice(),
     CHROME_DOCUMENT_SCOPED_BLOCKS: Object.keys(DOCUMENT_SCOPED_BLOCKS),
+    CHROME_LAYOUT_SLOTS: CHROME_LAYOUT_SLOTS.slice(),
+    CHROME_ANNOUNCEMENT_PART: ANNOUNCEMENT_PART,
     chromePositionFor,
     validateTemplateParts,
     TEMPLATE_PART_AREAS: TEMPLATE_PART_AREAS.slice(),

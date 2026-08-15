@@ -28,6 +28,7 @@ export default function PublicLayoutShell({
     headerMenu,
     footerMenu,
     footerSocials,
+    announcementSlot,
     headerSlot,
     footerSlot,
 }: {
@@ -53,6 +54,9 @@ export default function PublicLayoutShell({
     // built-in Header/Footer for that part. Absent ⇒ today's layout-v2 chrome, byte-for-byte.
     headerSlot?: React.ReactNode;
     footerSlot?: React.ReactNode;
+    // Optional composable announcement/top bar, rendered full-bleed ABOVE the header. Absent ⇒ nothing
+    // emitted (no reserved space, no empty band). The editor preview omits it, unchanged.
+    announcementSlot?: React.ReactNode;
 }) {
     // Normalized structure config (defaults ≡ today's chrome; invalid values fall back silently —
     // the theme doctor reports them in its own lane). All from props → deterministic for hydration.
@@ -91,6 +95,7 @@ export default function PublicLayoutShell({
                 </a>
                 <ThemeLoader initialSlug={themeSlug} initialThemeVersion={themeVersion} />
                 <ThemeTokenOverlay mods={mods} />
+                {announcementSlot}
                 {headerSlot ?? <Header initialMenu={headerMenu} initialSettings={settings} variant={header.variant} sticky={header.sticky} transparent={header.transparent} />}
                 <main id="main-content" className="flex-1 pt-24 pb-10 container mx-auto px-4" style={mainStyle}>
                     <SidebarLayout enabled={sidebar.enabled} position={sidebar.position}>{children}</SidebarLayout>

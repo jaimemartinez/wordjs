@@ -105,13 +105,15 @@ export default function ChromeEditorPage() {
             // 3º starter template. Every level is fail-closed via parseChromeData.
             let resolved: ChromeData | null = null;
             let from: ChromeSource = "starter";
+            // The announcement bar validates at its own position (bars ChromeNav); header/footer default.
+            const position = target === "announcement" ? ("announcement" as const) : undefined;
             // A FAILED settings read is not "nothing configured": falling through to the starter here
             // showed a pristine composition over a site that has a real one, and the next Save wrote
             // the starter on top of it. Treat it as an error and leave the editor empty instead.
             const settings = await settingsApi.get();
             const slug = settings?.template || "default";
             if (!opts.skipSite) {
-                const site = parseChromeData(settings?.[`site_chrome_${target}`], { source: "site" });
+                const site = parseChromeData(settings?.[`site_chrome_${target}`], { source: "site", position });
                 if (site.ok && site.data) { resolved = site.data; from = "site"; }
             }
             if (!resolved) {
@@ -120,7 +122,7 @@ export default function ChromeEditorPage() {
                     // page already uses for /themes/<slug>/style.css.
                     const res = await fetch(`/themes/${encodeURIComponent(slug)}/chrome/${target}.json`, { cache: "no-store" });
                     if (res.ok) {
-                        const theme = parseChromeData(await res.text(), { source: "theme" });
+                        const theme = parseChromeData(await res.text(), { source: "theme", position });
                         if (theme.ok && theme.data) { resolved = theme.data; from = "theme"; }
                     }
                 } catch { /* unreadable theme chrome — fall through to the starter */ }
@@ -208,7 +210,7 @@ export default function ChromeEditorPage() {
         // Same fail-closed validation the renderer applies — catch violations locally before the
         // PUT; the backend validator (the write authority) re-checks and its 400 errors[] land in
         // the same banner.
-        const local = parseChromeData(contract, { source: "editor" });
+        const local = parseChromeData(contract, { source: "editor", position: part === "announcement" ? "announcement" : undefined });
         if (!local.ok) { setErrors(local.errors); return; }
         setSaving(true);
         setErrors([]);
@@ -268,7 +270,7 @@ export default function ChromeEditorPage() {
 
                     {/* Part selector — toggle buttons, so the active part is exposed via aria-pressed */}
                     <div role="group" aria-label={t("chrome.admin.partSelector")} className="flex items-center bg-gray-100 rounded-xl p-1 gap-1">
-                        {(["header", "footer"] as ChromePart[]).map((p) => (
+                        {(["header", "footer", "announcement"] as ChromePart[]).map((p) => (
                             <button
                                 key={p}
                                 type="button"
@@ -280,7 +282,7 @@ export default function ChromeEditorPage() {
                                     under forced colours and to users who can't tell the two apart). Kept in the
                                     layout with `invisible` so switching doesn't shift the buttons. */}
                                 <i className={`fa-solid fa-check text-[8px] ${part === p ? "" : "invisible"}`} aria-hidden="true"></i>
-                                {p === "header" ? t("chrome.admin.part.header") : t("chrome.admin.part.footer")}
+                                {t(`chrome.admin.part.${p}`)}
                             </button>
                         ))}
                     </div>

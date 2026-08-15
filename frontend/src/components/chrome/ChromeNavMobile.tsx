@@ -14,7 +14,48 @@ import type { ChromeMenuItem } from "@/lib/chromeData";
 // the initial focus and to find the cycle ends for the Tab trap.
 const FOCUSABLE = 'a[href], button:not([disabled])';
 
+// Recursively render the (possibly nested) menu inside the drawer. A submenu becomes an indented
+// sub-list so the child links a desktop dropdown reveals on hover stay REACHABLE on touch — where
+// there is no hover. A leaf menu (no children anywhere) renders the same flat list of links it did
+// before submenus existed. `onNavigate` closes the drawer on any tap, at every depth.
+function MobileNavItems({
+    items,
+    onNavigate,
+    depth,
+}: {
+    items: ChromeMenuItem[];
+    onNavigate: () => void;
+    depth: number;
+}) {
+    return (
+        <>
+            {items.map((item) => {
+                const children = item.children ?? [];
+                return (
+                    <div key={item.id} className={depth > 0 ? "ps-4 border-s border-[var(--wjs-border-subtle,#f3f4f6)]" : ""}>
+                        <Link
+                            href={item.url || "#"}
+                            className="block text-lg text-[var(--wjs-color-text-main,#374151)] hover:text-[var(--wjs-color-primary,#2F6D86)] font-medium py-2 border-b border-[var(--wjs-border-subtle,#f3f4f6)] transition-colors"
+                            onClick={onNavigate}
+                        >
+                            {item.title}
+                        </Link>
+                        {children.length > 0 && (
+                            <div className="flex flex-col gap-1 mt-1">
+                                <MobileNavItems items={children} onNavigate={onNavigate} depth={depth + 1} />
+                            </div>
+                        )}
+                    </div>
+                );
+            })}
+        </>
+    );
+}
+
 export default function ChromeNavMobile({ items }: { items: ChromeMenuItem[] }) {
+    // Any nesting in the tree switches the drawer to the recursive (indented) renderer; a flat menu
+    // keeps its original per-link markup.
+    const hasSubmenus = items.some((item) => (item.children?.length ?? 0) > 0);
     const [open, setOpen] = useState(false);
     const [mounted, setMounted] = useState(false);
     // Unique panel id — a composition may hold several horizontal header navs (one per row).
@@ -131,7 +172,12 @@ export default function ChromeNavMobile({ items }: { items: ChromeMenuItem[] }) 
                     </button>
 
                     <nav aria-label="Mobile" className="flex flex-col gap-4 pt-10">
-                        {items.length > 0 ? (
+                        {items.length === 0 ? (
+                            <p className="text-[var(--wjs-color-text-muted,#6b7280)] text-sm">No menu items</p>
+                        ) : hasSubmenus ? (
+                            <MobileNavItems items={items} onNavigate={() => setOpen(false)} depth={0} />
+                        ) : (
+                            // Flat menu — the exact per-link markup the drawer shipped before submenus.
                             items.map((item) => (
                                 <Link
                                     key={item.id}
@@ -142,8 +188,6 @@ export default function ChromeNavMobile({ items }: { items: ChromeMenuItem[] }) 
                                     {item.title}
                                 </Link>
                             ))
-                        ) : (
-                            <p className="text-[var(--wjs-color-text-muted,#6b7280)] text-sm">No menu items</p>
                         )}
                     </nav>
                 </div>

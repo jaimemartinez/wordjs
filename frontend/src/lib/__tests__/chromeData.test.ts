@@ -6,11 +6,13 @@ import {
     resolveEffectiveChrome,
     parseChromeSocials,
     buildChromeBindings,
+    buildMenuTree,
     isSafeChromeHref,
     STARTER_TEMPLATES,
     CHROME_MAX_BLOCKS,
     CHROME_DOCUMENT_SCOPED_BLOCKS,
 } from '../chromeData';
+import type { ChromeMenuItem } from '../chromeData';
 
 // A representative valid composition with a nested Row (depth 3 at the deepest leaf).
 const VALID = {
@@ -305,6 +307,96 @@ describe('resolveEffectiveChrome', () => {
     });
 });
 
+// THE ANNOUNCEMENT / TOP BAR position (OLA 4 B) — mirrors chrome-validate's 'announcement' position.
+// A resolved site slot (not a template part) that STILL bars the document-scoped ChromeNav, because
+// the header already mounts the one mobile drawer. Renders when a composition survives, nothing when
+// none does — proven here at the resolve level; the layout wires the surviving data into a band.
+describe('parseChromeData / resolveEffectiveChrome — the announcement position', () => {
+    const wrap = (content: unknown[]) => ({ root: { props: {} }, content });
+    const presentational = wrap([
+        { type: 'ChromeText', props: { text: 'Free shipping' } },
+        { type: 'ChromeButton', props: { label: 'Shop', href: '/shop', variant: 'primary' } },
+    ]);
+    const withNav = wrap([{ type: 'ChromeNav', props: { location: 'header', orientation: 'horizontal' } }]);
+
+    it('accepts a presentational announcement composition', () => {
+        expect(parseChromeData(presentational, { position: 'announcement' }).ok).toBe(true);
+    });
+
+    it('refuses ChromeNav in the announcement bar, naming the bar and the reason', () => {
+        const r = parseChromeData(withNav, { position: 'announcement', source: 'site' });
+        expect(r.ok).toBe(false);
+        expect(r.errors.some((e) => /announcement bar/.test(e) && /ChromeNav/.test(e))).toBe(true);
+    });
+
+    it('RENDERS when a level survives and NOTHING (source null) when a ChromeNav sinks every level', () => {
+        // present → data resolved (the layout emits a band)
+        const present = resolveEffectiveChrome({ siteRaw: JSON.stringify(presentational), position: 'announcement' });
+        expect(present.source).toBe('site');
+        expect(present.data).toBeTruthy();
+        // a ChromeNav is refused at BOTH the site and theme level → nothing renders
+        const absent = resolveEffectiveChrome({ siteRaw: withNav, themeRaw: withNav, position: 'announcement' });
+        expect(absent.source).toBe(null);
+        expect(absent.data).toBeUndefined();
+    });
+});
+
+describe('buildMenuTree', () => {
+    it('nests children under their parent and leaves a flat menu as sorted roots', () => {
+        const flat: ChromeMenuItem[] = [
+            { id: 2, title: 'About', url: '/about', order: 1 },
+            { id: 1, title: 'Home', url: '/', order: 0 },
+        ];
+        const tree = buildMenuTree(flat);
+        expect(tree.map((n) => n.title)).toEqual(['Home', 'About']); // sorted by order
+        expect(tree.every((n) => (n.children?.length ?? 0) === 0)).toBe(true);
+    });
+
+    it('attaches children (with parent id) to the parent, sorted by order', () => {
+        const items: ChromeMenuItem[] = [
+            { id: 1, title: 'Products', url: '/p', order: 0 },
+            { id: 11, title: 'Beta', url: '/p/b', order: 1, parent: 1 },
+            { id: 10, title: 'Alpha', url: '/p/a', order: 0, parent: 1 },
+            { id: 2, title: 'Contact', url: '/c', order: 1 },
+        ];
+        const tree = buildMenuTree(items);
+        expect(tree.map((n) => n.title)).toEqual(['Products', 'Contact']);
+        const products = tree[0];
+        expect(products.children?.map((c) => c.title)).toEqual(['Alpha', 'Beta']);
+        // a grandchild works too
+        const deep = buildMenuTree([...items, { id: 100, title: 'A1', url: '/p/a/1', parent: 10 }]);
+        expect(deep[0].children?.[0].children?.map((c) => c.title)).toEqual(['A1']);
+    });
+
+    it('parent 0 / null / undefined all mean root', () => {
+        const items: ChromeMenuItem[] = [
+            { id: 1, title: 'Zero', url: '/', parent: 0 },
+            { id: 2, title: 'Null', url: '/n', parent: null as unknown as number },
+            { id: 3, title: 'Undef', url: '/u' },
+        ];
+        expect(buildMenuTree(items).map((n) => n.title).sort()).toEqual(['Null', 'Undef', 'Zero']);
+    });
+
+    it('is defensive: a dangling parent becomes a root, a self/2-cycle cannot loop forever', () => {
+        // parent id names no item → treated as a root, not dropped into the void
+        expect(buildMenuTree([{ id: 1, title: 'Orphan', url: '/o', parent: 999 }]).map((n) => n.title)).toEqual(['Orphan']);
+        // self-parent → root (never its own child)
+        expect(buildMenuTree([{ id: 1, title: 'Self', url: '/s', parent: 1 }]).map((n) => n.title)).toEqual(['Self']);
+        // 2-cycle A↔B: neither is a root; the function must simply terminate with no infinite branch
+        const cycle = buildMenuTree([
+            { id: 1, title: 'A', url: '/a', parent: 2 },
+            { id: 2, title: 'B', url: '/b', parent: 1 },
+        ]);
+        expect(Array.isArray(cycle)).toBe(true); // returns, does not hang
+    });
+
+    it('normalizes non-array input to an empty tree', () => {
+        expect(buildMenuTree(null)).toEqual([]);
+        expect(buildMenuTree(undefined)).toEqual([]);
+        expect(buildMenuTree('nope' as unknown as ChromeMenuItem[])).toEqual([]);
+    });
+});
+
 describe('STARTER_TEMPLATES', () => {
     it('header and footer starter compositions pass the parser', () => {
         const header = parseChromeData(STARTER_TEMPLATES.header, { source: 'starter-header' });
@@ -313,6 +405,12 @@ describe('STARTER_TEMPLATES', () => {
         const footer = parseChromeData(STARTER_TEMPLATES.footer, { source: 'starter-footer' });
         expect(footer.errors).toEqual([]);
         expect(footer.ok).toBe(true);
+    });
+
+    it('the announcement starter passes the parser at its own position (no ChromeNav)', () => {
+        const ann = parseChromeData(STARTER_TEMPLATES.announcement, { source: 'starter-announcement', position: 'announcement' });
+        expect(ann.errors).toEqual([]);
+        expect(ann.ok).toBe(true);
     });
 });
 

@@ -113,7 +113,7 @@ function SocialsEdit() {
 // canvas on every keystroke (Puck appearance lesson).
 export function buildChromeEditorConfig(part: ChromePart): Config {
     const lang = getStoredLanguage();
-    return {
+    const config = {
         components: {
             ChromeLogo: {
                 label: translate("chrome.block.logo", lang),
@@ -284,6 +284,11 @@ export function buildChromeEditorConfig(part: ChromePart): Config {
                     <header data-scrolled="false" className="wjs-header wjs-chrome-header bg-[var(--wjs-bg-surface-glass,white)] shadow-sm py-4">
                         <div className="wjs-header-container container mx-auto px-4 min-h-16">{children}</div>
                     </header>
+                ) : part === "announcement" ? (
+                    // Same full-bleed band the public layout renders above the header.
+                    <aside className="wjs-chrome-announcement w-full bg-[var(--wjs-bg-announcement,var(--wjs-color-primary,#1f2937))] text-[var(--wjs-color-on-primary,#ffffff)] text-sm">
+                        <div className="wjs-announcement-container container mx-auto px-4 py-2 min-h-8">{children}</div>
+                    </aside>
                 ) : (
                     <footer className="wjs-chrome-footer bg-[var(--wjs-bg-footer,rgb(17,24,39))] text-[var(--wjs-color-text-footer-main,white)] py-12">
                         <div className="wjs-footer-container container mx-auto px-4 min-h-24">{children}</div>
@@ -291,4 +296,8 @@ export function buildChromeEditorConfig(part: ChromePart): Config {
                 ),
         },
     } as Config;
+    // The announcement bar bars ChromeNav (chrome-validate's 'announcement' position — the header
+    // already owns the one mobile drawer), so it is not offered in the drawer for that part.
+    if (part === "announcement") delete (config.components as Record<string, unknown>).ChromeNav;
+    return config;
 }

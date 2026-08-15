@@ -684,7 +684,7 @@ export const settingsApi = {
 // site_chrome_* so nothing bypasses the backend validator. Reads travel via settingsApi.get()
 // (site_chrome_header / site_chrome_footer are PUBLIC_SETTINGS). A 400 carries the validator's
 // errors[] — api() preserves them on the thrown Error for field-level display.
-export type ChromePart = "header" | "footer";
+export type ChromePart = "header" | "footer" | "announcement";
 export const chromeApi = {
     save: (part: ChromePart, data: unknown) => apiPut<{ part: string; saved: boolean }>(`/chrome/${part}`, { data }),
     reset: (part: ChromePart) => apiDelete<{ part: string; deleted: boolean }>(`/chrome/${part}`),

@@ -280,6 +280,8 @@ export default function PageEditorPage() {
                 onCancel={() => router.back()}
                 pageId={pageId || undefined}
                 previewSlug={slug || undefined}
+                // OLA 3: preview the page inside the theme's `page` template (page-<slug> → page).
+                templateKind="page"
                 onChange={(data) => {
                     // Ignore init-time events only (see mountedAtRef note above).
                     if (Date.now() - mountedAtRef.current > 800) {

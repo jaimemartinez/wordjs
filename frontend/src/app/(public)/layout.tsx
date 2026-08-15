@@ -59,12 +59,21 @@ export default async function PublicLayout({
     // rest of the chrome data (switchTheme and the site_chrome_* writers purge that tag), and
     // resolveEffectiveChrome is fail-closed — any invalid/unreadable level falls through, so the
     // shell keeps rendering today's Header/Footer whenever no composition survives.
-    const [themeHeaderRaw, themeFooterRaw] = await Promise.all([
+    const [themeHeaderRaw, themeFooterRaw, themeAnnouncementRaw] = await Promise.all([
         getThemeChrome(themeSlug, "header"),
         getThemeChrome(themeSlug, "footer"),
+        getThemeChrome(themeSlug, "announcement"),
     ]);
     const headerChrome = resolveEffectiveChrome({ siteRaw: settings?.site_chrome_header, themeRaw: themeHeaderRaw });
     const footerChrome = resolveEffectiveChrome({ siteRaw: settings?.site_chrome_footer, themeRaw: themeFooterRaw });
+    // The optional announcement/top bar. Same site-option → theme-file precedence as header/footer, but
+    // validated at position "announcement" so the document-scoped ChromeNav is refused here (the header
+    // already mounts the one mobile drawer). Absent at every level ⇒ no band emitted at all.
+    const announcementChrome = resolveEffectiveChrome({
+        siteRaw: settings?.site_chrome_announcement,
+        themeRaw: themeAnnouncementRaw,
+        position: "announcement",
+    });
     const bindings = buildChromeBindings(settings, headerMenu?.items, footerMenu?.items);
 
     // Composed chrome renders ON THE SERVER inside the same semantic landmarks + container hooks the
@@ -88,6 +97,17 @@ export default async function PublicLayout({
             </div>
         </header>
     ) : undefined;
+    // Full-bleed band ABOVE the header: rendered outside any container so a theme can paint edge-to-edge
+    // (the hardcoded container wrapper on header/footer is exactly what made that impossible before). Its
+    // blocks are the presentational ones (ChromeText/ChromeButton/ChromeRow/…); ChromeNav is barred by
+    // the validator. Nothing renders when no composition survives resolution.
+    const announcementSlot = announcementChrome.data ? (
+        <aside className="wjs-chrome-announcement w-full bg-[var(--wjs-bg-announcement,var(--wjs-color-primary,#1f2937))] text-[var(--wjs-color-on-primary,#ffffff)] text-sm">
+            <div className="wjs-announcement-container container mx-auto px-4 py-2 flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-center">
+                <ChromeRenderer data={announcementChrome.data} bindings={bindings} location="header" />
+            </div>
+        </aside>
+    ) : undefined;
     const footerSlot = footerChrome.data ? (
         <footer className="wjs-chrome-footer bg-[var(--wjs-bg-footer,rgb(17,24,39))] text-[var(--wjs-color-text-footer-main,white)] py-12 mt-auto border-t border-[var(--wjs-border-subtle,transparent)]">
             <div className="wjs-footer-container container mx-auto px-4">
@@ -102,6 +122,7 @@ export default async function PublicLayout({
             mods={settings?.active_theme_mods}
             themeSlug={themeSlug}
             themeVersion={themeVersion}
+            announcementSlot={announcementSlot}
             headerSlot={headerSlot}
             footerSlot={footerSlot}
             settings={settings || undefined}

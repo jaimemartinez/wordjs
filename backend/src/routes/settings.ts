@@ -48,6 +48,7 @@ const PUBLIC_SETTINGS = [
     'active_theme_mods',    // active theme's live token overrides (JSON) from the customizer
     'site_chrome_header',   // site-level composable chrome (JSON, contract v1) — the SSR public
     'site_chrome_footer',   //   layout renders these; written ONLY via PUT /api/v1/chrome/:part
+    'site_chrome_announcement', // optional top/announcement bar, full-bleed above the header
     'users_can_register',
     // 'admin_email' - SECURITY: Removed from public to prevent email harvesting
     'default_role',
@@ -105,7 +106,8 @@ const ALL_SETTINGS = [
 // declared, until the next activation silently replaced it. ('active_theme_mods' is deliberately NOT
 // here: the customizer saves through this very API, and the overlay sanitizes it at render time.)
 const DEDICATED_WRITE_API = new Set([
-    'site_chrome_header', 'site_chrome_footer', 'template', 'stylesheet', 'active_theme_layout',
+    'site_chrome_header', 'site_chrome_footer', 'site_chrome_announcement',
+    'template', 'stylesheet', 'active_theme_layout',
 ]);
 
 // Public settings that are DERIVED, not stored. Computed per request from the memoized theme scan

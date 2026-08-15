@@ -241,8 +241,9 @@ from blocks. A composition is **Puck Data JSON** — `{ "root": { "props": {} },
 validated on the backend by `core/chrome-validate.ts` (contract v1, the write authority) and
 rendered by the public SSR layout without mounting any editor runtime.
 
-**Effective chrome precedence** (header and footer resolve independently; any invalid/unreadable
-level falls through to the next — fail-closed, never a partial render):
+**Effective chrome precedence** (header, footer and the optional [announcement bar](#announcement--top-bar-chromeannouncementjson)
+resolve independently; any invalid/unreadable level falls through to the next — fail-closed, never a
+partial render):
 
 1. **Site composition** — options `site_chrome_header` / `site_chrome_footer` (JSON strings),
    written only via `PUT /api/v1/chrome/:part` (admin; a 400 carries the validator's
@@ -261,7 +262,7 @@ level falls through to the next — fail-closed, never a partial render):
 | --- | --- |
 | `ChromeLogo` | `size?: "sm" \| "md" \| "lg"` |
 | `ChromeSiteTitle` | `showTagline?: boolean` |
-| `ChromeNav` | `location: "header" \| "footer"`, `orientation: "horizontal" \| "vertical"` — **site chrome only**, see the position rule below |
+| `ChromeNav` | `location: "header" \| "footer"`, `orientation: "horizontal" \| "vertical"` — **site chrome only**, see the position rule below. Renders the menu's **parent→child hierarchy** as submenus (below) |
 | `ChromeSearch` | `placeholder?: string` |
 | `ChromeSocials` | `source: "settings"` |
 | `ChromeText` | `text: string` (plain text — always rendered escaped) |
@@ -288,6 +289,18 @@ Minimal `chrome/header.json`:
   ]
 }
 ```
+
+**Navigation submenus.** A menu item can have children (the menu model's `parent` hierarchy —
+`post_parent`). `ChromeNav` renders that nesting as submenus: a parent item becomes a `<li>` with a
+nested `<ul>` of its children. On a **horizontal** nav the submenu is a **CSS-only** dropdown —
+hidden with `visibility:hidden` and revealed on `:hover` **or** `:focus-within` of the parent (so it
+is keyboard-reachable: Tab to the parent link opens it, Tab through the children, Tab out closes it;
+no theme JavaScript, matching the "a theme never ships client JS" boundary). On a **vertical** (footer)
+nav the children render as a static indented sub-list. Positioning uses **logical** properties
+(`start`/`ps`/`ms`) so submenus are correct under RTL, and the mobile drawer renders the same children
+as an indented list (there is no hover on touch). A menu with **no** child items renders exactly as
+before — a flat list of links, no `<ul>`. Submenu hooks: `.wjs-has-submenu` (parent `<li>`) and
+`.wjs-chrome-submenu` (the nested `<ul>`).
 
 `node backend/cli/wordjs.js doctor theme <slug>` validates shipped compositions: contract
 violations are **errors** (`CHROME_INVALID`, with the offending block path); a file that cannot
@@ -318,16 +331,52 @@ Violating this is `CHROME_INVALID` in the doctor with rule `CHROME_BLOCK_NOT_IN_
 the part resolves to nothing. Keep the site's navigation in `chrome/header.json` /
 `chrome/footer.json`, which is also where a nav belongs as a landmark.
 
+### Announcement / top bar (`chrome/announcement.json`)
+
+A **third** site chrome slot the public layout resolves itself — an optional band rendered
+**full-bleed above the header** when the theme or site ships it, and **nothing at all** when absent
+(no reserved space, no empty band). It follows the **exact same precedence** as header/footer:
+
+1. **Site composition** — option `site_chrome_announcement`, written via `PUT /api/v1/chrome/announcement`
+   and cleared via `DELETE /api/v1/chrome/announcement`.
+2. **Theme composition** — `chrome/announcement.json` in the active theme, served at
+   `/themes/<slug>/chrome/announcement.json`.
+3. **Default** — none (the bar is opt-in).
+
+It is a *single-instance* site slot like header/footer, but it is validated at its **own position**,
+which **refuses `ChromeNav`** (rule `CHROME_BLOCK_NOT_IN_PART`, same as a template part) — *not*
+because it renders more than once, but because the **header already mounts the one `ChromeNav` mobile
+drawer**, so a second `ChromeNav` anywhere on the page (announcement bar included) would be a second
+owner of the `document.body` scroll-lock global. Build the bar from the presentational blocks —
+`ChromeText`, `ChromeButton`, `ChromeRow`, `ChromeSpacer`, and the other non-`ChromeNav` blocks above.
+`announcement` is a **reserved** name (like `header`/`footer`): it can never be declared as a template
+part. Styling rides `.wjs-chrome-announcement` + the `--wjs-bg-announcement` / `--wjs-color-on-primary`
+tokens (with fallbacks, so it works untuned).
+
+Minimal `chrome/announcement.json`:
+
+```json
+{
+  "root": { "props": {} },
+  "content": [
+    { "type": "ChromeRow", "props": { "align": "center", "gap": "md", "items": [
+      { "type": "ChromeText", "props": { "text": "Free shipping this week" } },
+      { "type": "ChromeButton", "props": { "label": "Shop", "href": "/shop", "variant": "primary" } }
+    ] } }
+  ]
+}
+```
+
 ### Options with a dedicated write API
 
-**Five** theme-related options are **readable** through `GET /api/v1/settings` (the SSR public layout
+**Six** theme-related options are **readable** through `GET /api/v1/settings` (the SSR public layout
 needs them on first paint) but are **never writable through the generic settings API**. `PUT
 /api/v1/settings` silently skips them and `PUT /api/v1/settings/:key` answers **400
 `rest_invalid_param`** (`DEDICATED_WRITE_API` in `backend/src/routes/settings.ts`):
 
 | Option | Only writable through | Why a plain option write is not enough |
 | --- | --- | --- |
-| `site_chrome_header`, `site_chrome_footer` | `PUT`/`DELETE /api/v1/chrome/:part` | `core/chrome-validate.ts` is the write authority — the closed block allowlist, the href rules and the budgets above are enforced there. A raw option write stores an unvalidated composition on every public page. |
+| `site_chrome_header`, `site_chrome_footer`, `site_chrome_announcement` | `PUT`/`DELETE /api/v1/chrome/:part` | `core/chrome-validate.ts` is the write authority — the closed block allowlist, the href rules and the budgets above are enforced there (and `announcement` bars `ChromeNav`). A raw option write stores an unvalidated composition on every public page. |
 | `template`, `stylesheet` | `POST /api/v1/themes/:slug/activate` (`switchTheme()`) | Activating a theme is much more than an option write: it also republishes the new theme's `layout` to `active_theme_layout`, clears the previous theme's customizer mods, re-initializes the theme engine (retiring the outgoing theme's isolated `functions.js` child) and fires `switch_theme` to purge the frontend. Written alone, the site serves the new theme's CSS with the old theme's structure and token overrides, and the replaced theme's code keeps running. |
 | `active_theme_layout` | *(nothing — it is derived)* `switchTheme()` publishes it | It is not an input at all: activation copies the active `theme.json` `layout` block into it. Nothing reconciles a hand-written value, so the site would render a structure the theme never declared until the next activation silently replaced it. |
 

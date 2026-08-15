@@ -42,13 +42,19 @@ export interface ChromeData {
 // which prop combination reaches the island is an internal of the block, not part of this contract.
 export const CHROME_DOCUMENT_SCOPED_BLOCKS: readonly ChromeBlockType[] = ["ChromeNav"];
 
-export type ChromePosition = "chrome" | "part";
+// "announcement" is the optional top bar the public layout resolves into a full-bleed band ABOVE the
+// header. It is a single-instance site slot like the header/footer, but it still bars the
+// document-scoped blocks: the header already mounts the one ChromeNav mobile drawer, so a ChromeNav in
+// the announcement bar would be a SECOND owner of the body-scroll-lock global — the very failure the
+// template-part position exists to stop. Mirrors chrome-validate's ANNOUNCEMENT_PART position.
+export type ChromePosition = "chrome" | "part" | "announcement";
 
 export interface ChromeParseContext {
     // Label prefixed to every error, e.g. "site" / "theme" — purely diagnostic.
     source?: string;
     // Where this composition will render. Defaults to "chrome" (the site header/footer), the only
-    // position the write API can reach; the template-part resolver passes "part" explicitly.
+    // position the write API can reach; the template-part resolver passes "part" and the announcement
+    // bar passes "announcement" explicitly.
     position?: ChromePosition;
 }
 
@@ -59,11 +65,17 @@ export interface ChromeParseResult {
 }
 
 // Resolved data the renderer binds into the blocks (blocks NEVER fetch — the shell fetched already).
+// `parent` is the flat form the menu API returns (post_parent / _menu_item_menu_item_parent); the
+// renderer never reads it directly — buildMenuTree consumes it to produce `children`, and ChromeNav
+// renders that nesting. `children` is the nested form; absent/empty ⇒ a leaf, rendered exactly as a
+// flat item was before submenus existed.
 export interface ChromeMenuItem {
     id: string | number;
     title: string;
     url: string;
     order?: number;
+    parent?: string | number;
+    children?: ChromeMenuItem[];
 }
 
 export interface ChromeSocialLink {
@@ -143,7 +155,7 @@ const BLOCK_SPECS: Record<ChromeBlockType, Record<string, PropCheck>> = {
 
 export function parseChromeData(raw: unknown, ctx: ChromeParseContext = {}): ChromeParseResult {
     const where = ctx.source ? `${ctx.source}: ` : "";
-    const position: ChromePosition = ctx.position === "part" ? "part" : "chrome";
+    const position: ChromePosition = ctx.position === "part" || ctx.position === "announcement" ? ctx.position : "chrome";
     const errors: string[] = [];
 
     if (raw === null || raw === undefined || raw === "") {
@@ -217,8 +229,11 @@ export function parseChromeData(raw: unknown, ctx: ChromeParseContext = {}): Chr
         // Position gate at EVERY depth — a barred block is just as document-scoped three ChromeRows
         // down. Fail-closed like every other violation here: the whole part falls back to nothing
         // rather than render a second scroll-lock owner into the page.
-        if (position === "part" && (CHROME_DOCUMENT_SCOPED_BLOCKS as readonly string[]).includes(type)) {
-            errors.push(`${where}${path}: ${type} may not appear in a named template part — it owns document-level state (body scroll-lock, a document keydown listener and a portal into document.body) and a page may render the part more than once`);
+        if ((position === "part" || position === "announcement") && (CHROME_DOCUMENT_SCOPED_BLOCKS as readonly string[]).includes(type)) {
+            const scope = position === "announcement"
+                ? `the site announcement bar — the header already mounts the one drawer, so a second ${type} would fight over that global`
+                : `a named template part — a page may render the part more than once`;
+            errors.push(`${where}${path}: ${type} may not appear in ${scope}; it owns document-level state (body scroll-lock, a document keydown listener and a portal into document.body)`);
             return;
         }
         const spec = BLOCK_SPECS[type as ChromeBlockType];
@@ -261,14 +276,18 @@ export interface EffectiveChrome {
 // Precedence levels 1º (site option) → 2º (theme chrome file). Levels 3º (layout v2 variant) and 4º
 // (default chrome) stay with the existing shell: it applies them whenever this returns source null.
 // Any invalid/unreadable level falls THROUGH to the next without breaking (console.warn only in dev).
-export function resolveEffectiveChrome({ siteRaw, themeRaw }: { siteRaw?: unknown; themeRaw?: unknown }): EffectiveChrome {
+// `position` selects the validation branch: header/footer omit it ("chrome"), the announcement bar
+// passes "announcement" so both its precedence levels are checked against the document-scoped bar.
+export function resolveEffectiveChrome(
+    { siteRaw, themeRaw, position }: { siteRaw?: unknown; themeRaw?: unknown; position?: ChromePosition },
+): EffectiveChrome {
     if (siteRaw !== null && siteRaw !== undefined && siteRaw !== "") {
-        const site = parseChromeData(siteRaw, { source: "site" });
+        const site = parseChromeData(siteRaw, { source: "site", position });
         if (site.ok) return { source: "site", data: site.data };
         warnDev(site.errors);
     }
     if (themeRaw !== null && themeRaw !== undefined && themeRaw !== "") {
-        const theme = parseChromeData(themeRaw, { source: "theme" });
+        const theme = parseChromeData(themeRaw, { source: "theme", position });
         if (theme.ok) return { source: "theme", data: theme.data };
         warnDev(theme.errors);
     }
@@ -298,6 +317,51 @@ export function buildChromeBindings(
     };
 }
 
+// Nest a FLAT location menu (each item carrying a `parent` id) into a tree ChromeNav can render as
+// submenus. The menu model already stores the hierarchy (post_parent); the location API returns it
+// flat, so this is where "the model has parents" becomes "the nav has submenus". Pure and DOM-free so
+// ChromeNav (server) and the tests derive the same shape.
+//
+// A LEAF STAYS A LEAF: an item with no children gets `children: []`, and ChromeNav renders a menu with
+// zero submenus byte-for-byte as it did before this existed — the flat path is unchanged.
+//
+// DEFENSIVE against malformed parent chains (a self-parent, a 2-cycle, a parent id that names no item):
+// such nodes are treated as roots or dropped, never followed into an infinite render. parent 0 / null /
+// undefined all mean "top level" (the model's convention: post_parent 0 is a root item).
+export function buildMenuTree(items: ChromeMenuItem[] | null | undefined): ChromeMenuItem[] {
+    if (!Array.isArray(items)) return [];
+    type Node = ChromeMenuItem & { children: ChromeMenuItem[] };
+    const byId = new Map<string, Node>();
+    // First pass: one fresh node per item (drop entries with no usable id — they can anchor nothing).
+    for (const it of items) {
+        if (!isPlainObject(it) || it.id === undefined || it.id === null) continue;
+        byId.set(String(it.id), { id: it.id, title: it.title, url: it.url, order: it.order, children: [] });
+    }
+    const roots: Node[] = [];
+    // Second pass: attach each node to its parent, or promote it to a root.
+    for (const it of items) {
+        if (!isPlainObject(it) || it.id === undefined || it.id === null) continue;
+        const node = byId.get(String(it.id))!;
+        const parentKey = it.parent === undefined || it.parent === null ? "" : String(it.parent);
+        const parent = parentKey && parentKey !== "0" && parentKey !== String(it.id) ? byId.get(parentKey) : undefined;
+        if (parent) parent.children.push(node);
+        else roots.push(node);
+    }
+    // Sort every level by `order`, and cut any node reached twice — a malformed cycle cannot survive as
+    // an infinite branch (each node is emitted at most once in the final tree).
+    const seen = new Set<Node>();
+    const sortLevel = (level: Node[]): void => {
+        level.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+        for (const n of level) {
+            if (seen.has(n)) { n.children = []; continue; }
+            seen.add(n);
+            sortLevel(n.children as Node[]);
+        }
+    };
+    sortLevel(roots);
+    return roots;
+}
+
 // settings.footer_socials arrives as a JSON string (option) or an already-parsed array (editor
 // preview). Guard the typeof BEFORE JSON.parse — parsing an object throws (layout-v2 lesson).
 export function parseChromeSocials(settings: Record<string, any> | undefined | null): ChromeSocialLink[] {
@@ -313,7 +377,7 @@ export function parseChromeSocials(settings: Record<string, any> | undefined | n
 
 // Editor starting points approximating today's "classic" chrome, so authoring starts from the real
 // look instead of an empty canvas. Both MUST pass parseChromeData (covered by tests).
-export const STARTER_TEMPLATES: { header: ChromeData; footer: ChromeData } = {
+export const STARTER_TEMPLATES: { header: ChromeData; footer: ChromeData; announcement: ChromeData } = {
     header: {
         root: { props: {} },
         content: [
@@ -343,6 +407,23 @@ export const STARTER_TEMPLATES: { header: ChromeData; footer: ChromeData } = {
                         { type: "ChromeSiteTitle", props: { showTagline: true } },
                         { type: "ChromeNav", props: { location: "footer", orientation: "vertical" } },
                         { type: "ChromeSocials", props: { source: "settings" } },
+                    ],
+                },
+            },
+        ],
+    },
+    // The announcement bar starts as one centered line + a CTA — and NO ChromeNav (the position bars it).
+    announcement: {
+        root: { props: {} },
+        content: [
+            {
+                type: "ChromeRow",
+                props: {
+                    align: "center",
+                    gap: "md",
+                    items: [
+                        { type: "ChromeText", props: { text: "Announcement" } },
+                        { type: "ChromeButton", props: { label: "Learn more", href: "/", variant: "primary" } },
                     ],
                 },
             },
