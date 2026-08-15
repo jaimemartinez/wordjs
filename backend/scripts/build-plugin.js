@@ -154,7 +154,7 @@ async function buildPlugin(slug) {
     // loud-fail turns any drift into a build error instead of a blank panel in production.
     const HOST_SRC = path.resolve(__dirname, '../../frontend/src');
     const HOST_MODULES = [
-        'lib/api', 'lib/i18n', 'lib/plugin-hooks',
+        'lib/api', 'lib/i18n', 'lib/plugin-hooks', 'lib/sanitize',
         'contexts/ModalContext', 'contexts/I18nContext', 'contexts/ToastContext', 'contexts/AuthContext',
         'components/MediaPickerModal',
         'components/ui/StatCard', 'components/ui/PageHeader', 'components/ui/Card', 'components/ui/ActionCard',

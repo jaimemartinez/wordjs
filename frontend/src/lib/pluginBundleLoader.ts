@@ -22,6 +22,7 @@ import { ComponentType } from 'react';
 import * as h_api from '@/lib/api';
 import * as h_i18n from '@/lib/i18n';
 import * as h_pluginHooks from '@/lib/plugin-hooks';
+import * as h_sanitize from '@/lib/sanitize';
 import * as h_modalContext from '@/contexts/ModalContext';
 import * as h_i18nContext from '@/contexts/I18nContext';
 import * as h_toastContext from '@/contexts/ToastContext';
@@ -36,6 +37,11 @@ const HOST_MODULES: Record<string, unknown> = {
     'lib/api': h_api,
     'lib/i18n': h_i18n,
     'lib/plugin-hooks': h_pluginHooks,
+    // The isomorphic HTML sanitizer (DOMPurify on the client). Exposed so a plugin that must render
+    // untrusted HTML — the mail-server's compose/reply innerHTML sink for hostile inbound email — uses
+    // the ONE audited, mutation-XSS-safe sanitizer instead of vendoring its own. Client-safe: the
+    // server-only sanitize-html require sits behind a `typeof window` guard the bundler drops.
+    'lib/sanitize': h_sanitize,
     'contexts/ModalContext': h_modalContext,
     'contexts/I18nContext': h_i18nContext,
     'contexts/ToastContext': h_toastContext,
