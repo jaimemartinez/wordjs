@@ -1314,7 +1314,7 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   filter: brightness(1.08);
   transform: var(--wjs-button-hover-transform, scale(1.03));
 }
-.wp-block-button__link:active { transform: scale(0.96); }
+.wp-block-button__link:active { transform: var(--wjs-button-active-transform, scale(0.96)); }
 /* Variants get DEDICATED seams first: without them a theme's primary `--wjs-button-bg/color`
  * bleeds into every variant (secondary ≡ primary; outline inherits on-primary text, invisible
  * on light canvases). The old chain stays as fallback so pre-seam themes keep their look. */
@@ -1460,7 +1460,7 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
 }
 .wp-block-accordion__header:hover { background: var(--wjs-accordion-header-hover-bg, var(--wjs-bg-muted)); }
 .wp-block-accordion__icon { flex: none; color: var(--wjs-accordion-icon-color, inherit); transition: transform 0.2s ease; }
-.wp-block-accordion__item.is-open .wp-block-accordion__icon { transform: rotate(180deg); }
+.wp-block-accordion__item.is-open .wp-block-accordion__icon { transform: var(--wjs-accordion-icon-open-transform, rotate(180deg)); }
 .wp-block-accordion__item.is-open .wp-block-accordion__header { color: var(--wjs-accordion-active-color, var(--wjs-color-primary)); }
 .wp-block-accordion__panel {
   padding: var(--wjs-accordion-panel-pad, var(--wjs-md) var(--wjs-lg));
@@ -1578,8 +1578,8 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   transition: transform 0.15s ease, background var(--wjs-transition);
 }
 /* Nudge right: a play triangle is optically off-centre in a circle when centred geometrically. */
-.wp-block-video-embed__play i { transform: translateX(6%); }
-.wp-block-video-embed__cover:hover .wp-block-video-embed__play { transform: scale(1.06); }
+.wp-block-video-embed__play i { transform: var(--wjs-video-play-glyph-transform, translateX(6%)); }
+.wp-block-video-embed__cover:hover .wp-block-video-embed__play { transform: var(--wjs-video-play-hover-transform, scale(1.06)); }
 .wp-block-video-embed__cover:focus-visible {
   outline: var(--wjs-block-focus-outline, 2px solid var(--wjs-color-primary));
   outline-offset: calc(var(--wjs-block-focus-offset, 2px) * -1);
@@ -1630,8 +1630,8 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   cursor: pointer;
   transition: transform 0.15s ease, filter 0.2s ease;
 }
-.wp-block-audio-player__button:hover { transform: scale(1.05); filter: brightness(1.06); }
-.wp-block-audio-player__button:active { transform: scale(0.96); }
+.wp-block-audio-player__button:hover { transform: var(--wjs-audio-icon-hover-transform, scale(1.05)); filter: brightness(1.06); }
+.wp-block-audio-player__button:active { transform: var(--wjs-audio-icon-active-transform, scale(0.96)); }
 
 .wp-block-audio-player__body { flex: 1; min-width: 0; }
 
@@ -1795,7 +1795,7 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   --wjs-pricing-period-color: var(--wjs-pricing-highlight-period-color, var(--wjs-pricing-highlight-color, var(--wjs-color-text-muted)));
 }
 .wp-block-pricing__plan--highlighted:hover {
-  transform: scale(var(--wjs-pricing-highlight-scale, 1.02)) translateY(-6px);
+  transform: var(--wjs-pricing-highlight-hover-transform, scale(var(--wjs-pricing-highlight-scale, 1.02)) translateY(-6px));
   box-shadow: var(--wjs-pricing-highlight-hover-shadow, var(--wjs-pricing-highlight-shadow, var(--wjs-shadow-3)));
 }
 .wp-block-pricing__name {
@@ -1840,7 +1840,7 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   font-size: var(--wjs-pricing-feature-size, var(--wjs-small));
   color: var(--wjs-pricing-feature-color, var(--wjs-color-text-muted));
 }
-.wp-block-pricing__feature i { flex: none; font-size: 18px; color: var(--wjs-pricing-accent, var(--wjs-color-primary)); }
+.wp-block-pricing__feature i { flex: none; font-size: var(--wjs-pricing-feature-icon-size, 18px); color: var(--wjs-pricing-accent, var(--wjs-color-primary)); }
 .wp-block-pricing__button {
   display: block;
   margin-top: auto;
@@ -1873,8 +1873,8 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
 .wp-block-pricing__plan--highlighted .wp-block-pricing__button:hover { color: var(--wjs-pricing-button-on-accent, var(--wjs-color-on-primary)); }
 @media (max-width: 767.98px) {
   .wp-block-pricing { grid-template-columns: 1fr; }
-  .wp-block-pricing__plan--highlighted { transform: none; }
-  .wp-block-pricing__plan--highlighted:hover { transform: translateY(-6px); }
+  .wp-block-pricing__plan--highlighted { transform: var(--wjs-pricing-highlight-mobile-transform, none); }
+  .wp-block-pricing__plan--highlighted:hover { transform: var(--wjs-pricing-highlight-mobile-hover-transform, translateY(-6px)); }
 }
 
 /* --------------------------------------------------------------- TESTIMONIAL - */
@@ -1922,7 +1922,7 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   place-items: center;
   background: var(--wjs-testimonial-avatar-bg, var(--wjs-color-primary));
   color: var(--wjs-testimonial-avatar-color, var(--wjs-color-on-primary));
-  font-weight: 700;
+  font-weight: var(--wjs-testimonial-initials-weight, 700);
   font-size: calc(var(--wjs-testimonial-avatar-size, 48px) * 0.4);
 }
 .wp-block-testimonial__author {
@@ -2023,7 +2023,7 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   background: var(--wjs-cta-button-hover-bg, var(--wjs-cta-button-bg, var(--wjs-bg-surface)));
   color: var(--wjs-cta-button-hover-color, var(--wjs-cta-button-color, var(--wjs-color-primary)));
   box-shadow: var(--wjs-cta-button-hover-shadow, var(--wjs-cta-button-shadow, var(--wjs-shadow-2)));
-  transform: scale(1.03);
+  transform: var(--wjs-cta-button-hover-transform, scale(1.03));
   filter: brightness(1.05);
 }
 
@@ -2051,7 +2051,15 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   height: var(--wjs-posts-thumb-height, 160px);
   margin-bottom: var(--wjs-md);
   border-radius: var(--wjs-posts-thumb-radius, var(--wjs-radius));
+  /* The shorthand keeps --wjs-posts-thumb-bg as the whole-surface hook (color OR placeholder
+   * gradient); the longhand below then re-decides the image layers. The post's photo arrives as
+   * `--wjs-posts-thumb-image` (set inline by the block ONLY when the entry has an image — the
+   * var-bridge, not a literal inline background-image, so this rule stays in charge), and
+   * `--wjs-posts-thumb-scrim` is the theme's compositing layer painted ABOVE the photo
+   * (first background-image layer = topmost). Defaults resolve to `none, <photo or the same
+   * placeholder gradient as before>` — pixel-identical to the pre-bridge render. */
   background: var(--wjs-posts-thumb-bg, linear-gradient(135deg, var(--wjs-bg-muted), var(--wjs-surface-highest)));
+  background-image: var(--wjs-posts-thumb-scrim, none), var(--wjs-posts-thumb-image, var(--wjs-posts-thumb-bg, linear-gradient(135deg, var(--wjs-bg-muted), var(--wjs-surface-highest))));
   background-size: cover;
   background-position: center;
 }
@@ -2250,7 +2258,7 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   box-shadow: var(--wjs-shadow-2);
   transition: transform 0.15s ease, filter 0.2s ease, background 0.2s ease;
 }
-.wp-block-hero__button:hover { filter: brightness(1.08); transform: scale(1.03); color: var(--wjs-hero-button-color, var(--wjs-color-on-primary)); }
+.wp-block-hero__button:hover { filter: brightness(1.08); transform: var(--wjs-hero-button-hover-transform, scale(1.03)); color: var(--wjs-hero-button-color, var(--wjs-color-on-primary)); }
 .wp-block-hero__button--outline {
   background: var(--wjs-hero-button-outline-bg, transparent);
   border-color: var(--wjs-hero-button-outline-border, var(--wjs-outline));
@@ -2287,7 +2295,7 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   padding-inline-start: var(--wjs-lg);
   border-inline-start: var(--wjs-quote-bar-width, 4px) solid var(--wjs-quote-accent, var(--wjs-color-primary));
 }
-.wp-block-quote--large { padding: var(--wjs-xl) var(--wjs-lg); text-align: center; }
+.wp-block-quote--large { padding: var(--wjs-xl) var(--wjs-lg); text-align: var(--wjs-quote-large-align, center); }
 .wp-block-quote--large .wp-block-quote__mark {
   display: block;
   margin-bottom: var(--wjs-md);
@@ -2376,7 +2384,7 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
 .wp-block-social-links__link:hover {
   background: var(--wjs-social-hover-bg, var(--wjs-color-primary));
   color: var(--wjs-social-hover-color, var(--wjs-color-on-primary));
-  transform: translateY(-2px);
+  transform: var(--wjs-social-hover-transform, translateY(-2px));
 }
 
 /* --------------------------------------------------------------------- STATS - */

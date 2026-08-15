@@ -18,6 +18,7 @@ const path = require('path');
 const THEMES_DIR = path.resolve('./themes');
 const MANIFEST_PATH = path.resolve('./public/theme-tokens.json');
 const LAYOUT_SCHEMA_PATH = path.resolve('./public/theme-layouts.schema.json');
+const UI_CSS_PATH = path.resolve('./public/css/wordjs-ui.css');
 
 // theme.json keys that make a theme "declarative" (the theme-compile v1 contract).
 const DECLARATIVE_KEYS = ['seeds', 'archetype', 'tokens', 'styles'];
@@ -193,6 +194,142 @@ function parseWjsDeclarations(css: string): WjsDeclaration[] {
   return decls;
 }
 
+// ─────────────────────────────────────────────────────────────── DEAD_RULE ──
+// A compiled declaration that a higher-specificity wordjs-ui.css rule always beats is a
+// silent no-op: it validates, it compiles, it ships — and the browser never paints it.
+// The canonical case is headings: the compiler emits `.wp-block-heading { font-size: X }`
+// (specificity 0,1,0) but ui.css declares font-size on `h1.wp-block-heading`…
+// `h6.wp-block-heading` (0,1,1), and every heading block IS one of those tags — the
+// theme's declaration loses on every element it targets, and the token
+// (--wjs-heading-size) was the intended route all along.
+//
+// SCOPE — exact-match element cases only, parsed with css-tree (no regex guessing):
+// both selectors must be single COMPOUND selectors (no combinators), and the ui.css
+// compound must contain every simple selector of the compiled compound plus at least one
+// more (a strict superset). That containment is what makes "targets the same element"
+// honest: every element the ui.css selector matches is also matched by the compiled one,
+// so wherever the winner applies, the compiled declaration is beaten.
+//
+// What this check does NOT catch (deliberately — full selector-matching theory is out):
+//   - combinator selectors on either side (`.a .b`, `.a > .b`) — no containment reasoning;
+//   - ui.css rules inside @media (e.g. the pricing mobile overrides) — only ever
+//     conditionally winning, so top-level ui.css rules are the only ones indexed;
+//   - shorthand vs longhand collisions (ui `border` beating a compiled `border-color`);
+//   - equal-specificity source-order wins (theme css loads after ui.css and wins those);
+//   - `!important` on the ui.css side (none exists there today) — and a compiled
+//     `!important` declaration is skipped, since it beats plain ui.css declarations;
+//   - overlap without containment (ui `.a.b` vs compiled `.c` on the same element).
+
+interface UiRuleEntry {
+  selector: string;          // as written, for the message
+  simples: Set<string>;      // normalized simple selectors of the compound
+  spec: number[];            // [ids, classes/attrs/pseudo-classes, types/pseudo-elements]
+  decls: Map<string, string>; // property → value (last declaration wins within the rule)
+}
+
+// Decompose a css-tree Selector node into its simple selectors, or null when the
+// selector is not a single compound (any combinator present). Specificity buckets follow
+// the CSS rules for the node types css-tree emits; functional pseudo-classes (:not/:is)
+// are counted as one class each — good enough for the compounds ui.css actually uses.
+function decomposeCompound(csstree: any, selectorNode: any): { simples: Set<string>; spec: number[] } | null {
+  const simples = new Set<string>();
+  const spec = [0, 0, 0];
+  let compound = true;
+  selectorNode.children.forEach((node: any) => {
+    if (!compound) return;
+    switch (node.type) {
+      case 'Combinator': compound = false; return;
+      case 'IdSelector': spec[0]++; break;
+      case 'ClassSelector': case 'AttributeSelector': case 'PseudoClassSelector': spec[1]++; break;
+      case 'TypeSelector': if (node.name !== '*') spec[2]++; break;
+      case 'PseudoElementSelector': spec[2]++; break;
+      default: compound = false; return; // an unknown shape → refuse to reason about it
+    }
+    simples.add(csstree.generate(node));
+  });
+  return compound ? { simples, spec } : null;
+}
+
+const specGreater = (a: number[], b: number[]): boolean =>
+  a[0] !== b[0] ? a[0] > b[0] : a[1] !== b[1] ? a[1] > b[1] : a[2] > b[2];
+
+/** Index every top-level (non-@media) compound-selector rule of ui.css. */
+function indexUiCompounds(csstree: any, uiCss: string): UiRuleEntry[] {
+  const entries: UiRuleEntry[] = [];
+  const ast = csstree.parse(uiCss, { positions: false });
+  csstree.walk(ast, {
+    visit: 'Rule',
+    enter(this: any, rule: any) {
+      if (this.atrule) return; // only unconditional rules can ALWAYS win
+      const decls = new Map<string, string>();
+      rule.block.children.forEach((d: any) => {
+        if (d.type === 'Declaration' && !d.property.startsWith('--')) {
+          decls.set(d.property.toLowerCase(), csstree.generate(d.value));
+        }
+      });
+      if (decls.size === 0) return;
+      rule.prelude.children.forEach((sel: any) => {
+        const c = decomposeCompound(csstree, sel);
+        if (c) entries.push({ selector: csstree.generate(sel), simples: c.simples, spec: c.spec, decls });
+      });
+    }
+  });
+  return entries;
+}
+
+/**
+ * Compare the theme's compiled block against the ui.css index and report every
+ * compiled declaration that a strictly-higher-specificity superset compound always
+ * beats. Returns findings; never throws (the caller treats css-tree as optional).
+ */
+function findDeadRules(csstree: any, compiledCss: string, uiEntries: UiRuleEntry[]): DoctorFinding[] {
+  const findings: DoctorFinding[] = [];
+  const seen = new Set<string>();
+  const ast = csstree.parse(compiledCss, { positions: false });
+  csstree.walk(ast, {
+    visit: 'Rule',
+    enter(this: any, rule: any) {
+      // Compiled rules under @media still lose to an unconditional ui.css winner, so only
+      // @keyframes (whose "selectors" are steps, not elements) is excluded here.
+      if (this.atrule && this.atrule.name && this.atrule.name.toLowerCase().includes('keyframes')) return;
+      rule.prelude.children.forEach((sel: any) => {
+        const selText = csstree.generate(sel);
+        if (selText === ':root') return; // token declarations, not element rules
+        const c = decomposeCompound(csstree, sel);
+        if (!c) return;
+        rule.block.children.forEach((d: any) => {
+          if (d.type !== 'Declaration' || d.property.startsWith('--') || d.important) return;
+          const prop = d.property.toLowerCase();
+          const key = `${selText} ${prop}`;
+          if (seen.has(key)) return;
+          let winner: UiRuleEntry | null = null;
+          for (const ui of uiEntries) {
+            if (!ui.decls.has(prop)) continue;
+            if (ui.simples.size <= c.simples.size) continue;
+            let superset = true;
+            for (const s of c.simples) if (!ui.simples.has(s)) { superset = false; break; }
+            if (!superset || !specGreater(ui.spec, c.spec)) continue;
+            if (!winner || specGreater(ui.spec, winner.spec)) winner = ui;
+          }
+          if (!winner) return;
+          seen.add(key);
+          // The route out: the winning declaration's own value names the token a theme
+          // should set instead (when it consumes one).
+          const tokenMatch = (winner.decls.get(prop) || '').match(/var\((--wjs-[a-zA-Z0-9_-]+)/);
+          const token = tokenMatch ? tokenMatch[1] : null;
+          const finding: DoctorFinding = {
+            code: 'DEAD_RULE',
+            message: `compiled rule "${selText} { ${prop}: … }" is a silent no-op: wordjs-ui.css declares ${prop} on "${winner.selector}" at higher specificity, which wins on every element it matches${token ? ` — set the token ${token} instead` : ''}`,
+            detail: { selector: selText, property: prop, winner: winner.selector, ...(token ? { token } : {}) }
+          };
+          findings.push(finding);
+        });
+      });
+    }
+  });
+  return findings;
+}
+
 /**
  * Lint a theme against the token manifest. `opts` ({ themesDir, manifestPath }) exists
  * for tests, mirroring installThemeFromDir. Errors only when the theme itself is
@@ -201,7 +338,7 @@ function parseWjsDeclarations(css: string): WjsDeclaration[] {
  * `opts.compile` is a test escape hatch mirroring compileTheme's `derive`: pass null to
  * simulate an absent compiler; production resolves ./theme-compile lazily (fail-open).
  */
-function analyzeTheme(slug: string, opts: { themesDir?: string; manifestPath?: string; layoutSchemaPath?: string; compile?: any; chromeValidate?: any; templateValidate?: any } = {}): DoctorReport {
+function analyzeTheme(slug: string, opts: { themesDir?: string; manifestPath?: string; layoutSchemaPath?: string; uiCssPath?: string; compile?: any; chromeValidate?: any; templateValidate?: any } = {}): DoctorReport {
   const report: DoctorReport = { slug, available: false, errors: [], warnings: [], info: [] };
 
   // FAIL-OPEN: no manifest (or a corrupt one) → no contract to lint against.
@@ -370,7 +507,7 @@ function analyzeTheme(slug: string, opts: { themesDir?: string; manifestPath?: s
   const templateClasses = new Map<string, string>();
   if (templateValidate && typeof templateValidate.validateTemplate === 'function') {
     const tplDir = path.join(themeDir, 'templates');
-    let tplFiles: string[] = [];
+    let tplFiles: string[];
     try {
       tplFiles = fs.existsSync(tplDir)
         ? fs.readdirSync(tplDir).filter((f: string) => f.endsWith('.json')).sort()
@@ -733,6 +870,20 @@ function analyzeTheme(slug: string, opts: { themesDir?: string; manifestPath?: s
             code: 'GENERATED_DRIFT',
             message: `the @wjs-generated block in style.css differs from what theme.json compiles to — recompile to sync: node backend/cli/wordjs.js build theme ${slug}`
           });
+        }
+        // DEAD_RULE — the check runs on what theme.json COMPILES TO (the dry-run css),
+        // not on what happens to sit in style.css, so it fires before the author ever
+        // writes the dead block to disk. FAIL-OPEN twice over: css-tree missing → skip
+        // (same posture as the compiler, which needs it anyway to have produced `compiled`),
+        // and ui.css unreadable → skip (no framework stylesheet, nothing to lose against).
+        if (typeof compiled.css === 'string' && compiled.css.length > 0) {
+          try {
+            const csstree = require('css-tree');
+            const uiCss = fs.readFileSync(path.resolve(opts.uiCssPath || UI_CSS_PATH), 'utf8');
+            for (const f of findDeadRules(csstree, compiled.css, indexUiCompounds(csstree, uiCss))) {
+              report.warnings.push(f);
+            }
+          } catch { /* fail-open */ }
         }
       }
     }

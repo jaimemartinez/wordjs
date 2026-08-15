@@ -190,11 +190,20 @@ const dtResp = (a: Appearance, p: keyof ResponsiveLook): string => {
     }
 };
 
-/** Layered shadows — two-stop, the way design systems do it (never a single flat blur). */
+/**
+ * Layered shadows — two-stop, the way design systems do it (never a single flat blur).
+ *
+ * sm/md/lg route through the framework's elevation tokens (declared in wordjs-ui.css `:root`,
+ * overridable per theme) so a preset picked by the author still follows the theme's elevation
+ * design — a literal here was a lock no theme could open. The old literals stay as the var()
+ * FALLBACK, byte-identical, so any context without ui.css renders exactly as before.
+ * xl/2xl/soft/inner stay literal on purpose: the token family has no --wjs-shadow-xl/…, and
+ * inventing tokens the manifest (generated from ui.css) cannot see would be unpromised surface.
+ */
 export const SHADOWS: Record<string, string> = {
-    sm: "0 1px 2px rgb(0 0 0 / .06), 0 1px 3px rgb(0 0 0 / .10)",
-    md: "0 4px 6px -1px rgb(0 0 0 / .10), 0 2px 4px -2px rgb(0 0 0 / .10)",
-    lg: "0 10px 15px -3px rgb(0 0 0 / .10), 0 4px 6px -4px rgb(0 0 0 / .10)",
+    sm: "var(--wjs-shadow-sm, 0 1px 2px rgb(0 0 0 / .06), 0 1px 3px rgb(0 0 0 / .10))",
+    md: "var(--wjs-shadow-md, 0 4px 6px -1px rgb(0 0 0 / .10), 0 2px 4px -2px rgb(0 0 0 / .10))",
+    lg: "var(--wjs-shadow-lg, 0 10px 15px -3px rgb(0 0 0 / .10), 0 4px 6px -4px rgb(0 0 0 / .10))",
     xl: "0 20px 25px -5px rgb(0 0 0 / .12), 0 8px 10px -6px rgb(0 0 0 / .10)",
     "2xl": "0 25px 50px -12px rgb(0 0 0 / .25)",
     soft: "0 2px 8px rgb(0 0 0 / .04), 0 12px 32px -8px rgb(0 0 0 / .12)",

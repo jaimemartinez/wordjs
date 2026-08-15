@@ -39,7 +39,7 @@ const MANIFEST = {
         '--wjs-h1': { group: 'h1', declaredDefault: '2.5rem', fallbacks: [], consumers: [{ selector: 'h1', property: 'font-size' }] },
         '--wjs-h1-size': { group: 'h1', declaredDefault: 'var(--wjs-h1)', fallbacks: [], consumers: [], flags: ['alias'] }
     },
-    elements: { hero: { selector: '.wp-block-hero' } }
+    elements: { hero: { selector: '.wp-block-hero' }, heading: { selector: '.wp-block-heading' } }
 };
 
 fs.mkdirSync(THEMES_DIR, { recursive: true });
@@ -689,5 +689,80 @@ describe('analyzeTheme (theme doctor)', () => {
         writeChrome(slug, 'header', VALID_CHROME);
         writeTemplate(slug, 'page', VALID_TEMPLATE);
         assert.deepStrictEqual(partCodes(slug), []);
+    });
+
+    // ─────────────────────────────────────────────────────────────── DEAD_RULE ──
+    // A fixture ui.css shaped like the real thing's heading case: the element class rule
+    // holds color at equal specificity, the tag-qualified compound holds font-size (token
+    // route) and line-height (no token) at strictly higher specificity, and a @media rule
+    // holds text-align — which must NOT count, it only conditionally wins.
+    const UI_FIXTURE_PATH = path.join(TMP_ROOT, 'wordjs-ui.fixture.css');
+    fs.writeFileSync(UI_FIXTURE_PATH, [
+        ':root { --wjs-heading-size: 2rem; --wjs-heading-color: #111827; }',
+        '.wp-block-heading { color: var(--wjs-heading-color, #111827); }',
+        'h2.wp-block-heading { font-size: var(--wjs-heading-size, 2rem); line-height: 1.1; }',
+        '@media (max-width: 767.98px) { h2.wp-block-heading { text-align: center; } }',
+        // A superset compound at EQUAL specificity: `*` qualifies but adds nothing to the
+        // count, so this must never win — the strictly-higher requirement is load-bearing.
+        '*.wp-block-heading { font-style: italic; }',
+        '.wjs-header .wjs-header-nav a { font-weight: 700; }' // combinator rule: never indexed
+    ].join('\n'));
+
+    const doctorUi = (slug: string, uiCssPath: string = UI_FIXTURE_PATH) => analyzeTheme(slug, {
+        themesDir: THEMES_DIR, manifestPath: MANIFEST_PATH, layoutSchemaPath: LAYOUT_SCHEMA_PATH, uiCssPath
+    });
+    const headingTheme = (styles: any) => writeTheme(CLEAN_CSS, undefined, { styles: { heading: styles } });
+    const deadRules = (rep: any) => rep.warnings.filter((f: any) => f.code === 'DEAD_RULE');
+
+    it('warns DEAD_RULE when a higher-specificity ui.css compound always beats the compiled rule, naming the token route', () => {
+        const slug = headingTheme({ 'font-size': '30px' });
+        const dead = deadRules(doctorUi(slug));
+        assert.strictEqual(dead.length, 1, JSON.stringify(doctorUi(slug).warnings));
+        assert.strictEqual(dead[0].detail.selector, '.wp-block-heading');
+        assert.strictEqual(dead[0].detail.property, 'font-size');
+        assert.strictEqual(dead[0].detail.winner, 'h2.wp-block-heading');
+        assert.strictEqual(dead[0].detail.token, '--wjs-heading-size');
+        assert.match(dead[0].message, /h2\.wp-block-heading/);
+        assert.match(dead[0].message, /--wjs-heading-size/);
+    });
+
+    it('names no token when the winning ui.css declaration consumes none', () => {
+        const slug = headingTheme({ 'line-height': '1.5' });
+        const dead = deadRules(doctorUi(slug));
+        assert.strictEqual(dead.length, 1, JSON.stringify(doctorUi(slug).warnings));
+        assert.strictEqual(dead[0].detail.winner, 'h2.wp-block-heading');
+        assert.strictEqual(dead[0].detail.token, undefined);
+        assert.doesNotMatch(dead[0].message, /set the token/);
+    });
+
+    it('stays silent at equal specificity — theme css loads after ui.css and wins those', () => {
+        const slug = headingTheme({ color: '#ff0000' }); // ui.css declares color on the SAME compound
+        assert.deepStrictEqual(deadRules(doctorUi(slug)), []);
+    });
+
+    it('a superset compound at EQUAL specificity (universal * qualifier) does not win either', () => {
+        // {*, .wp-block-heading} ⊃ {.wp-block-heading} but `*` adds no specificity — the
+        // theme's later-loading declaration wins, so DEAD_RULE must stay quiet.
+        const slug = headingTheme({ 'font-style': 'oblique' });
+        assert.deepStrictEqual(deadRules(doctorUi(slug)), []);
+    });
+
+    it('ignores @media-scoped ui.css rules — they only conditionally win', () => {
+        const slug = headingTheme({ 'text-align': 'center' }); // beaten ONLY under 767.98px in the fixture
+        assert.deepStrictEqual(deadRules(doctorUi(slug)), []);
+    });
+
+    it('stays silent when ui.css never declares the property on a superset compound', () => {
+        const slug = headingTheme({ 'letter-spacing': '2px' });
+        assert.deepStrictEqual(deadRules(doctorUi(slug)), []);
+    });
+
+    it('fails open when ui.css is unreadable: same report, minus the DEAD_RULE pass', () => {
+        const slug = headingTheme({ 'font-size': '30px' });
+        const rep = doctorUi(slug, path.join(TMP_ROOT, 'no-such-ui.css'));
+        assert.strictEqual(rep.available, true);
+        assert.deepStrictEqual(deadRules(rep), []);
+        // The rest of the declarative pass still ran (the theme has no generated block yet).
+        assert.ok(rep.warnings.some((f: any) => f.code === 'STALE_GENERATED'), JSON.stringify(rep.warnings));
     });
 });

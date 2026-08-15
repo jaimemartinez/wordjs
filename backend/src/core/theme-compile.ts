@@ -617,8 +617,16 @@ function compileTheme(dirOrSlug: string, opts: CompileOpts = {}): CompileResult 
     // emitting the scoped rule the theme asked for. A variation styles the containers its template
     // marked; it is never a global.
     if (!ctx.variation && !ctx.media && !ctx.state && !ctx.position && !ctx.pseudo) {
+      // A CHILD resolves ONLY to its own token, never to the parent element's — the same rule states,
+      // positions and variations already obey: a narrower selector must never write a broader token.
+      // The parent fallback was load-bearing in the wrong direction. `styles.accordion.itemOpen.
+      // border-color` found no `--wjs-accordion-itemopen-border-color` (child keys are camelCase, tokens
+      // kebab, so a state/variant child token can never match), fell through to `--wjs-accordion-
+      // border-color`, and repainted EVERY item from :root — a rule that validates and does the
+      // opposite of what it says. A child prop with no child token becomes a literal declaration on the
+      // child's own (narrower) selector, which is exactly what the author asked for.
       const candidates = ctx.child
-        ? [`--wjs-${ctx.el}-${ctx.child}-${prop}`, `--wjs-${ctx.el}-${prop}`]
+        ? [`--wjs-${ctx.el}-${ctx.child}-${prop}`]
         : [`--wjs-${ctx.el}-${prop}`];
       const hit = candidates.find((c: string) => Object.prototype.hasOwnProperty.call(manifestTokens, c));
       if (hit) {
