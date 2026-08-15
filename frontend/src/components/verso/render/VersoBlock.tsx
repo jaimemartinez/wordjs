@@ -24,6 +24,7 @@ import SharedBlockShell from "@/components/content/SharedBlockShell";
 import type { AnimSpec, Appearance, Hide } from "@/components/puck/blockShell";
 import { createInlineMountStore } from "../inline/inlineSession";
 import VersoInline from "../inline/VersoInline";
+import { INLINE_HOST_SENTINEL } from "../inline/VersoTextSurface";
 import {
   selectInlineEditingId,
   useStoreSlice,
@@ -65,16 +66,31 @@ const VersoBlock = React.memo(function VersoBlock({ nodeId }: { nodeId: string }
 
   let content: React.ReactNode;
   if (inlineSpec) {
-    // Edición inline declarativa: Tiptap IN SITU en lugar del render del
-    // bloque (mismo documento del iframe, sin portal). key por nodo+prop:
-    // cambiar de destino fuerza un editor nuevo con su contenido inicial.
+    // Edición inline declarativa IN-PLACE (F3.5, fix W34-tipografía): el
+    // Component real del bloque se sigue renderizando — con la prop inline
+    // sustituida por el CENTINELA — y VersoTextSurface (dentro de VersoInline)
+    // localiza el elemento del centinela y edita su nodo de texto in situ, de
+    // modo que el editable hereda la tipografía real del bloque. El centinela
+    // es CONSTANTE: los commits parciales re-renderizan el Component con props
+    // idénticas y React no toca el DOM que posee el contenteditable. El cambio
+    // de forma del árbol (Fragment ↔ Component) fuerza remount limpio al
+    // entrar y al salir de la edición.
+    const passProps: Record<string, unknown> = {
+      ...props,
+      isEditing: true,
+      [inlineSpec.prop]: INLINE_HOST_SENTINEL,
+    };
+    for (const [slotKey, childIds] of Object.entries(node.slots)) {
+      const render: VersoSlotRender = (className?: string) => (
+        <VersoSlot parentId={node.id} slotKey={slotKey} childIds={childIds} className={className} />
+      );
+      passProps[slotKey] = render;
+    }
     content = (
-      <VersoInline
-        key={`${node.id}:${inlineSpec.prop}`}
-        nodeId={node.id}
-        prop={inlineSpec.prop}
-        schema={inlineSpec.schema}
-      />
+      <React.Fragment key={`${node.id}:${inlineSpec.prop}`}>
+        {Component ? <Component {...passProps} /> : null}
+        <VersoInline nodeId={node.id} prop={inlineSpec.prop} schema={inlineSpec.schema} />
+      </React.Fragment>
     );
   } else if (Component) {
     // Props del nodo TAL CUAL + una función de slot por cada clave de slot
