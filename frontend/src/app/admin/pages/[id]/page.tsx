@@ -10,6 +10,12 @@ import { localizeConfig } from "@/lib/puckI18n";
 import PuckEditor from "@/components/PuckEditor";
 import PuckEditorSkeleton from "@/components/PuckEditorSkeleton";
 import EditorLoadError from "@/components/EditorLoadError";
+import VersoEditor from "@/components/verso/editor/VersoEditor";
+import { rootFieldsPage } from "@/lib/verso/coreBlocks";
+import { serializeContentFallback } from "@/lib/verso/contentFallback";
+import { resolveEditorEngineFromBrowser, type EditorEngine } from "@/lib/editorEngine";
+import type { EditorHandle } from "@/lib/verso/store";
+import type { VersoData } from "@/lib/verso/types";
 import { unhydratedSaveBlocked, seedLegacyPuckData, applyLegacyHtmlFallback, resolveWjsTemplateForSave, isWithinPostMountGrace } from "@/lib/editorGuards";
 import { Data } from "@wordjs/puck";
 import { useUnsavedChanges } from "@/contexts/UnsavedChangesContext";
@@ -61,6 +67,18 @@ export default function PageEditorPage() {
     // swallowed (save stayed disabled, autosave never armed). A short post-mount grace window
     // ignores init noise without ever eating a human edit.
     const mountedAtRef = useRef(Date.now());
+
+    // F3 — engine flag: legacy es el DEFAULT ABSOLUTO; Verso solo con opt-in explícito
+    // (?engine= / localStorage wjs_editor_engine / NEXT_PUBLIC_WORDJS_EDITOR_ENGINE). Se resuelve
+    // tras montar (window/localStorage no existen en SSR — evita un mismatch de hidratación);
+    // hasta resolver se muestra el skeleton, igual que durante la carga del registro.
+    const [engine, setEngine] = useState<EditorEngine | null>(null);
+    useEffect(() => {
+        setEngine(resolveEditorEngineFromBrowser());
+    }, []);
+    // Handle vivo del motor Verso (null en legacy): el guardado lee getData() de aquí — el
+    // documento REAL del store, sin mirrors (el equivalente Verso de window.puckGetData).
+    const versoHandleRef = useRef<EditorHandle | null>(null);
 
     // Set initial dirty state for new pages
     useEffect(() => {
@@ -198,8 +216,12 @@ export default function PageEditorPage() {
             // Flush any open inline editor (so its latest keystrokes land in Puck's store), then read
             // the LIVE store rather than the mirrored ref — Puck's onChange has a deep-equal guard that
             // can leave puckDataRef stale, which would persist pre-edit content ("changes don't save").
-            try { (window as any).puckCommitActive?.(); } catch { /* no open editor */ }
-            const liveData = ((window as any).puckGetData?.() ?? puckDataRef.current);
+            // Verso: the same two steps against the live EditorHandle (commitInline + getData), no mirrors.
+            try {
+                if (versoHandleRef.current) versoHandleRef.current.commitInline();
+                else (window as any).puckCommitActive?.();
+            } catch { /* no open editor */ }
+            const liveData = (versoHandleRef.current?.getData() as any) ?? ((window as any).puckGetData?.() ?? puckDataRef.current);
             const root = liveData.root as any;
             const finalTitle = root?.props?.title || root?.title || title;
             const finalSlug = root?.props?.slug || root?.slug || slug;
@@ -265,7 +287,9 @@ export default function PageEditorPage() {
         return <PuckEditorSkeleton />;
     }
 
-    if (isLoading) {
+    // `engine === null` solo dura el primer frame tras montar (la resolución es síncrona en el
+    // efecto); el skeleton es el mismo que el de la carga, así que no hay parpadeo distinto.
+    if (isLoading || engine === null) {
         return <PuckEditorSkeleton />;
     }
 
@@ -277,6 +301,55 @@ export default function PageEditorPage() {
 
     return (
         <div className="h-full w-full overflow-hidden flex flex-col">
+            {engine === "verso" ? (
+                /* MOTOR VERSO (opt-in explícito). Mismas props de datos que alimentan a PuckEditor:
+                   carga/seeding ya hechos arriba (loadPage/seedLegacyPuckData), handleSubmit idéntico
+                   en semántica (lee el doc vivo vía versoHandleRef), root fields de PAGE (asimetría
+                   del CMS), y el onChange replica el del legacy con el fallback HTML COMPLETO
+                   compartido (lib/verso/contentFallback — resolución de la divergencia W47). */
+                <VersoEditor
+                    initialData={(initialPuckData || { content: [], root: {} }) as unknown as VersoData}
+                    status={status}
+                    onStatusChange={setStatus}
+                    saving={saving}
+                    hasChanges={isDirty}
+                    onSave={handleSubmit as any}
+                    onCancel={() => router.back()}
+                    pageId={pageId || undefined}
+                    previewSlug={slug || undefined}
+                    rootFields={rootFieldsPage}
+                    handleRef={versoHandleRef}
+                    onChange={(data: VersoData) => {
+                        // Ignore init-time events only (see mountedAtRef note above).
+                        if (!isWithinPostMountGrace(mountedAtRef.current, Date.now())) {
+                            setIsDirty(true);
+                        }
+                        // Mirror de última instancia (el guardado prefiere versoHandleRef.getData()).
+                        puckDataRef.current = data as unknown as Data;
+                        const root = data.root as any;
+                        const newTitle = root?.props?.title || root?.title;
+                        const newSlug = root?.props?.slug || root?.slug;
+                        if (newTitle !== undefined) {
+                            setTitle(newTitle);
+                        }
+                        if (newSlug !== undefined && newSlug !== slug) {
+                            // User manually edited slug in sidebar
+                            setSlugManuallyEdited(true);
+                            setSlug(newSlug);
+                        }
+                        const newTemplate = root?.props?._wjs_template;
+                        if (typeof newTemplate === 'string' && newTemplate !== assignedTemplate) {
+                            setAssignedTemplate(newTemplate);
+                        }
+                        // Fallback HTML desde bloques — EXCEPTO una página legacy aún en lienzo vacío
+                        // (su cuerpo vive como HTML en `content`): no machacarlo a "".
+                        if (data.content.length > 0) legacyHtmlRef.current = null;
+                        if (!(data.content.length === 0 && legacyHtmlRef.current)) {
+                            contentRef.current = serializeContentFallback(data.content);
+                        }
+                    }}
+                />
+            ) : (
             <PuckEditor
                 config={runtimeConfig}
                 initialData={initialPuckData || { content: [], root: {} }}
@@ -353,6 +426,7 @@ export default function PageEditorPage() {
                     }
                 }}
             />
+            )}
         </div>
     );
 }
