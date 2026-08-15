@@ -71,6 +71,44 @@ export function blockRectToDndRect(r: BlockRect): DndRect {
   return { left: r.x, top: r.y, right: r.x + r.width, bottom: r.y + r.height };
 }
 
+/**
+ * Escala visual del iframe derivada de su propia caja: rect.width (px visuales
+ * de getBoundingClientRect en el PADRE) / clientWidth (px CSS del iframe). Con
+ * el device-preview (`transform: scale(s)` en el contenedor) esta fórmula
+ * sigue siendo EXACTA por definición: un transform no altera clientWidth
+ * (layout interno) y getBoundingClientRect devuelve la caja post-transform,
+ * o sea clientWidth·s — el cociente ES s. clientWidth 0 (iframe sin layout)
+ * → 1, fail-soft.
+ */
+export function frameScaleOf(rectWidth: number, clientWidth: number): number {
+  return clientWidth > 0 ? rectWidth / clientWidth : 1;
+}
+
+/** Forma mínima de la caja del iframe que necesita toFramePoint. */
+export interface FrameBox {
+  left: number;
+  top: number;
+  /** rect.width visual (post-transform) del iframe. */
+  width: number;
+  /** clientWidth CSS (pre-transform) del iframe. */
+  clientWidth: number;
+}
+
+/**
+ * Punto del documento PADRE (clientX/Y) → coordenadas del iframe, con la
+ * escala derivada de la caja (frameScaleOf). Pura — es exactamente lo que el
+ * driver hace por tick con eventos del padre; extraída para testear la
+ * aritmética con escala != 1 (0.75 del device-preview) sin DOM.
+ */
+export function toFramePoint(clientX: number, clientY: number, box: FrameBox): DndPoint {
+  return translateParentPoint(
+    clientX,
+    clientY,
+    { left: box.left, top: box.top },
+    frameScaleOf(box.width, box.clientWidth),
+  );
+}
+
 /** Rect del "clon" arrastrado: el bloque de origen desplazado, o la caja sintética del item nuevo. */
 export function dragRectFor(
   originRect: DndRect | null,

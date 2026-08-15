@@ -13,7 +13,8 @@
  *     transact ni cambia la referencia del doc; el drop llama transact UNA vez
  *     con el comando exacto esperado; Escape/cancel solo limpia el preview.
  *  2. Tracker de originApproaching (histéresis de 10px, spec §3.4.1).
- *  3. Traducción de coordenadas padre→iframe con escala 0.5 y offset.
+ *  3. Traducción de coordenadas padre→iframe con escala 0.5/0.75 y offset
+ *     (toFramePoint: la fórmula rect.width/clientWidth bajo transform: scale()).
  *  4. Modo teclado: moveNode correcto en las 4 direcciones + anuncio aria-live.
  *  5. buildDragLayout: profundidades, accepts del registry, fail-soft sin rect.
  */
@@ -29,8 +30,10 @@ import {
   createDirectionTracker,
   createKeyboardMover,
   createOriginTracker,
+  frameScaleOf,
   keyboardMoveTarget,
   parseZoneId,
+  toFramePoint,
   translateParentPoint,
   zoneIdFor,
 } from "../driverCore";
@@ -369,6 +372,38 @@ describe("translateParentPoint — offset del iframe + escala del device-preview
     expect(translateParentPoint(150, 260, { left: 100, top: 200 }, 1)).toEqual({ x: 50, y: 60 });
     expect(translateParentPoint(150, 260, { left: 100, top: 200 }, 0)).toEqual({ x: 50, y: 60 });
     expect(translateParentPoint(150, 260, { left: 100, top: 200 }, Number.NaN)).toEqual({ x: 50, y: 60 });
+  });
+});
+
+describe("toFramePoint — la fórmula rect.width/clientWidth bajo transform: scale()", () => {
+  it("frameScaleOf: transform no altera clientWidth y rect.width = clientWidth·s ⇒ el cociente ES s", () => {
+    // Device-preview escritorio 1280 escalado 0.75: rect visual 960.
+    expect(frameScaleOf(960, 1280)).toBe(0.75);
+    // Sin transform: identidad. clientWidth 0: fail-soft a 1.
+    expect(frameScaleOf(1280, 1280)).toBe(1);
+    expect(frameScaleOf(400, 0)).toBe(1);
+  });
+
+  it("escala 0.75: ida y vuelta padre↔iframe exacta (el caso del encargo)", () => {
+    const box = { left: 52, top: 96, width: 960, clientWidth: 1280 };
+    // Punto interno (400, 240) pintado en el padre en (52+300, 96+180).
+    expect(toFramePoint(352, 276, box)).toEqual({ x: 400, y: 240 });
+    // La esquina del iframe es el origen del sistema interno.
+    expect(toFramePoint(52, 96, box)).toEqual({ x: 0, y: 0 });
+    // Compuesta con la proyección directa: identidad para cualquier punto.
+    const s = 0.75;
+    const inner = { x: 123.5, y: 77.25 };
+    const projected = { x: box.left + inner.x * s, y: box.top + inner.y * s };
+    const back = toFramePoint(projected.x, projected.y, box);
+    expect(back.x).toBeCloseTo(inner.x, 10);
+    expect(back.y).toBeCloseTo(inner.y, 10);
+  });
+
+  it("iframe sin layout (clientWidth 0): cae a escala 1 — solo offset", () => {
+    expect(toFramePoint(150, 260, { left: 100, top: 200, width: 0, clientWidth: 0 })).toEqual({
+      x: 50,
+      y: 60,
+    });
   });
 });
 
