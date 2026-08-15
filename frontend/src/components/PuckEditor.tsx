@@ -611,6 +611,12 @@ interface PuckEditorProps {
     templateKind?: TemplateKind;
     /** Post type for a `single` route (e.g. "post"), so the hierarchy can prefer single-post templates. */
     templatePostType?: string;
+    /**
+     * The author's per-page template pick (the `_wjs_template` sidebar field), live from the parent
+     * editor. Hoisted to the front of the canvas resolution chain so the canvas re-wraps in the picked
+     * template immediately — the same rule the public route applies to the saved meta.
+     */
+    assignedTemplate?: string;
 }
 
 // Context for Inline Editing
@@ -1027,18 +1033,20 @@ export default function PuckEditor({
     previewSlug,
     breadcrumbRoot,
     templateKind = "page",
-    templatePostType
+    templatePostType,
+    assignedTemplate
 }: PuckEditorProps) {
     const { t, language } = useI18n();
     const activeConfig = passedConfig || puckConfig;
 
     // OLA 3: route identity for the canvas theme-template preview, carried across the AutoFrame portal to
-    // CanvasThemeTemplate (rendered in the iframe). Memoized on kind+postType only (NOT the slug, which
-    // regenerates per keystroke while titling a draft) so the value is stable for the whole session and
-    // never re-runs the canvas resolution.
+    // CanvasThemeTemplate (rendered in the iframe). Memoized on kind+postType+assignedTemplate only (NOT
+    // the slug, which regenerates per keystroke while titling a draft): the assignment only changes when
+    // the author picks from the template dropdown, and re-running the canvas resolution right then is the
+    // point — the canvas re-wraps in the picked template.
     const canvasTemplateInfo = React.useMemo<CanvasTemplateInfo>(
-        () => ({ kind: templateKind, postType: templatePostType }),
-        [templateKind, templatePostType]
+        () => ({ kind: templateKind, postType: templatePostType, assignedTemplate }),
+        [templateKind, templatePostType, assignedTemplate]
     );
 
     // Preview the REAL live page (SSR, active theme) in a new tab. Saves first when there are

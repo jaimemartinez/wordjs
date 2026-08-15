@@ -35,6 +35,9 @@ export default function PostEditorPage() {
     const puckDataRef = useRef<Data>({ content: [], root: {} });
     const [status, setStatus] = useState("draft");
     const [commentStatus, setCommentStatus] = useState("open");
+    // The author's per-page theme-template pick (`_wjs_template` meta). State (not just a root prop
+    // read at save time) because the canvas preview re-wraps on it live — see PuckEditor.assignedTemplate.
+    const [assignedTemplate, setAssignedTemplate] = useState("");
     const [categories, setCategories] = useState<Category[]>([]);
     const [saving, setSaving] = useState(false);
     const [isLoading, setIsLoading] = useState(!isNew);
@@ -105,14 +108,27 @@ export default function PostEditorPage() {
             contentRef.current = post.content;
             setStatus(post.status);
             setCommentStatus(post.commentStatus || "open");
+            // The saved template assignment. META is the source of truth (it may have been set via the
+            // API, or before this field existed), so it is injected into root.props below rather than
+            // trusting whatever a stale _puck_data carries.
+            const savedTemplate = typeof post.meta?._wjs_template === "string" ? post.meta._wjs_template : "";
+            setAssignedTemplate(savedTemplate);
 
             // Load Puck data from meta if available
             if (post.meta && post.meta._puck_data) {
-                setPuckData(post.meta._puck_data);
-                puckDataRef.current = post.meta._puck_data;
+                const stored = post.meta._puck_data;
+                const withTemplate = {
+                    ...stored,
+                    root: {
+                        ...(stored.root as any),
+                        props: { ...((stored.root as any)?.props || {}), _wjs_template: savedTemplate }
+                    }
+                };
+                setPuckData(withTemplate);
+                puckDataRef.current = withTemplate;
                 legacyHtmlRef.current = null; // real Puck blocks — not a legacy HTML body
-                if (post.meta._puck_data.root?.title) {
-                    setTitle(post.meta._puck_data.root.title);
+                if (stored.root?.title) {
+                    setTitle(stored.root.title);
                 }
             } else {
                 // Seed Puck data with existing info for legacy posts. A legacy/imported post keeps its
@@ -132,7 +148,8 @@ export default function PostEditorPage() {
                             title: post.title,
                             slug: post.slug,
                             category: "",
-                            allowComments: post.commentStatus || "open"
+                            allowComments: post.commentStatus || "open",
+                            _wjs_template: savedTemplate
                         }
                     }
                 };
@@ -209,6 +226,9 @@ export default function PostEditorPage() {
                 commentStatus,
                 meta: {
                     _puck_data: liveData, // Save the JSON structure for re-editing
+                    // Per-page theme template. Always sent (backend merges meta per key): '' explicitly
+                    // CLEARS a previous assignment — omitting the key would leave it stale forever.
+                    _wjs_template: typeof root?.props?._wjs_template === 'string' ? root.props._wjs_template : '',
                     // SEO fields
                     seo_title: root?.props?.seo_title || '',
                     seo_description: root?.props?.seo_description || '',
@@ -280,9 +300,11 @@ export default function PostEditorPage() {
                 pageId={postId || undefined}
                 previewSlug={slug || undefined}
                 // OLA 3: preview the post inside the theme's `single` template (single-post-… → single →
-                // page in the hierarchy), matching the public post route.
+                // page in the hierarchy), matching the public post route. The author's dropdown pick is
+                // hoisted to the front of that chain, live (OLA 5).
                 templateKind="single"
                 templatePostType="post"
+                assignedTemplate={assignedTemplate || undefined}
                 onChange={(data) => {
                     // Ignore init-time events only (see mountedAtRef note above).
                     if (Date.now() - mountedAtRef.current > 800) {
@@ -306,6 +328,12 @@ export default function PostEditorPage() {
                     const newAllowComments = root?.props?.allowComments;
                     if (newAllowComments !== undefined) {
                         setCommentStatus(newAllowComments);
+                    }
+                    // Template pick from the sidebar dropdown — state so the canvas re-wraps live.
+                    // Guarded on change (it fires per keystroke for unrelated edits, the value rarely moves).
+                    const newTemplate = root?.props?._wjs_template;
+                    if (typeof newTemplate === 'string' && newTemplate !== assignedTemplate) {
+                        setAssignedTemplate(newTemplate);
                     }
                     // Regenerate the fallback HTML from blocks — EXCEPT a legacy post still on a blank
                     // canvas (its body lives in `content` HTML, not blocks): don't clobber it to "".

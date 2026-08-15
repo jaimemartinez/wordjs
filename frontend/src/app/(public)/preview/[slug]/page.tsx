@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import type { Metadata } from "next";
 import PostContent from "@/components/public/PostContent";
 import JsonLd from "@/components/public/JsonLd";
+import ThemeTemplate from "@/components/content/ThemeTemplate";
 import { getPostBySlugPreview, getSettings, buildPostMetadata, buildPostJsonLd, resolveSiteBase } from "@/lib/server-api";
 import { withResolvedBlocks } from "@/lib/resolveDynamicBlocks";
 
@@ -52,7 +53,17 @@ export default async function PostPreviewPage(
                 </div>
             )}
             <JsonLd data={buildPostJsonLd(post, base, settings?.blogname)} />
-            <PostContent post={withBlocks} settings={settings} showComments />
+            {/* Same theme-template wrap as the live /[slug] route (kind follows what was loaded,
+                assignment hoisted): a preview that dropped the template — now author-visible via the
+                template dropdown — would show an arrangement the published page won't have. */}
+            <ThemeTemplate
+                kind={post.type === "page" ? "page" : "single"}
+                postType={post.type}
+                slug={post.slug}
+                assignedTemplate={typeof post.meta?._wjs_template === "string" ? post.meta._wjs_template : undefined}
+            >
+                <PostContent post={withBlocks} settings={settings} showComments />
+            </ThemeTemplate>
         </>
     );
 }
