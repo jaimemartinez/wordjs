@@ -109,6 +109,7 @@
   --wjs-hero-radius: 0px;
   --wjs-hero-title-color: #e6eeff;
   --wjs-hero-subtitle-color: #8fa3c8;
+  --wjs-pricing-gap: 0.75rem;
 }
 h1,h2,h3,h4,h5,h6 { letter-spacing: -0.02em }
 .wjs-chrome-header { background: rgba(7,11,20,0.92); border-bottom: 1px solid var(--wjs-border-subtle); backdrop-filter: blur(8px) }
@@ -140,8 +141,14 @@ h1,h2,h3,h4,h5,h6 { letter-spacing: -0.02em }
 #main-content .glow-panel { background: var(--wjs-bg-surface); background-image: linear-gradient(180deg,rgba(34,211,238,0.06),transparent 45%); border: 1px solid rgba(34,211,238,0.3); border-radius: 8px; padding: 2.5rem; box-shadow: 0 0 24px rgba(34,211,238,0.08) }
 #main-content .celda-ancha { grid-column: span 2; min-width: 0 }
 #main-content .franja-estado { padding: 0.6rem 2rem; background: var(--wjs-bg-muted); background-image: linear-gradient(90deg,transparent 42%,rgba(34,211,238,0.08) 50%,transparent 58%); background-size: 300% 100%; background-repeat: no-repeat; background-position: 0%0; border-bottom: 1px solid var(--wjs-border-subtle); font-family: var(--wjs-font-family-mono); font-size: 0.8rem; letter-spacing: 0.05em; color: var(--wjs-color-text-muted) }
+.wp-block-pricing__plan { padding: 1.25rem }
 @media (max-width: 767.98px) {
+  #main-content .hero-scanline { padding: 2rem 1rem }
   #main-content .celda-ancha { grid-column: auto }
+  .wp-block-spacer { max-height: 2.5rem }
+}
+@media (min-width: 768px) and (max-width: 1023.98px) {
+  .wp-block-pricing { grid-template-columns: repeat(2,1fr) }
 }
 @media (max-width: 1023.98px) {
   #main-content .hero-scanline { padding: 3rem 1rem 2.5rem }

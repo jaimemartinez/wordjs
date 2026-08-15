@@ -1,6 +1,6 @@
 {
   "name": "Gaceta",
-  "version": "1.0.3",
+  "version": "1.0.5",
   "description": "An editorial broadsheet: a serious magazine front on cream paper — georgia headlines, thin double rules, deep-red accents and square corners.",
   "author": "WordJS",
   "generator": "wordjs",
@@ -290,7 +290,7 @@
           "animation": "wjs-a-masthead-sheen 16s linear infinite"
         },
         "mobile": {
-          "padding": "1.25rem 0 1.75rem"
+          "padding": "1.5rem 1rem"
         }
       },
       "caja-articulo": {
@@ -301,6 +301,21 @@
         "mobile": {
           "padding": "1.5rem 1.25rem"
         }
+      }
+    },
+    "spacer": {
+      "mobile": {
+        "max-height": "2.5rem"
+      }
+    },
+    "pricing": {
+      "grid-template-columns": "repeat(2, 1fr)",
+      "gap": "2rem",
+      "plan": {
+        "padding": "1.75rem"
+      },
+      "mobile": {
+        "grid-template-columns": "1fr"
       }
     }
   }
