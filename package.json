@@ -34,7 +34,7 @@
   },
   "dependencies": {
     "compression": "^1.8.1",
-    "concurrently": "^10.0.3",
+    "concurrently": "^10.0.4",
     "helmet": "^8.1.0",
     "selfsigned": "^5.5.0"
   },
