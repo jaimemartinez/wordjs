@@ -28,6 +28,19 @@ const { sanitize, sanitizeMetaValue } = require('../core/sanitize-meta');
 // callers editing an existing post fall back to capsFor('post').
 const { capsFor, capsForType } = require('../core/post-capabilities');
 
+// MULTILINGUAL: validate a BCP-47 language tag at the route boundary (the model canonicalizes; the
+// route rejects an unparseable non-empty value with a 400 instead of silently clearing it).
+const { parseLanguageTag } = require('../core/language-tag');
+
+/**
+ * Type-aware EDIT gate for one post (mirrors PUT /:id, without the publish restriction — the
+ * multilingual endpoints edit metadata, not content/status). Returns true when the caller may edit p.
+ */
+function canEditPost(user: any, p: any): boolean {
+    const caps = capsForType(p.type || p.postType || 'post') || capsFor('post');
+    return p.authorId === user.id ? user.can(caps.edit) : user.can(caps.editOthers);
+}
+
 /**
  * @swagger
  * components:
@@ -272,7 +285,8 @@ router.post('/', authenticate, asyncHandler(async (req: any, res: Response) => {
         categories,
         tags,
         meta,
-        date
+        date,
+        language
     } = req.body;
 
     if (!title) {
@@ -311,7 +325,9 @@ router.post('/', authenticate, asyncHandler(async (req: any, res: Response) => {
         parent,
         menuOrder: menu_order,
         commentStatus: comment_status,
-        date
+        date,
+        // MULTILINGUAL (opt-in): the model canonicalizes a BCP-47 tag, or stores NULL. Absent → NULL.
+        language
     });
 
     // Set categories
@@ -414,7 +430,8 @@ router.put('/:id', authenticate, asyncHandler(async (req: any, res: Response) =>
         tags,
         meta,
         autosave,
-        date
+        date,
+        language
     } = req.body;
 
     // Check if user can publish THIS type
@@ -432,7 +449,9 @@ router.put('/:id', authenticate, asyncHandler(async (req: any, res: Response) =>
         parent,
         menuOrder: menu_order,
         commentStatus: comment_status,
-        date
+        date,
+        // MULTILINGUAL: only touched when the key is present (undefined → column left as-is).
+        language
     });
 
     // Update categories
@@ -627,6 +646,101 @@ router.get('/:id/meta', optionalAuth, asyncHandler(async (req: any, res: Respons
     }
 
     res.json(await Post.getAllMeta(postId));
+}));
+
+// ---------------------------------------------------------------------------
+// MULTILINGUAL (opt-in) — set a post's language, and link/query its translations.
+// ---------------------------------------------------------------------------
+
+/**
+ * PUT /posts/:id/language
+ * Set or clear a post's content language (BCP-47). Body: { language: 'pt-BR' | null | '' }.
+ */
+router.put('/:id/language', authenticate, asyncHandler(async (req: any, res: Response) => {
+    const postId = parseInt(req.params.id, 10);
+    const post = await Post.findById(postId);
+    if (!post) {
+        return res.status(404).json({ code: 'rest_post_invalid_id', message: 'Invalid post ID.', data: { status: 404 } });
+    }
+    if (!canEditPost(req.user, post)) {
+        return res.status(403).json({ code: 'rest_forbidden', message: 'You cannot edit this post.', data: { status: 403 } });
+    }
+
+    const { language } = req.body;
+    // A non-empty value MUST parse to a BCP-47 tag; null/'' clears the language back to NULL.
+    if (language != null && language !== '' && !parseLanguageTag(language)) {
+        return res.status(400).json({ code: 'rest_invalid_language', message: 'Invalid BCP-47 language tag.', data: { status: 400 } });
+    }
+
+    await Post.setLanguage(postId, language);
+    const fresh = await Post.findById(postId);
+    res.json(await fresh.toJSON());
+}));
+
+/**
+ * GET /posts/:id/translations
+ * List this post's translations in other languages. Anonymous callers see PUBLISHED siblings only;
+ * the owner / an editor sees unpublished ones too (management view).
+ */
+router.get('/:id/translations', optionalAuth, asyncHandler(async (req: any, res: Response) => {
+    const postId = parseInt(req.params.id, 10);
+    const post = await Post.findById(postId);
+    if (!post) {
+        return res.status(404).json({ code: 'rest_post_invalid_id', message: 'Invalid post ID.', data: { status: 404 } });
+    }
+    // Mirror the single-post read gate for a non-published post.
+    if (post.postStatus !== 'publish') {
+        if (!req.user || (post.authorId !== req.user.id && !req.user.can('edit_others_posts'))) {
+            return res.status(404).json({ code: 'rest_post_invalid_id', message: 'Invalid post ID.', data: { status: 404 } });
+        }
+    }
+    const includeUnpublished = !!(req.user && (post.authorId === req.user.id || req.user.can('edit_others_posts')));
+    const translations = await Post.getTranslations(postId, undefined, { includeUnpublished });
+    res.json({ language: post.postLanguage || null, group: post.translationGroup || null, translations });
+}));
+
+/**
+ * POST /posts/:id/translations
+ * Link this post and another as translations of each other (symmetric, idempotent).
+ * Body: { translationId }. The caller must be able to edit BOTH posts.
+ */
+router.post('/:id/translations', authenticate, asyncHandler(async (req: any, res: Response) => {
+    const postId = parseInt(req.params.id, 10);
+    const otherId = parseInt(req.body?.translationId, 10);
+    if (!otherId || otherId === postId) {
+        return res.status(400).json({ code: 'rest_invalid_param', message: 'A distinct translationId is required.', data: { status: 400 } });
+    }
+    const [post, other] = await Promise.all([Post.findById(postId), Post.findById(otherId)]);
+    if (!post || !other) {
+        return res.status(404).json({ code: 'rest_post_invalid_id', message: 'Invalid post ID.', data: { status: 404 } });
+    }
+    if (!canEditPost(req.user, post) || !canEditPost(req.user, other)) {
+        return res.status(403).json({ code: 'rest_forbidden', message: 'You cannot edit both posts.', data: { status: 403 } });
+    }
+
+    const group = await Post.linkTranslations(postId, otherId);
+    if (!group) {
+        return res.status(400).json({ code: 'rest_link_failed', message: 'Could not link these posts.', data: { status: 400 } });
+    }
+    const translations = await Post.getTranslations(postId, group, { includeUnpublished: true });
+    res.json({ group, translations });
+}));
+
+/**
+ * DELETE /posts/:id/translations
+ * Remove this post from its translation set (the rest stay linked).
+ */
+router.delete('/:id/translations', authenticate, asyncHandler(async (req: any, res: Response) => {
+    const postId = parseInt(req.params.id, 10);
+    const post = await Post.findById(postId);
+    if (!post) {
+        return res.status(404).json({ code: 'rest_post_invalid_id', message: 'Invalid post ID.', data: { status: 404 } });
+    }
+    if (!canEditPost(req.user, post)) {
+        return res.status(403).json({ code: 'rest_forbidden', message: 'You cannot edit this post.', data: { status: 403 } });
+    }
+    await Post.unlinkTranslation(postId);
+    res.json({ success: true });
 }));
 
 module.exports = router;

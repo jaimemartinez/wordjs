@@ -687,8 +687,9 @@ export const DraggableComponent = ({
                       inline text editor via the global set up by PuckEditor.tsx. Puck's public
                       overrides.actionBar API can't express this (it has no access to the block id
                       or componentType), which is why this behavior previously lived as a regex
-                      patch of the compiled bundle. See NOTICE.md. This is the ONLY functional
-                      change from upstream Puck v0.20.2. */}
+                      patch of the compiled bundle. This is ONE of two functional divergences from
+                      upstream Puck v0.20.2 (the other is the parent-layer overlay portalization,
+                      also WORDJS-marked above); see NOTICE.md for the full enumeration. */}
                   {(componentType === "Text" || componentType === "Heading") && (
                     <ActionBar.Action
                       label="Edit"

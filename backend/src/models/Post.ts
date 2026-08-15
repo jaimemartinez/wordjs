@@ -10,6 +10,10 @@ const { sanitizeTitle, sanitizeContent, generateExcerpt, currentTimeGMT, current
 const config = require('../config/app');
 const cache = require('../core/cache');
 const { saveRevision } = require('../core/revisions');
+const { randomUUID } = require('crypto');
+// parseLanguageTag validates + canonicalizes a BCP-47 tag, returning null for anything that is not a
+// language tag (a post's language must never silently become 'en' — null means "no language set").
+const { parseLanguageTag } = require('../core/language-tag');
 
 class Post {
     id?: number;
@@ -32,6 +36,9 @@ class Post {
     postType?: string;
     postMimeType?: string;
     commentCount?: number;
+    // MULTILINGUAL (opt-in). NULL on a monolingual site — see migration 0011.
+    postLanguage?: string | null;
+    translationGroup?: string | null;
     // Optional pre-loaded meta (set by hydrateRelations to avoid N+1 in toJSON).
     // When undefined, toJSON falls back to a per-post DB query (identical behavior).
     _metaCache?: { [key: string]: any };
@@ -63,6 +70,10 @@ class Post {
         this.postType = data.post_type;
         this.postMimeType = data.post_mime_type;
         this.commentCount = data.comment_count;
+        // NULL when unset (older rows / monolingual sites); `?? null` normalizes an undefined column
+        // (a row selected before migration 0011) to the same absent value.
+        this.postLanguage = data.post_language ?? null;
+        this.translationGroup = data.translation_group ?? null;
         // Lazy load for async access patterns - meta might need explicit hydration
     }
 
@@ -164,6 +175,11 @@ class Post {
             commentStatus: this.commentStatus,
             pingStatus: this.pingStatus,
             mimeType: this.postMimeType,
+            // MULTILINGUAL (opt-in): the post's own language tag (null on a monolingual site) and its
+            // PUBLISHED translations in other languages. `translations` is what the public page turns
+            // into <link rel="alternate" hreflang> tags — a post with no group emits an empty list.
+            language: this.postLanguage || null,
+            translations: await Post.getTranslations(this.id, this.translationGroup),
             meta: meta
         };
 
@@ -219,8 +235,16 @@ class Post {
             pingStatus = 'open',
             password = '',
             mimeType = '',
-            date
+            date,
+            language,
+            translationGroup
         } = data;
+
+        // MULTILINGUAL: a language is validated to a canonical BCP-47 tag (or NULL — never a silent
+        // fallback), and a translation group is a uuid string (or NULL). Both default to NULL so an
+        // ordinary create is byte-identical to before.
+        const postLanguage = language != null && language !== '' ? parseLanguageTag(language) : null;
+        const postTranslationGroup = typeof translationGroup === 'string' && translationGroup ? translationGroup : null;
 
         // Generate slug from title if not provided
         let postName = slug || sanitizeTitle(title);
@@ -260,8 +284,9 @@ class Post {
       INSERT INTO posts (
         author_id, post_date, post_date_gmt, post_content, post_title, post_excerpt,
         post_status, comment_status, ping_status, post_password, post_name,
-        post_modified, post_modified_gmt, post_parent, guid, menu_order, post_type, post_mime_type
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        post_modified, post_modified_gmt, post_parent, guid, menu_order, post_type, post_mime_type,
+        post_language, translation_group
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       RETURNING id
     `, [
             authorId || 0,
@@ -281,7 +306,9 @@ class Post {
             guid,
             menuOrder,
             type,
-            mimeType
+            mimeType,
+            postLanguage,
+            postTranslationGroup
         ]);
 
         const postId = result.lastID;
@@ -902,6 +929,13 @@ class Post {
             values.push(data.authorId);
         }
 
+        // MULTILINGUAL: set or CLEAR the post's language. An explicit null/'' (or an unparseable tag)
+        // clears it back to NULL; a valid tag is stored canonicalized. Absent key → column untouched.
+        if (data.language !== undefined) {
+            updates.push('post_language = ?');
+            values.push(data.language != null && data.language !== '' ? parseLanguageTag(data.language) : null);
+        }
+
         // Always update modified date
         updates.push('post_modified = ?', 'post_modified_gmt = ?');
         values.push(currentTime(), currentTimeGMT());
@@ -935,6 +969,130 @@ class Post {
         await doAction('post_updated', id, data, post.postStatus);
 
         return await Post.findById(id);
+    }
+
+    // ---- MULTILINGUAL (opt-in) --------------------------------------------------
+    //
+    // A post carries an optional BCP-47 language tag and an optional translation_group uuid. Two posts
+    // are translations of one another iff they share the same non-NULL group, so linking is symmetric
+    // and idempotent by construction (both get the same group) and "translations of X" is a lookup by
+    // that group. Nothing here runs for a monolingual post (group NULL → early return, zero queries).
+
+    /**
+     * Invalidate the id + slug caches for one post row. Shared by the linking writers so a translation
+     * edit is visible on the very next public read (the same keys create()/update() clear).
+     */
+    static async _invalidatePostCacheById(id: any) {
+        const row = await dbAsync.get('SELECT post_name, post_type FROM posts WHERE id = ?', [id]);
+        await cache.del(`post:id:${id}`);
+        if (row && row.post_name) {
+            await cache.del(`post:slug:${row.post_type}:${row.post_name}`);
+            await cache.del(`post:slug:any:${row.post_name}`);
+        }
+    }
+
+    /**
+     * Set (or clear) a post's content language. A valid tag is stored canonicalized; null/''/an
+     * unparseable value clears it back to NULL. Returns the stored tag (or null). Idempotent.
+     */
+    static async setLanguage(id: any, language: any): Promise<string | null> {
+        const tag = language != null && language !== '' ? parseLanguageTag(language) : null;
+        await Post.update(id, { language: tag });
+        return tag;
+    }
+
+    /**
+     * List a post's translations in OTHER languages: the sibling posts sharing its translation_group,
+     * each carrying a declared language. PUBLISHED-only by default (the public hreflang set must not
+     * point at drafts); pass { includeUnpublished: true } for an admin/management view.
+     *
+     * `group` is an optimization for callers (toJSON) that already hold the group — pass it to skip the
+     * lookup. Omit it (public API) and the group is resolved from the id. A post with no group → [].
+     */
+    static async getTranslations(
+        id: any,
+        group?: string | null,
+        opts: { includeUnpublished?: boolean } = {}
+    ): Promise<Array<{ id: number; language: string; slug: string; type: string; status: string }>> {
+        let translationGroup: string | null | undefined = group;
+        if (translationGroup === undefined) {
+            const row = await dbAsync.get('SELECT translation_group FROM posts WHERE id = ?', [id]);
+            translationGroup = row ? row.translation_group : null;
+        }
+        if (!translationGroup) return [];
+
+        const statusClause = opts.includeUnpublished === true ? '' : " AND post_status = 'publish'";
+        const rows = await dbAsync.all(
+            `SELECT id, post_name, post_type, post_language, post_status FROM posts
+             WHERE translation_group = ? AND id != ? AND post_language IS NOT NULL${statusClause}
+             ORDER BY post_language`,
+            [translationGroup, id]
+        );
+        return rows.map((r: any) => ({
+            id: r.id,
+            language: r.post_language,
+            slug: r.post_name,
+            type: r.post_type,
+            status: r.post_status
+        }));
+    }
+
+    /**
+     * Link two posts as translations of each other. SYMMETRIC and IDEMPOTENT: both end up in one
+     * translation_group. If either already belongs to a group, that group survives (A's wins) and the
+     * other whole set is folded into it — merging sets, not just the two posts; if neither does, a new
+     * uuid is minted. Returns the surviving group id, or null when a post id is invalid/equal.
+     */
+    static async linkTranslations(idA: any, idB: any): Promise<string | null> {
+        const a2 = Number(idA);
+        const b2 = Number(idB);
+        if (!a2 || !b2 || a2 === b2) return null;
+        const a = await dbAsync.get('SELECT translation_group FROM posts WHERE id = ?', [a2]);
+        const b = await dbAsync.get('SELECT translation_group FROM posts WHERE id = ?', [b2]);
+        if (!a || !b) return null;
+
+        const groupA = a.translation_group || null;
+        const groupB = b.translation_group || null;
+        const target = groupA || groupB || randomUUID();
+
+        // Existing groups (other than the survivor) whose every member must be re-pointed at `target`.
+        const mergeGroups: string[] = [];
+        if (groupA && groupA !== target) mergeGroups.push(groupA);
+        if (groupB && groupB !== target) mergeGroups.push(groupB);
+
+        // Every post id that will change, gathered BEFORE the write so we can clear their caches after.
+        const affected = new Set<any>([a2, b2]);
+        if (mergeGroups.length) {
+            const ph = mergeGroups.map(() => '?').join(',');
+            const members = await dbAsync.all(`SELECT id FROM posts WHERE translation_group IN (${ph})`, mergeGroups);
+            for (const m of members) affected.add(m.id);
+        }
+
+        const writes = async (q: any) => {
+            await q.run('UPDATE posts SET translation_group = ? WHERE id = ? OR id = ?', [target, a2, b2]);
+            if (mergeGroups.length) {
+                const ph = mergeGroups.map(() => '?').join(',');
+                await q.run(`UPDATE posts SET translation_group = ? WHERE translation_group IN (${ph})`, [target, ...mergeGroups]);
+            }
+        };
+        if (typeof dbAsync.transaction === 'function') await dbAsync.transaction(writes);
+        else await writes(dbAsync);
+
+        for (const pid of affected) await Post._invalidatePostCacheById(pid);
+        return target;
+    }
+
+    /**
+     * Remove ONE post from its translation set (clears its group to NULL). The rest of the set stays
+     * linked. Returns false for an unknown id. Idempotent (a post with no group stays NULL).
+     */
+    static async unlinkTranslation(id: any): Promise<boolean> {
+        const pid = Number(id);
+        const row = await dbAsync.get('SELECT id FROM posts WHERE id = ?', [pid]);
+        if (!row) return false;
+        await dbAsync.run('UPDATE posts SET translation_group = NULL WHERE id = ?', [pid]);
+        await Post._invalidatePostCacheById(pid);
+        return true;
     }
 
     /**

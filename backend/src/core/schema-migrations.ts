@@ -460,6 +460,70 @@ const MIGRATIONS: Migration[] = [
             // SQLite (native or legacy): full-text is already handled by 0008 (native FTS5) or is
             // best-effort LIKE (legacy sql.js, which has no FTS5). Nothing to do here.
         }
+    },
+    {
+        // MULTILINGUAL CONTENT (FRENTE E-2), opt-in and non-breaking. Two NULLABLE columns on posts:
+        //   post_language     — the post's own content language as a canonical BCP-47 tag ('en', 'pt-BR').
+        //   translation_group — a uuid shared by a post and its translations in OTHER languages. Two posts
+        //                       are translations of one another iff they carry the same non-NULL group;
+        //                       linking is therefore symmetric and idempotent by construction (assign the
+        //                       same group), and "translations of X" is a lookup by that group.
+        // Fresh installs get these in initializeSchema; this brings EXISTING databases to the same shape.
+        // Every existing row keeps NULL/NULL — a monolingual site is byte-for-byte unchanged.
+        //
+        // CROSS-DRIVER NOTES. ALTER TABLE ADD COLUMN is NOT rewritten by the MySQL driver's translateSql
+        // (only CREATE TABLE is), so the column TYPE is chosen per-engine here: VARCHAR(255) on MySQL
+        // (raw TEXT cannot be indexed without a key length), TEXT elsewhere. `ADD COLUMN IF NOT EXISTS`
+        // is Postgres-only, so idempotency comes from an explicit column-existence probe (+ a swallow of
+        // the duplicate-column error as a belt-and-braces fallback). The index uses CREATE INDEX IF NOT
+        // EXISTS, which every driver honours (the MySQL driver strips it and swallows the re-run dup).
+        id: '0011_posts_multilingual',
+        up: async (ctx: MigrationCtx) => {
+            const table = 'posts';
+            const columnExists = async (column: string): Promise<boolean> => {
+                try {
+                    if (ctx.isPostgres) {
+                        const r = await ctx.get(
+                            `SELECT 1 AS ok FROM information_schema.columns WHERE table_name = ? AND column_name = ? LIMIT 1`,
+                            [table, column]
+                        );
+                        return !!r;
+                    }
+                    if (ctx.driverName === 'mysql') {
+                        const r = await ctx.get(
+                            `SELECT 1 AS ok FROM information_schema.columns ` +
+                            `WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ? LIMIT 1`,
+                            [table, column]
+                        );
+                        return !!r;
+                    }
+                    // SQLite (native or legacy). PRAGMA takes no bound params; `table` is a fixed literal.
+                    const rows = (await ctx.all(`PRAGMA table_info(${table})`)) || [];
+                    return rows.some((r: any) => r && r.name === column);
+                } catch {
+                    // Uncertain probe → treat as absent; the guarded ADD below stays idempotent anyway.
+                    return false;
+                }
+            };
+
+            const TEXT_TYPE = ctx.driverName === 'mysql' ? 'VARCHAR(255)' : 'TEXT';
+            for (const column of ['post_language', 'translation_group']) {
+                if (await columnExists(column)) continue;
+                try {
+                    await ctx.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${TEXT_TYPE}`);
+                } catch (e: any) {
+                    // Idempotent only for "the column is already there" (a racing/duplicate run); any other
+                    // failure must abort boot (fail-closed) rather than leave a half-applied schema.
+                    const msg = String((e && e.message) || '').toLowerCase();
+                    if (!/duplicate column|already exists/.test(msg)) throw e;
+                }
+            }
+
+            // Resolve "translations of X" by exact translation_group. A translation set is tiny, so a
+            // plain single-column index is all it needs.
+            await ctx.exec('CREATE INDEX IF NOT EXISTS idx_posts_translation_group ON posts (translation_group)');
+            console.log('   ✓ [migration 0011] posts.post_language + posts.translation_group ready');
+        }
     }
 ];
 

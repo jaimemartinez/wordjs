@@ -150,6 +150,14 @@ export const RESP_PROPS: (keyof ResponsiveLook)[] = [
 ];
 
 /**
+ * Directional text-align → flow-relative. The author's "left"/"right" become logical `start`/`end`
+ * so a block mirrors under `dir="rtl"`; `center`/`justify` (and any already-logical value) pass
+ * through untouched. Under `dir="ltr"` `start` resolves to `left` and `end` to `right`, so today's
+ * rendering is byte-identical — this only changes what RTL does.
+ */
+export const logicalAlign = (v: any): string => (v === "left" ? "start" : v === "right" ? "end" : String(v));
+
+/**
  * Format one responsive override value for its CSS variable. Prop-aware because the subset mixes
  * units and "zero" semantics: 0 is a real value for spacing/radius (0px), "inherit from desktop"
  * for fontSize/lineHeight (mirrors the base UI's "0 = heredado"), and an explicit REMOVAL of the
@@ -157,7 +165,7 @@ export const RESP_PROPS: (keyof ResponsiveLook)[] = [
  */
 export const fmtResp = (prop: keyof ResponsiveLook, v: any): string | undefined => {
     if (!isSet(v)) return undefined;
-    if (prop === "align") return String(v);
+    if (prop === "align") return logicalAlign(v);
     const n = Number(v);
     if (prop === "lineHeight") return n > 0 ? String(n) : undefined;
     if (prop === "fontSize") return n > 0 ? `${n}px` : undefined;
@@ -185,7 +193,7 @@ const dtResp = (a: Appearance, p: keyof ResponsiveLook): string => {
         case "fontSize": return isSet(a.fontSize) ? `${a.fontSize}px` : "1em";
         case "lineHeight": return isSet(a.lineHeight) ? String(a.lineHeight) : "normal";
         case "letterSpacing": return isSet(a.letterSpacing) ? `${a.letterSpacing}px` : "normal";
-        case "align": return isSet(a.align) ? String(a.align) : "start";
+        case "align": return isSet(a.align) ? logicalAlign(a.align) : "start";
         case "radius": return isSet(a.radius) ? `${a.radius}px` : "0px";
     }
 };
@@ -306,12 +314,12 @@ export function appearanceToStyle(look?: Appearance): {
         s.maxWidth = "var(--wjs-r-maxWidth)";
         // Same lateral centring the base applies. Kept unconditional across breakpoints: where the
         // var resolves to `none` the block is full-width, so `auto` margins compute to 0 anyway.
-        s.marginLeft = "auto";
-        s.marginRight = "auto";
+        // `margin-inline` (not margin-left/right): symmetric `auto` centres identically in LTR and
+        // RTL, so this is a no-op for today's layout and only future-proofs the property name.
+        s.marginInline = "auto";
     } else if (isSet(a.maxWidth) && Number(a.maxWidth) > 0) {
         s.maxWidth = `${a.maxWidth}px`;
-        s.marginLeft = "auto";
-        s.marginRight = "auto";
+        s.marginInline = "auto";
     }
     if (hasResp("minHeight")) s.minHeight = "var(--wjs-r-minHeight)";
     else if (isSet(a.minHeight) && Number(a.minHeight) > 0) s.minHeight = `${a.minHeight}px`;
@@ -327,7 +335,7 @@ export function appearanceToStyle(look?: Appearance): {
     if (hasResp("letterSpacing")) s.letterSpacing = "var(--wjs-r-letterSpacing)";
     else if (isSet(a.letterSpacing)) s.letterSpacing = `${a.letterSpacing}px`;
     if (hasResp("align")) s.textAlign = "var(--wjs-r-align)";
-    else if (isSet(a.align)) s.textAlign = a.align;
+    else if (isSet(a.align)) s.textAlign = logicalAlign(a.align);
     if (isSet(a.transform)) s.textTransform = a.transform;
 
     // ── Movimiento ──────────────────────────────────────────────────────

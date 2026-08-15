@@ -49,10 +49,10 @@ const TAG_RE = /^([a-z]{2,3})(?:-([a-z]{4}))?(?:-([a-z]{2}|\d{3}))?$/;
  * accepting it here would make the read side more permissive than the write side, which is how two
  * gates drift apart until only one of them is really enforcing anything.
  */
-function toLanguageTag(raw: any, fallback: string = DEFAULT_LANGUAGE_TAG): string {
-    if (typeof raw !== 'string' || raw.length === 0 || raw.length > MAX_TAG_LENGTH) return fallback;
+function parseLanguageTag(raw: any): string | null {
+    if (typeof raw !== 'string' || raw.length === 0 || raw.length > MAX_TAG_LENGTH) return null;
     const m = TAG_RE.exec(raw.replace(/_/g, '-').toLowerCase());
-    if (!m) return fallback;
+    if (!m) return null;
     const [, language, script, region] = m;
     return [
         language,
@@ -61,7 +61,12 @@ function toLanguageTag(raw: any, fallback: string = DEFAULT_LANGUAGE_TAG): strin
     ].filter(Boolean).join('-');
 }
 
+function toLanguageTag(raw: any, fallback: string = DEFAULT_LANGUAGE_TAG): string {
+    return parseLanguageTag(raw) ?? fallback;
+}
+
 module.exports = {
+    parseLanguageTag,
     toLanguageTag,
     DEFAULT_LANGUAGE_TAG,
     MAX_LANGUAGE_TAG_LENGTH: MAX_TAG_LENGTH,

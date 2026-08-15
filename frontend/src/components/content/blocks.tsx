@@ -726,7 +726,12 @@ export function VideoEmbedBlock({ url, poster, aspectRatio, radius, bg, css }: a
 
 export function HeroBlock({ title, subtitle, bgImage, overlay, overlayColor, height, align, buttons, gradientFrom, gradientTo, gradientAngle, titleSize, titleWeight, titleTracking, subtitleSize, color, pad, measure, elementId, css, isEditing }: any) {
     const dim = parseFloat(overlay || "0") || 0;
-    const textAlign = align === "center" ? "center" : "left";
+    // Flow-relative so the hero mirrors under dir="rtl": "left" author choice → text-align:start
+    // and justify-content:flex-start (both resolve to left under LTR — today's render is unchanged).
+    // justify stays undefined when the author never picked a side, preserving the ui.css `center`
+    // fallback for legacy pages that predate the field.
+    const textAlign = align === "center" ? "center" : "start";
+    const heroJustify = align ? (align === "center" ? "center" : align === "right" ? "flex-end" : "flex-start") : undefined;
     return (
         <section
             id={elementId || undefined}
@@ -739,7 +744,7 @@ export function HeroBlock({ title, subtitle, bgImage, overlay, overlayColor, hei
                     'gradient-angle': gradientAngle ? `${gradientAngle}deg` : undefined,
                     height,
                     pad: unit(pad),
-                    justify: align,
+                    justify: heroJustify,
                     'text-align': textAlign,
                     'actions-justify': textAlign === "center" ? "center" : "flex-start",
                     measure: unit(measure),

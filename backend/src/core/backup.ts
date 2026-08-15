@@ -4,12 +4,15 @@
  */
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const AdmZip = require('adm-zip');
 const { assertZipWithinBudget } = require('./zip-guard');
 const { exportSite, importSite } = require('./import-export');
 const config = require('../config/app');
 const { getOption } = require('./options');
+const { captureDump, restoreDump, dumpEntryName, usesExternalDump } = require('./db-dump');
+const { offloadBackup } = require('./s3-offload');
 
 const UPLOADS_DIR = path.resolve(config.uploads.dir);
 
@@ -91,9 +94,11 @@ async function createBackup() {
     // 4b. Physical database snapshot — a COMPLETE copy of the live DB (every table, incl.
     //     analytics/notifications/plugin tables/schema_migrations that the logical export above does
     //     NOT cover). The dir-walk excludes the live .db on purpose; we add a consistent snapshot here.
-    try {
-        const driver = config.dbDriver || 'sqlite-native';
-        if (driver === 'sqlite-native' || driver === 'sqlite-legacy') {
+    const driver = config.dbDriver || 'sqlite-native';
+    if (driver === 'sqlite-native' || driver === 'sqlite-legacy') {
+        // SQLite is a single file we copy. Best-effort: if the copy fails the logical export is still a
+        // usable fallback for the file drivers, so a copy hiccup shouldn't abort the whole backup.
+        try {
             const dbModule = require('../config/database');
             // Flush in-memory (legacy sql.js) state to its file, then checkpoint the WAL (native) so the
             // .db file on disk is a consistent, complete snapshot before we copy it.
@@ -109,13 +114,23 @@ async function createBackup() {
                 zip.addLocalFile(dbFile, 'database', 'wordjs.db');
                 console.log('   ✓ Added physical database snapshot (database/wordjs.db) to backup.');
             }
-        } else if (driver === 'postgres') {
-            // Physical pg_dump is not bundled (needs the pg_dump binary); the logical export above is the
-            // portable backup for Postgres. (pg_dump snapshot = follow-up.)
-            console.log('   ℹ Postgres: physical snapshot skipped — logical export is the portable backup.');
+        } catch (e: any) {
+            console.warn('   ⚠️ Could not add physical DB snapshot (logical export still included):', e && e.message);
         }
-    } catch (e: any) {
-        console.warn('   ⚠️ Could not add physical DB snapshot (logical export still included):', e && e.message);
+    } else if (usesExternalDump(driver)) {
+        // Postgres / MySQL: the logical JSON export OMITS analytics / notifications / plugin tables /
+        // schema_migrations, so a backup without a real pg_dump/mysqldump is a SILENT DATA-LOSS TRAP.
+        // captureDump FAILS LOUD when the tool is missing — do NOT swallow it (that would ship an
+        // incomplete archive that looks complete). Any error here aborts the backup.
+        const entry = dumpEntryName(driver);
+        const tmpDump = path.join(os.tmpdir(), `wordjs-dbdump-${process.pid}-${Date.now()}-${entry}`);
+        try {
+            await captureDump(driver, tmpDump, config.db);
+            zip.addLocalFile(tmpDump, 'database', entry);
+            console.log(`   ✓ Added physical database dump (database/${entry}) to backup.`);
+        } finally {
+            try { if (fs.existsSync(tmpDump)) fs.unlinkSync(tmpDump); } catch { /* temp cleanup best-effort */ }
+        }
     }
 
     // 5. Save Zip
@@ -130,10 +145,24 @@ async function createBackup() {
     // Enforce retention so scheduled/auto backups don't fill the disk unbounded.
     try { await pruneBackups(); } catch (e: any) { console.warn('   ⚠️ Backup prune failed:', e && e.message); }
 
+    // Optional S3 offload (config-gated). No-op unless bucket + keys are configured; on failure the local
+    // copy is kept and the failure is reported — an unreachable bucket never fails a good local backup.
+    let s3: any = { offloaded: false, reason: 'not-configured' };
+    try {
+        s3 = await offloadBackup(filepath, filename);
+        if (s3.offloaded) console.log(`   ☁ Offloaded backup to S3: s3://${s3.bucket}/${s3.key}`);
+        else if (s3.reason === 'upload-failed') console.warn('   ⚠️ S3 offload failed (local copy kept):', s3.error);
+    } catch (e: any) {
+        // offloadBackup is designed not to throw; guard anyway so offload can never fail the backup.
+        s3 = { offloaded: false, reason: 'upload-failed', error: e && e.message };
+        console.warn('   ⚠️ S3 offload error (local copy kept):', e && e.message);
+    }
+
     return {
         filename,
         size: fs.statSync(filepath).size,
-        date: new Date()
+        date: new Date(),
+        s3
     };
 }
 
@@ -309,9 +338,29 @@ async function restoreBackup(filename: string) {
             try { await dbModule.init(); } catch { /* ensure the DB is open again for the fallback below */ }
             physicalRestored = false;
         }
+    } else if (usesExternalDump(dbType.driver)) {
+        // 3a'. PHYSICAL restore (Postgres / MySQL). A backup made by the new path ships a real pg_dump /
+        //      mysqldump under database/<driver>.*; restore it authoritatively with pg_restore / mysql.
+        //      restoreDump FAILS LOUD if the vendor tool is missing — we deliberately do NOT catch that and
+        //      fall back to the (incomplete) logical import, since that would silently under-restore the DB.
+        //      A backup with NO dump entry (older logical-only archive) leaves physicalRestored=false and
+        //      falls through to the logical path below — backward compatible.
+        const entryName = dumpEntryName(dbType.driver);
+        const dumpEntry = entryName ? zip.getEntry('database/' + entryName) : null;
+        if (dumpEntry) {
+            const tmp = path.join(os.tmpdir(), `wordjs-dbrestore-${process.pid}-${Date.now()}-${entryName}`);
+            try {
+                fs.writeFileSync(tmp, dumpEntry.getData());
+                await restoreDump(dbType.driver, tmp, config.db);
+                physicalRestored = true;
+                console.log('   ✓ Physical database dump restored (all tables).');
+            } finally {
+                try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch { /* temp cleanup best-effort */ }
+            }
+        }
     }
 
-    // 3b. Logical restore (Postgres, older backups with no physical snapshot, or a failed physical swap).
+    // 3b. Logical restore (older backups with no physical snapshot, or a failed physical swap).
     //     WIPE first so rows deleted since the backup actually disappear — this previously ran for non-file
     //     drivers ONLY, so a SQLite logical restore was a merge that resurrected deleted content (audit
     //     F-03, defect #1). importSite then repopulates the logical tables.
