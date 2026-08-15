@@ -1,6 +1,6 @@
 {
   "name": "Circuito",
-  "version": "1.0.3",
+  "version": "1.0.5",
   "description": "Terminal oscuro: near-black, neón cian y violeta, monoespaciada y a sangre completa.",
   "author": "WordJS",
   "generator": "wordjs",
@@ -310,6 +310,9 @@
         },
         "belowDesktop": {
           "padding": "3rem 1rem 2.5rem"
+        },
+        "mobile": {
+          "padding": "2rem 1rem"
         }
       },
       "glow-panel": {
@@ -345,6 +348,20 @@
         "motionOk": {
           "animation": "wjs-a-franja-sweep 9s linear infinite"
         }
+      }
+    },
+    "spacer": {
+      "mobile": {
+        "max-height": "2.5rem"
+      }
+    },
+    "pricing": {
+      "gap": "0.75rem",
+      "plan": {
+        "padding": "1.25rem"
+      },
+      "tablet": {
+        "grid-template-columns": "repeat(2, 1fr)"
       }
     }
   }

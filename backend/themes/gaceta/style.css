@@ -96,6 +96,7 @@
   --wjs-search-button-bg: #1c1917;
   --wjs-search-button-color: #faf6ef;
   --wjs-search-button-radius: 2px;
+  --wjs-pricing-gap: 2rem;
 }
 h1,h2,h3,h4,h5,h6 { letter-spacing: -0.01em; line-height: 1.2 }
 a { text-decoration: underline; text-underline-offset: 3px; text-decoration-thickness: 1px; transition: color 0.2s ease }
@@ -130,9 +131,13 @@ a:hover { color: var(--wjs-color-primary) }
 .wjs-chrome-footer .wjs-chrome-text { text-transform: uppercase; letter-spacing: 0.14em; font-size: 0.68rem }
 #main-content .hero-manchette { background-color: transparent; background-image: linear-gradient(105deg,transparent 42%,rgba(185,28,28,0.05) 50%,transparent 58%); background-size: 300% 100%; background-repeat: no-repeat; background-position: 0%0; text-align: center; padding: 2.25rem 0 2.75rem; border-bottom: 4px double var(--wjs-color-text-main) }
 #main-content .caja-articulo { background: var(--wjs-bg-surface); border: 1px solid var(--wjs-border-subtle); border-top: 3px solid var(--wjs-color-primary); padding: 3rem 2.5rem }
+.wp-block-pricing { grid-template-columns: repeat(2,1fr) }
+.wp-block-pricing__plan { padding: 1.75rem }
 @media (max-width: 767.98px) {
-  #main-content .hero-manchette { padding: 1.25rem 0 1.75rem }
+  #main-content .hero-manchette { padding: 1.5rem 1rem }
   #main-content .caja-articulo { padding: 1.5rem 1.25rem }
+  .wp-block-spacer { max-height: 2.5rem }
+  .wp-block-pricing { grid-template-columns: 1fr }
 }
 @media (prefers-reduced-motion: no-preference) {
   #main-content .hero-manchette { animation: wjs-a-masthead-sheen 16s linear infinite }

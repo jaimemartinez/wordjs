@@ -1,6 +1,6 @@
 {
   "name": "Vergel",
-  "version": "1.0.3",
+  "version": "1.0.5",
   "description": "An organic portfolio — soft, rounded, airy and single-column. Sage green and blush on a pale garden white, Space Grotesk headings, pill buttons, floating cards and lots of air.",
   "author": "WordJS",
   "generator": "wordjs",
@@ -170,7 +170,7 @@
           "animation": "wjs-a-flotar 6s ease-in-out infinite alternate"
         },
         "mobile": {
-          "padding": "2.25rem 1.25rem"
+          "padding": "1.25rem"
         }
       },
       "invitacion": {
@@ -187,6 +187,23 @@
         "mobile": {
           "padding": "1.75rem 1.25rem"
         }
+      }
+    },
+    "postList": {
+      "title": {
+        "font-size": "2.25rem",
+        "mobile": {
+          "font-size": "1.6rem"
+        }
+      }
+    },
+    "pricing": {
+      "grid-template-columns": "1fr",
+      "gap": "1.5rem",
+      "max-width": "34rem",
+      "margin-inline": "auto",
+      "plan": {
+        "padding": "2rem"
       }
     }
   }

@@ -1,18 +1,21 @@
 {
     "$schema": "wordjs-page-template-v1",
     "content": [
-        { "type": "Spacer", "props": { "height": "3rem" } },
         {
-            "type": "Section",
+            "type": "Spacer",
             "props": {
-                "tag": "article",
-                "className": "caja-articulo",
-                "maxWidth": "48rem",
-                "items": [
-                    { "type": "PageContent", "props": {} }
-                ]
+                "height": "2rem"
             }
         },
-        { "type": "Spacer", "props": { "height": "4rem" } }
+        {
+            "type": "PageContent",
+            "props": {}
+        },
+        {
+            "type": "Spacer",
+            "props": {
+                "height": "3rem"
+            }
+        }
     ]
 }

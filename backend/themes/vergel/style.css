@@ -49,6 +49,7 @@
   --wjs-footer-icon-bg: #dce8dd;
   --wjs-footer-icon-color: #3f6850;
   --wjs-footer-icon-hover-bg: #4d7c5f;
+  --wjs-pricing-gap: 1.5rem;
 }
 h1,h2,h3,h4,h5,h6 { letter-spacing: -0.01em }
 body { background-image: radial-gradient(60rem 30rem at 85% -5%,rgba(217,142,142,0.12),transparent 60%),radial-gradient(50rem 26rem at -10% 15%,rgba(77,124,95,0.10),transparent 55%); background-repeat: no-repeat; background-attachment: fixed }
@@ -68,12 +69,16 @@ a:hover { text-decoration: underline; text-decoration-thickness: 2px; text-under
 .wjs-chrome-header .wjs-header-nav a:hover { background: #e4eee6 }
 #main-content .claro { background: #f9eded; border-radius: 1.75rem; padding: 3.5rem 2.5rem; text-align: center }
 #main-content .invitacion { background-color: #f9eded; background-image: linear-gradient(120deg,rgba(217,142,142,0.22) 0%,rgba(243,247,242,0) 45%,rgba(77,124,95,0.14) 100%); background-size: 220% 220%; background-position: 0% 50%; border-radius: 1.75rem; padding: 2.75rem 2rem; box-shadow: var(--wjs-shadow-sm) }
+.wjs-post-list-title { font-size: 2.25rem }
+.wp-block-pricing { grid-template-columns: 1fr; max-width: 34rem; margin-inline: auto }
+.wp-block-pricing__plan { padding: 2rem }
 @media (max-width: 767.98px) {
   .wjs-post-card { padding: 1.25rem }
   .wjs-search-result { padding: 1.25rem }
   .wp-block-spacer { max-height: 2.5rem }
-  #main-content .claro { padding: 2.25rem 1.25rem }
+  #main-content .claro { padding: 1.25rem }
   #main-content .invitacion { padding: 1.75rem 1.25rem }
+  .wjs-post-list-title { font-size: 1.6rem }
 }
 @media (prefers-reduced-motion: no-preference) {
   #main-content .claro { animation: wjs-a-flotar 6s ease-in-out infinite alternate }
