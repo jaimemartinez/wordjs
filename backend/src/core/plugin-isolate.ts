@@ -169,16 +169,74 @@ const livePids = new Map<string, Set<number>>();
 function addLivePid(slug: string, pid: number) {
     let s = livePids.get(slug);
     if (!s) { s = new Set<number>(); livePids.set(slug, s); }
-    s.add(pid);
+    if (!s.has(pid)) { s.add(pid); retainIpcFrameGuard(); }
 }
 function dropLivePid(slug: string, pid: number | undefined) {
     const s = livePids.get(slug);
     if (!s || !pid) return;
-    s.delete(pid);
+    if (s.delete(pid)) releaseIpcFrameGuard();
     if (s.size === 0) livePids.delete(slug);
 }
 /** Pids we spawned for this slug and have not observed exiting. Empty ⇒ nothing of ours is running. */
 function getLivePids(slug: string): number[] { return Array.from(livePids.get(slug) || []); }
+
+// --- IPC-frame containment guard (backend/src/tests flake + a plugin→host DoS) -------------------
+// The bridge reads each isolated child over a child_process IPC channel in `serialization:'advanced'`
+// mode (V8 structured clone, length-prefixed frames). If a frame arrives MISALIGNED — a truncated write
+// from a force-killed child, two interleaved writers under saturation, or a plugin that writes RAW BYTES
+// straight to its own IPC fd (fd 3) instead of via process.send — Node's INTERNAL channel reader throws
+//     Error: Unable to deserialize cloned data due to invalid or unsupported version.
+// from `parseChannelMessages` inside `channel.onread` (node:internal/child_process/serialization). That
+// throw happens BEFORE the 'message' event, so the `try/catch` around worker.on('message') below cannot
+// see it: it escapes as an uncaughtException and KILLS the reading process. On CI that reading process is
+// a `node --test` file-subprocess, so a random UNRELATED test file dies with this exact error and its
+// results never arrive (the flake). The fix is not to catch it at the message layer (impossible) nor to
+// wrap the channel handle (Node hides `onread` behind an internal closure — `child.channel` only exposes
+// `.fd`), but to CONTAIN this one specific framing error: log-and-drop it, never let it crash the host.
+//
+// SCOPE — this is deliberately NOT a global uncaughtException swallow:
+//   • It only recognizes the child_process advanced-deserializer error (message + a stack frame in
+//     `child_process/serialization`); EVERY other uncaughtException is passed through with Node's default
+//     fatal semantics preserved (print the stack, exit 1) so real bugs still crash exactly as before.
+//   • The listener is installed only WHILE an isolated child is alive (ref-counted to livePids) and
+//     removed the instant the last one exits — outside sandbox activity, uncaughtException is untouched.
+// CONTAINMENT — this strengthens isolation, it does not weaken it: a malformed frame carries no valid
+// bridge command (it never deserializes into a 'message', so callApi/the allowlist are never reached), and
+// a plugin can no longer crash the host by emitting garbage on its channel. Nothing about seccomp/bwrap/
+// namespaces/the re-exec/the default-deny bridge allowlist changes; the child runs byte-identically.
+let ipcGuardRefs = 0;
+let ipcGuardInstalled = false;
+let ipcGuardLastWarn = 0;
+function isIpcFrameDeserializeError(err: any): boolean {
+    return err instanceof Error
+        && typeof err.message === 'string'
+        && err.message.includes('Unable to deserialize cloned data')
+        && typeof err.stack === 'string'
+        && /child_process[\\/]serialization/.test(err.stack);
+}
+function onHostUncaughtException(err: any): void {
+    if (isIpcFrameDeserializeError(err)) {
+        const now = Date.now();
+        if (now - ipcGuardLastWarn > 1000) { // rate-limit: a wedged channel can re-throw every read
+            ipcGuardLastWarn = now;
+            try { console.error(`[Isolate] dropped a malformed IPC frame on a plugin channel (contained — the affected isolate is recycled by the RPC timeout / liveness checks). ${logSafe(err.message)}`); } catch { /* */ }
+        }
+        return; // swallow ONLY the IPC framing error; the host stays up
+    }
+    // Not ours: reproduce Node's default fatal behavior so real bugs are never masked. If the app has its
+    // OWN uncaughtException listener too, defer to it (it also runs) rather than exiting out from under it.
+    if (process.listenerCount('uncaughtException') > 1) return;
+    try { console.error(err && err.stack ? err.stack : String(err)); } catch { /* */ }
+    process.exit(1);
+}
+function retainIpcFrameGuard(): void {
+    ipcGuardRefs++;
+    if (!ipcGuardInstalled) { process.on('uncaughtException', onHostUncaughtException); ipcGuardInstalled = true; }
+}
+function releaseIpcFrameGuard(): void {
+    if (ipcGuardRefs > 0) ipcGuardRefs--;
+    if (ipcGuardRefs === 0 && ipcGuardInstalled) { process.removeListener('uncaughtException', onHostUncaughtException); ipcGuardInstalled = false; }
+}
 
 /**
  * Wait (bounded) until this slug has NO registered isolate AND no child we spawned is still alive.
@@ -2089,4 +2147,11 @@ module.exports = {
     // must not be supervised as a crash? The mark is consumed by that exit, so a mark with no child
     // behind it is a leak — it never goes away and it silences the supervisor for the NEXT child.
     __stopIntentMarked: (slug: string) => stopping.has(slug),
+    // Test seams for the IPC-frame containment guard (see the regression test): the classifier that
+    // decides whether an uncaughtException is the child_process advanced-deserializer framing error, and
+    // the ref-counted install/uninstall so a test can exercise the lifecycle without a real plugin.
+    __isIpcFrameDeserializeError: isIpcFrameDeserializeError,
+    __retainIpcFrameGuard: retainIpcFrameGuard,
+    __releaseIpcFrameGuard: releaseIpcFrameGuard,
+    __ipcFrameGuardActive: () => ipcGuardInstalled,
 };
