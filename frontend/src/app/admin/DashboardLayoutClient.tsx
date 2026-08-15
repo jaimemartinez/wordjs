@@ -105,7 +105,13 @@ function DashboardLayoutContent({ children }: { children: React.ReactNode }) {
     // replace the admin chrome, Gutenberg-style). Skip the admin shell there: rendering it is wasted
     // work, and the Sidebar (z-5002) would sit ON TOP of the editor. All auth/MFA gates above still
     // ran; the contexts wrap this component, so children keep every provider.
-    if (/^\/admin\/(pages|posts)\/[^/]+$/.test(pathname ?? "")) {
+    // Same bypass for the Verso editor surfaces (F2): /admin/canvas-frame is the MINIMAL document a
+    // canvas iframe loads (the sidebar inside the iframe would corrupt the page being edited), and
+    // /admin/verso-lab is the fullscreen editor harness. Auth/MFA gates above still ran for both.
+    if (
+        /^\/admin\/(pages|posts)\/[^/]+$/.test(pathname ?? "") ||
+        /^\/admin\/(canvas-frame|verso-lab)$/.test(pathname ?? "")
+    ) {
         return <>{children}</>;
     }
 
