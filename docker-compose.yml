@@ -1,0 +1,109 @@
+# WordJS — realistic multi-service stack: Postgres + Redis + TWO app replicas sharing both.
+#
+#   docker compose up --build
+#
+# `app` and `app2` are the SAME image, both pointed at the SAME Postgres and the SAME Redis with the
+# SAME jwtSecret — i.e. two nodes of the horizontally-scaled backend tier from documentation/multi-node.md.
+# This is what makes cross-node coherence real: an option / role / capability change on one node is
+# published over Redis (wordjs:option-changed) and reflected on the other, and concurrent first-boot is
+# serialized by the Redis boot lease so schema migration + seeding run exactly once.
+#
+# WHAT THIS COMPOSE PROVES: two independent backend cores staying coherent over shared Postgres + Redis
+# (the multi-node property), and a working, browsable WordJS on http://localhost:3000.
+#
+# WHAT IT DOES NOT PROVE (kept honest — see docker/README.md):
+#   * No gateway / load balancer sits in front, so it does not exercise gateway round-robin or the
+#     mTLS node-enrollment path (scripts/node-join.js). Each replica is browsed on its own port. The
+#     coherence bus lives in the backend core, which IS replicated here, so the property is covered;
+#     the gateway/mTLS layer adds transport, not coherence.
+#   * Shared-filesystem coherence (uploads/themes/plugins/backups) is only partially modeled — a shared
+#     volume is mounted at backend/uploads so a file written by one node is visible to the other; themes/
+#     plugins/backups/public/ssl are NOT shared here (a production N-replica deploy must mount all of
+#     them per multi-node.md). Plugin-activation fan-out therefore isn't representative in this compose.
+
+name: wordjs
+
+x-app-env: &app-env
+  # Database — shared Postgres. NOTE: the password is deliberately NOT the literal 'password': the app
+  # regenerates a random dbPassword when it sees that placeholder, which would break the shared login.
+  WORDJS_DB_DRIVER: postgres
+  WORDJS_DB_HOST: postgres
+  WORDJS_DB_PORT: "5432"
+  WORDJS_DB_USER: wordjs
+  WORDJS_DB_PASSWORD: wordjs
+  WORDJS_DB_NAME: wordjs
+  # Redis — shared, enabled (turns on cross-node coherence + shared rate limiting + SSE fan-out).
+  WORDJS_REDIS_ENABLED: "true"
+  WORDJS_REDIS_HOST: redis
+  WORDJS_REDIS_PORT: "6379"
+  # SHARED across replicas so tokens issued by one node validate on the other. Change for any real use.
+  WORDJS_JWT_SECRET: wordjs-shared-dev-secret-change-me
+  PORT: "3000"
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: wordjs
+      POSTGRES_PASSWORD: wordjs
+      POSTGRES_DB: wordjs
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wordjs -d wordjs"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  app:
+    build:
+      context: .
+    image: wordjs:local
+    environment:
+      <<: *app-env
+      WORDJS_SITE_URL: http://localhost:3000
+    ports:
+      - "3000:3000"
+    volumes:
+      - uploads:/app/backend/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  app2:
+    # Same image as `app` (built once) — the SECOND node of the backend tier.
+    image: wordjs:local
+    environment:
+      <<: *app-env
+      WORDJS_SITE_URL: http://localhost:3001
+    ports:
+      - "3001:3000"
+    volumes:
+      - uploads:/app/backend/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      # Let the first node win the boot lease and run migrations first (both would coordinate over the
+      # Redis lease anyway; this just makes the ordering deterministic for a demo).
+      app:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  uploads:

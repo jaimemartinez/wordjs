@@ -169,9 +169,9 @@ export const Preview = ({ id = "puck-preview" }: { id?: string }) => {
               }}
             </autoFrameContext.Consumer>
           </AutoFrame>
-          {/* Gutenberg-style editor-chrome layer. Each block's overlay (selection outline + ActionBar)
-              portals HERE — in the PARENT document, on top of the canvas iframe — instead of into the
-              iframe's own <body>. Living outside the iframe, the chrome is immune to the edited page's
+          {/* WORDJS (Gutenberg-style editor-chrome layer). Each block's overlay (selection outline +
+              ActionBar) portals HERE — in the PARENT document, on top of the canvas iframe — instead of
+              into the iframe's own <body>. Living outside the iframe, the chrome is immune to the edited page's
               CSS and stacking context: a theme's position:fixed header, z-index, or transform can never
               cover, clip, or shift it. The layer exactly overlays the iframe (same box via inset:0),
               clips to it (overflow:hidden), and is click-through (pointer-events:none) so canvas

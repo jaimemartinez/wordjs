@@ -232,6 +232,13 @@ export interface Post {
     meta?: Record<string, any>;
     /** Set when the post has a featured image (backend Post.toJSON serializes it with an absolute URL). */
     featuredMedia?: { id: number; url: string; title?: string };
+    /** MULTILINGUAL (opt-in): the post's own BCP-47 language tag, or null on a monolingual site. */
+    language?: string | null;
+    /**
+     * MULTILINGUAL (opt-in): PUBLISHED translations of this post in other languages. Empty for a post
+     * that is not part of a translation group. Drives the public page's <link rel="alternate" hreflang>.
+     */
+    translations?: Array<{ id: number; language: string; slug: string; type: string; status?: string }>;
 }
 
 export interface Category {

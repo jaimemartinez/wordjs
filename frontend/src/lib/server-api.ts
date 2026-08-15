@@ -431,7 +431,33 @@ export function buildPostMetadata(
         ...(images ? { images } : {}),
     } as Metadata['twitter'];
 
-    return { title, description, alternates: { canonical }, openGraph, twitter };
+    // MULTILINGUAL (opt-in): emit <link rel="alternate" hreflang> for a post that belongs to a
+    // translation group. Google wants every page in the set to reference ALL versions INCLUDING
+    // itself, so the current page's own language maps to its canonical, and each published sibling
+    // maps to its own path. A post with no language or no siblings emits nothing (monolingual sites
+    // and lone posts are byte-for-byte unchanged). Relative hrefs are absolutized by metadataBase.
+    // Siblings are OTHER posts, so this function does not have their canonicalPath — it derives each
+    // from the SAME default convention the self-canonical falls back to (`/${slug}`), the one every
+    // caller here actually passes. A caller that supplies a custom prefixed canonicalPath for the
+    // current post does NOT propagate that prefix to siblings (they'd need their own); documented
+    // rather than silently half-applied.
+    const postPath = (p: { slug?: string; id?: number | string }) => `/${p.slug || p.id}`;
+    const languages: Record<string, string> = {};
+    if (post.language && post.translations && post.translations.length > 0) {
+        languages[post.language] = canonical;
+        for (const t of post.translations) {
+            if (t.language && (t.slug || t.id)) languages[t.language] = postPath(t);
+        }
+    }
+    const hasAlternateLanguages = Object.keys(languages).length > 0;
+
+    return {
+        title,
+        description,
+        alternates: { canonical, ...(hasAlternateLanguages ? { languages } : {}) },
+        openGraph,
+        twitter,
+    };
 }
 
 // ---------------------------------------------------------------------------

@@ -195,7 +195,15 @@ async function initializeSchema(db: any, isAsync = false) {
     "menu_order INTEGER NOT NULL DEFAULT 0",
     "post_type TEXT NOT NULL DEFAULT 'post'",
     "post_mime_type TEXT NOT NULL DEFAULT ''",
-    "comment_count INTEGER NOT NULL DEFAULT 0"
+    "comment_count INTEGER NOT NULL DEFAULT 0",
+    // MULTILINGUAL (opt-in, Polylang-adapted). Both NULLABLE — a monolingual site never sets either,
+    // and every renderer treats NULL as "site default / not in a translation set" (zero behavior change).
+    //   post_language     — the post's own content language as a canonical BCP-47 tag (e.g. 'en', 'pt-BR').
+    //   translation_group — a uuid shared by a post and its translations in other languages; two posts
+    //                       are translations of one another iff they carry the same non-NULL group.
+    // Fresh installs get these here; EXISTING databases get them from migration 0011 (same shape).
+    "post_language TEXT",
+    "translation_group TEXT"
   ]);
 
   // Post meta table

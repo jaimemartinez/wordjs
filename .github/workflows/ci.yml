@@ -113,6 +113,63 @@ jobs:
           node backend/scripts/build-marketplace.js
           node backend/scripts/verify-marketplace.js --rebuild
 
+  multinode:
+    # Multi-node coherence leg. Boots TWO backend cores as SEPARATE OS PROCESSES against ONE shared
+    # Postgres 16 + Redis 7 and asserts the property that only holds across nodes: an option/role change
+    # written on node A is observed on node B via the Redis `wordjs:option-changed` bus + the shared
+    # Postgres (documentation/multi-node.md). This is the coherence coverage the single-process
+    # coherence.integration.test.ts cannot give — there, publisher and subscriber share one process, so a
+    # broken cross-PROCESS path would still pass. Here node B is a real second process (a fork with its own
+    # DB pool + its own Redis connections); it can only learn node A's freshly-random value through the
+    # shared infrastructure. Break the publish, the DB sharing, or the invalidation → node B never sees it
+    # → the job goes red. It also `docker compose config`-validates the Dockerfile/compose stack.
+    #
+    # This is the deliberately LIGHTER-but-real form the task allows: two app cores in one job sharing
+    # DB+Redis. It does not stand up two gateway-fronted, mTLS-enrolled full stacks — the gateway is a
+    # single, non-replicated node and the coherence bus lives entirely in the backend core, so replicating
+    # that core is exactly what exercises the property.
+    name: Multi-node coherence (2 backends, shared PG + Redis)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: wordjs
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+      - name: Install dependencies
+        working-directory: backend
+        run: npm ci || npm install
+      - name: Multi-node coherence test (node A writes, separate-process node B observes)
+        working-directory: backend
+        env:
+          # Same hard-fail contract as the backend job's DB steps: the postgres + redis services are wired
+          # up, so an UNREACHABLE service must FAIL this leg — never let the multi-node coverage skip green.
+          WORDJS_CI_DB: '1'
+          REDIS_ENABLED: 'true'
+        run: npm run test:multinode
+      - name: Validate container stack parses (Dockerfile + compose)
+        # Cheap wiring check that the compose file is well-formed and references a buildable image — no
+        # image build or container boot here (that is intentionally out of the per-PR budget). `config -q`
+        # renders and validates the merged compose model, catching env/anchor/service-graph mistakes.
+        run: docker compose config -q
+
   gateway:
     name: Gateway (test)
     runs-on: ubuntu-latest
