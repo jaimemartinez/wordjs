@@ -2,7 +2,9 @@
 
 import { useEffect, useState, useRef, useMemo } from "react";
 import { createPortal } from "react-dom";
-import { useRouter, useParams } from "next/navigation";
+import { useRouter, useParams, useSearchParams } from "next/navigation";
+import EngineToggle from "@/components/verso/editor/EngineToggle";
+import EditorBootFallback from "@/components/verso/editor/EditorBootFallback";
 import { postsApi, settingsApi } from "@/lib/api";
 import { pageConfig } from "@/components/puckConfig";
 import { useRuntimePuckConfig } from "@/lib/useRuntimePuckConfig";
@@ -72,10 +74,13 @@ export default function PageEditorPage() {
     // (?engine= / localStorage wjs_editor_engine / NEXT_PUBLIC_WORDJS_EDITOR_ENGINE). Se resuelve
     // tras montar (window/localStorage no existen en SSR — evita un mismatch de hidratación);
     // hasta resolver se muestra el skeleton, igual que durante la carga del registro.
+    const searchParams = useSearchParams();
     const [engine, setEngine] = useState<EditorEngine | null>(null);
     useEffect(() => {
+        // Re-resuelve tambien en navegacion SUAVE (?engine= cambiado sin recarga) — el defecto
+        // reportado: la resolucion de un solo mount dejaba el editor colgado/stale al cambiar la URL.
         setEngine(resolveEditorEngineFromBrowser());
-    }, []);
+    }, [searchParams]);
     // Handle vivo del motor Verso (null en legacy): el guardado lee getData() de aquí — el
     // documento REAL del store, sin mirrors (el equivalente Verso de window.puckGetData).
     const versoHandleRef = useRef<EditorHandle | null>(null);
@@ -290,7 +295,7 @@ export default function PageEditorPage() {
     // `engine === null` solo dura el primer frame tras montar (la resolución es síncrona en el
     // efecto); el skeleton es el mismo que el de la carga, así que no hay parpadeo distinto.
     if (isLoading || engine === null) {
-        return <PuckEditorSkeleton />;
+        return <EditorBootFallback />;
     }
 
     // Load failed → show a blocking error (with retry) instead of an empty, savable editor that would
@@ -300,7 +305,8 @@ export default function PageEditorPage() {
     }
 
     return (
-        <div className="h-full w-full overflow-hidden flex flex-col">
+        <div key={engine} className="h-full w-full overflow-hidden flex flex-col">
+            <EngineToggle current={engine} />
             {engine === "verso" ? (
                 /* MOTOR VERSO (opt-in explícito). Mismas props de datos que alimentan a PuckEditor:
                    carga/seeding ya hechos arriba (loadPage/seedLegacyPuckData), handleSubmit idéntico
@@ -318,6 +324,9 @@ export default function PageEditorPage() {
                     pageId={pageId || undefined}
                     previewSlug={slug || undefined}
                     rootFields={rootFieldsPage}
+                    // W30: el canvas envuelve en la plantilla `page` del tema (el pick _wjs_template
+                    // lo lee VersoThemeTemplate EN VIVO del root del store — sin prop).
+                    templateKind="page"
                     handleRef={versoHandleRef}
                     onChange={(data: VersoData) => {
                         // Ignore init-time events only (see mountedAtRef note above).

@@ -19,22 +19,47 @@
  *    estampa) y guardado manual con toast solo en éxito — cableado en saveFlow.ts (testeado).
  *  - El padre lee el documento vivo vía `handleRef` (EditorHandle.getData(), sin mirrors).
  *
- * PLACEHOLDERS DOCUMENTADOS (olas posteriores, presentes pero deshabilitados — nunca omitidos):
- *  - Plantillas/patrones (rail + panel), Recursos/media library (rail), Notas (W24) e Historial
- *    (W23) → ola 3; los botones se pintan con su glifo/label y title explicativo.
- *  - CommandPalette ⌘K → esta ola abre un placeholder modal (la paleta completa es ola 3).
- *  - Guías y contornos (W06/W56): canvasGuides depende del atributo data-puck-component del motor
- *    viejo — botón presente y deshabilitado hasta portarlo a data-wjs-block-id.
- *  - Presencia (W09), a11y (W20/W25), revisiones (W23), notas (W24), clipboard Ctrl+C/V (parte de
- *    W03) → olas posteriores; no se pintan controles muertos que fingirían funcionar.
+ * COMPLETO EN OLAS ANTERIORES (F3 ola 3): CommandPalette ⌘K real (VersoCommandPalette +
+ * paletteActions), clipboard de bloques Ctrl+C/V y de estilos (blockClipboard — claves/forma
+ * compartidas con el legacy), patrones (PatternsPanel en el rail + quick-picks, W19/W27).
+ *
+ * COMPLETO EN ESTA OLA (F3 ola 4 — superficies restantes):
+ *  - Plantilla del tema en el canvas (W30): VersoThemeTemplate envuelve EditorRenderer — misma
+ *    cadena de candidatos fail-closed que el resolver público; el dropdown _wjs_template del
+ *    panel root re-envuelve EN VIVO (lee el root del store, no un prop).
+ *  - Recursos (W22): MediaPickerModal reutilizado — elegir inserta un bloque Image al final con
+ *    sourceUrl RELATIVO (nunca guid); renderExternalPicker de los campos `external` cableado al
+ *    mismo modal con rememberPickedMedia (derivación de srcSet como el legacy).
+ *  - Historial (W23): RevisionsSidebar reutilizado (agnóstico del motor); restaurar =
+ *    revisionsApi.restore + reload, la semántica exacta del legacy.
+ *  - Notas (W24): ReviewComments reutilizado (solo depende de postsApi + POST /posts/:id/meta —
+ *    el contrato anti-race de una sola clave, jamás el PUT general).
+ *  - Presencia (W09): módulo editor/presence.ts (no inline — crítica del blueprint) + chip ámbar.
+ *  - A11y (W20/W25): drawer 340px con A11yPanel compartido sobre runVersoA11yAudit
+ *    (editor/a11y.ts — las 7 reglas compartidas re-apuntadas a data-wjs-block-id; el click
+ *    selecciona con handle.select, sin zona compuesta).
+ *  - Guías (W06/W56): canvasGuides compartido parametrizado por atributo — botón del header
+ *    ACTIVO, contornos + overlay de medidas del bloque seleccionado repintado en scroll/resize.
+ *
+ * PENDIENTE (documentado, jamás recortado en silencio): símbolos (W35) — su fila de paleta llega
+ * con la superficie; miniatura <Render> de patrones (resto de W27) → gate visual de navegador.
  */
 import "@/components/puck-theme.css";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import MSym from "@/components/editor/MSym";
 import ModernSelect from "@/components/ModernSelect";
+import MediaPickerModal from "@/components/MediaPickerModal";
+import RevisionsSidebar from "@/components/RevisionsSidebar";
+import ReviewComments from "@/components/editor/ReviewComments";
+import { A11yPanel, type A11yIssue } from "@/components/editor/A11yAudit";
+import { setOutlineMode, showSpacingOverlay } from "@/components/editor/canvasGuides";
 import { useI18n } from "@/contexts/I18nContext";
+import { useModal } from "@/contexts/ModalContext";
 import { trStr } from "@/lib/puckI18n";
 import { replayAnimations } from "@/components/puck/AnimationField";
+import { revisionsApi, type MediaItem, type Revision } from "@/lib/api";
+import { rememberPickedMedia } from "@/lib/imageSrcset";
+import type { TemplateKind } from "@/lib/templateData";
 import {
     computeAutosaveWaitMs,
     shouldRunAutosave,
@@ -46,17 +71,25 @@ import { ROOT_ID, ROOT_SLOT, type VersoData, type VersoEditorState, type VersoIt
 import EditorRenderer from "../render/EditorRenderer";
 import { useStoreSlice, type VersoComponentMap } from "../render/context";
 import FrameController from "../canvas/FrameController";
+import VersoThemeTemplate from "../canvas/VersoThemeTemplate";
 import { useAreaSize } from "../canvas/ViewportControls";
 import { DEVICE_WIDTHS, type DeviceKind } from "../canvas/viewport";
 import { GeometryStore } from "../overlay/GeometryStore";
 import OverlayLayer from "../overlay/OverlayLayer";
 import DnDDriver from "../dnd/DnDDriver";
 import { editSelectedInline } from "../overlay/actionBarCommands";
+import type { RenderExternalPicker } from "../fields/VersoFieldControl";
+import { runVersoA11yAudit, VERSO_BLOCK_ATTR } from "./a11y";
+import { startPresenceHeartbeat, type PresenceEditor } from "./presence";
 import EditorHotkeys from "./EditorHotkeys";
 import SaveStateChip from "./SaveStateChip";
 import BlockPalette from "./BlockPalette";
 import OutlineTree from "./OutlineTree";
 import PropertiesPanel from "./PropertiesPanel";
+import PatternsPanel from "./PatternsPanel";
+import VersoCommandPalette from "./VersoCommandPalette";
+import { buildVersoPaletteActions, importDataIntoHandle } from "./paletteActions";
+import { PATTERNS, insertVersoPattern } from "./patterns";
 import { runBackgroundSave, runManualSave, type OnSave } from "./saveFlow";
 
 export interface VersoEditorProps {
@@ -79,6 +112,14 @@ export interface VersoEditorProps {
     /** Campos ROOT del tipo (rootFieldsPage / rootFieldsPost) — la asimetría del CMS (W41). */
     rootFields: Record<string, VersoField>;
     /**
+     * Qué ES la ruta editada, para la plantilla del tema en el canvas (W30): `page` en el editor
+     * de páginas (default), `single` (+ templatePostType="post") en el de posts — la MISMA
+     * identidad que el legacy pasa a CanvasTemplateContext. El pick del autor (_wjs_template) NO
+     * viaja por props: VersoThemeTemplate lo lee EN VIVO del root del store.
+     */
+    templateKind?: TemplateKind;
+    templatePostType?: string;
+    /**
      * Expone el EditorHandle vivo al camino de guardado del padre (getData() sin mirrors,
      * commitInline() como flush pre-guardado — el sustituto de window.puckGetData/puckCommitActive).
      */
@@ -98,8 +139,51 @@ const VIEWPORT_LABEL: Record<DeviceKind, string> = {
 const VIEWPORT_ORDER: DeviceKind[] = ["desktop", "tablet", "mobile"];
 
 const selectState = (s: VersoEditorState): VersoEditorState => s;
+const selectSelectedId = (s: VersoEditorState): string | null => s.selection.nodeId;
 
 const isPhone = () => typeof window !== "undefined" && window.innerWidth < 768;
+
+/** Escape defensivo del id para el selector de atributo (los ids son UUID, pero jamás confiar). */
+const cssAttrEscape = (id: string): string =>
+    typeof CSS !== "undefined" && typeof CSS.escape === "function" ? CSS.escape(id) : id.replace(/["\\]/g, "\\$&");
+
+/**
+ * Guías del canvas (W06/W56): contornos discontinuos en cada bloque + overlay de medidas
+ * padding/margin del bloque SELECCIONADO, repintado en scroll/resize del iframe — la espec del
+ * GuidesController legacy sobre canvasGuides COMPARTIDO, re-apuntado a data-wjs-block-id (el
+ * atributo que VersoBlock estampa). Pintado DOM-only dentro del documento del iframe.
+ */
+function VersoGuidesController({
+    handle,
+    frameDoc,
+    enabled,
+}: {
+    handle: EditorHandle;
+    frameDoc: Document | null;
+    enabled: boolean;
+}) {
+    const selId = useStoreSlice(handle, selectSelectedId);
+    useEffect(() => {
+        const doc = frameDoc;
+        if (!doc) return;
+        setOutlineMode(doc, enabled, VERSO_BLOCK_ATTR);
+        if (!enabled) {
+            showSpacingOverlay(doc, null);
+            return;
+        }
+        const paint = () =>
+            showSpacingOverlay(doc, selId ? doc.querySelector(`[${VERSO_BLOCK_ATTR}="${cssAttrEscape(selId)}"]`) : null);
+        paint();
+        doc.addEventListener("scroll", paint, true);
+        doc.defaultView?.addEventListener("resize", paint);
+        return () => {
+            doc.removeEventListener("scroll", paint, true);
+            doc.defaultView?.removeEventListener("resize", paint);
+            showSpacingOverlay(doc, null);
+        };
+    }, [enabled, selId, frameDoc]);
+    return null;
+}
 
 /** Segmented control del header (piel exacta del ViewportControls del editor actual). */
 function HeaderViewportControls({ value, onChange }: { value: DeviceKind; onChange: (v: DeviceKind) => void }) {
@@ -168,9 +252,12 @@ export default function VersoEditor({
     previewSlug,
     breadcrumbRoot,
     rootFields,
+    templateKind = "page",
+    templatePostType,
     handleRef,
 }: VersoEditorProps) {
     const { t, language } = useI18n();
+    const { alert, confirm } = useModal();
 
     /* ---------------- motor: registry + handle + geometría ---------------- */
 
@@ -314,6 +401,14 @@ export default function VersoEditor({
     const [toastMsg, setToastMsg] = useState<string | null>(null);
     const [savedAt, setSavedAt] = useState<Date | null>(null);
     const [lastSaveWasAuto, setLastSaveWasAuto] = useState(false);
+    // Superficies (ola 4): media (modal Recursos), revisiones, notas, a11y y guías (W22-W25, W06).
+    const [mediaOpen, setMediaOpen] = useState(false);
+    const [showRevisions, setShowRevisions] = useState(false);
+    const [commentsOpen, setCommentsOpen] = useState(false);
+    const [guidesOn, setGuidesOn] = useState(false);
+    const [a11yOpen, setA11yOpen] = useState(false);
+    const [a11yIssues, setA11yIssues] = useState<A11yIssue[]>([]);
+    const [a11yRunning, setA11yRunning] = useState(false);
 
     // Contrato duro (W13): mismas claves EXACTAS que el editor actual, cargadas al montar ANTES
     // de persistir (para no pisar el default). localStorage no existe en SSR — no puede ser un
@@ -321,7 +416,6 @@ export default function VersoEditor({
     useEffect(() => {
         const savedSidebar = localStorage.getItem("puck_show_sidebar");
         const savedProps = localStorage.getItem("puck_show_properties");
-        // eslint-disable-next-line react-hooks/set-state-in-effect -- hidratación única de preferencias desde un sistema externo al montar
         if (savedSidebar !== null) setShowSidebar(savedSidebar === "true");
         if (savedProps !== null) setShowProperties(savedProps === "true");
         setIsUiLoaded(true);
@@ -378,6 +472,186 @@ export default function VersoEditor({
         if (previewSlug) window.open(`/preview/${previewSlug}`, "_blank", "noopener");
     }, [hasChanges, onSave, previewSlug]);
 
+    /* ---------------- presencia (W09, módulo presence.ts) ---------------- */
+
+    const [coEditors, setCoEditors] = useState<PresenceEditor[]>([]);
+    useEffect(() => {
+        if (!pageId) return;
+        return startPresenceHeartbeat(pageId, setCoEditors);
+    }, [pageId]);
+
+    /* ---------------- a11y (W20/W25): audit sobre el doc del canvas ---------------- */
+
+    const runAudit = useCallback(() => {
+        if (!frameDoc) return;
+        setA11yRunning(true);
+        // Frame siguiente: que el estado "analizando" pinte antes de un escaneo pesado (legacy).
+        requestAnimationFrame(() => {
+            try {
+                setA11yIssues(runVersoA11yAudit(frameDoc));
+            } finally {
+                setA11yRunning(false);
+            }
+        });
+    }, [frameDoc]);
+    // En Verso el id del issue ES la clave del nodo: seleccionar es directo (sin zona compuesta
+    // ni store interno — el selectBlockById del legacy queda superseded por diseño).
+    const selectBlockById = useCallback(
+        (blockId?: string) => {
+            if (blockId) handle.select(blockId);
+        },
+        [handle],
+    );
+
+    /* ---------------- media (W22): Recursos + picker de campos external ---------------- */
+
+    // Elegir en la biblioteca inserta un bloque Image AL FINAL (misma semántica que el legacy):
+    // sourceUrl RELATIVO, nunca guid (incrusta el host de subida); una transacción = un undo.
+    const insertMediaItem = useCallback(
+        (item: MediaItem) => {
+            setMediaOpen(false);
+            const def = registry.get("Image");
+            if (!def) return;
+            let defaults: Record<string, unknown>;
+            try {
+                defaults = structuredClone(def.defaultProps);
+            } catch {
+                defaults = { ...def.defaultProps };
+            }
+            const id = crypto.randomUUID();
+            const block: VersoItem = {
+                type: "Image",
+                props: { ...defaults, id, src: item.sourceUrl || item.guid, alt: item.title || "" },
+            };
+            const doc = handle.getDoc();
+            handle.transact((tx) => tx.insertNode(block, ROOT_ID, ROOT_SLOT, doc.rootChildren.length), {
+                label: "Insertar Image",
+            });
+        },
+        [handle, registry],
+    );
+
+    // Picker inyectado de los campos `external` (VersoFieldControl): el MISMO MediaPickerModal,
+    // registrando el MediaItem completo (rememberPickedMedia) para que el srcSet se derive igual
+    // que en el legacy; field.mapProp lo aplica el propio control al seleccionar.
+    const renderExternalPicker = useCallback<RenderExternalPicker>(
+        ({ onSelect, close }) => (
+            <MediaPickerModal
+                isOpen
+                onClose={close}
+                onSelect={(item) => {
+                    rememberPickedMedia(item);
+                    onSelect(item);
+                }}
+            />
+        ),
+        [],
+    );
+
+    /* ---------------- revisiones (W23): restaurar = restore + reload (legacy) ---------------- */
+
+    const handleRestore = useCallback(
+        async (revision: Revision) => {
+            if (!pageId) return;
+            try {
+                await revisionsApi.restore(revision.id);
+                // Tras restaurar, recargar es la única vía de re-hidratar TODO el estado (legacy).
+                window.location.reload();
+            } catch (error) {
+                console.error("Failed to restore revision:", error);
+                await alert("Failed to restore revision. Please try again.", "Error");
+            }
+        },
+        [pageId, alert],
+    );
+
+    /* ---------------- paleta ⌘K: acciones (W29) ---------------- */
+
+    // Export de página (paridad legacy): JSON del HANDLE VIVO, blob + anchor con revoke diferido.
+    const handleExportDoc = useCallback(
+        (data: VersoData) => {
+            const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+            const a = document.createElement("a");
+            a.href = URL.createObjectURL(blob);
+            a.download = `wordjs-page-${pageId ?? "borrador"}.json`;
+            a.click();
+            setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+        },
+        [pageId],
+    );
+
+    // Import de página: file picker + validación de forma + confirm modal (NUNCA window.confirm —
+    // congela el in-app browser) + replaceData vía importDataIntoHandle = UNA entrada de undo.
+    const handleImportDoc = useCallback(() => {
+        const input = document.createElement("input");
+        input.type = "file";
+        input.accept = "application/json,.json";
+        input.onchange = async () => {
+            const f = input.files?.[0];
+            if (!f) return;
+            try {
+                const parsed: unknown = JSON.parse(await f.text());
+                if (!parsed || typeof parsed !== "object" || !Array.isArray((parsed as { content?: unknown }).content)) {
+                    throw new Error("shape");
+                }
+                const ok = await confirm(
+                    trStr("¿Reemplazar todo el contenido de la página con el archivo importado?", language),
+                    trStr("Importar", language),
+                );
+                if (!ok) return;
+                if (importDataIntoHandle(handle, parsed)) setToastMsg(trStr("Página importada", language));
+            } catch {
+                await alert(trStr("El archivo no es una página válida", language), "Error");
+            }
+        };
+        input.click();
+    }, [confirm, alert, handle, language]);
+
+    // Las acciones dependientes de selección la leen PEREZOSAMENTE del handle al ejecutarse
+    // (buildVersoPaletteActions) — la paleta sobrevive cambios de selección sin regenerarse.
+    const paletteActions = useMemo(
+        () =>
+            buildVersoPaletteActions({
+                handle,
+                tr: (s) => trStr(s, language),
+                status,
+                hasSave: !!onSave,
+                hasPreview: !!previewSlug,
+                save: () => {
+                    void handleManualSave();
+                },
+                preview: () => {
+                    void handlePreview();
+                },
+                exportDoc: handleExportDoc,
+                importDoc: handleImportDoc,
+                toast: setToastMsg,
+                openPageSettings: () => {
+                    handle.select(null);
+                    if (isPhone()) setMobileSheet("right");
+                    else setShowProperties(true);
+                },
+                openOutline: () => {
+                    setRailView("outline");
+                    if (isPhone()) setMobileSheet("left");
+                    else setShowSidebar(true);
+                },
+                replayAnims: () => {
+                    if (frameDoc) replayAnimations(frameDoc);
+                },
+                hasPage: !!pageId,
+                openMedia: () => setMediaOpen(true),
+                openRevisions: () => setShowRevisions(true),
+                openComments: () => setCommentsOpen(true),
+                openA11y: () => {
+                    setA11yOpen(true);
+                    runAudit();
+                },
+                toggleGuides: () => setGuidesOn((v) => !v),
+            }),
+        [handle, language, status, onSave, previewSlug, handleManualSave, handlePreview, handleExportDoc, handleImportDoc, frameDoc, pageId, runAudit],
+    );
+
     /* ---------------- geometría del canvas (piel PreviewFrame) ---------------- */
 
     const areaRef = useRef<HTMLDivElement | null>(null);
@@ -407,9 +681,19 @@ export default function VersoEditor({
                 {/* Capa global de atajos (capture en window + iframe; re-attach en onFrameReady) */}
                 <EditorHotkeys
                     handle={handle}
+                    registry={registry}
                     frameDocument={frameDoc}
                     onSave={handleManualSave}
                     onCommandPalette={() => setCmdkOpen((v) => !v)}
+                />
+
+                {/* ⌘K — CommandPalette completa (W29): acciones + inserción de bloques (portal a <body>) */}
+                <VersoCommandPalette
+                    open={cmdkOpen}
+                    onClose={() => setCmdkOpen(false)}
+                    registry={registry}
+                    actions={paletteActions}
+                    onInsertBlock={insertType}
                 />
 
                 {/* HEADER — 48px, 3 grupos, hairline inferior (blueprint §a) */}
@@ -465,7 +749,20 @@ export default function VersoEditor({
                                 status={status}
                             />
                         )}
-                        {/* Presencia (W09): llega en una ola posterior — el chip solo existe con coeditores. */}
+                        {/* Presencia (W09): chip de aviso — alguien más tiene este registro abierto. */}
+                        {coEditors.length > 0 && (
+                            <span
+                                role="status"
+                                className="hidden lg:flex items-center gap-1.5 text-[11px] font-medium text-amber-800 bg-amber-50 border border-amber-200 rounded-full px-2.5 py-1 select-none"
+                                title={coEditors.map((e) => e.name).join(", ")}
+                            >
+                                <MSym name="person" size={14} fill />
+                                <span className="truncate max-w-[180px]">
+                                    {coEditors.map((e) => e.name).join(", ")}{" "}
+                                    {trStr(coEditors.length === 1 ? "también está editando" : "también están editando", language)}
+                                </span>
+                            </span>
+                        )}
                     </div>
 
                     {/* Derecha: insertar · replay · guías · propiedades · estado · preview · guardar · avatar */}
@@ -495,14 +792,14 @@ export default function VersoEditor({
                             <MSym name="play_arrow" size={18} />
                         </button>
 
-                        {/* Guías (W06/W56): canvasGuides aún opera sobre data-puck-component — placeholder
-                            deshabilitado y documentado hasta portarlo a data-wjs-block-id (ola posterior). */}
+                        {/* Guías (W06/W56): contornos + medidas del seleccionado (canvasGuides
+                            compartido re-apuntado a data-wjs-block-id — VersoGuidesController). */}
                         <button
                             type="button"
-                            disabled
-                            className="hidden md:flex w-7 h-7 rounded-md items-center justify-center text-[var(--ed-outline-variant)] cursor-not-allowed"
-                            title={trStr("Las guías llegan en una ola posterior.", language)}
-                            aria-pressed={false}
+                            onClick={() => setGuidesOn(!guidesOn)}
+                            className={`hidden md:flex w-7 h-7 rounded-md items-center justify-center transition-colors ${guidesOn ? "bg-[var(--ed-surface-container-high)] text-[var(--ed-primary)]" : "text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container)]"}`}
+                            title={trStr("Guías y contornos", language)}
+                            aria-pressed={guidesOn}
                         >
                             <MSym name="grid_view" size={16} />
                         </button>
@@ -564,8 +861,8 @@ export default function VersoEditor({
 
                 {/* ÁREA DE CONTENIDO */}
                 <div className="relative flex-1 w-full bg-[var(--ed-surface-container-low)] overflow-hidden flex flex-col min-h-0 md:flex-row pb-14 md:pb-0">
-                    {/* RAIL — 64px (blueprint §a). Plantillas presente (placeholder ola 3);
-                        Recursos/Notas/Historial deshabilitados y documentados; Ajustes REAL. */}
+                    {/* RAIL — 64px (blueprint §a), COMPLETO (ola 4): Bloques/Estructura/Plantillas,
+                        Recursos (media), Notas (comentarios), Historial (revisiones), Ajustes. */}
                     <nav className="hidden md:flex w-16 shrink-0 bg-[var(--ed-surface)] border-r border-[var(--ed-outline-variant)] flex-col items-center py-2 gap-1 z-30">
                         {railItems.map((item) => {
                             const active = showSidebar && railView === item.id;
@@ -592,11 +889,12 @@ export default function VersoEditor({
                             );
                         })}
 
+                        {/* Recursos (W22): abre la biblioteca — elegir inserta un bloque Image. */}
                         <button
                             type="button"
-                            disabled
-                            title={trStr("La biblioteca de medios llega en una ola posterior.", language)}
-                            className="w-12 h-12 rounded-lg flex flex-col items-center justify-center gap-1 text-[var(--ed-outline-variant)] cursor-not-allowed"
+                            onClick={() => setMediaOpen(true)}
+                            title={trStr("Biblioteca de medios", language)}
+                            className="w-12 h-12 rounded-lg flex flex-col items-center justify-center gap-1 text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container-high)] transition-colors"
                         >
                             <MSym name="image" size={20} />
                             <span className="text-[9px] leading-none">{trStr("Recursos", language)}</span>
@@ -606,22 +904,28 @@ export default function VersoEditor({
                             {pageId && (
                                 <button
                                     type="button"
-                                    disabled
-                                    title={trStr("Las notas de revisión llegan en una ola posterior.", language)}
-                                    className="w-12 h-12 rounded-lg flex flex-col items-center justify-center gap-1 text-[var(--ed-outline-variant)] cursor-not-allowed"
+                                    onClick={() => setCommentsOpen(!commentsOpen)}
+                                    title={trStr("Comentarios de revisión", language)}
+                                    aria-pressed={commentsOpen}
+                                    className={`w-12 h-12 rounded-lg flex flex-col items-center justify-center gap-1 transition-colors ${commentsOpen
+                                        ? "bg-[var(--ed-primary-container)] text-[var(--ed-on-primary-container)]"
+                                        : "text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container-high)]"}`}
                                 >
-                                    <MSym name="forum" size={20} />
+                                    <MSym name="forum" size={20} fill={commentsOpen} />
                                     <span className="text-[9px] leading-none">{trStr("Notas", language)}</span>
                                 </button>
                             )}
                             {pageId && (
                                 <button
                                     type="button"
-                                    disabled
-                                    title={trStr("El historial de revisiones llega en una ola posterior.", language)}
-                                    className="w-12 h-12 rounded-lg flex flex-col items-center justify-center gap-1 text-[var(--ed-outline-variant)] cursor-not-allowed"
+                                    onClick={() => setShowRevisions(!showRevisions)}
+                                    title={t('editor.revisionHistory')}
+                                    aria-pressed={showRevisions}
+                                    className={`w-12 h-12 rounded-lg flex flex-col items-center justify-center gap-1 transition-colors ${showRevisions
+                                        ? "bg-[var(--ed-primary-container)] text-[var(--ed-on-primary-container)]"
+                                        : "text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container-high)]"}`}
                                 >
-                                    <MSym name="history" size={20} />
+                                    <MSym name="history" size={20} fill={showRevisions} />
                                     <span className="text-[9px] leading-none">{trStr("Historial", language)}</span>
                                 </button>
                             )}
@@ -672,16 +976,8 @@ export default function VersoEditor({
                                     <OutlineTree handle={handle} registry={registry} />
                                 </div>
                             ) : railView === "patterns" ? (
-                                /* Placeholder documentado (ola 3): la pestaña existe, no finge funcionar. */
-                                <div className="p-3">
-                                    <div
-                                        role="note"
-                                        className="rounded border border-dashed border-[var(--ed-outline-variant)] px-3 py-4 text-center text-[12px] text-[var(--ed-on-surface-variant)]"
-                                    >
-                                        <MSym name="dashboard_customize" size={24} className="block mx-auto mb-2 opacity-50" />
-                                        {trStr("Las plantillas llegan en una ola posterior.", language)}
-                                    </div>
-                                </div>
+                                /* Patrones (W27): built-in compartidos + patrones de usuario cross-editor. */
+                                <PatternsPanel handle={handle} registry={registry} />
                             ) : (
                                 <BlockPalette
                                     registry={registry}
@@ -733,18 +1029,24 @@ export default function VersoEditor({
                                                 </>
                                             }
                                         >
-                                            <EditorRenderer
-                                                handle={handle}
-                                                registry={registry}
-                                                componentMap={componentMap}
-                                                onBlockElement={onBlockElement}
-                                                editorChrome
-                                            />
+                                            {/* Plantilla del tema (W30): el slot raíz del editor ES el
+                                                hueco PageContent — DISPLAY-ONLY, degrada a hijos sin
+                                                envolver si el tema no trae plantilla. */}
+                                            <VersoThemeTemplate handle={handle} kind={templateKind} postType={templatePostType}>
+                                                <EditorRenderer
+                                                    handle={handle}
+                                                    registry={registry}
+                                                    componentMap={componentMap}
+                                                    onBlockElement={onBlockElement}
+                                                    editorChrome
+                                                />
+                                            </VersoThemeTemplate>
                                         </FrameController>
                                     </div>
                                 </div>
 
-                                {/* Estado vacío (W19; los 3 patrones rápidos llegan con los patrones, ola 3) */}
+                                {/* Estado vacío (W19): CTA abre la paleta ⌘K (paridad legacy, ya real)
+                                    + los 3 patrones rápidos (PATTERNS.slice(0,3), un undo cada uno) */}
                                 {emptyCanvas && (
                                     <div className="absolute inset-0 z-30 flex items-center justify-center p-6 pointer-events-none">
                                         <div className="text-center max-w-md pointer-events-none bg-white/95 backdrop-blur rounded-2xl border border-[var(--ed-outline-variant)] shadow-xl p-8">
@@ -755,16 +1057,24 @@ export default function VersoEditor({
                                             <p className="text-[14px] text-[var(--ed-on-surface-variant)] mb-6">{trStr("Tu lienzo está listo. Añade el primer bloque para empezar a construir tu visión.", language)}</p>
                                             <button
                                                 type="button"
-                                                onClick={() => {
-                                                    setRailView("blocks");
-                                                    if (isPhone()) setMobileSheet("left");
-                                                    else setShowSidebar(true);
-                                                }}
+                                                onClick={() => setCmdkOpen(true)}
                                                 className="pointer-events-auto inline-flex items-center gap-2 px-6 py-3 rounded-full bg-[var(--ed-primary)] text-white text-[12px] font-semibold hover:shadow-lg transition-all active:scale-95"
                                             >
                                                 <MSym name="add_circle" size={20} />
                                                 {trStr("Añadir primer bloque", language)}
                                             </button>
+                                            <div className="flex flex-wrap justify-center gap-2 mt-5">
+                                                {PATTERNS.slice(0, 3).map((p) => (
+                                                    <button
+                                                        key={p.id}
+                                                        type="button"
+                                                        onClick={() => insertVersoPattern(handle, registry, p)}
+                                                        className="pointer-events-auto inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[var(--ed-surface-container-lowest)] border border-[var(--ed-outline-variant)] hover:border-[var(--ed-primary)] text-[11px] font-semibold text-[var(--ed-on-surface-variant)] hover:text-[var(--ed-primary)] transition"
+                                                    >
+                                                        {trStr(p.name, language)}
+                                                    </button>
+                                                ))}
+                                            </div>
                                         </div>
                                     </div>
                                 )}
@@ -778,6 +1088,7 @@ export default function VersoEditor({
                             handle={handle}
                             registry={registry}
                             rootFields={rootFields}
+                            renderExternalPicker={renderExternalPicker}
                             onClose={() => {
                                 if (isPhone()) setMobileSheet(null);
                                 else setShowProperties(false);
@@ -839,6 +1150,54 @@ export default function VersoEditor({
                     </button>
                 )}
 
+                {/* Guías del canvas (W06/W56) — contornos + medidas, siguen a la selección */}
+                <VersoGuidesController handle={handle} frameDoc={frameDoc} enabled={guidesOn} />
+
+                {/* Drawer de accesibilidad (W20/W25) — misma piel que el legacy (340px, z-90) */}
+                {a11yOpen && (
+                    <div className="fixed top-12 bottom-0 right-0 w-[340px] z-[90] bg-[var(--ed-surface-container-lowest)] border-l border-[var(--ed-outline-variant)] flex flex-col shadow-2xl">
+                        <div className="shrink-0 h-10 px-3 flex items-center justify-between bg-[var(--ed-surface-container-low)] border-b border-[var(--ed-outline-variant)]">
+                            <span className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ed-on-surface-variant)]">
+                                {trStr("Accesibilidad", language)}
+                            </span>
+                            <button
+                                type="button"
+                                onClick={() => setA11yOpen(false)}
+                                aria-label={t("common.close")}
+                                className="w-6 h-6 rounded flex items-center justify-center text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container-high)] transition-colors"
+                            >
+                                <MSym name="close" size={16} />
+                            </button>
+                        </div>
+                        <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar">
+                            <A11yPanel
+                                issues={a11yIssues}
+                                running={a11yRunning}
+                                onRefresh={runAudit}
+                                onSelect={selectBlockById}
+                            />
+                        </div>
+                    </div>
+                )}
+
+                {/* Biblioteca de medios (W22, "Recursos"): elegir inserta un bloque Image al final. */}
+                <MediaPickerModal isOpen={mediaOpen} onClose={() => setMediaOpen(false)} onSelect={insertMediaItem} />
+
+                {/* Historial de revisiones (W23) — sidebar reutilizado, agnóstico del motor */}
+                {pageId && (
+                    <RevisionsSidebar
+                        postId={pageId}
+                        isOpen={showRevisions}
+                        onClose={() => setShowRevisions(false)}
+                        onRestore={handleRestore}
+                    />
+                )}
+
+                {/* Notas de revisión (W24) — hilo editorial interno, meta de UNA clave, jamás público */}
+                {pageId && (
+                    <ReviewComments postId={pageId} isOpen={commentsOpen} onClose={() => setCommentsOpen(false)} />
+                )}
+
                 {/* Drag hint pill (solo durante un drag vivo — W07) */}
                 {isDragging && (
                     <div className="fixed bottom-20 md:bottom-6 left-1/2 -translate-x-1/2 z-[70] pointer-events-none bg-[var(--ed-inverse-surface)] text-[var(--ed-inverse-on-surface)] px-4 py-2 rounded-full shadow-xl flex items-center gap-2">
@@ -867,42 +1226,6 @@ export default function VersoEditor({
                     </div>
                 )}
 
-                {/* ⌘K — PLACEHOLDER documentado (la CommandPalette completa es ola 3). Backdrop y
-                    caja con la misma geometría del original para que el reflejo visual no salte. */}
-                {cmdkOpen && (
-                    <div
-                        className="fixed inset-0 z-[9999] flex items-start justify-center pt-[14vh] px-4"
-                        style={{ background: "rgba(27,27,34,0.4)" }}
-                        onClick={() => setCmdkOpen(false)}
-                    >
-                        <div
-                            role="dialog"
-                            aria-modal="true"
-                            aria-label={trStr("Insertar bloque (Ctrl/⌘ + K)", language)}
-                            className="w-full max-w-xl rounded-xl bg-[var(--ed-surface-container-lowest)] border border-[var(--ed-outline-variant)] shadow-2xl p-6 backdrop-blur-sm"
-                            onClick={(e) => e.stopPropagation()}
-                        >
-                            <div className="flex items-center gap-2 text-[var(--ed-on-surface-variant)]">
-                                <MSym name="search" size={18} />
-                                <span className="text-[13px]">
-                                    {trStr("La paleta de comandos completa llega en una ola posterior.", language)}
-                                </span>
-                            </div>
-                            <p className="mt-3 text-[12px] text-[var(--ed-on-surface-variant)]">
-                                {trStr("Usa el panel Bloques para insertar mientras tanto.", language)}
-                            </p>
-                            <div className="mt-4 flex justify-end">
-                                <button
-                                    type="button"
-                                    onClick={() => setCmdkOpen(false)}
-                                    className="px-3 py-1.5 rounded-md border border-[var(--ed-outline-variant)] text-[11px] text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container)] transition-colors"
-                                >
-                                    <kbd style={{ fontFamily: "var(--puck-font-family-monospaced)" }}>ESC</kbd>
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                )}
             </div>
         </div>
     );

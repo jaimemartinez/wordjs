@@ -31,11 +31,18 @@ describe("hotkeyActionOf", () => {
         expect(hotkeyActionOf(ev("d", { meta: true }))).toBe("duplicate");
     });
 
-    it("no-atajos → null (letras solas, Backspace, Ctrl+C/V que son de otra capa)", () => {
+    it("Ctrl+C → copy · Ctrl+V → paste (clipboard de bloques, W03 completo)", () => {
+        expect(hotkeyActionOf(ev("c", { ctrl: true }))).toBe("copy");
+        expect(hotkeyActionOf(ev("C", { meta: true }))).toBe("copy");
+        expect(hotkeyActionOf(ev("v", { ctrl: true }))).toBe("paste");
+        expect(hotkeyActionOf(ev("V", { meta: true }))).toBe("paste");
+    });
+
+    it("no-atajos → null (letras solas, Backspace)", () => {
         expect(hotkeyActionOf(ev("s"))).toBe(null);
         expect(hotkeyActionOf(ev("Backspace"))).toBe(null);
-        expect(hotkeyActionOf(ev("c", { ctrl: true }))).toBe(null);
-        expect(hotkeyActionOf(ev("v", { ctrl: true }))).toBe(null);
+        expect(hotkeyActionOf(ev("c"))).toBe(null);
+        expect(hotkeyActionOf(ev("v"))).toBe(null);
         expect(hotkeyActionOf(ev("d"))).toBe(null);
     });
 
@@ -46,5 +53,7 @@ describe("hotkeyActionOf", () => {
         expect(bypassesTypingGuard("redo")).toBe(false);
         expect(bypassesTypingGuard("delete")).toBe(false);
         expect(bypassesTypingGuard("duplicate")).toBe(false);
+        expect(bypassesTypingGuard("copy")).toBe(false);
+        expect(bypassesTypingGuard("paste")).toBe(false);
     });
 });
