@@ -24,7 +24,7 @@ import type { EditorHandle } from "@/lib/verso/store";
 import type { BlockRegistry, VersoField } from "@/lib/verso/registry";
 import type { VersoEditorState } from "@/lib/verso/types";
 import { useStoreSlice } from "../render/context";
-import VersoFieldControl from "../fields/VersoFieldControl";
+import VersoFieldControl, { type RenderExternalPicker } from "../fields/VersoFieldControl";
 import { partitionFieldEntries, tabAvailability, type PanelTab } from "./panelTabs";
 
 const selectState = (s: VersoEditorState) => s;
@@ -34,11 +34,13 @@ export interface VersoPropertiesPanelProps {
     registry: BlockRegistry;
     /** Campos ROOT del tipo de registro (rootFieldsPage / rootFieldsPost) — vista sin selección. */
     rootFields: Record<string, VersoField>;
+    /** Picker de los campos `external` (W22): VersoEditor inyecta MediaPickerModal. */
+    renderExternalPicker?: RenderExternalPicker;
     onClose: () => void;
     mobileOpen?: boolean;
 }
 
-export default function PropertiesPanel({ handle, registry, rootFields, onClose, mobileOpen = false }: VersoPropertiesPanelProps) {
+export default function PropertiesPanel({ handle, registry, rootFields, renderExternalPicker, onClose, mobileOpen = false }: VersoPropertiesPanelProps) {
     const { t, language } = useI18n();
     const state = useStoreSlice(handle, selectState);
     const selectedId = state.selection.nodeId;
@@ -154,6 +156,7 @@ export default function PropertiesPanel({ handle, registry, rootFields, onClose,
                             label={field.label ? trStr(field.label, language) : undefined}
                             value={values[key]}
                             onChange={(v) => onFieldChange(key, v)}
+                            renderExternalPicker={renderExternalPicker}
                         />
                     ))}
                 </div>

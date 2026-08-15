@@ -9,8 +9,8 @@
  * del fork: el driver nuevo no duplica nodos para el placeholder. El click inserta directamente
  * (tap-to-insert, también el modo mobile-sheet).
  *
- * La pestaña Plantillas (patrones) llega en una ola posterior: BlockPalette solo cubre la vista
- * "blocks"; el placeholder de patrones vive en VersoEditor.
+ * BlockPalette solo cubre la vista "blocks" del rail; la pestaña Plantillas (patrones) es un
+ * panel aparte — editor/PatternsPanel.tsx (F3 ola 3, W27).
  */
 import React, { useMemo, useState } from "react";
 import MSym from "@/components/editor/MSym";

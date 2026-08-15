@@ -10,23 +10,30 @@
  *
  * Mapa: hotkeyMap.ts (puro, testeado). Ctrl+S / Ctrl+K actúan incluso escribiendo; el resto se
  * ignora con foco en un campo o con edición inline activa (handle.getState().inlineEditingId —
- * el sustituto Verso de window.puckActiveEditorId). Ctrl+C/V (clipboard de bloques) y las flechas
- * de mover son de otras capas (ola posterior / DnDDriver).
+ * el sustituto Verso de window.puckActiveEditorId). Ctrl+C copia el subtree seleccionado al
+ * clipboard compartido (wjs_block_clipboard — interop con el editor legacy) SOLO si no hay
+ * selección de texto real (y sin preventDefault: el copy nativo sigue funcionando, paridad
+ * legacy); Ctrl+V pega con ids regenerados tras la selección o al final (blockClipboard.ts,
+ * UNA entrada de undo). Las flechas de mover son del DnDDriver.
  */
 import React from "react";
 import type { EditorHandle } from "@/lib/verso/store";
+import type { BlockRegistry } from "@/lib/verso/registry";
 import { duplicateSelected, removeSelected } from "../overlay/actionBarCommands";
+import { copySelectedSubtree, pasteFromClipboard } from "./blockClipboard";
 import { bypassesTypingGuard, hotkeyActionOf, TYPING_TARGET_SELECTOR } from "./hotkeyMap";
 
 export interface VersoEditorHotkeysProps {
     handle: EditorHandle;
+    /** Registry vivo — el pegado valida que el tipo del clipboard exista en este editor. */
+    registry: BlockRegistry;
     /** Documento del iframe (null hasta onFrameReady) — re-engancha al cambiar. */
     frameDocument: Document | null;
     onSave?: () => void;
     onCommandPalette?: () => void;
 }
 
-export default function EditorHotkeys({ handle, frameDocument, onSave, onCommandPalette }: VersoEditorHotkeysProps) {
+export default function EditorHotkeys({ handle, registry, frameDocument, onSave, onCommandPalette }: VersoEditorHotkeysProps) {
     // Refs para callbacks inline sin re-enganchar los listeners.
     const onSaveRef = React.useRef(onSave);
     const onPaletteRef = React.useRef(onCommandPalette);
@@ -84,6 +91,22 @@ export default function EditorHotkeys({ handle, frameDocument, onSave, onCommand
                     duplicateSelected(handle, id);
                     return;
                 }
+                case "copy": {
+                    // No secuestrar un copy de TEXTO real (paridad legacy): la selección se lee en
+                    // la ventana donde ocurrió el evento (puede ser el iframe del canvas).
+                    const view = e.view ?? window;
+                    const textSel = typeof view.getSelection === "function" ? view.getSelection() : null;
+                    if (textSel && !textSel.isCollapsed) return;
+                    // Sin preventDefault: el evento nativo sigue su curso (igual que el legacy).
+                    copySelectedSubtree(handle);
+                    return;
+                }
+                case "paste": {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    pasteFromClipboard(handle, registry);
+                    return;
+                }
             }
         };
 
@@ -100,7 +123,7 @@ export default function EditorHotkeys({ handle, frameDocument, onSave, onCommand
                 }
             }
         };
-    }, [handle, frameDocument]);
+    }, [handle, registry, frameDocument]);
 
     return null;
 }

@@ -17,7 +17,7 @@ const OVERLAY_ID = "wjs-spacing-overlay";
  * hover. Injects (or removes) a single <style id="wjs-guides"> in the canvas document. Idempotent:
  * calling with the same `on` twice is a no-op.
  */
-export function setOutlineMode(doc: Document, on: boolean): void {
+export function setOutlineMode(doc: Document, on: boolean, blockAttr = "data-puck-component"): void {
     if (!doc || !doc.documentElement) return;
     const existing = doc.getElementById(GUIDES_STYLE_ID);
     if (!on) {
@@ -32,9 +32,11 @@ export function setOutlineMode(doc: Document, on: boolean): void {
     // Colour is BRIGHT indigo on purpose: the canvas shows the site's real theme, which is as
     // likely to be near-black as near-white — the original dark-indigo-at-55% was invisible on
     // dark themes (user-reported). #818cf8 reads clearly on both.
+    // `blockAttr` is the engine's block-root attribute: default is the legacy fork's
+    // data-puck-component (unchanged callers); the Verso editor passes data-wjs-block-id.
     style.textContent = [
-        "[data-puck-component]{outline:1px dashed #818cf8 !important;outline-offset:-1px;}",
-        "[data-puck-component]:hover{outline:1px solid #6366f1 !important;}",
+        `[${blockAttr}]{outline:1px dashed #818cf8 !important;outline-offset:-1px;}`,
+        `[${blockAttr}]:hover{outline:1px solid #6366f1 !important;}`,
     ].join("\n");
     (doc.head || doc.documentElement).appendChild(style);
 }

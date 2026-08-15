@@ -229,13 +229,7 @@ const CHROME_STRINGS: Tri[] = [
     { es: "La página está vacía: añade bloques antes de guardarla como plantilla.", en: "The page is empty: add blocks before saving it as a template.", pt: "A página está vazia: adicione blocos antes de salvá-la como modelo." },
     { es: "Sin resultados para", en: "No results for", pt: "Sem resultados para" },
     // VersoEditor (F3) — placeholders documentados de superficies que llegan en olas posteriores.
-    { es: "Las plantillas llegan en una ola posterior.", en: "Templates arrive in a later wave.", pt: "Os modelos chegam em uma onda posterior." },
-    { es: "La biblioteca de medios llega en una ola posterior.", en: "The media library arrives in a later wave.", pt: "A biblioteca de mídia chega em uma onda posterior." },
-    { es: "Las notas de revisión llegan en una ola posterior.", en: "Review notes arrive in a later wave.", pt: "As notas de revisão chegam em uma onda posterior." },
-    { es: "El historial de revisiones llega en una ola posterior.", en: "Revision history arrives in a later wave.", pt: "O histórico de revisões chega em uma onda posterior." },
-    { es: "Las guías llegan en una ola posterior.", en: "Guides arrive in a later wave.", pt: "As guias chegam em uma onda posterior." },
-    { es: "La paleta de comandos completa llega en una ola posterior.", en: "The full command palette arrives in a later wave.", pt: "A paleta de comandos completa chega em uma onda posterior." },
-    { es: "Usa el panel Bloques para insertar mientras tanto.", en: "Use the Blocks panel to insert in the meantime.", pt: "Use o painel Blocos para inserir enquanto isso." },
+    // (Los de plantillas y paleta ⌘K se retiraron en la ola 3, al llegar las superficies reales.)
     { es: "Guardada", en: "Saved", pt: "Salva" },
     { es: "bloque", en: "block", pt: "bloco" },
     { es: "bloques", en: "blocks", pt: "blocos" },
@@ -322,6 +316,10 @@ const CHROME_STRINGS: Tri[] = [
     { es: "Pegar estilos en el bloque", en: "Paste styles into the block", pt: "Colar estilos no bloco" },
     { es: "Duplicar bloque", en: "Duplicate block", pt: "Duplicar bloco" },
     { es: "Eliminar bloque", en: "Delete block", pt: "Excluir bloco" },
+    // Filas nuevas de la paleta Verso (F3 ola 3): mover selección y navegar a la Estructura.
+    { es: "Subir bloque", en: "Move block up", pt: "Subir bloco" },
+    { es: "Bajar bloque", en: "Move block down", pt: "Descer bloco" },
+    { es: "Ver estructura", en: "View structure", pt: "Ver estrutura" },
     { es: "Estilos copiados", en: "Styles copied", pt: "Estilos copiados" },
     { es: "Página importada", en: "Page imported", pt: "Página importada" },
     { es: "El archivo no es una página válida", en: "The file is not a valid page", pt: "O arquivo não é uma página válida" },
