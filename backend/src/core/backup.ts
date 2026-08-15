@@ -147,7 +147,9 @@ async function createBackup() {
 
     // Optional S3 offload (config-gated). No-op unless bucket + keys are configured; on failure the local
     // copy is kept and the failure is reported — an unreachable bucket never fails a good local backup.
-    let s3: any = { offloaded: false, reason: 'not-configured' };
+    // Assigned on both paths below (the try's first statement, or the catch), so no initializer — the
+    // value would be dead (eslint no-useless-assignment).
+    let s3: any;
     try {
         s3 = await offloadBackup(filepath, filename);
         if (s3.offloaded) console.log(`   ☁ Offloaded backup to S3: s3://${s3.bucket}/${s3.key}`);
