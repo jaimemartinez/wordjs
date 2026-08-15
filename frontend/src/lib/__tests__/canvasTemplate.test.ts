@@ -105,4 +105,22 @@ describe('canvasTemplateCandidates', () => {
         expect(canvasTemplateCandidates('single').at(-1)).toBe('page');
         expect(canvasTemplateCandidates('page').at(-1)).toBe('page');
     });
+
+    // The author's per-page pick (`_wjs_template`) — same rules as the public resolver in
+    // ThemeTemplate.tsx: hoisted to the FRONT, never replacing the fallbacks.
+    it('hoists an assigned template to the front and keeps the whole chain behind it', () => {
+        expect(canvasTemplateCandidates('page', 'about', undefined, 'sidebar-left')).toEqual([
+            'sidebar-left', 'page-about', 'page',
+        ]);
+    });
+    it('de-duplicates an assignment the hierarchy would also produce (moved, not doubled)', () => {
+        expect(canvasTemplateCandidates('single', 'hello', 'post', 'single')).toEqual([
+            'single', 'single-post-hello', 'single-post', 'page',
+        ]);
+    });
+    it('ignores a junk assignment (bad shape) — fail-closed to the plain hierarchy', () => {
+        expect(canvasTemplateCandidates('page', 'about', undefined, '../evil')).toEqual(['page-about', 'page']);
+        expect(canvasTemplateCandidates('page', 'about', undefined, '')).toEqual(['page-about', 'page']);
+        expect(canvasTemplateCandidates('page', 'about', undefined, 'UPPER')).toEqual(['page-about', 'page']);
+    });
 });

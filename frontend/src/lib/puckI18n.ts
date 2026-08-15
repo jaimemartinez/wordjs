@@ -213,6 +213,7 @@ const CHROME_STRINGS: Tri[] = [
     { es: "Más", en: "More", pt: "Mais" },
     // Inserter chrome
     { es: "Bloques", en: "Blocks", pt: "Blocos" },
+    { es: "Plantilla del tema", en: "Theme template", pt: "Modelo do tema" },
     { es: "Plantillas", en: "Templates", pt: "Modelos" },
     { es: "Buscar bloque…", en: "Search block…", pt: "Buscar bloco…" },
     { es: "Buscar bloque", en: "Search block", pt: "Buscar bloco" },

@@ -43,6 +43,9 @@ export default function PageEditorPage() {
     const [initialPuckData, setInitialPuckData] = useState<Data | null>(null);
     const puckDataRef = useRef<Data>({ content: [], root: {} }); // For saving without causing re-renders
     const [status, setStatus] = useState("draft");
+    // The author's per-page theme-template pick (`_wjs_template` meta). State (not just a root prop
+    // read at save time) because the canvas preview re-wraps on it live — see PuckEditor.assignedTemplate.
+    const [assignedTemplate, setAssignedTemplate] = useState("");
     const [saving, setSaving] = useState(false);
     const [isLoading, setIsLoading] = useState(!isNew);
     // Data-safety hydration tracking: `loaded` is true only once the EXISTING page's content has loaded;
@@ -116,14 +119,27 @@ export default function PageEditorPage() {
             setSlug(page.slug);
             contentRef.current = page.content;
             setStatus(page.status);
+            // The saved template assignment. META is the source of truth (it may have been set via the
+            // API, or before this field existed), so it is injected into root.props below rather than
+            // trusting whatever a stale _puck_data carries.
+            const savedTemplate = typeof page.meta?._wjs_template === "string" ? page.meta._wjs_template : "";
+            setAssignedTemplate(savedTemplate);
 
             // Load Puck data from meta if available
             if (page.meta && page.meta._puck_data) {
-                setInitialPuckData(page.meta._puck_data);
-                puckDataRef.current = page.meta._puck_data;
+                const stored = page.meta._puck_data;
+                const withTemplate = {
+                    ...stored,
+                    root: {
+                        ...(stored.root as any),
+                        props: { ...((stored.root as any)?.props || {}), _wjs_template: savedTemplate }
+                    }
+                };
+                setInitialPuckData(withTemplate);
+                puckDataRef.current = withTemplate;
                 legacyHtmlRef.current = null; // real Puck blocks — not a legacy HTML body
-                if (page.meta._puck_data.root?.title) {
-                    setTitle(page.meta._puck_data.root.title);
+                if (stored.root?.title) {
+                    setTitle(stored.root.title);
                 }
             } else {
                 // Seed Puck data with existing info for legacy pages. A legacy/imported page keeps its
@@ -142,7 +158,8 @@ export default function PageEditorPage() {
                         props: {
                             title: page.title,
                             slug: page.slug,
-                            category: ""
+                            category: "",
+                            _wjs_template: savedTemplate
                         }
                     }
                 };
@@ -210,7 +227,10 @@ export default function PageEditorPage() {
                 status,
                 type: "page",
                 meta: {
-                    _puck_data: liveData
+                    _puck_data: liveData,
+                    // Per-page theme template. Always sent (backend merges meta per key): '' explicitly
+                    // CLEARS a previous assignment — omitting the key would leave it stale forever.
+                    _wjs_template: typeof root?.props?._wjs_template === 'string' ? root.props._wjs_template : ''
                 },
                 // Autosaves skip the revision snapshot server-side (see routes/posts.ts).
                 ...(isAutosave ? { autosave: true } : {})
@@ -280,8 +300,10 @@ export default function PageEditorPage() {
                 onCancel={() => router.back()}
                 pageId={pageId || undefined}
                 previewSlug={slug || undefined}
-                // OLA 3: preview the page inside the theme's `page` template (page-<slug> → page).
+                // OLA 3: preview the page inside the theme's `page` template (page-<slug> → page). The
+                // author's dropdown pick is hoisted to the front of that chain, live (OLA 5).
                 templateKind="page"
+                assignedTemplate={assignedTemplate || undefined}
                 onChange={(data) => {
                     // Ignore init-time events only (see mountedAtRef note above).
                     if (Date.now() - mountedAtRef.current > 800) {
@@ -300,6 +322,12 @@ export default function PageEditorPage() {
                         // User manually edited slug in sidebar
                         setSlugManuallyEdited(true);
                         setSlug(newSlug);
+                    }
+                    // Template pick from the sidebar dropdown — state so the canvas re-wraps live.
+                    // Guarded on change (it fires per keystroke for unrelated edits, the value rarely moves).
+                    const newTemplate = root?.props?._wjs_template;
+                    if (typeof newTemplate === 'string' && newTemplate !== assignedTemplate) {
+                        setAssignedTemplate(newTemplate);
                     }
                     // Regenerate fallback HTML from blocks — EXCEPT a legacy page still on a blank canvas
                     // (its body is HTML in `content`, not blocks): don't clobber it to "".

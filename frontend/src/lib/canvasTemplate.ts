@@ -26,6 +26,7 @@ import { toResolved, filterByCategory, type ResolvedPost } from "@/lib/resolvedP
 import {
     parseTemplate,
     templateCandidates,
+    TEMPLATE_NAME,
     type TemplateTree,
     type TemplateBlock,
     type TemplateKind,
@@ -97,9 +98,17 @@ export function decorateForCanvas(tree: TemplateTree, all: Post[]): TemplateTree
  * uses, so the editor previews the exact template the published page will pick. Only `page` and
  * `single` are reachable from the editor (a page editor and a post editor); the chain always ends at
  * `page`, the theme's index template.
+ *
+ * `assignedTemplate` is the author's per-page pick (the post's `_wjs_template` meta, live from the
+ * sidebar field). Same rules as the public resolver in ThemeTemplate.tsx: shape-checked against
+ * TEMPLATE_NAME, hoisted to the FRONT of the chain and de-duplicated — never replacing the fallbacks,
+ * so a template the theme doesn't ship degrades to the normal arrangement in the canvas exactly as it
+ * will on the public page.
  */
-export function canvasTemplateCandidates(kind: TemplateKind, slug?: string, postType?: string): string[] {
-    return templateCandidates(kind, { slug, postType });
+export function canvasTemplateCandidates(kind: TemplateKind, slug?: string, postType?: string, assignedTemplate?: string): string[] {
+    const hierarchy = templateCandidates(kind, { slug, postType });
+    const assigned = typeof assignedTemplate === "string" && TEMPLATE_NAME.test(assignedTemplate) ? assignedTemplate : null;
+    return assigned ? [assigned, ...hierarchy.filter((n) => n !== assigned)] : hierarchy;
 }
 
 /**

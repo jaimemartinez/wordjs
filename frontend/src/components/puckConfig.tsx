@@ -5,7 +5,7 @@ import React from "react";
 import { useState, useEffect } from "react";
 import MediaPickerModal from "./MediaPickerModal";
 import ModernSelect from "./ModernSelect";
-import { categoriesApi, Category, apiGet } from "@/lib/api";
+import { categoriesApi, themesApi, Category, apiGet } from "@/lib/api";
 import { t as translate, getStoredLanguage } from "@/lib/i18n";
 import { buildSrcSet, sizesForWidth, srcSetBelongsTo, rememberPickedMedia, getPickedMedia } from "@/lib/imageSrcset";
 
@@ -48,6 +48,52 @@ const CategoryField = ({ value, onChange }: { value: string; onChange: (value: s
                     value: cat.name,
                     label: cat.name
                 }))
+            ]}
+            className="!py-2 !px-3 font-normal"
+        />
+    );
+};
+
+// Custom per-page theme-template field (the post's `_wjs_template` meta). Mirrors CategoryField:
+// fetch-own-options custom root field. Options are the templates the ACTIVE theme actually ships
+// (GET /themes/:slug/templates); '' = no assignment, i.e. the normal route hierarchy. A saved
+// assignment naming a template the active theme no longer ships stays VISIBLE as a synthesized
+// option instead of silently vanishing from the select — the author sees what's stored (the public
+// route already degrades it to the hierarchy, fail-closed), and can clear it deliberately.
+const TemplateField = ({ value, onChange }: { value: string; onChange: (value: string) => void }) => {
+    const [templates, setTemplates] = useState<string[]>([]);
+    const [loading, setLoading] = useState(true);
+    const lang = getStoredLanguage();
+
+    useEffect(() => {
+        let dead = false;
+        (async () => {
+            try {
+                const list = await themesApi.list();
+                const active = (list.find((t: any) => t.active) || list.find((t: any) => t.slug === "default"))?.slug || "default";
+                const res = await themesApi.listTemplates(active);
+                if (!dead) setTemplates(Array.isArray(res?.templates) ? res.templates : []);
+            } catch {
+                // Endpoint unreachable (or the user lacks the admin scope it requires): the select
+                // degrades to just the default-hierarchy option — never blocks editing.
+            }
+            if (!dead) setLoading(false);
+        })();
+        return () => { dead = true; };
+    }, []);
+
+    const current = typeof value === "string" ? value : "";
+    return (
+        <ModernSelect
+            value={current}
+            onChange={(e) => onChange(e.target.value)}
+            disabled={loading}
+            options={[
+                { value: "", label: translate('editor.templateField.default', lang) },
+                ...templates.map((name) => ({ value: name, label: name })),
+                ...(current && !templates.includes(current)
+                    ? [{ value: current, label: `${current} — ${translate('editor.templateField.missing', lang)}` }]
+                    : []),
             ]}
             className="!py-2 !px-3 font-normal"
         />
@@ -2325,6 +2371,12 @@ export const postConfig: any = {
                     { label: "No", value: "closed" }
                 ]
             },
+            // Per-page theme template (persisted as the post's `_wjs_template` meta; '' = hierarchy).
+            _wjs_template: {
+                type: "custom",
+                label: "Theme template",
+                render: ({ value, onChange }: any) => <TemplateField value={value} onChange={onChange} />
+            },
             // SEO Fields
             seo_title: {
                 type: "text",
@@ -2374,6 +2426,12 @@ export const pageConfig: any = {
         fields: {
             title: { type: "text", label: "Title" },
             slug: { type: "text", label: "Slug (Permalink)" },
+            // Per-page theme template (persisted as the page's `_wjs_template` meta; '' = hierarchy).
+            _wjs_template: {
+                type: "custom",
+                label: "Theme template",
+                render: ({ value, onChange }: any) => <TemplateField value={value} onChange={onChange} />
+            },
         },
         render: ({ children }: any) => {
             return (

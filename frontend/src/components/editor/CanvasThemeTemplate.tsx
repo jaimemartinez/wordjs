@@ -41,6 +41,13 @@ export interface CanvasTemplateInfo {
     slug?: string;
     /** `post` for the post editor — lets `single` prefer single-post before single. */
     postType?: string;
+    /**
+     * The author's per-page template pick (the `_wjs_template` sidebar field), live. Unlike `slug` this
+     * IS safe to key the resolution on: it only changes when the author chooses from the dropdown, so
+     * re-resolving is exactly the feedback they asked for — the canvas re-wraps in the picked template
+     * immediately, matching what the public route will render.
+     */
+    assignedTemplate?: string;
 }
 
 /**
@@ -104,6 +111,7 @@ export function CanvasThemeTemplate({ children }: { children: React.ReactNode })
     const info = React.useContext(CanvasTemplateContext);
     const kind: TemplateKind = info?.kind ?? "page";
     const postType = info?.postType;
+    const assignedTemplate = info?.assignedTemplate;
 
     const [tree, setTree] = React.useState<TemplateTree | null>(null);
 
@@ -113,8 +121,9 @@ export function CanvasThemeTemplate({ children }: { children: React.ReactNode })
             const themeSlug = await resolveActiveSlug();
             // Most-specific-first, stopping at the first template the theme actually ships — the public
             // hierarchy at the page/single level (see CanvasTemplateInfo.slug for why the volatile
-            // per-slug candidate is intentionally skipped). A pure miss leaves the canvas unchanged.
-            for (const name of canvasTemplateCandidates(kind, undefined, postType)) {
+            // per-slug candidate is intentionally skipped), with the author's assignment hoisted to the
+            // front exactly as the public resolver does. A pure miss leaves the canvas unchanged.
+            for (const name of canvasTemplateCandidates(kind, undefined, postType, assignedTemplate)) {
                 const parsed = parseCanvasTemplate(await fetchTemplateRaw(themeSlug, name));
                 if (parsed) {
                     // Only now pay for the post list, and only to fill this template's listings.
@@ -131,7 +140,7 @@ export function CanvasThemeTemplate({ children }: { children: React.ReactNode })
         return () => {
             dead = true;
         };
-    }, [kind, postType]);
+    }, [kind, postType, assignedTemplate]);
 
     // No template resolved (yet, or at all): the editable content renders exactly as it did before this
     // component existed — the no-regression path.
