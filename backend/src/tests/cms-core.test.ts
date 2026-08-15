@@ -113,7 +113,7 @@ describe('Media Model', () => {
     });
 
     it('should generate safe filenames', () => {
-        const safeName = (name: string) => name.replace(/[^a-zA-Z0-9-_\.]/g, '-').toLowerCase();
+        const safeName = (name: string) => name.replace(/[^a-zA-Z0-9-_.]/g, '-').toLowerCase();
         assert.strictEqual(safeName('My File.jpg'), 'my-file.jpg');
         assert.strictEqual(safeName('dangerous<script>.png'), 'dangerous-script-.png');
     });

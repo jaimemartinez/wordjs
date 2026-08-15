@@ -224,8 +224,9 @@ class Email {
     }
 
     static async findAllByUser(email: string, folder = 'inbox', limit = 50, offset = 0) {
-        let whereClause = "";
-        let params: any[] = [];
+        // Both are assigned on every branch of the exhaustive folder if/else below.
+        let whereClause: string;
+        let params: any[];
         const likeEmail = `%${email}%`;
 
         // Common excluded check
@@ -263,8 +264,9 @@ class Email {
     }
 
     static async countByUser(email: string, folder = 'inbox') {
-        let whereClause = "";
-        let params: any[] = [];
+        // Both are assigned on every branch of the exhaustive folder if/else below.
+        let whereClause: string;
+        let params: any[];
         const likeEmail = `%${email}%`;
 
         if (folder === 'sent') {

@@ -205,7 +205,7 @@ async function runCronInner() {
     // if the stored blob is ever poisoned, an event may carry a pluginSlug pointing at another plugin.
     // Resolve the currently-active plugins once; an event whose pluginSlug is set but NOT active is
     // skipped (its code isn't even loaded — running its hooks in a foreign context would be the exploit).
-    let activeSet: Set<string> | null = null;
+    let activeSet: Set<string> | null;
     try { activeSet = new Set(await require('./plugins').getActivePlugins()); } catch { activeSet = null; }
 
     // Snapshot timestamps once so we don't iterate over reschedules created in this pass.
@@ -324,6 +324,36 @@ function registerCronJob(name: any, callback: any) {
 }
 
 /**
+ * When the next backup should run. PURE (takes `now`, touches no DB/clock) so the branch that once
+ * shipped a bug is unit-testable. The bug: for `weekly` when today is the target day but the time has
+ * already passed, the old code set daysUntilTarget = 7 in a branch whose sibling was the ONLY one that
+ * called setDate — so the 7 was never applied and the backup silently stayed on today.
+ */
+function computeNextBackupRun(frequency: any, time: any, day: any, now: Date): Date {
+    const nextRun = new Date(now.getTime());
+    let [hours, minutes] = String(time).split(':').map(Number);
+    // Guard against malformed/empty backup_time producing NaN -> Invalid Date.
+    if (Number.isNaN(hours) || Number.isNaN(minutes)) { hours = 3; minutes = 0; }
+    nextRun.setHours(hours, minutes, 0, 0);
+
+    if (frequency === 'weekly') {
+        const currentDay = nextRun.getDay(); // 0 = Sunday
+        let daysUntilTarget = day - currentDay;
+        if (daysUntilTarget < 0) daysUntilTarget += 7;
+        // Today is the target day but the time has passed → next week. (=== 0 with time still ahead
+        // means keep today.)
+        if (daysUntilTarget === 0 && nextRun.getTime() <= now.getTime()) daysUntilTarget = 7;
+        // Apply the shift — MUST run for the 7-day case too (that was the bug).
+        if (daysUntilTarget > 0) nextRun.setDate(nextRun.getDate() + daysUntilTarget);
+    } else if (nextRun.getTime() <= now.getTime()) {
+        // Time has passed for today (daily/hourly fallback).
+        if (frequency === 'hourly') nextRun.setHours(nextRun.getHours() + 1);
+        else nextRun.setDate(nextRun.getDate() + 1); // daily / twicedaily / etc → tomorrow
+    }
+    return nextRun;
+}
+
+/**
  * Reschedule backup job based on frequency
  * ('hourly', 'daily', 'weekly', 'off')
  */
@@ -344,51 +374,9 @@ async function rescheduleBackup(frequency?: any) {
         return;
     }
 
-    // 2. Calculate Start Time
-    let nextRun = new Date();
-    let [hours, minutes] = String(time).split(':').map(Number);
-
-    // Guard against malformed/empty backup_time producing NaN -> Invalid Date.
-    if (Number.isNaN(hours) || Number.isNaN(minutes)) {
-        console.warn(`   Invalid backup_time '${time}', falling back to 03:00`);
-        hours = 3;
-        minutes = 0;
-    }
-
-    nextRun.setHours(hours, minutes, 0, 0);
-
-    // Logic for next run
-    if (frequency === 'weekly') {
-        const currentDay = nextRun.getDay(); // 0 = Sunday
-        let daysUntilTarget = day - currentDay;
-
-        if (daysUntilTarget < 0) {
-            daysUntilTarget += 7;
-        }
-
-        // If today is the target day but time has passed, move to next week
-        if (daysUntilTarget === 0 && nextRun.getTime() <= Date.now()) {
-            daysUntilTarget = 7;
-        } else if (daysUntilTarget === 0 && nextRun.getTime() > Date.now()) {
-            // Today is the day and time hasn't passed, do nothing (keep today)
-        } else {
-            // Add days
-            nextRun.setDate(nextRun.getDate() + daysUntilTarget);
-        }
-
-    } else if (nextRun.getTime() <= Date.now()) {
-        // Time has passed for today (Daily/Hourly fallback logic)
-
-        if (frequency === 'daily') {
-            nextRun.setDate(nextRun.getDate() + 1);
-        } else if (frequency === 'hourly') {
-            // Align to next hour
-            nextRun.setHours(nextRun.getHours() + 1);
-        } else {
-            // twicedaily etc - just move to tomorrow
-            nextRun.setDate(nextRun.getDate() + 1);
-        }
-    }
+    // 2. Calculate Start Time — the date math is a PURE helper (computeNextBackupRun) so the
+    // reschedule logic can be tested without a DB or a live clock. It had a real bug once (see below).
+    const nextRun = computeNextBackupRun(frequency, time, day, new Date());
 
     await scheduleEvent(nextRun.getTime(), frequency, 'wordjs_scheduled_backup');
     console.log(`   Next backup scheduled: ${nextRun.toISOString()}`);
@@ -487,5 +475,6 @@ module.exports = {
     startCron,
     stopCron,
     registerCronJob,
-    initDefaultCronEvents
+    initDefaultCronEvents,
+    computeNextBackupRun, // pure; exported for the reschedule regression test
 };

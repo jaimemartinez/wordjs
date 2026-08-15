@@ -26,6 +26,7 @@ const fs = require('fs');
 const path = require('path');
 
 const { createProxyServer, createUpstreamAgent, httpKeepAliveAgent } = require('./proxy-config');
+const { helmetOptions } = require('./security-headers');
 const clusterCa = require('./cluster-ca');
 
 // mTLS cluster-cert directory. SEPARATE mode: `scripts/cluster.js init` writes the gateway's certs to
@@ -818,7 +819,10 @@ if (cluster.isPrimary) {
         next();
     };
 
-    app.use(helmet({ contentSecurityPolicy: false }));
+    // CSP restored (was `contentSecurityPolicy: false`): mirror the backend's policy shape so the gateway's
+    // own responses carry the same headers the app already tolerates (Next/Puck need unsafe-inline/eval).
+    // Proxied responses keep the upstream's own CSP — the upstream writes headers last, so its policy wins.
+    app.use(helmet(helmetOptions));
     // The gateway secret is no longer accepted in the query string (header-only now), so there is no
     // credential to redact and we log every request — the old skip let an attacker suppress logging
     // for any request just by appending ?secret=.
@@ -832,6 +836,13 @@ if (cluster.isPrimary) {
         return compression.filter(req, res);
     };
     app.use(compression({ filter: shouldCompress }));
+
+    // Public-listener rate limit (audit 2026-08-08 P1): the edge was unbounded — only enrollment was
+    // capped. Coarse per-IP cap mirroring the backend's limiter; fails OPEN on store loss (logged in
+    // rate-limit.js), and keys on the socket peer (Express default trust proxy = false) so a client
+    // cannot rotate X-Forwarded-For past it. Mounted before routing so it covers proxied traffic too.
+    const { createPublicLimiter } = require('./rate-limit');
+    app.use(createPublicLimiter(config, logger));
 
     app.get('/gateway-status', requireAuth, (req, res) => {
         res.send('<h1>Gateway Active</h1>');

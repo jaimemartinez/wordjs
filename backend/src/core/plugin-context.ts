@@ -216,7 +216,7 @@ function hasPermission(scope: string, access = 'read') {
     // (2) DEFAULT-DENY: a declared permission is only a REQUEST. An admin must GRANT it per-plugin in the
     // UI (Android-style) — there is no trust tier that bypasses this. Enforced host-side (the bridge runs
     // on the host, where grants are in memory).
-    let granted = false;
+    let granted: boolean;
     try { granted = require('./plugin-permissions').isGranted(pluginSlug, scope, access); } catch { granted = false; }
     if (!granted) {
         console.log(`[Security Block] Plugin '${pluginSlug}' permission ${scope}:${access} is declared but NOT granted by the admin (grant it in /admin/plugins).`);

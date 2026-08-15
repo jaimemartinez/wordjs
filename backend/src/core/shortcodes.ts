@@ -26,7 +26,7 @@ function currentOwner(): string | null {
  * @param {string} tag - Shortcode tag
  * @param {Function} callback - Function(attrs, content, tag) => string
  */
-function addShortcode(tag: string, callback: Function) {
+function addShortcode(tag: string, callback: (...args: any[]) => any) {
     const owner = currentOwner();
     if (shortcodes.has(tag)) {
         const existing = shortcodeOwners.get(tag) ?? null;

@@ -32,7 +32,7 @@ function init(options: any = {}) {
         return dbInstance;
     } catch (e) {
         if (e.code === 'MODULE_NOT_FOUND') {
-            throw new Error('Driver "db-driver-sqlite" requires "better-sqlite3". Please run: npm install better-sqlite3 --save --prefix backend');
+            throw new Error('Driver "db-driver-sqlite" requires "better-sqlite3". Please run: npm install better-sqlite3 --save --prefix backend', { cause: e });
         }
         throw e;
     }

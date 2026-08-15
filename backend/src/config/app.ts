@@ -11,6 +11,9 @@ export interface AppConfig {
     gatewayPort: number;
     siteUrl: string;
     frontendUrl: string;
+    // Reverse-proxy trust for client-IP derivation (see core/client-ip). null = resolve by deployment
+    // mode; otherwise an explicit Express 'trust proxy' value.
+    trustProxy: boolean | number | string | string[] | null;
 
     // Database (flat defaults + driver selection)
     dbDriver: string;
@@ -214,6 +217,18 @@ const config: AppConfig = {
 
     // Routable address the gateway uses to reach this backend node (multi-node). Single-host default.
     advertiseHost: fileConfig.advertiseHost || '127.0.0.1',
+
+    // Reverse-proxy trust for client-IP derivation (rate limiting + account lockout). Express
+    // 'trust proxy' semantics: false | true | hop-count | subnet(s). UNSET (null) → resolved by
+    // deployment mode in core/client-ip: a DIRECT monolith trusts NOTHING and keys on the socket
+    // peer (so a client cannot forge X-Forwarded-For to rotate past limits/lockout); behind the
+    // gateway exactly one hop is trusted. Set an explicit value here (or WORDJS_TRUST_PROXY) only
+    // when fronting the app with YOUR OWN reverse proxy — e.g. a monolith behind nginx needs the
+    // hop count that proxy adds, else every visitor collapses onto the proxy's IP.
+    trustProxy: (() => {
+        const v = fileConfig.trustProxy !== undefined ? fileConfig.trustProxy : process.env.WORDJS_TRUST_PROXY;
+        return (v === undefined || v === null || v === '') ? null : v;
+    })(),
 
     // Normalized SSL check
     ssl: {

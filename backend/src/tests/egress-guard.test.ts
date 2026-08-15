@@ -111,7 +111,7 @@ test('installChildNetGuard LOCKS the REAL net.Socket.prototype.connect — close
     assert.notStrictEqual(net.Socket.prototype.connect, orig, 'real Socket.prototype.connect must be patched');
     assert.throws(() => { const s = new net.Socket(); try { s.connect(80, '169.254.169.254'); } finally { s.destroy(); } }, /egress/i, 'direct real Socket blocked');
     assert.throws(() => { const s = new net.Stream(); try { s.connect(80, '127.0.0.1'); } finally { s.destroy(); } }, /egress/i, 'net.Stream alias blocked');
-    assert.throws(() => { const s = new net.Socket(); try { Object.getPrototypeOf(net.Socket.prototype).connect; s.connect(80, '10.0.0.1'); } finally { s.destroy(); } }, /egress/i);
+    assert.throws(() => { const s = new net.Socket(); try { void Object.getPrototypeOf(net.Socket.prototype).connect; s.connect(80, '10.0.0.1'); } finally { s.destroy(); } }, /egress/i);
     // REGRESSION GUARD: net.connect/createConnection + http.request pre-normalize args into a [options,cb]
     // ARRAY before Socket.prototype.connect; the patch must unwrap it (else ERR_MISSING_ARGS). /egress/i
     // here proves the unwrap reached the egress check.

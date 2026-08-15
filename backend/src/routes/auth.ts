@@ -18,6 +18,7 @@ const mfa = require('../core/mfa');
 // the same public IP. Runs ALONGSIDE the account-wide lockout below (which is the AUTH-A3 backstop
 // against distributed attacks on a single account); a login is refused if either trips.
 const loginThrottle = require('../core/login-throttle');
+const { clientIp } = require('../core/client-ip');
 // The ONE self-service email-write rule (shared with routes/users.ts) — see core/mailbox.ts.
 const { refuseSelfServiceEmailChange, isValidAddress } = require('../core/mailbox');
 
@@ -342,7 +343,10 @@ router.post('/login', asyncHandler(async (req: any, res: Response) => {
     }
 
     const lockId = await resolveLockIdentifier(username);
-    const ip = req.ip;
+    // Honest client IP: the TCP peer unless a proxy is genuinely trusted (core/client-ip). Keying the
+    // per-(IP+account) throttle on req.ip let a monolith client rotate X-Forwarded-For to mint a fresh
+    // bucket every attempt and evade this lockout entirely (audit 2026-08-08 P1).
+    const ip = clientIp(req);
 
     // Per-(IP + account) escalating gate (5→10→30→60→60 min by default). Refuses THIS IP for THIS
     // account only, so other users on a shared IP are unaffected.
@@ -527,7 +531,7 @@ router.post('/forgot-password', asyncHandler(async (req: any, res: Response) => 
     if (!login) return ok();
     if (!(await mailReady())) return ok();
 
-    let user: any = null;
+    let user: any;
     try { user = await User.findByLogin(login); } catch { user = null; }
     if (!user && login.includes('@')) { try { user = await User.findByEmail(login); } catch { user = null; } }
     if (!user) return ok();
@@ -574,7 +578,7 @@ router.post('/reset-password', asyncHandler(async (req: any, res: Response) => {
     if (password.length < 8) return res.status(400).json({ code: 'rest_weak_password', message: 'Password must be at least 8 characters.', data: { status: 400 } });
     if (password.length > 72) return res.status(400).json({ code: 'rest_invalid_param', message: 'Password must not exceed 72 characters.', data: { status: 400 } });
 
-    let user: any = null;
+    let user: any;
     try { user = await User.findById(uid); } catch { user = null; }
     if (!user) return bad();
 

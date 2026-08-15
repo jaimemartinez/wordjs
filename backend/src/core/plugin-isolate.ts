@@ -393,7 +393,7 @@ function probeOsMemoryCap(): Promise<number | null> {
             const kb = mb * 1024; // `ulimit -v` unit is KiB
             const ok = await new Promise<boolean>((res) => {
                 let c: any, got = false, done = false;
-                const finish = (v: boolean) => { if (!done) { done = true; try { c && c.kill(); } catch { /* */ } res(v); } };
+                const finish = (v: boolean) => { if (!done) { done = true; try { if (c) c.kill(); } catch { /* */ } res(v); } };
                 try {
                     // Same `exec "$@"` wrapper the real load uses; $0 = label, $@ = [node, …execArgv, -e, src].
                     c = spawn('sh', ['-c', `ulimit -v ${kb} 2>/dev/null; exec "$@"`, 'wjs-probe', process.execPath, ...execArgv, '-e', probeSrc],
@@ -830,7 +830,7 @@ function probeKernelHardening(): Promise<boolean> {
         const bpfPath = getSeccompBpfPath(); // validate the FULL launch INCLUDING seccomp, so a host where it fails falls back
         const ok = await new Promise<boolean>((res) => {
             let proc: any, got = false, done = false, probeFd = -1;
-            const finish = (v: boolean) => { if (!done) { done = true; try { proc && proc.kill('SIGKILL'); } catch { /* */ } try { if (probeFd >= 0) fsmod.closeSync(probeFd); } catch { /* */ } res(v); } };
+            const finish = (v: boolean) => { if (!done) { done = true; try { if (proc) proc.kill('SIGKILL'); } catch { /* */ } try { if (probeFd >= 0) fsmod.closeSync(probeFd); } catch { /* */ } res(v); } };
             const overall = setTimeout(() => finish(false), 20000);
             if ((overall as any).unref) (overall as any).unref();
             const stdio: any[] = ['ignore', 'ignore', 'ignore', 'ipc'];
@@ -867,7 +867,7 @@ function probeKernelHardening(): Promise<boolean> {
                     const nbpf = getSeccompBpfPath();
                     const netOk = await new Promise<boolean>((res) => {
                         let proc: any, got = false, done = false, probeFd = -1;
-                        const finish = (v: boolean) => { if (!done) { done = true; try { proc && proc.kill('SIGKILL'); } catch { /* */ } try { if (probeFd >= 0) fsmod.closeSync(probeFd); } catch { /* */ } res(v); } };
+                        const finish = (v: boolean) => { if (!done) { done = true; try { if (proc) proc.kill('SIGKILL'); } catch { /* */ } try { if (probeFd >= 0) fsmod.closeSync(probeFd); } catch { /* */ } res(v); } };
                         const overall = setTimeout(() => finish(false), 20000);
                         if ((overall as any).unref) (overall as any).unref();
                         const stdio: any[] = ['ignore', 'ignore', 'ignore', 'ipc'];
@@ -1473,7 +1473,7 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
         // down on unload/reload — otherwise a stale route/hook/shortcode would RPC a dead worker.
         const registeredShortcodes: string[] = [];                                  // shortcode tags
         const registeredRoutes: Array<{ m: string; full: string; handler: any }> = []; // mounted Express routes
-        const registeredHooks: Array<{ hook: string; type: string; shim: Function }> = []; // hook/filter shims
+        const registeredHooks: Array<{ hook: string; type: string; shim: (...args: any[]) => any }> = []; // hook/filter shims
         let providedMail = false;                                                   // did this plugin become the mail sender
         const invokeShortcode = (scId: string, payload: any) => rpcSend(pendingShortcode, { kind: 'invoke-shortcode', scId, ...payload });
 
@@ -1861,7 +1861,7 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
                 }
             } catch { /* */ }
             for (const { hook, type, shim } of registeredHooks) {
-                try { type === 'filter' ? hooks.removeFilter(hook, shim) : hooks.removeAction(hook, shim); } catch { /* */ }
+                try { if (type === 'filter') hooks.removeFilter(hook, shim); else hooks.removeAction(hook, shim); } catch { /* */ }
             }
             // Unregister IN the plugin's context so the shortcodes owner-guard applies: a tag the plugin
             // tried to squat (refused at add time, but still tracked here) is owned by core/another plugin,
@@ -2045,7 +2045,7 @@ function unloadIsolatedPlugin(slug: string): void | Promise<void> {
     if (!h) return;
     // INTENTIONAL stop — so the exit handler doesn't mistake it for a crash and auto-restart it.
     stopping.add(slug);
-    try { h.teardown && h.teardown(); } catch (e) { /* */ }
+    try { if (h.teardown) h.teardown(); } catch (e) { /* */ }
     try { h.worker.terminate(); } catch (e) { /* */ }
     isolates.delete(slug);
 }
@@ -2079,7 +2079,11 @@ module.exports = {
     getLivePids, awaitIsolateStopped, awaitIsolateSettled,
     getIsolateStatus, getAllIsolateStatuses,
     assignProcessToJobObject, probeJobObjectCap, getSandboxHardeningState, getSandboxNetnsState,
-    getPermissionModelState, probePermissionModel,
+    getPermissionModelState, probePermissionModel, probeKernelHardening,
+    // Derived admin-facing flag: TRUE only in the dangerous "looks secure but isn't" state — kernel
+    // hardening was ENABLED but the bwrap probe FAILED, so isolated plugins run WITHOUT the OS backstop.
+    // 'unsupported' (non-Linux) and 'disabled' (opt-out) are known/chosen postures, not degradation.
+    isSandboxHardeningDegraded: () => sandboxHardeningState === 'degraded',
     __bwrapProfile: bwrapProfile,
     // Diagnostic: is this slug marked as an INTENTIONAL stop, i.e. is there a pending child exit that
     // must not be supervised as a crash? The mark is consumed by that exit, so a mark with no child

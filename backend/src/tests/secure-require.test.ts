@@ -54,7 +54,7 @@ function expectThrows(fn: any, msgContains = '') {
         throw new Error('Expected function to throw but it did not');
     } catch (error) {
         if (msgContains && !error.message.includes(msgContains)) {
-            throw new Error(`Expected error to contain "${msgContains}" but got: ${error.message}`);
+            throw new Error(`Expected error to contain "${msgContains}" but got: ${error.message}`, { cause: error });
         }
         return true;
     }
@@ -391,7 +391,6 @@ test('Slug spoofing: an eval frame faking a plugins/ sourceURL is NOT attributed
     let detected: any = 'unset';
     // eval'd code whose CallSite getFileName() is the fake plugins/ path via //# sourceURL.
     const code = "detected = require('../core/plugin-context').getPluginFromStack();\n//# sourceURL=" + fakeFile;
-    // eslint-disable-next-line no-eval
     (function () { eval(code); })();
     // realpath of the non-existent fake file fails → not attributed; must not borrow a real slug.
     expect(detected !== 'conference-manager').toBeTrue();

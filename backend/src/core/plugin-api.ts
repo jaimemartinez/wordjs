@@ -749,7 +749,7 @@ function createPluginApi(slug: string) {
             // is treated as blocked and dropped.
             const { isBlockedIp } = require('./egress-guard');
             const requireNetwork = () => {
-                let granted = false;
+                let granted: boolean;
                 try { granted = require('./plugin-permissions').isNetworkGranted(slug); } catch { granted = false; }
                 if (!granted) throw new Error(`🛡️ Security Block: plugin '${slug}' needs the 'network' grant for DNS lookups.`);
             };

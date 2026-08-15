@@ -52,12 +52,20 @@ const app = express();
 // Register app for plugins to access
 setApp(app);
 
-// Trust proxy (for getting real IP behind reverse proxy)
 const rateLimit = require('express-rate-limit');
+const { clientIp, resolveTrustProxy } = require('./core/client-ip');
 
-// ... (existing helper setup, ensure this block replaces lines correctly)
-// Trust proxy (for getting real IP behind reverse proxy)
-app.set('trust proxy', 1);
+// TRUST PROXY — from the single source of truth, NOT a hard-coded `1`. In the monolith there is no
+// fronting proxy, so trusting one X-Forwarded-For hop trusted a header the CLIENT wrote: an attacker
+// rotated it to mint a fresh rate-limit / lockout bucket per request. resolveTrustProxy() returns
+// `false` (trust nothing → key on the TCP peer) in embedded mode, `1` behind the gateway, or the
+// operator's explicit WORDJS_TRUST_PROXY / config value. See core/client-ip.ts.
+app.set('trust proxy', resolveTrustProxy());
+
+// The honest per-request key for EVERY IP-based limiter below. Keying through clientIp() rather than
+// leaving express-rate-limit's default req.ip means the bucket can never diverge from the trust
+// decision, even if later middleware rewrites req.ip.
+const ipKey = (req: any) => clientIp(req);
 
 // Security Headers
 const helmet = require('helmet');
@@ -106,7 +114,7 @@ app.use(cors((req: any, done: any) => {
     // (1) configured public origins
     if ([config.site.url, config.frontendUrl, config.gatewayUrl].filter(Boolean).indexOf(origin) !== -1) return allow();
 
-    let originHost = '';
+    let originHost: string;
     try { originHost = new URL(origin).hostname.toLowerCase(); } catch { return deny(); }
 
     // (2) same-origin (Origin host === the host the request was actually sent to). Behind the gateway
@@ -151,6 +159,7 @@ const apiLimiter = rateLimit({
     max: 1000, // Limit each IP to 1000 requests per 15 mins
     standardHeaders: true,
     legacyHeaders: false,
+    keyGenerator: ipKey,
     store: limiterStore('rl:api:'),
     passOnStoreError: true, // if the Redis store errors (outage), ALLOW the request rather than 500 the whole API
     message: { error: 'Too many requests, please try again later.' }
@@ -161,6 +170,7 @@ const authLimiter = rateLimit({
     max: 10, // Limit each IP to 10 attempts per hour on the abuse-prone unauthenticated endpoints
     standardHeaders: true,
     legacyHeaders: false,
+    keyGenerator: ipKey,
     store: limiterStore('rl:auth:'),
     passOnStoreError: true,
     message: { error: 'Too many attempts, please try again later.' }
@@ -176,6 +186,7 @@ const loginIpLimiter = rateLimit({
     max: config.auth.loginIpFailPerHour,
     standardHeaders: true,
     legacyHeaders: false,
+    keyGenerator: ipKey,
     store: limiterStore('rl:loginip:'),
     passOnStoreError: true,
     skipSuccessfulRequests: true, // only failed logins count toward the cap
@@ -187,6 +198,7 @@ const uploadLimiter = rateLimit({
     max: 50, // Limit each IP to 50 uploads per hour
     standardHeaders: true,
     legacyHeaders: false,
+    keyGenerator: ipKey,
     store: limiterStore('rl:upload:'),
     passOnStoreError: true,
     message: { error: 'Too many file uploads, please try again later.' }
@@ -199,6 +211,7 @@ const formsSubmitLimiter = rateLimit({
     max: 10, // Limit each IP to 10 form submissions per minute
     standardHeaders: true,
     legacyHeaders: false,
+    keyGenerator: ipKey,
     store: limiterStore('rl:forms:'),
     passOnStoreError: true,
     message: { error: 'Too many form submissions, please try again later.' }
@@ -209,6 +222,7 @@ const setupLimiter = rateLimit({
     max: 20, // tight cap on the PUBLIC install / test-db endpoints (pre-config, unauthenticated)
     standardHeaders: true,
     legacyHeaders: false,
+    keyGenerator: ipKey,
     store: limiterStore('rl:setup:'),
     passOnStoreError: true,
     message: { error: 'Too many setup attempts, please try again later.' }
@@ -339,7 +353,7 @@ function resolveAdminSlugFolder(seg: string): string | null {
     const cached = adminSlugFolderCache.get(seg);
     const cachedPath = cached ? pluginManifestPath(cached) : null;
     if (cachedPath && fs.existsSync(cachedPath)) return cached!;
-    let dirs: string[] = [];
+    let dirs: string[];
     try {
         dirs = fs.readdirSync(PLUGINS_ROOT, { withFileTypes: true })
             .filter((d: any) => d.isDirectory()).map((d: any) => d.name);
@@ -1036,7 +1050,7 @@ async function initialize() {
 
             const dataDir = nodePath.resolve(__dirname, '../data');
             const pwFile = nodePath.join(dataDir, 'initial-admin-password');
-            let stored = '';
+            let stored: string;
             try {
                 if (!nodeFs.existsSync(dataDir)) nodeFs.mkdirSync(dataDir, { recursive: true });
                 nodeFs.writeFileSync(pwFile, `${password}\n`, { mode: 0o600 });
@@ -1149,6 +1163,37 @@ async function initialize() {
             await startPluginDevWatch();
         } catch (e: any) {
             console.warn('[plugin-dev-watch] not started:', e && e.message);
+        }
+
+        // Plugin-sandbox hardening: run the kernel-hardening probe at boot (fire-and-forget) and LOG the
+        // resulting state, so the OS-backstop posture is visible even when no isolated plugin has loaded
+        // yet — the probe is otherwise lazy (first isolate load). Boot-time twin of the active-theme
+        // warning and of the admin-visible `sandbox_hardening_*` settings flags. 'degraded' (hardening
+        // ENABLED on Linux but bwrap/userns unavailable) is the "looks secure but isn't" state and is
+        // logged as a WARNING; 'unsupported' (Windows/macOS — no bwrap) and 'disabled' (opt-out) are
+        // logged calmly as expected postures, never as a fault, never a crash.
+        try {
+            const iso = require('./core/plugin-isolate');
+            iso.probeKernelHardening().then(() => {
+                const state = iso.getSandboxHardeningState();
+                if (state === 'degraded') {
+                    console.warn('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+                    console.warn('⚠️  Plugin sandbox DEGRADED: kernel hardening is ENABLED but the bwrap probe FAILED');
+                    console.warn('   on this host — isolated plugins run WITHOUT the OS backstop (JS guards only).');
+                    console.warn('   Install bubblewrap + enable unprivileged user namespaces to restore it, or set');
+                    console.warn('   sandbox.requireHardening=true to fail closed. Visible to admins on GET /api/v1/settings/all');
+                    console.warn('   (sandbox_hardening_degraded) and GET /health/details.');
+                    console.warn('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+                } else if (state === 'active') {
+                    console.log('🛡️  Plugin sandbox: kernel hardening ACTIVE (bwrap + seccomp OS backstop).');
+                } else if (state === 'unsupported') {
+                    console.log('🛡️  Plugin sandbox: kernel hardening UNAVAILABLE on this platform (non-Linux) — isolated plugins use process separation + JS guards + Node permission model.');
+                } else if (state === 'disabled') {
+                    console.log('🛡️  Plugin sandbox: kernel hardening DISABLED via config (sandbox.useKernelHardening=false).');
+                }
+            }).catch(() => { /* the probe never throws; guard anyway so boot is unaffected */ });
+        } catch (e: any) {
+            console.warn('[boot] sandbox hardening probe skipped:', e && e.message);
         }
 
         // Start cron system

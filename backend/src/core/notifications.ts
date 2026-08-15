@@ -13,7 +13,7 @@ const { verifyPermission } = require('./plugin-context');
 const NODE_ID = require('crypto').randomBytes(8).toString('hex');
 
 class NotificationService {
-    transports: Map<string, { handler: Function; pluginSlug: string | null }>;
+    transports: Map<string, { handler: (...args: any[]) => any; pluginSlug: string | null }>;
     clients: Set<any>;
 
     // SSE concurrency caps (DoS backstop — see addClient).
@@ -81,7 +81,7 @@ class NotificationService {
      * @param {string} name - Transport identifier
      * @param {Function} handler - Function to call when sending a notification
      */
-    registerTransport(name: string, handler: Function) {
+    registerTransport(name: string, handler: (...args: any[]) => any) {
         // Capture the registering plugin (if any) so its handler runs in its sandbox context
         // when fired later by core's notify loop (otherwise it would run detached = trusted).
         const { getCurrentPlugin } = require('./plugin-context');
@@ -194,7 +194,6 @@ class NotificationService {
         let sentCount = 0;
         this.clients.forEach(client => {
             // Use loose comparison to avoid Number vs String issues
-            // eslint-disable-next-line eqeqeq
             if (notification.user_id == 0 || client._wordjs_user_id == notification.user_id) {
                 client.write(payload);
                 sentCount++;

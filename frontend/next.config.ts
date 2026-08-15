@@ -130,14 +130,6 @@ const nextConfig: NextConfig = {
     ];
   },
   reactStrictMode: false,
-  typescript: {
-    // The admin UI dynamically imports plugin frontend components that live under
-    // ../backend/plugins/*/client. Those files resolve `react` from backend/node_modules,
-    // which is NOT installed in an isolated frontend build (e.g. CI), so the build-time
-    // type-check fails to resolve their deps even though Turbopack bundles them correctly.
-    // Skip the build-time type-check (the frontend's own types are checked via `tsc`/editor).
-    ignoreBuildErrors: true,
-  },
 };
 
 export default nextConfig;

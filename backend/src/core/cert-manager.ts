@@ -223,7 +223,7 @@ class CertManager {
 
         } catch (e) {
             console.error('[CertManager] Auto HTTP Provision Error:', e);
-            throw new Error(`Provisioning failed: ${e.message}`);
+            throw new Error(`Provisioning failed: ${e.message}`, { cause: e });
         }
     }
 
@@ -275,7 +275,7 @@ class CertManager {
             };
         } catch (e) {
             console.error('[CertManager] DNS Start Error:', e);
-            throw new Error(`DNS challenge start failed: ${e.message}`);
+            throw new Error(`DNS challenge start failed: ${e.message}`, { cause: e });
         }
     }
 
@@ -356,10 +356,11 @@ class CertManager {
                     'DNS verification failed: this challenge is no longer valid at the certificate authority ' +
                     '(the order expired, or it was issued by a different Let\'s Encrypt endpoint). Your TXT ' +
                     'record is not the problem. Start the certificate request again and publish the NEW value ' +
-                    'it shows you — each order mints a new one.'
+                    'it shows you — each order mints a new one.',
+                    { cause: e },
                 );
             }
-            throw new Error(`DNS verification failed: ${e.message}`);
+            throw new Error(`DNS verification failed: ${e.message}`, { cause: e });
         }
     }
 
@@ -587,7 +588,7 @@ class CertManager {
             return { success: true, path: customDir };
         } catch (e) {
             console.error('[CertManager] Custom Install Error:', e);
-            throw new Error(`Failed to install custom cert: ${e.message}`);
+            throw new Error(`Failed to install custom cert: ${e.message}`, { cause: e });
         }
     }
 

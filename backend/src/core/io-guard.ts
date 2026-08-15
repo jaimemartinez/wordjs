@@ -345,7 +345,7 @@ function mkdirCreateCount(target: any, recursive: boolean): number {
     let count = 0;
     let cur = path.resolve(String(target));
     for (let i = 0; i < 4096; i++) {           // hard cap; real filesystem path depth is far below this
-        let exists = false;
+        let exists: boolean;
         try { exists = fs.existsSync(cur); } catch { exists = false; }
         if (exists) break;
         count++;
