@@ -10,7 +10,7 @@ import { localizeConfig } from "@/lib/puckI18n";
 import PuckEditor from "@/components/PuckEditor";
 import PuckEditorSkeleton from "@/components/PuckEditorSkeleton";
 import EditorLoadError from "@/components/EditorLoadError";
-import { unhydratedSaveBlocked } from "@/lib/editorGuards";
+import { unhydratedSaveBlocked, seedLegacyPuckData, applyLegacyHtmlFallback, resolveWjsTemplateForSave, isWithinPostMountGrace } from "@/lib/editorGuards";
 import { Data } from "@wordjs/puck";
 import { useUnsavedChanges } from "@/contexts/UnsavedChangesContext";
 import { useModal } from "@/contexts/ModalContext";
@@ -147,28 +147,19 @@ export default function PageEditorPage() {
                 // is VISIBLE and editable in the canvas instead of opening blank. The block renders the
                 // HTML sanitized (see puckConfig HTMLEmbed); the onChange serializer round-trips props.html
                 // back into `content`, so the body is preserved (and updated when edited).
-                const legacyHtml = page.content || "";
-                const seededData: any = {
-                    content: legacyHtml
-                        ? [{ type: "HTMLEmbed", props: { id: `HTMLEmbed-legacy-${pageId}`, html: legacyHtml } }]
-                        : [],
-                    root: {
-                        title: page.title,
-                        slug: page.slug,
-                        props: {
-                            title: page.title,
-                            slug: page.slug,
-                            category: "",
-                            _wjs_template: savedTemplate
-                        }
-                    }
-                };
-                setInitialPuckData(seededData);
-                puckDataRef.current = seededData;
+                const { data: seededData, legacyHtml } = seedLegacyPuckData({
+                    html: page.content || "",
+                    title: page.title,
+                    slug: page.slug,
+                    recordId: pageId as number,
+                    wjsTemplate: savedTemplate
+                });
+                setInitialPuckData(seededData as any);
+                puckDataRef.current = seededData as any;
                 // Safety net (belt-and-braces): keep the original body so an empty-canvas save can't blank
                 // the page if the HTMLEmbed block is deleted before its HTML round-trips. Once the block
                 // round-trips through onChange (content.length > 0), legacyHtmlRef is cleared.
-                legacyHtmlRef.current = legacyHtml || null;
+                legacyHtmlRef.current = legacyHtml;
             }
             setLoaded(true); // content is now hydrated — saving is safe
         } catch (error) {
@@ -230,7 +221,7 @@ export default function PageEditorPage() {
                     _puck_data: liveData,
                     // Per-page theme template. Always sent (backend merges meta per key): '' explicitly
                     // CLEARS a previous assignment — omitting the key would leave it stale forever.
-                    _wjs_template: typeof root?.props?._wjs_template === 'string' ? root.props._wjs_template : ''
+                    _wjs_template: resolveWjsTemplateForSave(root?.props)
                 },
                 // Autosaves skip the revision snapshot server-side (see routes/posts.ts).
                 ...(isAutosave ? { autosave: true } : {})
@@ -238,16 +229,13 @@ export default function PageEditorPage() {
 
             // Legacy body preservation: a legacy page still on a blank canvas must not be blanked — keep
             // its original HTML and don't stamp empty Puck data over it (which would orphan the body).
-            if (!(liveData.content && liveData.content.length) && legacyHtmlRef.current) {
-                pageData.content = legacyHtmlRef.current;
-                delete (pageData.meta as any)._puck_data;
-            }
+            const finalPageData = applyLegacyHtmlFallback(pageData, liveData.content?.length ?? 0, legacyHtmlRef.current);
 
             const effectiveId = pageId ?? createdIdRef.current;
             if (effectiveId) {
-                await postsApi.update(effectiveId, pageData as any);
+                await postsApi.update(effectiveId, finalPageData as any);
             } else {
-                const created = await postsApi.create(pageData as any);
+                const created = await postsApi.create(finalPageData as any);
                 if (created?.id) {
                     createdIdRef.current = created.id;
                     // Keep the URL honest without remounting the editor mid-session.
@@ -306,7 +294,7 @@ export default function PageEditorPage() {
                 assignedTemplate={assignedTemplate || undefined}
                 onChange={(data) => {
                     // Ignore init-time events only (see mountedAtRef note above).
-                    if (Date.now() - mountedAtRef.current > 800) {
+                    if (!isWithinPostMountGrace(mountedAtRef.current, Date.now())) {
                         setIsDirty(true);
                     }
 

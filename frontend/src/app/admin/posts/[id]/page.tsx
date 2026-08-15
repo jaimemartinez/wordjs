@@ -9,7 +9,7 @@ import { localizeConfig } from "@/lib/puckI18n";
 import PuckEditor from "@/components/PuckEditor";
 import PuckEditorSkeleton from "@/components/PuckEditorSkeleton";
 import EditorLoadError from "@/components/EditorLoadError";
-import { unhydratedSaveBlocked } from "@/lib/editorGuards";
+import { unhydratedSaveBlocked, seedLegacyPuckData, applyLegacyHtmlFallback, resolveWjsTemplateForSave, isWithinPostMountGrace } from "@/lib/editorGuards";
 import { Data } from "@wordjs/puck";
 import { useUnsavedChanges } from "@/contexts/UnsavedChangesContext";
 import { useModal } from "@/contexts/ModalContext";
@@ -136,29 +136,20 @@ export default function PostEditorPage() {
                 // is VISIBLE and editable in the canvas instead of opening blank. The block renders the
                 // HTML sanitized (see puckConfig HTMLEmbed); the onChange serializer round-trips props.html
                 // back into `content`, so the body is preserved (and updated when edited).
-                const legacyHtml = post.content || "";
-                const seededData: any = {
-                    content: legacyHtml
-                        ? [{ type: "HTMLEmbed", props: { id: `HTMLEmbed-legacy-${postId}`, html: legacyHtml } }]
-                        : [],
-                    root: {
-                        title: post.title,
-                        slug: post.slug,
-                        props: {
-                            title: post.title,
-                            slug: post.slug,
-                            category: "",
-                            allowComments: post.commentStatus || "open",
-                            _wjs_template: savedTemplate
-                        }
-                    }
-                };
-                setPuckData(seededData);
-                puckDataRef.current = seededData;
+                const { data: seededData, legacyHtml } = seedLegacyPuckData({
+                    html: post.content || "",
+                    title: post.title,
+                    slug: post.slug,
+                    recordId: postId as number,
+                    wjsTemplate: savedTemplate,
+                    extraRootProps: { allowComments: post.commentStatus || "open" }
+                });
+                setPuckData(seededData as any);
+                puckDataRef.current = seededData as any;
                 // Safety net (belt-and-braces): keep the original body so an empty-canvas save can't blank
                 // the post if the HTMLEmbed block is deleted before its HTML round-trips. Once the block
                 // round-trips through onChange (content.length > 0), legacyHtmlRef is cleared.
-                legacyHtmlRef.current = legacyHtml || null;
+                legacyHtmlRef.current = legacyHtml;
             }
             setLoaded(true); // content is now hydrated — saving is safe
         } catch (error) {
@@ -228,7 +219,7 @@ export default function PostEditorPage() {
                     _puck_data: liveData, // Save the JSON structure for re-editing
                     // Per-page theme template. Always sent (backend merges meta per key): '' explicitly
                     // CLEARS a previous assignment — omitting the key would leave it stale forever.
-                    _wjs_template: typeof root?.props?._wjs_template === 'string' ? root.props._wjs_template : '',
+                    _wjs_template: resolveWjsTemplateForSave(root?.props),
                     // SEO fields
                     seo_title: root?.props?.seo_title || '',
                     seo_description: root?.props?.seo_description || '',
@@ -241,16 +232,13 @@ export default function PostEditorPage() {
 
             // Legacy body preservation: a legacy post still on a blank canvas must not be blanked — keep
             // its original HTML and don't stamp empty Puck data over it (which would orphan the body).
-            if (!(liveData.content && liveData.content.length) && legacyHtmlRef.current) {
-                postData.content = legacyHtmlRef.current;
-                delete (postData.meta as any)._puck_data;
-            }
+            const finalPostData = applyLegacyHtmlFallback(postData, liveData.content?.length ?? 0, legacyHtmlRef.current);
 
             const effectiveId = postId ?? createdIdRef.current;
             if (effectiveId) {
-                await postsApi.update(effectiveId, postData as any);
+                await postsApi.update(effectiveId, finalPostData as any);
             } else {
-                const created = await postsApi.create({ ...postData, type: "post" } as any);
+                const created = await postsApi.create({ ...finalPostData, type: "post" } as any);
                 if (created?.id) {
                     createdIdRef.current = created.id;
                     // Keep the URL honest without remounting the editor mid-session.
@@ -307,7 +295,7 @@ export default function PostEditorPage() {
                 assignedTemplate={assignedTemplate || undefined}
                 onChange={(data) => {
                     // Ignore init-time events only (see mountedAtRef note above).
-                    if (Date.now() - mountedAtRef.current > 800) {
+                    if (!isWithinPostMountGrace(mountedAtRef.current, Date.now())) {
                         setIsDirty(true);
                     }
 

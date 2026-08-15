@@ -30,6 +30,7 @@ import { setOutlineMode, showSpacingOverlay } from "./editor/canvasGuides";
 import { runA11yAudit, A11yPanel, type A11yIssue } from "./editor/A11yAudit";
 import { symbolsApi } from "@/lib/symbols";
 import ReviewComments from "./editor/ReviewComments";
+import { shouldRunAutosave, computeAutosaveWaitMs, buildAutosaveSaveOptions, didSaveSucceed } from "@/lib/autosavePolicy";
 
 // Viewport switcher + responsive preview frame. The canvas renders in an iframe (#preview-frame; see
 // <Puck iframe>) that fills its container, so we drive responsiveness by sizing the container to the
@@ -1080,7 +1081,7 @@ export default function PuckEditor({
         // The parents alert-and-swallow their own failures and signal them by returning false —
         // a failed save must not stamp savedAt or celebrate with the success toast.
         const ok = await onSave();
-        if (ok === false) return;
+        if (!didSaveSucceed(ok)) return;
         setSavedAt(new Date());
         setLastSaveWasAuto(false);
         setToastMsg(trStr("¡Cambios guardados con éxito!", language));
@@ -1089,15 +1090,18 @@ export default function PuckEditor({
     // Autosave: drafts only (a published page must never go live in the background). Fires 8s after
     // the page first becomes dirty, with a 30s floor between runs; the parent passes autosave:true
     // through to the API so these background saves skip revision snapshots and validation alerts.
+    // Decision/timing logic lives in lib/autosavePolicy.ts (pure, unit-tested) — this effect just
+    // wires it to the timer/state.
     const lastAutosaveRef = useRef(0);
     useEffect(() => {
-        if (status !== "draft" || !onSave || !hasChanges || saving) return;
-        const wait = Math.max(8000, 30000 - (Date.now() - lastAutosaveRef.current));
+        if (!shouldRunAutosave({ status, hasOnSave: !!onSave, hasChanges, saving })) return;
+        if (!onSave) return; // narrows onSave for TS below; unreachable — shouldRunAutosave already required it
+        const wait = computeAutosaveWaitMs(Date.now(), lastAutosaveRef.current);
         const t = setTimeout(async () => {
             lastAutosaveRef.current = Date.now();
             try {
-                const ok = await onSave({ autosave: true });
-                if (ok === false) return; // blocked/failed — don't stamp a save that didn't happen
+                const ok = await onSave(buildAutosaveSaveOptions());
+                if (!didSaveSucceed(ok)) return; // blocked/failed — don't stamp a save that didn't happen
                 setSavedAt(new Date());
                 setLastSaveWasAuto(true);
             } catch { /* background save — the next manual save surfaces real errors */ }

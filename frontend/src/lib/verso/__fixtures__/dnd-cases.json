@@ -1,0 +1,1073 @@
+{
+  "$schemaNotes": "Ver documentation/verso/dnd-spec.md §10 para la explicación completa. Resumen: cada caso da un árbol `layout` (ZoneNode recursivo con rects ABSOLUTOS, ya resueltos — no se miden, son datos), un `pointer` (usado por la Fase 1 de resolución de candidato/zona), y `dragging` (tipo new|existing, rect del clon arrastrado y `direction` YA resuelta — el fixture no exige derivar dirección de movimiento crudo). `expected.slotId`/`expected.index` son ambos `null` cuando la spec dicta que el motor NO debe actualizar el preview en este tick (ver dnd-spec.md §1.3 F-4, §3.5, §8.2, §8.3, F-9). `dir` en cada ZoneNode es el valor YA RESUELTO equivalente a getDeepDir (walk ancestro buscando el primer atributo dir explícito) — el fixture no modela el walk DOM en sí. `accepts` es una allow-list (null = acepta todo tipo); `disallow` es opcional y se combina con `accepts` exactamente como en dnd-spec.md §1.5 (filteredDisallow = disallow - accepts). El índice de un ComponentNode dentro de su zona es su posición en el array `items` del ZoneNode padre. `hitOrder` (opcional, solo en la categoría z-order-tiebreak) declara explícitamente el orden elementsFromPoint (más al frente primero) para casos de profundidad EMPATADA — ver dnd-spec.md F-2 (corregido): tras sort ascendente estable + reverse(), gana el candidato que hitOrder listó ÚLTIMO entre los empatados (el que estaba más atrás en el pintado), no el primero.",
+  "cases": [
+    {
+      "name": "depth-1level-single-item-wins-over-own-zone",
+      "category": "depth-resolution",
+      "layout": {
+        "id": "root:default-zone", "kind": "zone", "areaId": "root", "depth": 0,
+        "direction": "column", "dir": "ltr", "accepts": null,
+        "rect": {"left": 0, "top": 0, "right": 800, "bottom": 100},
+        "items": [
+          {"id": "X", "kind": "component", "componentType": "Text", "depth": 1,
+           "rect": {"left": 0, "top": 0, "right": 800, "bottom": 100}, "zones": []}
+        ]
+      },
+      "pointer": {"x": 400, "y": 50},
+      "dragging": {"type": "new", "sourceId": null, "componentType": "Text",
+        "rect": {"left": 100, "top": 0, "right": 700, "bottom": 40}, "direction": "up"},
+      "expected": {"slotId": "root:default-zone", "index": 0},
+      "rationale": "Único componente en la zona; su profundidad (1) supera a la de su propia zona (0) y gana como candidato. containsActiveZone=false (sin zonas hijas) => zone = su propia zona. direction=up, dragRect.top(0) < center(50)-offset(5)=45 => before, index=0+0."
+    },
+    {
+      "name": "depth-2level-empty-nested-zone-wins",
+      "category": "depth-resolution",
+      "layout": {
+        "id": "root:default-zone", "kind": "zone", "areaId": "root", "depth": 0,
+        "direction": "column", "dir": "ltr", "accepts": null,
+        "rect": {"left": 0, "top": 0, "right": 800, "bottom": 400},
+        "items": [
+          {"id": "CompA", "kind": "component", "componentType": "Card", "depth": 1,
+           "rect": {"left": 0, "top": 0, "right": 800, "bottom": 400},
+           "zones": [
+             {"id": "CompA:content", "kind": "zone", "areaId": "CompA", "depth": 2,
+              "direction": "column", "dir": "ltr", "accepts": null,
+              "rect": {"left": 50, "top": 50, "right": 750, "bottom": 350}, "items": []}
+           ]}
+        ]
+      },
+      "pointer": {"x": 400, "y": 200},
+      "dragging": {"type": "new", "sourceId": null, "componentType": "Text",
+        "rect": {"left": 350, "top": 180, "right": 450, "bottom": 220}, "direction": "down"},
+      "expected": {"slotId": "CompA:content", "index": 0},
+      "rationale": "Puntero dentro de la zona anidada vacía (depth2); gana sobre CompA(depth1) y root(depth0). Zona vacía => contenedor mismo es el droppable, index siempre 0, direction irrelevante."
+    },
+    {
+      "name": "depth-3level-chrome-over-active-nested-zone-disables-all",
+      "category": "depth-resolution",
+      "layout": {
+        "id": "root:default-zone", "kind": "zone", "areaId": "root", "depth": 0,
+        "direction": "column", "dir": "ltr", "accepts": null,
+        "rect": {"left": 0, "top": 0, "right": 900, "bottom": 600},
+        "items": [
+          {"id": "CompA", "kind": "component", "componentType": "Card", "depth": 1,
+           "rect": {"left": 0, "top": 0, "right": 800, "bottom": 600},
+           "zones": [
+             {"id": "CompA:content", "kind": "zone", "areaId": "CompA", "depth": 2,
+              "direction": "column", "dir": "ltr", "accepts": null,
+              "rect": {"left": 50, "top": 50, "right": 750, "bottom": 550},
+              "items": [
+                {"id": "CompB", "kind": "component", "componentType": "Card", "depth": 3,
+                 "rect": {"left": 50, "top": 50, "right": 750, "bottom": 300},
+                 "zones": [
+                   {"id": "CompB:content", "kind": "zone", "areaId": "CompB", "depth": 4,
+                    "direction": "column", "dir": "ltr", "accepts": null,
+                    "rect": {"left": 100, "top": 100, "right": 700, "bottom": 260}, "items": []}
+                 ]}
+              ]}
+           ]},
+          {"id": "Elsewhere", "kind": "component", "componentType": "Text", "depth": 1,
+           "rect": {"left": 820, "top": 0, "right": 900, "bottom": 100}, "zones": []}
+        ]
+      },
+      "pointer": {"x": 80, "y": 80},
+      "dragging": {"type": "new", "sourceId": null, "componentType": "Text",
+        "rect": {"left": 30, "top": 30, "right": 130, "bottom": 130}, "direction": "down"},
+      "expected": {"slotId": null, "index": null},
+      "rationale": "Puntero dentro de CompB (50-750,50-300) pero FUERA de su zona anidada CompB:content (100-700,100-260, x=80<100). CompB gana como candidato más profundo (depth3) que sigue conteniendo al punto. containsActiveZone(CompB)=true porque CompB:content acepta el tipo arrastrado (accepts=null) y está registrada activa => getZoneId devuelve zone=null (F-9). onChange recibe {zone:null}: zoneDepthIndex pasa a {} (vacío) => NINGUNA zona queda habilitada => sin target de Fase 2 posible."
+    },
+    {
+      "name": "depth-4level-deepest-nested-zone-wins",
+      "category": "depth-resolution",
+      "layout": {
+        "id": "root:default-zone", "kind": "zone", "areaId": "root", "depth": 0,
+        "direction": "column", "dir": "ltr", "accepts": null,
+        "rect": {"left": 0, "top": 0, "right": 900, "bottom": 600},
+        "items": [
+          {"id": "CompA", "kind": "component", "componentType": "Card", "depth": 1,
+           "rect": {"left": 0, "top": 0, "right": 800, "bottom": 600},
+           "zones": [
+             {"id": "CompA:content", "kind": "zone", "areaId": "CompA", "depth": 2,
+              "direction": "column", "dir": "ltr", "accepts": null,
+              "rect": {"left": 50, "top": 50, "right": 750, "bottom": 550},
+              "items": [
+                {"id": "CompB", "kind": "component", "componentType": "Card", "depth": 3,
+                 "rect": {"left": 50, "top": 50, "right": 750, "bottom": 300},
+                 "zones": [
+                   {"id": "CompB:content", "kind": "zone", "areaId": "CompB", "depth": 4,
+                    "direction": "column", "dir": "ltr", "accepts": null,
+                    "rect": {"left": 100, "top": 100, "right": 700, "bottom": 260}, "items": []}
+                 ]}
+              ]}
+           ]},
+          {"id": "Elsewhere", "kind": "component", "componentType": "Text", "depth": 1,
+           "rect": {"left": 820, "top": 0, "right": 900, "bottom": 100}, "zones": []}
+        ]
+      },
+      "pointer": {"x": 400, "y": 180},
+      "dragging": {"type": "new", "sourceId": null, "componentType": "Text",
+        "rect": {"left": 350, "top": 160, "right": 450, "bottom": 200}, "direction": "down"},
+      "expected": {"slotId": "CompB:content", "index": 0},
+      "rationale": "4 niveles de zona: root(0)->CompA(1)->CompA:content(2)->CompB(3)->CompB:content(4). Puntero dentro de CompB:content (100-700,100-260) => gana como candidato más profundo. Zona vacía => index 0."
+    },
+    {
+      "name": "depth-zero-candidates-far-outside-canvas",
+      "category": "depth-resolution",
+      "layout": {
+        "id": "root:default-zone", "kind": "zone", "areaId": "root", "depth": 0,
+        "direction": "column", "dir": "ltr", "accepts": null,
+        "rect": {"left": 0, "top": 0, "right": 800, "bottom": 100},
+        "items": [
+          {"id": "A", "kind": "component", "componentType": "Text", "depth": 1,
+           "rect": {"left": 0, "top": 0, "right": 800, "bottom": 100}, "zones": []}
+        ]
+      },
+      "pointer": {"x": 5000, "y": 5000},
+      "dragging": {"type": "new", "sourceId": null, "componentType": "Text",
+        "rect": {"left": 4950, "top": 4950, "right": 5050, "bottom": 5050}, "direction": "down"},
+      "expected": {"slotId": null, "index": null},
+      "rationale": "Cero candidatos geométricos bajo el puntero desde el inicio => Fase 1 cae al fallback interno {zone:rootDroppableId} (distinto de F-4 'todo filtrado'), pero ese fallback es solo una señal de HABILITACIÓN interna; Fase 2 (dnd-kit) no encuentra ningún target real en ese punto vacío => el preview no se actualiza este tick."
+    },
+
+    {
+      "name": "column-before-first-via-up",
+      "category": "midpoint-y",
+      "layout": {
+        "id": "root:default-zone", "kind": "zone", "areaId": "root", "depth": 0,
+        "direction": "column", "dir": "ltr", "accepts": null,
+        "rect": {"left": 0, "top": 0, "right": 800, "bottom": 300},
+        "items": [
+          {"id": "A", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 0, "top": 0, "right": 800, "bottom": 100}, "zones": []},
+          {"id": "B", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 0, "top": 100, "right": 800, "bottom": 200}, "zones": []},
+          {"id": "C", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 0, "top": 200, "right": 800, "bottom": 300}, "zones": []}
+        ]
+      },
+      "pointer": {"x": 400, "y": 20},
+      "dragging": {"type": "new", "sourceId": null, "componentType": "Text",
+        "rect": {"left": 100, "top": 0, "right": 700, "bottom": 40}, "direction": "up"},
+      "expected": {"slotId": "root:default-zone", "index": 0},
+      "rationale": "A: center.y=50, offset=0.05*100=5, umbral up=45. dragRect.top(0) < 45 (estricto) => overMidpoint true => before => index = A.index(0) + 0."
+    },
+    {
+      "name": "column-after-last-via-down",
+      "category": "midpoint-y",
+      "layout": {
+        "id": "root:default-zone", "kind": "zone", "areaId": "root", "depth": 0,
+        "direction": "column", "dir": "ltr", "accepts": null,
+        "rect": {"left": 0, "top": 0, "right": 800, "bottom": 300},
+        "items": [
+          {"id": "A", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 0, "top": 0, "right": 800, "bottom": 100}, "zones": []},
+          {"id": "B", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 0, "top": 100, "right": 800, "bottom": 200}, "zones": []},
+          {"id": "C", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 0, "top": 200, "right": 800, "bottom": 300}, "zones": []}
+        ]
+      },
+      "pointer": {"x": 400, "y": 260},
+      "dragging": {"type": "new", "sourceId": null, "componentType": "Text",
+        "rect": {"left": 100, "top": 240, "right": 700, "bottom": 280}, "direction": "down"},
+      "expected": {"slotId": "root:default-zone", "index": 3},
+      "rationale": "C: center.y=250, offset=5, umbral down=255 (inclusivo). dragRect.bottom(280) >= 255 => after => index = C.index(2) + 1 = 3 (añadir al final)."
+    },
+    {
+      "name": "column-after-first-via-down-equivalent-to-before-second",
+      "category": "midpoint-y",
+      "layout": {
+        "id": "root:default-zone", "kind": "zone", "areaId": "root", "depth": 0,
+        "direction": "column", "dir": "ltr", "accepts": null,
+        "rect": {"left": 0, "top": 0, "right": 800, "bottom": 300},
+        "items": [
+          {"id": "A", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 0, "top": 0, "right": 800, "bottom": 100}, "zones": []},
+          {"id": "B", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 0, "top": 100, "right": 800, "bottom": 200}, "zones": []},
+          {"id": "C", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 0, "top": 200, "right": 800, "bottom": 300}, "zones": []}
+        ]
+      },
+      "pointer": {"x": 400, "y": 50},
+      "dragging": {"type": "new", "sourceId": null, "componentType": "Text",
+        "rect": {"left": 100, "top": 20, "right": 700, "bottom": 70}, "direction": "down"},
+      "expected": {"slotId": "root:default-zone", "index": 1},
+      "rationale": "A: umbral down=55. dragRect.bottom(70)>=55 => after => index = A.index(0)+1 = 1. Resultado idéntico al de 'before B' (ver caso siguiente) pero ejercitando la rama down/after en vez de up/before."
+    },
+    {
+      "name": "column-before-second-via-up",
+      "category": "midpoint-y",
+      "layout": {
+        "id": "root:default-zone", "kind": "zone", "areaId": "root", "depth": 0,
+        "direction": "column", "dir": "ltr", "accepts": null,
+        "rect": {"left": 0, "top": 0, "right": 800, "bottom": 300},
+        "items": [
+          {"id": "A", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 0, "top": 0, "right": 800, "bottom": 100}, "zones": []},
+          {"id": "B", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 0, "top": 100, "right": 800, "bottom": 200}, "zones": []},
+          {"id": "C", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 0, "top": 200, "right": 800, "bottom": 300}, "zones": []}
+        ]
+      },
+      "pointer": {"x": 400, "y": 120},
+      "dragging": {"type": "new", "sourceId": null, "componentType": "Text",
+        "rect": {"left": 100, "top": 100, "right": 700, "bottom": 140}, "direction": "up"},
+      "expected": {"slotId": "root:default-zone", "index": 1},
+      "rationale": "B: center.y=150, offset=5, umbral up=145. dragRect.top(100) < 145 => before => index = B.index(1) + 0 = 1."
+    },
+    {
+      "name": "column-boundary-down-inclusive-exact-threshold",
+      "category": "midpoint-y",
+      "layout": {
+        "id": "root:default-zone", "kind": "zone", "areaId": "root", "depth": 0,
+        "direction": "column", "dir": "ltr", "accepts": null,
+        "rect": {"left": 0, "top": 0, "right": 800, "bottom": 300},
+        "items": [
+          {"id": "A", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 0, "top": 0, "right": 800, "bottom": 100}, "zones": []},
+          {"id": "B", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 0, "top": 100, "right": 800, "bottom": 200}, "zones": []},
+          {"id": "C", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 0, "top": 200, "right": 800, "bottom": 300}, "zones": []}
+        ]
+      },
+      "pointer": {"x": 400, "y": 40},
+      "dragging": {"type": "new", "sourceId": null, "componentType": "Text",
+        "rect": {"left": 100, "top": 10, "right": 700, "bottom": 55}, "direction": "down"},
+      "expected": {"slotId": "root:default-zone", "index": 1},
+      "rationale": "A: umbral down=55 EXACTO. dragRect.bottom=55, condición es >= (inclusiva) => 55>=55 true => overMidpoint => after => index=0+1=1. Caso de borde exacto de la comparación inclusiva (ver dnd-spec.md §3.3/F-8)."
+    },
+    {
+      "name": "column-boundary-up-strict-miss-no-collision",
+      "category": "midpoint-y",
+      "layout": {
+        "id": "root:default-zone", "kind": "zone", "areaId": "root", "depth": 0,
+        "direction": "column", "dir": "ltr", "accepts": null,
+        "rect": {"left": 0, "top": 0, "right": 800, "bottom": 300},
+        "items": [
+          {"id": "A", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 0, "top": 0, "right": 800, "bottom": 100}, "zones": []},
+          {"id": "B", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 0, "top": 100, "right": 800, "bottom": 200}, "zones": []},
+          {"id": "C", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 0, "top": 200, "right": 800, "bottom": 300}, "zones": []}
+        ]
+      },
+      "pointer": {"x": 400, "y": 150},
+      "dragging": {"type": "new", "sourceId": null, "componentType": "Text",
+        "rect": {"left": 100, "top": 145, "right": 700, "bottom": 185}, "direction": "up",
+        "fallbackEnabled": false},
+      "expected": {"slotId": null, "index": null},
+      "rationale": "B: umbral up=145 EXACTO. dragRect.top=145, condición es < (estricta) => 145<145 false => NO overMidpoint (F-8: asimetría con la rama down/left/right que sí es inclusiva). fallbackEnabled=false (simula ventana de 100ms post-cambio-de-zona) => sin colisión Low/Lowest posible => ningún target este tick => preview no se actualiza."
+    },
+
+    {
+      "name": "row-before-first-via-left-ltr",
+      "category": "midpoint-x",
+      "layout": {
+        "id": "root:default-zone", "kind": "zone", "areaId": "root", "depth": 0,
+        "direction": "row", "dir": "ltr", "accepts": null,
+        "rect": {"left": 0, "top": 0, "right": 900, "bottom": 150},
+        "items": [
+          {"id": "A", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 0, "top": 0, "right": 300, "bottom": 150}, "zones": []},
+          {"id": "B", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 300, "top": 0, "right": 600, "bottom": 150}, "zones": []},
+          {"id": "C", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 600, "top": 0, "right": 900, "bottom": 150}, "zones": []}
+        ]
+      },
+      "pointer": {"x": 100, "y": 75},
+      "dragging": {"type": "new", "sourceId": null, "componentType": "Text",
+        "rect": {"left": 50, "top": 0, "right": 250, "bottom": 150}, "direction": "left"},
+      "expected": {"slotId": "root:default-zone", "index": 0},
+      "rationale": "A: center.x=150, offset=0.05*300=15, umbral left=135 (dropCenter-offset >= dragRect.left). dragRect.left(50)<=135 => overMidpoint. direction=left + dir=ltr => before => index=0+0."
+    },
+    {
+      "name": "row-after-last-via-right-ltr",
+      "category": "midpoint-x",
+      "layout": {
+        "id": "root:default-zone", "kind": "zone", "areaId": "root", "depth": 0,
+        "direction": "row", "dir": "ltr", "accepts": null,
+        "rect": {"left": 0, "top": 0, "right": 900, "bottom": 150},
+        "items": [
+          {"id": "A", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 0, "top": 0, "right": 300, "bottom": 150}, "zones": []},
+          {"id": "B", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 300, "top": 0, "right": 600, "bottom": 150}, "zones": []},
+          {"id": "C", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 600, "top": 0, "right": 900, "bottom": 150}, "zones": []}
+        ]
+      },
+      "pointer": {"x": 800, "y": 75},
+      "dragging": {"type": "new", "sourceId": null, "componentType": "Text",
+        "rect": {"left": 650, "top": 0, "right": 800, "bottom": 150}, "direction": "right"},
+      "expected": {"slotId": "root:default-zone", "index": 3},
+      "rationale": "C: center.x=750, offset=15, umbral right=765 (dragRect.right-offset>=center). dragRect.right(800)-15=785>=750 => overMidpoint. direction=right+dir=ltr => after => index=2+1=3."
+    },
+    {
+      "name": "row-after-first-via-right-ltr",
+      "category": "midpoint-x",
+      "layout": {
+        "id": "root:default-zone", "kind": "zone", "areaId": "root", "depth": 0,
+        "direction": "row", "dir": "ltr", "accepts": null,
+        "rect": {"left": 0, "top": 0, "right": 900, "bottom": 150},
+        "items": [
+          {"id": "A", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 0, "top": 0, "right": 300, "bottom": 150}, "zones": []},
+          {"id": "B", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 300, "top": 0, "right": 600, "bottom": 150}, "zones": []},
+          {"id": "C", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 600, "top": 0, "right": 900, "bottom": 150}, "zones": []}
+        ]
+      },
+      "pointer": {"x": 150, "y": 75},
+      "dragging": {"type": "new", "sourceId": null, "componentType": "Text",
+        "rect": {"left": 50, "top": 0, "right": 200, "bottom": 150}, "direction": "right"},
+      "expected": {"slotId": "root:default-zone", "index": 1},
+      "rationale": "A: umbral right=165 (150-15). dragRect.right(200)-15=185>=150 => overMidpoint => after => index=0+1=1."
+    },
+    {
+      "name": "row-before-second-via-left-ltr",
+      "category": "midpoint-x",
+      "layout": {
+        "id": "root:default-zone", "kind": "zone", "areaId": "root", "depth": 0,
+        "direction": "row", "dir": "ltr", "accepts": null,
+        "rect": {"left": 0, "top": 0, "right": 900, "bottom": 150},
+        "items": [
+          {"id": "A", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 0, "top": 0, "right": 300, "bottom": 150}, "zones": []},
+          {"id": "B", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 300, "top": 0, "right": 600, "bottom": 150}, "zones": []},
+          {"id": "C", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 600, "top": 0, "right": 900, "bottom": 150}, "zones": []}
+        ]
+      },
+      "pointer": {"x": 400, "y": 75},
+      "dragging": {"type": "new", "sourceId": null, "componentType": "Text",
+        "rect": {"left": 350, "top": 0, "right": 500, "bottom": 150}, "direction": "left"},
+      "expected": {"slotId": "root:default-zone", "index": 1},
+      "rationale": "B: umbral left=435 (450-15). dragRect.left(350)<=435 => overMidpoint => before => index=1+0=1. Mismo resultado que el caso anterior por ruta distinta (after-A == before-B)."
+    },
+
+    {
+      "name": "rtl-row-left-means-after-not-before",
+      "category": "rtl",
+      "layout": {
+        "id": "root:default-zone", "kind": "zone", "areaId": "root", "depth": 0,
+        "direction": "row", "dir": "rtl", "accepts": null,
+        "rect": {"left": 0, "top": 0, "right": 900, "bottom": 150},
+        "items": [
+          {"id": "A", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 0, "top": 0, "right": 300, "bottom": 150}, "zones": []},
+          {"id": "B", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 300, "top": 0, "right": 600, "bottom": 150}, "zones": []},
+          {"id": "C", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 600, "top": 0, "right": 900, "bottom": 150}, "zones": []}
+        ]
+      },
+      "pointer": {"x": 100, "y": 75},
+      "dragging": {"type": "new", "sourceId": null, "componentType": "Text",
+        "rect": {"left": 50, "top": 0, "right": 250, "bottom": 150}, "direction": "left"},
+      "expected": {"slotId": "root:default-zone", "index": 1},
+      "rationale": "Misma geometría que 'row-before-first-via-left-ltr' (overMidpoint left true sobre A) pero dir=rtl: la regla es before solo si (up) o (ltr&&left) o (rtl&&right); direction=left+dir=rtl no matchea ninguna => after => index=0+1=1. Contraste directo: LTR daba index=0, RTL da index=1 para geometría idéntica."
+    },
+    {
+      "name": "rtl-row-right-means-before-not-after",
+      "category": "rtl",
+      "layout": {
+        "id": "root:default-zone", "kind": "zone", "areaId": "root", "depth": 0,
+        "direction": "row", "dir": "rtl", "accepts": null,
+        "rect": {"left": 0, "top": 0, "right": 900, "bottom": 150},
+        "items": [
+          {"id": "A", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 0, "top": 0, "right": 300, "bottom": 150}, "zones": []},
+          {"id": "B", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 300, "top": 0, "right": 600, "bottom": 150}, "zones": []},
+          {"id": "C", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 600, "top": 0, "right": 900, "bottom": 150}, "zones": []}
+        ]
+      },
+      "pointer": {"x": 800, "y": 75},
+      "dragging": {"type": "new", "sourceId": null, "componentType": "Text",
+        "rect": {"left": 650, "top": 0, "right": 800, "bottom": 150}, "direction": "right"},
+      "expected": {"slotId": "root:default-zone", "index": 2},
+      "rationale": "Misma geometría que 'row-after-last-via-right-ltr' pero dir=rtl: (rtl&&right) => before => index=C.index(2)+0=2. Contraste directo: LTR daba index=3 (after), RTL da index=2 (before)."
+    },
+    {
+      "name": "rtl-column-up-direction-unaffected-by-dir",
+      "category": "rtl",
+      "layout": {
+        "id": "root:default-zone", "kind": "zone", "areaId": "root", "depth": 0,
+        "direction": "column", "dir": "rtl", "accepts": null,
+        "rect": {"left": 0, "top": 0, "right": 800, "bottom": 300},
+        "items": [
+          {"id": "A", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 0, "top": 0, "right": 800, "bottom": 100}, "zones": []},
+          {"id": "B", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 0, "top": 100, "right": 800, "bottom": 200}, "zones": []},
+          {"id": "C", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 0, "top": 200, "right": 800, "bottom": 300}, "zones": []}
+        ]
+      },
+      "pointer": {"x": 400, "y": 20},
+      "dragging": {"type": "new", "sourceId": null, "componentType": "Text",
+        "rect": {"left": 100, "top": 0, "right": 700, "bottom": 40}, "direction": "up"},
+      "expected": {"slotId": "root:default-zone", "index": 0},
+      "rationale": "direction=up siempre es before, sea cual sea dir — dir SOLO afecta left/right (dnd-spec.md §3.6). Idéntico resultado a la columna LTR equivalente."
+    },
+    {
+      "name": "rtl-nested-zone-local-ltr-overrides-outer-rtl",
+      "category": "rtl",
+      "layout": {
+        "id": "root:default-zone", "kind": "zone", "areaId": "root", "depth": 0,
+        "direction": "column", "dir": "rtl", "accepts": null,
+        "rect": {"left": 0, "top": 0, "right": 900, "bottom": 400},
+        "items": [
+          {"id": "CompA", "kind": "component", "componentType": "Card", "depth": 1,
+           "rect": {"left": 0, "top": 0, "right": 900, "bottom": 400},
+           "zones": [
+             {"id": "CompA:content", "kind": "zone", "areaId": "CompA", "depth": 2,
+              "direction": "row", "dir": "ltr", "accepts": null,
+              "rect": {"left": 0, "top": 100, "right": 900, "bottom": 250},
+              "items": [
+                {"id": "X", "kind": "component", "componentType": "Text", "depth": 3, "rect": {"left": 0, "top": 100, "right": 300, "bottom": 250}, "zones": []},
+                {"id": "Y", "kind": "component", "componentType": "Text", "depth": 3, "rect": {"left": 300, "top": 100, "right": 600, "bottom": 250}, "zones": []}
+              ]}
+           ]}
+        ]
+      },
+      "pointer": {"x": 150, "y": 175},
+      "dragging": {"type": "new", "sourceId": null, "componentType": "Text",
+        "rect": {"left": 50, "top": 150, "right": 250, "bottom": 250}, "direction": "left"},
+      "expected": {"slotId": "CompA:content", "index": 0},
+      "rationale": "La página raíz es dir=rtl pero la zona anidada CompA:content declara dir=ltr localmente (más cercana al target en el walk de getDeepDir) => direction=left+dir=ltr(local) => before => index=X.index(0)+0=0, IGNORANDO el rtl del ancestro."
+    },
+    {
+      "name": "rtl-nested-zone-inherits-outer-rtl-when-no-local-override",
+      "category": "rtl",
+      "layout": {
+        "id": "root:default-zone", "kind": "zone", "areaId": "root", "depth": 0,
+        "direction": "column", "dir": "rtl", "accepts": null,
+        "rect": {"left": 0, "top": 0, "right": 900, "bottom": 400},
+        "items": [
+          {"id": "CompA", "kind": "component", "componentType": "Card", "depth": 1,
+           "rect": {"left": 0, "top": 0, "right": 900, "bottom": 400},
+           "zones": [
+             {"id": "CompA:content", "kind": "zone", "areaId": "CompA", "depth": 2,
+              "direction": "row", "dir": "rtl", "accepts": null,
+              "rect": {"left": 0, "top": 100, "right": 900, "bottom": 250},
+              "items": [
+                {"id": "X", "kind": "component", "componentType": "Text", "depth": 3, "rect": {"left": 0, "top": 100, "right": 300, "bottom": 250}, "zones": []},
+                {"id": "Y", "kind": "component", "componentType": "Text", "depth": 3, "rect": {"left": 300, "top": 100, "right": 600, "bottom": 250}, "zones": []}
+              ]}
+           ]}
+        ]
+      },
+      "pointer": {"x": 150, "y": 175},
+      "dragging": {"type": "new", "sourceId": null, "componentType": "Text",
+        "rect": {"left": 50, "top": 150, "right": 250, "bottom": 250}, "direction": "left"},
+      "expected": {"slotId": "CompA:content", "index": 1},
+      "rationale": "CompA:content no tiene override local propio; su dir efectivo (ya resuelto, ver $schemaNotes) es rtl, heredado del root vía getDeepDir. Misma geometría que el caso anterior pero dir=rtl => direction=left => after => index=X.index(0)+1=1. Contraste directo entre override local y herencia."
+    },
+
+    {
+      "name": "grid-dynamic-vertical-dominant-after",
+      "category": "grid",
+      "layout": {
+        "id": "root:default-zone", "kind": "zone", "areaId": "root", "depth": 0,
+        "direction": "grid", "dir": "ltr", "accepts": null,
+        "rect": {"left": 0, "top": 0, "right": 600, "bottom": 600},
+        "items": [
+          {"id": "A", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 0, "top": 0, "right": 300, "bottom": 300}, "zones": []},
+          {"id": "B", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 300, "top": 0, "right": 600, "bottom": 300}, "zones": []},
+          {"id": "C", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 0, "top": 300, "right": 300, "bottom": 600}, "zones": []},
+          {"id": "D", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 300, "top": 300, "right": 600, "bottom": 600}, "zones": []}
+        ]
+      },
+      "pointer": {"x": 150, "y": 150},
+      "dragging": {"type": "new", "sourceId": null, "componentType": "Text",
+        "rect": {"left": 50, "top": 100, "right": 250, "bottom": 200}, "direction": "down"},
+      "expected": {"slotId": "root:default-zone", "index": 1},
+      "rationale": "display:grid => dragAxis dynamic, pero el índice sigue siendo LINEAL (posición en el array), no 2D. Colisiona con A (center=(150,150), offset_y=15, umbral down=165): dragRect.bottom(200)>=165 => after => index=A.index(0)+1=1 (== 'la posición de B' en el array, aunque geométricamente B está a la derecha, no debajo)."
+    },
+    {
+      "name": "grid-dynamic-horizontal-dominant-before",
+      "category": "grid",
+      "layout": {
+        "id": "root:default-zone", "kind": "zone", "areaId": "root", "depth": 0,
+        "direction": "grid", "dir": "ltr", "accepts": null,
+        "rect": {"left": 0, "top": 0, "right": 600, "bottom": 600},
+        "items": [
+          {"id": "A", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 0, "top": 0, "right": 300, "bottom": 300}, "zones": []},
+          {"id": "B", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 300, "top": 0, "right": 600, "bottom": 300}, "zones": []},
+          {"id": "C", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 0, "top": 300, "right": 300, "bottom": 600}, "zones": []},
+          {"id": "D", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 300, "top": 300, "right": 600, "bottom": 600}, "zones": []}
+        ]
+      },
+      "pointer": {"x": 450, "y": 150},
+      "dragging": {"type": "new", "sourceId": null, "componentType": "Text",
+        "rect": {"left": 350, "top": 50, "right": 550, "bottom": 250}, "direction": "left"},
+      "expected": {"slotId": "root:default-zone", "index": 1},
+      "rationale": "B: center=(450,150), offset_x=15, umbral left=435. dragRect.left(350)<=435 => before => index=B.index(1)+0=1."
+    },
+    {
+      "name": "grid-dynamic-diagonal-tie-defaults-to-x-axis",
+      "category": "grid",
+      "layout": {
+        "id": "root:default-zone", "kind": "zone", "areaId": "root", "depth": 0,
+        "direction": "grid", "dir": "ltr", "accepts": null,
+        "rect": {"left": 0, "top": 0, "right": 600, "bottom": 600},
+        "items": [
+          {"id": "A", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 0, "top": 0, "right": 300, "bottom": 300}, "zones": []},
+          {"id": "B", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 300, "top": 0, "right": 600, "bottom": 300}, "zones": []},
+          {"id": "C", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 0, "top": 300, "right": 300, "bottom": 600}, "zones": []},
+          {"id": "D", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 300, "top": 300, "right": 600, "bottom": 600}, "zones": []}
+        ]
+      },
+      "pointer": {"x": 150, "y": 150},
+      "dragging": {"type": "new", "sourceId": null, "componentType": "Text",
+        "rect": {"left": 50, "top": 50, "right": 200, "bottom": 200}, "direction": "right"},
+      "expected": {"slotId": "root:default-zone", "index": 1},
+      "rationale": "F-6: cuando |delta.x|===|delta.y| (movimiento diagonal 45°) el empate se resuelve a favor del eje X (comparación estricta '>' en getDirection). Aquí direction=right ya viene precomputada reflejando ese desempate. A: umbral right=135 (150-15). dragRect.right(200)-15=185>=150 => after => index=0+1=1."
+    },
+    {
+      "name": "grid-row-boundary-after-c-equals-before-d",
+      "category": "grid",
+      "layout": {
+        "id": "root:default-zone", "kind": "zone", "areaId": "root", "depth": 0,
+        "direction": "grid", "dir": "ltr", "accepts": null,
+        "rect": {"left": 0, "top": 0, "right": 600, "bottom": 600},
+        "items": [
+          {"id": "A", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 0, "top": 0, "right": 300, "bottom": 300}, "zones": []},
+          {"id": "B", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 300, "top": 0, "right": 600, "bottom": 300}, "zones": []},
+          {"id": "C", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 0, "top": 300, "right": 300, "bottom": 600}, "zones": []},
+          {"id": "D", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 300, "top": 300, "right": 600, "bottom": 600}, "zones": []}
+        ]
+      },
+      "pointer": {"x": 150, "y": 450},
+      "dragging": {"type": "new", "sourceId": null, "componentType": "Text",
+        "rect": {"left": 50, "top": 350, "right": 200, "bottom": 500}, "direction": "right"},
+      "expected": {"slotId": "root:default-zone", "index": 3},
+      "rationale": "C: center=(150,450), offset_x=15, umbral right=135. dragRect.right(200)-15=185>=150 => after => index=C.index(2)+1=3 (equivalente a 'before D' en el array lineal)."
+    },
+
+    {
+      "name": "new-item-from-drawer-never-triggers-same-zone-shift",
+      "category": "new-vs-existing",
+      "layout": {
+        "id": "root:default-zone", "kind": "zone", "areaId": "root", "depth": 0,
+        "direction": "column", "dir": "ltr", "accepts": null,
+        "rect": {"left": 0, "top": 0, "right": 800, "bottom": 200},
+        "items": [
+          {"id": "X", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 0, "top": 0, "right": 800, "bottom": 100}, "zones": []},
+          {"id": "Y", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 0, "top": 100, "right": 800, "bottom": 200}, "zones": []}
+        ]
+      },
+      "pointer": {"x": 400, "y": 170},
+      "dragging": {"type": "new", "sourceId": null, "componentType": "Text",
+        "rect": {"left": 100, "top": 140, "right": 700, "bottom": 190}, "direction": "down"},
+      "expected": {"slotId": "root:default-zone", "index": 2},
+      "rationale": "Y: center=150,offset=5,umbral down=155. bottom(190)>=155=>after=>raw index=Y.index(1)+1=2. La corrección de -1 por 'mismo-zona' NUNCA aplica a un drag 'new': sourceData.zone pertenece al bookkeeping interno del drawer, jamás coincide con un zoneCompound real del canvas."
+    },
+    {
+      "name": "existing-same-zone-move-first-toward-last-shifts-back",
+      "category": "new-vs-existing",
+      "layout": {
+        "id": "root:default-zone", "kind": "zone", "areaId": "root", "depth": 0,
+        "direction": "column", "dir": "ltr", "accepts": null,
+        "rect": {"left": 0, "top": 0, "right": 800, "bottom": 300},
+        "items": [
+          {"id": "A", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 0, "top": 0, "right": 800, "bottom": 100}, "zones": []},
+          {"id": "B", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 0, "top": 100, "right": 800, "bottom": 200}, "zones": []},
+          {"id": "C", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 0, "top": 200, "right": 800, "bottom": 300}, "zones": []}
+        ]
+      },
+      "pointer": {"x": 400, "y": 260},
+      "dragging": {"type": "existing", "sourceId": "A", "componentType": "Text",
+        "rect": {"left": 100, "top": 240, "right": 700, "bottom": 280}, "direction": "down"},
+      "expected": {"slotId": "root:default-zone", "index": 2},
+      "rationale": "Arrastrando A (idx0) hacia C (idx2), direction=down (after). raw targetIndex=2; shift: 2>=sourceIndex(0) && misma zona => -1 => 1; luego after => +1 => 2. Array final [B,C,A]: A queda en índice 2. Correcto."
+    },
+    {
+      "name": "existing-same-zone-move-last-toward-first-no-shift-needed",
+      "category": "new-vs-existing",
+      "layout": {
+        "id": "root:default-zone", "kind": "zone", "areaId": "root", "depth": 0,
+        "direction": "column", "dir": "ltr", "accepts": null,
+        "rect": {"left": 0, "top": 0, "right": 800, "bottom": 300},
+        "items": [
+          {"id": "A", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 0, "top": 0, "right": 800, "bottom": 100}, "zones": []},
+          {"id": "B", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 0, "top": 100, "right": 800, "bottom": 200}, "zones": []},
+          {"id": "C", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 0, "top": 200, "right": 800, "bottom": 300}, "zones": []}
+        ]
+      },
+      "pointer": {"x": 400, "y": 20},
+      "dragging": {"type": "existing", "sourceId": "C", "componentType": "Text",
+        "rect": {"left": 100, "top": 0, "right": 700, "bottom": 40}, "direction": "up"},
+      "expected": {"slotId": "root:default-zone", "index": 0},
+      "rationale": "Arrastrando C (idx2) hacia A (idx0), direction=up (before). raw targetIndex=0; shift: 0>=sourceIndex(2)? false => sin shift; before => sin +1 => index=0. Array final [C,A,B]: C queda en índice 0. Correcto."
+    },
+    {
+      "name": "existing-cross-zone-move-never-shifts",
+      "category": "new-vs-existing",
+      "layout": {
+        "id": "root:default-zone", "kind": "zone", "areaId": "root", "depth": 0,
+        "direction": "row", "dir": "ltr", "accepts": null,
+        "rect": {"left": 0, "top": 0, "right": 900, "bottom": 400},
+        "items": [
+          {"id": "CompP", "kind": "component", "componentType": "Card", "depth": 1,
+           "rect": {"left": 0, "top": 0, "right": 400, "bottom": 400},
+           "zones": [
+             {"id": "CompP:content", "kind": "zone", "areaId": "CompP", "depth": 2,
+              "direction": "column", "dir": "ltr", "accepts": null,
+              "rect": {"left": 20, "top": 20, "right": 380, "bottom": 380},
+              "items": [
+                {"id": "P0", "kind": "component", "componentType": "Text", "depth": 3, "rect": {"left": 20, "top": 20, "right": 380, "bottom": 120}, "zones": []}
+              ]}
+           ]},
+          {"id": "CompQ", "kind": "component", "componentType": "Card", "depth": 1,
+           "rect": {"left": 450, "top": 0, "right": 900, "bottom": 400},
+           "zones": [
+             {"id": "CompQ:content", "kind": "zone", "areaId": "CompQ", "depth": 2,
+              "direction": "column", "dir": "ltr", "accepts": null,
+              "rect": {"left": 470, "top": 20, "right": 830, "bottom": 380},
+              "items": [
+                {"id": "Q0", "kind": "component", "componentType": "Text", "depth": 3, "rect": {"left": 470, "top": 20, "right": 830, "bottom": 120}, "zones": []},
+                {"id": "Q1", "kind": "component", "componentType": "Text", "depth": 3, "rect": {"left": 470, "top": 120, "right": 830, "bottom": 220}, "zones": []}
+              ]}
+           ]}
+        ]
+      },
+      "pointer": {"x": 650, "y": 170},
+      "dragging": {"type": "existing", "sourceId": "P0", "componentType": "Text",
+        "rect": {"left": 500, "top": 150, "right": 800, "bottom": 200}, "direction": "down"},
+      "expected": {"slotId": "CompQ:content", "index": 2},
+      "rationale": "P0 vive en CompP:content, se arrastra hacia CompQ:content (zona DISTINTA) sobre Q1(idx1), direction=down. La corrección de -1 exige sourceZone===targetZone (falso aquí) => sin shift; after => index=Q1.index(1)+1=2."
+    },
+
+    {
+      "name": "empty-root-zone-drop-index-zero",
+      "category": "empty-zone",
+      "layout": {
+        "id": "root:default-zone", "kind": "zone", "areaId": "root", "depth": 0,
+        "direction": "column", "dir": "ltr", "accepts": null,
+        "rect": {"left": 0, "top": 0, "right": 800, "bottom": 400},
+        "items": []
+      },
+      "pointer": {"x": 400, "y": 200},
+      "dragging": {"type": "new", "sourceId": null, "componentType": "Text",
+        "rect": {"left": 350, "top": 180, "right": 450, "bottom": 220}, "direction": "down"},
+      "expected": {"slotId": "root:default-zone", "index": 0},
+      "rationale": "Página completamente vacía: el contenedor de la zona raíz es el único droppable (pointerIntersection), index siempre 0."
+    },
+    {
+      "name": "existing-item-dropped-into-empty-nested-zone",
+      "category": "empty-zone",
+      "layout": {
+        "id": "root:default-zone", "kind": "zone", "areaId": "root", "depth": 0,
+        "direction": "row", "dir": "ltr", "accepts": null,
+        "rect": {"left": 0, "top": 0, "right": 900, "bottom": 400},
+        "items": [
+          {"id": "CompA", "kind": "component", "componentType": "Card", "depth": 1,
+           "rect": {"left": 0, "top": 0, "right": 400, "bottom": 400},
+           "zones": [
+             {"id": "CompA:content", "kind": "zone", "areaId": "CompA", "depth": 2,
+              "direction": "column", "dir": "ltr", "accepts": null,
+              "rect": {"left": 50, "top": 50, "right": 350, "bottom": 350}, "items": []}
+           ]},
+          {"id": "Elsewhere", "kind": "component", "componentType": "Text", "depth": 1,
+           "rect": {"left": 450, "top": 0, "right": 900, "bottom": 100}, "zones": []}
+        ]
+      },
+      "pointer": {"x": 200, "y": 200},
+      "dragging": {"type": "existing", "sourceId": "Elsewhere", "componentType": "Text",
+        "rect": {"left": 150, "top": 180, "right": 250, "bottom": 220}, "direction": "down"},
+      "expected": {"slotId": "CompA:content", "index": 0},
+      "rationale": "Elsewhere (root:default-zone idx1) se arrastra a la zona anidada vacía CompA:content. target.type!=='component' en este camino => index siempre 0, sin corrección de shift (esa corrección solo existe dentro de la rama 'target es componente')."
+    },
+    {
+      "name": "existing-item-dropped-into-empty-4th-level-zone",
+      "category": "empty-zone",
+      "layout": {
+        "id": "root:default-zone", "kind": "zone", "areaId": "root", "depth": 0,
+        "direction": "column", "dir": "ltr", "accepts": null,
+        "rect": {"left": 0, "top": 0, "right": 900, "bottom": 600},
+        "items": [
+          {"id": "CompA", "kind": "component", "componentType": "Card", "depth": 1,
+           "rect": {"left": 0, "top": 0, "right": 800, "bottom": 600},
+           "zones": [
+             {"id": "CompA:content", "kind": "zone", "areaId": "CompA", "depth": 2,
+              "direction": "column", "dir": "ltr", "accepts": null,
+              "rect": {"left": 50, "top": 50, "right": 750, "bottom": 550},
+              "items": [
+                {"id": "CompB", "kind": "component", "componentType": "Card", "depth": 3,
+                 "rect": {"left": 50, "top": 50, "right": 750, "bottom": 300},
+                 "zones": [
+                   {"id": "CompB:content", "kind": "zone", "areaId": "CompB", "depth": 4,
+                    "direction": "column", "dir": "ltr", "accepts": null,
+                    "rect": {"left": 100, "top": 100, "right": 700, "bottom": 260}, "items": []}
+                 ]}
+              ]}
+           ]},
+          {"id": "Elsewhere", "kind": "component", "componentType": "Text", "depth": 1,
+           "rect": {"left": 820, "top": 0, "right": 900, "bottom": 100}, "zones": []}
+        ]
+      },
+      "pointer": {"x": 400, "y": 180},
+      "dragging": {"type": "existing", "sourceId": "Elsewhere", "componentType": "Text",
+        "rect": {"left": 350, "top": 160, "right": 450, "bottom": 200}, "direction": "down"},
+      "expected": {"slotId": "CompB:content", "index": 0},
+      "rationale": "Mismo árbol de 4 niveles que el caso depth-4level; aquí con un ítem EXISTENTE como origen (no 'new'), confirmando que la zona vacía más profunda gana igual y el índice es 0."
+    },
+    {
+      "name": "empty-zone-index-is-direction-invariant",
+      "category": "empty-zone",
+      "layout": {
+        "id": "root:default-zone", "kind": "zone", "areaId": "root", "depth": 0,
+        "direction": "row", "dir": "ltr", "accepts": null,
+        "rect": {"left": 0, "top": 0, "right": 900, "bottom": 400},
+        "items": [
+          {"id": "CompA", "kind": "component", "componentType": "Card", "depth": 1,
+           "rect": {"left": 0, "top": 0, "right": 400, "bottom": 400},
+           "zones": [
+             {"id": "CompA:content", "kind": "zone", "areaId": "CompA", "depth": 2,
+              "direction": "column", "dir": "ltr", "accepts": null,
+              "rect": {"left": 50, "top": 50, "right": 350, "bottom": 350}, "items": []}
+           ]},
+          {"id": "Elsewhere", "kind": "component", "componentType": "Text", "depth": 1,
+           "rect": {"left": 450, "top": 0, "right": 900, "bottom": 100}, "zones": []}
+        ]
+      },
+      "pointer": {"x": 200, "y": 200},
+      "dragging": {"type": "existing", "sourceId": "Elsewhere", "componentType": "Text",
+        "rect": {"left": 150, "top": 170, "right": 250, "bottom": 210}, "direction": "up"},
+      "expected": {"slotId": "CompA:content", "index": 0},
+      "rationale": "Idéntico resultado (index=0) que 'existing-item-dropped-into-empty-nested-zone' pese a direction='up' en vez de 'down' — prueba explícitamente que la dirección es irrelevante cuando el target es el contenedor de una zona vacía (esa rama de onDragOver ni siquiera consulta collisionData.direction)."
+    },
+
+    {
+      "name": "self-drop-on-own-position-is-noop",
+      "category": "self-and-descendant",
+      "layout": {
+        "id": "root:default-zone", "kind": "zone", "areaId": "root", "depth": 0,
+        "direction": "column", "dir": "ltr", "accepts": null,
+        "rect": {"left": 0, "top": 0, "right": 800, "bottom": 300},
+        "items": [
+          {"id": "A", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 0, "top": 0, "right": 800, "bottom": 100}, "zones": []},
+          {"id": "B", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 0, "top": 100, "right": 800, "bottom": 200}, "zones": []},
+          {"id": "C", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 0, "top": 200, "right": 800, "bottom": 300}, "zones": []}
+        ]
+      },
+      "pointer": {"x": 400, "y": 50},
+      "dragging": {"type": "existing", "sourceId": "A", "componentType": "Text",
+        "rect": {"left": 100, "top": 20, "right": 700, "bottom": 70}, "direction": "down"},
+      "expected": {"slotId": null, "index": null},
+      "rationale": "A se arrastra sobre sí mismo. Fase 1 se auto-excluye de candidates[] pero la zona contenedora (root:default-zone, el propio div) sigue siendo un candidato válido bajo el mismo punto => Fase 1 NO devuelve null, resuelve la zona normalmente. La guarda real es la de Fase 2 (dnd-kit resuelve colisión contra el propio droppable de origen de A vía el mecanismo 'sticky origin' de directionalCollision, target.id===source.id) => onDragOver descarta la actualización explícitamente (targetId===sourceId). Ver dnd-spec.md §8.2."
+    },
+    {
+      "name": "drag-container-over-its-own-nested-content-is-noop",
+      "category": "self-and-descendant",
+      "layout": {
+        "id": "root:default-zone", "kind": "zone", "areaId": "root", "depth": 0,
+        "direction": "row", "dir": "ltr", "accepts": null,
+        "rect": {"left": 0, "top": 0, "right": 900, "bottom": 400},
+        "items": [
+          {"id": "CompA", "kind": "component", "componentType": "Card", "depth": 1,
+           "rect": {"left": 0, "top": 0, "right": 400, "bottom": 400},
+           "zones": [
+             {"id": "CompA:content", "kind": "zone", "areaId": "CompA", "depth": 2,
+              "direction": "column", "dir": "ltr", "accepts": null,
+              "rect": {"left": 50, "top": 50, "right": 350, "bottom": 350},
+              "items": [
+                {"id": "Inner", "kind": "component", "componentType": "Text", "depth": 3, "rect": {"left": 50, "top": 50, "right": 350, "bottom": 200}, "zones": []}
+              ]}
+           ]},
+          {"id": "Sibling", "kind": "component", "componentType": "Text", "depth": 1,
+           "rect": {"left": 450, "top": 0, "right": 900, "bottom": 100}, "zones": []}
+        ]
+      },
+      "pointer": {"x": 200, "y": 100},
+      "dragging": {"type": "existing", "sourceId": "CompA", "componentType": "Card",
+        "rect": {"left": 150, "top": 80, "right": 250, "bottom": 130}, "direction": "down"},
+      "expected": {"slotId": null, "index": null},
+      "rationale": "CompA (un contenedor) se arrastra sobre su propio descendiente Inner. Doble guarda: Fase 1 excluye a Inner y a CompA:content por path/areaId; Fase 2 excluye cualquier target cuyo path contenga sourceId. Resultado observable: la actualización se descarta este tick (ver dnd-spec.md §8.3, F-3)."
+    },
+    {
+      "name": "dropzone-areaId-equals-dragged-id-isolated",
+      "category": "self-and-descendant",
+      "layout": {
+        "id": "root:default-zone", "kind": "zone", "areaId": "root", "depth": 0,
+        "direction": "row", "dir": "ltr", "accepts": null,
+        "rect": {"left": 0, "top": 0, "right": 900, "bottom": 400},
+        "items": [
+          {"id": "CompA", "kind": "component", "componentType": "Card", "depth": 1,
+           "rect": {"left": 0, "top": 0, "right": 400, "bottom": 400},
+           "zones": [
+             {"id": "CompA:content", "kind": "zone", "areaId": "CompA", "depth": 2,
+              "direction": "column", "dir": "ltr", "accepts": null,
+              "rect": {"left": 50, "top": 50, "right": 350, "bottom": 350}, "items": []}
+           ]},
+          {"id": "Sibling", "kind": "component", "componentType": "Text", "depth": 1,
+           "rect": {"left": 450, "top": 0, "right": 900, "bottom": 100}, "zones": []}
+        ]
+      },
+      "pointer": {"x": 200, "y": 200},
+      "dragging": {"type": "existing", "sourceId": "CompA", "componentType": "Card",
+        "rect": {"left": 150, "top": 180, "right": 250, "bottom": 220}, "direction": "down"},
+      "expected": {"slotId": null, "index": null},
+      "rationale": "Aisla la regla 'candidateData.areaId === draggedCandidateId' (§1.3): CompA:content está vacía (sin hijos que disparen el filtro por path), pero su areaId es literalmente CompA (el propio id arrastrado) => se excluye por esta regla específica, distinta de la de descendientes por path. Resultado: no-op."
+    },
+
+    {
+      "name": "accepts-nested-zone-rejects-type-falls-to-parent-component",
+      "category": "accepts",
+      "layout": {
+        "id": "root:default-zone", "kind": "zone", "areaId": "root", "depth": 0,
+        "direction": "column", "dir": "ltr", "accepts": null,
+        "rect": {"left": 0, "top": 0, "right": 800, "bottom": 400},
+        "items": [
+          {"id": "CompA", "kind": "component", "componentType": "Card", "depth": 1,
+           "rect": {"left": 0, "top": 0, "right": 800, "bottom": 400},
+           "zones": [
+             {"id": "CompA:content", "kind": "zone", "areaId": "CompA", "depth": 2,
+              "direction": "column", "dir": "ltr", "accepts": ["Image"],
+              "rect": {"left": 50, "top": 50, "right": 750, "bottom": 350}, "items": []}
+           ]}
+        ]
+      },
+      "pointer": {"x": 400, "y": 200},
+      "dragging": {"type": "new", "sourceId": null, "componentType": "Text",
+        "rect": {"left": 300, "top": 210, "right": 500, "bottom": 260}, "direction": "down"},
+      "expected": {"slotId": "root:default-zone", "index": 1},
+      "rationale": "zoneA solo acepta 'Image'; se arrastra 'Text' => isDroppableTarget=false => zoneA excluida de candidates. CompA (containsActiveZone=false, ya que su única zona no acepta este tipo) resuelve como componente: zone=su propia zona (root). CompA: center=(400,200), offset_y=20 (0.05*400), umbral down=220. dragRect.bottom(260)>=220 => after => index=CompA.index(0)+1=1."
+    },
+    {
+      "name": "accepts-allowlist-accepts-listed-type",
+      "category": "accepts",
+      "layout": {
+        "id": "root:default-zone", "kind": "zone", "areaId": "root", "depth": 0,
+        "direction": "column", "dir": "ltr", "accepts": null,
+        "rect": {"left": 0, "top": 0, "right": 800, "bottom": 400},
+        "items": [
+          {"id": "CompA", "kind": "component", "componentType": "Card", "depth": 1,
+           "rect": {"left": 0, "top": 0, "right": 800, "bottom": 400},
+           "zones": [
+             {"id": "CompA:content", "kind": "zone", "areaId": "CompA", "depth": 2,
+              "direction": "column", "dir": "ltr", "accepts": ["Text"],
+              "rect": {"left": 50, "top": 50, "right": 750, "bottom": 350}, "items": []}
+           ]}
+        ]
+      },
+      "pointer": {"x": 400, "y": 200},
+      "dragging": {"type": "new", "sourceId": null, "componentType": "Text",
+        "rect": {"left": 350, "top": 180, "right": 450, "bottom": 220}, "direction": "down"},
+      "expected": {"slotId": "CompA:content", "index": 0},
+      "rationale": "zoneA acepta explícitamente 'Text', que es el tipo arrastrado => isDroppableTarget=true => zoneA gana como candidato más profundo, zona vacía => index 0."
+    },
+    {
+      "name": "disallow-blocks-listed-type-falls-to-parent",
+      "category": "accepts",
+      "layout": {
+        "id": "root:default-zone", "kind": "zone", "areaId": "root", "depth": 0,
+        "direction": "column", "dir": "ltr", "accepts": null,
+        "rect": {"left": 0, "top": 0, "right": 800, "bottom": 400},
+        "items": [
+          {"id": "CompA", "kind": "component", "componentType": "Card", "depth": 1,
+           "rect": {"left": 0, "top": 0, "right": 800, "bottom": 400},
+           "zones": [
+             {"id": "CompA:content", "kind": "zone", "areaId": "CompA", "depth": 2,
+              "direction": "column", "dir": "ltr", "accepts": null, "disallow": ["Video"],
+              "rect": {"left": 50, "top": 50, "right": 750, "bottom": 350}, "items": []}
+           ]}
+        ]
+      },
+      "pointer": {"x": 400, "y": 200},
+      "dragging": {"type": "new", "sourceId": null, "componentType": "Video",
+        "rect": {"left": 300, "top": 50, "right": 500, "bottom": 150}, "direction": "up"},
+      "expected": {"slotId": "root:default-zone", "index": 0},
+      "rationale": "zoneA rechaza 'Video' vía disallow (sin allow que lo contrarreste) => isDroppableTarget=false => excluida. CompA (containsActiveZone=false para este tipo) resuelve a su propia zona (root). CompA: umbral up=180 (200-20). dragRect.top(50)<180 => before => index=0+0=0."
+    },
+    {
+      "name": "allow-overrides-disallow-for-explicitly-listed-type",
+      "category": "accepts",
+      "layout": {
+        "id": "root:default-zone", "kind": "zone", "areaId": "root", "depth": 0,
+        "direction": "column", "dir": "ltr", "accepts": null,
+        "rect": {"left": 0, "top": 0, "right": 800, "bottom": 400},
+        "items": [
+          {"id": "CompA", "kind": "component", "componentType": "Card", "depth": 1,
+           "rect": {"left": 0, "top": 0, "right": 800, "bottom": 400},
+           "zones": [
+             {"id": "CompA:content", "kind": "zone", "areaId": "CompA", "depth": 2,
+              "direction": "column", "dir": "ltr", "accepts": ["Text"], "disallow": ["Text", "Image"],
+              "rect": {"left": 50, "top": 50, "right": 750, "bottom": 350}, "items": []}
+           ]}
+        ]
+      },
+      "pointer": {"x": 400, "y": 200},
+      "dragging": {"type": "new", "sourceId": null, "componentType": "Text",
+        "rect": {"left": 350, "top": 180, "right": 450, "bottom": 220}, "direction": "down"},
+      "expected": {"slotId": "CompA:content", "index": 0},
+      "rationale": "filteredDisallow = disallow('Text','Image') - accepts('Text') = ['Image']. 'Text' no está en filteredDisallow => se acepta pese a aparecer nominalmente en disallow, porque accepts la lista explícitamente (dnd-spec.md §1.5). zoneA gana, vacía => index 0."
+    },
+
+    {
+      "name": "buffer-excludes-nested-zone-edge-cascades-to-null-via-active-chrome",
+      "category": "buffer-edge",
+      "layout": {
+        "id": "root:default-zone", "kind": "zone", "areaId": "root", "depth": 0,
+        "direction": "column", "dir": "ltr", "accepts": null,
+        "rect": {"left": 0, "top": 0, "right": 800, "bottom": 300},
+        "items": [
+          {"id": "CompA", "kind": "component", "componentType": "Card", "depth": 1,
+           "rect": {"left": 0, "top": 0, "right": 800, "bottom": 300},
+           "zones": [
+             {"id": "CompA:content", "kind": "zone", "areaId": "CompA", "depth": 2,
+              "direction": "column", "dir": "ltr", "accepts": null,
+              "rect": {"left": 50, "top": 50, "right": 750, "bottom": 250}, "items": []}
+           ]}
+        ]
+      },
+      "pointer": {"x": 400, "y": 53},
+      "dragging": {"type": "new", "sourceId": null, "componentType": "Text",
+        "rect": {"left": 350, "top": 40, "right": 450, "bottom": 66}, "direction": "down"},
+      "expected": {"slotId": null, "index": null},
+      "rationale": "zoneA.rect.top=50; su caja contraída (BUFFER=6) empieza en y=56. pointer.y=53 cae DENTRO del rect crudo pero FUERA de la caja contraída => zoneA se excluye como candidato este tick por el buffer. CompA (depth1) sobrevive y gana; containsActiveZone(CompA)=true (zoneA acepta cualquier tipo y está registrada activa) => zone=null (F-9) => zoneDepthIndex queda vacío => nada droppable."
+    },
+    {
+      "name": "buffer-includes-nested-zone-one-pixel-past-edge",
+      "category": "buffer-edge",
+      "layout": {
+        "id": "root:default-zone", "kind": "zone", "areaId": "root", "depth": 0,
+        "direction": "column", "dir": "ltr", "accepts": null,
+        "rect": {"left": 0, "top": 0, "right": 800, "bottom": 300},
+        "items": [
+          {"id": "CompA", "kind": "component", "componentType": "Card", "depth": 1,
+           "rect": {"left": 0, "top": 0, "right": 800, "bottom": 300},
+           "zones": [
+             {"id": "CompA:content", "kind": "zone", "areaId": "CompA", "depth": 2,
+              "direction": "column", "dir": "ltr", "accepts": null,
+              "rect": {"left": 50, "top": 50, "right": 750, "bottom": 250}, "items": []}
+           ]}
+        ]
+      },
+      "pointer": {"x": 400, "y": 57},
+      "dragging": {"type": "new", "sourceId": null, "componentType": "Text",
+        "rect": {"left": 350, "top": 44, "right": 450, "bottom": 70}, "direction": "down"},
+      "expected": {"slotId": "CompA:content", "index": 0},
+      "rationale": "Idéntica geometría al caso anterior salvo pointer.y=57 (>=56, la caja contraída de zoneA) => zoneA SOBREVIVE el buffer y gana como candidato más profundo. Un solo píxel de diferencia en pointer.y invierte el resultado completo (de 'nada droppable' a 'zoneA vacía, index 0') — demuestra el efecto observable del buffer de 6px."
+    },
+    {
+      "name": "drawer-overlap-forces-fallback-to-root-regardless-of-geometry",
+      "category": "buffer-edge",
+      "layout": {
+        "id": "root:default-zone", "kind": "zone", "areaId": "root", "depth": 0,
+        "direction": "column", "dir": "ltr", "accepts": null,
+        "rect": {"left": 0, "top": 0, "right": 800, "bottom": 100},
+        "items": [
+          {"id": "A", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 0, "top": 0, "right": 800, "bottom": 100}, "zones": []}
+        ]
+      },
+      "pointer": {"x": 400, "y": 50},
+      "pointerOverDrawer": true,
+      "dragging": {"type": "new", "sourceId": null, "componentType": "Text",
+        "rect": {"left": 100, "top": 60, "right": 700, "bottom": 90}, "direction": "down"},
+      "expected": {"slotId": "root:default-zone", "index": 1},
+      "rationale": "pointerOverDrawer=true simula que el elemento bajo el puntero tiene [data-puck-drawer]: la lista de elementsFromPoint se restringe A SOLO ESE ELEMENTO (§1.1 paso 2), que no tiene data-puck-dropzone/data-puck-dnd => candidates=[] desde el inicio => fallback a rootDroppableId (la rama 'cero candidatos desde el inicio', NO la de F-4). La restricción del drawer es exclusiva de la Fase 1 (NestedDroppablePlugin); la Fase 2 (colisión de dnd-kit) es un sistema independiente y sigue resolviendo normalmente contra A dentro de la zona root ya habilitada: umbral down=55, bottom(90)>=55 => after => index=0+1=1."
+    },
+    {
+      "name": "buffer-exclusion-is-per-candidate-list-continues-processing",
+      "category": "buffer-edge",
+      "layout": {
+        "id": "root:default-zone", "kind": "zone", "areaId": "root", "depth": 0,
+        "direction": "column", "dir": "ltr", "accepts": null,
+        "rect": {"left": 0, "top": 0, "right": 800, "bottom": 200},
+        "items": [
+          {"id": "Card", "kind": "component", "componentType": "Card", "depth": 1, "zIndex": 0,
+           "rect": {"left": 0, "top": 0, "right": 800, "bottom": 200}, "zones": []},
+          {"id": "Badge", "kind": "component", "componentType": "Text", "depth": 1, "zIndex": 1,
+           "rect": {"left": 380, "top": 10, "right": 420, "bottom": 50}, "zones": []}
+        ]
+      },
+      "pointer": {"x": 400, "y": 13},
+      "dragging": {"type": "new", "sourceId": null, "componentType": "Text",
+        "rect": {"left": 300, "top": 90, "right": 500, "bottom": 150}, "direction": "down"},
+      "expected": {"slotId": "root:default-zone", "index": 1},
+      "rationale": "Badge (rect chico, pintado al frente por zIndex superior) también contiene geométricamente el punto (400,13), pero su caja contraída empieza en y=16 (10+6) => 13<16 => Badge EXCLUIDO por el buffer. El bucle de getPointerCollisions sigue procesando el resto de elementsFromPoint (§1.1 paso 5: no corta el bucle) y encuentra Card, cuya caja contraída (top=6) sí incluye y=13 => Card sobrevive y gana (sin necesitar desempate, Card(depth1) es el único superviviente de esa profundidad). Fase 2 contra Card: umbral down=110 (100+10). dragRect.bottom(150)>=110 => after => index=Card.index(0)+1=1."
+    },
+
+    {
+      "name": "equal-depth-tie-winner-is-painted-behind-not-in-front",
+      "category": "z-order-tiebreak",
+      "layout": {
+        "id": "root:default-zone", "kind": "zone", "areaId": "root", "depth": 0,
+        "direction": "column", "dir": "ltr", "accepts": null,
+        "rect": {"left": 0, "top": 0, "right": 800, "bottom": 300},
+        "items": [
+          {"id": "Rear", "kind": "component", "componentType": "Text", "depth": 1,
+           "rect": {"left": 0, "top": 0, "right": 800, "bottom": 200}, "zones": []},
+          {"id": "Front", "kind": "component", "componentType": "Text", "depth": 1,
+           "rect": {"left": 0, "top": 50, "right": 800, "bottom": 250}, "zones": []}
+        ]
+      },
+      "pointer": {"x": 400, "y": 120},
+      "hitOrder": ["Front", "Rear", "root:default-zone"],
+      "dragging": {"type": "new", "sourceId": null, "componentType": "Text",
+        "rect": {"left": 200, "top": 90, "right": 600, "bottom": 150}, "direction": "down"},
+      "expected": {"slotId": "root:default-zone", "index": 1},
+      "rationale": "Rear y Front comparten depth=1 (empate exacto) y ambos sobreviven el buffer en (400,120). elementsFromPoint (hitOrder) los lista [Front,Rear,...] (Front al frente). depthSort ascendente ESTABLE conserva ese orden relativo entre los empatados: [root(0),Front(1),Rear(1)]. El .reverse() posterior INVIERTE también el orden relativo de los empatados: [Rear,Front,root] => gana Rear, el que estaba MÁS ATRÁS en el pintado, no Front (ver F-2 corregido en dnd-spec.md — es un efecto colateral de aplicar reverse() sobre un sort estable, no una regla deliberada de prioridad). zone=Rear.zone=root:default-zone. Fase 2 contra Rear (idx0): center=100,offset=10,umbral down=110. bottom(150)>=110=>after=>index=0+1=1."
+    },
+    {
+      "name": "mismatched-depth-always-wins-regardless-of-hitOrder",
+      "category": "z-order-tiebreak",
+      "layout": {
+        "id": "root:default-zone", "kind": "zone", "areaId": "root", "depth": 0,
+        "direction": "column", "dir": "ltr", "accepts": null,
+        "rect": {"left": 0, "top": 0, "right": 800, "bottom": 400},
+        "items": [
+          {"id": "CompA", "kind": "component", "componentType": "Card", "depth": 1,
+           "rect": {"left": 0, "top": 0, "right": 800, "bottom": 400},
+           "zones": [
+             {"id": "CompA:content", "kind": "zone", "areaId": "CompA", "depth": 2,
+              "direction": "column", "dir": "ltr", "accepts": null,
+              "rect": {"left": 50, "top": 50, "right": 750, "bottom": 350}, "items": []}
+           ]}
+        ]
+      },
+      "pointer": {"x": 400, "y": 200},
+      "hitOrder": ["CompA", "CompA:content"],
+      "dragging": {"type": "new", "sourceId": null, "componentType": "Text",
+        "rect": {"left": 350, "top": 180, "right": 450, "bottom": 220}, "direction": "down"},
+      "expected": {"slotId": "CompA:content", "index": 0},
+      "rationale": "hitOrder lista deliberadamente CompA(depth1) ANTES que CompA:content(depth2), como si CompA se pintara al frente. Sin embargo las profundidades NO están empatadas (2>1): depthSort+reverse ordena correctamente por profundidad sin importar el orden original de hitOrder — CompA:content sigue ganando. Contraste directo con el caso anterior: hitOrder solo importa en empates EXACTOS de profundidad."
+    },
+    {
+      "name": "three-way-equal-depth-tie-last-in-hitOrder-wins",
+      "category": "z-order-tiebreak",
+      "layout": {
+        "id": "root:default-zone", "kind": "zone", "areaId": "root", "depth": 0,
+        "direction": "column", "dir": "ltr", "accepts": null,
+        "rect": {"left": 0, "top": 0, "right": 800, "bottom": 300},
+        "items": [
+          {"id": "Rear1", "kind": "component", "componentType": "Text", "depth": 1,
+           "rect": {"left": 0, "top": 0, "right": 800, "bottom": 200}, "zones": []},
+          {"id": "Mid", "kind": "component", "componentType": "Text", "depth": 1,
+           "rect": {"left": 0, "top": 30, "right": 800, "bottom": 230}, "zones": []},
+          {"id": "Front", "kind": "component", "componentType": "Text", "depth": 1,
+           "rect": {"left": 0, "top": 60, "right": 800, "bottom": 260}, "zones": []}
+        ]
+      },
+      "pointer": {"x": 400, "y": 150},
+      "hitOrder": ["Front", "Mid", "Rear1", "root:default-zone"],
+      "dragging": {"type": "new", "sourceId": null, "componentType": "Text",
+        "rect": {"left": 200, "top": 90, "right": 600, "bottom": 150}, "direction": "down"},
+      "expected": {"slotId": "root:default-zone", "index": 1},
+      "rationale": "Generaliza el caso pairwise a 3 candidatos empatados en depth=1, los tres sobreviven el buffer en (400,150). hitOrder=[Front,Mid,Rear1,...]; tras sort estable ascendente + reverse, gana el que hitOrder listó ÚLTIMO entre los empatados: Rear1. zone=Rear1.zone=root:default-zone. Fase 2 contra Rear1(idx0): center=100,offset=10,umbral down=110. bottom(150)>=110=>after=>index=0+1=1."
+    },
+
+    {
+      "name": "move-first-of-four-to-end-combines-both-corrections",
+      "category": "first-last-index",
+      "layout": {
+        "id": "root:default-zone", "kind": "zone", "areaId": "root", "depth": 0,
+        "direction": "column", "dir": "ltr", "accepts": null,
+        "rect": {"left": 0, "top": 0, "right": 800, "bottom": 400},
+        "items": [
+          {"id": "A", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 0, "top": 0, "right": 800, "bottom": 100}, "zones": []},
+          {"id": "B", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 0, "top": 100, "right": 800, "bottom": 200}, "zones": []},
+          {"id": "C", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 0, "top": 200, "right": 800, "bottom": 300}, "zones": []},
+          {"id": "D", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 0, "top": 300, "right": 800, "bottom": 400}, "zones": []}
+        ]
+      },
+      "pointer": {"x": 400, "y": 360},
+      "dragging": {"type": "existing", "sourceId": "A", "componentType": "Text",
+        "rect": {"left": 100, "top": 340, "right": 700, "bottom": 390}, "direction": "down"},
+      "expected": {"slotId": "root:default-zone", "index": 3},
+      "rationale": "A(idx0) hacia D(idx3), direction=down. raw targetIndex=3; shift: 3>=0 && misma zona => -1 => 2; after => +1 => 3. Array final [B,C,D,A]: A queda en índice 3 (última posición de una lista de 4). Confirma ambas correcciones combinadas en un caso 'mover el primero al final'."
+    },
+    {
+      "name": "move-last-of-four-to-front-shift-does-not-apply",
+      "category": "first-last-index",
+      "layout": {
+        "id": "root:default-zone", "kind": "zone", "areaId": "root", "depth": 0,
+        "direction": "column", "dir": "ltr", "accepts": null,
+        "rect": {"left": 0, "top": 0, "right": 800, "bottom": 400},
+        "items": [
+          {"id": "A", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 0, "top": 0, "right": 800, "bottom": 100}, "zones": []},
+          {"id": "B", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 0, "top": 100, "right": 800, "bottom": 200}, "zones": []},
+          {"id": "C", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 0, "top": 200, "right": 800, "bottom": 300}, "zones": []},
+          {"id": "D", "kind": "component", "componentType": "Text", "depth": 1, "rect": {"left": 0, "top": 300, "right": 800, "bottom": 400}, "zones": []}
+        ]
+      },
+      "pointer": {"x": 400, "y": 20},
+      "dragging": {"type": "existing", "sourceId": "D", "componentType": "Text",
+        "rect": {"left": 100, "top": 0, "right": 700, "bottom": 40}, "direction": "up"},
+      "expected": {"slotId": "root:default-zone", "index": 0},
+      "rationale": "D(idx3) hacia A(idx0), direction=up. raw targetIndex=0; shift: 0>=3? false => sin shift; before => sin +1 => index=0. Array final [D,A,B,C]: D queda en índice 0 (primera posición). Contraste con el caso anterior: aquí la corrección de shift NUNCA se activa porque el target ya está antes del origen."
+    }
+  ]
+}
