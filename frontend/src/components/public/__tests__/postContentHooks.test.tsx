@@ -112,6 +112,15 @@ describe('PostContent — the post frame is emitted on both body paths', () => {
         expect(puck).toContain('Ada');
     });
 
+    it('emits NO inline <script> — the page-id global travels as a client effect', () => {
+        // The inline script executed only during document parse: after a soft navigation React
+        // inserts but never runs it, so window.__WJS_PAGE_ID kept the PREVIOUS page's id and a form
+        // submission was stamped against the wrong page. PageId.tsx (an effect keyed on the id) is
+        // the fix; this pins the script's absence so the bug cannot come back quietly.
+        expect(classic).not.toContain('<script');
+        expect(puck).not.toContain('<script');
+    });
+
     it('leaves a PAGE alone — the frame is the POST frame', () => {
         const page = render({ ...basePost, type: 'page' } as unknown as Post);
         expect(emits(page, 'wjs-post')).toBe(false);

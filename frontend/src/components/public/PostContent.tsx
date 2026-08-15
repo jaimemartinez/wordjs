@@ -9,6 +9,7 @@
  * imported <Render> + the ENTIRE editor config — ~378KB of hydrated JS on every public page.
  */
 import Link from "next/link";
+import PageId from "./PageId";
 import ContentRenderer from "@/components/content/ContentRenderer";
 import LocalizedDate from "@/components/content/LocalizedDate";
 import LegacyCarousels from "@/components/content/LegacyCarousels";
@@ -54,10 +55,10 @@ export default function PostContent({ post, settings, category, showComments }: 
     return (
         <div className="w-full">
             {/* Page identity for client-side blocks (the Form block stamps its submissions with it).
-                A plain global, set before hydration completes — read lazily inside event handlers. */}
-            <script
-                dangerouslySetInnerHTML={{ __html: `window.__WJS_PAGE_ID=${JSON.stringify(post.id)};` }}
-            />
+                A client effect, NOT an inline <script>: a script executes only while the browser
+                parses the server document, so after a soft navigation the global kept the PREVIOUS
+                page's id and a form submission was stamped against the wrong page. See PageId.tsx. */}
+            <PageId id={post.id} />
             {!isFramedPost ? (
                 puckData ? (
                     <div className="wjs-post-body puck-content">
