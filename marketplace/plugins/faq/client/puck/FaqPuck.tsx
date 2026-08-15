@@ -16,19 +16,23 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
+// Classes are namespaced under `.wjs-p-faq-` so a theme can NAME these surfaces through the
+// manifest (plugin:faq:*). The prefix is derived from the plugin slug — see
+// scripts/plugin-theme-surfaces.js — and manifest.json declares the same selectors under
+// `themeSurfaces`; frontend/src/lib/__tests__/pluginSelectorContract.test.ts proves the two agree.
 const STYLES = `
-.wjfq-wrap { width: 100%; max-width: 100%; }
-.wjfq-title { font-size: var(--wjs-h2-size, 1.75rem); font-weight: 700; margin: 0 0 1rem; color: inherit; }
-.wjfq-list { display: flex; flex-direction: column; gap: .6rem; }
-.wjfq-item { border: 1px solid var(--wjs-border-subtle, #e5e7eb); border-radius: var(--wjs-radius, .5rem); background: var(--wjs-bg-surface, #fff); overflow: hidden; }
-.wjfq-q { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 1rem; padding: .95rem 1.15rem; background: transparent; border: none; cursor: pointer; text-align: left; font: inherit; font-weight: 600; line-height: 1.4; color: inherit; }
-.wjfq-q:hover { background: rgba(0, 0, 0, .03); }
-.wjfq-icon { flex: 0 0 auto; width: 1.5em; height: 1.5em; display: inline-flex; align-items: center; justify-content: center; font-size: 1.15em; font-weight: 400; line-height: 1; color: var(--wjs-color-text-muted, #6b7280); transition: transform .3s ease; }
-.wjfq-open .wjfq-icon { transform: rotate(45deg); }
-.wjfq-panel { max-height: 0; overflow: hidden; transition: max-height .35s ease; }
-.wjfq-a { padding: 0 1.15rem 1.05rem; white-space: pre-line; color: var(--wjs-color-text-muted, #4b5563); line-height: 1.65; }
-.wjfq-empty { padding: 1.75rem 1rem; text-align: center; color: var(--wjs-color-text-muted, #6b7280); background: var(--wjs-bg-surface, #f9fafb); border: 1px dashed var(--wjs-border-subtle, #e5e7eb); border-radius: var(--wjs-radius, .5rem); font-size: .9rem; }
-@media (max-width: 767.98px) { .wjfq-q { padding: .8rem .9rem; } .wjfq-a { padding: 0 .9rem .9rem; } }
+.wjs-p-faq-wrap { width: 100%; max-width: 100%; }
+.wjs-p-faq-title { font-size: var(--wjs-h2-size, 1.75rem); font-weight: 700; margin: 0 0 1rem; color: inherit; }
+.wjs-p-faq-list { display: flex; flex-direction: column; gap: .6rem; }
+.wjs-p-faq-item { border: 1px solid var(--wjs-border-subtle, #e5e7eb); border-radius: var(--wjs-radius, .5rem); background: var(--wjs-bg-surface, #fff); overflow: hidden; }
+.wjs-p-faq-question { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 1rem; padding: .95rem 1.15rem; background: transparent; border: none; cursor: pointer; text-align: left; font: inherit; font-weight: 600; line-height: 1.4; color: inherit; }
+.wjs-p-faq-question:hover { background: rgba(0, 0, 0, .03); }
+.wjs-p-faq-icon { flex: 0 0 auto; width: 1.5em; height: 1.5em; display: inline-flex; align-items: center; justify-content: center; font-size: 1.15em; font-weight: 400; line-height: 1; color: var(--wjs-color-text-muted, #6b7280); transition: transform .3s ease; }
+.wjs-p-faq-item--open .wjs-p-faq-icon { transform: rotate(45deg); }
+.wjs-p-faq-panel { max-height: 0; overflow: hidden; transition: max-height .35s ease; }
+.wjs-p-faq-answer { padding: 0 1.15rem 1.05rem; white-space: pre-line; color: var(--wjs-color-text-muted, #4b5563); line-height: 1.65; }
+.wjs-p-faq-empty { padding: 1.75rem 1rem; text-align: center; color: var(--wjs-color-text-muted, #6b7280); background: var(--wjs-bg-surface, #f9fafb); border: 1px dashed var(--wjs-border-subtle, #e5e7eb); border-radius: var(--wjs-radius, .5rem); font-size: .9rem; }
+@media (max-width: 767.98px) { .wjs-p-faq-question { padding: .8rem .9rem; } .wjs-p-faq-answer { padding: 0 .9rem .9rem; } }
 `;
 
 // Module-level (never define a component inside a component — remounting steals state/focus).
@@ -43,14 +47,14 @@ function FaqItem({ item, open, onToggle }) {
     }, [open, item.answer]);
 
     return (
-        <div className={"wjfq-item" + (open ? " wjfq-open" : "")}>
-            <button type="button" className="wjfq-q" aria-expanded={open} onClick={onToggle}>
+        <div className={"wjs-p-faq-item" + (open ? " wjs-p-faq-item--open" : "")}>
+            <button type="button" className="wjs-p-faq-question" aria-expanded={open} onClick={onToggle}>
                 <span>{item.question}</span>
-                <span className="wjfq-icon" aria-hidden="true">+</span>
+                <span className="wjs-p-faq-icon" aria-hidden="true">+</span>
             </button>
-            <div className="wjfq-panel" style={{ maxHeight: maxH + "px" }}>
+            <div className="wjs-p-faq-panel" style={{ maxHeight: maxH + "px" }}>
                 {/* Plain text on purpose (white-space: pre-line) — answers are NOT trusted HTML. */}
-                <div ref={innerRef} className="wjfq-a">{item.answer}</div>
+                <div ref={innerRef} className="wjs-p-faq-answer">{item.answer}</div>
             </div>
         </div>
     );
@@ -133,18 +137,18 @@ export default function FaqPuck({ title, category, maxItems, singleOpen, jsonLd 
     }, [jsonLd, items]);
 
     return (
-        <div className="wjfq-wrap">
+        <div className="wjs-p-faq-wrap">
             <style dangerouslySetInnerHTML={{ __html: STYLES }} />
-            {title ? <h2 className="wjfq-title">{title}</h2> : null}
+            {title ? <h2 className="wjs-p-faq-title">{title}</h2> : null}
             {items === null ? (
-                <div className="wjfq-empty">Cargando preguntas frecuentes…</div>
+                <div className="wjs-p-faq-empty">Cargando preguntas frecuentes…</div>
             ) : items.length === 0 ? (
-                <div className="wjfq-empty">
+                <div className="wjs-p-faq-empty">
                     No hay preguntas frecuentes para mostrar
                     {category ? ` en la categoría "${category}"` : ""} — agrégalas en Admin → FAQ.
                 </div>
             ) : (
-                <div className="wjfq-list">
+                <div className="wjs-p-faq-list">
                     {items.map((it) => (
                         <FaqItem key={it.id} item={it} open={openIds.includes(it.id)} onToggle={() => toggle(it.id)} />
                     ))}

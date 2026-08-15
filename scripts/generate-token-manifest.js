@@ -16,11 +16,19 @@
  * ========================================================================== */
 const fs = require('fs');
 const path = require('path');
+const { collectPluginThemeElements } = require('./plugin-theme-surfaces');
 
 const CSS_PATH = path.resolve(__dirname, '../backend/public/css/wordjs-ui.css');
 const OUT_PATH = path.resolve(__dirname, '../backend/public/theme-tokens.json');
 const SOURCE_REL = 'backend/public/css/wordjs-ui.css';
 const TOKEN_PREFIX = '--wjs-';
+
+// The committed plugin catalog — the same deterministic on-disk source
+// build-marketplace.js packs. Each plugin may DECLARE its themable block surfaces
+// in manifest.json; they merge into the manifest under `plugin:<slug>:<element>`
+// keys. Namespace ownership (a plugin may only name `.wjs-p-<slug>-*` classes) is
+// enforced in plugin-theme-surfaces.js and a bad declaration fails this build.
+const PLUGINS_DIR = path.resolve(__dirname, '../marketplace/plugins');
 
 // ── Alias zone ────────────────────────────────────────────────────────────────
 // The `alias` flag is anchored to the "Visual-editor (Puck) block aliases"
@@ -610,6 +618,20 @@ function main() {
             ? { selector: seed }
             : { selector: seed.selector, ...(seed.children ? { children: { ...seed.children } } : {}) };
     }
+
+    // ── PLUGIN block surfaces (OLA 6 / F5) ────────────────────────────────────
+    // Merge each committed plugin's DECLARED + namespace-validated surfaces under
+    // `plugin:<slug>:<element>` keys. A malformed/hostile declaration (a selector
+    // naming a framework class, a bare tag, an id, another plugin's prefix, …) is
+    // collected as an error and FAILS the build below — refused loudly, never
+    // silently skipped. The `plugin:` key space cannot collide with a `.wp-block-*`
+    // base or a chrome seed key (those are bare identifiers), but guard anyway.
+    const { elements: pluginElements, errors: pluginErrors } = collectPluginThemeElements(PLUGINS_DIR);
+    for (const [key, def] of Object.entries(pluginElements)) {
+        if (elements[key]) { pluginErrors.push(`plugin element key ${key} collides with an existing manifest element`); continue; }
+        elements[key] = def;
+    }
+
     const elementsOut = {};
     for (const key of Object.keys(elements).sort()) {
         const el = elements[key];
@@ -651,8 +673,11 @@ function main() {
         }
     }
 
+    const pluginElementKeys = Object.keys(elementsOut).filter((k) => k.startsWith('plugin:'));
+
     console.log(`theme-tokens.json written: ${path.relative(process.cwd(), OUT_PATH)}`);
     console.log(`counts: tokens=${manifest.counts.tokens} varUses=${manifest.counts.varUses} elements=${manifest.counts.elements}`);
+    console.log(`plugin surfaces: ${pluginElementKeys.length}${pluginElementKeys.length ? ` (${pluginElementKeys.join(', ')})` : ''}`);
     console.log(`alias flags: ${aliasNames.length}`);
     console.log(`hero tokens: ${heroNames.length} (group "hero": ${heroGroupsOk ? 'OK' : 'FAIL'})`);
     console.log(`editor-internal (--wjs-r-*): ${editorInternal.length}`);
@@ -663,6 +688,14 @@ function main() {
     if (!heroGroupsOk) { console.error('FAIL: --wjs-hero-* tokens missing or not grouped as "hero"'); failed = true; }
     if (!phantomsOk) { console.error('FAIL: chrome-phantom tokens missing'); failed = true; }
     if (displacedBlockChildren.length) { console.error(`FAIL: block-child seeds missing or displaced by a scraped child with another selector: ${displacedBlockChildren.join(', ')}`); failed = true; }
+    // A plugin declaration that breaks the namespace boundary (or is otherwise
+    // malformed) is a REFUSAL, not a skip — the manifest a theme trusts must never
+    // absorb an unvalidated plugin surface.
+    if (pluginErrors.length) {
+        console.error(`FAIL: ${pluginErrors.length} plugin themeSurfaces declaration error(s):`);
+        for (const e of pluginErrors) console.error(`  - ${e}`);
+        failed = true;
+    }
     // 21 Puck block aliases + 1 RTL rename alias (--wjs-cta-button-ml → --wjs-cta-button-margin-start).
     if (aliasNames.length !== 22) console.warn(`WARN: alias-flagged tokens = ${aliasNames.length} (expected 22): ${aliasNames.join(', ')}`);
     if (failed) process.exitCode = 1;

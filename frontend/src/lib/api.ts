@@ -646,6 +646,15 @@ export const themesApi = {
         const baseUrl = getBaseUrl();
         window.location.href = `${baseUrl}/themes/${slug}/download`;
     },
+    /** The page templates a theme ships (templates/*.json), for the per-page template picker. */
+    listTemplates: (slug: string) => apiGet<{ slug: string; templates: string[] }>(`/themes/${slug}/templates`),
+    /** Download the active theme's customizer mods as a JSON file. Cookie-auth, like download(). */
+    exportMods: () => {
+        const baseUrl = getBaseUrl();
+        window.location.href = `${baseUrl}/themes/mods/export`;
+    },
+    /** Apply an uploaded customizer-mods file. The backend validates every key/value before writing. */
+    importMods: (data: unknown) => apiPost<{ applied: boolean; count: number }>(`/themes/mods/import`, data),
 };
 
 // The public settings payload also carries DERIVED, non-string fields (see DERIVED_PUBLIC_SETTINGS in

@@ -115,6 +115,8 @@ export default function ThemeCustomizerPage() {
     const [previewBlocked, setPreviewBlocked] = useState(false);
 
     const iframeRef = useRef<HTMLIFrameElement>(null);
+    // Hidden <input type=file> the "Import" button clicks — reading a JSON file the admin picked.
+    const importInputRef = useRef<HTMLInputElement>(null);
 
     // --- Load active theme + existing overrides on mount ---------------------------------------
     useEffect(() => {
@@ -290,6 +292,56 @@ export default function ThemeCustomizerPage() {
         }
     }, [t]);
 
+    // Export: a plain link to the backend download endpoint (cookie-authed) — no state to manage.
+    const handleExport = useCallback(() => {
+        themesApi.exportMods();
+    }, []);
+
+    // Import: read the picked JSON file, hand it to the backend (which VALIDATES every key/value and
+    // rejects the whole file on any bad entry), then reflect the applied mods back into the editor.
+    const handleImportFile = useCallback(
+        async (e: React.ChangeEvent<HTMLInputElement>) => {
+            const file = e.target.files?.[0];
+            // Clear the input so re-picking the same file fires change again.
+            e.target.value = "";
+            if (!file) return;
+            setSaveState("saving");
+            setErrorText(null);
+            try {
+                const text = await file.text();
+                let parsed: unknown;
+                try {
+                    parsed = JSON.parse(text);
+                } catch {
+                    throw new Error(t("customizer.importInvalidJson"));
+                }
+                await themesApi.importMods(parsed);
+                // Re-read the stored mods so the controls match exactly what the backend accepted.
+                const settings = await settingsApi.get();
+                const raw = settings[MODS_KEY];
+                const next: Record<string, string> = {};
+                if (raw) {
+                    try {
+                        const obj = JSON.parse(raw);
+                        if (obj && typeof obj === "object" && !Array.isArray(obj)) {
+                            for (const [k, v] of Object.entries(obj)) {
+                                if (typeof v === "string") next[k] = v;
+                            }
+                        }
+                    } catch {
+                        /* ignore — leave editor as-is */
+                    }
+                }
+                setOverrides(next);
+                setSaveState("saved");
+            } catch (err) {
+                setSaveState("error");
+                setErrorText(err instanceof Error ? err.message : t("customizer.importError"));
+            }
+        },
+        [t],
+    );
+
     const hasOverrides = Object.keys(sanitizeMods(overrides)).length > 0;
 
     return (
@@ -307,6 +359,29 @@ export default function ThemeCustomizerPage() {
                     }
                     actions={
                         <>
+                            <input
+                                ref={importInputRef}
+                                type="file"
+                                accept="application/json,.json"
+                                className="hidden"
+                                onChange={handleImportFile}
+                            />
+                            <Button
+                                variant="secondary"
+                                icon="fa-file-export"
+                                onClick={handleExport}
+                                disabled={saveState === "saving"}
+                            >
+                                {t("customizer.export")}
+                            </Button>
+                            <Button
+                                variant="secondary"
+                                icon="fa-file-import"
+                                onClick={() => importInputRef.current?.click()}
+                                disabled={saveState === "saving"}
+                            >
+                                {t("customizer.import")}
+                            </Button>
                             <Button
                                 variant="secondary"
                                 icon="fa-rotate-left"
