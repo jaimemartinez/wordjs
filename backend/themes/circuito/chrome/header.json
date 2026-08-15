@@ -1,0 +1,26 @@
+{
+  "root": { "props": {} },
+  "content": [
+    {
+      "type": "ChromeRow",
+      "props": {
+        "align": "between",
+        "gap": "md",
+        "items": [
+          { "type": "ChromeLogo", "props": { "size": "md" } },
+          {
+            "type": "ChromeRow",
+            "props": {
+              "align": "end",
+              "gap": "md",
+              "items": [
+                { "type": "ChromeNav", "props": { "location": "header", "orientation": "horizontal" } },
+                { "type": "ChromeButton", "props": { "label": "CONECTAR", "href": "/pages/contacto", "variant": "primary" } }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

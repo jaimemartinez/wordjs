@@ -1,0 +1,17 @@
+{
+  "root": { "props": {} },
+  "content": [
+    {
+      "type": "ChromeRow",
+      "props": {
+        "align": "center",
+        "gap": "md",
+        "wrap": true,
+        "items": [
+          { "type": "ChromeText", "props": { "text": "¿Te gustaría cultivar algo juntos?" } },
+          { "type": "ChromeButton", "props": { "label": "Escríbeme", "href": "/contact", "variant": "primary" } }
+        ]
+      }
+    }
+  ]
+}

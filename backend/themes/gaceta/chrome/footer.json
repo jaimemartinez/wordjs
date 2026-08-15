@@ -1,0 +1,37 @@
+{
+    "root": { "props": {} },
+    "content": [
+        {
+            "type": "ChromeRow",
+            "props": {
+                "align": "center",
+                "gap": "md",
+                "items": [
+                    { "type": "ChromeSiteTitle", "props": { "showTagline": false } }
+                ]
+            }
+        },
+        {
+            "type": "ChromeRow",
+            "props": {
+                "align": "center",
+                "gap": "lg",
+                "wrap": true,
+                "items": [
+                    { "type": "ChromeNav", "props": { "location": "footer", "orientation": "horizontal" } },
+                    { "type": "ChromeSocials", "props": { "source": "settings" } }
+                ]
+            }
+        },
+        {
+            "type": "ChromeRow",
+            "props": {
+                "align": "center",
+                "gap": "sm",
+                "items": [
+                    { "type": "ChromeText", "props": { "text": "Impresa cada día en tinta y papel digital" } }
+                ]
+            }
+        }
+    ]
+}

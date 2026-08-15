@@ -1,0 +1,27 @@
+{
+  "root": { "props": {} },
+  "content": [
+    { "type": "Spacer", "props": { "height": "3rem" } },
+    {
+      "type": "SearchBar",
+      "props": {
+        "placeholder": "Buscar en el vergel…",
+        "align": "center",
+        "width": "36rem",
+        "inputRadius": "999px",
+        "buttonRadius": "999px"
+      }
+    },
+    { "type": "Spacer", "props": { "height": "3rem" } },
+    {
+      "type": "Section",
+      "props": {
+        "tag": "section",
+        "items": [
+          { "type": "PageContent", "props": {} }
+        ]
+      }
+    },
+    { "type": "Spacer", "props": { "height": "4rem" } }
+  ]
+}

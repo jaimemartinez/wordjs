@@ -1,0 +1,175 @@
+@import url("fonts.css");
+/* @wjs-generated:start — compiled from theme.json; DO NOT EDIT inside. Edit theme.json and run: node backend/cli/wordjs.js build theme circuito */
+:root {
+  --wjs-bg-canvas: #070b14;
+  --wjs-bg-surface: #0d1424;
+  --wjs-bg-surface-raised: #121c33;
+  --wjs-color-primary: #22d3ee;
+  --wjs-color-primary-dark: #a78bfa;
+  --wjs-color-on-primary: #111111;
+  --wjs-color-accent: #a78bfa;
+  --wjs-color-on-accent: #111111;
+  --wjs-color-text-main: #c9d6f2;
+  --wjs-color-text-muted: #7f899e;
+  --wjs-color-heading: #c9d6f2;
+  --wjs-color-link: #22d3ee;
+  --wjs-color-link-hover: #a78bfa;
+  --wjs-border-subtle: #2a303c;
+  --wjs-outline: #515868;
+  --wjs-outline-variant: #242935;
+  --wjs-focus-ring: 0 0 0 3px rgba(34, 211, 238, 0.35);
+  --wjs-color-scheme: dark;
+  --wjs-bg-muted: #0a1120;
+  --wjs-color-secondary: #a78bfa;
+  --wjs-color-on-secondary: #070b14;
+  --wjs-color-secondary-dark: #8b5cf6;
+  --wjs-color-danger: #fb7185;
+  --wjs-color-on-danger: #14030a;
+  --wjs-color-success: #34d399;
+  --wjs-color-on-success: #04150e;
+  --wjs-color-warning: #fbbf24;
+  --wjs-color-on-warning: #171003;
+  --wjs-color-info: #38bdf8;
+  --wjs-color-on-info: #041420;
+  --wjs-font-family-base: system-ui, sans-serif;
+  --wjs-font-family-heading: 'JetBrains Mono', monospace;
+  --wjs-font-family-mono: 'JetBrains Mono', monospace;
+  --wjs-radius: 6px;
+  --wjs-radius-sm: 4px;
+  --wjs-radius-md: 6px;
+  --wjs-radius-lg: 8px;
+  --wjs-shadow: none;
+  --wjs-nav-font-family: 'JetBrains Mono', monospace;
+  --wjs-nav-font-size: 0.85rem;
+  --wjs-nav-font-weight: 600;
+  --wjs-nav-letter-spacing: 0.08em;
+  --wjs-nav-text-transform: uppercase;
+  --wjs-nav-color: #c9d6f2;
+  --wjs-nav-color-hover: #22d3ee;
+  --wjs-nav-hover-decoration: none;
+  --wjs-nav-transition: color 0.15s ease;
+  --wjs-logo-color: #22d3ee;
+  --wjs-logo-color-hover: #a78bfa;
+  --wjs-footer-bg: #0d1424;
+  --wjs-footer-text-heading: #c9d6f2;
+  --wjs-footer-text-body: #8fa3c8;
+  --wjs-footer-text-hover: #22d3ee;
+  --wjs-footer-icon-bg: #121c33;
+  --wjs-footer-icon-color: #22d3ee;
+  --wjs-footer-icon-hover-bg: #22d3ee;
+  --wjs-bg-footer: #0d1424;
+  --wjs-color-text-footer-heading: #c9d6f2;
+  --wjs-color-text-footer-main: #c9d6f2;
+  --wjs-color-text-footer-dim: #8fa3c8;
+  --wjs-posts-bg: #0d1424;
+  --wjs-posts-border-color: #1c2a47;
+  --wjs-posts-radius: 6px;
+  --wjs-posts-shadow: none;
+  --wjs-posts-hover-border-color: #22d3ee;
+  --wjs-posts-hover-shadow: 0 0 18px rgba(34, 211, 238, 0.18);
+  --wjs-posts-hover-transform: none;
+  --wjs-posts-family: 'JetBrains Mono', monospace;
+  --wjs-posts-title-color: #e6eeff;
+  --wjs-posts-date-color: #8fa3c8;
+  --wjs-posts-excerpt-color: #a9b8d8;
+  --wjs-posts-thumb-bg: #121c33;
+  --wjs-search-input-bg: #0a1120;
+  --wjs-search-input-border-color: #1c2a47;
+  --wjs-search-input-color: #c9d6f2;
+  --wjs-search-input-radius: 6px;
+  --wjs-search-input-family: 'JetBrains Mono', monospace;
+  --wjs-search-placeholder-color: #5b6c92;
+  --wjs-search-focus-color: #22d3ee;
+  --wjs-search-focus-ring: 0 0 0 3px rgba(34, 211, 238, 0.35);
+  --wjs-search-button-bg: #22d3ee;
+  --wjs-search-button-color: #06222b;
+  --wjs-search-button-radius: 6px;
+  --wjs-search-button-family: 'JetBrains Mono', monospace;
+  --wjs-search-button-weight: 600;
+  --wjs-search-button-transform: uppercase;
+  --wjs-search-button-tracking: 0.05em;
+  --wjs-button-bg: #22d3ee;
+  --wjs-button-color: #06222b;
+  --wjs-button-family: 'JetBrains Mono', monospace;
+  --wjs-button-radius: 6px;
+  --wjs-button-weight: 600;
+  --wjs-button-tracking: 0.05em;
+  --wjs-button-transform: uppercase;
+  --wjs-button-hover-bg: #a78bfa;
+  --wjs-button-hover-color: #070b14;
+  --wjs-card-bg: #0d1424;
+  --wjs-card-border-color: #1c2a47;
+  --wjs-card-radius: 6px;
+  --wjs-card-shadow: none;
+  --wjs-card-hover-border-color: #22d3ee;
+  --wjs-card-hover-shadow: 0 0 18px rgba(34, 211, 238, 0.18);
+  --wjs-card-title-color: #e6eeff;
+  --wjs-card-desc-color: #a9b8d8;
+  --wjs-hero-bg: #0d1424;
+  --wjs-hero-radius: 0px;
+  --wjs-hero-title-color: #e6eeff;
+  --wjs-hero-subtitle-color: #8fa3c8;
+}
+h1,h2,h3,h4,h5,h6 { letter-spacing: -0.02em }
+.wjs-chrome-header { background: rgba(7,11,20,0.92); border-bottom: 1px solid var(--wjs-border-subtle); backdrop-filter: blur(8px) }
+.wjs-chrome-header .wjs-header-actions button { font-family: var(--wjs-font-family-mono); text-transform: uppercase; letter-spacing: 0.05em; border-radius: var(--wjs-radius) }
+.wjs-chrome-header .wjs-chrome-button { box-shadow: 0 0 12px rgba(34,211,238,0.18) }
+.wjs-chrome-footer { background: var(--wjs-bg-surface); border-top: 1px solid var(--wjs-border-subtle) }
+.wjs-post-card { background: var(--wjs-bg-surface); border: 1px solid var(--wjs-border-subtle); border-radius: var(--wjs-radius); transition: border-color 0.15s ease,box-shadow 0.15s ease,background-color 0.15s ease }
+.wjs-post-card:hover { border-color: var(--wjs-color-primary); box-shadow: 0 0 18px rgba(34,211,238,0.22),0 0 42px rgba(34,211,238,0.08); background-color: #101a30 }
+.wjs-post-card-title { font-family: var(--wjs-font-family-mono); letter-spacing: -0.01em }
+.wjs-post-card-excerpt { color: var(--wjs-color-text-muted) }
+.wjs-post-card-meta { font-family: var(--wjs-font-family-mono); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--wjs-color-text-muted) }
+.wjs-post-meta { font-family: var(--wjs-font-family-mono); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--wjs-color-text-muted) }
+.wjs-search-result { background: var(--wjs-bg-surface); border: 1px solid var(--wjs-border-subtle); border-radius: var(--wjs-radius); transition: border-color 0.15s ease }
+.wjs-search-result:hover { border-color: var(--wjs-color-secondary) }
+.wjs-search-result-title { font-family: var(--wjs-font-family-mono) }
+.wjs-post-title { letter-spacing: -0.02em }
+.wjs-comments-title { font-family: var(--wjs-font-family-mono) }
+.wjs-comment-form-title { font-family: var(--wjs-font-family-mono) }
+.wjs-comment-field { background: var(--wjs-bg-muted); border: 1px solid var(--wjs-border-subtle); color: var(--wjs-color-text-main); border-radius: var(--wjs-radius) }
+.wjs-comment-field:focus { border-color: var(--wjs-color-primary); box-shadow: var(--wjs-focus-ring); outline: none }
+.wjs-comment-submit { background: var(--wjs-color-primary); color: var(--wjs-color-on-primary); font-family: var(--wjs-font-family-mono); text-transform: uppercase; letter-spacing: 0.05em; border-radius: var(--wjs-radius) }
+.wjs-comment-submit:hover { background: var(--wjs-color-secondary); color: var(--wjs-color-on-secondary) }
+.wjs-comment { background: var(--wjs-bg-surface); border: 1px solid var(--wjs-border-subtle); border-radius: var(--wjs-radius) }
+.wjs-comment-author { font-family: var(--wjs-font-family-mono) }
+.wjs-comment-date { color: var(--wjs-color-text-muted) }
+.wp-block-search__input::placeholder { color: #5b6c92 }
+.wjs-search-form input::placeholder { color: #5b6c92 }
+#main-content .hero-scanline { padding: 5rem 2rem 4rem; background-color: var(--wjs-bg-surface); background-image: repeating-linear-gradient(0deg,rgba(34,211,238,0.05) 0px,rgba(34,211,238,0.05) 1px,transparent 1px,transparent 4px); border-bottom: 1px solid var(--wjs-border-subtle) }
+#main-content .glow-panel { background: var(--wjs-bg-surface); background-image: linear-gradient(180deg,rgba(34,211,238,0.06),transparent 45%); border: 1px solid rgba(34,211,238,0.3); border-radius: 8px; padding: 2.5rem; box-shadow: 0 0 24px rgba(34,211,238,0.08) }
+#main-content .celda-ancha { grid-column: span 2; min-width: 0 }
+#main-content .franja-estado { padding: 0.6rem 2rem; background: var(--wjs-bg-muted); background-image: linear-gradient(90deg,transparent 42%,rgba(34,211,238,0.08) 50%,transparent 58%); background-size: 300% 100%; background-repeat: no-repeat; background-position: 0%0; border-bottom: 1px solid var(--wjs-border-subtle); font-family: var(--wjs-font-family-mono); font-size: 0.8rem; letter-spacing: 0.05em; color: var(--wjs-color-text-muted) }
+@media (max-width: 767.98px) {
+  #main-content .celda-ancha { grid-column: auto }
+}
+@media (max-width: 1023.98px) {
+  #main-content .hero-scanline { padding: 3rem 1rem 2.5rem }
+  #main-content .glow-panel { padding: 1.25rem }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .wjs-chrome-header .wjs-chrome-button { animation: wjs-a-neon-pulse 2.6s ease-in-out infinite }
+  .wp-block-search__input:focus { animation: wjs-a-caret-blink 1.2s steps(1,end) infinite }
+  .wjs-search-form input:focus { animation: wjs-a-caret-blink 1.2s steps(1,end) infinite }
+  #main-content .hero-scanline { animation: wjs-a-scan-drift 7s linear infinite }
+  #main-content .franja-estado { animation: wjs-a-franja-sweep 9s linear infinite }
+}
+@keyframes wjs-a-scan-drift {
+  from { background-position: 0 0 }
+  to { background-position: 0 8px }
+}
+@keyframes wjs-a-neon-pulse {
+  from { box-shadow: 0 0 6px rgba(34,211,238,0.25),0 0 18px rgba(34,211,238,0.10) }
+  50% { box-shadow: 0 0 10px rgba(34,211,238,0.45),0 0 28px rgba(34,211,238,0.22) }
+  to { box-shadow: 0 0 6px rgba(34,211,238,0.25),0 0 18px rgba(34,211,238,0.10) }
+}
+@keyframes wjs-a-caret-blink {
+  from { border-color: rgba(34,211,238,0.9) }
+  50% { border-color: rgba(34,211,238,0.25) }
+  to { border-color: rgba(34,211,238,0.9) }
+}
+@keyframes wjs-a-franja-sweep {
+  from { background-position: 0%0 }
+  to { background-position: 100%0 }
+}
+/* @wjs-generated:end */

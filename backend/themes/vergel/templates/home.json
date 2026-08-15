@@ -1,0 +1,28 @@
+{
+  "root": { "props": {} },
+  "content": [
+    { "type": "Spacer", "props": { "height": "4rem" } },
+    {
+      "type": "Section",
+      "props": {
+        "tag": "section",
+        "className": "claro",
+        "maxWidth": "40rem",
+        "items": [
+          { "type": "PageContent", "props": {} }
+        ]
+      }
+    },
+    { "type": "Spacer", "props": { "height": "5rem" } },
+    {
+      "type": "CategoryPosts",
+      "props": {
+        "count": 6,
+        "layout": "list",
+        "columns": 1,
+        "gap": "2.5rem"
+      }
+    },
+    { "type": "Spacer", "props": { "height": "5rem" } }
+  ]
+}

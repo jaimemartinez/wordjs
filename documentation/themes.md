@@ -985,6 +985,35 @@ tokens; `letter-spacing` (no token candidate) as a declaration on `.wp-block-her
 `hover` block as `.wp-block-hero__button:hover { background: #0ea5e9; transform: translateY(-2px) }`;
 and the `body.mobile` block inside `@media (max-width: 767.98px)`.
 
+## Animations (`animations`) and preference queries
+
+`animations.<name>` declares keyframes as data — the CSS-only motion a modern component library uses
+(shimmer, marquee, scanline, float), inside the validated contract instead of hand-written CSS the
+doctor cannot see:
+
+```json
+{
+    "animations": {
+        "shimmer": { "from": { "opacity": "0.55" }, "to": { "opacity": "1" } }
+    },
+    "styles": {
+        "card": { "motionOk": { "animation": "wjs-a-shimmer 2.4s ease-in-out infinite alternate" } }
+    }
+}
+```
+
+A name matches `[a-z][a-z0-9-]{0,39}` and compiles to `@keyframes wjs-a-<name>` — the prefix means a
+theme can never clobber a framework animation. Frames are `from`, `to` or `"NN%"`, and every frame
+declaration goes through the same validation as `styles`. Budgets: 16 animations, 12 frames each.
+
+The pairing is enforced: referencing an undeclared `wjs-a-*` name is a compile **error** (with a
+suggestion), and declaring an animation nothing references is a **warning** (dead CSS).
+
+Three preference breakpoints join the grammar: `motionOk` (`prefers-reduced-motion: no-preference`),
+`reducedMotion` (`reduce`) and `dark` (`prefers-color-scheme: dark`). Reduced motion is honoured by
+construction: an animation referenced outside `motionOk` with no `reducedMotion` override on the same
+selector gets an `ANIMATION_UNGUARDED` warning.
+
 ## Page templates (`templates/<name>.json`)
 
 Tokens decide how a theme *looks*. A page template decides how a page is **arranged** — the one thing

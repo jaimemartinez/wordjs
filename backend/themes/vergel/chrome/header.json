@@ -1,0 +1,26 @@
+{
+  "root": { "props": {} },
+  "content": [
+    {
+      "type": "ChromeRow",
+      "props": {
+        "align": "center",
+        "gap": "sm",
+        "items": [
+          { "type": "ChromeLogo", "props": { "size": "md" } }
+        ]
+      }
+    },
+    {
+      "type": "ChromeRow",
+      "props": {
+        "align": "center",
+        "gap": "md",
+        "wrap": true,
+        "items": [
+          { "type": "ChromeNav", "props": { "location": "header", "orientation": "horizontal" } }
+        ]
+      }
+    }
+  ]
+}

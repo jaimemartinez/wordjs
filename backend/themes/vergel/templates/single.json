@@ -1,0 +1,29 @@
+{
+  "root": { "props": {} },
+  "content": [
+    { "type": "Spacer", "props": { "height": "3rem" } },
+    {
+      "type": "Section",
+      "props": {
+        "tag": "div",
+        "maxWidth": "42rem",
+        "items": [
+          { "type": "PageContent", "props": {} }
+        ]
+      }
+    },
+    { "type": "Spacer", "props": { "height": "5rem" } },
+    {
+      "type": "Section",
+      "props": {
+        "tag": "div",
+        "className": "invitacion",
+        "maxWidth": "42rem",
+        "items": [
+          { "type": "TemplatePart", "props": { "name": "invitacion", "area": "general" } }
+        ]
+      }
+    },
+    { "type": "Spacer", "props": { "height": "4rem" } }
+  ]
+}

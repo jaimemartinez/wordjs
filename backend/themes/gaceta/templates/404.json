@@ -1,0 +1,18 @@
+{
+    "$schema": "wordjs-page-template-v1",
+    "content": [
+        { "type": "Spacer", "props": { "height": "6rem" } },
+        {
+            "type": "Section",
+            "props": {
+                "maxWidth": "40rem",
+                "items": [
+                    { "type": "PageContent", "props": {} },
+                    { "type": "Spacer", "props": { "height": "2rem" } },
+                    { "type": "SearchBar", "props": { "align": "center", "width": "100%", "placeholder": "Buscar en la gaceta…", "buttonText": "Buscar" } }
+                ]
+            }
+        },
+        { "type": "Spacer", "props": { "height": "6rem" } }
+    ]
+}

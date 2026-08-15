@@ -54,6 +54,7 @@ interface CompileStats {
   declarations: number;
   rules: number;
   variations: number;
+  animations: number;
   errors: number;
   warnings: number;
 }
@@ -128,7 +129,13 @@ const BREAKPOINTS: Record<string, string> = {
   // `tablet` is a BAND, not "up to tablet" — a distinction that already cost a real regression: a rule
   // written for (max-width: 1023.98px) was moved to `tablet` and silently stopped applying below 768px.
   // Two catalogue themes write that query, so it gets its own name instead of an approximation.
-  belowDesktop: '(max-width: 1023.98px)'
+  belowDesktop: '(max-width: 1023.98px)',
+  // PREFERENCE queries, same closed-map treatment as the widths. `motionOk` is where an animation
+  // belongs (progressive: motion only when the visitor has not asked for less); `reducedMotion` is
+  // the override lane for a base animation; `dark` follows the OS scheme for themes that want it.
+  motionOk: '(prefers-reduced-motion: no-preference)',
+  reducedMotion: '(prefers-reduced-motion: reduce)',
+  dark: '(prefers-color-scheme: dark)'
 };
 
 // --- VARIATIONS ------------------------------------------------------------------------------
@@ -167,6 +174,28 @@ const BREAKPOINTS: Record<string, string> = {
 const VARIATIONS_KEY = 'variations';
 const VARIATION_NAME_RE: RegExp = TEMPLATE_CLASS.TOKEN;
 const CONTENT_ROOT = '#main-content';
+
+// --- ANIMATIONS ------------------------------------------------------------------------------
+//
+// theme.json `animations.<name>` compiles to `@keyframes wjs-a-<name>` inside the generated block —
+// the last piece of the "21st.dev CSS-only" surface that previously lived only in hand-written CSS
+// the doctor could not see. Same fail-closed shape as variations:
+//   - the NAME is TEMPLATE_CLASS.TOKEN, so it is one ident, never a selector or a second at-rule;
+//   - the PREFIX is a constant of this file: a theme cannot collide with (or clobber) a framework
+//     @keyframes because ui.css declares none under `wjs-a-`;
+//   - every frame declaration goes through the SAME validateDeclaration path as styles, so keyframes
+//     cannot grow a second, weaker grammar;
+//   - a styles value referencing an undeclared `wjs-a-*` ident is an ERROR (a listing that animates
+//     with a missing keyframes is a block that validates and does nothing);
+//   - a declared animation nothing references is a WARNING (dead CSS);
+//   - an animation that runs OUTSIDE `motionOk` with no `reducedMotion` override on the same
+//     selector is a WARNING — prefers-reduced-motion is honoured by construction, not by memory.
+const ANIMATION_PREFIX = 'wjs-a-';
+const ANIMATION_NAME_RE: RegExp = TEMPLATE_CLASS.TOKEN;
+const ANIMATION_REF_RE = /wjs-a-[a-z0-9-]+/g;
+const FRAME_KEY_RE = /^(from|to|(?:100|\d{1,2})(?:\.\d+)?%)$/;
+const MAX_ANIMATIONS = 16;
+const MAX_FRAMES = 12;
 
 // Used only until theme-derive lands (it exports the authoritative ARCHETYPE_NAMES).
 const ARCHETYPE_FALLBACK = ['cyber', 'brutalist', 'editorial', 'glassmorphism', 'organic', 'obsidian'];
@@ -258,7 +287,7 @@ function tokenGrammarProblem(entry: any, value: string): string | null {
 
 function compileTheme(dirOrSlug: string, opts: CompileOpts = {}): CompileResult {
   const diagnostics: Diagnostic[] = [];
-  const stats: CompileStats = { tokens: 0, declarations: 0, rules: 0, variations: 0, errors: 0, warnings: 0 };
+  const stats: CompileStats = { tokens: 0, declarations: 0, rules: 0, variations: 0, animations: 0, errors: 0, warnings: 0 };
 
   const push = (level: 'error' | 'warning', code: string, p: string, message: string, suggestion?: string | null): void => {
     const d: Diagnostic = { level, code, path: p, message };
@@ -327,6 +356,12 @@ function compileTheme(dirOrSlug: string, opts: CompileOpts = {}): CompileResult 
 
   // --- emitters + global declaration cap ---
   const rootTokens = new Map<string, string>();
+  const declaredAnimations = new Set<string>();
+  const usedAnimations = new Set<string>();
+  const animationLines: string[] = [];
+  // Deferred so a deliberate `reducedMotion` override on the same selector cancels the nudge.
+  const unguardedRefs: Array<{ p: string; selector: string }> = [];
+  const reducedOverridden = new Set<string>();
   // mediaKey '' = base rules; per media, selectors keep first-appearance order.
   const buckets = new Map<string, Map<string, string[]>>();
   let total = 0;
@@ -560,6 +595,19 @@ function compileTheme(dirOrSlug: string, opts: CompileOpts = {}): CompileResult 
 
   function handleProp(key: string, value: string, ctx: WalkCtx, p: string): void {
     const prop = key.toLowerCase();
+    if (prop === 'animation' || prop === 'animation-name') {
+      if (ctx.media === 'reducedMotion') reducedOverridden.add(ctx.selector);
+      for (const m of String(value).matchAll(ANIMATION_REF_RE)) {
+        const ref = m[0];
+        if (!declaredAnimations.has(ref)) {
+          const suggestion = closestToken(ref, [...declaredAnimations]);
+          error('ANIMATION_UNKNOWN', p, `references ${ref}, which "animations" does not declare${suggestion ? ` — did you mean ${suggestion}?` : ''}`, suggestion);
+          return;
+        }
+        usedAnimations.add(ref);
+        if (ctx.media !== 'motionOk' && ctx.media !== 'reducedMotion') unguardedRefs.push({ p, selector: ctx.selector });
+      }
+    }
     // Token resolution only at the base level: a state, breakpoint, position or pseudo-element is a
     // narrower selector than the token it would otherwise feed, so those are ALWAYS declarations.
     //
@@ -673,6 +721,53 @@ function compileTheme(dirOrSlug: string, opts: CompileOpts = {}): CompileResult 
     }
   };
 
+  const animationsNode: any = themeJson.animations;
+  if (animationsNode !== undefined) {
+    if (!isPlainObject(animationsNode)) {
+      error('ANIMATIONS_INVALID', 'animations', '"animations" must be an object keyed by animation name');
+    } else if (Object.keys(animationsNode).length > MAX_ANIMATIONS) {
+      error('ANIMATIONS_BUDGET', 'animations', `${Object.keys(animationsNode).length} animations — the cap is ${MAX_ANIMATIONS}`);
+    } else {
+      for (const [name, frames] of Object.entries(animationsNode)) {
+        const p = `animations.${name}`;
+        if (!ANIMATION_NAME_RE.test(name)) {
+          error('ANIMATION_NAME_INVALID', p, `"${name}" must match ${ANIMATION_NAME_RE.source} — it becomes the ident @keyframes ${ANIMATION_PREFIX}${name}, never a selector`);
+          continue;
+        }
+        if (!isPlainObject(frames) || Object.keys(frames as object).length === 0) {
+          error('ANIMATION_INVALID', p, 'an animation is a non-empty object of keyframe selectors (from, to, "NN%")');
+          continue;
+        }
+        if (Object.keys(frames as object).length > MAX_FRAMES) {
+          error('ANIMATION_BUDGET', p, `${Object.keys(frames as object).length} frames — the cap is ${MAX_FRAMES}`);
+          continue;
+        }
+        let ok = true;
+        const frameLines: string[] = [];
+        for (const [fk, decls] of Object.entries(frames as Record<string, unknown>)) {
+          const fp = `${p}.${fk}`;
+          if (!FRAME_KEY_RE.test(fk)) { error('ANIMATION_FRAME_INVALID', fp, `"${fk}" — a frame is from, to or a 0-100 percentage`); ok = false; continue; }
+          if (!isPlainObject(decls)) { error('ANIMATION_INVALID', fp, 'a frame must be an object of declarations'); ok = false; continue; }
+          const parts: string[] = [];
+          for (const [fprop, fval] of Object.entries(decls as Record<string, unknown>)) {
+            if (typeof fval !== 'string' && typeof fval !== 'number') { error('STYLE_INVALID_VALUE', `${fp}.${fprop}`, 'frame values must be strings or numbers'); ok = false; continue; }
+            const v = validateDeclaration(fprop.toLowerCase(), String(fval), `${fp}.${fprop}`);
+            if (v === null) { ok = false; continue; }
+            parts.push(`${fprop.toLowerCase()}: ${v}`);
+          }
+          if (parts.length) frameLines.push(`  ${fk} { ${parts.join('; ')} }`);
+        }
+        // Fail-closed PER ANIMATION: one bad frame and the whole @keyframes is withheld — a
+        // half-emitted animation snaps instead of easing, which reads as the framework's bug.
+        if (ok && frameLines.length) {
+          declaredAnimations.add(ANIMATION_PREFIX + name);
+          animationLines.push(`@keyframes ${ANIMATION_PREFIX}${name} {`, ...frameLines, '}');
+          stats.animations++;
+        }
+      }
+    }
+  }
+
   const styles: any = themeJson.styles;
   if (styles !== undefined) {
     if (!isPlainObject(styles)) {
@@ -706,6 +801,17 @@ function compileTheme(dirOrSlug: string, opts: CompileOpts = {}): CompileResult 
     }
   }
 
+  for (const name of declaredAnimations) {
+    if (!usedAnimations.has(name)) {
+      warning('ANIMATION_UNUSED', `animations.${name.slice(ANIMATION_PREFIX.length)}`, 'declared but never referenced by any styles declaration — it compiles to dead CSS');
+    }
+  }
+  for (const u of unguardedRefs) {
+    if (!reducedOverridden.has(u.selector)) {
+      warning('ANIMATION_UNGUARDED', u.p, 'runs whatever the visitor asked — nest the animation under motionOk, or give this selector a reducedMotion override');
+    }
+  }
+
   // --- emit the marked block (deterministic order ⇒ recompiling is idempotent) ---
   const lines: string[] = [markerStart(slug)];
   if (rootTokens.size > 0) {
@@ -729,6 +835,7 @@ function compileTheme(dirOrSlug: string, opts: CompileOpts = {}): CompileResult 
     emitRules(rules, '  ');
     lines.push('}');
   }
+  if (animationLines.length) lines.push(...animationLines);
   // (no archetype CSS block — see the archetype section above: the legacy preset stylesheet is retired)
   lines.push(MARKER_END);
   const css = lines.join('\n');

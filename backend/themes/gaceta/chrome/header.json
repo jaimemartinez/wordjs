@@ -1,0 +1,36 @@
+{
+    "root": { "props": {} },
+    "content": [
+        {
+            "type": "ChromeRow",
+            "props": {
+                "align": "center",
+                "gap": "sm",
+                "items": [
+                    { "type": "ChromeText", "props": { "text": "Una gaceta de ideas — fundada en 2026" } }
+                ]
+            }
+        },
+        {
+            "type": "ChromeRow",
+            "props": {
+                "align": "center",
+                "gap": "md",
+                "items": [
+                    { "type": "ChromeSiteTitle", "props": { "showTagline": false } }
+                ]
+            }
+        },
+        {
+            "type": "ChromeRow",
+            "props": {
+                "align": "center",
+                "gap": "lg",
+                "wrap": true,
+                "items": [
+                    { "type": "ChromeNav", "props": { "location": "header", "orientation": "horizontal" } }
+                ]
+            }
+        }
+    ]
+}

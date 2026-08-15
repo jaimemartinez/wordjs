@@ -1,0 +1,23 @@
+{
+    "$schema": "wordjs-page-template-v1",
+    "content": [
+        { "type": "Spacer", "props": { "height": "3rem" } },
+        {
+            "type": "Section",
+            "props": {
+                "tag": "article",
+                "maxWidth": "46rem",
+                "items": [
+                    { "type": "Divider", "props": { "color": "var(--wjs-color-text-main)", "width": "2px", "gap": "0.5rem" } },
+                    { "type": "Spacer", "props": { "height": "2rem" } },
+                    { "type": "PageContent", "props": {} },
+                    { "type": "Spacer", "props": { "height": "2.5rem" } },
+                    { "type": "Divider", "props": { "color": "var(--wjs-border-subtle)", "width": "1px" } },
+                    { "type": "Spacer", "props": { "height": "1.5rem" } },
+                    { "type": "TemplatePart", "props": { "name": "firma", "area": "general" } }
+                ]
+            }
+        },
+        { "type": "Spacer", "props": { "height": "4rem" } }
+    ]
+}

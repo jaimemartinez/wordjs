@@ -1,0 +1,18 @@
+{
+  "$schema": "wordjs-page-template-v1",
+  "content": [
+    { "type": "Spacer", "props": { "height": "2rem" } },
+    {
+      "type": "Section",
+      "props": {
+        "tag": "div",
+        "items": [
+          { "type": "PostsGrid", "props": { "count": 12, "columns": 4, "gap": "0.75rem" } },
+          { "type": "Spacer", "props": { "height": "2.5rem" } },
+          { "type": "PageContent", "props": {} }
+        ]
+      }
+    },
+    { "type": "Spacer", "props": { "height": "3rem" } }
+  ]
+}
