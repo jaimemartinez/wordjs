@@ -59,7 +59,7 @@ function isBundledPlugin(pluginPath: string, manifest: any = {}) {
     if (fs.existsSync(nodeModulesPath) && fs.statSync(nodeModulesPath).isDirectory()) {
         try {
             if (fs.readdirSync(nodeModulesPath).length > 0) return true;
-        } catch { }
+        } catch { /* unreadable node_modules — treat as absent */ }
     }
 
     return false;
@@ -288,7 +288,7 @@ async function installPluginDependencies(slug: string, manifest: any, pluginPath
             });
             console.log(`   ✅ Dependencies installed successfully.`);
         } catch (error) {
-            throw new Error(`Failed to install dependencies for ${slug}: ${error.message}`);
+            throw new Error(`Failed to install dependencies for ${slug}: ${error.message}`, { cause: error });
         }
     }
 }
@@ -442,7 +442,7 @@ function validatePluginPermissions(slug: string, pluginPath: string, manifest: a
             }
             // For PLUGINS, reject data:/file:/blob:/remote URL-scheme specifiers (a bare/builtin import is
             // governed by the worker's ESM resolve hook; a URL scheme bypasses it and the require proxy).
-            if (/^[a-z][a-z0-9+.\-]*:/i.test(spec) && !/^node:/i.test(spec)) {
+            if (/^[a-z][a-z0-9+.-]*:/i.test(spec) && !/^node:/i.test(spec)) {
                 dangerousCalls.add(`import('${spec.slice(0, 40)}') — non-relative URL-scheme import specifier is not permitted`);
                 return;
             }
@@ -783,7 +783,6 @@ function scanPlugins() {
         const manifestPath = path.join(pluginDir, 'manifest.json');
 
         let metadata: any = {};
-        let mainFile = null;
 
         // 1. Try manifest.json (Preferred - Safe)
         if (fs.existsSync(manifestPath)) {
@@ -807,7 +806,7 @@ function scanPlugins() {
         //    plugin enumeration / GET /plugins). Use directory-name metadata only; real loading happens
         //    later, sandboxed, in the worker. Plugins wanting proper metadata must ship a manifest.json.
         else {
-            mainFile = findMainFile(pluginDir);
+            const mainFile = findMainFile(pluginDir);
             if (!mainFile) continue;
             // metadata stays {} → name falls back to entry.name below; nothing is executed here.
         }
@@ -1051,7 +1050,7 @@ async function _activatePluginUnlocked(slug: string) {
 
         return { success: true, message: `Plugin ${slug} activated` };
     } catch (error) {
-        throw new Error(`Failed to activate plugin ${slug}: ${error.message}`);
+        throw new Error(`Failed to activate plugin ${slug}: ${error.message}`, { cause: error });
     }
 }
 

@@ -174,7 +174,7 @@ class User {
             `, [username, hashedPassword, normalizedEmail, displayName || username]);
         } catch (e: any) {
             if (isUniqueViolation(e)) {
-                throw new Error('Username or email already exists');
+                throw new Error('Username or email already exists', { cause: e });
             }
             throw e;
         }
@@ -334,7 +334,7 @@ class User {
                 await dbAsync.run(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`, values);
             } catch (e: any) {
                 if (isUniqueViolation(e)) {
-                    throw new Error('Email already in use');
+                    throw new Error('Email already in use', { cause: e });
                 }
                 throw e;
             }

@@ -549,9 +549,9 @@ export function installChildDgramGuard(): void {
             const patchedBind = function (this: any, ...bargs: any[]) {
                 const r = origBind.apply(this, bargs);
                 try {
-                    const sock: any = this;
-                    const sym = Object.getOwnPropertySymbols(sock).find((s) => String(s) === 'Symbol(state symbol)');
-                    const handle = sym ? (sock[sym] && sock[sym].handle) : null;
+                    // `this` is the bound dgram socket instance (patchedBind runs as a socket method).
+                    const sym = Object.getOwnPropertySymbols(this).find((s) => String(s) === 'Symbol(state symbol)');
+                    const handle = sym ? (this[sym] && this[sym].handle) : null;
                     if (handle && !handle.__wjGuarded) {
                         for (const [hm, idx] of [['send', 4], ['send6', 4], ['connect', 0], ['connect6', 0]] as Array<[string, number]>) {
                             const ho = handle[hm];

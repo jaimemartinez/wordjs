@@ -530,7 +530,7 @@ class Post {
      */
     static _ftsMatchQuery(search: string): string | null {
         const tokens = String(search)
-            .replace(/["'^*():\-]/g, ' ')   // FTS5 syntax characters — never let them through
+            .replace(/["'^*():-]/g, ' ')   // FTS5 syntax characters — never let them through
             .split(/\s+/)
             .map((t) => t.trim())
             .filter(Boolean);

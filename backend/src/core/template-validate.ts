@@ -224,7 +224,6 @@ function checkProps(type: string, props: any, path: string, errors: TemplateErro
             }
             continue;
         }
-        // eslint-disable-next-line valid-typeof
         if (typeof value !== ps.kind) {
             errors.push({ code: 'TPL_INVALID_PROP', path: `${path}.props.${key}`, message: `must be a ${ps.kind}` });
         }

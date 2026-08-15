@@ -181,7 +181,7 @@ async function flush() {
 // Gated on Redis being CONFIGURED, INDEPENDENT of the object-cache master switch (enabledBySettings):
 // coherence/realtime must work across nodes even when the object cache is turned off.
 let subscriber: any = null;
-const subHandlers = new Map<string, Set<Function>>();
+const subHandlers = new Map<string, Set<(message: string) => void>>();
 
 function redisConfigured(): boolean { return !!(config.redis && config.redis.enabled !== false); }
 

@@ -58,7 +58,7 @@ const BLAME_FILE = path.join(DATA_DIR, 'runtime_crash.lock');
 
 function cleanupFiles() {
     [LOCK_FILE, STRIKE_FILE, BLAME_FILE].forEach(f => {
-        try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch { }
+        try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch { /* best-effort test cleanup */ }
     });
 }
 

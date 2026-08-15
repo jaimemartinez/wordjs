@@ -7,6 +7,11 @@ import { useEffect, useState, useRef, useCallback } from "react";
 import { api, apiPost } from "../../../../../frontend/src/lib/api";
 import { useAuth } from "../../../../../frontend/src/contexts/AuthContext";
 import { useModal } from "@/contexts/ModalContext";
+// Platform isomorphic sanitizer (DOMPurify on the client). Used to guard the ONE live-DOM innerHTML
+// sink — the reply/forward compose editor. Unlike the hand-rolled sanitizeEmailHtml below (safe only
+// inside the scripting-DISABLED sandboxed iframe), DOMPurify is mutation-XSS-safe in the live,
+// scripting-ENABLED admin document where this editor lives.
+import { sanitizeHTML } from "../../../../../frontend/src/lib/sanitize";
 
 type Email = {
     id: number;
@@ -149,6 +154,12 @@ const EmailBodyFrame = ({ html }: { html: string }) => {
         />
     );
 };
+
+// Escape untrusted plain-text (sender name/address/subject) before it is concatenated into an HTML
+// string that feeds the compose editor. The quoted BODY is HTML we keep (and sanitize at the sink);
+// these METADATA fields are text and must render literally, never as markup.
+const escapeHtml = (s: unknown): string =>
+    String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 // Rotating palette for newly-created labels.
 const LABEL_COLORS = ['#7c3aed', '#2563eb', '#059669', '#d97706', '#dc2626', '#db2777', '#0891b2', '#65a30d'];
@@ -341,11 +352,26 @@ export default function MailServerAdmin() {
         }
     }, [folder]);
 
-    // Sync newMail.body to editor content when it changes externally
+    // Sync newMail.body to editor content when it changes externally.
+    // SECURITY (stored/reflected XSS): this is a LIVE-DOM innerHTML sink in the ADMIN origin. The body
+    // set here on Reply/Forward embeds the ORIGINAL message's HTML (attacker-controlled — see
+    // handleReply/handleForward), so it MUST be sanitized before assignment. DOMPurify (sanitizeHTML)
+    // neutralizes script/on*/javascript:/style-exfil while keeping the quoted formatting; it is the
+    // execution guard that also covers legacy rows stored before the write-side ingest sanitizer.
     useEffect(() => {
         if (editorRef.current && newMail.body !== lastBodyRef.current) {
-            editorRef.current.innerHTML = newMail.body;
-            lastBodyRef.current = newMail.body;
+            const clean = sanitizeHTML(newMail.body);
+            editorRef.current.innerHTML = clean;
+            // Track the SANITIZED html as the last value so the editor's own onInput (which reads back
+            // innerHTML) does not see a diff and loop.
+            lastBodyRef.current = clean;
+            // Converge STATE on the sanitized html too: a Send/Save-draft that follows without any
+            // further edits reads newMail.body, so it must be the clean value — otherwise the hostile
+            // original would still reach the server. (No render loop: once body === lastBodyRef the
+            // effect's guard skips; a second sanitize pass is idempotent.)
+            if (clean !== newMail.body) {
+                setNewMail(prev => ({ ...prev, body: clean }));
+            }
         }
     }, [newMail.body]);
 
@@ -664,7 +690,10 @@ export default function MailServerAdmin() {
             cc: "",
             bcc: "",
             subject: isReply ? email.subject : `Re: ${email.subject}`,
-            body: `<br/><br/><br/><br/>________________________________<br/><strong>From:</strong> ${email.from_name || email.from_address}<br/><strong>Sent:</strong> ${new Date(email.date_received).toLocaleString()}<br/><strong>Subject:</strong> ${email.subject}<br/><br/>${email.body_html || email.body_text.replace(/\n/g, '<br/>')}`,
+            // Metadata is escaped (untrusted sender-controlled text); the quoted body_html is kept as
+            // HTML and sanitized at the editor sink. The plain-text fallback is escaped before its
+            // newline→<br/> pass so a text-only hostile body can't smuggle markup either.
+            body: `<br/><br/><br/><br/>________________________________<br/><strong>From:</strong> ${escapeHtml(email.from_name || email.from_address)}<br/><strong>Sent:</strong> ${escapeHtml(new Date(email.date_received).toLocaleString())}<br/><strong>Subject:</strong> ${escapeHtml(email.subject)}<br/><br/>${email.body_html || escapeHtml(email.body_text).replace(/\n/g, '<br/>')}`,
             attachments: [],
             useSignature: true
         });
@@ -679,7 +708,8 @@ export default function MailServerAdmin() {
             cc: "",
             bcc: "",
             subject: `Fwd: ${email.subject.replace(/^(re|fwd):\s*/i, '')}`,
-            body: `<br/><br/><br/>---------- Forwarded message ---------<br/><strong>From:</strong> ${email.from_name || email.from_address} &lt;${email.from_address}&gt;<br/><strong>Date:</strong> ${new Date(email.date_received).toLocaleString()}<br/><strong>Subject:</strong> ${email.subject}<br/><strong>To:</strong> ${email.to_address}<br/><br/>${email.body_html || (email.body_text || '').replace(/\n/g, '<br/>')}`,
+            // See handleReply: metadata escaped, quoted body_html sanitized at the sink, text fallback escaped.
+            body: `<br/><br/><br/>---------- Forwarded message ---------<br/><strong>From:</strong> ${escapeHtml(email.from_name || email.from_address)} &lt;${escapeHtml(email.from_address)}&gt;<br/><strong>Date:</strong> ${escapeHtml(new Date(email.date_received).toLocaleString())}<br/><strong>Subject:</strong> ${escapeHtml(email.subject)}<br/><strong>To:</strong> ${escapeHtml(email.to_address)}<br/><br/>${email.body_html || escapeHtml(email.body_text || '').replace(/\n/g, '<br/>')}`,
             attachments: (email as any).attachments || [],
             useSignature: true
         });

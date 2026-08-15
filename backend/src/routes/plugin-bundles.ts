@@ -40,7 +40,7 @@ function resolvePluginDir(slug: string): string | null {
     if (!/^[a-zA-Z0-9_-]+$/.test(slug)) return null;
     const direct = safeJoin(PLUGINS_DIR, slug, 'manifest.json');
     if (direct && fs.existsSync(direct)) return slug;
-    let entries: string[] = [];
+    let entries: string[];
     try {
         entries = fs.readdirSync(PLUGINS_DIR, { withFileTypes: true })
             .filter((d: any) => d.isDirectory())

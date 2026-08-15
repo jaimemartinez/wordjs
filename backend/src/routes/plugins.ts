@@ -649,7 +649,7 @@ async function runPluginUpdate(
  * Per-slug lease so a replica booting mid-update on a shared plugins dir skips a stash another node owns.
  */
 async function recoverInterruptedPluginUpdates(): Promise<void> {
-    let names: string[] = [];
+    let names: string[];
     try { names = fs.readdirSync(OS_TMP_DIR); } catch { return; }
     const distLock = require('../core/dist-lock');
     const base = path.resolve(OS_TMP_DIR);
@@ -1422,7 +1422,7 @@ router.delete('/:slug', authenticate, isAdmin, asyncHandler(async (req: any, res
 
         res.json({ success: true, message: `Plugin ${slug} deleted successfully`, cleanup });
     } catch (err) {
-        throw new Error(`Failed to delete plugin: ${err.message}`);
+        throw new Error(`Failed to delete plugin: ${err.message}`, { cause: err });
     }
 }));
 

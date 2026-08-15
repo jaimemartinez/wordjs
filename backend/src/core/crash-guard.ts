@@ -16,7 +16,7 @@ const MAX_STRIKES = 3;
 // Ensure data dir exists
 const DATA_DIR = path.dirname(LOCK_FILE);
 if (!fs.existsSync(DATA_DIR)) {
-    try { fs.mkdirSync(DATA_DIR, { recursive: true }); } catch (e) { }
+    try { fs.mkdirSync(DATA_DIR, { recursive: true }); } catch { /* best-effort: a later fs op surfaces a real failure */ }
 }
 
 // ============================================
@@ -192,8 +192,8 @@ function extractPluginFromStack(stack: string | undefined) {
 
     // Match patterns like /plugins/my-plugin/ or \plugins\my-plugin\
     const patterns = [
-        /[\/\\]plugins[\/\\]([a-zA-Z0-9_-]+)[\/\\]/,
-        /[\/\\]themes[\/\\]([a-zA-Z0-9_-]+)[\/\\]/
+        /[/\\]plugins[/\\]([a-zA-Z0-9_-]+)[/\\]/,
+        /[/\\]themes[/\\]([a-zA-Z0-9_-]+)[/\\]/
     ];
 
     for (const pattern of patterns) {

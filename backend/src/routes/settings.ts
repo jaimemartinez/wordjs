@@ -9,6 +9,8 @@ const express = require('express');
 const router = express.Router();
 const { getOption, updateOption } = require('../core/options');
 const { getActiveThemeVersion, isActiveThemeMissing } = require('../core/themes');
+// Plugin-sandbox hardening state, surfaced to admins (see DERIVED_ADMIN_SETTINGS below). Required lazily
+// inside the compute functions so a load error there can never break the settings route at import time.
 const { authenticate } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
@@ -119,6 +121,26 @@ const DERIVED_PUBLIC_SETTINGS: Record<string, () => Promise<any>> = {
     active_theme_missing: isActiveThemeMissing
 };
 
+// Admin-ONLY derived settings: computed per request, never stored, and returned only from GET
+// /settings/all (behind authenticate + isAdmin). Same shape as DERIVED_PUBLIC_SETTINGS, but deliberately
+// NOT public — the plugin-sandbox hardening posture is a security-internal signal (telling an anonymous
+// visitor "this host's OS backstop is off" only helps an attacker), so it rides the admin payload the
+// audit's item 6 asks for, mirroring the active_theme_missing derived-boolean pattern.
+//
+// State is read from core/plugin-isolate (populated by the boot-time probe, or lazily on first isolate
+// load). 'unknown' until the probe resolves; 'degraded' is the dangerous "looks secure but isn't" state.
+const DERIVED_ADMIN_SETTINGS: Record<string, () => Promise<any>> = {
+    // Raw hardening state enum: 'unknown' | 'unsupported' | 'disabled' | 'active' | 'degraded'.
+    sandbox_hardening_state: async () => {
+        try { return require('../core/plugin-isolate').getSandboxHardeningState(); } catch { return 'unknown'; }
+    },
+    // Derived BOOLEAN (not a string — `Boolean("false")` is true): TRUE only when hardening is 'degraded',
+    // i.e. kernel hardening was enabled but the bwrap probe failed and plugins run without the OS backstop.
+    sandbox_hardening_degraded: async () => {
+        try { return require('../core/plugin-isolate').isSandboxHardeningDegraded() === true; } catch { return false; }
+    }
+};
+
 const derivedSetting = (key: string) =>
     // hasOwnProperty, not `in`: `constructor`/`toString` must not resolve through the prototype.
     Object.prototype.hasOwnProperty.call(DERIVED_PUBLIC_SETTINGS, key) ? DERIVED_PUBLIC_SETTINGS[key] : null;
@@ -207,9 +229,15 @@ router.get('/', asyncHandler(async (req: Request, res: Response) => {
 router.get('/all', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     const settings: Record<string, any> = {};
 
-    await Promise.all(ALL_SETTINGS.map(async (key) => {
-        settings[key] = await getOption(key);
-    }));
+    await Promise.all([
+        ...ALL_SETTINGS.map(async (key) => {
+            settings[key] = await getOption(key);
+        }),
+        // Admin-only derived flags (sandbox hardening posture) — computed, never stored.
+        ...Object.entries(DERIVED_ADMIN_SETTINGS).map(async ([key, compute]) => {
+            settings[key] = await compute();
+        })
+    ]);
 
     res.json(settings);
 }));

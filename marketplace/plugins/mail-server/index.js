@@ -29,6 +29,12 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const crypto = require('crypto');
+// Write-side XSS control: inbound mail HTML is hostile by definition (any sender; catch-all reaches
+// the admin mailbox). Sanitize to a strict allowlist BEFORE persisting on ingest (onData) so stored
+// body_html is never a script-carrying string — the durable control for everything that later reads
+// it, including the admin Reply/Forward re-quote. See lib/sanitize-email-html.js for the allowlist
+// and why it is safe. (The admin compose sink is separately guarded client-side with DOMPurify.)
+const { sanitizeEmailHtml } = require('./lib/sanitize-email-html');
 
 // Attachment storage lives in the plugin's OWN dir (untrusted plugins can't write shared uploads).
 // The single source of truth is Email.UPLOAD_DIR (set in email-store); mirror it here for path joins.
@@ -1320,7 +1326,11 @@ async function initSMTPServer() {
                                 toAddress: user ? user.userEmail : addr.address,
                                 subject: parsed.subject || '(no subject)',
                                 bodyText: parsed.text || '',
-                                bodyHtml: parsed.html || '',
+                                // STORED XSS (P1): inbound HTML is attacker-controlled (any sender;
+                                // catch-all reaches the admin mailbox). Sanitize on the durable write
+                                // path so no reader — including Reply/Forward, which re-quotes this
+                                // body into the live admin editor — ever loads a script-bearing string.
+                                bodyHtml: sanitizeEmailHtml(parsed.html || ''),
                                 rawContent: parsed.textAsHtml || parsed.text || '',
                                 // The SPF verdict for THIS transaction, as the RFC 7208 §9.1 header
                                 // (built in onMailFrom). Empty when SPF was skipped — trusted/loopback

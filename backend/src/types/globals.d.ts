@@ -10,7 +10,6 @@ import 'express';
 
 declare global {
   // Cron/scheduling API exposed to plugins via global.wordjs (set in src/index).
-  // eslint-disable-next-line no-var
   var wordjs: {
     scheduleEvent?: (...args: any[]) => any;
     scheduleSingleEvent?: (...args: any[]) => any;

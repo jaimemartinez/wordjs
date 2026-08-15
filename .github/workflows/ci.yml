@@ -52,6 +52,13 @@ jobs:
       - name: Type check (strict)
         working-directory: backend
         run: npx tsc --noEmit
+      - name: Lint
+        # Mirrors the frontend `Lint` step. The backend ESLint config existed but was NEVER run in CI,
+        # so ~62 errors accumulated unseen; they are now fixed. eslint exits non-zero ONLY on errors
+        # (severity 2) — warnings (currently ~120 no-unused-vars, mostly in tests) do NOT fail the job.
+        # This is the intended first gate: errors block, warnings are surfaced but tolerated for now.
+        working-directory: backend
+        run: npm run lint
       - name: Build (compile to dist — no ts-node in prod)
         working-directory: backend
         run: npm run build

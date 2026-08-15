@@ -119,7 +119,7 @@ async function detectPortConflict(port: number, deps: Deps = {}): Promise<PortCo
     if (platform !== 'linux') {
         return { port, inUse: false, canFree: false, uninspectable: true, reason: 'Automatic port-conflict resolution is only available on Linux.' };
     }
-    let stdout = '';
+    let stdout: string;
     try {
         stdout = (await run('ss', ['-H', '-t', '-l', '-n', '-p'])).stdout;
     } catch {

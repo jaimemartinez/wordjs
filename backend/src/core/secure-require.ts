@@ -491,7 +491,7 @@ function secureModuleFor(id: any) {
         // Read via `globalThis` (unreassignable per spec), NOT the writable `global` identifier — a plugin
         // doing `global = {}` must not be able to swap the isolation marker (see plugin-context.ts).
         const isolated = (typeof globalThis !== 'undefined' && (globalThis as any).__WORDJS_ISOLATED__);
-        let netGranted = false;
+        let netGranted: boolean;
         if (isolated) netGranted = !!(globalThis as any).__WORDJS_PLUGIN_NETWORK__;
         else { try { netGranted = require('./plugin-permissions').isNetworkGranted(pluginSlug); } catch { netGranted = false; } }
         if (netGranted) {
@@ -987,7 +987,7 @@ function installSecureRequire() {
 // fs methods, so fs.promises.writeFile/appendFile (and FileHandle.write) would otherwise bypass the disk
 // quota and re-open the raw-fs disk-fill DoS. Meter them against io-guard's SAME per-plugin budget.
 function meterPromiseWrite(slug: string, prop: string, args: any[]): void {
-    let io: any = null;
+    let io: any;
     try { io = require('./io-guard'); } catch { return; }
     if (!io || typeof io.enforceGrowQuota !== 'function') return;
     // fs.promises.writeFile/appendFile (unlike the callback API) accept an AsyncIterable | Iterable | Stream

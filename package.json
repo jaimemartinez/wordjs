@@ -33,25 +33,10 @@
     "perf:bench": "node scripts/perf-bench.mjs"
   },
   "dependencies": {
-    "@types/react": "^19.2.8",
-    "@types/react-dom": "^19.2.3",
-    "axios": "^1.13.2",
-    "better-sqlite3": "^12.6.0",
-    "cluster": "^0.7.7",
     "compression": "^1.8.1",
     "concurrently": "^10.0.3",
-    "dotenv": "^17.2.3",
-    "express": "^5.2.1",
-    "express-rate-limit": "^8.2.1",
     "helmet": "^8.1.0",
-    "http-proxy": "^1.18.1",
-    "morgan": "^1.10.1",
-    "react": "^19.2.8",
-    "react-dom": "^19.2.8",
-    "selfsigned": "^5.5.0",
-    "uuid": "^10.0.0",
-    "winston": "^3.19.0",
-    "winston-daily-rotate-file": "^5.0.0"
+    "selfsigned": "^5.5.0"
   },
   "devDependencies": {
     "autocannon": "^8.0.0",

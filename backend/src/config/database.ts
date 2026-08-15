@@ -171,8 +171,20 @@ async function initializeSchema(db: any, isAsync = false) {
     "post_status TEXT NOT NULL DEFAULT 'draft'",
     "comment_status TEXT NOT NULL DEFAULT 'open'",
     "ping_status TEXT NOT NULL DEFAULT 'open'",
+    // post_password: DATA-BEARING, NOT ENFORCED. Populated by WXR import (core/wxr-import.ts) and
+    // round-tripped by the Post model (models/Post.ts reads/writes it), so it holds real per-post
+    // values and export/import fidelity depends on it. What is NOT implemented is WordPress's
+    // password GATE — no public route challenges the visitor for this password before rendering a
+    // protected post. Kept as an unenforced field (removing it would break import/model round-trip);
+    // implementing the gate is a feature, not a schema fix.
     "post_password TEXT NOT NULL DEFAULT ''",
     "post_name TEXT NOT NULL DEFAULT ''",
+    // to_ping / pinged: DEAD. These are WordPress's outbound pingback/trackback queues (URLs still to
+    // ping, URLs already pinged). WordJS implements no pingback/trackback/XML-RPC sender — WXR import
+    // even skips inbound pingback/trackback comments (core/wxr-import.ts). Nothing reads or writes
+    // these columns; the Post model does not map them. Retained inert (harmless empty-string defaults)
+    // rather than risk a cross-driver posts-table column drop; a dedicated migration could remove them.
+    // NOTE: ping_status ABOVE is live (stored, exposed in settings, honored by the comment form).
     "to_ping TEXT NOT NULL DEFAULT ''",
     "pinged TEXT NOT NULL DEFAULT ''",
     "post_modified TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP",
@@ -278,7 +290,14 @@ async function initializeSchema(db: any, isAsync = false) {
     "autoload TEXT NOT NULL DEFAULT 'yes'"
   ]);
 
-  // Links table
+  // Links table — DEAD SCHEMA (no model, no router, no writer anywhere in WordJS).
+  // This is WordPress's legacy "blogroll" (wp_links). WordJS ships no link-manager UI, API, or
+  // model; the only other reference is clearDatabase() below, which truncates it for completeness.
+  // It is created empty on every install and never populated. Retained rather than dropped because
+  // removing a table cleanly across all four drivers (SQLite/Postgres/MySQL) is a migration change
+  // with its own risk surface, and the audit guidance prefers documenting an inert table over a
+  // risky drop. Safe to delete in a dedicated migration (DROP TABLE IF EXISTS links) if the blogroll
+  // is confirmed out of scope for good — remove this createTable AND the 'links' entry in clearDatabase().
   await createTable('links', [
     `link_id ${INT_PK}`,
     "link_url TEXT NOT NULL DEFAULT ''",
@@ -504,9 +523,8 @@ const dbAsyncProxy = new Proxy({}, {
         // SQL through untouched so SQLite-style placeholders work everywhere and we
         // never double-normalize. Standard SQL (SELECT/INSERT/UPDATE/DELETE/JOIN/
         // LIMIT/OFFSET) works the same in both SQLite and PostgreSQL.
-        return await db[prop].bind(db)(...args);
-
-        // Non-SQL operations (like close, connect, etc.) - pass through
+        // Covers both SQL and non-SQL operations (close, connect, etc.) — the
+        // proxy passes every method through untouched after the permission check.
         return await db[prop].bind(db)(...args);
       }
     }

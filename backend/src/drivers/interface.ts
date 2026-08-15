@@ -57,7 +57,7 @@ class DatabaseDriverInterface {
      * @param {(tx: { get: Function, all: Function, run: Function, exec: Function }) => Promise<any>} fn
      * @returns {Promise<any>} the value returned by fn
      */
-    async transaction(fn: (tx: { get: Function; all: Function; run: Function; exec: Function }) => Promise<any>) {
+    async transaction(fn: (tx: { get: (...a: any[]) => any; all: (...a: any[]) => any; run: (...a: any[]) => any; exec: (...a: any[]) => any }) => Promise<any>) {
         throw new Error('transaction() not implemented');
     }
 
