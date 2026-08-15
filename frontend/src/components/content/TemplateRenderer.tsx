@@ -67,24 +67,32 @@ export interface TemplateRendererProps {
     template: TemplateTree;
     /** The page's own content, substituted for the `PageContent` slot. */
     children: Rendered;
+    /**
+     * EDITOR CANVAS ONLY. When true (CanvasThemeTemplate passes it), dynamic listings render inert so a
+     * post link never navigates the canvas iframe, and an UNRESOLVED template part renders a labelled
+     * placeholder instead of nothing — so the author can see where a part sits even though the canvas
+     * does not run the server's chrome resolution. Off (the public default) ⇒ behaviour is unchanged:
+     * links are live and an unresolved part renders nothing, the fail-closed contract.
+     */
+    canvasPreview?: boolean;
 }
 
-export function TemplateRenderer({ template, children }: TemplateRendererProps) {
-    return <>{renderList(template.content, children, 't')}</>;
+export function TemplateRenderer({ template, children, canvasPreview }: TemplateRendererProps) {
+    return <>{renderList(template.content, children, 't', !!canvasPreview)}</>;
 }
 
-function renderList(list: TemplateBlock[], content: Rendered, key: string): Rendered {
-    return list.map((block, i) => renderBlock(block, content, `${key}-${i}`));
+function renderList(list: TemplateBlock[], content: Rendered, key: string, preview: boolean): Rendered {
+    return list.map((block, i) => renderBlock(block, content, `${key}-${i}`, preview));
 }
 
-function renderBlock(block: TemplateBlock, content: Rendered, key: string): Rendered {
+function renderBlock(block: TemplateBlock, content: Rendered, key: string, preview: boolean): Rendered {
     const p = block.props || {};
     const items = Array.isArray(p.items) ? (p.items as TemplateBlock[]) : [];
 
     // The slot every container hands to its block: a wrapper div carrying whichever class the block
     // asks for (Grid and FlexRow put the layout on the slot's own wrapper, not on themselves).
     const slot: SlotFn = (className) => (
-        <div className={className}>{renderList(items, content, key)}</div>
+        <div className={className}>{renderList(items, content, key, preview)}</div>
     );
 
     switch (block.type) {
@@ -141,7 +149,7 @@ function renderBlock(block: TemplateBlock, content: Rendered, key: string): Rend
             const dist = distribution(Number(p.columns ?? 2));
             const buckets: TemplateBlock[][] = Array.from({ length: dist.columnCount }, () => []);
             items.forEach((child, i) => buckets[i % dist.columnCount].push(child));
-            const slots: SlotFn[] = buckets.map((bucket, i) => () => renderList(bucket, content, `${key}-c${i}`));
+            const slots: SlotFn[] = buckets.map((bucket, i) => () => renderList(bucket, content, `${key}-c${i}`, preview));
             return <ColumnsBlock key={key} distribution={dist} gap={p.gap} tag={p.tag} className={p.className} slots={slots} />;
         }
 
@@ -161,10 +169,10 @@ function renderBlock(block: TemplateBlock, content: Rendered, key: string): Rend
         // honest empty state rather than inventing titles. That is deliberate: this file must not be
         // the thing that decides what a listing contains.
         case 'PostsGrid':
-            return <PostsGridBlock key={key} {...p} posts={(p as any).resolvedPosts} />;
+            return <PostsGridBlock key={key} {...p} posts={(p as any).resolvedPosts} isEditing={preview} />;
 
         case 'CategoryPosts':
-            return <CategoryPostsBlock key={key} {...p} posts={(p as any).resolvedPosts} />;
+            return <CategoryPostsBlock key={key} {...p} posts={(p as any).resolvedPosts} isEditing={preview} />;
 
         case 'SearchBar':
             return <SearchBarBlock key={key} {...p} />;
@@ -184,8 +192,31 @@ function renderBlock(block: TemplateBlock, content: Rendered, key: string): Rend
         case 'TemplatePart': {
             const data = (p as { resolvedPart?: ChromeData }).resolvedPart;
             const bindings = (p as { resolvedBindings?: ChromeBindings }).resolvedBindings;
-            if (!data || !bindings) return null;
             const area = String(p.area ?? 'general');
+            if (!data || !bindings) {
+                // Public: fail-closed — an undeclared/invalid part renders nothing. Canvas: the part is
+                // never resolved here (chrome resolution is server-only), so show WHERE it sits with a
+                // labelled placeholder rather than a hole, and mark it clearly as a preview.
+                if (!preview) return null;
+                const Wrapper = PART_TAGS[area] || 'div';
+                return (
+                    <Wrapper
+                        key={key}
+                        className={`wjs-template-part wjs-template-part--${area} wjs-canvas-part-placeholder`}
+                        style={{
+                            border: '1px dashed var(--wjs-color-border, #cbd5e1)',
+                            borderRadius: '0.5rem',
+                            padding: '0.75rem 1rem',
+                            margin: '0.5rem 0',
+                            color: 'var(--wjs-color-muted, #64748b)',
+                            fontSize: '0.8125rem',
+                            textAlign: 'center',
+                        }}
+                    >
+                        {`Parte de plantilla: ${String(p.name ?? '')} (${area}) — vista previa`}
+                    </Wrapper>
+                );
+            }
             const Wrapper = PART_TAGS[area] || 'div';
             return (
                 <Wrapper key={key} className={`wjs-template-part wjs-template-part--${area}`}>

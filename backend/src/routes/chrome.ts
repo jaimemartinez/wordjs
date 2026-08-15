@@ -27,7 +27,11 @@ const { purgeFrontend } = require('../core/frontend-purge');
  *   description: Composable site chrome (header/footer compositions)
  */
 
-const PARTS = ['header', 'footer'];
+// header/footer are the masthead + footer landmarks; announcement is the optional top bar the public
+// layout renders full-bleed above the header. All three are resolved by the layout itself (never a
+// template part) and validated by chrome-validate at their own position — announcement bars ChromeNav
+// because the header already mounts the one mobile drawer.
+const PARTS = ['header', 'footer', 'announcement'];
 
 const invalidPart = (res: Response) => res.status(400).json({
     code: 'rest_invalid_param',
@@ -49,7 +53,7 @@ const invalidPart = (res: Response) => res.status(400).json({
  *         required: true
  *         schema:
  *           type: string
- *           enum: [header, footer]
+ *           enum: [header, footer, announcement]
  *     requestBody:
  *       content:
  *         application/json:
@@ -101,7 +105,7 @@ router.put('/:part', authenticate, isAdmin, asyncHandler(async (req: Request, re
  *         required: true
  *         schema:
  *           type: string
- *           enum: [header, footer]
+ *           enum: [header, footer, announcement]
  *     responses:
  *       200:
  *         description: Composition removed (deleted=false when none was stored)

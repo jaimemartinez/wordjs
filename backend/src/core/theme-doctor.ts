@@ -446,9 +446,11 @@ function analyzeTheme(slug: string, opts: { themesDir?: string; manifestPath?: s
     const onDisk = fs.existsSync(chromeDir)
       ? fs.readdirSync(chromeDir).filter((f: string) => f.endsWith('.json')).sort()
       : [];
+    const layoutSlots: string[] = (chromeValidate && Array.isArray(chromeValidate.CHROME_LAYOUT_SLOTS))
+      ? chromeValidate.CHROME_LAYOUT_SLOTS : ['header', 'footer', 'announcement'];
     for (const file of onDisk) {
       const name = file.slice(0, -'.json'.length);
-      if (name === 'header' || name === 'footer' || declaredParts.has(name)) continue;
+      if (layoutSlots.includes(name) || declaredParts.has(name)) continue;
       report.warnings.push({
         code: 'TEMPLATE_PART_UNDECLARED',
         message: `chrome/${file} is neither the site header/footer nor declared in theme.json "templateParts" — nothing can reference it`,
@@ -464,7 +466,9 @@ function analyzeTheme(slug: string, opts: { themesDir?: string; manifestPath?: s
   // part validated without its name would come back clean and the author would ship a second
   // body-scroll-lock owner into the page.
   if (chromeValidate && typeof chromeValidate.validateChromeData === 'function') {
-    for (const part of ['header', 'footer'].concat(Array.from(declaredParts.keys()))) {
+    const siteSlots: string[] = Array.isArray(chromeValidate.CHROME_LAYOUT_SLOTS)
+      ? chromeValidate.CHROME_LAYOUT_SLOTS : ['header', 'footer', 'announcement'];
+    for (const part of siteSlots.concat(Array.from(declaredParts.keys()))) {
       const chromeJsonPath = path.join(themeDir, 'chrome', `${part}.json`);
       if (!fs.existsSync(chromeJsonPath)) continue;
       let rawChrome: string | null = null;

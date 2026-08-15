@@ -238,7 +238,9 @@ export const getFonts = cache((): Promise<import('./fontFaceCss').WjsFont[]> =>
 export const getMenuByLocation = cache((location: string): Promise<{ items: MenuItem[] } | null> =>
     serverFetch<{ items: MenuItem[] }>(`/menus/location/${encodeURIComponent(location)}`, { revalidate: 60, tags: ['menus', `menu:${location}`] })
 );
-export interface MenuItem { id: number | string; title: string; url: string; order?: number; }
+// `parent` is the flat hierarchy the location endpoint returns (MenuItem.toJSON → post_parent /
+// _menu_item_menu_item_parent). buildMenuTree nests it into ChromeNav submenus; 0 means a root item.
+export interface MenuItem { id: number | string; title: string; url: string; order?: number; parent?: number | string; }
 
 /**
  * Active theme's chrome composition file (composable-chrome contract v1, precedence level 2º).

@@ -6,6 +6,8 @@ import "./puck-theme.css";
 import React, { useState, useEffect, useRef } from "react";
 import ModernSelect from "./ModernSelect";
 import PublicLayoutShell from "@/components/public/PublicLayoutShell";
+import { CanvasThemeTemplate, CanvasTemplateContext, type CanvasTemplateInfo } from "@/components/editor/CanvasThemeTemplate";
+import type { TemplateKind } from "@/lib/templateData";
 import { puckConfig } from "./puckConfig";
 import RevisionsSidebar from "./RevisionsSidebar";
 import BlockInserter from "./BlockInserter";
@@ -601,6 +603,14 @@ interface PuckEditorProps {
     previewSlug?: string;
     /** Breadcrumb root label (Spanish source string, translated via trStr) — "Entradas" for posts. */
     breadcrumbRoot?: string;
+    /**
+     * OLA 3 — which theme page-template the canvas previews the content inside. `page` (the default,
+     * used by the page editor) or `single` (the post editor). The canvas resolves the theme's matching
+     * template through the same hierarchy the public route uses.
+     */
+    templateKind?: TemplateKind;
+    /** Post type for a `single` route (e.g. "post"), so the hierarchy can prefer single-post templates. */
+    templatePostType?: string;
 }
 
 // Context for Inline Editing
@@ -830,7 +840,16 @@ const StablePuckRoot = ({ children }: { children: React.ReactNode }) => {
                 }
             }}>
                 <PublicLayoutShell>
-                    {children}
+                    {/* OLA 3: the editable content is composed INSIDE the active theme's matching page
+                        template (page/single), so the author sees their blocks in the theme's real
+                        Section/Grid arrangement — exactly what the public page renders. Display only:
+                        the template is the theme's and never enters the saved _puck_data (Puck serializes
+                        its store, not this render output). No template ⇒ children render as before. The
+                        route identity comes from CanvasTemplateContext, provided by PuckEditor and read
+                        here across the AutoFrame portal. */}
+                    <CanvasThemeTemplate>
+                        {children}
+                    </CanvasThemeTemplate>
                 </PublicLayoutShell>
             </EditorContext.Provider>
         </div>
@@ -1006,10 +1025,21 @@ export default function PuckEditor({
     config: passedConfig,
     pageId,
     previewSlug,
-    breadcrumbRoot
+    breadcrumbRoot,
+    templateKind = "page",
+    templatePostType
 }: PuckEditorProps) {
     const { t, language } = useI18n();
     const activeConfig = passedConfig || puckConfig;
+
+    // OLA 3: route identity for the canvas theme-template preview, carried across the AutoFrame portal to
+    // CanvasThemeTemplate (rendered in the iframe). Memoized on kind+postType only (NOT the slug, which
+    // regenerates per keystroke while titling a draft) so the value is stable for the whole session and
+    // never re-runs the canvas resolution.
+    const canvasTemplateInfo = React.useMemo<CanvasTemplateInfo>(
+        () => ({ kind: templateKind, postType: templatePostType }),
+        [templateKind, templatePostType]
+    );
 
     // Preview the REAL live page (SSR, active theme) in a new tab. Saves first when there are
     // unsaved changes so the preview reflects what's on screen; /preview/[slug] is the dedicated
@@ -1616,6 +1646,7 @@ export default function PuckEditor({
     }, [showSidebar]);
 
     return (
+        <CanvasTemplateContext.Provider value={canvasTemplateInfo}>
         <EditorContext.Provider value={{ updateComponent, activeEditorId, setActiveEditorId }}>
             {activeEditorId && (
                 <style dangerouslySetInnerHTML={{
@@ -2153,6 +2184,7 @@ export default function PuckEditor({
                 />
             )}
         </EditorContext.Provider>
+        </CanvasTemplateContext.Provider>
     );
 }
 

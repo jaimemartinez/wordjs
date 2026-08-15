@@ -279,6 +279,10 @@ export default function PostEditorPage() {
                 breadcrumbRoot="Entradas"
                 pageId={postId || undefined}
                 previewSlug={slug || undefined}
+                // OLA 3: preview the post inside the theme's `single` template (single-post-… → single →
+                // page in the hierarchy), matching the public post route.
+                templateKind="single"
+                templatePostType="post"
                 onChange={(data) => {
                     // Ignore init-time events only (see mountedAtRef note above).
                     if (Date.now() - mountedAtRef.current > 800) {

@@ -26,7 +26,7 @@ const {
     validateTemplateParts, TEMPLATE_PART_AREAS, TEMPLATE_PART_NAME, TEMPLATE_PART_RESERVED,
     MAX_TEMPLATE_PARTS,
     validateChromeData, chromePositionFor, CHROME_SITE_PARTS, CHROME_BLOCK_TYPES,
-    CHROME_DOCUMENT_SCOPED_BLOCKS
+    CHROME_DOCUMENT_SCOPED_BLOCKS, CHROME_LAYOUT_SLOTS, CHROME_ANNOUNCEMENT_PART
 } = require('../core/chrome-validate');
 const {
     validateTemplate, CONTENT_SLOT, templatePartRefs,
@@ -73,7 +73,8 @@ test('a name that could become a path, an attribute or a different file is REJEC
     }
 });
 
-test('"header" and "footer" are the site chrome, never a template part', () => {
+test('the reserved names (header, footer, announcement) are site chrome, never a template part', () => {
+    assert.deepStrictEqual(TEMPLATE_PART_RESERVED, ['header', 'footer', 'announcement']);
     for (const name of TEMPLATE_PART_RESERVED) {
         const r = validateTemplateParts([{ name, area: 'header' }]);
         assert.strictEqual(r.ok, false);
@@ -240,17 +241,25 @@ test('every OTHER block in the allowlist is still legal in a part — this narro
     assert.deepStrictEqual(CHROME_DOCUMENT_SCOPED_BLOCKS, ['ChromeNav']);
 });
 
-test('the position is DERIVED from the name, and no part name can reach the lenient branch', () => {
+test('the position is DERIVED from the name, and no part name can reach a laxer branch', () => {
     assert.strictEqual(chromePositionFor(undefined), 'chrome');
     assert.strictEqual(chromePositionFor('header'), 'chrome');
     assert.strictEqual(chromePositionFor('footer'), 'chrome');
     assert.strictEqual(chromePositionFor('promo'), 'part');
     assert.strictEqual(chromePositionFor(''), 'part');
-    // The lenient branch is reachable only by the two names validateTemplateParts REFUSES as part
-    // names, which is what closes the loop: a declared part can never be called 'header'/'footer'.
+    // 'announcement' is its OWN position: a resolved site slot (not a template part) that still bars the
+    // document-scoped blocks, because the header already owns the one ChromeNav drawer.
+    assert.strictEqual(CHROME_ANNOUNCEMENT_PART, 'announcement');
+    assert.strictEqual(chromePositionFor('announcement'), 'announcement');
+    // The 'chrome' (lenient, ChromeNav-allowed) branch is reachable only by header/footer, and all three
+    // slot names are REFUSED as template-part names — a declared part can never launder into a site slot.
     for (const name of CHROME_SITE_PARTS) {
-        assert.deepStrictEqual(codes(validateTemplateParts([{ name, area: 'general' }])), ['PARTS_RESERVED_NAME']);
         assert.strictEqual(chromePositionFor(name), 'chrome');
     }
-    assert.deepStrictEqual(CHROME_SITE_PARTS, TEMPLATE_PART_RESERVED);
+    for (const name of CHROME_LAYOUT_SLOTS) {
+        assert.deepStrictEqual(codes(validateTemplateParts([{ name, area: 'general' }])), ['PARTS_RESERVED_NAME']);
+    }
+    // The reserved set is exactly the names the layout resolves itself (header, footer, announcement).
+    assert.deepStrictEqual(TEMPLATE_PART_RESERVED, CHROME_LAYOUT_SLOTS);
+    assert.deepStrictEqual(CHROME_LAYOUT_SLOTS, ['header', 'footer', 'announcement']);
 });
