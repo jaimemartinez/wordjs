@@ -26,7 +26,10 @@ import { formBlockFields, formBlockDefaults, FormBlockRender } from "./puck/Form
 import { symbolBlockFields, symbolBlockDefaults, makeSymbolRender } from "./puck/SymbolBlock";
 
 // Custom Category Field component
-const CategoryField = ({ value, onChange }: { value: string; onChange: (value: string) => void }) => {
+// Exported (junto a TemplateField/ColumnStyleAccordion/ColumnDistributionControl) para que el
+// registro Verso (lib/verso/coreBlocks.tsx) reutilice EXACTAMENTE los mismos controles — una sola
+// implementación, dos registros de bloques durante la convivencia Puck↔Verso.
+export const CategoryField = ({ value, onChange }: { value: string; onChange: (value: string) => void }) => {
     const [categories, setCategories] = useState<Category[]>([]);
     const [loading, setLoading] = useState(true);
 
@@ -60,7 +63,7 @@ const CategoryField = ({ value, onChange }: { value: string; onChange: (value: s
 // assignment naming a template the active theme no longer ships stays VISIBLE as a synthesized
 // option instead of silently vanishing from the select — the author sees what's stored (the public
 // route already degrades it to the hierarchy, fail-closed), and can clear it deliberately.
-const TemplateField = ({ value, onChange }: { value: string; onChange: (value: string) => void }) => {
+export const TemplateField = ({ value, onChange }: { value: string; onChange: (value: string) => void }) => {
     const [templates, setTemplates] = useState<string[]>([]);
     const [loading, setLoading] = useState(true);
     const lang = getStoredLanguage();
@@ -101,7 +104,7 @@ const TemplateField = ({ value, onChange }: { value: string; onChange: (value: s
 };
 
 // Column Style Interface
-interface ColumnStyle {
+export interface ColumnStyle {
     backgroundColor?: string;
     padding?: string;
     borderWidth?: string;
@@ -110,7 +113,7 @@ interface ColumnStyle {
 }
 
 // Column Style Accordion - for per-column styling
-const ColumnStyleAccordion = ({ value, onChange, columnCount }: {
+export const ColumnStyleAccordion = ({ value, onChange, columnCount }: {
     value: ColumnStyle[];
     onChange: (styles: ColumnStyle[]) => void;
     columnCount: number;
@@ -223,12 +226,12 @@ const ColumnStyleAccordion = ({ value, onChange, columnCount }: {
 };
 
 // Column Distribution Control - buttons for count + slider for widths
-interface ColumnDistribution {
+export interface ColumnDistribution {
     columnCount: number;
     widths: number[]; // percentages that sum to 100
 }
 
-const ColumnDistributionControl = ({ value, onChange }: {
+export const ColumnDistributionControl = ({ value, onChange }: {
     value: ColumnDistribution;
     onChange: (distribution: ColumnDistribution) => void;
 }) => {
