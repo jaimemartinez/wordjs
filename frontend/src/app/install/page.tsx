@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { apiPost, apiGet } from "@/lib/api";
-import { FaServer, FaUserShield, FaMagic, FaCheckCircle, FaArrowRight, FaArrowLeft, FaDatabase } from 'react-icons/fa';
+import { FaServer, FaUserShield, FaMagic, FaCheckCircle, FaArrowRight, FaArrowLeft, FaDatabase, FaExclamationTriangle } from 'react-icons/fa';
 
 type DbDriver = 'sqlite-native' | 'sqlite-legacy' | 'postgres' | 'mysql';
 type TestState = { status: 'idle' | 'testing' | 'ok' | 'fail'; message: string };
@@ -37,6 +37,9 @@ export default function InstallPage() {
     const [stageMsg, setStageMsg] = useState("");
     const [siteUrl, setSiteUrl] = useState("");
     const stageTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+    // Set when install succeeds but no email provider is registered — we pause on a warning screen
+    // (instead of auto-redirecting) so the admin learns password recovery won't work before moving on.
+    const [installWarning, setInstallWarning] = useState<{ redirectTo: string } | null>(null);
 
     // Step 1: Site
     const [siteName, setSiteName] = useState("");
@@ -117,7 +120,7 @@ export default function InstallPage() {
         }, 1200);
 
         try {
-            const res = await apiPost<{ success: boolean; redirectTo?: string }>('/setup/install', {
+            const res = await apiPost<{ success: boolean; redirectTo?: string; emailProviderAvailable?: boolean }>('/setup/install', {
                 siteName,
                 siteDescription,
                 adminUser,
@@ -130,8 +133,17 @@ export default function InstallPage() {
                 demoContent
             });
             if (stageTimer.current) clearInterval(stageTimer.current);
+            const redirectTo = res?.redirectTo || '/login?installed=true';
+            // A fresh site has no mail plugin, so there is no email provider and no self-service password
+            // recovery. Pause on a warning screen so the admin knows before landing in /admin.
+            if (res && res.emailProviderAvailable === false) {
+                setInstallWarning({ redirectTo });
+                setLoading(false);
+                setStageMsg("");
+                return;
+            }
             // Auto-login sets an HttpOnly cookie on the response, so redirectTo can be /admin.
-            router.push(res?.redirectTo || '/login?installed=true');
+            router.push(redirectTo);
         } catch (err: any) {
             if (stageTimer.current) clearInterval(stageTimer.current);
             setError(err.message || "Installation failed.");
@@ -147,6 +159,47 @@ export default function InstallPage() {
     ];
     const inputCls = "block w-full px-4 py-3 rounded-lg border border-gray-300 bg-white/50 text-gray-900 placeholder-gray-500 focus:bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all duration-200 outline-none";
     const labelCls = "block text-sm font-semibold text-gray-700 mb-2 group-focus-within:text-blue-600 transition-colors";
+
+    // Post-install warning: setup succeeded but the site has no email provider, so password recovery
+    // won't work. Shown once, with an explicit Continue, before landing the admin in the dashboard.
+    if (installWarning) {
+        return (
+            <div className="min-h-screen relative flex items-center justify-center overflow-hidden bg-gray-50 dark:bg-gray-900 py-10">
+                <div className="relative z-10 w-full max-w-lg px-4">
+                    <div className="glass-panel rounded-2xl shadow-2xl overflow-hidden">
+                        <div className="bg-gradient-to-r from-amber-500 to-orange-500 p-8 text-center">
+                            <div className="mx-auto bg-white/20 w-16 h-16 rounded-full flex items-center justify-center backdrop-blur-sm mb-4 shadow-lg border border-white/30">
+                                <FaCheckCircle className="text-3xl text-white" aria-hidden="true" />
+                            </div>
+                            <h1 className="text-2xl font-bold text-white tracking-tight font-oswald">WordJS is installed</h1>
+                            <p className="text-amber-50 mt-2 font-medium">One thing to know before you start</p>
+                        </div>
+                        <div className="p-8 md:p-10 space-y-5">
+                            <div className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-4">
+                                <FaExclamationTriangle className="text-amber-500 mt-0.5 shrink-0" aria-hidden="true" />
+                                <div>
+                                    <h2 className="text-sm font-bold text-amber-900">No email provider — password recovery is off</h2>
+                                    <p className="text-sm text-amber-800/90 mt-1 leading-relaxed">
+                                        WordJS core cannot send email on its own, and no mail plugin is active. Until you
+                                        install one (e.g. mail-server) and grant it the <code className="font-mono text-xs">email:provider</code>{" "}
+                                        permission, the &ldquo;Forgot password?&rdquo; flow will not work — a locked-out user must be
+                                        reset by an administrator. Keep your admin password somewhere safe.
+                                    </p>
+                                </div>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => router.push(installWarning.redirectTo)}
+                                className="w-full flex items-center justify-center bg-blue-600 text-white py-3.5 px-6 rounded-lg font-semibold hover:bg-blue-700 transition-all"
+                            >
+                                Continue to Dashboard <FaArrowRight className="ml-2" aria-hidden="true" />
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div className="min-h-screen relative flex items-center justify-center overflow-hidden bg-gray-50 dark:bg-gray-900 transition-colors duration-500 py-10">

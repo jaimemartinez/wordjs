@@ -271,7 +271,8 @@ router.post('/', authenticate, asyncHandler(async (req: any, res: Response) => {
         comment_status,
         categories,
         tags,
-        meta
+        meta,
+        date
     } = req.body;
 
     if (!title) {
@@ -309,7 +310,8 @@ router.post('/', authenticate, asyncHandler(async (req: any, res: Response) => {
         slug,
         parent,
         menuOrder: menu_order,
-        commentStatus: comment_status
+        commentStatus: comment_status,
+        date
     });
 
     // Set categories
@@ -411,7 +413,8 @@ router.put('/:id', authenticate, asyncHandler(async (req: any, res: Response) =>
         categories,
         tags,
         meta,
-        autosave
+        autosave,
+        date
     } = req.body;
 
     // Check if user can publish THIS type
@@ -428,7 +431,8 @@ router.put('/:id', authenticate, asyncHandler(async (req: any, res: Response) =>
         slug,
         parent,
         menuOrder: menu_order,
-        commentStatus: comment_status
+        commentStatus: comment_status,
+        date
     });
 
     // Update categories

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, Suspense } from "react";
+import { useState, useEffect, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { authApi } from "@/lib/api";
 
@@ -20,10 +20,23 @@ function ResetPasswordInner() {
 
     // Request mode
     const [login, setLogin] = useState("");
+    // null = probing; false = no mail provider can deliver → self-service reset cannot work, so tell the
+    // user to contact an administrator instead of silently accepting a request that goes nowhere.
+    const [resetAvailable, setResetAvailable] = useState<boolean | null>(null);
     // Set-new-password mode
     const [password, setPassword] = useState("");
     const [confirm, setConfirm] = useState("");
     const [showPassword, setShowPassword] = useState(false);
+
+    // Only probe in request mode (a valid uid+token link should always render the set-password form).
+    useEffect(() => {
+        if (hasToken) return;
+        let active = true;
+        authApi.passwordResetAvailable()
+            .then((r) => { if (active) setResetAvailable(!!r?.available); })
+            .catch(() => { if (active) setResetAvailable(true); /* probe failed — don't block the form */ });
+        return () => { active = false; };
+    }, [hasToken]);
 
     const handleRequest = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -152,6 +165,23 @@ function ResetPasswordInner() {
                     {loading ? "Resetting…" : "Reset Password"}
                 </button>
             </form>
+        );
+    }
+
+    // ---- Recovery unavailable (no mail provider) ------------------------------------------------
+    // The site cannot send email, so a reset link would never arrive. Say so honestly instead of
+    // showing a form whose neutral "check your inbox" confirmation would be a lie.
+    if (resetAvailable === false) {
+        return shell(
+            <div className="text-center space-y-4">
+                <i className="fa-solid fa-envelope-open-text text-amber-500 text-4xl"></i>
+                <p className="text-gray-700">
+                    Self-service password reset is not available on this site — it has no email provider configured.
+                </p>
+                <p className="text-sm text-gray-500">
+                    Please contact a site administrator to have your password reset.
+                </p>
+            </div>
         );
     }
 

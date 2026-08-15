@@ -375,6 +375,91 @@ const MIGRATIONS: Migration[] = [
             await ctx.exec(`INSERT INTO posts_fts(posts_fts) VALUES('rebuild')`);
             console.log('   ✓ [migration 0008] full-text index built over posts(title, content)');
         }
+    },
+    {
+        // APPEND-ONLY AUDIT LOG (FRENTE C-3): a durable record of who did what, for the security-relevant
+        // mutations (user create/delete/role change, settings change, plugin activate/deactivate, theme
+        // activate). One row per event; the app NEVER updates or deletes rows (there is no such API) — the
+        // table is written by core/audit.recordAudit and read only by the admin GET /audit endpoint.
+        //   - actor_id: the acting user's id (NULLABLE — a system/boot action has no actor).
+        //   - target_id: TEXT, because a target is a numeric user id OR a slug (plugin/theme) OR an option
+        //     key. One column, uniformly stringified, so every action keys the same way.
+        //   - detail: a SMALL JSON blob (sanitized by recordAudit — never secrets/passwords/tokens).
+        //     Registered in mysql.ts LONG_TEXT_COLUMNS so MySQL maps it to LONGTEXT, never a truncating
+        //     VARCHAR(255). created_at follows the existing display-only convention (0002-0004, 0007).
+        id: '0009_create_audit_log',
+        up: async (ctx: MigrationCtx) => {
+            const INT_PK = ctx.isPostgres ? 'SERIAL PRIMARY KEY' : 'INTEGER PRIMARY KEY AUTOINCREMENT';
+            const TS = ctx.isPostgres ? 'TIMESTAMP' : 'DATETIME';
+            await ctx.exec(
+                `CREATE TABLE IF NOT EXISTS audit_log (` +
+                `id ${INT_PK}, ` +
+                `actor_id INTEGER, ` +
+                `action TEXT NOT NULL, ` +
+                `target_type TEXT NOT NULL DEFAULT '', ` +
+                `target_id TEXT NOT NULL DEFAULT '', ` +
+                `detail TEXT NOT NULL DEFAULT '', ` +
+                `created_at ${TS} DEFAULT CURRENT_TIMESTAMP)`
+            );
+            // The admin log lists newest-first (ORDER BY id DESC) — the PK already serves that walk. A
+            // second index lets "everything this actor did" stay cheap.
+            await ctx.exec('CREATE INDEX IF NOT EXISTS idx_audit_log_actor ON audit_log (actor_id, id)');
+        }
+    },
+    {
+        id: '0010_posts_fts_pg_mysql',
+        up: async (ctx: MigrationCtx) => {
+            // FULL-TEXT SEARCH for the two "serious" engines. Migration 0008 gave SQLite an FTS5 index;
+            // Postgres and MySQL early-returned there with a "pending" note, which meant every large
+            // deployment DEGRADED to a `LIKE '%q%'` table scan — backwards from what those engines need.
+            // This adds a REAL inverted index on each, over the same title+content FTS5 covers PLUS the
+            // excerpt, and Post's search path (models/Post.ts) queries it with a relevance rank.
+            //
+            // Idempotent on both a fresh and an existing database, and a no-op on SQLite (0008 owns it).
+
+            if (ctx.isPostgres) {
+                // A STORED generated column keeps the tsvector in lock-step with title/content/excerpt
+                // with no trigger to maintain — Postgres recomputes it on every INSERT/UPDATE. The
+                // regconfig is the LITERAL 'english' (not a column) so the expression is IMMUTABLE, which
+                // a generated column requires. `ADD COLUMN IF NOT EXISTS` + `CREATE INDEX IF NOT EXISTS`
+                // make the whole migration safe to re-run.
+                await ctx.exec(
+                    `ALTER TABLE posts ADD COLUMN IF NOT EXISTS search_vector tsvector ` +
+                    `GENERATED ALWAYS AS (` +
+                    `to_tsvector('english', ` +
+                    `coalesce(post_title, '') || ' ' || coalesce(post_content, '') || ' ' || coalesce(post_excerpt, ''))` +
+                    `) STORED`
+                );
+                // GIN is the index type for @@ containment queries over a tsvector.
+                await ctx.exec(
+                    `CREATE INDEX IF NOT EXISTS idx_posts_search_vector ON posts USING GIN (search_vector)`
+                );
+                console.log('   ✓ [migration 0010] Postgres tsvector column + GIN index built over posts(title, content, excerpt)');
+                return;
+            }
+
+            if (ctx.driverName === 'mysql') {
+                // MySQL 8 / InnoDB supports FULLTEXT natively. There is no `ADD FULLTEXT ... IF NOT
+                // EXISTS`, so probe information_schema first and skip if the index already exists — that
+                // is what makes a re-run (or a boot after a partial failure) a clean no-op.
+                const existing = await ctx.get(
+                    `SELECT 1 AS ok FROM information_schema.statistics ` +
+                    `WHERE table_schema = DATABASE() AND table_name = 'posts' AND index_name = 'ftidx_posts_search' LIMIT 1`
+                );
+                if (!existing) {
+                    await ctx.exec(
+                        `ALTER TABLE posts ADD FULLTEXT INDEX ftidx_posts_search (post_title, post_content, post_excerpt)`
+                    );
+                    console.log('   ✓ [migration 0010] MySQL FULLTEXT index built over posts(title, content, excerpt)');
+                } else {
+                    console.log('   • [migration 0010] MySQL FULLTEXT index already present — skipped');
+                }
+                return;
+            }
+
+            // SQLite (native or legacy): full-text is already handled by 0008 (native FTS5) or is
+            // best-effort LIKE (legacy sql.js, which has no FTS5). Nothing to do here.
+        }
     }
 ];
 

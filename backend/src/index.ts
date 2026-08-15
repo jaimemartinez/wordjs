@@ -246,6 +246,7 @@ app.post(`${config.api.prefix}/auth/mfa`, loginIpLimiter);
 app.use(`${config.api.prefix}/auth/register`, authLimiter);
 app.use(`${config.api.prefix}/auth/forgot-password`, authLimiter); // public, unauthenticated — throttle abuse
 app.use(`${config.api.prefix}/auth/reset-password`, authLimiter);
+app.use(`${config.api.prefix}/auth/verify-email`, authLimiter); // public token-consume — throttle abuse
 app.use(`${config.api.prefix}/media`, uploadLimiter);
 app.use(`${config.api.prefix}/themes/upload`, uploadLimiter);
 app.use(`${config.api.prefix}/plugins/upload`, uploadLimiter);
@@ -657,6 +658,11 @@ async function initialize() {
     // (no config → no secret → nothing sent).
     require('./core/frontend-purge').initFrontendPurge();
 
+    // Scheduled ("future") publishing: register the publish_future_post flip handler so a post whose
+    // scheduled time arrives is transitioned to 'publish' by the cron event Post.create/update armed.
+    // Registered unconditionally alongside the purge hook (it only reacts to cron events).
+    require('./core/scheduled-publish').initScheduledPublish();
+
     // Check Installation Status
     const { isInstalled } = require('./core/configManager');
 
@@ -1011,8 +1017,10 @@ async function initialize() {
         // However, I can inject it here.
         app.use(`${config.api.prefix}/backups`, require('./routes/backups'));
 
-        const { initPostTypes } = require('./core/post-types');
+        const { initPostTypes, initTaxonomies } = require('./core/post-types');
         await initPostTypes();
+        // Seed built-in taxonomies (category, post_tag) + any persisted custom ones.
+        await initTaxonomies();
 
         // Sync roles to ensure capabilities are up to date
         const { loadRoles, syncRoles } = require('./core/roles');
@@ -1154,6 +1162,27 @@ async function initialize() {
             console.warn('[boot] middleware reorder skipped:', e && e.message);
         }
         pluginsReady = true;
+
+        // Email-provider posture: the core cannot send mail itself; a plugin must register a host-wide
+        // sender (email:provider capability). Checked HERE — after plugins load — because that is when a
+        // provider would have registered. When none did, password recovery fails closed and silently, so
+        // we say so once at boot (boot-time twin of the admin `email_provider_available` settings flag and
+        // the active-theme / sandbox-hardening warnings). Guarded so it can never break boot.
+        try {
+            const { isEmailProviderAvailable } = require('./core/mail-provider');
+            if (!isEmailProviderAvailable()) {
+                console.warn('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+                console.warn('⚠️  No email provider is registered — WordJS core cannot send email on its own.');
+                console.warn('   Self-service PASSWORD RECOVERY is therefore unavailable: /auth/forgot-password');
+                console.warn('   fails closed and users cannot reset their own passwords.');
+                console.warn('   Install and activate a mail plugin (e.g. mail-server) and grant it the');
+                console.warn('   email:provider permission. Visible to admins on GET /api/v1/settings/all');
+                console.warn('   (email_provider_available).');
+                console.warn('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+            }
+        } catch (e: any) {
+            console.warn('[boot] email-provider check skipped:', e && e.message);
+        }
 
         // DEV hot-reload: watch each active isolated plugin's dir and re-spawn its child process
         // on change (re-runs the AST scan). Hard no-op outside development; guarded so a watcher

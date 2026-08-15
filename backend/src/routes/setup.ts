@@ -426,10 +426,18 @@ router.post('/install', async (req: any, res: Response) => {
             // not linger (the token is irrelevant now; the setup endpoints early-return once installed).
             try { require('../core/install-token').clearInstallTokenFile(); } catch { /* best-effort */ }
 
+            // A fresh install has no mail plugin loaded, so the core cannot send email — which means NO
+            // self-service password recovery. Report it so the wizard's final screen can warn the admin
+            // instead of leaving them to discover a dead "Forgot password?" flow later. Same derived
+            // signal as the admin `email_provider_available` settings flag and the boot-time warning.
+            let emailProviderAvailable = false;
+            try { emailProviderAvailable = require('../core/mail-provider').isEmailProviderAvailable() === true; } catch { /* default false */ }
+
             res.json({
                 success: true,
                 autoLoggedIn,
                 redirectTo: autoLoggedIn ? '/admin' : '/login?installed=true',
+                emailProviderAvailable,
                 tests: { total: testResults.tests, passed: testResults.passed, failed: testResults.failed }
             });
 

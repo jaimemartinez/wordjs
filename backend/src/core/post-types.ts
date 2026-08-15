@@ -9,6 +9,46 @@ const { doAction } = require('./hooks');
 // Registered post types
 const postTypes = new Map();
 
+// Registered taxonomies (mirrors `postTypes` — an in-memory registry of taxonomy objects).
+const taxonomies = new Map();
+
+// Built-in taxonomies. WordPress ships 'category' (hierarchical) and 'post_tag' (flat), both
+// attached to the 'post' type. Their terms already live in the terms/term_taxonomy tables.
+const defaultTaxonomies = {
+    category: {
+        name: 'category',
+        label: 'Categories',
+        labels: {
+            singular: 'Category',
+            plural: 'Categories',
+            addNew: 'Add New Category',
+            edit: 'Edit Category'
+        },
+        hierarchical: true,
+        public: true,
+        showInMenu: true,
+        showInRest: true,
+        postTypes: ['post'],
+        rewrite: { slug: 'category' }
+    },
+    post_tag: {
+        name: 'post_tag',
+        label: 'Tags',
+        labels: {
+            singular: 'Tag',
+            plural: 'Tags',
+            addNew: 'Add New Tag',
+            edit: 'Edit Tag'
+        },
+        hierarchical: false,
+        public: true,
+        showInMenu: true,
+        showInRest: true,
+        postTypes: ['post'],
+        rewrite: { slug: 'tag' }
+    }
+};
+
 // Default post types
 const defaultPostTypes = {
     post: {
@@ -206,6 +246,134 @@ function getPostTypesBy(feature: string) {
     return getPostTypes().filter(type => type.supports.includes(feature));
 }
 
+// ============================================================================
+// TAXONOMIES — mirrors the post-type registry above (register_taxonomy et al).
+// ============================================================================
+
+/**
+ * Register a taxonomy
+ * Equivalent to register_taxonomy()
+ *
+ * Closed, validated shape: only the known keys below are normalized. Unknown keys are
+ * carried through via the trailing spread exactly like registerPostType does, but the
+ * normalized `name`/`hierarchical`/`postTypes` are re-applied AFTER the spread so a caller
+ * cannot smuggle a non-boolean `hierarchical` or a non-array `postTypes` past normalization.
+ */
+function registerTaxonomy(name: string, args: Record<string, any> = {}) {
+    if (!name || typeof name !== 'string') {
+        throw new Error('registerTaxonomy: taxonomy name must be a non-empty string');
+    }
+    if (args === null || typeof args !== 'object' || Array.isArray(args)) {
+        throw new Error('registerTaxonomy: options must be a plain object');
+    }
+
+    // Normalize postTypes: accept a single string or an array, reject anything else to [].
+    let postTypesList: string[];
+    if (Array.isArray(args.postTypes)) {
+        postTypesList = args.postTypes;
+    } else if (typeof args.postTypes === 'string' && args.postTypes) {
+        postTypesList = [args.postTypes];
+    } else {
+        postTypesList = [];
+    }
+
+    const taxonomy: Record<string, any> = {
+        name,
+        label: args.label || name,
+        labels: {
+            singular: args.labels?.singular || args.label || name,
+            plural: args.labels?.plural || args.label || name,
+            addNew: args.labels?.addNew || `Add New ${args.label || name}`,
+            edit: args.labels?.edit || `Edit ${args.label || name}`,
+            ...args.labels
+        },
+        description: args.description || '',
+        public: args.public !== false,
+        showInMenu: args.showInMenu !== false,
+        showInRest: args.showInRest !== false,
+        rewrite: args.rewrite || { slug: name },
+        ...args,
+        // Re-applied after the spread so normalization always wins (a caller cannot smuggle a
+        // non-boolean hierarchical or a non-array postTypes through the trailing ...args spread).
+        hierarchical: args.hierarchical === true,
+        postTypes: postTypesList
+    };
+
+    taxonomies.set(name, taxonomy);
+
+    doAction('registered_taxonomy', name, taxonomy);
+
+    return taxonomy;
+}
+
+/**
+ * Unregister a taxonomy
+ * Equivalent to unregister_taxonomy(). Built-ins cannot be removed.
+ */
+function unregisterTaxonomy(name: string) {
+    if (['category', 'post_tag'].includes(name)) {
+        return false;
+    }
+    return taxonomies.delete(name);
+}
+
+/**
+ * Get a taxonomy object
+ * Equivalent to get_taxonomy()
+ */
+function getTaxonomy(name: string) {
+    return taxonomies.get(name) || null;
+}
+
+/**
+ * Get all taxonomies
+ * Equivalent to get_taxonomies()
+ */
+function getTaxonomies(args: Record<string, any> = {}) {
+    const list = Array.from(taxonomies.values());
+
+    return list.filter(tax => {
+        if (args.public !== undefined && tax.public !== args.public) return false;
+        if (args.showInMenu !== undefined && tax.showInMenu !== args.showInMenu) return false;
+        if (args.showInRest !== undefined && tax.showInRest !== args.showInRest) return false;
+        // Filter by the post type a taxonomy applies to (WP: get_object_taxonomies).
+        if (args.postType !== undefined && !tax.postTypes.includes(args.postType)) return false;
+        return true;
+    });
+}
+
+/**
+ * Check if a taxonomy exists
+ * Equivalent to taxonomy_exists()
+ */
+function taxonomyExists(name: string) {
+    return taxonomies.has(name);
+}
+
+/**
+ * Initialize built-in and custom taxonomies.
+ * Mirrors initPostTypes(): built-ins are registered synchronously, then any persisted
+ * custom taxonomies are loaded from options.
+ */
+async function initTaxonomies() {
+    Object.values(defaultTaxonomies).forEach(tax => {
+        registerTaxonomy(tax.name, tax);
+    });
+
+    const customTaxonomies = await getOption('custom_taxonomies', {});
+    if (customTaxonomies && typeof customTaxonomies === 'object') {
+        Object.values(customTaxonomies).forEach((tax: any) => {
+            // Per-entry guard: registerTaxonomy THROWS on a malformed shape (unlike registerPostType),
+            // so one poisoned persisted entry must not brick boot — skip it loudly and keep going.
+            try {
+                registerTaxonomy(tax && tax.name, tax);
+            } catch (e: any) {
+                console.warn(`Skipping invalid custom taxonomy: ${e && e.message ? e.message : e}`);
+            }
+        });
+    }
+}
+
 /**
  * Initialize default and custom post types
  */
@@ -278,5 +446,12 @@ module.exports = {
     removePostTypeSupport,
     getPostTypesBy,
     saveCustomPostType,
-    deleteCustomPostType
+    deleteCustomPostType,
+    // Taxonomies (mirror of the post-type registry)
+    initTaxonomies,
+    registerTaxonomy,
+    unregisterTaxonomy,
+    getTaxonomy,
+    getTaxonomies,
+    taxonomyExists
 };

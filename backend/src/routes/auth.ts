@@ -284,6 +284,36 @@ router.post('/register', asyncHandler(async (req: any, res: Response) => {
             role: defaultRole
         });
 
+        // EMAIL VERIFICATION (opt-in, fail-closed). When required, the account is created UNVERIFIED and
+        // may NOT log in until it confirms via a tokenized link (the login route refuses on the
+        // `email_verification_pending` meta). We do NOT issue a session cookie here — verifying is the
+        // gate. The admin-creates-user path (routes/users.ts) never sets the pending flag, so those
+        // accounts stay pre-verified. Reuses the SAME single-use token machinery as password reset and
+        // the SAME email:provider capability (global.wordjs_send_mail).
+        if (await emailVerificationRequired()) {
+            const { raw, hash } = mintSingleUseToken();
+            await User.updateMeta(user.id, 'email_verification_hash', hash);
+            await User.updateMeta(user.id, 'email_verification_expires', String(Date.now() + VERIFY_TTL_MS));
+            await User.updateMeta(user.id, 'email_verification_pending', '1');
+
+            const base = String((await getOption('siteurl', await getOption('home', config.siteUrl || 'http://localhost'))) || 'http://localhost').replace(/\/+$/, '');
+            const link = `${base}/verify-email?uid=${user.id}&token=${raw}`;
+            const siteName = await getOption('blogname', 'WordJS');
+            try {
+                (global as any).wordjs_send_mail({
+                    to: String(email).trim().toLowerCase(),
+                    subject: `Verify your email for ${siteName}`,
+                    text: `Welcome to ${siteName}! Please confirm this email address to activate your account (${user.userLogin}).\n\nVerify your email (this link is valid for 24 hours):\n${link}\n\nIf you did not create this account, you can safely ignore this email.`,
+                    html: `<p>Welcome to <strong>${siteName}</strong>! Please confirm this email address to activate your account (<code>${user.userLogin}</code>).</p>`
+                        + `<p><a href="${link}">Verify your email</a> — this link is valid for 24 hours.</p>`
+                        + `<p>If you did not create this account, you can safely ignore this email.</p>`
+                });
+            } catch { /* swallow send errors — the account still exists and can request a new link */ }
+
+            // No session cookie: the user must verify before logging in.
+            return res.status(201).json({ user: user.toJSON(), verificationRequired: true, message: 'Account created. Check your email for a verification link before logging in.' });
+        }
+
         const token = generateToken(user);
         res.cookie('wordjs_token', token, COOKIE_OPTIONS);
 
@@ -387,6 +417,19 @@ router.post('/login', asyncHandler(async (req: any, res: Response) => {
         // Successful password → reset the escalation ladder for this IP+account.
         await loginThrottle.succeed(ip, lockId);
 
+        // EMAIL VERIFICATION gate: a self-registered account created while verification was required
+        // carries `email_verification_pending='1'` until it confirms its email. The password is correct
+        // (so this is NOT a brute-force attempt — the throttle was already cleared above), but the
+        // account is not yet active. Refuse with a distinct code the login UI can act on. Admin-created
+        // and pre-feature accounts never carry this flag, so they are unaffected.
+        if (String(await User.getMeta(user.id, 'email_verification_pending')) === '1') {
+            return res.status(403).json({
+                code: 'rest_email_unverified',
+                message: 'Please verify your email address before logging in. Check your inbox for the verification link.',
+                data: { status: 403 }
+            });
+        }
+
         // Second factor: if the account has MFA enabled, do NOT issue the session yet. Return a short-lived
         // challenge token; the client must call POST /auth/mfa with a valid TOTP or backup code to finish.
         if (await mfa.isEnabled(user.id)) {
@@ -479,6 +522,27 @@ router.post('/logout', asyncHandler(async (req: any, res: Response) => {
 // used — a locked-out user can't read their own WordJS inbox. All responses are uniform (anti-enum).
 // ---------------------------------------------------------------------------------------------------
 const RESET_TTL_MS = 30 * 60 * 1000; // 30 minutes
+// Email-verification links live longer than a reset link — a new user may not open their mail for a while.
+const VERIFY_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+// ─── Single-use token machinery (SHARED by password reset AND email verification) ──────────────────
+// One scheme, expressed once: mint a random token, persist only its SHA-256 hash + an expiry, and later
+// validate by constant-time hash compare. Both flows store the hash/expiry in user_meta under their own
+// keys and consume (blank) them on success, so a link is single-use and never replayable.
+function mintSingleUseToken(): { raw: string; hash: string } {
+    const raw = crypto.randomBytes(32).toString('hex');
+    const hash = crypto.createHash('sha256').update(raw).digest('hex');
+    return { raw, hash };
+}
+// True IFF `given` matches `storedHash` and has not expired. Constant-time over the hashes (no timing
+// oracle on the token). An empty storedHash (already consumed) or a past expiry is always false.
+function singleUseTokenValid(given: string, storedHash: string, expiresMs: number): boolean {
+    if (!storedHash || !given || !(Date.now() <= expiresMs)) return false;
+    const givenHash = crypto.createHash('sha256').update(String(given)).digest('hex');
+    let a: Buffer, b: Buffer;
+    try { a = Buffer.from(givenHash, 'hex'); b = Buffer.from(storedHash, 'hex'); } catch { return false; }
+    return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
 
 // Readiness is checked GENERICALLY — no mail plugin slug is hardcoded, so swapping mail-server for any
 // other provider keeps recovery working without touching core. A plugin becomes the provider by calling
@@ -490,6 +554,20 @@ async function mailReady(): Promise<boolean> {
     try {
         if (typeof (global as any).wordjs_send_mail !== 'function') return false;
         return String(await getOption('mail_delivery_ready', '0')) === '1';
+    } catch {
+        return false;
+    }
+}
+
+// EMAIL VERIFICATION on self-registration is OPT-IN and FAIL-CLOSED. It can only be *required* when a
+// mail provider can actually deliver the link — exactly the same readiness the reset flow depends on.
+// So `require_email_verification=1` resolves to ON only when mailReady(); with no provider it degrades
+// to OFF (a newly registered user is created active, as before), because a verification we can never
+// deliver would strand every new account. Mirrors password reset's degrade-to-unavailable posture.
+async function emailVerificationRequired(): Promise<boolean> {
+    try {
+        if (String(await getOption('require_email_verification', '0')) !== '1') return false;
+        return await mailReady();
     } catch {
         return false;
     }
@@ -540,8 +618,7 @@ router.post('/forgot-password', asyncHandler(async (req: any, res: Response) => 
     if (!to) return ok();
 
     // Mint a single-use token; persist only its SHA-256 hash + expiry (never the raw token).
-    const raw = crypto.randomBytes(32).toString('hex');
-    const hash = crypto.createHash('sha256').update(raw).digest('hex');
+    const { raw, hash } = mintSingleUseToken();
     await User.updateMeta(user.id, 'password_reset_hash', hash);
     await User.updateMeta(user.id, 'password_reset_expires', String(Date.now() + RESET_TTL_MS));
 
@@ -584,13 +661,8 @@ router.post('/reset-password', asyncHandler(async (req: any, res: Response) => {
 
     const storedHash = String((await User.getMeta(uid, 'password_reset_hash')) || '');
     const expires = parseInt(String((await User.getMeta(uid, 'password_reset_expires')) || '0'), 10) || 0;
-    if (!storedHash || Date.now() > expires) return bad();
-
-    // Constant-time compare of the SHA-256 hashes to avoid a timing oracle on the token.
-    const givenHash = crypto.createHash('sha256').update(token).digest('hex');
-    const a = Buffer.from(givenHash, 'hex');
-    const b = Buffer.from(storedHash, 'hex');
-    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return bad();
+    // Single-use token: constant-time hash compare + expiry (shared helper — same scheme as verify-email).
+    if (!singleUseTokenValid(token, storedHash, expires)) return bad();
 
     // User.update() bcrypt-hashes the password AND stamps token_valid_after (revokes every session);
     // then consume the single-use token so the link cannot be replayed.
@@ -599,6 +671,35 @@ router.post('/reset-password', asyncHandler(async (req: any, res: Response) => {
     await User.updateMeta(uid, 'password_reset_expires', '0');
 
     res.json({ ok: true, message: 'Your password has been reset. You can now log in with your new password.' });
+}));
+
+/**
+ * POST /auth/verify-email
+ * Body: { uid, token }. Consumes the single-use email-verification token minted at registration and
+ * flips the account to verified (clears `email_verification_pending`), after which login works. Uniform
+ * failure for a bad/expired/consumed token. Rate-limited by authLimiter in index.ts.
+ */
+router.post('/verify-email', asyncHandler(async (req: any, res: Response) => {
+    const uid = parseInt((req.body && req.body.uid), 10);
+    const token = String((req.body && req.body.token) || '');
+
+    const bad = () => res.status(400).json({ code: 'rest_invalid_verification', message: 'This verification link is invalid or has expired. Please request a new one.', data: { status: 400 } });
+    if (!uid || !token) return bad();
+
+    let user: any;
+    try { user = await User.findById(uid); } catch { user = null; }
+    if (!user) return bad();
+
+    const storedHash = String((await User.getMeta(uid, 'email_verification_hash')) || '');
+    const expires = parseInt(String((await User.getMeta(uid, 'email_verification_expires')) || '0'), 10) || 0;
+    if (!singleUseTokenValid(token, storedHash, expires)) return bad();
+
+    // Flip to verified and consume the single-use token so the link cannot be replayed.
+    await User.updateMeta(uid, 'email_verification_pending', '0');
+    await User.updateMeta(uid, 'email_verification_hash', '');
+    await User.updateMeta(uid, 'email_verification_expires', '0');
+
+    res.json({ ok: true, message: 'Your email has been verified. You can now log in.' });
 }));
 
 // ─── Scoped API tokens (personal access tokens for headless/machine clients) ───────────────────────

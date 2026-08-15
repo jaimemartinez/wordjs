@@ -14,6 +14,7 @@ const { asyncHandler } = require('../middleware/errorHandler');
 const { getRoles } = require('../core/roles');
 // ACTIVE CORPORATE MAILBOX: the admin-owned grant + the one self-service email-write rule.
 const { refuseSelfServiceEmailChange, isValidAddress, mailboxFlagValue, hasProfessionalMailbox } = require('../core/mailbox');
+const { recordAudit } = require('../core/audit');
 
 /**
  * @swagger
@@ -205,6 +206,9 @@ router.post('/', authenticate, isAdmin, asyncHandler(async (req: any, res: Respo
             // allowed to provision mailboxes. Self-registration (POST /auth/register) never reaches here.
             professionalMailbox: req.body.professionalMailbox
         });
+
+        // AUDIT: admin created a user. No secret material — just the login and assigned role.
+        await recordAudit(req.user.id, 'user.create', 'user', user.id, { username, role });
 
         res.status(201).json(user.toJSON());
     } catch (error) {
@@ -550,7 +554,16 @@ router.put('/:id', authenticate, asyncHandler(async (req: any, res: Response) =>
         updateData.role = role;
     }
 
+    // Capture the pre-update role so a role change can be audited with from→to (before User.update
+    // mutates the meta the cached user reads). Only a genuine change reaches here (an unchanged role was
+    // stripped to undefined above), so updateData.role is present ONLY for a real role change.
+    const previousRole = (user.getRole && user.getRole()) || undefined;
     const updated = await User.update(userId, updateData);
+
+    // AUDIT: exactly one row per security-relevant change — a role change. No secret material.
+    if (updateData.role !== undefined) {
+        await recordAudit(req.user.id, 'user.role_change', 'user', userId, { from: previousRole, to: updateData.role });
+    }
     res.json(updated.toJSON());
 }));
 
@@ -600,6 +613,8 @@ router.delete('/:id', authenticate, isAdmin, asyncHandler(async (req: any, res: 
     }
 
     await User.delete(userId);
+    // AUDIT: admin deleted a user. Record who + the deleted account's login/role (no secret material).
+    await recordAudit(req.user.id, 'user.delete', 'user', userId, { username: user.userLogin, role: user.getRole && user.getRole() });
     res.json({ deleted: true, previous: user.toJSON() });
 }));
 

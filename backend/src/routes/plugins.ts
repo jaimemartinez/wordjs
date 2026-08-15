@@ -17,6 +17,7 @@ const { assertZipWithinBudget } = require('../core/zip-guard');
 const { authenticate, authenticateAllowQuery } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
+const { recordAudit } = require('../core/audit');
 const { execFile } = require('child_process');
 
 /**
@@ -904,6 +905,9 @@ router.post('/:slug/activate', authenticate, isAdmin, asyncHandler(async (req: R
     // Trigger frontend registry regeneration
     regenerateRegistry();
 
+    // AUDIT: an admin activated a plugin. Slug only — no secret material.
+    await recordAudit((req as any).user && (req as any).user.id, 'plugin.activate', 'plugin', slug, {});
+
     res.json(result);
 }));
 
@@ -1236,6 +1240,9 @@ router.post('/:slug/deactivate', authenticate, isAdmin, asyncHandler(async (req:
 
     // Trigger frontend registry regeneration
     regenerateRegistry();
+
+    // AUDIT: an admin deactivated a plugin. Slug only — no secret material.
+    await recordAudit((req as any).user && (req as any).user.id, 'plugin.deactivate', 'plugin', req.params.slug, {});
 
     res.json(result);
 }));

@@ -55,12 +55,28 @@ export default function SettingsPage() {
     const [saved, setSaved] = useState(false);
     const [activePicker, setActivePicker] = useState<"logo" | "icon" | null>(null);
     const [pages, setPages] = useState<Post[]>([]);
+    // null = not yet known; false = no mail provider registered → password recovery is unavailable.
+    const [emailProviderAvailable, setEmailProviderAvailable] = useState<boolean | null>(null);
 
     useEffect(() => {
         loadSettings();
         loadPages();
         loadRoles();
+        loadHealth();
     }, []);
+
+    const loadHealth = async () => {
+        try {
+            const health = await settingsApi.getAdminHealth();
+            // Fail CLOSED: a "password recovery unavailable" warning is a safety signal, so treat a
+            // missing/undefined flag as "not available" and show the warning. `!== false` did the
+            // opposite — an omitted flag silently hid the warning and let an admin believe recovery
+            // works when it may not.
+            setEmailProviderAvailable(health.email_provider_available === true);
+        } catch (error) {
+            console.error("Failed to load settings health:", error);
+        }
+    };
 
     const loadRoles = async () => {
         try {
@@ -139,6 +155,21 @@ export default function SettingsPage() {
                     title={t('settings.title')}
                     subtitle={t('settings.general')}
                 />
+
+                {emailProviderAvailable === false && (
+                    <div className="mb-8 flex items-start gap-4 rounded-3xl border-2 border-amber-100 bg-amber-50/60 px-6 py-5">
+                        <i className="fa-solid fa-triangle-exclamation text-amber-500 text-xl mt-0.5"></i>
+                        <div>
+                            <h3 className="text-sm font-bold text-amber-900">Password recovery is unavailable</h3>
+                            <p className="text-sm text-amber-800/90 mt-1 leading-relaxed">
+                                No email provider is registered, so WordJS cannot send email on its own. Self-service
+                                password reset (the &ldquo;Forgot password?&rdquo; flow) will not work until you install and
+                                activate a mail plugin and grant it the <code className="font-mono text-xs">email:provider</code> permission.
+                                Until then, a locked-out user must be reset by an administrator.
+                            </p>
+                        </div>
+                    </div>
+                )}
 
                 <form onSubmit={handleSubmit} className="space-y-8">
                     {/* General Settings Section */}
