@@ -56,8 +56,14 @@ export default async function SinglePage({ params }: { params: Promise<RoutePara
         <>
             <JsonLd data={buildPostJsonLd(page, base, settings?.blogname)} />
             {/* page-<slug> → page: a theme can arrange /pages/about differently without a second
-                template system. `page.slug` (not the URL param) so the numeric-id fallback agrees. */}
-            <ThemeTemplate kind="page" slug={page.slug}>
+                template system. `page.slug` (not the URL param) so the numeric-id fallback agrees.
+                _wjs_template is the author's per-page override (admin editor → Page Attributes), tried
+                ahead of the hierarchy and fail-closed when the theme no longer ships it. */}
+            <ThemeTemplate
+                kind="page"
+                slug={page.slug}
+                assignedTemplate={typeof page.meta?._wjs_template === "string" ? page.meta._wjs_template : undefined}
+            >
                 <PostContent post={withBlocks} settings={settings} />
             </ThemeTemplate>
         </>

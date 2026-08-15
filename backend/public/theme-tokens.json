@@ -4,7 +4,7 @@
   "counts": {
     "tokens": 772,
     "varUses": 1736,
-    "elements": 47
+    "elements": 51
   },
   "tokens": {
     "--wjs-2xl": {
@@ -14305,6 +14305,38 @@
           "selector": ".wjs-header-nav a"
         }
       }
+    },
+    "plugin:faq:empty": {
+      "selector": ".wjs-p-faq-empty"
+    },
+    "plugin:faq:item": {
+      "selector": ".wjs-p-faq-item",
+      "children": {
+        "answer": {
+          "selector": ".wjs-p-faq-answer"
+        },
+        "icon": {
+          "selector": ".wjs-p-faq-icon"
+        },
+        "iconOpen": {
+          "selector": ".wjs-p-faq-item--open .wjs-p-faq-icon"
+        },
+        "open": {
+          "selector": ".wjs-p-faq-item--open"
+        },
+        "panel": {
+          "selector": ".wjs-p-faq-panel"
+        },
+        "question": {
+          "selector": ".wjs-p-faq-question"
+        }
+      }
+    },
+    "plugin:faq:title": {
+      "selector": ".wjs-p-faq-title"
+    },
+    "plugin:faq:wrap": {
+      "selector": ".wjs-p-faq-wrap"
     },
     "postCard": {
       "selector": ".wjs-post-card",

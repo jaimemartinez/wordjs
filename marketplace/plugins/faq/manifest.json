@@ -17,6 +17,32 @@
             "entry": "client/puck/FaqPuck.tsx"
         }
     },
+    "themeSurfaces": [
+        {
+            "element": "wrap",
+            "selector": ".wjs-p-faq-wrap"
+        },
+        {
+            "element": "title",
+            "selector": ".wjs-p-faq-title"
+        },
+        {
+            "element": "item",
+            "selector": ".wjs-p-faq-item",
+            "children": {
+                "open": { "selector": ".wjs-p-faq-item--open" },
+                "question": { "selector": ".wjs-p-faq-question" },
+                "icon": { "selector": ".wjs-p-faq-icon" },
+                "iconOpen": { "selector": ".wjs-p-faq-item--open .wjs-p-faq-icon" },
+                "panel": { "selector": ".wjs-p-faq-panel" },
+                "answer": { "selector": ".wjs-p-faq-answer" }
+            }
+        },
+        {
+            "element": "empty",
+            "selector": ".wjs-p-faq-empty"
+        }
+    ],
     "adminMenu": {
         "label": "FAQ",
         "icon": "fa-circle-question",

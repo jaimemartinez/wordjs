@@ -38,7 +38,12 @@ export default async function CategoryPostPage({ params }: { params: Promise<Rou
             <JsonLd data={buildPostJsonLd(post, base, settings?.blogname)} />
             {/* Same post, same template chain as /[slug] — the category segment is a path, not a
                 different kind of thing, so it must not resolve to a different arrangement. */}
-            <ThemeTemplate kind="single" postType={post.type} slug={post.slug}>
+            <ThemeTemplate
+                kind="single"
+                postType={post.type}
+                slug={post.slug}
+                assignedTemplate={typeof post.meta?._wjs_template === "string" ? post.meta._wjs_template : undefined}
+            >
                 <PostContent post={withBlocks} settings={settings} category={slug} />
             </ThemeTemplate>
         </>

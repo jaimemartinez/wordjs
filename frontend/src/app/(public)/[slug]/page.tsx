@@ -67,6 +67,7 @@ export default async function SinglePostPage(
                 kind={post.type === "page" ? "page" : "single"}
                 postType={post.type}
                 slug={post.slug}
+                assignedTemplate={typeof post.meta?._wjs_template === "string" ? post.meta._wjs_template : undefined}
             >
                 <PostContent post={withBlocks} settings={settings} showComments />
             </ThemeTemplate>

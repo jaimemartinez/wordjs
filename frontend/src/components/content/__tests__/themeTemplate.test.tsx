@@ -79,6 +79,40 @@ describe('ThemeTemplate', () => {
         expect(html).toBe('<p>body</p>');
     });
 
+    // ── per-page template picker (_wjs_template) ──────────────────────────────────────────────────
+    it('asks for the AUTHOR-assigned template first, ahead of the whole hierarchy', async () => {
+        templates['landing'] = TEMPLATE;
+        const html = await renderServer(
+            <ThemeTemplate kind="page" slug="about" assignedTemplate="landing"><p>body</p></ThemeTemplate>,
+        );
+        expect(asked[0]).toBe('landing');           // tried before page-about / page
+        expect(html).toContain('themed');
+    });
+
+    it('hoists the assignment to the front even when the hierarchy also produces it', async () => {
+        // Author picks the generic `page` over the more-specific `page-about`.
+        await renderServer(
+            <ThemeTemplate kind="page" slug="about" assignedTemplate="page"><p>body</p></ThemeTemplate>,
+        );
+        expect(asked).toEqual(['page', 'page-about']); // page first, and not fetched twice
+    });
+
+    it('FAILS CLOSED: an assigned template the theme lacks falls through to the hierarchy', async () => {
+        templates['page'] = TEMPLATE; // theme ships page but NOT the assigned "gone"
+        const html = await renderServer(
+            <ThemeTemplate kind="page" slug="about" assignedTemplate="gone"><p>body</p></ThemeTemplate>,
+        );
+        expect(asked).toEqual(['gone', 'page-about', 'page']);
+        expect(html).toContain('themed'); // still rendered — via the hierarchy fallback, never an error
+    });
+
+    it('ignores a junk assignment (bad shape) and uses the hierarchy unchanged', async () => {
+        await renderServer(
+            <ThemeTemplate kind="page" slug="about" assignedTemplate="../etc/passwd"><p>body</p></ThemeTemplate>,
+        );
+        expect(asked).toEqual(['page-about', 'page']); // no bogus fetch for the junk name
+    });
+
     it('the 404 route asks for 404.json, then page.json', async () => {
         await renderServer(<PublicNotFound />);
         expect(asked).toEqual(['404', 'page']);

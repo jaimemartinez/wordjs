@@ -103,6 +103,11 @@ describe('chrome selector contract', () => {
     // string as one class name, which silently failed the moment a compound selector appeared.)
     const chromeSelectors: (readonly [string, string])[] = [];
     for (const [name, def] of Object.entries(manifest.elements as Record<string, { selector: string; children?: Record<string, { selector: string }> }>)) {
+        // PLUGIN surfaces (`plugin:<slug>:<element>`, selector `.wjs-p-<slug>-*`) are NOT chrome. Their
+        // markup lives in a plugin's own bundle, not the chrome source dirs walked below, and their
+        // promise-vs-markup contract is proven at equal strength by pluginSelectorContract.test.ts.
+        // Skipping them here is scoping, not weakening — chrome coverage is unchanged.
+        if (name.startsWith('plugin:')) continue;
         if (def.selector && def.selector.startsWith('.wjs-')) chromeSelectors.push([name, def.selector] as const);
         for (const [child, cd] of Object.entries(def.children || {})) {
             if (cd.selector && cd.selector.includes('.wjs-')) chromeSelectors.push([`${name}.${child}`, cd.selector] as const);

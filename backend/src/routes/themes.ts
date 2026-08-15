@@ -25,6 +25,8 @@ const {
     THEMES_DIR
 } = require('../core/themes');
 const { purgeFrontend } = require('../core/frontend-purge');
+const { getOption, updateOption } = require('../core/options');
+const { validateThemeMods, parseStoredMods } = require('../core/theme-mods');
 const { compileTheme, writeCompiled } = require('../core/theme-compile');
 const { analyzeTheme } = require('../core/theme-doctor');
 const { authenticate } = require('../middleware/auth');
@@ -588,6 +590,129 @@ router.get('/:slug/doctor', authenticate, isAdmin, asyncHandler(async (req: Requ
         return res.status(400).json({ error: 'Invalid theme slug' });
     }
     res.json(analyzeTheme(req.params.slug));
+}));
+
+// A template file name the route hierarchy can resolve — the SAME shape server-api.ts's getThemeTemplate
+// and templateData.ts's TEMPLATE_NAME enforce before a name lands in a /themes/<slug>/templates/<name>.json
+// URL. Anything else is dropped from the listing rather than sanitized: a file that cannot be a candidate
+// must never be offered as one.
+const TEMPLATE_FILE_NAME = /^[a-z0-9-]{1,40}$/;
+
+/**
+ * @swagger
+ * /themes/{slug}/templates:
+ *   get:
+ *     summary: List the page templates a theme ships (templates/*.json), for the per-page template picker
+ *     tags: [Themes]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: slug
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: "{ slug, templates: string[] } — template names without the .json extension"
+ *       400:
+ *         description: Invalid theme slug
+ */
+router.get('/:slug/templates', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+    // SECURITY: same slug gate as the sibling routes — the slug becomes a path segment under THEMES_DIR.
+    if (!validateSlug(req.params.slug)) {
+        return res.status(400).json({ error: 'Invalid theme slug' });
+    }
+    const dir = path.join(THEMES_DIR, req.params.slug, 'templates');
+    let names: string[];
+    try {
+        // withFileTypes so a `templates` that is somehow a directory-of-directories (or a symlink target)
+        // cannot slip a non-file name into the list. Only regular *.json files are candidates.
+        const entries = fs.readdirSync(dir, { withFileTypes: true });
+        names = entries
+            .filter((e: any) => e.isFile() && e.name.endsWith('.json'))
+            .map((e: any) => e.name.slice(0, -'.json'.length))
+            // The shape gate: a file whose name the hierarchy could never request is not a real template.
+            .filter((name: string) => TEMPLATE_FILE_NAME.test(name))
+            .sort();
+    } catch {
+        // No templates/ directory (the common case — most themes ship none) → an empty list, not an error.
+        names = [];
+    }
+    res.json({ slug: req.params.slug, templates: names });
+}));
+
+/**
+ * @swagger
+ * /themes/mods/export:
+ *   get:
+ *     summary: Export the active theme's customizer mods as a downloadable JSON file (Admin)
+ *     tags: [Themes]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: "{ theme, mods } — the sanitized active_theme_mods, safe to re-import"
+ */
+router.get('/mods/export', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+    const active = await getActiveTheme();
+    const themeSlug = active && active.slug ? active.slug : '';
+    // Sanitize on the way OUT too: a stored row could predate the contract (or have been hand-edited), and
+    // an export must only ever contain mods the customizer would accept, so the file round-trips cleanly.
+    const mods = parseStoredMods(await getOption('active_theme_mods', ''));
+    const payload = { theme: themeSlug, exportedAt: new Date().toISOString(), mods };
+    // A real download: the admin UI hits this and the browser saves a file rather than rendering JSON.
+    const fileSlug = themeSlug && /^[a-zA-Z0-9_-]+$/.test(themeSlug) ? themeSlug : 'theme';
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${fileSlug}-customizer-mods.json"`);
+    res.send(JSON.stringify(payload, null, 2));
+}));
+
+/**
+ * @swagger
+ * /themes/mods/import:
+ *   post:
+ *     summary: Import customizer mods, validating every key/value before applying them (Admin)
+ *     tags: [Themes]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             description: Either a bare { "--wjs-*": "value" } map or the export wrapper { theme, mods }
+ *     responses:
+ *       200:
+ *         description: "{ applied: true, count } — mods validated and written to active_theme_mods"
+ *       400:
+ *         description: "Invalid payload — { error, errors: [{ key, code, message }] }, nothing written"
+ */
+router.post('/mods/import', authenticate, isAdmin, asyncHandler(async (req: any, res: Response) => {
+    // NEVER trust the uploaded JSON. Accept a bare mods map OR the export wrapper, then validate STRICTLY:
+    // one bad key/value fails the whole import (reject, never silently strip a subset).
+    const { extractImportMods } = require('../core/theme-mods');
+    const source = extractImportMods(req.body);
+    if (source === null) {
+        return res.status(400).json({
+            error: 'Import must be a JSON object of --wjs-* mods, or an { mods: { … } } export.',
+            errors: [],
+        });
+    }
+    const result = validateThemeMods(source);
+    if (!result.ok) {
+        return res.status(400).json({ error: 'Invalid customizer mods', errors: result.errors });
+    }
+    // Store the sanitized object exactly as the customizer save path does (JSON string in the option).
+    await updateOption('active_theme_mods', JSON.stringify(result.mods));
+    // The overlay is on the public page, so importing new mods re-skins the live site — purge like the
+    // customizer's own writes do. 'settings' carries active_theme_mods; '/' is the home route the overlay
+    // renders into. Mirrors PUT /themes/:slug and DELETE /chrome/:part.
+    purgeFrontend(['settings'], ['/']);
+    // AUDIT: an admin replaced the customizer mods. Count only — the values are token overrides, but the
+    // route's convention is to record what changed, not the payload.
+    await recordAudit(req.user && req.user.id, 'theme.mods.import', 'theme', '', { count: Object.keys(result.mods).length });
+    res.json({ applied: true, count: Object.keys(result.mods).length });
 }));
 
 module.exports = router;
