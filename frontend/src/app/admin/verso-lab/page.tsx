@@ -51,9 +51,7 @@ import {
 import EditorRenderer from "@/components/verso/render/EditorRenderer";
 import {
     useStoreSlice,
-    type VersoBlockProps,
     type VersoComponentMap,
-    type VersoSlotRender,
 } from "@/components/verso/render/context";
 import VersoFieldControl from "@/components/verso/fields/VersoFieldControl";
 import FrameController from "@/components/verso/canvas/FrameController";
@@ -66,98 +64,27 @@ import { GeometryStore } from "@/components/verso/overlay/GeometryStore";
 import OverlayLayer from "@/components/verso/overlay/OverlayLayer";
 import { editSelectedInline } from "@/components/verso/overlay/actionBarCommands";
 import DnDDriver from "@/components/verso/dnd/DnDDriver";
-import {
-    HeadingBlock,
-    TextBlock,
-    CardBlock,
-    SectionBlock,
-    GridBlock,
-} from "@/components/content/blocks";
+import { registerCoreBlocks, coreBlockCategories } from "@/lib/verso/coreBlocks";
 
 /* ------------------------------------------------------------------ */
-/* Registry + componentMap (componentes reales de blocks.tsx).          */
+/* Registry: los 30 bloques core REALES (lib/verso/coreBlocks.tsx),     */
+/* cada uno pasado por el seam withSharedVersoFields en el registro.    */
+/* El componentMap se DERIVA del registry (def.render es el adaptador   */
+/* ya apuntado a los componentes compartidos de blocks.tsx/las islas).  */
 /* ------------------------------------------------------------------ */
-
-const componentMap: VersoComponentMap = {
-    Heading: HeadingBlock as VersoComponentMap[string],
-    Text: TextBlock as VersoComponentMap[string],
-    Card: CardBlock as VersoComponentMap[string],
-    // Contenedores: el slot llega bajo su clave ("children") y el bloque lo
-    // espera como `slot` — misma adaptación que puckConfig/los tests del renderer.
-    Section: (p: VersoBlockProps) => <SectionBlock {...p} slot={p.children as VersoSlotRender} />,
-    Grid: (p: VersoBlockProps) => <GridBlock {...p} slot={p.children as VersoSlotRender} />,
-};
 
 function makeLabRegistry(): BlockRegistry {
     const registry = createBlockRegistry();
-    registry.register([
-        {
-            type: "Heading",
-            label: "Encabezado",
-            category: "Texto",
-            fields: {
-                title: { type: "text", label: "Título" },
-                level: {
-                    type: "select",
-                    label: "Nivel",
-                    options: [
-                        { label: "H1", value: "h1" },
-                        { label: "H2", value: "h2" },
-                        { label: "H3", value: "h3" },
-                        { label: "H4", value: "h4" },
-                    ],
-                },
-                color: { type: "text", label: "Color" },
-            },
-            defaultProps: { title: "Encabezado nuevo", level: "h2" },
-            inline: { prop: "title", schema: "plain" },
-            render: HeadingBlock,
-        },
-        {
-            type: "Text",
-            label: "Texto",
-            category: "Texto",
-            fields: { content: { type: "textarea", label: "Contenido" } },
-            defaultProps: { content: "<p>Texto nuevo…</p>" },
-            inline: { prop: "content", schema: "rich" },
-            render: TextBlock,
-        },
-        {
-            type: "Card",
-            label: "Tarjeta",
-            category: "Contenido",
-            fields: {
-                title: { type: "text", label: "Título" },
-                description: { type: "textarea", label: "Descripción" },
-            },
-            defaultProps: { title: "Tarjeta", description: "Descripción" },
-            render: CardBlock,
-        },
-        {
-            type: "Section",
-            label: "Sección",
-            category: "Layout",
-            fields: {
-                children: { type: "slot", label: "Contenido" },
-                pad: { type: "number", label: "Padding", min: 0, max: 160 },
-            },
-            defaultProps: { pad: 24, children: [] },
-            render: SectionBlock,
-        },
-        {
-            type: "Grid",
-            label: "Rejilla",
-            category: "Layout",
-            fields: {
-                children: { type: "slot", label: "Celdas" },
-                columns: { type: "number", label: "Columnas", min: 1, max: 4 },
-                gap: { type: "number", label: "Separación", min: 0, max: 80 },
-            },
-            defaultProps: { columns: 3, gap: 16, children: [] },
-            render: GridBlock,
-        },
-    ]);
+    registerCoreBlocks(registry);
     return registry;
+}
+
+function makeComponentMap(registry: BlockRegistry): VersoComponentMap {
+    const map: VersoComponentMap = {};
+    for (const def of registry.list()) {
+        map[def.type] = def.render as VersoComponentMap[string];
+    }
+    return map;
 }
 
 /* ------------------------------------------------------------------ */
@@ -187,6 +114,18 @@ const TOOL_BTN_CLS =
 
 function VersoLabBench({ fixture }: { fixture: LabFixtureKey }) {
     const registry = React.useMemo(() => makeLabRegistry(), []);
+    const componentMap = React.useMemo(() => makeComponentMap(registry), [registry]);
+    // Paleta agrupada por las categorías reales de puckConfig (labels de coreBlockCategories).
+    const palette = React.useMemo(() => {
+        const groups = new Map<string, ReturnType<BlockRegistry["list"]>>();
+        for (const def of registry.list()) {
+            const key = def.category ?? "otros";
+            const group = groups.get(key);
+            if (group) group.push(def);
+            else groups.set(key, [def]);
+        }
+        return Array.from(groups.entries());
+    }, [registry]);
     const handle = React.useMemo<EditorHandle>(
         () => createEditor({ initialData: makeFixtureData(fixture), isSlot: makeSlotResolver(registry) }),
         [registry, fixture],
@@ -277,6 +216,13 @@ function VersoLabBench({ fixture }: { fixture: LabFixtureKey }) {
                 defaults = { ...def.defaultProps };
             }
             const item: VersoItem = { type, props: { ...defaults, id } };
+            // Materializa los slots DECLARADOS que el defaultProps no trae (p.ej. Section/Grid/
+            // FlexRow `children`, Columns col-0/col-1): puckConfig no los incluye en defaultProps
+            // (Puck los crea al insertar) y sin el array el contenedor recién insertado no tendría
+            // zona de drop. Los defaults en sí quedan byte-idénticos a puckConfig (gate anti-drift).
+            for (const [fieldKey, field] of Object.entries(def.fields)) {
+                if (field.type === "slot" && !(fieldKey in item.props)) item.props[fieldKey] = [];
+            }
             // Tras la selección si la hay; si no, al final de la raíz.
             const doc = handle.getDoc();
             const selected = handle.getState().selection.nodeId;
@@ -309,23 +255,25 @@ function VersoLabBench({ fixture }: { fixture: LabFixtureKey }) {
                 data-wjs-palette marca el drawer, data-wjs-palette-type cada item) */}
             <aside className={`${PANEL_CLS} w-52 shrink-0 border-r`} data-wjs-palette="">
                 <h2 className={PANEL_TITLE_CLS}>Bloques</h2>
-                <div className="flex flex-col gap-1">
-                    {registry.list().map((def) => (
-                        <button
-                            key={def.type}
-                            type="button"
-                            className={`${TOOL_BTN_CLS} text-left`}
-                            aria-label={`Insertar bloque ${def.label ?? def.type}`}
-                            data-wjs-palette-type={def.type}
-                            onClick={() => insertType(def.type)}
-                        >
-                            {def.label ?? def.type}
-                            <span className="ml-1 text-[10px] text-[var(--ed-on-surface-variant,#6b6880)]">
-                                {def.category}
-                            </span>
-                        </button>
-                    ))}
-                </div>
+                {palette.map(([categoryKey, defs]) => (
+                    <div key={categoryKey} className="mb-3">
+                        <h3 className={PANEL_TITLE_CLS}>{coreBlockCategories[categoryKey] ?? categoryKey}</h3>
+                        <div className="flex flex-col gap-1">
+                            {defs.map((def) => (
+                                <button
+                                    key={def.type}
+                                    type="button"
+                                    className={`${TOOL_BTN_CLS} text-left`}
+                                    aria-label={`Insertar bloque ${def.label ?? def.type}`}
+                                    data-wjs-palette-type={def.type}
+                                    onClick={() => insertType(def.type)}
+                                >
+                                    {def.label ?? def.type}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                ))}
             </aside>
 
             {/* Centro: barra + canvas */}
