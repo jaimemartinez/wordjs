@@ -72,6 +72,7 @@ import EditorRenderer from "../render/EditorRenderer";
 import { useStoreSlice, type VersoComponentMap } from "../render/context";
 import FrameController from "../canvas/FrameController";
 import VersoThemeTemplate from "../canvas/VersoThemeTemplate";
+import PublicLayoutShell from "@/components/public/PublicLayoutShell";
 import { useAreaSize } from "../canvas/ViewportControls";
 import { DEVICE_WIDTHS, type DeviceKind } from "../canvas/viewport";
 import { GeometryStore } from "../overlay/GeometryStore";
@@ -1032,15 +1033,25 @@ export default function VersoEditor({
                                             {/* Plantilla del tema (W30): el slot raíz del editor ES el
                                                 hueco PageContent — DISPLAY-ONLY, degrada a hijos sin
                                                 envolver si el tema no trae plantilla. */}
-                                            <VersoThemeTemplate handle={handle} kind={templateKind} postType={templatePostType}>
-                                                <EditorRenderer
-                                                    handle={handle}
-                                                    registry={registry}
-                                                    componentMap={componentMap}
-                                                    onBlockElement={onBlockElement}
-                                                    editorChrome
-                                                />
-                                            </VersoThemeTemplate>
+                                            {/* Paridad WYSIWYG con el canvas legacy (StablePuckRoot): el
+                                                contenido se compone dentro del CHROME real del sitio
+                                                (header/menú/footer + contenedor del layout público) vía
+                                                PublicLayoutShell SIN props — mismo modo preview que el
+                                                editor actual (chrome con fetch cliente, display-only,
+                                                jamás entra en _puck_data). Sin esto el canvas no enseñaba
+                                                header/footer y los espaciados del contenedor público
+                                                divergían (defecto reportado por el usuario). */}
+                                            <PublicLayoutShell>
+                                                <VersoThemeTemplate handle={handle} kind={templateKind} postType={templatePostType}>
+                                                    <EditorRenderer
+                                                        handle={handle}
+                                                        registry={registry}
+                                                        componentMap={componentMap}
+                                                        onBlockElement={onBlockElement}
+                                                        editorChrome
+                                                    />
+                                                </VersoThemeTemplate>
+                                            </PublicLayoutShell>
                                         </FrameController>
                                     </div>
                                 </div>
