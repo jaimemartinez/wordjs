@@ -1,0 +1,18 @@
+{
+  "root": { "props": {} },
+  "content": [
+    {
+      "type": "ChromeRow",
+      "props": {
+        "align": "between",
+        "gap": "md",
+        "wrap": true,
+        "items": [
+          { "type": "ChromeSiteTitle", "props": { "showTagline": true } },
+          { "type": "ChromeNav", "props": { "location": "footer", "orientation": "horizontal" } },
+          { "type": "ChromeSocials", "props": { "source": "settings" } }
+        ]
+      }
+    }
+  ]
+}

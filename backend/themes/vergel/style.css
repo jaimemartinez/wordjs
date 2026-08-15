@@ -1,0 +1,90 @@
+@import url("fonts.css");
+/* @wjs-generated:start — compiled from theme.json; DO NOT EDIT inside. Edit theme.json and run: node backend/cli/wordjs.js build theme vergel */
+:root {
+  --wjs-bg-canvas: #f3f7f2;
+  --wjs-bg-surface: #ecf0eb;
+  --wjs-bg-surface-raised: #e4e8e3;
+  --wjs-color-primary: #4d7c5f;
+  --wjs-color-primary-dark: #d98e8e;
+  --wjs-color-on-primary: #ffffff;
+  --wjs-color-accent: #d98e8e;
+  --wjs-color-on-accent: #111111;
+  --wjs-color-text-main: #33403a;
+  --wjs-color-text-muted: #5b6b62;
+  --wjs-color-heading: #33403a;
+  --wjs-color-link: #3f6850;
+  --wjs-color-link-hover: #33553f;
+  --wjs-border-subtle: #d0d6d1;
+  --wjs-outline: #aab1ac;
+  --wjs-outline-variant: #d6dcd6;
+  --wjs-focus-ring: #4d7c5f;
+  --wjs-color-scheme: light;
+  --wjs-font-family-heading: 'Space Grotesk', system-ui, sans-serif;
+  --wjs-font-family-base: system-ui, sans-serif;
+  --wjs-color-secondary: #d98e8e;
+  --wjs-color-on-secondary: #3a2323;
+  --wjs-radius: 1.25rem;
+  --wjs-radius-sm: 0.75rem;
+  --wjs-radius-md: 1.25rem;
+  --wjs-radius-lg: 1.75rem;
+  --wjs-radius-pill: 999px;
+  --wjs-shadow-sm: 0 4px 14px rgba(77,124,95,0.08);
+  --wjs-shadow: 0 8px 24px rgba(77,124,95,0.10);
+  --wjs-shadow-md: 0 10px 30px rgba(77,124,95,0.12);
+  --wjs-shadow-lg: 0 18px 44px rgba(77,124,95,0.16);
+  --wjs-button-radius: 999px;
+  --wjs-button-pad-x: 1.5rem;
+  --wjs-button-pad-y: 0.75rem;
+  --wjs-button-weight: 600;
+  --wjs-h1: 2.5rem;
+  --wjs-h2: 1.9rem;
+  --wjs-h3: 1.5rem;
+  --wjs-nav-color: #33403a;
+  --wjs-nav-color-hover: #33553f;
+  --wjs-nav-font-size: 0.95rem;
+  --wjs-footer-bg: #e9f0e9;
+  --wjs-footer-text-heading: #33403a;
+  --wjs-footer-text-body: #4a5a51;
+  --wjs-footer-text-hover: #33553f;
+  --wjs-footer-icon-bg: #dce8dd;
+  --wjs-footer-icon-color: #3f6850;
+  --wjs-footer-icon-hover-bg: #4d7c5f;
+}
+h1,h2,h3,h4,h5,h6 { letter-spacing: -0.01em }
+body { background-image: radial-gradient(60rem 30rem at 85% -5%,rgba(217,142,142,0.12),transparent 60%),radial-gradient(50rem 26rem at -10% 15%,rgba(77,124,95,0.10),transparent 55%); background-repeat: no-repeat; background-attachment: fixed }
+a { text-decoration: none }
+a:hover { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 3px }
+.wjs-post-card { background: var(--wjs-bg-surface); border: none; border-radius: var(--wjs-radius-lg); box-shadow: var(--wjs-shadow-md); padding: 2rem; transition: transform 0.3s ease,box-shadow 0.3s ease }
+.wjs-post-card:hover { box-shadow: var(--wjs-shadow-lg); transform: translateY(-2px) }
+.wjs-post-card:first-child { padding: 2.75rem }
+.wjs-post-card:last-child { margin-bottom: 0 }
+.wjs-search-result { background: var(--wjs-bg-surface); border: none; border-radius: var(--wjs-radius-lg); box-shadow: var(--wjs-shadow-sm); padding: 1.75rem; transition: transform 0.3s ease,box-shadow 0.3s ease }
+.wjs-search-result:hover { box-shadow: var(--wjs-shadow-md); transform: translateY(-2px) }
+.wjs-search-form input { border-radius: 999px; padding: 0.75rem 1.25rem }
+.wjs-search-form button { border-radius: 999px }
+.wjs-comment-field { border-radius: 1rem }
+.wjs-comment-submit { border-radius: 999px }
+.wjs-chrome-header .wjs-header-nav a { border-radius: 999px; padding: 0.4rem 1rem; transition: background-color 0.25s ease,color 0.25s ease }
+.wjs-chrome-header .wjs-header-nav a:hover { background: #e4eee6 }
+#main-content .claro { background: #f9eded; border-radius: 1.75rem; padding: 3.5rem 2.5rem; text-align: center }
+#main-content .invitacion { background-color: #f9eded; background-image: linear-gradient(120deg,rgba(217,142,142,0.22) 0%,rgba(243,247,242,0) 45%,rgba(77,124,95,0.14) 100%); background-size: 220% 220%; background-position: 0% 50%; border-radius: 1.75rem; padding: 2.75rem 2rem; box-shadow: var(--wjs-shadow-sm) }
+@media (max-width: 767.98px) {
+  .wjs-post-card { padding: 1.25rem }
+  .wjs-search-result { padding: 1.25rem }
+  .wp-block-spacer { max-height: 2.5rem }
+  #main-content .claro { padding: 2.25rem 1.25rem }
+  #main-content .invitacion { padding: 1.75rem 1.25rem }
+}
+@media (prefers-reduced-motion: no-preference) {
+  #main-content .claro { animation: wjs-a-flotar 6s ease-in-out infinite alternate }
+  #main-content .invitacion { animation: wjs-a-petalos 14s ease-in-out infinite alternate }
+}
+@keyframes wjs-a-flotar {
+  from { transform: translateY(0) }
+  to { transform: translateY(-4px) }
+}
+@keyframes wjs-a-petalos {
+  from { background-position: 0% 50% }
+  to { background-position: 100% 50% }
+}
+/* @wjs-generated:end */

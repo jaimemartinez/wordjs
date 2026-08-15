@@ -1,0 +1,17 @@
+{
+  "$schema": "wordjs-page-template-v1",
+  "content": [
+    { "type": "Spacer", "props": { "height": "2.5rem" } },
+    {
+      "type": "Section",
+      "props": {
+        "tag": "div",
+        "maxWidth": "62rem",
+        "items": [
+          { "type": "PageContent", "props": {} }
+        ]
+      }
+    },
+    { "type": "Spacer", "props": { "height": "3.5rem" } }
+  ]
+}

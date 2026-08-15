@@ -1,0 +1,27 @@
+{
+  "$schema": "wordjs-page-template-v1",
+  "content": [
+    { "type": "Spacer", "props": { "height": "6rem" } },
+    {
+      "type": "Section",
+      "props": {
+        "tag": "div",
+        "maxWidth": "40rem",
+        "items": [
+          { "type": "PageContent", "props": {} },
+          { "type": "Spacer", "props": { "height": "2rem" } },
+          {
+            "type": "SearchBar",
+            "props": {
+              "placeholder": "> ruta no encontrada. buscar_",
+              "buttonText": "EJECUTAR",
+              "align": "center",
+              "width": "min(30rem, 100%)"
+            }
+          }
+        ]
+      }
+    },
+    { "type": "Spacer", "props": { "height": "6rem" } }
+  ]
+}

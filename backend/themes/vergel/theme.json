@@ -1,0 +1,193 @@
+{
+  "name": "Vergel",
+  "version": "1.0.3",
+  "description": "An organic portfolio — soft, rounded, airy and single-column. Sage green and blush on a pale garden white, Space Grotesk headings, pill buttons, floating cards and lots of air.",
+  "author": "WordJS",
+  "generator": "wordjs",
+  "archetype": "organic",
+  "seeds": {
+    "primary": "#4d7c5f",
+    "secondary": "#d98e8e",
+    "bg": "#f3f7f2",
+    "text": "#33403a"
+  },
+  "layout": {
+    "containerWidth": "880px",
+    "sidebar": false
+  },
+  "templateParts": [
+    {
+      "name": "invitacion",
+      "area": "general"
+    }
+  ],
+  "tokens": {
+    "--wjs-color-scheme": "light",
+    "--wjs-font-family-heading": "'Space Grotesk', system-ui, sans-serif",
+    "--wjs-font-family-base": "system-ui, sans-serif",
+    "--wjs-color-secondary": "#d98e8e",
+    "--wjs-color-on-secondary": "#3a2323",
+    "--wjs-color-link": "#3f6850",
+    "--wjs-color-link-hover": "#33553f",
+    "--wjs-color-text-muted": "#5b6b62",
+    "--wjs-radius": "1.25rem",
+    "--wjs-radius-sm": "0.75rem",
+    "--wjs-radius-md": "1.25rem",
+    "--wjs-radius-lg": "1.75rem",
+    "--wjs-radius-pill": "999px",
+    "--wjs-shadow-sm": "0 4px 14px rgba(77,124,95,0.08)",
+    "--wjs-shadow": "0 8px 24px rgba(77,124,95,0.10)",
+    "--wjs-shadow-md": "0 10px 30px rgba(77,124,95,0.12)",
+    "--wjs-shadow-lg": "0 18px 44px rgba(77,124,95,0.16)",
+    "--wjs-button-radius": "999px",
+    "--wjs-button-pad-x": "1.5rem",
+    "--wjs-button-pad-y": "0.75rem",
+    "--wjs-button-weight": "600",
+    "--wjs-h1": "2.5rem",
+    "--wjs-h2": "1.9rem",
+    "--wjs-h3": "1.5rem",
+    "--wjs-nav-color": "#33403a",
+    "--wjs-nav-color-hover": "#33553f",
+    "--wjs-nav-font-size": "0.95rem",
+    "--wjs-footer-bg": "#e9f0e9",
+    "--wjs-footer-text-heading": "#33403a",
+    "--wjs-footer-text-body": "#4a5a51",
+    "--wjs-footer-text-hover": "#33553f",
+    "--wjs-footer-icon-bg": "#dce8dd",
+    "--wjs-footer-icon-color": "#3f6850",
+    "--wjs-footer-icon-hover-bg": "#4d7c5f"
+  },
+  "animations": {
+    "flotar": {
+      "from": {
+        "transform": "translateY(0)"
+      },
+      "to": {
+        "transform": "translateY(-4px)"
+      }
+    },
+    "petalos": {
+      "from": {
+        "background-position": "0% 50%"
+      },
+      "to": {
+        "background-position": "100% 50%"
+      }
+    }
+  },
+  "styles": {
+    "headings": {
+      "letter-spacing": "-0.01em"
+    },
+    "body": {
+      "background-image": "radial-gradient(60rem 30rem at 85% -5%, rgba(217, 142, 142, 0.12), transparent 60%), radial-gradient(50rem 26rem at -10% 15%, rgba(77, 124, 95, 0.10), transparent 55%)",
+      "background-repeat": "no-repeat",
+      "background-attachment": "fixed"
+    },
+    "links": {
+      "text-decoration": "none",
+      "hover": {
+        "text-decoration": "underline",
+        "text-decoration-thickness": "2px",
+        "text-underline-offset": "3px"
+      }
+    },
+    "postCard": {
+      "background": "var(--wjs-bg-surface)",
+      "border": "none",
+      "border-radius": "var(--wjs-radius-lg)",
+      "box-shadow": "var(--wjs-shadow-md)",
+      "padding": "2rem",
+      "transition": "transform 0.3s ease, box-shadow 0.3s ease",
+      "hover": {
+        "box-shadow": "var(--wjs-shadow-lg)",
+        "transform": "translateY(-2px)"
+      },
+      "first": {
+        "padding": "2.75rem"
+      },
+      "last": {
+        "margin-bottom": "0"
+      },
+      "mobile": {
+        "padding": "1.25rem"
+      }
+    },
+    "searchResult": {
+      "background": "var(--wjs-bg-surface)",
+      "border": "none",
+      "border-radius": "var(--wjs-radius-lg)",
+      "box-shadow": "var(--wjs-shadow-sm)",
+      "padding": "1.75rem",
+      "transition": "transform 0.3s ease, box-shadow 0.3s ease",
+      "hover": {
+        "box-shadow": "var(--wjs-shadow-md)",
+        "transform": "translateY(-2px)"
+      },
+      "mobile": {
+        "padding": "1.25rem"
+      }
+    },
+    "searchForm": {
+      "input": {
+        "border-radius": "999px",
+        "padding": "0.75rem 1.25rem"
+      },
+      "submit": {
+        "border-radius": "999px"
+      }
+    },
+    "comments": {
+      "field": {
+        "border-radius": "1rem"
+      },
+      "submit": {
+        "border-radius": "999px"
+      }
+    },
+    "chromeHeader": {
+      "navLink": {
+        "border-radius": "999px",
+        "padding": "0.4rem 1rem",
+        "transition": "background-color 0.25s ease, color 0.25s ease",
+        "hover": {
+          "background": "#e4eee6"
+        }
+      }
+    },
+    "spacer": {
+      "mobile": {
+        "max-height": "2.5rem"
+      }
+    },
+    "variations": {
+      "claro": {
+        "background": "#f9eded",
+        "border-radius": "1.75rem",
+        "padding": "3.5rem 2.5rem",
+        "text-align": "center",
+        "motionOk": {
+          "animation": "wjs-a-flotar 6s ease-in-out infinite alternate"
+        },
+        "mobile": {
+          "padding": "2.25rem 1.25rem"
+        }
+      },
+      "invitacion": {
+        "background-color": "#f9eded",
+        "background-image": "linear-gradient(120deg, rgba(217, 142, 142, 0.22) 0%, rgba(243, 247, 242, 0) 45%, rgba(77, 124, 95, 0.14) 100%)",
+        "background-size": "220% 220%",
+        "background-position": "0% 50%",
+        "border-radius": "1.75rem",
+        "padding": "2.75rem 2rem",
+        "box-shadow": "var(--wjs-shadow-sm)",
+        "motionOk": {
+          "animation": "wjs-a-petalos 14s ease-in-out infinite alternate"
+        },
+        "mobile": {
+          "padding": "1.75rem 1.25rem"
+        }
+      }
+    }
+  }
+}

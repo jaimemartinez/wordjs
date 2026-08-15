@@ -1,0 +1,15 @@
+{
+    "root": { "props": {} },
+    "content": [
+        {
+            "type": "ChromeRow",
+            "props": {
+                "align": "center",
+                "gap": "sm",
+                "items": [
+                    { "type": "ChromeText", "props": { "text": "— La Redacción de la Gaceta —" } }
+                ]
+            }
+        }
+    ]
+}

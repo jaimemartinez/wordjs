@@ -1,0 +1,17 @@
+{
+  "root": { "props": {} },
+  "content": [
+    {
+      "type": "ChromeRow",
+      "props": {
+        "align": "center",
+        "gap": "md",
+        "wrap": true,
+        "items": [
+          { "type": "ChromeSocials", "props": { "source": "settings" } },
+          { "type": "ChromeText", "props": { "text": "Cultivado con calma en el vergel." } }
+        ]
+      }
+    }
+  ]
+}

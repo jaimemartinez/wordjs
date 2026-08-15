@@ -1,0 +1,38 @@
+{
+    "$schema": "wordjs-page-template-v1",
+    "content": [
+        { "type": "Spacer", "props": { "height": "2.5rem" } },
+        {
+            "type": "Section",
+            "props": {
+                "maxWidth": "40rem",
+                "items": [
+                    { "type": "SearchBar", "props": { "align": "center", "width": "100%", "placeholder": "Buscar en la gaceta…", "buttonText": "Buscar" } }
+                ]
+            }
+        },
+        { "type": "Spacer", "props": { "height": "2rem" } },
+        {
+            "type": "Section",
+            "props": {
+                "maxWidth": "1140px",
+                "items": [
+                    { "type": "PageContent", "props": {} }
+                ]
+            }
+        },
+        { "type": "Spacer", "props": { "height": "3rem" } },
+        {
+            "type": "Section",
+            "props": {
+                "tag": "aside",
+                "maxWidth": "1140px",
+                "items": [
+                    { "type": "Divider", "props": { "color": "var(--wjs-color-text-main)", "width": "2px", "gap": "0.75rem" } },
+                    { "type": "PostsGrid", "props": { "count": 3, "columns": 3, "gap": "2rem" } }
+                ]
+            }
+        },
+        { "type": "Spacer", "props": { "height": "4rem" } }
+    ]
+}

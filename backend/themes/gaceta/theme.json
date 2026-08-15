@@ -1,0 +1,307 @@
+{
+  "name": "Gaceta",
+  "version": "1.0.3",
+  "description": "An editorial broadsheet: a serious magazine front on cream paper — georgia headlines, thin double rules, deep-red accents and square corners.",
+  "author": "WordJS",
+  "generator": "wordjs",
+  "archetype": "editorial",
+  "seeds": {
+    "primary": "#b91c1c",
+    "secondary": "#a16207",
+    "bg": "#faf6ef",
+    "text": "#1c1917"
+  },
+  "layout": {
+    "containerWidth": "1140px",
+    "sidebar": false
+  },
+  "templateParts": [
+    {
+      "name": "firma",
+      "area": "general"
+    }
+  ],
+  "tokens": {
+    "--wjs-color-scheme": "light",
+    "--wjs-font-family-heading": "georgia, 'Times New Roman', serif",
+    "--wjs-font-family-base": "system-ui, sans-serif",
+    "--wjs-line-height-base": "1.75",
+    "--wjs-display-line-height": "1.15",
+    "--wjs-heading-weight": "700",
+    "--wjs-heading-tracking": "-0.015em",
+    "--wjs-color-heading": "#1c1917",
+    "--wjs-color-link": "#1c1917",
+    "--wjs-color-link-hover": "#b91c1c",
+    "--wjs-bg-surface": "#fffcf5",
+    "--wjs-bg-muted": "#f3ecdf",
+    "--wjs-border-subtle": "#e3dbc9",
+    "--wjs-radius-sm": "2px",
+    "--wjs-radius-md": "2px",
+    "--wjs-radius-lg": "2px",
+    "--wjs-radius-pill": "2px",
+    "--wjs-shadow": "none",
+    "--wjs-button-radius": "2px",
+    "--wjs-card-radius": "2px",
+    "--wjs-card-shadow": "none",
+    "--wjs-image-radius": "2px",
+    "--wjs-form-input-radius": "2px",
+    "--wjs-form-submit-radius": "2px",
+    "--wjs-hero-radius": "2px",
+    "--wjs-hero-button-radius": "2px",
+    "--wjs-cta-radius": "2px",
+    "--wjs-cta-button-radius": "2px",
+    "--wjs-tabs-radius": "2px",
+    "--wjs-accordion-radius": "2px",
+    "--wjs-pricing-radius": "2px",
+    "--wjs-testimonial-radius": "2px",
+    "--wjs-blockquote-border-color": "#1c1917",
+    "--wjs-blockquote-border-width": "4px",
+    "--wjs-quote-accent": "#1c1917",
+    "--wjs-quote-bar-width": "4px",
+    "--wjs-quote-family": "georgia, 'Times New Roman', serif",
+    "--wjs-quote-style": "italic",
+    "--wjs-nav-font-family": "system-ui, sans-serif",
+    "--wjs-nav-font-size": "0.8rem",
+    "--wjs-nav-font-weight": "600",
+    "--wjs-nav-text-transform": "uppercase",
+    "--wjs-nav-letter-spacing": "0.14em",
+    "--wjs-nav-color": "#1c1917",
+    "--wjs-nav-color-hover": "#b91c1c",
+    "--wjs-nav-hover-decoration": "underline",
+    "--wjs-logo-color": "#1c1917",
+    "--wjs-logo-color-hover": "#b91c1c",
+    "--wjs-footer-bg": "#1c1917",
+    "--wjs-footer-text-heading": "#faf6ef",
+    "--wjs-footer-text-body": "#cfc7b8",
+    "--wjs-footer-text-hover": "#d9a84e",
+    "--wjs-footer-icon-bg": "#2b2724",
+    "--wjs-footer-icon-color": "#faf6ef",
+    "--wjs-footer-icon-hover-bg": "#b91c1c",
+    "--wjs-bg-footer": "#1c1917",
+    "--wjs-color-text-footer-main": "#e9e2d4",
+    "--wjs-color-text-footer-dim": "#a59d8e",
+    "--wjs-posts-bg": "#fffcf5",
+    "--wjs-posts-radius": "2px",
+    "--wjs-posts-shadow": "none",
+    "--wjs-posts-hover-shadow": "0 10px 24px rgba(28, 25, 23, 0.10)",
+    "--wjs-posts-hover-transform": "translateY(-2px)",
+    "--wjs-posts-border-color": "#e3dbc9",
+    "--wjs-posts-hover-border-color": "#b91c1c",
+    "--wjs-posts-family": "georgia, 'Times New Roman', serif",
+    "--wjs-posts-title-weight": "700",
+    "--wjs-posts-thumb-radius": "2px",
+    "--wjs-catposts-radius": "2px",
+    "--wjs-catposts-heading-family": "system-ui, sans-serif",
+    "--wjs-catposts-heading-transform": "uppercase",
+    "--wjs-catposts-heading-tracking": "0.12em",
+    "--wjs-catposts-heading-size": "0.8rem",
+    "--wjs-catposts-heading-border-color": "#1c1917",
+    "--wjs-catposts-heading-border-width": "2px",
+    "--wjs-catposts-link-color": "#1c1917",
+    "--wjs-catposts-link-hover-color": "#b91c1c",
+    "--wjs-catposts-link-family": "georgia, 'Times New Roman', serif",
+    "--wjs-search-input-bg": "#fffcf5",
+    "--wjs-search-input-border-color": "#1c1917",
+    "--wjs-search-input-radius": "2px",
+    "--wjs-search-button-bg": "#1c1917",
+    "--wjs-search-button-color": "#faf6ef",
+    "--wjs-search-button-radius": "2px"
+  },
+  "animations": {
+    "masthead-sheen": {
+      "from": {
+        "background-position": "0% 0"
+      },
+      "to": {
+        "background-position": "100% 0"
+      }
+    }
+  },
+  "styles": {
+    "headings": {
+      "letter-spacing": "-0.01em",
+      "line-height": "1.2"
+    },
+    "links": {
+      "text-decoration": "underline",
+      "text-underline-offset": "3px",
+      "text-decoration-thickness": "1px",
+      "transition": "color 0.2s ease",
+      "hover": {
+        "color": "var(--wjs-color-primary)"
+      }
+    },
+    "postList": {
+      "header": {
+        "border-bottom": "3px double var(--wjs-color-text-main)",
+        "padding-bottom": "0.5rem"
+      },
+      "title": {
+        "font-family": "var(--wjs-font-family-heading)",
+        "letter-spacing": "-0.01em"
+      }
+    },
+    "postCard": {
+      "background": "var(--wjs-bg-surface)",
+      "border": "1px solid var(--wjs-border-subtle)",
+      "border-top": "3px solid var(--wjs-color-primary)",
+      "border-radius": "2px",
+      "transition": "transform 0.25s ease, box-shadow 0.25s ease, border-top-color 0.25s ease",
+      "hover": {
+        "border-top-color": "var(--wjs-color-accent)"
+      },
+      "title": {
+        "font-family": "var(--wjs-font-family-heading)",
+        "letter-spacing": "-0.01em",
+        "line-height": "1.25"
+      },
+      "titleLink": {
+        "text-decoration": "none",
+        "background-image": "linear-gradient(currentcolor, currentcolor)",
+        "background-repeat": "no-repeat",
+        "background-size": "0% 1px",
+        "background-position": "0 100%",
+        "transition": "background-size 0.35s ease, color 0.2s ease",
+        "hover": {
+          "color": "var(--wjs-color-primary)",
+          "background-size": "100% 1px"
+        }
+      },
+      "meta": {
+        "text-transform": "uppercase",
+        "letter-spacing": "0.1em",
+        "font-size": "0.7rem"
+      },
+      "excerpt": {
+        "line-height": "1.65"
+      },
+      "more": {
+        "text-transform": "uppercase",
+        "letter-spacing": "0.1em",
+        "font-size": "0.72rem",
+        "text-decoration": "none",
+        "hover": {
+          "color": "var(--wjs-color-primary)"
+        }
+      },
+      "badge": {
+        "background": "transparent",
+        "color": "var(--wjs-color-accent)",
+        "border": "1px solid var(--wjs-color-accent)",
+        "border-radius": "2px",
+        "text-transform": "uppercase",
+        "letter-spacing": "0.08em"
+      }
+    },
+    "searchResult": {
+      "background": "var(--wjs-bg-surface)",
+      "border": "1px solid var(--wjs-border-subtle)",
+      "border-top": "3px solid var(--wjs-color-primary)",
+      "border-radius": "2px",
+      "title": {
+        "font-family": "var(--wjs-font-family-heading)",
+        "letter-spacing": "-0.01em"
+      },
+      "titleLink": {
+        "text-decoration": "none",
+        "background-image": "linear-gradient(currentcolor, currentcolor)",
+        "background-repeat": "no-repeat",
+        "background-size": "0% 1px",
+        "background-position": "0 100%",
+        "transition": "background-size 0.35s ease, color 0.2s ease",
+        "hover": {
+          "color": "var(--wjs-color-primary)",
+          "background-size": "100% 1px"
+        }
+      },
+      "meta": {
+        "text-transform": "uppercase",
+        "letter-spacing": "0.1em",
+        "font-size": "0.7rem"
+      }
+    },
+    "singlePost": {
+      "header": {
+        "text-align": "center",
+        "border-bottom": "1px solid var(--wjs-border-subtle)",
+        "padding-bottom": "1.25rem",
+        "margin-bottom": "2rem"
+      },
+      "title": {
+        "letter-spacing": "-0.02em",
+        "line-height": "1.12"
+      }
+    },
+    "postMeta": {
+      "text-transform": "uppercase",
+      "letter-spacing": "0.12em",
+      "font-size": "0.72rem"
+    },
+    "comments": {
+      "title": {
+        "font-family": "var(--wjs-font-family-heading)",
+        "border-bottom": "3px double var(--wjs-color-text-main)",
+        "padding-bottom": "0.5rem"
+      },
+      "field": {
+        "border-radius": "2px",
+        "background": "var(--wjs-bg-surface)"
+      },
+      "submit": {
+        "border-radius": "2px"
+      }
+    },
+    "chromeHeader": {
+      "background": "var(--wjs-bg-canvas)",
+      "border-bottom": "4px double var(--wjs-color-text-main)",
+      "siteTitleText": {
+        "font-family": "var(--wjs-font-family-heading)",
+        "font-size": "clamp(1.9rem, 5vw, 2.75rem)",
+        "font-weight": "700",
+        "letter-spacing": "-0.02em",
+        "line-height": "1.05"
+      },
+      "text": {
+        "text-transform": "uppercase",
+        "letter-spacing": "0.16em",
+        "font-size": "0.68rem",
+        "color": "var(--wjs-color-text-muted)"
+      }
+    },
+    "chromeFooter": {
+      "border-top": "3px solid var(--wjs-color-accent)",
+      "text": {
+        "text-transform": "uppercase",
+        "letter-spacing": "0.14em",
+        "font-size": "0.68rem"
+      }
+    },
+    "variations": {
+      "hero-manchette": {
+        "background-color": "transparent",
+        "background-image": "linear-gradient(105deg, transparent 42%, rgba(185, 28, 28, 0.05) 50%, transparent 58%)",
+        "background-size": "300% 100%",
+        "background-repeat": "no-repeat",
+        "background-position": "0% 0",
+        "text-align": "center",
+        "padding": "2.25rem 0 2.75rem",
+        "border-bottom": "4px double var(--wjs-color-text-main)",
+        "motionOk": {
+          "animation": "wjs-a-masthead-sheen 16s linear infinite"
+        },
+        "mobile": {
+          "padding": "1.25rem 0 1.75rem"
+        }
+      },
+      "caja-articulo": {
+        "background": "var(--wjs-bg-surface)",
+        "border": "1px solid var(--wjs-border-subtle)",
+        "border-top": "3px solid var(--wjs-color-primary)",
+        "padding": "3rem 2.5rem",
+        "mobile": {
+          "padding": "1.5rem 1.25rem"
+        }
+      }
+    }
+  }
+}

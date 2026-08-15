@@ -1,0 +1,17 @@
+{
+  "root": { "props": {} },
+  "content": [
+    { "type": "Spacer", "props": { "height": "3rem" } },
+    {
+      "type": "Section",
+      "props": {
+        "tag": "div",
+        "maxWidth": "46rem",
+        "items": [
+          { "type": "PageContent", "props": {} }
+        ]
+      }
+    },
+    { "type": "Spacer", "props": { "height": "4rem" } }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "root": { "props": {} },
+  "content": [
+    {
+      "type": "ChromeRow",
+      "props": {
+        "align": "between",
+        "gap": "sm",
+        "wrap": true,
+        "items": [
+          { "type": "ChromeText", "props": { "text": "// sistema: en linea · circuito v1" } },
+          { "type": "ChromeSocials", "props": { "source": "settings" } }
+        ]
+      }
+    }
+  ]
+}

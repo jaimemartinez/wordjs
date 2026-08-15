@@ -1,0 +1,28 @@
+{
+  "root": { "props": {} },
+  "content": [
+    { "type": "Spacer", "props": { "height": "5rem" } },
+    {
+      "type": "Section",
+      "props": {
+        "tag": "section",
+        "maxWidth": "38rem",
+        "items": [
+          { "type": "PageContent", "props": {} }
+        ]
+      }
+    },
+    { "type": "Spacer", "props": { "height": "3rem" } },
+    {
+      "type": "SearchBar",
+      "props": {
+        "placeholder": "Quizá esté por aquí…",
+        "align": "center",
+        "width": "30rem",
+        "inputRadius": "999px",
+        "buttonRadius": "999px"
+      }
+    },
+    { "type": "Spacer", "props": { "height": "6rem" } }
+  ]
+}
