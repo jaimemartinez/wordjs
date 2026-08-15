@@ -41,8 +41,10 @@
  *  - Guías (W06/W56): canvasGuides compartido parametrizado por atributo — botón del header
  *    ACTIVO, contornos + overlay de medidas del bloque seleccionado repintado en scroll/resize.
  *
- * PENDIENTE (documentado, jamás recortado en silencio): símbolos (W35) — su fila de paleta llega
- * con la superficie; miniatura <Render> de patrones (resto de W27) → gate visual de navegador.
+ * COMPLETO EN F3 ola 5: símbolos (W35) — fila "Guardar bloque como símbolo" de la paleta ⌘K
+ * (saveSelectedAsSymbol en paletteActions.ts, testeado) + miniaturas EN VIVO de patrones (W27,
+ * RenderSubtree escalado en PatternsPanel). El cotejo pantalla-a-pantalla queda para el gate de
+ * navegador del orquestador.
  */
 import "@/components/puck-theme.css";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -89,7 +91,8 @@ import OutlineTree from "./OutlineTree";
 import PropertiesPanel from "./PropertiesPanel";
 import PatternsPanel from "./PatternsPanel";
 import VersoCommandPalette from "./VersoCommandPalette";
-import { buildVersoPaletteActions, importDataIntoHandle } from "./paletteActions";
+import { buildVersoPaletteActions, importDataIntoHandle, saveSelectedAsSymbol } from "./paletteActions";
+import { symbolsApi } from "@/lib/symbols";
 import { PATTERNS, insertVersoPattern } from "./patterns";
 import { runBackgroundSave, runManualSave, type OnSave } from "./saveFlow";
 
@@ -338,10 +341,16 @@ export default function VersoEditor({
     );
 
     // Selección por click + edición inline por doble click (capture en el doc del iframe).
+    // CANVAS INERTE A NAVEGACIÓN (mismo defecto cazado en el editor de chrome): bloques como
+    // Button o PostsGrid renderizan enlaces, y el árbol portaleado comparte el router del PADRE
+    // — un click navegaba el admin entero. preventDefault en capture cancela el default del
+    // navegador Y next/link (respeta defaultPrevented); la selección y el dblclick inline siguen
+    // funcionando (el caret de contenteditable se coloca en mousedown, no en click).
     useEffect(() => {
         if (!frameDoc) return;
         const onClick = (e: Event) => {
             const target = e.target as Element | null;
+            if (target?.closest?.("a, button, [type='submit']")) e.preventDefault();
             const el = target?.closest?.("[data-wjs-block-id]") ?? null;
             handle.select(el ? el.getAttribute("data-wjs-block-id") : null);
         };
@@ -608,6 +617,19 @@ export default function VersoEditor({
         input.click();
     }, [confirm, alert, handle, language]);
 
+    // "Guardar bloque como símbolo" (W35): subtree seleccionado → símbolo sincronizado vía
+    // symbolsApi (strip de props resueltas en saveSelectedAsSymbol); toast/alert del legacy.
+    const handleSaveSymbol = useCallback(() => {
+        void (async () => {
+            const result = await saveSelectedAsSymbol(handle, {
+                create: (name, items) => symbolsApi.create(name, items),
+                labelOf: (type) => trStr(registry.get(type)?.label || type, language),
+            });
+            if (result === "saved") setToastMsg(trStr("Símbolo guardado", language));
+            else if (result === "error") await alert(trStr("No se pudo guardar el símbolo", language), "Error");
+        })();
+    }, [handle, registry, language, alert]);
+
     // Las acciones dependientes de selección la leen PEREZOSAMENTE del handle al ejecutarse
     // (buildVersoPaletteActions) — la paleta sobrevive cambios de selección sin regenerarse.
     const paletteActions = useMemo(
@@ -649,8 +671,9 @@ export default function VersoEditor({
                     runAudit();
                 },
                 toggleGuides: () => setGuidesOn((v) => !v),
+                saveSymbol: handleSaveSymbol,
             }),
-        [handle, language, status, onSave, previewSlug, handleManualSave, handlePreview, handleExportDoc, handleImportDoc, frameDoc, pageId, runAudit],
+        [handle, language, status, onSave, previewSlug, handleManualSave, handlePreview, handleExportDoc, handleImportDoc, frameDoc, pageId, runAudit, handleSaveSymbol],
     );
 
     /* ---------------- geometría del canvas (piel PreviewFrame) ---------------- */

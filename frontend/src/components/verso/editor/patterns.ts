@@ -100,13 +100,22 @@ export function insertVersoPattern(handle: EditorHandle, registry: BlockRegistry
 }
 
 /**
+ * Items de un patrón de usuario tal como QUEDARÍAN al insertarse: tipos no registrados en ESTE
+ * editor fuera (mismo filtro que la inserción). También alimenta la miniatura en vivo (W27) para
+ * que la preview enseñe exactamente lo que aterrizará en el lienzo.
+ */
+export function userPatternItems(p: UserPattern, registry: BlockRegistry): VersoItem[] {
+    return (p.items ?? []).filter(
+        (i): i is VersoItem => !!i && typeof i === "object" && !!registry.get((i as VersoItem).type),
+    );
+}
+
+/**
  * Inserta un patrón de usuario: salta tipos no registrados y REGENERA todos los ids (recursivo,
  * slots incluidos — el mismo regenIds del legacy) para que repetir nunca colisione.
  */
 export function insertVersoUserPattern(handle: EditorHandle, registry: BlockRegistry, p: UserPattern): boolean {
-    const items = (p.items ?? [])
-        .filter((i): i is VersoItem => !!i && typeof i === "object" && !!registry.get((i as VersoItem).type))
-        .map((i) => regenIds(i) as VersoItem);
+    const items = userPatternItems(p, registry).map((i) => regenIds(i) as VersoItem);
     return insertItemsAtEnd(handle, items, `Insertar plantilla ${p.name}`);
 }
 

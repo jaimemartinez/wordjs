@@ -8,14 +8,21 @@
 // validator is the write authority) and restores by DELETE + reload. The legacy /admin/footer
 // page stays alongside during the beta.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { Puck, type Data } from "@wordjs/puck";
 import "@wordjs/puck/puck.css";
 import { chromeApi, settingsApi, type ChromePart } from "@/lib/api";
 import { themeStylesheetHref, uiFrameworkHref } from "@/lib/assetVersion";
-import { parseChromeData, STARTER_TEMPLATES, type ChromeBlock, type ChromeData } from "@/lib/chromeData";
+import { parseChromeData, STARTER_TEMPLATES, type ChromeData } from "@/lib/chromeData";
 import { useToast } from "@/contexts/ToastContext";
 import { useI18n } from "@/contexts/I18nContext";
+import { resolveEditorEngineFromBrowser, type EditorEngine } from "@/lib/editorEngine";
+import { unhydratedSaveBlocked } from "@/lib/editorGuards";
+import EngineToggle from "@/components/verso/editor/EngineToggle";
+import type { VersoData } from "@/lib/verso/types";
 import { buildChromeEditorConfig } from "./chromeEditorConfig";
+import { saveChromeComposition, toContractData, withBlockIds } from "./chromeContract";
+import ChromeVersoEditor from "./ChromeVersoEditor";
 
 type ChromeSource = "site" | "theme" | "starter";
 
@@ -25,29 +32,9 @@ const SOURCE_LABEL_KEY: Record<ChromeSource, string> = {
     starter: "chrome.admin.source.starter",
 };
 
-// Puck keys every block instance by a stable string props.id; theme files / starter templates ship
-// without ids, so stamp them once on load (the contract explicitly allows the editor's id prop).
-const genId = (type: string) =>
-    `${type}-${typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : Math.random().toString(36).slice(2, 10)}`;
-
-function withBlockIds(data: ChromeData): ChromeData {
-    const stamp = (block: ChromeBlock): ChromeBlock => {
-        const props: Record<string, unknown> = { ...(block.props || {}) };
-        if (typeof props.id !== "string") props.id = genId(block.type);
-        if (block.type === "ChromeRow" && Array.isArray(props.items)) {
-            props.items = (props.items as ChromeBlock[]).map(stamp);
-        }
-        return { type: block.type, props };
-    };
-    return { root: { props: { ...(data.root?.props || {}) } }, content: (data.content || []).map(stamp) };
-}
-
-// The stored contract form is EXACTLY { root, content } — Puck's Data may carry extras (e.g. a
-// legacy `zones` key); never persist anything beyond the contract shape.
-function toContractData(data: Data): ChromeData {
-    const d = data as unknown as { root?: { props?: Record<string, unknown> }; content?: ChromeBlock[] };
-    return { root: { props: d.root?.props ?? {} }, content: d.content ?? [] };
-}
+// withBlockIds / toContractData viven ahora en ./chromeContract.ts (MOVIDAS byte-idénticas, ver
+// documentation/verso/chrome-oracle.md §6): una sola implementación para ambos motores y tests de
+// wiring contra el productor real.
 
 // The backend validator answers with structured entries ({ code, path, message }), the local one with
 // plain strings. Both end up in the same banner, so flatten to text here: rendering an object as a
@@ -80,6 +67,15 @@ export default function ChromeEditorPage() {
     const [pendingPart, setPendingPart] = useState<ChromePart | null>(null);
     const [dirty, setDirty] = useState(false);
     const [errors, setErrors] = useState<string[]>([]);
+
+    // F3/W52 — flag de motor: legacy es el DEFAULT ABSOLUTO; Verso solo con opt-in explícito
+    // (?engine= / localStorage wjs_editor_engine / env). Se resuelve tras montar (window no existe
+    // en SSR) y se re-resuelve en navegación suave — el MISMO patrón de pages/[id] y posts/[id].
+    const searchParams = useSearchParams();
+    const [engine, setEngine] = useState<EditorEngine | null>(null);
+    useEffect(() => {
+        setEngine(resolveEditorEngineFromBrowser());
+    }, [searchParams]);
 
     // Save reads the LATEST Puck data from a ref (state would re-render the whole page per keystroke);
     // dirty tracking compares the contract-shaped JSON against the loaded baseline — exact, no
@@ -156,6 +152,10 @@ export default function ChromeEditorPage() {
     // the iframe and clones links back in arbitrary positions.
     useEffect(() => {
         if (!themeSlug) return;
+        // SOLO motor legacy: el canvas Verso (/admin/canvas-frame) carga wordjs-ui.css + la hoja del
+        // tema activo por sí mismo con los mismos helpers — inyectar aquí además crearía una pelea
+        // de hrefs entre dos resoluciones de versión del tema.
+        if (engine !== "legacy") return;
         const ensureLink = (doc: Document, id: string, href: string): HTMLLinkElement => {
             let l = doc.getElementById(id) as HTMLLinkElement | null;
             if (!l) {
@@ -185,7 +185,7 @@ export default function ChromeEditorPage() {
         inject();
         const t = setInterval(inject, 700);
         return () => clearInterval(t);
-    }, [themeSlug, themeVersion, mountKey]);
+    }, [themeSlug, themeVersion, mountKey, engine]);
 
     const handleChange = useCallback((newData: Data) => {
         latestDataRef.current = newData;
@@ -206,6 +206,10 @@ export default function ChromeEditorPage() {
     const handleSave = async () => {
         const data = latestDataRef.current;
         if (!data || saving || loading) return;
+        // Cinturón explícito (W44 aplicado al chrome): jamás guardar una composición no hidratada.
+        // Equivalente estructural ya garantizado por el guard anterior (initialData null ⇒ el editor
+        // no se monta y latestDataRef es null), pero el contrato queda declarado, no implícito.
+        if (unhydratedSaveBlocked({ isNew: false, loaded: initialData !== null })) return;
         const contract = toContractData(data);
         // Same fail-closed validation the renderer applies — catch violations locally before the
         // PUT; the backend validator (the write authority) re-checks and its 400 errors[] land in
@@ -215,7 +219,8 @@ export default function ChromeEditorPage() {
         setSaving(true);
         setErrors([]);
         try {
-            await chromeApi.save(part, contract);
+            // Wrapper 1:1 de chromeApi.save (PUT /api/v1/chrome/:part) — seam espiable en tests.
+            await saveChromeComposition(part, contract);
             baselineJsonRef.current = JSON.stringify(contract);
             setDirty(false);
             setPendingPart(null); // nothing left to discard, so a pending switch is moot
@@ -382,13 +387,32 @@ export default function ChromeEditorPage() {
                 (children replace Puck's default UI). The iframe canvas gets the active theme's
                 stylesheets injected by the effect above. */}
             <div className="relative flex-1 min-h-0 wjs-chrome-editor bg-gray-50/50">
-                {loading || !initialData ? (
+                <EngineToggle current={engine} />
+                {loading || !initialData || engine === null ? (
                     <div className="absolute inset-0 flex items-center justify-center">
                         <div className="flex flex-col items-center gap-3 text-gray-300">
                             <i className="fa-solid fa-circle-notch fa-spin text-2xl"></i>
                             <span className="text-[10px] font-black uppercase tracking-widest">{t("chrome.admin.loading")}</span>
                         </div>
                     </div>
+                ) : engine === "verso" ? (
+                    /* MOTOR VERSO (opt-in explícito, W52). Mismos datos (initialData ya estampado por
+                       withBlockIds), mismo onChange compartido (dirty por comparación de contrato) y
+                       mismo camino de guardado/restaurar del header — el dato de chrome NO es
+                       _puck_data. La rama legacy de abajo queda byte-intacta. */
+                    <ChromeVersoEditor
+                        key={`${part}-${mountKey}`}
+                        part={part}
+                        initialData={toContractData(initialData) as ChromeData}
+                        onChange={(data: VersoData) => handleChange(data as unknown as Data)}
+                        onInit={(data: VersoData) => {
+                            // Re-basar el dirty sobre la SERIALIZACIÓN VERSO del doc cargado: emite
+                            // `id` primero en nodos sin slots (byte-distinto, deep-igual) y comparar
+                            // contra el crudo daba «sin guardar» en falso permanente.
+                            latestDataRef.current = data as unknown as Data;
+                            baselineJsonRef.current = JSON.stringify(toContractData(data as unknown as Data));
+                        }}
+                    />
                 ) : (
                     <Puck
                         key={`${part}-${mountKey}`}
