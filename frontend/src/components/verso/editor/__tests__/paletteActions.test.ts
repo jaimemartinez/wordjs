@@ -8,7 +8,12 @@ import { createEditor } from "@/lib/verso/store";
 import { createBlockRegistry, makeSlotResolver, type BlockRegistry } from "@/lib/verso/registry";
 import type { VersoItem } from "@/lib/verso/types";
 import { STYLE_CLIPBOARD_KEY } from "../blockClipboard";
-import { buildVersoPaletteActions, importDataIntoHandle, type VersoPaletteActionDeps } from "../paletteActions";
+import {
+    buildVersoPaletteActions,
+    importDataIntoHandle,
+    saveSelectedAsSymbol,
+    type VersoPaletteActionDeps,
+} from "../paletteActions";
 
 const store = new Map<string, string>();
 vi.stubGlobal("localStorage", {
@@ -34,6 +39,19 @@ function makeRegistry(): BlockRegistry {
             type: "Text",
             fields: { content: { type: "textarea" } },
             defaultProps: { content: "..." },
+            render: () => null,
+        },
+        {
+            type: "Section",
+            label: "Sección",
+            fields: { children: { type: "slot" } },
+            defaultProps: {},
+            render: () => null,
+        },
+        {
+            type: "Symbol",
+            fields: { symbolId: { type: "custom", render: () => null } },
+            defaultProps: { symbolId: 0 },
             render: () => null,
         },
     ]);
@@ -68,6 +86,7 @@ function makeDeps(handle: ReturnType<typeof makeHandle>, over: Partial<VersoPale
         openComments: vi.fn(),
         openA11y: vi.fn(),
         toggleGuides: vi.fn(),
+        saveSymbol: vi.fn(),
         ...over,
     };
     return { deps, actions: buildVersoPaletteActions(deps) };
@@ -270,5 +289,76 @@ describe("importDataIntoHandle (import JSON = UNA entrada de undo)", () => {
         expect(importDataIntoHandle(handle, { content: "no-array" })).toBe(false);
         expect(handle.getData()).toEqual(before);
         expect(handle.canUndo()).toBe(false);
+    });
+});
+
+describe("W35 — Guardar bloque como símbolo", () => {
+    it("la fila save-symbol lleva el id/glifo/label del legacy y delega en el callback", () => {
+        const registry = makeRegistry();
+        const { deps, actions } = makeDeps(makeHandle(registry));
+        const row = find(actions, "save-symbol");
+        expect(row.ms).toBe("collections");
+        expect(row.label).toBe("Guardar bloque como símbolo");
+        // Misma posición relativa que el legacy: tras replay y antes de comments.
+        const ids = actions.map((a) => a.id);
+        expect(ids.indexOf("save-symbol")).toBeGreaterThan(ids.indexOf("replay"));
+        expect(ids.indexOf("save-symbol")).toBeLessThan(ids.indexOf("comments"));
+        row.run();
+        expect(deps.saveSymbol).toHaveBeenCalledTimes(1);
+    });
+
+    it("serializa el SUBTREE seleccionado (slots incluidos), descarta props resueltas y nombra <label> · <stamp>", async () => {
+        const registry = makeRegistry();
+        const handle = makeHandle(registry, [
+            {
+                type: "Section",
+                props: {
+                    id: "s-1",
+                    resolvedPosts: [{ fake: true }],
+                    resolvedFiltered: [1],
+                    resolvedSymbolItems: [2],
+                    children: [{ type: "Text", props: { id: "t-1", content: "dentro" } }],
+                },
+            },
+        ]);
+        handle.select("s-1");
+        const create = vi.fn().mockResolvedValue({ id: 9 });
+        const result = await saveSelectedAsSymbol(handle, {
+            create,
+            labelOf: (type) => (type === "Section" ? "Sección" : type),
+            stamp: () => "12:34",
+        });
+        expect(result).toBe("saved");
+        expect(create).toHaveBeenCalledTimes(1);
+        const [name, items] = create.mock.calls[0];
+        expect(name).toBe("Sección · 12:34");
+        expect(items).toHaveLength(1);
+        expect(items[0].type).toBe("Section");
+        // El subtree viaja completo (forma cruda Puck: hijos como array dentro de props)…
+        expect(items[0].props.children).toEqual([{ type: "Text", props: { id: "t-1", content: "dentro" } }]);
+        // …y las props inyectadas por el resolver SSR jamás se persisten (legacy L1580-1583).
+        expect("resolvedPosts" in items[0].props).toBe(false);
+        expect("resolvedFiltered" in items[0].props).toBe(false);
+        expect("resolvedSymbolItems" in items[0].props).toBe(false);
+        // El documento y la historia quedan intactos: guardar un símbolo no es una edición.
+        expect(handle.canUndo()).toBe(false);
+    });
+
+    it("sin selección → skipped; seleccionar un Symbol → skipped (mismo guard del legacy); nunca llama a create", async () => {
+        const registry = makeRegistry();
+        const handle = makeHandle(registry, [{ type: "Symbol", props: { id: "sym-1", symbolId: 3 } }]);
+        const create = vi.fn();
+        expect(await saveSelectedAsSymbol(handle, { create, labelOf: (t) => t })).toBe("skipped");
+        handle.select("sym-1");
+        expect(await saveSelectedAsSymbol(handle, { create, labelOf: (t) => t })).toBe("skipped");
+        expect(create).not.toHaveBeenCalled();
+    });
+
+    it("create() rechaza → 'error' (el llamador alerta), sin excepción hacia arriba", async () => {
+        const registry = makeRegistry();
+        const handle = makeHandle(registry, [{ type: "Text", props: { id: "t-1", content: "x" } }]);
+        handle.select("t-1");
+        const create = vi.fn().mockRejectedValue(new Error("red caída"));
+        expect(await saveSelectedAsSymbol(handle, { create, labelOf: (t) => t })).toBe("error");
     });
 });

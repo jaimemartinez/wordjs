@@ -15,11 +15,15 @@
  *    normalize.ts de Verso ya absorbe zones legacy fail-soft — supersede a migrate, ver W40).
  *  - media / revisiones / comentarios / a11y / guías (F3 ola 4): filas REALES con los ids/glifos/
  *    labels del legacy; revisiones y comentarios solo con `hasPage` (mismo gate `pageId` del
- *    legacy). Símbolos (W35) es la ÚNICA fila aún pendiente — llegará con su superficie, jamás
- *    una fila muerta.
+ *    legacy).
+ *  - save-symbol (F3 ola 5, W35): fila REAL con el id/glifo/label del legacy (PuckEditor
+ *    L1571-1593); la serialización + strip de props resueltas vive en `saveSelectedAsSymbol`
+ *    (testeable en node, symbolsApi inyectado) — el componente pone toast/alert e idioma.
  */
+import { SYMBOL_BLOCK_TYPE } from "@/lib/symbols";
 import type { EditorHandle } from "@/lib/verso/store";
-import type { VersoData } from "@/lib/verso/types";
+import type { VersoData, VersoItem } from "@/lib/verso/types";
+import { subtreeToItem } from "@/lib/verso/commands";
 import { duplicateSelected, moveSelected, removeSelected } from "../overlay/actionBarCommands";
 import { copyStylesFromSelected, pasteStylesToSelected } from "./blockClipboard";
 
@@ -62,6 +66,51 @@ export interface VersoPaletteActionDeps {
     /** Abre el drawer de accesibilidad Y lanza el análisis (mismo run del legacy). */
     openA11y: () => void;
     toggleGuides: () => void;
+    /** "Guardar bloque como símbolo" (W35) — el componente cablea saveSelectedAsSymbol + toast/alert. */
+    saveSymbol: () => void;
+}
+
+/** Props inyectadas por el resolver SSR que JAMÁS se persisten en un símbolo (legacy L1580-1583). */
+export const SYMBOL_RESOLVED_PROPS = ["resolvedPosts", "resolvedFiltered", "resolvedSymbolItems"] as const;
+
+export interface SaveSymbolIO {
+    /** symbolsApi.create (inyectado para test). */
+    create: (name: string, items: VersoItem[]) => Promise<unknown>;
+    /** Label ya traducido del tipo de bloque (registry def.label → tr). */
+    labelOf: (type: string) => string;
+    /** Sello horario del nombre — inyectable en tests (default: hora local HH:MM). */
+    stamp?: () => string;
+}
+
+/**
+ * W35 — "Guardar bloque como símbolo": serializa el SUBTREE seleccionado (hijos de slots
+ * incluidos — `subtreeToItem`, la MISMA forma cruda Puck que el resolver de símbolos consume),
+ * descarta las props resueltas server-side del nivel raíz (mismo alcance que el legacy, que solo
+ * limpiaba `sel.props`) y lo crea vía symbolsApi con el nombre `<label> · <HH:MM>` del legacy.
+ *  - "saved"   → creado (el llamador toastea "Símbolo guardado");
+ *  - "skipped" → sin selección o la selección ya ES un Symbol (mismo guard del legacy);
+ *  - "error"   → create() falló (el llamador alerta "No se pudo guardar el símbolo").
+ */
+export async function saveSelectedAsSymbol(
+    handle: EditorHandle,
+    io: SaveSymbolIO,
+): Promise<"saved" | "skipped" | "error"> {
+    const id = handle.getState().selection.nodeId;
+    const doc = handle.getDoc();
+    if (!id || !doc.nodes[id]) return "skipped";
+    const item = subtreeToItem(doc, id);
+    if (item.type === SYMBOL_BLOCK_TYPE) return "skipped";
+    const props = { ...item.props };
+    for (const k of SYMBOL_RESOLVED_PROPS) delete (props as Record<string, unknown>)[k];
+    const stamp = io.stamp
+        ? io.stamp()
+        : new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    try {
+        await io.create(`${io.labelOf(item.type)} · ${stamp}`, [{ type: item.type, props }]);
+        return "saved";
+    } catch {
+        return "error";
+    }
 }
 
 /**
@@ -189,6 +238,13 @@ export function buildVersoPaletteActions(d: VersoPaletteActionDeps): PaletteActi
         ms: "play_arrow",
         label: d.tr("Reproducir las animaciones de entrada"),
         run: () => d.replayAnims(),
+    });
+    // Misma posición que el legacy: tras replay, antes de comments (PuckEditor L1571).
+    acts.push({
+        id: "save-symbol",
+        ms: "collections",
+        label: d.tr("Guardar bloque como símbolo"),
+        run: () => d.saveSymbol(),
     });
     if (d.hasPage) {
         acts.push({

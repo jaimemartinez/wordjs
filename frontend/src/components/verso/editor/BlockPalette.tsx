@@ -51,7 +51,10 @@ export default function BlockPalette({ registry, onInsert }: BlockPaletteProps) 
         const byGroup: Record<string, PaletteItem[]> = {};
         for (const def of registry.list()) {
             const meta = BLOCK_META[def.type];
-            const label = def.label || meta?.label || def.type;
+            // trStr: labels reactivos al idioma SIN remontar el registry (el localizeConfig del
+            // legacy, reducido al punto de display; trStr matchea por cualquiera de los 3 idiomas
+            // fuente y devuelve el input intacto si no está en el diccionario — plugins a salvo).
+            const label = trStr(def.label || meta?.label || def.type, language);
             const ms = meta?.ms || "widgets";
             const desc = meta?.desc;
             const group = meta?.group || FALLBACK_GROUP;
@@ -68,7 +71,7 @@ export default function BlockPalette({ registry, onInsert }: BlockPaletteProps) 
             ms: GROUP_MS_ICON[g] || "widgets",
             items: byGroup[g].sort((a, b) => a.label.localeCompare(b.label)),
         }));
-    }, [registry, query, activeGroup]);
+    }, [registry, query, activeGroup, language]);
 
     const hasResults = groups.length > 0;
 

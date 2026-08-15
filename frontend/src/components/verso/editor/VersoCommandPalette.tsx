@@ -84,13 +84,15 @@ function PaletteDialog({
     const listRef = useRef<HTMLDivElement>(null);
     const dialogRef = useRef<HTMLDivElement>(null);
 
-    // Mapa components-like para el catálogo compartido (def.label como en el legacy). El registry
+    // Mapa components-like para el catálogo compartido con labels YA localizados (el legacy
+    // recibía el config pasado por localizeConfig; aquí trStr en el punto de entrada — así la
+    // búsqueda matchea lo que se enseña y el idioma cambia SIN remontar el registry). El registry
     // es identidad-estable; en F3 los core blocks se registran una vez antes del primer render.
     const components = useMemo(() => {
         const map: Record<string, { label?: string }> = {};
-        for (const def of registry.list()) map[def.type] = { label: def.label };
+        for (const def of registry.list()) map[def.type] = { label: def.label ? trStr(def.label, language) : undefined };
         return map;
-    }, [registry]);
+    }, [registry, language]);
 
     const items = useMemo(() => getBlockItems(components, query), [components, query]);
     // Las acciones filtran sobre la misma query; con query vacía se muestran todas (encabezan la

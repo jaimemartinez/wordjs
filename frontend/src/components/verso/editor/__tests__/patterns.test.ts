@@ -22,6 +22,7 @@ import {
     insertVersoUserPattern,
     loadUserPatterns,
     saveDocAsPattern,
+    userPatternItems,
     type Pattern,
 } from "../patterns";
 
@@ -224,6 +225,25 @@ describe("patrones de usuario (clave/forma/cap compartidos con el legacy)", () =
         };
         expect(insertVersoUserPattern(handle, registry, p)).toBe(true);
         expect(handle.getData().content.map((i) => i.type)).toEqual(["Text"]);
+    });
+
+    it("userPatternItems (miniatura W27) devuelve EXACTAMENTE lo que la inserción usará: tipos no registrados fuera, forma intacta", () => {
+        const registry = makeRegistry();
+        const p = {
+            id: "u-2",
+            name: "Mixto",
+            items: [
+                { type: "Heading", props: { id: "h-9", title: "queda" } },
+                { type: "PluginOnly", props: { id: "p-9" } },
+                { type: "Text", props: { id: "t-9", content: "queda" } },
+            ],
+            createdAt: new Date().toISOString(),
+        };
+        const items = userPatternItems(p, registry);
+        expect(items.map((i) => i.type)).toEqual(["Heading", "Text"]);
+        // Sin regeneración de ids: la miniatura enseña los items tal cual (los ids frescos son
+        // cosa de la inserción — insertVersoUserPattern).
+        expect(items[0].props.id).toBe("h-9");
     });
 
     it("deleteUserPattern (el del legacy, reutilizado) borra por id", () => {
