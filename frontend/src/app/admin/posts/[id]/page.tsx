@@ -9,6 +9,12 @@ import { localizeConfig } from "@/lib/puckI18n";
 import PuckEditor from "@/components/PuckEditor";
 import PuckEditorSkeleton from "@/components/PuckEditorSkeleton";
 import EditorLoadError from "@/components/EditorLoadError";
+import VersoEditor from "@/components/verso/editor/VersoEditor";
+import { rootFieldsPost } from "@/lib/verso/coreBlocks";
+import { serializeContentFallback } from "@/lib/verso/contentFallback";
+import { resolveEditorEngineFromBrowser, type EditorEngine } from "@/lib/editorEngine";
+import type { EditorHandle } from "@/lib/verso/store";
+import type { VersoData } from "@/lib/verso/types";
 import { unhydratedSaveBlocked, seedLegacyPuckData, applyLegacyHtmlFallback, resolveWjsTemplateForSave, isWithinPostMountGrace } from "@/lib/editorGuards";
 import { Data } from "@wordjs/puck";
 import { useUnsavedChanges } from "@/contexts/UnsavedChangesContext";
@@ -54,6 +60,17 @@ export default function PostEditorPage() {
     // swallowed (save stayed disabled, autosave never armed). A short post-mount grace window
     // ignores init noise without ever eating a human edit.
     const mountedAtRef = useRef(Date.now());
+
+    // F3 — engine flag: legacy es el DEFAULT ABSOLUTO; Verso solo con opt-in explícito
+    // (?engine= / localStorage wjs_editor_engine / NEXT_PUBLIC_WORDJS_EDITOR_ENGINE). Se resuelve
+    // tras montar (window/localStorage no existen en SSR — evita un mismatch de hidratación).
+    const [engine, setEngine] = useState<EditorEngine | null>(null);
+    useEffect(() => {
+        setEngine(resolveEditorEngineFromBrowser());
+    }, []);
+    // Handle vivo del motor Verso (null en legacy): el guardado lee getData() de aquí — el
+    // documento REAL del store, sin mirrors (el equivalente Verso de window.puckGetData).
+    const versoHandleRef = useRef<EditorHandle | null>(null);
 
     // Set initial dirty state for new posts
     useEffect(() => {
@@ -196,8 +213,12 @@ export default function PostEditorPage() {
         try {
             // Flush any open inline editor and read the LIVE Puck store (same hardening as the page
             // editor): Puck's onChange deep-equal guard can leave the mirrored state stale.
-            try { (window as any).puckCommitActive?.(); } catch { /* no open editor */ }
-            const liveData = ((window as any).puckGetData?.() ?? puckDataRef.current);
+            // Verso: the same two steps against the live EditorHandle (commitInline + getData), no mirrors.
+            try {
+                if (versoHandleRef.current) versoHandleRef.current.commitInline();
+                else (window as any).puckCommitActive?.();
+            } catch { /* no open editor */ }
+            const liveData = (versoHandleRef.current?.getData() as any) ?? ((window as any).puckGetData?.() ?? puckDataRef.current);
             const root = liveData.root as any;
             const finalTitle = root?.props?.title || root?.title || title;
             const finalSlug = root?.props?.slug || root?.slug || slug;
@@ -263,7 +284,9 @@ export default function PostEditorPage() {
     // Add active marketplace plugins' Puck blocks to the editor palette/canvas at runtime.
     const runtimeConfig = useRuntimePuckConfig(localizedConfig);
 
-    if (isLoading) {
+    // `engine === null` solo dura el primer frame tras montar (la resolución es síncrona en el
+    // efecto); el skeleton es el mismo que el de la carga, así que no hay parpadeo distinto.
+    if (isLoading || engine === null) {
         return <PuckEditorSkeleton />;
     }
 
@@ -275,6 +298,62 @@ export default function PostEditorPage() {
 
     return (
         <div className="h-full w-full overflow-hidden flex flex-col">
+            {engine === "verso" ? (
+                /* MOTOR VERSO (opt-in explícito). Mismas props de datos que alimentan a PuckEditor:
+                   carga/seeding ya hechos arriba (loadPost/seedLegacyPuckData), handleSubmit idéntico
+                   en semántica (lee el doc vivo vía versoHandleRef), root fields de POST (SEO/
+                   categoría/comentarios — la asimetría del CMS, W41), y el fallback HTML usa el
+                   módulo COMPARTIDO con el switch COMPLETO de pages: la divergencia W47 (posts solo
+                   serializaba 4 tipos, sin clases wp-block-*) era drift accidental y se resuelve
+                   hacia el lado completo — decisión ratificada del encargo F3. */
+                <VersoEditor
+                    initialData={puckData as unknown as VersoData}
+                    status={status}
+                    onStatusChange={setStatus}
+                    saving={saving}
+                    hasChanges={isDirty}
+                    onSave={handleSubmit as any}
+                    onCancel={() => router.back()}
+                    breadcrumbRoot="Entradas"
+                    pageId={postId || undefined}
+                    previewSlug={slug || undefined}
+                    rootFields={rootFieldsPost}
+                    handleRef={versoHandleRef}
+                    onChange={(data: VersoData) => {
+                        // Ignore init-time events only (see mountedAtRef note above).
+                        if (!isWithinPostMountGrace(mountedAtRef.current, Date.now())) {
+                            setIsDirty(true);
+                        }
+                        // Mirror de última instancia (el guardado prefiere versoHandleRef.getData()).
+                        puckDataRef.current = data as unknown as Data;
+                        const root = data.root as any;
+                        const newTitle = root?.props?.title || root?.title;
+                        const newSlug = root?.props?.slug || root?.slug;
+                        if (newTitle !== undefined) {
+                            setTitle(newTitle);
+                        }
+                        if (newSlug !== undefined && newSlug !== slug) {
+                            // User manually edited slug in sidebar
+                            setSlugManuallyEdited(true);
+                            setSlug(newSlug);
+                        }
+                        const newAllowComments = root?.props?.allowComments;
+                        if (newAllowComments !== undefined) {
+                            setCommentStatus(newAllowComments);
+                        }
+                        const newTemplate = root?.props?._wjs_template;
+                        if (typeof newTemplate === 'string' && newTemplate !== assignedTemplate) {
+                            setAssignedTemplate(newTemplate);
+                        }
+                        // Fallback HTML desde bloques — EXCEPTO un post legacy aún en lienzo vacío
+                        // (su cuerpo vive como HTML en `content`): no machacarlo a "".
+                        if (data.content.length > 0) legacyHtmlRef.current = null;
+                        if (!(data.content.length === 0 && legacyHtmlRef.current)) {
+                            contentRef.current = serializeContentFallback(data.content);
+                        }
+                    }}
+                />
+            ) : (
             <PuckEditor
                 config={runtimeConfig}
                 initialData={puckData}
@@ -347,6 +426,7 @@ export default function PostEditorPage() {
                     }
                 }}
             />
+            )}
         </div>
     );
 }
