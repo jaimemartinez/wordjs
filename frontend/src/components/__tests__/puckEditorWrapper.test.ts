@@ -50,23 +50,36 @@ const SRC = path.resolve(import.meta.dirname, "../PuckEditor.tsx");
 const code = stripComments(readFileSync(SRC, "utf8")).replace(/\s+/g, " ");
 
 describe("PuckEditor wrapper — autosave fires + debounces (drafts only)", () => {
-  it("only autosaves drafts, and skips while already saving / clean", () => {
-    // Mutation: drop the `status !== "draft"` guard (autosave a published page in the background) -> fails.
-    expect(code).toMatch(/if\s*\(\s*status\s*!==\s*"draft"\s*\|\|\s*!onSave\s*\|\|\s*!hasChanges\s*\|\|\s*saving\s*\)\s*return;/);
+  // VERSO F2: the autosave POLICY itself (the guard, the 8s/30s floors, the {autosave:true} marker,
+  // the ok===false abort) moved to lib/autosavePolicy.ts and is now exercised by real behavior tests
+  // (frontend/src/lib/__tests__/verso-autosavePolicy.test.ts) against the exact functions PuckEditor.tsx
+  // imports — see that file for the actual contract coverage. What's left worth pinning HERE is only
+  // that the wrapper still WIRES UP that shared, tested policy instead of drifting back to an inline
+  // reimplementation that the behavior tests would no longer be protecting.
+  it("delegates the arm/guard decision to the shared, behavior-tested shouldRunAutosave", () => {
+    // Mutation: stop importing from lib/autosavePolicy (silently drift the wrapper back onto its own
+    // inline copy of the guard, orphaning it from verso-autosavePolicy.test.ts) -> fails.
+    expect(code).toMatch(/import\s*\{[^}]*shouldRunAutosave[^}]*\}\s*from\s*"@\/lib\/autosavePolicy"/);
+    // Mutation: drop the status/onSave/hasChanges/saving guard (autosave a published page, or one with
+    // no handler/no changes/already saving) -> fails.
+    expect(code).toMatch(/if\s*\(\s*!shouldRunAutosave\(\s*\{\s*status,\s*hasOnSave:\s*!!onSave,\s*hasChanges,\s*saving\s*\}\s*\)\s*\)\s*return;/);
   });
 
-  it("debounces with an 8s floor after first dirty and a 30s floor between runs", () => {
-    // The exact policy. Mutation: change 8000 or 30000, or drop the lastAutosaveRef term -> fails.
-    expect(code).toContain("Math.max(8000, 30000 - (Date.now() - lastAutosaveRef.current))");
+  it("computes the debounce/repeat wait via the shared computeAutosaveWaitMs, on a cancelable timer", () => {
+    // Mutation: inline the Math.max(8000, 30000 - ...) arithmetic again instead of the shared/tested
+    // computeAutosaveWaitMs (whose exact 8000/30000 floors are pinned behaviorally in
+    // verso-autosavePolicy.test.ts) -> fails.
+    expect(code).toMatch(/const wait\s*=\s*computeAutosaveWaitMs\(\s*Date\.now\(\),\s*lastAutosaveRef\.current\s*\)/);
     // Scheduled via a cancelable timer (debounce, not fire-immediately). Mutation: remove clearTimeout cleanup -> fails.
     expect(code).toMatch(/return\s*\(\s*\)\s*=>\s*clearTimeout\(\s*t\s*\)/);
   });
 
-  it("marks background saves as autosave and does not stamp a save the parent rejected", () => {
-    // Mutation: drop `{ autosave: true }` (parents would snapshot a revision every 8s) -> fails.
-    expect(code).toMatch(/onSave\(\s*\{\s*autosave:\s*true\s*\}\s*\)/);
-    // Mutation: remove the `ok === false` early-return (announce success for a blocked save) -> fails.
-    expect(code).toMatch(/if\s*\(\s*ok\s*===\s*false\s*\)\s*return;/);
+  it("marks background saves via buildAutosaveSaveOptions() and aborts via didSaveSucceed", () => {
+    // Mutation: pass a raw `{ autosave: true }` literal again, or drop it (parents would snapshot a
+    // revision every 8s) -> fails.
+    expect(code).toMatch(/onSave\(\s*buildAutosaveSaveOptions\(\)\s*\)/);
+    // Mutation: remove the didSaveSucceed early-return (announce success for a blocked/failed save) -> fails.
+    expect(code).toMatch(/if\s*\(\s*!didSaveSucceed\(\s*ok\s*\)\s*\)\s*return;/);
   });
 });
 
