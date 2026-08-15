@@ -19,9 +19,11 @@
  * - componentMap[type] ausente → placeholder <div data-verso-missing> con el
  *   type visible (fail-soft: el doc nunca se pierde por un bloque sin UI).
  */
-import React, { useCallback } from "react";
+import React, { useCallback, useMemo, useSyncExternalStore } from "react";
 import SharedBlockShell from "@/components/content/SharedBlockShell";
 import type { AnimSpec, Appearance, Hide } from "@/components/puck/blockShell";
+import { createInlineMountStore } from "../inline/inlineSession";
+import VersoInline from "../inline/VersoInline";
 import {
   selectInlineEditingId,
   useStoreSlice,
@@ -33,10 +35,21 @@ import VersoSlot from "./VersoSlot";
 
 const VersoBlock = React.memo(function VersoBlock({ nodeId }: { nodeId: string }) {
   const ctx = useVersoRenderContext();
-  const { handle, componentMap, onBlockElement, editorChrome } = ctx;
+  const { handle, registry, componentMap, onBlockElement, editorChrome } = ctx;
   const node = useVersoNode(handle, nodeId);
   // Cambia como mucho dos veces por sesión de edición inline (entrar/salir).
   const inlineEditingId = useStoreSlice(handle, selectInlineEditingId);
+  // Declaración inline del nodo cuando ESTE nodo es el activo (referencia
+  // estable del registry; solo notifica al entrar/salir del modo inline).
+  const inlineStore = useMemo(
+    () => createInlineMountStore(handle, registry, nodeId),
+    [handle, registry, nodeId],
+  );
+  const inlineSpec = useSyncExternalStore(
+    inlineStore.subscribe,
+    inlineStore.getSnapshot,
+    inlineStore.getSnapshot,
+  );
   const registerElement = useCallback(
     (el: HTMLElement | null) => {
       onBlockElement?.(nodeId, el);
@@ -51,7 +64,19 @@ const VersoBlock = React.memo(function VersoBlock({ nodeId }: { nodeId: string }
   const Component = componentMap[node.type];
 
   let content: React.ReactNode;
-  if (Component) {
+  if (inlineSpec) {
+    // Edición inline declarativa: Tiptap IN SITU en lugar del render del
+    // bloque (mismo documento del iframe, sin portal). key por nodo+prop:
+    // cambiar de destino fuerza un editor nuevo con su contenido inicial.
+    content = (
+      <VersoInline
+        key={`${node.id}:${inlineSpec.prop}`}
+        nodeId={node.id}
+        prop={inlineSpec.prop}
+        schema={inlineSpec.schema}
+      />
+    );
+  } else if (Component) {
     // Props del nodo TAL CUAL + una función de slot por cada clave de slot
     // (contrato (className)=>ReactNode) + isEditing, como el config actual.
     const passProps: Record<string, unknown> = { ...props, isEditing: true };

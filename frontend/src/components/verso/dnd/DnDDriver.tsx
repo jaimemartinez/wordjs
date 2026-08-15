@@ -37,7 +37,7 @@ import {
   buildDragLayout,
   createKeyboardMover,
   slotAttrValue,
-  translateParentPoint,
+  toFramePoint,
   type SlotInfo,
 } from "./driverCore";
 import { createDragSession, type DragSession, type DragSource } from "./session";
@@ -134,13 +134,20 @@ export default function DnDDriver({ handle, registry, geometry, frameDocument }:
     let moveRaf: number | null = null;
     let scrollRaf: number | null = null;
 
-    const toFramePoint = (e: PointerEvent, fromParent: boolean): DndPoint | null => {
+    // Aritmética pura en driverCore.toFramePoint (testeada con escala 0.75):
+    // la escala se deriva de la propia caja del iframe (rect.width/clientWidth),
+    // exacta bajo el transform: scale() del device-preview — ver frameScaleOf.
+    const eventToFramePoint = (e: PointerEvent, fromParent: boolean): DndPoint | null => {
       if (!fromParent) return { x: e.clientX, y: e.clientY };
       const iframe = canvas.getFrameElement();
       if (!iframe) return null;
       const rect = iframe.getBoundingClientRect();
-      const scale = iframe.clientWidth > 0 ? rect.width / iframe.clientWidth : 1;
-      return translateParentPoint(e.clientX, e.clientY, { left: rect.left, top: rect.top }, scale);
+      return toFramePoint(e.clientX, e.clientY, {
+        left: rect.left,
+        top: rect.top,
+        width: rect.width,
+        clientWidth: iframe.clientWidth,
+      });
     };
 
     const stopRafs = () => {
@@ -190,7 +197,7 @@ export default function DnDDriver({ handle, registry, geometry, frameDocument }:
     const makeMoveHandler = (fromParent: boolean) => (e: Event) => {
       if (!pending && !session) return;
       const pe = e as PointerEvent;
-      const p = toFramePoint(pe, fromParent);
+      const p = eventToFramePoint(pe, fromParent);
       if (!p) return;
       lastPoint = p;
       overDrawer =
@@ -201,6 +208,9 @@ export default function DnDDriver({ handle, registry, geometry, frameDocument }:
     const onFrameDown = (e: Event) => {
       const pe = e as PointerEvent;
       if (pe.button !== 0) return;
+      // Edición inline activa: arrastrar para SELECCIONAR texto dentro del
+      // contenteditable de Tiptap no debe arrancar un drag de bloque.
+      if (isEditableTarget(pe.target)) return;
       const el = (pe.target as Element | null)?.closest?.("[data-wjs-block-id]");
       const id = el?.getAttribute("data-wjs-block-id");
       if (!id) return;
@@ -217,7 +227,7 @@ export default function DnDDriver({ handle, registry, geometry, frameDocument }:
       const item = (pe.target as Element | null)?.closest?.("[data-wjs-palette-type]");
       const type = item?.getAttribute("data-wjs-palette-type");
       if (!type) return;
-      const p = toFramePoint(pe, true);
+      const p = eventToFramePoint(pe, true);
       if (!p) return;
       pending = { source: { kind: "new", type }, start: p };
     };

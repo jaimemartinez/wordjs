@@ -10,13 +10,25 @@
  * ya está tras los gates de auth/MFA del admin — DashboardLayoutClient corre
  * antes del bypass del shell).
  *
- * Montaje: createEditor con un doc sintético de 30 bloques (Section>Grid
- * anidado 3 niveles, componentes REALES de blocks.tsx), FrameController
+ * Montaje: createEditor con un doc sintético (?fixture=30 default — el doc de
+ * siempre —, ?fixture=500 el determinista de 500 bloques; ambos en
+ * lab/labFixtures.ts, componentes REALES de blocks.tsx), FrameController
  * (iframe /admin/canvas-frame + portal) + EditorRenderer, capa OverlayLayer
  * hermana del iframe, panel izquierdo (tipos del registry → insertNode), panel
  * derecho (VersoFieldControl sobre registry.get(type).fields del seleccionado),
  * undo/redo con canUndo/canRedo, y HUD dev: contador de re-renders + coste del
- * último transact en ms (performance.now). Funcional, no bonito.
+ * último transact + PerfHud de percentiles (lab/PerfHud.tsx). Funcional, no bonito.
+ *
+ * DEVICE VIEWPORTS (encargo F2): ViewportControls fija el ANCHO CSS del
+ * contenedor del canvas (escritorio 1280 / tableta 768 / móvil 375 — ver el
+ * contrato de breakpoints con wordjs-ui.css en canvas/viewport.ts) y lo encoge
+ * con transform: scale() para caber en el área medida con ResizeObserver
+ * (useAreaSize). El iframe (h-full w-full) hereda ese ancho → sus media
+ * queries REALES disparan. La capa overlay sigue siendo HERMANA del iframe
+ * DENTRO del mismo contenedor transformado: iframe y overlay comparten el
+ * sistema de coordenadas local (pre-transform) y el navegador los escala
+ * juntos, así que el mapeo rects-del-iframe → overlay sigue siendo 1:1 para
+ * cualquier escala (la justificación completa, en viewport.ts).
  */
 import React from "react";
 import {
@@ -33,7 +45,6 @@ import {
 import {
     ROOT_ID,
     ROOT_SLOT,
-    type VersoData,
     type VersoEditorState,
     type VersoItem,
 } from "@/lib/verso/types";
@@ -46,8 +57,14 @@ import {
 } from "@/components/verso/render/context";
 import VersoFieldControl from "@/components/verso/fields/VersoFieldControl";
 import FrameController from "@/components/verso/canvas/FrameController";
+import ViewportControls, { useAreaSize } from "@/components/verso/canvas/ViewportControls";
+import { canvasContainerLayout, DEVICE_WIDTHS, type DeviceKind } from "@/components/verso/canvas/viewport";
+import { makeFixtureData, type LabFixtureKey } from "@/components/verso/lab/labFixtures";
+import PerfHud from "@/components/verso/lab/PerfHud";
+import { createPerfTracker } from "@/components/verso/lab/perf";
 import { GeometryStore } from "@/components/verso/overlay/GeometryStore";
 import OverlayLayer from "@/components/verso/overlay/OverlayLayer";
+import { editSelectedInline } from "@/components/verso/overlay/actionBarCommands";
 import DnDDriver from "@/components/verso/dnd/DnDDriver";
 import {
     HeadingBlock,
@@ -144,73 +161,8 @@ function makeLabRegistry(): BlockRegistry {
 }
 
 /* ------------------------------------------------------------------ */
-/* Doc sintético: 30 bloques, Section>Grid anidado 3 niveles.           */
+/* Doc sintético: lab/labFixtures.ts (30 default; 500 determinista).    */
 /* ------------------------------------------------------------------ */
-
-const heading = (id: string, title: string, level = "h2"): VersoItem => ({
-    type: "Heading",
-    props: { id, title, level },
-});
-const text = (id: string, content: string): VersoItem => ({
-    type: "Text",
-    props: { id, content: `<p>${content}</p>` },
-});
-const card = (id: string, title: string): VersoItem => ({
-    type: "Card",
-    props: { id, title, description: `Descripción de ${title}` },
-});
-const section = (id: string, pad: number, children: VersoItem[]): VersoItem => ({
-    type: "Section",
-    props: { id, pad, children },
-});
-const grid = (id: string, columns: number, children: VersoItem[]): VersoItem => ({
-    type: "Grid",
-    props: { id, columns, gap: 16, children },
-});
-
-/** 30 bloques exactos (contados): 2 raíz + S1/G1(6 hijos) + S2/G2>S3/G3>S4/G4 + 4 raíz. */
-function makeLabData(): VersoData {
-    return {
-        content: [
-            heading("lab-h-top", "Verso Lab", "h1"),
-            text("lab-t-top", "Banco de pruebas del núcleo F2 — canvas propio + overlay en padre."),
-            section("lab-s1", 32, [
-                grid("lab-g1", 3, [
-                    card("lab-c1", "Alfa"),
-                    card("lab-c2", "Beta"),
-                    card("lab-c3", "Gamma"),
-                    heading("lab-h2", "Dentro de la rejilla", "h3"),
-                    text("lab-t2", "Celda de texto."),
-                    card("lab-c4", "Delta"),
-                ]),
-            ]),
-            section("lab-s2", 24, [
-                grid("lab-g2", 2, [
-                    section("lab-s3", 16, [
-                        grid("lab-g3", 2, [
-                            section("lab-s4", 8, [
-                                grid("lab-g4", 1, [
-                                    text("lab-t5", "Nivel 3 de anidamiento."),
-                                    card("lab-c7", "Épsilon"),
-                                ]),
-                            ]),
-                            card("lab-c8", "Zeta"),
-                        ]),
-                    ]),
-                    text("lab-t6", "Columna derecha del nivel 1."),
-                ]),
-                heading("lab-h4", "Cierre de la sección", "h3"),
-                text("lab-t4", "Texto de cierre."),
-            ]),
-            heading("lab-h6", "Bloques sueltos", "h2"),
-            text("lab-t7", "Raíz, tras las secciones."),
-            card("lab-c9", "Eta"),
-            card("lab-c10", "Theta"),
-            text("lab-t8", "Último bloque del banco."),
-        ],
-        root: { props: {} },
-    };
-}
 
 /* ------------------------------------------------------------------ */
 /* Banco.                                                               */
@@ -233,13 +185,14 @@ const PANEL_TITLE_CLS =
 const TOOL_BTN_CLS =
     "rounded border border-[var(--ed-outline-variant,#d5d2e0)] px-2 py-1 text-xs text-[var(--ed-on-surface,#1c1b22)] hover:bg-[var(--ed-surface-container,#f0eef6)] disabled:opacity-40";
 
-function VersoLabBench() {
+function VersoLabBench({ fixture }: { fixture: LabFixtureKey }) {
     const registry = React.useMemo(() => makeLabRegistry(), []);
     const handle = React.useMemo<EditorHandle>(
-        () => createEditor({ initialData: makeLabData(), isSlot: makeSlotResolver(registry) }),
-        [registry],
+        () => createEditor({ initialData: makeFixtureData(fixture), isSlot: makeSlotResolver(registry) }),
+        [registry, fixture],
     );
     const geometry = React.useMemo(() => new GeometryStore(), []);
+    const perf = React.useMemo(() => createPerfTracker(), []);
     React.useEffect(
         () => () => {
             handle.destroy();
@@ -263,10 +216,12 @@ function VersoLabBench() {
         (fn: (tx: VersoTransactionApi) => void, opts?: TransactOptions): boolean => {
             const t0 = performance.now();
             const ok = handle.transact(fn, opts);
-            setLastTransactMs(performance.now() - t0);
+            const dt = performance.now() - t0;
+            setLastTransactMs(dt);
+            perf.record("transact", dt);
             return ok;
         },
-        [handle],
+        [handle, perf],
     );
 
     const onBlockElement = React.useCallback(
@@ -293,6 +248,22 @@ function VersoLabBench() {
         frameDoc.addEventListener("click", onClick, true);
         return () => frameDoc.removeEventListener("click", onClick, true);
     }, [frameDoc, handle]);
+
+    // Edición inline por doble click (capture en el doc del iframe, igual que
+    // la selección): solo abre si el registry declara inline para ese type
+    // (editSelectedInline ya hace esa comprobación). El botón ✎ del ActionBar
+    // es la otra vía de entrada; ambas terminan en handle.setInlineEditing.
+    React.useEffect(() => {
+        if (!frameDoc) return;
+        const onDblClick = (e: Event) => {
+            const target = e.target as Element | null;
+            const el = target?.closest?.("[data-wjs-block-id]") ?? null;
+            const id = el?.getAttribute("data-wjs-block-id");
+            if (id) editSelectedInline(handle, registry, id);
+        };
+        frameDoc.addEventListener("dblclick", onDblClick, true);
+        return () => frameDoc.removeEventListener("dblclick", onDblClick, true);
+    }, [frameDoc, handle, registry]);
 
     const insertType = React.useCallback(
         (type: string) => {
@@ -323,6 +294,14 @@ function VersoLabBench() {
     const selectedId = state.selection.nodeId;
     const selectedNode = selectedId ? state.doc.nodes[selectedId] : undefined;
     const selectedDef = selectedNode ? registry.get(selectedNode.type) : undefined;
+
+    // Device-viewport: el área disponible se mide con ResizeObserver y el
+    // contenedor del canvas fija el ancho del dispositivo + scale-to-fit
+    // (aritmética pura en canvas/viewport.ts, testeada).
+    const [device, setDevice] = React.useState<DeviceKind>("desktop");
+    const areaRef = React.useRef<HTMLDivElement | null>(null);
+    const area = useAreaSize(areaRef);
+    const vp = canvasContainerLayout(area.width, area.height, DEVICE_WIDTHS[device]);
 
     return (
         <div className="fixed inset-0 z-[100] flex bg-[var(--ed-surface-container-low,#f3f2f7)] text-sm">
@@ -371,20 +350,40 @@ function VersoLabBench() {
                     >
                         ↷ Rehacer
                     </button>
-                    {/* HUD dev: re-renders del banco + coste del último transact */}
+                    <ViewportControls value={device} onChange={setDevice} />
+                    {/* HUD dev: re-renders del banco + coste del último transact + percentiles */}
                     <span
                         data-wjs-lab-hud=""
                         className="ml-auto rounded bg-[var(--ed-surface-container-high,#e8e6f0)] px-2 py-0.5 font-mono text-[11px] text-[var(--ed-on-surface-variant,#6b6880)]"
                     >
-                        renders: {labRenderCounter.value} · transact:{" "}
+                        fixture: {fixture} · renders: {labRenderCounter.value} · transact:{" "}
                         {lastTransactMs === null ? "—" : `${lastTransactMs.toFixed(1)}ms`} · bloques:{" "}
                         {Object.keys(state.doc.nodes).length}
                     </span>
+                    <PerfHud tracker={perf} />
                 </header>
-                <div className="relative min-h-0 flex-1 p-4">
-                    {/* Contenedor del canvas: el iframe y la capa overlay son HERMANOS aquí
-                        dentro (mismo marco de coordenadas, 1:1 con los rects del iframe). */}
-                    <div className="relative mx-auto h-full max-w-[960px] overflow-hidden rounded border border-[var(--ed-outline-variant,#d5d2e0)] bg-white shadow">
+                <div className="min-h-0 flex-1 p-4">
+                    {/* Área medida (ResizeObserver): dentro, el contenedor TRANSFORMADO del
+                        canvas — ancho CSS = ancho del dispositivo, transform: scale() para
+                        caber. El iframe y la capa overlay son HERMANOS dentro de ese
+                        contenedor: comparten el sistema de coordenadas local (pre-transform)
+                        y el navegador los escala JUNTOS, así que los rects del GeometryStore
+                        (viewport del iframe) siguen mapeando 1:1 al overlay con CUALQUIER
+                        escala — ver canvas/viewport.ts para la justificación completa. */}
+                    <div ref={areaRef} className="relative h-full w-full overflow-hidden">
+                        <div
+                            data-wjs-canvas-container=""
+                            data-wjs-canvas-scale={vp.scale.toFixed(4)}
+                            data-wjs-canvas-device={device}
+                            className="relative overflow-hidden rounded border border-[var(--ed-outline-variant,#d5d2e0)] bg-white shadow"
+                            style={{
+                                width: vp.width,
+                                height: vp.height,
+                                marginLeft: vp.offsetX,
+                                transform: `scale(${vp.scale})`,
+                                transformOrigin: "top left",
+                            }}
+                        >
                         <FrameController
                             onFrameReady={onFrameReady}
                             overlay={
@@ -412,12 +411,17 @@ function VersoLabBench() {
                                 editorChrome
                             />
                         </FrameController>
+                        </div>
                     </div>
                 </div>
             </main>
 
-            {/* Panel derecho: props del seleccionado */}
-            <aside className={`${PANEL_CLS} w-72 shrink-0 border-l`}>
+            {/* Panel derecho: props del seleccionado. onKeyDownCapture: marca de
+                input latency (keydown → fin del transact del onChange, ver lab/perf.ts). */}
+            <aside
+                className={`${PANEL_CLS} w-72 shrink-0 border-l`}
+                onKeyDownCapture={() => perf.markInput()}
+            >
                 <h2 className={PANEL_TITLE_CLS}>Propiedades</h2>
                 {selectedNode && selectedDef ? (
                     <>
@@ -431,12 +435,16 @@ function VersoLabBench() {
                                 field={field}
                                 name={key}
                                 value={selectedNode.props[key]}
-                                onChange={(v) =>
+                                onChange={(v) => {
+                                    // Punto donde el panel llama a setProps: el fin de ESTE
+                                    // transact cierra la medición de input latency (la marca
+                                    // la puso el keydown capturado en el aside).
                                     timedTransact((tx) => tx.setProps(selectedNode.id, { [key]: v }), {
                                         coalesceKey: `props:${selectedNode.id}:${key}`,
                                         label: `Editar ${key}`,
-                                    })
-                                }
+                                    });
+                                    perf.endInput();
+                                }}
                             />
                         ))}
                     </>
@@ -455,12 +463,16 @@ export default function VersoLabPage() {
     const [allowed, setAllowed] = React.useState<boolean | null>(
         process.env.NODE_ENV !== "production" ? true : null,
     );
+    // ?fixture=500 → doc determinista de 500 bloques; cualquier otra cosa → 30.
+    // null hasta leer la query tras montar (window no existe en SSR; el banco
+    // espera a ambos estados — evita un mismatch de hidratación por la URL).
+    const [fixture, setFixture] = React.useState<LabFixtureKey | null>(null);
     React.useEffect(() => {
-        setAllowed((prev) =>
-            prev === null ? new URLSearchParams(window.location.search).get("lab") === "1" : prev,
-        );
+        const params = new URLSearchParams(window.location.search);
+        setAllowed((prev) => (prev === null ? params.get("lab") === "1" : prev));
+        setFixture(params.get("fixture") === "500" ? "500" : "30");
     }, []);
-    if (allowed === null) return null;
+    if (allowed === null || fixture === null) return null;
     if (!allowed) {
         return (
             <div className="p-8 text-sm text-[var(--ed-on-surface-variant,#6b6880)]">
@@ -469,5 +481,5 @@ export default function VersoLabPage() {
             </div>
         );
     }
-    return <VersoLabBench />;
+    return <VersoLabBench fixture={fixture} />;
 }
