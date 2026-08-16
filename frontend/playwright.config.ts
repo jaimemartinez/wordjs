@@ -44,7 +44,14 @@ export default defineConfig({
         // de arrancar — el primer boot en frío tarda minutos.
         timeout: 600_000,
         reuseExistingServer: !process.env.CI,
-        env: { WORDJS_HTTP: "1" },
+        // El entorno se propaga EXPLÍCITAMENTE (no se asume herencia): en un
+        // checkout limpio el setup e2e instala la instancia y necesita que el
+        // servidor arranque con el MISMO WORDJS_INSTALL_TOKEN que él enviará
+        // (core/install-token.ts honra esa env var precisamente para automatizar).
+        env: {
+            ...(process.env as Record<string, string>),
+            WORDJS_HTTP: "1",
+        },
     },
     projects: [
         {
