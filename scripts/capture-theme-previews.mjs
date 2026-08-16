@@ -19,9 +19,9 @@
  * crops to (`aspect-[4/3] object-cover`).
  */
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { pathToFileURL } from "node:url";
 
 const argv = process.argv.slice(2);
 const urlIdx = argv.indexOf("--url");
@@ -91,22 +91,30 @@ async function installAll(slugs) {
     console.log(" ok");
 }
 
-function capture(slug, dest) {
-    const tmp = path.join(process.env.TEMP || "/tmp", `wjs-shot-${slug}`);
-    fs.rmSync(tmp, { recursive: true, force: true });
-    execFileSync(CHROME, [
-        "--headless=new",
-        "--disable-gpu",
-        "--hide-scrollbars",
-        "--window-size=1280,960",
-        // Long enough for the self-hosted @font-face files and the hero image to settle; the page is
-        // server-rendered, so this is about paint, not about waiting for data.
-        "--virtual-time-budget=8000",
-        `--user-data-dir=${tmp}`,
-        `--screenshot=${dest}`,
-        `${BASE}/?preview-capture=1`,
-    ], { stdio: "pipe" });
-    fs.rmSync(tmp, { recursive: true, force: true });
+function capture(dest) {
+    // Chrome's --user-data-dir holds a live profile (cookies, session, cache) for the admin-authenticated
+    // site. `<temp>/wjs-shot-<slug>` is a name any local process can PREDICT and pre-create — as a
+    // symlink, or simply as a directory it can read afterwards. mkdtempSync asks the OS for an
+    // unpredictable name AND creates it 0700 in one non-racy syscall (on Windows it lands under the
+    // per-user %TEMP%, whose ACL already excludes other users). Removed in `finally`, so a Chrome
+    // crash does not leave the profile lying around.
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "wjs-shot-"));
+    try {
+        execFileSync(CHROME, [
+            "--headless=new",
+            "--disable-gpu",
+            "--hide-scrollbars",
+            "--window-size=1280,960",
+            // Long enough for the self-hosted @font-face files and the hero image to settle; the page is
+            // server-rendered, so this is about paint, not about waiting for data.
+            "--virtual-time-budget=8000",
+            `--user-data-dir=${tmp}`,
+            `--screenshot=${dest}`,
+            `${BASE}/?preview-capture=1`,
+        ], { stdio: "pipe" });
+    } finally {
+        fs.rmSync(tmp, { recursive: true, force: true });
+    }
 }
 
 // ------------------------------------------------------------------- main
@@ -134,7 +142,7 @@ for (const slug of slugs) {
         await api("POST", `/themes/${slug}/activate`);
         // switchTheme purges the 'settings' tag; give the public route a beat to re-render with it.
         await sleep(1200);
-        capture(slug, path.join(src, "screenshot.png"));
+        capture(path.join(src, "screenshot.png"));
         const kb = (fs.statSync(path.join(src, "screenshot.png")).size / 1024).toFixed(0);
         console.log(`  ✓ ${slug} — ${kb}KB`);
         ok++;

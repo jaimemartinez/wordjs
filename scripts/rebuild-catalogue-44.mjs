@@ -26,7 +26,6 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
 import { BRIEFS } from "./catalogue-44-briefs.mjs";
 
 const argv = process.argv.slice(2);
@@ -121,7 +120,8 @@ for (const b of targets) {
     if (!fs.existsSync(dir)) { console.error(`  ✗ ${b.slug}: no such theme`); process.exitCode = 1; continue; }
     const old = JSON.parse(fs.readFileSync(path.join(dir, "theme.json"), "utf8"));
     // Keep the marketplace identity and bump the version: the public stylesheet URL is keyed by it.
-    const [maj, min, pat] = String(old.version || "1.0.0").split(".").map(Number);
+    // Only major+minor are read — the bump always resets the patch to 0.
+    const [maj, min] = String(old.version || "1.0.0").split(".").map(Number);
     const meta = {
         name: b.name,
         version: `${maj}.${min + 1}.0`,

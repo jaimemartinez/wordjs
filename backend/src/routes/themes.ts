@@ -33,6 +33,7 @@ const { authenticate } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
 const { recordAudit } = require('../core/audit');
+const { resolveThemeDir, resolveWithin } = require('../core/safe-path');
 
 /**
  * @swagger
@@ -61,16 +62,26 @@ const upload = multer({
 });
 
 /**
- * SECURITY: Validate theme slug to prevent path traversal
+ * SECURITY: resolve `<THEMES_DIR>/<slug>` or fail closed.
+ *
+ * This USED to be a boolean guard that resolved a path into a local, checked it, threw it away and
+ * let every handler re-join the RAW slug afterwards. That is the shape of the bug, not the fix: the
+ * value that was proved safe was never the value that reached the syscall (and the prefix test had
+ * no separator, so `themes/` would have matched a sibling `themes-evil/`). core/safe-path does the
+ * three things that actually constitute a defense — allowlist the FORM, resolve canonically, prove
+ * containment — and RETURNS the resolved directory, so handlers use what was checked.
+ *
+ * The form is now THE canonical THEME_SLUG (leading alphanumeric, 64 max), identical to what
+ * installThemeFromDir / createDefaultTheme enforce when a theme is written. A slug outside it cannot
+ * name an installed theme, so narrowing here rejects nothing that could ever have resolved.
  */
-function validateSlug(slug: any) {
-    // Only allow alphanumeric, dashes, and underscores
-    if (!/^[a-zA-Z0-9_-]+$/.test(slug)) {
-        return false;
-    }
-    // Ensure the resolved path is still within THEMES_DIR
-    const safePath = path.resolve(THEMES_DIR, slug);
-    return safePath.startsWith(path.resolve(THEMES_DIR));
+function resolveThemeDirOr400(slug: any): string | null {
+    return resolveThemeDir(THEMES_DIR, slug);
+}
+
+/** Boolean form for the handlers that only pass the slug on to a core function. */
+function validateSlug(slug: any): boolean {
+    return resolveThemeDirOr400(slug) !== null;
 }
 
 // ---------------------------------------------------------------------------
@@ -367,16 +378,20 @@ router.post('/', authenticate, isAdmin, asyncHandler(async (req: any, res: Respo
  *         description: Theme was not created by the WordJS writer
  */
 router.put('/:slug', authenticate, isAdmin, asyncHandler(async (req: any, res: Response) => {
-    // SECURITY: Validate slug
-    if (!validateSlug(req.params.slug)) {
+    // SECURITY: the slug picks the directory this handler WRITES theme.json and style.css into, so it
+    // uses the resolved-and-contained path the gate returns rather than re-joining the raw param.
+    const themeDir = resolveThemeDirOr400(req.params.slug);
+    if (themeDir === null) {
         return res.status(400).json({ error: 'Invalid theme slug' });
     }
     const slug = req.params.slug;
-    const themeDir = path.join(THEMES_DIR, slug);
     if (!fs.existsSync(themeDir)) {
         return res.status(404).json({ error: `Theme ${slug} not found` });
     }
-    const themeJsonPath = path.join(themeDir, 'theme.json');
+    const themeJsonPath = resolveWithin(themeDir, 'theme.json');
+    if (themeJsonPath === null) {
+        return res.status(400).json({ error: 'Invalid theme slug' });
+    }
     let current: any = null;
     try { current = JSON.parse(fs.readFileSync(themeJsonPath, 'utf8')); } catch { /* missing or invalid */ }
     if (!isPlainObject(current) || current.generator !== 'wordjs') {
@@ -619,11 +634,17 @@ const TEMPLATE_FILE_NAME = /^[a-z0-9-]{1,40}$/;
  *         description: Invalid theme slug
  */
 router.get('/:slug/templates', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
-    // SECURITY: same slug gate as the sibling routes — the slug becomes a path segment under THEMES_DIR.
-    if (!validateSlug(req.params.slug)) {
+    // SECURITY: same slug gate as the sibling routes — the slug becomes a path segment under
+    // THEMES_DIR, so the handler reads the RESOLVED directory the gate returned, never a re-join of
+    // req.params.slug. `templates` then descends from a proven-contained base.
+    const themeDir = resolveThemeDirOr400(req.params.slug);
+    if (themeDir === null) {
         return res.status(400).json({ error: 'Invalid theme slug' });
     }
-    const dir = path.join(THEMES_DIR, req.params.slug, 'templates');
+    const dir = resolveWithin(themeDir, 'templates');
+    if (dir === null) {
+        return res.status(400).json({ error: 'Invalid theme slug' });
+    }
     let names: string[];
     try {
         // withFileTypes so a `templates` that is somehow a directory-of-directories (or a symlink target)

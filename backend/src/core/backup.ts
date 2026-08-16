@@ -24,6 +24,44 @@ if (!fs.existsSync(BACKUPS_DIR)) {
 }
 
 /**
+ * Run `fn` with a PRIVATE scratch directory under the OS temp dir, and delete it afterwards.
+ *
+ * The database dump that passes through here is the whole site — every row, including password
+ * hashes and tokens. It used to be written to `os.tmpdir()/wordjs-db{dump,restore}-<pid>-<ts>-<entry>`,
+ * a name any local process can PREDICT and therefore win the race for: pre-create the path as a
+ * symlink and the dump is written through it (or is simply readable, since writeFileSync/pg_dump
+ * create with the process umask — 0644 on a typical host).
+ *
+ * mkdtemp is the fix, not a longer name: the OS picks six random characters AND creates the
+ * directory with 0700 in one non-racy syscall, so the dump lands somewhere no other user can even
+ * traverse. On Windows there is no 0700, but mkdtemp still lands inside the per-user %TEMP%, whose
+ * ACL already excludes other users — and the unpredictable name closes the pre-creation race on
+ * both platforms. Cleanup is in `finally`, so a failed dump/restore leaves nothing behind.
+ */
+async function withPrivateTempDir<T>(prefix: string, fn: (dir: string) => Promise<T>): Promise<T> {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+    try {
+        return await fn(dir);
+    } finally {
+        try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* temp cleanup best-effort */ }
+    }
+}
+
+/**
+ * The file name a dump gets INSIDE that private directory. dumpEntryName() only ever returns one of
+ * two literals, but the guard is structural on purpose: a name is what CHOOSES the path, so it is
+ * validated against an anchored allowlist (basename + [A-Za-z0-9._-]) instead of trusted because it
+ * "looks fine" or because it contains no `..`.
+ */
+function safeDumpFileName(entry: string): string {
+    const name = path.basename(String(entry));
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(name)) {
+        throw new Error(`Refusing to use unsafe dump entry name: ${entry}`);
+    }
+    return name;
+}
+
+/**
  * Create a full backup
  * @returns {Promise<string>} Filename of the backup
  */
@@ -123,13 +161,13 @@ async function createBackup() {
         // captureDump FAILS LOUD when the tool is missing — do NOT swallow it (that would ship an
         // incomplete archive that looks complete). Any error here aborts the backup.
         const entry = dumpEntryName(driver);
-        const tmpDump = path.join(os.tmpdir(), `wordjs-dbdump-${process.pid}-${Date.now()}-${entry}`);
-        try {
-            await captureDump(driver, tmpDump, config.db);
-            zip.addLocalFile(tmpDump, 'database', entry);
-            console.log(`   ✓ Added physical database dump (database/${entry}) to backup.`);
-        } finally {
-            try { if (fs.existsSync(tmpDump)) fs.unlinkSync(tmpDump); } catch { /* temp cleanup best-effort */ }
+        if (entry) {
+            await withPrivateTempDir('wordjs-dbdump-', async (tmpDir) => {
+                const tmpDump = path.join(tmpDir, safeDumpFileName(entry));
+                await captureDump(driver, tmpDump, config.db);
+                zip.addLocalFile(tmpDump, 'database', entry);
+                console.log(`   ✓ Added physical database dump (database/${entry}) to backup.`);
+            });
         }
     }
 
@@ -349,16 +387,16 @@ async function restoreBackup(filename: string) {
         //      falls through to the logical path below — backward compatible.
         const entryName = dumpEntryName(dbType.driver);
         const dumpEntry = entryName ? zip.getEntry('database/' + entryName) : null;
-        if (dumpEntry) {
-            const tmp = path.join(os.tmpdir(), `wordjs-dbrestore-${process.pid}-${Date.now()}-${entryName}`);
-            try {
-                fs.writeFileSync(tmp, dumpEntry.getData());
+        if (entryName && dumpEntry) {
+            await withPrivateTempDir('wordjs-dbrestore-', async (tmpDir) => {
+                const tmp = path.join(tmpDir, safeDumpFileName(entryName));
+                // mode 0600 as well as the 0700 directory: defence in depth if the platform ever
+                // hands back a temp dir with looser permissions than mkdtemp promises.
+                fs.writeFileSync(tmp, dumpEntry.getData(), { mode: 0o600 });
                 await restoreDump(dbType.driver, tmp, config.db);
                 physicalRestored = true;
                 console.log('   ✓ Physical database dump restored (all tables).');
-            } finally {
-                try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch { /* temp cleanup best-effort */ }
-            }
+            });
         }
     }
 

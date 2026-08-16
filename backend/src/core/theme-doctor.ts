@@ -13,6 +13,9 @@
 
 const fs = require('fs');
 const path = require('path');
+// The ONE place a name becomes a path (allowlisted form + canonical resolve + containment proof).
+// node:path-only, so requiring it keeps this module CLI-loadable with no subsystem behind it.
+const { resolveThemeDir, resolveWithin, resolveThemeAsset } = require('./safe-path');
 
 // Same cwd conventions as core/themes.ts (the backend always runs from backend/).
 const THEMES_DIR = path.resolve('./themes');
@@ -352,12 +355,15 @@ function analyzeTheme(slug: string, opts: { themesDir?: string; manifestPath?: s
   report.available = true;
 
   // Same slug shape installThemeFromDir enforces — containment even though we only read.
+  // resolveThemeDir does all three parts at once (form → canonical resolve → containment) and hands
+  // back the RESOLVED directory, so every path built below descends from a proven-contained value
+  // rather than from the raw slug. Null = fail closed; a slug this installation could not have.
   const themesDir = path.resolve(opts.themesDir || THEMES_DIR);
-  if (typeof slug !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(slug)) {
+  const themeDir: string | null = resolveThemeDir(themesDir, slug);
+  if (themeDir === null) {
     report.errors.push({ code: 'THEME_NOT_FOUND', message: `Invalid theme slug: ${JSON.stringify(slug)}` });
     return report;
   }
-  const themeDir = path.join(themesDir, slug);
   let dirStat: any = null;
   try { dirStat = fs.statSync(themeDir); } catch { /* missing */ }
   if (!dirStat || !dirStat.isDirectory()) {
@@ -367,9 +373,9 @@ function analyzeTheme(slug: string, opts: { themesDir?: string; manifestPath?: s
 
   // theme.json is optional; a malformed one still renders (parseThemeMetadata falls back
   // to defaults) so it is a warning, not an error.
-  const themeJsonPath = path.join(themeDir, 'theme.json');
+  const themeJsonPath: string | null = resolveWithin(themeDir, 'theme.json');
   let themeJson: any = null;
-  if (fs.existsSync(themeJsonPath)) {
+  if (themeJsonPath !== null && fs.existsSync(themeJsonPath)) {
     try {
       themeJson = JSON.parse(fs.readFileSync(themeJsonPath, 'utf8'));
     } catch (e) {
@@ -428,7 +434,13 @@ function analyzeTheme(slug: string, opts: { themesDir?: string; manifestPath?: s
     for (const p of (verdict && Array.isArray(verdict.parts) ? verdict.parts : [])) declaredParts.set(p.name, p.area);
     // TEMPLATE_PART_MISSING — declared, but there is no file to render. The block renders nothing.
     for (const [name] of declaredParts) {
-      if (!fs.existsSync(path.join(themeDir, 'chrome', `${name}.json`))) {
+      // The name comes from theme.json — theme-authored, so it CHOOSES A FILE. chrome-validate
+      // already rejects a declaration outside ^[a-z0-9-]{1,40}$, but the doctor accepts an injected
+      // validator (opts.chromeValidate) and must not inherit its diligence: resolveThemeAsset
+      // re-checks the form here and proves containment, so a stubbed or future validator cannot turn
+      // a declaration into a path. Null = the name could never name a file → same finding.
+      const partPath: string | null = resolveThemeAsset(themeDir, 'chrome', name);
+      if (partPath === null || !fs.existsSync(partPath)) {
         report.errors.push({
           code: 'TEMPLATE_PART_MISSING',
           message: `theme.json declares template part "${name}" but chrome/${name}.json does not exist — a TemplatePart referencing it renders nothing`,
@@ -442,8 +454,8 @@ function analyzeTheme(slug: string, opts: { themesDir?: string; manifestPath?: s
   // header/footer are resolved without a declaration; any other chrome/*.json is dead weight until it
   // is declared. A warning, not an error: the file is valid, it is simply unreachable.
   try {
-    const chromeDir = path.join(themeDir, 'chrome');
-    const onDisk = fs.existsSync(chromeDir)
+    const chromeDir: string | null = resolveWithin(themeDir, 'chrome');
+    const onDisk = (chromeDir !== null && fs.existsSync(chromeDir))
       ? fs.readdirSync(chromeDir).filter((f: string) => f.endsWith('.json')).sort()
       : [];
     const layoutSlots: string[] = (chromeValidate && Array.isArray(chromeValidate.CHROME_LAYOUT_SLOTS))
@@ -469,8 +481,10 @@ function analyzeTheme(slug: string, opts: { themesDir?: string; manifestPath?: s
     const siteSlots: string[] = Array.isArray(chromeValidate.CHROME_LAYOUT_SLOTS)
       ? chromeValidate.CHROME_LAYOUT_SLOTS : ['header', 'footer', 'announcement'];
     for (const part of siteSlots.concat(Array.from(declaredParts.keys()))) {
-      const chromeJsonPath = path.join(themeDir, 'chrome', `${part}.json`);
-      if (!fs.existsSync(chromeJsonPath)) continue;
+      // Same gate as TEMPLATE_PART_MISSING above: `part` is either a layout slot the validator
+      // supplies (which is also injectable) or a theme-declared name. Both go through the allowlist.
+      const chromeJsonPath: string | null = resolveThemeAsset(themeDir, 'chrome', part);
+      if (chromeJsonPath === null || !fs.existsSync(chromeJsonPath)) continue;
       let rawChrome: string | null = null;
       try { rawChrome = fs.readFileSync(chromeJsonPath, 'utf8'); } catch { /* unreadable */ }
       let verdict: any = null;
@@ -510,16 +524,22 @@ function analyzeTheme(slug: string, opts: { themesDir?: string; manifestPath?: s
   // below; only templates that VALIDATED contribute, since an invalid one never renders at all.
   const templateClasses = new Map<string, string>();
   if (templateValidate && typeof templateValidate.validateTemplate === 'function') {
-    const tplDir = path.join(themeDir, 'templates');
+    const tplDir: string | null = resolveWithin(themeDir, 'templates');
     let tplFiles: string[];
     try {
-      tplFiles = fs.existsSync(tplDir)
+      tplFiles = (tplDir !== null && fs.existsSync(tplDir))
         ? fs.readdirSync(tplDir).filter((f: string) => f.endsWith('.json')).sort()
         : [];
     } catch { tplFiles = []; }
     for (const file of tplFiles) {
+      // A directory listing is not a whitelist: readdir hands back whatever the filesystem holds, and
+      // that entry is about to be re-joined. resolveWithin re-proves it is one plain name inside
+      // tplDir — null means the listing produced something that cannot be read as a template file.
+      const tplPath: string | null = tplDir === null ? null : resolveWithin(tplDir, file);
       let raw: string | null = null;
-      try { raw = fs.readFileSync(path.join(tplDir, file), 'utf8'); } catch { /* unreadable */ }
+      if (tplPath !== null) {
+        try { raw = fs.readFileSync(tplPath, 'utf8'); } catch { /* unreadable */ }
+      }
       let verdict: any = null;
       if (raw !== null) {
         try { verdict = templateValidate.validateTemplate(raw); } catch { continue; } // fail-open
@@ -569,7 +589,9 @@ function analyzeTheme(slug: string, opts: { themesDir?: string; manifestPath?: s
 
   let css: string;
   try {
-    css = fs.readFileSync(path.join(themeDir, 'style.css'), 'utf8');
+    const stylePath: string | null = resolveWithin(themeDir, 'style.css');
+    if (stylePath === null) throw new Error('style.css does not resolve inside the theme');
+    css = fs.readFileSync(stylePath, 'utf8');
   } catch {
     report.errors.push({ code: 'STYLE_UNREADABLE', message: 'style.css is missing or unreadable — nothing to lint' });
     return report;
