@@ -42,8 +42,21 @@ const heading = (id: string, ix?: unknown) => ({
 
 /** El markup SIN la hoja: `data-wjs-ix` aparece dentro del CSS a propósito (el selector del
  *  estado armado), y confundirlo con un atributo del HTML servido sería exactamente el error que
- *  este test existe para cazar. */
-const markupOnly = (html: string): string => html.replace(/<style[\s\S]*?<\/style>/g, "");
+ *  este test existe para cazar.
+ *
+ *  Una sola pasada NO basta: al borrar una etiqueta completa, los trozos que quedan a cada lado se
+ *  empalman y pueden formar una etiqueta NUEVA, así que el filtro se repite hasta punto fijo — la
+ *  forma que CodeQL reconoce para js/incomplete-multi-character-sanitization. Con la salida real de
+ *  React la primera pasada ya es el punto fijo, así que el bucle no altera nada de lo que se afirma
+ *  más abajo. */
+const markupOnly = (html: string): string => {
+  let out = html;
+  for (let prev: string | null = null; prev !== out; ) {
+    prev = out;
+    out = out.replace(/<style[\s\S]*?<\/style>/g, "");
+  }
+  return out;
+};
 
 const render = (data: unknown, ixPresets?: unknown): string =>
   renderToStaticMarkup(<ContentRenderer data={data} ixPresets={ixPresets} />);
@@ -97,6 +110,12 @@ describe("ContentRenderer — la hoja de interacciones", () => {
 });
 
 describe("ContentRenderer — cero CLS, cero FOUC: el servidor no oculta nada", () => {
+  it("el filtro de la hoja no deja etiquetas empalmadas: quitar el CSS es de fiar", () => {
+    // Al borrar la etiqueta interna, `<sty` y `le>b</style>` se empalman en un `<style>` VIVO: con
+    // una sola pasada quedaría CSS dentro de lo que las afirmaciones de abajo toman por markup.
+    expect(markupOnly("X<sty<style>a</style>le>b</style>Y")).toBe("XY");
+  });
+
   it("el HTML servido NUNCA lleva `data-wjs-ix` (el estado armado lo pone el runtime, o nadie)", () => {
     const html = render({
       content: [

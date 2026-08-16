@@ -304,7 +304,20 @@ export function loadPluginHooks(): Promise<void> {
 
     // Write-if-changed: an identical rewrite still bumps mtime, which makes Next/Turbopack
     // invalidate + full-reload the browser for nothing (e.g. uninstalling a never-active plugin).
-    if (fs.existsSync(OUTPUT_FILE) && fs.readFileSync(OUTPUT_FILE, 'utf8') === content) {
+    //
+    // THE READ IS THE EXISTENCE CHECK. An existsSync() before the read is a check-then-use race
+    // (CWE-367): if the file goes away in between, readFileSync throws out of an async top-level
+    // call, the process dies, and the tree is left with NO registry — which is a hard frontend
+    // build error, not a missing plugin, because the app imports this module. "Could not read it"
+    // is simply the same decision as "it differs": rewrite. Any other errno is a real failure and
+    // still throws. Same shape as scripts/vendor-theme-fonts.mjs and the Verso generator.
+    let current = null;
+    try {
+        current = fs.readFileSync(OUTPUT_FILE, 'utf8');
+    } catch (e) {
+        if (e.code !== 'ENOENT' && e.code !== 'ENOTDIR' && e.code !== 'EISDIR') throw e;
+    }
+    if (current === content) {
         console.log(`\n✅ Registry unchanged (${includedPlugins.length} plugin(s)) — write skipped, no rebuild`);
         return;
     }

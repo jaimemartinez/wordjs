@@ -266,7 +266,18 @@ export default function PluginAdminPage() {
 
     // Write-if-changed: an identical rewrite still bumps mtime, which makes Next/Turbopack
     // invalidate + full-reload the browser for nothing (e.g. uninstalling a never-active plugin).
-    if (fs.existsSync(OUTPUT_FILE) && fs.readFileSync(OUTPUT_FILE, 'utf8') === content) {
+    //
+    // THE READ IS THE EXISTENCE CHECK — same reasoning as generate-plugin-registry.js: an
+    // existsSync() before the read is a check-then-use race, and losing this file is a hard build
+    // error rather than a missing plugin. "Could not read it" means "rewrite"; any other errno
+    // still throws.
+    let current = null;
+    try {
+        current = fs.readFileSync(OUTPUT_FILE, 'utf8');
+    } catch (e) {
+        if (e.code !== 'ENOENT' && e.code !== 'ENOTDIR' && e.code !== 'EISDIR') throw e;
+    }
+    if (current === content) {
         console.log(`\n✅ Admin registry unchanged (${availablePlugins.length} plugin(s)) — write skipped, no rebuild`);
         return;
     }
