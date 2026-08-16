@@ -36,7 +36,7 @@ import VersoSlot from "./VersoSlot";
 
 const VersoBlock = React.memo(function VersoBlock({ nodeId }: { nodeId: string }) {
   const ctx = useVersoRenderContext();
-  const { handle, registry, componentMap, onBlockElement, editorChrome } = ctx;
+  const { handle, registry, componentMap, onBlockElement, editorChrome, ixCtx } = ctx;
   const node = useVersoNode(handle, nodeId);
   // Cambia como mucho dos veces por sesión de edición inline (entrar/salir).
   const inlineEditingId = useStoreSlice(handle, selectInlineEditingId);
@@ -78,6 +78,13 @@ const VersoBlock = React.memo(function VersoBlock({ nodeId }: { nodeId: string }
     const passProps: Record<string, unknown> = {
       ...props,
       isEditing: true,
+      ixCtx,
+      // Split por palabras APAGADO mientras se edita el texto en línea: la prop del bloque no es el
+      // texto sino el CENTINELA, y partirlo dejaría el centinela dentro de un span de una palabra —
+      // que es justo el elemento que VersoTextSurface adopta como host del contenteditable. Se
+      // editaría "dentro de una palabra" y el aria-label quedaría congelado en el texto anterior.
+      // Al salir de la sesión inline el bloque se remonta y las palabras vuelven.
+      ixWords: false,
       [inlineSpec.prop]: INLINE_HOST_SENTINEL,
     };
     for (const [slotKey, childIds] of Object.entries(node.slots)) {
@@ -95,7 +102,10 @@ const VersoBlock = React.memo(function VersoBlock({ nodeId }: { nodeId: string }
   } else if (Component) {
     // Props del nodo TAL CUAL + una función de slot por cada clave de slot
     // (contrato (className)=>ReactNode) + isEditing, como el config actual.
-    const passProps: Record<string, unknown> = { ...props, isEditing: true };
+    // `ixCtx` DESPUÉS del spread: el catálogo con el que el bloque resuelve su propio `ix` lo pone
+    // el editor, no el documento. Es lo que hace que un preajuste del SITIO que parte el texto en
+    // palabras se vea igual en el lienzo que en la página publicada.
+    const passProps: Record<string, unknown> = { ...props, isEditing: true, ixCtx };
     for (const [slotKey, childIds] of Object.entries(node.slots)) {
       const render: VersoSlotRender = (className?: string) => (
         <VersoSlot parentId={node.id} slotKey={slotKey} childIds={childIds} className={className} />
@@ -130,6 +140,10 @@ const VersoBlock = React.memo(function VersoBlock({ nodeId }: { nodeId: string }
         anim={props.anim as AnimSpec | undefined}
         look={props.look as Appearance | undefined}
         ix={props.ix}
+        // Con el catálogo del SITIO: sin él, un bloque enlazado a un preajuste creado en Ajustes no
+        // recibía capa ③ en el lienzo (el compilador no podía resolver la referencia) y el autor
+        // veía su bloque quieto mientras la página publicada sí se movía.
+        ixCtx={ixCtx}
       >
         {content}
       </SharedBlockShell>

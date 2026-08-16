@@ -51,7 +51,21 @@
 import type { CSSProperties } from "react";
 
 import { compileIx, ixClassFor, type IxCompileCtx } from "./compile";
+import { SYS_IX_PRESETS } from "./presets";
 import type { IxNeedsRuntime, IxPage, IxUnit } from "./types";
+
+/**
+ * Contexto de compilación MÍNIMO: solo los presets del SISTEMA.
+ *
+ * Es el que se usa cuando quien renderiza no ha leído ajustes del sitio. Vive aquí y no en cada
+ * superficie porque tenerlo declarado dos veces es tenerlo declarado mal: el wrapper compartido, el
+ * canvas y los bloques que consultan su propio `ix` tienen que caer todos en el MISMO catálogo por
+ * defecto, o un preajuste del sistema resolvería en una superficie y no en la otra.
+ *
+ * Un tema JAMÁS aporta presets: la frontera del proyecto es que un tema es su contrato de tokens y
+ * no decide cuándo se mueve el contenido.
+ */
+export const IX_SYS_CTX: IxCompileCtx = { presets: SYS_IX_PRESETS };
 
 /** Lo que la capa ③ necesita para renderizarse. `null` = no hay capa (el caso normal). */
 export type IxLayer = {
@@ -99,6 +113,3 @@ export function ixLayer(raw: unknown, ctx?: IxCompileCtx, page?: IxPage): IxLaye
     unit,
   };
 }
-
-/** Clase CSS de la capa, sin compilar nada más. Atajo para el markup del split por palabras. */
-export const IX_WORD_CLASS = "wjs-ixw";

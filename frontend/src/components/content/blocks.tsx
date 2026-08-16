@@ -14,7 +14,33 @@
  */
 import React from "react";
 import { bc, blockVars, cx, unit } from "@/components/blocks/blockVars";
+import { ixWordSpans } from "@/components/blocks/IxWords";
+import { ixSplitWords, ixTargetsWords, IX_SYS_CTX, type IxCompileCtx } from "@/lib/verso/interactions";
 import { resolveVideoEmbedUrl, sameOriginPath, sanitizeHTML } from "@/lib/sanitize";
+
+/**
+ * ── SPLIT POR PALABRAS (motor de interacciones, F9-D) ───────────────────────────────────────────
+ *
+ * Los bloques que lo declaran (`ixText: true` en su definición: Heading y Quote) parten su texto en
+ * `<span class="wjs-ixw">` CUANDO Y SOLO CUANDO su propia interacción apunta a `words`. Esa
+ * condición se evalúa aquí, en el componente, y no en un renderer: hay dos renderers (el público y
+ * el del canvas) y la condición tiene que ser literalmente la misma función en los dos.
+ *
+ * Lo que decide es el `ix` YA RESUELTO, no el crudo: el objetivo `words` puede venir dentro de un
+ * preajuste del sitio, así que hace falta el catálogo. `ixCtx` lo pasa quien renderiza; sin él se
+ * cae a los preajustes del SISTEMA, igual que hace el wrapper compartido.
+ *
+ * `ixWords={false}` es una NEGATIVA explícita, el único valor que se honra de esa prop: la usa el
+ * canvas mientras se edita el texto en línea, porque en esa sesión la prop del bloque no es el
+ * texto sino un centinela y partirlo dejaría el contenteditable dentro de un span de una palabra.
+ * Un `ixWords: true` colado en `_puck_data` NO parte nada: el dato que manda es `ix`.
+ */
+type IxTextProps = { ix?: unknown; ixCtx?: IxCompileCtx; ixWords?: false };
+
+const splitForBlock = (text: unknown, html: boolean, p: IxTextProps) =>
+    p.ixWords === false || !ixTargetsWords(p.ix, p.ixCtx ?? IX_SYS_CTX)
+        ? null
+        : ixSplitWords(text, { html });
 import { sizesForWidth } from "@/lib/imageSrcset";
 import SelfHostedVideo from "./SelfHostedVideo";
 import AudioTransport from "./AudioTransport";
@@ -51,28 +77,43 @@ export function AudioPlayerBlock({ src, title, bg, borderColor, radius, pad, ico
 // the page. Untrusted data may fill a slot; it may never choose the structure around it.
 const HEADING_TAGS = new Set(['h1', 'h2', 'h3', 'h4', 'h5', 'h6']);
 
-export function HeadingBlock({ title, level, elementId, color, size, weight, tracking, css }: any) {
+export function HeadingBlock({ title, level, elementId, color, size, weight, tracking, css, ...ixp }: any) {
     const tag = HEADING_TAGS.has(String(level)) ? String(level) : 'h2';
     const Tag = tag as any;
+    const attrs = {
+        id: elementId || undefined,
+        className: cx(bc('heading'), `heading-${tag}`),
+        style: {
+            ...blockVars('heading', {
+                color,
+                size: unit(size),
+                // NOT `weight`: `--wjs-heading-weight` is already a FRAMEWORK token
+                // (the theme's global heading weight, declared in wordjs-ui.css's
+                // :root). Emitting the block's value under that name would make
+                // `var(--wjs-heading-weight, var(--wjs-h2-weight))` resolve from
+                // :root for every heading, so the per-level theme weights would
+                // never apply. A distinct name keeps both seams working.
+                'font-weight': weight,
+                tracking: unit(tracking),
+            }),
+            ...css,
+        },
+    };
+    // `html: true` — este bloque pinta su texto COMO HTML, así que el split se niega en cuanto el
+    // título trae `<`, `>` o `&`: repartir markup entre spans lo rompería, y el resto depende de qué
+    // saneador haya corrido (sanitize-html en el servidor, DOMPurify en el cliente), lo que podría
+    // hacer que servidor y cliente discrepasen en la FORMA del árbol. Sin esos tres caracteres,
+    // sanear no cambia un byte y las dos superficies parten idéntico. Fail-open: si no se puede
+    // partir, el titular se pinta exactamente como siempre y lo único que se pierde es el
+    // movimiento.
+    const split = splitForBlock(title, true, ixp);
+    if (split) {
+        // El nombre accesible del titular es la FRASE ENTERA; los spans van aria-hidden (IxWords).
+        return <Tag {...attrs} aria-label={split.label}>{ixWordSpans(split)}</Tag>;
+    }
     return (
         <Tag
-            id={elementId || undefined}
-            className={cx(bc('heading'), `heading-${tag}`)}
-            style={{
-                ...blockVars('heading', {
-                    color,
-                    size: unit(size),
-                    // NOT `weight`: `--wjs-heading-weight` is already a FRAMEWORK token
-                    // (the theme's global heading weight, declared in wordjs-ui.css's
-                    // :root). Emitting the block's value under that name would make
-                    // `var(--wjs-heading-weight, var(--wjs-h2-weight))` resolve from
-                    // :root for every heading, so the per-level theme weights would
-                    // never apply. A distinct name keeps both seams working.
-                    'font-weight': weight,
-                    tracking: unit(tracking),
-                }),
-                ...css,
-            }}
+            {...attrs}
             suppressHydrationWarning
             dangerouslySetInnerHTML={{ __html: sanitizeHTML(title || '') }}
         />
@@ -364,7 +405,7 @@ export function CardBlock({ title, description, icon, theme, bg, color, borderCo
     );
 }
 
-export function QuoteBlock({ text, cite, style, accent, size, color, quoteStyle, css }: any) {
+export function QuoteBlock({ text, cite, style, accent, size, color, quoteStyle, css, ...ixp }: any) {
     const vars = {
         ...blockVars('quote', {
             accent,
@@ -374,12 +415,32 @@ export function QuoteBlock({ text, cite, style, accent, size, color, quoteStyle,
         }),
         ...css,
     };
+    // `html: false` — aquí el texto es un HIJO de React, no HTML: React lo escapa igual en las dos
+    // superficies, así que un `<` o un `&` en la cita no obligan a renunciar al split (a diferencia
+    // del titular, que sí se pinta como HTML).
+    const split = splitForBlock(text, false, ixp);
+    // El nombre accesible va en el <blockquote>, que es el elemento que contiene el texto — y cuyo
+    // rol admite nombre de autor. Nunca en la <figure>: ahí también viven la comilla decorativa y el
+    // pie de cita, y etiquetar el conjunto los borraría del árbol de accesibilidad.
+    const body = split ? ixWordSpans(split) : text;
+    const bodyLabel = split ? split.label : undefined;
     if (style === "large") {
         return (
             <figure className={bc('quote', 'quote--large')} style={vars}>
                 <i className={cx('fa-solid fa-quote-left', bc('quote__mark'))} aria-hidden="true"></i>
-                <blockquote className={bc('quote__body')}>{text}</blockquote>
+                <blockquote className={bc('quote__body')} aria-label={bodyLabel}>{body}</blockquote>
                 {cite && <figcaption className={bc('quote__cite')}>— {cite}</figcaption>}
+            </figure>
+        );
+    }
+    // El pie de cita va DENTRO del blockquote en esta variante, así que cuando hay `aria-label` se
+    // saca a un hermano: un `aria-label` en el contenedor sustituye a TODO su contenido, y la cita
+    // desaparecería del árbol de accesibilidad. Sin split, el markup es el de siempre.
+    if (split) {
+        return (
+            <figure className={bc('quote', 'quote--bar')} style={vars}>
+                <blockquote className={bc('quote__body')} aria-label={bodyLabel}>{body}</blockquote>
+                {cite && <footer className={bc('quote__cite')}>— {cite}</footer>}
             </figure>
         );
     }

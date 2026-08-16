@@ -2760,3 +2760,19 @@ h6.wjs-block-heading, h6.wp-block-heading { font-size: var(--wjs-heading-size, v
     transition: none !important;
   }
 }
+
+/* The per-word span of the split-text target (`target: { kind: "words" }`).
+   `inline-block` is not cosmetic and not negotiable: `transform` needs a box, and an inline box has
+   none — without this the whole words path silently animates nothing but opacity.
+
+   It is also the reason the split carries an accessibility contract. One box per word is exactly
+   what makes a screen reader treat the words as separate chunks, so the renderer emits the spans
+   `aria-hidden="true"` and names the CONTAINER with `aria-label` (the full sentence). Never style
+   this class in a way that turns the spans back into something a11y-visible.
+
+   No `will-change`: a heading of 40 words would ask the compositor for 40 layers to animate an
+   entrance that lasts 600ms. The transform itself is enough for the compositor to promote what it
+   actually needs. */
+.wjs-ixw {
+  display: inline-block;
+}

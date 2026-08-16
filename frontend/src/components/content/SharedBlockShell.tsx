@@ -27,16 +27,15 @@
 import { hideClasses, appearanceToStyle, ixLayer } from "@/components/blocks/blockShell";
 import type { AnimSpec, Appearance, Hide } from "@/components/blocks/blockShell";
 import type { IxCompileCtx, IxPage } from "@/lib/verso/interactions";
-import { SYS_IX_PRESETS } from "@/lib/verso/interactions";
+import { IX_SYS_CTX } from "@/lib/verso/interactions";
 import AnimatedShell from "./AnimatedShell";
 
 /**
- * Contexto de compilación por defecto: solo los presets del SISTEMA. Los del sitio
- * (`wjs_ix_presets`) los pasa explícitamente `ixCtx` desde el renderer de la página (F9-E), que es
- * quien los ha leído de ajustes y los ha normalizado. Un tema NUNCA aporta presets: la frontera del
- * proyecto es que un tema no envía JS y no decide cuándo se mueve el contenido.
+ * Contexto de compilación por defecto: solo los presets del SISTEMA (`IX_SYS_CTX`, declarado UNA vez
+ * en el motor). Los del sitio (`wjs_ix_presets`) los pasa explícitamente `ixCtx` desde el renderer
+ * de la página (F9-E) o desde el canvas del editor, que son quienes los han leído de ajustes.
  */
-const DEFAULT_IX_CTX: IxCompileCtx = { presets: SYS_IX_PRESETS };
+const DEFAULT_IX_CTX: IxCompileCtx = IX_SYS_CTX;
 
 export default function SharedBlockShell({ hide, anim: animProp, look: lookProp, ix, ixCtx, ixPage, children }: {
     hide?: Hide;

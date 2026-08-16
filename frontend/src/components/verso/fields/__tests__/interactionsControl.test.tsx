@@ -46,9 +46,16 @@ const CTX: IxCompileCtx = ixCtxFromSite(
 
 const noop = (): void => undefined;
 
-function render(value: unknown): string {
+function render(value: unknown, opts: { supportsWords?: boolean } = {}): string {
   return renderToStaticMarkup(
-    <InteractionsControl value={value} onChange={noop} ixCtx={CTX} onPreview={noop} />,
+    <InteractionsControl
+      value={value}
+      onChange={noop}
+      ixCtx={CTX}
+      supportsWords={opts.supportsWords}
+      onPreview={noop}
+      onScrub={noop}
+    />,
   );
 }
 
@@ -235,9 +242,12 @@ describe("InteractionsControl — los tres niveles", () => {
     expect(html).toContain("Retardo (ms)");
   });
 
-  it("«Las palabras» NO se ofrece (aún no hay bloque que parta el texto), pero no se pierde si el dato ya lo trae", () => {
-    // Ofrecer un objetivo que hoy no mueve nada sería una opción que miente.
+  it("«Las palabras» se ofrece SOLO en bloques que declaran `ixText`, y nunca se pierde si el dato ya lo trae", () => {
+    // Ofrecer un objetivo en un bloque cuyo render no emite los spans sería una opción que miente:
+    // el compilador escribiría reglas contra un selector que no existe en la página.
     expect(render(defaultIxSpec())).not.toContain("Las palabras");
+    // En Heading/Quote (que sí los emiten) el panel lo ofrece.
+    expect(render(defaultIxSpec(), { supportsWords: true })).toContain("Las palabras");
     const words = {
       v: 1,
       trigger: { on: "view", once: true },
@@ -341,6 +351,60 @@ describe("InteractionsControl — enlazado a un preajuste", () => {
 
   it("dice lo que significa compartir un preajuste (que editarlo cambia todos los bloques)", () => {
     expect(render({ v: 1, preset: "aparecer-tarjetas" })).toContain("los demás bloques que lo usan");
+  });
+});
+
+/**
+ * EL SCRUBBER (§6.3). Su fidelidad —que mueva el estado real y no una imitación— se verifica en
+ * `lib/verso/interactions/__tests__/ix-scrubber.test.ts` sobre el IR. Aquí se fija lo que le toca al
+ * PANEL: que exista, que sea operable con teclado y que se pueda SOLTAR sin ratón.
+ */
+describe("InteractionsControl — el scrubber", () => {
+  it("no aparece sin interacción: no hay nada que recorrer", () => {
+    expect(render(undefined)).not.toContain('type="range"');
+  });
+
+  it("con interacción hay un deslizador NATIVO (flechas, Inicio/Fin) con su etiqueta y su unidad", () => {
+    const html = render(defaultIxSpec());
+    expect(html).toContain('type="range"');
+    expect(html).toContain("Recorrer a mano");
+    // Un `slider` nativo anuncia su valor; `aria-valuetext` le pone la unidad para que no se lea un
+    // número suelto. No se añade una región `aria-live` con el porcentaje: duplicaría el anuncio en
+    // cada pulsación de flecha.
+    expect(html).toContain('aria-valuetext="0 %"');
+    const range = html.match(/<input[^>]*type="range"[^>]*>/)![0];
+    expect(range).toContain('min="0"');
+    expect(range).toContain('max="100"');
+    // Y su etiqueta apunta a él por id, como el resto del panel.
+    const rangeId = range.match(/\sid="([^"]+)"/)![1];
+    expect(html).toContain(`for="${rangeId}"`);
+  });
+
+  it("se ARMA y se SUELTA con un botón: con teclado no existe «soltar el ratón»", () => {
+    const html = render(defaultIxSpec());
+    // Un botón conmutador de verdad (aria-pressed), no un div con onMouseUp.
+    expect(html).toMatch(/<button[^>]*aria-pressed="false"[^>]*>/);
+    expect(html).toContain("Recorrer");
+    // Y el deslizador nace deshabilitado: hasta que alguien arma, el lienzo lo manda el CSS.
+    expect(html).toMatch(/<input[^>]*type="range"[^>]*disabled/);
+  });
+
+  it("explica qué hace, y por qué importa en las interacciones de scroll", () => {
+    const scrub = {
+      v: 1,
+      trigger: { on: "scrub" },
+      tracks: [
+        {
+          target: { kind: "self" },
+          steps: [
+            { at: 0, set: { y: 20 } },
+            { at: 100, set: { y: -20 } },
+          ],
+        },
+      ],
+    };
+    expect(render(scrub)).toContain("avanza con el scroll");
+    expect(render(defaultIxSpec())).toContain("pararte en cualquier punto");
   });
 });
 

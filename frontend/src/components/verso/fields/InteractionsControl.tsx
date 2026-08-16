@@ -23,11 +23,12 @@
  * RESULTADO, no el gesto. Quien no ve el lienzo necesita oír "al entrar en pantalla, sus hijos,
  * 2 pasos", no "botón pulsado".
  */
-import React, { useId, useMemo } from "react";
+import React, { useCallback, useId, useMemo } from "react";
 import MSym from "@/components/editor/MSym";
 import {
   IX_EASINGS,
   IX_MAX_STEPS,
+  IX_MAX_WORDS,
   IX_PROP_NEUTRAL,
   IX_STAGGER_MAX,
   type IxCompileCtx,
@@ -65,7 +66,8 @@ import {
   type IxPanelTargetKind,
   type IxPanelTriggerKind,
 } from "../editor/ixPanelModel";
-import { requestIxPreview } from "../canvas/IxCanvasEngine";
+import { requestIxPreview, requestIxScrub } from "../canvas/IxCanvasEngine";
+import IxScrubberControl from "./IxScrubberControl";
 import VersoFieldControl from "./VersoFieldControl";
 
 const BTN =
@@ -76,12 +78,14 @@ const TRIGGERS: IxPanelTriggerKind[] = ["view", "scrub", "hover", "click", "load
 const EASES = Object.keys(IX_EASINGS) as IxEase[];
 
 /**
- * Objetivos OFRECIBLES. `words` (el split por palabras) está fuera a propósito: el modelo y el
- * compilador lo soportan, pero todavía no hay ningún bloque que renderice los `<span class="wjs-ixw">`
- * —eso exige que la definición declare soporte de split y que el MISMO renderer lo emita en el
- * canvas y en el público, con `aria-label` íntegro y los spans `aria-hidden`—, así que elegirlo hoy
- * produciría CSS que no encuentra a nadie: una opción que no hace nada. Se ofrece cuando el bloque
- * YA lo tiene puesto (dato que puede llegar por la API), para no dejar el radiogrupo sin selección.
+ * Objetivos que se ofrecen SIEMPRE. `words` (el split por palabras) no está aquí porque no es una
+ * capacidad del motor sino del BLOQUE: solo las definiciones que declaran `ixText: true` emiten los
+ * `<span class="wjs-ixw">` que el CSS generado necesita (hoy Heading y Quote). Ofrecerlo en un
+ * bloque que no los emite produciría reglas contra un selector inexistente — una opción que no mueve
+ * nada, que es exactamente por lo que estuvo retirada.
+ *
+ * Se añade en dos casos: cuando el bloque lo declara (`supportsWords`) y cuando el dato YA lo trae
+ * puesto (puede llegar por la API o por una importación), para no dejar el radiogrupo sin selección.
  */
 const OFFERED_TARGETS: IxPanelTargetKind[] = ["self", "children"];
 
@@ -95,17 +99,33 @@ export interface InteractionsControlProps {
   onChange: (value: unknown) => void;
   /** Presets del sistema + del sitio. */
   ixCtx?: IxCompileCtx;
+  /**
+   * El bloque seleccionado declara `ixText: true` (su render emite los spans por palabra). Lo pasa
+   * `PropertiesPanel` desde la definición del registro: el panel no adivina qué sabe pintar cada
+   * bloque, se lo dice el bloque.
+   */
+  supportsWords?: boolean;
   /** Inyectable para tests; por defecto emite el evento de previsualización en el documento. */
   onPreview?: () => void;
+  /** Inyectable para tests; por defecto emite el evento del scrubber en el documento. */
+  onScrub?: (pct: number | null) => void;
 }
 
 export default function InteractionsControl({
   value,
   onChange,
   ixCtx,
+  supportsWords = false,
   onPreview,
+  onScrub,
 }: InteractionsControlProps) {
   const titleId = useId();
+  // Referencia ESTABLE: el scrubber la usa como dependencia de su efecto de limpieza, y una función
+  // nueva en cada render lo soltaría y lo re-armaría en cada pulsación de tecla del panel.
+  const scrub = useCallback(
+    (pct: number | null) => (onScrub ? onScrub(pct) : requestIxScrub(pct)),
+    [onScrub],
+  );
   const state = useMemo(() => ixPanelState(value, ixCtx), [value, ixCtx]);
   const presetOptions = useMemo(() => ixPresetOptions(ixCtx), [ixCtx]);
   const track = state.tracks[0];
@@ -126,7 +146,7 @@ export default function InteractionsControl({
   };
   const currentTarget = track?.target.kind;
   const targets: IxPanelTargetKind[] =
-    currentTarget === "words" ? [...OFFERED_TARGETS, "words"] : OFFERED_TARGETS;
+    supportsWords || currentTarget === "words" ? [...OFFERED_TARGETS, "words"] : OFFERED_TARGETS;
   const targetField: RadioVersoField = {
     type: "radio",
     options: targets.map((kind) => ({ label: IX_TARGET_LABELS[kind], value: kind })),
@@ -187,6 +207,16 @@ export default function InteractionsControl({
 
       {state.active && track && (
         <>
+          {/* Transporte: «Probar» (arriba) reproduce; esto recorre. Una entrada de 600 ms se ve
+              pasar; una interacción ligada al scroll NO se puede ver pasar, porque su estado no
+              depende del reloj sino de dónde está el bloque — para ajustar el paso intermedio hay
+              que poder pararse en él. */}
+          <IxScrubberControl
+            enabled={state.active}
+            scrollDriven={trigger.on === "scrub" || (trigger.on === "view" && trigger.once === false)}
+            onScrub={scrub}
+          />
+
           {/* ── Nivel 2 — disparador y objetivo ─────────────────────── */}
           <VersoFieldControl
             field={triggerField}
@@ -237,6 +267,14 @@ export default function InteractionsControl({
                 value={track.target.kind}
                 onChange={(v) => onChange(setTargetKind(value, v as IxPanelTargetKind, ixCtx))}
               />
+
+              {track.target.kind === "words" && (
+                <p className={HINT}>
+                  El texto se parte en palabras y el bloque conserva su lectura completa para los
+                  lectores de pantalla. No se parte si lleva formato (negritas, enlaces) o si pasa de{" "}
+                  {IX_MAX_WORDS} palabras: entonces se ve igual que siempre, sin movimiento.
+                </p>
+              )}
 
               {(track.target.kind === "children" || track.target.kind === "words") && (
                 <VersoFieldControl

@@ -149,7 +149,10 @@ function renderItem(item: any, fallbackKey: string, exclude?: ReadonlySet<string
 /** Core-block dispatch. Returns undefined for unknown types (→ PluginBlockIsland). */
 function renderCore(type: string, props: Record<string, any>, item: any, exclude?: ReadonlySet<string>, ix?: IxEnv): React.ReactNode | undefined {
     switch (type) {
-        case "Heading": return <HeadingBlock {...props} />;
+        // `ixCtx` DESPUÉS del spread, nunca antes: es el catálogo de preajustes con el que el
+        // bloque decide si parte su texto en palabras, y un `_puck_data` hostil no puede
+        // sustituirlo colando una clave con ese nombre en sus props.
+        case "Heading": return <HeadingBlock {...props} ixCtx={ix?.ctx} />;
         case "Text": return <TextBlock {...props} />;
         case "Image": return <ImageBlock {...props} />;
         case "Divider": return <DividerBlock {...props} />;
@@ -165,7 +168,7 @@ function renderCore(type: string, props: Record<string, any>, item: any, exclude
             />
         );
         case "Card": return <CardBlock {...props} />;
-        case "Quote": return <QuoteBlock {...props} />;
+        case "Quote": return <QuoteBlock {...props} ixCtx={ix?.ctx} />;
         case "Table": return <TableBlock {...props} />;
         case "IconList": return <IconListBlock {...props} />;
         case "SocialLinks": return <SocialLinksBlock {...props} />;

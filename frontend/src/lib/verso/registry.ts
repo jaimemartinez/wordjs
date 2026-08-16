@@ -173,6 +173,20 @@ export interface BlockDefinition {
    * (Tiptap); `plain` = texto sin formato.
    */
   inline?: { prop: string; schema: "rich" | "plain" };
+  /**
+   * `true` cuando el RENDER de este bloque emite los `<span class="wjs-ixw">` del split por palabras
+   * del motor de interacciones (§3.4.1 de `documentation/verso/interactions-spec.md`).
+   *
+   * Es una declaración de CAPACIDAD, no un ajuste del autor: el panel solo ofrece el objetivo «las
+   * palabras» a los bloques que lo declaran, porque en cualquier otro el compilador emitiría reglas
+   * contra un selector que no existe — una opción que no mueve nada. La declaración y la emisión
+   * tienen que viajar juntas: poner esto sin emitir los spans es exactamente la mentira que la
+   * opción tenía retirada hasta ahora.
+   *
+   * Los adaptadores de bloques legacy/plugin (`adaptLegacySingle`) NO lo copian a propósito: su
+   * render no pasa por el split, así que declararlo sería prometer algo que no ocurre.
+   */
+  ixText?: boolean;
   render: VersoBlockRenderer;
 }
 

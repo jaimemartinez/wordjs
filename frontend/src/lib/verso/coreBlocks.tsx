@@ -265,6 +265,9 @@ export const coreBlockDefinitions: BlockDefinition[] = [
             css: {},
         },
         inline: { prop: "title", schema: "plain" },
+        // El render de este bloque emite los `<span class="wjs-ixw">` cuando su `ix` apunta a
+        // `words` (blocks.tsx → splitForBlock). Sin esta declaración el panel no ofrece el objetivo.
+        ixText: true,
         render: HeadingBlock,
     },
     {
@@ -1183,6 +1186,7 @@ export const coreBlockDefinitions: BlockDefinition[] = [
             css: {},
         },
         inline: { prop: "text", schema: "plain" },
+        ixText: true,
         render: QuoteBlock,
     },
     {

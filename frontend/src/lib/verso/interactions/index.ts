@@ -80,12 +80,29 @@ export {
 } from "./compile";
 export type { IxCompileCtx, IxResolved } from "./compile";
 
-export { ixLayer, IX_STATE_ATTR, IX_TRIGGER_ATTR, IX_WORD_CLASS } from "./shell";
+export { ixLayer, IX_STATE_ATTR, IX_SYS_CTX, IX_TRIGGER_ATTR } from "./shell";
 export type { IxLayer } from "./shell";
+
+export { ixSplitWords, ixTargetsWords, IX_WORD_CLASS } from "./words";
+export type { IxSplitOptions, IxWordSplit } from "./words";
 
 export { SYS_IX_PRESETS, SYS_IX_PRESET_IDS } from "./presets";
 
 export { collectIxSpecs, IX_COLLECT_MAX_DEPTH, IX_COLLECT_MAX_NODES } from "./collect";
+
+export {
+  ixFreePresetId,
+  ixPresetDelete,
+  ixPresetDuplicate,
+  ixPresetSave,
+  ixPresetSlug,
+  ixPresetToSpec,
+  ixPresetUsage,
+  ixSpecToBody,
+  IX_PRESET_NAME_MAX,
+  IX_SYS_PREFIX,
+} from "./presetsAdmin";
+export type { IxCatalog, IxCatalogResult, IxPresetDraft } from "./presetsAdmin";
 
 export {
   ixCtxFromSetting,

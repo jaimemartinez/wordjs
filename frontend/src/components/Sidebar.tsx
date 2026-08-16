@@ -40,6 +40,10 @@ const coreMenuItems: SidebarMenuItem[] = [
     { href: "/admin/themes", label: "nav.themes", icon: "fa-palette", cap: "switch_themes" },
     { href: "/admin/fonts", label: "nav.fonts", icon: "fa-font", cap: "manage_options" },
     { href: "/admin/settings", label: "nav.settings", icon: "fa-gear", cap: "manage_options" },
+    // Preajustes de interacción del sitio (motor F9). Literal en vez de clave i18n, como el resto de
+    // las entradas añadidas después del corte de traducciones. Va DESPUÉS del índice 7, así que cae
+    // en la sección de gestión junto a Ajustes — no mueve el reparto de secciones.
+    { href: "/admin/settings/interactions", label: "Interacciones", icon: "fa-wand-magic-sparkles", cap: "manage_options" },
     { href: "/admin/import", label: "nav.import", icon: "fa-file-import", cap: "manage_options" },
     { href: "/admin/settings/backups", label: "nav.backups", icon: "fa-box-archive", cap: "manage_options" },
     { href: "/admin/security", label: "nav.security", icon: "fa-lock", cap: "manage_options" },

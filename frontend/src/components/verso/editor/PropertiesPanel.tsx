@@ -192,6 +192,10 @@ export default function PropertiesPanel({ handle, registry, rootFields, renderEx
                             key={`${node.id}:ix`}
                             value={values.ix}
                             ixCtx={ixCtx}
+                            // El objetivo «las palabras» solo se ofrece si el RENDER del bloque
+                            // emite los spans por palabra. Lo declara su definición (`ixText`), no
+                            // lo adivina el panel.
+                            supportsWords={def?.ixText === true}
                             onChange={(v) => onFieldChange("ix", v)}
                         />
                     )}

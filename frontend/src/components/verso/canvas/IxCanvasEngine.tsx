@@ -37,9 +37,23 @@
  * revés, y nunca en el sitio publicado.
  */
 import React from "react";
-import { compileIxPage, type IxCompileCtx, type IxRuntimeUnit } from "@/lib/verso/interactions";
+import {
+  compileIx,
+  compileIxPage,
+  toRuntimeUnit,
+  type IxCompileCtx,
+  type IxRuntimeUnit,
+} from "@/lib/verso/interactions";
 import { startIxRuntime } from "@/lib/verso/interactions/runtime";
-import { defaultIxHost } from "@/lib/verso/interactions/runtime/host";
+import {
+  defaultIxHost,
+  type IxDocumentLike,
+  type IxElementLike,
+} from "@/lib/verso/interactions/runtime/host";
+import {
+  createIxScrubber,
+  type IxScrubber,
+} from "@/lib/verso/interactions/runtime/scrubber";
 import { ANIM_REPLAY_EVENT } from "@/components/blocks/entranceAnimation";
 import type { EditorHandle } from "@/lib/verso/store";
 import type { VersoEditorState } from "@/lib/verso/types";
@@ -59,6 +73,50 @@ export const IX_PREVIEW_EVENT = "wjs-ix-preview";
 export function requestIxPreview(doc?: Document | null): void {
   const target = doc ?? (typeof document === "undefined" ? null : document);
   target?.dispatchEvent(new CustomEvent(IX_PREVIEW_EVENT));
+}
+
+/**
+ * Evento del SCRUBBER (§6.3): «coloca la interacción del bloque seleccionado en el N %». Mismo canal
+ * que la reproducción y por la misma razón: un evento del DOM cruza el iframe sin puente de React, y
+ * el panel no tiene por qué conocer ni el marco ni el elemento.
+ */
+export const IX_SCRUB_EVENT = "wjs-ix-scrub";
+
+/** `detail` del evento del scrubber. `pct: null` = soltar (el CSS nativo retoma el control). */
+export type IxScrubDetail = { pct: number | null };
+
+/**
+ * Pide recorrer la interacción a mano. El PORCENTAJE es el único dato: a QUÉ bloque se aplica lo
+ * decide el motor leyendo la selección del store, que es la única fuente de verdad de "el bloque que
+ * el autor está editando" — pasarlo desde el panel obligaría a que el panel supiera su propio id y
+ * abriría la puerta a que las dos ideas de "el bloque actual" discrepasen.
+ */
+export function requestIxScrub(pct: number | null, doc?: Document | null): void {
+  const target = doc ?? (typeof document === "undefined" ? null : document);
+  target?.dispatchEvent(new CustomEvent<IxScrubDetail>(IX_SCRUB_EVENT, { detail: { pct } }));
+}
+
+/**
+ * Ids de bloque admisibles en un selector de atributo. El mismo patrón que valida el normalizador
+ * del motor: `props.id` viene de `_puck_data` y no va a construir un selector con comillas dentro.
+ */
+const BLOCK_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+
+/**
+ * La capa `.wjs-ix-<hash>` DE ESTE bloque dentro del marco.
+ *
+ * No basta con `querySelector('.cls')`: un contenedor puede tener descendientes con la misma clase
+ * (dos bloques con la misma interacción comparten hash, que es justo la virtud del compilador), así
+ * que se descarta cualquier candidato cuyo bloque más cercano no sea el nuestro.
+ */
+function findIxLayer(doc: Document, blockId: string, cls: string): Element | null {
+  if (!BLOCK_ID_RE.test(blockId)) return null;
+  const root = doc.querySelector(`[data-wjs-block-id="${blockId}"]`);
+  if (!root) return null;
+  for (const el of Array.from(root.querySelectorAll(`.${cls}`))) {
+    if (el.closest("[data-wjs-block-id]") === root) return el;
+  }
+  return null;
 }
 
 const selectNodes = (s: VersoEditorState) => s.doc.nodes;
@@ -135,6 +193,69 @@ export default function IxCanvasEngine({ handle, ixCtx }: IxCanvasEngineProps) {
       if (frameDoc !== editorDoc) frameDoc.removeEventListener(IX_PREVIEW_EVENT, onPreview);
     };
   }, [canvas]);
+
+  /* ── 4. El scrubber: recorrer la interacción a mano ───────────────── */
+  React.useEffect(() => {
+    const frameDoc = canvas?.getFrameDocument();
+    if (!frameDoc) return;
+    const editorDoc = typeof document === "undefined" ? null : document;
+
+    // Un scrubber vivo a la vez, atado a "este bloque con esta interacción". Si cualquiera de las
+    // dos cosas cambia mientras se arrastra (el autor edita un paso, o selecciona otro bloque), el
+    // anterior se cancela y se construye uno nuevo: nunca se queda una animación pausada sobre un
+    // elemento que ya no es el que el deslizador cree estar moviendo.
+    let active: { key: string; scrubber: IxScrubber } | null = null;
+
+    const release = () => {
+      active?.scrubber.stop();
+      active = null;
+    };
+
+    const onScrub = (ev: Event) => {
+      const pct = (ev as CustomEvent<IxScrubDetail>).detail?.pct;
+      if (typeof pct !== "number") {
+        release();
+        return;
+      }
+      const nodeId = handle.getState().selection.nodeId;
+      const node = nodeId ? handle.getDoc().nodes[nodeId] : undefined;
+      const unit = node ? compileIx(node.props.ix, ixCtx) : null;
+      if (!node || !unit) {
+        release();
+        return;
+      }
+      const key = `${node.id}|${unit.cls}`;
+      if (active && active.key !== key) release();
+      if (!active) {
+        const layer = findIxLayer(frameDoc, String(node.props.id ?? node.id), unit.cls);
+        if (!layer) return; // el bloque no tiene capa pintada todavía: no se inventa nada
+        // Los casts son los MISMOS que hace `defaultIxHost`: las interfaces `*Like` del runtime son
+        // un subconjunto estructural de las del DOM, pero TypeScript no lo comprueba sin fricción a
+        // través de `NodeListOf`/`CSSNumberish`, y no merece la pena retorcer los tipos del DOM por
+        // dos casts que están a la vista.
+        const scrubber = createIxScrubber(
+          layer as unknown as IxElementLike,
+          toRuntimeUnit(unit),
+          frameDoc as unknown as IxDocumentLike,
+        );
+        if (!scrubber) return;
+        active = { key, scrubber };
+      }
+      active.scrubber.set(pct);
+    };
+
+    editorDoc?.addEventListener(IX_SCRUB_EVENT, onScrub);
+    if (frameDoc !== editorDoc) frameDoc.addEventListener(IX_SCRUB_EVENT, onScrub);
+    return () => {
+      editorDoc?.removeEventListener(IX_SCRUB_EVENT, onScrub);
+      if (frameDoc !== editorDoc) frameDoc.removeEventListener(IX_SCRUB_EVENT, onScrub);
+      // Desmontar con el scrubber puesto tiene que devolver el bloque a su CSS, no dejarlo
+      // congelado en el fotograma en el que estaba el deslizador.
+      release();
+    };
+    // `sig` está en las dependencias para que cambiar la interacción reconstruya el listener (y con
+    // él, el scrubber): el IR de la unidad viaja dentro del closure.
+  }, [canvas, handle, ixCtx, sig]);
 
   return null;
 }

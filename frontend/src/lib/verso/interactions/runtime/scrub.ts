@@ -18,8 +18,9 @@
  * PRESUPUESTO: un IntersectionObserver y UN bucle `rAF` por documento, activo solo mientras haya
  * algo en pantalla. 30 unidades de las que 3 se ven cuestan 3, no 30.
  */
-import type { IxEdge, IxRange, IxRuntimeTrack, IxRuntimeUnit } from "../types";
+import type { IxEdge, IxRange, IxRuntimeUnit } from "../types";
 import type { IxAnimationLike, IxElementLike, IxHost } from "./host";
+import { ixStaggerOffset, resolveIxTargets } from "./targets";
 
 /** Duración virtual de la animación pausada. 1000 y no 1: da 3 decimales de resolución al 0–100 %. */
 const SCRUB_MS = 1000;
@@ -72,34 +73,6 @@ function progressOf(anchor: IxElementLike, range: IxRange, vh: number): number {
   return clamp01((vh - rect.top - from) / span);
 }
 
-/** Desfase del escalonado de UN hermano. Aquí sí se conoce el recuento, así que `center` es exacto. */
-function staggerOffset(track: IxRuntimeTrack, index: number, count: number): number {
-  const st = track.stagger;
-  if (!st) return 0;
-  if (st.from === "end") return (count - 1 - index) * st.each;
-  if (st.from === "center") return Math.abs(index - (count - 1) / 2) * st.each;
-  return index * st.each;
-}
-
-function resolveTargets(
-  root: IxElementLike,
-  track: IxRuntimeTrack,
-  host: IxHost,
-): IxElementLike[] {
-  switch (track.target.kind) {
-    case "self":
-      return [root];
-    case "children":
-      return toArray(root.children);
-    case "words":
-      return toArray(root.querySelectorAll(".wjs-ixw"));
-    case "block":
-      // El id está validado contra /^[A-Za-z0-9_-]{1,64}$/ en el normalizador: no puede romper el
-      // selector ni traer nada que no sea alfanumérico.
-      return toArray(host.doc.querySelectorAll(`[data-wjs-block-id="${track.target.id}"]`));
-  }
-}
-
 type ScrubEntry = { anchor: IxElementLike; range: IxRange; anim: IxAnimationLike };
 
 /**
@@ -117,7 +90,7 @@ export function createScrubDriver(units: readonly IxRuntimeUnit[], host: IxHost)
     const timeline = isTimeline(unit);
     for (const root of roots) {
       for (const track of unit.tracks) {
-        const targets = resolveTargets(root, track, host);
+        const targets = resolveIxTargets(root, track, host.doc);
         targets.forEach((el, i) => {
           if (typeof el.animate !== "function") return; // sin WAAPI → visible y quieto
           if (timeline) {
@@ -139,7 +112,7 @@ export function createScrubDriver(units: readonly IxRuntimeUnit[], host: IxHost)
               duration: track.dur,
               fill: "both",
               easing: "linear",
-              delay: track.delay + staggerOffset(track, i, targets.length),
+              delay: track.delay + ixStaggerOffset(track, i, targets.length),
               iterations: track.repeat === "inf" ? Infinity : track.repeat,
               direction: track.alt ? "alternate" : "normal",
             });

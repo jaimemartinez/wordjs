@@ -63,8 +63,8 @@ export default function EditorRenderer({
   const rootChildren = useStoreSlice(handle, selectRootChildren);
   const ixCtx = useSiteIxPresets();
   const contextValue = useMemo<VersoRenderContextValue>(
-    () => ({ handle, registry, componentMap, onBlockElement, editorChrome, collabLive }),
-    [handle, registry, componentMap, onBlockElement, editorChrome, collabLive],
+    () => ({ handle, registry, componentMap, onBlockElement, editorChrome, collabLive, ixCtx }),
+    [handle, registry, componentMap, onBlockElement, editorChrome, collabLive, ixCtx],
   );
   return (
     <VersoRenderContext.Provider value={contextValue}>

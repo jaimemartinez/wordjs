@@ -15,6 +15,7 @@ import type React from "react";
 import type { EditorHandle } from "@/lib/verso/store";
 import type { VersoEditorState, VersoNode } from "@/lib/verso/types";
 import type { BlockRegistry } from "@/lib/verso/registry";
+import type { IxCompileCtx } from "@/lib/verso/interactions";
 
 /**
  * Contrato de slot — el MISMO de ContentRenderer/TemplateRenderer y del editor
@@ -54,6 +55,17 @@ export interface VersoRenderContextValue {
    * de una sesión viva no se activa nada de eso — el editor se comporta exactamente como siempre.
    */
   collabLive?: boolean;
+  /**
+   * Catálogo de preajustes de interacción (sistema + SITIO) con el que el canvas compila. Viaja por
+   * el contexto y no por props porque lo necesitan dos consumidores muy separados: el wrapper de
+   * cada bloque (para resolver la clase `.wjs-ix-<hash>` de un preajuste del sitio) y los bloques de
+   * texto (para saber si su interacción parte el texto en palabras).
+   *
+   * Sin él, `SharedBlockShell` cae a los preajustes del SISTEMA y un preajuste creado en Ajustes
+   * simplemente no se vería en el editor: se vería en el sitio público y no en el lienzo, que es la
+   * peor forma posible de fallar.
+   */
+  ixCtx?: IxCompileCtx;
 }
 
 export const VersoRenderContext = createContext<VersoRenderContextValue | null>(null);
