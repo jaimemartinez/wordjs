@@ -27,6 +27,7 @@ import { useI18n } from "@/contexts/I18nContext";
 import { trStr } from "@/lib/puckI18n";
 import { getBlockItems, BLOCK_META } from "@/lib/blockCatalog";
 import type { BlockRegistry } from "@/lib/verso/registry";
+import { useRegistryVersion } from "@/lib/verso/useRegistryVersion";
 import type { PaletteAction } from "./paletteActions";
 
 // Versión real de la app (root package.json, inlined por next.config.ts). ASSET_VERSION es un
@@ -87,12 +88,15 @@ function PaletteDialog({
     // Mapa components-like para el catálogo compartido con labels YA localizados (el legacy
     // recibía el config pasado por localizeConfig; aquí trStr en el punto de entrada — así la
     // búsqueda matchea lo que se enseña y el idioma cambia SIN remontar el registry). El registry
-    // es identidad-estable; en F3 los core blocks se registran una vez antes del primer render.
+    // es identidad-estable; los core blocks se registran antes del primer render y los de plugin
+    // (F4) llegan POST-hidratación vía register() — de ahí la dependencia en la versión.
+    const registryVersion = useRegistryVersion(registry);
     const components = useMemo(() => {
+        void registryVersion; // dependencia deliberada: un register() debe recalcular el catálogo
         const map: Record<string, { label?: string }> = {};
         for (const def of registry.list()) map[def.type] = { label: def.label ? trStr(def.label, language) : undefined };
         return map;
-    }, [registry, language]);
+    }, [registry, registryVersion, language]);
 
     const items = useMemo(() => getBlockItems(components, query), [components, query]);
     // Las acciones filtran sobre la misma query; con query vacía se muestran todas (encabezan la

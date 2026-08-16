@@ -94,6 +94,11 @@ export interface VersoDoc {
   contentKeyState: "array" | "absent" | "verbatim";
   /** true si el dato original traía la clave `root`. Se re-emite si estaba o si hay props. */
   rootKeyPresent: boolean;
+  /**
+   * Orden ORIGINAL de las claves top-level (docs reales guardan `root` antes que
+   * `content`): la serialización lo respeta byte-a-byte; claves nuevas al final.
+   */
+  topKeyOrder: string[];
   /** Claves top-level desconocidas del dato original, re-emitidas verbatim. */
   extras: Record<string, unknown>;
   /** Anomalías no destructivas detectadas al normalizar (ids duplicados, zonas huérfanas…). */

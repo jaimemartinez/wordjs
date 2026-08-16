@@ -214,7 +214,9 @@ function internItem(
     while (`${originalId}#dup${n}` in d.next.nodes) n += 1;
     key = `${originalId}#dup${n}`;
   }
-  const props: VersoNode["props"] = { id: originalId };
+  // Espejo de normalizeItem: props en el ORDEN ORIGINAL de claves (id incluido en
+  // su posición) — forzar id-primero reordenaba el JSON persistido (gate F4).
+  const props = {} as VersoNode["props"];
   const slots: Record<string, string[]> = {};
   const node: VersoNode = { id: key, type: item.type, props, slots, parentId, slotKey, index };
   for (const k of Object.keys(item)) {
@@ -225,13 +227,17 @@ function internItem(
   d.next.nodes[key] = node;
   d.touched.add(key);
   for (const [k, v] of Object.entries(item.props)) {
-    if (k === "id") continue;
+    if (k === "id") {
+      (props as Record<string, unknown>).id = originalId;
+      continue;
+    }
     if (classifySlotProp(isSlot?.(item.type, k), v)) {
       slots[k] = (v as VersoItem[]).map((child, i) => internItem(d, child, key, k, i, isSlot));
     } else {
       props[k] = v;
     }
   }
+  if (!("id" in props)) (props as Record<string, unknown>).id = originalId;
   // Espejo de normalizeItem: el orden original solo se materializa con ≥1 slot.
   if (Object.keys(slots).length > 0) node.keyOrder = Object.keys(item.props);
   return key;

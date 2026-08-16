@@ -280,19 +280,31 @@ function toPascalCase(slug: string): string {
     return slug.split('-').map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join('');
 }
 
+/**
+ * Inject one plugin's block CSS <link> into an ARBITRARY document. Additive seam for the Verso editor
+ * (F4): its canvas is an <iframe> with its OWN document (/admin/canvas-frame), so the link injected into
+ * the top-level document by injectBlockCss below never reaches the canvas — the Verso plugin-block path
+ * calls this with the frame's document once it exists. Deduped per DOCUMENT via the data attribute (not
+ * the module-level Set, which tracks only the top-level document): an iframe reload produces a fresh
+ * document that legitimately needs the link again.
+ */
+export function injectBlockCssInto(doc: Document, pluginId: string): void {
+    if (!doc.head) return;
+    if (doc.querySelector(`link[data-plugin-block-css="${pluginId}"]`)) return;
+    const link = doc.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = `/plugins/${pluginId}/dist/component.bundle.css`;
+    link.setAttribute('data-plugin-block-css', pluginId);
+    // A plugin may ship no block CSS — a 404 <link> is harmless (no error surfaced to the user).
+    doc.head.appendChild(link);
+}
+
 // Load the CSS esbuild extracted next to a plugin's block bundle (dist/component.bundle.css). Served via
 // the /plugins static route (which maps slug→folder), so the block's styles apply in editor + canvas.
 function injectBlockCss(pluginId: string): void {
     if (typeof document === 'undefined' || blockCssInjected.has(pluginId)) return;
     blockCssInjected.add(pluginId);
-    const href = `/plugins/${pluginId}/dist/component.bundle.css`;
-    if (document.querySelector(`link[data-plugin-block-css="${pluginId}"]`)) return;
-    const link = document.createElement('link');
-    link.rel = 'stylesheet';
-    link.href = href;
-    link.setAttribute('data-plugin-block-css', pluginId);
-    // A plugin may ship no block CSS — a 404 <link> is harmless (no error surfaced to the user).
-    document.head.appendChild(link);
+    injectBlockCssInto(document, pluginId);
 }
 
 /**

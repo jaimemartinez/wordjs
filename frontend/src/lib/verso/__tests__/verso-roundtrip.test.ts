@@ -152,6 +152,16 @@ describe("verso round-trip — sintéticos", () => {
     expect(fromNormalized(doc)).toEqual(d);
   });
 
+  it("orden de claves EXACTO cuando id NO va primero (dato legacy real): content, id", () => {
+    // Cazado en el gate F4: forzar id-primero reordenaba el JSON al primer guardado
+    // (deep-equal pasaba; los diffs de revisiones se ensuciaban).
+    const d: VersoData = {
+      content: [{ type: "Text", props: { content: "<p>x</p>", id: "t1" } as never }],
+      root: { props: {} },
+    };
+    expect(JSON.stringify(roundTrip(d))).toBe(JSON.stringify(d));
+  });
+
   it("orden de claves EXACTO (byte-a-byte) con slot intercalado: id, items, title", () => {
     const d: VersoData = {
       content: [
@@ -226,7 +236,9 @@ describe.skipIf(!corpusAvailable)("verso round-trip — corpus de producción", 
         if (hasRealZones) {
           expect(roundTrip(out1)).toEqual(out1); // punto fijo
         } else {
-          expect(out1).toEqual(d); // exacto
+          // BYTE-a-byte (no solo deep-equal): el orden de claves también es contrato
+          // — una reordenación ensucia los diffs de revisiones (cazado en F4).
+          expect(JSON.stringify(out1)).toBe(JSON.stringify(d));
         }
       } catch {
         failures.push(`doc ${entry.id} (${entry.type}/${entry.status}, zones=${hasRealZones})`);

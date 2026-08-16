@@ -18,6 +18,7 @@ import { useI18n } from "@/contexts/I18nContext";
 import { trStr } from "@/lib/puckI18n";
 import { BLOCK_META, FALLBACK_GROUP, GROUP_MS_ICON, GROUP_ORDER } from "@/lib/blockCatalog";
 import type { BlockRegistry } from "@/lib/verso/registry";
+import { useRegistryVersion } from "@/lib/verso/useRegistryVersion";
 
 export interface BlockPaletteProps {
     registry: BlockRegistry;
@@ -36,17 +37,22 @@ export default function BlockPalette({ registry, onInsert }: BlockPaletteProps) 
     const { language } = useI18n();
     const [query, setQuery] = useState("");
     const [activeGroup, setActiveGroup] = useState("");
+    // F4: los bloques de plugin llegan POST-hidratación con register() sobre el registry
+    // identidad-estable — la versión es la dependencia real de estos memos.
+    const registryVersion = useRegistryVersion(registry);
 
     const allGroups = useMemo(() => {
+        void registryVersion; // dependencia deliberada: un register() debe recalcular los grupos
         const present = new Set<string>();
         for (const def of registry.list()) present.add(BLOCK_META[def.type]?.group || FALLBACK_GROUP);
         return [
             ...GROUP_ORDER.filter((g) => present.has(g)),
             ...Array.from(present).filter((g) => !GROUP_ORDER.includes(g)),
         ];
-    }, [registry]);
+    }, [registry, registryVersion]);
 
     const groups = useMemo(() => {
+        void registryVersion; // dependencia deliberada (ver arriba)
         const q = query.trim().toLowerCase();
         const byGroup: Record<string, PaletteItem[]> = {};
         for (const def of registry.list()) {
@@ -71,7 +77,7 @@ export default function BlockPalette({ registry, onInsert }: BlockPaletteProps) 
             ms: GROUP_MS_ICON[g] || "widgets",
             items: byGroup[g].sort((a, b) => a.label.localeCompare(b.label)),
         }));
-    }, [registry, query, activeGroup, language]);
+    }, [registry, registryVersion, query, activeGroup, language]);
 
     const hasResults = groups.length > 0;
 
