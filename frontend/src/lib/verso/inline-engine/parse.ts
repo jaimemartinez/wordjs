@@ -61,7 +61,7 @@ const SELF_CLOSING_SIBLINGS = new Set(["p", "li", "tr", "td", "th"]);
 
 const NAMED_ENTITIES: Record<string, string> = {
     amp: "&", lt: "<", gt: ">", quot: '"', apos: "'",
-    nbsp: " ", copy: "©", reg: "®", trade: "™",
+    nbsp: " ", copy: "©", reg: "®", trade: "™",
     hellip: "…", mdash: "—", ndash: "–",
     lsquo: "‘", rsquo: "’", ldquo: "“", rdquo: "”",
 };
