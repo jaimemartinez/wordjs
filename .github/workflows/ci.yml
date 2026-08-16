@@ -304,6 +304,15 @@ jobs:
         working-directory: frontend
         env:
           CI: 'true'
+          # Un checkout limpio arranca SIN instalar (todas las rutas 503
+          # setup_required), así que el setup e2e instala la instancia por el
+          # camino oficial de automatización: servidor y cliente comparten este
+          # token efímero (core/install-token.ts lo honra vía env var). El
+          # instalador exige contraseña de ≥10 caracteres — de ahí que la de CI
+          # no sea la de dev.
+          WORDJS_INSTALL_TOKEN: ci-verso-e2e-install-token
+          VERSO_E2E_USER: admin
+          VERSO_E2E_PASS: verso-e2e-ci-pass
         run: npx playwright test
       - name: Upload traces on failure
         if: failure()
