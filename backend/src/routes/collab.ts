@@ -173,6 +173,22 @@ function makeRevalidate(req: any, postId: number): () => Promise<boolean> {
     };
 }
 
+/**
+ * ÚNICA TRADUCCIÓN DE UN RECHAZO POR RITMO A HTTP. Un 429 SIEMPRE lleva la espera y el número de
+ * serie del aviso: son lo que el cliente devuelve para poder ser considerado desobediente (ver
+ * `rateGate` en core/collab-rooms.ts), así que un camino que se olvide de mandarlos vuelve inmune a
+ * su cliente. Con una sola función no hay «un camino que se olvide».
+ */
+function denyRate(res: Response, status: number, r: { code: string; message?: string; rate?: any }): Response {
+    return res.status(status).json({
+        code: r.code,
+        message: r.message,
+        retryAfterMs: r.rate ? r.rate.retryAfterMs : undefined,
+        rateNotice: r.rate ? r.rate.notice : undefined,
+        data: { status },
+    });
+}
+
 /** Resuelve post + conexión para las rutas de subida. */
 async function connGate(req: any, res: Response): Promise<any | null> {
     const postId = parsePostId(req.params.postId);
@@ -194,6 +210,10 @@ async function connGate(req: any, res: Response): Promise<any | null> {
         });
         return null;
     }
+    // ÚNICA PUERTA por la que una ruta de subida consigue una conexión, y por eso el acuse de la
+    // espera se anota AQUÍ: cualquier ruta nueva lo hereda sin tener que acordarse. Anotarlo en cada
+    // handler es exactamente la forma en la que este defecto se mudó de camino tres veces.
+    collab.noteRateAck(conn, req.body?.rateAck);
     return conn;
 }
 
@@ -296,12 +316,12 @@ router.get('/:postId/stream', authenticate, asyncHandler(async (req: any, res: R
             maxOpsPerSec: collab.CONFIG.MAX_OPS_PER_SEC,
             maxBytesPerSec: collab.CONFIG.MAX_BYTES_PER_SEC,
             maxFrameBytes: collab.CONFIG.MAX_FRAME_BYTES,
-            // LA ESPERA VIAJA POR EL CABLE. El servidor cuenta un strike a quien reintenta ANTES de
-            // `RATE_RETRY_MS` y a los tres cierra la sesión; el cliente esperaba 1000 ms FIJOS,
-            // escritos en otro fichero y sin nada que atara los dos números. Con 900 < 1000 funciona
-            // POR CASUALIDAD: subir la constante del servidor a 1500 —o bajar la del cliente— reabre
-            // la expulsión en silencio, y ningún test lo veía. Publicándola aquí el cliente deriva su
-            // espera de la del servidor y el acoplamiento deja de ser un invariante no declarado.
+            // LA ESPERA VIAJA POR EL CABLE, y ésta es su ÚNICA FUENTE. El cliente llevaba 1000 ms
+            // fijos escritos en otro fichero de otro paquete: con 900 < 1000 funcionaba POR
+            // CASUALIDAD, y subir la constante del servidor —o bajar la del cliente— reabría la
+            // expulsión en silencio, sin un solo test en rojo. De aquí sale AHORA la espera de todos
+            // los caminos del cliente (ops, presencia, resync y reconexión), y cada 429 la repite
+            // junto al número de serie del aviso.
             rateRetryMs: collab.CONFIG.RATE_RETRY_MS,
         },
     });
@@ -317,7 +337,7 @@ router.post('/:postId/ops', authenticate, asyncHandler(async (req: any, res: Res
 
     const result = await collab.pushOps(conn, req.body?.ops, req.body?.epoch);
     if (!result.ok) {
-        return res.status(result.status).json({ code: result.code, message: result.message, data: { status: result.status } });
+        return denyRate(res, result.status, result);
     }
     // `rejected` viaja de vuelta a propósito: el emisor tiene que poder enterarse de que algo suyo
     // no pasó el filtro en el momento, no releyendo su documento más tarde. `normalized` es lo mismo
@@ -344,8 +364,7 @@ router.post('/:postId/presence', authenticate, asyncHandler(async (req: any, res
 
     const r = await collab.setPresence(conn, req.body?.sel);
     if (!r.ok) {
-        const status = r.code === 'collab_rate_limit' ? 429 : 409;
-        return res.status(status).json({ code: r.code, message: r.message, data: { status } });
+        return denyRate(res, r.status || 409, r);
     }
     res.json({ ok: true });
 }));
@@ -363,7 +382,7 @@ router.post('/:postId/resync', authenticate, asyncHandler(async (req: any, res: 
     // amplificador contra la memoria del proceso y contra la BD.
     const r = await collab.resync(conn, req.body?.vv, req.body?.epoch);
     if (!r.ok) {
-        return res.status(r.status).json({ code: r.code, message: r.message, data: { status: r.status } });
+        return denyRate(res, r.status, r);
     }
     res.json({ epoch: r.epoch, ops: r.ops, base: r.base, complete: r.complete });
 }));

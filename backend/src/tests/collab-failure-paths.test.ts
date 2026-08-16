@@ -858,10 +858,15 @@ describe('el límite de ritmo frena, pero no deja a nadie mudo', () => {
         }
     });
 
-    test('el freno de PRESENCIA sigue existiendo: quien la machaca sin esperar acaba fuera', async () => {
+    test('el freno de PRESENCIA sigue existiendo: quien ACUSA el aviso y no espera acaba fuera', async () => {
         // La contracara del anterior: que un cubo ajeno no la frene no puede significar que la
         // presencia sea gratis. Su propio cubo (`PRESENCE_BURST` / `MAX_PRESENCE_PER_SEC`) sigue
-        // frenando, y quien ignora la espera sigue acumulando strikes hasta el cierre.
+        // frenando, y quien ignora la espera sigue acabando cerrado.
+        //
+        // «Ignorar la espera» es AHORA una cosa comprobable, no una suposición sobre el reloj:
+        // devolver el `rateNotice` del 429 —o sea, reconocer que se ha recibido esa instrucción— y
+        // mandar igual dentro de su ventana. Es exactamente lo que hace un cliente nuestro con el
+        // planificador roto, que es el caso que esto tiene que seguir frenando.
         const burst = collab.CONFIG.PRESENCE_BURST;
         const perSec = collab.CONFIG.MAX_PRESENCE_PER_SEC;
         collab.CONFIG.PRESENCE_BURST = 3;
@@ -871,11 +876,16 @@ describe('el límite de ritmo frena, pero no deja a nadie mudo', () => {
             a = await openSession('mano', P.presencia, NONCE_B);
             let rechazos = 0;
             let cerrado = false;
+            let rateAck = 0;
             for (let i = 0; i < 40 && !cerrado; i++) {
                 const r = await post('mano', `/collab/${P.presencia}/presence`, {
-                    siteId: a.site, sel: { nodeId: `n${i}` },
+                    siteId: a.site, sel: { nodeId: `n${i}` }, rateAck,
                 });
-                if (r.status === 429) rechazos++;
+                if (r.status === 429) {
+                    rechazos++;
+                    assert.ok(r.body.retryAfterMs > 0, 'un 429 tiene que decir CUÁNTO esperar');
+                    rateAck = r.body.rateNotice;      // se entera… y vuelve dentro de la ventana
+                }
                 if (r.status === 409 && r.body.code === 'collab_no_session') cerrado = true;
             }
             assert.ok(rechazos > 0, 'el cubo de presencia tiene que frenar');
@@ -893,7 +903,7 @@ describe('el límite de ritmo frena, pero no deja a nadie mudo', () => {
     test('quien IGNORA la espera sigue acabando expulsado (el freno no se ha desactivado)', async () => {
         // La contracara del test anterior: relajar el strike NO puede haber desactivado el freno. Los
         // frames van muy por debajo del máximo (si no, rebotarían como 413 `too-large`, que no es un
-        // problema de ritmo) y se mandan seguidos, sin respetar ninguna espera.
+        // problema de ritmo) y se mandan seguidos, acusando el aviso y sin respetar ninguna espera.
         const burst = collab.CONFIG.BYTES_BURST;
         const perSec = collab.CONFIG.MAX_BYTES_PER_SEC;
         collab.CONFIG.BYTES_BURST = 4_000;
@@ -904,10 +914,11 @@ describe('el límite de ritmo frena, pero no deja a nadie mudo', () => {
             let cerrado = false;
             let rechazos = 0;
             let counter = 500;
+            let rateAck = 0;
             for (let i = 0; i < 60 && !cerrado; i++) {
                 const ops = Array.from({ length: 3 }, () => opPropSet(a!.site, counter++, `k${counter}`, 'y'.repeat(200)));
-                const r = await post('jefa', `/collab/${P.cubo}/ops`, { siteId: a.site, epoch: a.welcome.epoch, ops });
-                if (r.status === 429) rechazos++;
+                const r = await post('jefa', `/collab/${P.cubo}/ops`, { siteId: a.site, epoch: a.welcome.epoch, ops, rateAck });
+                if (r.status === 429) { rechazos++; rateAck = r.body.rateNotice; }
                 if (r.status === 409 && r.body.code === 'collab_no_session') cerrado = true;
             }
             assert.ok(rechazos > 0, 'el límite de ritmo tiene que dispararse');
@@ -920,6 +931,108 @@ describe('el límite de ritmo frena, pero no deja a nadie mudo', () => {
             collab.CONFIG.MAX_BYTES_PER_SEC = perSec;
             await settle(250);
             await dbAsync.run('DELETE FROM collab_ops WHERE post_id = ?', [P.cubo]);
+        }
+    });
+
+    test('UN FRAME EN VUELO NO PRUEBA NADA: llegar dentro de la ventana sin acusar el aviso no expulsa', async () => {
+        // EL DEFECTO DE FONDO, el que hacía que el arreglo se mudara de sitio cada ronda.
+        //
+        // La regla anterior decía «un frame que llega dentro de la ventana = el cliente ignoró la
+        // espera», y eso es FALSO EN CUANTO HAY RED: un frame que ya iba por el cable cuando el
+        // servidor emitió la instrucción llega dentro de la ventana sin que su emisor pudiera saber
+        // nada. Con RTT de 120 ms y tres canales a la vez (ops, presencia, resync), eso eran tres
+        // strikes de un cliente impecable — y no hay arreglo posible en el cliente, porque un paquete
+        // ya enviado no se puede desconvocar.
+        //
+        // Aquí se reproduce exactamente eso: rechazos seguidos, TODOS dentro de la ventana, con el
+        // acuse que traía el frame en vuelo (ninguno). No puede cerrarse la sesión.
+        const burst = collab.CONFIG.PRESENCE_BURST;
+        const perSec = collab.CONFIG.MAX_PRESENCE_PER_SEC;
+        collab.CONFIG.PRESENCE_BURST = 2;
+        collab.CONFIG.MAX_PRESENCE_PER_SEC = 1;
+        let a: Session | null = null;
+        try {
+            a = await openSession('mano', P.presencia, NONCE_A);
+            const status: number[] = [];
+            for (let i = 0; i < 12; i++) {
+                const r = await post('mano', `/collab/${P.presencia}/presence`, {
+                    siteId: a.site, sel: { nodeId: `n${i}` },
+                });
+                status.push(r.status);
+            }
+            assert.ok(status.includes(429), 'la contrapresión tiene que actuar: si no, el test no prueba nada');
+            assert.equal(status.includes(409), false,
+                `un frame en vuelo no puede costar la sesión: ${JSON.stringify(status)}`);
+            assert.equal(a.ended(), false, 'y el stream sigue abierto');
+            assert.equal(a.events.some((e) => e.event === 'error'), false,
+                `nadie es expulsado sin prueba: ${JSON.stringify(a.events.filter((e) => e.event === 'error'))}`);
+        } finally {
+            a?.close();
+            collab.CONFIG.PRESENCE_BURST = burst;
+            collab.CONFIG.MAX_PRESENCE_PER_SEC = perSec;
+            await settle(250);
+        }
+    });
+
+    test('el 429 lleva SIEMPRE la espera y el número de aviso: sin eso el cliente no puede obedecer', async () => {
+        // Los dos campos son el contrato entero: `retryAfterMs` es lo que el cliente espera y
+        // `rateNotice` lo que devuelve para que se le pueda probar algo. Un camino que se olvidara de
+        // mandarlos volvería inmune a su propio cliente Y le dejaría sin saber cuánto esperar.
+        const burst = collab.CONFIG.PRESENCE_BURST;
+        const perSec = collab.CONFIG.MAX_PRESENCE_PER_SEC;
+        collab.CONFIG.PRESENCE_BURST = 1;
+        collab.CONFIG.MAX_PRESENCE_PER_SEC = 1;
+        let a: Session | null = null;
+        try {
+            a = await openSession('mano', P.presencia, NONCE_B);
+            let visto: any = null;
+            for (let i = 0; i < 8 && !visto; i++) {
+                const r = await post('mano', `/collab/${P.presencia}/presence`, { siteId: a.site, sel: { nodeId: `n${i}` } });
+                if (r.status === 429) visto = r.body;
+            }
+            assert.ok(visto, 'hacía falta al menos un 429 para mirarlo');
+            assert.equal(typeof visto.retryAfterMs, 'number', 'sin `retryAfterMs` el cliente no sabe cuánto esperar');
+            assert.ok(visto.retryAfterMs > 0 && visto.retryAfterMs <= collab.CONFIG.RATE_RETRY_MS,
+                `la espera anunciada sale de RATE_RETRY_MS: ${visto.retryAfterMs}`);
+            assert.equal(typeof visto.rateNotice, 'number', 'sin `rateNotice` no hay nada que acusar');
+            assert.ok(visto.rateNotice > 0, 'el número de aviso empieza en 1');
+        } finally {
+            a?.close();
+            collab.CONFIG.PRESENCE_BURST = burst;
+            collab.CONFIG.MAX_PRESENCE_PER_SEC = perSec;
+            await settle(250);
+        }
+    });
+});
+
+describe('la sala dice quién está dentro, no quién ha movido el cursor', () => {
+    test('quien entra ve a los que YA estaban aunque nadie haya tocado el cursor', async () => {
+        // `livePresence` derivaba los miembros del mapa de PRESENCIA, que solo se llena con los POST
+        // de `/presence` y caduca por TTL. Al recargar una pestaña, el editor decía «no hay nadie
+        // más» aunque hubiera gente conectada, hasta que esa persona moviera el cursor. Con dos
+        // personas quietas, cada una se creía sola en el documento.
+        //
+        // Se reproduce con el TTL a cero, que es la forma determinista de «la entrada efímera ya
+        // caducó» sin dormir treinta segundos: la pertenencia no puede depender de ella.
+        const ttl = collab.CONFIG.PRESENCE_TTL_MS;
+        let a: Session | null = null;
+        let b: Session | null = null;
+        try {
+            a = await openSession('jefa', P.presencia, NONCE_A);
+            collab.CONFIG.PRESENCE_TTL_MS = 0;
+            await settle(30);
+
+            b = await openSession('mano', P.presencia, NONCE_B);
+            const vistos = (b.welcome.members || []).map((m: any) => m.siteId);
+            assert.deepEqual(vistos, [a.site],
+                `la pertenencia sale de las CONEXIONES vivas, no de una presencia efímera caducada: ${JSON.stringify(b.welcome.members)}`);
+            assert.equal(b.welcome.members[0].sel, null, 'sin selección conocida, el hecho de estar ya es información');
+            assert.equal(vistos.includes(b.site), false, 'y uno no se ve a sí mismo entre los compañeros');
+        } finally {
+            collab.CONFIG.PRESENCE_TTL_MS = ttl;
+            a?.close();
+            b?.close();
+            await settle(250);
         }
     });
 });

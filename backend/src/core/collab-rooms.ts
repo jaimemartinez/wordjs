@@ -124,12 +124,13 @@ const CONFIG = {
     PRESENCE_BURST: 40,
     /** Coste en fichas de ops de UN `resync` (la ruta más cara del módulo: lee la sala entera). */
     RESYNC_OP_COST: 10,
-    /** Avisos de exceso antes de cerrar la conexión. */
+    /** Desobediencias PROBADAS antes de cerrar la conexión (ver `rateGate`). */
     MAX_STRIKES: 3,
     /**
-     * Espera que un 429 le pide al cliente antes de reintentar (`backoffMs` en `client.ts`). Un
-     * rechazo que llega DESPUÉS de esa espera no suma strike: es un cliente que se porta bien contra
-     * un cubo que todavía no se ha rellenado. Solo el que la ignora acumula hasta el cierre.
+     * ÚNICA FUENTE DE LA ESPERA de todo el transporte. Viaja en `welcome.limits.rateRetryMs` y en
+     * cada 429, y el cliente DERIVA de ella la suya: no hay ningún otro número de espera, ni aquí ni
+     * en `client.ts`. Es también la ventana con la que `rateGate` decide si a un cliente se le puede
+     * probar que ignoró una instrucción.
      */
     RATE_RETRY_MS: 900,
     /** Ops persistidas por epoch. Pasado el tope se sigue difundiendo pero NO se persiste. */
@@ -180,9 +181,18 @@ type Conn = {
     byteTokens: number;
     presenceTokens: number;
     lastRefill: number;
+    /** Desobediencias PROBADAS (ver `rateGate`). No es "rechazos": un rechazo no prueba nada. */
     strikes: number;
-    /** Instante del último rechazo por ritmo. Sirve para saber si el cliente respetó la espera. */
-    lastRateReject: number;
+    /**
+     * INSTRUCCIÓN DE ESPERA VIGENTE, emitida por este servidor y con su reloj.
+     *
+     * `rateNotice` es su número de serie —monótono por conexión— y `rateRetryAt` el instante hasta el
+     * que pidió esperar. Los dos viajan al cliente en el cuerpo del 429; `rateAck` es el número de
+     * serie que el cliente DEVUELVE en el siguiente frame, y es la única prueba de que ya la conocía.
+     */
+    rateNotice: number;
+    rateRetryAt: number;
+    rateAck: number;
     authFailures: number;
     revalidate: Revalidate | null;
     closed: boolean;
@@ -766,7 +776,9 @@ async function join(params: {
         presenceTokens: CONFIG.PRESENCE_BURST,
         lastRefill: now,
         strikes: 0,
-        lastRateReject: 0,
+        rateNotice: 0,
+        rateRetryAt: 0,
+        rateAck: 0,
         authFailures: 0,
         revalidate: params.revalidate || null,
         closed: false,
@@ -818,7 +830,9 @@ async function join(params: {
     // tiene que enterarse igual que si el log estuviera lleno.
     const truncated = doc.truncated || ops.length >= CONFIG.MAX_OPS_PER_EPOCH || unreadable > 0;
 
-    const members = livePresence(room);
+    // Los demás, sin nosotros: nuestra conexión ya está `ready` y si no se excluyera nos veríamos a
+    // nosotros mismos en la lista de compañeros.
+    const members = livePresence(room, conn.siteId);
     // Alta en presencia SIN selección: el hecho de estar es ya información útil para los demás.
     const entry: PresenceEntry = { siteId, userId, name: conn.name, color: conn.color, sel: null, at: Date.now() };
     room.presence.set(siteId, entry);
@@ -867,12 +881,40 @@ async function reauthorize(conn: Conn): Promise<void> {
     await leave(conn);
 }
 
-function livePresence(room: Room): PresenceEntry[] {
+/**
+ * QUIÉN ESTÁ EN LA SALA. Sale de las CONEXIONES VIVAS, no del mapa de presencia.
+ *
+ * La presencia es efímera a propósito: se llena con los POST de `/presence` y caduca por TTL, porque
+ * lo que describe es DÓNDE tiene cada uno el cursor, que envejece. Derivar de ahí la PERTENENCIA
+ * mezclaba dos cosas distintas y se notaba al recargar una pestaña: quien entraba veía «no hay nadie
+ * más» aunque hubiera gente conectada, hasta que alguna de esas personas moviera el cursor y su
+ * entrada renaciera. Con dos personas quietas, cada una creía estar sola en el documento.
+ *
+ * Estar conectado es el hecho; la selección es un adorno que puede faltar. Los que están a mitad de
+ * entrar (`ready === false`) NO cuentan, por el mismo motivo que en `collab_members`: dos entradas
+ * simultáneas en una sala vacía se verían la una a la otra y ninguna re-sembraría.
+ */
+function livePresence(room: Room, exceptSite?: string | null): PresenceEntry[] {
     const now = Date.now();
-    const out: PresenceEntry[] = [];
+    // Las entradas efímeras caducadas se siguen podando aquí: es el único recorrido periódico del
+    // mapa, y sin él las selecciones de quien ya se fue se quedarían ocupando memoria.
     for (const [site, p] of room.presence) {
-        if (now - p.at > CONFIG.PRESENCE_TTL_MS) { room.presence.delete(site); continue; }
-        out.push(p);
+        if (now - p.at > CONFIG.PRESENCE_TTL_MS) room.presence.delete(site);
+    }
+
+    const out: PresenceEntry[] = [];
+    for (const conn of room.conns.values()) {
+        if (!conn.ready || conn.closed || conn.left) continue;
+        if (exceptSite && conn.siteId === exceptSite) continue;
+        const sel = room.presence.get(conn.siteId);
+        out.push({
+            siteId: conn.siteId,
+            userId: conn.userId,
+            name: conn.name,
+            color: conn.color,
+            sel: sel ? sel.sel : null,
+            at: sel ? sel.at : now,
+        });
     }
     return out;
 }
@@ -983,7 +1025,12 @@ async function sweepIdleRooms(maxAgeMs = 60 * 60 * 1000): Promise<number> {
 /* Límites de ritmo                                                                              */
 /* ------------------------------------------------------------------------------------------- */
 
-type RateVerdict = { ok: true } | { ok: false; code: 'rate' | 'closed' | 'too-large'; message: string };
+/** La instrucción que acompaña SIEMPRE a un rechazo por ritmo: cuánto esperar y con qué nº de serie. */
+export type RateInstruction = { retryAfterMs: number; notice: number };
+
+type RateVerdict =
+    | { ok: true }
+    | { ok: false; code: 'rate' | 'closed' | 'too-large'; message: string; rate?: RateInstruction };
 
 function refill(conn: Conn, now: number): void {
     const dt = Math.max(0, now - conn.lastRefill) / 1000;
@@ -995,12 +1042,48 @@ function refill(conn: Conn, now: number): void {
 }
 
 /**
+ * EL ÚNICO SITIO DEL SERVIDOR QUE PUEDE RECHAZAR POR RITMO Y EL ÚNICO QUE PUEDE CERRAR POR RITMO.
+ *
+ * Aquí vive el invariante del que cuelga todo el transporte:
+ *
+ *     UN CLIENTE QUE RESPETA LA ESPERA QUE EL SERVIDOR LE PIDE NUNCA PUEDE SER EXPULSADO.
+ *
+ * Tres rondas de arreglos lo dieron por cerrado y tres veces reapareció en otro sitio (el camino de
+ * ops, el de presencia, el planificador del cliente) porque se parcheaba el SÍNTOMA —dónde ocurría la
+ * expulsión— en vez de la razón por la que era POSIBLE. La razón era ésta: la regla decía «un frame
+ * que llega dentro de la ventana = el cliente ignoró la espera», y eso ES FALSO EN CUANTO HAY RED.
+ * Un frame que ya iba por el cable cuando el servidor emitió la instrucción llega dentro de la
+ * ventana sin que su emisor pudiera saber nada, y el servidor lo castigaba igual. Con RTT de 120 ms y
+ * tres canales a la vez (ops, presencia, resync) eso son tres strikes de un cliente impecable. No hay
+ * arreglo posible en el cliente: no se puede desconvocar un paquete ya enviado.
+ *
+ * Así que la expulsión pasa a exigir PRUEBA, y la prueba la firma el propio cliente:
+ *
+ *   · cada rechazo emite una INSTRUCCIÓN `{retryAfterMs, notice}` — `notice` es un número de serie
+ *     monótono por conexión y `rateRetryAt` su plazo, medido con el RELOJ DEL SERVIDOR;
+ *   · el cliente devuelve en cada frame el último `notice` que ha VISTO (`conn.rateAck`);
+ *   · solo es desobediencia un frame que llega con `rateAck >= notice` vigente y ANTES del plazo: el
+ *     cliente reconoce haber recibido esta instrucción concreta y aun así mandó dentro de su ventana.
+ *
+ * Un frame en vuelo trae un `rateAck` ANTERIOR y por construcción nunca puede contar. Un cliente que
+ * espera manda después del plazo y tampoco. Ninguna latencia, ningún planificador roto y ningún
+ * reparto de la carga entre canales puede fabricar esa prueba: por eso el defecto no puede volver a
+ * mudarse de sitio, y por eso el número de la espera ya no puede desincronizarse (solo hay uno,
+ * `CONFIG.RATE_RETRY_MS`, y viaja con cada rechazo).
+ *
+ * Lo que NO cambia: el rechazo en sí. La contrapresión —no aceptar el frame y decir cuánto esperar—
+ * es lo que protege al servidor, y se aplica a todo el mundo, pruebe lo que pruebe. Cerrar la sesión
+ * de alguien que obedece nunca protegió nada: el 409 posterior cuesta exactamente lo mismo de servir
+ * que el 429 (los dos pasan por `authenticate` + `Post.findById` en `connGate`), así que la expulsión
+ * solo ahorra el socket SSE. Un cliente ajeno al protocolo, que no devuelva `rateAck`, no se expulsa:
+ * se le rechaza TODO igualmente, que es la parte que sirve para algo.
+ *
  * CUBO DE FICHAS, no ventana de un segundo. Con la ventana, un frame legítimo más grande que el cap
  * por segundo era IMPOSIBLE de aceptar por muy despacio que fuera el editor: se validaba, se
  * saneaba, se rechazaba con 429 y a los tres reintentos se cerraba la sesión — y al reabrir pasaba
  * exactamente lo mismo. El cubo permite la ráfaga (>= el frame máximo) y mantiene el ritmo medio.
  */
-function rateCheck(conn: Conn, ops: number, bytes: number, presence = 0): RateVerdict {
+function rateGate(conn: Conn, ops: number, bytes: number, presence = 0): RateVerdict {
     const now = Date.now();
     refill(conn, now);
 
@@ -1014,39 +1097,74 @@ function rateCheck(conn: Conn, ops: number, bytes: number, presence = 0): RateVe
     // `resync`. Por esa puerta rebotaba TODA la presencia, que cuesta 0 ops y 0 bytes: mover el cursor
     // por los bloques después de un resync legítimo se comía los tres strikes y expulsaba de la sala a
     // quien no había hecho nada malo (y un co-editor lo provocaba a voluntad inflando el log). El
-    // arreglo del strike tapó el camino de `ops`, donde el cliente ya respetaba la espera, y dejó éste
-    // abierto: el candado estaba en la puerta que nadie forzaba. El suelo de la deuda acota el tiempo
-    // de recuperación; esto acota A QUÉ afecta esa deuda.
+    // suelo de la deuda acota el tiempo de recuperación; esto acota A QUÉ afecta esa deuda.
     const falta =
         (ops > 0 && conn.opTokens < ops) ||
         (bytes > 0 && conn.byteTokens < bytes) ||
         (presence > 0 && conn.presenceTokens < presence);
     if (falta) {
-        // EL STRIKE SOLO CUENTA SI EL CLIENTE IGNORÓ LA ESPERA. Sumar uno en cada rechazo cerraba la
-        // sesión de quien se porta BIEN: un solo `resync` legítimo deja el cubo de bytes en
-        // descubierto (se cobra el log entero DESPUÉS de servirlo), y a partir de ahí hasta un frame
-        // de tecleo de 150 B rebota. Tres rebotes y fuera — y el cliente trata `rate_limit` como
-        // terminal, así que el editor se quedaba MUDO hasta recargar la página. Peor: un co-editor
-        // podía provocarlo a voluntad contra todos los demás (inflar el log y forzar un resync
-        // ajeno). El cliente responde a un 429 devolviendo el lote a su cola y esperando; quien
-        // respeta esa espera nunca acumula, y quien la ignora sigue acabando cerrado.
-        const ignoroLaEspera = conn.lastRateReject > 0 && now - conn.lastRateReject < CONFIG.RATE_RETRY_MS;
-        conn.lastRateReject = now;
-        if (ignoroLaEspera) conn.strikes++;
-        if (conn.strikes >= CONFIG.MAX_STRIKES) {
-            writeEvent(conn, 'error', { code: 'rate_limit', message: 'Demasiadas operaciones: conexión cerrada.' });
-            void leave(conn);
-            return { ok: false, code: 'closed', message: 'Conexión cerrada por exceso de operaciones.' };
+        // ¿Hay una instrucción VIGENTE y este frame demuestra conocerla? Ésa es toda la condición de
+        // expulsión del módulo, y está escrita una sola vez.
+        const vigente = now < conn.rateRetryAt;
+        if (vigente && conn.rateAck >= conn.rateNotice) {
+            conn.strikes++;
+            if (conn.strikes >= CONFIG.MAX_STRIKES) {
+                writeEvent(conn, 'error', { code: 'rate_limit', message: 'Demasiadas operaciones: conexión cerrada.' });
+                void leave(conn);
+                return { ok: false, code: 'closed', message: 'Conexión cerrada por exceso de operaciones.' };
+            }
         }
-        return { ok: false, code: 'rate', message: 'Demasiadas operaciones. Reduce el ritmo.' };
+        // La instrucción solo se RENUEVA cuando la anterior ha vencido: mientras una está en vigor,
+        // repetirla movería el plazo hacia delante y volvería inalcanzable el número de serie que el
+        // cliente tiene que reconocer — justo la puerta por la que un cliente que la ignora se haría
+        // inmune a los strikes. Un plazo, un número de serie.
+        if (!vigente) {
+            conn.rateNotice++;
+            conn.rateRetryAt = now + CONFIG.RATE_RETRY_MS;
+        }
+        return {
+            ok: false,
+            code: 'rate',
+            message: 'Demasiadas operaciones. Reduce el ritmo.',
+            rate: { retryAfterMs: Math.max(0, conn.rateRetryAt - now), notice: conn.rateNotice },
+        };
     }
 
     conn.opTokens -= ops;
     conn.byteTokens -= bytes;
     conn.presenceTokens -= presence;
-    conn.strikes = 0; // un pico aislado no puede acumularse hasta matar una sesión sana
-    conn.lastRateReject = 0;
+    conn.strikes = 0;     // un pico aislado no puede acumularse hasta matar una sesión sana
+    conn.rateRetryAt = 0; // frame aceptado ⇒ no hay espera en vigor que nadie pueda incumplir
     return { ok: true };
+}
+
+/**
+ * TRADUCCIÓN ÚNICA de un veredicto de ritmo a lo que devuelven las rutas. Estaba repetida en los
+ * tres puntos de entrada, y con una diferencia que costó un test: el veredicto `closed` —la sesión
+ * ACABA de cerrarse— salía como 429 «espera un poco», o sea invitando a reintentar sobre una sesión
+ * que ya no existe y sin la instrucción que un 429 tiene que llevar. Es un 409: no hay sesión.
+ */
+function rateFailure(v: Extract<RateVerdict, { ok: false }>): {
+    status: number; code: string; message: string; rate?: RateInstruction;
+} {
+    if (v.code === 'too-large') return { status: 413, code: 'collab_frame_too_large', message: v.message };
+    if (v.code === 'closed') return { status: 409, code: 'collab_closed', message: v.message };
+    return { status: 429, code: 'collab_rate_limit', message: v.message, rate: v.rate };
+}
+
+/**
+ * Anota el número de aviso que el cliente DICE haber visto. Se llama desde `connGate`, que es la
+ * única puerta por la que una ruta de subida consigue una `conn`: así ningún camino nuevo puede
+ * olvidarse de pasarlo (que fue exactamente cómo el defecto se mudó de camino tres veces).
+ *
+ * Es un dato del cliente y se trata como tal: solo puede perjudicarle. Declarar de menos = no se le
+ * puede probar nada (y se le sigue rechazando todo); declarar de más = se autoinculpa. Nunca afecta a
+ * otra conexión, porque el número de serie es por conexión.
+ */
+function noteRateAck(conn: Conn, raw: any): void {
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n <= 0) return;
+    conn.rateAck = Math.max(conn.rateAck, Math.min(n, Number.MAX_SAFE_INTEGER));
 }
 
 /**
@@ -1076,7 +1194,7 @@ export type PushResult =
         /** Ops que el saneado REESCRIBIÓ, ya normalizadas, para que el emisor adopte el valor bueno. */
         normalized: any[];
     }
-    | { ok: false; status: number; code: string; message: string };
+    | { ok: false; status: number; code: string; message: string; rate?: RateInstruction };
 
 /**
  * ¿El error del INSERT es la violación del UNIQUE (= la op ya estaba) o un fallo de verdad?
@@ -1111,10 +1229,8 @@ async function pushOps(conn: Conn, rawOps: any, epoch: number): Promise<PushResu
 
     // El ritmo se cobra ANTES de la consulta y del saneado: no tiene sentido pagar sanitize-html
     // sobre un frame que se va a rechazar.
-    const byteVerdict = rateCheck(conn, 0, bytes);
-    if (!byteVerdict.ok) {
-        return { ok: false, status: 429, code: 'collab_rate_limit', message: byteVerdict.message };
-    }
+    const byteVerdict = rateGate(conn, 0, bytes);
+    if (!byteVerdict.ok) return { ok: false, ...rateFailure(byteVerdict) };
 
     const current = await dbAsync.get('SELECT epoch, truncated FROM collab_docs WHERE post_id = ?', [conn.postId]);
     if (!current) {
@@ -1133,11 +1249,8 @@ async function pushOps(conn: Conn, rawOps: any, epoch: number): Promise<PushResu
         return { ok: false, status: 400, code: 'collab_bad_frame', message: `Frame inválido (${frame.code}).` };
     }
 
-    const verdict = rateCheck(conn, frame.ops.length, 0);
-    if (!verdict.ok) {
-        const status = verdict.code === 'too-large' ? 413 : 429;
-        return { ok: false, status, code: status === 413 ? 'collab_frame_too_large' : 'collab_rate_limit', message: verdict.message };
-    }
+    const verdict = rateGate(conn, frame.ops.length, 0);
+    if (!verdict.ok) return { ok: false, ...rateFailure(verdict) };
 
     const rejected = [...frame.rejected];
     if (frame.ops.length === 0) {
@@ -1268,10 +1381,13 @@ function cleanSel(raw: any): PresenceSel {
     return out;
 }
 
-async function setPresence(conn: Conn, rawSel: any): Promise<{ ok: boolean; code?: string; message?: string }> {
-    if (conn.closed) return { ok: false, code: 'collab_closed', message: 'La conexión ya no está activa.' };
-    const verdict = rateCheck(conn, 0, 0, 1);
-    if (!verdict.ok) return { ok: false, code: 'collab_rate_limit', message: verdict.message };
+async function setPresence(
+    conn: Conn,
+    rawSel: any,
+): Promise<{ ok: boolean; status?: number; code?: string; message?: string; rate?: RateInstruction }> {
+    if (conn.closed) return { ok: false, status: 409, code: 'collab_closed', message: 'La conexión ya no está activa.' };
+    const verdict = rateGate(conn, 0, 0, 1);
+    if (!verdict.ok) return { ok: false, ...rateFailure(verdict) };
 
     const room = rooms.get(conn.postId);
     if (!room) return { ok: false, code: 'collab_no_room', message: 'La sala ya no existe.' };
@@ -1305,7 +1421,7 @@ export type ResyncResult =
         /** false ⇒ el log se truncó: el cliente debe recargar el documento del servidor. */
         complete: boolean;
     }
-    | { ok: false; status: number; code: string; message: string };
+    | { ok: false; status: number; code: string; message: string; rate?: RateInstruction };
 
 /**
  * Cierra un hueco. Se filtra por VERSION VECTOR y no por un cursor de secuencia: un cursor asume
@@ -1320,11 +1436,8 @@ export type ResyncResult =
 async function resync(conn: Conn, rawVv: any, clientEpoch: number): Promise<ResyncResult> {
     if (conn.closed) return { ok: false, status: 409, code: 'collab_closed', message: 'La conexión ya no está activa.' };
 
-    const verdict = rateCheck(conn, CONFIG.RESYNC_OP_COST, 0);
-    if (!verdict.ok) {
-        const status = verdict.code === 'too-large' ? 413 : 429;
-        return { ok: false, status, code: 'collab_rate_limit', message: verdict.message };
-    }
+    const verdict = rateGate(conn, CONFIG.RESYNC_OP_COST, 0);
+    if (!verdict.ok) return { ok: false, ...rateFailure(verdict) };
 
     const doc = await ensureDoc(conn.postId, false);
     const { ops: all, bytes, unreadable } = await loadOps(conn.postId, doc.epoch);
@@ -1384,7 +1497,7 @@ function _resetForTests(): void {
 module.exports = {
     CONFIG, NODE_ID, CHANNEL,
     colorForUser, initClusterBus, replicaId,
-    join, leave, pushOps, setPresence, resync, findConn,
+    join, leave, pushOps, setPresence, resync, findConn, noteRateAck,
     livePresence, retireRoom, sweepIdleRooms, ensureDoc, liveMembers,
     writeEvent, stats, _resetForTests,
     _rooms: rooms,

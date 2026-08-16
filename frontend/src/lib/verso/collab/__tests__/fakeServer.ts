@@ -27,6 +27,28 @@ import type { CollabOp } from "../../crdt";
 
 type Pending = { siteId: string; event: string; data: unknown };
 
+type PostBody = {
+  siteId?: string;
+  epoch?: number;
+  ops?: CollabOp[];
+  sel?: unknown;
+  vv?: Record<string, number>;
+  /** Acuse del último aviso de espera que el cliente dice haber visto (ver `ritmo`). */
+  rateAck?: unknown;
+};
+
+/** Estado de ritmo por sitio: los cubos y la INSTRUCCIÓN de espera vigente. */
+type Rate = {
+  opTokens: number;
+  byteTokens: number;
+  presenceTokens: number;
+  lastRefill: number;
+  strikes: number;
+  notice: number;
+  retryAt: number;
+  ack: number;
+};
+
 export interface FakeClient {
   siteId: string;
   userId: number;
@@ -118,6 +140,7 @@ export class FakeCollabServer {
   private readonly handlers = new Map<string, StreamHandlers>();
   private readonly clients = new Map<string, FakeClient>();
   private readonly presence = new Map<string, CollabMember>();
+  private readonly rate = new Map<string, Rate>();
   private outbox: Pending[] = [];
   /**
    * Nonces tal cual llegaron en la query de cada `GET /stream`, en orden. Es la huella del PRODUCTOR
@@ -132,14 +155,66 @@ export class FakeCollabServer {
    */
   rateRetryMs = 900;
 
-  /** Cuántos 429 seguidos servir por camino. Es el freno de ritmo del servidor real, simulado. */
+  /**
+   * TIEMPO DE VUELO, en una sola dirección. Por defecto 0 para no cambiar los tests que no lo
+   * necesitan, pero un doble instantáneo NO MODELA UNA RED, y ésa fue la razón —comprobada— de que
+   * ninguno de los 45 tests de colaboración viera el defecto que sobrevivió tres rondas: el 429 se
+   * respondía en el MISMO tick, así que entre mandar un frame y enterarse de que lo han rechazado no
+   * cabía nada. La carrera que expulsaba a la gente de la sala es justamente lo que pasa en ese
+   * hueco: una pulsación o un movimiento de cursor mientras el 429 viene de vuelta.
+   */
+  latencyMs = 0;
+
+  /** Cuántos 429 seguidos servir por camino, saltándose los cubos. Fuerza el rechazo en un test. */
   readonly refuse: Record<string, number> = {};
 
   /** Reloj del test (normalmente `timers.time`): sin él no se puede medir CUÁNTO esperó el cliente. */
   clock: () => number = () => 0;
 
-  /** Cada POST recibido con el instante del reloj simulado. La huella de las esperas del cliente. */
-  readonly posted: { path: string; at: number }[] = [];
+  /**
+   * Cómo espera este doble el tiempo de vuelo. Con `ManualTimers` tiene que ser SU cola, o el retardo
+   * no se podría avanzar de forma determinista y el test volvería a medir otra cosa.
+   */
+  sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  /** Ata reloj y retardo a los temporizadores del test de una vez: es fácil poner uno y olvidar el otro. */
+  useTimers(timers: ManualTimers): ManualTimers {
+    this.clock = () => timers.time;
+    this.sleep = (ms) => new Promise<void>((r) => { timers.set(r, ms); });
+    return timers;
+  }
+
+  /**
+   * LÍMITES QUE ESTE DOBLE APLICA, y los mismos que publica en el `welcome`. Están en un único sitio
+   * a propósito: si lo que exige y lo que dice exigir pudieran divergir, el cliente estaría
+   * obedeciendo un contrato que el servidor no cumple — que es EXACTAMENTE el defecto original, con
+   * el 900 del servidor y el 1000 del cliente escritos por separado.
+   */
+  readonly limits = {
+    maxOpsPerSec: 50,
+    maxBytesPerSec: 64 * 1024,
+    maxFrameBytes: 256 * 1024,
+    opsBurst: 400,
+    bytesBurst: 256 * 1024,
+    maxPresencePerSec: 20,
+    presenceBurst: 40,
+    /** Coste en fichas de ops de un `resync`, como `CONFIG.RESYNC_OP_COST`. */
+    resyncOpCost: 10,
+    /** Desobediencias probadas antes de cerrar, como `CONFIG.MAX_STRIKES`. */
+    maxStrikes: 3,
+  };
+
+  /** Sitios SIN sesión ahora mismo por haber sido cerrados por ritmo (su POST responde 409). */
+  private readonly expulsados = new Set<string>();
+
+  /**
+   * REGISTRO PERMANENTE de expulsiones. Aparte del conjunto vivo porque una reconexión lo limpia, y
+   * la evidencia de que a alguien lo echaron no puede borrarla el propio cliente al volver a entrar.
+   */
+  readonly expulsiones: { siteId: string; at: number }[] = [];
+
+  /** Cada POST recibido: cuándo se mandó y cuándo se sirvió (difieren en cuanto hay latencia). */
+  readonly posted: { path: string; at: number; servedAt: number; status: number }[] = [];
 
   /**
    * DERIVACIÓN de la identidad de réplica, igual que hace el servidor real: lo que el cliente pone
@@ -172,6 +247,11 @@ export class FakeCollabServer {
         const siteId = this.siteFor(nonce);
         const client = this.clients.get(nonce) ?? this.clients.get(siteId);
         this.handlers.set(siteId, h);
+        // Conexión NUEVA: cubos llenos y numeración de avisos desde cero, como el `Conn` que crea
+        // `join()` en el servidor real. Arrastrar la deuda de la conexión anterior haría que una
+        // reconexión heredara un castigo que el servidor de verdad no aplica.
+        this.rate.delete(siteId);
+        this.expulsados.delete(siteId);
         h.onOpen();
 
         const self: CollabSelf = {
@@ -194,7 +274,9 @@ export class FakeCollabServer {
           serverTime: 0,
           truncated: false,
           limits: {
-            maxOpsPerSec: 50, maxBytesPerSec: 65536, maxFrameBytes: 262144,
+            maxOpsPerSec: this.limits.maxOpsPerSec,
+            maxBytesPerSec: this.limits.maxBytesPerSec,
+            maxFrameBytes: this.limits.maxFrameBytes,
             rateRetryMs: this.rateRetryMs,
           },
         });
@@ -206,18 +288,142 @@ export class FakeCollabServer {
 
       post: async (url: string, body: unknown): Promise<PostResponse> => {
         const path = url.split("/").pop() ?? "";
-        const payload = body as { siteId?: string; epoch?: number; ops?: CollabOp[]; sel?: unknown; vv?: Record<string, number> };
-        const siteId = String(payload?.siteId ?? "");
-        this.posted.push({ path, at: this.clock() });
+        const payload = body as PostBody;
+        const enviadoEn = this.clock();
 
-        // Freno de ritmo, como el real: 429 con la MISMA semántica —el lote no se ha aceptado y hay
-        // que esperar `rateRetryMs` antes de volver—. El servidor real cuenta strike a quien no
-        // espera y a los tres cierra la sesión, así que el cliente TIENE que respetarlo aquí también.
-        if ((this.refuse[path] ?? 0) > 0) {
-          this.refuse[path]--;
-          return { status: 429, body: { code: "collab_rate_limit" } };
-        }
+        // IDA. A partir de aquí estamos en el SERVIDOR: todo lo que el cliente haga mientras tanto
+        // (teclear, mover el cursor) ocurre sin saber nada de lo que se decida aquí dentro.
+        if (this.latencyMs > 0) await this.sleep(this.latencyMs);
+        const res = this.sirve(path, payload);
+        this.posted.push({ path, at: enviadoEn, servedAt: this.clock(), status: res.status });
+        // VUELTA.
+        if (this.latencyMs > 0) await this.sleep(this.latencyMs);
+        return res;
+      },
+    };
+  }
 
+  /** Lo que decide el servidor, ya en su reloj (después de la ida). */
+  private sirve(path: string, payload: PostBody): PostResponse {
+    const siteId = String(payload?.siteId ?? "");
+
+    if (path === "leave") return { status: 200, body: { ok: true } };
+
+    // Sin sesión viva no hay sala a la que hablar: es el 409 del `connGate` real, y es la firma con
+    // la que se manifestaba el defecto (expulsado ⇒ 409 collab_no_session en todo lo que mande).
+    if (this.expulsados.has(siteId)) {
+      return { status: 409, body: { code: "collab_no_session", message: "No hay una sesión colaborativa abierta para ese siteId." } };
+    }
+
+    const freno = this.ritmo(siteId, path, payload);
+    if (freno) return freno;
+
+    return this.aplica(path, payload, siteId);
+  }
+
+  /**
+   * EL FRENO DE RITMO DEL SERVIDOR REAL, con su regla de expulsión.
+   *
+   * Reproduce `rateGate` de backend/src/core/collab-rooms.ts, y en particular la parte sin la cual un
+   * test de esta propiedad sería VACUO: este doble SÍ PUEDE EXPULSAR. Si solo devolviera 429, la
+   * aserción «el cliente nunca recibe un 409 collab_no_session» se cumpliría sola y no probaría nada.
+   * Hay un test de control negativo que comprueba que expulsa de verdad.
+   *
+   * La regla: un rechazo emite una instrucción `{retryAfterMs, notice}`; solo suma strike un frame
+   * que llega con `rateAck >= notice` VIGENTE y antes del plazo, o sea uno cuyo emisor reconoce haber
+   * recibido esa instrucción concreta. Un frame en vuelo trae un acuse anterior y nunca puede contar.
+   */
+  private ritmo(siteId: string, path: string, payload: PostBody): PostResponse | null {
+    if (path !== "ops" && path !== "presence" && path !== "resync") return null;
+
+    const now = this.clock();
+    const r = this.rateState(siteId, now);
+
+    const ack = Number(payload?.rateAck);
+    if (Number.isFinite(ack) && ack > r.ack) r.ack = ack;
+
+    const ops = path === "ops" ? (payload.ops ?? []).length : path === "resync" ? this.limits.resyncOpCost : 0;
+    const bytes = path === "ops" ? JSON.stringify(payload.ops ?? null).length : 0;
+    const presence = path === "presence" ? 1 : 0;
+
+    const forzado = (this.refuse[path] ?? 0) > 0;
+    if (forzado) this.refuse[path]--;
+
+    const falta = forzado
+      || (ops > 0 && r.opTokens < ops)
+      || (bytes > 0 && r.byteTokens < bytes)
+      || (presence > 0 && r.presenceTokens < presence);
+
+    if (!falta) {
+      r.opTokens -= ops;
+      r.byteTokens -= bytes;
+      r.presenceTokens -= presence;
+      r.strikes = 0;
+      r.retryAt = 0;
+      return null;
+    }
+
+    const vigente = now < r.retryAt;
+    if (vigente && r.ack >= r.notice) {
+      r.strikes++;
+      if (r.strikes >= this.limits.maxStrikes) {
+        this.expulsados.add(siteId);
+        this.expulsiones.push({ siteId, at: now });
+        const h = this.handlers.get(siteId);
+        this.handlers.delete(siteId);
+        this.presence.delete(siteId);
+        h?.onEvent("error", { code: "rate_limit", message: "Demasiadas operaciones: conexión cerrada." });
+        return { status: 409, body: { code: "collab_no_session", message: "No hay una sesión colaborativa abierta para ese siteId." } };
+      }
+    }
+    if (!vigente) {
+      r.notice++;
+      r.retryAt = now + this.rateRetryMs;
+    }
+    return {
+      status: 429,
+      body: {
+        code: "collab_rate_limit",
+        retryAfterMs: Math.max(0, r.retryAt - now),
+        rateNotice: r.notice,
+      },
+    };
+  }
+
+  private rateState(siteId: string, now: number): Rate {
+    let r = this.rate.get(siteId);
+    if (!r) {
+      r = {
+        opTokens: this.limits.opsBurst,
+        byteTokens: this.limits.bytesBurst,
+        presenceTokens: this.limits.presenceBurst,
+        lastRefill: now,
+        strikes: 0, notice: 0, retryAt: 0, ack: 0,
+      };
+      this.rate.set(siteId, r);
+      return r;
+    }
+    const dt = Math.max(0, now - r.lastRefill) / 1000;
+    if (dt > 0) {
+      r.lastRefill = now;
+      r.opTokens = Math.min(this.limits.opsBurst, r.opTokens + dt * this.limits.maxOpsPerSec);
+      r.byteTokens = Math.min(this.limits.bytesBurst, r.byteTokens + dt * this.limits.maxBytesPerSec);
+      r.presenceTokens = Math.min(this.limits.presenceBurst, r.presenceTokens + dt * this.limits.maxPresencePerSec);
+    }
+    return r;
+  }
+
+  /**
+   * Cobra bytes YA SERVIDOS (la respuesta de un `resync`), con el mismo SUELO que el real: la deuda
+   * no puede pasar de una ráfaga, o el tiempo de recuperación crecería con el documento.
+   */
+  private cobraBytes(siteId: string, bytes: number): void {
+    const r = this.rateState(siteId, this.clock());
+    r.byteTokens = Math.max(-this.limits.bytesBurst, r.byteTokens - Math.max(0, bytes));
+  }
+
+  private aplica(path: string, payload: PostBody, siteId: string): PostResponse {
+    {
         if (path === "ops") {
           if (Number(payload.epoch) !== this.epoch) {
             return { status: 409, body: { code: "collab_epoch" } };
@@ -256,18 +462,21 @@ export class FakeCollabServer {
           // Igual que el servidor real: con OTRA generación no se puede filtrar por version vector
           // —las posiciones semilla del cliente ya no existen— así que se devuelve el snapshot base
           // y el log entero para que re-siembre.
-          if (Number(payload.epoch) !== this.epoch) {
-            return { status: 200, body: { epoch: this.epoch, base: this.base, ops: [...this.log], complete: true } };
-          }
+          //
+          // Y como el real, LO LEÍDO SE COBRA ENTERO aunque se filtre después: el coste que hay que
+          // frenar es recorrer la sala. Es lo que deja el cubo de bytes en descubierto y lo que
+          // convierte un resync legítimo en una ráfaga de 429 — el escenario del defecto.
+          const otraGeneracion = Number(payload.epoch) !== this.epoch;
           const vv = payload.vv ?? {};
-          const missing = this.log.filter((op) => !(vv[op.id.site] >= op.id.counter));
-          return { status: 200, body: { epoch: this.epoch, ops: missing, complete: true } };
+          const ops = otraGeneracion ? [...this.log] : this.log.filter((op) => !(vv[op.id.site] >= op.id.counter));
+          this.cobraBytes(siteId, JSON.stringify(this.log).length);
+          return otraGeneracion
+            ? { status: 200, body: { epoch: this.epoch, base: this.base, ops, complete: true } }
+            : { status: 200, body: { epoch: this.epoch, ops, complete: true } };
         }
 
-        if (path === "leave") return { status: 200, body: { ok: true } };
         return { status: 404, body: null };
-      },
-    };
+    }
   }
 
   private enqueue(siteId: string, event: string, data: unknown): void {
