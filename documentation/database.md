@@ -222,7 +222,7 @@ The central content table. Used for posts, pages, attachments, revisions, and me
 | `ID`             | INTEGER PK |                                 |
 | `post_author`    | INTEGER FK |                                 |
 | `post_date`      | DATETIME   | Published date                  |
-| `post_content`   | LONGTEXT   | The main HTML/Puck content      |
+| `post_content`   | LONGTEXT   | The main HTML body (classic content; a block-built page's tree lives in the `_puck_data` post meta) |
 | `post_title`     | TEXT       |                                 |
 | `post_status`    | VARCHAR    | `publish`, `draft`, `trash`     |
 | `comment_status` | VARCHAR    | `open`, `closed`                |

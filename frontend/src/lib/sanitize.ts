@@ -72,6 +72,26 @@ const VIMEO_ID = /^\d{1,20}$/;
 const VIMEO_HASH = /^[A-Za-z0-9]{1,40}$/;
 
 /**
+ * A root-relative path served by THIS site — or null. Use it wherever a value decides "is this ours",
+ * because same-origin-by-construction is what makes it safe to evaluate during SSR, where there is no
+ * window.location to compare against.
+ *
+ * Two spellings have to be rejected, and only one of them is obvious:
+ *   · `//host/x`  — protocol-relative, i.e. remote. The old check caught this one.
+ *   · `/\host/x`  — the parser treats `\` exactly like `/` for a special scheme, so this is ALSO
+ *                   authority-relative and ALSO remote. The old check waved it through.
+ * Tab, LF and CR are stripped first because the URL parser strips them before parsing: `/\t/host/x`
+ * reaches the network as `//host/x`. Validating a string the browser will never see is not a guard.
+ */
+export function sameOriginPath(raw: unknown): string | null {
+    if (typeof raw !== 'string') return null;
+    const clean = raw.replace(/[\t\n\r]/g, '');
+    if (!clean.startsWith('/')) return null;
+    if (/^\/[/\\]/.test(clean)) return null;
+    return clean;
+}
+
+/**
  * Canonical, allowlisted embed URL for a pasted video URL — or null when the URL is not a video from
  * a provider we embed (the caller renders a placeholder, never an iframe).
  */

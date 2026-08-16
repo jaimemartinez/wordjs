@@ -13,8 +13,8 @@
             "entry": "client/admin/page.tsx",
             "slug": "__SLUG__"
         },
-        "puckComponents": {
-            "entry": "client/puck/__PASCAL__Puck.tsx"
+        "versoComponents": {
+            "entry": "client/verso/__PASCAL__Verso.tsx"
         }
     },
     "adminMenu": {

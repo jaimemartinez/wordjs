@@ -17,7 +17,7 @@ What you'd like to see. If it's UI, a sketch or reference helps.
 ## Could this be a plugin or theme instead?
 
 WordJS is designed to be extended without core changes. If your idea could ship as a **plugin**
-(routes, hooks, `puckComponents`) or a **theme** (`style.css` + `--wjs-*` tokens), say so — it may not
+(routes, hooks, `versoComponents`) or a **theme** (`style.css` + `--wjs-*` tokens), say so — it may not
 need to live in core at all.
 
 ## Alternatives considered

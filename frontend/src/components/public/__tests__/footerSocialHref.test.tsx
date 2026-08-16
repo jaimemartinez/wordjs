@@ -37,6 +37,13 @@ describe('Footer — social link hrefs', () => {
             'vbscript:msgbox(1)',
             '//evil.test/pwn',
             '/\\evil.test/pwn',
+            // Contrabando authority-relative con los caracteres que el parser del navegador BORRA
+            // antes de parsear: las tres empiezan por '/' y su segundo caracter no es '/' ni '\',
+            // asi que pasaban el chequeo sobre la cadena cruda — y el navegador resuelve las tres a
+            // https://evil.test/ (open redirect almacenado sobre un <a target="_blank">).
+            '/\t/evil.test',
+            '/\n/evil.test',
+            '/\r\\evil.test',
         ]) {
             const html = render([{ platform: 'X', url, icon: 'fa-brands fa-x-twitter' }]);
             expect(hrefs(html), url).toEqual([]);

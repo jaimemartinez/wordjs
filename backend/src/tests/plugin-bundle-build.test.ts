@@ -61,29 +61,31 @@ test('plugin bundle maps react + host modules to WordJS globals (no bare specifi
     }
 });
 
-test('plugin builds a Puck block (component) bundle from frontend.puckComponents.entry', () => {
+test('plugin builds an editor block (component) bundle from frontend.versoComponents.entry', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wjs-bundle-'));
     try {
         const slug = 'fixture-block';
         const dir = path.join(root, slug);
-        fs.mkdirSync(path.join(dir, 'client', 'puck'), { recursive: true });
+        fs.mkdirSync(path.join(dir, 'client', 'verso'), { recursive: true });
         fs.writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify({
             id: slug, name: slug, version: '1.0.0', isolated: true,
-            // The block entry lives under puckComponents.entry — NOT frontend.component (the key the
-            // build script used to read, which is why block bundles never built).
-            frontend: { puckComponents: { entry: './client/puck/Block.tsx' } },
+            // The block entry lives under versoComponents.entry (historically puckComponents.entry)
+            // — NOT frontend.component, the key the build script used to read, which is why block
+            // bundles never built. The historical spellings are covered by
+            // plugin-block-contract.test.ts, which builds a whole old-convention plugin.
+            frontend: { versoComponents: { entry: './client/verso/Block.tsx' } },
         }));
-        fs.writeFileSync(path.join(dir, 'client', 'puck', 'Block.tsx'), `
+        fs.writeFileSync(path.join(dir, 'client', 'verso', 'Block.tsx'), `
             import { useState } from 'react';
-            export const puckComponentDef = { label: 'My Block', category: 'content', fields: {}, defaultProps: {} };
+            export const versoComponentDef = { label: 'My Block', category: 'content', fields: {}, defaultProps: {} };
             export default function Block() { const [n] = useState(0); return <div className="my-block">{n}</div>; }
         `);
         const r = build(root, slug);
         assert.equal(r.status, 0, `build failed: ${r.out}`);
         const out = path.join(dir, 'dist', 'component.bundle.js');
-        assert.ok(fs.existsSync(out), 'component.bundle.js must be produced from puckComponents.entry');
+        assert.ok(fs.existsSync(out), 'component.bundle.js must be produced from versoComponents.entry');
         const code = fs.readFileSync(out, 'utf8');
-        assert.ok(/puckComponentDef/.test(code), 'block bundle exposes puckComponentDef');
+        assert.ok(/versoComponentDef/.test(code), 'block bundle exposes versoComponentDef');
         assert.ok(!/from\s*["'](react|react-dom|@\/)/.test(code), 'block bundle has no bare react/@ specifiers');
     } finally {
         fs.rmSync(root, { recursive: true, force: true });

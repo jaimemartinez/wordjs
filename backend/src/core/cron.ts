@@ -417,6 +417,14 @@ async function initDefaultCronEvents() {
         if (!(await nextScheduled('wordjs_cert_renewal'))) {
             await scheduleEvent(Date.now(), 'twicedaily', 'wordjs_cert_renewal');
         }
+
+        // Barrido de salas de edición colaborativa huérfanas (Verso F8). Una sala se retira sola
+        // cuando se vacía, pero un nodo que muere de golpe (kill -9, corte de luz) deja su estado de
+        // sesión sin retirar y nadie más lo observa. Esto lo recoge por ANTIGÜEDAD, que es lo único
+        // fiable en multinodo: un contador cooperativo lo deja mentiroso justo el proceso que muere.
+        if (!(await nextScheduled('wordjs_collab_sweep'))) {
+            await scheduleEvent(Date.now(), 'hourly', 'wordjs_collab_sweep');
+        }
     } catch (e) {
         console.error('Failed to init cron events:', e);
     }
@@ -449,6 +457,17 @@ async function initDefaultCronEvents() {
             }
         } catch (e) {
             console.error('ACME auto-renewal error:', e);
+        }
+    });
+
+    // 2c. Salas colaborativas huérfanas: se retira SOLO estado de sesión (`collab_docs`/`collab_ops`),
+    // nunca contenido — el `_puck_data` del post lo escribe el editor por su ruta de siempre.
+    addAction('wordjs_collab_sweep', async () => {
+        try {
+            const retired = await require('./collab-rooms').sweepIdleRooms();
+            if (retired > 0) console.log(`⏰ colaboración: ${retired} sala(s) inactiva(s) retirada(s)`);
+        } catch (e) {
+            console.error('Barrido de salas colaborativas fallido:', e);
         }
     });
 

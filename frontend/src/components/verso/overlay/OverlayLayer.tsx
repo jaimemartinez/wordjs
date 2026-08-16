@@ -22,6 +22,7 @@ import type { EditorHandle } from "@/lib/verso/store";
 import type { BlockRegistry } from "@/lib/verso/registry";
 import { useStoreSlice } from "../render/context";
 import { slotEntries } from "../render/VersoSlot";
+import { onColor, selectionsByNode, type RemoteBlockSelection } from "../editor/collabModel";
 import ActionBar from "./ActionBar";
 import type { BlockRect, GeometryStore } from "./GeometryStore";
 
@@ -103,15 +104,65 @@ function Outline({ rect, className }: { rect: BlockRect; className: string }) {
     );
 }
 
+/**
+ * Marco + etiqueta del bloque que OTRA persona tiene seleccionado (F8.4).
+ *
+ * El borde es del color del participante, pero el color NO es la información: la etiqueta lleva su
+ * NOMBRE escrito, y dice además si está escribiendo dentro o solo lo tiene seleccionado. La
+ * etiqueta se ancla ARRIBA del bloque salvo que no quepa (bloque pegado al techo del canvas), en
+ * cuyo caso baja dentro — un rótulo recortado no se lee.
+ *
+ * `pointer-events:none` en todo: la selección ajena se ve, no se toca.
+ */
+function RemoteOutline({ rect, people }: { rect: BlockRect; people: RemoteBlockSelection[] }) {
+    const lead = people[0];
+    const above = rect.y >= 20;
+    return (
+        <div
+            data-wjs-remote-selection={lead.siteId}
+            className="pointer-events-none absolute"
+            style={{ left: rect.x, top: rect.y, width: rect.width, height: rect.height }}
+        >
+            <div
+                className="absolute inset-0 rounded-[2px]"
+                style={{ border: `2px solid ${lead.color}`, boxShadow: `0 0 0 1px ${lead.color}33` }}
+            />
+            <div
+                className="absolute flex items-center gap-1 whitespace-nowrap"
+                style={{ top: above ? -19 : 2, left: -2 }}
+            >
+                {people.map((p) => (
+                    <span
+                        key={p.siteId}
+                        className="px-1.5 py-0.5 rounded text-[10px] font-semibold leading-none shadow-sm"
+                        style={{ background: p.color, color: onColor(p.color) }}
+                    >
+                        {p.name}
+                        {p.editing ? " ✎" : ""}
+                    </span>
+                ))}
+            </div>
+        </div>
+    );
+}
+
 export interface OverlayLayerProps {
     handle: EditorHandle;
     registry: BlockRegistry;
     geometry: GeometryStore;
     /** Documento del iframe (null hasta onFrameReady); alimenta el hover. */
     frameDocument: Document | null;
+    /** Selecciones de los DEMÁS participantes (F8.4). Vacío/ausente ⇒ no se pinta nada. */
+    remoteSelections?: readonly RemoteBlockSelection[];
 }
 
-export default function OverlayLayer({ handle, registry, geometry, frameDocument }: OverlayLayerProps) {
+export default function OverlayLayer({
+    handle,
+    registry,
+    geometry,
+    frameDocument,
+    remoteSelections,
+}: OverlayLayerProps) {
     const rects = useGeometryRects(geometry);
     const selectedId = useStoreSlice(handle, selectSelectedId);
     const dragPreview = useStoreSlice(handle, selectDragPreview);
@@ -130,12 +181,21 @@ export default function OverlayLayer({ handle, registry, geometry, frameDocument
     const hoveredRect =
         hoveredId && hoveredId !== selectedId ? rects.get(hoveredId) : undefined;
     const line = dragPreview ? insertionLineRect(handle.getDoc(), rects, dragPreview) : null;
+    const remoteByNode = React.useMemo(
+        () => selectionsByNode(remoteSelections ?? []),
+        [remoteSelections],
+    );
 
     return (
         <div
             data-wjs-overlay-layer=""
             className="pointer-events-none absolute inset-0 z-[2] overflow-hidden"
         >
+            {/* Selección AJENA primero: el marco propio (azul, 2px) va encima si coinciden. */}
+            {[...remoteByNode].map(([nodeId, people]) => {
+                const rect = rects.get(nodeId);
+                return rect ? <RemoteOutline key={nodeId} rect={rect} people={people} /> : null;
+            })}
             {hoveredRect && (
                 <Outline
                     rect={hoveredRect}

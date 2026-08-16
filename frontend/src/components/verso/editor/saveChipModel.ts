@@ -1,6 +1,6 @@
 /**
  * Verso — modelo puro del SaveStateChip (F3): el estado del pill de guardado del header, byte a
- * byte los mismos textos/orden de evaluación que el SaveStateChip del PuckEditor actual (tabla d
+ * byte los mismos textos/orden de evaluación que el SaveStateChip del PuckEditor legacy, ya retirado (tabla d
  * del wrapper-blueprint). El componente (SaveStateChip.tsx) solo pinta este modelo; los textos
  * salen en ES fuente y el componente los pasa por trStr — así la tripleta es/en/pt existente
  * sigue aplicando sin tocar el diccionario.

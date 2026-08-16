@@ -24,7 +24,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import MSym from "@/components/editor/MSym";
 import { useI18n } from "@/contexts/I18nContext";
-import { trStr } from "@/lib/puckI18n";
+import { trStr } from "@/lib/editorI18n";
 import { getBlockItems, BLOCK_META } from "@/lib/blockCatalog";
 import type { BlockRegistry } from "@/lib/verso/registry";
 import { useRegistryVersion } from "@/lib/verso/useRegistryVersion";
@@ -159,7 +159,7 @@ function PaletteDialog({
     };
 
     // JetBrains Mono para el chrome de kbd/atajos — igual que el resto del editor.
-    const mono = { fontFamily: "var(--puck-font-family-monospaced)" };
+    const mono = { fontFamily: "var(--ed-font-family-monospaced)" };
 
     const row = (
         idx: number,
@@ -195,7 +195,7 @@ function PaletteDialog({
 
     return createPortal(
         <div
-            className="puck-editor-ui fixed inset-0 z-[9999] flex items-start justify-center pt-[14vh] px-4 bg-[rgba(27,27,34,0.4)] backdrop-blur-sm"
+            className="verso-editor-ui fixed inset-0 z-[9999] flex items-start justify-center pt-[14vh] px-4 bg-[rgba(27,27,34,0.4)] backdrop-blur-sm"
             onMouseDown={onClose}
         >
             <div

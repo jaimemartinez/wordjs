@@ -3,9 +3,9 @@ import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import fs from 'node:fs';
 import path from 'node:path';
-import { FormBlockRender, formBlockDefaults } from '@/components/puck/FormBlock';
+import { FormBlockRender, formBlockDefaults } from '@/components/blocks/FormBlock';
 import { PostsGridBlock } from '../blocks';
-import { SHADOWS, appearanceToStyle } from '@/components/puck/blockShell';
+import { SHADOWS, appearanceToStyle } from '@/components/blocks/blockShell';
 
 /**
  * WAVE 2 — the three inline-style locks, proven OPEN at the artifact level.

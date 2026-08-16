@@ -5,7 +5,7 @@
  * element itself is server-rendered HTML; this component only owns the cover interaction.
  */
 import React, { useState } from "react";
-import { cx } from "@/components/puck/blockVars";
+import { cx } from "@/components/blocks/blockVars";
 
 export const fmtTime = (s: number): string => {
     if (!isFinite(s) || s < 0) return '--:--';

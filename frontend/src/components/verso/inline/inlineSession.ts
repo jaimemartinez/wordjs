@@ -119,6 +119,17 @@ export interface InlineSessionDeps {
     cancel?: (handle: unknown) => void;
     /** Etiqueta de historia. Default: "Edición inline". */
     label?: string;
+    /**
+     * Intervalo mínimo entre commits parciales. Default `INLINE_COMMIT_THROTTLE_MS` (300).
+     *
+     * CON COLABORACIÓN VIVA SE PASA 0, y no es un capricho de rendimiento (F8.4): mientras haya
+     * pulsaciones sin comitear, el contenido del editable y el documento NO coinciden, y una op
+     * ajena que llegue en esa ventana obliga a elegir entre descartar lo tuyo o descartar lo suyo.
+     * Comiteando en cada pulsación esa ventana se cierra: cuando llega lo ajeno, lo tuyo ya está
+     * en el documento y la fusión es del CRDT, que es de quien tiene que ser. El coste es una
+     * transacción por tecla — la coalescencia (`coalesceKey`) sigue dejando UNA entrada de undo.
+     */
+    throttleMs?: number;
 }
 
 export interface InlineSession {
@@ -132,6 +143,18 @@ export interface InlineSession {
     dispose(): void;
     /** true tras dispose/end o tras el flush automático por cambio de inlineEditingId. */
     isDisposed(): boolean;
+    /**
+     * Último valor TRANSFORMADO que ESTA sesión escribió en el documento, o `null` si todavía no
+     * escribió ninguno. Es la referencia con la que el cableado de colaboración distingue "esto lo
+     * puse yo" de "esto lo puso otro" (F8.4).
+     */
+    lastCommitted(): string | null;
+    /**
+     * Declara que la superficie ya MUESTRA `value` sin haberlo comiteado ella (lo trajo otra
+     * réplica). Evita que el siguiente commit lo reenvíe como si fuera una edición local — un eco
+     * que, con el diff del puente, sería literalmente un no-op caro.
+     */
+    adopt(value: string): void;
 }
 
 export function createInlineSession(deps: InlineSessionDeps): InlineSession {
@@ -142,6 +165,7 @@ export function createInlineSession(deps: InlineSessionDeps): InlineSession {
         deps.cancel ?? ((h: unknown): void => clearTimeout(h as ReturnType<typeof setTimeout>));
     const coalesceKey = inlineCoalesceKey(deps.nodeId);
     const label = deps.label ?? "Edición inline";
+    const throttleMs = Math.max(0, deps.throttleMs ?? INLINE_COMMIT_THROTTLE_MS);
 
     let pendingRaw: string | null = null;
     /** Último valor TRANSFORMADO committeado (para no abrir transacciones vacías). */
@@ -202,8 +226,15 @@ export function createInlineSession(deps: InlineSessionDeps): InlineSession {
         onContent(raw: string): void {
             if (disposed) return;
             pendingRaw = raw;
+            // Sin throttle (colaboración viva): commit SÍNCRONO en la propia pulsación. Diferirlo
+            // aunque fuera a 0ms dejaría abierta la ventana que este modo existe para cerrar.
+            if (throttleMs === 0) {
+                clearTimer();
+                commitPending();
+                return;
+            }
             if (timer !== null) return; // ya hay un commit programado: recogerá el último pendiente
-            const wait = Math.max(0, lastCommitAt + INLINE_COMMIT_THROTTLE_MS - now());
+            const wait = Math.max(0, lastCommitAt + throttleMs - now());
             timer = schedule(() => {
                 timer = null;
                 commitPending();
@@ -219,5 +250,13 @@ export function createInlineSession(deps: InlineSessionDeps): InlineSession {
         },
         dispose: disposeInternal,
         isDisposed: () => disposed,
+        lastCommitted: () => lastCommitted,
+        adopt(value: string): void {
+            // Lo pendiente ya no vale: describía el contenido de ANTES de adoptar lo ajeno, y
+            // comitearlo borraría justo lo que se acaba de adoptar.
+            pendingRaw = null;
+            clearTimer();
+            lastCommitted = value;
+        },
     };
 }

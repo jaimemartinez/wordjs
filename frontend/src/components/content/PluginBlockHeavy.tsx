@@ -23,10 +23,11 @@
 import React from "react";
 import SharedBlockShell from "./SharedBlockShell";
 import { RenderSubtree } from "./ContentRenderer";
+import { ixCtxFromSite, type IxPreset } from "@/lib/verso/interactions";
 import VersoSymbolRender from "@/components/verso/blocks/VersoSymbolBlock";
 import { SYMBOL_BLOCK_TYPE } from "@/lib/symbols";
 import { fetchActivePluginIds, loadPluginBlockConfigs } from "@/lib/pluginBundleLoader";
-import { puckPluginComponents } from "@/lib/puckPluginRegistry";
+import { versoPluginComponents } from "@/lib/versoPluginRegistry";
 
 type PluginBlockDef = {
     defaultProps?: Record<string, unknown>;
@@ -68,7 +69,7 @@ function loadRuntimePluginDefs(): Promise<Record<string, unknown>> {
 
 /** Bloques ESTÁTICOS de los plugins in-tree (dev): la misma salida generada que consume Verso. */
 function staticDef(type: string): PluginBlockDef | null {
-    const def = (puckPluginComponents as Record<string, unknown>)[type];
+    const def = (versoPluginComponents as Record<string, unknown>)[type];
     return def && typeof def === "object" ? (def as PluginBlockDef) : null;
 }
 
@@ -95,7 +96,7 @@ function usePluginBlockDef(type: string): PluginBlockDef | null {
  * del catálogo lo usan hoy, pero un plugin de terceros compilado contra el contrato viejo no debe
  * romperse. En el sitio público `isEditing` es SIEMPRE false.
  */
-function puckCompat(props: Record<string, unknown>) {
+function puckCompat(props: Record<string, unknown>, ixPresets?: Record<string, IxPreset>) {
     return {
         isEditing: false,
         metadata: {},
@@ -104,29 +105,35 @@ function puckCompat(props: Record<string, unknown>) {
             const slot = props[zone];
             if (typeof slot === "function") return (slot as (cls?: string) => React.ReactNode)(className);
             // En el dato persistido un slot es un ARRAY de items: se pinta con el switch compartido.
-            if (Array.isArray(slot)) return <div className={className}><RenderSubtree items={slot} /></div>;
+            if (Array.isArray(slot)) return <div className={className}><RenderSubtree items={slot} ixPresets={ixPresets} /></div>;
             return null;
         },
     };
 }
 
-function PluginBlockRender({ type, props }: { type: string; props: Record<string, unknown> }) {
+function PluginBlockRender({ type, props, ixPresets }: { type: string; props: Record<string, unknown>; ixPresets?: Record<string, IxPreset> }) {
     const def = usePluginBlockDef(type);
     const Render = def?.render;
     // Tipo desconocido (plugin inactivo, bundle sin ese bloque, o aún cargando): no se pinta nada —
     // exactamente lo que hacía <Render> del fork con un componente no registrado.
     if (typeof Render !== "function") return null;
-    return <Render {...(def?.defaultProps || {})} {...props} puck={puckCompat(props)} />;
+    return <Render {...(def?.defaultProps || {})} {...props} puck={puckCompat(props, ixPresets)} />;
 }
 
-export default function PluginBlockHeavy({ item }: { item: any }) {
+/**
+ * `ixPresets` (catálogo del SITIO ya normalizado en el servidor) llega como prop porque este
+ * componente es de CLIENTE y no puede leer ajustes. Lo que NO llega es la página compilada: lleva
+ * un `Map` y no cruza la frontera de serialización — la clase sale del hash desnudo, que coincide
+ * con el de la página salvo colisión de hash entre dos cuerpos distintos (ver SharedBlockShell).
+ */
+export default function PluginBlockHeavy({ item, ixPresets }: { item: any; ixPresets?: Record<string, IxPreset> }) {
     const type = typeof item?.type === "string" ? item.type : "";
     const props = (item?.props || {}) as Record<string, unknown>;
     const inner = type === SYMBOL_BLOCK_TYPE
         ? <VersoSymbolRender symbolId={props.symbolId} resolvedSymbolItems={props.resolvedSymbolItems} />
-        : <PluginBlockRender type={type} props={props} />;
+        : <PluginBlockRender type={type} props={props} ixPresets={ixPresets} />;
     return (
-        <SharedBlockShell hide={props.hide as any} anim={props.anim as any} look={props.look as any}>
+        <SharedBlockShell hide={props.hide as any} anim={props.anim as any} look={props.look as any} ix={props.ix} ixCtx={ixPresets ? ixCtxFromSite(ixPresets) : undefined}>
             {inner}
         </SharedBlockShell>
     );

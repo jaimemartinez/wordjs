@@ -511,7 +511,13 @@ export interface MarketplaceEntry {
     category: string;
     permissions: { scope: string; access?: string; reason?: string }[];
     hasAdminPage: boolean;
-    hasPuckBlock: boolean;
+    // "ships an editor block". The catalog is fetched at RUNTIME from the GitHub Release, so this
+    // frontend can be reading an index built by an OLDER version that only emits `hasPuckBlock`.
+    // Both are optional here and read new-first at the call site; the old name is deprecated and
+    // still published by the builder for the mirror-image case (older frontend, newer catalog).
+    hasVersoBlock?: boolean;
+    /** @deprecated pre-Verso spelling of `hasVersoBlock` — kept so old catalogs still render. */
+    hasPuckBlock?: boolean;
     blockName: string | null;
     adminMenu: { label: string; icon?: string } | null;
     file: string;

@@ -2,7 +2,7 @@
     "id": "faq",
     "name": "FAQ",
     "version": "1.0.0",
-    "description": "Database-managed FAQ with categories, publish toggles and drag-free reordering, rendered by the Puck block \"Faq\" as an accordion. Unlike the core static Accordion block, it emits Google FAQPage structured data (JSON-LD) so your questions qualify for rich results in search.",
+    "description": "Database-managed FAQ with categories, publish toggles and drag-free reordering, rendered by the Verso block \"Faq\" as an accordion. Unlike the core static Accordion block, it emits Google FAQPage structured data (JSON-LD) so your questions qualify for rich results in search.",
     "author": "WordJS",
     "isolated": true,
     "backend": {
@@ -13,8 +13,8 @@
             "entry": "client/admin/page.tsx",
             "slug": "faq"
         },
-        "puckComponents": {
-            "entry": "client/puck/FaqPuck.tsx"
+        "versoComponents": {
+            "entry": "client/verso/FaqVerso.tsx"
         }
     },
     "themeSurfaces": [

@@ -2,7 +2,7 @@
  * Verso — mapa puro de atajos del editor (F3). El componente de hotkeys (dentro de
  * VersoEditor.tsx) solo enruta eventos por aquí; la decisión es testeable en node.
  *
- * Contrato (paridad con EditorHotkeys del PuckEditor actual, checklist W03 — COMPLETO):
+ * Contrato (paridad con EditorHotkeys del PuckEditor legacy (retirado), checklist W03 — COMPLETO):
  *   Ctrl/Cmd+S → save          (funciona TAMBIÉN mientras se escribe)
  *   Ctrl/Cmd+K → palette       (ídem — abre desde cualquier foco, incluso el iframe)
  *   Ctrl/Cmd+Z → undo          · Ctrl/Cmd+Shift+Z o Ctrl/Cmd+Y → redo

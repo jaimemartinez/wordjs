@@ -1,7 +1,7 @@
 "use client";
 /**
  * Verso — chip de estado de guardado del header (F3). Misma piel y semántica que el
- * SaveStateChip del PuckEditor actual (wrapper-blueprint §d):
+ * SaveStateChip del PuckEditor legacy, ya retirado (wrapper-blueprint §d):
  *  - el <span> permanece SIEMPRE montado (sr-only bajo xl) con aria-live="polite" — una región
  *    que aparece a la vez que su primer mensaje no se anuncia;
  *  - tick de 30s para que "hace Xm" no mienta sin re-render del padre;
@@ -10,7 +10,7 @@
 import React, { useEffect, useState } from "react";
 import MSym from "@/components/editor/MSym";
 import { useI18n } from "@/contexts/I18nContext";
-import { trStr } from "@/lib/puckI18n";
+import { trStr } from "@/lib/editorI18n";
 import { saveChipModel } from "./saveChipModel";
 
 export default function SaveStateChip({ saving, hasChanges, savedAt, wasAuto, status }: {

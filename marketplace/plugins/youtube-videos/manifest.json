@@ -2,7 +2,7 @@
     "id": "youtube-videos",
     "name": "YouTube Videos",
     "version": "1.0.0",
-    "description": "Pulls the videos of a YouTube channel (links, thumbnails, titles) and ships a Puck carousel block with title filtering and a video-count limit. Works keyless out of the box via the channel RSS feed (latest 15); add a YouTube Data API v3 key for the full upload history.",
+    "description": "Pulls the videos of a YouTube channel (links, thumbnails, titles) and ships a Verso carousel block with title filtering and a video-count limit. Works keyless out of the box via the channel RSS feed (latest 15); add a YouTube Data API v3 key for the full upload history.",
     "author": "WordJS",
     "isolated": true,
     "theme": {
@@ -18,8 +18,8 @@
             "entry": "client/admin/page.tsx",
             "slug": "youtube"
         },
-        "puckComponents": {
-            "entry": "client/puck/YoutubeVideosPuck.tsx"
+        "versoComponents": {
+            "entry": "client/verso/YoutubeVideosVerso.tsx"
         }
     },
     "adminMenu": {

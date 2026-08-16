@@ -4,7 +4,7 @@
 // sidebar, containerWidth) + customizer overlay, all passed in as plain props.
 //
 // WHY a separate shell: the real route layout (app/(public)/layout.tsx) is an ASYNC server component
-// (it fetches settings via getSettings). The Puck editor preview (PuckEditor.tsx, a "use client"
+// (it fetches settings via getSettings). The Verso editor preview (VersoEditor.tsx, a "use client"
 // component) also needs to render the public chrome for WYSIWYG — but a client tree cannot render an
 // async component. So data-fetching lives in the async server layout, and this sync shell does the
 // rendering, usable from BOTH the server layout and the client editor (no "use client" here → it is a

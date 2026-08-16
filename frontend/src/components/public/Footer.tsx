@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { settingsApi, menusApi } from "@/lib/api";
 import { sanitizeHTML } from "@/lib/sanitize";
-import { isSafeChromeHref } from "@/lib/chromeData";
+import { safeChromeHref } from "@/lib/chromeData";
 import PublicSidebar from "./PublicSidebar";
 import type { FooterColumns, FooterVariant } from "@/lib/themeLayout";
 
@@ -84,12 +84,18 @@ export default function Footer({ previewSettings, previewMenu, previewSocials, v
     }, [previewSettings, previewMenu, previewSocials]);
 
     const socialIcons = socialLinks.map((link, idx) => {
-        // An <a href> is an XSS SINK: `javascript:…` (or `data:text/html`) in a stored setting runs
-        // when a visitor clicks it — the same stored-XSS shape this product already shipped once.
-        // Same guard the theme chrome uses for its buttons (isSafeChromeHref: root-relative path or
-        // http(s) only, `//host` and `/\host` rejected; the backend validator mirrors it, pinned by
-        // the parity harness). A link whose URL fails still renders its icon — as text, not a target.
-        const href = isSafeChromeHref(link.url) ? link.url : undefined;
+        // Un <a href> es un SUMIDERO: `javascript:…` (o `data:text/html`) guardado en un ajuste se
+        // ejecuta al clicar — la misma forma de XSS almacenado que este producto ya publico una vez —
+        // y una forma authority-relative saca al visitante del sitio (open redirect almacenado).
+        // 'footer_socials' se guarda como JSON opaco y el servidor NO valida sus URLs, asi que este
+        // guard de render es la UNICA defensa.
+        //
+        // Se pinta el retorno del RESOLVER, nunca `link.url`: el navegador borra tabuladores, saltos
+        // de linea y retornos de carro antes de parsear, asi que validar la cadena cruda y pintar esa
+        // misma cruda dejaba pasar "/\t/evil.example" -> https://evil.example/. Lo que se valida y lo
+        // que se pinta tienen que ser LA MISMA cadena.
+        // Un enlace cuya URL no pasa sigue renderizando su icono — como texto, no como destino.
+        const href = safeChromeHref(link.url);
         return href ? (
             <a
                 key={idx}

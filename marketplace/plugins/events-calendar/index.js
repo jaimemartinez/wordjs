@@ -17,7 +17,7 @@
 exports.metadata = {
     name: 'Events Calendar',
     version: '1.0.0',
-    description: 'Admin-managed events + Puck block (upcoming list / monthly calendar grid)',
+    description: 'Admin-managed events + Verso block (upcoming list / monthly calendar grid)',
     author: 'WordJS',
 };
 

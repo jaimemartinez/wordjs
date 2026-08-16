@@ -13,13 +13,13 @@
  *    del legacy (paletteActions copy-styles/paste-styles).
  *
  * Los ids del pegado se regeneran RECURSIVAMENTE (slots incluidos) con el MISMO `regenIds` del
- * legacy (lib/puckPatterns.ts — puro, sin dependencias): semántica idéntica byte-a-byte, ningún
+ * legacy (lib/blockPatterns.ts — puro, sin dependencias): semántica idéntica byte-a-byte, ningún
  * id repetido aunque se pegue N veces el mismo clipboard.
  *
  * Toda mutación va vía `handle.transact` — UNA transacción = UNA entrada de undo. Este módulo
  * jamás toca el doc directamente (invariante Verso: el chrome solo emite comandos).
  */
-import { regenIds } from "@/lib/puckPatterns";
+import { regenIds } from "@/lib/blockPatterns";
 import { subtreeToItem } from "@/lib/verso/commands";
 import { ROOT_ID, ROOT_SLOT, type VersoItem } from "@/lib/verso/types";
 import type { EditorHandle } from "@/lib/verso/store";

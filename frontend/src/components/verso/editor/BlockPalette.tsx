@@ -15,7 +15,7 @@
 import React, { useMemo, useState } from "react";
 import MSym from "@/components/editor/MSym";
 import { useI18n } from "@/contexts/I18nContext";
-import { trStr } from "@/lib/puckI18n";
+import { trStr } from "@/lib/editorI18n";
 import { BLOCK_META, FALLBACK_GROUP, GROUP_MS_ICON, GROUP_ORDER } from "@/lib/blockCatalog";
 import type { BlockRegistry } from "@/lib/verso/registry";
 import { useRegistryVersion } from "@/lib/verso/useRegistryVersion";

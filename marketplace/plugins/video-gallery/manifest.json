@@ -23,7 +23,7 @@
             "entry": "client/admin/page.tsx",
             "slug": "videos"
         },
-        "puckComponents": null
+        "versoComponents": null
     },
     "api": {
         "baseUrl": "/api/v1/videos",

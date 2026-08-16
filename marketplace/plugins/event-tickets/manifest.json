@@ -13,8 +13,8 @@
             "entry": "client/admin/page.tsx",
             "slug": "tickets"
         },
-        "puckComponents": {
-            "entry": "client/puck/EventTicketsPuck.tsx"
+        "versoComponents": {
+            "entry": "client/verso/EventTicketsVerso.tsx"
         }
     },
     "adminMenu": {

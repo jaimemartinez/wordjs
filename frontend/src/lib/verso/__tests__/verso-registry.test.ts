@@ -125,8 +125,9 @@ describe("createBlockRegistry — get()/list()", () => {
 /* Adaptadores legacy — fixtures que reproducen plugins reales.        */
 /* ------------------------------------------------------------------ */
 
-// Fixture single-block: forma EXACTA de marketplace/plugins/testimonials/client/puck/TestimonialsPuck.tsx
-// (puckComponentDef sin render — el generador lo compone aparte).
+// Fixture single-block: forma EXACTA de marketplace/plugins/testimonials/client/verso/TestimonialsVerso.tsx
+// (el nombre de export histórico `puckComponentDef` sin render — el generador lo compone aparte; se
+// conserva a propósito porque este fixture cubre el canal de compatibilidad, no el actual).
 const testimonialsLegacyDef: LegacySingleBlockDef = {
   category: "Testimonios",
   fields: {
@@ -163,7 +164,7 @@ function TestimonialsRender() {
 }
 
 describe("adaptLegacySingle — fixture single-block real (Testimonials)", () => {
-  it("compone {type, render} tal como generate-puck-plugin-registry.js:167-171", () => {
+  it("compone {type, render} tal como generate-verso-plugin-registry.js:167-171", () => {
     const def = adaptLegacySingle(testimonialsLegacyDef, TestimonialsRender, "Testimonials");
     expect(def.type).toBe("Testimonials");
     expect(def.category).toBe("Testimonios");
@@ -179,8 +180,9 @@ describe("adaptLegacySingle — fixture single-block real (Testimonials)", () =>
   });
 });
 
-// Fixture multi-block: forma EXACTA de marketplace/plugins/online-store/client/puck/OnlineStorePuck.tsx
-// (export const puckComponents = { OnlineStore: {...def, render}, StoreOrders: {...def, render} }).
+// Fixture multi-block: forma EXACTA de marketplace/plugins/online-store/client/verso/OnlineStoreVerso.tsx
+// (nombre de export histórico: `export const puckComponents = { OnlineStore: {...def, render},
+// StoreOrders: {...def, render} }` — conservado a propósito, es el canal de compatibilidad).
 function OnlineStoreRender() {
   return null;
 }

@@ -29,7 +29,7 @@ body {
   font-family: var(--font-inter, Arial, Helvetica, sans-serif);
 }
 
-/* Puck editor preview + customizer live-preview iframes fill their container. !important kept
+/* Visual-editor preview + customizer live-preview iframes fill their container. !important kept
  * from the original global rule; public embeds size themselves via .wp-block-video-embed. */
 iframe {
   height: 100% !important;

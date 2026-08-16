@@ -49,6 +49,11 @@ const PUBLIC_SETTINGS = [
     'site_chrome_header',   // site-level composable chrome (JSON, contract v1) — the SSR public
     'site_chrome_footer',   //   layout renders these; written ONLY via PUT /api/v1/chrome/:part
     'site_chrome_announcement', // optional top/announcement bar, full-bleed above the header
+    'wjs_ix_presets',       // preajustes de interacción del sitio (JSON, motor F9). PÚBLICO porque
+                            // el renderer del sitio los necesita para compilar el CSS de la página
+                            // en el servidor. No son secreto: describen movimiento, y su efecto ya
+                            // es visible en la hoja emitida. Un bloque guarda solo el ID del
+                            // preajuste, así que editarlos NO toca un byte de `_puck_data`.
     'users_can_register',
     // 'admin_email' - SECURITY: Removed from public to prevent email harvesting
     'default_role',
@@ -202,7 +207,52 @@ const TEXT_DIRECTIONS = ['', 'ltr', 'rtl', 'auto'];
 // character admitted ends up in an attribute.
 const LOCALE_RE = /^[A-Za-z]{2,3}([-_][A-Za-z]{4})?([-_]([A-Za-z]{2}|[0-9]{3}))?$/;
 
+// Preajustes de interacción del sitio (`wjs_ix_presets`, motor F9). Se guardan como JSON y los
+// consume el compilador del frontend, que YA los trata como dato hostil: los pasa uno a uno por
+// `normalizeIxPreset` y descarta lo que no encaje (frontend/src/lib/verso/interactions/sitePresets).
+//
+// Esto es la SEGUNDA vuelta de la llave, en la escritura, y deliberadamente ESTRUCTURAL en vez de
+// semántica: el backend no compila animaciones y no va a mantener una copia de las 8 propiedades
+// permitidas —dos validadores de la misma gramática acaban discrepando, y el que manda es el que
+// compila—. Lo que sí impone aquí es lo que el lector no puede arreglar después: que sea JSON, que
+// sea una lista, que no ocupe megabytes y que no venga con 10.000 entradas. Un JSON de 40 MB
+// bloquea el hilo del render antes de que ningún normalizador llegue a opinar.
+const IX_PRESETS_MAX_BYTES = 256 * 1024;
+const IX_PRESETS_MAX_ENTRIES = 50;
+const IX_PRESET_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+
 const SETTING_VALIDATORS: Record<string, (v: any) => string | null> = {
+    wjs_ix_presets: (v: any) => {
+        if (v === '' || v === null || v === undefined) return null; // sin preajustes de sitio
+        if (typeof v !== 'string') return 'wjs_ix_presets must be a JSON string.';
+        if (v.length > IX_PRESETS_MAX_BYTES) {
+            return `wjs_ix_presets must be at most ${IX_PRESETS_MAX_BYTES} characters.`;
+        }
+        let parsed: any;
+        try {
+            parsed = JSON.parse(v);
+        } catch {
+            return 'wjs_ix_presets must be valid JSON.';
+        }
+        if (!Array.isArray(parsed)) return 'wjs_ix_presets must be a JSON array of presets.';
+        if (parsed.length > IX_PRESETS_MAX_ENTRIES) {
+            return `wjs_ix_presets must contain at most ${IX_PRESETS_MAX_ENTRIES} presets.`;
+        }
+        for (const entry of parsed) {
+            if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+                return 'Each wjs_ix_presets entry must be an object.';
+            }
+            // El id `sys:` está RESERVADO al catálogo del código: si un ajuste pudiera declararlo,
+            // redefiniría en silencio el movimiento que traen los bloques nuevos por defecto.
+            if (typeof entry.id !== 'string' || !IX_PRESET_ID_RE.test(entry.id)) {
+                return 'Each wjs_ix_presets entry needs an `id` slug (a-z, 0-9, - and _; the `sys:` namespace is reserved).';
+            }
+            if (!Array.isArray(entry.tracks)) {
+                return 'Each wjs_ix_presets entry needs a `tracks` array.';
+            }
+        }
+        return null;
+    },
     WPLANG: (v: any) => {
         if (v === '' || v === null || v === undefined) return null; // unset → the resolver's "en"
         if (typeof v !== 'string' || !LOCALE_RE.test(v)) {

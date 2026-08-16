@@ -4,11 +4,11 @@
 // presentational chrome blocks the public shell renders (components/chrome/*) in thin client-side
 // wrappers that resolve their data-bindings (menus by location + public settings) with a one-shot
 // client fetch — the blocks themselves stay fetch-free, exactly as on the public site. Kept apart
-// from puckConfig.tsx on purpose: the page editor knows nothing about chrome and vice versa, and
+// from versoConfig.tsx on purpose: the page editor knows nothing about chrome and vice versa, and
 // the PUBLIC bundle never imports this file (it lives under app/admin).
 import { useEffect, useState } from "react";
 import { menusApi, settingsApi, type ChromePart } from "@/lib/api";
-// Same i18n access the page editor's config factory uses (components/puckConfig.tsx): the config
+// Same i18n access the page editor's config factory uses (components/versoConfig.tsx): the config
 // is built outside the React tree, so it reads the stored language directly instead of useI18n().
 import { t as translate, getStoredLanguage } from "@/lib/i18n";
 import { buildChromeBindings, parseChromeSocials, type ChromeBindings } from "@/lib/chromeData";

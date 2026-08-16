@@ -26,7 +26,7 @@ import type { SlotResolver } from "./types";
 /* Campos de bloque.                                                   */
 /* ------------------------------------------------------------------ */
 
-/** Propiedades comunes a los 10 tipos de campo (equivalente a `BaseField` de Puck). */
+/** Propiedades comunes a los 10 tipos de campo (equivalente al `BaseField` del editor anterior). */
 export interface VersoFieldBase {
   label?: string;
   /**
@@ -230,14 +230,15 @@ export function createBlockRegistry(): BlockRegistry {
 
 /* ------------------------------------------------------------------ */
 /* Adaptadores de compatibilidad — shape legacy de los 31 plugins.     */
-/* Confirmado bloques HOJA puros, sin renderDropZone/usePuck/useGetPuck */
+/* Confirmado bloques HOJA puros, sin renderDropZone ni hooks del editor anterior */
 /* (documentation/verso/legacy-surface.md §6, 0/31 en los 4 patrones). */
 /* ------------------------------------------------------------------ */
 
 /**
- * Forma legacy de un bloque single-block: `puckComponentDef` exportado por el plugin, SIN `render`
- * (el generador lo compone aparte — generate-puck-plugin-registry.js:169). Ejemplo real:
- * marketplace/plugins/testimonials/client/puck/TestimonialsPuck.tsx.
+ * Forma de un bloque single-block: `versoComponentDef` (histórico: `puckComponentDef`) exportado
+ * por el plugin, SIN `render` — el generador lo compone aparte
+ * (generate-verso-plugin-registry.js). Ejemplo real:
+ * marketplace/plugins/testimonials/client/verso/TestimonialsVerso.tsx.
  */
 export interface LegacySingleBlockDef {
   label?: string;
@@ -268,9 +269,10 @@ export function adaptLegacySingle(
 }
 
 /**
- * Forma legacy de un bloque dentro de un export multi-block: `export const puckComponents = {...}`
+ * Forma de un bloque dentro de un export multi-block: `export const versoComponents = {...}`
+ * (histórico: `puckComponents`; ambos nombres se leen — ver pluginBundleLoader)
  * (detectado por regex en el generador, f0-audit-core.md L180) — cada entrada YA trae `render` compuesto
- * por el propio plugin. Ejemplo real: marketplace/plugins/online-store/client/puck/OnlineStorePuck.tsx
+ * por el propio plugin. Ejemplo real: marketplace/plugins/online-store/client/verso/OnlineStoreVerso.tsx
  * (`{ OnlineStore: {...def, render}, StoreOrders: {...def, render} }`).
  */
 export interface LegacyMultiBlockDef extends LegacySingleBlockDef {
@@ -278,11 +280,11 @@ export interface LegacyMultiBlockDef extends LegacySingleBlockDef {
 }
 
 /**
- * Expande el mapa `puckComponents` a un `BlockDefinition` por entrada, usando la CLAVE del mapa como
+ * Expande el mapa multi-bloque a un `BlockDefinition` por entrada, usando la CLAVE del mapa como
  * `type` — preserva el nombre v1 exacto que ya referencian páginas guardadas (p.ej. "OnlineStore").
  */
-export function adaptLegacyMulti(puckComponents: Record<string, LegacyMultiBlockDef>): BlockDefinition[] {
-  return Object.entries(puckComponents).map(([type, def]) => adaptLegacySingle(def, def.render, type));
+export function adaptLegacyMulti(components: Record<string, LegacyMultiBlockDef>): BlockDefinition[] {
+  return Object.entries(components).map(([type, def]) => adaptLegacySingle(def, def.render, type));
 }
 
 /* ------------------------------------------------------------------ */
@@ -306,5 +308,26 @@ export function makeSlotResolver(registry: BlockRegistry): SlotResolver {
     const field = def.fields[propKey];
     if (!field) return undefined;
     return field.type === "slot";
+  };
+}
+
+/**
+ * Qué prop de un bloque es TEXTO RICO a efectos de la colaboración (crdt-spec §3.2.3): la que el
+ * bloque DECLARA como destino de edición inline con schema `rich`. Se resuelve por el registry, no
+ * por el nombre de la clave a ciegas: dos bloques pueden llamar `content` a cosas distintas.
+ *
+ * `plain` queda FUERA a propósito. El canal de texto proyecta el campo como HTML de un párrafo
+ * (`<p>…</p>`), así que abrir ahí un campo plano (el `title` de Heading) le metería etiquetas en el
+ * texto. Un campo plano se replica como prop LWW: la última edición gana, sin fusión por carácter.
+ * Es la degradación honesta y está declarada.
+ *
+ * DOS RÉPLICAS TIENEN QUE RESPONDER LO MISMO: si una clasificara `content` como texto y la otra no,
+ * sembrarían estructuras distintas del mismo snapshot y divergirían desde el primer instante. Por
+ * eso sale del MISMO registry que ya comparte el editor.
+ */
+export function makeRichTextResolver(registry: BlockRegistry): (type: string, propKey: string) => boolean {
+  return (type: string, propKey: string): boolean => {
+    const inline = registry.get(type)?.inline;
+    return inline !== undefined && inline.schema === "rich" && inline.prop === propKey;
   };
 }

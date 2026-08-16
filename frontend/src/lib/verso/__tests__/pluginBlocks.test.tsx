@@ -87,11 +87,11 @@ export const puckComponents = {
 }
 
 // Import fresco por test: las cachés módulo-nivel del loader y la memo de adaptación son estado de
-// sesión bajo prueba. El registry estático generado (puckPluginRegistry.ts) se mockea VACÍO — su
+// sesión bajo prueba. El registry estático generado (versoPluginRegistry.ts) se mockea VACÍO — su
 // contenido real depende de la máquina (plugins in-tree gitignorados) y estos tests no deben leerlo.
 async function freshModules() {
     vi.resetModules();
-    vi.doMock("@/lib/puckPluginRegistry", () => ({ puckPluginComponents: {} }));
+    vi.doMock("@/lib/versoPluginRegistry", () => ({ versoPluginComponents: {} }));
     const pluginBlocks = await import("../pluginBlocks");
     const { createBlockRegistry } = await import("../registry");
     return { ...pluginBlocks, createBlockRegistry };
@@ -118,7 +118,7 @@ afterEach(() => {
     }
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
-    vi.doUnmock("@/lib/puckPluginRegistry");
+    vi.doUnmock("@/lib/versoPluginRegistry");
 });
 
 /** fetch: /plugins/active → `active`; bundle `?type=component` → por slug según `bundles`. */
@@ -302,7 +302,7 @@ describe("identidad estable del registry tras N pasadas (contrato anti-remount)"
     });
 });
 
-describe("bloques estáticos (dev, generate-puck-plugin-registry.js)", () => {
+describe("bloques estáticos (dev, generate-verso-plugin-registry.js)", () => {
     it("registerStaticPluginBlocks registra el mapa generado envuelto por el seam; repetir no bumpea", async () => {
         const { registerStaticPluginBlocks, createBlockRegistry } = await freshModules();
         const registry = createBlockRegistry();

@@ -19,7 +19,7 @@ A WordJS plugin is simply a folder inside `backend/plugins/`.
 
 Follow these steps to create a plugin that shows a message in the admin panel.
 
-> **Fast path:** `node backend/cli/wordjs.js create plugin my-plugin` scaffolds everything below in one command — manifest (`"isolated": true`, requested permissions), a bridge-idiomatic `index.js` (typed via `backend/types/wordjs-bridge.d.ts` for JSDoc IntelliSense), an admin page and a Puck block — and prints the activate/regenerate flow. See `documentation/cli.md` §2. The tutorial below explains what each piece is.
+> **Fast path:** `node backend/cli/wordjs.js create plugin my-plugin` scaffolds everything below in one command — manifest (`"isolated": true`, requested permissions), a bridge-idiomatic `index.js` (typed via `backend/types/wordjs-bridge.d.ts` for JSDoc IntelliSense), an admin page and a Verso block — and prints the activate/regenerate flow. See `documentation/cli.md` §2. The tutorial below explains what each piece is.
 
 ### Step 1: Create the Folder and Manifest
 Create a folder named `hello-world` inside `backend/plugins/`. Inside it, create a `manifest.json`:
@@ -224,7 +224,7 @@ node scripts/build-plugin.js hello-world
 This script uses **esbuild** to create a `dist/` folder in your plugin with one bundle per declared
 frontend entry:
 - `admin.bundle.js`: Your admin UI (`frontend.adminPage.entry`).
-- `component.bundle.js`: Your Puck block (`frontend.puckComponents.entry`, or the conventional `client/puck/<Pascal>Puck.tsx`).
+- `component.bundle.js`: Your Verso block (`frontend.versoComponents.entry`, or the conventional `client/verso/<Pascal>Verso.tsx`; the pre-rename `frontend.puckComponents` / `client/puck/<Pascal>Puck.tsx` still resolve — see §13).
 - `hooks.bundle.js`: Your frontend hooks (`frontend.hooks`).
 - `manifest.build.json`: Build metadata.
 
@@ -495,7 +495,7 @@ For a full list of security rules, see the **[Security Guide](security.md)**.
 | `manifest.json`         | Metadata, **Dependencies**, Entry Points.       |
 | `client/admin/page.tsx` | The UI shown when clicking the sidebar link.    |
 | `client/hooks.tsx`      | **Global Hooks**. Runs on app load (if active). |
-| `client/puck/`          | Visual blocks for the Page Builder.             |
+| `client/verso/`         | Visual blocks for the Page Builder.             |
 
 ---
 
@@ -655,33 +655,63 @@ that data can leave your server. Only grant capabilities to code you have audite
 
 ---
 
-## 13. Puck Blocks (Visual Editor Components) 🧩
+## 13. Verso Blocks (Visual Editor Components) 🧩
 
-Plugins can add blocks to the visual page builder (Puck). This is how it actually works, end to end.
+Plugins can add blocks to the visual page builder (**Verso**). This is how it actually works, end to end.
+
+> **Renamed, not broken.** The editor used to be a fork of Puck and the API carried its name. Every
+> historical spelling below still works and will keep working — a plugin you published before the
+> rename keeps loading with nobody touching it. The build just prints a deprecation line.
+>
+> | | current | still accepted (deprecated) |
+> |---|---|---|
+> | manifest key | `frontend.versoComponents` | `frontend.puckComponents` |
+> | folder convention | `client/verso/<Pascal>Verso.tsx` | `client/puck/<Pascal>Puck.tsx` |
+> | single-block export | `versoComponentDef` | `puckComponentDef` |
+> | multi-block export | `versoComponents` | `puckComponents` |
+>
+> When both spellings are present the **new one wins**. All four are resolved by one shared module,
+> `backend/scripts/plugin-block-contract.js`, which the registry generator, `build-plugin.js`,
+> `build-marketplace.js` and `verify-marketplace.js` all `require` — so the tool that imports your block
+> and the tool that packages it can never disagree about where it lives.
+>
+> Your render component also still receives the legacy **`puck` prop** —
+> `{ isEditing, metadata, dragRef, renderDropZone }` — with `renderDropZone({ zone })` mapped onto the
+> engine's slots (`frontend/src/lib/verso/pluginBlocks.tsx`). None of the 31 first-party bundles use it,
+> but a third-party bundle compiled against the old contract keeps working without a recompile.
+>
+> The one name that is *not* changing is the post-meta key `_puck_data`, where a page's document is
+> stored. It is not a name in our source — it is a **value already written into the `postmeta` table of
+> every installation in the wild**, and into every WXR export ever taken from one. Renaming it would
+> mean a data migration whose failure mode is losing the body of every block-built page, in exchange for
+> cosmetics. So it is frozen, deliberately: read it as "the editor's document blob", not as a reference
+> to the retired engine. The decision is recorded next to the constants themselves —
+> `CONTENT_META_KEY` (`frontend/src/lib/verso/types.ts`, the load side) and `EDITOR_DATA_META_KEY`
+> (`frontend/src/lib/editorGuards.ts`, the save side).
 
 ### 13.1 Declare the entry in `manifest.json`
 
-`frontend.puckComponents` is an **object** with a single `entry` (**not** an array):
+`frontend.versoComponents` is an **object** with a single `entry` (**not** an array):
 
 ```json
 "frontend": {
-    "puckComponents": { "entry": "client/puck/MyPluginPuck.tsx" }
+    "versoComponents": { "entry": "client/verso/MyPluginVerso.tsx" }
 }
 ```
 
-If you omit it, a convention fallback is tried: `client/puck/<Pascal>Puck.tsx`, where `<Pascal>` is the PascalCase of the plugin folder (e.g. `card-gallery` → `CardGalleryPuck.tsx`).
+If you omit it, a convention fallback is tried: `client/verso/<Pascal>Verso.tsx`, where `<Pascal>` is the PascalCase of the plugin folder (e.g. `card-gallery` → `CardGalleryVerso.tsx`). The legacy `client/puck/<Pascal>Puck.tsx` is tried after it.
 
 ### 13.2 The export contract
 
-`frontend/scripts/generate-puck-plugin-registry.js` reads your entry file and supports exactly two shapes:
+`frontend/scripts/generate-verso-plugin-registry.js` reads your entry file and supports exactly two shapes:
 
-**One block** — `export const puckComponentDef` (category/fields/defaultProps) **plus** a default-exported render component. The block is registered under the PascalCase of your manifest `id` (`card-gallery` → `CardGallery`):
+**One block** — `export const versoComponentDef` (category/fields/defaultProps) **plus** a default-exported render component. The block is registered under the PascalCase of your manifest `id` (`card-gallery` → `CardGallery`):
 
 ```tsx
 // @ts-nocheck
 "use client";
 
-export const puckComponentDef = {
+export const versoComponentDef = {
     category: "My Plugin",
     fields: {
         title: { type: "text" as const, label: "Title" }
@@ -689,28 +719,28 @@ export const puckComponentDef = {
     defaultProps: { title: "Hello" }
 };
 
-export default function MyPluginPuck({ title = "" }) {
+export default function MyPluginVerso({ title = "" }) {
     return <section>{title}</section>;
 }
 ```
 
-**Multiple blocks** — a single `export const puckComponents = { ... }` where each value already includes its `render`. Detection is literal: the generator matches `export const puckComponents` in the file text and spreads the object into the registry:
+**Multiple blocks** — a single `export const versoComponents = { ... }` where each value already includes its `render`. Detection is literal: the generator matches `export const versoComponents` (or the deprecated `export const puckComponents`) in the file text and spreads the object into the registry:
 
 ```tsx
-export const puckComponents = {
+export const versoComponents = {
     PriceTable: { ...priceTableDef, render: PriceTable },
     FaqList:    { ...faqListDef,   render: FaqList },
 };
 ```
 
-> Export **only** the shape you use. The generated registry does `import * as X` and statically references either `X.puckComponents` **or** `X.puckComponentDef` + `X.default` — referencing a member that isn't a real export is a hard build error under Turbopack.
+> Export **only** the shape you use. The generated registry does `import * as X` and statically references either `X.versoComponents` **or** `X.versoComponentDef` + `X.default` — referencing a member that isn't a real export is a hard build error under Turbopack. The generator reads which name your file actually declares, so a bundle exporting the deprecated names is referenced by *those* names.
 
 ### 13.3 The activate → regenerate → restart flow
 
-The registry (`frontend/src/lib/puckPluginRegistry.ts`) is **generated, not dynamic**, and includes **active plugins only**:
+The registry (`frontend/src/lib/versoPluginRegistry.ts`) is **generated, not dynamic**, and includes **active plugins only**:
 
 1. Activate the plugin in `/admin/plugins`.
-2. Run `node frontend/scripts/generate-puck-plugin-registry.js`. It queries `GET /api/v1/plugins/active` on `localhost:3000` to filter — if the backend isn't reachable it falls back to including **all** plugins that have a Puck entry. Regenerate the admin-page registry too: `node frontend/scripts/generate-admin-plugin-registry.js`.
+2. Run `node frontend/scripts/generate-verso-plugin-registry.js`. It queries `GET /api/v1/plugins/active` on `localhost:3000` to filter — if the backend isn't reachable it falls back to including **all** plugins that have a block entry. Regenerate the admin-page registry too: `node frontend/scripts/generate-admin-plugin-registry.js`.
 3. Restart (or let Fast Refresh reload) the frontend dev server; production needs a rebuild.
 
 Your block then appears in the editor's component list and renders both in the editor iframe and on the live SSR site. Deactivating a plugin and regenerating removes its blocks again.
@@ -730,6 +760,6 @@ Blocks render inside the public site **and** the editor iframe — both load `wo
 
 Two reminders for committed plugin client files: start every `.tsx` with `// @ts-nocheck` (the frontend CI type-checks the generated registries, which import these files directly from `backend/plugins/`), and mark interactive blocks `"use client"`.
 
-> **Scaffold all of this:** `node backend/cli/wordjs.js create plugin my-plugin` generates a working single-block Puck component wired to the manifest — see `documentation/cli.md` §2.
+> **Scaffold all of this:** `node backend/cli/wordjs.js create plugin my-plugin` generates a working single-block Verso component wired to the manifest — see `documentation/cli.md` §2.
 
 

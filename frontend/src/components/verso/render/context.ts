@@ -48,6 +48,12 @@ export interface VersoRenderContextValue {
   onBlockElement?: (id: string, el: HTMLElement | null) => void;
   /** true → atenúa los bloques NO activos durante la edición inline. */
   editorChrome?: boolean;
+  /**
+   * true → hay una sesión de colaboración VIVA sobre este documento (F8.4). Lo consume la edición
+   * inline: comitea por pulsación y reconcilia el editable con el texto ajeno ya fusionado. Fuera
+   * de una sesión viva no se activa nada de eso — el editor se comporta exactamente como siempre.
+   */
+  collabLive?: boolean;
 }
 
 export const VersoRenderContext = createContext<VersoRenderContextValue | null>(null);

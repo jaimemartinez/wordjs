@@ -10,7 +10,20 @@
  * round-trip sobre el corpus de producción (verso-roundtrip.test.ts).
  */
 
-/** Clave meta de almacenamiento. Excepción ratificada del renombrado (2026-08-15). */
+/**
+ * Clave meta de almacenamiento. **SE QUEDA `_puck_data` A PROPÓSITO** — excepción única y ratificada
+ * del renombrado (2026-08-15).
+ *
+ * El editor pasó a llamarse Verso y con él todos los módulos, ficheros y clases CSS. Esta clave NO,
+ * porque no es un nombre de nuestro código: es un VALOR ya escrito en la tabla `postmeta` de cada
+ * instalación que existe ahí fuera y en cada export WXR que se haya sacado de una. Renombrarla exigiría
+ * una migración de datos cuyo modo de fallo es perder el cuerpo de todas las páginas hechas con
+ * bloques, a cambio de estética. No hay ganancia que justifique ese riesgo.
+ *
+ * Léela como «el blob del documento del editor», no como una referencia al motor retirado.
+ * El espejo de esta constante en el lado del guardado es `EDITOR_DATA_META_KEY`
+ * (frontend/src/lib/editorGuards.ts), con la misma decisión documentada.
+ */
 export const CONTENT_META_KEY = "_puck_data";
 
 /** Id del pseudo-nodo raíz en el documento normalizado. */

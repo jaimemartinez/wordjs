@@ -1,0 +1,172 @@
+/* WordJS — tema del chrome del editor.
+ *
+ * Fuente ÚNICA de los tokens --ed-* del editor (paleta, árbol de esquema, renderizador de campos).
+ * La importa VersoEditor.tsx; solo se carga en las rutas del editor. La hoja y sus clases
+ * (`verso-container`, `verso-editor-ui`) ya llevan el nombre del editor propio.
+ *
+ * OJO: `.puck-content` NO es de aquí y NO se renombró — es una clase del HTML PÚBLICO
+ * (HomeContent/PostContent la emiten) sobre la que se anclan las hojas de tema enviadas
+ * (backend/public/css/core.css y wordjs-ui.css). Tocarla rompería los temas instalados.
+ *
+ * The ramps below are DERIVED, not picked: generated from the Stitch design's own Material-3
+ * colour roles, with the steps it does not state interpolated between the ones it does, in OKLCH,
+ * evenly in lightness (scratchpad/build-ramps.js). Ramps run 01 = darkest to 12 = lightest.
+ *
+ * The "green" and "rose" ramps are intentionally NOT overridden: the design supplies no anchor for
+ * either, and a success colour invented out of an indigo palette would be fabrication, not fidelity.
+ */
+
+/* ── Editor typefaces + iconography (Stitch design: Inter · JetBrains Mono · Material Symbols) ──
+ * SELF-HOSTED under frontend/public/fonts — homelab deploys run offline, a Google Fonts CDN link
+ * would silently strip the editor back to system fonts there. The Material Symbols file is a
+ * NAMED-ICON SUBSET (94KB, generated with the css2 API's icon_names parameter): adding a NEW icon
+ * name to the chrome requires regenerating the subset or the glyph renders as its ligature text.
+ * font-display: block on the icon font for the same reason — a flash of raw ligature text
+ * ("delete", "expand_more") is worse than a briefly empty 20px box. */
+@font-face {
+  font-family: "Material Symbols Outlined";
+  font-style: normal;
+  font-weight: 100 700;
+  font-display: block;
+  /* ?v= — bump when the subset is regenerated; same-URL fonts cache hard in the browser. */
+  src: url("/fonts/material-symbols-outlined-subset.woff2?v=2") format("woff2");
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 100 800;
+  font-display: swap;
+  src: url("/fonts/jetbrains-mono-var.woff2?v=1") format("woff2");
+}
+
+/* Ligature-based icon glyph (use via <MSym name="…"/>). Default axes exactly as the design's
+ * reference markup pins them; filled variants set 'FILL' 1 inline. */
+.msym {
+  font-family: "Material Symbols Outlined";
+  font-weight: normal;
+  font-style: normal;
+  line-height: 1;
+  letter-spacing: normal;
+  text-transform: none;
+  display: inline-block;
+  white-space: nowrap;
+  word-wrap: normal;
+  direction: ltr;
+  -webkit-font-smoothing: antialiased;
+  font-variation-settings: "FILL" 0, "wght" 400, "GRAD" 0, "opsz" 24;
+  user-select: none;
+  flex: none;
+}
+
+:root {
+  /* azure */
+  --ed-color-azure-01: #0f0069;
+  --ed-color-azure-02: #1d0f8b;
+  --ed-color-azure-03: #312a9e;
+  --ed-color-azure-04: #383ac7;
+  --ed-color-azure-05: #4e51dc;
+  --ed-color-azure-06: #6467ef;
+  --ed-color-azure-07: #7f81f6;
+  --ed-color-azure-08: #9a99fc;
+  --ed-color-azure-09: #b4b2ff;
+  --ed-color-azure-10: #cecbff;
+  --ed-color-azure-11: #e7e5ff;
+  --ed-color-azure-12: #ffffff;
+  /* grey */
+  --ed-color-grey-01: #1b1b22;
+  --ed-color-grey-02: #2c2c35;
+  --ed-color-grey-03: #3e3d4a;
+  --ed-color-grey-04: #51505e;
+  --ed-color-grey-05: #656372;
+  --ed-color-grey-06: #797786;
+  --ed-color-grey-07: #8f8c9c;
+  --ed-color-grey-08: #a5a1b2;
+  --ed-color-grey-09: #bbb7c8;
+  --ed-color-grey-10: #d2cedc;
+  --ed-color-grey-11: #e9e5f0;
+  --ed-color-grey-12: #ffffff;
+  /* red */
+  --ed-color-red-01: #93000a;
+  --ed-color-red-02: #a91013;
+  --ed-color-red-03: #bd2522;
+  --ed-color-red-04: #c8443c;
+  --ed-color-red-05: #d25c53;
+  --ed-color-red-06: #db7369;
+  --ed-color-red-07: #e4897f;
+  --ed-color-red-08: #ec9e96;
+  --ed-color-red-09: #f3b3ac;
+  --ed-color-red-10: #fac8c3;
+  --ed-color-red-11: #ffdedb;
+  --ed-color-red-12: #fff5f5;
+  --ed-font-family-monospaced: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* Panel widths, as single values the design states rather than per-breakpoint guesses. */
+  /* Editor shell roles, taken verbatim from the generated design so the chrome can be built
+   * without pulling in its Tailwind config. These are STATED values, not derived ones. */
+  --ed-surface: #fcf8ff;
+  --ed-surface-container: #f0ecf6;
+  --ed-surface-container-low: #f6f2fc;
+  --ed-surface-container-high: #eae6f1;
+  --ed-surface-container-highest: #e4e1eb;
+  --ed-surface-container-lowest: #ffffff;
+  --ed-on-surface: #1b1b22;
+  --ed-on-surface-variant: #464553;
+  --ed-outline: #777584;
+  --ed-outline-variant: #c8c4d5;
+  --ed-primary: #1f108e;
+  --ed-primary-container: #3730a3;
+  --ed-on-primary-container: #a9a7ff;
+  --ed-inverse-surface: #303037;
+  --ed-inverse-on-surface: #f3eff9;
+  --ed-error: #ba1a1a;
+  /* Remaining stated roles from the Stitch screens (project 15016963210436703665). */
+  --ed-primary-fixed: #e2dfff;
+  --ed-secondary-container: #6063ee;
+  --ed-surface-dim: #dcd8e3;
+  --ed-error-container: #ffdad6;
+  --ed-on-error-container: #93000a;
+  /* The success green the design's toast states (text-green-400 in the reference markup). */
+  --ed-success: #4ade80;
+  --ed-side-bar-width: 280px;
+}
+
+/* Type: the design specifies Inter for the interface. Declared on BODY, not :root, on purpose:
+ * var() inside a custom property substitutes where the property is DECLARED, and next/font's
+ * --font-inter (the real, possibly hashed family) is set on <body> — declared at :root the
+ * variable is undefined and the chrome silently falls back. The "Inter" fallback still covers
+ * environments where next/font registers the literal name. */
+body {
+  --ed-font-family: var(--font-inter, "Inter"), "Inter", ui-sans-serif, system-ui, -apple-system,
+    "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+/* NOTA (retirada del editor anterior): aquí vivía un bloque de ~170 líneas que reteñía los
+ * internals de aquel editor seleccionando por el fragmento legible de sus clases css-module
+ * ([class*="ActionBar-action"], [class*="PuckFields-field"], [class*="Layer-inner"], …). Ese
+ * motor ya no existe y NINGUNO de los 24 fragmentos que seleccionaba lo emite hoy nadie, así que
+ * eran reglas que no casaban con un solo elemento. El reparto de campos en las 3 pestañas del
+ * panel, que aquel bloque hacía con :has() sobre [data-ptab], hoy lo hace el propio panel en JS
+ * (components/verso/editor/panelTabs.ts). Verso pinta su chrome con utilidades Tailwind sobre los
+ * tokens --ed-* de arriba, que siguen siendo la razón de ser de esta hoja. */
+
+/* ── Editor-panel scrollbars — the design's 4px primary-fixed thumb ─────────────────────────────
+ * .verso-editor-ui marks editor UI that PORTALS OUT of .verso-container (the ⌘K palette on <body>). */
+.verso-container .custom-scrollbar::-webkit-scrollbar,
+.verso-editor-ui .custom-scrollbar::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+.verso-container .custom-scrollbar::-webkit-scrollbar-thumb,
+.verso-editor-ui .custom-scrollbar::-webkit-scrollbar-thumb {
+  background: var(--ed-primary-fixed);
+  border-radius: 10px;
+}
+.verso-container .custom-scrollbar::-webkit-scrollbar-thumb:hover,
+.verso-editor-ui .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: var(--ed-primary-container);
+}
+.verso-container .custom-scrollbar,
+.verso-editor-ui .custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: var(--ed-primary-fixed) transparent;
+}

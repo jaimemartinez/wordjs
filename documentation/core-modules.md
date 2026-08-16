@@ -275,7 +275,9 @@ The notification service is a core module too — see **[notifications.md](./not
 
 **Location:** `backend/src/core/sanitize-meta.ts`
 
-The Puck page tree (`_puck_data`) is stored verbatim in `post_meta` and rendered as HTML on many public sites, so it **must** be sanitized on every write path. This logic was extracted from `routes/posts.ts` so non-route write paths (the WXR importer) sanitize through the **exact same code** rather than bypassing it. Shared by `posts.ts` + `wxr-import.ts`.
+The visual editor's page tree (`_puck_data`) is stored verbatim in `post_meta` and rendered as HTML on many public sites, so it **must** be sanitized on every write path. This logic was extracted from `routes/posts.ts` so non-route write paths (the WXR importer) sanitize through the **exact same code** rather than bypassing it. Shared by `posts.ts` + `wxr-import.ts`.
+
+> **Naming.** The editor is now Verso, but the meta key `_puck_data` and this module's identifiers (`sanitizePuckTree`, `PUCK_HTML_FIELDS`, `safePuckUrl`) keep their historical names on purpose. The key is a value already written into every existing install, so renaming it would mean migrating everyone's content; the identifiers are named after the key they operate on and are quoted here verbatim so a grep for them finds the code.
 
 ### Logic
 *   `sanitizeMetaValue(key, value)` targets `_puck_data`. It sanitizes an object tree, and **(XSS-02)** also parses a `_puck_data` sent as a **JSON string** → sanitizes → re-stringifies (it was previously object-only).

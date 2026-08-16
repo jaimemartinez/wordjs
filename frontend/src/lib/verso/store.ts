@@ -77,6 +77,20 @@ export interface CreateEditorOptions {
   now?: () => number;
 }
 
+/** De dónde salió un lote de comandos efectivos. `remote` NUNCA se emite (ver `applyRemoteDoc`). */
+export type VersoCommandOrigin = "transact" | "undo" | "redo";
+
+export interface VersoCommandBatch {
+  /**
+   * Los comandos EFECTIVOS — los que devuelve `applyCommand`, con los índices ya clampados y el
+   * `idMap` materializado. Nunca los crudos: dos réplicas que apliquen "inserta en el índice 99"
+   * sobre listas de distinta longitud acaban con documentos distintos, y ahí la convergencia deja
+   * de significar nada.
+   */
+  commands: readonly VersoHistoryCommand[];
+  origin: VersoCommandOrigin;
+}
+
 export interface EditorHandle {
   /** Serializa el doc actual a la forma persistida (`_puck_data`). */
   getData(): VersoData;
@@ -93,6 +107,30 @@ export interface EditorHandle {
   ): () => void;
   /** Notifica solo cuando ese VersoNode cambia de referencia (o desaparece). */
   subscribeNode(nodeId: string, listener: (node: VersoNode | undefined) => void): () => void;
+  /**
+   * Suscripción a los comandos efectivos que el store ACABA de aplicar. Existe para la
+   * colaboración (F8): el transporte convierte cada comando en operaciones CRDT.
+   *
+   * Se emite DESPUÉS de `emitDocChange`, así que un oyente que lea `getDoc()` ve el documento ya
+   * committeado. Un `undo` local también se emite —deshacer es una edición como otra cualquiera y
+   * las demás réplicas tienen que verla—; lo que NO se emite jamás es lo que llega por
+   * `applyRemoteDoc`, porque devolverlo al transporte sería un eco infinito.
+   */
+  subscribeCommands(listener: (batch: VersoCommandBatch) => void): () => void;
+  /**
+   * Publica un documento venido de OTRA réplica, ya proyectado por el CRDT. No toca la pila de
+   * historia y no emite al sink de comandos.
+   *
+   * SOBRE EL DESHACER (limitación conocida, documentada a propósito): las entradas de historia que
+   * ya estaban guardadas describen inversos de un documento anterior, y tras un cambio ajeno pueden
+   * no encajar. No se vacía la pila —perder el deshacer cada vez que otro teclea sería peor que el
+   * problema—: el `undo` es peek-then-commit, así que si un inverso ya no aplica, la entrada se
+   * conserva y el documento publicado no se corrompe. El deshacer selectivo (deshacer solo lo tuyo)
+   * es trabajo del CRDT, no del store.
+   *
+   * `resetHistory` es para el documento INICIAL de la sala, donde no hay nada tuyo que conservar.
+   */
+  applyRemoteDoc(nextDoc: VersoDoc, opts?: { resetHistory?: boolean }): boolean;
   select(nodeId: string | null): void;
   setInlineEditing(nodeId: string | null): void;
   setDragPreview(preview: DragPreview | null): void;
@@ -135,6 +173,23 @@ export function createEditor(options: CreateEditorOptions): EditorHandle {
 
   const subs = new Set<Subscription>();
   const nodeSubs = new Set<NodeSubscription>();
+  const commandSubs = new Set<(batch: VersoCommandBatch) => void>();
+
+  /**
+   * Entrega de los comandos efectivos al sink. Contenida igual que `onChange`: el transporte de
+   * colaboración es un consumidor EXTERNO y su excepción no puede tumbar una edición ya committeada.
+   */
+  function emitCommands(commands: readonly VersoHistoryCommand[], origin: VersoCommandOrigin): void {
+    if (destroyed || commands.length === 0 || commandSubs.size === 0) return;
+    const batch: VersoCommandBatch = { commands, origin };
+    for (const listener of [...commandSubs]) {
+      try {
+        listener(batch);
+      } catch (e) {
+        console.error("verso: el sink de comandos lanzó", e);
+      }
+    }
+  }
 
   function rebuildState(): void {
     // Higiene: referencias a nodos desaparecidos (undo/remove/replace) se limpian.
@@ -258,6 +313,9 @@ export function createEditor(options: CreateEditorOptions): EditorHandle {
     coalesceBarrier = false;
     doc = working;
     emitDocChange();
+    // Copia: `commands` sigue vivo en el closure de `run` y, si hubo coalescencia, sus elementos
+    // están además dentro de la entrada de historia. El sink recibe una lista suya.
+    emitCommands(commands.slice(), "transact");
     return true;
   }
 
@@ -267,10 +325,15 @@ export function createEditor(options: CreateEditorOptions): EditorHandle {
     // el doc publicado no cambia.
     const entry = undoStack[undoStack.length - 1];
     let working = doc;
+    // Los EFECTIVOS de deshacer, en el orden en que se aplican: es lo que viaja a las otras
+    // réplicas (un inverso crudo tendría los mismos índices sin clampar que un comando crudo).
+    const applied: VersoHistoryCommand[] = [];
     try {
       // Inversos en orden CRONOLÓGICO: deshacer = aplicarlos hacia atrás.
       for (let i = entry.inverse.length - 1; i >= 0; i--) {
-        working = applyCommand(working, entry.inverse[i], applyOpts).doc;
+        const result = applyCommand(working, entry.inverse[i], applyOpts);
+        working = result.doc;
+        applied.push(result.command);
       }
     } catch (e) {
       console.error("verso: undo falló — la entrada se conserva y el doc queda intacto", e);
@@ -281,6 +344,7 @@ export function createEditor(options: CreateEditorOptions): EditorHandle {
     coalesceBarrier = true;
     doc = working;
     emitDocChange();
+    emitCommands(applied, "undo");
     return true;
   }
 
@@ -288,8 +352,13 @@ export function createEditor(options: CreateEditorOptions): EditorHandle {
     if (destroyed || redoStack.length === 0) return false;
     const entry = redoStack[redoStack.length - 1];
     let working = doc;
+    const applied: VersoHistoryCommand[] = [];
     try {
-      for (const cmd of entry.commands) working = applyCommand(working, cmd, applyOpts).doc;
+      for (const cmd of entry.commands) {
+        const result = applyCommand(working, cmd, applyOpts);
+        working = result.doc;
+        applied.push(result.command);
+      }
     } catch (e) {
       console.error("verso: redo falló — la entrada se conserva y el doc queda intacto", e);
       return false;
@@ -298,6 +367,24 @@ export function createEditor(options: CreateEditorOptions): EditorHandle {
     undoStack.push(entry);
     coalesceBarrier = true;
     doc = working;
+    emitDocChange();
+    emitCommands(applied, "redo");
+    return true;
+  }
+
+  function applyRemoteDoc(nextDoc: VersoDoc, opts: { resetHistory?: boolean } = {}): boolean {
+    if (destroyed) return false;
+    // Una transacción a medias tiene su propio `working` sobre el doc de ANTES; publicar aquí
+    // haría que al confirmarla se perdiera lo remoto. El transporte reintenta en el siguiente tic.
+    if (inTransaction) return false;
+    if (Object.is(nextDoc, doc)) return true;
+    doc = nextDoc;
+    if (opts.resetHistory) {
+      undoStack.length = 0;
+      redoStack.length = 0;
+    }
+    // Lo que teclees a continuación no debe fundirse con una entrada anterior al cambio ajeno.
+    coalesceBarrier = true;
     emitDocChange();
     return true;
   }
@@ -339,6 +426,13 @@ export function createEditor(options: CreateEditorOptions): EditorHandle {
         nodeSubs.delete(sub);
       };
     },
+    subscribeCommands(listener) {
+      commandSubs.add(listener);
+      return () => {
+        commandSubs.delete(listener);
+      };
+    },
+    applyRemoteDoc,
     select(nodeId) {
       setUiState(() => {
         const next = nodeId !== null && doc.nodes[nodeId] ? nodeId : null;
@@ -376,6 +470,7 @@ export function createEditor(options: CreateEditorOptions): EditorHandle {
       destroyed = true;
       subs.clear();
       nodeSubs.clear();
+      commandSubs.clear();
     },
   };
 }

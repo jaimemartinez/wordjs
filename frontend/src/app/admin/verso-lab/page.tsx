@@ -115,7 +115,7 @@ const TOOL_BTN_CLS =
 function VersoLabBench({ fixture }: { fixture: LabFixtureKey }) {
     const registry = React.useMemo(() => makeLabRegistry(), []);
     const componentMap = React.useMemo(() => makeComponentMap(registry), [registry]);
-    // Paleta agrupada por las categorías reales de puckConfig (labels de coreBlockCategories).
+    // Paleta agrupada por las categorías reales de versoConfig (labels de coreBlockCategories).
     const palette = React.useMemo(() => {
         const groups = new Map<string, ReturnType<BlockRegistry["list"]>>();
         for (const def of registry.list()) {
@@ -220,9 +220,9 @@ function VersoLabBench({ fixture }: { fixture: LabFixtureKey }) {
             }
             const item: VersoItem = { type, props: { ...defaults, id } };
             // Materializa los slots DECLARADOS que el defaultProps no trae (p.ej. Section/Grid/
-            // FlexRow `children`, Columns col-0/col-1): puckConfig no los incluye en defaultProps
+            // FlexRow `children`, Columns col-0/col-1): versoConfig no los incluye en defaultProps
             // (Puck los crea al insertar) y sin el array el contenedor recién insertado no tendría
-            // zona de drop. Los defaults en sí quedan byte-idénticos a puckConfig (gate anti-drift).
+            // zona de drop. Los defaults en sí quedan byte-idénticos a versoConfig (gate anti-drift).
             for (const [fieldKey, field] of Object.entries(def.fields)) {
                 if (field.type === "slot" && !(fieldKey in item.props)) item.props[fieldKey] = [];
             }

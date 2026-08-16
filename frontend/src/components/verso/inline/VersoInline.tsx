@@ -32,7 +32,7 @@ import React from "react";
 import { sanitizeHTML } from "@/lib/sanitize";
 import { useVersoRenderContext } from "../render/context";
 import { createInlineSession, type InlineSession } from "./inlineSession";
-import VersoTextSurface from "./VersoTextSurface";
+import VersoTextSurface, { type ApplyExternalValue } from "./VersoTextSurface";
 
 export interface VersoInlineProps {
     /** Clave interna del nodo en edición (== inlineEditingId). */
@@ -53,7 +53,7 @@ function plainTransform(raw: string): string {
 }
 
 export default function VersoInline({ nodeId, prop, schema }: VersoInlineProps) {
-    const { handle } = useVersoRenderContext();
+    const { handle, collabLive } = useVersoRenderContext();
 
     // Valor inicial UNA vez: la superficie no es controlada; los commits
     // parciales cambian node.props (y la referencia del nodo) sin re-alimentar
@@ -66,12 +66,15 @@ export default function VersoInline({ nodeId, prop, schema }: VersoInlineProps) 
     // La sesión se crea en un efecto (no en render: crear una suscripción al
     // store durante el render es un side effect y StrictMode la duplicaría).
     const sessionRef = React.useRef<InlineSession | null>(null);
+    const applyRef = React.useRef<ApplyExternalValue | null>(null);
     React.useEffect(() => {
         const session = createInlineSession({
             handle,
             nodeId,
             prop,
             transform: schema === "rich" ? richTransform : plainTransform,
+            // Con colaboración viva, commit SÍNCRONO por pulsación (ver InlineSessionDeps).
+            ...(collabLive ? { throttleMs: 0 } : {}),
         });
         sessionRef.current = session;
         return () => {
@@ -80,7 +83,29 @@ export default function VersoInline({ nodeId, prop, schema }: VersoInlineProps) 
             // pendiente SIN tocar inlineEditingId (eso es de end()/el store).
             session.dispose();
         };
-    }, [handle, nodeId, prop, schema]);
+    }, [handle, nodeId, prop, schema, collabLive]);
+
+    /**
+     * RECONCILIACIÓN CON LO AJENO (F8.4). Solo con colaboración viva: sin ella, el único que
+     * escribe en esta prop es esta misma sesión y no hay nada que reconciliar.
+     *
+     * Cómo se distingue lo tuyo de lo ajeno sin preguntar a la red: la sesión recuerda el último
+     * valor que ELLA escribió (`lastCommitted`). Si el documento trae otro, lo puso otra réplica
+     * — el store lo publicó por `applyRemoteDoc` — y el editable tiene que enseñarlo. Se `adopt`a
+     * el valor ya adoptado por la superficie para que el siguiente commit no lo reenvíe.
+     */
+    React.useEffect(() => {
+        if (!collabLive) return;
+        return handle.subscribeNode(nodeId, (node) => {
+            const session = sessionRef.current;
+            const apply = applyRef.current;
+            if (!session || !apply || !node) return;
+            const value = node.props[prop];
+            if (typeof value !== "string") return;
+            if (value === session.lastCommitted()) return; // es lo nuestro, volviendo de rebote
+            if (apply(value)) session.adopt(value);
+        });
+    }, [handle, nodeId, prop, collabLive]);
 
     return (
         <VersoTextSurface
@@ -89,6 +114,7 @@ export default function VersoInline({ nodeId, prop, schema }: VersoInlineProps) 
             initialValue={initialValue}
             onContent={(raw) => sessionRef.current?.onContent(raw)}
             onRequestEnd={() => sessionRef.current?.end()}
+            applyRef={applyRef}
         />
     );
 }

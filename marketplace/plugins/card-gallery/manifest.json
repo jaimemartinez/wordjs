@@ -23,8 +23,8 @@
             "entry": "client/admin/page.tsx",
             "slug": "cards"
         },
-        "puckComponents": {
-            "entry": "client/puck/CardGalleryPuck.tsx"
+        "versoComponents": {
+            "entry": "client/verso/CardGalleryVerso.tsx"
         }
     },
     "api": {

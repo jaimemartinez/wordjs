@@ -105,16 +105,16 @@ Scaffolds a complete, activatable **isolated** plugin:
 
 | File | What it is |
 | :--- | :--- |
-| `manifest.json` | `id`, `name`, **`"isolated": true`** (required — activation is rejected without it), requested `permissions` with reasons (granted by the admin on activation, default-deny), `frontend.adminPage` `{entry, slug}` and `frontend.puckComponents` `{entry}`. |
+| `manifest.json` | `id`, `name`, **`"isolated": true`** (required — activation is rejected without it), requested `permissions` with reasons (granted by the admin on activation, default-deny), `frontend.adminPage` `{entry, slug}` and `frontend.versoComponents` `{entry}` (the pre-rename `frontend.puckComponents` is still accepted — see `documentation/plugins.md` §13). |
 | `index.js` | The isolated-bridge idioms: `exports.init = function (wordjs) { const { options, http, adminMenu } = wordjs; ... }` with a public GET plus admin-gated POST/DELETE route (`{ auth: true, admin: true }`), slug-prefixed options storage, and `adminMenu.add`. JSDoc-typed against `backend/types/wordjs-bridge.d.ts`, so plain-JS authors get full IntelliSense. |
 | `client/admin/page.tsx` | The admin page (starts with `// @ts-nocheck` + `"use client"` — **required** for committed plugin client files: the frontend CI type-checks the generated registries, which import these files directly). |
-| `client/puck/<Pascal>Puck.tsx` | A Puck block: `export const puckComponentDef` + default-exported render, themed via an embedded `<style>` with `--wjs-*` token fallbacks. |
+| `client/verso/<Pascal>Verso.tsx` | A Verso block: `export const versoComponentDef` + default-exported render, themed via an embedded `<style>` with `--wjs-*` token fallbacks. |
 
 The CLI then prints the required flow: **restart the backend once** (new plugin folders are discovered at boot; from then on activation hot-loads them) → **activate** in `/admin/plugins` → regenerate the frontend registries:
 
 ```bash
 node frontend/scripts/generate-admin-plugin-registry.js
-node frontend/scripts/generate-puck-plugin-registry.js
+node frontend/scripts/generate-verso-plugin-registry.js
 ```
 
 > **Dev hot-reload:** with `NODE_ENV=development` (i.e. `npm run dev`), the backend watches every active isolated plugin's directory (`backend/src/core/plugin-dev-watch.ts`) and re-spawns its child process ~300 ms after a `.js`/`.json` save — the reload re-runs the full load pipeline including the AST security scan, so nothing is bypassed. Manual equivalent (admin-only, works in any environment): `POST /api/v1/plugins/:slug/reload`.

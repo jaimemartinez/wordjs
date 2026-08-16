@@ -7,9 +7,9 @@
  * a multi-hour delay).
  */
 import React from "react";
-import { animClasses } from "@/components/puck/blockShell";
-import type { AnimSpec } from "@/components/puck/blockShell";
-import { useEntranceAnimation } from "@/components/puck/entranceAnimation";
+import { animClasses } from "@/components/blocks/blockShell";
+import type { AnimSpec } from "@/components/blocks/blockShell";
+import { useEntranceAnimation } from "@/components/blocks/entranceAnimation";
 
 export default function AnimatedShell({ hideCls, anim, children }: { hideCls: string; anim: AnimSpec; children: React.ReactNode }) {
     const animActive = !!anim.type;

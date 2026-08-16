@@ -6,18 +6,18 @@
  * PADRE (FrameController) portalea el árbol del editor dentro — mismo árbol React,
  * el contexto del EditorHandle fluye a través del portal. Aquí no hay JS de editor.
  *
- * CSS del canvas (WYSIWYG, mismas URLs que el editor actual — PuckEditor.tsx L507-508
+ * CSS del canvas (WYSIWYG, mismas URLs que el editor legacy retirado — PuckEditor.tsx L507-508
  * y el ThemeLoader público, vía los helpers compartidos de lib/assetVersion):
  * - /public/css/wordjs-ui.css?v=<ASSET_VERSION>  (uiFrameworkHref)
  * - /themes/<slug>/style.css?v=<slug>-<version>-<ASSET_VERSION>  (themeStylesheetHref)
- *   El slug/version activos se resuelven igual que PuckEditor: themesApi.list() y
+ *   El slug/version activos se resuelven igual que el PuckEditor legacy (retirado): themesApi.list() y
  *   fallback a "default" si la petición falla (nunca quedar sin link).
  * El <link> del tema lleva id="wjs-theme-stylesheet": FrameController.swapThemeCss lo
  * reemplaza esperando el onload del nuevo antes de retirar el viejo (sin FOUC). Tras
  * el primer render este componente ya no re-renderiza el link, así que la retirada
  * imperativa no entra en conflicto con React.
  *
- * CONTRATO DE DOCUMENTO (lección del editor actual, PuckEditor L446-456): el tema y
+ * CONTRATO DE DOCUMENTO (lección del editor legacy retirado, PuckEditor L446-456): el tema y
  * los globals del admin (html,body{height:100%}) NO pueden secuestrar el modelo de
  * scroll del canvas. :root/:root>body ganan por especificidad a cualquier selector
  * html/body de tema, y html queda como ÚNICO contenedor de scroll con body en
@@ -59,7 +59,7 @@ interface ActiveTheme {
     version: string;
 }
 
-/** Resuelve el tema activo (mismo criterio y fallback que PuckEditor: active → "default"). */
+/** Resuelve el tema activo (mismo criterio y fallback que el PuckEditor legacy (retirado): active → "default"). */
 async function resolveActiveTheme(): Promise<ActiveTheme> {
     const list = await themesApi.list();
     const active = list.find((t) => t.active) || list.find((t) => t.slug === "default");
@@ -76,7 +76,7 @@ export default function CanvasFramePage() {
                 if (!cancelled) setTheme(t);
             })
             .catch(() => {
-                // Offline/error: nunca quedar sin hoja de tema (mismo fallback que PuckEditor).
+                // Offline/error: nunca quedar sin hoja de tema (mismo fallback que el PuckEditor legacy (retirado)).
                 if (!cancelled) setTheme({ slug: "default", version: "" });
             });
         return () => {

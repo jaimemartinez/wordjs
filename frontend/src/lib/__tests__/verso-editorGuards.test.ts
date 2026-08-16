@@ -10,7 +10,7 @@
 import { describe, it, expect } from "vitest";
 import {
     unhydratedSaveBlocked,
-    seedLegacyPuckData,
+    seedLegacyVersoData,
     applyLegacyHtmlFallback,
     resolveWjsTemplateForSave,
     isWithinPostMountGrace,
@@ -43,9 +43,9 @@ describe("unhydratedSaveBlocked — full isNew×loaded matrix", () => {
     });
 });
 
-describe("seedLegacyPuckData — legacy post/page (no _puck_data) seeds an editable HTMLEmbed block", () => {
+describe("seedLegacyVersoData — legacy post/page (no _puck_data) seeds an editable HTMLEmbed block", () => {
     it("wraps non-empty legacy HTML in a single HTMLEmbed block with id `HTMLEmbed-legacy-<recordId>`", () => {
-        const { data, legacyHtml } = seedLegacyPuckData({
+        const { data, legacyHtml } = seedLegacyVersoData({
             html: "<p>Imported via WXR</p>",
             title: "Old Page",
             slug: "old-page",
@@ -61,7 +61,7 @@ describe("seedLegacyPuckData — legacy post/page (no _puck_data) seeds an edita
     });
 
     it("seeds an EMPTY content array (no HTMLEmbed block) and a null legacyHtml when there is no body", () => {
-        const { data, legacyHtml } = seedLegacyPuckData({
+        const { data, legacyHtml } = seedLegacyVersoData({
             html: "",
             title: "Blank Page",
             slug: "blank-page",
@@ -76,7 +76,7 @@ describe("seedLegacyPuckData — legacy post/page (no _puck_data) seeds an edita
     });
 
     it("carries the saved _wjs_template into root.props so the canvas preview wraps in the right template", () => {
-        const { data } = seedLegacyPuckData({
+        const { data } = seedLegacyVersoData({
             html: "<p>x</p>",
             title: "T",
             slug: "t",
@@ -87,7 +87,7 @@ describe("seedLegacyPuckData — legacy post/page (no _puck_data) seeds an edita
     });
 
     it("merges extraRootProps (posts add allowComments; pages don't) without disturbing the shared fields", () => {
-        const { data } = seedLegacyPuckData({
+        const { data } = seedLegacyVersoData({
             html: "<p>x</p>",
             title: "Hello",
             slug: "hello",
@@ -102,7 +102,7 @@ describe("seedLegacyPuckData — legacy post/page (no _puck_data) seeds an edita
     });
 
     it("uses the exact recordId given (string ids stringify the same as number ids)", () => {
-        const { data } = seedLegacyPuckData({ html: "<p>x</p>", title: "T", slug: "t", recordId: "abc-123", wjsTemplate: "" });
+        const { data } = seedLegacyVersoData({ html: "<p>x</p>", title: "T", slug: "t", recordId: "abc-123", wjsTemplate: "" });
         expect((data.content[0].props as any).id).toBe("HTMLEmbed-legacy-abc-123");
     });
 });

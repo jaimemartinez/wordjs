@@ -47,7 +47,11 @@ const LONG_TEXT_COLUMNS = new Set([
     'meta_value', 'comment_content', 'comment_agent', 'description', 'message', 'data', 'option_value',
     'link_description', 'link_notes', 'link_image', 'link_url', 'action_url', 'metadata',
     'fields', // form_submissions.fields — the submitted key→value map as JSON (route-bounded at 64KB)
-    'detail' // audit_log.detail — the small sanitized JSON blob for an audit event (never a secret)
+    'detail', // audit_log.detail — the small sanitized JSON blob for an audit event (never a secret)
+    // Verso real-time collaboration (migration 0012). `base_doc` is a whole _puck_data page tree and
+    // `payload` a sanitized CRDT op (route-bounded at 256KB per frame) — both would be silently
+    // truncated at VARCHAR(255), which for base_doc means handing a late joiner a corrupt document.
+    'base_doc', 'payload'
 ]);
 
 // Strip `-- line` and `/* block */` comments (string-literal aware). Core DDL sometimes carries inline

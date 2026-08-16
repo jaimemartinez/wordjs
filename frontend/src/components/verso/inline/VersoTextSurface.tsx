@@ -68,6 +68,7 @@ import VersoBubbleMenu, {
     type BubbleSelectionState,
     type VersoBubbleMenuHandle,
 } from "./VersoBubbleMenu";
+import { mapOffset, reconcileSelection } from "./remoteReconcile";
 
 /**
  * Centinela que VersoBlock inyecta como valor de la prop inline: invisible
@@ -75,6 +76,15 @@ import VersoBubbleMenu, {
  * dangerouslySetInnerHTML (Heading/Text) como en interpolación (Card/Button…).
  */
 export const INLINE_HOST_SENTINEL = "⁠wjs-inline-host⁠";
+
+/**
+ * Aplica en la superficie un valor que NO ha escrito quien la tiene delante (F8.4): el texto del
+ * campo ya fusionado por el CRDT con la edición de otra persona. Devuelve `true` si lo aplicó.
+ *
+ * No emite `onContent`: el documento ya lo tiene: lo que falta es que el editable lo REFLEJE, y
+ * devolverlo sería un eco.
+ */
+export type ApplyExternalValue = (value: string) => boolean;
 
 export interface VersoTextSurfaceProps {
     nodeId: string;
@@ -84,6 +94,12 @@ export interface VersoTextSurfaceProps {
     onContent(raw: string): void;
     /** Escape / click fuera → la sesión hace flush + setInlineEditing(null). */
     onRequestEnd(): void;
+    /**
+     * Buzón por el que el cableado de colaboración empuja el texto ajeno ya fusionado. La
+     * superficie escribe aquí su `applyExternal` mientras tiene el host tomado, y `null` al
+     * soltarlo — quien lo llame fuera de sesión no rompe nada.
+     */
+    applyRef?: React.MutableRefObject<ApplyExternalValue | null>;
 }
 
 /* ------------------------------------------------------------------ */
@@ -494,6 +510,7 @@ export default function VersoTextSurface({
     initialValue,
     onContent,
     onRequestEnd,
+    applyRef,
 }: VersoTextSurfaceProps): React.ReactElement {
     const markerRef = React.useRef<HTMLSpanElement | null>(null);
     const fallbackRef = React.useRef<HTMLDivElement | null>(null);
@@ -814,6 +831,45 @@ export default function VersoTextSurface({
             });
         };
 
+        /* ------------- texto AJENO ya fusionado (colaboración) ---------- */
+
+        /**
+         * Publica en el editable el valor que trae el documento tras fusionar la edición de otra
+         * persona. Es lo que convierte "converge en el modelo" en "se puede escribir a la vez":
+         * sin esto, el editable seguiría enseñando TU versión, y tu siguiente pulsación mandaría
+         * un texto sin las letras del otro — que el diff del puente traduciría, con toda la razón
+         * del mundo, como "bórralas".
+         *
+         * No emite: el documento ya tiene este valor. No apila undo: lo ajeno no es tuyo para
+         * deshacerlo. Y no toca nada durante una composición IME (§7) ni en solo lectura.
+         */
+        const applyExternal = (value: string): boolean => {
+            if (s.readOnly || s.composing) return false;
+            if (schema === "plain") {
+                const entry = readPlainEntry(host as HTMLElement);
+                const current = plainValueOf(entry);
+                if (current === value) return false;
+                const selP = readPlainSelection(entry);
+                const caret = selP ? selP.to : current.length;
+                writePlain(value, mapOffset(current, value, caret));
+                s.lastEmitted = value;
+                return true;
+            }
+            const model = readRich();
+            if (serializeDoc(model.doc) === value) return false;
+            const nextDoc = normalizeDoc(parseRichHtml(value));
+            // MISMO guard fail-closed que al abrir la sesión: si el valor ajeno no sobrevive al
+            // pipeline, se deja el editable como está — preservar > pintar.
+            if (inlineGuardLosesText(docGuardText(parseRichHtml(value)), docGuardText(nextDoc))) {
+                return false;
+            }
+            const m2 = renderRich(nextDoc, reconcileSelection(model.doc, nextDoc, readModelSelection(model)));
+            s.lastEmitted = serializeDoc(m2.doc);
+            updateBubble();
+            return true;
+        };
+        if (applyRef) applyRef.current = applyExternal;
+
         /* --------------------------- listeners -------------------------- */
         const onKeyDown = (e: KeyboardEvent): void => {
             // §7.2: NADA se intercepta durante una composición IME (D12).
@@ -1070,6 +1126,7 @@ export default function VersoTextSurface({
             host!.removeAttribute("data-wjs-inline-readonly");
             host!.innerHTML = r.innerHTML;
             sessionRef.current = null;
+            if (applyRef) applyRef.current = null;
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [useFallback, nodeId, schema]);

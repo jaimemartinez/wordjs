@@ -162,9 +162,9 @@ Next steps:
   2. Activate it in /admin/plugins. Activation spawns the sandboxed child process and
      grants exactly the permissions declared in manifest.json (default-deny — the admin
      can refine every grant later).
-  3. Regenerate the frontend registries so the admin page and Puck block show up:
+  3. Regenerate the frontend registries so the admin page and Verso block show up:
        node frontend/scripts/generate-admin-plugin-registry.js
-       node frontend/scripts/generate-puck-plugin-registry.js
+       node frontend/scripts/generate-verso-plugin-registry.js
 
 Dev loop: run the backend with NODE_ENV=development (npm run dev) and every .js/.json save
 inside the plugin hot-reloads its child process (re-running the security scan). You can also

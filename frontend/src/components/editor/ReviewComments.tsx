@@ -33,7 +33,7 @@ import { apiPost, postsApi } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { useI18n } from "@/contexts/I18nContext";
 import { useModal } from "@/contexts/ModalContext";
-import { trStr } from "@/lib/puckI18n";
+import { trStr } from "@/lib/editorI18n";
 import MSym from "./MSym";
 
 const META_KEY = "_wjs_review_comments";

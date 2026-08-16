@@ -166,7 +166,7 @@ export default function ThemeCustomizerPage() {
     }, []);
 
     // --- Seed token defaults from the live theme via the preview iframe ------------------------
-    // Mirror the PuckEditor pattern: poll for the iframe's contentDocument, guard nulls, read the
+    // Mirror the editor-canvas pattern: poll for the iframe's contentDocument, guard nulls, read the
     // computed --wjs-* values once available, then stop. Runs once on mount.
     useEffect(() => {
         let done = false;

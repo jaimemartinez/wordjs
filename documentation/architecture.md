@@ -21,7 +21,7 @@ graph TB
 
     subgraph "Frontend Layer"
         NextJS[⚛️ Next.js Frontend :3001]
-        Puck[🎨 Puck Editor]
+        Verso[🎨 Verso Editor]
         Themes[🎭 Theme Engine]
     end
 
@@ -49,7 +49,7 @@ graph TB
     Mobile --> Gateway
     Gateway --> NextJS
     Gateway --> Express
-    NextJS --> Puck
+    NextJS --> Verso
     NextJS --> Themes
     Express --> Hooks
     Express --> Cron
@@ -247,63 +247,69 @@ graph TD
 On top of per-theme `style.css`, the theme system ships **one shared static stylesheet**, `backend/public/css/wordjs-ui.css` — a token-driven, Bootstrap-like CSS framework. It auto-styles **every** HTML element and provides Bootstrap-compatible components (`.btn` / `.card` / `.alert` / `.badge` / `.table` / `.nav` / `.list-group` / `.pagination` / `.progress` / `.modal` / `.dropdown`, a flexbox grid `.container` / `.row` / `.col-*`) plus a utility layer (spacing / display / flex / text / colors / borders / sizing / shadow).
 
 - **Driven by `--wjs-*` design tokens.** A theme *declares* them in its `theme.json` (`seeds` / `tokens`); `core/theme-compile.ts` compiles that contract into a marked `/* @wjs-generated:start … */` block inside the theme's `style.css`, where the tokens land verbatim in `:root`. The framework carries safe fallbacks, so a theme re-skins everything just by setting tokens. Per-variant `--wjs-color-on-*` tokens hold the max-contrast (black/white) text computed per theme for each solid color.
-- **Where it loads:** on **public** pages (frontend `ThemeLoader.tsx`) and inside the **editor preview iframe** (frontend `PuckEditor.tsx`, for true WYSIWYG) — never the admin chrome. `ThemeLoader.tsx` emits it (React 19 `precedence="wjs-base"`) **before** the theme's own `style.css` (`precedence="wjs-theme"`) so the theme wins at equal specificity. (`core.css` is linked only by the *legacy* Handlebars engine's `wordjs_head` (`core/theme-engine.ts`), and that public path is no longer mounted — Next.js renders the live site.)
+- **Where it loads:** on **public** pages (frontend `ThemeLoader.tsx`) and inside the **editor canvas iframe** (frontend `app/admin/canvas-frame/page.tsx`, for true WYSIWYG) — never the admin chrome. `ThemeLoader.tsx` emits it (React 19 `precedence="wjs-base"`) **before** the theme's own `style.css` (`precedence="wjs-theme"`) so the theme wins at equal specificity. (`core.css` is linked only by the *legacy* Handlebars engine's `wordjs_head` (`core/theme-engine.ts`), and that public path is no longer mounted — Next.js renders the live site.)
 - The `default` theme ships bundled and 64 first-party themes are available through the theme marketplace — each tunes a full `--wjs-*` token set to its palette. Full reference: **[theming.md](theming.md)**.
 
 ---
 
-## 🎯 Puck Editor Flow
+## 🎯 Verso Editor Flow
 
 ```mermaid
 graph TB
     subgraph "Admin Interface"
-        Editor[📝 Puck Editor]
-        Sidebar[📋 Component Sidebar]
-        Canvas[🖼️ Visual Canvas]
-        Props[⚙️ Property Panel]
+        Editor[📝 VersoEditor]
+        Palette[📋 Block Palette]
+        Canvas[🖼️ Canvas iframe /admin/canvas-frame]
+        Props[⚙️ Properties Panel]
     end
 
-    subgraph "Component Registry"
-        Config[puckConfig.tsx]
-        Core[Core Components]
-        Plugins[Plugin Components]
+    subgraph "Block Registry"
+        Registry[lib/verso/registry.ts]
+        Core[coreBlocks.tsx — 30 core blocks]
+        Plugins[pluginBlocks.tsx — plugin blocks]
     end
 
     subgraph "Shared Block Markup"
         Blocks[content/blocks.tsx]
     end
 
-    subgraph "Component Categories"
-        Content[📄 Content]
-        Layout[📐 Layout]
-        Media[🎬 Media]
+    subgraph "Palette Groups"
+        Content[📄 Contenido]
+        Layout[📐 Diseño]
+        Media[🎬 Medios]
         Marketing[📢 Marketing]
-        Dynamic[🔄 Dynamic]
+        Dynamic[🔄 Dinámicos]
     end
 
     subgraph "Output"
-        PuckData[📦 _puck_data JSON]
+        Store[🗂️ lib/verso/store.ts — normalized tree]
+        DocData[📦 _puck_data JSON]
         Render[⚛️ content/ContentRenderer.tsx server render]
         HTML[🌐 Final HTML]
     end
 
-    Editor --> Sidebar
+    Editor --> Palette
     Editor --> Canvas
     Editor --> Props
-    Sidebar --> Config
-    Config --> Core
-    Config --> Plugins
-    Config --> Blocks
+    Palette --> Registry
+    Registry --> Core
+    Registry --> Plugins
+    Core --> Blocks
     Blocks --> Render
     Core --> Content
     Core --> Layout
     Core --> Media
     Core --> Marketing
     Core --> Dynamic
-    Canvas --> PuckData
-    PuckData --> Render
+    Canvas --> Store
+    Store --> DocData
+    DocData --> Render
     Render --> HTML
 ```
+
+> The persisted document keeps the post-meta key `_puck_data`. That name is historical and stays: the
+> value is already written into every existing install, so renaming the key would mean migrating
+> everyone's content for cosmetics. See `documentation/plugins.md` §13.
 
 ### Component Hierarchy
 
@@ -367,7 +373,7 @@ graph TB
         MainJS[main.js]
         Routes[routes/]
         Client[client/]
-        PuckComp[puck/]
+        VersoComp[client/verso/]
     end
 
     subgraph "Hook System"
@@ -389,11 +395,11 @@ graph TB
     Execute --> MainJS
     MainJS --> Routes
     MainJS --> Client
-    Client --> PuckComp
+    Client --> VersoComp
     MainJS --> Actions
     MainJS --> Filters
     Routes --> API
-    PuckComp --> Frontend
+    VersoComp --> Frontend
     MainJS --> Menu
     MainJS --> Cron
 ```
@@ -603,7 +609,9 @@ wordjs/
 │   │   │   ├── 📁 admin/       # Admin Dashboard
 │   │   │   └── 📁 api/         # API Routes
 │   │   ├── 📁 components/      # React Components
-│   │   │   ├── puckConfig.tsx  # Puck Component Registry (editor-side)
+│   │   │   ├── 📁 verso/       # Verso editor: canvas/, overlay/, dnd/, inline/, editor/, fields/
+│   │   │   ├── 📁 blocks/      # Shared block field controls (Appearance/Animation/Visibility/…)
+│   │   │   ├── versoConfig.tsx # Custom field pickers reused by the Verso block registry
 │   │   │   ├── 📁 content/     # Public block rendering: blocks.tsx (shared markup),
 │   │   │   │                   #   ContentRenderer.tsx (server) + the client islands
 │   │   │   ├── 📁 public/      # Public site components (Header.tsx, Footer.tsx, …)

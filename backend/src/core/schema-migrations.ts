@@ -524,6 +524,167 @@ const MIGRATIONS: Migration[] = [
             await ctx.exec('CREATE INDEX IF NOT EXISTS idx_posts_translation_group ON posts (translation_group)');
             console.log('   ✓ [migration 0011] posts.post_language + posts.translation_group ready');
         }
+    },
+    {
+        // COLABORACIÓN EN TIEMPO REAL (Verso F8) — estado de SESIÓN, no contenido.
+        //
+        // Tabla DEDICADA a propósito, no `post_meta` (D18): el estado de una sala cambia decenas de
+        // veces por segundo y meterlo por la ruta de meta invalidaría la caché de contenido público
+        // y generaría revisiones basura. Además `post_meta` pasa por sanitize-meta y por el merge
+        // por clave del backend — semántica que aquí no queremos.
+        //
+        // El contenido CANÓNICO sigue siendo `meta._puck_data`, escrito por `PUT /posts/:id`. Estas
+        // dos tablas solo permiten que un cliente que llega tarde o que reconecta reconstruya la
+        // sesión: `base_doc` (el snapshot del epoch) + las ops posteriores.
+        //
+        // `base_doc` y `payload` se registran en LONG_TEXT_COLUMNS de drivers/mysql.ts para que
+        // MySQL los mapee a LONGTEXT y no a un VARCHAR(255) que truncaría el árbol de la página.
+        id: '0012_create_collab',
+        up: async (ctx: MigrationCtx) => {
+            const INT_PK = ctx.isPostgres ? 'SERIAL PRIMARY KEY' : 'INTEGER PRIMARY KEY AUTOINCREMENT';
+            const TS = ctx.isPostgres ? 'TIMESTAMP' : 'DATETIME';
+
+            await ctx.exec(
+                `CREATE TABLE IF NOT EXISTS collab_docs (` +
+                `post_id INTEGER PRIMARY KEY, ` +
+                `epoch INTEGER NOT NULL DEFAULT 1, ` +
+                `base_doc TEXT NOT NULL, ` +
+                `ops_count INTEGER NOT NULL DEFAULT 0, ` +
+                `updated_at ${TS} DEFAULT CURRENT_TIMESTAMP)`
+            );
+
+            await ctx.exec(
+                `CREATE TABLE IF NOT EXISTS collab_ops (` +
+                `id ${INT_PK}, ` +
+                `post_id INTEGER NOT NULL, ` +
+                `epoch INTEGER NOT NULL, ` +
+                `site_id TEXT NOT NULL, ` +
+                `counter INTEGER NOT NULL, ` +
+                `kind TEXT NOT NULL, ` +
+                `payload TEXT NOT NULL, ` +
+                `user_id INTEGER, ` +
+                `created_at ${TS} DEFAULT CURRENT_TIMESTAMP)`
+            );
+
+            // El UNIQUE hace de la IDEMPOTENCIA un invariante de la BD y no del proceso: reenviar una
+            // op tras una reconexión choca aquí y se descarta, sin que nadie tenga que recordar nada.
+            // (En MySQL `site_id` es VARCHAR(255), indexable; en el resto TEXT.)
+            await ctx.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_collab_ops_dot ON collab_ops (post_id, site_id, counter)');
+            // La lectura caliente es "dame el log de esta sala en orden": (post_id, epoch, id).
+            await ctx.exec('CREATE INDEX IF NOT EXISTS idx_collab_ops_room ON collab_ops (post_id, epoch, id)');
+            console.log('   ✓ [migration 0012] collab_docs + collab_ops ready');
+        }
+    },
+    {
+        // COLABORACIÓN F8 — remate del ciclo de vida de la sala (revisión adversarial del transporte).
+        //
+        // Cuatro cosas, todas de ESTADO DE SESIÓN (esta migración no toca contenido):
+        //
+        //  1. `collab_docs.truncated` — bandera PEGAJOSA. El tope de ops por epoch se comprobaba
+        //     contando filas, y un frame que no cabe deja el contador POR DEBAJO del tope: la señal
+        //     derivada de `COUNT(*)` no volvía a dispararse nunca y al que entraba se le decía que el
+        //     log estaba completo mientras faltaban ediciones. Con la bandera, "el log dejó de ser
+        //     reanudable" es un hecho registrado, no una inferencia.
+        //  2. `collab_docs.base_hash` — huella del `_puck_data` del que se derivó el snapshot. Permite
+        //     detectar que el contenido canónico cambió por FUERA (restaurar una revisión, importar,
+        //     el editor clásico) y re-sembrar con un epoch nuevo en vez de servir un snapshot rancio.
+        //  3. `collab_docs.updated_ms` — el mismo instante que `updated_at`, pero en MILISEGUNDOS
+        //     ENTEROS. `updated_at` es 'YYYY-MM-DD HH:MM:SS' en UTC SIN marca de zona, y `Date.parse`
+        //     lo lee como hora LOCAL: al este de UTC una fila recién escrita se leía como pasada y el
+        //     barrido la retiraba; al oeste no se retiraba nunca. Un entero no tiene zona horaria.
+        //     Se rellenan las filas existentes con el instante de la migración para que el primer
+        //     barrido tras actualizar no las tome por antiquísimas.
+        //  4. `collab_members` — LIVENESS VISIBLE EN EL CLÚSTER. Antes la única prueba de "esta sala
+        //     está viva" era un Map en memoria de UN proceso, así que el nodo que barre borraba el
+        //     estado de salas que otro nodo estaba sirviendo. Una fila por conexión, con latido, es
+        //     la señal que cualquier nodo puede leer.
+        //
+        // El UNIQUE de dots pasa a llevar el `epoch`: al subir de generación se purgan las ops, pero
+        // si por lo que fuera sobreviviera una, un dot de la generación anterior no debe poder
+        // eclipsar al de la nueva. Se crea con NOMBRE NUEVO y el viejo se retira aparte.
+        //
+        // Y AQUÍ NO HAY «CONSERVADOR» QUE VALGA, aunque una versión anterior de este comentario lo
+        // dijera: el índice VIEJO `(post_id, site_id, counter)` es el MÁS restrictivo de los dos —le
+        // falta el epoch, así que rechaza dots que el nuevo aceptaría. Si sobreviviera y sobreviviera
+        // también una op de la generación anterior, el INSERT chocaría, `isDuplicateKeyError` lo
+        // llamaría duplicado, el re-SELECT (que filtra por el epoch vivo) no encontraría fila y
+        // `pushOps` respondería 503 en BUCLE. Por eso el DROP se bifurca bien por motor —incluido
+        // `mariadb`, que exige `ON <tabla>`— en vez de confiar en que da igual que falle.
+        id: '0013_collab_epoch_and_liveness',
+        up: async (ctx: MigrationCtx) => {
+            // `mariadb` es un valor de driver soportado (`config/database.ts`) y habla el MISMO
+            // dialecto: dejándolo fuera, esta migración tomaba la rama SQLite contra MariaDB y el
+            // `DROP INDEX ... ` sin `ON tbl` era error de sintaxis, así que el índice laxo
+            // `(post_id, site_id, counter)` SOBREVIVÍA. Con él vivo, el reenvío de un dot de una
+            // generación anterior choca con el UNIQUE viejo, el re-SELECT por `(post_id, epoch,
+            // site_id, counter)` no encuentra fila y se responde 503 en bucle.
+            const isMysql = ctx.driverName === 'mysql' || ctx.driverName === 'mariadb';
+            const TEXT_TYPE = isMysql ? 'VARCHAR(255)' : 'TEXT';
+
+            const columnExists = async (table: string, column: string): Promise<boolean> => {
+                try {
+                    if (ctx.isPostgres) {
+                        return !!(await ctx.get(
+                            `SELECT 1 AS ok FROM information_schema.columns WHERE table_name = ? AND column_name = ? LIMIT 1`,
+                            [table, column]
+                        ));
+                    }
+                    if (isMysql) {
+                        return !!(await ctx.get(
+                            `SELECT 1 AS ok FROM information_schema.columns ` +
+                            `WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ? LIMIT 1`,
+                            [table, column]
+                        ));
+                    }
+                    const rows = (await ctx.all(`PRAGMA table_info(${table})`)) || [];
+                    return rows.some((r: any) => r && r.name === column);
+                } catch {
+                    return false; // sonda dudosa ⇒ el ADD de abajo sigue siendo idempotente
+                }
+            };
+
+            // BIGINT en los tres motores: `updated_ms` guarda milisegundos desde epoch (~1.7e12), que
+            // NO cabe en el INTEGER de 32 bits de Postgres. En SQLite BIGINT tiene afinidad INTEGER.
+            const columns: [string, string][] = [
+                ['truncated', 'INTEGER NOT NULL DEFAULT 0'],
+                ['base_hash', TEXT_TYPE],
+                ['updated_ms', 'BIGINT NOT NULL DEFAULT 0'],
+            ];
+            for (const [column, type] of columns) {
+                if (await columnExists('collab_docs', column)) continue;
+                try {
+                    await ctx.exec(`ALTER TABLE collab_docs ADD COLUMN ${column} ${type}`);
+                } catch (e: any) {
+                    const msg = String((e && e.message) || '').toLowerCase();
+                    if (!/duplicate column|already exists/.test(msg)) throw e;
+                }
+            }
+
+            // Relleno: sin esto toda fila preexistente valdría 0 y el primer barrido la creería vieja.
+            await ctx.run('UPDATE collab_docs SET updated_ms = ? WHERE updated_ms = 0', [Date.now()]);
+
+            await ctx.exec(
+                `CREATE TABLE IF NOT EXISTS collab_members (` +
+                `conn_id TEXT PRIMARY KEY, ` +
+                `post_id INTEGER NOT NULL, ` +
+                `site_id TEXT NOT NULL, ` +
+                `user_id INTEGER NOT NULL, ` +
+                `node_id TEXT NOT NULL, ` +
+                `seen_at BIGINT NOT NULL DEFAULT 0)`
+            );
+            await ctx.exec('CREATE INDEX IF NOT EXISTS idx_collab_members_room ON collab_members (post_id, seen_at)');
+
+            await ctx.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_collab_ops_dot_epoch ON collab_ops (post_id, epoch, site_id, counter)');
+            try {
+                if (isMysql) await ctx.exec('DROP INDEX idx_collab_ops_dot ON collab_ops');
+                else await ctx.exec('DROP INDEX IF EXISTS idx_collab_ops_dot');
+            } catch (e: any) {
+                // No poder retirar el índice viejo NO es motivo para abortar el arranque: el nuevo ya
+                // está y es más estricto. Se deja dicho en el log y se sigue.
+                console.warn('   ⚠️  [migration 0013] no se pudo retirar idx_collab_ops_dot:', (e && e.message) || e);
+            }
+            console.log('   ✓ [migration 0013] collab: epoch en el UNIQUE, truncated/base_hash/updated_ms y collab_members');
+        }
     }
 ];
 

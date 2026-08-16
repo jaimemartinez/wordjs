@@ -18,7 +18,7 @@
 exports.metadata = {
     name: 'YouTube Videos',
     version: '1.0.0',
-    description: 'Channel video list (links, thumbnails, titles) + Puck carousel block',
+    description: 'Channel video list (links, thumbnails, titles) + Verso carousel block',
     author: 'WordJS',
 };
 

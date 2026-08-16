@@ -2,7 +2,7 @@
  * Verso — patrones (F3, checklist W19/W27): los 9 built-in compartidos + patrones de usuario.
  *
  * FUENTE ÚNICA con el legacy: `PATTERNS`, `regenIds`, `loadUserPatterns` y `deleteUserPattern`
- * se REUTILIZAN de lib/puckPatterns.ts (datos puros / localStorage genérico, sin dependencia del
+ * se REUTILIZAN de lib/blockPatterns.ts (datos puros / localStorage genérico, sin dependencia del
  * motor viejo). Lo que este módulo aporta es la mitad acoplada al motor:
  *  - construir los items de un patrón contra el `BlockRegistry` de Verso (defaults reales del
  *    registro + overrides del patrón + id fresco, slots recursivos, tipos no registrados se
@@ -20,7 +20,7 @@ import {
     deleteUserPattern,
     type Pattern,
     type UserPattern,
-} from "@/lib/puckPatterns";
+} from "@/lib/blockPatterns";
 import { ROOT_ID, ROOT_SLOT, type VersoItem } from "@/lib/verso/types";
 import type { EditorHandle } from "@/lib/verso/store";
 import type { BlockRegistry, VersoField } from "@/lib/verso/registry";
@@ -28,13 +28,13 @@ import type { BlockRegistry, VersoField } from "@/lib/verso/registry";
 export { PATTERNS, loadUserPatterns, deleteUserPattern };
 export type { Pattern, UserPattern };
 
-/** Misma clave EXACTA que el legacy (lib/puckPatterns.ts USER_PATTERNS_KEY). */
+/** Misma clave EXACTA que el legacy (lib/blockPatterns.ts USER_PATTERNS_KEY). */
 export const USER_PATTERNS_KEY = "wjs_user_patterns";
 
 /** Cap de patrones de usuario — el mismo `slice(0, 30)` del legacy. */
 export const USER_PATTERNS_MAX = 30;
 
-/* Los tipos de `Pattern.blocks` no están exportados por puckPatterns (PatternBlock es interno);
+/* Los tipos de `Pattern.blocks` no están exportados por blockPatterns (PatternBlock es interno);
  * esta forma estructural es idéntica y solo se usa para recorrerlos. */
 interface PatternBlockShape {
     type: string;

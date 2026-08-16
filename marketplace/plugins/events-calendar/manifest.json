@@ -2,7 +2,7 @@
     "id": "events-calendar",
     "name": "Events Calendar",
     "version": "1.0.0",
-    "description": "Manage events from the admin (title, dates, location, link, color) and show them anywhere with the EventsCalendar Puck block — as an upcoming-events list or a monthly calendar grid. WordPress parity: The Events Calendar.",
+    "description": "Manage events from the admin (title, dates, location, link, color) and show them anywhere with the EventsCalendar Verso block — as an upcoming-events list or a monthly calendar grid. WordPress parity: The Events Calendar.",
     "author": "WordJS",
     "isolated": true,
     "backend": {
@@ -13,8 +13,8 @@
             "entry": "client/admin/page.tsx",
             "slug": "events-calendar"
         },
-        "puckComponents": {
-            "entry": "client/puck/EventsCalendarPuck.tsx"
+        "versoComponents": {
+            "entry": "client/verso/EventsCalendarVerso.tsx"
         }
     },
     "adminMenu": {

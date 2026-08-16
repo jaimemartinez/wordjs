@@ -609,9 +609,9 @@ describe.skipIf(!corpusAvailable)("verso commands — propiedad sobre corpus de 
   // Los 3 documentos con más bloques (y sin ids duplicados, que desestabilizarían
   // las claves internas #dupN durante remove/reinsert).
   const picked = entries
-    .filter((e) => Array.isArray(e.puckData?.content))
-    .filter((e) => toNormalized(e.puckData).warnings.every((w) => !w.includes("duplicado")))
-    .sort((a, b) => Object.keys(toNormalized(b.puckData).nodes).length - Object.keys(toNormalized(a.puckData).nodes).length)
+    .filter((e) => Array.isArray(e.versoData?.content))
+    .filter((e) => toNormalized(e.versoData).warnings.every((w) => !w.includes("duplicado")))
+    .sort((a, b) => Object.keys(toNormalized(b.versoData).nodes).length - Object.keys(toNormalized(a.versoData).nodes).length)
     .slice(0, 3);
 
   it("hay documentos que ejercitar", () => {
@@ -623,7 +623,7 @@ describe.skipIf(!corpusAvailable)("verso commands — propiedad sobre corpus de 
       // Base = forma ya normalizada (los docs con zones migran zones→slots al
       // entrar al editor; la identidad se mide contra ESA base, como en el gate
       // de round-trip).
-      const base = fromNormalized(toNormalized(entry.puckData));
+      const base = fromNormalized(toNormalized(entry.versoData));
       for (const seed of [7, 1234]) runIdentityProperty(base, seed);
     });
   }
