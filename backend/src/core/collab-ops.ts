@@ -10,6 +10,9 @@
  *     a partir de la entrada. Nada que no esté enumerado aquí sobrevive. Esto cierra de raíz dos
  *     clases enteras: el contrabando de campos (usar la op como canal lateral entre editores) y
  *     la contaminación de prototipos (`__proto__`/`constructor` como clave de un objeto de props).
+ *     Y donde la clave la elige el cliente —`props`, los valores JSON, el version vector— la
+ *     estructura NO la elige: destino sin prototipo y escritura por `setOwn`, para que el filtro de
+ *     nombres sea defensa en profundidad y no el único muro (ver `setOwn`).
  *  2. **SANEADO CON EL MISMO MÓDULO QUE LA RUTA DE ESCRITURA.** Los valores que acaban pintados
  *     en el canvas del OTRO editor pasan por `sanitizePuckTree`/`safePuckUrl` de
  *     `core/sanitize-meta.ts` — el mismo código que ya sanea `_puck_data` en `PUT /posts/:id`.
@@ -91,9 +94,33 @@ const isPlainObject = (v: any): boolean =>
  * Una clave que un atacante puede usar para envenenar `Object.prototype` al reconstruirse el objeto
  * en el CLIENTE receptor. Se rechaza aquí, no se filtra: una op con una clave así es hostil por
  * construcción y no hay motivo legítimo para dejar pasar el resto de la op.
+ *
+ * Esta lista es COMPLETA para lo que hace (a diferencia de una denylist de nombres de módulos, que
+ * envejece): en JS solo `__proto__` es un accesor de `Object.prototype` que redirige una escritura, y
+ * `constructor`/`prototype` son los dos pasos del único gadget indirecto. Aun así NO es de lo que
+ * cuelga la seguridad de este fichero — de eso se encarga `setOwn`, que no puede alcanzar un
+ * prototipo ni aunque la lista se quedara corta o alguien la borrara.
  */
 const isUnsafeKey = (k: string): boolean =>
     k === '__proto__' || k === 'constructor' || k === 'prototype';
+
+/**
+ * ESCRIBIR UNA CLAVE QUE ELIGE EL CLIENTE, SIN QUE LA CLAVE PUEDA ELEGIR LA ESTRUCTURA.
+ *
+ * Los tres sitios de este fichero que escriben bajo una clave remota pasan por aquí. `obj[k] = v`
+ * consulta la cadena de prototipos y puede acabar invocando un ACCESOR heredado (`__proto__` es
+ * exactamente eso); `Object.defineProperty` no: define siempre una propiedad PROPIA de datos sobre
+ * el objeto indicado, pase lo que pase por encima. Combinado con destinos creados sin prototipo
+ * (`Object.create(null)`), la escritura no tiene ningún prototipo al que llegar.
+ *
+ * Esto es lo que convierte el filtro de claves en defensa en profundidad en vez de en el único muro.
+ * Este proyecto ya se comió el otro modelo en los permisos de plugins, donde un slug `__proto__`
+ * hacía que la comprobación fallara EN ABIERTO: la lección fue no inferir seguridad de la AUSENCIA
+ * de un nombre en una lista.
+ */
+function setOwn<T>(target: Record<string, T>, key: string, value: T): void {
+    Object.defineProperty(target, key, { value, writable: true, enumerable: true, configurable: true });
+}
 
 function okString(v: any, max: number): boolean {
     return typeof v === 'string' && v.length > 0 && v.length <= max;
@@ -152,14 +179,20 @@ function cloneJson(v: any, depth: number): any {
         return out;
     }
     if (t === 'object') {
+        // `Object.keys` solo devuelve claves PROPIAS y enumerables, así que `v[k]` de abajo nunca lee
+        // nada heredado por muy envenenado que esté `Object.prototype` en este proceso.
         const keys = Object.keys(v);
         if (keys.length > LIMITS.OBJECT_KEYS) return undefined;
-        const out: Record<string, any> = {};
+        // Destino SIN PROTOTIPO: no hay accesor heredado que una clave remota pueda despertar, ni
+        // `Object.prototype` al que llegar. (Aquí es transitorio —`sanitizePuckTree` reconstruye el
+        // valor después— pero la ESCRITURA de este bucle deja de poder tocar estructura, que es lo
+        // que se estaba señalando.)
+        const out: Record<string, any> = Object.create(null);
         for (const k of keys) {
             if (k.length > LIMITS.KEY || isUnsafeKey(k)) return undefined;
             const c = cloneJson(v[k], depth + 1);
             if (c === undefined) return undefined;
-            out[k] = c;
+            setOwn(out, k, c);
         }
         return out;
     }
@@ -293,13 +326,17 @@ function validateOp(raw: any, siteId: string): ValidateResult {
             if (!isPlainObject(raw.props)) return bad('bad-value');
             const propKeys = Object.keys(raw.props);
             if (propKeys.length > LIMITS.PROPS) return bad('too-large');
-            const props: Record<string, any> = {};
+            // Las claves de `props` son NOMBRES DE CAMPO DE BLOQUE: no hay allowlist posible (cada
+            // plugin declara los suyos), así que lo que se acota es la ESTRUCTURA — objeto sin
+            // prototipo y escritura por `setOwn` — en vez de fiarlo todo a la lista de nombres
+            // prohibidos. `props` viaja después por JSON, así que no tener prototipo no se nota.
+            const props: Record<string, any> = Object.create(null);
             let changed = false;
             for (const pk of propKeys) {
                 if (!okKey(pk)) return bad('bad-key');
                 const val = cleanValueEx(raw.props[pk], pk);
                 if (val.value === undefined) return bad('bad-value');
-                props[pk] = val.value;
+                setOwn(props, pk, val.value);
                 if (val.changed) changed = true;
             }
             const propOrder = readStringList(raw.propOrder, LIMITS.PROPS);
@@ -475,19 +512,30 @@ function validateFrame(rawOps: any, siteId: string): {
  * es dato hostil — un VV con 10⁶ entradas sería un vector de agotamiento de CPU en el filtrado.
  */
 function sanitizeVersionVector(raw: any, maxSites = 256): Record<string, number> {
-    const out: Record<string, number> = {};
+    // SIN PROTOTIPO, y aquí no es transitorio: este objeto se consulta tal cual en el filtro del
+    // `resync` (`vvCovers`). Con `{}`, un `Object.prototype` envenenado por CUALQUIER otro punto del
+    // proceso haría que el vector "contuviera" sitios que el cliente nunca declaró, y el filtro
+    // dejaría fuera ops que sí le faltan: pérdida silenciosa de trabajo ajeno al reanudar.
+    const out: Record<string, number> = Object.create(null);
     if (!isPlainObject(raw)) return out;
     let n = 0;
+    // `Object.entries` = solo propias y enumerables: nada heredado entra al vector.
     for (const [site, counter] of Object.entries(raw)) {
         if (n++ >= maxSites) break;
         if (!okString(site, LIMITS.ID) || isUnsafeKey(site)) continue;
         if (!okCounter(counter)) continue;
-        out[site] = counter as number;
+        setOwn(out, site, counter as number);
     }
     return out;
 }
 
-/** ¿El VV ya cubre este dot? (dedup e idempotencia del `resync`). */
+/**
+ * ¿El VV ya cubre este dot? (dedup e idempotencia del `resync`).
+ *
+ * `Object.hasOwn` ANTES de leer, siempre: la pregunta es "¿lo declaró el cliente?", no "¿sale algo al
+ * leerlo?". Sin ella, un `Object.prototype` con `toString` numérico —o cualquier clave heredada—
+ * respondería que sí a un sitio que nadie mencionó.
+ */
 function vvCovers(vv: Record<string, number>, site: string, counter: number): boolean {
     return Object.hasOwn(vv, site) && vv[site] >= counter;
 }

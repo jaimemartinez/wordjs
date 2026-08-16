@@ -122,10 +122,23 @@ function sseWrite(res: Response, chunk: string): boolean {
     try { return res.write(chunk); } catch { return false; }
 }
 
-/** El mismo token que usó `authenticate`, para poder volver a evaluarlo mientras el stream vive. */
+/**
+ * EL MISMO TOKEN QUE USÓ `authenticate`, para poder volver a evaluarlo mientras el stream vive.
+ *
+ * La selección se copia LÍNEA A LÍNEA de `middleware/auth.ts#authenticate`, incluidas las dos
+ * exclusiones que parecen cosmética y no lo son: `Bearer null` y `Bearer undefined` (lo que manda un
+ * frontend que hace `localStorage.getItem('token')` sin comprobar). `authenticate` las IGNORA y cae a
+ * la cookie; la versión anterior de esta función no, y ahí había un bypass real: con
+ * `Authorization: Bearer null` + la cookie de sesión válida, `authenticate` autenticaba por cookie y
+ * aquí se recogía la cadena `"null"`, que no es un JWT — así que la re-autorización tomaba el camino
+ * "no hay JWT que verificar" y el stream sobrevivía al cierre de sesión, al cambio de contraseña y a
+ * la caducidad del token. Un valor elegido por quien llama decidía si se comprobaba la revocación.
+ */
 function sessionToken(req: any): string {
     const header = String(req.get('Authorization') || '');
-    if (header.startsWith('Bearer ')) return header.slice(7).trim();
+    if (header.startsWith('Bearer ') && header !== 'Bearer null' && header !== 'Bearer undefined') {
+        return header.slice(7).trim();
+    }
     return String((req.cookies && req.cookies.wordjs_token) || '');
 }
 
@@ -141,20 +154,39 @@ function sessionToken(req: any): string {
  * Contrato con la sala: `false` = denegado (se cierra); LANZAR = no se ha podido comprobar (la sala
  * lo tolera un rato acotado antes de cerrar por precaución). Un token caducado o inválido es
  * denegación explícita, no incertidumbre.
+ *
+ * QUÉ CREDENCIAL HAY QUE RE-VERIFICAR NO LO DECIDE EL DATO, LO DECIDE EL MIDDLEWARE. Antes se
+ * deducía de la FORMA de la cadena (`rawToken.split('.').length === 3` ⇒ "esto parece un JWT"), o
+ * sea de un valor que pone quien llama: bastaba una cadena sin dos puntos en `Authorization` para
+ * que el stream cayera en la rama "no hay JWT que verificar" y se saltara la caducidad y el
+ * `token_valid_after`. Ahora la rama sale de `req.apiToken`, que solo existe si `authenticate`
+ * validó de verdad un token de API, y el resto de credenciales de sesión TIENEN que verificar su JWT
+ * o se deniegan. Falla cerrado: si la cadena no verifica, no hay "otra rama" a la que caer.
  */
 function makeRevalidate(req: any, postId: number): () => Promise<boolean> {
     const rawToken = sessionToken(req);
+    // La clase de credencial la fijó `authenticate` al autenticar; aquí no se vuelve a inferir.
+    const apiTokenSession = !!req.apiToken;
     const userId = req.user.id;
     const User = require('../models/User');
+    const ApiToken = require('../models/ApiToken');
 
     return async (): Promise<boolean> => {
         let user: any;
-        if (rawToken && rawToken.split('.').length === 3) {
+        if (apiTokenSession) {
+            // Token de API (`wjt_`): no hay JWT, pero SÍ hay revocación y caducidad que comprobar —
+            // `findByRawToken` devuelve `null` para un token revocado o vencido. No re-verificar nada
+            // aquí dejaba vivo el stream de un token ya revocado.
+            const record = await ApiToken.findByRawToken(rawToken);
+            if (!record || Number(record.userId) !== Number(userId)) return false;
+            user = await User.findById(userId);
+            if (!user) return false;
+        } else {
             let decoded: any;
             try {
                 decoded = jwt.verify(rawToken, config.jwt.secret, { algorithms: ['HS256'] });
             } catch {
-                return false; // caducado, revocado por firma o manipulado
+                return false; // caducado, revocado por firma, manipulado… o simplemente no es un JWT
             }
             if (decoded.purpose) return false;
             if (Number(decoded.userId) !== Number(userId)) return false;
@@ -162,11 +194,6 @@ function makeRevalidate(req: any, postId: number): () => Promise<boolean> {
             if (!user) return false;
             const validAfter = parseInt(user.meta && user.meta.token_valid_after, 10);
             if (validAfter && decoded.iat && decoded.iat <= validAfter) return false;
-        } else {
-            // Cliente con token de API (`wjt_`): no hay JWT que re-verificar, pero el rol y el estado
-            // del post sí pueden haber cambiado.
-            user = await User.findById(userId);
-            if (!user) return false;
         }
         const g = await gate({ user }, postId);
         return g.ok;
@@ -174,10 +201,12 @@ function makeRevalidate(req: any, postId: number): () => Promise<boolean> {
 }
 
 /**
- * ÚNICA TRADUCCIÓN DE UN RECHAZO POR RITMO A HTTP. Un 429 SIEMPRE lleva la espera y el número de
- * serie del aviso: son lo que el cliente devuelve para poder ser considerado desobediente (ver
- * `rateGate` en core/collab-rooms.ts), así que un camino que se olvide de mandarlos vuelve inmune a
- * su cliente. Con una sola función no hay «un camino que se olvide».
+ * ÚNICA TRADUCCIÓN DE UN RECHAZO POR RITMO A HTTP. Un 429 SIEMPRE lleva la espera, el número de
+ * serie del aviso y el SELLO de la conexión que lo acuñó: son lo que el cliente devuelve para poder
+ * ser considerado desobediente (ver `rateGate` en core/collab-rooms.ts), así que un camino que se
+ * olvide de mandarlos vuelve inmune a su cliente. Con una sola función no hay «un camino que se
+ * olvide». El sello va con el número porque sin él el número no identifica nada: es el par entero lo
+ * que el servidor sabe reconocer.
  */
 function denyRate(res: Response, status: number, r: { code: string; message?: string; rate?: any }): Response {
     return res.status(status).json({
@@ -185,6 +214,7 @@ function denyRate(res: Response, status: number, r: { code: string; message?: st
         message: r.message,
         retryAfterMs: r.rate ? r.rate.retryAfterMs : undefined,
         rateNotice: r.rate ? r.rate.notice : undefined,
+        rateSeal: r.rate ? r.rate.seal : undefined,
         data: { status },
     });
 }
@@ -213,7 +243,10 @@ async function connGate(req: any, res: Response): Promise<any | null> {
     // ÚNICA PUERTA por la que una ruta de subida consigue una conexión, y por eso el acuse de la
     // espera se anota AQUÍ: cualquier ruta nueva lo hereda sin tener que acordarse. Anotarlo en cada
     // handler es exactamente la forma en la que este defecto se mudó de camino tres veces.
-    collab.noteRateAck(conn, req.body?.rateAck);
+    //
+    // El acuse viaja SIEMPRE con su sello. Los dos campos se pasan juntos porque juntos son el dato:
+    // un número sin sello no dice de qué conexión habla, y ése era el agujero de la ronda 5.
+    collab.noteRateAck(conn, req.body?.rateAck, req.body?.rateSeal);
     return conn;
 }
 

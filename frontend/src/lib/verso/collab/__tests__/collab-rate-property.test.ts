@@ -58,6 +58,17 @@ interface Escenario {
   resyncs: boolean;
   /** Cortes de red en medio, para que la reconexión participe. */
   cortes: number;
+  /**
+   * LO QUE TARDA EL CLIENTE EN TENER EL `welcome` DELANTE (ver `FakeCollabServer.welcomeDelayMs`).
+   *
+   * Sin esto, la frontera de la reconexión era IRREPRESENTABLE en el doble: el `welcome` se entregaba
+   * en el mismo tick que se abría el stream, así que el cliente re-sincronizaba su numeración de
+   * avisos en el instante exacto en que el servidor creaba la conexión nueva y nunca podía haber
+   * desacuerdo. Ahí vivía el defecto de la ronda 5, y por eso los escenarios con `cortes` estaban
+   * verdes con él dentro. El retardo no es artificioso: el `welcome` lleva el snapshot del epoch y el
+   * log entero, y el cliente todavía tiene que parsearlo y aplicarlo.
+   */
+  welcomeDelay?: number;
 }
 
 interface Resultado {
@@ -67,6 +78,8 @@ interface Resultado {
   aceptados: number;
   avisos: CollabNotice[];
   estado: string;
+  /** Frames que llegaron con el acuse de la conexión ANTERIOR: la huella de la carrera. */
+  acusesDeOtraConexion: number;
 }
 
 async function corre(esc: Escenario): Promise<Resultado> {
@@ -74,6 +87,7 @@ async function corre(esc: Escenario): Promise<Resultado> {
   server.register({ siteId: SITE, userId: 1, name: "Ana" });
   const timers = server.useTimers(new ManualTimers());
   server.latencyMs = esc.rtt / 2;
+  server.welcomeDelayMs = esc.welcomeDelay ?? 0;
 
   // Cubos a escala, con la MISMA proporción que producción (ráfaga / ritmo = 4 s de recuperación),
   // para que un test dure segundos simulados y no minutos. La regla que se prueba no depende de la
@@ -137,6 +151,7 @@ async function corre(esc: Escenario): Promise<Resultado> {
     aceptados: server.posted.filter((p) => p.status === 200).length,
     avisos,
     estado: session.snapshot().status,
+    acusesDeOtraConexion: server.acusesDeOtraConexion,
   };
 }
 
@@ -153,6 +168,13 @@ const ESCENARIOS: Escenario[] = [
   { nombre: "todo a la vez + 2 cortes de red, RTT 120", rtt: 120, seed: 6, tecleo: true, cursor: true, resyncs: true, cortes: 2 },
   { nombre: "todo a la vez + 2 cortes de red, RTT 50", rtt: 50, seed: 7, tecleo: true, cursor: true, resyncs: true, cortes: 2 },
   { nombre: "solo tecleo a chorro, sin resyncs, RTT 120", rtt: 120, seed: 8, tecleo: true, cursor: false, resyncs: false, cortes: 0 },
+  // RONDA 5: los tres escenarios en los que el `welcome` TARDA en llegar tras reconectar. Es el
+  // hueco en el que el cliente sigue mandando con lo que sabía de la conexión anterior, y donde el
+  // acuse envenenaba el contador del servidor. El verificador midió que basta con 300 ms a RTT 10 y
+  // con 800 ms a RTT 120 — el `welcome` de una sala de 5000 ops son 1,80 MB.
+  { nombre: "cortes con `welcome` lento (300 ms), RTT 10", rtt: 10, seed: 9, tecleo: true, cursor: true, resyncs: true, cortes: 2, welcomeDelay: 300 },
+  { nombre: "cortes con `welcome` lento (800 ms), RTT 120", rtt: 120, seed: 10, tecleo: true, cursor: true, resyncs: true, cortes: 2, welcomeDelay: 800 },
+  { nombre: "cortes con `welcome` lentísimo (2 s) + resyncs, RTT 50", rtt: 50, seed: 11, tecleo: true, cursor: true, resyncs: true, cortes: 3, welcomeDelay: 2_000 },
 ];
 
 describe("PROPIEDAD: quien respeta la espera del servidor no puede acabar fuera de la sala", () => {
@@ -183,6 +205,18 @@ describe("PROPIEDAD: quien respeta la espera del servidor no puede acabar fuera 
       expect(r.rechazos, `este escenario tiene que provocar 429 de verdad (${esc.nombre})`).toBeGreaterThan(0);
       // Y tiene que RECUPERARSE: frenar para siempre también sería «no lo expulsan».
       expect(r.aceptados, `y el cliente tiene que seguir entregando después (${esc.nombre})`).toBeGreaterThan(0);
+
+      // Y en los escenarios de `welcome` lento, que la CARRERA se haya representado de verdad: si
+      // ningún frame llegó a aterrizar en la conexión nueva con el acuse de la vieja, «no expulsa a
+      // nadie» sería cierto porque el escenario no reproduce nada. Es la misma trampa que dejó pasar
+      // tres rondas con un doble sin tiempo de vuelo.
+      if (esc.welcomeDelay) {
+        expect(
+          r.acusesDeOtraConexion,
+          `este escenario existe para reproducir el frame rezagado de la conexión anterior (${esc.nombre}); ` +
+          "si no llega ninguno, no prueba nada",
+        ).toBeGreaterThan(0);
+      }
     });
   }
 
@@ -214,11 +248,16 @@ describe("PROPIEDAD: quien respeta la espera del servidor no puede acabar fuera 
     });
 
     let ack = 0;
+    let seal: string | undefined;
     let fuera = false;
     for (let i = 0; i < 30 && !fuera; i++) {
-      const res = await transport.post(`/api/v1/collab/7/presence`, { siteId: site, sel: { nodeId: `n${i}` }, rateAck: ack });
-      const body = res.body as { code?: string; rateNotice?: number } | null;
-      if (typeof body?.rateNotice === "number") ack = body.rateNotice;   // se entera... y no espera
+      const res = await transport.post(`/api/v1/collab/7/presence`, { siteId: site, sel: { nodeId: `n${i}` }, rateAck: ack, rateSeal: seal });
+      const body = res.body as { code?: string; rateNotice?: number; rateSeal?: string } | null;
+      // Se entera... y no espera. El acuse va con SU SELLO: sin él, el servidor lo descarta entero
+      // (es lo que impide que el acuse de una conexión cuente en otra), así que un cliente que quiera
+      // desobedecer de forma DEMOSTRABLE tiene que devolver el par completo.
+      if (typeof body?.rateNotice === "number") ack = body.rateNotice;
+      if (typeof body?.rateSeal === "string") seal = body.rateSeal;
       if (res.status === 409 && body?.code === "collab_no_session") fuera = true;
       await timers.run();
     }
@@ -227,6 +266,63 @@ describe("PROPIEDAD: quien respeta la espera del servidor no puede acabar fuera 
     expect(server.expulsiones.length).toBe(1);
     // Y se le dice por qué, por el mismo canal que el servidor real: el evento SSE `error`.
     expect(expulsion, "la expulsión se anuncia por el stream, no en silencio").toBe("rate_limit");
+  });
+
+  /**
+   * CONTROL DE VACUIDAD DEL CLIENTE REAL. Todo lo de arriba dice «al cliente no lo expulsan», y hay
+   * una forma barata de que eso sea cierto sin que signifique nada: que el cliente deje de mandar el
+   * acuse. Sin acuse —o con el número pero sin su sello, que el servidor descarta entero— el cliente
+   * es INEXPULSABLE por construcción y los ocho escenarios pasarían solos.
+   *
+   * Así que aquí se mira lo que el cliente REAL pone en el cable: tras un 429, el frame siguiente
+   * tiene que llevar el par completo, y con el sello de quien acuñó ese aviso. Es la contrapartida de
+   * `rateGate.test.ts`, que fija la decisión; esto fija que la decisión SALE.
+   */
+  it("el cliente REAL devuelve el acuse COMPLETO: número Y sello del que lo acuñó", async () => {
+    const server = new FakeCollabServer(BASE, "auto");
+    server.register({ siteId: SITE, userId: 1, name: "Ana" });
+    const timers = server.useTimers(new ManualTimers());
+    server.limits.presenceBurst = 1;
+    server.limits.maxPresencePerSec = 1;
+
+    const real = server.transport();
+    const enviados: { rateAck?: unknown; rateSeal?: unknown }[] = [];
+    let ultimoRechazo: { rateNotice?: number; rateSeal?: string } | null = null;
+
+    const session = new VersoCollabSession(
+      {
+        postId: 7, siteId: SITE, flushMs: 100, presenceMs: 50,
+        setTimer: timers.set, clearTimer: timers.clear,
+        transport: {
+          openStream: real.openStream,
+          post: async (url, body) => {
+            enviados.push(body as { rateAck?: unknown; rateSeal?: unknown });
+            const res = await real.post(url, body);
+            if (res.status === 429) ultimoRechazo = res.body as { rateNotice?: number; rateSeal?: string };
+            return res;
+          },
+        },
+      },
+      {},
+    );
+
+    session.start();
+    await timers.run(5_000);
+    for (let t = 0; t < 30; t++) {
+      timers.set(() => session.setSelection({ nodeId: `n${t}` }), 100 + t * 200);
+    }
+    await timers.run(60_000);
+
+    expect(ultimoRechazo, "el escenario tiene que provocar un 429 de verdad").not.toBe(null);
+    const rechazo = ultimoRechazo as unknown as { rateNotice: number; rateSeal: string };
+    expect(typeof rechazo.rateSeal, "el 429 del servidor trae el sello").toBe("string");
+
+    const conElPar = enviados.filter((b) => b.rateSeal === rechazo.rateSeal && Number(b.rateAck) >= rechazo.rateNotice);
+    expect(
+      conElPar.length,
+      "tras un 429 el cliente tiene que devolver el acuse CON su sello: sin él el servidor lo descarta, " +
+      "el cliente se vuelve inexpulsable y los escenarios de arriba pasan por vacuidad",
+    ).toBeGreaterThan(0);
   });
 
   /**

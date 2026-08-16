@@ -283,3 +283,88 @@ describe('version vector del resync (también es dato hostil)', () => {
         assert.equal(vvCovers(vv, 's_desconocido', 1), false);
     });
 });
+
+/* ------------------------------------------------------------------------------------------- */
+/* La ESTRUCTURA no la elige nunca el dato remoto (CodeQL #689/#690/#691)                        */
+/* ------------------------------------------------------------------------------------------- */
+
+describe('donde la CLAVE la pone el cliente, la ESTRUCTURA no', () => {
+    /**
+     * Este fichero escribe en tres sitios bajo una clave que elige el cliente: los valores JSON de
+     * una prop (`cloneJson`), el mapa `props` de un `nodeCreate` y el version vector del `resync`.
+     * Los tres estaban protegidos por una LISTA DE NOMBRES PROHIBIDOS, y una lista de nombres es
+     * justo el modelo que ya falló en este proyecto (un slug `__proto__` hacía que la comprobación de
+     * permisos de plugin fallara EN ABIERTO): la seguridad se estaba infiriendo de la AUSENCIA de un
+     * nombre.
+     *
+     * Lo que fijan estos tests es la propiedad que no depende de ninguna lista: el destino no tiene
+     * prototipo y la escritura es `Object.defineProperty`, así que una clave remota no puede alcanzar
+     * estructura aunque la lista se quedara corta o alguien la borrara.
+     */
+
+    test('las `props` reconstruidas de un `nodeCreate` NO heredan de `Object.prototype`', () => {
+        const r = validateOp({
+            k: 'nodeCreate', id: dot(), hlc: hlc(), nodeId: 'n1', type: 'Text',
+            props: { texto: 'hola', anidado: { a: 1 } }, propOrder: ['texto'], slotKeys: [],
+        }, SITE);
+        assert.equal(r.ok, true);
+        assert.equal(Object.getPrototypeOf(r.op.props), null,
+            'un mapa con claves elegidas por el cliente no puede tener un prototipo al que llegar');
+        assert.equal(r.op.props.texto, 'hola', 'y sigue siendo el objeto que el cliente quería mandar');
+    });
+
+    test('el version vector del `resync` no hereda nada: un `Object.prototype` sucio no le añade sitios', () => {
+        // Este objeto NO es transitorio: se consulta tal cual en el filtro del `resync`. Si el
+        // prototipo se cuela, el vector "contiene" sitios que el cliente nunca declaró y el filtro
+        // deja fuera ops que sí le faltan — trabajo ajeno perdido en silencio al reanudar.
+        const proto = Object.prototype as any;
+        proto.s_inyectado = 9999;
+        try {
+            const vv = sanitizeVersionVector({ [SITE]: 4 });
+            assert.equal(Object.getPrototypeOf(vv), null, 'el vector se construye sin prototipo');
+            assert.equal('s_inyectado' in vv, false,
+                'un sitio que nadie declaró no puede aparecer en el vector por herencia');
+            assert.equal(vvCovers(vv, 's_inyectado', 1), false,
+                'y desde luego no puede hacer creer que el cliente ya tiene esas ops');
+        } finally {
+            delete proto.s_inyectado;
+        }
+    });
+
+    test('el valor JSON de una prop se copia entero (y su bucle escribe sin tocar prototipos)', () => {
+        // HONESTIDAD SOBRE EL ALCANCE. El bucle de `cloneJson` escribe con `setOwn` sobre un destino
+        // sin prototipo, así que esa escritura no puede alcanzar estructura. Pero ese objeto NO es lo
+        // que sale: `sanitizePuckTree` (core/sanitize-meta.ts) lo vuelve a construir sobre un `{}`
+        // normal con `out[k] = ...`, así que desde fuera de este módulo el prototipo del valor final
+        // no depende de esta línea y NO HAY una aserción de caja negra que la ponga roja ella sola.
+        //
+        // Se intentó una: con un accesor heredado (`Object.prototype.trampa`), `out[k] = v` llama al
+        // SETTER y el valor desaparece. Reproduce el fallo, pero sigue rojo con este módulo arreglado
+        // — porque quien se lo come es el saneador, que está fuera de este ámbito. Se deja escrito
+        // aquí en vez de fingir un verde: la misma escritura vive en `sanitizePuckTree`.
+        const r = validateOp(propSet({ key: 'datos', value: { a: { b: 1 }, lista: [1, 2] } }), SITE);
+        assert.equal(r.ok, true);
+        assert.equal(r.op.value.a.b, 1);
+        assert.deepEqual(r.op.value.lista, [1, 2]);
+    });
+
+    test('ANTI-VACUIDAD: una clave hostil sigue tumbando la op entera y no contamina nada', () => {
+        // El filtro de nombres NO se ha quitado: protege al CLIENTE RECEPTOR, que reconstruye la op
+        // en un objeto normal. Lo que ha cambiado es que ya no es lo único que hay.
+        //
+        // Las props hostiles se construyen con `JSON.parse` A PROPÓSITO, y no con un objeto literal:
+        // en un literal, `{__proto__: x}` NO crea una propiedad propia — cambia el prototipo del
+        // literal — así que `Object.keys` no la ve y este test pasaría sin probar nada. Por el cable
+        // llega siempre por `JSON.parse`, que sí la crea como propia. (Escrito con literal, esta
+        // aserción estaba verde por el motivo equivocado.)
+        const conProto = validateOp({
+            k: 'nodeCreate', id: dot(), hlc: hlc(), nodeId: 'n1', type: 'Text',
+            props: JSON.parse('{"__proto__":{"colado":true}}'), propOrder: [], slotKeys: [],
+        }, SITE);
+        assert.equal(conProto.ok, false, 'una clave `__proto__` en props tumba la op');
+
+        const anidado = validateOp(propSet({ value: JSON.parse('{"__proto__":{"colado":true}}') }), SITE);
+        assert.equal(anidado.ok, false, 'y también anidada dentro de un valor');
+        assert.equal(({} as any).colado, undefined, 'y nada de eso ha tocado `Object.prototype`');
+    });
+});
