@@ -17,15 +17,26 @@ const { asyncHandler } = require('../middleware/errorHandler');
 // URLs. Anything with a disallowed scheme is blanked to '#'. A blank input returns '' so existing
 // `url || '#'` defaulting is preserved.
 const SAFE_URL_SCHEMES = new Set(['http:', 'https:', 'mailto:', 'tel:']);
+/**
+ * Characters the WHATWG URL parser STRIPS before parsing (tab, LF, CR). They are removed here first
+ * so that what is validated is what the browser will actually see — see the two bugs below.
+ */
+const URL_STRIPPED_CONTROLS = /[\t\n\r]/g;
 function safeMenuUrl(raw: any) {
     if (raw === undefined || raw === null) return raw;
-    const value = String(raw).trim();
+    // Strip BEFORE deciding, and keep the stripped value: `trim()` only touches the ends, so
+    // "/\t/evil.example" kept its tab, satisfied the "starts with / but not //" test below, and the
+    // browser — parsing it without the tab — navigated to https://evil.example/. Validating the raw
+    // string while the browser parses a different one is how a guard comes to protect nothing.
+    const value = String(raw).replace(URL_STRIPPED_CONTROLS, '').trim();
     if (!value) return '';
-    // Same-origin relative paths and in-page fragments have no scheme and are always safe. NOTE the
-    // explicit `!startsWith('//')`: a protocol-relative URL ("//evil.com/x") also begins with '/', but it
-    // is an EXTERNAL navigation (open-redirect in the nav), so it must NOT be treated as a relative path —
-    // it falls through to scheme validation below, where `new URL('//evil.com')` throws → neutralized to '#'.
-    if ((value.startsWith('/') && !value.startsWith('//')) || value.startsWith('#') || value.startsWith('?')) {
+    // AUTHORITY-RELATIVE, in both spellings. "//host" was already handled; "/\host" was NOT, and it
+    // needs no control character at all: for a special scheme the parser treats `\` exactly like `/`,
+    // so "/\evil.example" is an EXTERNAL navigation that the old `!startsWith('//')` waved through.
+    // This mirrors the chrome guard's `/^\/[/\\]/` — the two must agree, they defend the same thing.
+    if (/^\/[/\\]/.test(value)) return '#';
+    // Same-origin relative paths and in-page fragments have no scheme and are always safe.
+    if (value.startsWith('/') || value.startsWith('#') || value.startsWith('?')) {
         return value;
     }
     try {
@@ -33,6 +44,8 @@ function safeMenuUrl(raw: any) {
         // closing the open-redirect. Genuine absolute URLs (http(s)/mailto/tel) parse and are scheme-checked.
         const parsed = new URL(value);
         if (SAFE_URL_SCHEMES.has(parsed.protocol)) {
+            // The CLEANED value, never `raw`: returning the original would hand the renderer back the
+            // string with the control characters still in it, which is the whole bug.
             return value;
         }
     } catch {

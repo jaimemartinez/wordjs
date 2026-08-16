@@ -164,17 +164,33 @@ function chromePositionFor(part?: string): 'chrome' | 'part' | 'announcement' {
 const isPlainObject = (v: any): boolean => typeof v === 'object' && v !== null && !Array.isArray(v);
 
 /**
+ * Tabulador, salto de linea y retorno de carro: los tres caracteres que el parser de URL del
+ * navegador BORRA de la cadena ANTES de parsearla (WHATWG URL, "remove all ASCII tab or newline").
+ * Espejo de URL_STRIPPED_CONTROLS en frontend/src/lib/chromeData.ts.
+ */
+const URL_STRIPPED_CONTROLS = /[\t\n\r]/g;
+
+/**
  * Allowlist, not denylist: only '/…' (site-relative — '//' is protocol-RELATIVE, i.e. external,
- * so it does not count) and http(s):// pass. javascript:, data:, vbscript:, mailto:, tel:,
- * scheme-smuggling with control characters, … all fall through to rejection by simply never
- * matching.
+ * so it does not count) and http(s):// pass. javascript:, data:, vbscript:, mailto:, tel:, … all
+ * fall through to rejection by simply never matching.
+ *
+ * CARACTERES DE CONTROL — el matiz que el comentario anterior daba por cerrado y NO lo estaba.
+ * Contra el contrabando de ESQUEMA si bastaba con no casar: "java\tscript:alert(1)" no empieza por
+ * '/' ni casa http(s), luego cae. Pero contra la forma AUTHORITY-RELATIVE no: "/\t/evil.example"
+ * empieza por '/' y su segundo caracter es el control, no '/' ni '\', asi que pasaba el chequeo —
+ * y el navegador, tras borrar el tabulador, resuelve https://evil.example/. Por eso se limpia
+ * ANTES de decidir: lo que se valida tiene que ser lo que el navegador vera.
  */
 function isSafeHref(v: string): boolean {
+    const href = v.replace(URL_STRIPPED_CONTROLS, '');
+    // La limpieza puede vaciar la cadena (era toda controles): un href vacio no es navegable.
+    if (href.length === 0) return false;
     // A leading '/' followed by another slash OR A BACKSLASH is authority-relative, not site-relative:
     // browsers normalize '\' to '/' while parsing, so '/\evil.example' navigates OFF-SITE exactly like
     // '//evil.example'. Rejecting only '//' left that open-redirect spelling through.
-    if (v.startsWith('/')) return !/^\/[/\\]/.test(v);
-    return /^https?:\/\//i.test(v);
+    if (href.startsWith('/')) return !/^\/[/\\]/.test(href);
+    return /^https?:\/\//i.test(href);
 }
 
 function describeProp(spec: PropSpec): string {

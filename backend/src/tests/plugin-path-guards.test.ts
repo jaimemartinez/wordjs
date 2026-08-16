@@ -11,8 +11,11 @@
  *          (`^[a-zA-Z0-9_-]+$`) also ACCEPTED `__proto__`, `_x` and `-rf`, which the project's real
  *          slug shape never allowed. Replaced by safeSlugParam(), which returns the value it proved.
  *      (b) `installPluginFromZip` unlinked its `zipPath` argument on thirteen failure paths without
- *          ever establishing what that path was. Now assertZipInOsTmp() proves containment in the
- *          app's own scratch dir first, and every deletion goes through one helper.
+ *          ever establishing what that path was. Ahora la prueba de contencion en el scratch propio
+ *          de la app esta escrita INLINE al principio de esa misma funcion — no en un helper — y
+ *          todo borrado pasa por discardZip(). El helper anterior (assertZipInOsTmp) hacia las mismas
+ *          tres comprobaciones y NO apagaba la alerta: el analisis de rutas contaminadas razona
+ *          dentro de una funcion, asi que un barrier en otra funcion deja el sumidero encendido.
  *
  *   2. js/tainted-format-string — a request-derived slug was interpolated into the FIRST argument of
  *      console.warn, which util.format reads as a FORMAT. A slug containing `%s` then ate the error
@@ -75,7 +78,7 @@ require.cache[OPTIONS_PATH] = {
 
 const perms = require('../core/plugin-permissions');
 const pluginRoutes = require('../routes/plugins');
-const { safeSlugParam, pluginFile, assertZipInOsTmp, createInstallTmp, isValidSlug, OS_TMP_DIR } = pluginRoutes;
+const { safeSlugParam, pluginFile, installPluginFromZip, createInstallTmp, isValidSlug, OS_TMP_DIR } = pluginRoutes;
 
 const SRC_DIR = path.resolve(__dirname, '..');
 const REPO_ROOT = path.resolve(__dirname, '..', '..', '..');
@@ -168,24 +171,34 @@ describe('routes/plugins — safeSlugParam returns the value it validated', () =
 
 // ───────────────────────────────────────── B. what installPluginFromZip is allowed to delete / read
 
-describe('routes/plugins — assertZipInOsTmp proves containment before anything is unlinked', () => {
-    it('accepts a path inside the app scratch dir', () => {
-        const inside = path.join(OS_TMP_DIR, 'install-abc', 'package.zip');
-        assert.strictEqual(assertZipInOsTmp(inside), path.resolve(inside));
+describe('routes/plugins — installPluginFromZip prueba la contencion INLINE antes de borrar nada', () => {
+    // Se ataca por la TUBERIA, no por un helper, porque es ahi donde la prueba tiene que estar: el
+    // barrier vive en la misma funcion que el fs.unlinkSync, o el sumidero se queda encendido.
+    const NOT_CONTAINED = /not inside the plugin scratch directory/;
+
+    /** Planta un fichero senuelo: si la tuberia lo borrase, el rechazo no seria "sin tocar el disco". */
+    const decoy = (dir: string, name: string): string => {
+        fs.mkdirSync(dir, { recursive: true });
+        const p = path.join(dir, name);
+        fs.writeFileSync(p, 'PK-decoy');
+        return p;
+    };
+
+    it('acepta una ruta dentro del scratch de la app (el control: pasa la contencion)', async () => {
+        const inside = decoy(path.join(OS_TMP_DIR, 'install-abc'), 'package.zip');
+        const res = await installPluginFromZip(inside, 'package.zip');
+        // No es un zip valido, asi que falla mas adelante — pero NO por contencion. Y el temporal se
+        // consume, que es justo lo que la tuberia hace con el zip que si acepta.
+        assert.strictEqual(res.ok, false);
+        assert.doesNotMatch(String(res.body.error), NOT_CONTAINED, 'no puede rechazarlo la contencion');
+        assert.strictEqual(fs.existsSync(inside), false, 'un zip contenido SI se consume');
     });
 
-    // THE BARE-PREFIX TRAP, the exact bug the old validateSlug had: `os-tmp-evil` "starts with"
-    // `os-tmp`. Only a `base + path.sep` comparison rejects it.
-    it('rejects a SIBLING directory whose name merely starts with the base name', () => {
-        const sibling = path.resolve(OS_TMP_DIR + '-evil', 'package.zip');
-        assert.throws(() => assertZipInOsTmp(sibling), /not inside the plugin scratch directory/);
-    });
-
-    it('rejects the scratch directory itself (a child is required, never the base)', () => {
-        assert.throws(() => assertZipInOsTmp(OS_TMP_DIR), /not inside/);
-    });
-
+    // LA TRAMPA DEL PREFIJO PELADO, el mismo bug que tuvo validateSlug: `os-tmp-evil` "empieza por"
+    // `os-tmp`. Solo una comparacion contra `base + path.sep` lo rechaza.
     const OUTSIDE: Array<[string, unknown]> = [
+        ['a SIBLING dir whose name merely starts with the base name', path.resolve(OS_TMP_DIR + '-evil', 'package.zip')],
+        ['the scratch directory itself (a child is required, never the base)', OS_TMP_DIR],
         ['a traversal out of the base', path.join(OS_TMP_DIR, '..', 'plugins', 'victim', 'x.zip')],
         ['the shared OS temp dir', path.join(os.tmpdir(), 'wjs-mkt-deadbeef.zip')],
         ['an absolute system path', '/etc/passwd'],
@@ -195,19 +208,44 @@ describe('routes/plugins — assertZipInOsTmp proves containment before anything
         ['null', null],
     ];
     for (const [label, p] of OUTSIDE) {
-        it(`rejects ${label}`, () => {
-            assert.throws(() => assertZipInOsTmp(p as any));
+        it(`rejects ${label}`, async () => {
+            const res = await installPluginFromZip(p as any, 'x.zip');
+            assert.strictEqual(res.status, 400, JSON.stringify(res.body));
+            assert.match(String(res.body.error), NOT_CONTAINED);
         });
     }
 
-    it('every zip deletion in the install pipeline goes through the one guarded helper', () => {
+    it('un zip fuera del scratch se rechaza SIN borrar el fichero que nombraba', async () => {
+        const sharedTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'wordjs-decoy-'));
+        const victims = [
+            decoy(path.resolve(OS_TMP_DIR + '-evil'), 'package.zip'),
+            decoy(sharedTmp, 'package.zip'),
+            decoy(path.join(TMP_ROOT, 'plugins', 'victim'), 'x.zip'),
+        ];
+        try {
+            for (const p of victims) {
+                const res = await installPluginFromZip(p, 'x.zip');
+                assert.strictEqual(res.status, 400, `${p}: ${JSON.stringify(res.body)}`);
+                assert.match(String(res.body.error), NOT_CONTAINED);
+                assert.ok(fs.existsSync(p), `${p} NO puede haberse borrado`);
+            }
+        } finally {
+            fs.rmSync(sharedTmp, { recursive: true, force: true });
+        }
+    });
+
+    it('la prueba de contencion esta ESCRITA en la funcion del sumidero, no delegada a un helper', () => {
         const src = codeOnly(readSrc('routes/plugins.ts'));
         // The only fs.unlinkSync of the zip left in the file is the body of discardZip().
         const raw = src.match(/fs\.unlinkSync\(zipPath\)/g) || [];
         assert.strictEqual(raw.length, 1, 'exactly one raw unlink — inside discardZip()');
         assert.match(src, /const discardZip = \(\) => \{ try \{ fs\.unlinkSync\(zipPath\);/);
+        // Resolucion canonica + prefijo CON separador, en la MISMA funcion que el unlink: eso es lo
+        // que apaga la alerta js/path-injection, porque el barrier del analizador no cruza funciones.
+        assert.match(src, /const zipPath = path\.resolve\(zipPathIn\);/);
+        assert.match(src, /if \(!zipPath\.startsWith\(OS_TMP_DIR \+ path\.sep\)\) \{/);
+        assert.doesNotMatch(src, /assertZipInOsTmp/, 'el helper no puede volver: reabriria la alerta');
         // And the caller's argument is never used for an fs op: it is renamed, then proved.
-        assert.match(src, /zipPath = assertZipInOsTmp\(zipPathIn\)/);
         assert.doesNotMatch(src, /fs\.\w+\(zipPathIn/);
     });
 });
@@ -348,8 +386,9 @@ describe('temp files — kernel-exclusive directory, exclusive create, cleanup i
             assert.ok(tmp.dir.startsWith(path.resolve(OS_TMP_DIR) + path.sep), 'inside os-tmp');
             assert.notStrictEqual(tmp.dir, path.resolve(OS_TMP_DIR));
             assert.ok(fs.statSync(tmp.dir).isDirectory());
-            // The zip path it proposes must be one the install pipeline is willing to touch.
-            assert.strictEqual(assertZipInOsTmp(tmp.zipPath), path.resolve(tmp.zipPath));
+            // The zip path it proposes must be one the install pipeline is willing to touch — la misma
+            // contencion que installPluginFromZip comprueba inline (hijo estricto de OS_TMP_DIR).
+            assert.ok(path.resolve(tmp.zipPath).startsWith(path.resolve(OS_TMP_DIR) + path.sep));
             if (process.platform !== 'win32') {
                 assert.strictEqual(fs.statSync(tmp.dir).mode & 0o777, 0o700, 'mkdtemp gives 0700');
             }
