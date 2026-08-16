@@ -5,7 +5,7 @@
  * contra el _puck_data persistido por Verso (contrato byte-exacto de F4).
  */
 import { expect, test } from "@playwright/test";
-import { blockIdsIn, insertFromPalette, openNewPageVerso, saveAndGetId } from "./helpers";
+import { blockIdsIn, insertFromPalette, openNewPageVerso, saveAndGetId, setRootTitle } from "./helpers";
 
 test("cross-engine: guardar en Verso y abrir en legacy — contenido idéntico vía window.puckGetData", async ({ page }) => {
     const frame = await openNewPageVerso(page);
@@ -19,10 +19,8 @@ test("cross-engine: guardar en Verso y abrir en legacy — contenido idéntico v
     await expect(frame.locator("[data-wjs-block-id]")).toHaveCount(3);
     const ids = await blockIdsIn(frame.locator("body"));
 
-    // Título (root) para poder guardar: rail "Ajustes" → campo Title.
-    await page.getByRole("button", { name: /ajustes/i }).first().click();
-    const rootTitle = page.getByLabel(/^(title|título)/i).first();
-    await rootTitle.fill(`Cross-engine ${stamp}`);
+    // Título (root) para poder guardar — helper que ESPERA al modo root del panel.
+    await setRootTitle(page, `Cross-engine ${stamp}`);
 
     const id = await saveAndGetId(page, async () => {
         await page.getByRole("button", { name: /^(guardar|save)$/i }).click();

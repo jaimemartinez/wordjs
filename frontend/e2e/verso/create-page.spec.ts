@@ -3,7 +3,14 @@
  * 3 bloques por paleta, edición de props, guardar, recargar, persistencia.
  */
 import { expect, test } from "@playwright/test";
-import { blockIdsIn, canvas, insertFromPalette, openNewPageVerso, saveAndGetId } from "./helpers";
+import {
+    blockIdsIn,
+    canvas,
+    insertFromPalette,
+    openNewPageVerso,
+    saveAndGetId,
+    setRootTitle,
+} from "./helpers";
 
 test("crear página: 3 bloques por paleta, editar props, guardar, recargar y verificar persistencia", async ({ page }) => {
     const frame = await openNewPageVerso(page);
@@ -30,11 +37,8 @@ test("crear página: 3 bloques por paleta, editar props, guardar, recargar y ver
     await expect(frame.locator(`[data-wjs-block-id="${ids[0]}"]`)).toContainText(headingText);
 
     // --- título de la página (campos ROOT): rail "Ajustes" deselecciona ----
-    await page.getByRole("button", { name: /ajustes/i }).first().click();
     const pageTitle = `Página E2E ${stamp}`;
-    const rootTitle = page.getByLabel(/^(title|título)/i).first();
-    await expect(rootTitle).toBeVisible();
-    await rootTitle.fill(pageTitle);
+    await setRootTitle(page, pageTitle);
 
     // --- guardar ------------------------------------------------------------
     const id = await saveAndGetId(page, async () => {

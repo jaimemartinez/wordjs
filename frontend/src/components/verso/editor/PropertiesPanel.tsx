@@ -101,7 +101,16 @@ export default function PropertiesPanel({ handle, registry, rootFields, renderEx
     ];
 
     return (
-        <aside className={`flex-col bg-[var(--ed-surface-container-lowest)] border-l border-[var(--ed-outline-variant)] ${mobileOpen ? "flex fixed inset-x-0 top-12 bottom-14 z-40" : "hidden"} md:flex md:static md:inset-auto md:w-[320px] md:shrink-0 md:z-30`}>
+        <aside
+            // Modo del panel: "block" (hay selección) o "root" (ajustes de la
+            // página/entrada). Ancla DETERMINISTA para los e2e — sin ella un spec
+            // solo puede heurizar por texto y, con el panel a medio conmutar,
+            // escribe el título de la página en el campo del bloque (cazado en CI,
+            // donde el arranque es más lento que en local).
+            data-verso-panel={node ? "block" : "root"}
+            data-verso-panel-node={node?.id ?? undefined}
+            className={`flex-col bg-[var(--ed-surface-container-lowest)] border-l border-[var(--ed-outline-variant)] ${mobileOpen ? "flex fixed inset-x-0 top-12 bottom-14 z-40" : "hidden"} md:flex md:static md:inset-auto md:w-[320px] md:shrink-0 md:z-30`}
+        >
             <div className="shrink-0 p-3 flex items-center gap-2.5 bg-[var(--ed-surface-container-low)] border-b border-[var(--ed-outline-variant)]">
                 <div className="w-8 h-8 shrink-0 rounded bg-[var(--ed-primary-container)] text-[var(--ed-on-primary-container)] flex items-center justify-center">
                     <MSym name={msIcon} size={20} />

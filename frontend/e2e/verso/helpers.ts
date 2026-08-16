@@ -128,6 +128,35 @@ export async function centerOf(loc: Locator): Promise<{ x: number; y: number }> 
     return { x: box!.x + box!.width / 2, y: box!.y + box!.height / 2 };
 }
 
+/**
+ * Conmuta el panel derecho a AJUSTES DE PÁGINA (campos root) y espera a que el
+ * cambio haya ocurrido de verdad.
+ *
+ * Por qué el wait explícito: `getByLabel(/título/i).first()` sobre un panel a
+ * medio conmutar apunta al campo del BLOQUE — el spec cree que escribió el
+ * título de la página, el payload va sin `title` y el backend responde 400
+ * "Title is required". Pasaba solo en CI (arranque más lento). El ancla es
+ * `[data-verso-panel="root"]`, estampada por PropertiesPanel.
+ */
+export async function openPageSettings(page: Page): Promise<void> {
+    const rootPanel = page.locator('[data-verso-panel="root"]');
+    if (!(await rootPanel.count())) {
+        await page.getByRole("button", { name: /ajustes/i }).first().click();
+    }
+    await expect(rootPanel).toBeVisible({ timeout: 30_000 });
+}
+
+/** Escribe el título de la página/entrada (campo root) y VERIFICA que quedó puesto. */
+export async function setRootTitle(page: Page, title: string): Promise<void> {
+    await openPageSettings(page);
+    const field = page.locator('[data-verso-panel="root"]').getByLabel(/^(title|título)/i).first();
+    await expect(field).toBeVisible({ timeout: 30_000 });
+    await field.fill(title);
+    // Verificar, no asumir: si el editor no propagase el valor, el fallo debe
+    // señalar AQUÍ (al editor) y no más tarde como un 400 opaco del guardado.
+    await expect(field).toHaveValue(title);
+}
+
 /** Guarda vía el chrome y devuelve el id del registro creado/actualizado. */
 export async function saveAndGetId(page: Page, trigger: () => Promise<void>): Promise<number> {
     const [res] = await Promise.all([
@@ -138,7 +167,12 @@ export async function saveAndGetId(page: Page, trigger: () => Promise<void>): Pr
         ),
         trigger(),
     ]);
-    expect(res.ok(), `guardado falló: ${res.status()}`).toBeTruthy();
+    // El CUERPO en el mensaje: un "400" pelado no dice si faltó el título, el
+    // tipo o la capability — y el diagnóstico se paga en ciclos de CI.
+    expect(
+        res.ok(),
+        `guardado falló: ${res.status()} ${await res.text().catch(() => "")}`,
+    ).toBeTruthy();
     const body = (await res.json()) as { id?: number };
     if (typeof body.id === "number") return body.id;
     const m = new URL(res.url()).pathname.match(/\/posts\/(\d+)$/);
