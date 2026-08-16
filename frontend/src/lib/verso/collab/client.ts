@@ -29,6 +29,7 @@ import {
   type VersionVector,
 } from "../crdt";
 import type {
+  CollabAccounting,
   CollabMember,
   CollabNotice,
   CollabOpLike,
@@ -127,6 +128,15 @@ const RESYNC_COALESCE_MS = 250;
  */
 const MAX_FLUSH_RETRIES = 8;
 
+/**
+ * UNA RESPUESTA QUE NO LLEGA NUNCA. `transport.post` devuelve una promesa, y una promesa que no se
+ * asienta no es un error: no hay `catch` que la vea. Sin plazo, un POST colgado dejaba `flushing` en
+ * `true` PARA SIEMPRE — ni un envío más, ni un aviso, la cola creciendo y el canal diciendo `live`.
+ * Es la variante más silenciosa de la pérdida: nadie se entera de nada. Con plazo se resuelve como
+ * «el servidor no se ha hecho cargo», que es lo único que se puede afirmar.
+ */
+const SIN_RESPUESTA = Symbol("sin-respuesta");
+
 export class VersoCollabSession {
   private readonly opts: Required<Pick<CollabSessionOptions, "postId" | "transport">> & CollabSessionOptions;
   private readonly listeners: SessionListeners;
@@ -161,8 +171,27 @@ export class VersoCollabSession {
   private epoch = 0;
   private notice: CollabNotice | null = null;
 
-  /** Ops emitidas localmente y aún no confirmadas por el servidor. */
+  /**
+   * Ops emitidas localmente y aún no confirmadas por el servidor.
+   *
+   * ES LA ÚNICA DUEÑA DE UNA OP SIN CONFIRMAR, y de ahí cuelga todo lo demás. Solo dos métodos la
+   * acortan (`confirmaLote` y `descartaDeLaCola`), y los dos anotan en `cuenta` lo que sacan. El
+   * envío ya NO la vacía: `flush()` toma una COPIA de la cabeza y la cola se queda con el lote hasta
+   * que el servidor dice qué ha hecho con él. Antes era al revés —se extraía el lote y cada rama
+   * tenía que acordarse de devolverlo— y la rama 409 no se acordaba: un parpadeo de red tiraba las
+   * ops en vuelo sin que nadie se enterara. Con este reparto, olvidarse de una rama nueva no pierde
+   * nada; a lo sumo reenvía, que por el dot es un no-op exacto.
+   */
   private outbox: CollabOp[] = [];
+  /**
+   * GENERACIÓN de la cola. Sube cada vez que la cola se tira ENTERA (una re-siembra por epoch nuevo,
+   * el fin de la sesión). Un lote que estaba en vuelo cuando eso pasó ya está contado, así que su
+   * respuesta no puede volver a tocar la cola: sin este número, confirmar «las N primeras» después
+   * de una re-siembra se llevaría por delante ops que nunca se enviaron.
+   */
+  private outboxGen = 0;
+  /** Ver `CollabAccounting`. `pendientes` no se guarda: es `outbox.length`, y no puede desviarse. */
+  private readonly cuenta = { emitidas: 0, entregadas: 0, rechazadas: 0, descartadas: 0 };
   /**
    * Dots efectivamente APLICADOS, por sitio.
    *
@@ -227,6 +256,19 @@ export class VersoCollabSession {
     this.gate.reset();
     this.stream?.close();
     this.stream = null;
+    // Parar con la cola llena NO es entregar. Se dice y se cuenta antes de soltar la sesión: sin
+    // esto, cerrar la pestaña con ediciones sin enviar era la última pérdida silenciosa del ciclo de
+    // vida — el documento local las conserva (por eso Guardar las salva), pero nadie más las vio.
+    if (this.outbox.length) {
+      const pendientes = this.outbox.length;
+      this.descartaDeLaCola(pendientes, this.outboxGen);
+      this.outboxGen++;
+      this.emitNotice({
+        code: "store-failed",
+        message: `La sesión colaborativa se cerró con ${pendientes} cambio(s) sin enviar. Están en tu documento: guarda para conservarlos.`,
+        at: this.time(),
+      });
+    }
     // Baja explícita para que los demás vean marcharse el avatar sin esperar al TTL. Es
     // best-effort a propósito: si el navegador se está cerrando, el TTL del servidor lo cubre — y
     // por eso NO pasa por el freno: `/leave` no se cobra al ritmo (el servidor no lo pasa por
@@ -325,15 +367,17 @@ export class VersoCollabSession {
       if (this.state && (this.epoch !== msg.epoch || identityChanged)) {
         // Generación distinta: la sala se reinició (se purgó por inactividad, o alguien reemplazó el
         // contenido por otra vía). Lo local que no llegó a enviarse NO se pierde en silencio: se
-        // cuenta. Ahora esta rama SÍ es alcanzable — el servidor incrementa el epoch de verdad.
+        // cuenta —en el aviso Y en la contabilidad— y sale de la cola por la puerta que anota.
+        const pendientes = this.outbox.length;
+        this.descartaDeLaCola(pendientes, this.outboxGen);
+        this.outboxGen++;
         this.emitNotice({
           code: identityChanged ? "identity-reset" : "epoch-reset",
-          message: this.outbox.length
-            ? `La sesión se reinició y ${this.outbox.length} cambio(s) tuyo(s) no llegaron a enviarse. Revisa el documento antes de seguir.`
+          message: pendientes
+            ? `La sesión se reinició y ${pendientes} cambio(s) tuyo(s) no llegaron a enviarse. Revisa el documento antes de seguir.`
             : "La sesión colaborativa se reinició con el contenido guardado.",
           at: this.time(),
         });
-        this.outbox = [];
       }
       this.state = this.buildState(msg.base);
       this.appliedDots.clear();
@@ -501,9 +545,16 @@ export class VersoCollabSession {
     }
 
     this.stopped = true;
+    // La sala se cerró para nosotros y ya no va a salir nada más: lo que quede en la cola no se va a
+    // entregar NUNCA por este canal, así que el aviso lo dice con el número exacto. Las ops se quedan
+    // en la cola (siguen en el documento, y Guardar las conserva), pero el usuario ya no puede
+    // enterarse tarde de que había trabajo sin difundir.
+    const pendientes = this.outbox.length;
     this.emitNotice({
       code: code === "forbidden" || code === "unauthorized" ? "forbidden" : "transport-error",
-      message: String(msg?.message || "La sesión colaborativa se cerró."),
+      message: pendientes
+        ? `${String(msg?.message || "La sesión colaborativa se cerró.")} ${pendientes} cambio(s) tuyo(s) no llegaron a enviarse: guarda para conservarlos.`
+        : String(msg?.message || "La sesión colaborativa se cerró."),
       at: this.time(),
     });
   }
@@ -528,6 +579,9 @@ export class VersoCollabSession {
 
     this.ingest(result.ops);
     this.outbox.push(...result.ops);
+    // PUNTO DE ENTRADA DE LA CUENTA: a partir de aquí esta sesión se ha comprometido a entregar estas
+    // ops o a decir que no ha podido. No hay otro sitio donde una op del editor entre en la cola.
+    this.cuenta.emitidas += result.ops.length;
     this.flushSoon();
     this.emitChange();
     return result.ops;
@@ -593,10 +647,18 @@ export class VersoCollabSession {
   /**
    * Envía el outbox. Público para que el cableado pueda forzar un envío antes de guardar.
    *
-   * REGLA DE LA QUE CUELGA TODO: un lote solo sale de la cola cuando el servidor CONFIRMA qué ha
-   * hecho con cada op. Un 200 con menos ops contabilizadas de las enviadas, un fallo de guardado o
-   * un status desconocido devuelven el lote a la cola; lo único que se descarta es lo que el
-   * servidor no va a aceptar nunca, y eso se dice con un aviso.
+   * REGLA DE LA QUE CUELGA TODO, Y AHORA POR CONSTRUCCIÓN: **el lote no sale de la cola al enviarlo,
+   * sale al contabilizarse**. Aquí solo se toma una COPIA de la cabeza; la cola sigue siendo la
+   * dueña de esas ops hasta que una de las dos únicas puertas de salida (`confirmaLote`, que las da
+   * por entregadas, y `descartaDeLaCola`, que reconoce que no se van a poder entregar y lo DICE) las
+   * saque anotándolas.
+   *
+   * El diseño anterior era el contrario —extraer el lote y confiar en que cada rama lo devolviera— y
+   * de sus siete ramas había una, el 409, que no lo devolvía: un parpadeo de red normal
+   * (`collab_no_session` del `connGate`) tiraba las ops en vuelo, que ni quedaban en `collab_ops` ni
+   * las recuperaba ningún `resync` ni las veía ningún otro editor. Divergencia permanente, y el aviso
+   * además mentía diciendo «la sesión se reinició». Con este reparto, una rama nueva que se olvide de
+   * todo no pierde nada: como mucho reenvía, y reenviar es un no-op exacto por el dot.
    */
   async flush(): Promise<void> {
     if (this.flushing || this.outbox.length === 0 || this.stopped || this.flushGaveUp || !this.self) return;
@@ -604,10 +666,15 @@ export class VersoCollabSession {
     // Un solo frame por POST: por encima del tope del validador el frame entero vuelve inválido, y
     // reenviarlo intacto es un bucle. Lo que no cabe se queda encolado para el envío siguiente.
     const batch = this.outbox.slice(0, this.flushCap);
-    this.outbox = this.outbox.slice(batch.length);
+    const gen = this.outboxGen;
     try {
-      const res = await this.post("ops", () => ({ siteId: this.siteId, epoch: this.epoch, ops: batch }));
-      if (res.status === 200) {
+      const res = await this.conPlazo(this.post("ops", () => ({ siteId: this.siteId, epoch: this.epoch, ops: batch })));
+      // Parada en pleno vuelo: `stop()` ya contó lo que quedaba. Tocar la cola aquí la descuadraría.
+      if (this.stopped) return;
+      if (res === SIN_RESPUESTA) {
+        // Ni respuesta ni error: no se puede afirmar NADA de este lote, así que sigue en la cola.
+        this.reintenta("El servidor no contestó al último envío; se está reintentando.");
+      } else if (res.status === 200) {
         const body = res.body as OpsResponse | null;
         const rejected = body?.rejected ?? [];
         this.flushCap = MAX_OPS_PER_FLUSH;
@@ -622,34 +689,38 @@ export class VersoCollabSession {
           });
         }
         // Contabilidad completa: aceptadas + ya conocidas + rechazadas tiene que cubrir el lote. Si
-        // no cuadra, hay ops de las que nadie se ha hecho cargo: vuelven a la cola (reenviarlas es
-        // un no-op exacto por el dot) en vez de darlas por entregadas.
+        // no cuadra, hay ops de las que nadie se ha hecho cargo: NO se confirman (o sea, no salen de
+        // la cola) y se reintentan, en vez de darlas por entregadas.
         const accounted = (body?.accepted ?? 0) + (body?.known ?? 0) + rejected.length;
         if (typeof body?.accepted === "number" && accounted < batch.length) {
-          this.requeue(batch, `El servidor no confirmó ${batch.length - accounted} cambio(s); se reintentan.`);
-        } else if (body?.persisted === false) {
-          // Difundido pero NO guardado: los demás lo ven, pero la sesión ya no es reanudable.
-          this.setStatus("degraded");
-          this.emitNotice({
-            code: "log-full",
-            message: "Esta sesión colaborativa es muy larga: guarda y recarga la página para poder reconectar sin perder cambios.",
-            at: this.time(),
-          });
+          this.reintenta(`El servidor no confirmó ${batch.length - accounted} cambio(s); se reintentan.`);
+        } else {
+          this.confirmaLote(batch.length, rejected.length, gen);
+          this.flushRetries = 0;                       // el servidor SÍ se hizo cargo
+          if (body?.persisted === false) {
+            // Difundido pero NO guardado: los demás lo ven, pero la sesión ya no es reanudable.
+            this.setStatus("degraded");
+            this.emitNotice({
+              code: "log-full",
+              message: "Esta sesión colaborativa es muy larga: guarda y recarga la página para poder reconectar sin perder cambios.",
+              at: this.time(),
+            });
+          }
         }
-        if (accounted >= batch.length) this.flushRetries = 0;   // el servidor SÍ se hizo cargo
         if (body?.normalized?.length) this.adoptNormalized(body.normalized);
       } else if (res.status === 429) {
         // Un 429 no gasta presupuesto: es un freno, no un fallo, y el servidor dice cuánto esperar.
-        this.outbox = batch.concat(this.outbox);
+        // Las ops no se han movido de la cola, así que no hay nada que devolver.
         this.gate.rechazado(res.body as never);
         this.emitNotice({ code: "rate-limited", message: "Vas más rápido de lo que el servidor acepta; reintentando.", at: this.time() });
       } else if (res.status === 413) {
         // El frame no cabe. Se parte por la mitad y se reintenta; si ni una sola op cabe, esa op no
-        // se va a poder enviar nunca y se dice, en vez de reintentarla en bucle para siempre.
+        // se va a poder enviar nunca: se DESCARTA contándola —si no, se reintentaría en bucle para
+        // siempre— y se dice que solo Guardar la conserva.
         if (batch.length > 1) {
           this.flushCap = Math.max(1, Math.floor(batch.length / 2));
-          this.outbox = batch.concat(this.outbox);
         } else {
+          this.descartaDeLaCola(1, gen);
           this.emitNotice({
             code: "rejected-ops",
             message: "Un cambio es demasiado grande para la sesión colaborativa y no se ha podido enviar. Guarda para conservarlo.",
@@ -657,22 +728,15 @@ export class VersoCollabSession {
           });
         }
       } else if (res.status === 409) {
-        // Epoch caducado o sesión cerrada: estas ops ya no encajan en el estado del servidor. El
-        // documento local las conserva, así que Guardar sigue preservando el trabajo.
-        this.setStatus("degraded");
-        this.emitNotice({
-          code: "epoch-reset",
-          message: `La sesión se reinició; ${batch.length} cambio(s) no se pudieron enviar. Guarda y recarga para reconciliar.`,
-          at: this.time(),
-        });
+        this.sinSala(String((res.body as { code?: unknown } | null)?.code ?? ""));
       } else {
-        // 5xx u otro status: el servidor NO se ha hecho cargo del lote. Vuelve a la cola con freno.
-        this.requeue(batch, "El servidor no pudo guardar los últimos cambios; se están reintentando.");
+        // 5xx u otro status: el servidor NO se ha hecho cargo del lote. Sigue en la cola, con freno.
+        this.reintenta("El servidor no pudo guardar los últimos cambios; se están reintentando.");
       }
     } catch {
-      // Red caída: las ops vuelven a la cola INTACTAS y se reintentan al reconectar. Perderlas
-      // aquí sería la pérdida silenciosa que este diseño no admite.
-      this.requeue(batch, null);
+      // Red caída: las ops siguen en la cola INTACTAS y se reintentan al reconectar. Perderlas aquí
+      // sería la pérdida silenciosa que este diseño no admite.
+      this.reintenta(null);
     } finally {
       this.flushing = false;
       this.emitChange();
@@ -681,13 +745,73 @@ export class VersoCollabSession {
   }
 
   /**
-   * Devuelve un lote a la cola CON PRESUPUESTO. Las ops nunca se tiran —eso sería la pérdida
-   * silenciosa— pero los reintentos sí se acaban: un 503 por una fila del log ilegible es permanente
-   * por construcción, y reintentarlo a 1 Hz para siempre agota el limitador global de la IP y no
-   * arregla nada. Al agotarse se deja de posear y se dice que hay que guardar a mano.
+   * LOS DOS 409 NO SIGNIFICAN LO MISMO, Y TRATARLOS IGUAL ERA LA PÉRDIDA.
+   *
+   *  · `collab_epoch` — la sala se re-sembró: estas ops hablan de un estado que ya no existe y no se
+   *    van a poder aplicar NUNCA. Se descartan, todas de una vez y con el número exacto en el aviso
+   *    (una a una, cada lote habría soltado su propio mensaje con una cifra distinta), y se pide el
+   *    estado nuevo para no seguir editando sobre un base muerto.
+   *  · cualquier otro (`collab_no_session` del `connGate`, `collab_closed` de la sala) — NO es un
+   *    reinicio: es que el CANAL se ha caído. Las ops siguen siendo válidas para este epoch, así que
+   *    no se toca la cola: se reintentan, y el `welcome` de la reconexión las suelta. Es el caso que
+   *    dispara cualquier parpadeo de red, y el que antes decía «la sesión se reinició» mientras tiraba
+   *    el lote.
    */
-  private requeue(batch: CollabOp[], message: string | null): void {
-    this.outbox = batch.concat(this.outbox);
+  private sinSala(code: string): void {
+    if (code === "collab_epoch") {
+      const pendientes = this.outbox.length;
+      this.descartaDeLaCola(pendientes, this.outboxGen);
+      this.outboxGen++;
+      this.setStatus("degraded");
+      this.emitNotice({
+        code: "epoch-reset",
+        message: `La sesión se reinició; ${pendientes} cambio(s) no se pudieron enviar. Guarda y recarga para reconciliar.`,
+        at: this.time(),
+      });
+      void this.resync();
+      return;
+    }
+    this.reintenta(
+      `Se perdió la sesión colaborativa; ${this.outbox.length} cambio(s) siguen pendientes y se reenviarán al reconectar.`,
+    );
+  }
+
+  /**
+   * EL SERVIDOR SE HIZO CARGO. Única puerta por la que una op sale de la cola habiéndose entregado, y
+   * por eso es también donde se anota. Se sacan de la CABEZA porque el lote se tomó de la cabeza y
+   * nada más acorta la cola: lo que llegara mientras el POST volaba se apiló detrás.
+   */
+  private confirmaLote(total: number, rechazadas: number, gen: number): void {
+    if (gen !== this.outboxGen) return;   // la cola se re-sembró en pleno vuelo: ya está contada
+    const salen = Math.max(0, Math.min(total, this.outbox.length));
+    if (salen === 0) return;
+    this.outbox = this.outbox.slice(salen);
+    const malas = Math.min(rechazadas, salen);
+    this.cuenta.rechazadas += malas;
+    this.cuenta.entregadas += salen - malas;
+  }
+
+  /**
+   * LA OTRA PUERTA: el cliente reconoce que no va a poder entregar esas ops. Cuenta lo que saca para
+   * que la suma siga cuadrando; el aviso con el número lo pone quien llama, que es el que sabe por
+   * qué. Nunca se llama sin un aviso detrás — eso sería exactamente la pérdida silenciosa.
+   */
+  private descartaDeLaCola(n: number, gen: number): number {
+    if (gen !== this.outboxGen) return 0;
+    const salen = Math.max(0, Math.min(n, this.outbox.length));
+    if (salen === 0) return 0;
+    this.outbox = this.outbox.slice(salen);
+    this.cuenta.descartadas += salen;
+    return salen;
+  }
+
+  /**
+   * El servidor NO se ha hecho cargo del lote. Las ops NO se mueven —siguen en la cola, que nunca las
+   * soltó— pero los reintentos sí se acaban: un 503 por una fila del log ilegible es permanente por
+   * construcción, y reintentarlo a 1 Hz para siempre agota el limitador global de la IP y no arregla
+   * nada. Al agotarse se deja de posear y se dice que hay que guardar a mano.
+   */
+  private reintenta(message: string | null): void {
     // Mismo freno, otra causa. La espera sale de la ventana que publicó el servidor igual que la del
     // 429: es SU ritmo declarado, y no hay ninguna razón para inventar aquí un segundo número.
     this.gate.frenaPorFallo();
@@ -703,6 +827,29 @@ export class VersoCollabSession {
       return;
     }
     if (message) this.emitNotice({ code: "store-failed", message, at: this.time() });
+  }
+
+  /**
+   * Pone PLAZO a un envío. Ver `SIN_RESPUESTA`: sin esto, una promesa que no se asienta congelaba el
+   * envío para siempre sin un solo aviso. El plazo no es una constante nueva —es EL TECHO de
+   * cualquier espera de este cliente, el mismo que gobierna el backoff— y al vencer no se afirma que
+   * el lote se haya perdido: se afirma que no se sabe, que es distinto y se trata como tal (sigue en
+   * la cola). Si la respuesta perdida acaba llegando después del reenvío, el servidor la cuenta como
+   * `known` y nadie duplica nada: la idempotencia por dot es lo que hace seguro reintentar a ciegas.
+   */
+  private conPlazo(p: Promise<PostResponse>): Promise<PostResponse | typeof SIN_RESPUESTA> {
+    return new Promise((resolve, reject) => {
+      let vivo = true;
+      const h = this.later(this.gate.techo, () => {
+        if (!vivo) return;
+        vivo = false;
+        resolve(SIN_RESPUESTA);
+      });
+      p.then(
+        (v) => { if (vivo) { vivo = false; this.clear(h); resolve(v); } },
+        (e) => { if (vivo) { vivo = false; this.clear(h); reject(e); } },
+      );
+    });
   }
 
   /**
@@ -746,6 +893,9 @@ export class VersoCollabSession {
     if (fixes.length) {
       this.ingest(fixes);
       this.outbox.push(...fixes);
+      // El OTRO punto de entrada de la cuenta. Una corrección es una op como cualquier otra: si se
+      // perdiera, el emisor se quedaría con el valor crudo y divergiría del resto para siempre.
+      this.cuenta.emitidas += fixes.length;
       this.listeners.onRemoteDoc?.(state.toDoc(), fixes);
       this.flushSoon();
     }
@@ -913,6 +1063,24 @@ export class VersoCollabSession {
       vv: this.state ? ({ ...this.state.vv } as VersionVector) : {},
       pendingOps: this.outbox.length,
       notice: this.notice,
+      cuenta: this.contabilidad(),
+    };
+  }
+
+  /**
+   * LA CUENTA DE PUNTA A PUNTA (ver `CollabAccounting`). Se expone porque una propiedad que no se
+   * puede LEER no se puede falsear: «no se pierde nada» tiene que ser una suma que un test compara,
+   * no la ausencia de un error en un log. La identidad que tiene que cumplirse SIEMPRE es
+   *
+   *     emitidas === entregadas + rechazadas + descartadas + pendientes
+   */
+  contabilidad(): CollabAccounting {
+    return {
+      emitidas: this.cuenta.emitidas,
+      entregadas: this.cuenta.entregadas,
+      rechazadas: this.cuenta.rechazadas,
+      descartadas: this.cuenta.descartadas,
+      pendientes: this.outbox.length,
     };
   }
 

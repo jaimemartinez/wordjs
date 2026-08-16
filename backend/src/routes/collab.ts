@@ -125,21 +125,30 @@ function sseWrite(res: Response, chunk: string): boolean {
 /**
  * EL MISMO TOKEN QUE USÓ `authenticate`, para poder volver a evaluarlo mientras el stream vive.
  *
- * La selección se copia LÍNEA A LÍNEA de `middleware/auth.ts#authenticate`, incluidas las dos
- * exclusiones que parecen cosmética y no lo son: `Bearer null` y `Bearer undefined` (lo que manda un
- * frontend que hace `localStorage.getItem('token')` sin comprobar). `authenticate` las IGNORA y cae a
- * la cookie; la versión anterior de esta función no, y ahí había un bypass real: con
- * `Authorization: Bearer null` + la cookie de sesión válida, `authenticate` autenticaba por cookie y
- * aquí se recogía la cadena `"null"`, que no es un JWT — así que la re-autorización tomaba el camino
- * "no hay JWT que verificar" y el stream sobrevivía al cierre de sesión, al cambio de contraseña y a
- * la caducidad del token. Un valor elegido por quien llama decidía si se comprobaba la revocación.
+ * La selección replica la de `middleware/auth.ts#authenticate`, incluidas las exclusiones que parecen
+ * cosmética y no lo son: `Bearer null` y `Bearer undefined` (lo que manda un frontend que hace
+ * `localStorage.getItem('token')` sin comprobar). `authenticate` las IGNORA y cae a la cookie; la
+ * versión anterior de esta función no, y ahí había un bypass real: con `Authorization: Bearer null` +
+ * la cookie de sesión válida, `authenticate` autenticaba por cookie y aquí se recogía la cadena
+ * `"null"`, que no es un JWT — así que la re-autorización tomaba el camino "no hay JWT que verificar"
+ * y el stream sobrevivía al cierre de sesión, al cambio de contraseña y a la caducidad del token. Un
+ * valor elegido por quien llama decidía si se comprobaba la revocación.
+ *
+ * LA CAÍDA A LA COOKIE SE ESCRIBE COMO LA ESCRIBE `authenticate`: «si del header no sale un token,
+ * usa la cookie». Enumerar los tres casos malos a mano dejó fuera el tercero — `Authorization:
+ * Bearer ` a secas, con el token vacío — porque en `authenticate` no lo excluye ninguna comparación,
+ * lo excluye que `''` sea FALSY en `if (!token && cookie)`. Aquí se recogía esa cadena vacía y no se
+ * caía a la cookie, así que el editor entraba (autenticado por cookie) y la primera re-autorización
+ * lo echaba de la sala con `unauthorized`. Fallaba hacia el lado seguro, pero echaba a un editor
+ * legítimo cada cuatro ticks. La forma de la regla es lo que evita que la lista se vuelva a quedar
+ * corta: no hay lista.
  */
 function sessionToken(req: any): string {
     const header = String(req.get('Authorization') || '');
-    if (header.startsWith('Bearer ') && header !== 'Bearer null' && header !== 'Bearer undefined') {
-        return header.slice(7).trim();
-    }
-    return String((req.cookies && req.cookies.wordjs_token) || '');
+    const delHeader = header.startsWith('Bearer ') && header !== 'Bearer null' && header !== 'Bearer undefined'
+        ? header.slice(7).trim()
+        : '';
+    return delHeader || String((req.cookies && req.cookies.wordjs_token) || '');
 }
 
 /**
@@ -437,5 +446,19 @@ router.post('/:postId/leave', authenticate, asyncHandler(async (req: any, res: R
 // guarda se quedaba sin ningún test que la pusiera roja. Una defensa en profundidad que nadie falsea
 // es la que desaparece en el siguiente refactor.
 (router as any)._sseWrite = sseWrite;
+
+// MISMA PUERTA, MISMO MOTIVO, para las DOS MITADES del arreglo de #688.
+//
+// El bypass necesitaba las dos a la vez (recoger `Bearer null` como si fuera la credencial Y elegir
+// la rama por la FORMA del dato), así que el test de caja negra —revocar la sesión y esperar que el
+// stream se cierre— se pone verde revirtiendo cualquiera de ellas por separado: la que sobrevive
+// cierra el agujero sola. Eso deja el bypass a UN commit de distancia con la suite en verde, que es
+// exactamente lo que este proyecto ya se comió antes. Cada mitad tiene aquí su contrato, y cada
+// contrato su rojo:
+//   · `sessionToken` — devolver LA MISMA credencial que usó `authenticate`, exclusiones incluidas.
+//   · `makeRevalidate` — la CLASE de credencial la fija el middleware (`req.apiToken`), nunca el
+//     aspecto de la cadena; lo que no sea token de API tiene que verificar su JWT o denegarse.
+(router as any)._sessionToken = sessionToken;
+(router as any)._makeRevalidate = makeRevalidate;
 
 module.exports = router;

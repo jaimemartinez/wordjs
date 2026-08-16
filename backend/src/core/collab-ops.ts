@@ -200,15 +200,6 @@ function cloneJson(v: any, depth: number): any {
 }
 
 /**
- * Copia + SANEA un valor de prop. `keyHint` es la clave bajo la que el valor viaja: es lo que hace
- * que `sanitizePuckTree` sepa que `text`/`content`/`html`… son HTML y haya que pasarlos por el
- * sanitizador de HTML, mientras que el resto de cadenas solo pierden los esquemas peligrosos.
- */
-function cleanValue(v: any, keyHint: string | null): any {
-    return cleanValueEx(v, keyHint).value;
-}
-
-/**
  * JSON con las claves de objeto ORDENADAS. Sirve para comparar "antes y después del saneado" sin
  * que un simple cambio de orden de claves cuente como reescritura (produciría correcciones
  * espurias en el emisor).
@@ -224,7 +215,16 @@ function canonicalJson(v: any): string {
     });
 }
 
-/** Igual que `cleanValue` pero diciendo además si el saneador cambió algo. */
+/**
+ * Copia + SANEA un valor de prop, diciendo además si el saneador cambió algo. `keyHint` es la clave
+ * bajo la que el valor viaja: es lo que hace que `sanitizePuckTree` sepa que `text`/`content`/`html`…
+ * son HTML y haya que pasarlos por el sanitizador de HTML, mientras que el resto de cadenas solo
+ * pierden los esquemas peligrosos.
+ *
+ * (Tenía delante un `cleanValue` que solo se quedaba con el valor y al que ya no llamaba nadie: el
+ * emisor necesita saber qué se le reescribió, así que todos los caminos pasan por la versión que lo
+ * dice. Se barre en vez de dejarlo como warning perpetuo del linter.)
+ */
 function cleanValueEx(v: any, keyHint: string | null): { value: any; changed: boolean } {
     const cloned = cloneJson(v, 0);
     if (cloned === undefined) return { value: undefined, changed: false };
@@ -540,4 +540,20 @@ function vvCovers(vv: Record<string, number>, site: string, counter: number): bo
     return Object.hasOwn(vv, site) && vv[site] >= counter;
 }
 
-module.exports = { validateOp, validateFrame, sanitizeVersionVector, vvCovers, LIMITS };
+/**
+ * `setOwn` y `cloneJson` se exponen SOLO para poder falsearlos, igual que `_sseWrite` en
+ * `routes/collab.ts` y por el mismo motivo.
+ *
+ * Son DOS DE LOS TRES PILARES con los que se descartaron #689/#690/#691 —destino sin prototipo,
+ * definición de propiedad de datos y `Object.hasOwn` en la única lectura del version vector— y desde
+ * fuera son INVISIBLES: con destinos sin prototipo, `setOwn` y `obj[k]=v` se comportan igual, y el
+ * valor que devuelve `cloneJson` lo reconstruye después `sanitizePuckTree` sobre un `{}` normal. O
+ * sea: ninguno de los dos puede tener un rojo de caja negra, y sin esta puerta se quedaban como
+ * "defensa en profundidad que nadie falsea", que es la que desaparece en el siguiente refactor —
+ * dejando la seguridad colgando otra vez de una LISTA DE NOMBRES, que es el modelo que ya le costó
+ * caro a este proyecto en los permisos de plugins.
+ *
+ * Lo que se prueba a través de ellos es su CONTRATO, no un exploit: que escribir bajo una clave
+ * remota no pueda despertar un accesor heredado, y que el objeto que se construye no herede nada.
+ */
+module.exports = { validateOp, validateFrame, sanitizeVersionVector, vvCovers, LIMITS, setOwn, cloneJson };

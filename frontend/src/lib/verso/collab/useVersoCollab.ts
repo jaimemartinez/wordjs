@@ -102,6 +102,9 @@ const NO_MEMBERS: CollabMember[] = [];
 const INERT: SessionSnapshot = {
   status: "off", siteId: "", self: null, members: NO_MEMBERS,
   epoch: 0, vv: {}, pendingOps: 0, notice: null,
+  // Sin sesión no se ha emitido nada, así que la cuenta está a cero y CUADRA: la identidad de
+  // `CollabAccounting` también tiene que valer aquí, o el estado apagado sería el único que miente.
+  cuenta: { emitidas: 0, entregadas: 0, rechazadas: 0, descartadas: 0, pendientes: 0 },
 };
 
 export function useVersoCollab(options: UseVersoCollabOptions): UseVersoCollabResult {

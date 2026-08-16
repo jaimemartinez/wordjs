@@ -173,6 +173,32 @@ export interface CollabTransport {
   post: (url: string, body: unknown) => Promise<PostResponse>;
 }
 
+/**
+ * CONTABILIDAD DE PUNTA A PUNTA DE LAS OPS DEL EMISOR.
+ *
+ * No es telemetría: es la forma de que «ninguna operación se pierde en silencio» sea una CUENTA que
+ * se puede falsear, en vez de la ausencia de un error. Toda op que sale de `sendCommand` (y toda
+ * corrección que el cliente emite al adoptar el saneado) acaba en EXACTAMENTE una casilla, y la
+ * identidad se cumple en todo momento:
+ *
+ *     emitidas === entregadas + rechazadas + descartadas + pendientes
+ *
+ * Un camino nuevo que se llevara un lote por delante rompería esta suma aunque nadie se acordara de
+ * escribir su aviso — que es exactamente cómo la rama 409 de `flush()` sobrevivió dos rondas.
+ */
+export interface CollabAccounting {
+  /** Ops que el editor produjo y que esta sesión se comprometió a entregar. */
+  emitidas: number;
+  /** El servidor se hizo cargo de ellas (nuevas o ya conocidas): están en su log. */
+  entregadas: number;
+  /** El servidor las rechazó explícitamente, y se dijo en el momento. */
+  rechazadas: number;
+  /** El cliente reconoce que NO va a poder entregarlas, y lo ha dicho con el número exacto. */
+  descartadas: number;
+  /** Siguen en la cola: ni entregadas ni perdidas. Se reintentan. */
+  pendientes: number;
+}
+
 export interface SessionSnapshot {
   status: CollabStatus;
   /** Identidad de ESTA réplica (una por pestaña). Viaja en el snapshot y no por una ref: el
@@ -185,4 +211,6 @@ export interface SessionSnapshot {
   vv: VersionVector;
   pendingOps: number;
   notice: CollabNotice | null;
+  /** Ver `CollabAccounting`. Viaja en el snapshot para que la cuenta sea observable desde fuera. */
+  cuenta: CollabAccounting;
 }

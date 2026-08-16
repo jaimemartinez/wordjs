@@ -324,6 +324,72 @@ describe('autorización de sala: la capacidad de editar ESE post, y nada más', 
             await settle(300);
         }
     });
+
+    /**
+     * LAS DOS MITADES DE #688, CADA UNA CON SU ROJO.
+     *
+     * El test de arriba es de caja negra y prueba la CONJUNCIÓN: revocar la sesión cierra el stream.
+     * Pero el bypass necesitaba las dos mitades a la vez, así que revirtiendo cualquiera de ellas por
+     * separado ese test sigue VERDE — la que sobrevive cierra el agujero sola. Traducido: un refactor
+     * que se lleve una sola mitad deja la suite en verde con el bypass a un commit de distancia.
+     *
+     * Aquí se falsea cada mitad por su CONTRATO, a través de las puertas `_sessionToken` y
+     * `_makeRevalidate` (mismo motivo y mismo precedente que `_sseWrite`).
+     */
+    test('#688 mitad A — `sessionToken` recoge la MISMA credencial que `authenticate`, exclusiones incluidas', () => {
+        const router = require('../routes/collab');
+        const jwtDeLaCookie = tok('otra');
+        const req = (auth: string | undefined, cookie: string | undefined) => ({
+            get: (h: string) => (h === 'Authorization' ? auth : undefined),
+            cookies: cookie === undefined ? {} : { wordjs_token: cookie },
+        });
+
+        // Lo que manda un frontend que hace `localStorage.getItem('token')` sin comprobar.
+        // `authenticate` IGNORA estos tres y cae a la cookie; si aquí se recogiera la cadena literal,
+        // la re-autorización estaría verificando una credencial que NADIE usó para autenticar.
+        for (const basura of ['Bearer null', 'Bearer undefined', 'Bearer ']) {
+            assert.equal(router._sessionToken(req(basura, jwtDeLaCookie)), jwtDeLaCookie,
+                `con \`${basura}\` + cookie válida hay que re-verificar la COOKIE, no la cadena literal`);
+        }
+
+        // ANTI-VACUIDAD: no vale con devolver siempre la cookie. Un Bearer de verdad manda.
+        assert.equal(router._sessionToken(req(`Bearer ${jwtDeLaCookie}`, 'otra-cosa')), jwtDeLaCookie,
+            'un `Authorization` legítimo sigue siendo la credencial de la petición');
+        assert.equal(router._sessionToken(req(undefined, jwtDeLaCookie)), jwtDeLaCookie);
+    });
+
+    test('#688 mitad B — la CLASE de credencial la fija el middleware, no la forma de la cadena', async () => {
+        const router = require('../routes/collab');
+        // Sesión NORMAL (sin `req.apiToken`) cuya credencial no se parece a un JWT. Antes la rama se
+        // elegía contando puntos, así que esto caía en «no hay JWT que verificar» y se autorizaba
+        // saltándose caducidad y `token_valid_after`. Ahora no hay otra rama a la que caer: verifica
+        // o deniega.
+        const sinPinta = router._makeRevalidate({
+            get: () => undefined,
+            cookies: { wordjs_token: 'esto-no-tiene-tres-partes' },
+            user: { id: U.otra },
+        }, P.ajeno);
+        assert.equal(await sinPinta(), false,
+            'una credencial de sesión que no verifica NO puede autorizar por no parecer un JWT');
+
+        // Y la de dos puntos, que sí «parece» un JWT pero no lo es: mismo veredicto, otra forma.
+        const conPinta = router._makeRevalidate({
+            get: () => undefined,
+            cookies: { wordjs_token: 'a.b.c' },
+            user: { id: U.otra },
+        }, P.ajeno);
+        assert.equal(await conPinta(), false);
+
+        // ANTI-VACUIDAD: si esta función denegara SIEMPRE, las dos aserciones de arriba pasarían sin
+        // probar nada y además el stream se caería para todo el mundo cada cuatro ticks.
+        const buena = router._makeRevalidate({
+            get: () => undefined,
+            cookies: { wordjs_token: tok('otra') },
+            user: { id: U.otra },
+        }, P.ajeno);
+        assert.equal(await buena(), true,
+            'una sesión legítima tiene que seguir autorizándose, o el arreglo echa a los editores buenos');
+    });
 });
 
 describe('identidad de réplica: infalsificable y estable', () => {

@@ -368,3 +368,96 @@ describe('donde la CLAVE la pone el cliente, la ESTRUCTURA no', () => {
         assert.equal(({} as any).colado, undefined, 'y nada de eso ha tocado `Object.prototype`');
     });
 });
+
+/**
+ * CADA PILAR, SU ROJO PROPIO.
+ *
+ * La evidencia con la que se descartaron #689/#690/#691 se apoya en TRES cosas —destino sin
+ * prototipo, definición de propiedad de DATOS y `Object.hasOwn` en la única lectura del version
+ * vector— y hasta ahora solo la primera tenía un test que pudiera ponerse rojo. Las otras dos son
+ * invisibles desde fuera precisamente porque las tres juntas se solapan: con destinos sin prototipo,
+ * `setOwn` y `obj[k]=v` hacen lo mismo, y con un vector sin prototipo `Object.hasOwn` no cambia nada.
+ *
+ * Eso es exactamente lo que hace peligroso dejarlas sin gate: un refactor que quite UNA deja la suite
+ * verde y la seguridad colgando otra vez de la lista de nombres. Aquí se prueba el CONTRATO de cada
+ * una por separado, en las condiciones en las que se nota la diferencia. Que esas condiciones no se
+ * den hoy en producción no las hace decorativas: las hace lo que son, un muro de repuesto, y un muro
+ * de repuesto que nadie comprueba no es un muro.
+ */
+describe('los tres pilares, cada uno con su falsable', () => {
+    const { setOwn, cloneJson } = require('../core/collab-ops');
+
+    test('`setOwn` define propiedad PROPIA de datos aunque el destino herede un accesor trampa', () => {
+        // La diferencia entre `Object.defineProperty` y `obj[k] = v`: la asignación consulta la cadena
+        // de prototipos y, si hay un SETTER heredado, se lo entrega a él — el objeto se queda sin la
+        // propiedad y el atacante se queda con el valor. Es el gadget del que `__proto__` es el caso
+        // conocido; la lista de nombres solo cubre los que alguien enumeró.
+        const proto = Object.prototype as any;
+        const robado: unknown[] = [];
+        Object.defineProperty(proto, 'campoTrampa', {
+            configurable: true,
+            set(v: unknown) { robado.push(v); },
+            get() { return undefined; },
+        });
+        try {
+            const destino: Record<string, unknown> = {};
+            setOwn(destino, 'campoTrampa', 'valor bueno');
+            assert.equal(Object.hasOwn(destino, 'campoTrampa'), true,
+                'la propiedad tiene que quedar en el objeto indicado, no en quien la intercepte');
+            assert.equal(destino.campoTrampa, 'valor bueno');
+            assert.deepEqual(robado, [], 'y el setter heredado NO puede haberse invocado');
+
+            // ANTI-VACUIDAD: que el escenario reproduce el robo de verdad con la escritura ingenua.
+            const ingenuo: Record<string, unknown> = {};
+            (ingenuo as any).campoTrampa = 'valor bueno';
+            assert.equal(Object.hasOwn(ingenuo, 'campoTrampa'), false,
+                'si esto fuera true, el test no estaría probando nada: no hay accesor que esquivar');
+            assert.deepEqual(robado, ['valor bueno'], 'el accesor heredado sí se lleva la asignación');
+        } finally {
+            delete proto.campoTrampa;
+        }
+    });
+
+    test('`cloneJson` construye SIN PROTOTIPO: el objeto copiado no hereda nada de nadie', () => {
+        // El otro pilar del mismo muro. Aquí es invisible desde la API pública porque
+        // `sanitizePuckTree` reconstruye el valor después sobre un `{}` normal (está dicho sin adornos
+        // en el test de arriba), así que su contrato hay que comprobarlo donde vive.
+        const proto = Object.prototype as any;
+        proto.campoFantasma = 'de la cadena';
+        try {
+            const copia = cloneJson(JSON.parse('{"a":{"b":1},"lista":[1,2]}'), 0);
+            assert.equal(Object.getPrototypeOf(copia), null,
+                'el destino de la copia no puede tener prototipo');
+            assert.equal(Object.getPrototypeOf(copia.a), null, 'ni el de los objetos anidados');
+            assert.equal(copia.campoFantasma, undefined,
+                'y por tanto no puede aparecer nada que el cliente no mandara');
+            assert.equal(copia.a.b, 1, 'sin dejar de copiar lo que sí mandó');
+            // ANTI-VACUIDAD: con un destino normal el campo heredado SÍ se ve, o sea que el
+            // `Object.prototype` de este test está sucio de verdad y la aserción de arriba dice algo.
+            assert.equal(({} as any).campoFantasma, 'de la cadena');
+        } finally {
+            delete proto.campoFantasma;
+        }
+    });
+
+    test('`vvCovers` pregunta por propiedad PROPIA: un sitio heredado no cubre nada', () => {
+        // Tercer pilar. `sanitizeVersionVector` ya devuelve un vector sin prototipo, así que hoy esta
+        // lectura no puede fallar por ahí — pero `vvCovers` es una función EXPORTADA y su contrato es
+        // suyo: la pregunta es «¿lo declaró el cliente?», no «¿sale algo al leerlo?». Si mintiera, el
+        // filtro del `resync` dejaría fuera ops que al cliente SÍ le faltan, y el hueco no se cerraría
+        // nunca — pérdida de datos por la otra puerta.
+        const proto = Object.prototype as any;
+        proto.s_heredado = 999;
+        try {
+            assert.equal(vvCovers({} as any, 's_heredado', 1), false,
+                'un sitio que solo existe en la cadena de prototipos no cubre ninguna op');
+            assert.equal(vvCovers({ s_propio: 5 } as any, 's_propio', 3), true,
+                'y el declarado de verdad sigue cubriendo (si no, no se filtraría nada)');
+            assert.equal(vvCovers({ s_propio: 2 } as any, 's_propio', 7), false);
+            // ANTI-VACUIDAD: el prototipo está sucio de verdad, así que la primera aserción dice algo.
+            assert.equal(({} as any).s_heredado, 999);
+        } finally {
+            delete proto.s_heredado;
+        }
+    });
+});

@@ -232,6 +232,17 @@ export class FakeCollabServer {
    */
   readonly expulsiones: { siteId: string; at: number }[] = [];
 
+  /**
+   * CADA 409 `collab_no_session`, CON SU RAZÓN.
+   *
+   * El servidor real usa EL MISMO código para dos cosas muy distintas —«te he echado» y «se te cayó
+   * el cable»— así que un test que cuente códigos no puede distinguirlas. Aquí sí se anota cuál fue,
+   * y eso es lo que permite seguir afirmando «a este cliente no lo echaron» sin tener que fingir que
+   * un parpadeo de red no produce ese código. Fingirlo es lo que tapaba el hallazgo: mientras el
+   * doble contestaba 200 a un POST sin stream, la pérdida de las ops en vuelo era irrepresentable.
+   */
+  readonly sinSesion: { siteId: string; at: number; porExpulsion: boolean }[] = [];
+
   /** Cada POST recibido: cuándo se mandó y cuándo se sirvió (difieren en cuanto hay latencia). */
   readonly posted: { path: string; at: number; servedAt: number; status: number }[] = [];
 
@@ -348,9 +359,16 @@ export class FakeCollabServer {
 
     if (path === "leave") return { status: 200, body: { ok: true } };
 
-    // Sin sesión viva no hay sala a la que hablar: es el 409 del `connGate` real, y es la firma con
-    // la que se manifestaba el defecto (expulsado ⇒ 409 collab_no_session en todo lo que mande).
-    if (this.expulsados.has(siteId)) {
+    // SIN CONEXIÓN SSE VIVA NO HAY SALA A LA QUE HABLAR. Es literalmente el `connGate` real
+    // (`routes/collab.ts`: `findConn` → 409 `collab_no_session`), y da igual por qué no la hay: te
+    // echaron por ritmo, o simplemente se te cayó el cable y todavía no has reconectado.
+    //
+    // ESTA SEGUNDA MITAD FALTABA, y su ausencia es lo que dejó vivo un hallazgo de pérdida de datos
+    // durante dos rondas: mientras el doble contestaba 200 a un POST hecho con el stream caído, el
+    // hueco de la reconexión —donde el cliente sigue posteando y el servidor real responde 409— NO
+    // SE PODÍA REPRESENTAR, así que ningún test podía ver que el lote en vuelo se tiraba.
+    if (this.expulsados.has(siteId) || !this.handlers.has(siteId)) {
+      this.sinSesion.push({ siteId, at: this.clock(), porExpulsion: this.expulsados.has(siteId) });
       return { status: 409, body: { code: "collab_no_session", message: "No hay una sesión colaborativa abierta para ese siteId." } };
     }
 
@@ -415,6 +433,7 @@ export class FakeCollabServer {
       if (r.strikes >= this.limits.maxStrikes) {
         this.expulsados.add(siteId);
         this.expulsiones.push({ siteId, at: now });
+        this.sinSesion.push({ siteId, at: now, porExpulsion: true });
         const h = this.handlers.get(siteId);
         this.handlers.delete(siteId);
         this.presence.delete(siteId);
