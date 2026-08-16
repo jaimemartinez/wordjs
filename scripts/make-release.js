@@ -41,9 +41,19 @@ const IGNORE_PATTERNS = [
     'gateway-config.json', // SECURITY: gateway-config.json holds the live gatewaySecret — never ship it
     'gateway-registry.json', // Gateway state
     '.env',
+    // SECURITY + SIZE: agent/assistant working directories. They are LOCAL developer state, they
+    // are gitignored (so a CI release built from a clean checkout never sees them), but a release
+    // packaged from a real working tree does. `.claude` was missing from this list and cost 46 MB of
+    // a 97 MB artifact — 6744 of its 12169 entries — including full git WORKTREES under
+    // `.claude/worktrees/`, plus `mcp.json` and `settings.local.json`, which can hold credentials
+    // for connected servers. The whole family is listed here rather than just the one that bit us.
     'brain',
     '.agent',
     '.gemini',
+    '.claude',
+    '.cursor',
+    '.aider.chat.history.md',
+    '.aider.input.history',
     'ssl-auto.crt',    // Exclude local certs
     'ssl-auto.key',
     'backend/cli',     // Exclude test/debug scripts (see CLI_SHIPPED for the product CLI carve-out)
@@ -205,6 +215,59 @@ function copyFiles(src, dest) {
     }
 }
 
+/**
+ * WHAT GIT KNOWS ABOUT — the structural half of the exclusion rules.
+ *
+ * The blocklist below is a list of NAMES, and a list of names is always one tool behind: it already
+ * missed `.claude/` (46 MB of a 97 MB artifact, including `mcp.json` and full git worktrees) and,
+ * right after that was fixed, `.mcp.json` plus a handful of the developer's scratch files. This
+ * project has learned the same lesson three times over in its security work: never infer safety
+ * from the ABSENCE of a name in a list.
+ *
+ * So the question is inverted. A release is built from a REAL WORKING TREE, and the authority on
+ * what belongs to the project is git: everything git does not track is developer-local unless it is
+ * a BUILD ARTIFACT we deliberately ship. Those are enumerated (they are gitignored by design), and
+ * everything else untracked is dropped.
+ *
+ * If git is unavailable the packager falls back to the name list and SAYS SO — a quieter artifact
+ * is better than a failed build, but a silent downgrade would put us back where we started.
+ */
+const SHIPPED_BUILD_ARTIFACTS = [
+    'backend/dist',                              // compiled backend — the whole point of a compiled release
+    'frontend/.next',                            // Next build output
+    'frontend/src/lib/pluginRegistry.ts',        // generated at prebuild from the installed plugins
+    'frontend/src/lib/versoPluginRegistry.ts',
+    'frontend/src/lib/adminPluginRegistry.ts',
+];
+
+let trackedFiles = null;      // Set<string> of repo-relative paths, or null when git is unavailable
+let trackedWarned = false;
+
+function loadTrackedFiles() {
+    if (trackedFiles !== null) return trackedFiles;
+    try {
+        const out = require('child_process').execSync('git ls-files -z', {
+            cwd: ROOT_DIR, encoding: 'buffer', maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'],
+        });
+        const list = out.toString('utf8').split('\0').filter(Boolean);
+        if (!list.length) throw new Error('git ls-files returned nothing');
+        trackedFiles = new Set(list);
+        console.log(`   🔒 git knows ${trackedFiles.size} files — anything else is local and will NOT ship`);
+    } catch (e) {
+        trackedFiles = false;
+        console.log(`   ⚠️  git unavailable (${e.message}) — falling back to the name-based exclusion list ONLY.`);
+        console.log('      Review the archive before publishing: untracked local files may be included.');
+    }
+    return trackedFiles;
+}
+
+/** Is this path a build artifact we deliberately ship even though git ignores it? */
+function isShippedArtifact(relativePath) {
+    return SHIPPED_BUILD_ARTIFACTS.some(
+        (a) => relativePath === a || relativePath.startsWith(a + '/'),
+    );
+}
+
 function shouldIgnore(filePath) {
     const basename = path.basename(filePath);
 
@@ -255,6 +318,33 @@ function shouldIgnore(filePath) {
     // jwtSecret/gatewaySecret/dbPassword and would otherwise slip past the `*-config.json$` anchor. (DEPLOY-01)
     if (/(^|-)config\.json$/.test(lowerBase) || lowerBase.includes('wordjs-config') || lowerBase.includes('gateway-config')) return true;
 
+    // THE STRUCTURAL RULE, last so the explicit ones above still short-circuit: if git does not track
+    // it and it is not one of the build artifacts we deliberately ship, it is developer-local and does
+    // not belong in a published archive. Directories are kept only when they could still CONTAIN
+    // something shippable — pruning a whole tree here would drop `backend/dist` and `frontend/.next`.
+    const tracked = loadTrackedFiles();
+    // The ROOT itself has an empty relative path: no tracked file "starts with" it, so without this
+    // guard the rule below prunes the entire tree and produces an 865-byte archive. (Caught by
+    // rebuilding and looking at the artifact — which is why that check is part of the routine.)
+    if (tracked && relativePath && !isShippedArtifact(relativePath)) {
+        let isDir = false;
+        try { isDir = fs.statSync(filePath).isDirectory(); } catch { /* vanished mid-copy: treat as file */ }
+        if (isDir) {
+            const prefix = relativePath + '/';
+            const keeps = SHIPPED_BUILD_ARTIFACTS.some((a) => a === relativePath || a.startsWith(prefix));
+            if (!keeps) {
+                let hasTracked = false;
+                for (const f of tracked) { if (f.startsWith(prefix)) { hasTracked = true; break; } }
+                if (!hasTracked) {
+                    if (!trackedWarned) { trackedWarned = true; }
+                    return true;
+                }
+            }
+        } else if (!tracked.has(relativePath)) {
+            return true;
+        }
+    }
+
     return false;
 }
 
@@ -275,4 +365,10 @@ async function createZip(sourceDir, outPath) {
     }
 }
 
-run();
+// Packaging when INVOKED (npm run bundle-release); importable when REQUIRED, so the exclusion rules
+// can be tested without building a 97 MB artifact. `require.main === module` is the standard guard.
+if (require.main === module) {
+    run();
+} else {
+    module.exports = { shouldIgnore, IGNORE_PATTERNS, ROOT_DIR };
+}
