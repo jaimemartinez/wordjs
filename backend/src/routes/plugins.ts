@@ -19,7 +19,7 @@ const { isAdmin } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
 const { recordAudit } = require('../core/audit');
 const { execFile } = require('child_process');
-const { resolveWithin, isWithin } = require('../core/safe-path');
+const { resolveWithin } = require('../core/safe-path');
 
 /**
  * @swagger
@@ -33,14 +33,17 @@ const { resolveWithin, isWithin } = require('../core/safe-path');
  *
  * It used to be the string 'os-tmp/' here and `path.resolve(PLUGINS_DIR, '..', 'os-tmp')` further down —
  * the same directory only as long as process.cwd() happened to be the backend root. Resolving it once,
- * from PLUGINS_DIR, makes that an invariant instead of a coincidence, and gives assertZipInOsTmp() below
- * a fixed base to prove containment against. (io-guard already treats ROOT_DIR/os-tmp as scratch.)
+ * from PLUGINS_DIR, makes that an invariant instead of a coincidence, and gives the containment guard
+ * inside installPluginFromZip() a fixed base to prove against. (io-guard already treats ROOT_DIR/os-tmp
+ * as scratch.)
  */
 const OS_TMP_DIR = path.resolve(PLUGINS_DIR, '..', 'os-tmp');
 
 // Configure multer for zip uploads
 const upload = multer({
-    dest: OS_TMP_DIR, // absolute: the confinement base assertZipInOsTmp() checks against
+    // Absoluto a proposito: es la base de contencion que installPluginFromZip() comprueba inline.
+    // Sigue siendo almacenamiento EN DISCO — memoryStorage cargaria en RAM plugins enteros.
+    dest: OS_TMP_DIR,
     limits: {
         fileSize: 10 * 1024 * 1024, // 10MB limit
         // SECURITY: Prevent CVE-2025-47935/47944 DoS
@@ -65,7 +68,7 @@ function regenerateRegistry() {
     // In production the frontend ships as a pre-built .next bundle, so the registries are baked in at
     // build time — regenerating the source .ts at runtime can't help (and frontend/scripts may not
     // ship). Only useful in dev, where rewriting the registry sources triggers Next HMR so a newly
-    // activated plugin's admin page / Puck blocks appear WITHOUT the old manual "regenerate + restart".
+    // activated plugin's admin page / editor blocks appear WITHOUT the old manual "regenerate + restart".
     // (The path was '../../../admin-next/scripts' — a directory that does not exist — so this silently
     // no-op'd on every activate/deactivate. The real generators live in frontend/scripts/.)
     if (process.env.NODE_ENV === 'production') return;
@@ -73,7 +76,7 @@ function regenerateRegistry() {
     const scripts = [
         'generate-plugin-registry.js',         // Frontend components
         'generate-admin-plugin-registry.js',   // Admin pages
-        'generate-puck-plugin-registry.js'     // Puck components
+        'generate-verso-plugin-registry.js'    // Verso block components
     ];
 
     // Resolve the authoritative active list IN-PROCESS and hand it to the generators via env.
@@ -165,25 +168,14 @@ function pluginFile(slug: unknown, ...rest: string[]): string | null {
 }
 
 /**
- * A zip handed to the install pipeline must live in OS_TMP_DIR — proven, not assumed.
+ * La respuesta a un paquete de instalacion que no esta dentro de nuestro directorio de trabajo.
  *
- * installPluginFromZip unlinks its `zipPath` on a dozen different failure paths and reads it as an
- * archive; it is a path chosen by the CALLER (multer's temp file, the marketplace download), which is
- * precisely the shape CodeQL flags as path-injection: the function has no idea what it is deleting. Now
- * it does. Both callers write into OS_TMP_DIR, so containment is a real invariant and not a formality.
- *
- * Returns the resolved path, or throws a 400 — fail closed. Never a "sanitized" fallback: a path we
- * cannot place inside our own scratch dir must not be offered as a deletion target.
+ * Es una FUNCION, no una constante compartida: cada rechazo devuelve su propio objeto, para que un
+ * llamante que decore `body` no contamine el siguiente rechazo. La prueba de contencion en si NO vive
+ * aqui — vive escrita dentro de installPluginFromZip, junto al sumidero (ver el comentario alli).
  */
-function assertZipInOsTmp(zipPath: unknown): string {
-    if (typeof zipPath === 'string' && !zipPath.includes('\0')) {
-        const resolved = path.resolve(zipPath);
-        // Containment on the value RETURNED (and used), against `base + path.sep` — never a bare prefix.
-        if (isWithin(OS_TMP_DIR, resolved) && resolved !== path.resolve(OS_TMP_DIR)) return resolved;
-    }
-    const e: any = new Error('Install package is not inside the plugin scratch directory');
-    e.status = 400;
-    throw e;
+function refuseUncontainedZip(): { ok: boolean; status: number; body: any } {
+    return { ok: false, status: 400, body: { error: 'Install package is not inside the plugin scratch directory' } };
 }
 
 /**
@@ -294,11 +286,32 @@ router.post('/upload', authenticate, isAdmin, upload.single('plugin'), asyncHand
  *   name would let a zip for one plugin overwrite another.
  */
 async function installPluginFromZip(zipPathIn: string, originalName: string, expectedSlug?: string): Promise<{ ok: boolean; status: number; body: any }> {
-    // CONTAINMENT FIRST — before the archive is opened and long before anything is unlinked. Every fs op
-    // below uses `zipPath` (the proven value returned here), never the caller's string.
-    let zipPath: string;
-    try { zipPath = assertZipInOsTmp(zipPathIn); }
-    catch (e: any) { return { ok: false, status: e.status || 400, body: { error: e.message } }; }
+    // CONTENCION PRIMERO — INLINE, Y AQUI SE QUEDA.
+    //
+    // POR QUE AQUI Y NO EN UN HELPER (no lo refactorices a una utilidad). Esta funcion borra su zip
+    // con fs.unlinkSync en trece caminos de fallo y ademas lo abre como archivo, y la ruta se la elige
+    // el LLAMANTE: el fichero temporal de multer en POST /plugins/upload, la descarga del marketplace,
+    // el zip de la actualizacion. Antes esto delegaba en un `assertZipInOsTmp(zipPathIn)` que hacia
+    // exactamente las mismas tres comprobaciones — y no servia, porque el analisis de rutas
+    // contaminadas razona DENTRO de una funcion: un barrier escrito en otra funcion no apaga el
+    // sumidero de esta, aunque devuelva el valor ya probado. De ahi que la alerta js/path-injection
+    // siguiera senalando el unlink de discardZip(). Sacar esto a un helper la vuelve a encender.
+    //
+    // Las tres partes de la defensa, sobre el valor QUE SE USA despues (nunca sobre el argumento):
+    //   1. FORMA: cadena no vacia y sin NUL (un NUL trunca la ruta que ve la capa C);
+    //   2. RESOLUCION CANONICA: path.resolve() da la ruta absoluta y normalizada que recibira el
+    //      syscall, no el texto que paso el llamante;
+    //   3. CONTENCION PROBADA contra `base + path.sep` — nunca un prefijo pelado, que aceptaria un
+    //      hermano llamado `os-tmp-evil`, y exigiendo un HIJO, nunca el propio directorio base.
+    // Falla cerrado: una ruta que no podemos situar dentro de nuestro scratch no se ofrece como
+    // objetivo de borrado; se devuelve 400 y no se toca el disco.
+    if (typeof zipPathIn !== 'string' || zipPathIn.length === 0 || zipPathIn.includes('\0')) {
+        return refuseUncontainedZip();
+    }
+    const zipPath = path.resolve(zipPathIn);
+    if (!zipPath.startsWith(OS_TMP_DIR + path.sep)) {
+        return refuseUncontainedZip();
+    }
     // ONE deletion helper, so no failure path can grow a raw unlink again.
     const discardZip = () => { try { fs.unlinkSync(zipPath); } catch { /* already gone */ } };
     try {
@@ -1675,7 +1688,6 @@ module.exports.isValidSlug = isValidSlug;
 module.exports.resolveSafePluginDir = resolveSafePluginDir;
 module.exports.safeSlugParam = safeSlugParam;
 module.exports.pluginFile = pluginFile;
-module.exports.assertZipInOsTmp = assertZipInOsTmp;
 module.exports.createInstallTmp = createInstallTmp;
 module.exports.OS_TMP_DIR = OS_TMP_DIR;
 // The shared zip-install pipeline — consumed by routes/marketplace.ts so marketplace installs

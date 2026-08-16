@@ -42,9 +42,23 @@ const { resolveThemeDir, resolveWithin } = require('../core/safe-path');
  *   description: Theme management (Install, Switch, Delete)
  */
 
+/**
+ * El UNICO directorio donde puede vivir el zip de una subida, absoluto y resuelto UNA vez al cargar.
+ *
+ * Antes era la cadena 'os-tmp/' dentro del `dest` de multer: relativa al cwd y reinterpretada en cada
+ * peticion, asi que "nuestro directorio de trabajo" coincidia con el que cuelga de THEMES_DIR solo
+ * mientras nadie llamase a process.chdir(). Resolverlo desde THEMES_DIR lo convierte en un invariante
+ * en lugar de una coincidencia, y le da al guard de contencion del handler de /upload una base fija
+ * contra la que probar. (io-guard ya trata ROOT_DIR/os-tmp como scratch.) Misma constante y mismo
+ * razonamiento que en routes/plugins.ts.
+ */
+const OS_TMP_DIR = path.resolve(THEMES_DIR, '..', 'os-tmp');
+
 // Configure multer for zip uploads
 const upload = multer({
-    dest: 'os-tmp/',
+    // Absoluto a proposito: es la base de contencion que comprueba el handler de /upload.
+    // Sigue siendo almacenamiento EN DISCO — memoryStorage cargaria en RAM temas enteros.
+    dest: OS_TMP_DIR,
     limits: {
         fileSize: 20 * 1024 * 1024, // 20MB limit
         // SECURITY: Prevent CVE-2025-47935/47944 DoS
@@ -162,7 +176,33 @@ router.post('/upload', authenticate, isAdmin, upload.single('theme'), asyncHandl
         return res.status(400).json({ error: 'No file uploaded' });
     }
 
-    const zipPath = req.file.path;
+    // CONTENCION DEL FICHERO TEMPORAL — INLINE, Y AQUI SE QUEDA.
+    //
+    // POR QUE AQUI Y NO EN UN HELPER (no lo refactorices a una utilidad). `req.file.path` lo escribe
+    // multer, o sea que es un valor derivado de la peticion; mas abajo se abre como archivo y se
+    // BORRA con fs.unlinkSync en siete salidas distintas mas la del catch. El analisis de rutas
+    // contaminadas razona DENTRO de una funcion: un barrier que vive en otro modulo — o en otra
+    // funcion de este — no apaga el sumidero en el llamante, por buena que sea la prueba. Esa es
+    // exactamente la razon de que las ocho alertas js/path-injection colgadas de `zipPath` en este
+    // fichero siguieran encendidas teniendo core/safe-path delante. Mover esto a un helper las reabre
+    // las ocho de golpe.
+    //
+    // Las tres partes de la defensa, aplicadas sobre el valor QUE SE USA despues:
+    //   1. FORMA: cadena no vacia y sin NUL (un NUL trunca la ruta que acaba viendo la capa C, y asi
+    //      es como una comprobacion y un syscall dejan de hablar de la misma ruta);
+    //   2. RESOLUCION CANONICA: path.resolve() da la ruta absoluta y normalizada que recibira el
+    //      syscall, no el texto que llego;
+    //   3. CONTENCION PROBADA contra `base + path.sep`, nunca un prefijo pelado — `os-tmp-evil`
+    //      "empieza por" os-tmp.
+    // Falla cerrado: lo que no esta contenido no se borra, se responde 400 y se sale.
+    const uploadedPath = req.file.path;
+    if (typeof uploadedPath !== 'string' || uploadedPath.length === 0 || uploadedPath.includes('\0')) {
+        return res.status(400).json({ error: 'Upload rejected: the temporary file has no usable path' });
+    }
+    const zipPath = path.resolve(uploadedPath);
+    if (!zipPath.startsWith(OS_TMP_DIR + path.sep)) {
+        return res.status(400).json({ error: 'Upload rejected: the temporary file is not inside the theme scratch directory' });
+    }
 
     try {
         const zip = new AdmZip(zipPath);
@@ -777,3 +817,7 @@ router.post('/mods/import', authenticate, isAdmin, asyncHandler(async (req: any,
 }));
 
 module.exports = router;
+// Expuesto SOLO para los tests: la base de contencion que el handler de /upload comprueba inline y a
+// la que multer escribe. No lo uses como "utilidad de rutas" — la comprobacion tiene que seguir
+// estando escrita dentro del handler (ver el comentario largo en POST /upload).
+module.exports.OS_TMP_DIR = OS_TMP_DIR;
