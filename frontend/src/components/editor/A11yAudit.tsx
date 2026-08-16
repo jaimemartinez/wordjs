@@ -1,20 +1,20 @@
 "use client";
 
 /**
- * Accessibility audit for the Puck canvas (Webflow-audit parity), dependency-free.
+ * Accessibility audit del lienzo del editor (Webflow-audit parity), dependency-free.
  *
  * `runA11yAudit(doc)` walks the CANVAS document (pass `iframe.contentDocument`) and returns a
  * flat issue list; each issue is mapped back to its block by climbing to the closest
- * `data-puck-component` ancestor (the attribute the fork's DraggableComponent stamps on every
- * block root inside the iframe). `A11yPanel` renders the list in the editor chrome (M3 --ed-*
- * tokens) and reports clicks so the integrator can select the offending block via
- * `window.puckDispatch({ type: "setUi", ui: { itemSelector } })`.
+ * `data-wjs-block-id` ancestor (el atributo que VersoBlock estampa en la raíz de cada bloque dentro
+ * del iframe). `A11yPanel` renders the list in the editor chrome (M3 --ed-* tokens) y reporta los
+ * clics para que el integrador seleccione el bloque infractor.
  *
  * SSR-safe: no `window`/`document` at module scope; the audit only touches the doc it is given.
  */
 
 import React from "react";
 import MSym from "./MSym";
+import { BLOCK_ATTR, SCAFFOLD_ATTR } from "./canvasGuides";
 import { useI18n } from "@/contexts/I18nContext";
 import { trStr } from "@/lib/puckI18n";
 
@@ -30,37 +30,30 @@ export type A11yIssue = {
 // Audit
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Editor-owned elements inside the canvas doc (guides/overlays) — never audited. */
-const EDITOR_OVERLAY_SELECTOR =
-    // NOT [data-puck-dnd] as an ANCESTOR match: every block ROOT carries it (dnd-kit handle), so a
-    // closest() on it silently limited the whole audit to theme chrome. The root itself IS editor
-    // scaffolding though (role="button" + aria from dnd-kit → phantom "unnamed button" findings),
-    // so isEditorEl also skips the element when IT carries the attribute — content stays audited.
-    "#wjs-spacing-overlay, #wjs-guides, [data-puck-overlay], [data-puck-overlay-portal]";
+/**
+ * Editor-owned elements inside the canvas doc (guides/overlays) — never audited.
+ *
+ * Solo los dos artefactos de guías: en este motor la capa de selección/arrastre vive en el
+ * documento PADRE, no dentro del iframe, así que no hay más andamio que saltar aquí. (El fork
+ * viejo sí metía su overlay en el iframe y este selector listaba además sus `[data-puck-overlay*]`;
+ * borrado el fork, nadie los estampa y emparejarlos era una comprobación muerta.)
+ *
+ * El elemento marcado con SCAFFOLD_ATTR se salta ÉL, no su subárbol — su contenido sigue
+ * auditándose. Emparejar el andamio como ANCESTRO limitaba la auditoría entera al chrome del tema:
+ * defecto real y caro de diagnosticar, de ahí la separación en isEditorEl.
+ */
+const EDITOR_OVERLAY_SELECTOR = "#wjs-spacing-overlay, #wjs-guides";
 
-function isEditorEl(el: Element, scaffoldAttr: string): boolean {
+function isEditorEl(el: Element): boolean {
     try {
-        return el.hasAttribute(scaffoldAttr) || !!el.closest(EDITOR_OVERLAY_SELECTOR);
+        return el.hasAttribute(SCAFFOLD_ATTR) || !!el.closest(EDITOR_OVERLAY_SELECTOR);
     } catch {
         return false;
     }
 }
 
-function blockIdOf(el: Element, blockAttr: string): string | undefined {
-    return el.closest(`[${blockAttr}]`)?.getAttribute(blockAttr) || undefined;
-}
-
-/**
- * Engine-specific attribute names, so the SAME seven rules audit any canvas. Defaults are the
- * legacy Puck fork's attributes (unchanged behaviour for every existing caller); the Verso editor
- * passes its own (`data-wjs-block-id`, see components/verso/editor/a11y.ts) instead of forking
- * this module — one source of truth for the audit.
- */
-export interface A11yAuditOptions {
-    /** Attribute stamped on every block ROOT — how an issue maps back to its block. */
-    blockAttr?: string;
-    /** Attribute marking an element as editor scaffolding (skipped, but its CONTENT stays audited). */
-    scaffoldAttr?: string;
+function blockIdOf(el: Element): string | undefined {
+    return el.closest(`[${BLOCK_ATTR}]`)?.getAttribute(BLOCK_ATTR) || undefined;
 }
 
 /** Compact, single-line description of the element (opening tag + a slice of its text). */
@@ -190,16 +183,14 @@ function hasDirectText(el: Element): boolean {
 const CONTRAST_SKIP_TAGS = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE", "TITLE", "META", "LINK"]);
 
 /** Run every rule over the canvas document. Returns [] for a missing/empty doc. */
-export function runA11yAudit(doc: Document, opts?: A11yAuditOptions): A11yIssue[] {
-    const blockAttr = opts?.blockAttr ?? "data-puck-component";
-    const scaffoldAttr = opts?.scaffoldAttr ?? "data-puck-dnd";
-    const isEditor = (el: Element): boolean => isEditorEl(el, scaffoldAttr);
+export function runA11yAudit(doc: Document): A11yIssue[] {
+    const isEditor = isEditorEl;
     const issues: A11yIssue[] = [];
     if (!doc || !doc.body) return issues;
     const win = doc.defaultView;
 
     const push = (severity: A11yIssue["severity"], rule: string, message: string, el: Element): void => {
-        issues.push({ severity, rule, message, blockId: blockIdOf(el, blockAttr), snippet: snippetOf(el) });
+        issues.push({ severity, rule, message, blockId: blockIdOf(el), snippet: snippetOf(el) });
     };
 
     // 1) Images without alt (alt="" = decorative → ok).

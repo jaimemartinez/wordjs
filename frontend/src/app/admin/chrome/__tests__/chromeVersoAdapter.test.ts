@@ -13,7 +13,7 @@
  * saveChromeComposition (el seam del PUT) con el endpoint espiado.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { Data } from "@wordjs/puck";
+import type { VersoData as Data } from "@/lib/verso/types";
 import { chromeApi, type ChromePart } from "@/lib/api";
 import { parseChromeData, STARTER_TEMPLATES, type ChromeData } from "@/lib/chromeData";
 import { ALIGN_CLASS, GAP_CLASS } from "@/components/chrome/ChromeRow";

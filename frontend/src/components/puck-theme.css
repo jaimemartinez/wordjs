@@ -1,9 +1,9 @@
-/* WordJS — Puck chrome theming.
+/* WordJS — tema del chrome del editor.
  *
- * Overrides Puck CSS custom properties (its stable theming API) so the built-in palette,
- * outline tree and field renderer match the WordJS editor design instead of clashing with the
- * hand-built shell. Imported AFTER "@wordjs/puck/puck.css" in PuckEditor.tsx so it wins the
- * cascade. Only loaded on editor routes. NOTHING in the vendored Puck package is patched.
+ * Fuente ÚNICA de los tokens --ed-* del editor (paleta, árbol de esquema, renderizador de campos).
+ * La importa VersoEditor.tsx; solo se carga en las rutas del editor. Su nombre y el de las clases
+ * `puck-container`/`puck-editor-ui` son deuda de nombrado heredada del editor anterior, cuyo
+ * renombrado es un pase propio (retirement-plan Fase 8) porque toca también el camino público.
  *
  * The ramps below are DERIVED, not picked: generated from the Stitch design's own Material-3
  * colour roles, with the steps it does not state interpolated between the ones it does, in OKLCH,

@@ -7,9 +7,8 @@
 // from puckConfig.tsx on purpose: the page editor knows nothing about chrome and vice versa, and
 // the PUBLIC bundle never imports this file (it lives under app/admin).
 import { useEffect, useState } from "react";
-import type { Config } from "@wordjs/puck";
 import { menusApi, settingsApi, type ChromePart } from "@/lib/api";
-// Same i18n access the page editor's config factory uses (components/puckConfig.tsx): a Puck config
+// Same i18n access the page editor's config factory uses (components/puckConfig.tsx): the config
 // is built outside the React tree, so it reads the stored language directly instead of useI18n().
 import { t as translate, getStoredLanguage } from "@/lib/i18n";
 import { buildChromeBindings, parseChromeSocials, type ChromeBindings } from "@/lib/chromeData";
@@ -107,11 +106,21 @@ function SocialsEdit() {
     return <ChromeSocials links={links} />;
 }
 
+/**
+ * Forma del config de chrome — la declaraba el `Config` del fork; ahora es propia. Deliberadamente
+ * laxa en el interior de cada entrada: el único consumidor (chromeVersoAdapter) la re-tipa contra su
+ * `LegacyChromeConfigShape` y el test anti-drift compara fields/render POR REFERENCIA.
+ */
+export interface ChromeEditorConfig {
+    components: Record<string, any>;
+    root?: any;
+}
+
 // Config factory, one per part. The root canvas mirrors the EXACT wrapper the public layout puts
 // around a composed part ((public)/layout.tsx headerSlot/footerSlot) so what you compose is what
-// ships. The caller MUST memoize the result per part — an unmemoized Puck config remounts the
-// canvas on every keystroke (Puck appearance lesson).
-export function buildChromeEditorConfig(part: ChromePart): Config {
+// ships. The caller MUST memoize the result per part — un config no memoizado remonta el lienzo en
+// cada pulsación.
+export function buildChromeEditorConfig(part: ChromePart): ChromeEditorConfig {
     const lang = getStoredLanguage();
     const config = {
         components: {
@@ -295,7 +304,7 @@ export function buildChromeEditorConfig(part: ChromePart): Config {
                     </footer>
                 ),
         },
-    } as Config;
+    } as ChromeEditorConfig;
     // The announcement bar bars ChromeNav (chrome-validate's 'announcement' position — the header
     // already owns the one mobile drawer), so it is not offered in the drawer for that part.
     if (part === "announcement") delete (config.components as Record<string, unknown>).ChromeNav;

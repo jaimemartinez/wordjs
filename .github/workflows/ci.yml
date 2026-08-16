@@ -203,12 +203,6 @@ jobs:
       - name: Install dependencies
         working-directory: frontend
         run: npm ci || npm install
-      - name: Build vendored editor (@wordjs/puck)
-        # The editor is a vendored Puck fork (packages/puck) built from source by tsup; its dist/ is
-        # gitignored, so it must be built before type-check/lint/test/build can resolve `@wordjs/puck`.
-        # predev/prebuild build it locally too, but CI runs these steps individually — hence its own step.
-        working-directory: frontend
-        run: npm run build:editor
       - name: Audit (block high/critical prod vulns)
         working-directory: frontend
         run: npm audit --omit=dev --audit-level=high

@@ -5,7 +5,8 @@
 // comparten UNA implementación y los tests de wiring ejercitan el productor REAL, no una copia.
 // `saveChromeComposition` es el seam espiable del PUT — misma llamada 1:1 que hacía page.tsx.
 
-import type { Data } from "@wordjs/puck";
+// La forma persistida `{ content, root }` — el mismo tipo que exponía el fork, ahora propio.
+import type { VersoData as Data } from "@/lib/verso/types";
 import { chromeApi, type ChromePart } from "@/lib/api";
 import type { ChromeBlock, ChromeData } from "@/lib/chromeData";
 
@@ -26,8 +27,8 @@ export function withBlockIds(data: ChromeData): ChromeData {
     return { root: { props: { ...(data.root?.props || {}) } }, content: (data.content || []).map(stamp) };
 }
 
-// The stored contract form is EXACTLY { root, content } — Puck's Data may carry extras (e.g. a
-// legacy `zones` key); never persist anything beyond the contract shape.
+// The stored contract form is EXACTLY { root, content } — el documento del editor puede llevar
+// extras (p.ej. una clave `zones` legacy); never persist anything beyond the contract shape.
 export function toContractData(data: Data): ChromeData {
     const d = data as unknown as { root?: { props?: Record<string, unknown> }; content?: ChromeBlock[] };
     return { root: { props: d.root?.props ?? {} }, content: d.content ?? [] };

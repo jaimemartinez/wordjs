@@ -97,7 +97,7 @@ replicando el orden de escritura de `routes/posts.ts` (PUT `/posts/:id`, ~L460-4
 **R2** → 4. `restoreRevision(R1)` → 5. el `_puck_data` debe volver **byte-igual a R1** y ningún meta
 presente en R1 puede desaparecer ni cambiar.
 
-Resultado (2026-08-15, 12 documentos):
+Resultado (2026-08-15, 12 documentos, **tras arreglar H3**):
 
 ```
 restaurado_byte_igual_a_R1                        : 12/12   ← el contrato del ciclo
@@ -106,7 +106,9 @@ restaurado_distinto_del_original_en_BD_(saneador) : 3
 legacy_save_MUTA_bytes                            : 3
 saneador_idempotente_desde_2a_pasada              : 12/12
 meta_PERDIDO_en_restore                           : 0
-colision_post_name_revisiones                     : 1   ← FALLO (bug preexistente, ver abajo)
+ms_por_saveRevision_medido                        : 4.50
+sonda_colision_sin_incidencia                     : 1     ← antes: colision_post_name_revisiones 1 (FALLO)
+VEREDICTO: OK
 ```
 
 ## Drill 3 — WXR round-trip (`drill3-wxr-roundtrip.cjs`)
@@ -121,13 +123,18 @@ que una ejecución no puede hablar con dos bases):
   lo que el importador sí sabe leer), con los 25 documentos más grandes del corpus, importado en otra
   BD limpia. Compara byte a byte y verifica la supervivencia de **cada tipo de bloque**.
 
-Resultado (2026-08-15):
+Resultado (2026-08-15, **tras arreglar H1 y H2**):
 
 ```
-PATA A  export_bytes 874 · items 0 · wp:postmeta 0 · _puck_data recuperados 0   ← FALLO x2
+PATA A  export_bytes 116.807 · items 31 · wp:postmeta 35 · _puck_data recuperados 21
+        exportSite posts 10 · pages 21 (de 17 post + 38 page en la BD: el resto es papelera —
+        7 posts y 17 páginas — que `status:'any'` excluye a propósito)
+        post_type emitidos: <wp:post_type>post</wp:post_type> y <wp:post_type>page</wp:post_type>
+        ANTES: export_bytes 874 · items 0 · wp:postmeta 0 · _puck_data recuperados 0   ← FALLO x2
 PATA B  docs 25 · tipos de bloque distintos 30 · reimportados 25/25
         byte_igual_tras_saneador_de_import 25/25 · perdidas_de_bloques 0
         byte_igual_al_original 22/25 (los 3 restantes, por el saneador de escritura del drill 2)
+VEREDICTO: OK
 ```
 
 ## Drill 4 — Fuzz de carga real contra el guard inline (`drill4-inline-guard-load.cjs`)
@@ -161,12 +168,18 @@ VEREDICTO: OK
 
 ---
 
-## Hallazgos abiertos (por qué 2 de los 4 salen en rojo)
+## Hallazgos (los cuatro drills salen ya en VERDE)
 
-Ninguno es una regresión de Verso: los tres son del backend y afectan igual al editor legacy. Los
-drills los dejan en rojo a propósito para que no se olviden.
+Ninguno era una regresión de Verso: los tres son del backend y afectaban igual al editor legacy. Se
+descubrieron con los drills en rojo y están **ARREGLADOS + con test de regresión** (2026-08-15):
 
-### H1 — El export de sitio sale VACÍO (`status: 'any'` no existe) · drill 3
+| Hallazgo | Arreglo | Test de regresión |
+|---|---|---|
+| H1 | `models/Post.ts#buildWhere` resuelve el pseudo-estado `any` (todo menos `trash`/`auto-draft`) | `backend/src/tests/export-fidelity.test.ts` |
+| H2 | `core/import-export.ts#exportToWXR` emite todos los tipos con su `post_type` real + `wp:postmeta` | `backend/src/tests/export-fidelity.test.ts` |
+| H3 | `core/revisions.ts` nombra la revisión de forma única y `restoreRevision` no revienta si falla la foto previa | `backend/src/tests/revisions-name-collision.test.ts` |
+
+### H1 — El export de sitio salía VACÍO (`status: 'any'` no existe) · drill 3
 
 `core/import-export.ts#exportSite` consulta `Post.findAll({ type, status: 'any' })`, y
 `Post.buildWhere` (`models/Post.ts:507`) traduce eso a `post_status = 'any'` — una cadena literal que
@@ -175,12 +188,28 @@ con 17 entradas y 38 páginas en la BD (el mismo `findAll` con `status:'publish'
 WXR resultante ocupa **874 bytes y contiene 0 `<item>`**. Afecta a `GET /api/v1/export/wxr` y a la
 exportación JSON del sitio.
 
-### H2 — `exportToWXR()` no emite `wp:postmeta` ni páginas · drill 3
+**ARREGLADO** en el ÚNICO constructor compartido (`buildWhere`, que usan `findAll` y `count`, así que
+no pueden divergir): `any` = todos los estados MENOS `trash` y `auto-draft` (semántica de WordPress:
+los estados `exclude_from_search`). Un llamador que quiera literalmente todo lo pide explícito —
+`includeStatuses: [...]` o `status: null` (sin filtro). La ruta pública `GET /posts?status=any` no
+cambia: ya traducía `any` a `includeStatuses` + filtro de autor ANTES de llegar al modelo (y para
+anónimos lo degrada a `publish`), y ambas rutas de export son `authenticate + isAdmin`.
+
+### H2 — `exportToWXR()` no emitía `wp:postmeta` ni páginas · drill 3
 
 Aunque se arregle H1, `exportToWXR` (`core/import-export.ts:577`) recorre solo `data.content.posts`,
 fuerza `<wp:post_type>post</wp:post_type>` y **no emite un solo `<wp:postmeta>`**: el `_puck_data` de
 todo el sitio no viaja. El importador sí sabe leerlo (pata B: 25/25 documentos y 30 tipos de bloque
 reimportados sin pérdida), así que el arreglo es del lado del exportador.
+
+**ARREGLADO**: el exportador recorre TODAS las colecciones de `exportSite()` (posts **y** páginas, y
+lo que se añada mañana) con su `post_type` real, y emite un `<wp:postmeta>` por meta. El valor se lee
+**en crudo** (`Post.getAllMetaRawForIds`, nueva) en vez de por `getAllMeta()`, que hace `JSON.parse` y
+por tanto pierde bytes al re-serializar. Se excluyen las metas volátiles del editor `_edit_lock` /
+`_edit_last` — exactamente el `SKIP_META` que el importador ya descarta al leer. Extras del mismo
+arreglo: el `]]>` literal dentro de un payload ya no rompe la sección CDATA (se parte en dos, como
+WordPress) y `escapeXml` deja de convertir un `0` legítimo (`wp:post_parent`, `wp:menu_order`) en
+elemento vacío.
 
 ### H3 — Colisión de `post_name` entre revisiones del mismo milisegundo · drill 2
 
@@ -195,7 +224,14 @@ reimportados sin pérdida), así que el arreglo es del lado del exportador.
 
 El drill lo reproduce de dos formas: natural (durante el desarrollo de este drill saltó dos veces
 seguidas de forma espontánea, abortando la ejecución) y **determinista**, congelando `Date.now()`.
-`saveRevision` mide ~5 ms en esta máquina, así que la ventana natural es estrecha pero real.
+`saveRevision` mide ~5 ms en esta máquina (4,50 ms en la última pasada), así que la ventana natural es
+estrecha pero real.
+
+**ARREGLADO** por los dos lados: la CAUSA — el nombre es único por construcción
+(`${postId}-revision-v${Date.now()}-${contador}-${8 hex aleatorios}`, así que dos PROCESOS tampoco
+chocan) con reintento hasta 5 veces si aun así saltara el índice, en vez de perder la foto; y el
+SÍNTOMA — `restoreRevision` envuelve la foto previa en su propio `try`: perder el punto de
+recuperación es malo, perder ADEMÁS la restauración es peor.
 
 ### H4 — Notas de medición, sin acción obligatoria
 

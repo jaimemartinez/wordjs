@@ -22,9 +22,9 @@
  * output width/height per size). Variants live in the same directory as the
  * original, so: variantUrl = dirname(sourceUrl) + '/' + sizes[name].file.
  *
- * The Image block only persists a `src` string, and a Puck custom field's
- * onChange can only set its own prop (verified in
- * packages/puck/components/Puck/components/Fields/index.tsx createOnChange).
+ * The Image block only persists a `src` string, and a custom field's onChange
+ * can only set its own prop (contract inherited from the previous editor, whose
+ * createOnChange was verified to behave this way; Verso keeps it).
  * However, that same dispatch runs the component's `resolveData` (trigger
  * "replace") immediately after. So the flow is:
  *   1. MediaPicker onSelect registers the full MediaItem here (rememberPickedMedia)

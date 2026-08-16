@@ -1,8 +1,8 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
-import { Render } from "@wordjs/puck";
-import { symbolsApi, SYMBOL_BLOCK_TYPE, type SymbolSummary } from "@/lib/symbols";
+import { useEffect, useState } from "react";
+import { symbolsApi, type SymbolSummary } from "@/lib/symbols";
+import VersoSymbolRender from "@/components/verso/blocks/VersoSymbolBlock";
 
 /**
  * Symbol block — a reusable, SYNCED group of blocks (Figma/Webflow "components"): pages store a
@@ -15,22 +15,13 @@ import { symbolsApi, SYMBOL_BLOCK_TYPE, type SymbolSummary } from "@/lib/symbols
  *  - EDITOR canvas: no server pass — the render fetches through symbolsApi (30s cache, shared
  *    across instances) and shows honest picking/loading/deleted/empty states.
  *
- * The nested tree renders through Puck's own <Render> with a config built from the LIVE component
- * map minus Symbol itself, so a symbol referencing a symbol cannot recurse (depth capped at 1 by
- * construction). The map arrives via a GETTER with late binding: at module time puckConfig hasn't
- * been wrapped by withSharedBlockFields yet, but by first render it has — so symbol content gets
- * the full appearance/animation treatment. (Plugin runtime blocks merged after boot are not in
- * that map; a symbol built from one renders empty in that edge — core blocks always work.)
+ * UNA SOLA IMPLEMENTACIÓN DE SYMBOL (retirement-plan §11). Hasta la retirada del fork existían dos:
+ * ésta, que pintaba el subárbol con `<Render>` de @wordjs/puck y un config anidado derivado del mapa
+ * VIVO de componentes menos Symbol; y VersoSymbolBlock, que lo pinta con `RenderSubtree` — el MISMO
+ * switch compartido de ContentRenderer que usa el sitio público — excluyendo "Symbol" del subárbol
+ * (idéntico cap de profundidad 1, por construcción). Borrado el fork, este módulo conserva solo la
+ * PARTE DE CAMPOS del bloque (el selector de símbolo) y delega el render en aquélla.
  */
-
-const noticeStyle: React.CSSProperties = {
-    border: "1px dashed rgba(119, 117, 132, 0.5)",
-    borderRadius: 8,
-    padding: "14px 16px",
-    fontSize: 13,
-    color: "#464553",
-    background: "rgba(240, 236, 246, 0.5)",
-};
 
 export const symbolBlockDefaults = { symbolId: 0 };
 
@@ -76,50 +67,16 @@ export const symbolBlockFields = {
 };
 
 /**
- * Build the block's render bound to the live component map. `getComponents` is called at RENDER
- * time (late binding — see the header) and the derived nested config is cached per component-map
- * identity, shared by every Symbol instance on the page.
+ * Render del bloque — delega en la única implementación (VersoSymbolBlock). El objeto `puck` del
+ * contrato legacy se traduce a la prop `isEditing` que ésta espera; el resto de estados (elegir /
+ * cargando / eliminado / vacío, y "nada" fuera de edición) son los mismos, porque son los suyos.
  */
-export function makeSymbolRender(getComponents: () => Record<string, any>) {
-    let cachedFor: Record<string, any> | null = null;
-    let cachedConfig: any = null;
-    const nestedConfig = () => {
-        const comps = getComponents();
-        if (comps !== cachedFor) {
-            const { [SYMBOL_BLOCK_TYPE]: _omit, ...rest } = comps;
-            cachedFor = comps;
-            cachedConfig = {
-                components: rest,
-                root: { render: ({ children }: any) => <>{children}</> },
-            };
-        }
-        return cachedConfig;
-    };
-
-    return function SymbolRender({ symbolId, resolvedSymbolItems, puck }: any) {
-        const editing = !!puck?.isEditing;
-        const id = Number(symbolId) || 0;
-        const injected = Array.isArray(resolvedSymbolItems) ? resolvedSymbolItems : null;
-        const [fetched, setFetched] = useState<{ id: number; items: unknown[] | null } | null>(null);
-
-        useEffect(() => {
-            if (injected || !editing || !id) return;
-            let dead = false;
-            symbolsApi.get(id).then(
-                (sym) => { if (!dead) setFetched({ id, items: sym ? sym.items : null }); },
-                () => { /* network error — stay in the loading state */ }
-            );
-            return () => { dead = true; };
-        }, [id, editing, injected !== null]);
-
-        const items = injected ?? (fetched && fetched.id === id ? fetched.items : undefined);
-
-        // Editor-only notices; the public site renders nothing for a broken/empty reference.
-        if (!id) return editing ? <div style={noticeStyle}>Elige un símbolo en el panel de propiedades.</div> : null;
-        if (items === undefined) return editing ? <div style={noticeStyle}>Cargando símbolo…</div> : null;
-        if (items === null) return editing ? <div style={noticeStyle}>Este símbolo fue eliminado — elige otro.</div> : null;
-        if (!items.length) return editing ? <div style={noticeStyle}>El símbolo está vacío.</div> : null;
-
-        return <Render config={nestedConfig()} data={{ content: items, root: {} } as any} />;
-    };
+export function SymbolRender({ symbolId, resolvedSymbolItems, puck, isEditing }: any) {
+    return (
+        <VersoSymbolRender
+            symbolId={symbolId}
+            resolvedSymbolItems={resolvedSymbolItems}
+            isEditing={puck?.isEditing ?? isEditing}
+        />
+    );
 }
