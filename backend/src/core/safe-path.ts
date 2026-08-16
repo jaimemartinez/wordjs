@@ -137,14 +137,68 @@ function resolveThemeAsset(themeDir: string, subdir: string, name: unknown): str
     return resolveWithin(themeDir, subdir, `${name as string}.json`);
 }
 
+/**
+ * ONE DNS label, per RFC 1035 §2.3.1 / RFC 1123: 1–63 chars, alphanumeric at both ends, hyphens
+ * only inside. Deliberately anchored and BOUNDED ({0,61} between two single-character classes) so
+ * it cannot backtrack super-linearly — this project has already shipped ReDoS in a hostname-shaped
+ * regex, and the labels here arrive straight from an admin HTTP body.
+ */
+const CERT_LABEL = /^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$/;
+
+/**
+ * Is `v` a DNS name an ACME order could legitimately identify — and therefore a name this
+ * installation may keep a certificate backup under?
+ *
+ * The form is checked LABEL BY LABEL rather than with one composite pattern: a dotted name is a
+ * list, and validating it as a list is both linear and impossible to get subtly wrong. Everything
+ * that makes a path traversal is excluded as a CONSEQUENCE of the form, not by hunting for tokens —
+ * a label cannot be empty, so `..`, `.`, a leading `/`, `\`, `C:` or a NUL never survive it.
+ *
+ * A leading `*.` is accepted because a wildcard order is exactly what the DNS-01 flow exists for
+ * (the admin UI advertises it: "For firewalls / wildcards"). `*` is not a path vector — it carries
+ * no separator, no drive letter and no colon, and containment is still proved on the resolved value
+ * below. On Win32 the OS refuses to mkdir such a name, which is today's behaviour unchanged.
+ */
+function isCertHostname(v: unknown): boolean {
+    if (typeof v !== 'string') return false;
+    // 253 is the RFC 1035 presentation-format ceiling; the cap is applied BEFORE any splitting so
+    // the work done on a hostile string is bounded.
+    if (v.length === 0 || v.length > 253) return false;
+    const host = v.startsWith('*.') ? v.slice(2) : v;
+    if (host.length === 0) return false;
+    for (const label of host.split('.')) {
+        if (!CERT_LABEL.test(label)) return false;
+    }
+    return true;
+}
+
+/**
+ * `<liveDir>/<hostname>` — the directory a provisioned certificate's privkey.pem / fullchain.pem
+ * are written into. Null means "not a name a certificate could be issued for", and the callers turn
+ * that into a refusal, never into a write.
+ *
+ * WHY THIS FACADE EXISTS: POST /api/v1/certs/dns-finish hands `step1Data` back from the browser and
+ * cert-manager used `path.join(LIVE_DIR, step1Data.domain)` verbatim — a value that chooses a
+ * DIRECTORY, straight off the wire, followed by mkdir(recursive) and two writeFileSync. The private
+ * key lands there, so a name that picks the path is an arbitrary-write primitive with the operator's
+ * own key material as the payload.
+ */
+function resolveCertDir(liveDir: string, hostname: unknown): string | null {
+    if (!isCertHostname(hostname)) return null;
+    return resolveWithin(liveDir, hostname as string);
+}
+
 module.exports = {
     THEME_SLUG,
     THEME_ASSET_NAME,
+    CERT_LABEL,
     isThemeSlug,
     isThemeAssetName,
+    isCertHostname,
     isPlainSegment,
     resolveWithin,
     isWithin,
     resolveThemeDir,
     resolveThemeAsset,
+    resolveCertDir,
 };

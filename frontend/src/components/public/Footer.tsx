@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { settingsApi, menusApi } from "@/lib/api";
 import { sanitizeHTML } from "@/lib/sanitize";
+import { isSafeChromeHref } from "@/lib/chromeData";
 import PublicSidebar from "./PublicSidebar";
 import type { FooterColumns, FooterVariant } from "@/lib/themeLayout";
 
@@ -16,6 +17,10 @@ const GRID_COLS: Record<FooterColumns, string> = {
 };
 // The brand column spans 2 tracks only when the grid actually has ≥2 of them (span 2 inside a
 // 1-column grid would create an implicit second track and break columns:1).
+// One literal for both renderings of a social icon (linked and, when its URL is not safe to
+// navigate to, unlinked) so they stay visually identical.
+const SOCIAL_ICON_CLASS =
+    "w-10 h-10 rounded-full bg-[var(--wjs-bg-surface-hover,rgb(31,41,55))] flex items-center justify-center hover:bg-[var(--wjs-color-primary,blue)] text-[var(--wjs-color-text-footer-main,white)] transition-colors tooltip-trigger";
 const BRAND_SPAN: Record<FooterColumns, string> = {
     1: "col-span-1 md:col-span-1",
     2: "col-span-1 md:col-span-2",
@@ -78,19 +83,31 @@ export default function Footer({ previewSettings, previewMenu, previewSocials, v
         loadFooterData();
     }, [previewSettings, previewMenu, previewSocials]);
 
-    const socialIcons = socialLinks.map((link, idx) => (
-        <a
-            key={idx}
-            href={link.url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="w-10 h-10 rounded-full bg-[var(--wjs-bg-surface-hover,rgb(31,41,55))] flex items-center justify-center hover:bg-[var(--wjs-color-primary,blue)] text-[var(--wjs-color-text-footer-main,white)] transition-colors tooltip-trigger"
-            title={link.platform}
-            aria-label={link.platform}
-        >
-            <i className={link.icon} aria-hidden="true"></i>
-        </a>
-    ));
+    const socialIcons = socialLinks.map((link, idx) => {
+        // An <a href> is an XSS SINK: `javascript:…` (or `data:text/html`) in a stored setting runs
+        // when a visitor clicks it — the same stored-XSS shape this product already shipped once.
+        // Same guard the theme chrome uses for its buttons (isSafeChromeHref: root-relative path or
+        // http(s) only, `//host` and `/\host` rejected; the backend validator mirrors it, pinned by
+        // the parity harness). A link whose URL fails still renders its icon — as text, not a target.
+        const href = isSafeChromeHref(link.url) ? link.url : undefined;
+        return href ? (
+            <a
+                key={idx}
+                href={href}
+                target="_blank"
+                rel="noopener noreferrer"
+                className={SOCIAL_ICON_CLASS}
+                title={link.platform}
+                aria-label={link.platform}
+            >
+                <i className={link.icon} aria-hidden="true"></i>
+            </a>
+        ) : (
+            <span key={idx} className={SOCIAL_ICON_CLASS} title={link.platform} role="img" aria-label={link.platform}>
+                <i className={link.icon} aria-hidden="true"></i>
+            </span>
+        );
+    });
 
     return (
         <footer className="bg-[var(--wjs-bg-footer,rgb(17,24,39))] text-[var(--wjs-color-text-footer-main,white)] py-12 mt-auto border-t border-[var(--wjs-border-subtle,transparent)]">

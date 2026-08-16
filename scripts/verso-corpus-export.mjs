@@ -43,10 +43,17 @@ function sleep(ms) {
  * Nunca usa fileMustExist:false ni crea el fichero — si no existe, retorna null.
  */
 async function openReadonly(filePath, label) {
-  if (!fs.existsSync(filePath)) {
-    return { db: null, reason: 'no-existe' };
+  // Un solo stat responde AMBAS preguntas (¿existe? ¿está vacío?). El par existsSync+statSync que
+  // había aquí era una carrera check→use (js/file-system-race): entre la comprobación y el uso el
+  // fichero puede desaparecer, y entonces el statSync reventaba con ENOENT en vez de devolver
+  // 'no-existe'. Ahora el error del propio stat ES la respuesta.
+  let size;
+  try {
+    size = fs.statSync(filePath).size;
+  } catch (e) {
+    if (e.code === 'ENOENT' || e.code === 'ENOTDIR') return { db: null, reason: 'no-existe' };
+    throw e;
   }
-  const size = fs.statSync(filePath).size;
   if (size === 0) {
     return { db: null, reason: 'fichero-vacio-0-bytes' };
   }

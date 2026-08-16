@@ -558,27 +558,26 @@ const dbAsyncProxy = new Proxy({}, {
 async function createPluginTable(tableName: string, columns: string[]) {
   const isPostgres = driverName === 'postgres';
 
-  // SECURITY: the table name and column strings are concatenated into DDL and run via exec(), which
-  // executes STACKED statements. An unvalidated column like 'id INT); INSERT INTO users (...) VALUES
-  // (...); CREATE TABLE z (a' would create an admin user / rewrite options. Validate the identifier
-  // and reject any statement-breaking or comment tokens BEFORE building the SQL.
-  const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
-  if (typeof tableName !== 'string' || !IDENT_RE.test(tableName)) {
-    throw new Error(`🛡️ createTable: invalid table name '${tableName}' (must be a simple identifier).`);
-  }
+  // SECURITY (js/sql-injection, CodeQL #579 — source: the import bundle at POST /api/v1/import,
+  // routes/export.ts:71 → core/import-export custom_tables → here; also every untrusted plugin via
+  // plugin-api db.createTable). The table name and column strings are concatenated into DDL and run
+  // via exec(), which executes STACKED statements.
+  //
+  // This used to be a DENYLIST on the column text (`/;|--|\/\*|\*\//`) plus an identifier test on a
+  // DERIVED COPY (`col.trim().split(/\s+/)[0]`), after which the ORIGINAL `col` was interpolated —
+  // both halves of the failure mode this project keeps re-shipping: infer safety from the ABSENCE of
+  // a token, and validate a copy while concatenating the raw value. Replaced by core/safe-sql, which
+  // allowlists the FORM and REBUILDS the identifier / definition from a constant alphabet, so the
+  // string that reaches the SQL is by construction a member of the allowed language. See safe-sql.ts.
+  const { assertPlainIdent, assertColumnDefinition, buildCreateTable } = require('../core/safe-sql');
+
+  // The CANONICAL name — the raw `tableName` is never concatenated anywhere below.
+  const table: string = assertPlainIdent(tableName, 'createTable: table name');
   if (!Array.isArray(columns) || columns.length === 0) {
-    throw new Error('createTable: columns must be a non-empty array of definitions.');
+    throw new Error('🛡️ createTable: columns must be a non-empty array of definitions.');
   }
-  const BAD_COL = /;|--|\/\*|\*\//; // no statement break, no SQL comments
-  for (const col of columns) {
-    if (typeof col !== 'string' || BAD_COL.test(col)) {
-      throw new Error(`🛡️ createTable: invalid column definition (stacked statements / comments are not allowed).`);
-    }
-    const firstTok = col.trim().split(/\s+/)[0];
-    if (!IDENT_RE.test(firstTok)) {
-      throw new Error(`🛡️ createTable: invalid column name '${firstTok}' (must be a simple identifier).`);
-    }
-  }
+  // Gate 1: the caller's definitions, canonicalized. The alias mapping below only ever runs on these.
+  const safeColumns = columns.map((col) => assertColumnDefinition(col, 'createTable'));
 
   // Type mappings for compatibility
   const typeMap = {
@@ -591,7 +590,7 @@ async function createPluginTable(tableName: string, columns: string[]) {
   };
 
   // Replace type aliases with driver-specific syntax
-  const mappedColumns = columns.map(col => {
+  const mappedColumns = safeColumns.map((col: string) => {
     let mapped = col;
     // Replace INT_PK
     mapped = mapped.replace(/\bINT_PK\b/g, typeMap.INT_PK);
@@ -606,12 +605,10 @@ async function createPluginTable(tableName: string, columns: string[]) {
     return mapped;
   });
 
-  const sql = `CREATE TABLE IF NOT EXISTS ${tableName} (\n  ${mappedColumns.join(',\n  ')}\n)`;
-
-  // Defense in depth: the assembled DDL must be a SINGLE statement (no stacked queries reached exec).
-  if (sql.replace(/;\s*$/, '').includes(';')) {
-    throw new Error('🛡️ createTable: refusing to run multiple statements.');
-  }
+  // Gate 2: the DDL is ASSEMBLED by safe-sql from re-validated parts (the alias expansion above
+  // inserts only constant text, and this proves it). buildCreateTable also refuses a `;` anywhere in
+  // the assembled statement, so nothing stacked can reach exec().
+  const sql = buildCreateTable(table, mappedColumns);
 
   if (driverAsync) {
     await driverAsync.exec(sql);

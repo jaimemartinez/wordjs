@@ -42,6 +42,7 @@ import {
     removeLink,
     serializeDoc,
     setList,
+    tokenizeHtml,
     toggleMark,
     unlist,
 } from "@/lib/verso/inline-engine";
@@ -308,6 +309,35 @@ describe("inline-engine — pegado hostil", () => {
         const out = pasteInto('<div><h1 style="color:red">T</h1><p><b onclick="x()">n</b></p></div>');
         expect(out).toBe("<p>T</p><p><strong>n</strong></p>");
         expect(sanitizeHTML(out).replaceAll("<br />", "<br>")).toBe(out);
+    });
+
+    /**
+     * El NOMBRE de un atributo del HTML pegado elegía la clave de `attrs` (remote property
+     * injection). Con una allowlist —los tres atributos que el motor lee— el HTML solo aporta
+     * VALORES, y el objeto sin prototipo hace que un nombre que nadie escribió no resuelva a nada.
+     */
+    it("el nombre de un atributo no elige la clave del objeto (allowlist + sin prototipo)", () => {
+        const el = tokenizeHtml('<b onclick="x()" style="color:red" data-x="1" __proto__="p">t</b>')[0];
+        if (el.kind !== "el") throw new Error("se esperaba un elemento");
+        expect(Object.keys(el.attrs)).toEqual([]);
+        expect(Object.getPrototypeOf(el.attrs)).toBeNull();
+
+        // Un atributo que el HTML NUNCA escribió no puede resolver por el prototipo: con `{}`,
+        // `attrs.constructor` devolvía Function y `attrs.toString` una función.
+        const plain = tokenizeHtml("<span>t</span>")[0];
+        if (plain.kind !== "el") throw new Error("se esperaba un elemento");
+        for (const name of ["constructor", "toString", "hasOwnProperty", "__proto__", "valueOf"]) {
+            expect((plain.attrs as Record<string, unknown>)[name], name).toBeUndefined();
+        }
+
+        // Ni el prototipo global queda tocado, ni se pierde lo que el motor SÍ lee.
+        expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+        const link = tokenizeHtml('<a href="/ok" target="_blank" rel="nofollow">t</a>')[0];
+        if (link.kind !== "el") throw new Error("se esperaba un elemento");
+        expect(link.attrs).toEqual({ href: "/ok", target: "_blank" });
+        expect(pasteInto('<p><a href="/ok" target="_blank" __proto__="p">b</a></p>')).toBe(
+            '<p><a href="/ok" target="_blank" rel="noopener noreferrer">b</a></p>',
+        );
     });
 });
 

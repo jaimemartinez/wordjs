@@ -113,7 +113,15 @@ const DEDICATED_WRITE_API = new Set([
 // Public settings that are DERIVED, not stored. Computed per request from the memoized theme scan
 // (core/themes), so they add no SQL and no fs to the read path — and deliberately absent from
 // ALL_SETTINGS, because an option row for one of these could only ever drift from the theme on disk.
-const DERIVED_PUBLIC_SETTINGS: Record<string, () => Promise<any>> = {
+//
+// A MAP, not an object literal (SECURITY / CodeQL #611, js/unvalidated-dynamic-method-call). The key
+// arrives from the URL (`GET /settings/:key`) and selects a FUNCTION TO CALL — it chooses STRUCTURE,
+// not a value. An object indexed by an outside string is one prototype hop away from dispatching
+// `constructor` / `toString` / `valueOf`, and `__proto__` is a live accessor on every object literal;
+// a hasOwnProperty guard closes today's hole but leaves the dangerous SHAPE (an external string
+// indexing an object) in place for the next edit to reopen. A Map has no prototype chain to walk and
+// no property access at all: `.get()` can only ever return something `.set()` put there.
+const DERIVED_PUBLIC_SETTINGS: Map<string, () => Promise<any>> = new Map(Object.entries({
     // theme.json `version` of the ACTIVE theme. The frontend appends it to the theme stylesheet URL
     // so an in-place theme edit (PUT /api/v1/themes/:slug bumps the patch) busts the browser/CDN
     // copy — the build-time asset version cannot see that edit. That route purges the 'settings' tag.
@@ -126,7 +134,7 @@ const DERIVED_PUBLIC_SETTINGS: Record<string, () => Promise<any>> = {
     // Boolean, not a string: `Boolean("false")` is true, and a health flag that reads backwards when
     // stringified is worse than no flag. Derived, so it can never drift from the directory on disk.
     active_theme_missing: isActiveThemeMissing
-};
+}));
 
 // Admin-ONLY derived settings: computed per request, never stored, and returned only from GET
 // /settings/all (behind authenticate + isAdmin). Same shape as DERIVED_PUBLIC_SETTINGS, but deliberately
@@ -136,7 +144,10 @@ const DERIVED_PUBLIC_SETTINGS: Record<string, () => Promise<any>> = {
 //
 // State is read from core/plugin-isolate (populated by the boot-time probe, or lazily on first isolate
 // load). 'unknown' until the probe resolves; 'degraded' is the dangerous "looks secure but isn't" state.
-const DERIVED_ADMIN_SETTINGS: Record<string, () => Promise<any>> = {
+// Same Map discipline as DERIVED_PUBLIC_SETTINGS above (this one is only ever enumerated, never
+// indexed by an outside key — keeping the two the same shape is what stops a future single-key admin
+// route from reintroducing the object-indexing pattern).
+const DERIVED_ADMIN_SETTINGS: Map<string, () => Promise<any>> = new Map(Object.entries({
     // Raw hardening state enum: 'unknown' | 'unsupported' | 'disabled' | 'active' | 'degraded'.
     sandbox_hardening_state: async () => {
         try { return require('../core/plugin-isolate').getSandboxHardeningState(); } catch { return 'unknown'; }
@@ -155,11 +166,20 @@ const DERIVED_ADMIN_SETTINGS: Record<string, () => Promise<any>> = {
     email_provider_available: async () => {
         try { return require('../core/mail-provider').isEmailProviderAvailable() === true; } catch { return false; }
     }
-};
+}));
 
-const derivedSetting = (key: string) =>
-    // hasOwnProperty, not `in`: `constructor`/`toString` must not resolve through the prototype.
-    Object.prototype.hasOwnProperty.call(DERIVED_PUBLIC_SETTINGS, key) ? DERIVED_PUBLIC_SETTINGS[key] : null;
+/**
+ * Resolve a URL-supplied key to a derived-setting COMPUTE FUNCTION, or null.
+ *
+ * The allowlist IS the Map: `.get()` on a Map never consults a prototype, so `constructor`,
+ * `__proto__`, `toString`, `valueOf` and every other inherited member resolve to undefined instead of
+ * to a callable. `?? null` normalizes the miss, and the `typeof === 'function'` assertion is the last
+ * word: only something this module put in the Map is ever invoked.
+ */
+const derivedSetting = (key: string): (() => Promise<any>) | null => {
+    const compute = DERIVED_PUBLIC_SETTINGS.get(key);
+    return typeof compute === 'function' ? compute : null;
+};
 
 // ---------------------------------------------------------------------------
 // Per-key write validation
@@ -220,7 +240,7 @@ router.get('/', asyncHandler(async (req: Request, res: Response) => {
         ...PUBLIC_SETTINGS.map(async (key) => {
             settings[key] = await getOption(key);
         }),
-        ...Object.entries(DERIVED_PUBLIC_SETTINGS).map(async ([key, compute]) => {
+        ...[...DERIVED_PUBLIC_SETTINGS].map(async ([key, compute]) => {
             settings[key] = await compute();
         })
     ]);
@@ -250,7 +270,7 @@ router.get('/all', authenticate, isAdmin, asyncHandler(async (req: Request, res:
             settings[key] = await getOption(key);
         }),
         // Admin-only derived flags (sandbox hardening posture) — computed, never stored.
-        ...Object.entries(DERIVED_ADMIN_SETTINGS).map(async ([key, compute]) => {
+        ...[...DERIVED_ADMIN_SETTINGS].map(async ([key, compute]) => {
             settings[key] = await compute();
         })
     ]);

@@ -90,17 +90,34 @@ function safeFromCodePoint(cp: number, fallback: string): string {
 
 const ATTR_RE = /([^\s"'>/=]+)(?:\s*=\s*("([^"]*)"|'([^']*)'|[^\s"'>]+))?/g;
 
+/**
+ * Los ÚNICOS atributos que el motor lee (marksFor: href/target; isFillerBr: el marcador del <br>
+ * de relleno). Todo lo demás se descartaba igualmente en la proyección — pero se GUARDABA antes,
+ * y ahí estaba el agujero: `attrs[name] = …` con un `name` que sale del HTML pegado deja que quien
+ * escribe el HTML elija la CLAVE, no solo el valor (remote property injection). Con `<b __proto__=…>`
+ * la escritura no crea propiedad propia sino que toca el prototipo, y con `<b constructor=…>` /
+ * `<b toString=…>` se sombrea lo que el objeto hereda: un lookup posterior deja de responder lo que
+ * el llamador cree. La estructura la fija ahora esta allowlist —el HTML ya solo aporta VALORES—
+ * reforzada por un objeto sin prototipo y por `Object.hasOwn` en cada lectura.
+ */
+const KEPT_ATTRS: ReadonlySet<string> = new Set([FILLER_BR_ATTR, "href", "target"]);
+
 function parseAttrs(raw: string): Record<string, string> {
-    const attrs: Record<string, string> = {};
+    const attrs = Object.create(null) as Record<string, string>;
     ATTR_RE.lastIndex = 0;
     let m: RegExpExecArray | null;
     while ((m = ATTR_RE.exec(raw)) !== null) {
         const name = m[1].toLowerCase();
-        if (name === "/") continue;
+        if (!KEPT_ATTRS.has(name)) continue; // incluye el "/" del cierre autocontenido
         const value = m[3] ?? m[4] ?? (m[2] !== undefined ? m[2] : "");
         attrs[name] = decodeEntities(value);
     }
     return attrs;
+}
+
+/** Lectura de un atributo: propiedad PROPIA o nada (nunca algo heredado del prototipo). */
+function attr(el: ParseElement, name: string): string | undefined {
+    return Object.hasOwn(el.attrs, name) ? el.attrs[name] : undefined;
 }
 
 /** Parser HTML tolerante → fragmento de árbol ligero. */
@@ -215,19 +232,20 @@ function flushBuf(ctx: ProjectCtx): void {
 }
 
 function isFillerBr(el: ParseElement): boolean {
-    return el.tag === "br" && el.attrs[FILLER_BR_ATTR] !== undefined;
+    return el.tag === "br" && attr(el, FILLER_BR_ATTR) !== undefined;
 }
 
 function marksFor(el: ParseElement, m: Marks): Marks {
     if (el.tag === "strong" || el.tag === "b") return { ...cloneMarks(m), bold: true };
     if (el.tag === "em" || el.tag === "i") return { ...cloneMarks(m), italic: true };
-    if (el.tag === "a" && typeof el.attrs.href === "string") {
+    const href = el.tag === "a" ? attr(el, "href") : undefined;
+    if (typeof href === "string") {
         return {
             ...cloneMarks(m),
             link: {
-                href: el.attrs.href,
+                href,
                 // D11: solo target="_blank" sobrevive como newTab; rel se recalcula.
-                newTab: (el.attrs.target ?? "") === "_blank",
+                newTab: attr(el, "target") === "_blank",
             },
         };
     }
