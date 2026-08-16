@@ -15,21 +15,97 @@ import { cache } from 'react';
 import type { Metadata } from 'next';
 import type { Post } from './api';
 
+// ---------------------------------------------------------------------------
+// The backend base URL — the one value that chooses WHERE every SSR request goes
+// ---------------------------------------------------------------------------
+//
+// It is read from wordjs-config.json (and from the environment), i.e. it is FILE DATA that selects
+// STRUCTURE, not a value that merely rides along inside a request. That is exactly the class this
+// codebase has been bitten by before: a base of `http://someone@169.254.169.254/api/v1` would send
+// every server-side read — and the session cookie getPostBySlugPreview forwards — to a host of
+// somebody else's choosing, and nothing in the old code looked at the string at all. So the base is
+// never used as it was read:
+//
+//   1. SHAPE ALLOWLIST — it must parse as a URL, its scheme must be one of two compiled-in literals,
+//      it may not carry credentials, a query or a fragment, and its host and path must match a
+//      positive character allowlist (never "does it contain something bad?", which is the inference
+//      from ABSENCE this project has ruled out).
+//   2. CANONICALISATION — the base that gets used is REBUILT from the validated pieces (and the
+//      scheme is the literal from the allowlist, not the parsed string), so no unnormalised spelling
+//      survives into the request.
+//   3. CONTAINMENT — every request URL is re-parsed after the endpoint is appended and refused
+//      unless it is still on the base's origin AND under the base's path. Same "resolve, then prove
+//      it is inside" shape the filesystem rules use; an endpoint can no longer walk out of the API
+//      root with `..`, and it can never move the host.
+//
+// A candidate that fails is not repaired — it is dropped, and resolution falls through to the next
+// candidate (ending at the compiled-in localhost default). A malformed base is a misconfiguration,
+// never a destination.
+const BACKEND_PROTOCOLS = ['http:', 'https:'];
+const DEFAULT_BACKEND_BASE = 'http://localhost:4000/api/v1';
+const MONO_BACKEND_BASE = 'http://127.0.0.1:4000/api/v1';
+// A host name or IPv4 literal: labels joined by dots, optional FQDN root dot. Underscores are
+// allowed on purpose — they are illegal in DNS but ordinary in a Docker/compose service name, which
+// is exactly what `internalApiUrl` points at in a container deployment, and an underscore cannot
+// change a URL's structure. What the allowlist keeps OUT is what can: `@ : / \ ? # [ ]` and space.
+const BACKEND_HOST_RE = /^[a-z0-9_](?:[a-z0-9_-]*[a-z0-9_])?(?:\.[a-z0-9_](?:[a-z0-9_-]*[a-z0-9_])?)*\.?$/;
+/** A bracketed IPv6 literal, as URL.hostname reports it. */
+const BACKEND_IPV6_RE = /^\[[0-9a-f:]+\]$/;
+/** An optional path prefix: `/segment` repeated, each segment from a positive character allowlist. */
+const BACKEND_PATH_RE = /^(?:\/[a-z0-9._~-]+)*$/i;
+
 /**
- * Resolve the backend base URL for server-side fetches. Mirrors the SSR branch of lib/api.ts'
- * getBaseUrl() so split and monolith modes behave identically:
+ * Validate + canonicalise one backend-base candidate. Returns null (never a "cleaned up" variant)
+ * when the candidate is not exactly the shape above.
+ */
+function sanitizeBackendBase(candidate: string): string | null {
+    let u: URL;
+    try {
+        u = new URL(String(candidate));
+    } catch {
+        return null; // not a URL at all
+    }
+    // Scheme: pick the matching LITERAL out of the allowlist, so what ends up in the request string
+    // is this file's constant rather than the configured text.
+    const protocol = BACKEND_PROTOCOLS.find((p) => p === u.protocol);
+    if (!protocol) return null;
+    // Credentials in a URL are the classic "the host is not what you think it is" trick, and a
+    // backend base has no business carrying a query or a fragment.
+    if (u.username || u.password || u.search || u.hash) return null;
+
+    const host = u.hostname.toLowerCase();
+    if (!BACKEND_HOST_RE.test(host) && !BACKEND_IPV6_RE.test(host)) return null;
+
+    // URL.port is '' or digits only; still bound it to the real port range.
+    const port = u.port;
+    if (port) {
+        if (!/^[0-9]{1,5}$/.test(port)) return null;
+        const n = Number(port);
+        if (n < 1 || n > 65535) return null;
+    }
+
+    const path = u.pathname.replace(/\/+$/, '');
+    if (!BACKEND_PATH_RE.test(path)) return null;
+
+    return `${protocol}//${host}${port ? `:${port}` : ''}${path}`;
+}
+
+/**
+ * The backend-base candidates, most specific first. Split out from resolveServerBase so the
+ * resolution ORDER (which mirrors the SSR branch of lib/api.ts' getBaseUrl, keeping split and
+ * monolith identical) stays readable next to the validation that every candidate must pass:
  *  - monolith: the in-process backend's plain-HTTP loopback listener (self-signed TLS never blocks SSR)
  *  - split:    the backend's own HTTP port (default 4000), read from wordjs-config.json
  *  - override: INTERNAL_API_URL (full `.../api/v1`) wins when set
  */
-function resolveServerBase(): string {
+function backendBaseCandidates(): string[] {
     if (process.env.WORDJS_MODE === 'mono') {
-        return `${process.env.WORDJS_MONO_ORIGIN || 'http://127.0.0.1:4000'}/api/v1`;
+        return [`${process.env.WORDJS_MONO_ORIGIN || 'http://127.0.0.1:4000'}/api/v1`, MONO_BACKEND_BASE];
     }
     if (process.env.INTERNAL_API_URL) {
-        return process.env.INTERNAL_API_URL.replace(/\/+$/, '');
+        return [process.env.INTERNAL_API_URL.replace(/\/+$/, ''), DEFAULT_BACKEND_BASE];
     }
-    let backendPort = 4000;
+    const candidates: string[] = [];
     try {
         // eslint-disable-next-line @typescript-eslint/no-var-requires
         const path = require('path');
@@ -45,7 +121,7 @@ function resolveServerBase(): string {
             // Separate-machine frontend: internalApiUrl points SSR at the backend's reachable API base
             // (typically the gateway's public origin, whose cert is issued from the cluster CA the
             // frontend trusts via NODE_EXTRA_CA_CERTS). Same effect as the env, but config-file driven.
-            if (cfg.internalApiUrl) return String(cfg.internalApiUrl).replace(/\/+$/, '');
+            if (cfg.internalApiUrl) candidates.push(String(cfg.internalApiUrl).replace(/\/+$/, ''));
 
             // LOCAL SPLIT: once the install has issued cluster certs, the backend serves HTTPS with
             // `rejectUnauthorized: true` (backend/src/index.ts), so it will not answer the plain-HTTP
@@ -56,15 +132,58 @@ function resolveServerBase(): string {
             const backendCert = path.resolve(path.dirname(configPath), 'certs', 'backend.crt');
             if (fs.existsSync(backendCert)) {
                 const front = String(cfg.gatewayUrl || cfg.siteUrl || '').replace(/\/+$/, '');
-                if (front) return `${front}/api/v1`;
+                if (front) candidates.push(`${front}/api/v1`);
             }
 
-            if (cfg.port) backendPort = cfg.port;
+            if (cfg.port) candidates.push(`http://localhost:${String(cfg.port)}/api/v1`);
         }
     } catch {
-        /* fall back to default port 4000 */
+        /* unreadable/!JSON config — fall back to the default port below */
     }
-    return `http://localhost:${backendPort}/api/v1`;
+    candidates.push(DEFAULT_BACKEND_BASE);
+    return candidates;
+}
+
+/** The validated, canonical backend API base. Always a well-formed `scheme://host[:port][/path]`. */
+function resolveServerBase(): string {
+    for (const candidate of backendBaseCandidates()) {
+        const base = sanitizeBackendBase(candidate);
+        if (base) return base;
+    }
+    return DEFAULT_BACKEND_BASE;
+}
+
+/**
+ * The ORIGIN-level base: the backend serves themes/ (chrome, templates, theme.json) as static files
+ * one level ABOVE the API prefix, so those loaders drop the `/api/v1` suffix off the same resolved
+ * base. No request-header reads — config is the host authority and the public tree must stay
+ * prerenderable.
+ */
+function resolveStaticBase(): string {
+    return resolveServerBase().replace(/\/api\/v1$/, '');
+}
+
+/**
+ * Join a validated base with a caller-supplied endpoint and PROVE the result is still inside it.
+ * Concatenation alone is not enough: `${base}${endpoint}` with an endpoint containing `..` (or a
+ * second scheme) can land on another path — or another host — entirely. So the joined string is
+ * re-parsed and refused unless the origin still matches and the path is still under the base's path
+ * (at a SEGMENT boundary, never a string prefix). Returns null when it is not; every caller already
+ * degrades on a null/failed fetch, so this fails closed on the same path.
+ */
+function backendUrl(base: string, endpoint: string): string | null {
+    let joined: URL;
+    let root: URL;
+    try {
+        root = new URL(base);
+        joined = new URL(`${base}${endpoint}`);
+    } catch {
+        return null;
+    }
+    if (joined.origin !== root.origin) return null;
+    const rootPath = root.pathname.replace(/\/+$/, '');
+    if (rootPath && joined.pathname !== rootPath && !joined.pathname.startsWith(`${rootPath}/`)) return null;
+    return joined.toString();
 }
 
 // Configured public origin (wordjs-config.json siteUrl), module-cached with a short TTL (a siteUrl
@@ -119,7 +238,10 @@ interface ServerFetchOptions {
  * render a not-found / fallback state instead of throwing a 500 for the whole page.
  */
 export async function serverFetch<T>(endpoint: string, options: ServerFetchOptions = {}): Promise<T | null> {
-    const base = resolveServerBase();
+    // Destination first, and only the destination: the URL is resolved and contained BEFORE any of
+    // the request is assembled, so nothing below can influence where this goes.
+    const url = backendUrl(resolveServerBase(), endpoint);
+    if (!url) return null; // endpoint escaped the API root — same degrade path as an unreachable backend
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
 
     // Forward the real public host/proto to the backend. SSR fetches hit the loopback origin
@@ -164,7 +286,7 @@ export async function serverFetch<T>(endpoint: string, options: ServerFetchOptio
         : ({ next: { revalidate: options.revalidate, tags: options.tags } } as RequestInit);
 
     try {
-        const res = await fetch(`${base}${endpoint}`, { headers, ...cacheInit });
+        const res = await fetch(url, { headers, ...cacheInit });
         if (!res.ok) return null;
         return (await res.json()) as T;
     } catch {
@@ -186,12 +308,13 @@ export async function serverFetch<T>(endpoint: string, options: ServerFetchOptio
 let _setupSettled = false;
 export const checkSetupRequired = cache(async (): Promise<boolean> => {
     if (_setupSettled) return false;
-    const base = resolveServerBase();
+    const url = backendUrl(resolveServerBase(), '/settings');
+    if (!url) return false;
     try {
         // revalidate:1, NOT no-store: a no-store fetch during the runtime render of a prerendered
         // route is the same Next 16 static-to-dynamic hard error the lab gate caught. 1s of
         // staleness on "is this installed yet?" is nothing; a 500 on a cached page is not.
-        const res = await fetch(`${base}/settings`, { next: { revalidate: 1 } });
+        const res = await fetch(url, { next: { revalidate: 1 } });
         if (res.status !== 503) { _setupSettled = true; return false; }
         const body = await res.json().catch(() => null);
         return !!body && body.error === 'setup_required';
@@ -264,9 +387,10 @@ export interface MenuItem { id: number | string; title: string; url: string; ord
  */
 export const getThemeTemplate = cache(async (slug: string, name: string): Promise<string | null> => {
     if (!/^[a-z0-9-]{1,40}$/.test(name)) return null;
-    const origin = resolveServerBase().replace(/\/api\/v1$/, '');
+    const url = backendUrl(resolveStaticBase(), `/themes/${encodeURIComponent(slug)}/templates/${name}.json`);
+    if (!url) return null;
     try {
-        const res = await fetch(`${origin}/themes/${encodeURIComponent(slug)}/templates/${name}.json`, {
+        const res = await fetch(url, {
             next: { revalidate: 60, tags: ['settings'] },
         } as RequestInit);
         if (!res.ok) return null;
@@ -286,9 +410,10 @@ export const getThemeTemplate = cache(async (slug: string, name: string): Promis
  * Cached under the 'settings' tag so activating a theme purges it.
  */
 export const getThemeManifest = cache(async (slug: string): Promise<string | null> => {
-    const origin = resolveServerBase().replace(/\/api\/v1$/, '');
+    const url = backendUrl(resolveStaticBase(), `/themes/${encodeURIComponent(slug)}/theme.json`);
+    if (!url) return null;
     try {
-        const res = await fetch(`${origin}/themes/${encodeURIComponent(slug)}/theme.json`, {
+        const res = await fetch(url, {
             next: { revalidate: 60, tags: ['settings'] },
         } as RequestInit);
         if (!res.ok) return null;
@@ -306,9 +431,10 @@ export const getThemeManifest = cache(async (slug: string): Promise<string | nul
  */
 export const getThemeChrome = cache(async (slug: string, part: string): Promise<string | null> => {
     if (!/^[a-z0-9-]{1,40}$/.test(part)) return null;
-    const origin = resolveServerBase().replace(/\/api\/v1$/, '');
+    const url = backendUrl(resolveStaticBase(), `/themes/${encodeURIComponent(slug)}/chrome/${part}.json`);
+    if (!url) return null;
     try {
-        const res = await fetch(`${origin}/themes/${encodeURIComponent(slug)}/chrome/${part}.json`, {
+        const res = await fetch(url, {
             next: { revalidate: 60, tags: ['settings'] },
         } as RequestInit);
         if (!res.ok) return null;

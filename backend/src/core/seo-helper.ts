@@ -3,7 +3,6 @@
  * Generates meta tags, sitemaps, and structured data
  */
 
-const { getOption } = require('./options');
 const { toLanguageTag } = require('./language-tag');
 
 interface SeoOptions {
@@ -69,7 +68,8 @@ function generateMetaTags(post: any, options: SeoOptions = {}) {
 function generateJsonLd(post: any, options: SeoOptions = {}) {
     const siteUrl = options.siteUrl || '';
     const siteName = options.siteName || 'WordJS';
-    const siteDescription = options.siteDescription || '';
+    // (no siteDescription here: the Article's "description" comes from the POST, and the publisher
+    //  Organization node has no description field — the local was read and then never used.)
 
     const canonicalUrl = `${siteUrl}/${post.slug}`; // live canonical is /<slug> for posts AND pages
 

@@ -4,6 +4,19 @@ on:
   push:
   pull_request:
 
+# Least privilege for the GITHUB_TOKEN handed to every job below. Without this block the token keeps
+# the repository's DEFAULT permissions, which on many repos still includes write access to contents,
+# packages, issues and pull-requests — a scope no CI job here needs, and one that a compromised
+# dependency running inside `npm ci`/`npm test` would inherit for free.
+#
+# Every job in this workflow only READS the repository (checkout + install + typecheck/lint/test/build).
+# Nothing publishes a release, comments on a PR, pushes a commit or writes a package. `contents: read`
+# is therefore the exact scope in use; anything a future job needs must be granted on THAT job, not
+# widened here. (actions/upload-artifact in the verso-e2e job authenticates with the Actions runtime
+# token, not the GITHUB_TOKEN, so it needs no permission entry.)
+permissions:
+  contents: read
+
 jobs:
   backend:
     name: Backend (typecheck + test)

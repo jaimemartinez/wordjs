@@ -145,8 +145,8 @@ const CHROME_ELEMENT_SEEDS = {
             spacer: { selector: '.wjs-chrome-footer .wjs-chrome-spacer' },
             // Same composites as the header (see there). socialLink and siteTitleLink are used by 10 of
             // 10 themes and rowNested by 7 — these are not speculative names, they are the selectors
-            // every theme was already writing by hand.
-            socials: { selector: '.wjs-chrome-footer .wjs-chrome-socials' },
+            // every theme was already writing by hand. (`socials` itself is NOT a composite: it is
+            // already declared above with this exact selector, next to the header's copy of the list.)
             socialLink: { selector: '.wjs-chrome-footer .wjs-chrome-socials a' },
             siteTitleLink: { selector: '.wjs-chrome-footer .wjs-chrome-site-title a' },
             siteTitleText: { selector: '.wjs-chrome-footer .wjs-chrome-site-title span' },

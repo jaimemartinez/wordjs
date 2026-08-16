@@ -27,6 +27,12 @@ on:
         required: false
         default: 'default'
 
+# Least privilege for the GITHUB_TOKEN (see the same block in ci.yml). This workflow only checks the
+# repository out and runs the backend suite N times — it writes nothing back to GitHub — so read access
+# to the contents is the whole scope it uses.
+permissions:
+  contents: read
+
 jobs:
   hunt:
     name: "Shard ${{ matrix.shard }}"

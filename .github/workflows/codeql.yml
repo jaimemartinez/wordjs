@@ -11,14 +11,21 @@ on:
   schedule:
     - cron: '27 3 * * 1'
 
+# Workflow-wide floor (see ci.yml). The analyze job below declares its own, WIDER set — a job-level
+# `permissions:` REPLACES this block rather than adding to it, so `security-events: write` still
+# reaches the upload step. This exists so a job added here later starts read-only by default instead
+# of inheriting the repository's default token scope.
+permissions:
+  contents: read
+
 jobs:
   analyze:
     name: Analyze
     runs-on: ubuntu-latest
     permissions:
-      actions: read
-      contents: read
-      security-events: write
+      actions: read # the analyze action reads the workflow run's own metadata
+      contents: read # checkout
+      security-events: write # upload the SARIF to code scanning — the one write this workflow needs
     strategy:
       fail-fast: false
       matrix:

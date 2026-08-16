@@ -67,6 +67,19 @@ function buildIndex() {
 
 const norm = (s) => s.trim().replace(/\s+/g, ' ').replace(/\s*([>+~])\s*/g, ' $1 ');
 
+/**
+ * Read a file, or report "not there" — instead of asking existsSync() first and reading afterwards.
+ * One syscall cannot be raced against itself; a check followed by a use can (js/file-system-race).
+ */
+function readTextOrNull(p) {
+    try {
+        return fs.readFileSync(p, 'utf8');
+    } catch (e) {
+        if (e.code === 'ENOENT' || e.code === 'ENOTDIR' || e.code === 'EISDIR') return null;
+        throw e;
+    }
+}
+
 /** Split a selector into its base and an ordered list of suffix keys. */
 function decompose(sel) {
     let base = sel, keys = [];
@@ -117,9 +130,13 @@ function convert(slug, write) {
     const dir = path.join(THEMES, slug);
     const cssPath = path.join(dir, 'style.css');
     const jsonPath = path.join(dir, 'theme.json');
-    if (!fs.existsSync(cssPath) || !fs.existsSync(jsonPath)) return null;
+    // Read both files up front and let the READ say whether they are there. Asking existsSync() first
+    // and writing to the same paths later is a check→use race (js/file-system-race): the answer is
+    // already stale when it arrives, and it is an answer about a path this function then overwrites.
+    const css = readTextOrNull(cssPath);
+    const jsonRaw = readTextOrNull(jsonPath);
+    if (css === null || jsonRaw === null) return null;
 
-    const css = fs.readFileSync(cssPath, 'utf8');
     const endIdx = css.search(END_MARKER);
     if (endIdx < 0) return { slug, skipped: 'no generated markers' };
     const endOfMarker = endIdx + (css.match(END_MARKER)[0].length);
@@ -128,7 +145,7 @@ function convert(slug, write) {
     if (!manual.replace(/\/\*[\s\S]*?\*\//g, '').trim()) return { slug, skipped: 'nothing hand-written' };
 
     const idx = buildIndex();
-    const json = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
+    const json = JSON.parse(jsonRaw);
     const styles = JSON.parse(JSON.stringify(json.styles || {}));
 
     const rules = parseRules(manual);
@@ -165,7 +182,12 @@ function convert(slug, write) {
 const args = process.argv.slice(2);
 const write = args.includes('--write');
 const slugs = args.filter((a) => !a.startsWith('--'));
-const targets = slugs.length ? slugs : fs.readdirSync(THEMES).filter((s) => fs.existsSync(path.join(THEMES, s, 'style.css')));
+// Only the directory listing here: whether a directory is actually a theme is decided by convert(),
+// which finds out by READING style.css/theme.json. Pre-filtering with existsSync() was a check on the
+// very paths convert() goes on to rewrite.
+const targets = slugs.length
+    ? slugs
+    : fs.readdirSync(THEMES, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name);
 
 let totC = 0, totL = 0;
 for (const slug of targets) {
