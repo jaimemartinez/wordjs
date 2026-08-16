@@ -92,9 +92,18 @@ function beginDraft(doc: VersoDoc): Draft {
   return { next: { ...doc, nodes: { ...doc.nodes } }, touched: new Set() };
 }
 
+/**
+ * Lookup SIN cadena de prototipos (F6, cazado por el fuzzer): un id hostil
+ * "constructor"/"hasOwnProperty" resolvía a Function/función por prototipo y el
+ * llamador lo trataba como VersoNode. Toda búsqueda por clave externa pasa por aquí.
+ */
+function nodeOf(nodes: Record<string, VersoNode>, key: string): VersoNode | undefined {
+  return Object.hasOwn(nodes, key) ? nodes[key] : undefined;
+}
+
 /** Devuelve una copia mutable del nodo dentro del draft (copia una sola vez). */
 function draftNode(d: Draft, key: string): VersoNode {
-  const current = d.next.nodes[key];
+  const current = nodeOf(d.next.nodes, key);
   if (!current) throw new VersoCommandError("node-not-found", `nodo "${key}" inexistente`);
   if (d.touched.has(key)) return current;
   const copy: VersoNode = { ...current, slots: { ...current.slots } };
@@ -105,7 +114,9 @@ function draftNode(d: Draft, key: string): VersoNode {
 
 function readChildren(doc: VersoDoc, parentId: string, slotKey: string): readonly string[] | undefined {
   if (parentId === ROOT_ID) return slotKey === ROOT_SLOT ? doc.rootChildren : undefined;
-  return doc.nodes[parentId]?.slots[slotKey];
+  const slots = nodeOf(doc.nodes, parentId)?.slots;
+  if (!slots) return undefined;
+  return Object.hasOwn(slots, slotKey) ? slots[slotKey] : undefined;
 }
 
 /**
@@ -140,19 +151,32 @@ function writeChildren(d: Draft, parentId: string, slotKey: string, list: string
  *   promociona a slot (la serialización es idéntica — clave → [] — así que el
  *   inverso sigue siendo exacto); cualquier otra cosa no es insertable.
  */
+interface InsertTarget {
+  list: readonly string[];
+  /**
+   * true si la CLAVE del slot no existía y se acaba de materializar (declarado
+   * slot por el registry, clave ausente). EXACTITUD DE INVERSOS (F6, cazado por
+   * el fuzzer): deshacer el insert/move con removeNode/moveNode dejaba un
+   * `clave: []` residual y la serialización ya no era deep-equal a la de
+   * partida — en ese caso el inverso exacto es restaurar el doc entero
+   * (history:restoreDoc, el mismo mecanismo que setRootProps sin props).
+   */
+  createdSlotKey: boolean;
+}
+
 function resolveInsertTarget(
   d: Draft,
   parentId: string,
   slotKey: string,
   isSlot?: SlotResolver,
-): readonly string[] {
+): InsertTarget {
   if (parentId === ROOT_ID) {
     if (slotKey !== ROOT_SLOT) {
       throw new VersoCommandError("slot-not-insertable", `la raíz solo tiene el slot "${ROOT_SLOT}"`);
     }
-    return d.next.rootChildren;
+    return { list: d.next.rootChildren, createdSlotKey: false };
   }
-  const parent = d.next.nodes[parentId];
+  const parent = nodeOf(d.next.nodes, parentId);
   if (!parent) throw new VersoCommandError("parent-not-found", `padre "${parentId}" inexistente`);
   const declared = isSlot?.(parent.type, slotKey);
   if (declared === false) {
@@ -161,10 +185,12 @@ function resolveInsertTarget(
       `"${parentId}.${slotKey}" está declarado NO-slot por el registry`,
     );
   }
-  const slot = parent.slots[slotKey];
-  if (slot) return slot;
-  const asProp = parent.props[slotKey];
-  const hasProp = slotKey in parent.props;
+  // Object.hasOwn, no lookup directo/`in` (F6): un slotKey "constructor" resolvía
+  // por prototipo (Function como "slot", Object.prototype como "prop presente").
+  const slot = Object.hasOwn(parent.slots, slotKey) ? parent.slots[slotKey] : undefined;
+  if (slot) return { list: slot, createdSlotKey: false };
+  const hasProp = Object.hasOwn(parent.props, slotKey);
+  const asProp = hasProp ? parent.props[slotKey] : undefined;
   if (declared === true) {
     // Con un resolutor consistente (contrato de ApplyCommandOptions.isSlot) un
     // valor slot-shaped no vacío ya estaría en `slots`; aquí solo puede quedar
@@ -186,7 +212,10 @@ function resolveInsertTarget(
     delete copy.props[slotKey];
   }
   copy.slots[slotKey] = [];
-  return copy.slots[slotKey];
+  // Promoción de un [] en props: la serialización no cambia (clave → []), el
+  // inverso clave-a-clave sigue siendo exacto. Clave AUSENTE materializada:
+  // el llamador debe emitir history:restoreDoc como inverso (ver InsertTarget).
+  return { list: copy.slots[slotKey], createdSlotKey: !hasProp };
 }
 
 function clampIndex(index: number, length: number): number {
@@ -209,9 +238,11 @@ function internItem(
 ): string {
   const originalId = item.props.id;
   let key = originalId;
-  if (key in d.next.nodes) {
+  // Object.hasOwn, no `in` (F6): espejo del fix de internKey en normalize.ts —
+  // incluida la colisión con ROOT_ID (props.id "verso:root" hostil).
+  if (key === ROOT_ID || Object.hasOwn(d.next.nodes, key)) {
     let n = 2;
-    while (`${originalId}#dup${n}` in d.next.nodes) n += 1;
+    while (Object.hasOwn(d.next.nodes, `${originalId}#dup${n}`)) n += 1;
     key = `${originalId}#dup${n}`;
   }
   // Espejo de normalizeItem: props en el ORDEN ORIGINAL de claves (id incluido en
@@ -245,7 +276,7 @@ function internItem(
 
 /** Serializa el subtree de un nodo como VersoItem (espejo de buildItem, mismo keyOrder). */
 export function subtreeToItem(doc: VersoDoc, key: string): VersoItem {
-  const node = doc.nodes[key];
+  const node = nodeOf(doc.nodes, key);
   if (!node) throw new VersoCommandError("node-not-found", `nodo "${key}" inexistente`);
   const props = emitNodeProps(node, (c) => subtreeToItem(doc, c));
   const item: VersoItem = { type: node.type, props };
@@ -255,7 +286,7 @@ export function subtreeToItem(doc: VersoDoc, key: string): VersoItem {
 
 function collectSubtreeKeys(doc: VersoDoc, key: string, out: string[] = []): string[] {
   out.push(key);
-  const node = doc.nodes[key];
+  const node = nodeOf(doc.nodes, key);
   if (node) {
     for (const children of Object.values(node.slots)) {
       for (const c of children) collectSubtreeKeys(doc, c, out);
@@ -274,7 +305,7 @@ function assertNotInSubtree(doc: VersoDoc, nodeKey: string, candidateParent: str
     }
     if (seen.has(cur)) break; // ciclo corrupto preexistente: no bloquear aquí
     seen.add(cur);
-    const n = doc.nodes[cur];
+    const n = nodeOf(doc.nodes, cur);
     if (!n) break;
     cur = n.parentId;
   }
@@ -296,20 +327,22 @@ function applyInsert(doc: VersoDoc, cmd: InsertNodeCommand, opts: ApplyCommandOp
   }
   const d = beginDraft(doc);
   const target = resolveInsertTarget(d, cmd.parentId, cmd.slotKey, opts.isSlot);
-  const index = clampIndex(cmd.index, target.length);
+  const index = clampIndex(cmd.index, target.list.length);
   const key = internItem(d, cmd.item, cmd.parentId, cmd.slotKey, index, opts.isSlot);
-  const list = [...target];
+  const list = [...target.list];
   list.splice(index, 0, key);
   writeChildren(d, cmd.parentId, cmd.slotKey, list);
   return {
     doc: d.next,
-    inverse: { kind: "removeNode", nodeId: key },
+    // Slot materializado desde clave ausente: removeNode dejaría `clave: []`
+    // residual — el inverso exacto es restaurar el doc previo (ver InsertTarget).
+    inverse: target.createdSlotKey ? { kind: "history:restoreDoc", doc } : { kind: "removeNode", nodeId: key },
     command: index === cmd.index ? cmd : { ...cmd, index },
   };
 }
 
 function applyRemove(doc: VersoDoc, cmd: RemoveNodeCommand): ApplyCommandResult {
-  const node = doc.nodes[cmd.nodeId];
+  const node = nodeOf(doc.nodes, cmd.nodeId);
   if (!node) throw new VersoCommandError("node-not-found", `removeNode: nodo "${cmd.nodeId}" inexistente`);
   // El inverso captura el SUBTREE entero (nodo + slots recursivos) y su posición.
   const item = subtreeToItem(doc, cmd.nodeId);
@@ -334,10 +367,10 @@ function applyRemove(doc: VersoDoc, cmd: RemoveNodeCommand): ApplyCommandResult 
 }
 
 function applyMove(doc: VersoDoc, cmd: MoveNodeCommand, opts: ApplyCommandOptions): ApplyCommandResult {
-  const node = doc.nodes[cmd.nodeId];
+  const node = nodeOf(doc.nodes, cmd.nodeId);
   if (!node) throw new VersoCommandError("node-not-found", `moveNode: nodo "${cmd.nodeId}" inexistente`);
   if (cmd.toParentId !== ROOT_ID) {
-    if (!doc.nodes[cmd.toParentId]) {
+    if (!nodeOf(doc.nodes, cmd.toParentId)) {
       throw new VersoCommandError("parent-not-found", `moveNode: padre "${cmd.toParentId}" inexistente`);
     }
     assertNotInSubtree(doc, cmd.nodeId, cmd.toParentId);
@@ -361,29 +394,35 @@ function applyMove(doc: VersoDoc, cmd: MoveNodeCommand, opts: ApplyCommandOption
     fromSiblings.filter((k) => k !== cmd.nodeId),
   );
   const target = resolveInsertTarget(d, cmd.toParentId, cmd.toSlotKey, opts.isSlot);
-  const toIndex = clampIndex(cmd.toIndex, target.length);
-  const list = [...target];
+  const toIndex = clampIndex(cmd.toIndex, target.list.length);
+  const list = [...target.list];
   list.splice(toIndex, 0, cmd.nodeId);
   writeChildren(d, cmd.toParentId, cmd.toSlotKey, list);
   return {
     doc: d.next,
-    inverse,
+    // Mismo caso que applyInsert: mover HACIA un slot materializado desde clave
+    // ausente dejaría `clave: []` residual al deshacer — restoreDoc es el exacto.
+    inverse: target.createdSlotKey ? { kind: "history:restoreDoc", doc } : inverse,
     command: toIndex === cmd.toIndex ? cmd : { ...cmd, toIndex },
   };
 }
 
 function applySetProps(doc: VersoDoc, cmd: SetPropsCommand): ApplyCommandResult {
-  const node = doc.nodes[cmd.nodeId];
+  const node = nodeOf(doc.nodes, cmd.nodeId);
   if (!node) throw new VersoCommandError("node-not-found", `setProps: nodo "${cmd.nodeId}" inexistente`);
   assertPlainPatch(cmd.patch, "setProps");
-  if ("id" in cmd.patch) throw new VersoCommandError("immutable-id", "setProps: `id` es inmutable");
+  if (Object.hasOwn(cmd.patch, "id")) throw new VersoCommandError("immutable-id", "setProps: `id` es inmutable");
   const prev: Record<string, unknown> = {};
   for (const k of Object.keys(cmd.patch)) {
-    if (k in node.slots) {
+    // Object.hasOwn, no `in` (F6): un patch con clave "constructor" disparaba
+    // slot-prop-conflict por la cadena de prototipos sin haber tal slot.
+    if (Object.hasOwn(node.slots, k)) {
       throw new VersoCommandError("slot-prop-conflict", `setProps: "${k}" es un slot de "${cmd.nodeId}"`);
     }
     // `undefined` = clave ausente: el inverso la eliminará con undefined.
-    prev[k] = node.props[k];
+    // Object.hasOwn (F6): con k="constructor", `node.props[k]` devolvía la Function
+    // del prototipo y el INVERSO estampaba esa Function como prop propia.
+    prev[k] = Object.hasOwn(node.props, k) ? node.props[k] : undefined;
   }
   const d = beginDraft(doc);
   const copy = draftNode(d, cmd.nodeId);
@@ -434,10 +473,12 @@ function duplicateItemFromNode(
   idMap: Record<string, string>,
   gen: () => string,
 ): VersoItem {
-  const node = doc.nodes[key];
+  const node = nodeOf(doc.nodes, key);
   if (!node) throw new VersoCommandError("node-not-found", `duplicateSubtree: nodo "${key}" inexistente`);
   const oldId = node.props.id;
-  const newId = idMap[oldId] ?? (idMap[oldId] = gen());
+  // Object.hasOwn (F6): con oldId "constructor", `idMap[oldId] ??` devolvía la
+  // Function del prototipo como "id nuevo" y corrompía el duplicado.
+  const newId = Object.hasOwn(idMap, oldId) ? idMap[oldId] : (idMap[oldId] = gen());
   const props = emitNodeProps(node, (c) => duplicateItemFromNode(doc, c, idMap, gen));
   props.id = newId; // re-asignar no mueve la clave: conserva su posición original
   const item: VersoItem = { type: node.type, props };
@@ -446,7 +487,7 @@ function duplicateItemFromNode(
 }
 
 function applyDuplicate(doc: VersoDoc, cmd: DuplicateSubtreeCommand, opts: ApplyCommandOptions): ApplyCommandResult {
-  const node = doc.nodes[cmd.nodeId];
+  const node = nodeOf(doc.nodes, cmd.nodeId);
   if (!node) throw new VersoCommandError("node-not-found", `duplicateSubtree: nodo "${cmd.nodeId}" inexistente`);
   const gen = opts.generateId ?? defaultGenerateId;
   const idMap: Record<string, string> = { ...(cmd.idMap ?? {}) };

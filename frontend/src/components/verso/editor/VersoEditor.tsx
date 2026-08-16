@@ -367,6 +367,10 @@ export default function VersoEditor({
         if (!frameDoc) return;
         const onClick = (e: Event) => {
             const target = e.target as Element | null;
+            // F6: un click en el BubbleMenu de la sesión inline (portal en el body
+            // del iframe, fuera de todo bloque) NO es un click de selección — sin
+            // este guard deseleccionaba (select(null)) en mitad de la sesión.
+            if (target?.closest?.("[data-wjs-inline-bubble]")) return;
             if (target?.closest?.("a, button, [type='submit']")) e.preventDefault();
             const el = target?.closest?.("[data-wjs-block-id]") ?? null;
             handle.select(el ? el.getAttribute("data-wjs-block-id") : null);

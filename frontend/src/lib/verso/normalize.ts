@@ -62,12 +62,16 @@ interface NormalizeCtx {
 }
 
 function internKey(ctx: NormalizeCtx, id: string): string {
-  if (!(id in ctx.nodes)) return id;
+  // Object.hasOwn, no `in` (F6, cazado por el fuzzer): un id "constructor"/"hasOwnProperty"
+  // matcheaba por la CADENA DE PROTOTIPOS y se desambiguaba (o pisaba) sin colisión real.
+  // ROOT_ID también colisiona (F6): un props.id "verso:root" hacía que sus hijos llevaran
+  // parentId === ROOT_ID y los comandos los trataran como hijos de la raíz (inversos rotos).
+  if (id !== ROOT_ID && !Object.hasOwn(ctx.nodes, id)) return id;
   // Sondeo de clave libre (espejo de internItem en commands.ts): un contador por id
   // se descolocaba cuando el propio dato traía claves `#dupN` literales (p.ej.
   // content ids ["a","a#dup2","a"]) y PISABA un nodo ya interneado.
   let n = 2;
-  while (`${id}#dup${n}` in ctx.nodes) n += 1;
+  while (Object.hasOwn(ctx.nodes, `${id}#dup${n}`)) n += 1;
   const key = `${id}#dup${n}`;
   ctx.warnings.push(`id duplicado "${id}" — esta aparición se indexa como "${key}" (props.id intacto)`);
   return key;
@@ -125,14 +129,25 @@ function normalizeItem(
 export function toNormalized(data: VersoData, isSlot?: SlotResolver): VersoDoc {
   const ctx: NormalizeCtx = { nodes: {}, warnings: [], isSlot };
 
-  const contentKeyState: VersoDoc["contentKeyState"] = Array.isArray(data.content)
+  // FAIL-SOFT (F6, cazado por el fuzzer): un `content` array con CUALQUIER entrada
+  // que no sea un VersoItem bien formado (null, escalar, props no-objeto, id no-string)
+  // hacía throw a normalizeItem (`item.props.id` sobre null) — violando la política
+  // "nunca throw, nunca pérdida". Mismo canal que el content no-array: el array entero
+  // se preserva VERBATIM (round-trip byte-exacto; el doc no es editable, que es lo
+  // correcto para dato corrupto).
+  const contentIsCleanArray = Array.isArray(data.content) && data.content.every(isVersoItem);
+  const contentKeyState: VersoDoc["contentKeyState"] = contentIsCleanArray
     ? "array"
     : "content" in data
       ? "verbatim"
       : "absent";
   const content = contentKeyState === "array" ? data.content : [];
   if (contentKeyState === "verbatim") {
-    ctx.warnings.push("`content` presente pero no-array — preservado verbatim sin normalizar");
+    ctx.warnings.push(
+      Array.isArray(data.content)
+        ? "`content` con entradas malformadas (no-VersoItem) — preservado verbatim sin normalizar"
+        : "`content` presente pero no-array — preservado verbatim sin normalizar",
+    );
   }
 
   const rootChildren = content.map((item, i) => normalizeItem(ctx, item, ROOT_ID, ROOT_SLOT, i));
@@ -147,7 +162,8 @@ export function toNormalized(data: VersoData, isSlot?: SlotResolver): VersoDoc {
       const sep = compound.indexOf(":");
       const targetId = sep === -1 ? "" : compound.slice(0, sep);
       const slotName = sep === -1 ? "" : compound.slice(sep + 1);
-      const target = ctx.nodes[targetId];
+      // Object.hasOwn: un targetId "constructor" resolvía a Function por prototipo y reventaba.
+      const target = Object.hasOwn(ctx.nodes, targetId) ? ctx.nodes[targetId] : undefined;
       if (target && slotName && Array.isArray(items) && items.every(isVersoItem)) {
         if (target.slots[slotName]) {
           // El slot ya venía poblado en props (dato mixto anómalo): no fusionar a ciegas.
@@ -202,12 +218,14 @@ export function emitNodeProps(node: VersoNode, buildChild: (childKey: string) =>
   const props = {} as VersoItem["props"];
   const bag = props as Record<string, unknown>;
   const emitted = new Set<string>();
+  // Object.hasOwn, no `in` (F6, cazado por el fuzzer): una prop llamada "constructor"
+  // resolvía por la cadena de prototipos a Function y `.map` reventaba el emisor.
   for (const k of node.keyOrder ?? []) {
     if (emitted.has(k)) continue;
-    if (k in node.slots) {
+    if (Object.hasOwn(node.slots, k)) {
       bag[k] = node.slots[k].map(buildChild);
       emitted.add(k);
-    } else if (k in node.props) {
+    } else if (Object.hasOwn(node.props, k)) {
       bag[k] = node.props[k];
       emitted.add(k);
     }
@@ -223,7 +241,7 @@ export function emitNodeProps(node: VersoNode, buildChild: (childKey: string) =>
 }
 
 function buildItem(doc: VersoDoc, nodeKey: string): VersoItem {
-  const node = doc.nodes[nodeKey];
+  const node = Object.hasOwn(doc.nodes, nodeKey) ? doc.nodes[nodeKey] : undefined;
   if (!node) {
     // Referencia rota (no debería ocurrir: los comandos mantienen la integridad).
     // Fail-soft: emitir un placeholder imposible de confundir en vez de lanzar.

@@ -257,6 +257,62 @@ jobs:
         working-directory: frontend
         run: npm run build
 
+  verso-e2e:
+    # F6 — programa E2E del editor Verso (Playwright chromium headless) contra un
+    # MONOLITO EFÍMERO en HTTP plano (WORDJS_HTTP=1). El webServer lo arranca el
+    # propio Playwright (frontend/playwright.config.ts: `npm run dev:mono` desde la
+    # raíz; en CI reuseExistingServer=false, así que el runner siempre levanta el
+    # suyo). El proyecto `setup` hace login por API (admin/admin123 — la cuenta
+    # seed del primer boot en dev) y comparte storageState con los specs.
+    #
+    # SUPUESTO DOCUMENTADO (F6b lo verifica en el runner): un checkout limpio +
+    # dev:mono auto-siembra config/BD/admin en el primer boot, igual que el flujo
+    # local de desarrollo. Si el primer boot en Actions exigiera un paso de setup
+    # explícito (p. ej. siteUrl/guard de migración), el plan es añadir AQUÍ un paso
+    # previo `node setup/index.js --install` con la config mínima HTTP — NUNCA
+    # tocar los jobs existentes.
+    #
+    # PERF (F6b): perf.spec.ts corre con sus presupuestos por defecto
+    # (input p95<16ms · transact p95<30ms · TTI<2500ms) medidos sobre dev-mode; el
+    # número FINAL de CI se calibrará en este runner y, si hace falta, se fijará
+    # vía VERSO_PERF_*_MS en este job (ver el comentario del spec).
+    name: Verso E2E (Playwright chromium, monolito efímero HTTP)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: |
+            package-lock.json
+            backend/package-lock.json
+            frontend/package-lock.json
+            gateway/package-lock.json
+      - name: Install root dependencies (concurrently/helmet/compression del monolito)
+        run: npm ci || npm install
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm ci || npm install
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci || npm install
+      - name: Install Playwright chromium (with system deps)
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+      - name: Run Verso E2E suite (webServer arranca dev:mono WORDJS_HTTP=1)
+        working-directory: frontend
+        env:
+          CI: 'true'
+        run: npx playwright test
+      - name: Upload traces on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verso-e2e-traces
+          path: frontend/e2e/.results/
+          retention-days: 7
+
   bundle-boot:
     # SHIFT-LEFT of the release smoke gate: build the real compiled bundle and DEPLOY it ON EVERY PR, so
     # the "present in src/ but stripped from dist/" class (which shipped v1.6.0 unbootable, "Cannot find
