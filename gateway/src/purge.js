@@ -25,6 +25,7 @@
 
 const http = require('http');
 const https = require('https');
+const { requireIdentity } = require('./identity');
 
 // Mirror the frontend route's own limits (frontend/src/app/api/revalidate/route.ts) so the gateway never
 // forwards a payload the receiver would silently truncate anyway.
@@ -109,4 +110,48 @@ async function fanOutPurge({ targets = [], payload, secret, agent, timeoutMs = P
     };
 }
 
-module.exports = { sanitizePurgePayload, collectFrontendTargets, postPurge, fanOutPurge, MAX_ENTRIES, MAX_LEN };
+/**
+ * `GET /revalidate-secret` — let a frontend node FETCH the purge secret it should already have.
+ *
+ * The secret rides enrollment: `/enroll` hands it to every joining node. That leaves one deployment
+ * permanently broken and silent about it — a cluster enrolled BEFORE the secret existed. Its frontend
+ * has full cluster identity (certificates, gateway wiring) but no `revalidateSecret`, so every purge
+ * the gateway delivers is refused with 403 and the site quietly falls back to TTL freshness, for good.
+ * The documented remedy was for a human to remember to re-enroll the node, which is the kind of thing
+ * nobody remembers.
+ *
+ * So the node repairs itself over the mTLS channel it already holds. This is not a new trust decision:
+ * the internal listener already treats `CN=backend` as sufficient authorization to REQUEST a purge, and
+ * a `CN=frontend` certificate is what the gateway hands the secret to at enrollment anyway. A peer that
+ * can present it is, by definition, a node the gateway would already have given the secret to — and the
+ * worst a leaked purge secret buys is extra re-renders, never content injection.
+ *
+ * Deliberately GET and side-effect-free from the caller's point of view: the value is minted lazily and
+ * persisted by `ensureSecret`, exactly as the fan-out path does.
+ *
+ * @param {import('express').Express} app the internal mTLS app
+ * @param {{ensureSecret: () => string, logger: {info: Function, warn: Function, error: Function}}} deps
+ */
+function mountRevalidateSecret(app, { ensureSecret, logger }) {
+    app.get('/revalidate-secret', requireIdentity(['frontend'], logger), (req, res) => {
+        try {
+            const secret = ensureSecret();
+            if (!secret) {
+                logger.warn('[Gateway] [Purge] a frontend node asked for the revalidate secret and there is none to give');
+                return res.status(503).json({ error: 'revalidate secret unavailable' });
+            }
+            // Worth a line in the log: it means a node was missing it, which only happens on a cluster
+            // enrolled before the secret existed (or after a config was restored without it).
+            logger.info('[Gateway] [Purge] handed the revalidate secret to a CN=frontend node (self-repair)');
+            res.json({ revalidateSecret: String(secret) });
+        } catch (e) {
+            logger.error(`[Gateway] [Purge] could not serve the revalidate secret: ${e.message}`);
+            if (!res.headersSent) res.status(500).json({ error: 'revalidate secret unavailable' });
+        }
+    });
+}
+
+module.exports = {
+    sanitizePurgePayload, collectFrontendTargets, postPurge, fanOutPurge,
+    mountRevalidateSecret, MAX_ENTRIES, MAX_LEN
+};

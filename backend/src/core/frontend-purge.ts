@@ -242,6 +242,32 @@ function purgeFrontend(tags: string[] = [], paths: string[] = []) {
     }
 }
 
+/**
+ * The public URL path(s) one post is actually served at, read off the frontend's REAL route map
+ * (frontend/src/app/(public)):
+ *
+ *   (public)/[slug]        → `/<slug>`         — posts and every custom post type
+ *   (public)/pages/[slug]  → `/pages/<slug>`   — pages; the URL the admin's menu builder emits
+ *
+ * A PAGE is live at both: `/pages/<slug>` is what the site links to, and the catch-all `/<slug>`
+ * resolves it too (the backend's /posts/slug/:slug is not type-filtered) — which is also the
+ * canonical the page's own <head> declares. Both are real, so both are purged.
+ *
+ * This used to be one hardcoded `/<postName>` for EVERY type. Right for a post, wrong for a page:
+ * `/about` was purged and `/pages/about` — the URL the menu points at — was not. Nothing looked
+ * broken because the `post:<slug>` TAG covers every route that rendered the post (Next invalidates
+ * by tag across routes), so the path was pure decoration: a claim in the purge logs that matched no
+ * route. Derive it from the route map instead of assuming, and it stays true when routes move.
+ *
+ * Exported for tests.
+ */
+function publicPathsForPost(post: { postName?: string; postType?: string } | null | undefined): string[] {
+    const slug = post && post.postName ? String(post.postName) : '';
+    if (!slug) return [];
+    if (String(post && post.postType) === 'page') return [`/pages/${slug}`, `/${slug}`];
+    return [`/${slug}`];
+}
+
 /** Tags/paths affected by a change to one post. Falls back to the broad 'posts' tag on any gap. */
 async function purgeForPost(postId: any) {
     const tags = ['posts'];
@@ -252,7 +278,7 @@ async function purgeForPost(postId: any) {
         if (post) {
             if (post.postName) {
                 tags.push(`post:${post.postName}`);
-                paths.push(`/${post.postName}`);
+                paths.push(...publicPathsForPost(post));
             }
             tags.push(`post:${post.id}`, `posts:${post.postType}`);
         }
@@ -297,4 +323,4 @@ function initFrontendPurge() {
     });
 }
 
-module.exports = { initFrontendPurge, purgeFrontend, purgeTransport, gatewayPurgeOptions };
+module.exports = { initFrontendPurge, purgeFrontend, purgeForPost, publicPathsForPost, purgeTransport, gatewayPurgeOptions };

@@ -9,6 +9,24 @@ export async function register() {
         const fs = await import('fs');
         const path = await import('path');
 
+        /**
+         * Ask the gateway for the cache-purge secret if this node has cluster identity but no secret.
+         * Runs at most once per process, never throws, and says what happened either way — a node it
+         * cannot repair simply keeps serving TTL-fresh content, exactly as it does today.
+         */
+        let purgeSecretChecked = false;
+        const recoverPurgeSecret = async () => {
+            if (purgeSecretChecked) return;
+            purgeSecretChecked = true;
+            try {
+                const { recoverRevalidateSecret } = await import('@/lib/revalidateSecret');
+                const outcome = await recoverRevalidateSecret();
+                if (outcome.status === 'recovered') console.log('[Frontend Instrumentation] cache-purge secret recovered from the gateway');
+            } catch (e: any) {
+                console.warn('[Frontend Instrumentation] purge-secret self-repair failed:', e?.message);
+            }
+        };
+
         const registerWithGateway = () => {
             // Advertised host/port the gateway proxies to. Defaults to loopback (co-located), but a
             // frontend on a SEPARATE machine must advertise its routable address via config.advertiseHost
@@ -102,6 +120,12 @@ export async function register() {
                 }, (res: any) => {
                     if (res.statusCode === 200) {
                         // console.log('✅ Frontend registered with Gateway via ' + (useMtls ? 'mTLS' : 'HTTP'));
+                        // Registration proving out means the gateway is up AND this node's cluster
+                        // certificate is accepted — the exact moment the missing purge secret can be
+                        // asked for. A cluster enrolled before that secret existed has everything but
+                        // it, so every purge is refused with 403 forever unless someone remembers to
+                        // re-enroll the node. Repair it here instead. See lib/revalidateSecret.ts.
+                        void recoverPurgeSecret();
                     } else {
                         retry();
                     }

@@ -29,6 +29,7 @@ const { createProxyServer, createUpstreamAgent, httpKeepAliveAgent } = require('
 const { helmetOptions } = require('./security-headers');
 const clusterCa = require('./cluster-ca');
 const purge = require('./purge');
+const identity = require('./identity');
 
 // mTLS cluster-cert directory. SEPARATE mode: `scripts/cluster.js init` writes the gateway's certs to
 // gateway/certs. LOCAL split (one machine, `npm start`): the install generates the cluster certs into
@@ -449,15 +450,10 @@ if (cluster.isPrimary) {
                 const internalApp = express();
                 internalApp.use(express.json());
 
-                const requireIdentity = (allowedCns) => (req, res, next) => {
-                    const cert = req.socket.getPeerCertificate();
-                    if (!cert || !cert.subject || !allowedCns.includes(cert.subject.CN)) {
-                        logger.warn(`[Gateway] [Internal] ACCESS DENIED: Identity '${cert?.subject?.CN || 'Unknown'}'`);
-                        return res.status(403).json({ error: 'Access Forbidden' });
-                    }
-                    logger.info(`[Gateway] [Internal] mTLS Verified: Identity '${cert.subject.CN}'`);
-                    next();
-                };
+                // Extracted to src/identity.js so the cluster control plane's ONE authorization
+                // primitive is reachable from a test (gateway/test/cluster-secret.test.js drives it
+                // over a real mTLS handshake). Behaviour is unchanged for every call site below.
+                const requireIdentity = (allowedCns) => identity.requireIdentity(allowedCns, logger);
 
                 // A registering node may only claim routes that belong to its ROLE (its cert CN) — mTLS
                 // proves *who* the peer is, but without this it could serve *anything*. The exploit: a
@@ -574,6 +570,12 @@ if (cluster.isPrimary) {
                         if (!res.headersSent) res.status(500).json({ error: 'purge failed' });
                     }
                 });
+
+                // Self-repair for a cluster enrolled BEFORE the purge secret existed: a frontend node
+                // that boots with cluster identity but no `revalidateSecret` asks for it here, over
+                // this same mTLS channel, instead of waiting for an operator to re-enroll it. See
+                // src/purge.js for why a CN=frontend certificate is the authorization.
+                purge.mountRevalidateSecret(internalApp, { ensureSecret: ensureRevalidateSecret, logger });
 
                 // New Info Endpoint
                 internalApp.get('/info', requireIdentity(['backend']), (req, res) => {

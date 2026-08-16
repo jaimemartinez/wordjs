@@ -239,21 +239,43 @@ already trusts:
   reached, publishing still succeeds and the content simply stays fresh-by-TTL — and both the backend
   (`[Purge] …`) and the gateway (`[Gateway] [Purge] …`) log it.
 
+* **A node missing the secret repairs itself.** A cluster enrolled *before* `revalidateSecret` existed
+  has a frontend with every other piece of cluster identity and no secret, so purges arrive and are
+  refused (403) — permanently, and quietly. So on the boot after it registers, a frontend that has
+  cluster identity but no secret asks the gateway for one over the mTLS channel it just used to
+  register:
+
+  ```
+  FRONTEND ──GET /revalidate-secret (mTLS, CN=frontend)──▶ GATEWAY :3100
+  ```
+
+  The `CN=frontend` certificate **is** the authorization, exactly as `CN=backend` is the authorization
+  to request a purge — a node that can present it is one `/enroll` would have handed the secret to
+  anyway. The value is written into the node's own `wordjs-config.json`, so it survives restarts, and
+  an existing secret is **never** overwritten. Nothing else changes: a monolith or single-host split
+  has no cluster identity, so it never asks; and if the gateway cannot be reached or refuses, the node
+  keeps serving TTL-fresh content and says so in its log:
+
+  ```
+  [Purge] this node has cluster identity but no revalidateSecret, and the gateway at …:3100 could not
+  supply one: … — cache purges will be REFUSED (403) and content stays TTL-fresh
+  ```
+
 Monolith and single-host split are untouched: they keep purging the co-located frontend directly,
 which is shorter and already instant.
 
-> **Upgrading a cluster enrolled before this existed?** Its frontend config has no `revalidateSecret`,
-> so purges arrive and are refused (403; the gateway logs it). Re-enroll that node — mint a token and
-> run `node-join` again, per [Rotating / re-issuing](#rotating--re-issuing) — or copy
-> `revalidateSecret` from `gateway/gateway-config.json` into the frontend's `wordjs-config.json` and
-> restart it.
+> **Upgrading a cluster enrolled before this existed?** Nothing to do — restart the frontend node and
+> it fetches the secret itself (`[Purge] recovered the missing revalidateSecret from the gateway…`).
+> Only if that log line says it could **not** is manual action needed: copy `revalidateSecret` from
+> `gateway/gateway-config.json` into the frontend's `wordjs-config.json`, or re-enroll the node per
+> [Rotating / re-issuing](#rotating--re-issuing).
 
 ## What must match across nodes
 
 | Thing | Where | Notes |
 |---|---|---|
 | `gatewaySecret` | all three configs | written automatically by `init`/`node-join` |
-| `revalidateSecret` | gateway + every frontend | minted by `init`, handed out by `/enroll`; authenticates cache purges. A mismatch means purges are refused (403) and content falls back to TTL freshness |
+| `revalidateSecret` | gateway + every frontend | minted by `init`, handed out by `/enroll`, and re-fetched by a frontend that lacks it (`GET /revalidate-secret`, mTLS `CN=frontend`); authenticates cache purges. A mismatch means purges are refused (403) and content falls back to TTL freshness |
 | cluster CA (`cluster-ca.crt`) | all three `certs/` | distributed automatically by enrollment |
 | `siteUrl` | gateway + backend | its **hostname** must match the host browsers reach the gateway on, or the backend's migration guard 409s `migration_required` (scheme and port are ignored; loopback is always exempt) |
 | `jwtSecret` | backend only | only needs to match if you run **multiple** backends |
