@@ -691,8 +691,21 @@ export class VersoCollabSession {
         // Contabilidad completa: aceptadas + ya conocidas + rechazadas tiene que cubrir el lote. Si
         // no cuadra, hay ops de las que nadie se ha hecho cargo: NO se confirman (o sea, no salen de
         // la cola) y se reintentan, en vez de darlas por entregadas.
+        //
+        // UN 200 NO ES UNA CONFIRMACIÓN: lo es el CUERPO. `transport.ts` entrega `body === null`
+        // cuando la respuesta no es JSON, y eso es exactamente lo que devuelve un portal cautivo, la
+        // página de mantenimiento de un balanceador o un service worker offline: un 200 que NUNCA
+        // llegó al servidor. La comprobación de aquí abajo empezaba por `typeof accepted === number`,
+        // así que ante un cuerpo mudo era falsa y el lote caía en el `else` dándose por ENTREGADO.
+        // Se medía: 20 ops aplicadas en el canvas del autor, ausentes del log y de la otra réplica,
+        // `pendientes: 0`, la identidad contable CUADRANDO y ni un aviso. Una suma que se cuadra a sí
+        // misma porque nadie comprueba que el servidor haya dicho nada.
+        // Por eso la ausencia de dato se trata como lo que es —no sé si se hizo cargo— y se reintenta:
+        // reenviar es un no-op exacto por el dot, y ese es el argumento que sostiene toda la cola.
         const accounted = (body?.accepted ?? 0) + (body?.known ?? 0) + rejected.length;
-        if (typeof body?.accepted === "number" && accounted < batch.length) {
+        if (typeof body?.accepted !== "number") {
+          this.reintenta("El servidor contestó 200 sin decir de cuántos cambios se hizo cargo; se reintentan.");
+        } else if (accounted < batch.length) {
           this.reintenta(`El servidor no confirmó ${batch.length - accounted} cambio(s); se reintentan.`);
         } else {
           this.confirmaLote(batch.length, rejected.length, gen);
@@ -728,7 +741,7 @@ export class VersoCollabSession {
           });
         }
       } else if (res.status === 409) {
-        this.sinSala(String((res.body as { code?: unknown } | null)?.code ?? ""));
+        this.sinSala(String((res.body as { code?: unknown } | null)?.code ?? ""), gen);
       } else {
         // 5xx u otro status: el servidor NO se ha hecho cargo del lote. Sigue en la cola, con freno.
         this.reintenta("El servidor no pudo guardar los últimos cambios; se están reintentando.");
@@ -757,8 +770,14 @@ export class VersoCollabSession {
    *    dispara cualquier parpadeo de red, y el que antes decía «la sesión se reinició» mientras tiraba
    *    el lote.
    */
-  private sinSala(code: string): void {
+  private sinSala(code: string, gen: number): void {
     if (code === "collab_epoch") {
+      // La MISMA guarda de generación que `confirmaLote`, y por el mismo motivo: esta respuesta puede
+      // llegar tarde. Si el `welcome` de un `resync` ya re-sembró la cola, lo que hay dentro son ops
+      // NUEVAS, válidas para el epoch nuevo, y tirarlas aquí sería perder por culpa de un 409 que
+      // hablaba de la cola anterior — que ya se descartó, contada, en su momento. Medido: tres
+      // pulsaciones válidas para el epoch 2 se iban con el 409 rezagado del epoch 1.
+      if (gen !== this.outboxGen) return;
       const pendientes = this.outbox.length;
       this.descartaDeLaCola(pendientes, this.outboxGen);
       this.outboxGen++;

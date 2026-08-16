@@ -242,6 +242,13 @@ export class FakeCollabServer {
    * doble contestaba 200 a un POST sin stream, la pérdida de las ops en vuelo era irrepresentable.
    */
   readonly sinSesion: { siteId: string; at: number; porExpulsion: boolean }[] = [];
+  /**
+   * Devuelve true para los POST que hay que contestar con un 200 MUDO sin llegar al servidor (ver
+   * `portalCautivo` en el transporte del doble). Null = todo llega, que es lo normal.
+   */
+  portalCautivo: ((path: string) => boolean) | null = null;
+  /** Los POST que se tragó el portal: existen para que un test pueda exigir que hubo alguno. */
+  readonly tragados: { path: string; at: number }[] = [];
 
   /** Cada POST recibido: cuándo se mandó y cuándo se sirvió (difieren en cuanto hay latencia). */
   readonly posted: { path: string; at: number; servedAt: number; status: number }[] = [];
@@ -344,6 +351,18 @@ export class FakeCollabServer {
         // IDA. A partir de aquí estamos en el SERVIDOR: todo lo que el cliente haga mientras tanto
         // (teclear, mover el cursor) ocurre sin saber nada de lo que se decida aquí dentro.
         if (this.latencyMs > 0) await this.sleep(this.latencyMs);
+
+        // EL 200 QUE NUNCA LLEGÓ AL SERVIDOR. Un portal cautivo, la página de mantenimiento de un
+        // balanceador o un service worker offline contestan 200 con algo que no es JSON, y el
+        // transporte real (`transport.ts`) entrega eso como `body: null`. Se corta ANTES de `sirve`
+        // a propósito: el servidor no se entera, que es exactamente lo que hace peligroso el caso —
+        // el cliente tiene un 200 en la mano y nadie ha guardado nada.
+        if (this.portalCautivo?.(path)) {
+          this.tragados.push({ path, at: enviadoEn });
+          if (this.latencyMs > 0) await this.sleep(this.latencyMs);
+          return { status: 200, body: null };
+        }
+
         const res = this.sirve(path, payload);
         this.posted.push({ path, at: enviadoEn, servedAt: this.clock(), status: res.status });
         // VUELTA.
