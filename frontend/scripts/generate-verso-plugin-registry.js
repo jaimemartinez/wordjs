@@ -189,7 +189,19 @@ ${exports}
 
     // Write-if-changed: an identical rewrite still bumps mtime, which makes Next/Turbopack
     // invalidate + full-reload the browser for nothing (e.g. uninstalling a never-active plugin).
-    if (fs.existsSync(OUTPUT_FILE) && fs.readFileSync(OUTPUT_FILE, 'utf8') === fileContent) {
+    //
+    // The read IS the existence check (CWE-367): asking `existsSync` first and reading the path
+    // afterwards decides on a state that may already be gone when we act on it — and that read
+    // throwing kills the script, leaving the tree with NO registry at all, which is a hard frontend
+    // build error rather than a missing block. "Could not read it" is simply "not the content we
+    // want", i.e. write it. Anything other than absent-or-not-a-file is still a real failure.
+    let current = null;
+    try {
+        current = fs.readFileSync(OUTPUT_FILE, 'utf8');
+    } catch (e) {
+        if (e.code !== 'ENOENT' && e.code !== 'ENOTDIR' && e.code !== 'EISDIR') throw e;
+    }
+    if (current === fileContent) {
         console.log(`\n✅ Verso Registry unchanged (${includedPlugins.length} component(s)) — write skipped, no rebuild`);
         return;
     }

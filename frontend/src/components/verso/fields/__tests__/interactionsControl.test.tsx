@@ -60,6 +60,64 @@ function labelTargets(html: string): { fors: string[]; ids: string[] } {
   };
 }
 
+/** Elementos sin cierre: no abren subárbol. */
+const VOID_TAGS = new Set([
+  "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr",
+]);
+
+/**
+ * El texto que un lector de pantalla LEERÍA dentro de un fragmento de markup.
+ *
+ * Quitar las etiquetas con `markup.replace(/<[^>]+>/g, "")` no vale para esto, por dos motivos:
+ *
+ *  1. una etiqueta sin cerrar sobrevive ENTERA al reemplazo (`'<i></i><script alert'` deja
+ *     `'<script alert'`), así que el supuesto «texto» podía traer markup dentro — es el saneado
+ *     incompleto que marca CodeQL con js/incomplete-multi-character-sanitization;
+ *  2. contaba el contenido de los subárboles `aria-hidden="true"` — y eso es justo lo que NO se
+ *     lee: los iconos `MSym` son un `<span aria-hidden="true">` cuyo texto es el nombre de la
+ *     ligadura ("play_arrow"), de modo que un botón de solo icono y sin `aria-label` pasaba por
+ *     «tiene nombre accesible» cuando su nombre es la cadena vacía.
+ *
+ * Se recorre el markup carácter a carácter: un `<` no llega nunca a la salida, así que no hay
+ * forma de reconstruir una etiqueta con los restos.
+ */
+function accessibleText(markup: string): string {
+  let out = "";
+  let hidden = false; // dentro de un subárbol aria-hidden
+  let depth = 0; // elementos abiertos dentro de ese subárbol
+  let i = 0;
+  while (i < markup.length) {
+    if (markup[i] !== "<") {
+      if (!hidden) out += markup[i];
+      i += 1;
+      continue;
+    }
+    const close = markup.indexOf(">", i);
+    if (close === -1) break; // etiqueta a medio escribir: ahí ya no queda texto que leer
+    const tag = markup.slice(i + 1, close);
+    i = close + 1;
+    const isEnd = tag.startsWith("/");
+    const name = (isEnd ? tag.slice(1) : tag).trim().split(/[\s/]/)[0].toLowerCase();
+    const opensSubtree = !tag.endsWith("/") && !VOID_TAGS.has(name);
+    if (hidden) {
+      if (isEnd) {
+        if (depth === 0) hidden = false;
+        else depth -= 1;
+      } else if (opensSubtree) depth += 1;
+    } else if (!isEnd && opensSubtree && /\saria-hidden="true"/.test(tag)) {
+      hidden = true;
+      depth = 0;
+    }
+  }
+  // `&nbsp;` y sus formas numéricas son espacio: un botón que solo lleva eso no tiene nombre.
+  return out.replace(/&(?:nbsp|#160|#xa0);/gi, " ").replace(/\s+/g, " ").trim();
+}
+
+/** Un botón tiene nombre si lo dice `aria-label` (no vacío) o si algo se lee dentro. */
+function hasAccessibleName(attrs: string, inner: string): boolean {
+  return /\saria-label="[^"]+"/.test(attrs) || accessibleText(inner).length > 0;
+}
+
 describe("InteractionsControl — estructura y nombres accesibles", () => {
   it("la sección se anuncia por su título (aria-labelledby → el id del encabezado)", () => {
     const html = render(undefined);
@@ -120,10 +178,41 @@ describe("InteractionsControl — estructura y nombres accesibles", () => {
     const buttons = [...html.matchAll(/<button([^>]*)>([\s\S]*?)<\/button>/g)];
     expect(buttons.length).toBeGreaterThan(2);
     for (const [, attrs, inner] of buttons) {
-      const text = inner.replace(/<[^>]+>/g, "").trim();
-      const hasLabel = /aria-label="/.test(attrs) || text.length > 0;
-      expect(hasLabel, `botón sin nombre accesible: <button${attrs}>`).toBe(true);
+      expect(hasAccessibleName(attrs, inner), `botón sin nombre accesible: <button${attrs}>`).toBe(
+        true,
+      );
     }
+  });
+});
+
+/**
+ * El gate de arriba vale lo que valga `accessibleText`: si el ayudante contase de más, diría que
+ * todos los botones tienen nombre pase lo que pase. Estos son sus controles negativos.
+ */
+describe("accessibleText — qué se lee de verdad dentro de un botón", () => {
+  it("un botón de solo icono NO tiene nombre: `aria-hidden` no se lee", () => {
+    // Es el markup exacto de MSym: el texto del span es el nombre de la ligadura, no una palabra.
+    const soloIcono = '<span aria-hidden="true" class="msym">play_arrow</span>';
+    expect(accessibleText(soloIcono)).toBe("");
+    expect(hasAccessibleName("", soloIcono)).toBe(false);
+    // …y con `aria-label` sí lo tiene, que es como está resuelto en el panel.
+    expect(hasAccessibleName(' aria-label="Probar"', soloIcono)).toBe(true);
+    // El texto que acompaña al icono sigue contando.
+    expect(accessibleText(`${soloIcono} Probar`)).toBe("Probar");
+  });
+
+  it("ninguna etiqueta se cuela en el texto, ni siquiera a medio cerrar", () => {
+    // Una sola pasada de `replace(/<[^>]+>/g, "")` deja aquí `<script alert` intacto.
+    expect(accessibleText('<i class="x"></i><script alert')).toBe("");
+    expect(accessibleText("<b>Quitar</b>")).toBe("Quitar");
+    expect(accessibleText("<b>Qui</b>tar")).toBe("Quitar"); // el marcado en línea no parte la palabra
+    expect(accessibleText("<span>Añadir</span> <span>paso</span>")).toBe("Añadir paso");
+  });
+
+  it("un espacio duro no es un nombre", () => {
+    expect(accessibleText("&nbsp;")).toBe("");
+    expect(accessibleText("<span>&#160;</span>")).toBe("");
+    expect(hasAccessibleName(' aria-label=""', "&nbsp;")).toBe(false);
   });
 });
 

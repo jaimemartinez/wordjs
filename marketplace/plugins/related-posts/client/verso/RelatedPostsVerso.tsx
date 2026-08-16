@@ -115,16 +115,31 @@ function formatDateEs(iso) {
     }
 }
 
-/** Strip tags/entities from the API excerpt so the 2-line clamp shows clean text. */
+/**
+ * The entities this block decodes. Kept next to the single regex that consumes it so the two can
+ * never drift: adding a row here is the ONLY way to teach cleanText a new entity.
+ */
+const ENTITIES = {
+    "&nbsp;": " ",
+    "&amp;": "&",
+    "&lt;": "<",
+    "&gt;": ">",
+    "&quot;": '"',
+    "&#39;": "'",
+};
+
+/**
+ * Strip tags/entities from the API excerpt so the 2-line clamp shows clean text.
+ *
+ * Decoding is SINGLE-PASS on purpose. A chain of `.replace()` that turns `&amp;` into `&` before the
+ * other entities re-reads its own output: `&amp;lt;` becomes `&lt;` and then `<`, so text that merely
+ * QUOTED an entity comes out as the character it names. One regex over a lookup table cannot rescan
+ * what it just produced, so the ordering trap cannot come back when a row is added above.
+ */
 function cleanText(s) {
     return String(s == null ? "" : s)
         .replace(/<[^>]*>/g, " ")
-        .replace(/&nbsp;/g, " ")
-        .replace(/&amp;/g, "&")
-        .replace(/&lt;/g, "<")
-        .replace(/&gt;/g, ">")
-        .replace(/&quot;/g, '"')
-        .replace(/&#39;/g, "'")
+        .replace(/&(?:nbsp|amp|lt|gt|quot|#39);/g, (m) => ENTITIES[m])
         .replace(/\s+/g, " ")
         .trim();
 }
