@@ -6,7 +6,6 @@ acme.axios.defaults.timeout = 10000;
 const fs = require('fs');
 const path = require('path');
 const dns = require('dns').promises;
-const { v4: uuidv4 } = require('uuid');
 // The one place a name becomes a path. A certificate's storage directory is CHOSEN by a hostname
 // that arrives in an admin HTTP body (POST /certs/auto-provision, and — round-tripped through the
 // browser — POST /certs/dns-finish), so it gets the full treatment: allowlist the FORM, resolve
