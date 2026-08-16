@@ -23,7 +23,7 @@
 import { describe, expect, it } from "vitest";
 
 import { VersoCollabSession } from "../client";
-import type { CollabNotice } from "../types";
+import type { CollabAccounting, CollabNotice } from "../types";
 import { FakeCollabServer, ManualTimers, makeRng } from "./fakeServer";
 
 const SITE = "s_prop";
@@ -73,13 +73,24 @@ interface Escenario {
 
 interface Resultado {
   expulsiones: number;
-  cuatrocientosNueve: number;
+  /**
+   * 409 `collab_no_session` SERVIDOS POR EXPULSIÓN.
+   *
+   * Antes esto contaba TODOS los 409 y afirmaba que ni uno podía aparecer. Era falso, y su falsedad
+   * escondía un hallazgo: el servidor real devuelve ese mismo código cuando simplemente no hay
+   * conexión SSE viva —lo que pasa en cada parpadeo de red— y el doble lo tapaba contestando 200.
+   * Al hacerlo fiel, «ni un 409» dejó de ser cierto sin que nadie hubiera roto nada. Lo que sigue
+   * siendo la propiedad es que ninguno de esos 409 venga de que nos hayan ECHADO.
+   */
+  sinSesionPorExpulsion: number;
   rechazos: number;
   aceptados: number;
   avisos: CollabNotice[];
   estado: string;
   /** Frames que llegaron con el acuse de la conexión ANTERIOR: la huella de la carrera. */
   acusesDeOtraConexion: number;
+  /** La cuenta de punta a punta del cliente (ver `CollabAccounting`). */
+  cuenta: CollabAccounting;
 }
 
 async function corre(esc: Escenario): Promise<Resultado> {
@@ -146,12 +157,13 @@ async function corre(esc: Escenario): Promise<Resultado> {
 
   return {
     expulsiones: server.expulsiones.length,
-    cuatrocientosNueve: server.posted.filter((p) => p.status === 409).length,
+    sinSesionPorExpulsion: server.sinSesion.filter((s) => s.porExpulsion).length,
     rechazos: server.posted.filter((p) => p.status === 429).length,
     aceptados: server.posted.filter((p) => p.status === 200).length,
     avisos,
     estado: session.snapshot().status,
     acusesDeOtraConexion: server.acusesDeOtraConexion,
+    cuenta: session.contabilidad(),
   };
 }
 
@@ -186,13 +198,34 @@ describe("PROPIEDAD: quien respeta la espera del servidor no puede acabar fuera 
       expect(
         r.expulsiones,
         `expulsado de la sala respetando la espera (${esc.nombre}): ` +
-        `${r.rechazos} rechazos, ${r.cuatrocientosNueve} respuestas 409, avisos ` +
-        JSON.stringify(r.avisos.map((a) => a.code)),
+        `${r.rechazos} rechazos, avisos ` + JSON.stringify(r.avisos.map((a) => a.code)),
       ).toBe(0);
       expect(
-        r.cuatrocientosNueve,
-        `un 409 collab_no_session es la firma de la expulsión: no puede aparecer ni uno (${esc.nombre})`,
+        r.sinSesionPorExpulsion,
+        `un 409 collab_no_session POR EXPULSIÓN es la firma del defecto: no puede aparecer ni uno (${esc.nombre})`,
       ).toBe(0);
+
+      // NI UNA OP PERDIDA, EN NINGÚN ESCENARIO. Estos son los mismos recorridos que provocan cortes
+      // de red, y por tanto el hueco de la reconexión: si un lote en vuelo se cayera, la suma no
+      // cuadraría aunque nadie hubiera escrito un aviso. Y lo que se descarte tiene que estar DICHO.
+      const c = r.cuenta;
+      expect(
+        c.entregadas + c.rechazadas + c.descartadas + c.pendientes,
+        `la cuenta no cuadra (${esc.nombre}): ${JSON.stringify(c)}`,
+      ).toBe(c.emitidas);
+      // La cuenta solo dice algo si hubo ops que contar, y hay un escenario que es SOLO presencia
+      // (`tecleo: false`): exigirle ops ahí haría fallar un escenario correcto, y exigírselo a todos
+      // por igual sería fingir que el de presencia prueba algo que no prueba.
+      if (esc.tecleo) {
+        expect(c.emitidas, `este escenario tiene que emitir ops de verdad (${esc.nombre})`).toBeGreaterThan(0);
+        expect(c.entregadas, `y tienen que llegar a entregarse (${esc.nombre})`).toBeGreaterThan(0);
+      }
+      if (c.descartadas > 0) {
+        expect(
+          r.avisos.some((a) => a.code === "epoch-reset" || a.code === "identity-reset" || a.code === "rejected-ops"),
+          `se descartaron ${c.descartadas} ops sin decirlo (${esc.nombre})`,
+        ).toBe(true);
+      }
       expect(
         r.avisos.some((a) => a.code === "transport-error"),
         `la sesión no puede caerse: ${JSON.stringify(r.avisos.map((a) => `${a.code}: ${a.message}`))}`,
