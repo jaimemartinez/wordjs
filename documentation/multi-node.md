@@ -121,6 +121,13 @@ registered backends in its route group and round-robins across them. (`advertise
   load," never lost.
 - **Rate limits** — backed by the shared Redis store, so caps are enforced globally instead of
   per-node (N× looser).
+- **Frontend cache purge (N frontend replicas)** — on publish the backend asks the **gateway** to
+  purge, over the internal mTLS channel (`POST /purge`, `CN=backend`), and the gateway fans the
+  `{ tags, paths }` out to **every** frontend it has registered. Next.js caches are per-process, so a
+  purge that reached only one replica would leave the others serving stale HTML until their ISR window
+  expired; routing it through the registry is what makes "instant publish" hold at N > 1. Nodes that
+  cannot be reached fall back to TTL freshness and are logged, never failing the write. See
+  [separate-mode.md](separate-mode.md#cache-purge-across-machines--instant-via-the-gateway).
 
 The lease locks are DB-clock based (immune to node clock skew) and auto-expire, so a crashed node never
 deadlocks the cluster.

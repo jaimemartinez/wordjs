@@ -19,7 +19,9 @@ Not every route under `src/app/` is a page — three are Next **route handlers**
 | `/api/internal/gateway-update` | `POST` | `x-gateway-secret` | The frontend twin of the backend's `/api/internal/gateway-update` — the gateway telling this node its public port moved. Writes `gatewayPort` back into `wordjs-config.json`. |
 | `/health` | `GET` | No | Liveness for the gateway's health-checks: `{ status: 'healthy', timestamp }`. |
 
-> **`/api/revalidate` fails closed.** With no `revalidateSecret` in `wordjs-config.json` it answers **503** — never open access — and a wrong secret gets **403** from a constant-time compare (both sides hashed first, so a length mismatch can't throw). The blast radius is bounded by construction: purging can only force a re-render, it can never inject content.
+> **`/api/revalidate` fails closed.** With no `revalidateSecret` anywhere it answers **503** — never open access — and a wrong secret gets **403** from a constant-time compare (both sides hashed first, so a length mismatch can't throw). The blast radius is bounded by construction: purging can only force a re-render, it can never inject content.
+>
+> The secret is looked up by `lib/revalidateSecret.ts`, **per key, not per file**: this node's own `wordjs-config.json` first (separate mode — enrollment writes the gateway-minted secret there, and the caller is the gateway fanning a backend purge out to every frontend node), then `../backend/wordjs-config.json` (monolith / single-host split, where the backend's config shares the disk). A local config that merely *exists* without the key must not end the search — that was exactly why cross-machine purges used to 503.
 
 ## Gateway Integration
 

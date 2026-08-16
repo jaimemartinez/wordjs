@@ -129,6 +129,10 @@ async function main() {
         advertiseHost: advertise,
         mtls: { ca: './certs/cluster-ca.crt', key: `./certs/${role}.key`, cert: `./certs/${role}.crt` }
     });
+    // Cache-purge secret, minted by the gateway and handed to BOTH roles at enrollment. The frontend
+    // authenticates purge requests with it (from this file, on this machine — never from the backend's
+    // config, which lives on another host); a co-located backend signs its direct purges with it.
+    if (boot.revalidateSecret) cfg.revalidateSecret = boot.revalidateSecret;
     if (role === 'backend') {
         cfg.host = '0.0.0.0';                 // accept the gateway from another machine
         cfg.port = svcPort;

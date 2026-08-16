@@ -28,6 +28,7 @@ const path = require('path');
 const { createProxyServer, createUpstreamAgent, httpKeepAliveAgent } = require('./proxy-config');
 const { helmetOptions } = require('./security-headers');
 const clusterCa = require('./cluster-ca');
+const purge = require('./purge');
 
 // mTLS cluster-cert directory. SEPARATE mode: `scripts/cluster.js init` writes the gateway's certs to
 // gateway/certs. LOCAL split (one machine, `npm start`): the install generates the cluster certs into
@@ -369,6 +370,29 @@ if (cluster.isPrimary) {
         logger.info(`[Gateway] Service registered: ${service.name} -> ${service.url}`);
     };
 
+    /**
+     * The frontend cache-purge shared secret, minting + persisting it on first use.
+     *
+     * It is CLUSTER-WIDE state, so the gateway owns it exactly like gatewaySecret: enrollment hands the
+     * same value to every node (the frontend verifies purges with it; a co-located backend signs them
+     * with it) and the /purge fan-out below presents it to each frontend. Owning it here is what lets a
+     * frontend node authenticate a purge from its OWN config instead of reading the backend's config
+     * file off a disk it does not share.
+     */
+    const ensureRevalidateSecret = () => {
+        if (config.revalidateSecret) return String(config.revalidateSecret);
+        const secret = require('crypto').randomBytes(32).toString('hex');
+        config.revalidateSecret = secret;
+        try {
+            fs.writeFileSync(path.resolve(__dirname, '../gateway-config.json'), JSON.stringify(config, null, 2));
+        } catch (e) {
+            // Not fatal, but a secret we cannot persist would differ on the next boot and every purge
+            // would 403 — say so loudly rather than failing mysteriously later.
+            logger.error(`[Gateway] could not persist revalidateSecret: ${e.message} — purges will stop working after a restart.`);
+        }
+        return secret;
+    };
+
     // Helper to restart workers (used by both message handler and internal API)
     const restartGateway = () => {
         logger.info('[Gateway] 🔄 Reloading workers...');
@@ -493,6 +517,62 @@ if (cluster.isPrimary) {
                     }
                     handleRegistration(req.body, cn);
                     res.json({ success: true });
+                });
+
+                // Cluster cache purge: fan a backend's { tags, paths } out to EVERY registered frontend.
+                //
+                // The backend cannot do this itself across machines — it does not know where the frontend
+                // nodes live (its frontendUrl is the gateway's public origin, whose /api prefix routes
+                // straight back to the backend) and there may be N replicas. The registry right here is
+                // the authority, so the gateway resolves the targets and delivers. See src/purge.js.
+                //
+                // Authorization is the same mTLS identity the rest of this listener requires: only a peer
+                // holding a cluster-CA cert with CN=backend can reach it, and the only thing it can ask
+                // for is cache INVALIDATION — never content injection.
+                let purgeAgent = null;
+                const purgeUpstreamAgent = () => {
+                    if (!purgeAgent) {
+                        purgeAgent = createUpstreamAgent({
+                            ca: fs.readFileSync(MTLS_CA),
+                            key: fs.readFileSync(MTLS_KEY),
+                            cert: fs.readFileSync(MTLS_CERT)
+                        });
+                    }
+                    return purgeAgent;
+                };
+                internalApp.post('/purge', requireIdentity(['backend']), async (req, res) => {
+                    // Express 4 does not catch async rejections, and this handler runs in the PRIMARY —
+                    // which, unlike the workers, installs no unhandledRejection net. A purge must never be
+                    // able to take the gateway down; answer 500 and let the backend degrade to TTL.
+                    try {
+                        const payload = purge.sanitizePurgePayload(req.body);
+                        if (!payload.tags.length && !payload.paths.length) {
+                            return res.status(400).json({ error: 'At least one tag or path must be given.' });
+                        }
+                        const targets = purge.collectFrontendTargets(registry);
+                        if (!targets.length) {
+                            // Not an error: a cluster whose frontend is down or has not registered yet
+                            // simply keeps serving TTL-fresh content. Say it so it is diagnosable.
+                            logger.warn('[Gateway] [Purge] no frontend node registered — content stays TTL-fresh');
+                            return res.json({ targets: 0, delivered: 0, failed: 0 });
+                        }
+                        const out = await purge.fanOutPurge({
+                            targets,
+                            payload,
+                            secret: ensureRevalidateSecret(),
+                            agent: purgeUpstreamAgent()
+                        });
+                        if (out.failed) {
+                            const why = out.results.filter((r) => !r.ok).map((r) => `${r.url} → ${r.status || r.error}`).join(', ');
+                            logger.warn(`[Gateway] [Purge] ${out.delivered}/${targets.length} frontend node(s) purged; ${out.failed} could not be reached (they stay TTL-fresh): ${logSafe(why)}`);
+                        } else {
+                            logger.info(`[Gateway] [Purge] ${out.delivered}/${targets.length} frontend node(s) purged (${payload.tags.length} tag(s), ${payload.paths.length} path(s))`);
+                        }
+                        res.json({ targets: targets.length, delivered: out.delivered, failed: out.failed });
+                    } catch (e) {
+                        logger.error(`[Gateway] [Purge] failed: ${e.message}`);
+                        if (!res.headersSent) res.status(500).json({ error: 'purge failed' });
+                    }
                 });
 
                 // New Info Endpoint
@@ -729,7 +809,12 @@ if (cluster.isPrimary) {
                         gatewaySecret: GATEWAY_SECRET,
                         gatewayPort: config.gatewayPort || 3000,
                         gatewayInternalPort: config.gatewayInternalPort || 3100,
-                        siteUrl: config.siteUrl || null
+                        siteUrl: config.siteUrl || null,
+                        // Cache-purge secret. It rides the ENROLLMENT channel precisely so a frontend on
+                        // its own machine can authenticate purges from its own wordjs-config.json — the
+                        // old code read it out of the backend's config file, which only exists when the
+                        // two share a disk, so cross-machine purges could never be authenticated.
+                        revalidateSecret: ensureRevalidateSecret()
                     }
                 });
             } catch (e) {

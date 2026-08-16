@@ -211,20 +211,49 @@ curl -k -X POST https://<gateway-ip>:3000/api/v1/setup/install \
 Install **through the gateway**, not straight at the backend: the wizard derives `siteUrl` from the
 request, and the address you install on becomes the site's canonical origin.
 
-### Known limitation — cache purge is TTL-based across machines
+### Cache purge across machines — instant, via the gateway
 
-On a single host the backend purges the frontend's Next.js cache on publish, so edits appear
-immediately. That path does **not** work across machines: the backend purges `frontendUrl`, and the
-frontend authenticates the purge with the `revalidateSecret` it reads from the backend's config file
-next to it — neither of which exists on a separate frontend node. Publishes therefore land on the
-public site through normal **ISR revalidation (~60 s)** rather than instantly. Everything else is
-unaffected; the admin and the editor always read live data.
+Publishing is **instant** in separate mode, exactly like on a single host: an edit is visible on the
+public site on the next request, not after the ISR window.
+
+On one host the backend POSTs the purge straight at the frontend. Across machines it can't — its
+`frontendUrl` is the gateway's public origin (whose `/api` prefix the gateway routes right back to the
+backend), and a cluster may run several frontend replicas. So the purge takes the path the cluster
+already trusts:
+
+```
+   BACKEND ──POST /purge (mTLS, CN=backend)──▶ GATEWAY ──POST /api/revalidate──▶ FRONTEND ①
+     (content changed)                        (reads its own registry)      └──▶ FRONTEND ② …
+```
+
+* **Discovery** is the gateway's job. It already knows every frontend node — they register with it —
+  so it fans one purge out to **all** of them. The backend guesses no addresses and needs no new
+  discovery mechanism of its own.
+* **Authorization** is the mTLS identity already used for `/register`: only a peer holding a
+  cluster-CA certificate with `CN=backend` may ask, and the only thing it can ask for is cache
+  **invalidation** — a purge can force a re-render, never inject content.
+* **The shared secret rides enrollment.** `cluster.js init` mints `revalidateSecret` on the gateway and
+  `/enroll` hands it to every node, so a frontend authenticates purges from **its own**
+  `wordjs-config.json`, never from a backend config file on a disk it does not share.
+* **Failure is a TTL fallback, never a write error.** If the gateway (or a frontend replica) can't be
+  reached, publishing still succeeds and the content simply stays fresh-by-TTL — and both the backend
+  (`[Purge] …`) and the gateway (`[Gateway] [Purge] …`) log it.
+
+Monolith and single-host split are untouched: they keep purging the co-located frontend directly,
+which is shorter and already instant.
+
+> **Upgrading a cluster enrolled before this existed?** Its frontend config has no `revalidateSecret`,
+> so purges arrive and are refused (403; the gateway logs it). Re-enroll that node — mint a token and
+> run `node-join` again, per [Rotating / re-issuing](#rotating--re-issuing) — or copy
+> `revalidateSecret` from `gateway/gateway-config.json` into the frontend's `wordjs-config.json` and
+> restart it.
 
 ## What must match across nodes
 
 | Thing | Where | Notes |
 |---|---|---|
 | `gatewaySecret` | all three configs | written automatically by `init`/`node-join` |
+| `revalidateSecret` | gateway + every frontend | minted by `init`, handed out by `/enroll`; authenticates cache purges. A mismatch means purges are refused (403) and content falls back to TTL freshness |
 | cluster CA (`cluster-ca.crt`) | all three `certs/` | distributed automatically by enrollment |
 | `siteUrl` | gateway + backend | its **hostname** must match the host browsers reach the gateway on, or the backend's migration guard 409s `migration_required` (scheme and port are ignored; loopback is always exempt) |
 | `jwtSecret` | backend only | only needs to match if you run **multiple** backends |

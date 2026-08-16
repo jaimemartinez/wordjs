@@ -87,6 +87,11 @@ function cmdInit(args) {
     const cfg = readJson(CONFIG, {});
     cfg.gatewaySecret = cfg.gatewaySecret && cfg.gatewaySecret !== 'secure-your-gateway-secret'
         ? cfg.gatewaySecret : crypto.randomBytes(32).toString('hex');
+    // Cache-purge secret: cluster-wide, so the gateway owns it and enrollment hands the same value to
+    // every node (the frontend authenticates purges with it from ITS OWN config; the gateway presents it
+    // when fanning a backend's purge out to the frontends). Minted here so it exists before any node
+    // joins; the gateway also mints it lazily for clusters initialized before this existed.
+    if (!cfg.revalidateSecret) cfg.revalidateSecret = crypto.randomBytes(32).toString('hex');
     cfg.gatewayPort = port;
     cfg.gatewayInternalPort = internalPort;
     cfg.gatewayEnrollPort = enrollPort;
