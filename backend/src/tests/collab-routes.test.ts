@@ -779,9 +779,14 @@ describe('ciclo de vida de la sala: el epoch sube de verdad', () => {
         await settle(300);
     });
 
-    test('el barrido NO retira una sala con miembros vivos en OTRO nodo (falla cerrado)', async () => {
+    test('el barrido NO retira una sala con miembros vivos en OTRO nodo', async () => {
         // La única prueba de liveness era el mapa en memoria de ESTE proceso: el nodo que barría
         // borraba el estado de salas que otro nodo estaba sirviendo en vivo.
+        //
+        // El nombre decía «(falla cerrado)» y solo ejercitaba `live > 0`, que es el caso en que la
+        // consulta SÍ contesta: prometía una cobertura que no tenía. El fallo cerrado de verdad —
+        // `live === null`, la consulta que no se puede hacer, y el driver que no lanza— vive en
+        // `collab-failure-paths.test.ts` con dos tests propios.
         const a = await openSession('colabora', P.ciclo, NONCE_A);
         await post('colabora', `/collab/${P.ciclo}/ops`, {
             siteId: a.site, epoch: a.welcome.epoch, ops: [opPropSet(a.site, 90, 'viva', 1)],

@@ -163,7 +163,8 @@ before(async () => {
     await seedUser('jefa', 'administrator');
     await seedUser('mano', 'administrator');
 
-    for (const key of ['join', 'log', 'latido', 'viva', 'carrera', 'retirada', 'aviso', 'cubo', 'docfail', 'barrido']) {
+    for (const key of ['join', 'log', 'latido', 'viva', 'carrera', 'retirada', 'aviso', 'cubo', 'presencia',
+        'docfail', 'barrido', 'ciego', 'logciego', 'entrando']) {
         P[key] = (await Post.create({ authorId: U.jefa, title: `post ${key}`, type: 'post', status: 'draft' })).id;
         await Post.updateMeta(P[key], '_puck_data', VACIO);
     }
@@ -201,15 +202,107 @@ describe('un fallo de UNA sesión no puede tumbar el proceso', () => {
             s = await openStream('jefa', P.join, NONCE_A);
             const err = await s.waitFor('error', 4000);
             assert.equal(err.code, 'server-error', 'el cliente tiene que enterarse de por qué no entró');
-            await settle(200);
-            assert.deepEqual(
-                sueltos.map((e: any) => String(e && e.code)), [],
-                `un fallo de join no puede llegar a uncaughtException: ${sueltos.map((e: any) => e && e.message).join(' | ')}`);
         } finally {
             s?.close();
             await dbAsync.exec('DROP TRIGGER collab_members_boom');
+            await settle(300);
             process.removeListener('uncaughtException', capturar);
-            await settle(200);
+            // ESTE ASSERT VA EN EL `finally`, y no es estilo. Estaba después del `waitFor('error')`, y
+            // toda regresión que reintroduzca el `write after end` impide justamente que ese evento
+            // llegue: el `waitFor` rechaza por timeout y el assert de `uncaughtException` no se
+            // ejecutaba NUNCA. La mitad del test que da nombre al caso —«y no dispara
+            // uncaughtException»— era decorativa. Aquí corre pase lo que pase con la primera mitad.
+            assert.deepEqual(
+                sueltos.map((e: any) => String(e && e.code)), [],
+                `un fallo de join no puede llegar a uncaughtException: ${sueltos.map((e: any) => e && e.message).join(' | ')}`);
+        }
+    });
+
+    test('`sseWrite` NO escribe sobre una respuesta ya terminada (la guarda, falseada de frente)', () => {
+        // Esta guarda no se puede provocar por HTTP mientras el resto del arreglo esté en su sitio: la
+        // sala ya no cierra la respuesta en su camino de error (`leave(conn, {closeSocket:false})`),
+        // así que cuando la ruta escribe el motivo el socket sigue vivo. Comprobado: revertir
+        // `sseWrite` a un `res.write` crudo dejaba los 21 tests en verde. Por eso se ejercita
+        // DIRECTAMENTE — es lo único que la separa de ser código que nadie prueba.
+        //
+        // `res.write()` sobre una respuesta terminada NO lanza: Node emite `'error'`
+        // (`ERR_STREAM_WRITE_AFTER_END`) en el siguiente tick, fuera de toda cadena de promesas, y
+        // acaba en el `process.on('uncaughtException')` del arranque ⇒ `process.exit(1)`.
+        const sseWrite = require('../routes/collab')._sseWrite;
+        assert.equal(typeof sseWrite, 'function', 'la guarda tiene que existir y ser alcanzable');
+
+        const escrituras: string[] = [];
+        const viva: any = { destroyed: false, writableEnded: false, writable: true, write: (c: string) => { escrituras.push(c); return true; } };
+        const terminada: any = { destroyed: false, writableEnded: true, writable: true, write: () => { throw new Error('write after end'); } };
+        const destruida: any = { destroyed: true, writableEnded: false, writable: false, write: () => { throw new Error('destroyed'); } };
+
+        assert.equal(sseWrite(viva, 'hola'), true, 'sobre una respuesta viva sí escribe');
+        assert.deepEqual(escrituras, ['hola']);
+        assert.equal(sseWrite(terminada, 'x'), false, 'sobre una respuesta TERMINADA no puede intentarlo siquiera');
+        assert.equal(sseWrite(destruida, 'x'), false, 'ni sobre una destruida');
+    });
+
+    test('un error del stream de UNA sesión se contiene en esa sesión', async () => {
+        // El `res.on('error')` del handshake tampoco tenía test. Sin él, CUALQUIER error del stream
+        // —escribir sobre una respuesta terminada, un socket que se rompe a media escritura— es un
+        // evento `'error'` sin manejador sobre la `ServerResponse`, y eso en Node es
+        // `uncaughtException` ⇒ `process.exit(1)`: un editor con mala suerte tumbaba el CMS entero.
+        // Con él, lo peor que puede pasar es que se caiga ESA sesión.
+        const sueltos: any[] = [];
+        const capturar = (e: any) => sueltos.push(e);
+        process.on('uncaughtException', capturar);
+        let a: Session | null = null;
+        let b: Session | null = null;
+        try {
+            a = await openSession('jefa', P.join, NONCE_A);
+            b = await openSession('mano', P.join, NONCE_B);
+            const conn = collab.findConn(P.join, a.site, U.jefa);
+            assert.ok(conn, 'la conexión de A tiene que existir');
+
+            (conn.res as any).emit('error', Object.assign(new Error('socket roto'), { code: 'ERR_STREAM_WRITE_AFTER_END' }));
+            await settle(300);
+
+            assert.equal(collab.findConn(P.join, a.site, U.jefa), null, 'la sesión rota se retira');
+            assert.ok(collab.findConn(P.join, b!.site, U.mano), 'y la del compañero sigue viva');
+        } finally {
+            a?.close(); b?.close();
+            await settle(300);
+            process.removeListener('uncaughtException', capturar);
+            assert.deepEqual(
+                sueltos.map((e: any) => String(e && e.code)), [],
+                `un error de stream no puede tumbar el proceso: ${sueltos.map((e: any) => e && e.message).join(' | ')}`);
+        }
+    });
+
+    test('un cliente que ABORTA a mitad de un join fallido no deja sala, cupo ni fila colgando', async () => {
+        // El listener de cierre se registra ANTES del `await` justamente por esto: `join()` hace
+        // varias consultas y si el cliente se va dentro de esa ventana (un F5 sobre el editor, nginx
+        // cortando el upstream) el `close` YA se emitió cuando se registraba después, el listener no
+        // corría nunca y la conexión quedaba dada de alta para siempre, con su temporizador y su cupo.
+        // Escribir en un socket destruido NO lanza, así que nada la recogía.
+        const realGetMeta = Post.getMeta;
+        Post.getMeta = async (...args: any[]) => {
+            await new Promise((r) => setTimeout(r, 250));
+            return realGetMeta.apply(Post, args);
+        };
+        await dbAsync.exec(
+            "CREATE TRIGGER collab_docs_boom_abort BEFORE INSERT ON collab_docs BEGIN SELECT RAISE(ABORT, 'disco lleno'); END");
+        let s: Stream | null = null;
+        try {
+            s = await openStream('jefa', P.docfail, NONCE_B);
+            await settle(60);
+            s.close();                       // aborto del cliente DENTRO del join
+            await settle(600);               // el join termina en fallo y la ruta intenta responder
+            assert.equal(collab.stats().rooms, 0, 'la sala no puede quedarse abierta');
+            assert.equal(collab.stats().totalConns, 0, 'ni el cupo consumido');
+            const filas = await dbAsync.get(
+                'SELECT COUNT(*) AS c FROM collab_members WHERE post_id = ?', [P.docfail]);
+            assert.equal(Number(filas.c), 0, 'ni la fila de liveness huérfana');
+        } finally {
+            s?.close();
+            Post.getMeta = realGetMeta;
+            await dbAsync.exec('DROP TRIGGER collab_docs_boom_abort');
+            await settle(300);
         }
     });
 
@@ -414,6 +507,187 @@ describe('la liveness de sala no puede quedarse en cero con gente dentro', () =>
         }
     });
 
+    test('si el aviso de reinicio NO cruza el bus, se dice; no se pierde en silencio', async () => {
+        // El superviviente al que este aviso rescata está, por definición, en OTRO nodo. `cache.publish`
+        // devuelve `false` SIN LANZAR cuando Redis está caído, y `broadcast` tiraba ese resultado: la
+        // pérdida no dejaba ni una línea de log, y el editor del otro nodo volvía al «live y mudo»
+        // que el aviso existe para cerrar. No se puede reintentar (el epoch ya subió), pero sí se
+        // puede dejar de ser invisible.
+        const cache = require('../core/cache');
+        const realDisponible = cache.pubsubAvailable;
+        const realPublish = cache.publish;
+        const realError = console.error;
+        const gritos: string[] = [];
+        // Sala con contenido de verdad: retirar una ya retirada es `noop` y no anuncia nada.
+        const a = await openSession('jefa', P.aviso, NONCE_A);
+        cache.pubsubAvailable = () => true;              // hay clúster...
+        cache.publish = async () => false;              // ...pero el bus no entrega
+        console.error = (...a2: any[]) => { gritos.push(a2.join(' ')); };
+        try {
+            assert.equal(await collab.retireRoom(P.aviso), 'retired', 'la sala tiene que retirarse de verdad');
+        } finally {
+            console.error = realError;
+            cache.pubsubAvailable = realDisponible;
+            cache.publish = realPublish;
+            a.close();
+            await settle(250);
+        }
+        assert.ok(gritos.some((g) => /aviso de reinicio NO cruzó el bus/.test(g)),
+            `una retirada cuyo aviso no sale del nodo tiene que quedar registrada: ${JSON.stringify(gritos)}`);
+    });
+
+    test('el barrido falla CERRADO también con un driver que NO LANZA: `undefined` no es cero', async () => {
+        // «Falla cerrado» era una propiedad del DRIVER, no del código. Con `sqlite-native` la consulta
+        // imposible LANZA y el `catch` devolvía `null` — bien. Pero `sqlite-legacy`, que
+        // `config/database.ts` documenta como «the automatic fallback when the native binary isn't
+        // available», NO LANZA: loguea y devuelve `undefined` desde `get` (`drivers/sqlite-legacy.ts`,
+        // sus `get`/`all`). Ahí `Number(undefined?.c) || 0` daba 0 = «no hay nadie ⇒ purga», y el
+        // barrido borraba el log y subía el epoch de salas CON GENTE DENTRO en otros nodos — que son
+        // justo a quienes la señal de clúster existe para proteger.
+        //
+        // Aquí se reproduce ESA forma de fallar (devolver `undefined` en vez de lanzar) sobre el
+        // driver vivo, que es lo que el test anterior no cubría: renombrar la tabla solo ejercita el
+        // camino de excepción.
+        const a = await openSession('jefa', P.ciego, NONCE_A);
+        await post('jefa', `/collab/${P.ciego}/ops`, {
+            siteId: a.site, epoch: a.welcome.epoch, ops: [opPropSet(a.site, 1, 'x', 1)],
+        });
+        const epochAntes = a.welcome.epoch;
+        a.close();
+        await settle(300);
+
+        const db = database.getDbAsync();
+        const realGet = db.get.bind(db);
+        db.get = async (sql: string, params?: any) =>
+            (/FROM collab_members/i.test(String(sql)) ? undefined : realGet(sql, params));
+        try {
+            const retiradas = await collab.sweepIdleRooms(0);
+            assert.equal(retiradas, 0,
+                'un driver que responde `undefined` en vez de lanzar no está diciendo "no hay nadie"');
+            const fila = await dbAsync.get('SELECT epoch FROM collab_docs WHERE post_id = ?', [P.ciego]);
+            assert.equal(Number(fila.epoch), epochAntes, 'no se puede subir el epoch a ciegas');
+            const ops = await dbAsync.get('SELECT COUNT(*) AS c FROM collab_ops WHERE post_id = ?', [P.ciego]);
+            assert.ok(Number(ops.c) > 0, 'ni borrar el log');
+        } finally {
+            db.get = realGet;
+            await dbAsync.run('DELETE FROM collab_ops WHERE post_id = ?', [P.ciego]);
+        }
+    });
+
+    test('un log que NO se llega a leer no se sirve como «vacío y completo»', async () => {
+        // Mismo contrato por el otro método del driver: `all` devuelve `[]` cuando la consulta falla,
+        // y un `[]` de fallo es indistinguible de un log vacío. Sin contrastar contra el recuento, el
+        // `welcome` salía con `truncated: false` y 0 ops habiendo leído CERO filas de un log lleno:
+        // al cliente se le decía «tienes el histórico completo» y lo creía.
+        await dbAsync.run(
+            'INSERT INTO collab_ops (post_id, epoch, site_id, counter, kind, payload, user_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
+            [P.logciego, 1, 's_yyyyyyyyyyyyyyyy', 1, 'propSet',
+                JSON.stringify(opPropSet('s_yyyyyyyyyyyyyyyy', 1, 'k', 'v')), U.jefa]);
+
+        const db = database.getDbAsync();
+        const realAll = db.all.bind(db);
+        db.all = async (sql: string, params?: any) =>
+            (/FROM collab_ops/i.test(String(sql)) ? [] : realAll(sql, params));
+        let a: Session | null = null;
+        try {
+            a = await openSession('jefa', P.logciego, NONCE_A);
+            assert.equal(a.welcome.ops.length, 0, 'el driver no devolvió nada, en efecto');
+            assert.equal(a.welcome.truncated, true,
+                'haber leído cero filas de un log con filas es una sesión NO reanudable, no un log vacío');
+        } finally {
+            db.all = realAll;
+            a?.close();
+            await settle(250);
+            await dbAsync.run('DELETE FROM collab_ops WHERE post_id = ?', [P.logciego]);
+        }
+    });
+
+    test('la fila de quien ESTÁ ENTRANDO no cuenta como viva pero SÍ lleva su edad', async () => {
+        // Las dos propiedades del marcador, juntas, porque una sin la otra reabre un fallo distinto:
+        //   · si contara como viva, dos joins simultáneos se verían el uno al otro y NINGUNO
+        //     re-sembraría (el hallazgo 12);
+        //   · si no llevara la edad —el `seen_at = 0` de antes— la poda del barrido la confundiría con
+        //     la fila de un nodo muerto hace horas y la borraría mientras el join está en curso.
+        const realGetMeta = Post.getMeta;
+        Post.getMeta = async (...args: any[]) => {
+            await new Promise((r) => setTimeout(r, 400));
+            return realGetMeta.apply(Post, args);
+        };
+        let s: Promise<Session> | null = null;
+        try {
+            s = openSession('jefa', P.entrando, NONCE_A);
+            await settle(150);      // el join está DENTRO de `ensureDoc`, con la fila ya reclamada
+
+            const fila = await dbAsync.get(
+                'SELECT seen_at FROM collab_members WHERE post_id = ? AND node_id = ?', [P.entrando, collab.NODE_ID]);
+            assert.ok(fila, 'la fila se reclama ANTES de los await, para que nada quede huérfano');
+            const seen = Number(fila.seen_at);
+            assert.ok(seen <= 0, 'quien está entrando NO puede contar como miembro vivo');
+            assert.ok(Math.abs(seen) > Date.now() - 60_000,
+                `la marca tiene que llevar la EDAD del intento, no un 0 que parece antiquísimo (seen_at=${seen})`);
+
+            const vivos = await collab.liveMembers(P.entrando);
+            assert.equal(vivos, 0, 'y para la re-siembra sigue sin contar');
+        } finally {
+            Post.getMeta = realGetMeta;
+            (await s)?.close();
+            await settle(300);
+        }
+    });
+
+    test('el barrido NO retira una sala con alguien A MITAD DE ENTRAR en otro nodo', async () => {
+        // Carrera real: `claimMember` marcaba la fila del que entra con `seen_at = 0` para que no
+        // contara como miembro vivo (si contara, dos joins simultáneos se verían el uno al otro y
+        // ninguno re-sembraría). Pero para la PODA del barrido un 0 es la marca de tiempo más vieja
+        // posible: la conexión que estaba entrando en el nodo A era indistinguible de la fila de un
+        // nodo muerto hace horas. El barrido del nodo B la borraba y retiraba la sala —epoch arriba y
+        // log fuera— con A dentro, que acababa de leer ese log. Ahora la fila guarda `-now`: sigue sin
+        // contar como viva, pero lleva su edad.
+        const a = await openSession('jefa', P.entrando, NONCE_A);
+        await post('jefa', `/collab/${P.entrando}/ops`, {
+            siteId: a.site, epoch: a.welcome.epoch, ops: [opPropSet(a.site, 1, 'x', 1)],
+        });
+        const epochAntes = a.welcome.epoch;
+        a.close();
+        await settle(300);
+
+        // Fila de alguien entrando AHORA MISMO en OTRO nodo (sin rastro en el mapa local de éste).
+        await dbAsync.run(
+            'INSERT INTO collab_members (conn_id, post_id, site_id, user_id, node_id, seen_at) VALUES (?, ?, ?, ?, ?, ?)',
+            ['c_entrando_nodo2', P.entrando, 's_zzzzzzzzzzzzzzzz', U.mano, 'nodo-2', -Date.now()]);
+        try {
+            await collab.sweepIdleRooms(0);
+            const viva = await dbAsync.get(
+                'SELECT conn_id FROM collab_members WHERE conn_id = ?', ['c_entrando_nodo2']);
+            assert.ok(viva, 'su fila no puede podarse por parecer antiquísima: acaba de crearse');
+            const fila = await dbAsync.get('SELECT epoch FROM collab_docs WHERE post_id = ?', [P.entrando]);
+            assert.equal(Number(fila.epoch), epochAntes,
+                'quien está entrando cuenta: subirle el epoch por debajo le invalida el log que acaba de leer');
+            const ops = await dbAsync.get('SELECT COUNT(*) AS c FROM collab_ops WHERE post_id = ?', [P.entrando]);
+            assert.ok(Number(ops.c) > 0, 'ni borrárselo');
+        } finally {
+            await dbAsync.run('DELETE FROM collab_members WHERE conn_id = ?', ['c_entrando_nodo2']);
+            await dbAsync.run('DELETE FROM collab_ops WHERE post_id = ?', [P.entrando]);
+        }
+    });
+
+    test('una fila de ENTRANTE abandonada sí acaba podándose (no bloquea el barrido para siempre)', async () => {
+        // La contracara: si «entrando» inmunizara la fila, un nodo que muere a mitad de un join dejaría
+        // la sala inmortal. La marca lleva su edad justamente para que la poda pueda distinguirlas.
+        await dbAsync.run(
+            'INSERT INTO collab_members (conn_id, post_id, site_id, user_id, node_id, seen_at) VALUES (?, ?, ?, ?, ?, ?)',
+            ['c_entrando_zombi', P.entrando, 's_zzzzzzzzzzzzzzzz', U.mano, 'nodo-3',
+                -(Date.now() - collab.CONFIG.MEMBER_TTL_MS * 10)]);
+        try {
+            await collab.sweepIdleRooms(0);
+            const viva = await dbAsync.get(
+                'SELECT conn_id FROM collab_members WHERE conn_id = ?', ['c_entrando_zombi']);
+            assert.equal(viva, undefined, 'un join que se quedó a medias hace horas se poda como cualquier otra fila');
+        } finally {
+            await dbAsync.run('DELETE FROM collab_members WHERE conn_id = ?', ['c_entrando_zombi']);
+        }
+    });
+
     test('el barrido falla CERRADO si la consulta de liveness no se puede hacer', async () => {
         // La rama `live === null`: el test que decía cubrirla solo ejercitaba `live > 0`. Una
         // consulta que falla NO es permiso para borrarle la sesión a nadie.
@@ -441,43 +715,76 @@ describe('la liveness de sala no puede quedarse en cero con gente dentro', () =>
 });
 
 describe('el límite de ritmo frena, pero no deja a nadie mudo', () => {
-    test('un `resync` legítimo no puede expulsar de la sala a quien respeta la espera', async () => {
+    /**
+     * ESPERA DEL CLIENTE, DERIVADA COMO LA DERIVA EL CLIENTE REAL.
+     *
+     * La versión anterior de estos tests ponía `CONFIG.RATE_RETRY_MS = 60` y esperaba
+     * `CONFIG.RATE_RETRY_MS + 20`: reescribía LOS DOS LADOS del acoplamiento que decía proteger, así
+     * que «quien espera lo que pide el servidor no acumula strike» era cierto POR CONSTRUCCIÓN para
+     * cualquier valor. Prueba de que no valía: subir `RATE_RETRY_MS` de 900 a 5000 —un cambio que
+     * REABRE la expulsión contra el cliente de entonces, que esperaba 1000 ms fijos— dejaba los 77
+     * tests en verde.
+     *
+     * Aquí la espera sale de `welcome.limits.rateRetryMs`, que es EXACTAMENTE de donde la saca
+     * `client.ts#rateBackoff()`, con el mismo suelo (1000) y el mismo margen (100). Si alguien toca
+     * la constante del servidor, este test cambia de espera igual que cambiaría el navegador — y si
+     * alguien deja de PUBLICARLA, el suelo de 1000 vuelve a ser lo único que hay y el test se
+     * comporta como el cliente real en ese servidor.
+     */
+    const esperaDelCliente = (welcome: any) =>
+        Math.min(Math.max(1000, (Number(welcome?.limits?.rateRetryMs) || 0) + 100), 30_000);
+
+    test('un `resync` legítimo no puede expulsar de la sala a quien respeta la espera (con el backoff REAL del cliente)', async () => {
         // `chargeBytes` restaba SIN SUELO los bytes del log entero, así que un solo `resync` dejaba el
         // cubo en descubierto; con el cubo negativo la guarda de ritmo era cierta incluso para un
         // frame diminuto, y tres frames de tecleo después el servidor cerraba el stream con
         // `rate_limit` — que el cliente trata como terminal: mudo hasta recargar la página. Un
         // co-editor podía provocarlo a voluntad contra todos los demás.
+        //
+        // `RATE_RETRY_MS` NO se toca: es la mitad del acoplamiento que hay que ejercitar de verdad.
+        // Solo se escala el cubo, y con la MISMA proporción que en producción (ráfaga / ritmo = 4 s
+        // de recuperación con suelo), para que el test dure segundos y no minutos.
         const burst = collab.CONFIG.BYTES_BURST;
         const perSec = collab.CONFIG.MAX_BYTES_PER_SEC;
-        const espera = collab.CONFIG.RATE_RETRY_MS;
         collab.CONFIG.BYTES_BURST = 2_000;
-        collab.CONFIG.MAX_BYTES_PER_SEC = 8_000;
-        collab.CONFIG.RATE_RETRY_MS = 60;
+        collab.CONFIG.MAX_BYTES_PER_SEC = 500;      // ráfaga/ritmo = 4 s, igual que 256 KB / 64 KB/s
         let a: Session | null = null;
         try {
-            // Log de la sala muy por encima de la ráfaga: eso es lo que el `resync` va a cobrar.
-            for (let i = 1; i <= 40; i++) {
+            // Log MUY por encima de la ráfaga: ~28 KB. Con suelo, la deuda máxima es −2000 y el cubo
+            // vuelve a cero en 4 s. SIN suelo la deuda sería ≈ −28 000 ⇒ 56 s de mudez, y creciendo
+            // con el documento. El presupuesto de intentos de abajo es lo que separa un caso del otro.
+            for (let i = 1; i <= 140; i++) {
                 await dbAsync.run(
                     'INSERT INTO collab_ops (post_id, epoch, site_id, counter, kind, payload, user_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
                     [P.cubo, 1, 's_yyyyyyyyyyyyyyyy', i, 'propSet',
                         JSON.stringify(opPropSet('s_yyyyyyyyyyyyyyyy', i, `k${i}`, 'x'.repeat(120))), U.jefa]);
             }
             a = await openSession('jefa', P.cubo, NONCE_A);
+            const espera = esperaDelCliente(a.welcome);
+            assert.ok(espera > collab.CONFIG.RATE_RETRY_MS,
+                `el cliente TIENE que esperar más que el servidor: ${espera} vs ${collab.CONFIG.RATE_RETRY_MS}`);
+
             const rs = await post('jefa', `/collab/${P.cubo}/resync`, { siteId: a.site, epoch: a.welcome.epoch, vv: {} });
             assert.equal(rs.status, 200);
-            assert.ok(rs.body.ops.length >= 40);
+            assert.ok(rs.body.ops.length >= 140);
 
-            // El cliente real hace exactamente esto: ante un 429 espera y reintenta el mismo lote.
+            // PRESUPUESTO. Con suelo hacen falta ~4 s ⇒ 5 intentos de 1000 ms sobran. Sin suelo harían
+            // falta ~56 s ⇒ 8 intentos NO llegan y el test cae por `entregada === false`. Ése es el
+            // rojo que faltaba: el suelo de `chargeBytes` no lo falseaba ningún test.
+            const INTENTOS = 8;
             let entregada = false;
-            for (let i = 0; i < 40 && !entregada; i++) {
+            let usados = 0;
+            for (; usados < INTENTOS && !entregada; usados++) {
                 const r = await post('jefa', `/collab/${P.cubo}/ops`, {
                     siteId: a.site, epoch: a.welcome.epoch, ops: [opPropSet(a.site, 1, 'tecleo', 'a')],
                 });
                 if (r.status === 200) { entregada = true; break; }
                 assert.equal(r.status, 429, `respetando la espera solo cabe un 429, no un ${r.status} (${JSON.stringify(r.body)})`);
-                await settle(collab.CONFIG.RATE_RETRY_MS + 20);
+                await settle(espera);
             }
-            assert.ok(entregada, 'la op tiene que acabar entrando: el cubo se rellena');
+            assert.ok(entregada,
+                `la deuda de un resync tiene que drenarse en ${INTENTOS} reintentos del cliente (~${INTENTOS * espera} ms); ` +
+                `sin el suelo de chargeBytes son decenas de segundos y crecen con el documento`);
             assert.equal(a.ended(), false, 'y el stream no puede haberse cerrado por el camino');
             assert.equal(a.events.some((e) => e.event === 'error'), false,
                 `nadie puede ser expulsado por pedir un resync: ${JSON.stringify(a.events.filter((e) => e.event === 'error'))}`);
@@ -485,9 +792,101 @@ describe('el límite de ritmo frena, pero no deja a nadie mudo', () => {
             a?.close();
             collab.CONFIG.BYTES_BURST = burst;
             collab.CONFIG.MAX_BYTES_PER_SEC = perSec;
-            collab.CONFIG.RATE_RETRY_MS = espera;
             await settle(250);
             await dbAsync.run('DELETE FROM collab_ops WHERE post_id = ?', [P.cubo]);
+        }
+    });
+
+    test('el `welcome` PUBLICA la espera del servidor: es de donde el cliente saca su backoff', async () => {
+        // El acoplamiento `RATE_RETRY_MS (900) < backoff del cliente (1000)` vivía en dos ficheros de
+        // dos paquetes distintos, sin un comentario que los atara y con 100 ms de margen. Tocar
+        // cualquiera de los dos reabría la expulsión EN SILENCIO. Ahora la ventana viaja por el cable.
+        const a = await openSession('jefa', P.cubo, NONCE_A);
+        try {
+            assert.equal(a.welcome.limits.rateRetryMs, collab.CONFIG.RATE_RETRY_MS,
+                'sin este campo el cliente vuelve a llevar la espera escrita a mano');
+        } finally {
+            a.close();
+            await settle(250);
+        }
+    });
+
+    test('un cubo de BYTES en descubierto no puede rebotar la PRESENCIA, que no gasta bytes', async () => {
+        // AQUÍ es donde F2 seguía vivo. `rateCheck` comparaba `conn.byteTokens < bytes` incluso con
+        // `bytes = 0`, y `setPresence` llama con `rateCheck(conn, 0, 0, 1)`: con el cubo de bytes en
+        // rojo tras un `resync`, TODA la presencia rebotaba con 429. Y el cliente de presencia
+        // re-posteaba cada 50 ms sin mirar el status, así que el servidor contaba tres «ignoró la
+        // espera» seguidos y CERRABA la sesión. ~150 ms de bajar con las flechas por el documento
+        // después de un resync legítimo y el editor mudo hasta recargar la página.
+        const burst = collab.CONFIG.BYTES_BURST;
+        const perSec = collab.CONFIG.MAX_BYTES_PER_SEC;
+        collab.CONFIG.BYTES_BURST = 2_000;
+        collab.CONFIG.MAX_BYTES_PER_SEC = 500;
+        let a: Session | null = null;
+        try {
+            for (let i = 1; i <= 140; i++) {
+                await dbAsync.run(
+                    'INSERT INTO collab_ops (post_id, epoch, site_id, counter, kind, payload, user_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                    [P.presencia, 1, 's_yyyyyyyyyyyyyyyy', i, 'propSet',
+                        JSON.stringify(opPropSet('s_yyyyyyyyyyyyyyyy', i, `k${i}`, 'x'.repeat(120))), U.jefa]);
+            }
+            a = await openSession('jefa', P.presencia, NONCE_A);
+            const rs = await post('jefa', `/collab/${P.presencia}/resync`, { siteId: a.site, epoch: a.welcome.epoch, vv: {} });
+            assert.equal(rs.status, 200, 'el resync es legítimo y se sirve');
+
+            // Exactamente el patrón del editor: un `setSelection` por bloque al bajar con las flechas,
+            // coalescido a un POST cada `presenceMs` (50 ms). Nada de esto gasta bytes ni ops.
+            const status: number[] = [];
+            for (let i = 0; i < 6; i++) {
+                const r = await post('jefa', `/collab/${P.presencia}/presence`, {
+                    siteId: a.site, sel: { nodeId: `n${i}` },
+                });
+                status.push(r.status);
+                await settle(50);
+            }
+            assert.deepEqual(status, [200, 200, 200, 200, 200, 200],
+                `la presencia no gasta bytes: un cubo de bytes en descubierto no puede frenarla (${JSON.stringify(status)})`);
+            assert.equal(a.ended(), false, 'y desde luego no puede cerrar el stream');
+            assert.equal(a.events.some((e) => e.event === 'error'), false,
+                `mover el cursor tras un resync no expulsa a nadie: ${JSON.stringify(a.events.filter((e) => e.event === 'error'))}`);
+        } finally {
+            a?.close();
+            collab.CONFIG.BYTES_BURST = burst;
+            collab.CONFIG.MAX_BYTES_PER_SEC = perSec;
+            await settle(250);
+            await dbAsync.run('DELETE FROM collab_ops WHERE post_id = ?', [P.presencia]);
+        }
+    });
+
+    test('el freno de PRESENCIA sigue existiendo: quien la machaca sin esperar acaba fuera', async () => {
+        // La contracara del anterior: que un cubo ajeno no la frene no puede significar que la
+        // presencia sea gratis. Su propio cubo (`PRESENCE_BURST` / `MAX_PRESENCE_PER_SEC`) sigue
+        // frenando, y quien ignora la espera sigue acumulando strikes hasta el cierre.
+        const burst = collab.CONFIG.PRESENCE_BURST;
+        const perSec = collab.CONFIG.MAX_PRESENCE_PER_SEC;
+        collab.CONFIG.PRESENCE_BURST = 3;
+        collab.CONFIG.MAX_PRESENCE_PER_SEC = 1;
+        let a: Session | null = null;
+        try {
+            a = await openSession('mano', P.presencia, NONCE_B);
+            let rechazos = 0;
+            let cerrado = false;
+            for (let i = 0; i < 40 && !cerrado; i++) {
+                const r = await post('mano', `/collab/${P.presencia}/presence`, {
+                    siteId: a.site, sel: { nodeId: `n${i}` },
+                });
+                if (r.status === 429) rechazos++;
+                if (r.status === 409 && r.body.code === 'collab_no_session') cerrado = true;
+            }
+            assert.ok(rechazos > 0, 'el cubo de presencia tiene que frenar');
+            assert.ok(cerrado, 'y quien no respeta la espera acaba fuera, igual que en `ops`');
+            assert.ok(a.events.some((e) => e.event === 'error' && e.data.code === 'rate_limit'),
+                'y se le dice por qué');
+        } finally {
+            a?.close();
+            collab.CONFIG.PRESENCE_BURST = burst;
+            collab.CONFIG.MAX_PRESENCE_PER_SEC = perSec;
+            await settle(250);
         }
     });
 
@@ -538,11 +937,16 @@ describe('migración 0013: el motor se detecta bien o el índice viejo sobrevive
         assert.ok(mig, 'la migración 0013 tiene que existir');
 
         const sql: string[] = [];
+        // Las SONDAS de columna se registran aparte. El assert «no usa PRAGMA» miraba `exec`/`run`,
+        // donde un PRAGMA no puede aparecer NUNCA (la sonda va por `get` en MySQL y por `all` en
+        // SQLite): era un assert que no podía fallar. Registrando los dos caminos, una regresión a la
+        // rama SQLite mete aquí el `PRAGMA table_info` y el assert se pone rojo de verdad.
+        const sondas: string[] = [];
         const ctx = {
             exec: async (s: string) => { sql.push(s); },
             run: async (s: string) => { sql.push(s); },
-            get: async () => null,          // ninguna columna existe todavía
-            all: async () => { throw new Error('PRAGMA no existe en MariaDB'); },
+            get: async (s: string) => { sondas.push(s); return null; },   // ninguna columna existe aún
+            all: async (s: string) => { sondas.push(s); throw new Error('PRAGMA no existe en MariaDB'); },
             isPostgres: false,
             driverName: 'mariadb',
         };
@@ -554,8 +958,12 @@ describe('migración 0013: el motor se detecta bien o el índice viejo sobrevive
         assert.ok(!/DROP INDEX IF EXISTS idx_collab_ops_dot/.test(todo), 'esa forma no es válida en MariaDB');
         assert.ok(/ADD COLUMN base_hash VARCHAR\(255\)/.test(todo),
             `MariaDB no admite TEXT sin longitud donde se indexa:\n${todo}`);
-        // Y la sonda de columnas usa information_schema, no PRAGMA (que aquí lanza).
-        assert.ok(!/PRAGMA table_info/.test(todo));
+        // Y la sonda de columnas usa information_schema, no PRAGMA (que en MariaDB no existe).
+        assert.ok(sondas.length > 0, 'la migración TIENE que sondar las columnas antes de tocarlas');
+        assert.ok(!sondas.some((s) => /PRAGMA/i.test(s)),
+            `la sonda de columnas no puede ser un PRAGMA con el driver mariadb:\n${sondas.join('\n')}`);
+        assert.ok(sondas.some((s) => /information_schema/i.test(s)),
+            `tiene que sondar por information_schema:\n${sondas.join('\n')}`);
     });
 });
 

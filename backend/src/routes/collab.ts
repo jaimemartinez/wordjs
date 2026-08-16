@@ -296,6 +296,13 @@ router.get('/:postId/stream', authenticate, asyncHandler(async (req: any, res: R
             maxOpsPerSec: collab.CONFIG.MAX_OPS_PER_SEC,
             maxBytesPerSec: collab.CONFIG.MAX_BYTES_PER_SEC,
             maxFrameBytes: collab.CONFIG.MAX_FRAME_BYTES,
+            // LA ESPERA VIAJA POR EL CABLE. El servidor cuenta un strike a quien reintenta ANTES de
+            // `RATE_RETRY_MS` y a los tres cierra la sesión; el cliente esperaba 1000 ms FIJOS,
+            // escritos en otro fichero y sin nada que atara los dos números. Con 900 < 1000 funciona
+            // POR CASUALIDAD: subir la constante del servidor a 1500 —o bajar la del cliente— reabre
+            // la expulsión en silencio, y ningún test lo veía. Publicándola aquí el cliente deriva su
+            // espera de la del servidor y el acoplamiento deja de ser un invariante no declarado.
+            rateRetryMs: collab.CONFIG.RATE_RETRY_MS,
         },
     });
 }));
@@ -371,5 +378,12 @@ router.post('/:postId/leave', authenticate, asyncHandler(async (req: any, res: R
     await collab.leave(conn);
     res.json({ ok: true });
 }));
+
+// `sseWrite` se expone SOLO para poder falsearlo. Es una guarda de contención cuyo caso —escribir
+// sobre una respuesta ya terminada— no se puede provocar por HTTP mientras el resto del arreglo esté
+// en su sitio (la sala no cierra la respuesta en su camino de error), así que sin esta puerta la
+// guarda se quedaba sin ningún test que la pusiera roja. Una defensa en profundidad que nadie falsea
+// es la que desaparece en el siguiente refactor.
+(router as any)._sseWrite = sseWrite;
 
 module.exports = router;
