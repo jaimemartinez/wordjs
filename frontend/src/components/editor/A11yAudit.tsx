@@ -104,10 +104,14 @@ function hasAssociatedLabel(input: Element, doc: Document): boolean {
     if (input.closest("label")) return true;
     const id = input.getAttribute("id");
     if (id) {
-        try {
-            if (doc.querySelector(`label[for="${id.replace(/"/g, '\\"')}"]`)) return true;
-        } catch {
-            /* invalid id for a selector — fall through */
+        // No se construye un selector por concatenación. Escapar SOLO `"` era saneo incompleto: el
+        // propio escape (`\`) quedaba sin escapar, así que un id `a\` producía `label[for="a\"]` —
+        // la comilla quedaba anulada y el selector se comía el resto del documento (o lanzaba, y la
+        // pregunta se respondía "no" por accidente). Se compara el atributo REAL, sin sintaxis CSS
+        // de por medio: ningún id puede cambiar el significado de la consulta.
+        const labels = doc.getElementsByTagName("label");
+        for (let i = 0; i < labels.length; i++) {
+            if (labels[i].getAttribute("for") === id) return true;
         }
     }
     const title = input.getAttribute("title");

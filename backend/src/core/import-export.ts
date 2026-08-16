@@ -466,7 +466,11 @@ async function importSite(data: any, options: Record<string, any> = {}) {
         // `users`) or inject SQL fragments through identifier names. Restrict to simple, unqualified
         // identifiers and forbid the core tables — symmetric with the export, which never dumps core tables
         // (CORE_TABLES) and only ever emits simple non-core table names, so legit round-trips are preserved.
-        const IMPORT_IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+        // Identifier authority: core/safe-sql (the SAME module createPluginTable validates with, so the
+        // two ends of this path cannot drift). safeIdent returns the CANONICAL identifier rebuilt from a
+        // constant alphabet, or null — and it is that RETURNED value that is interpolated below, never
+        // `table.name` / the raw column key.
+        const { safeIdent } = require('./safe-sql');
         const CORE_TABLES = [
             'posts', 'post_meta',
             'users', 'user_meta',
@@ -480,39 +484,44 @@ async function importSite(data: any, options: Record<string, any> = {}) {
             try {
                 // Reject anything that is not a plain identifier (blocks dotted/schema-qualified names,
                 // SQL fragments, comments) or that targets a protected core table.
-                if (typeof table?.name !== 'string' || !IMPORT_IDENT_RE.test(table.name)) {
+                const tableName = safeIdent(table?.name);
+                if (tableName === null) {
                     throw new Error(`invalid table name (must be a simple identifier)`);
                 }
-                if (CORE_TABLES.includes(table.name.toLowerCase())) {
+                if (CORE_TABLES.includes(tableName.toLowerCase())) {
                     throw new Error(`refusing to import into core table '${table.name}'`);
                 }
                 // Defense-in-depth: also refuse SQLite's reserved internal tables (sqlite_master,
                 // sqlite_sequence, sqlite_stat*, …). These pass the simple-identifier shape but are
                 // engine-internal; SQLite already rejects writes to them, so blocking here just turns a
                 // confusing per-table error into a clear refusal (and forbids accidental schema probing).
-                if (table.name.toLowerCase().startsWith('sqlite_')) {
+                if (tableName.toLowerCase().startsWith('sqlite_')) {
                     throw new Error(`refusing to import into reserved table '${table.name}'`);
                 }
 
-                // 1. Reconstruct Schema (Create Table)
+                // 1. Reconstruct Schema (Create Table). createPluginTable re-validates both the name and
+                //    every column DEFINITION through core/safe-sql — this is not the only gate.
                 if (table.schema && table.schema.columns) {
-                    await createPluginTable(table.name, table.schema.columns);
+                    await createPluginTable(tableName, table.schema.columns);
                     results.custom_tables.created++;
                 }
 
                 // 2. Insert Data
                 if (table.rows && table.rows.length > 0) {
                     for (const row of table.rows) {
-                        const cols = Object.keys(row);
-                        // Every column identifier must also be a simple identifier before it is interpolated.
-                        for (const col of cols) {
-                            if (!IMPORT_IDENT_RE.test(col)) {
+                        // Every column identifier is canonicalized before it is interpolated, and it is the
+                        // CANONICAL value that goes into the statement (the raw key is never concatenated).
+                        const cols: string[] = [];
+                        for (const col of Object.keys(row)) {
+                            const safeCol = safeIdent(col);
+                            if (safeCol === null) {
                                 throw new Error(`invalid column name '${col}' (must be a simple identifier)`);
                             }
+                            cols.push(safeCol);
                         }
                         const vals = Object.values(row);
                         const placeholders = cols.map(() => '?').join(',');
-                        const sql = `INSERT INTO ${table.name} (${cols.join(',')}) VALUES (${placeholders})`;
+                        const sql = `INSERT INTO ${tableName} (${cols.join(',')}) VALUES (${placeholders})`;
 
                         // Try insert (ignore duplicate key errors if simple backup)
                         try {

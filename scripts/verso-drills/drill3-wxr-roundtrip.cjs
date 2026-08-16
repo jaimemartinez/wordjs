@@ -23,10 +23,11 @@
 'use strict';
 
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const {
-    Reporter, REPO, BACKEND_NM, copyLiveDb, dropCopy, openReadonly, tmpDir, firstDiff,
+    Reporter, REPO, BACKEND_NM, copyLiveDb, dropCopy, openReadonly, firstDiff,
 } = require('./_common.cjs');
 
 const argv = process.argv.slice(2);
@@ -236,10 +237,35 @@ function runPhase(args) {
     return res;
 }
 
+/**
+ * Directorio de trabajo PRIVADO para esta ejecución.
+ *
+ * Antes los artefactos se escribían en `tmpDir()` (un nombre FIJO, `<os.tmpdir()>/wordjs-verso-drills`)
+ * con nombres derivados de pid+timestamp: predecibles, en un directorio compartido y escribible por
+ * cualquier usuario local, y con `writeFileSync` a secas — que SIGUE un symlink ya plantado en la ruta.
+ * Un nombre aleatorio no arregla eso; lo que importa es quién crea el inodo. `mkdtempSync` lo crea el
+ * kernel, en exclusiva y a 0700, con un nombre que nadie puede adivinar ni pre-crear; dentro, cada
+ * escritura usa `flag: 'wx'` (creación exclusiva, nunca sigue nada) y modo 0600.
+ *
+ * Importa de verdad aquí: el drill escribe el WXR y el fichero de expectativas que luego LEE para decidir
+ * si el round-trip conserva los datos. Si alguien puede sustituirlos, el drill no mide el importador —
+ * mide lo que le hayan dejado — y podría dar VERDE sobre una pérdida real.
+ */
+function makeRunDir() {
+    return fs.mkdtempSync(path.join(os.tmpdir(), 'wordjs-drill3-'));
+}
+
+/** Escritura de artefacto: creación exclusiva + 0600, sobre el directorio privado de la ejecución. */
+function writeArtifact(file, data) {
+    fs.writeFileSync(file, data, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+}
+
 async function main() {
     const rep = new Reporter('DRILL 3 — WXR round-trip (export real + import real)');
-    const T = tmpDir();
+    const T = makeRunDir();
     const stamp = `${process.pid}-${Date.now()}`;
+    let code = 2;
+    try {
 
     const copy = await copyLiveDb('drill3');
     rep.note(`copia: ${copy.file} (${copy.bytes} bytes, ${copy.method})`);
@@ -316,8 +342,8 @@ async function main() {
     /* ---------------- PATA B: WXR con wp:postmeta ------------------- */
     const synthXml = path.join(T, `wxr-synth-${stamp}.xml`);
     const expectFile = path.join(T, `expect-${stamp}.json`);
-    fs.writeFileSync(synthXml, buildSyntheticWxr(usable), 'utf8');
-    fs.writeFileSync(expectFile, JSON.stringify(usable.map((d) => ({ slug: d.slug, type: d.type, raw: d.raw }))), 'utf8');
+    writeArtifact(synthXml, buildSyntheticWxr(usable));
+    writeArtifact(expectFile, JSON.stringify(usable.map((d) => ({ slug: d.slug, type: d.type, raw: d.raw }))));
     rep.set('B_wxr_bytes', fs.statSync(synthXml).size);
 
     const cleanB = path.join(T, `clean-B-${stamp}.db`);
@@ -348,13 +374,18 @@ async function main() {
 
     if (!KEEP) {
         dropCopy(copy.file); dropCopy(cleanA); dropCopy(cleanB);
-        for (const f of [realXml, synthXml, expectFile, expReport, impAReport, impBReport]) {
-            try { fs.unlinkSync(f); } catch { /* best-effort */ }
-        }
     } else {
         rep.note(`artefactos conservados en ${T}`);
     }
-    process.exit(rep.finish());
+    code = rep.finish();
+    } finally {
+        // El directorio privado se va SIEMPRE (salvo --keep-copy), también si una fase lanzó: si no, cada
+        // ejecución abortada deja un directorio con una copia de contenido real del sitio en /tmp.
+        if (!KEEP) { try { fs.rmSync(T, { recursive: true, force: true }); } catch { /* best-effort */ } }
+    }
+    // process.exit() ATROPELLA el finally (termina el proceso en el acto), así que el código de salida se
+    // guarda dentro del try y se aplica AQUÍ, ya con el directorio temporal borrado.
+    process.exit(code);
 }
 
 if (PHASE === 'export') {

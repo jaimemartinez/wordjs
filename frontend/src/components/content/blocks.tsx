@@ -11,7 +11,7 @@
  */
 import React from "react";
 import { blockVars, cx, unit } from "@/components/puck/blockVars";
-import { sanitizeHTML } from "@/lib/sanitize";
+import { resolveVideoEmbedUrl, sanitizeHTML } from "@/lib/sanitize";
 import { sizesForWidth } from "@/lib/imageSrcset";
 import SelfHostedVideo from "./SelfHostedVideo";
 import AudioTransport from "./AudioTransport";
@@ -662,42 +662,15 @@ export function VideoEmbedBlock({ url, poster, aspectRatio, radius, bg, css }: a
         );
     }
 
-    // Convert regular YouTube URLs to embed format
-    let embedUrl = url;
-
-    if (url?.includes("youtube.com/watch")) {
-        const videoId = url.split("v=")[1]?.split("&")[0];
-        embedUrl = `https://www.youtube.com/embed/${videoId}?rel=0&modestbranding=1`;
-    } else if (url?.includes("youtu.be/")) {
-        const videoId = url.split("youtu.be/")[1]?.split("?")[0];
-        embedUrl = `https://www.youtube.com/embed/${videoId}?rel=0&modestbranding=1`;
-    } else if (url?.includes("youtube.com/embed/")) {
-        // Already an embed URL. Canonicalize the host to https://www.youtube.com so host
-        // variants (bare youtube.com, m.youtube.com, http://) still pass the allowlist
-        // below, preserving the existing embed UX, and add params if not present.
-        const path = url.split("youtube.com/embed/")[1] || "";
-        const hasQuery = path.includes("?");
-        embedUrl = `https://www.youtube.com/embed/${hasQuery ? path : `${path}?rel=0&modestbranding=1`}`;
-    } else if (url?.includes("vimeo.com/") && !url?.includes("player.vimeo.com")) {
-        const videoId = url.split("vimeo.com/")[1]?.split("?")[0];
-        embedUrl = `https://player.vimeo.com/video/${videoId}`;
-    }
-
-    // Validate the resolved embed URL against an allowlist of trusted embed
-    // providers (mirrors lib/sanitize.ts isAllowedIframeSrc): require https and a
-    // hostname in {www.youtube.com, player.vimeo.com}. Anything else (arbitrary src,
-    // javascript:/data: schemes, non-embed hosts) renders a placeholder, never an iframe.
-    const ALLOWED_EMBED_HOSTS = ["www.youtube.com", "youtube-nocookie.com", "www.youtube-nocookie.com", "player.vimeo.com"];
-    let isAllowedEmbed = false;
-    try {
-        const parsed = new URL(embedUrl);
-        isAllowedEmbed = parsed.protocol === "https:" && ALLOWED_EMBED_HOSTS.includes(parsed.hostname.toLowerCase());
-    } catch {
-        isAllowedEmbed = false;
-    }
+    // Classify + canonicalize through the SHARED provider table (lib/sanitize.ts), which parses the
+    // URL and compares the WHOLE host. The substring version this replaces (`url.includes("youtube.com/watch")`,
+    // `url.includes("vimeo.com/")`) accepted `https://youtube.com.evil.test/watch?v=…`: the attacker
+    // picked the provider and the id that went into the iframe src. The resolver returns null for
+    // anything that is not a video on a provider we embed → placeholder, never an iframe.
+    const embedUrl = resolveVideoEmbedUrl(url);
 
     // Show placeholder if no URL or the URL is not a trusted embed
-    if (!url || !isAllowedEmbed) {
+    if (!url || !embedUrl) {
         return (
             <div className="wp-block-video-embed" style={vars}>
                 <div className="wp-block-video-embed__placeholder">

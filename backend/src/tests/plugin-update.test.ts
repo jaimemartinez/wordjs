@@ -56,6 +56,7 @@ describe('plugin in-place update', () => {
 
     after(async () => {
         cleanupSlug();
+        for (const t of installTmps) { try { t.dispose(); } catch { /* */ } }
         try { await database.closeDatabase(); } catch { /* */ }
         for (const f of [TMP_DB, `${TMP_DB}-wal`, `${TMP_DB}-shm`]) { try { fs.unlinkSync(f); } catch { /* */ } }
     });
@@ -101,6 +102,23 @@ describe('plugin in-place update', () => {
         if (opts.origin) await origins.setPluginOrigin(SLUG, opts.origin);
     }
 
+    /**
+     * Where an install package is allowed to live.
+     *
+     * installPluginFromZip now PROVES that the path it was handed sits inside the app's own os-tmp
+     * scratch dir before it opens or unlinks anything (js/path-injection: the pipeline used to delete a
+     * caller-chosen path on thirteen failure branches without ever establishing what that path was).
+     * Both production callers already put it there — multer's `dest` and the marketplace download — so
+     * the fixture uses the same sanctioned allocator instead of a loose name in the shared OS temp dir.
+     * Each call gets its own kernel-exclusive 0700 directory, disposed in after().
+     */
+    const installTmps: Array<{ dispose: () => void }> = [];
+    function newZipPath(): string {
+        const t = require('../routes/plugins').createInstallTmp();
+        installTmps.push(t);
+        return t.zipPath;
+    }
+
     // Build a valid update zip (single root folder <slug>/), optionally corrupt to force install failure.
     function buildZip(opts: { version: string; permissions?: string[]; corrupt?: boolean }): string {
         const zip = new AdmZip();
@@ -111,7 +129,7 @@ describe('plugin in-place update', () => {
             zip.addFile(`${SLUG}/manifest.json`, Buffer.from(JSON.stringify({ name: 'Upd Test', isolated: true, version: opts.version, permissions: permObjs(opts.permissions) })));
             zip.addFile(`${SLUG}/index.js`, Buffer.from(`${BENIGN_INDEX}// version ${opts.version}\n`));
         }
-        const p = path.join(os.tmpdir(), `updzip-${crypto.randomBytes(6).toString('hex')}.zip`);
+        const p = newZipPath();
         zip.writeZip(p);
         return p;
     }
@@ -242,7 +260,7 @@ describe('plugin in-place update', () => {
         const zip = new AdmZip();
         zip.addFile(`${other}/manifest.json`, Buffer.from(JSON.stringify({ name: 'Other', isolated: true, version: '2.0.0', permissions: [] })));
         zip.addFile(`${other}/index.js`, Buffer.from(BENIGN_INDEX));
-        const zipPath = path.join(os.tmpdir(), `updzip-${crypto.randomBytes(6).toString('hex')}.zip`);
+        const zipPath = newZipPath();
         zip.writeZip(zipPath);
 
         try {
@@ -268,7 +286,7 @@ describe('plugin in-place update', () => {
         const zip = new AdmZip();
         zip.addFile(`${SLUG}-2.0.0/manifest.json`, Buffer.from(JSON.stringify({ name: 'Upd Test', isolated: true, version: '2.0.0', permissions: [] })));
         zip.addFile(`${SLUG}-2.0.0/index.js`, Buffer.from(BENIGN_INDEX));
-        const zipPath = path.join(os.tmpdir(), `updzip-${crypto.randomBytes(6).toString('hex')}.zip`);
+        const zipPath = newZipPath();
         zip.writeZip(zipPath);
 
         const r = await runPluginUpdate(SLUG, zipPath, { source: S1, catalogId: SLUG, version: '2.0.0' });

@@ -36,6 +36,10 @@ const { closestToken } = require('./theme-doctor');
 // a variation and the template class it styles must be able to refer to one another, and two
 // copies of the pattern is exactly how they would stop doing that. See VARIATIONS below.
 const { TEMPLATE_CLASS } = require('./template-validate');
+// The one place a name becomes a path (allowlist the FORM · resolve canonically · prove containment
+// on the value RETURNED). The compiler reads and WRITES inside a theme directory that a caller names,
+// and the names it reads back out of theme.json belong to an UPLOADED, untrusted theme.
+const { resolveThemeDir, resolveWithin } = require('./safe-path');
 
 // Same cwd conventions as core/themes.ts (the backend always runs from backend/).
 const THEMES_DIR = path.resolve('./themes');
@@ -304,10 +308,43 @@ function compileTheme(dirOrSlug: string, opts: CompileOpts = {}): CompileResult 
   };
 
   // --- resolve theme dir + slug (slug drives the url() policy and the start marker) ---
+  //
+  // TWO ARGUMENTS, TWO ROLES — and conflating them is how this compiled a directory nobody checked.
+  // `dirOrSlug` chooses the DIRECTORY that gets read and (unless dryRun) WRITTEN; `opts.slug` only
+  // names the theme in the url() policy and the start marker. The SLUG_RE test below tests
+  // `opts.slug || …`, so whenever a caller passes an explicit slug — which routes/themes.ts does on
+  // every POST and PUT — the guard was validating a value that had NOTHING to do with the path just
+  // built by `path.join(themesDir, dirOrSlug)`. Validating one string and joining another is the
+  // exact shape this project keeps re-shipping: the value proved safe was never the value used.
+  //
+  // So the slug form resolves through safe-path and the compiler uses THE PATH IT RETURNS. The path
+  // form stays available for the temp directory routes/themes.ts builds with mkdtempSync (a caller-
+  // owned absolute path, never a request value), and everything read underneath it descends from
+  // that resolved base via resolveWithin.
+  //
+  // AND THE THIRD CASE, which was the hole the other two hid: a string that contains a separator but
+  // is NOT absolute took the path branch and was resolved against the PROCESS CWD, unchecked —
+  // `compileTheme('../..')` read `<cwd>/../../theme.json`. "Looks like a path" is not a category
+  // anything can be trusted on. A dirOrSlug is now exactly one of two things: a SLUG (untrusted, so
+  // it is resolved under themesDir and proved contained) or an ABSOLUTE directory the caller itself
+  // built (routes/themes.ts's mkdtempSync scratch dir — never a request value). Anything else is
+  // neither, and is refused rather than interpreted.
   const looksLikePath = path.isAbsolute(dirOrSlug) || /[\\/]/.test(dirOrSlug);
-  const themeDir = looksLikePath
-    ? path.resolve(dirOrSlug)
-    : path.join(path.resolve(opts.themesDir || THEMES_DIR), dirOrSlug);
+  let themeDir: string;
+  if (looksLikePath) {
+    if (!path.isAbsolute(dirOrSlug) || dirOrSlug.includes('\0')) {
+      error('THEME_SLUG_INVALID', 'slug', `Invalid theme slug: ${JSON.stringify(dirOrSlug)} — pass a theme slug, or an absolute directory.`);
+      return finish('');
+    }
+    themeDir = path.resolve(dirOrSlug);
+  } else {
+    const resolved = resolveThemeDir(opts.themesDir || THEMES_DIR, dirOrSlug);
+    if (resolved === null) {
+      error('THEME_SLUG_INVALID', 'slug', `Invalid theme slug: ${JSON.stringify(dirOrSlug)}`);
+      return finish('');
+    }
+    themeDir = resolved;
+  }
   const slug: string = opts.slug || (looksLikePath ? path.basename(themeDir) : dirOrSlug);
   if (!SLUG_RE.test(slug)) {
     error('THEME_SLUG_INVALID', 'slug', `Invalid theme slug: ${JSON.stringify(slug)}`);
@@ -331,7 +368,12 @@ function compileTheme(dirOrSlug: string, opts: CompileOpts = {}): CompileResult 
   );
 
   // --- theme.json ---
-  const themeJsonPath = path.join(themeDir, 'theme.json');
+  // Descends from the resolved base, and the containment proof is redone on the value that is read.
+  const themeJsonPath = resolveWithin(themeDir, 'theme.json');
+  if (themeJsonPath === null) {
+    error('THEME_JSON_MISSING', 'theme.json', `no theme.json at themes/${slug}`);
+    return finish('');
+  }
   let st: any = null;
   try { st = fs.statSync(themeJsonPath); } catch { /* missing */ }
   if (!st || !st.isFile()) {
@@ -859,7 +901,24 @@ function compileTheme(dirOrSlug: string, opts: CompileOpts = {}): CompileResult 
  * Everything outside the markers is preserved byte for byte. Atomic within the theme dir.
  */
 function writeCompiled(dir: string, blockCss: string): void {
-  const target = path.join(path.resolve(dir), 'style.css');
+  // `dir` is the base, and the only two paths this function touches must be PROVED to be inside it —
+  // including the temp file, whose name used to be built by string-concatenating onto `target`
+  // (`${target}.tmp-…`). Concatenating onto a path is not the same thing as resolving inside a
+  // directory: it inherits whatever `target` was, and it is the file the rename then promotes over
+  // the theme's stylesheet. Both are built with the segment allowlist + containment proof instead.
+  //
+  // `dir` itself is checked BEFORE it is resolved: path.resolve('') is the process CWD, so an empty
+  // or missing directory silently retargeted the write at the project root and scribbled a style.css
+  // there. A base that names nothing is not a base.
+  if (typeof dir !== 'string' || dir.trim() === '' || dir.includes('\0')) {
+    throw new Error(`Refusing to write the compiled stylesheet: ${JSON.stringify(dir)} is not a theme directory.`);
+  }
+  const base = path.resolve(dir);
+  const target = resolveWithin(base, 'style.css');
+  const tmp = resolveWithin(base, `style.css.tmp-${process.pid}-${Date.now().toString(36)}`);
+  if (target === null || tmp === null) {
+    throw new Error(`Refusing to write the compiled stylesheet: ${JSON.stringify(dir)} is not a directory a theme can be written into.`);
+  }
   let existing: string | null = null;
   try { existing = fs.readFileSync(target, 'utf8'); } catch { /* new file */ }
   let next: string;
@@ -889,7 +948,6 @@ function writeCompiled(dir: string, blockCss: string): void {
   } else {
     next = `${blockCss}\n`;
   }
-  const tmp = `${target}.tmp-${process.pid}-${Date.now().toString(36)}`;
   fs.writeFileSync(tmp, next, 'utf8');
   // Windows refuses to replace a file another handle has open (EPERM/EBUSY) — an editor, a virus
   // scanner or the static server reading style.css is enough, and it is transient. POSIX rename has

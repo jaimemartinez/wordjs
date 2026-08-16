@@ -176,23 +176,58 @@ router.post('/upload', authenticate, isAdmin, upload.single('theme'), asyncHandl
             return res.status(400).json({ error: e.message });
         }
 
-        // Get theme folder name from zip
-        const zipName = path.parse(req.file.originalname).name;
-        const targetDir = path.join(THEMES_DIR, zipName);
+        // WHICH THEME IS THIS? The zip's ROOT FOLDER, not the upload's filename.
+        //
+        // It used to be `path.parse(req.file.originalname).name` — the multipart filename, chosen by
+        // whoever posted the request — joined onto THEMES_DIR to pick the directory the "already
+        // exists" probe ran against. Two things were wrong with that, and only one of them is the
+        // CodeQL finding:
+        //   · a request field chose a path (`...zip` parses to the name `..`; path.parse dropping the
+        //     directory part is a property of the parser, not a containment proof); and
+        //   · IT NAMED THE WRONG DIRECTORY. Extraction is driven by the ENTRIES, so a zip called
+        //     `astra-4.1.2.zip` containing `astra/` was checked against `themes/astra-4.1.2` (absent
+        //     → "not installed") and then extracted with overwrite=true straight over an existing
+        //     `themes/astra`. The guard could not have protected the write: it was not looking at it.
+        // The root folder is what actually becomes a theme, so that is what is checked — its FORM
+        // against THEME_SLUG (the shape every other theme path in the project agrees on) and its
+        // containment through safe-path, on the value used below.
+        const rootSegments = new Set<string>();
+        for (const entry of zipEntries) {
+            const first = String(entry.entryName).replace(/\\/g, '/').split('/')[0];
+            if (first) rootSegments.add(first);
+        }
+        if (rootSegments.size !== 1) {
+            fs.unlinkSync(zipPath);
+            return res.status(400).json({
+                error: rootSegments.size === 0
+                    ? 'The zip is empty.'
+                    : `A theme zip must contain exactly one top-level folder (found ${rootSegments.size}: ${[...rootSegments].slice(0, 5).map((s) => JSON.stringify(s)).join(', ')}).`
+            });
+        }
+        const zipName = [...rootSegments][0];
+        const targetDir = resolveThemeDir(THEMES_DIR, zipName);
+        if (targetDir === null) {
+            fs.unlinkSync(zipPath);
+            return res.status(400).json({
+                error: `Invalid theme folder ${JSON.stringify(zipName)} inside the zip — a theme directory is letters, digits, "-" and "_", starting with a letter or digit.`
+            });
+        }
 
-        // Check if theme already exists
+        // Check if theme already exists — now against the directory extraction will actually create.
         if (fs.existsSync(targetDir)) {
             fs.unlinkSync(zipPath);
             return res.status(400).json({ error: `Theme "${zipName}" already exists` });
         }
 
-        // SECURITY: Verify EVERY entry resolves inside THEMES_DIR before extracting
-        // (Zip Slip: absolute paths, '..', symlink-style escapes). Extraction target is THEMES_DIR.
-        const resolvedTarget = path.resolve(THEMES_DIR);
+        // SECURITY: Verify EVERY entry resolves inside the theme's OWN directory before extracting
+        // (Zip Slip: absolute paths, '..', symlink-style escapes). Extraction target is THEMES_DIR,
+        // but a theme's entries may only ever land under `<THEMES_DIR>/<zipName>/` — checking against
+        // THEMES_DIR alone let one upload write into a SIBLING theme's directory.
         for (const entry of zipEntries) {
-            const dest = path.resolve(THEMES_DIR, entry.entryName);
-            const isContained = dest === resolvedTarget || dest.startsWith(resolvedTarget + path.sep);
-            if (!isContained || entry.entryName.indexOf('..') !== -1) {
+            const name = String(entry.entryName).replace(/\\/g, '/');
+            const segments = name.split('/').filter((s) => s !== '');
+            const dest = segments.length ? resolveWithin(THEMES_DIR, ...segments) : null;
+            if (dest === null || !(dest === targetDir || dest.startsWith(targetDir + path.sep))) {
                 fs.unlinkSync(zipPath);
                 return res.status(400).json({ error: 'Malicious zip file detected (Zip Slip / path traversal)' });
             }
@@ -567,7 +602,12 @@ router.delete('/:slug', authenticate, isAdmin, asyncHandler(async (req: Request,
  *               format: binary
  */
 router.get('/:slug/download', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
-    // SECURITY: Validate slug
+    // SECURITY: the slug picks BOTH the folder that gets packed and the temp file the zip is written
+    // to — and the file this handler then serves and DELETES. The boolean gate that used to stand
+    // here is not enough on its own: it proves a property of a path it throws away, while the raw
+    // param travels on to createThemeZip. It stays (fail fast, 400 instead of 500), but the real
+    // barrier now lives in core/themes.createThemeZip, which resolves the destination under os-tmp/
+    // and RETURNS the proved value — so `zipPath` below is contained by construction.
     if (!validateSlug(req.params.slug)) {
         return res.status(400).json({ error: 'Invalid theme slug' });
     }

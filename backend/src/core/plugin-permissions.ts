@@ -38,6 +38,91 @@ function isValidEgressHost(h: string): boolean {
 /** The literal token used for the network grant (no access level). */
 const NETWORK_TOKEN = 'network';
 
+// ── Slug-as-OBJECT-KEY: the structure-choosing input ────────────────────────────────────────────────
+//
+// `plugin_grants` and `plugin_egress_hosts` are JSON blobs keyed BY PLUGIN SLUG, and the slug arrives
+// from the request (`POST /plugins/:slug/permissions`, `.../egress-hosts`). So a remote value is not
+// merely stored — it CHOOSES A PROPERTY NAME. That is the same defect class as the path routes: the code
+// sanitized the VALUES (the token/host lists, thoroughly) and never validated the thing selecting
+// structure. Two concrete failures it left open on `stored[slug] = clean`:
+//
+//   · `__proto__` — on the `{}` default that getOption returns when the option is unset, this is a
+//     SETTER, not a property: it silently re-parents the object instead of adding a key. updateOption
+//     then serializes an object with no such key, so the API answers 200 with the admin's egress
+//     allowlist… never persisted. A restrictive policy that reports success and does not exist is
+//     fail-OPEN, which is exactly what the egress allowlist exists to prevent.
+//   · `constructor` / `prototype` — both are legal slugs under the project's slug charset, and both
+//     shadow inherited names, so any later `stored[x]`-shaped read of a MISSING key stops returning
+//     undefined and starts returning a function.
+//
+// Fix, per the rule the editor fuzzer taught us: allowlist the FORM of the key, refuse the three magic
+// names outright, and never index an inherited name — every read is Object.hasOwn-gated and every write
+// goes through writeSlugKey(), which rebuilds the record with a NULL PROTOTYPE so there is no inherited
+// name left to hit in the first place.
+
+/** A plugin slug: one segment, starts alnum, ≤64. Character-for-character routes/plugins.ts' SLUG_RE. */
+const PLUGIN_SLUG = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
+
+/**
+ * Property names that must never be written or read through a computed key, whatever the charset says.
+ * `__proto__` cannot match PLUGIN_SLUG; `constructor` and `prototype` CAN — which is the whole point of
+ * listing them explicitly rather than inferring safety from the regex.
+ */
+const FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
+/**
+ * A key echoed into an operator log line, with line breaks stripped: an unsafe key is by definition a
+ * value we did not validate, so it must not be able to forge or split a log entry on its way to the
+ * warning that reports it. Two single-constant replacements (the shape the log-injection analysis
+ * recognises), exactly like routes/plugins.ts' logSafe().
+ */
+function logSafeKey(v: unknown): string {
+    return String(v).replace(/\n/g, '').replace(/\r/g, '');
+}
+
+/** Is `slug` usable as a record key here — right shape AND not a magic name? */
+function isSafeSlugKey(slug: unknown): boolean {
+    return typeof slug === 'string' && PLUGIN_SLUG.test(slug) && !FORBIDDEN_KEYS.has(slug);
+}
+
+/**
+ * Return a NEW null-prototype record = `store` plus `slug -> value`. Throws on a slug that may not be a
+ * key (fail closed: an unstorable grant/egress change must be an error the admin sees, never a silent
+ * no-op that leaves the old policy in force while the API reports success).
+ *
+ * The copy is own-properties-only and skips the forbidden names, so a `plugin_grants` blob that was
+ * poisoned before this guard existed is also cleaned up the first time it is rewritten.
+ */
+function writeSlugKey(store: any, slug: unknown, value: any): Record<string, any> {
+    if (!isSafeSlugKey(slug)) {
+        throw new Error(`Refusing to store plugin policy under an unsafe key: ${JSON.stringify(slug)}`);
+    }
+    const out: Record<string, any> = Object.create(null);
+    if (store && typeof store === 'object') {
+        for (const k of Object.keys(store)) {
+            if (!Object.hasOwn(store, k) || FORBIDDEN_KEYS.has(k)) continue;
+            out[k] = (store as any)[k];
+        }
+    }
+    out[slug as string] = value;
+    return out;
+}
+
+/** Same own-key discipline for the DELETE side (uninstall), without needing a value. */
+function deleteSlugKey(store: any, slug: unknown): { changed: boolean; next: Record<string, any> } {
+    const next: Record<string, any> = Object.create(null);
+    let changed = false;
+    if (store && typeof store === 'object') {
+        for (const k of Object.keys(store)) {
+            if (!Object.hasOwn(store, k)) continue;
+            if (FORBIDDEN_KEYS.has(k)) { changed = true; continue; } // drop a poisoned key while we are here
+            if (k === slug) { changed = true; continue; }
+            next[k] = (store as any)[k];
+        }
+    }
+    return { changed, next };
+}
+
 // A grant token is either the literal 'network' or a "<scope>:<access>" pair. Validating the SHAPE at
 // load time is defense-in-depth: even if the plugin_grants option is ever poisoned by some path other
 // than the admin setGrants API (which sanitizes), a blob can't smuggle in a structurally-bogus token
@@ -58,14 +143,21 @@ async function loadGrants(): Promise<void> {
         grants.clear();
         if (stored && typeof stored === 'object') {
             for (const [slug, list] of Object.entries(stored)) {
+                // The KEY is validated too, not just the values: a blob written before this guard (or by
+                // any path other than setGrants) must not be able to install a grant record under a magic
+                // name. Unsafe key ⇒ the plugin simply has no grants — default-deny, fail closed.
+                if (!isSafeSlugKey(slug)) {
+                    console.warn("[PluginPermissions] Dropping grant record under an unsafe plugin key '%s' from plugin_grants.", logSafeKey(slug));
+                    continue;
+                }
                 if (!Array.isArray(list)) continue;
                 const clean: string[] = [];
                 for (const raw of list) {
                     const t = String(raw).toLowerCase().trim();
                     if (isValidGrantToken(t)) clean.push(t);
-                    else console.warn(`[PluginPermissions] Dropping malformed grant token '${raw}' for plugin '${slug}' from plugin_grants.`);
+                    else console.warn("[PluginPermissions] Dropping malformed grant token '%s' for plugin '%s' from plugin_grants.", String(raw), slug);
                 }
-                grants.set(String(slug), new Set(clean));
+                grants.set(slug, new Set(clean));
             }
         }
         loaded = true;
@@ -111,11 +203,13 @@ async function setGrants(slug: string, tokens: string[]): Promise<void> {
         throw new Error('🛡️ setGrants is not permitted from plugin/theme context.');
     }
     const clean = Array.from(new Set((tokens || []).map(t => String(t).toLowerCase().trim()).filter(Boolean)));
-    grants.set(slug, new Set(clean));
+    // Validate the KEY before it selects anything — throws on __proto__/constructor/prototype or a
+    // non-slug shape, so a bad key can never reach either the mirror or the option.
     const { getOption, updateOption } = require('./options');
     const stored = (await getOption('plugin_grants', {})) || {};
-    stored[slug] = clean;
-    await updateOption('plugin_grants', stored);
+    const next = writeSlugKey(stored, slug, clean);
+    grants.set(slug, new Set(clean));
+    await updateOption('plugin_grants', next);
 }
 
 /**
@@ -147,16 +241,12 @@ async function removeGrants(slug: string): Promise<void> {
     egressHosts.delete(slug);
     const { getOption, updateOption } = require('./options');
     const stored = (await getOption('plugin_grants', {})) || {};
-    if (Object.prototype.hasOwnProperty.call(stored, slug)) {
-        delete stored[slug];
-        await updateOption('plugin_grants', stored);
-    }
+    const g = deleteSlugKey(stored, slug);
+    if (g.changed) await updateOption('plugin_grants', g.next);
     // Also clear the egress allowlist so re-uploading the same slug can't silently inherit an old policy.
     const eStored = (await getOption('plugin_egress_hosts', {})) || {};
-    if (Object.prototype.hasOwnProperty.call(eStored, slug)) {
-        delete eStored[slug];
-        await updateOption('plugin_egress_hosts', eStored);
-    }
+    const e = deleteSlugKey(eStored, slug);
+    if (e.changed) await updateOption('plugin_egress_hosts', e.next);
 }
 
 // Distinguishes "policy loaded successfully" from "load failed / not yet loaded" (audit F-06). A DB/options
@@ -175,14 +265,18 @@ async function loadEgressHosts(): Promise<void> {
         egressHosts.clear();
         if (stored && typeof stored === 'object') {
             for (const [slug, list] of Object.entries(stored)) {
+                if (!isSafeSlugKey(slug)) {
+                    console.warn("[PluginPermissions] Dropping egress record under an unsafe plugin key '%s' from plugin_egress_hosts.", logSafeKey(slug));
+                    continue;
+                }
                 if (!Array.isArray(list)) continue;
                 const clean: string[] = [];
                 for (const raw of list) {
                     const h = String(raw).toLowerCase().trim();
                     if (isValidEgressHost(h)) clean.push(h);
-                    else console.warn(`[PluginPermissions] Dropping malformed egress host '${raw}' for plugin '${slug}' from plugin_egress_hosts.`);
+                    else console.warn("[PluginPermissions] Dropping malformed egress host '%s' for plugin '%s' from plugin_egress_hosts.", String(raw), slug);
                 }
-                egressHosts.set(String(slug), clean);
+                egressHosts.set(slug, clean);
             }
         }
         egressPolicyLoaded = true; // populated cleanly (an empty {} is a valid, successfully-loaded policy)
@@ -209,11 +303,11 @@ async function setEgressAllowlist(slug: string, hosts: string[]): Promise<void> 
         throw new Error('🛡️ setEgressAllowlist is not permitted from plugin/theme context.');
     }
     const clean = Array.from(new Set((hosts || []).map(h => String(h).toLowerCase().trim()).filter(isValidEgressHost)));
-    egressHosts.set(slug, clean);
     const { getOption, updateOption } = require('./options');
     const stored = (await getOption('plugin_egress_hosts', {})) || {};
-    stored[slug] = clean;
-    await updateOption('plugin_egress_hosts', stored);
+    const next = writeSlugKey(stored, slug, clean); // key gate first: no silent __proto__ no-op
+    egressHosts.set(slug, clean);
+    await updateOption('plugin_egress_hosts', next);
 }
 
 // Test-only: set a plugin's grants in memory WITHOUT persisting, so unit tests can grant the
@@ -227,4 +321,4 @@ function _setGrantsInMemory(slug: string, tokens: string[]): void {
     grants.set(slug, new Set((tokens || []).map(t => String(t).toLowerCase().trim()).filter(Boolean)));
 }
 
-module.exports = { loadGrants, isGranted, isNetworkGranted, getGrants, setGrants, removeGrants, backfillActive, NETWORK_TOKEN, _setGrantsInMemory, loadEgressHosts, isEgressPolicyLoaded, getEgressAllowlist, setEgressAllowlist };
+module.exports = { loadGrants, isGranted, isNetworkGranted, getGrants, setGrants, removeGrants, backfillActive, NETWORK_TOKEN, _setGrantsInMemory, loadEgressHosts, isEgressPolicyLoaded, getEgressAllowlist, setEgressAllowlist, PLUGIN_SLUG, FORBIDDEN_KEYS, isSafeSlugKey, writeSlugKey };
