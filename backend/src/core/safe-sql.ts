@@ -27,7 +27,7 @@
  *   3. PROVE THE STRUCTURE the definition may not break: parentheses balanced (a column cannot close
  *      the column list), quotes balanced (a literal cannot swallow what follows), and no `--`.
  *      Everything else that could break out is impossible BY CONSTRUCTION, because the alphabet
- *      simply has no `;` (statement separator), no `/` or `*` (`/*` … `*​/`, and MySQL's executable
+ *      simply has no `;` (statement separator), no `/` or `*` (`/*` … `* /`, and MySQL's executable
  *      `/*!` comments), no `#` (MySQL line comment), no `"`, no backtick, no `\` (identifier quoting
  *      and string escapes), and no newline.
  *
@@ -49,7 +49,7 @@ const IDENT_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456
  *
  * What is deliberately ABSENT is the whole point:
  *   ;            statement separator — no stacked statement can exist in a definition
- *   / *          `/​*` … `*​/` block comments, and MySQL's version-gated executable `/*!…*​/`
+ *   / *          `/ *` … `* /` block comments, and MySQL's version-gated executable `/*!…* /`
  *   #            MySQL line comment
  *   " ` \        identifier quoting and string escapes — a literal cannot be escaped out of
  *   \n \r        no line breaks: a definition is one line, so a line comment has nothing to hide
