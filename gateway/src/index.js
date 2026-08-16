@@ -443,7 +443,7 @@ if (cluster.isPrimary) {
                 // legitimately declare, so authorized registration is unaffected; anything else is refused.
                 // null-proto so a CN like '__proto__' / 'constructor' can't make the lookup a truthy inherited value.
                 const ROLE_ROUTES = Object.assign(Object.create(null), {
-                    backend: new Set(['/api', '/uploads', '/themes', '/plugins', '/.well-known', '/healthz', '/readyz', '/metrics']),
+                    backend: new Set(['/api', '/uploads', '/themes', '/plugins', '/public', '/.well-known', '/healthz', '/readyz', '/metrics']),
                     frontend: new Set(['/', '/admin', '/login', '/install', '/migration', '/portal', '/_next']),
                 });
                 // Does the peer's certificate cover `host` (a SAN entry, its CN, or loopback)? Binds a registered

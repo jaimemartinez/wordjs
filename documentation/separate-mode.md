@@ -83,6 +83,48 @@ without starting; `[dir]` after the subcommand to pick the target directory.
 
 Then jump to [Verify](#verify).
 
+## Manual setup — from a pre-built release ZIP (advanced)
+
+`npx create-wordjs` always downloads a **published** release from GitHub. When you need to deploy a
+bundle you built yourself (`npm run bundle-release` → `release/wordjs-compiled-release.zip`, e.g. to
+validate `main` before tagging), unpack that ZIP on each machine and drive `cluster.js` /
+`node-join.js` from it — they ship inside the bundle, under `scripts/`.
+
+The bundle is **already compiled** (`backend/dist/`, `frontend/.next/`) but ships **no**
+`node_modules`. Install only the runtime dependencies for the role that machine plays, and do **not**
+pass `--install`/`--build` to `node-join` (those run a full `npm install` including devDependencies,
+and rebuild what the bundle already contains):
+
+```bash
+# every machine: unpack the bundle
+mkdir -p /opt/wordjs && cd /opt/wordjs && unzip /path/to/wordjs-compiled-release.zip
+
+# machine 1 — gateway
+cd /opt/wordjs && npm install --omit=dev && (cd gateway && npm install --omit=dev)
+node scripts/cluster.js init --host <gateway-ip>
+(cd gateway && node src/index.js &)          # or a systemd unit
+node scripts/cluster.js token backend  --host <backend-ip>
+node scripts/cluster.js token frontend --host <frontend-ip>
+
+# machine 2 — backend
+cd /opt/wordjs/backend && npm install --omit=dev && cd /opt/wordjs
+node scripts/node-join.js --role backend --gateway <gateway-ip> --enroll-port 3101 \
+     --token <token> --ca-hash <fingerprint> --advertise <backend-ip>
+(cd backend && npm start &)
+
+# machine 3 — frontend
+cd /opt/wordjs/frontend && npm install --omit=dev && cd /opt/wordjs
+node scripts/node-join.js --role frontend --gateway <gateway-ip> --enroll-port 3101 \
+     --token <token> --ca-hash <fingerprint> --advertise <frontend-ip>
+(cd frontend && npm start &)
+```
+
+Then finish the install wizard (see [Verify](#verify)). **Keep the clocks in sync** across the build
+machine and every node (`timedatectl set-ntp true`): the frontend serves prebuilt pages whose
+freshness Next.js judges from file timestamps, so a node whose clock lags behind the machine that
+built the bundle treats every prerendered page as "not yet stale" and serves the build-time
+placeholder — including the pre-install *"Service Temporarily Unavailable"* homepage — forever.
+
 ## Manual setup — from a source checkout (advanced)
 
 Use this when you run from a `git clone` instead of the release bundle (development, custom builds).
@@ -154,7 +196,29 @@ On the gateway, `gateway/gateway-registry.json` should list the **real** node IP
 ```
 
 Browse `https://<gateway-ip>:3000` — the gateway proxies `/` to the frontend (SSR pulls content from the
-backend through the gateway) and `/api`, `/uploads`, `/themes` to the backend.
+backend through the gateway) and `/api`, `/uploads`, `/themes`, `/public` to the backend.
+
+First run shows the install wizard. Finish it in the browser, or headlessly against the gateway with
+the one-time install token the backend prints at boot (also at `backend/data/install-token`):
+
+```bash
+curl -k -X POST https://<gateway-ip>:3000/api/v1/setup/install \
+  -H 'Content-Type: application/json' -H "x-install-token: $TOKEN" \
+  -H 'Origin: https://<gateway-ip>:3000' \
+  -d '{"siteName":"…","adminUser":"admin","adminEmail":"…","adminPassword":"…","dbDriver":"sqlite-native","demoContent":true}'
+```
+
+Install **through the gateway**, not straight at the backend: the wizard derives `siteUrl` from the
+request, and the address you install on becomes the site's canonical origin.
+
+### Known limitation — cache purge is TTL-based across machines
+
+On a single host the backend purges the frontend's Next.js cache on publish, so edits appear
+immediately. That path does **not** work across machines: the backend purges `frontendUrl`, and the
+frontend authenticates the purge with the `revalidateSecret` it reads from the backend's config file
+next to it — neither of which exists on a separate frontend node. Publishes therefore land on the
+public site through normal **ISR revalidation (~60 s)** rather than instantly. Everything else is
+unaffected; the admin and the editor always read live data.
 
 ## What must match across nodes
 

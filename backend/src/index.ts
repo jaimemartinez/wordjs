@@ -783,7 +783,13 @@ async function initialize() {
                     // Advertise a routable address so a gateway on another host can reach this node.
                     // Defaults to 127.0.0.1 (single host); set advertiseHost per-node for multi-node.
                     url: `${serverProtocol}://${config.advertiseHost || '127.0.0.1'}:${config.port}`,
-                    routes: ['/api', '/uploads', '/themes', '/plugins', '/.well-known', '/healthz', '/readyz', '/metrics']
+                    // Must mirror what this process actually mounts (see the express.static mounts above).
+                    // `/public` was missing: the backend serves the block CSS framework
+                    // (public/css/wordjs-ui.css — every wp-block-* rule) and the vendored Font Awesome
+                    // from there, but never advertised the prefix, so behind the gateway those requests
+                    // fell through to the frontend catch-all `/` and 404'd. Public pages then rendered
+                    // with no block styling and no icons in every gateway-fronted deployment.
+                    routes: ['/api', '/uploads', '/themes', '/plugins', '/public', '/.well-known', '/healthz', '/readyz', '/metrics']
                 }
             ];
 

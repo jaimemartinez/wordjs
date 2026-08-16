@@ -118,3 +118,70 @@ describe('option serialisation — an absent value is empty, never the text "und
         assert.notStrictEqual(stored, 'undefined');
     });
 });
+
+/**
+ * SEPARATE MODE (3-machine cluster) — regressions found by the first Proxmox run of that mode.
+ *
+ * 3. The installer derived the site host from `Host` alone. Behind the gateway (`changeOrigin: true`)
+ *    that header has already been rewritten to the upstream target, so the backend recorded ITSELF as
+ *    the site origin. On one host that is loopback and the migration guard exempts it — invisible. In
+ *    separate mode it was the backend node's LAN IP, and every subsequent API call 409'd
+ *    `migration_required` against the gateway's host: the whole site was unreachable after install.
+ *
+ * 4. The installer then re-minted a cluster CA over the node's enrolled identity. Enrollment had
+ *    already given it a CN=backend leaf signed by the CA whose private key lives ONLY on the gateway;
+ *    overwriting it left the backend holding certificates the gateway does not trust (and dropped a
+ *    CA private key onto a machine that must never hold one). It survived until the next restart.
+ */
+describe('separate mode — the installer must not undo cluster enrollment', () => {
+    const { pickInstallHost, isEnrolledConfig: isEnrolled } = require('../routes/setup');
+
+    describe('pickInstallHost — X-Forwarded-Host wins over the proxied Host', () => {
+        test('behind the gateway, the operator-facing host is used, not the upstream target', () => {
+            // What the backend actually sees for an install POSTed to the gateway.
+            assert.strictEqual(
+                pickInstallHost('192.168.182.145:3000', '192.168.182.146:4000'),
+                '192.168.182.145:3000'
+            );
+        });
+
+        test('direct (unproxied) install still uses Host', () => {
+            assert.strictEqual(pickInstallHost(undefined, 'example.com'), 'example.com');
+            assert.strictEqual(pickInstallHost('', 'example.com:3000'), 'example.com:3000');
+        });
+
+        test('only the FIRST hop of a comma-joined chain is taken', () => {
+            assert.strictEqual(pickInstallHost('edge.example.com, inner.example.com', 'be:4000'), 'edge.example.com');
+        });
+
+        test('no headers at all yields empty, so the caller rejects it', () => {
+            assert.strictEqual(pickInstallHost(undefined, undefined), '');
+        });
+    });
+
+    describe('isEnrolledConfig — enrollment is authoritative on a cluster node', () => {
+        const enrolledCfg = {
+            gatewayHost: '10.0.0.5',
+            gatewaySecret: 'shared-with-the-gateway',
+            advertiseHost: '10.0.0.6',
+            host: '0.0.0.0',
+            mtls: { ca: './certs/cluster-ca.crt', key: './certs/backend.key', cert: './certs/backend.crt' }
+        };
+
+        test('an enrolled node with its issued cert on disk is recognised', () => {
+            assert.strictEqual(isEnrolled(enrolledCfg, true), true);
+        });
+
+        test('config says enrolled but the cert is gone → treat as a plain install', () => {
+            assert.strictEqual(isEnrolled(enrolledCfg, false), false);
+        });
+
+        test('a single-host install is never mistaken for an enrolled node', () => {
+            // No advertiseHost: nothing pinned this box into a cluster.
+            assert.strictEqual(isEnrolled({ siteUrl: 'https://example.com', mtls: enrolledCfg.mtls }, true), false);
+            assert.strictEqual(isEnrolled({ advertiseHost: '10.0.0.6' }, true), false);
+            assert.strictEqual(isEnrolled({}, true), false);
+            assert.strictEqual(isEnrolled(null, true), false);
+        });
+    });
+});

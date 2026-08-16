@@ -20,6 +20,34 @@ function requireInstallToken(req: any, res: any): boolean {
     return true;
 }
 
+/**
+ * Which host did the operator actually install on?
+ *
+ * The gateway proxies with `changeOrigin: true`, so an install that arrives through it carries the
+ * UPSTREAM's address in `Host` (e.g. backend:4000) and the operator's real address only in
+ * `X-Forwarded-Host`. Reading `Host` alone made the backend record ITSELF as the site origin. On one
+ * host that lands on loopback, which the migration guard exempts — so the bug stayed invisible until
+ * separate mode, where it wrote the backend node's LAN IP and every later API call 409'd
+ * `migration_required`. Same precedence as the migration guard in index.ts.
+ *
+ * Exported for tests — pure; the caller supplies the header values and validates the result.
+ */
+function pickInstallHost(forwardedHost: unknown, host: unknown): string {
+    return String(forwardedHost || host || '').split(',')[0].trim();
+}
+
+/**
+ * Was this node provisioned by cluster enrollment (scripts/node-join.js) rather than being a fresh
+ * single-host box? Enrollment writes the gateway wiring plus an mTLS identity signed by the cluster
+ * CA that lives on the GATEWAY. The installer must treat all of that as authoritative instead of
+ * overwriting it with its own single-host defaults.
+ *
+ * Exported for tests — pure; `certExists` is the caller's filesystem check.
+ */
+function isEnrolledConfig(cfg: any, certExists: boolean): boolean {
+    return !!(cfg && cfg.advertiseHost && cfg.mtls && cfg.mtls.cert && certExists);
+}
+
 // Check installation status
 router.get('/status', (req: any, res: Response) => {
     const installed = isInstalled();
@@ -175,22 +203,14 @@ router.post('/install', async (req: any, res: Response) => {
         if (protocol !== 'http' && protocol !== 'https') {
             return fail('Invalid request protocol; pass an explicit siteUrl in the installer.');
         }
-        const rawHost = req.get('host') || '';
+        // Prefer X-Forwarded-Host over Host — see pickInstallHost() above for why.
+        const rawHost = pickInstallHost(req.get('x-forwarded-host'), req.get('host'));
         if (!HOST_PATTERN.test(rawHost)) {
             return fail('Could not determine a valid install host. Pass an explicit siteUrl in the installer.');
         }
         host = rawHost;
     }
     const siteUrl = `${protocol}://${host}`;
-
-    // Frontend URL could be inferred or passed. 
-    // Ideally frontend sends its own URL.
-    // For now we assume typical port + 1 or passed in body?
-    // Let's assume passed or same host different port.
-    // For zero-config on same domain, it might be same protocol/host/port if serving static?
-    // But we are running separate servers.
-    // Let's rely on the user/frontend telling us, or default logic.
-    const frontendUrl = req.body.frontendUrl || siteUrl.replace(':3000', ':3001');
 
     // Save config
     const crypto = require('crypto');
@@ -200,6 +220,31 @@ router.post('/install', async (req: any, res: Response) => {
     // SECURITY: Auto-generate cryptographically secure secrets
     const jwtSecret = crypto.randomBytes(64).toString('hex');
     const gatewaySecret = crypto.randomBytes(32).toString('hex');
+
+    // Was this node provisioned by CLUSTER ENROLLMENT (scripts/node-join.js, separate mode)? If so the
+    // gateway is the cluster CA: it already issued this node a CN=backend identity, handed it the shared
+    // gatewaySecret, and pinned the address the gateway dials (advertiseHost, with host bound 0.0.0.0).
+    // The installer's own defaults below describe a SINGLE-HOST install and would silently undo all of
+    // it — re-minting a *different* CA over the enrolled certs (and dropping the CA private key, which
+    // must never leave the gateway, onto this node), rotating gatewaySecret away from the gateway's, and
+    // re-binding the listener to localhost where a remote gateway cannot reach it. Enrollment values are
+    // authoritative here; the wizard only supplies what enrollment does not know (site identity, DB).
+    const enrolledConfig = getConfig() || {};
+    const isEnrolledNode = isEnrolledConfig(
+        enrolledConfig,
+        !!enrolledConfig.mtls?.cert && fs.existsSync(path.resolve(enrolledConfig.mtls.cert))
+    );
+    if (isEnrolledNode) {
+        console.log(`🔗 Setup: cluster-enrolled node detected (advertiseHost=${enrolledConfig.advertiseHost}) — preserving enrollment identity and gateway wiring.`);
+    }
+
+    // Frontend URL — the origin visitors use, stored as the `home` option.
+    // Single host: the frontend sits next to the gateway on :3001. Cluster: the frontend is on
+    // ANOTHER machine and is only reachable through the gateway, so `siteUrl.replace(':3000',':3001')`
+    // would name the gateway's host with the frontend's private port — an address nothing serves.
+    // The public origin of an enrolled cluster IS the gateway.
+    const frontendUrl = req.body.frontendUrl
+        || (isEnrolledNode ? siteUrl : siteUrl.replace(':3000', ':3001'));
 
     // newConfig is mutated below (mtls paths, host identities), so type it loosely.
     const newConfig: Record<string, any> = {
@@ -212,13 +257,17 @@ router.post('/install', async (req: any, res: Response) => {
         port: 4000,
         frontendPort: 3001,
         gatewayPort: 3000,
-        gatewayInternalPort: 3100,
-        // Host for the backend server listen binding (usually localhost or 0.0.0.0)
-        host: 'localhost',
+        gatewayInternalPort: enrolledConfig.gatewayInternalPort || 3100,
+        // Host for the backend server listen binding (usually localhost or 0.0.0.0). An enrolled node
+        // MUST keep the binding enrollment chose — the gateway lives on another machine.
+        host: isEnrolledNode ? (enrolledConfig.host || '0.0.0.0') : 'localhost',
         // Public Gateway URL (FQDN/IP) captured from the request (Forwarded or Host)
         gatewayUrl: `${protocol}://${host}`, // Store full URL just in case
-        gatewayHost: host.split(':')[0], // Store hostname for reference
-        gatewaySecret: gatewaySecret,
+        // Which host this backend DIALS for the gateway control plane. On an enrolled node that is the
+        // gateway machine (from the join), NOT the public site host the browser used.
+        gatewayHost: isEnrolledNode ? enrolledConfig.gatewayHost : host.split(':')[0],
+        // Rotating this on an enrolled node would desynchronise it from the gateway's shared secret.
+        gatewaySecret: isEnrolledNode ? enrolledConfig.gatewaySecret : gatewaySecret,
         jwtSecret: jwtSecret, // Store in config for reference
         // Database selection (chosen in the installer). SQLite drivers use their own file; Postgres
         // stores a connection object. The driver layer reads these from the live config.
@@ -262,63 +311,73 @@ router.post('/install', async (req: any, res: Response) => {
             await updateOption('siteurl', String(siteUrl ?? ''));
             await updateOption('home', String(frontendUrl ?? ''));
 
-            // SECURITY: Generate mTLS Certificates
-            console.log('🔐 Setup: Generating mTLS certificates...');
-            try {
-                const { generateClusterCA, generateServiceCert } = require('../core/certManager');
-                const ca = generateClusterCA();
+            // SECURITY: Generate mTLS Certificates — but NEVER on a cluster-enrolled node. There the
+            // cluster CA already exists on the GATEWAY (its private key deliberately never leaves that
+            // machine) and this node holds a CN=backend leaf signed by it. Minting a second, unrelated
+            // CA here overwrites that leaf with one the gateway does not trust — the backend keeps
+            // serving only until its next restart, then every mTLS handshake with the gateway fails and
+            // the whole cluster goes dark. Keep the enrolled identity; enrollment is the source of truth.
+            if (isEnrolledNode) {
+                console.log('🔐 Setup: cluster-enrolled node — keeping the gateway-issued mTLS identity (not re-minting a CA).');
+                newConfig.mtls = enrolledConfig.mtls;
+            } else {
+                console.log('🔐 Setup: Generating mTLS certificates...');
+                try {
+                    const { generateClusterCA, generateServiceCert } = require('../core/certManager');
+                    const ca = generateClusterCA();
 
-                // Derive Subdomains based on installation host
-                const baseHost = host.split(':')[0];
-                const isIp = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/.test(baseHost);
+                    // Derive Subdomains based on installation host
+                    const baseHost = host.split(':')[0];
+                    const isIp = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/.test(baseHost);
 
-                // Logic: If host is "wordjs.com", we create "gateway.wordjs.com", "backend.wordjs.com", etc.
-                // If it's an IP, we just use the IP.
-                const getSubdomain = (prefix: string) => {
-                    if (isIp || baseHost === 'localhost') return baseHost;
-                    // Avoid double prefixing if user installed on a subdomain already
-                    const parts = baseHost.split('.');
-                    if (parts.length > 2) {
-                        // Already a subdomain, just replace the first part or append
-                        return `${prefix}.${parts.slice(1).join('.')}`;
-                    }
-                    return `${prefix}.${baseHost}`;
-                };
+                    // Logic: If host is "wordjs.com", we create "gateway.wordjs.com", "backend.wordjs.com", etc.
+                    // If it's an IP, we just use the IP.
+                    const getSubdomain = (prefix: string) => {
+                        if (isIp || baseHost === 'localhost') return baseHost;
+                        // Avoid double prefixing if user installed on a subdomain already
+                        const parts = baseHost.split('.');
+                        if (parts.length > 2) {
+                            // Already a subdomain, just replace the first part or append
+                            return `${prefix}.${parts.slice(1).join('.')}`;
+                        }
+                        return `${prefix}.${baseHost}`;
+                    };
 
-                const gatewayHost = getSubdomain('gateway');
-                const backendHost = getSubdomain('backend');
-                const frontendHost = getSubdomain('frontend');
+                    const gatewayHost = getSubdomain('gateway');
+                    const backendHost = getSubdomain('backend');
+                    const frontendHost = getSubdomain('frontend');
 
-                // Save identities to config for persistence
-                newConfig.gatewayHost = gatewayHost; // Align target with identity
-                newConfig.gatewayHostIdentity = gatewayHost;
-                newConfig.backendHostIdentity = backendHost;
-                newConfig.frontendHostIdentity = frontendHost;
+                    // Save identities to config for persistence
+                    newConfig.gatewayHost = gatewayHost; // Align target with identity
+                    newConfig.gatewayHostIdentity = gatewayHost;
+                    newConfig.backendHostIdentity = backendHost;
+                    newConfig.frontendHostIdentity = frontendHost;
 
-                // SAVE EXPLICIT mTLS PATHS
-                newConfig.mtls = {
-                    ca: './certs/cluster-ca.crt',
-                    key: './certs/backend.key',
-                    cert: './certs/backend.crt'
-                };
+                    // SAVE EXPLICIT mTLS PATHS
+                    newConfig.mtls = {
+                        ca: './certs/cluster-ca.crt',
+                        key: './certs/backend.key',
+                        cert: './certs/backend.crt'
+                    };
 
-                // Generate Service Certs with specific SANs
-                generateServiceCert('gateway-internal', ca.key, ca.cert, [
-                    isIp ? { type: 7, ip: gatewayHost } : { type: 2, value: gatewayHost }
-                ]);
-                generateServiceCert('backend', ca.key, ca.cert, [
-                    isIp ? { type: 7, ip: backendHost } : { type: 2, value: backendHost }
-                ]);
-                generateServiceCert('frontend', ca.key, ca.cert, [
-                    isIp ? { type: 7, ip: frontendHost } : { type: 2, value: frontendHost }
-                ]);
+                    // Generate Service Certs with specific SANs
+                    generateServiceCert('gateway-internal', ca.key, ca.cert, [
+                        isIp ? { type: 7, ip: gatewayHost } : { type: 2, value: gatewayHost }
+                    ]);
+                    generateServiceCert('backend', ca.key, ca.cert, [
+                        isIp ? { type: 7, ip: backendHost } : { type: 2, value: backendHost }
+                    ]);
+                    generateServiceCert('frontend', ca.key, ca.cert, [
+                        isIp ? { type: 7, ip: frontendHost } : { type: 2, value: frontendHost }
+                    ]);
 
-                console.log(`✅ mTLS Certificates generated for: ${gatewayHost}, ${backendHost}, ${frontendHost}`);
+                    console.log(`✅ mTLS Certificates generated for: ${gatewayHost}, ${backendHost}, ${frontendHost}`);
 
-            } catch (e) {
-                console.error('❌ Setup failed during mTLS generation:', e);
-                res.status(500).json({ error: 'Setup failed during mTLS generation: ' + e.message });
-                return; // Exit if mTLS generation fails
+                } catch (e) {
+                    console.error('❌ Setup failed during mTLS generation:', e);
+                    res.status(500).json({ error: 'Setup failed during mTLS generation: ' + e.message });
+                    return; // Exit if mTLS generation fails
+                }
             }
 
             // SECURITY: Delegate cluster orchestration to the autonomous Setup service.
@@ -327,6 +386,11 @@ router.post('/install', async (req: any, res: Response) => {
             // needing the root setup/ package, which the compiled monolith release doesn't ship deps for).
             if (process.env.WORDJS_EMBEDDED === '1') {
                 console.log('ℹ️ Monolith (embedded) — skipping cluster artifact distribution (single process, not needed).');
+            } else if (isEnrolledNode) {
+                // Separate mode: the gateway and frontend are on OTHER machines and were provisioned by
+                // their own join. There is nothing local to distribute to, and the distributor rewrites
+                // sibling gateway/frontend cert dirs that do not exist here.
+                console.log('ℹ️ Cluster-enrolled node — skipping local artifact distribution (peers provisioned by their own join).');
             } else {
                 console.log('🏗️ Setup: Orchestrating cluster via standalone service...');
                 try {
@@ -629,3 +693,6 @@ router.post('/migrate', async (req: any, res: Response) => {
 });
 
 module.exports = router;
+// Pure decision helpers, exported for the install-state tests (the router itself stays the default).
+module.exports.pickInstallHost = pickInstallHost;
+module.exports.isEnrolledConfig = isEnrolledConfig;
