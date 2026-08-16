@@ -90,9 +90,17 @@ test("keyboard-only: insertar, mover, editar y guardar sin un solo click", async
     await page.keyboard.type("Ajustes");
     await expect(page.getByRole("dialog").getByRole("option").first()).toBeVisible();
     await page.keyboard.press("Enter");
+    // El panel debe haber conmutado a modo ROOT antes de teclear: si no, el
+    // Shift+Tab aterriza en el campo del BLOQUE, el payload va sin `title` y el
+    // backend responde 400 "Title is required" (cazado en CI, más lento que local).
+    await expect(page.locator('[data-verso-panel="root"]')).toBeVisible({ timeout: 30_000 });
+    const pageTitle = `Página teclado ${stamp}`;
     await shiftTabToField(page, TITLE_LABEL);
     await page.keyboard.press("Control+a");
-    await page.keyboard.type(`Página teclado ${stamp}`);
+    await page.keyboard.type(pageTitle);
+    await expect(
+        page.locator('[data-verso-panel="root"]').getByLabel(TITLE_LABEL).first(),
+    ).toHaveValue(pageTitle);
 
     // --- GUARDAR: Ctrl+S (bypassa el guard de tecleo — contrato W03) --------
     const [res] = await Promise.all([
@@ -103,5 +111,8 @@ test("keyboard-only: insertar, mover, editar y guardar sin un solo click", async
         ),
         page.keyboard.press("Control+s"),
     ]);
-    expect(res.ok(), `guardado por teclado falló: ${res.status()}`).toBeTruthy();
+    expect(
+        res.ok(),
+        `guardado por teclado falló: ${res.status()} ${await res.text().catch(() => "")}`,
+    ).toBeTruthy();
 });
