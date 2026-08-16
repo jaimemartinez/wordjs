@@ -53,6 +53,34 @@ function setEnabled(val: any) {
     }
 }
 
+/**
+ * Reconnection policy of the object-cache client — which is ALSO the cluster bus PUBLISHER.
+ *
+ * NEVER GIVES UP, and that is the whole point. This client stopped being "just the cache" the
+ * moment it also became the publisher for coherence invalidation, notifications and the collab
+ * realtime fan-out. It used to `return null` after 3 attempts, which makes ioredis stop reconnecting
+ * FOR GOOD: a single Redis blip left `redisAvailable = false` forever. The cache survives that (it
+ * falls back to the DB, as the old log line said) but the BUS HAS NO FALLBACK — cross-node realtime
+ * stayed dead until someone restarted the process, and nothing said so.
+ *
+ * Reproduced on the multi-node lab (two backends + shared Postgres + shared Redis): stopping Redis
+ * for 4s and starting it again left fan-out between replicas permanently broken — the editor on the
+ * peer node never received another operation, and `⚡ Redis Object Cache Connected` appeared exactly
+ * once, at boot. Same shape as `getClient()` below (the rate-limit store), and for the same reason.
+ *
+ * Exported as `_busRetryStrategy` so the "never returns null" contract has a test that fails if
+ * anyone reintroduces a give-up branch.
+ */
+function busRetryStrategy(times: number): number {
+    if (times === 4) {
+        console.warn(
+            '[Cache] Redis unreachable — the cache falls back to the DB, but the CLUSTER BUS ' +
+            '(coherence, notifications, realtime fan-out) is DEGRADED until it reconnects. ' +
+            'Retrying in the background.');
+    }
+    return Math.min(times * 200, 3000);
+}
+
 // Initialize Redis if enabled in config
 if (config.redis && config.redis.enabled !== false) {
     try {
@@ -61,14 +89,12 @@ if (config.redis && config.redis.enabled !== false) {
             port: config.redis.port || 6379,
             password: config.redis.password || undefined,
             db: config.redis.db || 0,
-            retryStrategy: (times: number) => {
-                if (times > 3) {
-                    console.warn('[Cache] Redis unavailable after 3 retries. Falling back to DB.');
-                    redisAvailable = false;
-                    return null; // Stop retrying
-                }
-                return Math.min(times * 100, 2000);
-            }
+            retryStrategy: busRetryStrategy,
+            // Fail FAST rather than queue: every caller (get/set/del/flush/publish) already catches
+            // and falls back. With the offline queue those calls would instead hang waiting for a
+            // reconnect, which is worse than an immediate, visible failure.
+            enableOfflineQueue: false,
+            maxRetriesPerRequest: 1
         });
 
         redis.on('connect', () => {
@@ -76,8 +102,15 @@ if (config.redis && config.redis.enabled !== false) {
             redisAvailable = true;
         });
 
+        // Now that reconnection is unbounded, an outage emits one 'error' per attempt. Throttle the
+        // line so a long outage degrades LOUDLY ONCE (and periodically) instead of drowning the log.
+        let lastRedisErrorLog = 0;
         redis.on('error', (err: any) => {
-            console.warn('[Cache] Redis Error:', err.message);
+            const now = Date.now();
+            if (now - lastRedisErrorLog > 30_000) {
+                lastRedisErrorLog = now;
+                console.warn('[Cache] Redis Error:', err.message);
+            }
             redisAvailable = false;
         });
     } catch (e) {
@@ -278,10 +311,17 @@ module.exports = {
     isAvailable: () => redisAvailable && enabledBySettings,
     // test/introspection hooks for the L1 tier (not a public API)
     _l1: { size: () => l1.size, clear: () => l1.clear() },
+    // Test hook: the bus client's reconnection policy must never surrender (see busRetryStrategy).
+    _busRetryStrategy: busRetryStrategy,
     // Multi-node primitives:
     publish,
     subscribe,
     pubsubAvailable,
+    // "Is a cluster leg EXPECTED here?" — deliberately NOT the same question as pubsubAvailable()
+    // ("is it up right now?"). Callers that must tell a single-node install (nothing to deliver
+    // across) from a multi-node install whose bus is momentarily down (a delivery just FAILED) need
+    // this one; conflating them turns an outage into silence. See core/collab-rooms.ts#broadcast.
+    redisConfigured,
     getClient,
     closeAll
 };

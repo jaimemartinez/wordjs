@@ -55,7 +55,15 @@ class NotificationService {
             // transport persists regardless, so a remote node that's briefly unsubscribed recovers on reload.
             this.broadcast(notification);
             const cache = require('./cache');
-            if (cache.pubsubAvailable()) {
+            // SAME RULE AS core/collab-rooms.ts#broadcast: the question is "is a cluster leg
+            // EXPECTED here?" (configuration), not "is it up right now?". `pubsubAvailable()` is
+            // `redisConfigured() && redisAvailable`, so a CONFIGURED-but-DOWN Redis took the
+            // single-node branch and the live cross-node delivery was skipped WITHOUT A TRACE.
+            // Asking about configuration routes an outage into `publish()`, which logs the
+            // degradation. Nothing is lost either way (the 'db' transport persisted it and a remote
+            // node picks it up on reload) — but the operator now learns that realtime is degraded
+            // instead of the drop being silent.
+            if (cache.redisConfigured()) {
                 await cache.publish('wordjs:notify', { o: NODE_ID, n: notification });
             }
         });

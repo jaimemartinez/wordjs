@@ -163,7 +163,7 @@ before(async () => {
     await seedUser('jefa', 'administrator');
     await seedUser('mano', 'administrator');
 
-    for (const key of ['join', 'log', 'latido', 'viva', 'carrera', 'retirada', 'aviso', 'cubo', 'presencia',
+    for (const key of ['join', 'log', 'latido', 'viva', 'carrera', 'retirada', 'aviso', 'buscaido', 'cubo', 'presencia',
         'docfail', 'barrido', 'ciego', 'logciego', 'entrando', 'sello', 'ventana']) {
         P[key] = (await Post.create({ authorId: U.jefa, title: `post ${key}`, type: 'post', status: 'draft' })).id;
         await Post.updateMeta(P[key], '_puck_data', VACIO);
@@ -515,12 +515,19 @@ describe('la liveness de sala no puede quedarse en cero con gente dentro', () =>
         // puede dejar de ser invisible.
         const cache = require('../core/cache');
         const realDisponible = cache.pubsubAvailable;
+        const realConfigurado = cache.redisConfigured;
         const realPublish = cache.publish;
         const realError = console.error;
         const gritos: string[] = [];
         // Sala con contenido de verdad: retirar una ya retirada es `noop` y no anuncia nada.
         const a = await openSession('jefa', P.aviso, NONCE_A);
-        cache.pubsubAvailable = () => true;              // hay clúster...
+        // «Hay clúster» lo decide ahora `redisConfigured()` — la CONFIGURACIÓN — y no
+        // `pubsubAvailable()`, que además exige que la conexión esté viva. Los dos se falsean aquí
+        // para que este caso siga siendo el que dice ser: bus PRESENTE y LEVANTADO que, aun así, no
+        // entrega. El caso de al lado (bus presente pero CAÍDO) es el del test siguiente, y es el
+        // que se escapaba justamente porque esta condición miraba la disponibilidad.
+        cache.pubsubAvailable = () => true;             // hay clúster y está en pie...
+        cache.redisConfigured = () => true;
         cache.publish = async () => false;              // ...pero el bus no entrega
         console.error = (...a2: any[]) => { gritos.push(a2.join(' ')); };
         try {
@@ -528,12 +535,57 @@ describe('la liveness de sala no puede quedarse en cero con gente dentro', () =>
         } finally {
             console.error = realError;
             cache.pubsubAvailable = realDisponible;
+            cache.redisConfigured = realConfigurado;
             cache.publish = realPublish;
             a.close();
             await settle(250);
         }
         assert.ok(gritos.some((g) => /aviso de reinicio NO cruzó el bus/.test(g)),
             `una retirada cuyo aviso no sale del nodo tiene que quedar registrada: ${JSON.stringify(gritos)}`);
+    });
+
+    test('el bus CAÍDO no es el bus AUSENTE: con Redis configurado y muerto, la pérdida se registra', async () => {
+        // EL TEST DE ARRIBA NO PODÍA CAZAR ESTO, y ese es justo el motivo de que exista éste.
+        //
+        // Aquel fija `pubsubAvailable() => true` para llegar al `publish`. Pero `pubsubAvailable()`
+        // es `redisConfigured() && redisAvailable`, así que en un Redis CAÍDO vale FALSE: el estado
+        // que el test monta —«hay clúster Y el bus contesta que no entrega»— no ocurre nunca en
+        // producción. El estado REAL de un multinodo con Redis muerto es el de aquí abajo, y con él
+        // `broadcast` salía por el atajo del monolito: devolvía `true` sin llamar a `publish`, así
+        // que ni saltaba el aviso de `announceReset` ni el «coherence DEGRADED» de `core/cache.ts`.
+        //
+        // Comprobado en el laboratorio multinodo (dos backends + Postgres + Redis compartidos): con
+        // Redis parado, cinco ops emitidas en el nodo A no llegaron al editor del nodo B y el log de
+        // A no registró UNA SOLA línea `[collab]`. La entrega entre nodos fallaba EN SILENCIO.
+        //
+        // La condición correcta es «¿hay tramo de clúster?» (configuración), no «¿está levantado?».
+        const cache = require('../core/cache');
+        const realDisponible = cache.pubsubAvailable;
+        const realConfigurado = cache.redisConfigured;
+        const realPublish = cache.publish;
+        const realError = console.error;
+        const gritos: string[] = [];
+        let publicaciones = 0;
+        const a = await openSession('jefa', P.buscaido, NONCE_A);
+        cache.pubsubAvailable = () => false;   // el bus está CAÍDO...
+        cache.redisConfigured = () => true;    // ...pero este despliegue SÍ es multinodo
+        cache.publish = async () => { publicaciones++; return false; };
+        console.error = (...a2: any[]) => { gritos.push(a2.join(' ')); };
+        try {
+            assert.equal(await collab.retireRoom(P.buscaido), 'retired', 'la sala tiene que retirarse de verdad');
+        } finally {
+            console.error = realError;
+            cache.pubsubAvailable = realDisponible;
+            cache.redisConfigured = realConfigurado;
+            cache.publish = realPublish;
+            a.close();
+            await settle(250);
+        }
+        assert.equal(publicaciones, 1,
+            'con Redis CONFIGURADO el tramo de clúster hay que INTENTARLO: saltárselo es lo que hacía ' +
+            'invisible el fallo (es `publish` quien registra la degradación)');
+        assert.ok(gritos.some((g) => /aviso de reinicio NO cruzó el bus/.test(g)),
+            `un bus caído tiene que dejar rastro, no silencio: ${JSON.stringify(gritos)}`);
     });
 
     test('el barrido falla CERRADO también con un driver que NO LANZA: `undefined` no es cero', async () => {

@@ -728,7 +728,22 @@ function deliverLocal(postId: number, event: string, data: any, exceptSite?: str
  */
 async function broadcast(postId: number, event: string, data: any, exceptSite?: string | null): Promise<boolean> {
     deliverLocal(postId, event, data, exceptSite);
-    if (!cache.pubsubAvailable()) return true;   // monolito: no hay tramo de clúster que fallar
+    // LA PREGUNTA ES «¿HAY TRAMO DE CLÚSTER?», NO «¿ESTÁ LEVANTADO AHORA MISMO?».
+    //
+    // Aquí se preguntaba `cache.pubsubAvailable()`, que es `redisConfigured() && redisAvailable`, y
+    // eso mete en el MISMO saco dos situaciones opuestas:
+    //   · Redis NO configurado (monolito): no hay nada que entregar fuera ⇒ `true` es la verdad;
+    //   · Redis configurado pero CAÍDO (multinodo con el bus roto): la entrega a los demás nodos
+    //     ACABA DE FALLAR ⇒ `true` es mentira.
+    // Con el segundo caso devolviendo `true` se saltaba además el `publish`, así que tampoco salía
+    // el aviso de «coherence DEGRADED» de `core/cache.ts`: la pérdida no dejaba NI UNA LÍNEA. Se
+    // verificó en el laboratorio multinodo — con Redis parado, cinco ops del nodo A no llegaron al
+    // editor del nodo B y el log de A no registró un solo `[collab]`, mientras `announceReset` daba
+    // por entregado su aviso de retirada (que es justo el que existe para no perderse en silencio).
+    //
+    // Preguntando por la CONFIGURACIÓN, un bus caído entra en `publish`, que devuelve `false` y lo
+    // registra: la degradación vuelve a ser visible y `announceReset` puede volver a gritar.
+    if (!cache.redisConfigured()) return true;   // monolito: no hay tramo de clúster que fallar
     return (await cache.publish(CHANNEL, { o: NODE_ID, p: postId, e: event, d: data, x: exceptSite || null })) !== false;
 }
 
