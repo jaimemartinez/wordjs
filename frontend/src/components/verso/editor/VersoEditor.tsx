@@ -69,6 +69,8 @@ import {
 import { createEditor, type EditorHandle } from "@/lib/verso/store";
 import { createBlockRegistry, makeSlotResolver, type BlockRegistry, type VersoField } from "@/lib/verso/registry";
 import { registerCoreBlocks } from "@/lib/verso/coreBlocks";
+import { registerStaticPluginBlocks, useVersoPluginBlocks } from "@/lib/verso/pluginBlocks";
+import { useRegistryVersion } from "@/lib/verso/useRegistryVersion";
 import { ROOT_ID, ROOT_SLOT, type VersoData, type VersoEditorState, type VersoItem } from "@/lib/verso/types";
 import EditorRenderer from "../render/EditorRenderer";
 import { useStoreSlice, type VersoComponentMap } from "../render/context";
@@ -268,13 +270,22 @@ export default function VersoEditor({
     const registry = useMemo<BlockRegistry>(() => {
         const r = createBlockRegistry();
         registerCoreBlocks(r);
+        // Bloques ESTÁTICOS de plugins in-tree (dev, generate-puck-plugin-registry.js): síncrono al
+        // crear el registry — presentes desde el primer render, como el merge estático del legacy
+        // (puckConfig) y ANTES de createEditor, para que makeSlotResolver los conozca al normalizar.
+        registerStaticPluginBlocks(r);
         return r;
     }, []);
+    // F4: los bloques de plugin de marketplace se registran POST-hidratación en el registry VIVO
+    // (identidad estable — jamás se recrea). La versión es la dependencia real de todo derivado del
+    // registry: sin ella, este useMemo nunca vería los bloques nuevos (registry no cambia de identidad).
+    const registryVersion = useRegistryVersion(registry);
     const componentMap = useMemo<VersoComponentMap>(() => {
+        void registryVersion; // dependencia deliberada: un register() debe regenerar el mapa
         const map: VersoComponentMap = {};
         for (const def of registry.list()) map[def.type] = def.render as VersoComponentMap[string];
         return map;
-    }, [registry]);
+    }, [registry, registryVersion]);
 
     // El handle se crea UNA vez (los cambios posteriores del prop initialData no recrean el
     // editor — mismo contrato que el `data` no controlado del wrapper actual).
@@ -339,6 +350,12 @@ export default function VersoEditor({
         (id: string, el: HTMLElement | null) => geometry.registerElement(id, el),
         [geometry],
     );
+
+    // F4: bloques de plugin de marketplace en runtime — mismo timing que el legacy (useEffect tras
+    // montar, jamás SSR; hydration-safety documentada en pluginBlocks.ts). Un plugin caído degrada en
+    // silencio; frameDoc recibe el CSS de bloque de los plugins que entregaron bloques (el canvas es
+    // un iframe con documento propio — el <link> del documento padre no le llega).
+    useVersoPluginBlocks(registry, frameDoc);
 
     // Selección por click + edición inline por doble click (capture en el doc del iframe).
     // CANVAS INERTE A NAVEGACIÓN (mismo defecto cazado en el editor de chrome): bloques como

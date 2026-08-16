@@ -82,7 +82,10 @@ function normalizeItem(
 ): string {
   const key = internKey(ctx, item.props.id);
 
-  const props: VersoNode["props"] = { id: item.props.id };
+  // Las props se construyen EN EL ORDEN ORIGINAL de claves (incluida la posición
+  // de `id`): forzar id-primero reordenaba el JSON al primer guardado y ensuciaba
+  // los diffs de revisiones aunque deep-equal pasara (cazado en el gate F4).
+  const props = {} as VersoNode["props"];
   const slots: Record<string, string[]> = {};
 
   // Registrar el nodo ANTES de descender: los hijos necesitan que el padre exista
@@ -99,13 +102,18 @@ function normalizeItem(
   ctx.nodes[key] = node;
 
   for (const [k, v] of Object.entries(item.props)) {
-    if (k === "id") continue;
+    if (k === "id") {
+      (props as Record<string, unknown>).id = item.props.id;
+      continue;
+    }
     if (classifySlotProp(ctx.isSlot?.(item.type, k), v)) {
       slots[k] = (v as VersoItem[]).map((child, i) => normalizeItem(ctx, child, key, k, i));
     } else {
       props[k] = v;
     }
   }
+  // Dato corrupto sin id (imposible vía isVersoItem, cinturón igualmente):
+  if (!("id" in props)) (props as Record<string, unknown>).id = item.props.id;
 
   // Orden original de claves del item — solo se materializa cuando hay ≥1 slot
   // (sin slots, el orden de `props` ya ES el original y `keyOrder` sobraría).
@@ -177,6 +185,7 @@ export function toNormalized(data: VersoData, isSlot?: SlotResolver): VersoDoc {
     zonesKeyPresent,
     contentKeyState,
     rootKeyPresent: "root" in data,
+    topKeyOrder: Object.keys(data),
     extras,
     warnings: ctx.warnings,
   };
@@ -228,15 +237,33 @@ function buildItem(doc: VersoDoc, nodeKey: string): VersoItem {
 
 export function fromNormalized(doc: VersoDoc): VersoData {
   const rebuilt = doc.rootChildren.map((c) => buildItem(doc, c));
-  const data = {} as VersoData;
-  if (doc.contentKeyState === "array" || rebuilt.length > 0) data.content = rebuilt;
-  if (doc.rootKeyPresent || Object.keys(doc.root).length > 0) data.root = doc.root;
-  if (doc.zonesKeyPresent || Object.keys(doc.orphanZones).length > 0) {
-    data.zones = { ...doc.orphanZones };
-  }
-  // Extras al final (incluye `content`/`zones` verbatim de datos anómalos)…
-  Object.assign(data as unknown as Record<string, unknown>, doc.extras);
-  // …pero los hijos REALES siempre ganan sobre un `content` verbatim corrupto.
-  if (rebuilt.length > 0) data.content = rebuilt;
-  return data;
+  // Qué claves se emiten (misma semántica de siempre)…
+  const emitContent = doc.contentKeyState === "array" || rebuilt.length > 0;
+  const emitRoot = doc.rootKeyPresent || Object.keys(doc.root).length > 0;
+  const emitZones = doc.zonesKeyPresent || Object.keys(doc.orphanZones).length > 0;
+  const extras = doc.extras;
+  // …emitidas EN EL ORDEN TOP-LEVEL ORIGINAL (docs reales guardan `root` antes que
+  // `content`); las claves nuevas que el original no tenía van al final.
+  const out = {} as Record<string, unknown>;
+  const emitted = new Set<string>();
+  const emitKey = (k: string): void => {
+    if (emitted.has(k)) return;
+    if (k === "content" && emitContent) {
+      // Los hijos REALES ganan sobre un `content` verbatim corrupto de extras.
+      out.content = rebuilt.length > 0 || !("content" in extras) ? rebuilt : extras.content;
+      emitted.add(k);
+    } else if (k === "root" && emitRoot) {
+      out.root = doc.root;
+      emitted.add(k);
+    } else if (k === "zones" && emitZones) {
+      out.zones = { ...doc.orphanZones };
+      emitted.add(k);
+    } else if (k in extras) {
+      out[k] = k === "content" && rebuilt.length > 0 ? rebuilt : extras[k];
+      emitted.add(k);
+    }
+  };
+  for (const k of doc.topKeyOrder) emitKey(k);
+  for (const k of ["content", "root", "zones", ...Object.keys(extras)]) emitKey(k);
+  return out as unknown as VersoData;
 }
