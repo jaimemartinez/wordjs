@@ -27,7 +27,7 @@ import MSym from "../editor/MSym";
 // The PURE half (types + appearanceToStyle + friends) lives in blockShell.ts so the public
 // server renderer can use it without this "use client" module. Re-exported here so every
 // existing import keeps working; the UI below imports the same single implementation.
-import { appearanceToStyle, SHADOWS, isSet, RESP_PROPS, fmtResp } from "./blockShell";
+import { appearanceToStyle, SHADOWS, isSet, fmtResp } from "./blockShell";
 import type { Appearance, ResponsiveLook } from "./blockShell";
 export { appearanceToStyle, SHADOWS, isSet };
 

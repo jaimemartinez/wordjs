@@ -7,13 +7,13 @@ import MediaPickerModal from "./MediaPickerModal";
 import ModernSelect from "./ModernSelect";
 import { categoriesApi, themesApi, Category, apiGet } from "@/lib/api";
 import { t as translate, getStoredLanguage } from "@/lib/i18n";
-import { buildSrcSet, sizesForWidth, srcSetBelongsTo, rememberPickedMedia, getPickedMedia } from "@/lib/imageSrcset";
+import { buildSrcSet, srcSetBelongsTo, rememberPickedMedia, getPickedMedia } from "@/lib/imageSrcset";
 
 
 // Bloques aportados por plugins (registro generado)
 import { versoPluginComponents } from "../lib/versoPluginRegistry";
 import { CSSPropertiesControl } from "./blocks/CSSControls";
-import { blockVars, cx, unit } from "./blocks/blockVars";
+import { blockVars, unit } from "./blocks/blockVars";
 import SearchBarBlockIsland from "./content/SearchBarBlock";
 import AccordionBlockIsland from "./content/AccordionBlock";
 import TabsBlockIsland from "./content/TabsBlock";
@@ -752,27 +752,9 @@ export const RichTextEditor = React.memo(({ value, onChange, onSave, onCancel, t
 });
 RichTextEditor.displayName = 'RichTextEditor';
 
-/**
- * Post date for the dynamic blocks.
- *
- * Deliberately NOT `toLocaleDateString`: that reads the runtime's locale and timezone, which differ
- * between the server that renders the HTML and the browser that hydrates it — the classic source of
- * a hydration mismatch on any date. A fixed `DD MMM YYYY` built from the UTC parts is identical in
- * both places.
- */
-const MESES_ES = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
-const fmtPostDate = (raw: string): string => {
-    const d = new Date(String(raw).replace(" ", "T") + (/[Zz]|[+-]\d\d:?\d\d$/.test(raw) ? "" : "Z"));
-    if (isNaN(d.getTime())) return "";
-    return `${d.getUTCDate()} ${MESES_ES[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
-};
-
-/** mm:ss, and a stable placeholder before metadata has loaded (SSR renders the placeholder). */
-const fmtTime = (s: number): string => {
-    if (!isFinite(s) || s < 0) return '--:--';
-    const m = Math.floor(s / 60);
-    return `${m}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
-};
+// `fmtPostDate`/`MESES_ES` y `fmtTime` vivían aquí duplicados: las copias VIVAS son las de
+// content/blocks.tsx y content/SelfHostedVideo.tsx, que es donde se renderiza de verdad desde que
+// este fichero delega el render. Las de aquí no las llamaba nadie.
 
 /**
  * The audio transport, drawn by US rather than by the browser.

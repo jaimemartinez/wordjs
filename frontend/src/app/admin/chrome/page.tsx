@@ -51,8 +51,10 @@ export default function ChromeEditorPage() {
     const [part, setPart] = useState<ChromePart>("header");
     const [initialData, setInitialData] = useState<Data | null>(null);
     const [source, setSource] = useState<ChromeSource>("starter");
-    const [themeSlug, setThemeSlug] = useState<string>("");
-    const [themeVersion, setThemeVersion] = useState<string>("");
+    // Solo se ESCRIBEN (al cargar los ajustes): nada lee estos dos valores, así que se descarta el
+    // binding y se conserva el setter para no cambiar el número de renders de la pantalla.
+    const [, setThemeSlug] = useState<string>("");
+    const [, setThemeVersion] = useState<string>("");
     const [mountKey, setMountKey] = useState(0);
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);

@@ -6,7 +6,7 @@
 const fs = require('fs');
 const path = require('path');
 const { getOption, updateOption } = require('./options');
-const { doAction, applyFilters } = require('./hooks');
+const { doAction } = require('./hooks');
 // The one place a name becomes a path: allowlist the FORM, resolve canonically, prove containment on
 // the value RETURNED (core/safe-path).
 const { resolveThemeDir, resolveWithin, isThemeSlug, isPlainSegment } = require('./safe-path');
