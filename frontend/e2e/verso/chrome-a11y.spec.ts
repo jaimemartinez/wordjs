@@ -12,7 +12,7 @@ import { expect, test } from "@playwright/test";
 import { canvas, openLab, ROOT_SLOT_SELECTOR } from "./helpers";
 
 test("chrome del editor: roles y ARIA básicos", async ({ page }) => {
-    await page.goto("/admin/pages/new?engine=verso");
+    await page.goto("/admin/pages/new");
     await expect(canvas(page).locator(ROOT_SLOT_SELECTOR)).toBeAttached({ timeout: 60_000 });
 
     // Viewports: 3 botones etiquetados, aria-pressed y EXACTAMENTE uno activo.

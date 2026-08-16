@@ -84,7 +84,7 @@ The honest row is the last one: WordJS is young, and every plugin and theme in i
 <tr><td width="33%" valign="top">
 
 **🎨 Build**
-- Drag-and-drop visual editor ([Puck](https://puckeditor.com)) with **30 blocks** & edit-in-place text
+- Drag-and-drop visual editor (**Verso**, built in-house) with **30 blocks** & edit-in-place text
 - **Token-driven themes** + a live customizer
 - **64 themes** & **31 plugins**, one-click install
 - Real **SEO**: server-rendered pages, sitemap, RSS, social cards
@@ -141,6 +141,38 @@ The honest row is the last one: WordJS is young, and every plugin and theme in i
 - **Native mail server** — an optional, fully sandboxed first-party plugin: inbound SMTP, direct-MX delivery, and DKIM signing.
 
 </details>
+
+---
+
+## ✍️ The editor — Verso
+
+WordJS ships its own visual block editor, Verso (`frontend/src/components/verso/`,
+`frontend/src/lib/verso/`): drag-and-drop, edit-in-place text, undo/redo, a command palette and a
+properties panel — all built on an in-house core with no third-party dependency for the editor
+state, the drag-and-drop resolver or the rich-text engine.
+
+**Architecture in 10 lines:** the document lives as a normalized tree (id→node map) mutated
+exclusively by commands inside transactions, with history kept as inverse patches
+(`lib/verso/store.ts`). The canvas is an iframe with its own document, into which the React tree is
+teleported through a portal (`components/verso/canvas/FrameController.tsx`) — no stylesheet mixing
+with the parent. The selection/drag/action-bar layer always lives in the parent document, measured
+by a purpose-built `GeometryStore` (`components/verso/overlay/`), never inside the iframe. The
+drop-target resolver (`lib/verso/dnd/resolve.ts`) is a pure function with no dependency on any DnD
+library. Rich text is edited by an in-house engine over `contenteditable`
+(`lib/verso/inline-engine/`), with no Tiptap and no ProseMirror. Blocks — core ones and marketplace
+plugin ones alike — are declared against an in-house field contract (`lib/verso/registry.ts`)
+inspired, for compatibility, by the field shape Puck popularized — see the credit below.
+
+**Document format:** content is persisted as `{ content: [...], root: {...} }`, the same format the
+WordJS block editor has used from the start.
+
+**Courtesy credit:** the first versions of the WordJS editor were built on a vendored fork of
+[Puck](https://github.com/measuredco/puck) (`@measured/puck`, MIT). Verso is a complete, independent
+rewrite — it shares no code, no internal data structures and no dependencies with Puck — but the
+persisted document format and the shape of the block field contract were deliberately designed to
+stay compatible with that heritage, out of respect for the project that gave the idea its form. This
+mention is a courtesy, not an obligation of the MIT license (WordJS neither redistributes nor
+derives Puck code in the current editor).
 
 ---
 
