@@ -263,6 +263,39 @@ gateway, so no shared filesystem is needed for a single backend. To scale to **m
 to a networked driver (Postgres or MySQL/MariaDB) + a shared Redis and pin an identical `jwtSecret` — see
 [multi-node.md](multi-node.md).
 
+## The gate — verifying separate mode automatically
+
+Everything above is manual, which is how separate mode came to be unusable without anyone noticing:
+it needs three machines, so nothing exercised it. `npm run gate:separate` does exactly that, from one
+command — it stands the whole topology up, verifies it, and tears it down.
+
+```bash
+npm run bundle-release          # the artifact the gate deploys
+npm run gate:separate
+```
+
+It provisions three fresh Debian 12 LXC containers on the Proxmox lab (a gateway box, a backend box
+and a frontend box, ids 220/221/222, cloned from a base template it builds once and reuses), deploys
+the release ZIP to each, drives `cluster.js` / `node-join.js` exactly as documented above, and then
+asserts the five things that are either a bug that actually happened or the property that proves the
+mode:
+
+| # | Check |
+|---|---|
+| 1 | **Enrollment** — the gateway is the CA (private key `0600`, gateway only), join tokens are single-use, each node holds a `CN=<role>` leaf that verifies against that CA, and the registry names the real node addresses |
+| 2 | **Mutual TLS** — the internal ports refuse a request with **no** client certificate, answer one that presents the right certificate, and reject a **valid certificate of another role** claiming routes that are not its own |
+| 3 | **Install** — installed *through the gateway*, the recorded public origin is the gateway and never the backend's internal address, and API calls afterwards are 200 rather than 409 `migration_required` |
+| 4 | **Identity** — survives the install **and a restart**: the backend still trusts the gateway's CA, and the CA private key is not on the backend |
+| 5 | **Public site** — HTML carrying `wp-block-*` classes, `/public/css/wordjs-ui.css` served 200 at its real size, plus an editor round-trip (create a page with blocks, save, read it back) |
+
+Failure names the check that broke and what was observed. Options: `--keep` leaves the containers
+running for inspection, `--teardown` destroys them, `--build` rebuilds the bundle first,
+`--rebuild-base` rebuilds the base template, and `--host` / `--key` point it at a different lab.
+
+The gate can also be pointed at itself. `--sabotage <install-host|install-identity|public-route>`
+reverts one of the three fixes **in the deployed copy only** (never in the repo) and the gate must go
+red on the matching check — a gate that stays green while a bug is reintroduced is worth nothing.
+
 ## Managing tokens (on the gateway)
 
 ```bash
