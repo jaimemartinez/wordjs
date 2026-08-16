@@ -6,13 +6,9 @@
   "engines": {
     "node": ">=20.9.0"
   },
-  "workspaces": [
-    "packages/*"
-  ],
   "scripts": {
-    "build:editor": "npm run build -w @wordjs/puck",
-    "predev": "npm run build:editor && node scripts/generate-plugin-registry.js && node scripts/generate-admin-plugin-registry.js && node scripts/generate-puck-plugin-registry.js && node ../scripts/generate-asset-version.js",
-    "prebuild": "npm run build:editor && node scripts/generate-plugin-registry.js && node scripts/generate-admin-plugin-registry.js && node scripts/generate-puck-plugin-registry.js && node ../scripts/generate-asset-version.js",
+    "predev": "node scripts/generate-plugin-registry.js && node scripts/generate-admin-plugin-registry.js && node scripts/generate-puck-plugin-registry.js && node ../scripts/generate-asset-version.js",
+    "prebuild": "node scripts/generate-plugin-registry.js && node scripts/generate-admin-plugin-registry.js && node scripts/generate-puck-plugin-registry.js && node ../scripts/generate-asset-version.js",
     "dev": "node scripts/start-frontend.js dev",
     "build": "next build",
     "start": "node scripts/start-frontend.js prod",
@@ -25,17 +21,6 @@
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
     "@tailwindcss/typography": "^0.5.19",
-    "@tiptap/extension-bubble-menu": "^3.27.1",
-    "@tiptap/extension-color": "^3.27.1",
-    "@tiptap/extension-image": "^3.15.3",
-    "@tiptap/extension-link": "^3.27.1",
-    "@tiptap/extension-text-align": "^3.27.1",
-    "@tiptap/extension-text-style": "^3.27.1",
-    "@tiptap/extension-underline": "^3.27.1",
-    "@tiptap/pm": "^3.27.1",
-    "@tiptap/react": "^3.27.1",
-    "@tiptap/starter-kit": "^3.27.1",
-    "@wordjs/puck": "*",
     "date-fns": "^4.1.0",
     "dompurify": "^3.3.1",
     "next": "^16.1.1",

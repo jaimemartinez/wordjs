@@ -2,8 +2,9 @@
  * Verso — registro de bloques versionado.
  *
  * Contrato de campos (`VersoField`): reescritura con compatibilidad de INTERFAZ (no de expresión) de
- * la union `Field`/`FieldProps` de `frontend/packages/puck/types/Fields.ts` — el fork vendorizado se usa
- * SOLO como referencia de forma, nunca se importa. Los 31 plugins de marketplace + los bloques core ya
+ * la union `Field`/`FieldProps` que declaraba el editor anterior (fork vendorizado de Puck, ya
+ * retirado del árbol: se usó SOLO como referencia de forma, jamás se importó). Los 31 plugins de
+ * marketplace + los bloques core ya
  * declaran sus `fields` contra esa forma (ver documentation/verso/f0-audit-core.md, contrato duro L29);
  * cualquier `fields` legacy debe ser asignable estructuralmente a `Record<string, VersoField>` sin más
  * que un adaptador de shape (ver `adaptLegacySingle`/`adaptLegacyMulti` más abajo).

@@ -1042,15 +1042,48 @@ a.list-group-item:hover, .list-group-item-action:hover { background-color: var(-
   }
   .wjs-anim-fade[data-wjs-anim="in"] { animation-name: wjs-anim-fade; }
   .wjs-anim-fade-up[data-wjs-anim="in"] { animation-name: wjs-anim-fade-up; }
+  .wjs-anim-fade-down[data-wjs-anim="in"] { animation-name: wjs-anim-fade-down; }
   .wjs-anim-fade-left[data-wjs-anim="in"] { animation-name: wjs-anim-fade-left; }
   .wjs-anim-fade-right[data-wjs-anim="in"] { animation-name: wjs-anim-fade-right; }
   .wjs-anim-zoom[data-wjs-anim="in"] { animation-name: wjs-anim-zoom; }
+  .wjs-anim-zoom-out[data-wjs-anim="in"] { animation-name: wjs-anim-zoom-out; }
+  .wjs-anim-blur[data-wjs-anim="in"] { animation-name: wjs-anim-blur; }
+  .wjs-anim-rise[data-wjs-anim="in"] { animation-name: wjs-anim-rise; }
+  .wjs-anim-flip[data-wjs-anim="in"] { animation-name: wjs-anim-flip; }
+  .wjs-anim-reveal[data-wjs-anim="in"] { animation-name: wjs-anim-reveal; }
+  .wjs-anim-swing[data-wjs-anim="in"] { animation-name: wjs-anim-swing; }
+  /* `flip` gira sobre su eje: sin perspectiva el navegador lo aplana y el giro se
+   * ve como un simple estrechamiento. Se declara en el elemento que anima porque
+   * el wrapper de animación es su propia capa (ver blockShell: entrada y hover
+   * viven en capas separadas a propósito). */
+  .wjs-anim-flip { perspective: 1000px; }
+  /* `reveal` descubre el bloque con un clip: el contenido nunca cambia de sitio
+   * (cero CLS) y no necesita overflow:hidden en el padre. */
+  .wjs-anim-reveal { will-change: clip-path; }
 }
 @keyframes wjs-anim-fade { from { opacity: 0; } to { opacity: 1; } }
 @keyframes wjs-anim-fade-up { from { opacity: 0; transform: translateY(28px); } to { opacity: 1; transform: none; } }
 @keyframes wjs-anim-fade-left { from { opacity: 0; transform: translateX(-32px); } to { opacity: 1; transform: none; } }
 @keyframes wjs-anim-fade-right { from { opacity: 0; transform: translateX(32px); } to { opacity: 1; transform: none; } }
 @keyframes wjs-anim-zoom { from { opacity: 0; transform: scale(0.92); } to { opacity: 1; transform: none; } }
+/* Los 7 tipos que el panel del editor ofrecía SIN implementación: elegirlos no
+ * hacía nada (controles muertos). Mismo contrato que los de arriba: solo
+ * opacity/transform/filter/clip-path (cero reflow, cero CLS) y `to` siempre
+ * neutro para que el estado final sea idéntico al del bloque sin animación. */
+@keyframes wjs-anim-fade-down { from { opacity: 0; transform: translateY(-28px); } to { opacity: 1; transform: none; } }
+@keyframes wjs-anim-zoom-out { from { opacity: 0; transform: scale(1.08); } to { opacity: 1; transform: none; } }
+@keyframes wjs-anim-blur { from { opacity: 0; filter: blur(12px); } to { opacity: 1; filter: blur(0); } }
+@keyframes wjs-anim-rise { from { opacity: 0; transform: translateY(64px) scale(0.98); } to { opacity: 1; transform: none; } }
+@keyframes wjs-anim-flip { from { opacity: 0; transform: rotateX(-70deg); } to { opacity: 1; transform: none; } }
+@keyframes wjs-anim-reveal {
+  from { opacity: 1; clip-path: inset(0 100% 0 0); }
+  to { opacity: 1; clip-path: inset(0 0 0 0); }
+}
+@keyframes wjs-anim-swing {
+  from { opacity: 0; transform: rotate(-6deg) translateY(18px); }
+  60% { opacity: 1; transform: rotate(2deg) translateY(0); }
+  to { opacity: 1; transform: none; }
+}
 
 /* ============================================== VISUAL-EDITOR BLOCK CONTRACT ==
  * Every Puck block's look, expressed once, here, as `var(--wjs-<block>-<prop>, <base>)`.

@@ -23,7 +23,7 @@ import { withSharedBlockFields } from "./puck/VisibilityField";
 import { sanitizeHTML } from "@/lib/sanitize";
 import { useEditorPosts } from "@/lib/useEditorPosts";
 import { formBlockFields, formBlockDefaults, FormBlockRender } from "./puck/FormBlock";
-import { symbolBlockFields, symbolBlockDefaults, makeSymbolRender } from "./puck/SymbolBlock";
+import { symbolBlockFields, symbolBlockDefaults, SymbolRender } from "./puck/SymbolBlock";
 
 // Custom Category Field component
 // Exported (junto a TemplateField/ColumnStyleAccordion/ColumnDistributionControl) para que el
@@ -1836,13 +1836,13 @@ const baseConfig: any = {
 
         Symbol: {
             // Synced reusable block groups ("editas uno, cambian todos") — puck/SymbolBlock.tsx.
-            // The render's nested config binds to baseConfig.components LAZILY: by first render
-            // withSharedBlockFields (bottom of this file) has already wrapped the map.
+            // El subárbol lo pinta la ÚNICA implementación de Symbol (VersoSymbolBlock, vía
+            // RenderSubtree) — ya no hay config anidado ni mapa de componentes que enlazar.
             label: "Símbolo",
             category: "content",
             fields: { ...symbolBlockFields },
             defaultProps: { ...symbolBlockDefaults },
-            render: makeSymbolRender(() => (baseConfig as any).components),
+            render: (props: any) => <SymbolRender {...props} />,
         },
 
         CategoryPosts: {

@@ -1,26 +1,20 @@
 "use client";
 
-// /admin/chrome — "Cabecera y Pie (beta)": the composable-chrome (contract v1) editor. Mounts
-// @wordjs/puck's <Puck> DIRECTLY with the chrome-only config (chromeEditorConfig.tsx) — NOT the
-// pages PuckEditor, which is coupled to posts (autosave/revisions/status). Loads the EFFECTIVE
-// composition with the same precedence the public layout resolves (site option → theme chrome
-// file → starter template), saves through the dedicated PUT /api/v1/chrome/:part (backend
-// validator is the write authority) and restores by DELETE + reload. The legacy /admin/footer
-// page stays alongside during the beta.
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useSearchParams } from "next/navigation";
-import { Puck, type Data } from "@wordjs/puck";
-import "@wordjs/puck/puck.css";
+// /admin/chrome — "Cabecera y Pie (beta)": the composable-chrome (contract v1) editor. Monta
+// ChromeVersoEditor (variante delgada del motor Verso) con el config de chrome
+// (chromeEditorConfig.tsx) — NO el editor de páginas, acoplado a posts (autosave/revisiones/estado).
+// Loads the EFFECTIVE composition with the same precedence the public layout resolves (site option →
+// theme chrome file → starter template), saves through the dedicated PUT /api/v1/chrome/:part
+// (backend validator is the write authority) and restores by DELETE + reload. The legacy
+// /admin/footer page stays alongside during the beta.
+import { useCallback, useEffect, useRef, useState } from "react";
 import { chromeApi, settingsApi, type ChromePart } from "@/lib/api";
-import { themeStylesheetHref, uiFrameworkHref } from "@/lib/assetVersion";
 import { parseChromeData, STARTER_TEMPLATES, type ChromeData } from "@/lib/chromeData";
 import { useToast } from "@/contexts/ToastContext";
 import { useI18n } from "@/contexts/I18nContext";
-import { resolveEditorEngineFromBrowser, type EditorEngine } from "@/lib/editorEngine";
 import { unhydratedSaveBlocked } from "@/lib/editorGuards";
-import EngineToggle from "@/components/verso/editor/EngineToggle";
-import type { VersoData } from "@/lib/verso/types";
-import { buildChromeEditorConfig } from "./chromeEditorConfig";
+// La forma persistida `{ content, root }` — el mismo tipo que exponía el fork, ahora propio.
+import type { VersoData, VersoData as Data } from "@/lib/verso/types";
 import { saveChromeComposition, toContractData, withBlockIds } from "./chromeContract";
 import ChromeVersoEditor from "./ChromeVersoEditor";
 
@@ -68,27 +62,16 @@ export default function ChromeEditorPage() {
     const [dirty, setDirty] = useState(false);
     const [errors, setErrors] = useState<string[]>([]);
 
-    // F3/W52 — flag de motor: legacy es el DEFAULT ABSOLUTO; Verso solo con opt-in explícito
-    // (?engine= / localStorage wjs_editor_engine / env). Se resuelve tras montar (window no existe
-    // en SSR) y se re-resuelve en navegación suave — el MISMO patrón de pages/[id] y posts/[id].
-    const searchParams = useSearchParams();
-    const [engine, setEngine] = useState<EditorEngine | null>(null);
-    useEffect(() => {
-        setEngine(resolveEditorEngineFromBrowser());
-    }, [searchParams]);
-
-    // Save reads the LATEST Puck data from a ref (state would re-render the whole page per keystroke);
+    // Save reads the LATEST editor data from a ref (state would re-render the whole page per keystroke);
     // dirty tracking compares the contract-shaped JSON against the loaded baseline — exact, no
     // "ignore the first onChange" heuristics.
     const latestDataRef = useRef<Data | null>(null);
     const baselineJsonRef = useRef<string>("");
-    // loadPart and the stylesheet effect must keep a STABLE identity: they remount <Puck> / reload the
-    // composition, so re-running them would drop unsaved edits. The context hands out a NEW t() on
-    // every provider render, so read the translator through a ref instead of depending on it.
+    // loadPart must keep a STABLE identity: re-running it reloads the composition and dropría las
+    // ediciones sin guardar. The context hands out a NEW t() on every provider render, so read the
+    // translator through a ref instead of depending on it.
     const tRef = useRef(t);
     tRef.current = t;
-
-    const config = useMemo(() => buildChromeEditorConfig(part), [part]);
 
     const loadPart = useCallback(async (target: ChromePart, opts: { skipSite?: boolean } = {}) => {
         setLoading(true);
@@ -147,45 +130,11 @@ export default function ChromeEditorPage() {
 
     useEffect(() => { loadPart(part); }, [part, loadPart]);
 
-    // WYSIWYG canvas: the ensureLink pattern from PuckEditor — UI framework first, ACTIVE theme
-    // sheet second (cascade contract), re-asserted for the whole session because AutoFrame reloads
-    // the iframe and clones links back in arbitrary positions.
-    useEffect(() => {
-        if (!themeSlug) return;
-        // SOLO motor legacy: el canvas Verso (/admin/canvas-frame) carga wordjs-ui.css + la hoja del
-        // tema activo por sí mismo con los mismos helpers — inyectar aquí además crearía una pelea
-        // de hrefs entre dos resoluciones de versión del tema.
-        if (engine !== "legacy") return;
-        const ensureLink = (doc: Document, id: string, href: string): HTMLLinkElement => {
-            let l = doc.getElementById(id) as HTMLLinkElement | null;
-            if (!l) {
-                l = doc.createElement("link");
-                l.id = id;
-                l.rel = "stylesheet";
-            }
-            if (l.getAttribute("href") !== href) l.setAttribute("href", href);
-            return l;
-        };
-        const inject = () => {
-            const iframe = document.querySelector(".wjs-chrome-editor iframe") as HTMLIFrameElement | null;
-            const doc = iframe?.contentDocument;
-            if (!doc?.head) return;
-            // Puck creates the canvas iframe itself, so its accessible name has to be set here —
-            // an untitled iframe is announced as just "iframe" by screen readers.
-            if (iframe && !iframe.title) iframe.title = tRef.current("chrome.admin.canvasTitle");
-            const ui = ensureLink(doc, "wjs-ui-framework", uiFrameworkHref());
-            // Same key the public site uses (slug + theme version + ui hash): editing a theme bumps its
-            // version, and without it the canvas kept showing the pre-edit CSS from cache.
-            const theme = ensureLink(doc, "wjs-theme-stylesheet", themeStylesheetHref(themeSlug, themeVersion));
-            if (ui.parentNode !== doc.head) doc.head.appendChild(ui);
-            if (theme.parentNode !== doc.head || !(ui.compareDocumentPosition(theme) & Node.DOCUMENT_POSITION_FOLLOWING)) {
-                doc.head.appendChild(theme);
-            }
-        };
-        inject();
-        const t = setInterval(inject, 700);
-        return () => clearInterval(t);
-    }, [themeSlug, themeVersion, mountKey, engine]);
+    // NOTA (retirada del fork): aquí vivía una inyección periódica de wordjs-ui.css + la hoja del tema
+    // en el iframe que creaba <Puck>. Era EXCLUSIVA del motor legacy (se auto-anulaba con
+    // `engine !== "legacy"`): el canvas Verso (/admin/canvas-frame) carga ambas por sí mismo con los
+    // mismos helpers, y tener las dos resoluciones de versión del tema peleándose por el href era
+    // precisamente lo que evitaba aquella guarda. Se borra con el motor que la necesitaba.
 
     const handleChange = useCallback((newData: Data) => {
         latestDataRef.current = newData;
@@ -383,23 +332,20 @@ export default function ChromeEditorPage() {
                 <p className="text-[11px] text-indigo-500 font-medium">{t("chrome.admin.purgeNote")}</p>
             </div>
 
-            {/* EDITOR — Puck mounted directly with the chrome-only config; custom 3-pane layout
-                (children replace Puck's default UI). The iframe canvas gets the active theme's
-                stylesheets injected by the effect above. */}
+            {/* EDITOR — ChromeVersoEditor con el config de chrome; layout propio de 3 paneles. El
+                iframe del lienzo carga wordjs-ui.css + la hoja del tema activo por sí mismo. */}
             <div className="relative flex-1 min-h-0 wjs-chrome-editor bg-gray-50/50">
-                <EngineToggle current={engine} />
-                {loading || !initialData || engine === null ? (
+                {loading || !initialData ? (
                     <div className="absolute inset-0 flex items-center justify-center">
                         <div className="flex flex-col items-center gap-3 text-gray-300">
                             <i className="fa-solid fa-circle-notch fa-spin text-2xl"></i>
                             <span className="text-[10px] font-black uppercase tracking-widest">{t("chrome.admin.loading")}</span>
                         </div>
                     </div>
-                ) : engine === "verso" ? (
-                    /* MOTOR VERSO (opt-in explícito, W52). Mismos datos (initialData ya estampado por
-                       withBlockIds), mismo onChange compartido (dirty por comparación de contrato) y
-                       mismo camino de guardado/restaurar del header — el dato de chrome NO es
-                       _puck_data. La rama legacy de abajo queda byte-intacta. */
+                ) : (
+                    /* MOTOR VERSO — el único (W52). initialData ya estampado por withBlockIds, onChange
+                       compartido (dirty por comparación de contrato) y el mismo camino de guardado/
+                       restaurar del header — el dato de chrome NO es _puck_data. */
                     <ChromeVersoEditor
                         key={`${part}-${mountKey}`}
                         part={part}
@@ -413,44 +359,6 @@ export default function ChromeEditorPage() {
                             baselineJsonRef.current = JSON.stringify(toContractData(data as unknown as Data));
                         }}
                     />
-                ) : (
-                    <Puck
-                        key={`${part}-${mountKey}`}
-                        config={config}
-                        data={initialData}
-                        onChange={handleChange}
-                        iframe={{ enabled: true }}
-                    >
-                        <div className="flex h-full min-h-0 w-full">
-                            {/* Left: block drawer + outline */}
-                            <aside className="w-64 shrink-0 border-r border-gray-100 bg-white overflow-y-auto custom-scrollbar hidden md:block">
-                                <div className="p-3 border-b border-gray-50">
-                                    <h3 className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">{t("chrome.admin.pane.blocks")}</h3>
-                                    <Puck.Components />
-                                </div>
-                                <div className="p-3">
-                                    <h3 className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">{t("chrome.admin.pane.outline")}</h3>
-                                    <Puck.Outline />
-                                </div>
-                            </aside>
-
-                            {/* Center: canvas. A plain div, NOT <main>: the admin shell already wraps every
-                                page in its own <main>, and nesting a second one is an invalid landmark. */}
-                            <div className="flex-1 min-w-0 min-h-0 overflow-hidden p-4 md:p-6 flex flex-col">
-                                <div className="flex-1 min-h-0 mx-auto w-full max-w-5xl bg-white shadow-xl rounded-xl overflow-hidden border border-gray-200">
-                                    <Puck.Preview />
-                                </div>
-                            </div>
-
-                            {/* Right: selected block fields */}
-                            <aside className="w-72 shrink-0 border-l border-gray-100 bg-white overflow-y-auto custom-scrollbar hidden lg:block">
-                                <div className="p-3">
-                                    <h3 className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">{t("chrome.admin.pane.fields")}</h3>
-                                    <Puck.Fields />
-                                </div>
-                            </aside>
-                        </div>
-                    </Puck>
                 )}
             </div>
         </div>

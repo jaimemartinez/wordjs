@@ -172,7 +172,7 @@ function VersoGuidesController({
     useEffect(() => {
         const doc = frameDoc;
         if (!doc) return;
-        setOutlineMode(doc, enabled, VERSO_BLOCK_ATTR);
+        setOutlineMode(doc, enabled);
         if (!enabled) {
             showSpacingOverlay(doc, null);
             return;
