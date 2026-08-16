@@ -1,13 +1,13 @@
 "use client";
 /**
  * Verso — seam de campos compartidos (el rol de `withSharedBlockFields` en el editor actual,
- * frontend/src/components/puck/VisibilityField.tsx).
+ * frontend/src/components/blocks/VisibilityField.tsx).
  *
  * `withSharedVersoFields(def)` envuelve TODA `BlockDefinition` en el punto de REGISTRO e inyecta
  * los 3 campos comunes — `hide` (visibilidad por dispositivo), `anim` (animación de entrada +
  * efecto de scroll) y `look` (apariencia completa) — con LOS MISMOS defaultProps que el wrapper
  * actual, byte a byte (verificado programáticamente en verso-coreBlocks.test.ts contra
- * puckConfig.tsx):
+ * versoConfig.tsx):
  *   hide: {}   anim: { type: "fade-up", duration: 600, delay: 0 }   look: {}
  *
  * DIFERENCIA DELIBERADA con withSharedBlockFields: este seam NO toca `def.render`. El wrapper
@@ -31,10 +31,10 @@
  * de él (contrato duro de f0-audit-core.md).
  */
 import React from "react";
-import { VisibilityControl } from "@/components/puck/VisibilityField";
-import { AnimationControl } from "@/components/puck/AnimationField";
-import { AppearanceControl } from "@/components/puck/AppearanceField";
-import type { AnimSpec, Appearance, Hide } from "@/components/puck/blockShell";
+import { VisibilityControl } from "@/components/blocks/VisibilityField";
+import { AnimationControl } from "@/components/blocks/AnimationField";
+import { AppearanceControl } from "@/components/blocks/AppearanceField";
+import type { AnimSpec, Appearance, Hide } from "@/components/blocks/blockShell";
 import type { BlockDefinition, VersoField } from "./registry";
 
 /* ------------------------------------------------------------------ */

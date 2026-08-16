@@ -2,7 +2,7 @@
     "id": "invoices",
     "name": "Invoices",
     "version": "1.0.0",
-    "description": "Build and manage invoices (client, line items, tax, discount) with statuses draft/sent/paid/overdue/void, dashboard totals and CSV export. Each invoice gets a public token URL rendered by the Invoices Puck block as a print-friendly view, and can be emailed to the client.",
+    "description": "Build and manage invoices (client, line items, tax, discount) with statuses draft/sent/paid/overdue/void, dashboard totals and CSV export. Each invoice gets a public token URL rendered by the Invoices Verso block as a print-friendly view, and can be emailed to the client.",
     "author": "WordJS",
     "isolated": true,
     "backend": {
@@ -13,8 +13,8 @@
             "entry": "client/admin/page.tsx",
             "slug": "invoices"
         },
-        "puckComponents": {
-            "entry": "client/puck/InvoicesPuck.tsx"
+        "versoComponents": {
+            "entry": "client/verso/InvoicesVerso.tsx"
         }
     },
     "adminMenu": {

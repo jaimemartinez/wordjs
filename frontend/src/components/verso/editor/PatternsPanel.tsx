@@ -3,7 +3,7 @@
  * Verso — pestaña Plantillas del rail (F3, checklist W27): guardar la página actual como patrón,
  * listar/insertar/borrar patrones de usuario (localStorage `wjs_user_patterns`, cap 30, misma
  * clave y forma que el legacy — interoperables entre editores) + los 9 patrones built-in
- * compartidos (PATTERNS de lib/puckPatterns, fuente única).
+ * compartidos (PATTERNS de lib/blockPatterns, fuente única).
  *
  * Piel: la vista "patterns" del BlockInserter legacy (card de guardado punteada + secciones
  * "Mis plantillas"/"Plantillas" con tarjetas icono chip 32 + nombre 12 bold + descripción 11,
@@ -21,7 +21,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import MSym from "@/components/editor/MSym";
 import { RenderSubtree } from "@/components/content/ContentRenderer";
 import { useI18n } from "@/contexts/I18nContext";
-import { trStr } from "@/lib/puckI18n";
+import { trStr } from "@/lib/editorI18n";
 import type { EditorHandle } from "@/lib/verso/store";
 import type { BlockRegistry } from "@/lib/verso/registry";
 import type { VersoItem } from "@/lib/verso/types";

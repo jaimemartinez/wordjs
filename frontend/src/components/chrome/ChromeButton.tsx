@@ -3,7 +3,7 @@
 // at render (defense in depth) — an invalid href degrades to an inert <span>, never a javascript:
 // link. Relative paths use next/link; absolute http(s) URLs use a plain <a>.
 import Link from "next/link";
-import { isSafeChromeHref } from "@/lib/chromeData";
+import { safeChromeHref } from "@/lib/chromeData";
 
 // Static literal map so Tailwind sees every class (no interpolation).
 const VARIANT_CLASS: Record<"primary" | "ghost", string> = {
@@ -24,18 +24,22 @@ export default function ChromeButton({ label, href, variant = "primary" }: Chrom
     // unlayered rules win over layered ones regardless of specificity) — which painted the label the
     // link colour, i.e. invisible on any palette where link == primary.
     const className = `wjs-chrome-button wjs-chrome-button--${variant} inline-flex items-center justify-center px-5 py-2 rounded-full font-medium text-sm transition-colors ${VARIANT_CLASS[variant]}`;
-    if (!isSafeChromeHref(href)) {
+    // Se navega al retorno del RESOLVER, no a `href`: el navegador borra tabuladores, saltos de linea
+    // y retornos de carro antes de parsear, asi que validar la cadena cruda y usar esa misma cruda
+    // dejaba pasar "/\t/evil.example" (authority-relative disfrazada de ruta del sitio).
+    const safeHref = safeChromeHref(href);
+    if (safeHref === undefined) {
         return <span className={className}>{label}</span>;
     }
-    if (href.startsWith("/")) {
+    if (safeHref.startsWith("/")) {
         return (
-            <Link href={href} className={className}>
+            <Link href={safeHref} className={className}>
                 {label}
             </Link>
         );
     }
     return (
-        <a href={href} className={className}>
+        <a href={safeHref} className={className}>
             {label}
         </a>
     );

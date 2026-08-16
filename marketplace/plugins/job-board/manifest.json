@@ -2,7 +2,7 @@
     "id": "job-board",
     "name": "Job Board",
     "version": "1.0.0",
-    "description": "Job listings with a public application form (anti-spam honeypot + timing + rate cap), an applications inbox with statuses and CSV export, and a Puck block with search, type and remote filters. WordPress parity: WP Job Manager.",
+    "description": "Job listings with a public application form (anti-spam honeypot + timing + rate cap), an applications inbox with statuses and CSV export, and a Verso block with search, type and remote filters. WordPress parity: WP Job Manager.",
     "author": "WordJS",
     "isolated": true,
     "backend": {
@@ -13,8 +13,8 @@
             "entry": "client/admin/page.tsx",
             "slug": "jobs"
         },
-        "puckComponents": {
-            "entry": "client/puck/JobBoardPuck.tsx"
+        "versoComponents": {
+            "entry": "client/verso/JobBoardVerso.tsx"
         }
     },
     "adminMenu": {

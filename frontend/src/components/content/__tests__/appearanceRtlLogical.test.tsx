@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { appearanceToStyle, logicalAlign } from '@/components/puck/blockShell';
+import { appearanceToStyle, logicalAlign } from '@/components/blocks/blockShell';
 import { HeroBlock } from '../blocks';
 
 /**

@@ -58,6 +58,14 @@ const invalidVectors: Array<[string, any, string]> = [
     ['javascript: href', { root: { props: {} }, content: [{ type: 'ChromeButton', props: { label: 'x', href: 'javascript:alert(1)', variant: 'primary' } }] }, 'CHROME_UNSAFE_HREF'],
     ['protocol-relative href', { root: { props: {} }, content: [{ type: 'ChromeButton', props: { label: 'x', href: '//evil.example/x', variant: 'ghost' } }] }, 'CHROME_UNSAFE_HREF'],
     ['data: href', { root: { props: {} }, content: [{ type: 'ChromeButton', props: { label: 'x', href: 'data:text/html,x', variant: 'primary' } }] }, 'CHROME_UNSAFE_HREF'],
+    // PARIDAD con el resolver del frontend (safeChromeHref). El parser de URL del navegador BORRA
+    // tabulador, salto de linea y retorno de carro ANTES de parsear, asi que estas tres empiezan por
+    // '/' con un control en segunda posicion — ni '/' ni '\' — y pasaban el chequeo sobre la cadena
+    // cruda, para acabar resolviendo https://evil.example/. Son open redirect, no XSS, pero el
+    // validador es la autoridad de escritura: no deben poder ALMACENARSE.
+    ['tab-smuggled authority-relative href', { root: { props: {} }, content: [{ type: 'ChromeButton', props: { label: 'x', href: '/\t/evil.example', variant: 'primary' } }] }, 'CHROME_UNSAFE_HREF'],
+    ['newline-smuggled authority-relative href', { root: { props: {} }, content: [{ type: 'ChromeButton', props: { label: 'x', href: '/\n/evil.example', variant: 'ghost' } }] }, 'CHROME_UNSAFE_HREF'],
+    ['carriage-return-smuggled authority-relative href', { root: { props: {} }, content: [{ type: 'ChromeButton', props: { label: 'x', href: '/\r\\evil.example', variant: 'primary' } }] }, 'CHROME_UNSAFE_HREF'],
     ['missing required prop', { root: { props: {} }, content: [{ type: 'ChromeButton', props: { label: 'x', href: '/ok' } }] }, 'CHROME_MISSING_PROP'],
     ['wrong prop type', { root: { props: {} }, content: [{ type: 'ChromeText', props: { text: 42 } }] }, 'CHROME_INVALID_PROP'],
     ['enum out of range', { root: { props: {} }, content: [{ type: 'ChromeSpacer', props: { size: 'xl' } }] }, 'CHROME_INVALID_PROP'],

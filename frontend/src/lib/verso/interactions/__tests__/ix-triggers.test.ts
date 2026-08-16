@@ -1,0 +1,245 @@
+/**
+ * MATRIZ DE DISPARADORES — qué se expresa en CSS puro, qué no, y cuánto JS cuesta cada caso.
+ *
+ * Esta es la tabla que manda en todo el diseño (§4.2 de la spec) y por eso se prueba entera: si un
+ * caso cambia de columna, cambia el presupuesto de bytes de la página y hay que saberlo aquí, no
+ * en un perfil de navegador.
+ *
+ *   never      → cero bytes de motor, en TODOS los navegadores.
+ *   no-native  → el CSS lo hace en Chrome/Safari 26+; solo Firefox baja el chunk.
+ *   always     → el CSS no puede: la isla de eventos, siempre.
+ */
+import { describe, expect, it } from "vitest";
+import { compileIx, compileIxPage, toRuntimeUnit } from "../compile";
+import { IX_MAX_CHILDREN } from "../normalize";
+import type { IxSpec, IxTrack } from "../types";
+
+const steps2 = [
+  { at: 0, set: { opacity: 0 } },
+  { at: 100, set: { opacity: 1 } },
+];
+const steps3 = [
+  { at: 0, set: { opacity: 0 } },
+  { at: 50, set: { opacity: 0.5 } },
+  { at: 100, set: { opacity: 1 } },
+];
+
+const mk = (trigger: IxSpec["trigger"], track: Partial<IxTrack> = {}): IxSpec => ({
+  v: 1,
+  trigger,
+  tracks: [{ target: { kind: "self" }, steps: steps2, ...track } as IxTrack],
+});
+
+describe("la columna `needsRuntime`", () => {
+  const cases: Array<[string, IxSpec, "never" | "no-native" | "always"]> = [
+    ["scrub (progreso ligado al scroll)", mk({ on: "scrub" }), "no-native"],
+    ["scrub sobre el scroll de la página", mk({ on: "scrub", src: "page" }), "no-native"],
+    ["view, once:false (entra y sale)", mk({ on: "view", once: false }), "no-native"],
+    ["view, once:true (la entrada de hoy)", mk({ on: "view", once: true }), "always"],
+    ["view sin `once` (por defecto once)", mk({ on: "view" }), "always"],
+    ["load", mk({ on: "load" }), "never"],
+    ["load con retardo", mk({ on: "load", delay: 300 }), "never"],
+    ["hover, 2 pasos", mk({ on: "hover" }), "never"],
+    ["hover, 3 pasos", mk({ on: "hover" }, { steps: steps3 }), "never"],
+    ["click", mk({ on: "click" }), "always"],
+    ["click con toggle", mk({ on: "click", toggle: true }), "always"],
+    [
+      "objetivo externo (otro bloque)",
+      mk({ on: "load" }, { target: { kind: "block", id: "abc" } }),
+      "always",
+    ],
+    ["stagger sobre hijos, con load", mk({ on: "load" }, { target: { kind: "children" }, stagger: { each: 60 } }), "never"],
+    ["stagger sobre palabras, con load", mk({ on: "load" }, { target: { kind: "words" }, stagger: { each: 40 } }), "never"],
+    ["sin disparador → view+once", { v: 1, tracks: [{ target: { kind: "self" }, steps: steps2 }] }, "always"],
+  ];
+
+  for (const [name, spec, expected] of cases) {
+    it(`${name} → ${expected}`, () => {
+      expect(compileIx(spec)!.needsRuntime).toBe(expected);
+    });
+  }
+
+  it("una página SIN nada que el CSS no resuelva no lleva manifiesto de runtime", () => {
+    const page = compileIxPage([mk({ on: "load" }), mk({ on: "hover" })]);
+    expect(page.units).toHaveLength(2);
+    expect(page.runtime).toHaveLength(0);
+  });
+
+  it("una página con un solo caso `always` lo lleva, y solo ese", () => {
+    const page = compileIxPage([mk({ on: "load" }), mk({ on: "click" }), mk({ on: "scrub" })]);
+    expect(page.runtime.map((u) => u.needsRuntime).sort()).toEqual(["always", "no-native"]);
+  });
+});
+
+describe("qué CSS emite cada disparador", () => {
+  it("scrub → @supports + animation-timeline + animation-range, y NADA fuera del @supports", () => {
+    const u = compileIx(mk({ on: "scrub" }))!;
+    expect(u.rules).toHaveLength(1);
+    expect(u.rules[0]).toBe(
+      `@supports (animation-timeline:view()){.${u.cls}{animation:wjs-ixk-${u.hash} 1ms linear both;animation-timeline:view();animation-range:cover 0% cover 100%}}`,
+    );
+  });
+
+  it("scrub sobre la página usa scroll() en la regla Y en el @supports", () => {
+    const u = compileIx(mk({ on: "scrub", src: "page" }))!;
+    expect(u.rules[0].startsWith("@supports (animation-timeline:scroll()){")).toBe(true);
+    expect(u.rules[0]).toContain("animation-timeline:scroll()");
+  });
+
+  it("el atajo `animation` va ANTES de animation-timeline (el atajo la resetea)", () => {
+    // Solo dentro del bloque de declaraciones: el `@supports (animation-timeline:…)` de fuera es
+    // una condición, no una declaración.
+    const decls = compileIx(mk({ on: "scrub" }))!.rules[0].split("{").pop()!;
+    expect(decls.indexOf("animation:")).toBeLessThan(decls.indexOf("animation-timeline:"));
+  });
+
+  it("view once:false usa el rango por defecto `entry 0% cover 40%`", () => {
+    const u = compileIx(mk({ on: "view", once: false }))!;
+    expect(u.rules[0]).toContain("animation-range:entry 0% cover 40%");
+  });
+
+  it("el rango del autor manda sobre el defecto", () => {
+    const u = compileIx(mk({
+      on: "scrub",
+      range: { from: { at: "entry", pct: 25 }, to: { at: "exit", pct: 75 } },
+    }))!;
+    expect(u.rules[0]).toContain("animation-range:entry 25% exit 75%");
+  });
+
+  it("view once:true escribe contra el atributo del runtime, y arma con el fotograma 0", () => {
+    const u = compileIx(mk({ on: "view", once: true }, {
+      steps: [{ at: 0, set: { opacity: 0, y: 20 } }, { at: 100, set: { opacity: 1, y: 0 } }],
+    }))!;
+    expect(u.rules[0]).toBe(`.${u.cls}[data-wjs-ix="in"]{animation:wjs-ixk-${u.hash} 600ms linear both}`);
+    expect(u.rules[1]).toBe(`.${u.cls}[data-wjs-ix="armed"]{opacity:0;transform:translate3d(0px,20px,0)}`);
+    // El servidor NO puede ocultar: el estado armado solo existe bajo un atributo que pone el JS.
+    expect(u.rules.every((r) => !r.startsWith(`.${u.cls}{`))).toBe(true);
+  });
+
+  it("click escribe contra [data-wjs-ix=\"on\"]", () => {
+    const u = compileIx(mk({ on: "click" }))!;
+    expect(u.rules[0].startsWith(`.${u.cls}[data-wjs-ix="on"]{`)).toBe(true);
+  });
+
+  it("hover con 2 pasos es una TRANSICIÓN (vuelve sola al salir el ratón)", () => {
+    const u = compileIx(mk({ on: "hover" }, {
+      steps: [{ at: 0, set: { scale: 1 } }, { at: 100, set: { scale: 1.05 } }],
+      dur: 200,
+    }))!;
+    expect(u.rules).toHaveLength(2);
+    expect(u.rules[0]).toBe(
+      `.${u.cls}{transition:transform 200ms cubic-bezier(.16,1,.3,1) 0ms;transform:scale(1)}`,
+    );
+    expect(u.rules[1]).toBe(`.${u.cls}:hover,.${u.cls}:focus-visible{transform:scale(1.05)}`);
+    expect(u.keyframes).toHaveLength(0); // una transición no necesita @keyframes
+  });
+
+  it("hover con 3+ pasos es una ANIMACIÓN sobre :hover (una transición no tiene pasos)", () => {
+    const u = compileIx(mk({ on: "hover" }, { steps: steps3 }))!;
+    expect(u.rules).toHaveLength(1);
+    expect(u.rules[0]).toBe(
+      `.${u.cls}:hover,.${u.cls}:focus-visible{animation:wjs-ixk-${u.hash} 600ms linear both}`,
+    );
+    expect(u.keyframes).toHaveLength(1);
+  });
+
+  it("`:focus-visible` acompaña SIEMPRE a `:hover` (teclado)", () => {
+    for (const steps of [steps2, steps3]) {
+      const u = compileIx(mk({ on: "hover" }, { steps }))!;
+      expect(u.rules.join()).toContain(":focus-visible");
+    }
+  });
+
+  it("load suma el retardo del disparador al de la pista", () => {
+    const u = compileIx(mk({ on: "load", delay: 300 }, { delay: 200 }))!;
+    expect(u.rules[0]).toContain("500ms both");
+  });
+
+  it("repeat/alt solo aparecen cuando no son el valor inicial", () => {
+    expect(compileIx(mk({ on: "load" }))!.rules[0]).toBe(
+      `.${compileIx(mk({ on: "load" }))!.cls}{animation:wjs-ixk-${compileIx(mk({ on: "load" }))!.hash} 600ms linear both}`,
+    );
+    const rep = compileIx(mk({ on: "load" }, { repeat: "inf", alt: true }))!;
+    expect(rep.rules[0]).toContain("600ms linear infinite alternate both");
+  });
+
+  it("un objetivo externo NO emite CSS y avisa de que va por runtime", () => {
+    const u = compileIx(mk({ on: "load" }, { target: { kind: "block", id: "abc" } }))!;
+    expect(u.rules).toHaveLength(0);
+    expect(u.keyframes).toHaveLength(0);
+    expect(u.warnings.join(" ")).toContain("objetivo externo");
+    // Pero el IR SÍ está, porque el runtime lo necesita.
+    expect(Object.keys(u.kf)).toHaveLength(1);
+  });
+});
+
+describe("escalonado", () => {
+  it("sobre hijos emite nth-child 1..23 + un catch-all para el 24 en adelante", () => {
+    const u = compileIx(mk({ on: "load" }, { target: { kind: "children" }, stagger: { each: 60 } }))!;
+    // 1 regla principal + 23 nth-child + 1 catch-all
+    expect(u.rules).toHaveLength(1 + IX_MAX_CHILDREN);
+    expect(u.rules[1]).toBe(`.${u.cls}>:nth-child(1){animation-delay:0ms}`);
+    expect(u.rules[2]).toBe(`.${u.cls}>:nth-child(2){animation-delay:60ms}`);
+    expect(u.rules[IX_MAX_CHILDREN - 1]).toBe(`.${u.cls}>:nth-child(23){animation-delay:1320ms}`);
+    expect(u.rules[IX_MAX_CHILDREN]).toBe(`.${u.cls}>:nth-child(n+24){animation-delay:1380ms}`);
+  });
+
+  it("`from: end` usa nth-last-child, que es EXACTO sin conocer el recuento", () => {
+    const u = compileIx(mk({ on: "load" }, {
+      target: { kind: "children" }, stagger: { each: 50, from: "end" },
+    }))!;
+    expect(u.rules[1]).toContain(">:nth-last-child(1){");
+    expect(u.warnings).toHaveLength(0);
+  });
+
+  it("`from: center` no es expresable en CSS puro: avisa y cae a `start`", () => {
+    const u = compileIx(mk({ on: "load" }, {
+      target: { kind: "children" }, stagger: { each: 50, from: "center" },
+    }))!;
+    expect(u.warnings.join(" ")).toContain("centro");
+    expect(u.rules[1]).toContain(">:nth-child(1){");
+    // …pero el manifiesto del runtime SÍ conserva `center`: allí se conoce el recuento y es exacto.
+    expect(toRuntimeUnit(u).tracks[0].stagger).toEqual({ each: 50, from: "center" });
+  });
+
+  it("sobre palabras es UNA regla con calc() y la variable del motor", () => {
+    const u = compileIx(mk({ on: "load" }, { target: { kind: "words" }, stagger: { each: 40 } }))!;
+    expect(u.rules).toHaveLength(1);
+    expect(u.rules[0]).toBe(
+      `.${u.cls} .wjs-ixw{animation:wjs-ixk-${u.hash} 600ms linear both;animation-delay:calc(var(--wjs-ixv-i, 0) * 40ms + 0ms)}`,
+    );
+  });
+
+  it("con hover de 2 pasos el escalonado va sobre transition-delay, no animation-delay", () => {
+    const u = compileIx(mk({ on: "hover" }, {
+      target: { kind: "children" }, stagger: { each: 30 },
+      steps: [{ at: 0, set: { y: 0 } }, { at: 100, set: { y: -4 } }],
+    }))!;
+    expect(u.rules.join()).toContain("transition-delay:30ms");
+    expect(u.rules.join()).not.toContain("animation-delay");
+  });
+
+  it("con un disparador de scroll el escalonado se ignora y se avisa", () => {
+    const u = compileIx(mk({ on: "scrub" }, { target: { kind: "children" }, stagger: { each: 60 } }))!;
+    expect(u.rules).toHaveLength(1);
+    expect(u.warnings.join(" ")).toContain("escalonado");
+  });
+});
+
+describe("varias pistas", () => {
+  it("cada pista tiene su @keyframes numerado y su propia regla", () => {
+    const u = compileIx({
+      v: 1,
+      trigger: { on: "load" },
+      tracks: [
+        { target: { kind: "self" }, steps: steps2 },
+        { target: { kind: "children" }, steps: [{ at: 0, set: { y: 10 } }, { at: 100, set: { y: 0 } }] },
+      ],
+    })!;
+    expect(u.keyframes).toHaveLength(2);
+    expect(u.rules).toHaveLength(2);
+    expect(u.rules[0]).toContain(`wjs-ixk-${u.hash}-0`);
+    expect(u.rules[1]).toContain(`wjs-ixk-${u.hash}-1`);
+    expect(u.rules[1].startsWith(`.${u.cls}>*{`)).toBe(true);
+  });
+});

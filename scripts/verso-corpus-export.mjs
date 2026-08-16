@@ -214,7 +214,10 @@ function processDb(db, label) {
         status: row.post_status,
         title: row.post_title,
         slug: row.post_name,
-        puckData: parsed,
+        // El documento serializado. Se llama `versoData` desde el renombrado del editor; los
+        // corpus ya exportados con la clave anterior (`puckData`) los sigue leyendo el loader de
+        // los tests (frontend/src/lib/verso/__tests__/helpers.ts), que normaliza las dos.
+        versoData: parsed,
         hasZones: analysis.hasZones,
         zoneCount: analysis.zoneCount,
         zoneItemCount: analysis.zoneItemCount,
@@ -297,9 +300,9 @@ function buildStats(allCorpus, allLegacy, allParseErrors, perDbMeta) {
         }
       }
     };
-    countOcc(Array.isArray(e.puckData.content) ? e.puckData.content : []);
-    if (e.puckData.zones && typeof e.puckData.zones === 'object') {
-      for (const zi of Object.values(e.puckData.zones)) {
+    countOcc(Array.isArray(e.versoData.content) ? e.versoData.content : []);
+    if (e.versoData.zones && typeof e.versoData.zones === 'object') {
+      for (const zi of Object.values(e.versoData.zones)) {
         if (Array.isArray(zi)) countOcc(zi);
       }
     }

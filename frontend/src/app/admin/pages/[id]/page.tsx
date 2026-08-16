@@ -11,13 +11,13 @@ import { rootFieldsPage } from "@/lib/verso/coreBlocks";
 import { serializeContentFallback } from "@/lib/verso/contentFallback";
 import type { EditorHandle } from "@/lib/verso/store";
 import type { VersoData } from "@/lib/verso/types";
-import { unhydratedSaveBlocked, seedLegacyPuckData, applyLegacyHtmlFallback, resolveWjsTemplateForSave, isWithinPostMountGrace } from "@/lib/editorGuards";
+import { unhydratedSaveBlocked, seedLegacyVersoData, applyLegacyHtmlFallback, resolveWjsTemplateForSave, isWithinPostMountGrace, EDITOR_DATA_META_KEY } from "@/lib/editorGuards";
 // La forma persistida `{ content, root }` — el mismo tipo que exponía el fork, ahora propio.
 import type { VersoData as Data } from "@/lib/verso/types";
 import { useUnsavedChanges } from "@/contexts/UnsavedChangesContext";
 import { useModal } from "@/contexts/ModalContext";
 import { useI18n } from "@/contexts/I18nContext";
-import { trStr } from "@/lib/puckI18n";
+import { trStr } from "@/lib/editorI18n";
 import { useAuth } from "@/contexts/AuthContext";
 
 export default function PageEditorPage() {
@@ -42,11 +42,12 @@ export default function PageEditorPage() {
     // every keystroke) and is only ever read inside handleSubmit — never during render. As state it
     // re-rendered the whole editor on each letter typed.
     const contentRef = useRef("");
-    const [initialPuckData, setInitialPuckData] = useState<Data | null>(null);
-    const puckDataRef = useRef<Data>({ content: [], root: {} }); // For saving without causing re-renders
+    const [initialVersoData, setInitialVersoData] = useState<Data | null>(null);
+    const versoDataRef = useRef<Data>({ content: [], root: {} }); // For saving without causing re-renders
     const [status, setStatus] = useState("draft");
     // The author's per-page theme-template pick (`_wjs_template` meta). State (not just a root prop
-    // read at save time) because the canvas preview re-wraps on it live — see PuckEditor.assignedTemplate.
+    // read at save time) because the canvas preview re-wraps on it live — VersoThemeTemplate reads the
+    // pick straight from the store root, so the canvas follows the dropdown without a save.
     const [assignedTemplate, setAssignedTemplate] = useState("");
     const [saving, setSaving] = useState(false);
     const [isLoading, setIsLoading] = useState(!isNew);
@@ -85,14 +86,14 @@ export default function PageEditorPage() {
                 .replace(/[\s_-]+/g, '-')
                 .replace(/^-+|-+$/g, '');
             setSlug(generatedSlug);
-            // Update puckDataRef for saving (no re-render)
-            puckDataRef.current = {
-                ...puckDataRef.current,
+            // Update versoDataRef for saving (no re-render)
+            versoDataRef.current = {
+                ...versoDataRef.current,
                 root: {
-                    ...(puckDataRef.current.root as any),
+                    ...(versoDataRef.current.root as any),
                     slug: generatedSlug,
                     props: {
-                        ...((puckDataRef.current.root as any)?.props || {}),
+                        ...((versoDataRef.current.root as any)?.props || {}),
                         slug: generatedSlug
                     }
                 }
@@ -132,8 +133,8 @@ export default function PageEditorPage() {
             setAssignedTemplate(savedTemplate);
 
             // Load Puck data from meta if available
-            if (page.meta && page.meta._puck_data) {
-                const stored = page.meta._puck_data;
+            if (page.meta && page.meta[EDITOR_DATA_META_KEY]) {
+                const stored = page.meta[EDITOR_DATA_META_KEY];
                 const withTemplate = {
                     ...stored,
                     root: {
@@ -141,8 +142,8 @@ export default function PageEditorPage() {
                         props: { ...((stored.root as any)?.props || {}), _wjs_template: savedTemplate }
                     }
                 };
-                setInitialPuckData(withTemplate);
-                puckDataRef.current = withTemplate;
+                setInitialVersoData(withTemplate);
+                versoDataRef.current = withTemplate;
                 legacyHtmlRef.current = null; // real Puck blocks — not a legacy HTML body
                 if (stored.root?.title) {
                     setTitle(stored.root.title);
@@ -151,17 +152,17 @@ export default function PageEditorPage() {
                 // Seed Puck data with existing info for legacy pages. A legacy/imported page keeps its
                 // body as HTML in `content` with no _puck_data. Wrap that HTML in an HTMLEmbed block so it
                 // is VISIBLE and editable in the canvas instead of opening blank. The block renders the
-                // HTML sanitized (see puckConfig HTMLEmbed); the onChange serializer round-trips props.html
+                // HTML sanitized (see versoConfig HTMLEmbed); the onChange serializer round-trips props.html
                 // back into `content`, so the body is preserved (and updated when edited).
-                const { data: seededData, legacyHtml } = seedLegacyPuckData({
+                const { data: seededData, legacyHtml } = seedLegacyVersoData({
                     html: page.content || "",
                     title: page.title,
                     slug: page.slug,
                     recordId: pageId as number,
                     wjsTemplate: savedTemplate
                 });
-                setInitialPuckData(seededData as any);
-                puckDataRef.current = seededData as any;
+                setInitialVersoData(seededData as any);
+                versoDataRef.current = seededData as any;
                 // Safety net (belt-and-braces): keep the original body so an empty-canvas save can't blank
                 // the page if the HTMLEmbed block is deleted before its HTML round-trips. Once the block
                 // round-trips through onChange (content.length > 0), legacyHtmlRef is cleared.
@@ -207,7 +208,7 @@ export default function PageEditorPage() {
             try {
                 versoHandleRef.current?.commitInline();
             } catch { /* no open editor */ }
-            const liveData = (versoHandleRef.current?.getData() as any) ?? puckDataRef.current;
+            const liveData = (versoHandleRef.current?.getData() as any) ?? versoDataRef.current;
             const root = liveData.root as any;
             const finalTitle = root?.props?.title || root?.title || title;
             const finalSlug = root?.props?.slug || root?.slug || slug;
@@ -226,7 +227,8 @@ export default function PageEditorPage() {
                 status,
                 type: "page",
                 meta: {
-                    _puck_data: liveData,
+                    // Clave histórica CONGELADA a propósito — ver EDITOR_DATA_META_KEY.
+                    [EDITOR_DATA_META_KEY]: liveData,
                     // Per-page theme template. Always sent (backend merges meta per key): '' explicitly
                     // CLEARS a previous assignment — omitting the key would leave it stale forever.
                     _wjs_template: resolveWjsTemplateForSave(root?.props)
@@ -281,12 +283,12 @@ export default function PageEditorPage() {
 
     return (
         <div className="h-full w-full overflow-hidden flex flex-col">
-                {/* MOTOR VERSO — el único. Carga/seeding ya hechos arriba (loadPage/seedLegacyPuckData),
+                {/* MOTOR VERSO — el único. Carga/seeding ya hechos arriba (loadPage/seedLegacyVersoData),
                    handleSubmit lee el doc vivo vía versoHandleRef, root fields de PAGE (asimetría del
                    CMS), y el onChange serializa el fallback HTML COMPLETO compartido
                    (lib/verso/contentFallback). */}
                 <VersoEditor
-                    initialData={(initialPuckData || { content: [], root: {} }) as unknown as VersoData}
+                    initialData={(initialVersoData || { content: [], root: {} }) as unknown as VersoData}
                     status={status}
                     onStatusChange={setStatus}
                     saving={saving}
@@ -306,7 +308,7 @@ export default function PageEditorPage() {
                             setIsDirty(true);
                         }
                         // Mirror de última instancia (el guardado prefiere versoHandleRef.getData()).
-                        puckDataRef.current = data as unknown as Data;
+                        versoDataRef.current = data as unknown as Data;
                         const root = data.root as any;
                         const newTitle = root?.props?.title || root?.title;
                         const newSlug = root?.props?.slug || root?.slug;

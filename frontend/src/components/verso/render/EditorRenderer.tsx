@@ -14,11 +14,20 @@
  * derive del registry re-renderiza pasando un mapa nuevo). El registry viaja
  * en el contexto para los consumidores que sí lo necesitan (panel de props,
  * inserción — F2).
+ *
+ * INTERACCIONES (F9-D): <IxCanvasEngine> se monta AQUÍ, no en VersoEditor,
+ * porque este es el punto más interno que ya está dentro del portal del iframe
+ * — y el motor necesita el documento del MARCO (su hoja se inyecta a mano ahí,
+ * como la del tema: el hoisting de <style precedence> de React apunta al head
+ * del documento padre y nunca llegaría al canvas). No pinta nada: devuelve
+ * null, así que el DOM del canvas es idéntico con motor y sin él.
  */
 import React, { useMemo } from "react";
 import { ROOT_ID, ROOT_SLOT } from "@/lib/verso/types";
 import type { EditorHandle } from "@/lib/verso/store";
 import type { BlockRegistry } from "@/lib/verso/registry";
+import IxCanvasEngine from "../canvas/IxCanvasEngine";
+import { useSiteIxPresets } from "../canvas/useSiteIxPresets";
 import {
   selectRootChildren,
   useStoreSlice,
@@ -38,6 +47,8 @@ export interface EditorRendererProps {
   editorChrome?: boolean;
   /** Clase del wrapper del slot raíz (p.ej. el ancho de página del canvas). */
   rootClassName?: string;
+  /** true → sesión de colaboración viva (F8.4): la edición inline reconcilia con lo ajeno. */
+  collabLive?: boolean;
 }
 
 export default function EditorRenderer({
@@ -47,14 +58,17 @@ export default function EditorRenderer({
   onBlockElement,
   editorChrome,
   rootClassName,
+  collabLive,
 }: EditorRendererProps) {
   const rootChildren = useStoreSlice(handle, selectRootChildren);
+  const ixCtx = useSiteIxPresets();
   const contextValue = useMemo<VersoRenderContextValue>(
-    () => ({ handle, registry, componentMap, onBlockElement, editorChrome }),
-    [handle, registry, componentMap, onBlockElement, editorChrome],
+    () => ({ handle, registry, componentMap, onBlockElement, editorChrome, collabLive }),
+    [handle, registry, componentMap, onBlockElement, editorChrome, collabLive],
   );
   return (
     <VersoRenderContext.Provider value={contextValue}>
+      <IxCanvasEngine handle={handle} ixCtx={ixCtx} />
       <VersoSlot parentId={ROOT_ID} slotKey={ROOT_SLOT} childIds={rootChildren} className={rootClassName} />
     </VersoRenderContext.Provider>
   );

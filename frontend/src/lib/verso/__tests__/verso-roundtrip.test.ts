@@ -223,7 +223,7 @@ describe.skipIf(!corpusAvailable)("verso round-trip — corpus de producción", 
   it("cada documento sin zones hace round-trip EXACTO; con zones, idempotente con única diferencia zones→slots", () => {
     const failures: string[] = [];
     for (const entry of corpus) {
-      const d = entry.puckData;
+      const d = entry.versoData;
       let out1: VersoData;
       try {
         out1 = roundTrip(d);

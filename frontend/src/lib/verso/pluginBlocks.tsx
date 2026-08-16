@@ -31,8 +31,8 @@
  *    (por diseño, para no envenenar cachés) y aquí lo captura el hook — sin retry propio, porque el
  *    loader no memoiza fallos y el siguiente mount reintenta solo.
  *  - BLOQUES ESTÁTICOS (dev, 8 plugins in-tree): registerStaticPluginBlocks consume la MISMA salida
- *    generada (lib/puckPluginRegistry.ts, de scripts/generate-puck-plugin-registry.js — fichero que
- *    JAMÁS se commitea) que ya consume el editor legacy vía puckConfig.tsx: una sola fuente, dos
+ *    generada (lib/versoPluginRegistry.ts, de scripts/generate-verso-plugin-registry.js — fichero que
+ *    JAMÁS se commitea) que ya consume el editor legacy vía versoConfig.tsx: una sola fuente, dos
  *    editores, sin tocar el generador ni el camino legacy. Se registra síncrono al crear el registry
  *    (mismo momento que el merge estático del legacy: presente desde el primer render, determinista
  *    en SSR y cliente); el camino runtime hace después upsert por clave — la misma precedencia que el
@@ -49,7 +49,7 @@ import {
   loadPluginBlockConfigs,
   injectBlockCssInto,
 } from "@/lib/pluginBundleLoader";
-import { puckPluginComponents } from "@/lib/puckPluginRegistry";
+import { versoPluginComponents } from "@/lib/versoPluginRegistry";
 import {
   adaptLegacySingle,
   type BlockDefinition,
@@ -166,14 +166,14 @@ export function registerPluginBlocks(
 }
 
 /**
- * Bloques ESTÁTICOS de los plugins in-tree (dev): la salida de generate-puck-plugin-registry.js, la
- * misma que el legacy mergea en puckConfig. Llamar SÍNCRONO al crear el registry (junto a
+ * Bloques ESTÁTICOS de los plugins in-tree (dev): la salida de generate-verso-plugin-registry.js, la
+ * misma que el legacy mergea en versoConfig. Llamar SÍNCRONO al crear el registry (junto a
  * registerCoreBlocks) — así están desde el primer render, como en el legacy. `components` inyectable
  * solo para tests.
  */
 export function registerStaticPluginBlocks(
   registry: BlockRegistry,
-  components: Record<string, unknown> = puckPluginComponents,
+  components: Record<string, unknown> = versoPluginComponents,
 ): string[] {
   return registerPluginBlocks(registry, components);
 }

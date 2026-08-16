@@ -145,8 +145,10 @@ stays legible against that theme's palette.
 - On **public pages**, `ThemeLoader` (`frontend/src/components/public/ThemeLoader.tsx`) injects
   `wordjs-ui.css` **first** (id `wjs-ui-framework`), then the active theme's `style.css` — so the
   theme's `:root` tokens and custom rules win at equal specificity.
-- In the **editor preview iframe** (`frontend/src/components/PuckEditor.tsx`), the same framework +
-  active-theme stylesheet are injected (framework first), so the WYSIWYG canvas matches the live site.
+- In the **editor canvas iframe** (`frontend/src/app/admin/canvas-frame/page.tsx` — the Verso canvas is a
+  real same-origin route, not a `srcdoc` document), the same framework + active-theme stylesheet are
+  emitted (framework first), so the WYSIWYG canvas matches the live site. Switching theme goes through
+  `FrameController.swapThemeCss()`, which waits for the new sheet’s `onload` before removing the old one.
 - *(Legacy engine — not the live renderer.)* The backend Handlebars `wordjs_head` helper (`backend/src/core/theme-engine.ts`) emits the framework
   (`wordjs-ui.css`, before `core.css`). The active theme's `style.css` is linked separately by the theme's
   `header.html` partial via the `get_stylesheet_uri` helper (in the bundled partials that link comes *before*
@@ -237,7 +239,7 @@ did-you-mean suggestion) and invalid enum/type values as `LAYOUT_INVALID_VALUE`.
 ### Composable chrome (`chrome/*.json`)
 
 Beyond the layout *variants* above, a theme (or the site itself) can compose the header/footer
-from blocks. A composition is **Puck Data JSON** — `{ "root": { "props": {} }, "content": [ { "type", "props" } ] }` —
+from blocks. A composition is an **editor document JSON** — `{ "root": { "props": {} }, "content": [ { "type", "props" } ] }` —
 validated on the backend by `core/chrome-validate.ts` (contract v1, the write authority) and
 rendered by the public SSR layout without mounting any editor runtime.
 
@@ -1361,8 +1363,9 @@ cascades after it.
 It doesn't any more: switching or editing a theme purges the `settings` tag
 (`backend/src/core/frontend-purge.ts`), so the next navigation serves HTML with the new slug/version.
 An already-open public tab keeps the theme it was rendered with until it navigates. The only client
-resolve left is the Puck editor preview, which reuses the public shell without server props and reads
-`GET /api/v1/settings` **once** (cheap, cached, no fs). When the href does change at runtime the
+resolve left is the editor canvas, which gets no server props and reads `GET /api/v1/themes` **once**
+(`themesApi.list()`, falling back to `default` if the request fails, so the canvas is never left with no
+theme link). When the href does change at runtime the
 loader still removes the previous `<link>` — matched on the exact href, so a version-only change
 evicts it too (React treats `precedence` stylesheets as add-only, so the stale stylesheet would
 otherwise stay applied alongside the new one).
@@ -1475,7 +1478,7 @@ header {
 
 ### Containment Rules
 
-All Puck components have built-in overflow containment (shipped in the framework `backend/public/css/wordjs-ui.css`, which contains wide content — tables/`pre` scroll in their own container, long strings wrap — at every width):
+All editor blocks have built-in overflow containment (shipped in the framework `backend/public/css/wordjs-ui.css`, which contains wide content — tables/`pre` scroll in their own container, long strings wrap — at every width):
 
 ```css
 /* Already defined in wordjs-ui.css */

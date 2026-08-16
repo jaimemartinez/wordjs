@@ -2,7 +2,7 @@
  * Material Symbols Outlined glyph (ligature-based), per the Stitch editor design.
  *
  * The font is a NAMED-ICON SUBSET self-hosted at /fonts/material-symbols-outlined-subset.woff2
- * (see puck-theme.css). A `name` that is not in the subset renders as an empty box — regenerate
+ * (see editor-theme.css). A `name` that is not in the subset renders as an empty box — regenerate
  * the subset (css2 API `icon_names=` param) when introducing a new glyph.
  */
 export default function MSym({

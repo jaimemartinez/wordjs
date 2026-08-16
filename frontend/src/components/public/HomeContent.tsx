@@ -56,11 +56,14 @@ function renderContent(htmlContent: string) {
     );
 }
 
-export default function HomeContent({ post }: { post: Post }) {
+export default function HomeContent({ post, settings }: { post: Post; settings?: Record<string, string> | null }) {
     if (post.meta?._puck_data) {
         return (
             <div className="puck-content w-full">
-                <ContentRenderer data={post.meta._puck_data} />
+                {/* `wjs_ix_presets` = los preajustes de interacción del sitio (motor F9). Se pasan
+                    desde aquí, y no se leen dentro de ContentRenderer, porque ese módulo también lo
+                    importa código de cliente y no puede tocar la capa de servidor. */}
+                <ContentRenderer data={post.meta._puck_data} ixPresets={settings?.wjs_ix_presets} />
             </div>
         );
     }

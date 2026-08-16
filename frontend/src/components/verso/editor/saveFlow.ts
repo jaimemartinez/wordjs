@@ -2,7 +2,7 @@
  * Verso — flujo de guardado del wrapper (F3), extraído puro para poder verificar el CABLEADO de
  * los guards con un onSave espiado (checklist A: W10/W11/W50) sin montar el componente.
  *
- * El contrato es el del PuckEditor actual, delegado en lib/autosavePolicy.ts:
+ * El contrato es el del PuckEditor legacy (retirado), delegado en lib/autosavePolicy.ts:
  *  - onSave devuelve Promise<boolean|void>: `false` = bloqueado/fallido (unhydratedSaveBlocked,
  *    validación, error de red) → NO se estampa savedAt ni se muestra toast; true/void = éxito.
  *  - El autosave pasa EXACTAMENTE `{autosave:true}` (buildAutosaveSaveOptions) — el backend salta

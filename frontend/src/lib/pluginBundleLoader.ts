@@ -202,7 +202,7 @@ let activePromise: Promise<string[]> | null = null;
  * extensions appear without a manual reload).
  *
  * Without it the memo taken BEFORE the activation was replayed for the rest of the session: the new
- * plugin was missing from every later `ids` list, so neither its hooks nor its Puck blocks ever loaded —
+ * plugin was missing from every later `ids` list, so neither its hooks nor its plugin blocks ever loaded —
  * precisely the invisible-marketplace-plugin bug this runtime loader exists to eliminate, just moved from
  * "the build never saw it" to "the cache never saw it".
  *
@@ -240,7 +240,7 @@ export function invalidateActivePluginIds(): void {
  * would reproduce exactly the silent-death bug above, so it rejects too.
  *
  * Every caller must handle the rejection: loadRuntimePluginHooks() lets it propagate (initPlugins
- * un-latches and the next admin-layout mount retries); useRuntimePuckConfig() catches it, because block
+ * un-latches and the next admin-layout mount retries); loadVersoPluginBlocks() catches it, because block
  * loading is best-effort and must never break a page render.
  *
  * Resolves `[]` on the SERVER without fetching: the URL is relative, so Node's fetch cannot parse it and
@@ -270,7 +270,7 @@ export function fetchActivePluginIds(): Promise<string[]> {
 }
 
 // ============================================
-// Puck block loading (runtime, marketplace plugins)
+// Plugin block loading (runtime, marketplace plugins)
 // ============================================
 
 const blockConfigCache = new Map<string, Promise<Record<string, any>>>();
@@ -278,6 +278,28 @@ const blockCssInjected = new Set<string>();
 
 function toPascalCase(slug: string): string {
     return slug.split('-').map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join('');
+}
+
+/**
+ * Read an evaluated block bundle's exports into the `{ blockName: def }` map the registry expects.
+ *
+ * BOTH SPELLINGS ARE ACCEPTED, new first: `versoComponents` / `versoComponentDef` are the names the
+ * host uses since the editor was renamed to Verso, but a plugin bundle is a COMPILED artifact
+ * published by a third party — the catalog bundles on disk export the historical `puckComponents` /
+ * `puckComponentDef`, and nothing in this repo rebuilds them. Reading only the new names would
+ * silently return `{}` for every one of them, i.e. every marketplace block would vanish from the
+ * editor with no error raised anywhere.
+ *
+ * Exported so this resolution is unit-testable against a PLAIN module object: the only other way in
+ * is loadPluginBlockConfigs' `import()` of a `blob:` URL, which the test runner's node environment
+ * cannot perform — the same reason invokeHookRegistrars is exported.
+ */
+export function blocksFromModule(pluginId: string, mod: Record<string, any>): Record<string, any> {
+    const multi = mod.versoComponents ?? mod.puckComponents;
+    if (multi && typeof multi === 'object') return multi as Record<string, any>;
+    const single = mod.versoComponentDef ?? mod.puckComponentDef;
+    if (single) return { [toPascalCase(pluginId)]: { ...single, render: mod.default } };
+    return {};
 }
 
 /**
@@ -308,17 +330,20 @@ function injectBlockCss(pluginId: string): void {
 }
 
 /**
- * Load a single plugin's Puck block config(s) at runtime from its pre-compiled `component` bundle.
- * Returns a map keyed by BLOCK NAME (the `type` stored in Puck data), matching the build-time registry:
- *   - single block: `{ [PascalName(pluginId)]: { ...puckComponentDef, render: default } }`
- *   - multi block:  the plugin's own `puckComponents` map, spread as-is
+ * Load a single plugin's block config(s) at runtime from its pre-compiled `component` bundle.
+ * Returns a map keyed by BLOCK NAME (the `type` stored in the saved document), matching the
+ * build-time registry:
+ *   - single block: `{ [PascalName(pluginId)]: { ...versoComponentDef, render: default } }`
+ *   - multi block:  the plugin's own `versoComponents` map, spread as-is
+ * Both the new and the historical export names are read — see blocksFromModule.
+ *
  * Empty object — memoized for the session — when the plugin genuinely ships no block bundle (404) or
  * ships one that cannot be evaluated (a deterministic, no-point-retrying failure).
  *
  * REJECTS, and does NOT memoize, on any OTHER failure (network error, 5xx from a restarting gateway,
  * 400): those are transient and the previous "collapse everything to {} and cache it" behaviour was the
  * same silent-death bug fetchActivePluginIds had — one 502 during the first editor mount permanently
- * removed every marketplace plugin's Puck blocks for the rest of the session, because the poisoned {}
+ * removed every marketplace plugin's blocks for the rest of the session, because the poisoned {}
  * was replayed from blockConfigCache on every later render. Callers keep block loading BEST-EFFORT
  * (loadActivePluginBlocks catches per plugin), so a rejection never breaks a page render — it just lets
  * the next render try again.
@@ -328,7 +353,7 @@ export async function loadPluginBlockConfigs(pluginId: string): Promise<Record<s
     if (cached) return cached;
     const p = (async () => {
         const response = await fetch(`/api/v1/plugins/${pluginId}/bundle?type=component`);
-        // 404 is the only status that means "this plugin ships no Puck blocks" — a real answer, cacheable.
+        // 404 is the only status that means "this plugin ships no blocks" — a real answer, cacheable.
         if (response.status === 404) return {};
         if (!response.ok) {
             throw new Error(`block bundle fetch for '${pluginId}' failed: HTTP ${response.status}`);
@@ -340,13 +365,7 @@ export async function loadPluginBlockConfigs(pluginId: string): Promise<Record<s
             const mod: any = await import(/* webpackIgnore: true */ url);
             URL.revokeObjectURL(url);
             injectBlockCss(pluginId);
-            if (mod.puckComponents && typeof mod.puckComponents === 'object') {
-                return mod.puckComponents as Record<string, any>;
-            }
-            if (mod.puckComponentDef) {
-                return { [toPascalCase(pluginId)]: { ...mod.puckComponentDef, render: mod.default } };
-            }
-            return {};
+            return blocksFromModule(pluginId, mod);
         } catch (e) {
             // The bytes arrived but are not loadable JS: retrying re-downloads the same broken bundle, so
             // this one IS cached. It is loud, because it always means the plugin needs a rebuild.
@@ -364,13 +383,13 @@ export async function loadPluginBlockConfigs(pluginId: string): Promise<Record<s
 }
 
 /**
- * Load + merge the Puck block configs of every given plugin (typically the ACTIVE plugins).
+ * Load + merge the block configs of every given plugin (typically the ACTIVE plugins).
  * Best-effort by design: one plugin's failure is logged and skipped, never propagated — this runs on
  * PUBLIC page renders, where a plugin block going missing must not take the page down with it.
  */
 export async function loadActivePluginBlocks(pluginIds: string[]): Promise<Record<string, any>> {
     const maps = await Promise.all(pluginIds.map((id) => loadPluginBlockConfigs(id).catch((e) => {
-        console.warn(`[PluginLoader] Puck blocks unavailable for '${id}':`, e);
+        console.warn(`[PluginLoader] Blocks unavailable for '${id}':`, e);
         return {};
     })));
     return Object.assign({}, ...maps);

@@ -90,7 +90,7 @@ A few conventions keep the project coherent and reviewable:
     `node backend/cli/wordjs.js build theme <slug>` — never hand-edit inside that block. Scaffold one
     with `node backend/cli/wordjs.js create theme <slug>`, or copy an existing theme (e.g.
     `marketplace/themes/midnight-luxury/`) for the pattern.
-  - **Plugins** add functionality through their `manifest.json` (routes, hooks, `puckComponents`) —
+  - **Plugins** add functionality through their `manifest.json` (routes, hooks, `versoComponents`) —
     copy a bundled example like `hello-world` or `test-schema`.
   - If you find yourself editing `backend/src/core/*` to change how one site looks or behaves, that's
     usually a sign it belongs in a theme or plugin instead.

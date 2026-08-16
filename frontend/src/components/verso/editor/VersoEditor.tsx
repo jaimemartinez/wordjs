@@ -3,17 +3,17 @@
  * VersoEditor — wrapper de chrome del motor Verso (F3, el encargo núcleo).
  *
  * PIEL: réplica del editor actual según documentation/verso/wrapper-blueprint.md — mismas clases,
- * mismos tokens --ed-* (única fuente: puck-theme.css, importada aquí igual que en PuckEditor —
+ * mismos tokens --ed-* (única fuente: editor-theme.css, importada aquí igual que en el PuckEditor legacy (retirado) —
  * jamás redeclarados), mismos glifos del subset Material Symbols (todos los usados aquí están en
  * la lista de 161 del blueprint §c), mismos strings ES fuente (trStr → es/en/pt sin tocar el
- * diccionario salvo los 6 placeholders nuevos, añadidos a puckI18n con su tripleta).
+ * diccionario salvo los 6 placeholders nuevos, añadidos a editorI18n con su tripleta).
  *
  * MOTOR: createEditor + registry de bloques core (registerCoreBlocks) + FrameController (iframe
  * /admin/canvas-frame + portal) + EditorRenderer + OverlayLayer + DnDDriver — el mismo conjunto
  * verificado en el Verso Lab; el chrome solo emite comandos, nunca muta el documento.
  *
  * CONTRATOS DUROS de esta ola:
- *  - localStorage `puck_show_sidebar` / `puck_show_properties` para el plegado de paneles (leídos
+ *  - localStorage `verso_show_sidebar` / `verso_show_properties` para el plegado de paneles (leídos
  *    al montar ANTES de persistir; los sheets móviles son estado aparte y no los contaminan).
  *  - Autosave por lib/autosavePolicy.ts (pisos 8000/30000, flag {autosave:true}, ok===false no
  *    estampa) y guardado manual con toast solo en éxito — cableado en saveFlow.ts (testeado).
@@ -46,7 +46,7 @@
  * RenderSubtree escalado en PatternsPanel). El cotejo pantalla-a-pantalla queda para el gate de
  * navegador del orquestador.
  */
-import "@/components/puck-theme.css";
+import "@/components/editor-theme.css";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import MSym from "@/components/editor/MSym";
 import ModernSelect from "@/components/ModernSelect";
@@ -57,8 +57,8 @@ import { A11yPanel, type A11yIssue } from "@/components/editor/A11yAudit";
 import { setOutlineMode, showSpacingOverlay } from "@/components/editor/canvasGuides";
 import { useI18n } from "@/contexts/I18nContext";
 import { useModal } from "@/contexts/ModalContext";
-import { trStr } from "@/lib/puckI18n";
-import { replayAnimations } from "@/components/puck/AnimationField";
+import { trStr } from "@/lib/editorI18n";
+import { replayAnimations } from "@/components/blocks/AnimationField";
 import { revisionsApi, type MediaItem, type Revision } from "@/lib/api";
 import { rememberPickedMedia } from "@/lib/imageSrcset";
 import type { TemplateKind } from "@/lib/templateData";
@@ -67,7 +67,15 @@ import {
     shouldRunAutosave,
 } from "@/lib/autosavePolicy";
 import { createEditor, type EditorHandle } from "@/lib/verso/store";
-import { createBlockRegistry, makeSlotResolver, type BlockRegistry, type VersoField } from "@/lib/verso/registry";
+import {
+    createBlockRegistry,
+    makeRichTextResolver,
+    makeSlotResolver,
+    type BlockRegistry,
+    type VersoField,
+} from "@/lib/verso/registry";
+import { useVersoCollab } from "@/lib/verso/collab";
+import { isCollabEnabled } from "@/lib/verso/collab/flag";
 import { registerCoreBlocks } from "@/lib/verso/coreBlocks";
 import { registerStaticPluginBlocks, useVersoPluginBlocks } from "@/lib/verso/pluginBlocks";
 import { useRegistryVersion } from "@/lib/verso/useRegistryVersion";
@@ -86,6 +94,8 @@ import { editSelectedInline } from "../overlay/actionBarCommands";
 import type { RenderExternalPicker } from "../fields/VersoFieldControl";
 import { runVersoA11yAudit, VERSO_BLOCK_ATTR } from "./a11y";
 import { startPresenceHeartbeat, type PresenceEditor } from "./presence";
+import CollabPresence from "./CollabPresence";
+import { remoteSelections } from "./collabModel";
 import EditorHotkeys from "./EditorHotkeys";
 import SaveStateChip from "./SaveStateChip";
 import BlockPalette from "./BlockPalette";
@@ -270,9 +280,9 @@ export default function VersoEditor({
     const registry = useMemo<BlockRegistry>(() => {
         const r = createBlockRegistry();
         registerCoreBlocks(r);
-        // Bloques ESTÁTICOS de plugins in-tree (dev, generate-puck-plugin-registry.js): síncrono al
+        // Bloques ESTÁTICOS de plugins in-tree (dev, generate-verso-plugin-registry.js): síncrono al
         // crear el registry — presentes desde el primer render, como el merge estático del legacy
-        // (puckConfig) y ANTES de createEditor, para que makeSlotResolver los conozca al normalizar.
+        // (versoConfig) y ANTES de createEditor, para que makeSlotResolver los conozca al normalizar.
         registerStaticPluginBlocks(r);
         return r;
     }, []);
@@ -443,19 +453,19 @@ export default function VersoEditor({
 
     // Contrato duro (W13): mismas claves EXACTAS que el editor actual, cargadas al montar ANTES
     // de persistir (para no pisar el default). localStorage no existe en SSR — no puede ser un
-    // useState initializer (impuro en render); es la misma secuencia del PuckEditor actual.
+    // useState initializer (impuro en render); es la misma secuencia del PuckEditor legacy (retirado).
     useEffect(() => {
-        const savedSidebar = localStorage.getItem("puck_show_sidebar");
-        const savedProps = localStorage.getItem("puck_show_properties");
+        const savedSidebar = localStorage.getItem("verso_show_sidebar");
+        const savedProps = localStorage.getItem("verso_show_properties");
         if (savedSidebar !== null) setShowSidebar(savedSidebar === "true");
         if (savedProps !== null) setShowProperties(savedProps === "true");
         setIsUiLoaded(true);
     }, []);
     useEffect(() => {
-        if (isUiLoaded) localStorage.setItem("puck_show_sidebar", String(showSidebar));
+        if (isUiLoaded) localStorage.setItem("verso_show_sidebar", String(showSidebar));
     }, [showSidebar, isUiLoaded]);
     useEffect(() => {
-        if (isUiLoaded) localStorage.setItem("puck_show_properties", String(showProperties));
+        if (isUiLoaded) localStorage.setItem("verso_show_properties", String(showProperties));
     }, [showProperties, isUiLoaded]);
 
     useEffect(() => {
@@ -466,8 +476,16 @@ export default function VersoEditor({
 
     /* ---------------- guardado: manual + autosave + preview ---------------- */
 
+    /**
+     * Envío del outbox de colaboración ANTES de un guardado explícito: el snapshot que se persiste
+     * y las ops que ven los demás tienen que contar la misma historia. Va por ref para no reordenar
+     * medio componente solo porque `handleManualSave` se declara antes que la sesión.
+     */
+    const collabFlushRef = useRef<(() => Promise<void>) | null>(null);
+
     const handleManualSave = useCallback(async () => {
         if (!onSave) return;
+        await collabFlushRef.current?.().catch(() => undefined);
         const ok = await runManualSave(onSave);
         if (!ok) return;
         setSavedAt(new Date());
@@ -503,13 +521,106 @@ export default function VersoEditor({
         if (previewSlug) window.open(`/preview/${previewSlug}`, "_blank", "noopener");
     }, [hasChanges, onSave, previewSlug]);
 
+    /* ---------------- colaboración en vivo (F8.4) ---------------- */
+
+    /**
+     * La bandera se lee en un EFECTO, no en el render: mira `localStorage`, que en SSR no existe y
+     * que además haría divergir el HTML del servidor del primer render del cliente (hydration
+     * mismatch). Arrancar en `false` y encender tras montar es exactamente la secuencia del resto
+     * de preferencias de este editor (`verso_show_sidebar`).
+     */
+    const [collabEnabled, setCollabEnabled] = useState(false);
+    useEffect(() => setCollabEnabled(isCollabEnabled()), []);
+
+    /**
+     * Los resolutores viajan al hook y ENTRAN en las deps de su sesión: si cambiaran de identidad
+     * en cada render, la sala se reabriría en bucle. Se memorizan sobre `registry`, cuya identidad
+     * es estable de por vida, y leen el registry EN VIVO — así un bloque de plugin registrado más
+     * tarde se resuelve bien sin reabrir la sesión.
+     */
+    const slotResolver = useMemo(() => makeSlotResolver(registry), [registry]);
+    const richTextResolver = useMemo(() => makeRichTextResolver(registry), [registry]);
+
+    const collab = useVersoCollab({
+        postId: pageId ?? null,
+        enabled: collabEnabled,
+        isSlot: slotResolver,
+        isRichText: richTextResolver,
+        /**
+         * Documento INICIAL de la sala. `resetHistory` porque la pila de deshacer de un editor
+         * recién montado no describe nada de este documento.
+         *
+         * VENTANA CONOCIDA Y DECLARADA: entre montar el editor y recibir este `welcome` (un ida y
+         * vuelta de SSE) lo que se teclee es local y este documento lo pisa. En la práctica es el
+         * instante de carga; con el canal abierto no vuelve a ocurrir.
+         */
+        onReady: (doc) => {
+            handle.applyRemoteDoc(doc, { resetHistory: true });
+        },
+        /** Ops AJENAS ya proyectadas: se publican sin entrada de historia (regla 1 del hook). */
+        onRemoteDoc: (doc) => {
+            handle.applyRemoteDoc(doc);
+        },
+    });
+
+    const collabLive = collab.status === "live" || collab.status === "degraded";
+    const sendCollabCommand = collab.sendCommand;
+    const setCollabSelection = collab.setSelection;
+    const collabFlush = collab.flush;
+    useEffect(() => {
+        collabFlushRef.current = collabFlush;
+    }, [collabFlush]);
+
+    /**
+     * SALIDA. El sink del store entrega los comandos EFECTIVOS (índices clampados, `idMap`
+     * materializado) — que es lo único que `sendCommand` puede traducir sin que emisor y receptor
+     * apliquen cosas distintas (regla 2 del hook).
+     *
+     * Los TRES orígenes viajan, deshacer incluido: un `undo` es una edición como cualquier otra y
+     * los demás tienen que verla. Lo que jamás vuelve por aquí es lo que entra por
+     * `applyRemoteDoc` (el store no lo emite), así que no hay eco.
+     */
+    useEffect(() => {
+        if (!collabEnabled) return;
+        return handle.subscribeCommands(({ commands }) => {
+            for (const command of commands) sendCollabCommand(command);
+        });
+    }, [handle, collabEnabled, sendCollabCommand]);
+
+    /**
+     * PRESENCIA. La edición inline manda sobre la selección de bloque: si estoy escribiendo dentro
+     * de un bloque, lo que los demás tienen que ver es eso, no que lo tengo "seleccionado". El
+     * `field` es el que el bloque DECLARA como destino inline (registry), no una adivinanza.
+     */
+    const selectedNodeId = state.selection.nodeId;
+    const inlineNodeId = state.inlineEditingId;
+    useEffect(() => {
+        if (!collabEnabled) return;
+        const nodeId = inlineNodeId ?? selectedNodeId;
+        if (!nodeId) {
+            setCollabSelection(null);
+            return;
+        }
+        const type = handle.getDoc().nodes[nodeId]?.type;
+        const field = inlineNodeId && type ? registry.get(type)?.inline?.prop : undefined;
+        setCollabSelection({ nodeId, ...(field ? { field } : {}) });
+    }, [collabEnabled, selectedNodeId, inlineNodeId, handle, registry, setCollabSelection]);
+
+    // Aviso: se descarta por instante (`at`), no por un booleano — así un aviso NUEVO con el mismo
+    // código vuelve a aparecer en vez de quedarse oculto por el descarte del anterior.
+    const [dismissedNoticeAt, setDismissedNoticeAt] = useState(0);
+    const visibleNotice = collab.notice && collab.notice.at !== dismissedNoticeAt ? collab.notice : null;
+    const remoteSels = useMemo(() => remoteSelections(collab.members), [collab.members]);
+
     /* ---------------- presencia (W09, módulo presence.ts) ---------------- */
 
     const [coEditors, setCoEditors] = useState<PresenceEditor[]>([]);
     useEffect(() => {
-        if (!pageId) return;
+        // Con el canal en vivo, el heartbeat de 10s sobra: la presencia real llega por la sala (y
+        // dos chips diciendo lo mismo con distinta latencia es peor que uno).
+        if (!pageId || collabLive) return;
         return startPresenceHeartbeat(pageId, setCoEditors);
-    }, [pageId]);
+    }, [pageId, collabLive]);
 
     /* ---------------- a11y (W20/W25): audit sobre el doc del canvas ---------------- */
 
@@ -721,7 +832,7 @@ export default function VersoEditor({
     ];
 
     return (
-        <div className="puck-container fixed inset-0 z-50 bg-[var(--ed-surface)]">
+        <div className="verso-container fixed inset-0 z-50 bg-[var(--ed-surface)]">
             <div className="flex flex-col h-screen w-full overflow-hidden">
                 {/* Capa global de atajos (capture en window + iframe; re-attach en onFrameReady) */}
                 <EditorHotkeys
@@ -794,8 +905,18 @@ export default function VersoEditor({
                                 status={status}
                             />
                         )}
+                        {/* Colaboración en vivo (F8.4): estado del canal + avatares + avisos.
+                            Con la sala apagada no pinta NADA (el editor se ve igual que siempre). */}
+                        <CollabPresence
+                            status={collab.status}
+                            self={collab.self}
+                            members={collab.members}
+                            notice={visibleNotice}
+                            onDismissNotice={() => setDismissedNoticeAt(collab.notice?.at ?? 0)}
+                        />
+
                         {/* Presencia (W09): chip de aviso — alguien más tiene este registro abierto. */}
-                        {coEditors.length > 0 && (
+                        {!collabLive && coEditors.length > 0 && (
                             <span
                                 role="status"
                                 className="hidden lg:flex items-center gap-1.5 text-[11px] font-medium text-amber-800 bg-amber-50 border border-amber-200 rounded-full px-2.5 py-1 select-none"
@@ -822,7 +943,7 @@ export default function VersoEditor({
                             <span className="text-[11px]">{trStr("Insertar", language)}</span>
                             <kbd
                                 className="text-[9px] text-[var(--ed-on-surface-variant)] bg-[var(--ed-surface-container)] rounded px-1 py-0.5 leading-none"
-                                style={{ fontFamily: "var(--puck-font-family-monospaced)" }}
+                                style={{ fontFamily: "var(--ed-font-family-monospaced)" }}
                             >⌘K</kbd>
                         </button>
 
@@ -1064,6 +1185,7 @@ export default function VersoEditor({
                                                         registry={registry}
                                                         geometry={geometry}
                                                         frameDocument={frameDoc}
+                                                        remoteSelections={remoteSels}
                                                     />
                                                     <DnDDriver
                                                         handle={handle}
@@ -1093,6 +1215,7 @@ export default function VersoEditor({
                                                         componentMap={componentMap}
                                                         onBlockElement={onBlockElement}
                                                         editorChrome
+                                                        collabLive={collabLive}
                                                     />
                                                 </VersoThemeTemplate>
                                             </PublicLayoutShell>

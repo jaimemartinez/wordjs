@@ -13,8 +13,8 @@
             "entry": "client/admin/page.tsx",
             "slug": "polls"
         },
-        "puckComponents": {
-            "entry": "client/puck/PollsPuck.tsx"
+        "versoComponents": {
+            "entry": "client/verso/PollsVerso.tsx"
         }
     },
     "adminMenu": {

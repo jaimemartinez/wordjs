@@ -2,7 +2,7 @@
 
 import React from "react";
 import { useI18n } from "@/contexts/I18nContext";
-import { trStr } from "@/lib/puckI18n";
+import { trStr } from "@/lib/editorI18n";
 
 /**
  * Blocking error state shown when an existing post/page FAILS to load. It replaces the editor entirely

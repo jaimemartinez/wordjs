@@ -21,7 +21,7 @@
  */
 import React, { useCallback, useMemo, useSyncExternalStore } from "react";
 import SharedBlockShell from "@/components/content/SharedBlockShell";
-import type { AnimSpec, Appearance, Hide } from "@/components/puck/blockShell";
+import type { AnimSpec, Appearance, Hide } from "@/components/blocks/blockShell";
 import { createInlineMountStore } from "../inline/inlineSession";
 import VersoInline from "../inline/VersoInline";
 import { INLINE_HOST_SENTINEL } from "../inline/VersoTextSurface";
@@ -129,6 +129,7 @@ const VersoBlock = React.memo(function VersoBlock({ nodeId }: { nodeId: string }
         hide={props.hide as Hide | undefined}
         anim={props.anim as AnimSpec | undefined}
         look={props.look as Appearance | undefined}
+        ix={props.ix}
       >
         {content}
       </SharedBlockShell>

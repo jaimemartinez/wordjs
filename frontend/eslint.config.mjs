@@ -19,8 +19,6 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
-    // Vendored Puck fork — upstream source, linted (and built) by its own toolchain, not the app's.
-    "packages/**",
   ]),
   // Pragmatic rule levels: this is a rapidly-iterated codebase with intentional `any` and
   // CommonJS interop, and the new (experimental) react-hooks rules from Next 16 are noisy.

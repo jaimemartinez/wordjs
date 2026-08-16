@@ -3,9 +3,9 @@
  * Verso — variante del bloque Symbol para el canvas del editor Verso.
  *
  * AUDITORÍA (encargo F3.3, verificada): el render actual del Symbol
- * (frontend/src/components/puck/SymbolBlock.tsx, makeSymbolRender) depende de `<Render>` de
+ * (frontend/src/components/blocks/SymbolBlock.tsx, makeSymbolRender) depende de `<Render>` de
  * @wordjs/puck (import en su L4, uso en su L123) con un config anidado derivado del mapa VIVO de
- * componentes de puckConfig menos el propio Symbol. Verso no puede montar ese camino (prohibido
+ * componentes de versoConfig menos el propio Symbol. Verso no puede montar ese camino (prohibido
  * acoplarse al fork), así que esta variante renderiza el subárbol con `RenderSubtree` — el MISMO
  * switch compartido de ContentRenderer.tsx que usa el sitio público — con `exclude={Symbol}`:
  * un símbolo que referencie otro símbolo NO recursa (cap de profundidad 1, la misma garantía que

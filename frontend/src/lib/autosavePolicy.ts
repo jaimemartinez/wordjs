@@ -1,8 +1,9 @@
 /**
- * Pure decision logic for the block editor wrapper's background autosave (PuckEditor.tsx).
+ * Pure decision logic for the block editor wrapper's background autosave.
  *
- * Extracted verbatim from the autosave effect/handleManualSave in PuckEditor.tsx so the contract can
- * be exercised by real behavior tests instead of source-text pins — PuckEditor.tsx imports these
+ * Extracted verbatim from the autosave effect/handleManualSave of the retired legacy wrapper so the
+ * contract can be exercised by real behavior tests instead of source-text pins. The live consumers are
+ * components/verso/editor/VersoEditor.tsx and components/verso/editor/saveFlow.ts, which import these
  * functions rather than re-implementing the decisions inline. See f0-audit-core.md "Contratos duros"
  * (wrapper-integration): autosave fires 8s after the page first becomes dirty with a 30s floor between
  * runs, only while status==='draft' (a published record must never go live in the background), and a

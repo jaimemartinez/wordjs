@@ -303,7 +303,8 @@ export default function MarketplaceTab({ onInstalled }: { onInstalled: () => voi
                                 <p className="text-slate-500 text-xs mb-4 line-clamp-3 flex-1 font-medium leading-relaxed">{e.description}</p>
 
                                 <div className="flex items-center gap-2 flex-wrap mb-5">
-                                    {e.hasPuckBlock && (
+                                    {/* new field first, pre-Verso catalogs fall back to the old one */}
+                                    {(e.hasVersoBlock ?? e.hasPuckBlock) && (
                                         <span className="inline-flex items-center gap-1 text-[8px] font-extrabold uppercase tracking-widest px-2.5 py-1 rounded-full bg-indigo-50 border border-indigo-100/50 text-indigo-650 shadow-sm">
                                             <FaThLarge className="text-[7px]" /> Bloque {e.blockName}
                                         </span>

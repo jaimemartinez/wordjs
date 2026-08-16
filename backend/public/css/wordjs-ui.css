@@ -1092,7 +1092,7 @@ a.list-group-item:hover, .list-group-item-action:hover { background-color: var(-
  * stylesheet, so the only way a theme could restyle a block was `!important` on every declaration
  * (the bundled themes carried ~100 each). Moving the values here — behind per-block custom
  * properties — turns a block into something a theme can actually skin, with no `!important`
- * anywhere. `frontend/src/components/puck/blockVars.ts` is the emitting half of this contract.
+ * anywhere. `frontend/src/components/blocks/blockVars.ts` is the emitting half of this contract.
  *
  * THE CASCADE, in the order people expect:
  *   1. What the AUTHOR set on this one block  → inline `--wjs-hero-title-size` on that element
@@ -2721,5 +2721,31 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   .wjs-scroll,
   .wjs-anim.wjs-scroll[data-wjs-anim="in"] {
     animation: none !important;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   INTERACTIONS ENGINE (Verso F9) — the static half
+   ═══════════════════════════════════════════════════════════════════════════
+   Every rule the engine GENERATES already ships inside
+   `@media screen and (prefers-reduced-motion: no-preference)`, and both runtime islands check the
+   media query before arming anything. This block is the third lock on the same door: it kills any
+   `.wjs-ix-*` motion outright when the visitor asked for less of it, whatever the generator did.
+   Belt and braces, exactly like the `.wjs-scroll` block above.
+
+   Reduced motion is ABSOLUTE here — there is no per-block or per-site override, and there is not
+   going to be one: an accessibility preference set in the operating system is not a checkbox for
+   the page author to untick. (Webflow's IX3 makes it optional "conditional playback"; this does
+   not.) The content stays fully VISIBLE: only the movement stops, never the block.
+
+   The selector is a prefix match on the class the compiler stamps (`wjs-ix-<hash>`), so it covers
+   units that do not exist yet without this file having to know their names. `.wjs-ixw` is the
+   per-word span of the split-text target. */
+@media (prefers-reduced-motion: reduce) {
+  [class*="wjs-ix-"],
+  [class*="wjs-ix-"] > *,
+  .wjs-ixw {
+    animation: none !important;
+    transition: none !important;
   }
 }

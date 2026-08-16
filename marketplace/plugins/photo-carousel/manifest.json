@@ -25,8 +25,8 @@
             "entry": "client/admin/page.tsx",
             "slug": "carousels"
         },
-        "puckComponents": {
-            "entry": "client/puck/PhotoCarouselPuck.tsx"
+        "versoComponents": {
+            "entry": "client/verso/PhotoCarouselVerso.tsx"
         }
     },
     "api": {

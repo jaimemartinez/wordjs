@@ -2,10 +2,10 @@
  * Verso — partición de campos en las 3 pestañas del panel de propiedades (Contenido/Estilo/
  * Avanzado), F3.
  *
- * MECANISMO (equivalencia documentada con el editor actual): PuckEditor renderiza UNA lista plana
+ * MECANISMO (equivalencia documentada con el editor legacy, ya retirado): PuckEditor renderizaba UNA lista plana
  * de campos y la parte con CSS `:has()` sobre las clases marcador que solo llevan los 3 controles
  * compartidos (`.wjs-f-look` → Estilo; `.wjs-f-anim`/`.wjs-f-hide` → Avanzado; el resto →
- * Contenido — ver puck-theme.css [data-ptab]). En Verso el panel renderiza los campos él mismo
+ * Contenido — ver editor-theme.css [data-ptab]). En Verso el panel renderiza los campos él mismo
  * (VersoFieldControl por entrada), así que el filtrado se hace EXPLÍCITO por clave de campo — el
  * resultado visual es idéntico por construcción: hoy esas clases marcador viven exclusivamente en
  * VisibilityControl (`hide`), AnimationControl (`anim`) y AppearanceControl (`look`), los tres
@@ -50,7 +50,7 @@ export interface TabAvailability {
 
 /**
  * Disponibilidad de pestañas (las vacías se DESHABILITAN, nunca muestran un panel hueco — misma
- * regla que el probe DOM del PuckEditor actual). Contenido siempre está disponible: es el
+ * regla que el probe DOM del PuckEditor legacy). Contenido siempre está disponible: es el
  * fallback al que vuelve la pestaña activa si la selección cambia a un bloque sin ese grupo.
  */
 export function tabAvailability(fields: Record<string, VersoField>): TabAvailability {

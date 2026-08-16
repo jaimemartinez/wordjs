@@ -114,7 +114,7 @@ describe('TemplateRenderer', () => {
     });
 
     it('drops a malformed className rather than emitting it — these components also get _puck_data', () => {
-        // ContentRenderer and puckConfig spread AUTHOR-controlled `_puck_data` into these same
+        // ContentRenderer and versoConfig spread AUTHOR-controlled `_puck_data` into these same
         // components, and the write-side sanitizer does not touch a structural prop. So the block must
         // be fail-closed on its own, not merely downstream of parseTemplate. Hand-built for that
         // reason: parseTemplate would (and does, in its own suite) reject all of this first.

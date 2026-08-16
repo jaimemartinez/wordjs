@@ -46,6 +46,9 @@ const path = require('path');
 const crypto = require('crypto');
 const AdmZip = require('adm-zip');
 const { spawnSync } = require('child_process');
+// Same resolver build-plugin.js uses, so "which bundles should be in this zip" cannot drift from
+// "which bundles the builder emits" — the drift that already shipped bundle-less catalog zips once.
+const { resolveBlockEntry } = require('./plugin-block-contract');
 
 const ROOT = process.env.WORDJS_MARKETPLACE_ROOT
     ? path.resolve(process.env.WORDJS_MARKETPLACE_ROOT)
@@ -78,9 +81,10 @@ function sourceDirs(dir) {
 }
 
 /**
- * Re-derives the frontend bundles build-plugin.js would emit, using build-plugin.js's OWN resolution
- * order (puckComponents.entry → legacy components[0].entry → conventional client/puck/<Pascal>Puck.tsx,
- * and `frontend.hooks` as a bare string path). Returns { expected: [...bundle names], missingSrc: [...] }.
+ * Re-derives the frontend bundles build-plugin.js would emit, sharing build-plugin.js's OWN resolver
+ * (plugin-block-contract.js: versoComponents.entry → legacy puckComponents.entry → legacy
+ * components[0].entry → conventional client/verso/<Pascal>Verso.tsx then client/puck/<Pascal>Puck.tsx;
+ * `frontend.hooks` is a bare string path). Returns { expected: [...bundle names], missingSrc: [...] }.
  *
  * missingSrc is a DECLARED entry whose source file does not exist: build-plugin swallows that case, so
  * the manifest advertises a frontend the package cannot possibly contain.
@@ -97,15 +101,10 @@ function expectedBundles(dir, manifest) {
 
     resolve('admin', fe.adminPage?.entry, true);
 
-    let componentEntry = fe.puckComponents?.entry || fe.components?.[0]?.entry;
-    let componentDeclared = Boolean(componentEntry);
-    if (!componentEntry) {
-        const pascal = String(manifest.id || path.basename(dir)).split('-')
-            .map((s) => s.charAt(0).toUpperCase() + s.slice(1)).join('');
-        const conv = `client/puck/${pascal}Puck.tsx`;
-        if (fs.existsSync(path.join(dir, conv))) componentEntry = conv;
-    }
-    resolve('component', componentEntry, componentDeclared);
+    // `warn: false` — this verifier walks the whole catalog twice (once per --rebuild pass) and the
+    // deprecation lines belong to the BUILD output, where an author can act on them.
+    const block = resolveBlockEntry(dir, manifest, { componentsChannel: true, warn: false });
+    resolve('component', block?.entry, Boolean(block?.declared));
 
     // `frontend.hooks` is a bare string in the manifests that use it (mail-server), not an object.
     const hooks = typeof fe.hooks === 'string' ? fe.hooks : fe.hooks?.entry;

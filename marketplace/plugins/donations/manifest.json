@@ -13,8 +13,8 @@
             "entry": "client/admin/page.tsx",
             "slug": "donations"
         },
-        "puckComponents": {
-            "entry": "client/puck/DonationsPuck.tsx"
+        "versoComponents": {
+            "entry": "client/verso/DonationsVerso.tsx"
         }
     },
     "adminMenu": {

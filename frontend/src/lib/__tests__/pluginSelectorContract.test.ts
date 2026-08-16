@@ -54,15 +54,19 @@ function readDeclaringPlugins(): PluginDecl[] {
     for (const slug of fs.readdirSync(PLUGINS_DIR, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name).sort()) {
         const manifestPath = path.join(PLUGINS_DIR, slug, 'manifest.json');
         if (!fs.existsSync(manifestPath)) continue;
-        let m: { id?: string; themeSurfaces?: Surface[]; frontend?: { puckComponents?: { entry?: string } } };
+        type BlockEntry = { entry?: string } | null;
+        let m: { id?: string; themeSurfaces?: Surface[]; frontend?: { versoComponents?: BlockEntry; puckComponents?: BlockEntry } };
         try { m = JSON.parse(fs.readFileSync(manifestPath, 'utf8')); } catch { continue; }
         if (!Array.isArray(m.themeSurfaces) || m.themeSurfaces.length === 0) continue;
-        // Read the plugin's Puck block source — that is where the classes must actually be emitted.
-        const entry = m.frontend?.puckComponents?.entry;
+        // Read the plugin's block source — that is where the classes must actually be emitted. BOTH
+        // manifest spellings are read, new first: a plugin published before the editor was renamed
+        // to Verso still declares `frontend.puckComponents`, and this gate must keep seeing it
+        // instead of silently checking nothing.
+        const entry = m.frontend?.versoComponents?.entry ?? m.frontend?.puckComponents?.entry;
         let markup = '';
         if (entry) {
             const p = path.join(PLUGINS_DIR, slug, entry);
-            if (!fs.existsSync(p)) throw new Error(`[${slug}] puckComponents entry does not exist: ${entry}`);
+            if (!fs.existsSync(p)) throw new Error(`[${slug}] block entry does not exist: ${entry}`);
             markup = stripComments(fs.readFileSync(p, 'utf8'));
         }
         out.push({ slug, surfaces: m.themeSurfaces, markup });

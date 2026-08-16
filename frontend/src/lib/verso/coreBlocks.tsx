@@ -2,13 +2,13 @@
 /**
  * Verso — registro de los 30 bloques core como TABLA DE DATOS (F3).
  *
- * Porta el registro de frontend/src/components/puckConfig.tsx al formato `BlockDefinition`:
+ * Porta el registro de frontend/src/components/versoConfig.tsx al formato `BlockDefinition`:
  *  - `type`: EXACTAMENTE los strings del switch de ContentRenderer.tsx — contrato de serialización
  *    de `_puck_data`; renombrar uno rompe el render público de páginas ya guardadas.
- *  - `fields` / `defaultProps`: MISMA semántica byte a byte que puckConfig (nombres de prop,
- *    opciones de select/radio, labels literales ES que casan con el diccionario de puckI18n, y
+ *  - `fields` / `defaultProps`: MISMA semántica byte a byte que versoConfig (nombres de prop,
+ *    opciones de select/radio, labels literales ES que casan con el diccionario de editorI18n, y
  *    defaults idénticos) — el gate anti-drift (verso-coreBlocks.test.ts) los compara
- *    PROGRAMÁTICAMENTE contra puckConfig importado.
+ *    PROGRAMÁTICAMENTE contra versoConfig importado.
  *  - slots: declarados como `type: "slot"` (Section/Grid/FlexRow `children`; Columns
  *    `col-0`/`col-1`/`col-2`); Card NO tiene slots (title/description son props planas).
  *  - `inline`: los dos del editor actual (Text.content rich, Heading.title plain) MÁS la extensión
@@ -17,13 +17,13 @@
  *    una extensión multi-prop futura si se ratifica).
  *  - `render`: los MISMOS componentes compartidos que hoy (content/blocks.tsx + islas
  *    Accordion/Tabs/SearchBar/AudioTransport/SelfHostedVideo/FormBlock) con los adaptadores
- *    slot→prop que puckConfig ya hace. En Verso el slot llega como función `(className?)=>ReactNode`
+ *    slot→prop que versoConfig ya hace. En Verso el slot llega como función `(className?)=>ReactNode`
  *    (VersoBlock), así que el adaptador es pasarlo como `slot`/`slots`, no envolver un componente.
  *    Symbol usa la variante Verso (components/verso/blocks/VersoSymbolBlock.tsx — RenderSubtree
  *    sobre el switch compartido, cap de profundidad 1) sin tocar el SymbolBlock público.
  *
  * Los controles custom se REUTILIZAN, nunca se duplican: CSSPropertiesControl, LinkField,
- * MediaPickerModal, y los cuatro que puckConfig ahora exporta (CategoryField, TemplateField,
+ * MediaPickerModal, y los cuatro que versoConfig ahora exporta (CategoryField, TemplateField,
  * ColumnDistributionControl, ColumnStyleAccordion). Una sola implementación, dos registros
  * durante la convivencia Puck↔Verso.
  *
@@ -42,8 +42,8 @@ import { t as translate, getStoredLanguage } from "@/lib/i18n";
 import { rememberPickedMedia } from "@/lib/imageSrcset";
 import { useEditorPosts } from "@/lib/useEditorPosts";
 import MediaPickerModal from "@/components/MediaPickerModal";
-import LinkField from "@/components/puck/LinkField";
-import { CSSPropertiesControl, type CSSData } from "@/components/puck/CSSControls";
+import LinkField from "@/components/blocks/LinkField";
+import { CSSPropertiesControl, type CSSData } from "@/components/blocks/CSSControls";
 import {
     CategoryField,
     TemplateField,
@@ -51,9 +51,9 @@ import {
     ColumnStyleAccordion,
     type ColumnDistribution,
     type ColumnStyle,
-} from "@/components/puckConfig";
-import { formBlockFields, formBlockDefaults, FormBlockRender } from "@/components/puck/FormBlock";
-import { symbolBlockFields, symbolBlockDefaults } from "@/components/puck/SymbolBlock";
+} from "@/components/versoConfig";
+import { formBlockFields, formBlockDefaults, FormBlockRender } from "@/components/blocks/FormBlock";
+import { symbolBlockFields, symbolBlockDefaults } from "@/components/blocks/SymbolBlock";
 import VersoSymbolRender from "@/components/verso/blocks/VersoSymbolBlock";
 import SearchBarBlockIsland from "@/components/content/SearchBarBlock";
 import AccordionBlockIsland from "@/components/content/AccordionBlock";
@@ -87,7 +87,7 @@ export const CORE_BLOCK_TYPES = [
 
 export type CoreBlockType = (typeof CORE_BLOCK_TYPES)[number];
 
-/** Las 5 categorías actuales de puckConfig (mismas claves, mismos labels vía i18n). */
+/** Las 5 categorías actuales de versoConfig (mismas claves, mismos labels vía i18n). */
 export const coreBlockCategories: Record<string, string> = {
     layout: translate("editor.category.layout", getStoredLanguage()),
     content: translate("editor.category.content", getStoredLanguage()),
@@ -97,7 +97,7 @@ export const coreBlockCategories: Record<string, string> = {
 };
 
 /* ------------------------------------------------------------------ */
-/* Helpers de campos (misma semántica que los literales de puckConfig). */
+/* Helpers de campos (misma semántica que los literales de versoConfig). */
 /* ------------------------------------------------------------------ */
 
 /** El escape hatch `css` presente en LOS 30 bloques — mismo label, mismo control. */
@@ -117,7 +117,7 @@ const linkField = (label: string): VersoField => ({
 
 /**
  * Campo de URL de media (input + «elegir de la biblioteca»). Réplica del custom inline de
- * puckConfig; `remember` reproduce la diferencia real entre Image (registra el MediaItem completo
+ * versoConfig; `remember` reproduce la diferencia real entre Image (registra el MediaItem completo
  * para derivar srcSet) y Hero.bgImage (solo guarda la URL).
  */
 function MediaUrlField({ value, onChange, placeholder, remember }: {
@@ -195,7 +195,7 @@ type InjectedPosts = Parameters<typeof useEditorPosts>[1];
 
 function PostsGridRender(props: BlockProps) {
     const { count, resolvedPosts, isEditing, ...rest } = props;
-    // Mismo contrato que puckConfig: posts reales inyectados por el resolver del servidor en el
+    // Mismo contrato que versoConfig: posts reales inyectados por el resolver del servidor en el
     // público, o fetch cliente (mismo mapper) dentro del canvas del editor.
     const editing = !!isEditing;
     const posts = useEditorPosts(editing, resolvedPosts as InjectedPosts, undefined, count as number);

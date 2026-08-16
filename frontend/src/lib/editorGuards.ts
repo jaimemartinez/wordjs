@@ -2,7 +2,7 @@
  * Data-safety guards for the block editor's save path.
  *
  * The editor pages (admin/posts/[id] and admin/pages/[id]) load an existing record's content, then
- * mount the Puck editor with it. If that load FAILS (a transient GET 500 / network blip), the old code
+ * mount the visual editor with it. If that load FAILS (a transient GET 500 / network blip), the old code
  * only console.error'd and dropped through to an editor mounted with the EMPTY default
  * ({content:[],root:{}}). A subsequent save — manual or the 8s autosave — would then PUT that empty
  * content over the real record, silently and (because autosave skips the revision snapshot)
@@ -12,6 +12,22 @@
  * successfully hydrated. A NEW record has nothing to hydrate, so an empty body is correct and always
  * saveable.
  */
+
+/**
+ * The post-meta key the editor's serialized document lives under.
+ *
+ * IT STAYS `_puck_data`, DELIBERATELY, and must not be renamed, migrated or aliased.
+ *
+ * The editor was renamed to Verso and every module, file and CSS class around it followed. This key
+ * did NOT, because it is not a name in our source — it is a value already written into the `postmeta`
+ * table of every installation in the wild, and into every WXR export ever taken from one. Renaming it
+ * would mean a data migration whose failure mode is losing the body of every block-built page, in
+ * exchange for cosmetics. There is no upside that justifies that risk, so the historical spelling is
+ * frozen: it is the ONE place the old name survives on purpose.
+ *
+ * Read it as "the editor's document blob", not as a reference to the retired engine.
+ */
+export const EDITOR_DATA_META_KEY = '_puck_data';
 
 /**
  * Should a save be BLOCKED because the editor hasn't hydrated the existing record's content yet?
@@ -31,11 +47,11 @@ export function unhydratedSaveBlocked(opts: { isNew: boolean; loaded: boolean })
  * `recordId` must be the record's real id (not "new") — it becomes part of the block's `id`, which is
  * also used as a DOM/selection key elsewhere, so it must be stable across a page's lifetime.
  *
- * Returns BOTH the seeded Puck `data` to mount the canvas with, and `legacyHtml` — the exact string
+ * Returns BOTH the seeded `data` to mount the canvas with, and `legacyHtml` — the exact string
  * that must be kept in editorGuards' companion function `applyLegacyHtmlFallback` (via the caller's
  * `legacyHtmlRef`) until the user actually builds real blocks.
  */
-export function seedLegacyPuckData(opts: {
+export function seedLegacyVersoData(opts: {
     html: string;
     title: string;
     slug: string;
@@ -75,7 +91,7 @@ export function seedLegacyPuckData(opts: {
 
 /**
  * Legacy-HTML save-time preservation (admin/pages/[id] and admin/posts/[id], handleSubmit): a legacy
- * record seeded by seedLegacyPuckData() whose canvas is STILL EMPTY (the user hasn't built/kept any
+ * record seeded by seedLegacyVersoData() whose canvas is STILL EMPTY (the user hasn't built/kept any
  * real block, e.g. they deleted the seeded HTMLEmbed) must not be saved as blank. Instead the save
  * payload's `content` is restored to the original HTML and `_puck_data` is dropped from `meta` entirely
  * (an empty _puck_data next to a non-empty content would be a lie — the record isn't really block-based
@@ -88,7 +104,7 @@ export function applyLegacyHtmlFallback<T extends { content: unknown; meta: Reco
 ): T {
     if (liveContentLength > 0 || !legacyHtml) return payload;
     const meta = { ...payload.meta };
-    delete meta._puck_data;
+    delete meta[EDITOR_DATA_META_KEY];
     return { ...payload, content: legacyHtml, meta };
 }
 
@@ -104,8 +120,8 @@ export function resolveWjsTemplateForSave(rootProps: unknown): string {
 }
 
 /**
- * Post-mount grace window (admin/pages/[id] and admin/posts/[id], the editor's onChange): Puck MAY
- * fire onChange during initialization (migrate/resolveData). Skipping "the first event" by counting
+ * Post-mount grace window (admin/pages/[id] and admin/posts/[id], the editor's onChange): the editor
+ * MAY fire onChange during initialization (migrate/resolveData). Skipping "the first event" by counting
  * was fragile — when no init event fired, the user's FIRST real change got swallowed (save stayed
  * disabled, autosave never armed). Instead, onChange events inside this short window after mount are
  * treated as init noise and do NOT mark the record dirty; anything after it is a human edit.

@@ -16,7 +16,7 @@ import React from "react";
 import MSym from "./MSym";
 import { BLOCK_ATTR, SCAFFOLD_ATTR } from "./canvasGuides";
 import { useI18n } from "@/contexts/I18nContext";
-import { trStr } from "@/lib/puckI18n";
+import { trStr } from "@/lib/editorI18n";
 
 export type A11yIssue = {
     severity: "error" | "warning";
@@ -419,7 +419,7 @@ export function A11yPanel({
                                         </span>
                                         <span
                                             className="text-[10px] text-[var(--ed-on-surface-variant)] truncate"
-                                            style={{ fontFamily: "var(--puck-font-family-monospaced)" }}
+                                            style={{ fontFamily: "var(--ed-font-family-monospaced)" }}
                                         >
                                             {issue.snippet}
                                         </span>

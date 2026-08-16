@@ -4,7 +4,7 @@
  * public ContentRenderer.
  */
 import React from "react";
-import { blockVars, cx, unit } from "@/components/puck/blockVars";
+import { blockVars, cx, unit } from "@/components/blocks/blockVars";
 
 export default function AccordionBlock({ items, bg, borderColor, radius, pad, headerBg, headerColor, activeColor, panelBg, panelColor, css }: any) {
     const [openIndex, setOpenIndex] = React.useState<number | null>(0);

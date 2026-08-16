@@ -7,8 +7,8 @@
     "node": ">=20.9.0"
   },
   "scripts": {
-    "predev": "node scripts/generate-plugin-registry.js && node scripts/generate-admin-plugin-registry.js && node scripts/generate-puck-plugin-registry.js && node ../scripts/generate-asset-version.js",
-    "prebuild": "node scripts/generate-plugin-registry.js && node scripts/generate-admin-plugin-registry.js && node scripts/generate-puck-plugin-registry.js && node ../scripts/generate-asset-version.js",
+    "predev": "node scripts/generate-plugin-registry.js && node scripts/generate-admin-plugin-registry.js && node scripts/generate-verso-plugin-registry.js && node ../scripts/generate-asset-version.js",
+    "prebuild": "node scripts/generate-plugin-registry.js && node scripts/generate-admin-plugin-registry.js && node scripts/generate-verso-plugin-registry.js && node ../scripts/generate-asset-version.js",
     "dev": "node scripts/start-frontend.js dev",
     "build": "next build",
     "start": "node scripts/start-frontend.js prod",

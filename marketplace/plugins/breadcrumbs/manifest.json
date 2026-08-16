@@ -2,15 +2,15 @@
     "id": "breadcrumbs",
     "name": "Breadcrumbs",
     "version": "1.0.0",
-    "description": "Adds a 'Breadcrumbs' Puck block that renders the navigation trail of the current page (Inicio › … › current page) with optional BreadcrumbList JSON-LD structured data for search engines. WordPress parity: Breadcrumb NavXT / Yoast Breadcrumbs.",
+    "description": "Adds a 'Breadcrumbs' Verso block that renders the navigation trail of the current page (Inicio › … › current page) with optional BreadcrumbList JSON-LD structured data for search engines. WordPress parity: Breadcrumb NavXT / Yoast Breadcrumbs.",
     "author": "WordJS",
     "isolated": true,
     "backend": {
         "entry": "index.js"
     },
     "frontend": {
-        "puckComponents": {
-            "entry": "client/puck/BreadcrumbsPuck.tsx"
+        "versoComponents": {
+            "entry": "client/verso/BreadcrumbsVerso.tsx"
         }
     },
     "permissions": []

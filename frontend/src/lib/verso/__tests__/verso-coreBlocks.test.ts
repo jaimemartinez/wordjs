@@ -1,7 +1,7 @@
 /**
  * GATE F3 — los 30 bloques core como tabla de datos + seam de shared fields.
  *
- * ANTI-DRIFT: la fuente de verdad de la comparación es puckConfig.tsx IMPORTADO (no una copia):
+ * ANTI-DRIFT: la fuente de verdad de la comparación es versoConfig.tsx IMPORTADO (no una copia):
  * defaultProps se comparan por deep-equal PROGRAMÁTICO campo a campo, y los `fields` por igualdad
  * estructural con las funciones sustituidas por un marcador (los `render` de campos custom no son
  * comparables por valor; todo lo demás — type, label, options, placeholders, min/max, arrayFields —
@@ -31,7 +31,7 @@ import {
   withSharedVersoFields,
 } from "../sharedFields";
 import { createBlockRegistry, makeSlotResolver, type BlockDefinition } from "../registry";
-import { postConfig, pageConfig } from "@/components/puckConfig";
+import { postConfig, pageConfig } from "@/components/versoConfig";
 
 /* ------------------------------------------------------------------ */
 /* Utilidades de comparación.                                          */
@@ -56,7 +56,7 @@ const wrappedByType = new Map<string, BlockDefinition>(
   coreBlockDefinitions.map((def) => [def.type, withSharedVersoFields(def)]),
 );
 
-const puckComponents = (postConfig as { components: Record<string, Record<string, unknown>> }).components;
+const configComponents = (postConfig as { components: Record<string, Record<string, unknown>> }).components;
 
 /* ------------------------------------------------------------------ */
 /* 1. El contrato de tipos: los 30 EXACTOS del switch público.          */
@@ -78,9 +78,9 @@ describe("coreBlocks — contrato de tipos", () => {
     expect(coreBlockDefinitions.map((d) => d.type).sort()).toEqual([...CONTRACT].sort());
   });
 
-  it("cada type existe también en el registro Puck actual (puckConfig.components)", () => {
+  it("cada type existe también en el registro de bloques de versoConfig.components", () => {
     for (const type of CORE_BLOCK_TYPES) {
-      expect(puckComponents[type], `puckConfig no tiene ${type}`).toBeDefined();
+      expect(configComponents[type], `versoConfig no tiene ${type}`).toBeDefined();
     }
   });
 
@@ -100,35 +100,35 @@ describe("coreBlocks — contrato de tipos", () => {
 });
 
 /* ------------------------------------------------------------------ */
-/* 2. Anti-drift: defaultProps y fields contra puckConfig IMPORTADO.    */
+/* 2. Anti-drift: defaultProps y fields contra versoConfig IMPORTADO.    */
 /* ------------------------------------------------------------------ */
 
-describe("coreBlocks — anti-drift contra puckConfig (programático)", () => {
+describe("coreBlocks — anti-drift contra versoConfig (programático)", () => {
   for (const type of CORE_BLOCK_TYPES) {
     it(`${type}: defaultProps deep-equal (incluye hide/anim/look del seam)`, () => {
       const verso = wrappedByType.get(type);
-      const puck = puckComponents[type];
+      const config = configComponents[type];
       expect(verso).toBeDefined();
-      expect(puck).toBeDefined();
-      // puckConfig ya está envuelto por withSharedBlockFields en módulo, así que ambos lados
+      expect(config).toBeDefined();
+      // versoConfig ya está envuelto por withSharedBlockFields en módulo, así que ambos lados
       // llevan los defaults compartidos — el seam Verso debe producir EXACTAMENTE los mismos.
-      expect(verso!.defaultProps).toEqual(puck!.defaultProps);
+      expect(verso!.defaultProps).toEqual(config!.defaultProps);
     });
 
     it(`${type}: fields con la misma semántica (claves en orden, types, labels, options)`, () => {
       const verso = wrappedByType.get(type)!;
-      const puck = puckComponents[type]! as { fields: Record<string, unknown> };
+      const config = configComponents[type]! as { fields: Record<string, unknown> };
       // Mismo conjunto Y mismo orden de claves (el orden es el del panel de propiedades).
-      expect(Object.keys(verso.fields)).toEqual(Object.keys(puck.fields));
+      expect(Object.keys(verso.fields)).toEqual(Object.keys(config.fields));
       // Igualdad estructural del resto (funciones → marcador).
-      expect(stripFunctions(verso.fields)).toEqual(stripFunctions(puck.fields));
+      expect(stripFunctions(verso.fields)).toEqual(stripFunctions(config.fields));
     });
 
-    it(`${type}: label y categoría idénticos a puckConfig`, () => {
+    it(`${type}: label y categoría idénticos a versoConfig`, () => {
       const verso = wrappedByType.get(type)!;
-      const puck = puckComponents[type]! as { label?: string; category?: string };
-      expect(verso.label).toEqual(puck.label);
-      expect(verso.category).toEqual(puck.category);
+      const config = configComponents[type]! as { label?: string; category?: string };
+      expect(verso.label).toEqual(config.label);
+      expect(verso.category).toEqual(config.category);
     });
   }
 });
@@ -287,17 +287,17 @@ describe("sharedFields — withSharedVersoFields", () => {
 /* ------------------------------------------------------------------ */
 
 describe("coreBlocks — rootFieldsPost / rootFieldsPage", () => {
-  const puckPostRoot = (postConfig as { root: { fields: Record<string, unknown> } }).root.fields;
-  const puckPageRoot = (pageConfig as { root: { fields: Record<string, unknown> } }).root.fields;
+  const configPostRoot = (postConfig as { root: { fields: Record<string, unknown> } }).root.fields;
+  const configPageRoot = (pageConfig as { root: { fields: Record<string, unknown> } }).root.fields;
 
   it("rootFieldsPost coincide byte a byte (estructura) con postConfig.root.fields", () => {
-    expect(Object.keys(rootFieldsPost)).toEqual(Object.keys(puckPostRoot));
-    expect(stripFunctions(rootFieldsPost)).toEqual(stripFunctions(puckPostRoot));
+    expect(Object.keys(rootFieldsPost)).toEqual(Object.keys(configPostRoot));
+    expect(stripFunctions(rootFieldsPost)).toEqual(stripFunctions(configPostRoot));
   });
 
   it("rootFieldsPage coincide con pageConfig.root.fields", () => {
-    expect(Object.keys(rootFieldsPage)).toEqual(Object.keys(puckPageRoot));
-    expect(stripFunctions(rootFieldsPage)).toEqual(stripFunctions(puckPageRoot));
+    expect(Object.keys(rootFieldsPage)).toEqual(Object.keys(configPageRoot));
+    expect(stripFunctions(rootFieldsPage)).toEqual(stripFunctions(configPageRoot));
   });
 
   it("la asimetría se conserva: SEO/category/allowComments SOLO en post", () => {

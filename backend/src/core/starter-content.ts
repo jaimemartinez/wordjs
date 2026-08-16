@@ -10,7 +10,7 @@
  *  - Idempotent: each item is looked up by slug first (safe to call twice, e.g. a re-run wizard).
  *  - Best-effort: a failure here must NEVER fail the install — callers get a boolean per item.
  *  - Uses the same raw insert pattern as backend/cli/create-demo-page.js (proven to render),
- *    and only core Puck blocks confirmed in frontend/src/components/puckConfig.tsx
+ *    and only core blocks confirmed in frontend/src/components/versoConfig.tsx
  *    (Heading, Text, Divider, Card, Spacer, Button).
  */
 

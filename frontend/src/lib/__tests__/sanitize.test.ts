@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { sanitizeHTML, stripHTML, hasDangerousContent, resolveVideoEmbedUrl, ALLOWED_EMBED_HOSTS } from '../sanitize';
+import { sanitizeHTML, stripHTML, hasDangerousContent, resolveVideoEmbedUrl, sameOriginPath, ALLOWED_EMBED_HOSTS } from '../sanitize';
 
 // Security-property tests for the XSS sanitizer. Assertions hold on BOTH the sanitize-html SSR path
 // and the fail-closed regex fallback, so they don't depend on optional deps being resolvable.
@@ -95,6 +95,38 @@ describe('resolveVideoEmbedUrl (embed host allowlist)', () => {
       42,
     ]) {
       expect(resolveVideoEmbedUrl(url)).toBeNull();
+    }
+  });
+});
+
+// "Lo sirve este sitio" decide si un valor entra en <video src> sin ningún tercero en la petición,
+// así que la pregunta no es cómo se ESCRIBE la ruta sino a dónde irá el navegador CON ella.
+describe('sameOriginPath (autoridad relativa y caracteres de control)', () => {
+  it('acepta rutas raíz normales tal cual', () => {
+    expect(sameOriginPath('/uploads/2026/clip.mp4')).toBe('/uploads/2026/clip.mp4');
+    expect(sameOriginPath('/a?b=1#c')).toBe('/a?b=1#c');
+  });
+
+  it('rechaza las DOS grafías de autoridad relativa', () => {
+    expect(sameOriginPath('//evil.test/v.mp4')).toBeNull();
+    // Para un esquema especial el parser trata la barra invertida igual que la barra: esto es
+    // evil.test, no una ruta nuestra — y es la grafía que el chequeo anterior dejaba pasar.
+    expect(sameOriginPath('/\\evil.test/v.mp4')).toBeNull();
+  });
+
+  it('rechaza el contrabando por caracteres que el parser BORRA antes de parsear', () => {
+    for (const raw of ['/\t/evil.test/v.mp4', '/\n/evil.test/v.mp4', '/\r\\evil.test/v.mp4']) {
+      expect(sameOriginPath(raw), JSON.stringify(raw)).toBeNull();
+    }
+  });
+
+  it('lo que devuelve ya viene limpio: el llamante nunca ve los caracteres borrados', () => {
+    expect(sameOriginPath('/upl\toads/clip.mp4')).toBe('/uploads/clip.mp4');
+  });
+
+  it('rechaza absolutas, esquemas peligrosos y lo que no sea cadena', () => {
+    for (const raw of ['https://evil.test/v.mp4', 'javascript:alert(1)', 'data:text/html,x', 'clip.mp4', '', null, undefined, 42, {}]) {
+      expect(sameOriginPath(raw), JSON.stringify(raw)).toBeNull();
     }
   });
 });

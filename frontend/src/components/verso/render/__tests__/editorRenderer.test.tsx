@@ -31,7 +31,7 @@ import { createNodeStore, type VersoBlockProps, type VersoComponentMap, type Ver
 import { slotEntries } from "../VersoSlot";
 
 // componentMap con los componentes REALES de blocks.tsx. Los contenedores se
-// adaptan igual que en puckConfig.tsx: el slot llega como prop bajo su clave
+// adaptan igual que en versoConfig.tsx: el slot llega como prop bajo su clave
 // ("children") y el bloque lo espera como `slot`.
 const componentMap: VersoComponentMap = {
   Heading: HeadingBlock as VersoComponentMap[string],

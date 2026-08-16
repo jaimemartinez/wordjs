@@ -4,7 +4,7 @@
  * public ContentRenderer.
  */
 import React from "react";
-import { blockVars, cx, unit } from "@/components/puck/blockVars";
+import { blockVars, cx, unit } from "@/components/blocks/blockVars";
 
 export default function TabsBlock({ tabs, color, activeColor, borderColor, borderWidth, tabPad, panelBg, panelPad, panelRadius, css }: any) {
     const [activeTab, setActiveTab] = React.useState(0);

@@ -1,11 +1,11 @@
 /**
- * VERSO F2 harness — behavior tests for the wrapper's autosave contract (PuckEditor.tsx), extracted
- * to ../autosavePolicy.ts so this survives the Puck→motor-nuevo rewrite. See
+ * VERSO F2 harness — behavior tests for the wrapper's autosave contract, extracted
+ * to ../autosavePolicy.ts so this survived the rewrite of the legacy editor into Verso. See
  * documentation/verso/f0-audit-core.md, wrapper-integration "Contratos duros":
  *   "piso de 8000ms tras el primer cambio, piso de 30000ms entre ejecuciones, guard
  *    status!=='draft'||!onSave||!hasChanges||saving, marca {autosave:true}, aborta si ok===false"
  *
- * PuckEditor.tsx imports these exact functions (see its autosave useEffect) — this is the same unit
+ * VersoEditor.tsx imports these exact functions (see its autosave useEffect) — this is the same unit
  * production runs, not a parallel reimplementation of the rule.
  */
 import { describe, it, expect } from "vitest";

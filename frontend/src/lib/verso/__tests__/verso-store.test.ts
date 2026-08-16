@@ -425,3 +425,143 @@ describe("verso store — generateId y destroy", () => {
     expect(listener).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * GATE F8 — el seam que consume la colaboración: sink de comandos EFECTIVOS y publicación de un
+ * documento ajeno. Lo que se prueba aquí es justo lo que hace que dos réplicas converjan o no.
+ */
+describe("verso store — seam de colaboración", () => {
+  it("el sink recibe el comando EFECTIVO, no el crudo (índice clampado)", () => {
+    const ed = makeEditor();
+    const seen: unknown[] = [];
+    ed.subscribeCommands((b) => seen.push(...b.commands));
+    // Índice 99 sobre una lista de 3: el crudo diría 99, el efectivo dice a dónde fue de verdad.
+    ed.transact((tx) => tx.moveNode("h1", ROOT_ID, ROOT_SLOT, 99));
+    const move = seen.find((c: any) => c.kind === "moveNode") as any;
+    expect(move).toBeDefined();
+    expect(move.toIndex).toBe(2);
+    expect(move.toIndex).not.toBe(99);
+  });
+
+  it("insertNode emite el id REAL generado, no el hueco que traía el comando", () => {
+    let n = 0;
+    const ed = makeEditor({ generateId: () => `gen${++n}` });
+    const seen: any[] = [];
+    ed.subscribeCommands((b) => seen.push(...b.commands));
+    ed.transact((tx) => tx.duplicateSubtree("h1"));
+    const dup = seen.find((c) => c.kind === "duplicateSubtree");
+    expect(dup).toBeDefined();
+    // El idMap va materializado: la otra réplica tiene que crear ESOS ids, no inventarse los suyos.
+    expect(dup.idMap).toBeTruthy();
+    expect(Object.values(dup.idMap)).toContain("gen1");
+  });
+
+  it("el sink se emite DESPUÉS del commit: getDoc() dentro del oyente ya ve el cambio", () => {
+    const ed = makeEditor();
+    let titleVisto: unknown;
+    ed.subscribeCommands(() => {
+      titleVisto = ed.getDoc().nodes["h1"]?.props.title;
+    });
+    ed.transact((tx) => tx.setProps("h1", { title: "committeado" }));
+    expect(titleVisto).toBe("committeado");
+  });
+
+  it("deshacer y rehacer también viajan, con su origen", () => {
+    const ed = makeEditor();
+    const origins: string[] = [];
+    ed.subscribeCommands((b) => origins.push(b.origin));
+    ed.transact((tx) => tx.setProps("h1", { title: "X" }));
+    ed.undo();
+    ed.redo();
+    expect(origins).toEqual(["transact", "undo", "redo"]);
+  });
+
+  it("una transacción que revierte no emite nada al sink", () => {
+    const ed = makeEditor();
+    const sink = vi.fn();
+    ed.subscribeCommands(sink);
+    const ok = ed.transact(() => {
+      throw new Error("no");
+    });
+    expect(ok).toBe(false);
+    expect(sink).not.toHaveBeenCalled();
+  });
+
+  it("una excepción del sink no rompe la edición ya committeada", () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const ed = makeEditor();
+    ed.subscribeCommands(() => {
+      throw new Error("el transporte se cayó");
+    });
+    expect(ed.transact((tx) => tx.setProps("h1", { title: "sobrevive" }))).toBe(true);
+    expect(ed.getDoc().nodes["h1"]?.props.title).toBe("sobrevive");
+    err.mockRestore();
+  });
+
+  it("applyRemoteDoc publica el doc ajeno SIN eco al sink y sin tocar la historia", () => {
+    const ed = makeEditor();
+    ed.transact((tx) => tx.setProps("h1", { title: "mío" }));
+    const sink = vi.fn();
+    ed.subscribeCommands(sink);
+    const otro = createEditor({ initialData: baseData() });
+    otro.transact((tx) => tx.setProps("h1", { title: "de otro" }));
+
+    const onChange = vi.fn();
+    const ed2 = makeEditor({ onChange });
+    ed2.transact((tx) => tx.setProps("h1", { title: "mío" }));
+    onChange.mockClear();
+    ed2.subscribeCommands(sink);
+    expect(ed2.applyRemoteDoc(otro.getDoc())).toBe(true);
+
+    expect(sink).not.toHaveBeenCalled(); // ← sin eco: devolverlo sería un bucle infinito
+    expect(ed2.getDoc().nodes["h1"]?.props.title).toBe("de otro");
+    expect(onChange).toHaveBeenCalledTimes(1); // el contenido cambió: el editor debe saberlo
+    expect(ed2.canUndo()).toBe(true); // mi deshacer sigue ahí
+  });
+
+  it("applyRemoteDoc con resetHistory vacía la pila (documento inicial de la sala)", () => {
+    const ed = makeEditor();
+    ed.transact((tx) => tx.setProps("h1", { title: "antes de entrar" }));
+    expect(ed.canUndo()).toBe(true);
+    const otro = createEditor({ initialData: baseData() });
+    ed.applyRemoteDoc(otro.getDoc(), { resetHistory: true });
+    expect(ed.canUndo()).toBe(false);
+    expect(ed.canRedo()).toBe(false);
+  });
+
+  it("un cambio ajeno rompe la coalescencia: lo siguiente que teclees es su propio deshacer", () => {
+    let t = 0;
+    const ed = makeEditor({ now: () => t });
+    ed.transact((tx) => tx.setProps("h1", { title: "a" }), { coalesceKey: "h1:title" });
+    const otro = createEditor({ initialData: baseData() });
+    otro.transact((tx) => tx.setProps("t2", { content: "ajeno" }));
+    ed.applyRemoteDoc(otro.getDoc());
+    t += 10; // dentro de la ventana de coalescencia
+    ed.transact((tx) => tx.setProps("h1", { title: "ab" }), { coalesceKey: "h1:title" });
+    ed.undo();
+    // Si hubiera coalescido con la entrada previa al cambio ajeno, este undo habría deshecho las dos.
+    expect(ed.getDoc().nodes["t2"]?.props.content).toBe("ajeno");
+  });
+
+  it("applyRemoteDoc se niega dentro de una transacción (no pisa un working a medias)", () => {
+    const ed = makeEditor();
+    const otro = createEditor({ initialData: baseData() });
+    otro.transact((tx) => tx.setProps("h1", { title: "de otro" }));
+    let resultado: boolean | null = null;
+    ed.transact((tx) => {
+      tx.setProps("h1", { title: "mientras tanto" });
+      resultado = ed.applyRemoteDoc(otro.getDoc());
+    });
+    expect(resultado).toBe(false);
+    expect(ed.getDoc().nodes["h1"]?.props.title).toBe("mientras tanto");
+  });
+
+  it("destroy() suelta también los oyentes del sink", () => {
+    const ed = makeEditor();
+    const sink = vi.fn();
+    ed.subscribeCommands(sink);
+    ed.destroy();
+    ed.transact((tx) => tx.setProps("h1", { title: "X" }));
+    expect(sink).not.toHaveBeenCalled();
+  });
+});

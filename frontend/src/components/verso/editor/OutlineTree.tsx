@@ -14,7 +14,7 @@ import type { VersoEditorState } from "@/lib/verso/types";
 import { useStoreSlice } from "../render/context";
 import { outlineRows } from "./outlineModel";
 import { useI18n } from "@/contexts/I18nContext";
-import { trStr } from "@/lib/puckI18n";
+import { trStr } from "@/lib/editorI18n";
 
 const selectDoc = (s: VersoEditorState) => s.doc;
 const selectSelectedId = (s: VersoEditorState) => s.selection.nodeId;

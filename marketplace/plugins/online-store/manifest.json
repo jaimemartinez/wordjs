@@ -13,8 +13,8 @@
             "entry": "client/admin/page.tsx",
             "slug": "store"
         },
-        "puckComponents": {
-            "entry": "client/puck/OnlineStorePuck.tsx"
+        "versoComponents": {
+            "entry": "client/verso/OnlineStoreVerso.tsx"
         }
     },
     "adminMenu": {

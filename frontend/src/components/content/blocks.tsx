@@ -1,7 +1,7 @@
 /**
  * Shared, SERVER-COMPATIBLE render components for the public content blocks (perf F3).
  *
- * Single source of truth: puckConfig's per-block `render` delegates here, and the public
+ * Single source of truth: versoConfig's per-block `render` delegates here, and the public
  * ContentRenderer (server) imports these directly — the editor canvas and the live site can never
  * drift. NO "use client", no hooks, no fetching: blocks are purely presentational; anything
  * interactive lives in its own client-island module, not here.
@@ -10,8 +10,8 @@
  * style both surfaces the same way.
  */
 import React from "react";
-import { blockVars, cx, unit } from "@/components/puck/blockVars";
-import { resolveVideoEmbedUrl, sanitizeHTML } from "@/lib/sanitize";
+import { blockVars, cx, unit } from "@/components/blocks/blockVars";
+import { resolveVideoEmbedUrl, sameOriginPath, sanitizeHTML } from "@/lib/sanitize";
 import { sizesForWidth } from "@/lib/imageSrcset";
 import SelfHostedVideo from "./SelfHostedVideo";
 import AudioTransport from "./AudioTransport";
@@ -168,7 +168,7 @@ export function ButtonBlock({ label, href, variant, align, bg, color, radius, pa
  * shipping four identical ones.
  *
  * BOTH CHECKS ARE ENFORCED AGAIN HERE, and that is not belt-and-braces — it is load-bearing. These
- * components are also rendered by ContentRenderer/puckConfig with `{...props}` spread straight out of
+ * components are also rendered by ContentRenderer/versoConfig with `{...props}` spread straight out of
  * `_puck_data`, which is AUTHOR-controlled and whose write-side sanitizer only classifies string leaves
  * as HTML- or URL-bearing: a structural prop passes through it untouched. That is precisely the hole
  * that produced the `level: "script"` stored-XSS (see HEADING_TAGS above). So `tag` is resolved through
@@ -646,17 +646,17 @@ export function VideoEmbedBlock({ url, poster, aspectRatio, radius, bg, css }: a
         ...css,
     };
 
-    // A file served by THIS site plays inline in a real <video>, with no third party in
-    // the request path at all. Restricted to a root-relative path: that is same-origin by
-    // construction and safe to evaluate during SSR, where there is no window.location to
-    // compare an absolute URL against. '//host/x' is protocol-relative (i.e. remote) and
-    // is deliberately excluded.
-    const isSelfHosted = typeof url === 'string' && url.startsWith('/') && !url.startsWith('//');
-    if (isSelfHosted) {
+    // A file served by THIS site plays inline in a real <video>, with no third party in the request
+    // path at all. `sameOriginPath` (lib/sanitize.ts) is what decides that: root-relative only, and
+    // it rejects BOTH authority-relative spellings — '//host/x' and '/\host/x' — after stripping the
+    // control characters the URL parser drops. The inline test this replaces only knew about '//',
+    // so '/\evil.test/v.mp4' was treated as ours and the <video> fetched from evil.test.
+    const selfHostedSrc = sameOriginPath(url);
+    if (selfHostedSrc) {
         return (
             <SelfHostedVideo
-                src={url}
-                poster={poster && poster.startsWith('/') && !poster.startsWith('//') ? poster : ''}
+                src={selfHostedSrc}
+                poster={sameOriginPath(poster) ?? ''}
                 vars={vars}
             />
         );
@@ -755,7 +755,7 @@ export function HeroBlock({ title, subtitle, bgImage, overlay, overlayColor, hei
     );
 }
 
-// Shared post-date formatter for the dynamic blocks (also used by puckConfig's editor paths).
+// Shared post-date formatter for the dynamic blocks (also used by versoConfig's editor paths).
 export const MESES_ES = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
 export const fmtPostDate = (raw: string): string => {
     const d = new Date(String(raw).replace(" ", "T") + (/[Zz]|[+-]\d\d:?\d\d$/.test(raw) ? "" : "Z"));
@@ -765,7 +765,7 @@ export const fmtPostDate = (raw: string): string => {
 
 /**
  * PostsGrid markup. `posts` arrives ALREADY RESOLVED: server-side via resolveDynamicBlocks on the
- * public site; from the useEditorPosts hook (which stays in puckConfig — client) in the editor.
+ * public site; from the useEditorPosts hook (which stays in versoConfig — client) in the editor.
  * The hook's public branch returns the injected list untouched, so passing it straight through
  * here is the same derivation, not a re-implementation.
  */

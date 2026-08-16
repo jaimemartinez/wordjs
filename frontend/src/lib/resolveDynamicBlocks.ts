@@ -120,10 +120,10 @@ export const resolveDynamicBlocks = cache(async (data: unknown): Promise<unknown
  * and writing into it would let one route's resolution leak into another's.
  */
 export async function withResolvedBlocks<T extends Post>(post: T): Promise<T> {
-    const puckData = (post as unknown as { meta?: Record<string, unknown> }).meta?._puck_data;
-    if (!puckData) return post;
-    const resolved = await resolveDynamicBlocks(puckData);
-    if (resolved === puckData) return post;
+    const versoData = (post as unknown as { meta?: Record<string, unknown> }).meta?._puck_data;
+    if (!versoData) return post;
+    const resolved = await resolveDynamicBlocks(versoData);
+    if (resolved === versoData) return post;
     const meta = { ...(post as unknown as { meta: Record<string, unknown> }).meta, _puck_data: resolved };
     return { ...post, meta } as T;
 }

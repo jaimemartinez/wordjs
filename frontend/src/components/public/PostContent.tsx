@@ -27,7 +27,7 @@ interface PostContentProps {
 }
 
 export default function PostContent({ post, settings, category, showComments }: PostContentProps) {
-    const puckData = post.meta?._puck_data || null;
+    const versoData = post.meta?._puck_data || null;
     // WHICH TYPES GET THE POST FRAME (title + date + byline), by an explicit allowlist rather than
     // "anything that is not a page".
     //
@@ -60,9 +60,9 @@ export default function PostContent({ post, settings, category, showComments }: 
                 page's id and a form submission was stamped against the wrong page. See PageId.tsx. */}
             <PageId id={post.id} />
             {!isFramedPost ? (
-                puckData ? (
+                versoData ? (
                     <div className="wjs-post-body puck-content">
-                        <ContentRenderer data={puckData} />
+                        <ContentRenderer data={versoData} ixPresets={settings?.wjs_ix_presets} />
                     </div>
                 ) : (
                     // Page fallback (no card). `wjs-post-body` rides here too: the FRAME is post-only,
@@ -96,10 +96,10 @@ export default function PostContent({ post, settings, category, showComments }: 
                 // It also restores what the editor already promises: postConfig's root render draws the
                 // title above the blocks in the canvas, and the public page drew nothing — a Puck-edited
                 // post shipped with no <h1>, no date and no byline. Only the body is author-composed.
-                <article className={`wjs-post ${puckData ? 'w-full' : 'max-w-3xl mx-auto py-8'}`}>
+                <article className={`wjs-post ${versoData ? 'w-full' : 'max-w-3xl mx-auto py-8'}`}>
                     {/* Puck bodies are full-bleed (heroes, full-width sections), so the frame must not
                         constrain them — the header carries its own measure instead of the article's. */}
-                    <div className={`wjs-post-header mb-8 text-center${puckData ? ' max-w-3xl mx-auto px-4 pt-8' : ''}`}>
+                    <div className={`wjs-post-header mb-8 text-center${versoData ? ' max-w-3xl mx-auto px-4 pt-8' : ''}`}>
                         <div className="wjs-post-meta flex flex-wrap items-center justify-center gap-3 text-sm text-[var(--wjs-color-text-muted,#6b7280)] mb-4">
                             {category && (
                                 <>
@@ -125,9 +125,9 @@ export default function PostContent({ post, settings, category, showComments }: 
                         framework-STYLED in ui.css (heading margins, image radii, table and field
                         rules), so putting it on Puck output would restyle every block. The Puck body
                         keeps `.puck-content`, which is what ui.css already treats as its twin. */}
-                    {puckData ? (
+                    {versoData ? (
                         <div className="wjs-post-body puck-content">
-                            <ContentRenderer data={puckData} />
+                            <ContentRenderer data={versoData} ixPresets={settings?.wjs_ix_presets} />
                         </div>
                     ) : (
                         <>

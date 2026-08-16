@@ -224,7 +224,7 @@ jobs:
         # plugins (e.g. the gitignored conference-manager). Regenerate here so type-check, lint and
         # build only reference plugins present in this checkout — otherwise tsc fails on a missing module.
         working-directory: frontend
-        run: node scripts/generate-plugin-registry.js && node scripts/generate-admin-plugin-registry.js && node scripts/generate-puck-plugin-registry.js
+        run: node scripts/generate-plugin-registry.js && node scripts/generate-admin-plugin-registry.js && node scripts/generate-verso-plugin-registry.js
       - name: Token manifest anti-drift gate
         # backend/public/theme-tokens.json is COMMITTED and derived deterministically from
         # backend/public/css/wordjs-ui.css (no timestamps, stable key order), so unlike the plugin

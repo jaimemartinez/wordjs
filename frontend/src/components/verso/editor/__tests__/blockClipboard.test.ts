@@ -3,7 +3,7 @@
  *
  *  - Regeneración RECURSIVA de ids al pegar (ningún id repetido, slots anidados incluidos),
  *    sobre la MISMA forma que produce el legacy (fixture generado con buildPatternBlocks de
- *    lib/puckPatterns — el productor real del motor viejo, no una imitación).
+ *    lib/blockPatterns — el productor real del motor viejo, no una imitación).
  *  - Interop cross-editor: misma clave localStorage (wjs_block_clipboard) y misma validación
  *    (`item.type && item.props`) — lo escrito por el legacy pega en Verso y viceversa.
  *  - Pegar = UNA transacción = UNA entrada de undo; posición: tras la selección (mismo slot del
@@ -11,7 +11,7 @@
  *  - Clipboard de estilos: forma EXACTA {look, anim, hide} bajo wjs_style_clipboard.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { buildPatternBlocks, regenIds, type Pattern } from "@/lib/puckPatterns";
+import { buildPatternBlocks, regenIds, type Pattern } from "@/lib/blockPatterns";
 import { createEditor } from "@/lib/verso/store";
 import { createBlockRegistry, makeSlotResolver, type BlockRegistry } from "@/lib/verso/registry";
 import type { VersoItem } from "@/lib/verso/types";

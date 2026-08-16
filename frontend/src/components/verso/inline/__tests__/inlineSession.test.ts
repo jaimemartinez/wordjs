@@ -366,4 +366,82 @@ describe("createInlineSession — throttle, prop, coalesceKey y sanitización", 
         expect(handle.getDoc().nodes["t1"]).toBeUndefined();
         expect(session.flush()).toBe(false);
     });
+
+    /* ------------------------------------------------------------------ */
+    /* Modo colaboración (F8.4)                                            */
+    /* ------------------------------------------------------------------ */
+
+    describe("modo colaboración: throttleMs 0 + adopción de lo ajeno", () => {
+        it("sin throttle, cada pulsación se comitea EN EL ACTO (sin programar nada)", () => {
+            const { handle } = setup();
+            handle.setInlineEditing("t1");
+            const { session, scheduler } = makeSession(handle, { nodeId: "t1", prop: "content", throttleMs: 0 });
+
+            session.onContent("<p>H</p>");
+            expect(handle.getDoc().nodes["t1"].props.content).toBe("<p>H</p>");
+            session.onContent("<p>Ho</p>");
+            expect(handle.getDoc().nodes["t1"].props.content).toBe("<p>Ho</p>");
+            // Nada diferido: la ventana entre "lo tecleado" y "lo que dice el documento" es la que
+            // este modo existe para cerrar; un timer a 0ms la dejaría abierta.
+            expect(scheduler.pending()).toHaveLength(0);
+        });
+
+        it("aun así sigue siendo UNA entrada de deshacer (la coalescencia no cambia)", () => {
+            const clock = makeClock();
+            const { handle } = setup(clock.now);
+            handle.setInlineEditing("t1");
+            const { session } = makeSession(handle, { nodeId: "t1", prop: "content", throttleMs: 0 });
+
+            for (const v of ["<p>H</p>", "<p>Ho</p>", "<p>Hol</p>", "<p>Hola!</p>"]) session.onContent(v);
+            expect(handle.getDoc().nodes["t1"].props.content).toBe("<p>Hola!</p>");
+            expect(handle.undo()).toBe(true);
+            expect(handle.getDoc().nodes["t1"].props.content).toBe("<p>Hola</p>");
+            expect(handle.canUndo()).toBe(false);
+        });
+
+        it("`lastCommitted` distingue lo tuyo de lo ajeno", () => {
+            const { handle } = setup();
+            handle.setInlineEditing("t1");
+            const { session } = makeSession(handle, { nodeId: "t1", prop: "content", throttleMs: 0 });
+
+            expect(session.lastCommitted()).toBeNull();
+            session.onContent("<p>mío</p>");
+            expect(session.lastCommitted()).toBe("<p>mío</p>");
+            // Escritura AJENA publicada por applyRemoteDoc: el documento ya no dice lo que yo puse.
+            const doc = handle.getDoc();
+            handle.applyRemoteDoc({
+                ...doc,
+                nodes: { ...doc.nodes, t1: { ...doc.nodes.t1, props: { ...doc.nodes.t1.props, content: "<p>ajeno</p>" } } },
+            });
+            expect(handle.getDoc().nodes["t1"].props.content).toBe("<p>ajeno</p>");
+            expect(session.lastCommitted()).toBe("<p>mío</p>");
+        });
+
+        it("`adopt` evita el eco: lo adoptado no se reenvía como edición propia", () => {
+            const { handle } = setup();
+            handle.setInlineEditing("t1");
+            const { session } = makeSession(handle, { nodeId: "t1", prop: "content", throttleMs: 0 });
+
+            session.adopt("<p>ajeno</p>");
+            expect(session.lastCommitted()).toBe("<p>ajeno</p>");
+            // Reofrecer EXACTAMENTE lo adoptado no abre transacción (no hay nada que contar).
+            session.onContent("<p>ajeno</p>");
+            expect(handle.canUndo()).toBe(false);
+            // Pero seguir escribiendo encima sí, y parte de lo adoptado.
+            session.onContent("<p>ajeno+</p>");
+            expect(handle.getDoc().nodes["t1"].props.content).toBe("<p>ajeno+</p>");
+        });
+
+        it("`adopt` descarta lo pendiente: comitearlo borraría justo lo que se acaba de adoptar", () => {
+            const { handle } = setup();
+            handle.setInlineEditing("t1");
+            const { session, scheduler } = makeSession(handle, { nodeId: "t1", prop: "content" });
+
+            session.onContent("<p>a medio escribir</p>"); // queda pendiente (throttle por defecto)
+            session.adopt("<p>lo ajeno ya fusionado</p>");
+            scheduler.fire();
+            expect(session.flush()).toBe(false);
+            expect(handle.getDoc().nodes["t1"].props.content).toBe("<p>Hola</p>");
+        });
+    });
 });
