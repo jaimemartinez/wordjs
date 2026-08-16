@@ -53,7 +53,7 @@ async function insertViaPalette(page: Page, type: string): Promise<void> {
 
 test("keyboard-only: insertar, mover, editar y guardar sin un solo click", async ({ page }) => {
     await prepPage(page);
-    await page.goto("/admin/pages/new?engine=verso");
+    await page.goto("/admin/pages/new");
     const frame = canvas(page);
     await expect(frame.locator(ROOT_SLOT_SELECTOR)).toBeAttached({ timeout: 60_000 });
     const stamp = Date.now().toString(36);

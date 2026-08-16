@@ -40,8 +40,8 @@ export default defineConfig({
         command: "npm run dev:mono",
         cwd: path.join(__dirname, ".."),
         url: `${E2E_BASE_URL}/healthz`,
-        // dev:mono corre predev (build del editor vendorizado + registries) antes
-        // de arrancar — el primer boot en frío tarda minutos.
+        // dev:mono corre predev (registries generados) antes de arrancar — el
+        // primer boot en frío tarda minutos.
         timeout: 600_000,
         reuseExistingServer: !process.env.CI,
         // El entorno se propaga EXPLÍCITAMENTE (no se asume herencia): en un

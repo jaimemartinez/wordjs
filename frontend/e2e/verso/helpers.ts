@@ -83,7 +83,7 @@ export async function openLab(page: Page, fixture: "30" | "500" = "30"): Promise
 /** Abre el editor de páginas NUEVA en motor Verso y espera el chrome montado. */
 export async function openNewPageVerso(page: Page): Promise<FrameLocator> {
     await prepPage(page);
-    await page.goto("/admin/pages/new?engine=verso");
+    await page.goto("/admin/pages/new");
     // El chrome del VersoEditor: botón Guardar (estado draft) del header.
     await expect(page.getByRole("button", { name: /guardar|publicar/i }).first()).toBeVisible({
         timeout: 60_000,

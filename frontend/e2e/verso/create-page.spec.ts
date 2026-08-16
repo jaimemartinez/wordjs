@@ -1,5 +1,5 @@
 /**
- * Verso F6 (a) — crear página real en /admin/pages/new?engine=verso:
+ * Verso F6 (a) — crear página real en /admin/pages/new:
  * 3 bloques por paleta, edición de props, guardar, recargar, persistencia.
  *
  * REGRESIÓN QUE ESTE SPEC PINEA (cazada por él en CI): en un checkout limpio el
@@ -54,7 +54,7 @@ test("crear página: 3 bloques por paleta, editar props, guardar, recargar y ver
     expect(id).toBeGreaterThan(0);
 
     // --- recargar y verificar persistencia ----------------------------------
-    await page.goto(`/admin/pages/${id}?engine=verso`);
+    await page.goto(`/admin/pages/${id}`);
     const frame2 = canvas(page);
     await expect(frame2.locator("[data-wjs-block-id]")).toHaveCount(3, { timeout: 60_000 });
     const idsAfter = await blockIdsIn(frame2.locator("body"));
