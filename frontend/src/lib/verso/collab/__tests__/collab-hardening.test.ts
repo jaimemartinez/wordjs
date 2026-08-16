@@ -18,7 +18,7 @@ import { describe, expect, it } from "vitest";
 
 import { deriveSite, FakeCollabServer } from "./fakeServer";
 import { VersoCollabSession } from "../client";
-import { ManualTimers } from "./fakeServer";
+import { ManualTimers, settleMicrotasks } from "./fakeServer";
 import type { CollabNotice, CollabTransport, PostResponse, StreamHandlers } from "../types";
 import type { VersoData } from "../../types";
 
@@ -589,5 +589,238 @@ describe("la espera que pide el servidor se respeta en TODOS los caminos", () =>
 
     expect(session.snapshot().pendingOps).toBe(0);
     expect(server.log).toHaveLength(1);
+  });
+
+  /**
+   * EL ARREGLO DE LA RONDA 4, con el hueco que lo hacía invisible ya tapado en el doble.
+   *
+   * La espera se perdía en el PLANIFICADOR: el 429 se procesaba cuando el POST respondía, y si
+   * durante ese vuelo una pulsación armaba el temporizador corto, `flushSoon()` se encontraba la
+   * ranura ocupada y RETORNABA. La espera no se aplazaba: se descartaba, y el siguiente POST salía a
+   * los 100 ms, dentro de la ventana del servidor. Sin tiempo de vuelo en el doble, esa carrera NO
+   * SE PUEDE REPRESENTAR — por eso los 45 tests seguían verdes con el defecto dentro.
+   */
+  it("una pulsación DURANTE el vuelo del 429 no adelanta el siguiente envío", async () => {
+    const server = new FakeCollabServer(BASE, "auto");
+    server.register({ siteId: SITE, userId: 1, name: "Ana" });
+    const timers = server.useTimers(new ManualTimers());
+    server.latencyMs = 60;                 // RTT 120 ms: el hueco donde vive la carrera
+    server.refuse.ops = 1;
+
+    const session = new VersoCollabSession(
+      {
+        postId: 7, transport: server.transport(), siteId: SITE, flushMs: 100, presenceMs: 50,
+        setTimer: timers.set, clearTimer: timers.clear,
+      },
+      {},
+    );
+    session.start();
+    await timers.run();
+
+    session.sendCommand({ kind: "setProps", nodeId: "t1", patch: { a: "1" } });
+    // Pulsaciones mientras el primer POST está EN EL AIRE. Cada una llama a `flushSoon()`, que es
+    // por donde se colaba el temporizador de 100 ms que se comía la espera.
+    for (let i = 0; i < 6; i++) {
+      timers.set(() => session.sendCommand({ kind: "setProps", nodeId: "t1", patch: { [`b${i}`]: "1" } }), 110 + i * 20);
+    }
+    await timers.run(5_000);
+
+    const envios = server.posted.filter((p) => p.path === "ops").map((p) => p.at);
+    expect(envios.length).toBeGreaterThanOrEqual(2);
+    const hueco = envios[1] - envios[0];
+    expect(
+      hueco,
+      `tras un 429 el siguiente envío tiene que ir DESPUÉS de la ventana del servidor, ` +
+      `teclee el usuario o no: salió a los ${hueco} ms (envíos en ${JSON.stringify(envios)})`,
+    ).toBeGreaterThan(server.rateRetryMs);
+  });
+
+  /**
+   * DÓNDE VIVE EL INVARIANTE, y por qué no puede vivir en los planificadores.
+   *
+   * `resync()` es API pública y el propio cliente la llama FUERA de todo planificador (el aviso
+   * `room_reset` del servidor hace `void this.resync()`). Un freno que viviera en los `xxxSoon()`
+   * —la arquitectura de la ronda 3— no cubre este camino: mandaría dentro de la ventana y con el
+   * acuse puesto, que es lo único que el servidor puede castigar. Tres así y fuera de la sala.
+   *
+   * Por eso la espera se aplica en `post()`, que es la única puerta de salida del cliente. Este test
+   * es lo que separa las dos arquitecturas: con el freno en `post()` no pasa nada; con el freno solo
+   * en los planificadores, el servidor expulsa.
+   */
+  it("un `resync` pedido A PELO durante la espera no se salta el freno", async () => {
+    const server = new FakeCollabServer(BASE, "auto");
+    server.register({ siteId: SITE, userId: 1, name: "Ana" });
+    const timers = server.useTimers(new ManualTimers());
+    server.latencyMs = 30;
+    server.refuse.resync = 6;
+
+    const notices: CollabNotice[] = [];
+    const session = new VersoCollabSession(
+      {
+        postId: 7, transport: server.transport(), siteId: SITE, flushMs: 100, presenceMs: 50,
+        setTimer: timers.set, clearTimer: timers.clear,
+      },
+      { onNotice: (n) => notices.push(n) },
+    );
+    session.start();
+    await timers.run();
+
+    // TODO programado antes de correr el reloj: `run()` lo agota, y programar después dejaría las
+    // peticiones FUERA de la ventana de espera — el test pasaría en verde sin probar nada.
+    // El primero se rechaza y deja una espera en vigor; los tres siguientes caen DENTRO de ella,
+    // que es cuando el servidor puede probar desobediencia.
+    timers.set(() => { void session.resync(); }, 10);
+    for (let i = 0; i < 3; i++) timers.set(() => { void session.resync(); }, 120 + i * 90);
+    await timers.run(20_000);
+
+    expect(
+      server.expulsiones.length,
+      `expulsado por peticiones que el propio cliente hace fuera del planificador: ` +
+      `${JSON.stringify(server.posted.map((p) => `${p.path}@${p.at}=${p.status}`))}`,
+    ).toBe(0);
+    expect(server.posted.some((p) => p.status === 409), "y ni un 409 collab_no_session").toBe(false);
+    expect(notices.some((n) => n.code === "transport-error")).toBe(false);
+  });
+
+  /**
+   * El aparcado de ranuras del planificador es TRÁFICO, no corrección (la corrección la sostiene
+   * `post()`, arriba). Este test lo ancla por lo que hace: sin él, cada disparo del temporizador
+   * mientras el freno está puesto encola una petición más, y bajar por el documento con las flechas
+   * durante una espera de un segundo son veinte POST amontonados esperando a que se suelte.
+   */
+  it("con el freno puesto, mover el cursor no amontona una petición por movimiento", async () => {
+    const server = new FakeCollabServer(BASE, "auto");
+    server.register({ siteId: SITE, userId: 1, name: "Ana" });
+    const timers = server.useTimers(new ManualTimers());
+    server.refuse.presence = 1;
+
+    const session = new VersoCollabSession(
+      {
+        postId: 7, transport: server.transport(), siteId: SITE, flushMs: 100, presenceMs: 50,
+        setTimer: timers.set, clearTimer: timers.clear,
+      },
+      {},
+    );
+    session.start();
+    await timers.run();
+
+    // TODO se programa ANTES de correr el reloj: `run()` avanza hasta agotar la cola, así que
+    // programar después de correrlo dejaría los movimientos FUERA de la ventana de espera y el test
+    // mediría otra cosa (pasa en verde sin probar nada).
+    timers.set(() => session.setSelection({ nodeId: "n0" }), 10);
+    for (let i = 1; i <= 20; i++) timers.set(() => session.setSelection({ nodeId: `n${i}` }), 60 + i * 40);
+    await timers.run(20_000);
+
+    const presencias = server.posted.filter((p) => p.path === "presence");
+    expect(
+      presencias.length,
+      `una espera no puede convertirse en una petición por movimiento: ${presencias.length} POST /presence`,
+    ).toBeLessThanOrEqual(4);
+  });
+
+  it("el `resync` también respeta la espera: era el único camino que se tragaba el 429", async () => {
+    // `resync()` hacía `if (res.status !== 200) return;`. Ni aplicaba la espera —así que el siguiente
+    // frame de CUALQUIER camino salía como si nada— ni reintentaba, con lo que el hueco de entrega
+    // que motivó el resync se quedaba abierto y la réplica divergía en silencio.
+    const server = new FakeCollabServer(BASE, "auto");
+    server.register({ siteId: SITE, userId: 1, name: "Ana" });
+    const timers = server.useTimers(new ManualTimers());
+    server.refuse.resync = 1;
+
+    const session = new VersoCollabSession(
+      {
+        postId: 7, transport: server.transport(), siteId: SITE, flushMs: 100, presenceMs: 50,
+        setTimer: timers.set, clearTimer: timers.clear,
+      },
+      {},
+    );
+    session.start();
+    await timers.run();
+
+    // `resync()` se llama a pelo, fuera de todo temporizador: hay que dejar asentar su cadena de
+    // promesas ANTES de correr el reloj, o `run()` sale sin haber visto nada programado.
+    void session.resync();
+    await settleMicrotasks();
+    await timers.run(5_000);
+
+    const resyncs = server.posted.filter((p) => p.path === "resync").map((p) => p.at);
+    expect(resyncs.length, "un `resync` rechazado tiene que reintentarse, no perderse").toBeGreaterThanOrEqual(2);
+    expect(
+      resyncs[1] - resyncs[0],
+      `y el reintento va DESPUÉS de la ventana del servidor: ${resyncs[1] - resyncs[0]} ms`,
+    ).toBeGreaterThan(server.rateRetryMs);
+  });
+
+  it("todos los frames llevan el acuse del último aviso visto", async () => {
+    // Sin `rateAck` el servidor no puede distinguir un frame EN VUELO de uno desobediente, y su única
+    // salida sería volver a castigar por tiempo — que es lo que expulsaba a gente inocente. El acuse
+    // es lo que sostiene la mitad de la propiedad que vive en el servidor: quitarlo no «relaja» nada,
+    // reabre el defecto por el otro lado.
+    const server = new FakeCollabServer(BASE, "auto");
+    server.register({ siteId: SITE, userId: 1, name: "Ana" });
+    const timers = server.useTimers(new ManualTimers());
+    server.refuse.ops = 1;
+
+    const cuerpos: Record<string, unknown>[] = [];
+    const real = server.transport();
+    const espia: CollabTransport = {
+      openStream: real.openStream,
+      post: (url, body) => { cuerpos.push(body as Record<string, unknown>); return real.post(url, body); },
+    };
+    const session = new VersoCollabSession(
+      {
+        postId: 7, transport: espia, siteId: SITE, flushMs: 100, presenceMs: 50,
+        setTimer: timers.set, clearTimer: timers.clear,
+      },
+      {},
+    );
+    session.start();
+    await timers.run();
+
+    session.sendCommand({ kind: "setProps", nodeId: "t1", patch: { a: "1" } });
+    session.setSelection({ nodeId: "n1" });
+    await timers.run(5_000);
+
+    expect(cuerpos.length).toBeGreaterThan(1);
+    for (const c of cuerpos) {
+      expect(typeof c.rateAck, `todo frame lleva acuse: ${JSON.stringify(c).slice(0, 120)}`).toBe("number");
+    }
+    // Y después del 429 el acuse SUBE: se devuelve el aviso que se acaba de recibir, no un cero fijo.
+    expect(
+      Math.max(...cuerpos.map((c) => Number(c.rateAck))),
+      "tras un 429 el acuse tiene que subir, o el servidor nunca sabrá que nos enteramos",
+    ).toBeGreaterThan(0);
+  });
+
+  it("la espera de la RECONEXIÓN también sale del `welcome`, no de un 1000 escrito a mano", async () => {
+    // Era el último número duplicado: `Math.min(1000 * 2 ** retries, 30_000)`, copiado además en DOS
+    // manejadores. Con la ventana del servidor a 5000, la primera reconexión tiene que esperar en esa
+    // escala; con un 1000 fijo esperaría 1000 pase lo que pase.
+    const server = new FakeCollabServer(BASE, "auto");
+    server.register({ siteId: SITE, userId: 1, name: "Ana" });
+    const timers = server.useTimers(new ManualTimers());
+    server.rateRetryMs = 5_000;
+
+    const session = new VersoCollabSession(
+      {
+        postId: 7, transport: server.transport(), siteId: SITE, flushMs: 100, presenceMs: 50,
+        setTimer: timers.set, clearTimer: timers.clear,
+      },
+      {},
+    );
+    session.start();
+    await timers.run();
+
+    const cortadoEn = timers.time;
+    server.dropStream(SITE);
+    await timers.run(5_000);
+
+    // `openedWith` guarda cada apertura del stream: la segunda es la reconexión.
+    expect(server.openedWith.length).toBeGreaterThanOrEqual(2);
+    const reabiertoEn = server.posted.length ? server.posted[server.posted.length - 1].at : timers.time;
+    expect(
+      reabiertoEn - cortadoEn,
+      "la unidad del backoff de reconexión es la ventana que publica el servidor",
+    ).toBeGreaterThanOrEqual(server.rateRetryMs);
   });
 });

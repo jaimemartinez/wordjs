@@ -37,10 +37,19 @@ import type {
   CollabStatus,
   CollabTransport,
   OpsResponse,
+  PostResponse,
   SessionSnapshot,
   StreamHandle,
   WelcomeMessage,
 } from "./types";
+import { RateGate } from "./rateGate";
+
+/**
+ * Las tres ranuras de envío. Están enumeradas porque comparten UN planificador y UN freno: mientras
+ * cada una tuvo los suyos, cerrar el defecto en una lo dejaba abierto en la siguiente.
+ */
+type Slot = "flush" | "presence" | "resync";
+const SLOTS: readonly Slot[] = ["flush", "presence", "resync"];
 
 export interface CollabSessionOptions {
   postId: number;
@@ -93,21 +102,20 @@ const RETRYABLE_REFUSALS = new Set([
 ]);
 
 /**
- * ESPERA MÍNIMA TRAS UN 429, y margen sobre la que exige el servidor.
+ * NO HAY NINGUNA CONSTANTE DE ESPERA EN ESTE FICHERO, y eso es el arreglo.
  *
- * El servidor cuenta un strike a quien reintenta antes de su `RATE_RETRY_MS` y a los tres CIERRA la
- * sesión — que este cliente trata como terminal: editor mudo hasta recargar la página. Estos 1000 ms
- * fijos y los 900 del servidor vivían en ficheros distintos sin nada que los atara: funcionaba por
- * 100 ms de casualidad. Ahora el servidor publica su ventana en `welcome.limits.rateRetryMs` y aquí
- * se espera SIEMPRE algo más que ella; el suelo cubre a un servidor que no la publique y el techo
- * impide que un valor absurdo (o manipulado) deje al editor parado indefinidamente.
+ * Vivían aquí unos 1000 ms fijos que tenían que ser mayores que los 900 del servidor para que éste
+ * no contara un strike; dos números en dos paquetes distintos, sin nada que los atara, que
+ * funcionaban por 100 ms de casualidad. Ahora la ventana la publica el servidor y toda espera de
+ * este cliente —ops, presencia, resync, reconexión y el freno tras un 5xx— se deriva de ella en
+ * `rateGate.ts`, que es también quien la APLICA. Ver la cabecera de ese fichero.
  */
-const RATE_BACKOFF_MS = 1000;
-const RATE_BACKOFF_MARGIN_MS = 100;
-const RATE_BACKOFF_CAP_MS = 30_000;
 
-/** Espera tras un fallo del servidor que NO es de ritmo (5xx, red caída). */
-const RETRY_BACKOFF_MS = 1000;
+/**
+ * Coalescencia del `resync`. No es una espera que pida el servidor: es cuánto se agrupa un hueco de
+ * entrega antes de preguntar, para que diez huecos seguidos no sean diez peticiones.
+ */
+const RESYNC_COALESCE_MS = 250;
 
 /**
  * Presupuesto de reintentos del envío. Sin tope, un 5xx permanente —o el 503 de una fila del log que
@@ -166,20 +174,22 @@ export class VersoCollabSession {
    * PREFIJO DENSO (`1..n` todos presentes), que es lo único que un version vector puede afirmar.
    */
   private readonly appliedDots = new Map<string, Set<number>>();
-  private flushTimer: unknown = null;
+  /**
+   * Los TRES planificadores de este cliente, en un solo sitio. Cada uno decide cuándo LE GUSTARÍA
+   * enviar; ninguno decide si puede — eso lo decide `gate`, en el envío. Tenerlos en un mapa no es
+   * cosmética: mientras cada uno tenía su campo y su backoff propio, arreglar uno dejaba el otro
+   * abierto, que es exactamente cómo este defecto sobrevivió tres rondas.
+   */
+  private readonly timers: Record<Slot, unknown> = { flush: null, presence: null, resync: null };
+  /** Ranuras que esperan a que se suelte el freno. Evita encolar dos veces la misma. */
+  private readonly deferred = new Set<Slot>();
+  /** LA ESPERA, entera y en un solo sitio. Ver `rateGate.ts`. */
+  private readonly gate: RateGate;
   private flushing = false;
-  private presenceTimer: unknown = null;
   private pendingSel: CollabSelection | null = null;
   private presenceDirty = false;
-  private resyncTimer: unknown = null;
   private retries = 0;
   private stopped = false;
-  /** Espera del PRÓXIMO envío. Un 429 o un fallo de guardado la suben; se consume una sola vez. */
-  private backoffMs = 0;
-  /** Igual que `backoffMs`, para el canal de PRESENCIA, que tiene su propio temporizador. */
-  private presenceBackoffMs = 0;
-  /** Ventana de espera que el SERVIDOR publica en el `welcome` (`CONFIG.RATE_RETRY_MS`). */
-  private serverRetryMs = 0;
   /** Reintentos consecutivos del envío sin que el servidor se haya hecho cargo del lote. */
   private flushRetries = 0;
   private flushGaveUp = false;
@@ -195,6 +205,9 @@ export class VersoCollabSession {
     this.nonce = opts.siteId ?? createSiteId();
     this.siteId = this.nonce;
     this.base = (opts.apiBase ?? "/api/v1").replace(/\/+$/, "");
+    // El freno usa LOS MISMOS temporizadores que la sesión: en un test con reloj manual, una espera
+    // que se midiera con `setTimeout` de verdad no se podría avanzar y el test mediría otra cosa.
+    this.gate = new RateGate({ later: (ms, fn) => this.later(ms, fn), clear: (h) => this.clear(h) });
   }
 
   /* ----------------------------------------------------------------------------------------- */
@@ -209,14 +222,16 @@ export class VersoCollabSession {
 
   stop(): void {
     this.stopped = true;
-    this.clear(this.flushTimer); this.flushTimer = null;
-    this.clear(this.presenceTimer); this.presenceTimer = null;
-    this.clear(this.resyncTimer); this.resyncTimer = null;
+    for (const slot of SLOTS) { this.clear(this.timers[slot]); this.timers[slot] = null; }
+    this.deferred.clear();
+    this.gate.reset();
     this.stream?.close();
     this.stream = null;
     // Baja explícita para que los demás vean marcharse el avatar sin esperar al TTL. Es
-    // best-effort a propósito: si el navegador se está cerrando, el TTL del servidor lo cubre.
-    if (this.self) void this.post("leave", { siteId: this.siteId }).catch(() => undefined);
+    // best-effort a propósito: si el navegador se está cerrando, el TTL del servidor lo cubre — y
+    // por eso NO pasa por el freno: `/leave` no se cobra al ritmo (el servidor no lo pasa por
+    // `rateGate`), así que esperar aquí solo serviría para no llegar a mandarlo nunca.
+    if (this.self) void this.postNow("leave", { siteId: this.siteId }).catch(() => undefined);
     this.setStatus("off");
   }
 
@@ -254,7 +269,7 @@ export class VersoCollabSession {
     }
     // Backoff exponencial con techo: reconectar en bucle cerrado contra un servidor caído sería
     // exactamente el comportamiento que hace caer al servidor cuando vuelve.
-    const delay = Math.min(1000 * 2 ** this.retries, 30_000);
+    const delay = this.reconnectDelay();
     this.retries++;
     void err;
     this.later(delay, () => { if (!this.stopped) this.openStream(); });
@@ -284,11 +299,10 @@ export class VersoCollabSession {
     this.flushRetries = 0;
     this.flushGaveUp = false;
 
-    // La espera que el servidor exige tras un 429 la dice ÉL. Duplicarla a ojo aquí es lo que hacía
-    // que 900 vs 1000 funcionara por casualidad y que tocar cualquiera de los dos números reabriera
-    // la expulsión sin un solo test en rojo.
-    const retry = Number(msg.limits?.rateRetryMs);
-    if (Number.isFinite(retry) && retry > 0) this.serverRetryMs = retry;
+    // La espera que el servidor exige tras un 429 la dice ÉL, y de aquí la toman TODOS los caminos
+    // del cliente. Duplicarla a ojo es lo que hacía que 900 vs 1000 funcionara por casualidad y que
+    // tocar cualquiera de los dos números reabriera la expulsión sin un solo test en rojo.
+    this.gate.publica(msg.limits?.rateRetryMs);
 
     // La identidad de réplica la manda el SERVIDOR y se adopta antes de tocar nada: con ella se
     // siembran las posiciones y se firman las ops. Que cambie con estado vivo es rarísimo (rotación
@@ -475,7 +489,7 @@ export class VersoCollabSession {
     this.setStatus("offline");
 
     if (RETRYABLE_REFUSALS.has(code) && this.retries < (this.opts.maxRetries ?? DEFAULTS.maxRetries)) {
-      const delay = Math.min(1000 * 2 ** this.retries, 30_000);
+      const delay = this.reconnectDelay();
       this.retries++;
       this.emitNotice({
         code: "transport-error",
@@ -520,19 +534,60 @@ export class VersoCollabSession {
   }
 
   private flushSoon(): void {
+    this.schedule("flush", this.opts.flushMs ?? DEFAULTS.flushMs);
+  }
+
+  private presenceSoon(): void {
+    this.schedule("presence", this.opts.presenceMs ?? DEFAULTS.presenceMs);
+  }
+
+  private scheduleResync(): void {
+    this.schedule("resync", RESYNC_COALESCE_MS);
+  }
+
+  /**
+   * EL ÚNICO PLANIFICADOR. Las tres ranuras (envío, presencia, resync) comparten este código, y
+   * ninguna decide aquí si se puede enviar: eso lo decide el freno, y lo decide EN EL ENVÍO.
+   *
+   * La ronda 3 se perdió por lo contrario. Cada camino tenía su propio `xxxSoon()` con la forma
+   * `if (timer !== null) return;` y su propio `backoffMs`, y el 429 se procesaba DESPUÉS de que el
+   * POST respondiera: si durante ese vuelo una pulsación armaba el temporizador corto (100 ms), la
+   * espera recién fijada se encontraba la ranura ocupada y se DESCARTABA. El siguiente POST salía a
+   * los 100 ms, dentro de la ventana de 900 del servidor, que es literalmente lo que éste contaba
+   * como desobediencia. Aquí ya no hay nada que descartar: el temporizador puede dispararse cuando
+   * quiera, porque `post()` no sale mientras haya freno.
+   */
+  private schedule(slot: Slot, baseMs: number): void {
+    if (this.stopped) return;
     // `flushGaveUp` corta el bucle AQUÍ, que es por donde se re-programaba (el `finally` de `flush`
     // llama a este mismo camino). Se recupera con el `welcome` de una reconexión, no tecleando: si
     // cada pulsación rearmara el reintento, el presupuesto no serviría de nada.
-    if (this.flushTimer !== null || this.stopped || this.flushGaveUp) return;
-    // El freno vive AQUÍ y no en un instante absoluto: el reintento que programa el `finally` de
-    // `flush()` pasa por este mismo camino, así que un 429 ya no puede acabar reenviando a los
-    // 100 ms como si no hubiera pasado nada.
-    const delay = this.backoffMs || (this.opts.flushMs ?? DEFAULTS.flushMs);
-    this.backoffMs = 0;
-    this.flushTimer = this.later(delay, () => {
-      this.flushTimer = null;
-      void this.flush();
+    if (slot === "flush" && this.flushGaveUp) return;
+    if (this.timers[slot] !== null || this.deferred.has(slot)) return;
+
+    this.timers[slot] = this.later(baseMs, () => {
+      this.timers[slot] = null;
+      if (this.stopped) return;
+      // Con freno en vigor la ranura se APARCA en vez de bloquearse dentro de `post()`: así el
+      // trabajo se agrupa (una sola presencia con la selección buena, un solo lote de ops) en vez
+      // de encolarse una petición por disparo. La corrección no depende de esto — si esta rama
+      // desapareciera, `post()` seguiría sin dejar salir nada — pero el tráfico sí.
+      if (this.gate.frenado) {
+        this.deferred.add(slot);
+        this.gate.alSoltarse(() => {
+          this.deferred.delete(slot);
+          this.schedule(slot, 0);
+        });
+        return;
+      }
+      this.dispara(slot);
     });
+  }
+
+  private dispara(slot: Slot): void {
+    if (slot === "flush") { void this.flush(); return; }
+    if (slot === "presence") { this.enviaPresencia(); return; }
+    void this.resync();
   }
 
   /**
@@ -551,7 +606,7 @@ export class VersoCollabSession {
     const batch = this.outbox.slice(0, this.flushCap);
     this.outbox = this.outbox.slice(batch.length);
     try {
-      const res = await this.post("ops", { siteId: this.siteId, epoch: this.epoch, ops: batch });
+      const res = await this.post("ops", () => ({ siteId: this.siteId, epoch: this.epoch, ops: batch }));
       if (res.status === 200) {
         const body = res.body as OpsResponse | null;
         const rejected = body?.rejected ?? [];
@@ -571,7 +626,7 @@ export class VersoCollabSession {
         // un no-op exacto por el dot) en vez de darlas por entregadas.
         const accounted = (body?.accepted ?? 0) + (body?.known ?? 0) + rejected.length;
         if (typeof body?.accepted === "number" && accounted < batch.length) {
-          this.requeue(batch, RETRY_BACKOFF_MS, `El servidor no confirmó ${batch.length - accounted} cambio(s); se reintentan.`);
+          this.requeue(batch, `El servidor no confirmó ${batch.length - accounted} cambio(s); se reintentan.`);
         } else if (body?.persisted === false) {
           // Difundido pero NO guardado: los demás lo ven, pero la sesión ya no es reanudable.
           this.setStatus("degraded");
@@ -586,7 +641,7 @@ export class VersoCollabSession {
       } else if (res.status === 429) {
         // Un 429 no gasta presupuesto: es un freno, no un fallo, y el servidor dice cuánto esperar.
         this.outbox = batch.concat(this.outbox);
-        this.backoffMs = this.rateBackoff();
+        this.gate.rechazado(res.body as never);
         this.emitNotice({ code: "rate-limited", message: "Vas más rápido de lo que el servidor acepta; reintentando.", at: this.time() });
       } else if (res.status === 413) {
         // El frame no cabe. Se parte por la mitad y se reintenta; si ni una sola op cabe, esa op no
@@ -612,12 +667,12 @@ export class VersoCollabSession {
         });
       } else {
         // 5xx u otro status: el servidor NO se ha hecho cargo del lote. Vuelve a la cola con freno.
-        this.requeue(batch, RETRY_BACKOFF_MS, "El servidor no pudo guardar los últimos cambios; se están reintentando.");
+        this.requeue(batch, "El servidor no pudo guardar los últimos cambios; se están reintentando.");
       }
     } catch {
       // Red caída: las ops vuelven a la cola INTACTAS y se reintentan al reconectar. Perderlas
       // aquí sería la pérdida silenciosa que este diseño no admite.
-      this.requeue(batch, RETRY_BACKOFF_MS, null);
+      this.requeue(batch, null);
     } finally {
       this.flushing = false;
       this.emitChange();
@@ -631,9 +686,11 @@ export class VersoCollabSession {
    * por construcción, y reintentarlo a 1 Hz para siempre agota el limitador global de la IP y no
    * arregla nada. Al agotarse se deja de posear y se dice que hay que guardar a mano.
    */
-  private requeue(batch: CollabOp[], backoff: number, message: string | null): void {
+  private requeue(batch: CollabOp[], message: string | null): void {
     this.outbox = batch.concat(this.outbox);
-    this.backoffMs = backoff;
+    // Mismo freno, otra causa. La espera sale de la ventana que publicó el servidor igual que la del
+    // 429: es SU ritmo declarado, y no hay ninguna razón para inventar aquí un segundo número.
+    this.gate.frenaPorFallo();
     this.flushRetries++;
     if (this.flushRetries >= MAX_FLUSH_RETRIES) {
       this.flushGaveUp = true;
@@ -725,48 +782,26 @@ export class VersoCollabSession {
    * recargar. El servidor ya no rebota la presencia por un cubo de BYTES en rojo, pero el freno de
    * presencia sigue existiendo (y debe): cuando salte, se espera como en `flush`.
    */
-  private presenceSoon(): void {
-    if (this.presenceTimer !== null || this.stopped) return;
-    const delay = this.presenceBackoffMs || (this.opts.presenceMs ?? DEFAULTS.presenceMs);
-    this.presenceBackoffMs = 0;
-    this.presenceTimer = this.later(delay, () => {
-      this.presenceTimer = null;
-      if (!this.presenceDirty || this.stopped || !this.self) return;
-      this.presenceDirty = false;
-      void this.post("presence", { siteId: this.siteId, sel: this.pendingSel })
-        .then((res) => {
-          if (res?.status !== 429 || this.stopped) return;
-          // Se reintenta la ÚLTIMA selección conocida (la presencia es estado, no un log: lo viejo
-          // no interesa), y sobre todo se espera lo que el servidor pide antes de volver.
-          this.presenceDirty = true;
-          this.presenceBackoffMs = this.rateBackoff();
-          this.presenceSoon();
-        })
-        .catch(() => undefined);
-    });
-  }
-
-  /**
-   * Espera antes de reintentar tras un 429, DERIVADA de la que el servidor publicó en el `welcome`.
-   * Nunca menos que la suya (eso es lo que el servidor castiga con un strike) ni menos que el suelo
-   * propio, y con techo para que un valor absurdo no deje al editor parado.
-   */
-  private rateBackoff(): number {
-    const server = Number(this.serverRetryMs) || 0;
-    return Math.min(Math.max(RATE_BACKOFF_MS, server + RATE_BACKOFF_MARGIN_MS), RATE_BACKOFF_CAP_MS);
+  private enviaPresencia(): void {
+    if (!this.presenceDirty || this.stopped || !this.self) return;
+    this.presenceDirty = false;
+    // La selección se lee EN EL ENVÍO, no al programarlo: si el envío espera, lo que sale tiene que
+    // ser dónde está el cursor ahora, no dónde estaba cuando se armó el temporizador.
+    void this.post("presence", () => ({ siteId: this.siteId, sel: this.pendingSel }))
+      .then((res) => {
+        if (res?.status !== 429 || this.stopped) return;
+        // Se reintenta la ÚLTIMA selección conocida (la presencia es estado, no un log: lo viejo
+        // no interesa), y sobre todo se espera lo que el servidor pide antes de volver.
+        this.presenceDirty = true;
+        this.gate.rechazado(res.body as never);
+        this.presenceSoon();
+      })
+      .catch(() => undefined);
   }
 
   /* ----------------------------------------------------------------------------------------- */
   /* Reanudación                                                                                 */
   /* ----------------------------------------------------------------------------------------- */
-
-  private scheduleResync(): void {
-    if (this.resyncTimer !== null || this.stopped) return;
-    this.resyncTimer = this.later(250, () => {
-      this.resyncTimer = null;
-      void this.resync();
-    });
-  }
 
   /**
    * Cierra un hueco pidiendo por VERSION VECTOR lo que nos falta. No por un cursor de secuencia: en
@@ -777,7 +812,15 @@ export class VersoCollabSession {
     const state = this.state;
     if (!state || this.stopped) return;
     try {
-      const res = await this.post("resync", { siteId: this.siteId, epoch: this.epoch, vv: this.denseVersionVector() });
+      const res = await this.post("resync", () => ({ siteId: this.siteId, epoch: this.epoch, vv: this.denseVersionVector() }));
+      if (res.status === 429) {
+        // El `resync` tragaba el 429 sin mirarlo: no aplicaba la espera Y perdía el hueco. Era el
+        // tercer camino de subida y el único que no participaba del freno; con el hueco sin cerrar
+        // y sin reintento, un cliente se quedaba divergiendo en silencio.
+        this.gate.rechazado(res.body as never);
+        this.scheduleResync();
+        return;
+      }
       if (res.status !== 200) return;
       const body = res.body as { epoch: number; ops?: CollabOp[]; base?: string; complete?: boolean };
 
@@ -808,8 +851,35 @@ export class VersoCollabSession {
   /* Utilidades                                                                                  */
   /* ----------------------------------------------------------------------------------------- */
 
-  private post(path: string, body: unknown) {
+  /**
+   * ÚNICA PUERTA DE SALIDA, y donde se respeta la espera. Nada de este cliente llega al servidor sin
+   * pasar por aquí, así que la propiedad «no se manda nada mientras haya una espera en vigor» no
+   * depende de que ningún planificador se acuerde de aplicarla: es la forma del código.
+   *
+   * El cuerpo se construye DESPUÉS de la espera, no antes, y eso importa por `rateAck`: hay que
+   * devolver el último aviso que se ha visto EN EL MOMENTO DE ENVIAR. Si se serializara al programar,
+   * un frame que sale tras una espera llevaría un acuse viejo y el servidor no podría distinguirlo
+   * de uno en vuelo (le daríamos inmunidad gratis, que es tan malo como que nos expulse).
+   */
+  private async post(path: string, body: () => object): Promise<PostResponse> {
+    const espera = this.gate.ready();
+    if (espera) await espera;
+    if (this.stopped) return { status: 0, body: null };
+    return this.postNow(path, { ...body(), rateAck: this.gate.ack });
+  }
+
+  /** Envío SIN freno. Solo para `/leave`, que el servidor no cobra al ritmo (ver `stop()`). */
+  private postNow(path: string, body: unknown): Promise<PostResponse> {
     return this.opts.transport.post(`${this.base}/collab/${this.opts.postId}/${path}`, body);
+  }
+
+  /**
+   * Espera antes de volver a abrir el stream. Su unidad es la MISMA ventana que publica el servidor
+   * —no un 1000 escrito a mano, que es el número que reabría la expulsión al tocarlo— y su techo, el
+   * mismo techo de cualquier espera de este cliente. Estaba duplicada en dos manejadores distintos.
+   */
+  private reconnectDelay(): number {
+    return Math.min(this.gate.espera() * 2 ** this.retries, this.gate.techo);
   }
 
   private setStatus(status: CollabStatus): void {
