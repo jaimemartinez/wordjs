@@ -26,7 +26,7 @@
 }
 
 /* (The old `--ed-*` editor-chrome tokens lived here; they had ZERO consumers and collided with the
- * Stitch-design `--ed-*` roles that puck-theme.css now owns — deleted, single owner.) */
+ * Stitch-design `--ed-*` roles that editor-theme.css now owns — deleted, single owner.) */
 
 /* The old body font-family (Arial), --background/--foreground + dark flip, scroll-behavior and
  * the iframe height !important moved to app/admin/admin-globals.css: they fought the wordjs-ui.css
@@ -40,14 +40,14 @@ body {
   height: 100%;
 }
 
-/* Puck composition mode + NATIVE preview (no iframe): the editor's own layout
- * (the h-screen flex column inside <Puck>) drives sizing, so only make Puck's own
+/* Editor composition mode + NATIVE preview (no iframe): the editor's own layout
+ * (its h-screen flex column) drives sizing, so only make the editor's own
  * wrapper fill the absolutely-positioned container. We must NOT force
  * display:flex / flex-direction:column on deeper descendants — that was an
  * iframe-era hack that, without the iframe, collapsed the natively-rendered page
  * (hid its menu and killed scrolling). */
-.puck-container,
-.puck-container>div {
+.verso-container,
+.verso-container>div {
   height: 100%;
 }
 

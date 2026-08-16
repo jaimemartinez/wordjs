@@ -33,6 +33,7 @@ const { authenticate } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
 const { recordAudit } = require('../core/audit');
+const { resolveThemeDir, resolveWithin } = require('../core/safe-path');
 
 /**
  * @swagger
@@ -41,9 +42,23 @@ const { recordAudit } = require('../core/audit');
  *   description: Theme management (Install, Switch, Delete)
  */
 
+/**
+ * El UNICO directorio donde puede vivir el zip de una subida, absoluto y resuelto UNA vez al cargar.
+ *
+ * Antes era la cadena 'os-tmp/' dentro del `dest` de multer: relativa al cwd y reinterpretada en cada
+ * peticion, asi que "nuestro directorio de trabajo" coincidia con el que cuelga de THEMES_DIR solo
+ * mientras nadie llamase a process.chdir(). Resolverlo desde THEMES_DIR lo convierte en un invariante
+ * en lugar de una coincidencia, y le da al guard de contencion del handler de /upload una base fija
+ * contra la que probar. (io-guard ya trata ROOT_DIR/os-tmp como scratch.) Misma constante y mismo
+ * razonamiento que en routes/plugins.ts.
+ */
+const OS_TMP_DIR = path.resolve(THEMES_DIR, '..', 'os-tmp');
+
 // Configure multer for zip uploads
 const upload = multer({
-    dest: 'os-tmp/',
+    // Absoluto a proposito: es la base de contencion que comprueba el handler de /upload.
+    // Sigue siendo almacenamiento EN DISCO — memoryStorage cargaria en RAM temas enteros.
+    dest: OS_TMP_DIR,
     limits: {
         fileSize: 20 * 1024 * 1024, // 20MB limit
         // SECURITY: Prevent CVE-2025-47935/47944 DoS
@@ -61,16 +76,26 @@ const upload = multer({
 });
 
 /**
- * SECURITY: Validate theme slug to prevent path traversal
+ * SECURITY: resolve `<THEMES_DIR>/<slug>` or fail closed.
+ *
+ * This USED to be a boolean guard that resolved a path into a local, checked it, threw it away and
+ * let every handler re-join the RAW slug afterwards. That is the shape of the bug, not the fix: the
+ * value that was proved safe was never the value that reached the syscall (and the prefix test had
+ * no separator, so `themes/` would have matched a sibling `themes-evil/`). core/safe-path does the
+ * three things that actually constitute a defense — allowlist the FORM, resolve canonically, prove
+ * containment — and RETURNS the resolved directory, so handlers use what was checked.
+ *
+ * The form is now THE canonical THEME_SLUG (leading alphanumeric, 64 max), identical to what
+ * installThemeFromDir / createDefaultTheme enforce when a theme is written. A slug outside it cannot
+ * name an installed theme, so narrowing here rejects nothing that could ever have resolved.
  */
-function validateSlug(slug: any) {
-    // Only allow alphanumeric, dashes, and underscores
-    if (!/^[a-zA-Z0-9_-]+$/.test(slug)) {
-        return false;
-    }
-    // Ensure the resolved path is still within THEMES_DIR
-    const safePath = path.resolve(THEMES_DIR, slug);
-    return safePath.startsWith(path.resolve(THEMES_DIR));
+function resolveThemeDirOr400(slug: any): string | null {
+    return resolveThemeDir(THEMES_DIR, slug);
+}
+
+/** Boolean form for the handlers that only pass the slug on to a core function. */
+function validateSlug(slug: any): boolean {
+    return resolveThemeDirOr400(slug) !== null;
 }
 
 // ---------------------------------------------------------------------------
@@ -151,7 +176,33 @@ router.post('/upload', authenticate, isAdmin, upload.single('theme'), asyncHandl
         return res.status(400).json({ error: 'No file uploaded' });
     }
 
-    const zipPath = req.file.path;
+    // CONTENCION DEL FICHERO TEMPORAL — INLINE, Y AQUI SE QUEDA.
+    //
+    // POR QUE AQUI Y NO EN UN HELPER (no lo refactorices a una utilidad). `req.file.path` lo escribe
+    // multer, o sea que es un valor derivado de la peticion; mas abajo se abre como archivo y se
+    // BORRA con fs.unlinkSync en siete salidas distintas mas la del catch. El analisis de rutas
+    // contaminadas razona DENTRO de una funcion: un barrier que vive en otro modulo — o en otra
+    // funcion de este — no apaga el sumidero en el llamante, por buena que sea la prueba. Esa es
+    // exactamente la razon de que las ocho alertas js/path-injection colgadas de `zipPath` en este
+    // fichero siguieran encendidas teniendo core/safe-path delante. Mover esto a un helper las reabre
+    // las ocho de golpe.
+    //
+    // Las tres partes de la defensa, aplicadas sobre el valor QUE SE USA despues:
+    //   1. FORMA: cadena no vacia y sin NUL (un NUL trunca la ruta que acaba viendo la capa C, y asi
+    //      es como una comprobacion y un syscall dejan de hablar de la misma ruta);
+    //   2. RESOLUCION CANONICA: path.resolve() da la ruta absoluta y normalizada que recibira el
+    //      syscall, no el texto que llego;
+    //   3. CONTENCION PROBADA contra `base + path.sep`, nunca un prefijo pelado — `os-tmp-evil`
+    //      "empieza por" os-tmp.
+    // Falla cerrado: lo que no esta contenido no se borra, se responde 400 y se sale.
+    const uploadedPath = req.file.path;
+    if (typeof uploadedPath !== 'string' || uploadedPath.length === 0 || uploadedPath.includes('\0')) {
+        return res.status(400).json({ error: 'Upload rejected: the temporary file has no usable path' });
+    }
+    const zipPath = path.resolve(uploadedPath);
+    if (!zipPath.startsWith(OS_TMP_DIR + path.sep)) {
+        return res.status(400).json({ error: 'Upload rejected: the temporary file is not inside the theme scratch directory' });
+    }
 
     try {
         const zip = new AdmZip(zipPath);
@@ -165,23 +216,58 @@ router.post('/upload', authenticate, isAdmin, upload.single('theme'), asyncHandl
             return res.status(400).json({ error: e.message });
         }
 
-        // Get theme folder name from zip
-        const zipName = path.parse(req.file.originalname).name;
-        const targetDir = path.join(THEMES_DIR, zipName);
+        // WHICH THEME IS THIS? The zip's ROOT FOLDER, not the upload's filename.
+        //
+        // It used to be `path.parse(req.file.originalname).name` — the multipart filename, chosen by
+        // whoever posted the request — joined onto THEMES_DIR to pick the directory the "already
+        // exists" probe ran against. Two things were wrong with that, and only one of them is the
+        // CodeQL finding:
+        //   · a request field chose a path (`...zip` parses to the name `..`; path.parse dropping the
+        //     directory part is a property of the parser, not a containment proof); and
+        //   · IT NAMED THE WRONG DIRECTORY. Extraction is driven by the ENTRIES, so a zip called
+        //     `astra-4.1.2.zip` containing `astra/` was checked against `themes/astra-4.1.2` (absent
+        //     → "not installed") and then extracted with overwrite=true straight over an existing
+        //     `themes/astra`. The guard could not have protected the write: it was not looking at it.
+        // The root folder is what actually becomes a theme, so that is what is checked — its FORM
+        // against THEME_SLUG (the shape every other theme path in the project agrees on) and its
+        // containment through safe-path, on the value used below.
+        const rootSegments = new Set<string>();
+        for (const entry of zipEntries) {
+            const first = String(entry.entryName).replace(/\\/g, '/').split('/')[0];
+            if (first) rootSegments.add(first);
+        }
+        if (rootSegments.size !== 1) {
+            fs.unlinkSync(zipPath);
+            return res.status(400).json({
+                error: rootSegments.size === 0
+                    ? 'The zip is empty.'
+                    : `A theme zip must contain exactly one top-level folder (found ${rootSegments.size}: ${[...rootSegments].slice(0, 5).map((s) => JSON.stringify(s)).join(', ')}).`
+            });
+        }
+        const zipName = [...rootSegments][0];
+        const targetDir = resolveThemeDir(THEMES_DIR, zipName);
+        if (targetDir === null) {
+            fs.unlinkSync(zipPath);
+            return res.status(400).json({
+                error: `Invalid theme folder ${JSON.stringify(zipName)} inside the zip — a theme directory is letters, digits, "-" and "_", starting with a letter or digit.`
+            });
+        }
 
-        // Check if theme already exists
+        // Check if theme already exists — now against the directory extraction will actually create.
         if (fs.existsSync(targetDir)) {
             fs.unlinkSync(zipPath);
             return res.status(400).json({ error: `Theme "${zipName}" already exists` });
         }
 
-        // SECURITY: Verify EVERY entry resolves inside THEMES_DIR before extracting
-        // (Zip Slip: absolute paths, '..', symlink-style escapes). Extraction target is THEMES_DIR.
-        const resolvedTarget = path.resolve(THEMES_DIR);
+        // SECURITY: Verify EVERY entry resolves inside the theme's OWN directory before extracting
+        // (Zip Slip: absolute paths, '..', symlink-style escapes). Extraction target is THEMES_DIR,
+        // but a theme's entries may only ever land under `<THEMES_DIR>/<zipName>/` — checking against
+        // THEMES_DIR alone let one upload write into a SIBLING theme's directory.
         for (const entry of zipEntries) {
-            const dest = path.resolve(THEMES_DIR, entry.entryName);
-            const isContained = dest === resolvedTarget || dest.startsWith(resolvedTarget + path.sep);
-            if (!isContained || entry.entryName.indexOf('..') !== -1) {
+            const name = String(entry.entryName).replace(/\\/g, '/');
+            const segments = name.split('/').filter((s) => s !== '');
+            const dest = segments.length ? resolveWithin(THEMES_DIR, ...segments) : null;
+            if (dest === null || !(dest === targetDir || dest.startsWith(targetDir + path.sep))) {
                 fs.unlinkSync(zipPath);
                 return res.status(400).json({ error: 'Malicious zip file detected (Zip Slip / path traversal)' });
             }
@@ -367,16 +453,20 @@ router.post('/', authenticate, isAdmin, asyncHandler(async (req: any, res: Respo
  *         description: Theme was not created by the WordJS writer
  */
 router.put('/:slug', authenticate, isAdmin, asyncHandler(async (req: any, res: Response) => {
-    // SECURITY: Validate slug
-    if (!validateSlug(req.params.slug)) {
+    // SECURITY: the slug picks the directory this handler WRITES theme.json and style.css into, so it
+    // uses the resolved-and-contained path the gate returns rather than re-joining the raw param.
+    const themeDir = resolveThemeDirOr400(req.params.slug);
+    if (themeDir === null) {
         return res.status(400).json({ error: 'Invalid theme slug' });
     }
     const slug = req.params.slug;
-    const themeDir = path.join(THEMES_DIR, slug);
     if (!fs.existsSync(themeDir)) {
         return res.status(404).json({ error: `Theme ${slug} not found` });
     }
-    const themeJsonPath = path.join(themeDir, 'theme.json');
+    const themeJsonPath = resolveWithin(themeDir, 'theme.json');
+    if (themeJsonPath === null) {
+        return res.status(400).json({ error: 'Invalid theme slug' });
+    }
     let current: any = null;
     try { current = JSON.parse(fs.readFileSync(themeJsonPath, 'utf8')); } catch { /* missing or invalid */ }
     if (!isPlainObject(current) || current.generator !== 'wordjs') {
@@ -552,7 +642,12 @@ router.delete('/:slug', authenticate, isAdmin, asyncHandler(async (req: Request,
  *               format: binary
  */
 router.get('/:slug/download', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
-    // SECURITY: Validate slug
+    // SECURITY: the slug picks BOTH the folder that gets packed and the temp file the zip is written
+    // to — and the file this handler then serves and DELETES. The boolean gate that used to stand
+    // here is not enough on its own: it proves a property of a path it throws away, while the raw
+    // param travels on to createThemeZip. It stays (fail fast, 400 instead of 500), but the real
+    // barrier now lives in core/themes.createThemeZip, which resolves the destination under os-tmp/
+    // and RETURNS the proved value — so `zipPath` below is contained by construction.
     if (!validateSlug(req.params.slug)) {
         return res.status(400).json({ error: 'Invalid theme slug' });
     }
@@ -619,11 +714,17 @@ const TEMPLATE_FILE_NAME = /^[a-z0-9-]{1,40}$/;
  *         description: Invalid theme slug
  */
 router.get('/:slug/templates', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
-    // SECURITY: same slug gate as the sibling routes — the slug becomes a path segment under THEMES_DIR.
-    if (!validateSlug(req.params.slug)) {
+    // SECURITY: same slug gate as the sibling routes — the slug becomes a path segment under
+    // THEMES_DIR, so the handler reads the RESOLVED directory the gate returned, never a re-join of
+    // req.params.slug. `templates` then descends from a proven-contained base.
+    const themeDir = resolveThemeDirOr400(req.params.slug);
+    if (themeDir === null) {
         return res.status(400).json({ error: 'Invalid theme slug' });
     }
-    const dir = path.join(THEMES_DIR, req.params.slug, 'templates');
+    const dir = resolveWithin(themeDir, 'templates');
+    if (dir === null) {
+        return res.status(400).json({ error: 'Invalid theme slug' });
+    }
     let names: string[];
     try {
         // withFileTypes so a `templates` that is somehow a directory-of-directories (or a symlink target)
@@ -716,3 +817,7 @@ router.post('/mods/import', authenticate, isAdmin, asyncHandler(async (req: any,
 }));
 
 module.exports = router;
+// Expuesto SOLO para los tests: la base de contencion que el handler de /upload comprueba inline y a
+// la que multer escribe. No lo uses como "utilidad de rutas" — la comprobacion tiene que seguir
+// estando escrita dentro del handler (ver el comentario largo en POST /upload).
+module.exports.OS_TMP_DIR = OS_TMP_DIR;

@@ -2,7 +2,7 @@
 // "use client". Links arrive RESOLVED by ChromeRenderer (settings.footer_socials via
 // parseChromeSocials); markup and classes mirror today's Footer social icons — including the
 // existing .wjs-footer-social hook so current theme CSS keeps applying.
-import { isSafeChromeHref, type ChromeSocialLink } from "@/lib/chromeData";
+import { safeChromeHref, type ChromeSocialLink } from "@/lib/chromeData";
 
 export interface ChromeSocialsViewProps {
     // Resolved bindings
@@ -10,17 +10,24 @@ export interface ChromeSocialsViewProps {
 }
 
 export default function ChromeSocials({ links }: ChromeSocialsViewProps) {
-    // These URLs come from a site setting, not from the validated composition, so this block is the
-    // one place a chrome link reaches the DOM unchecked — ChromeButton re-validates its own href.
-    // Same allowlist, so a stored 'javascript:' entry can never become a live link here either.
-    const safe = links.filter((link) => isSafeChromeHref(link.url));
+    // Estas URLs vienen de un ajuste del sitio, no de la composicion validada, asi que este bloque es
+    // el unico sitio donde un enlace del chrome llega al DOM sin comprobar — ChromeButton revalida su
+    // propio href. Misma allowlist, asi que una entrada 'javascript:' guardada tampoco puede volverse
+    // un enlace vivo aqui.
+    //
+    // Se pinta el href RESUELTO, no `link.url`: el navegador borra tabuladores, saltos de linea y
+    // retornos de carro antes de parsear, asi que filtrar por la cadena cruda y pintar esa misma cruda
+    // dejaba pasar "/\t/evil.example" -> https://evil.example/ (open redirect almacenado).
+    const safe = links
+        .map((link) => ({ link, href: safeChromeHref(link.url) }))
+        .filter((entry): entry is { link: ChromeSocialLink; href: string } => entry.href !== undefined);
     if (safe.length === 0) return null;
     return (
         <div className="wjs-chrome-socials wjs-footer-social flex gap-4 flex-wrap">
-            {safe.map((link, idx) => (
+            {safe.map(({ link, href }, idx) => (
                 <a
                     key={idx}
-                    href={link.url}
+                    href={href}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="w-10 h-10 rounded-full bg-[var(--wjs-bg-surface-hover,rgb(31,41,55))] flex items-center justify-center hover:bg-[var(--wjs-color-primary,blue)] text-[var(--wjs-color-text-footer-main,white)] transition-colors tooltip-trigger"

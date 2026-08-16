@@ -23,7 +23,6 @@ import type { Request, Response } from 'express';
 const express = require('express');
 const router = express.Router();
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const https = require('https');
@@ -35,7 +34,7 @@ const { isAdmin } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
 const { getOption, updateOption, deleteOption } = require('../core/options');
 const { getAllPlugins } = require('../core/plugins');
-const { installPluginFromZip, runPluginUpdate } = require('./plugins');
+const { installPluginFromZip, runPluginUpdate, createInstallTmp } = require('./plugins');
 const pluginOrigins = require('../core/plugin-origins');
 
 const INDEX_FILE = 'marketplace-index.json';
@@ -359,24 +358,38 @@ const handleMarketplaceApply = asyncHandler(async (req: Request, res: Response) 
         }
     }
 
-    // Hand off to the shared upload pipeline via a temp file (the pipeline owns cleanup of that file).
-    // Unpredictable name (crypto): Date.now()+Math.random() is guessable, so a local attacker could
-    // pre-create/symlink the path (insecure-temp-file); mirror the theme installer's crypto naming.
+    // Hand off to the shared upload pipeline via a temp file (the pipeline owns cleanup of the FILE; we
+    // own the directory around it).
+    //
+    // This used to be `path.join(os.tmpdir(), 'wjs-mkt-<random>.zip')` + a plain writeFileSync. A random
+    // NAME is not the property that matters here: os.tmpdir() is world-writable and shared, writeFileSync
+    // follows a symlink that is already at the path, and the file lands with the process umask — so the
+    // bytes of a plugin that is about to be executed server-side were both readable by any local user and
+    // redirectable by one who won the name. createInstallTmp() takes a kernel-exclusive 0700 directory
+    // (mkdtemp) inside the app's own os-tmp instead, and the write below is an EXCLUSIVE create at 0600.
+    // Landing it in os-tmp is also what lets installPluginFromZip PROVE containment on what it deletes.
     const slug = String(entry.id);
     const installedNow = (await getAllPlugins()).some((p: any) => String(p.slug || p.id) === slug);
     const origin = { source: String(entry.source || ''), catalogId: slug, version: entry.version != null ? String(entry.version) : null };
-    const tmpPath = path.join(os.tmpdir(), `wjs-mkt-${crypto.randomBytes(12).toString('hex')}.zip`);
-    fs.writeFileSync(tmpPath, buf);
+    const tmp = createInstallTmp();
+    try {
+        // wx = create-exclusive: fails outright rather than writing through anything that already exists.
+        fs.writeFileSync(tmp.zipPath, buf, { mode: 0o600, flag: 'wx' });
 
-    if (installedNow) {
-        // In-place update (preserves data/tables/grants, gated to the install origin, fail-safe rollback).
-        const result = await runPluginUpdate(slug, tmpPath, origin);
+        if (installedNow) {
+            // In-place update (preserves data/tables/grants, gated to the install origin, fail-safe rollback).
+            const result = await runPluginUpdate(slug, tmp.zipPath, origin);
+            return res.status(result.status).json(result.body);
+        }
+        // Fresh install — then record where it came from so future updates are bound to this source.
+        const result = await installPluginFromZip(tmp.zipPath, file);
+        if (result.ok) { try { await pluginOrigins.setPluginOrigin(slug, origin); } catch { /* non-fatal */ } }
         return res.status(result.status).json(result.body);
+    } finally {
+        // ALWAYS — including the throw paths inside the pipeline. The zip is already gone by then; this
+        // removes the scratch directory so os-tmp cannot accumulate one empty dir per install attempt.
+        tmp.dispose();
     }
-    // Fresh install — then record where it came from so future updates are bound to this source.
-    const result = await installPluginFromZip(tmpPath, file);
-    if (result.ok) { try { await pluginOrigins.setPluginOrigin(slug, origin); } catch { /* non-fatal */ } }
-    return res.status(result.status).json(result.body);
 });
 router.post('/install', authenticate, isAdmin, handleMarketplaceApply);
 router.post('/update', authenticate, isAdmin, handleMarketplaceApply);

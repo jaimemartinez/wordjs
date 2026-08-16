@@ -13,8 +13,8 @@
             "entry": "client/admin/page.tsx",
             "slug": "auctions"
         },
-        "puckComponents": {
-            "entry": "client/puck/AuctionsPuck.tsx"
+        "versoComponents": {
+            "entry": "client/verso/AuctionsVerso.tsx"
         }
     },
     "adminMenu": {

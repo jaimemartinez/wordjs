@@ -3,8 +3,41 @@
  * Equivalent to wp-includes/revision.php
  */
 
-const { db, dbAsync } = require('../config/database');
+const crypto = require('crypto');
+const { dbAsync } = require('../config/database');
 const { diffText, diffStats } = require('./text-diff');
+
+/**
+ * Per-process counter that breaks ties WITHIN one millisecond.
+ *
+ * A revision's post_name used to be `${postId}-revision-v${Date.now()}` and the schema carries
+ * `CREATE UNIQUE INDEX idx_posts_name_type ON posts (post_name, post_type) WHERE post_name <> ''`
+ * (config/database.ts). saveRevision() takes ~5 ms, so two revisions of the SAME post landing in the
+ * same millisecond — a double save, a restore (which snapshots first), two concurrent writers — hit
+ * SQLITE_CONSTRAINT_UNIQUE. The callers made that fatal in two different ways: routes/posts.ts calls
+ * saveRevision fire-and-forget, so the snapshot was lost SILENTLY (no recovery point for that edit),
+ * and restoreRevision() called it outside its try, so the throw escaped and the route answered 500
+ * WITHOUT restoring anything. Fixed at the source: the name is unique by construction (timestamp +
+ * in-process counter + 8 random hex chars, so two processes cannot collide either).
+ */
+let revisionNameSeq = 0;
+
+function nextRevisionName(postId: number) {
+  revisionNameSeq = (revisionNameSeq + 1) % 1_000_000;
+  // ~45 chars: comfortably inside post_name and still greppable/sortable by the old prefix.
+  return `${postId}-revision-v${Date.now()}-${revisionNameSeq}-${crypto.randomBytes(4).toString('hex')}`;
+}
+
+/** True for a unique-constraint violation on any supported driver (SQLite / Postgres / MySQL). */
+function isUniqueViolation(err: any) {
+  const code = String(err?.code || '');
+  // Deliberately NOT the generic 'SQLITE_CONSTRAINT': a NOT NULL / CHECK failure is not something a
+  // fresh name would fix, and it must surface instead of being retried.
+  if (code === 'SQLITE_CONSTRAINT_UNIQUE' || code === 'SQLITE_CONSTRAINT_PRIMARYKEY' || code === '23505' || code === 'ER_DUP_ENTRY') return true;
+  if (err?.errno === 1062) return true;
+  const msg = String(err?.message || '');
+  return /UNIQUE constraint|duplicate key|Duplicate entry/i.test(msg);
+}
 
 /**
  * Save a revision of a post
@@ -18,26 +51,36 @@ async function saveRevision(postId: number) {
   // Don't save revisions of revisions
   if (post.post_type === 'revision') return null;
 
-  // Create revision
-  const result = await dbAsync.run(`
-    INSERT INTO posts (
-      author_id, post_date, post_date_gmt, post_content, post_title,
-      post_excerpt, post_status, post_name, post_modified, post_modified_gmt,
-      post_parent, post_type, post_mime_type
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'revision', '')
-  `, [
-    post.author_id,
-    post.post_date,
-    post.post_date_gmt,
-    post.post_content,
-    post.post_title,
-    post.post_excerpt,
-    'inherit',
-    `${postId}-revision-v${Date.now()}`,
-    post.post_modified,
-    post.post_modified_gmt,
-    postId
-  ]);
+  // Create revision. Belt AND braces: the generated name is already collision-proof, but a unique
+  // violation retries with a fresh name instead of losing the author's snapshot.
+  const MAX_NAME_ATTEMPTS = 5;
+  let result: any;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      result = await dbAsync.run(`
+        INSERT INTO posts (
+          author_id, post_date, post_date_gmt, post_content, post_title,
+          post_excerpt, post_status, post_name, post_modified, post_modified_gmt,
+          post_parent, post_type, post_mime_type
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'revision', '')
+      `, [
+        post.author_id,
+        post.post_date,
+        post.post_date_gmt,
+        post.post_content,
+        post.post_title,
+        post.post_excerpt,
+        'inherit',
+        nextRevisionName(postId),
+        post.post_modified,
+        post.post_modified_gmt,
+        postId
+      ]);
+      break;
+    } catch (err: any) {
+      if (attempt >= MAX_NAME_ATTEMPTS || !isUniqueViolation(err)) throw err;
+    }
+  }
 
   const revisionId = result.lastID;
 
@@ -127,7 +170,16 @@ async function restoreRevision(revisionId: number) {
 
   // Save current state as a new revision first (outside the restore transaction, matching the
   // original ordering — this is its own multi-statement unit and must persist regardless).
-  await saveRevision(revision.postId);
+  //
+  // NEVER let this abort the restore: a failed pre-snapshot used to escape (it sits outside the try
+  // below) and turn the restore into a 500 that restored NOTHING — the author lost both the new
+  // content and the old one they were trying to get back. Losing the safety snapshot is bad; losing
+  // the restore too is worse. Log and continue.
+  try {
+    await saveRevision(revision.postId);
+  } catch (error) {
+    console.error('Failed to snapshot current state before restoring revision:', error);
+  }
 
   try {
     // Run the restore as ONE atomic unit on a single connection. Previously this issued

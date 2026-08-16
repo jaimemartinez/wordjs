@@ -53,7 +53,7 @@ So a plugin that turns out to be buggy, greedy, or outright malicious **stays in
 
 <div align="center">
 
-![WordJS visual editor — dragging blocks onto the canvas to build a page](docs/media/puck-editor-demo.gif)
+![WordJS visual editor — dragging blocks onto the canvas to build a page](docs/media/verso-editor-demo.gif)
 
 *Building a page by dragging blocks and editing text right on the canvas — the visual editor ships in the core, not as a paid add-on.*
 
@@ -84,7 +84,7 @@ The honest row is the last one: WordJS is young, and every plugin and theme in i
 <tr><td width="33%" valign="top">
 
 **🎨 Build**
-- Drag-and-drop visual editor ([Puck](https://puckeditor.com)) with **30 blocks** & edit-in-place text
+- Drag-and-drop visual editor (**Verso**, built in-house) with **30 blocks** & edit-in-place text
 - **Token-driven themes** + a live customizer
 - **64 themes** & **31 plugins**, one-click install
 - Real **SEO**: server-rendered pages, sitemap, RSS, social cards
@@ -125,7 +125,7 @@ The honest row is the last one: WordJS is young, and every plugin and theme in i
 - **Plugin & theme marketplace.** A curated catalog of **31 first-party plugins** and **64 first-party themes** with one-click, **sha256-verified** installs through the same hardened, sandboxed pipeline as manual uploads. Sources are admin-configurable (point it at any HTTPS catalog); all catalog items are first-party today, with third-party submissions on the roadmap.
 
 **Authoring & content**
-- **Visual builder** ([Puck](https://puckeditor.com/)) — drag-and-drop editing, **in-place rich text** (bold/italic/links, a color picker with eyedropper, font family from your installed fonts, size, alignment), a searchable block inserter with reusable section patterns, and a **device preview** (desktop/tablet/mobile) that renders the canvas at true device width.
+- **Visual builder** (**Verso**, built in-house — see *The editor* below) — drag-and-drop editing, **in-place rich text** (bold, italic, links with an open-in-new-tab toggle, bullet and numbered lists, clear formatting), a per-block **Appearance** panel (background colour/gradient/image/glass, border, shadow, typography, hover effects, each with tablet/mobile overrides), a searchable block inserter with reusable section patterns, and a **device preview** that sizes the canvas to the real device width (desktop 1280 / tablet 768 / mobile 375), so the site's actual CSS breakpoints fire.
 - **Real server-side rendering** — public pages are React Server Components, so crawlers and first paint get the real content, per-page metadata (`generateMetadata`), OpenGraph/Twitter cards, JSON-LD, real `404`s, and a no-JS search form.
 - **SEO basics** — semantic HTML, `sitemap.xml`, `robots.txt`, and an RSS feed.
 - **Themes** — a shared, token-driven CSS framework (`--wjs-*` design tokens) that auto-styles pages, plus a live **customizer** at `/admin/themes/customize`. A theme's optional server-side `functions.js` runs in the **same sandbox** as plugins.
@@ -141,6 +141,48 @@ The honest row is the last one: WordJS is young, and every plugin and theme in i
 - **Native mail server** — an optional, fully sandboxed first-party plugin: inbound SMTP, direct-MX delivery, and DKIM signing.
 
 </details>
+
+---
+
+## ✍️ The editor — Verso
+
+WordJS ships its own visual block editor, Verso (`frontend/src/components/verso/`,
+`frontend/src/lib/verso/`): drag-and-drop, edit-in-place text, undo/redo, a command palette and a
+properties panel — all built on an in-house core with no third-party dependency for the editor
+state, the drag-and-drop resolver or the rich-text engine.
+
+**Architecture in 10 lines:** the document lives as a normalized tree (id→node map) mutated
+exclusively by commands inside transactions, with history kept as inverse patches
+(`lib/verso/store.ts`). The canvas is an iframe with its own document, into which the React tree is
+teleported through a portal (`components/verso/canvas/FrameController.tsx`) — no stylesheet mixing
+with the parent. The selection/drag/action-bar layer always lives in the parent document, measured
+by a purpose-built `GeometryStore` (`components/verso/overlay/`), never inside the iframe. The
+drop-target resolver (`lib/verso/dnd/resolve.ts`) is a pure function with no dependency on any DnD
+library. Rich text is edited by an in-house engine over `contenteditable`
+(`lib/verso/inline-engine/`), with no Tiptap and no ProseMirror. Blocks — core ones and marketplace
+plugin ones alike — are declared against an in-house field contract (`lib/verso/registry.ts`)
+inspired, for compatibility, by the field shape Puck popularized — see the credit below.
+
+**Document format:** content is persisted as `{ content: [...], root: {...} }` under the post-meta key
+`_puck_data` — the same format *and the same key* the WordJS block editor has used from the start. The
+key kept its historical name on purpose: it is a value already written into every existing install, and
+renaming it would buy a tidier string at the price of a data migration on everyone's content.
+
+**Plugin blocks:** a plugin declares its block with `frontend.versoComponents` in `manifest.json` (or
+by dropping it at `client/verso/<Pascal>Verso.tsx`) and exports `versoComponentDef` + a default render
+component, or a `versoComponents` map for several blocks. The pre-rename spellings —
+`frontend.puckComponents`, `client/puck/<Pascal>Puck.tsx`, `puckComponentDef` / `puckComponents` — are
+still resolved, and will stay resolved: a plugin published before the rename keeps loading untouched,
+with a deprecation line in the build log and nothing else. Full walkthrough in the
+[plugin guide](documentation/plugins.md), §13.
+
+**Courtesy credit:** the first versions of the WordJS editor were built on a vendored fork of
+[Puck](https://github.com/measuredco/puck) (`@measured/puck`, MIT). Verso is a complete, independent
+rewrite — it shares no code, no internal data structures and no dependencies with Puck — but the
+persisted document format and the shape of the block field contract were deliberately designed to
+stay compatible with that heritage, out of respect for the project that gave the idea its form. This
+mention is a courtesy, not an obligation of the MIT license (WordJS neither redistributes nor
+derives Puck code in the current editor).
 
 ---
 
@@ -180,7 +222,7 @@ graph TD
 
 - **[Gateway](gateway/)** — clustered Node/Express reverse proxy: routing, load-balancing, health-check eviction, mTLS internal channel, SSE-aware proxying, and the cluster CA.
 - **[Backend](backend/)** — the core engine (content, users, roles, the plugin/theme system, mail, certificates, and the sandbox). TypeScript, compiled to JS for production.
-- **[Frontend](frontend/)** — the public site and the Next.js admin, including the Puck visual builder.
+- **[Frontend](frontend/)** — the public site and the Next.js admin, including the Verso visual builder.
 
 **Monolith** runs the backend (with its isolated plugins) and the Next.js frontend **in one process** on `:3000` — no gateway proxy, no cluster — while still handling TLS, security headers, compression, and SEO rewrites locally. **Split** runs them as three cooperating processes behind the gateway. **Separate** spreads those three across machines: `create-wordjs gateway --host <ip>` makes the first box the cluster CA and prints ready-to-paste join commands with single-use, role-bound tokens; each other box enrolls over mutual TLS with no cert hand-copying.
 
@@ -230,7 +272,7 @@ Before exposing WordJS to the internet: have it **independently audited**, **rot
 - **Runtime:** Node.js (≥ 20.9; Node 20/22 LTS recommended)
 - **Backend:** TypeScript — compiled with `tsc` for production, `ts-node` for dev
 - **Frontend:** Next.js (React 19)
-- **Editor:** Puck · **Styling:** vanilla CSS + Tailwind
+- **Editor:** Verso — in-house; its editor state, drag-and-drop resolver and rich-text engine carry no third-party dependency · **Styling:** vanilla CSS + Tailwind
 - **Communication:** REST + JWT + scoped API tokens + WebSockets/SSE
 - **Gateway:** Express + Node `cluster`, http-proxy, mTLS internal channel
 - **Sandbox:** `child_process` OS-process isolation + `acorn` code scanning + runtime require proxies + layered memory caps (cgroup / Windows Job Object / RSS-poll)

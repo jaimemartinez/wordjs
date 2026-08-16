@@ -32,8 +32,8 @@ export default function ThemeLoader({
     // ALREADY-OPEN public tab keeps the theme it was rendered with until it navigates — deliberate, and
     // far cheaper than a request per visitor per focus.
     //
-    // The one client resolve left is for the Puck editor preview, which reuses this shell WITHOUT
-    // server props (PuckEditor renders <PublicLayoutShell/> bare). It reads the settings endpoint —
+    // The one client resolve left is for the Verso editor preview, which reuses this shell WITHOUT
+    // server props (VersoEditor renders <PublicLayoutShell/> bare). It reads the settings endpoint —
     // cheap, cached, no fs — once, not on a timer.
     useEffect(() => {
         if (initialSlug) return;

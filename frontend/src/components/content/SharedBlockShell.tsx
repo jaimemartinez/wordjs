@@ -8,15 +8,50 @@
  *  - look only                    → the appearance box (server-rendered, zero hydration)
  *  - hide only                    → display:contents div with wjs-hide-* classes (pure CSS)
  *  - anim/scroll (± hide/look)    → AnimatedShell client island (the ONLY hydrated case)
+ *
+ * ── Capa ③: INTERACCIONES (motor F9) ────────────────────────────────────────────────────────
+ * `ix` añade UNA capa más, entre la entrada y la caja de apariencia:
+ *
+ *     ① entrada (.wjs-anim)  →  ③ interacción (.wjs-ix-<hash>)  →  ② apariencia (.wjs-fx)  →  bloque
+ *
+ * Las tres son elementos DISTINTOS a propósito. ① y ② ya no podían compartir elemento porque
+ * `animation-fill-mode: both` mata el `:hover`; ③ tiene ese mismo choque con las dos (usa
+ * `animation` como ① y `:hover`/`transition` como ②) y además gana algo por estar anidada: los
+ * `transform` de elementos anidados se COMPONEN, así que una entrada y un paralaje de scroll
+ * conviven sin que ninguno tenga que "ganar" al otro. El razonamiento completo está en la cabecera
+ * de `lib/verso/interactions/shell.ts`.
+ *
+ * Un bloque SIN `ix` no gana ningún elemento: la salida es byte-idéntica a la de antes del motor.
+ * Y el servidor nunca estampa `data-wjs-ix`: el HTML servido no oculta NADA (cero CLS, cero FOUC).
  */
-import { hideClasses, appearanceToStyle } from "@/components/puck/blockShell";
-import type { AnimSpec, Appearance, Hide } from "@/components/puck/blockShell";
+import { hideClasses, appearanceToStyle, ixLayer } from "@/components/blocks/blockShell";
+import type { AnimSpec, Appearance, Hide } from "@/components/blocks/blockShell";
+import type { IxCompileCtx, IxPage } from "@/lib/verso/interactions";
+import { SYS_IX_PRESETS } from "@/lib/verso/interactions";
 import AnimatedShell from "./AnimatedShell";
 
-export default function SharedBlockShell({ hide, anim: animProp, look: lookProp, children }: {
+/**
+ * Contexto de compilación por defecto: solo los presets del SISTEMA. Los del sitio
+ * (`wjs_ix_presets`) los pasa explícitamente `ixCtx` desde el renderer de la página (F9-E), que es
+ * quien los ha leído de ajustes y los ha normalizado. Un tema NUNCA aporta presets: la frontera del
+ * proyecto es que un tema no envía JS y no decide cuándo se mueve el contenido.
+ */
+const DEFAULT_IX_CTX: IxCompileCtx = { presets: SYS_IX_PRESETS };
+
+export default function SharedBlockShell({ hide, anim: animProp, look: lookProp, ix, ixCtx, ixPage, children }: {
     hide?: Hide;
     anim?: AnimSpec;
     look?: Appearance;
+    /** La prop `ix` del bloque, TAL CUAL sale de `_puck_data` (dato hostil: el motor la valida). */
+    ix?: unknown;
+    ixCtx?: IxCompileCtx;
+    /**
+     * La página YA COMPILADA (ContentRenderer). Solo ahí se ven todas las unidades a la vez, así que
+     * solo ahí se pueden desambiguar dos cuerpos distintos que reclamen el mismo hash de 32 bits.
+     * Sin ella se usa el hash desnudo: determinista igual, y suficiente para el canvas y para los
+     * bloques que se pintan fuera del recorrido de la página.
+     */
+    ixPage?: IxPage;
     children: React.ReactNode;
 }) {
     const hideCls = hideClasses(hide);
@@ -25,13 +60,14 @@ export default function SharedBlockShell({ hide, anim: animProp, look: lookProp,
     const scrollActive = !!anim.scroll;
     const wrapActive = animActive || scrollActive;
     const look = appearanceToStyle(lookProp);
+    const ixl = ix === undefined ? null : ixLayer(ix, ixCtx ?? DEFAULT_IX_CTX, ixPage);
     const inner = children;
 
     // Untouched block → no wrapper element at all, so its own render() is untouched.
     // NOTE: gate mirrors the editor wrapper EXACTLY, including its documented wart — a scroll-only
     // spec with entrance "Ninguna", no hide and no box takes this path and loses its scroll
     // classes there too. Fixing that belongs to both surfaces at once, in blockShell.
-    if (!hideCls && !animActive && !look.hasBox) return inner;
+    if (!hideCls && !animActive && !look.hasBox && !ixl) return inner;
 
     // TWO NESTED LAYERS, deliberately — they must never share an element (see the editor wrapper:
     // entrance animation and appearance box fight over `animation`/`transform` on one element).
@@ -46,17 +82,30 @@ export default function SharedBlockShell({ hide, anim: animProp, look: lookProp,
         inner
     );
 
-    if (!hideCls && !wrapActive) return box;
+    // Capa ③ — nunca `display: contents`: un elemento sin caja no se puede transformar ni recortar.
+    const ixed = ixl ? (
+        <div
+            className={ixl.className}
+            style={Object.keys(ixl.style).length > 0 ? ixl.style : undefined}
+            {...ixl.attrs}
+        >
+            {box}
+        </div>
+    ) : (
+        box
+    );
+
+    if (!hideCls && !wrapActive) return ixed;
 
     if (wrapActive) {
         // The one hydrated case: the entrance/scroll wrapper needs the client hook.
-        return <AnimatedShell hideCls={hideCls} anim={anim}>{box}</AnimatedShell>;
+        return <AnimatedShell hideCls={hideCls} anim={anim}>{ixed}</AnimatedShell>;
     }
 
     // hide-only: static wrapper, no hydration — the wjs-hide-* media queries do the work.
     return (
         <div className={hideCls} style={{ display: "contents" }}>
-            {box}
+            {ixed}
         </div>
     );
 }

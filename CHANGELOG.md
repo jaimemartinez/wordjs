@@ -4,6 +4,58 @@ All notable changes to WordJS are documented here. This project follows
 [Semantic Versioning](https://semver.org/). Each release is published as a pre-compiled bundle
 on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
+## [Unreleased]
+
+### Changed
+
+- **The visual editor is now called Verso, and the code carries that name.** WordJS's block editor
+  started life as a vendored fork of [Puck](https://github.com/measuredco/puck) and the whole surface
+  around it — modules, folders, CSS classes, generated registries — was named after it. The fork is
+  retired: there is no `@measured/puck`/`@wordjs/puck` dependency left, no vendored-editor build step,
+  and no third-party notice to carry. This release renames the surface to match.
+
+  **The rename does not touch the public HTML contract.** Every `wp-block-*` class name and every
+  `--wjs-*` design token a theme is written against is unchanged, and so is the `.puck-content` wrapper
+  class — that one keeps its historical spelling precisely because themes may be selecting on it. A
+  theme built before this change keeps working with no edit.
+
+  **The post-meta key `_puck_data` is deliberately unchanged.** It is not a name in our source — it is
+  a value already written into the `postmeta` table of every existing install and into every WXR export
+  ever taken from one. Renaming it would mean a data migration whose failure mode is losing the body of
+  every block-built page, in exchange for cosmetics. It stays exactly as it is, and the reasoning is
+  recorded next to the constants that hold it (`CONTENT_META_KEY`, `EDITOR_DATA_META_KEY`).
+
+- **Plugin block API: new spellings, old ones still accepted — permanently.** This is the same block
+  API it has always been, under Verso names. A plugin now declares its block with
+  `frontend.versoComponents` (or the folder convention `client/verso/<Pascal>Verso.tsx`) and exports
+  `versoComponentDef` + a default render component, or a `versoComponents` map for several blocks.
+
+  The pre-rename spellings — `frontend.puckComponents`, `client/puck/<Pascal>Puck.tsx`,
+  `puckComponentDef` / `puckComponents` — are still resolved, and are not scheduled for removal: a
+  published plugin is a third-party artifact nobody here can rewrite. Finding an old spelling logs one
+  deprecation line per plugin and then behaves identically; when both are present, the Verso spelling
+  wins. Render components also still receive the legacy `puck` prop
+  (`{ isEditing, metadata, dragRef, renderDropZone }`), so a bundle compiled against the old contract
+  runs without a recompile. Resolution lives in one shared module,
+  `backend/scripts/plugin-block-contract.js`, required by the registry generator and by all three
+  marketplace build/verify scripts, so they cannot drift apart.
+
+  Renamed for authors: `frontend/scripts/generate-puck-plugin-registry.js` →
+  `generate-verso-plugin-registry.js`, and the registry it writes,
+  `frontend/src/lib/puckPluginRegistry.ts` → `versoPluginRegistry.ts` (generated per machine and
+  gitignored, as before). The `wordjs create plugin` scaffold now emits `client/verso/`.
+
+### Documentation
+
+- README and `documentation/**` updated to describe Verso and the current block API, including the
+  compatibility guarantees above. Several claims that no longer matched the code were corrected rather
+  than reworded — the inline text toolbar's real feature set, the editor canvas being a same-origin
+  route rather than a `srcdoc` iframe, the removed `build:editor` CI step, and the `GET /api/v1/themes`
+  call the canvas actually makes. The retired editor's `eval` and `srcdoc` iframe were also two of the
+  stated reasons the CSP is widened; that is now flagged as an open cleanup rather than a live
+  justification, because the policy itself has **not** been re-narrowed.
+- `docs/media/puck-editor-demo.gif` → `docs/media/verso-editor-demo.gif` (same recording, renamed file).
+
 ## [1.14.1] - 2026-08-07
 
 Ships the dependency fix that v1.14.0 was published without, and closes the pipeline hole that let it

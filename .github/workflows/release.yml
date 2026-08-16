@@ -10,8 +10,12 @@ on:
       - 'v*'
   workflow_dispatch:
 
+# Least privilege. `contents: write` used to sit HERE, which handed every job in the workflow — the
+# verify gate and the npm publish included — a token that can push commits and create releases. Only
+# build-release actually publishes, so the write is granted on THAT job (below) and the workflow-wide
+# floor is read-only.
 permissions:
-  contents: write # required to create the GitHub Release and upload assets
+  contents: read
 
 jobs:
   # GATE THE PUBLISH ON THE SAME CHECKS CI RUNS.
@@ -31,6 +35,8 @@ jobs:
   verify:
     name: Verify before publishing (audit + typecheck + tests)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read # checkout only — this gate publishes nothing
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -76,6 +82,8 @@ jobs:
     name: Build & publish compiled bundle
     needs: verify # nothing is built, and nothing is published, unless the gate above is green
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # the ONLY job that needs it: softprops/action-gh-release creates the Release
     steps:
       - name: Checkout
         uses: actions/checkout@v6

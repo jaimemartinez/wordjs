@@ -1,0 +1,338 @@
+<title>WordJS · Editor nuevo — decisión F0+F1</title>
+<style>
+  :root {
+    --bg: #FAFAF7;
+    --surface: #FFFFFF;
+    --surface-2: #F1F2EE;
+    --ink: #1D1E1A;
+    --muted: #67695F;
+    --line: #DDDFD6;
+    --accent: #2E62D9;
+    --accent-soft: #E8EEFB;
+    --good: #1E7A46;
+    --warn: #A05A12;
+    --bad: #B03434;
+    --mono-bg: #EFF1EA;
+  }
+  :root:not([data-theme="light"]) { }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #14161A;
+      --surface: #1B1E24;
+      --surface-2: #22262E;
+      --ink: #E7E8E4;
+      --muted: #9CA097;
+      --line: #32363E;
+      --accent: #7CA1F0;
+      --accent-soft: #232C42;
+      --good: #5FBF8A;
+      --warn: #D99A55;
+      --bad: #E07C7C;
+      --mono-bg: #232730;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #14161A;
+    --surface: #1B1E24;
+    --surface-2: #22262E;
+    --ink: #E7E8E4;
+    --muted: #9CA097;
+    --line: #32363E;
+    --accent: #7CA1F0;
+    --accent-soft: #232C42;
+    --good: #5FBF8A;
+    --warn: #D99A55;
+    --bad: #E07C7C;
+    --mono-bg: #232730;
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: system-ui, "Segoe UI", Roboto, sans-serif;
+    font-size: 16px;
+    line-height: 1.6;
+    margin: 0;
+    padding: 0 20px 96px;
+  }
+  .wrap { max-width: 900px; margin: 0 auto; }
+  header.doc { padding: 56px 0 24px; border-bottom: 2px solid var(--ink); }
+  .eyebrow {
+    font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--accent); font-weight: 600; margin: 0 0 10px;
+  }
+  h1 {
+    font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+    font-size: clamp(30px, 5vw, 44px); line-height: 1.12; margin: 0 0 14px;
+    text-wrap: balance; font-weight: 600;
+  }
+  .meta { color: var(--muted); font-size: 14px; margin: 0; }
+  .meta b { color: var(--ink); font-weight: 600; }
+  h2 {
+    font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+    font-size: 26px; margin: 0 0 6px; font-weight: 600; text-wrap: balance;
+  }
+  h3 { font-size: 17px; margin: 26px 0 8px; font-weight: 650; }
+  section { margin-top: 52px; }
+  .sec-eyebrow {
+    display: flex; align-items: baseline; gap: 12px; margin-bottom: 14px;
+    border-bottom: 1px solid var(--line); padding-bottom: 10px;
+  }
+  .sec-eyebrow .tag {
+    font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+    font-size: 13px; color: var(--accent); font-weight: 600; letter-spacing: 0.06em;
+  }
+  p { margin: 10px 0; max-width: 72ch; }
+  .lead { font-size: 17px; }
+  .decision {
+    background: var(--accent-soft); border: 1px solid var(--accent);
+    border-radius: 6px; padding: 20px 24px; margin: 28px 0 0;
+  }
+  .decision p { margin: 6px 0; }
+  .decision .big { font-size: 19px; font-weight: 650; }
+  ul { padding-left: 22px; margin: 10px 0; }
+  li { margin: 6px 0; max-width: 74ch; }
+  li::marker { color: var(--accent); }
+  .tablewrap { overflow-x: auto; margin: 16px 0; border: 1px solid var(--line); border-radius: 6px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; background: var(--surface); }
+  th, td { padding: 8px 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+  th {
+    background: var(--surface-2); font-size: 11.5px; text-transform: uppercase;
+    letter-spacing: 0.06em; color: var(--muted); position: sticky; top: 0;
+  }
+  td.num, th.num { text-align: center; font-variant-numeric: tabular-nums; }
+  tr:last-child td { border-bottom: none; }
+  .s5 { color: var(--good); font-weight: 700; }
+  .s1, .s2 { color: var(--bad); }
+  .pill {
+    display: inline-block; font-size: 11.5px; font-weight: 650; padding: 1px 9px;
+    border-radius: 999px; letter-spacing: 0.03em; white-space: nowrap;
+  }
+  .pill.win { background: var(--good); color: var(--bg); }
+  .pill.fatal { background: var(--bad); color: var(--bg); }
+  .pill.soft { background: var(--surface-2); color: var(--muted); border: 1px solid var(--line); }
+  .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin: 16px 0; }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 16px 18px; }
+  .card h4 { margin: 0 0 8px; font-size: 14px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); }
+  .card ul { margin: 0; padding-left: 18px; font-size: 14.5px; }
+  code, .k {
+    font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+    font-size: 0.88em; background: var(--mono-bg); padding: 1px 5px; border-radius: 4px;
+  }
+  dl.phases { margin: 16px 0; }
+  dl.phases dt {
+    font-weight: 650; margin-top: 18px; display: flex; gap: 10px; align-items: baseline;
+  }
+  dl.phases dt .k { color: var(--accent); background: var(--accent-soft); }
+  dl.phases dd { margin: 6px 0 0 0; color: var(--ink); max-width: 76ch; }
+  dl.phases dd.gate { color: var(--muted); font-size: 14px; }
+  dl.phases dd.gate b { color: var(--good); }
+  .risk { border-left: 3px solid var(--warn); padding: 2px 0 2px 14px; margin: 12px 0; max-width: 74ch; }
+  .risk.high { border-color: var(--bad); }
+  .risk b.sev { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--bad); }
+  .risk .mit { color: var(--muted); font-size: 14px; }
+  .names { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; margin: 16px 0; }
+  .name-card { border: 1px solid var(--line); border-radius: 6px; padding: 18px; background: var(--surface); }
+  .name-card.chosen { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .name-card h4 {
+    font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+    font-size: 24px; margin: 0 0 6px;
+  }
+  .name-card p { font-size: 14px; margin: 6px 0; color: var(--muted); }
+  .name-card .pill { margin-bottom: 8px; }
+  footer { margin-top: 64px; padding-top: 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
+</style>
+<div class="wrap">
+
+<header class="doc">
+  <p class="eyebrow">WordJS · Programa del editor · F0 + F1</p>
+  <h1>Un editor propio: benchmark, veredicto del panel y arquitectura</h1>
+  <p class="meta">15 ago 2026 · Evidencia: <b>18 agentes</b> (7 benchmark · 5 auditoría · 3 arquitectos · 3 jueces), ~2,3M tokens · Base: <code>@wordjs/puck</code> v0.20.2 (fork vendorizado, 14,5k LOC) + wrapper de 2.199 LOC</p>
+</header>
+
+<div class="decision">
+  <p class="big">Decisión recomendada: reescritura limpia del motor (propuesta A) con el arnés de verificación de B y C injertado.</p>
+  <p>El formato persistido <code>_puck_data</code> queda <b>canónico y byte-exacto</b> (cero migración de datos, rollback = flag). La capa de render compartida (<code>blocks.tsx</code> + <code>blockShell.ts</code>), <code>sanitize-meta.ts</code> y el pipeline de los 31 plugins <b>no se tocan</b>. El fork se retira entero en F5 y el NOTICE de Puck con él, con auditoría de derivación como gate. Nombre propuesto: <b>Verso</b> (<code>@wordjs/verso</code>).</p>
+</div>
+
+<section>
+  <div class="sec-eyebrow"><span class="tag">F0</span><h2>Benchmark: la barra que hay que superar</h2></div>
+  <p>Siete editores evaluados en 15 dimensiones (1–5), con investigación web del estado 2025-2026. Puntuación dura a propósito.</p>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Editor</th><th class="num">Inline</th><th class="num">DnD</th><th class="num">Responsive</th><th class="num">Colab</th><th class="num">Historia</th><th class="num">A11y</th><th class="num">Perf</th><th class="num">Atajos</th><th class="num">Portabilidad</th><th class="num">Extensib.</th><th class="num">Tokens</th><th class="num">Anim</th><th class="num">Plantillas</th><th class="num">IA</th><th class="num">Binding</th></tr></thead>
+      <tbody>
+        <tr><td>Gutenberg</td><td class="num">4</td><td class="num">3</td><td class="num s2">2</td><td class="num">3</td><td class="num">3</td><td class="num">3</td><td class="num s2">2</td><td class="num">4</td><td class="num">4</td><td class="num">4</td><td class="num">4</td><td class="num s2">2</td><td class="num">4</td><td class="num s2">2</td><td class="num">4</td></tr>
+        <tr><td>Elementor</td><td class="num">4</td><td class="num">4</td><td class="num">4</td><td class="num s2">2</td><td class="num">4</td><td class="num s2">2</td><td class="num s2">2</td><td class="num">3</td><td class="num">3</td><td class="num">4</td><td class="num">4</td><td class="num">4</td><td class="num s5">5</td><td class="num">3</td><td class="num">4</td></tr>
+        <tr><td>Webflow</td><td class="num">4</td><td class="num s5">5</td><td class="num s5">5</td><td class="num">3</td><td class="num">4</td><td class="num">3</td><td class="num">3</td><td class="num">4</td><td class="num s2">2</td><td class="num">4</td><td class="num">4</td><td class="num s5">5</td><td class="num">4</td><td class="num">4</td><td class="num">4</td></tr>
+        <tr><td>Framer</td><td class="num s5">5</td><td class="num">4</td><td class="num">3</td><td class="num s5">5</td><td class="num">4</td><td class="num s2">2</td><td class="num">3</td><td class="num">3</td><td class="num s1">1</td><td class="num">4</td><td class="num">3</td><td class="num s5">5</td><td class="num">4</td><td class="num s5">5</td><td class="num">3</td></tr>
+        <tr><td>Notion</td><td class="num">4</td><td class="num">4</td><td class="num s2">2</td><td class="num">4</td><td class="num">3</td><td class="num s2">2</td><td class="num">3</td><td class="num">4</td><td class="num s2">2</td><td class="num">4</td><td class="num s2">2</td><td class="num">3</td><td class="num">4</td><td class="num">4</td><td class="num s2">2</td></tr>
+        <tr><td>Builder.io</td><td class="num">4</td><td class="num">4</td><td class="num">3</td><td class="num">4</td><td class="num">3</td><td class="num s2">2</td><td class="num">3</td><td class="num">3</td><td class="num s2">2</td><td class="num s5">5</td><td class="num">4</td><td class="num">3</td><td class="num">4</td><td class="num s5">5</td><td class="num s5">5</td></tr>
+        <tr><td>Craft CMS</td><td class="num">3</td><td class="num">4</td><td class="num">3</td><td class="num s2">2</td><td class="num">3</td><td class="num s5">5</td><td class="num">3</td><td class="num s2">2</td><td class="num">4</td><td class="num s5">5</td><td class="num s2">2</td><td class="num s1">1</td><td class="num">4</td><td class="num s2">2</td><td class="num s5">5</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <h3>La barra por dimensión (lo que hay que igualar o superar)</h3>
+  <ul>
+    <li><b>Inline:</b> Notion (motor propio por bloque, «turn into», slash) y Framer (edición sobre la URL publicada).</li>
+    <li><b>DnD:</b> Webflow (manipula el box model real) · Notion (handle + línea de inserción, multi-bloque).</li>
+    <li><b>Responsive:</b> Webflow (breakpoints con cascada editable en vivo).</li>
+    <li><b>Colaboración:</b> Framer (multiplayer + branching) · Gutenberg (Yjs sobre stores estándar) · Notion (CRDT por bloque).</li>
+    <li><b>Historia:</b> Webflow Page Branching (fork/merge por página) · Framer (snapshots escalonados 5min/1h/1d).</li>
+    <li><b>A11y:</b> Craft (conformidad WCAG/ATAG auditada y publicada — el único).</li>
+    <li><b>Atajos:</b> Gutenberg Command Palette sobre todo el admin.</li>
+    <li><b>Portabilidad:</b> Gutenberg (HTML + comentarios, diffable) · Craft Project Config (YAML en git).</li>
+    <li><b>Extensibilidad:</b> Builder.io <code>registerComponent</code> + inputs tipados · Gutenberg <code>deprecated/migrate()</code>.</li>
+    <li><b>Tokens:</b> Gutenberg theme.json · Elementor V4 Variables + Global Classes.</li>
+    <li><b>Animaciones:</b> Webflow IX3/GSAP con presets propagables.</li>
+    <li><b>Binding dinámico:</b> Builder.io · Gutenberg Block Bindings · Craft Live Preview (ruta real de producción).</li>
+  </ul>
+  <h3>El hueco de mercado</h3>
+  <p><b>Nadie combina</b> rendimiento en documentos grandes (Gutenberg y Elementor puntúan 2; el lag de tipeo de Gutenberg es estructural y lleva desde 2018 sin arreglo de raíz), accesibilidad real (todos entre 2 y 3 salvo Craft, que no es WYSIWYG), portabilidad de datos (Webflow 2, Notion 2, Builder 2, Framer 1 — lock-in confesado) y fidelidad editor=público garantizada por construcción. Ahí es donde Verso gana en v1; colaboración, breakpoints con overrides e interacciones quedan <i>habilitadas</i> por la arquitectura para programas posteriores.</p>
+</section>
+
+<section>
+  <div class="sec-eyebrow"><span class="tag">Auditoría</span><h2>Lo que tenemos: activos y deuda</h2></div>
+  <div class="cols">
+    <div class="card">
+      <h4>Activos que se conservan intactos</h4>
+      <ul>
+        <li><code>blocks.tsx</code> (26 componentes puros, cero Puck) + <code>blockShell.ts</code> + <code>SharedBlockShell</code> + <code>ContentRenderer</code>: una implementación de render, dos entradas (canvas y público).</li>
+        <li><code>sanitize-meta.ts</code>: único saneador de escritura, 5 rondas de fixes de seguridad.</li>
+        <li>Pipeline de plugins: <code>build-plugin.js</code>, HOST_MODULES (14 claves), <code>pluginBundleLoader.ts</code> con ~10 fixes de carreras. Los 31 bundles publicados cargan sin recompilar.</li>
+        <li>Contrato de temas: clases <code>wp-block-*</code>, 28 familias <code>--wjs-*</code>, <code>blockVars()</code> emite solo si el autor fijó valor.</li>
+        <li>Forma JSON de <code>_puck_data</code>: revisiones, WXR y backups siguen válidos.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4>Deuda que muere con el motor</h4>
+      <ul>
+        <li>Store no controlado (el prop <code>data</code> se copia una vez) → 7 globals <code>window.puck*</code> sin tipos como único canal.</li>
+        <li>Reducer que recalcula todos los índices en cada acción — la misma clase de arquitectura del lag de Gutenberg.</li>
+        <li>Modelo dual zonas-legacy/slots con <code>migrate.ts</code> que lanza throw.</li>
+        <li><code>@dnd-kit/react</code> 0.1.18 pre-1.0, API de una sola vía.</li>
+        <li>6 <code>setInterval</code> de polling contra un iframe (AutoFrame) que puede recargarse solo.</li>
+        <li>2 divergencias de fork que existían solo porque la API de Puck no daba <code>id</code>/<code>type</code> al ActionBar.</li>
+        <li>Dos editores paralelos ya divergentes (páginas/posts vs <code>/admin/chrome</code>).</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="sec-eyebrow"><span class="tag">F1</span><h2>El panel: tres propuestas, tres lentes</h2></div>
+  <p>Tres arquitectos independientes defendieron reescritura (A), absorción progresiva del fork (B) e híbrido kernel-nuevo (C). Tres jueces puntuaron con lentes excluyentes. Las tres propuestas convergieron por sí solas en lo esencial: formato persistido intacto, render compartido intacto, store controlado con transacciones, overlay en el documento padre.</p>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Lente</th><th class="num">A · Reescritura</th><th class="num">B · Absorción</th><th class="num">C · Híbrido</th><th>Ganador</th></tr></thead>
+      <tbody>
+        <tr><td>Integridad de datos y migración</td><td class="num">7</td><td class="num">9</td><td class="num">8</td><td><span class="pill soft">B</span></td></tr>
+        <tr><td>Velocidad y mantenibilidad</td><td class="num">6</td><td class="num">4 <span class="pill fatal">fatal</span></td><td class="num">8</td><td><span class="pill soft">C</span></td></tr>
+        <tr><td>Techo de capacidades, perf y a11y</td><td class="num">9</td><td class="num">6</td><td class="num">5 <span class="pill fatal">fatal</span></td><td><span class="pill soft">A</span></td></tr>
+        <tr><td><b>Total (sin fatal flaws)</b></td><td class="num"><b>22</b> <span class="pill win">única sin fatal</span></td><td class="num">19</td><td class="num">21</td><td><span class="pill win">A</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <ul>
+    <li><b>Fatal de B</b> (velocidad): dominada — llega al mismo punto final que C con 10-30 jornadas más (67-101), pagando un impuesto de transición exclusivo (shims, doble estampado) que su propio registro de riesgos admite que «históricamente se pospone», y conteniendo de todas formas la reescritura big-bang del clúster DnD.</li>
+    <li><b>Fatal de C</b> (techo): su gate de CI comprometido es p95 &lt; 50ms — el triple del objetivo de 16ms — sobre un fixture de 200 bloques; el programa entero podría terminar «verde» entregando un editor 3× más lento. Agravado por dos anclas permanentes: <code>@dnd-kit</code> 0.1.x y el style-mirroring por MutationObserver de AutoFrame.</li>
+    <li><b>Por qué A y no C</b>, si el objetivo es «el mejor editor de todos los CMS»: la lente de techo pesa más que las demás en este programa, A es la única sin fatal flaw, y su debilidad real (reescribir 57 features sin red de tests) se corrige con los injertos de B/C — la debilidad de C (techo hipotecado por dependencias adoptadas) no se corrige con injertos.</li>
+  </ul>
+</section>
+
+<section>
+  <div class="sec-eyebrow"><span class="tag">Arquitectura</span><h2>El diseño elegido: A + arnés</h2></div>
+  <h3>Motor (paquete nuevo <code>frontend/packages/verso</code>)</h3>
+  <ul>
+    <li><b>Modelo de datos:</b> la forma Puck Data persistida sigue canónica byte-exacta. Internamente, documento normalizado (mapa <code>id→nodo</code> + <code>parentId/slotKey/index</code>); al serializar se reconstruye el árbol exacto (round-trip deep-equal sobre corpus de producción como gate). Zonas legacy: fail-soft con preservación verbatim (injerto de C) en vez del throw actual.</li>
+    <li><b>Store y historia:</b> <code>createEditor()</code> → <code>EditorHandle</code> tipado; toda mutación es un comando dentro de <code>transact()</code>; historia transaccional por parches inversos (pegar 20 bloques = 1 Ctrl+Z); coalescencia de texto 250ms (granularidad actual). Los 7 <code>window.puck*</code> y el CustomEvent desaparecen — contexto React que fluye al iframe por portal.</li>
+    <li><b>Render:</b> <code>EditorRenderer</code> (~400 LOC) llama <b>literalmente</b> a <code>hideClasses/animClasses/appearanceToStyle</code> de <code>blockShell.ts</code> — paridad canvas↔público garantizada por compartir la función, no por disciplina. Atributo <code>data-wjs-block-id</code>. BlockRegistry versionado de identidad estable (el remount por keystroke muere por diseño).</li>
+    <li><b>Canvas:</b> iframe propio con ruta real <code>/admin/canvas-frame</code> y <code>&lt;link&gt;</code> explícitos (wordjs-ui.css + tema + canvas). Muere AutoFrame, muere el polling: ciclo de vida <code>onFrameReady</code>, cambio de tema = swap de link. Overlay en el documento padre como único camino (capa <code>[data-wjs-overlay-layer]</code>), ActionBar con <code>id+type</code> nativos.</li>
+    <li><b>DnD propio</b> detrás de interfaz <code>DnDDriver</code>: los casos de <code>NestedDroppablePlugin</code>/colisión se tabulan como suite ejecutable <b>antes</b> de escribir el motor; parity e2e con drags grabados contra ambos motores (injerto de B); invariante con test: <b>el DnD solo emite comandos, jamás muta</b> — un fallo de geometría no puede corromper datos (injerto de C). Plan B: <code>@dnd-kit</code> detrás del mismo driver. DnD por teclado de primera clase (modo mover + aria-live).</li>
+    <li><b>Inline:</b> Tiptap se queda; la entrada es declarativa en el registry (<code>inline:{prop,schema}</code>) y se extiende a Quote, Button, Card, CTABanner. El HTML sigue entrando por los nombres de <code>PUCK_HTML_FIELDS</code> → saneado sin cambios.</li>
+    <li><b>Plugins:</b> la forma antigua <code>{category,fields,defaultProps}</code> / <code>puckComponents</code> se convierte en la forma <b>nativa</b> del registry — los 31 bundles publicados cargan tal cual, sin recompilar. Los 9 tipos de campo se implementan todos. Test automático de sincronía HOST_MODULES. Telemetría en shims durante F2-F4 + grep de <code>usePuck</code> sobre los bundles compilados antes de retirar nada (injerto de B/C).</li>
+    <li><b>Seguridad:</b> <code>sanitize-meta.ts</code> intacto + límite de profundidad nuevo en <code>sanitizePuckTree</code> (DoS documentado — injerto de C); allowlists de tags en render intactas; un tema sigue sin poder enviar JS.</li>
+    <li><b>Rendimiento (gates de CI):</b> input p95 &lt; 16ms / p99 &lt; 50ms + presupuesto separado de commit ≤ 30ms, sobre fixture de <b>500 bloques</b> (injerto del juez); TTI &lt; 2,5s; línea base del editor actual medida <b>antes</b> de escribir el motor (injerto de B); HUD de perf en dev. Suscripción por nodo, índices incrementales, cero polling. Sin virtualizar el canvas v1 (<code>content-visibility:auto</code>, con gate de que no altera el DOM de las 4 ramas del wrapper); outline sí virtualizado.</li>
+    <li><b>A11y:</b> chrome WCAG 2.2 AA documentado; e2e keyboard-only completo (insertar, mover anidado, inline, guardar — sin un clic) + axe-core como gates.</li>
+    <li><b>Rollback:</b> flag <code>WORDJS_EDITOR_ENGINE=verso|legacy</code> por entorno (y por usuario en staging); el fork vive hasta F7 verde; ambos motores leen/escriben la misma forma. Drill de rollback en F7.</li>
+    <li><b>Licencia:</b> sin código derivado al cierre — AutoFrame se reemplaza por diseño distinto, field-renderers se reescriben (el punto de máxima disciplina), Render/SlotRender se sustituyen. Gate F5 = auditoría de derivación fichero a fichero; si algo sale sustancialmente similar, se reescribe o el NOTICE se queda. Crédito de cortesía en README.</li>
+  </ul>
+  <h3>Contratos que se preservan exactos</h3>
+  <ul>
+    <li><code>_wjs_template</code> siempre en el payload ('' limpia) · <code>autosave:true</code> literal salta revisión · pisos 8000/30000ms · <code>onSave → Promise&lt;boolean&gt;</code>.</li>
+    <li>Guards anti-pérdida (<code>unhydratedSaveBlocked</code>, rama legacy-HTML, gracia 800ms) centralizados en un módulo con <b>tests de comportamiento escritos al inicio de F2</b>, antes de tocar nada (injerto clave de B — hoy el 95% del wrapper solo tiene pines de texto).</li>
+    <li>Byte-diff SSR del sitio público sobre corpus real en cada fase que roce render + snapshot DOM del producto cartesiano de las 4 ramas del wrapper (hide × anim × look × responsive).</li>
+    <li>Compatibilidad cruzada por fase: guardar con Verso → abrir con el editor legacy, y viceversa; restauración cruzada de revisiones; drill WXR con exports previos al programa.</li>
+  </ul>
+</section>
+
+<section>
+  <div class="sec-eyebrow"><span class="tag">Plan</span><h2>Fases F2–F7 con gates</h2></div>
+  <dl class="phases">
+    <dt><span class="k">F2</span> Núcleo del motor (15-20 jornadas)</dt>
+    <dd>Doc normalizado + serialización canónica, store + EditorHandle, historia por parches, canvas propio, overlay en padre, DnD propio tras DnDDriver (suite tabulada primero), field-renderers (9 tipos), EditorRenderer, BlockRegistry. Harness standalone en ruta dev. <b>Primero:</b> tests de comportamiento de los guards + línea base de perf del editor actual.</dd>
+    <dd class="gate"><b>GATE:</b> round-trip deep-equal sobre corpus completo de producción · suite DnD tabulada verde · Playwright drag a slot anidado verificado visualmente a igual tamaño · p95 &lt; 16ms (fixture 500) · pegar 20 bloques = 1 undo.</dd>
+    <dt><span class="k">F3</span> Bloques core + wrapper VersoEditor + unificación chrome (12-16 j)</dt>
+    <dd>30 bloques portados como tabla de datos (asimetría post/page preservada); withSharedBlockFields en el seam de registro; las ~57 features del wrapper con checklist; inline declarativo extendido; CanvasThemeTemplate re-puenteado; <code>/admin/chrome</code> unificado (con checkpoint propio — si sangra, se corta con flag sin bloquear el resto).</dd>
+    <dd class="gate"><b>GATE:</b> checklist de 57 en navegador · screenshot-diff canvas↔público por bloque (anim+hover incluido) · tests de autosave y los 3 guards · compat cruzada Verso↔legacy sobre corpus · Symbol capado a profundidad 1.</dd>
+    <dt><span class="k">F4</span> API de plugins (5-8 j)</dt>
+    <dd>Adaptador BlockRegistry←pluginBundleLoader (conservado entero), registry generator re-apuntado, test de sincronía HOST_MODULES, shim <code>usePuck</code> mínimo con deprecation warning, objeto <code>puck</code> compatible en render().</dd>
+    <dd class="gate"><b>GATE:</b> verify-marketplace verde · e2e de los 31: insertar+editar+guardar+render público · faq recibe tokens de tema · mail-server sin doble registro bajo StrictMode.</dd>
+    <dt><span class="k">F5</span> Renombrado y retirada del fork (3-4 j)</dt>
+    <dd>Borrar <code>frontend/packages/puck</code>; barrido puckConfig/puckPluginRegistry/<code>data-puck-*</code>/<code>window.puck*</code>/<code>.puck-container</code> (10 sitios); retirar NOTICE + tests-pin; auditoría de derivación; crédito de cortesía.</dd>
+    <dd class="gate"><b>GATE:</b> grep-gate cero «puck» fuera de CHANGELOG/notas/constante · tsc+build+lint verdes · informe de licencia archivado · la app edita sin el paquete.</dd>
+    <dt><span class="k">F6</span> Programa de tests (10-14 j)</dt>
+    <dd>Unit (store/historia/serialización/DnD), no-pérdida (corpus + revisiones + WXR), fuzzing (10k árboles hostiles contra loader y sanitizePuckTree, «nunca throw, nunca pérdida»), e2e (DnD anidado, inline, keyboard-only, autosave con reloj), axe-core, presupuestos de perf como gates que fallan el build.</dd>
+    <dd class="gate"><b>GATE:</b> todas las suites en CI con presupuestos enforzados · fuzzing 0 crashes/0 pérdidas · guards cubiertos por comportamiento.</dd>
+    <dt><span class="k">F7</span> Verificación final (3-4 j)</dt>
+    <dd>3 modos en Proxmox con click-through real; WXR round-trip contra WordPress real; drill de rollback (flag a legacy → editar → volver → verificar); purga ISR verificada.</dd>
+    <dd class="gate"><b>GATE:</b> 3 modos verdes con checklist firmada · rollback sin pérdida · sitio público verificado en navegador con temas activos.</dd>
+  </dl>
+  <p class="meta">Total estimado: <b>48-66 jornadas</b> (advertencia honesta del arquitecto: las reescrituras crecen históricamente 30-50%; los descuentos reales son los ~8-10k LOC de render/saneado/plugins que no se tocan y las cero jornadas de migración de datos).</p>
+</section>
+
+<section>
+  <div class="sec-eyebrow"><span class="tag">Riesgos</span><h2>Registro de riesgos principal</h2></div>
+  <div class="risk high"><b class="sev">Alta</b> · <b>El DnD propio no alcanza la calidad del clúster actual</b> (zona más profunda, autoscroll, RTL, touch).<div class="mit">Mitigación: suite tabulada antes de codificar · parity e2e con drags grabados contra ambos motores · DnDDriver con plan B (@dnd-kit) · invariante solo-comandos con test · touch pospuesto a post-v1 si aprieta.</div></div>
+  <div class="risk high"><b class="sev">Alta</b> · <b>Paridad de las ~57 features del wrapper</b> — 95% sin tests de comportamiento previos.<div class="mit">Mitigación: guards anti-pérdida testeados al inicio de F2 · checklist en navegador como gate F3 · screenshot-diff por bloque.</div></div>
+  <div class="risk high"><b class="sev">Alta</b> · <b>Divergencia sutil del wrapper compartido</b> rompería páginas guardadas con look/anim/hide.<div class="mit">Mitigación: no se reimplementa — se llama a las funciones literales de blockShell.ts; snapshot del producto cartesiano de las 4 ramas.</div></div>
+  <div class="risk"><b class="sev" style="color:var(--warn)">Media</b> · <b>Geometría de overlay solo verificable en navegador real</b> (jsdom ciego).<div class="mit">Mitigación: asserts visuales Playwright a igual tamaño en F2 y F6 (regla de memoria «exacto y verificado en pantalla»).</div></div>
+  <div class="risk"><b class="sev" style="color:var(--warn)">Media</b> · <b>Plugins de terceros fuera del catálogo</b> usando <code>usePuck</code> o campos no usados por los 31.<div class="mit">Mitigación: 9 tipos de campo completos · shim usePuck · telemetría de shims + grep sobre bundles compilados antes de retirar.</div></div>
+  <div class="risk"><b class="sev" style="color:var(--warn)">Media</b> · <b>Deriva de alcance</b> («ya que reescribimos, añadamos colaboración/IA»).<div class="mit">Mitigación: v1 = paridad + arquitectura; capacidades nuevas a backlog post-F7; el op-log se diseña colaboración-compatible sin implementar sync.</div></div>
+</section>
+
+<section>
+  <div class="sec-eyebrow"><span class="tag">Nombre</span><h2>Tres candidatos, uno elegido</h2></div>
+  <div class="names">
+    <div class="name-card chosen">
+      <span class="pill win">Elegido</span>
+      <h4>Verso</h4>
+      <p><code>@wordjs/verso</code> · VersoEditor · «Plantilla del tema» sigue igual.</p>
+      <p>El verso: la unidad con la que se componen las palabras — WordJS compone versos. Y el <i>verso</i> de la encuadernación: la cara de la página. Corto, pronunciable en español e inglés, sin colisión en el espacio CMS/editores.</p>
+    </div>
+    <div class="name-card">
+      <h4>Stanza</h4>
+      <p><code>@wordjs/stanza</code></p>
+      <p>La estrofa: un bloque de versos — metáfora exacta de un editor de bloques para un CMS de palabras. Colisión menor: librería NLP de Stanford con ese nombre.</p>
+    </div>
+    <div class="name-card">
+      <h4>Atelier</h4>
+      <p><code>@wordjs/atelier</code></p>
+      <p>El taller del artesano. Evoca la ambición estética, pero es más largo, menos propio del mundo editorial de WordJS y con más uso previo en tooling.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="sec-eyebrow"><span class="tag">Ratificar</span><h2>Decisiones que te pido confirmar</h2></div>
+  <ul>
+    <li><b>Arquitectura:</b> A (reescritura limpia) + arnés de B/C. Alternativas evaluadas y documentadas arriba.</li>
+    <li><b>Clave de almacenamiento:</b> los 3 arquitectos coinciden en mantener <code>_puck_data</code> como clave meta permanente (constante <code>CONTENT_META_KEY</code>, documentada como excepción del renombrado). Un alias dual crearía split-brain con el merge por clave del backend, y migrar la clave obligaría a reescribir revisiones e invalidar WXR/backups en circulación a cambio de cero valor de usuario. Es la única desviación del renombrado literal que pediste — necesita tu visto bueno explícito.</li>
+    <li><b>Nombre:</b> Verso (con Stanza y Atelier como alternativas).</li>
+  </ul>
+</section>
+
+<footer>
+  WordJS · Programa del editor · F0+F1 cerradas · Evidencia completa en el repo de sesión (benchmark, auditoría de 255 features, 3 propuestas íntegras, 3 veredictos).
+</footer>
+</div>

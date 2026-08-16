@@ -6,7 +6,11 @@ acme.axios.defaults.timeout = 10000;
 const fs = require('fs');
 const path = require('path');
 const dns = require('dns').promises;
-const { v4: uuidv4 } = require('uuid');
+// The one place a name becomes a path. A certificate's storage directory is CHOSEN by a hostname
+// that arrives in an admin HTTP body (POST /certs/auto-provision, and — round-tripped through the
+// browser — POST /certs/dns-finish), so it gets the full treatment: allowlist the FORM, resolve
+// canonically, prove containment on the value that is RETURNED.
+const { resolveCertDir, resolveWithin } = require('./safe-path');
 
 const CONFIG_PATH = path.resolve(__dirname, '../../wordjs-config.json');
 const DATA_DIR = path.resolve(__dirname, '../../data/ssl'); // Store ACME account keys here
@@ -17,6 +21,17 @@ const WWW_ROOT = path.resolve(__dirname, '../../public'); // For HTTP-01
 // world/group-traversable.
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
 if (!fs.existsSync(LIVE_DIR)) fs.mkdirSync(LIVE_DIR, { recursive: true, mode: 0o700 });
+
+/**
+ * `<domainDir>/<name>` for the two files a provisioned certificate is stored as. The name is a
+ * literal from this module, so a null here means the containment proof itself failed — which is a
+ * bug, not a user error, and must stop the write rather than fall back to a join.
+ */
+function certFile(domainDir: string, name: string): string {
+    const p = resolveWithin(domainDir, name);
+    if (p === null) throw new Error(`Refusing to write ${name}: it does not resolve inside the certificate directory.`);
+    return p;
+}
 
 // Write a PRIVATE KEY (account key / privkey.pem) with restrictive permissions. writeFileSync's
 // `mode` is ignored when the file already exists, so we ALSO chmod after the write to guarantee 0o600
@@ -159,6 +174,11 @@ class CertManager {
      */
     async provisionAutoHTTP(domain: string, email: string, useStaging = false) {
         try {
+            // The name is resolved to its storage directory BEFORE any network work: a name that
+            // cannot be stored must not cost the CA an order, and refusing here means the value used
+            // at step 5 is the one that was proved contained (not a re-join of the raw argument).
+            const domainDir = resolveCertDir(LIVE_DIR, domain);
+            if (domainDir === null) throw new Error(`Invalid domain ${JSON.stringify(String(domain))} — expected a DNS name such as "example.com".`);
             console.log(`[CertManager] Starting HTTP-01 provisioning for ${domain}...`);
             await this.initClient(email, useStaging);
 
@@ -207,12 +227,12 @@ class CertManager {
             const cert = await this.client.getCertificate(finalized);
             console.log('[CertManager] Certificate downloaded.');
 
-            // 5. Save locally (backup/reference)
-            const domainDir = path.join(LIVE_DIR, domain);
+            // 5. Save locally (backup/reference) — into the directory resolved and proved contained
+            // at the top of this method.
             if (!fs.existsSync(domainDir)) fs.mkdirSync(domainDir, { recursive: true, mode: 0o700 });
 
-            writePrivateKey(path.join(domainDir, 'privkey.pem'), key);
-            fs.writeFileSync(path.join(domainDir, 'fullchain.pem'), cert);
+            writePrivateKey(certFile(domainDir, 'privkey.pem'), key);
+            fs.writeFileSync(certFile(domainDir, 'fullchain.pem'), cert);
 
             // 6. Push to Gateway
             // Ensure key is string
@@ -229,6 +249,12 @@ class CertManager {
 
     async startDNSChallenge(domain: string, email: string, useStaging = false) {
         try {
+            // Gate the NAME here, at step 1, even though step 2 is what writes to disk: the domain
+            // this returns is what the browser posts back to /dns-finish, and a flow that can only
+            // start with a storable name is one fewer way for an unstorable one to reach the writer.
+            if (resolveCertDir(LIVE_DIR, domain) === null) {
+                throw new Error(`Invalid domain ${JSON.stringify(String(domain))} — expected a DNS name such as "example.com" or "*.example.com".`);
+            }
             // Initialize client if needed
             await this.initClient(email, useStaging);
 
@@ -285,6 +311,14 @@ class CertManager {
      */
     async finishDNSChallenge(step1Data: any, email: string, useStaging = false) {
         try {
+            // step1Data IS THE REQUEST BODY. POST /api/v1/certs/dns-finish takes it verbatim from the
+            // browser — it is not server state that happens to round-trip, it is input, and
+            // `step1Data.domain` used to choose a DIRECTORY under ssl/live/ that is then mkdir'd
+            // recursively and written with the account's PRIVATE KEY. Resolve it first, fail closed.
+            const domainDir = resolveCertDir(LIVE_DIR, step1Data && step1Data.domain);
+            if (domainDir === null) {
+                throw new Error(`Invalid domain ${JSON.stringify(String(step1Data && step1Data.domain))} — expected a DNS name such as "example.com" or "*.example.com".`);
+            }
             // Re-init against THE CA THAT MINTED THIS CHALLENGE (step1Data.directoryUrl), not against
             // the caller's `staging` flag. The order/authz/challenge URLs in step1Data exist at exactly
             // one endpoint; talking to the other one gets "No such challenge" from boulder after the
@@ -325,19 +359,18 @@ class CertManager {
             // Get certificate
             const cert = await this.client.getCertificate(finalized);
 
-            // Save to files
-            const domainDir = path.join(LIVE_DIR, step1Data.domain);
+            // Save to files — `domainDir` is the value resolved and proved contained at the top of
+            // this method, never a fresh join of step1Data.domain.
             if (!fs.existsSync(domainDir)) fs.mkdirSync(domainDir, { recursive: true, mode: 0o700 });
 
-            writePrivateKey(path.join(domainDir, 'privkey.pem'), key);
-            fs.writeFileSync(path.join(domainDir, 'fullchain.pem'), cert);
+            const keyPath = certFile(domainDir, 'privkey.pem');
+            const chainPath = certFile(domainDir, 'fullchain.pem');
+            writePrivateKey(keyPath, key);
+            fs.writeFileSync(chainPath, cert);
 
             // Update config to use new cert. AWAIT it: un-awaited, a failed gateway push still
             // reported success to the admin and the rejection went unhandled.
-            await this.updateSSLConfig(
-                path.join(domainDir, 'privkey.pem'),
-                path.join(domainDir, 'fullchain.pem')
-            );
+            await this.updateSSLConfig(keyPath, chainPath);
 
             return {
                 success: true,
@@ -544,9 +577,18 @@ class CertManager {
      * Prepare HTTP-01 Challenge File
      */
     async writeChallengeFile(token: string, keyAuthorization: any) {
-        const challengeDir = path.join(WWW_ROOT, '.well-known', 'acme-challenge');
+        // The token NAMES A FILE under the public web root, and it is REMOTE DATA: it comes from the
+        // ACME directory, and which directory that is can be steered (the `staging` flag, and
+        // `step1Data.directoryUrl` straight out of a request body). A server answering with a token
+        // of `../../evil` would have this write the key authorization wherever it liked. RFC 8555
+        // tokens are base64url, so requiring a single plain segment refuses nothing a real CA sends.
+        const challengeDir = resolveWithin(WWW_ROOT, '.well-known', 'acme-challenge');
+        const target = challengeDir && resolveWithin(challengeDir, token);
+        if (!target) {
+            throw new Error(`The certificate authority returned an unusable challenge token ${JSON.stringify(String(token))} — refusing to write it.`);
+        }
         if (!fs.existsSync(challengeDir)) fs.mkdirSync(challengeDir, { recursive: true });
-        fs.writeFileSync(path.join(challengeDir, token), keyAuthorization);
+        fs.writeFileSync(target, keyAuthorization);
         return true;
     }
 
@@ -771,8 +813,14 @@ class CertManager {
      */
     readLocalCertValidTo(domain: string): string | null {
         try {
-            const p = path.join(LIVE_DIR, domain, 'fullchain.pem');
-            if (fs.existsSync(p)) {
+            // Same facade as the writer. The domain here comes from config (acme.domains[0] / the
+            // siteUrl host), but "the value happens to be trusted today" is not a property the READ
+            // should depend on — and a reader that accepts names the writer rejects would answer
+            // about a file the writer could never have produced.
+            const dir = resolveCertDir(LIVE_DIR, domain);
+            if (dir === null) return null;
+            const p = resolveWithin(dir, 'fullchain.pem');
+            if (p && fs.existsSync(p)) {
                 const x509 = new (require('crypto').X509Certificate)(fs.readFileSync(p));
                 return x509.validTo;
             }

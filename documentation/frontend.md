@@ -34,11 +34,12 @@ This is handled in **`src/instrumentation.ts`** (`register()`, Node runtime only
 
 > **Separate mode.** When the three services live on **different machines**, the frontend node first joins the cluster (mints its mTLS identity from a gateway-issued join token) via `scripts/node-join.js`, which also writes its `wordjs-config.json` (`advertiseHost`, `gatewayHost`, `internalApiUrl`, `gatewaySecret`, …). See [`documentation/separate-mode.md`](./separate-mode.md) for the full enrollment flow.
 
-## Visual Editing (Puck)
+## Visual Editing (Verso)
 
-WordJS uses **Puck** for its visual editor.
-*   **Components:** Located in `src/components/puck`.
-*   **Plugin Integration:** Plugins can inject custom Puck components ensuring a modular page builder experience.
+WordJS ships **Verso**, its own visual editor — no third-party editor package is installed.
+*   **Editor:** `src/components/verso/` (canvas, overlay, DnD, inline engine, panels) and `src/lib/verso/` (store, registry, commands, block definitions).
+*   **Shared block field controls:** `src/components/blocks/` (`AppearanceField`, `AnimationField`, `VisibilityField`, `LinkField`, `CSSControls`, `blockShell.ts`, `blockVars.ts`) — used by both the editor panels and the public renderers.
+*   **Plugin Integration:** plugins ship their own blocks; see **Plugin blocks in the editor** below.
 
 ## Development vs Production
 
@@ -67,7 +68,7 @@ A **server-only** module (must never be imported from a `"use client"` file). It
 ### Content renderers (Server Components + client islands)
 The actual content markup lives in `src/components/public/PostContent.tsx` (single post / page / category-post) and `src/components/public/HomeContent.tsx` (static home page). Both receive the already-fetched `post` as a prop from the route's Server Component and are **themselves Server Components** — no `"use client"`, so the page body ships as HTML with no body hydration.
 
-*   **Public block rendering lives in `src/components/content/`.** `ContentRenderer.tsx` walks `meta._puck_data` and dispatches each core block to the shared, server-compatible components in `blocks.tsx` (`HeadingBlock`, `TextBlock`, `ImageBlock`, `SectionBlock`, `HeroBlock`, `CardBlock`, …), each wrapped in `SharedBlockShell.tsx` — the server twin of the editor's `withSharedBlockFields`. `blocks.tsx` is the single source of truth: `puckConfig.tsx`'s per-block `render` delegates to the same components, so the editor canvas and the live site cannot drift, and the `wp-block-*` class names now live here rather than in `puckConfig.tsx`.
+*   **Public block rendering lives in `src/components/content/`.** `ContentRenderer.tsx` walks `meta._puck_data` and dispatches each core block to the shared, server-compatible components in `blocks.tsx` (`HeadingBlock`, `TextBlock`, `ImageBlock`, `SectionBlock`, `HeroBlock`, `CardBlock`, …), each wrapped in `SharedBlockShell.tsx` — the server twin of the editor's shared-field wrapper. `blocks.tsx` is the single source of truth: the Verso block registry (`src/lib/verso/coreBlocks.tsx`) points each block's `render` at the same components, so the editor canvas and the live site cannot drift, and the `wp-block-*` class names live here rather than in the registry.
 *   **Only genuinely interactive pieces hydrate**, each its own island module in the same directory (so its chunk code-splits away from pages that don't use it): `AccordionBlock.tsx`, `TabsBlock.tsx`, `SearchBarBlock.tsx`, `AudioTransport.tsx`, `SelfHostedVideo.tsx`, `AnimatedShell.tsx`, `LocalizedDate.tsx`, `LegacyCarousels.tsx` (the legacy `[photo-carousel]` initialiser), and `PluginBlockIsland.tsx` / `PluginBlockHeavy.tsx` for plugin and Symbol blocks. Comments (`CommentsSection`) and `[shortcode]` plugin embeds (`PluginLoader`) stay client components as before.
 *   **Structural props are never trusted.** `blocks.tsx`'s `HeadingBlock` resolves `level` against a fixed `HEADING_TAGS` allowlist (`h1`–`h6`, defaulting to `h2`): the write-side meta sanitizer only classifies string leaves as HTML- or URL-bearing, so a structural prop reaches the renderer untouched — and since these are server components the resulting tag lands in the cached initial document.
 
@@ -87,9 +88,9 @@ The theme system ships a single token-driven, Bootstrap-like CSS framework. The 
 
 *   **What it is:** `backend/public/css/wordjs-ui.css` (served at `/public/css/wordjs-ui.css`) — one shared static stylesheet that auto-styles every HTML element plus Bootstrap-compatible components (`.btn`/`.card`/`.alert`/`.badge`/`.table`/`.nav`/`.list-group`/`.pagination`/`.progress`/`.modal`/`.dropdown` and a flexbox grid `.container`/`.row`/`.col-*`) and a utility layer (spacing/display/flex/text/colors/borders/sizing/shadow).
 *   **Driven by `--wjs-*` design tokens** that land in each theme's `style.css :root` — compiled there from the theme's `theme.json` for a declarative theme (every marketplace theme), or hand-written for the bundled `default`. The framework has fallbacks, so a theme re-skins everything just by setting tokens. The default theme ships bundled, and 64 first-party themes are available via the theme marketplace — each ships a full `--wjs-*` token set tuned to its palette (including per-variant `--wjs-color-on-*` max-contrast text tokens).
-*   **Public load order (`src/components/public/ThemeLoader.tsx`):** the `<link id="wjs-ui-framework" href="/public/css/wordjs-ui.css?v=…">` is emitted **first**, then the active theme's `style.css?v=…` (`id="wjs-theme-stylesheet"`); both hrefs are cache-busted with `ASSET_VERSION` (the sha256 of `wordjs-ui.css`, generated — see below) and the theme href additionally with the active theme's `theme.json` version, so an in-place theme edit busts the browser copy too. Because the framework loads before the theme, the theme's `:root` tokens and custom rules override it at equal specificity. **No FOUC:** the active slug **and version** are resolved on the **server** (the public layout's `getSettings()` passes them down as `initialSlug` / `initialThemeVersion`) so the first server-rendered paint already carries the correct theme, and both `<link>`s carry a React 19 **`precedence`** attribute — without it React leaves them in the body as non-render-blocking, so the page painted with fallback token values and restyled once the CSS loaded. **No per-visitor query:** the loader no longer polls `themesApi.list()` on tab focus — the `settings` purge + ISR deliver a theme switch on the next navigation, and only the editor preview (which gets no server props) resolves once via `GET /api/v1/settings`. When the href does change at runtime the loader evicts the previous theme's `<link>`, matched on the exact href (precedence stylesheets are add-only, so React never removes the stale one itself).
+*   **Public load order (`src/components/public/ThemeLoader.tsx`):** the `<link id="wjs-ui-framework" href="/public/css/wordjs-ui.css?v=…">` is emitted **first**, then the active theme's `style.css?v=…` (`id="wjs-theme-stylesheet"`); both hrefs are cache-busted with `ASSET_VERSION` (the sha256 of `wordjs-ui.css`, generated — see below) and the theme href additionally with the active theme's `theme.json` version, so an in-place theme edit busts the browser copy too. Because the framework loads before the theme, the theme's `:root` tokens and custom rules override it at equal specificity. **No FOUC:** the active slug **and version** are resolved on the **server** (the public layout's `getSettings()` passes them down as `initialSlug` / `initialThemeVersion`) so the first server-rendered paint already carries the correct theme, and both `<link>`s carry a React 19 **`precedence`** attribute — without it React leaves them in the body as non-render-blocking, so the page painted with fallback token values and restyled once the CSS loaded. **No per-visitor query:** the loader no longer polls `themesApi.list()` on tab focus — the `settings` purge + ISR deliver a theme switch on the next navigation, and only the editor canvas (`/admin/canvas-frame`, which gets no server props) resolves once via `themesApi.list()` → `GET /api/v1/themes`, falling back to `default` if that request fails. When the href does change at runtime the loader evicts the previous theme's `<link>`, matched on the exact href (precedence stylesheets are add-only, so React never removes the stale one itself).
 *   **`ASSET_VERSION` is generated, never hand-bumped (`src/lib/assetVersion.ts`):** it re-exports the sha256 in `src/lib/assetVersion.generated.ts`, written by `scripts/generate-asset-version.js` from `backend/public/css/wordjs-ui.css` (CRLF-normalized so Windows and CI hash the same bytes). It runs in `predev`/`prebuild` and CI regenerates + diffs the committed file (`git ls-files` guard + `git diff --exit-code`), so shipping a CSS change without the matching token fails the build instead of leaving browsers on a day-old stylesheet — which is exactly what the old manual constant did.
-*   **Editor preview (`src/components/PuckEditor.tsx`):** a `useEffect` injects the same two links — framework first, then the active theme's `style.css` — into the Puck preview **iframe** (`.puck-container iframe`) for true WYSIWYG. The injection is idempotent and id-guarded, so it's a safe no-op if the public layout already added them. Only the iframe canvas is themed; Puck's editing chrome stays outside it.
+*   **Editor canvas (`src/app/admin/canvas-frame/page.tsx`):** the Verso canvas is a real iframe whose document is its own admin route, and that route emits the same two links — framework first (`uiFrameworkHref`), then the active theme's `style.css` (`themeStylesheetHref`, `id="wjs-theme-stylesheet"`) — for true WYSIWYG. Both hrefs come from the same `src/lib/assetVersion.ts` helpers the public `ThemeLoader` uses, so canvas and live site can't disagree on the cache-busting version. Switching theme goes through `FrameController.swapThemeCss()`, which appends the new `<link>`, waits for its `onload` and only then removes the old one — no FOUC. Only the iframe canvas is themed; the editor's own chrome (panels, overlay, action bar) lives in the parent document and stays unthemed.
 *   **Customizer overlay (`src/components/public/ThemeTokenOverlay.tsx`):** a Server Component emits a sanitized `<style id="wjs-theme-mods">:root{…}</style>` from the active theme's `active_theme_mods` overrides (set by the admin customizer at `/admin/themes/customize`) **after** the theme stylesheet, so live `--wjs-*` edits win with no FOUC. Only `^--wjs-[a-z0-9-]+$` keys and injection-safe values (no `;{}:<>`) are emitted.
 *   **Theme structure (`src/app/(public)/layout.tsx`):** the (now async) public layout reads `active_theme_layout` (from `theme.json`'s `layout`) via `getSettings()` and hands the raw option to `src/components/public/PublicLayoutShell.tsx`, which normalizes it with `parseThemeLayout()` (`src/lib/themeLayout.ts`) and applies `containerWidth` + an opt-in two-column sidebar (`SidebarLayout.tsx`). The layout may additionally pass a server-composed `headerSlot`/`footerSlot` (`resolveEffectiveChrome()` from `src/lib/chromeData.ts` → `src/components/chrome/ChromeRenderer.tsx`); when no composition survives, the shell falls back to the built-in `Header`/`Footer` unchanged. The chrome (`Header`/`Footer`/`PostContent`/blog roll) consumes `--wjs-*` tokens and post bodies use `.wjs-content`, so the active theme drives the whole live look. See [themes.md → Theme integration](themes.md#theme-integration-with-the-live-site).
 *   **Legacy backend rendering:** the Handlebars `wordjs_head` helper (`backend/src/core/theme-engine.ts`) links the same stylesheet, but that public path is **no longer mounted** (Next.js renders the live site) — it applies only to the on-disk legacy template engine.
@@ -109,17 +110,27 @@ The app uses React Contexts to manage global state:
 **Location:** `src/lib/fontFaceCss.ts` + `src/components/SystemFontsLoader.tsx`
 The `@font-face` rules for WordJS-installed fonts are built by the shared, isomorphic `buildFontFaceCss()` (`src/lib/fontFaceCss.ts` — numeric weight parsed from the variant label, `format()` hint derived from the file extension, family names escaped). The root layout (`src/app/layout.tsx`) injects them into the **initial SSR `<head>`** (fonts fetched via the request-deduped, ISR-cached `getFonts()` from `server-api.ts`), so a page whose blocks reference a custom font paints in that font on first render — previously the faces were injected only client-side, so first paint fell back to the theme font (permanently, if client JS was blocked). `SystemFontsLoader` is the client-side refresher: it re-fetches `/fonts` and injects the **same builder's** output, picking up fonts uploaded after the SSR cache window and covering the admin editor.
 
-### `InlineTiptap` (in-place text editor)
-**Location:** `src/components/InlineTiptap.tsx`
-The in-place rich-text editor for Text/Heading blocks — edits the text **directly on the canvas**
-(Tiptap / ProseMirror) so it looks identical to the rendered block, with a floating toolbar.
-*   **Features:** bold / italic / underline / strikethrough, links, lists, **text color** (swatch
-    palette + visual picker + screen **eyedropper**), **font family** (from the fonts installed in
-    WordJS, via `/fonts`), **font size**, and **text alignment** (left/center/right/justify).
-*   **Usage:** opens via the per-block pencil action in Puck's overlay; saves continuously. Runs
-    inside the editor's iframe and is cross-frame aware (`editor.view.dom.ownerDocument`).
-*   **Note:** `puckConfig.tsx` still exports a legacy standalone `RichTextEditor`, no longer used
-    for inline editing.
+### Verso inline text engine (in-place editing)
+**Location:** `src/lib/verso/inline-engine/` (pure model/ops/parse/serialize — no React, no DOM) +
+`src/components/verso/inline/` (`VersoInline`, `VersoTextSurface`, `VersoBubbleMenu`).
+The in-place editor for text-bearing blocks edits the block's **own** text node on the canvas, so the
+editable inherits the block's real typography (`h2`, `.wp-block-text`, …) instead of approximating it.
+There is **no Tiptap and no ProseMirror** — the engine is in-house, and its document model is
+deliberately minimal.
+*   **What the model supports:** paragraphs and `ul`/`ol` lists (one paragraph per `<li>`), hard
+    breaks, and exactly three marks — **bold**, **italic** and **link** (`href` verbatim, plus a
+    new-tab flag that serializes to `target="_blank" rel="noopener noreferrer"`).
+*   **Floating toolbar (`VersoBubbleMenu`):** bold, italic, link (with the open-in-new-tab toggle and
+    a remove-link action), bullet list, numbered list, and clear formatting. Colour, font family,
+    size and line height are **not** here — they are per-block properties in the **Appearance** panel
+    (`src/components/blocks/AppearanceField.tsx`), which also carries tablet/mobile overrides.
+*   **Usage:** opens on double-click on the canvas, or from the block action bar when the block's
+    definition declares `inline` (`src/components/verso/overlay/actionBarCommands.ts`).
+*   **Commits:** partial commits are throttled through `handle.transact(setProps)` with a coalesce key,
+    so a burst of typing collapses into one undo entry; `Escape` or a click outside flushes and closes
+    the session. The serialized output is passed through the same isomorphic `sanitizeHTML` before it
+    reaches the document — defence in depth, since the engine's own output is already a fixed point of
+    the sanitizer.
 
 ## Navigation Components
 
@@ -168,16 +179,19 @@ Form controls with consistent rounded styling and focus states.
 
 ---
 
-## Visual Editing (Puck)
+## Visual Editing (Verso) — the editor in detail
 
-WordJS integrates **Puck** (by Measured) as its visual page builder.
+**Verso** is WordJS's own visual page builder. Nothing here is a wrapper around a third-party editor:
+the document store, the drop-target resolver and the rich-text engine are all in-tree.
 
 ### Configuration
-*   **Config File**: `src/components/puckConfig.tsx` defines the available components (and exports the `RichTextEditor`).
-*   **Plugin blocks**: active plugins' Puck components are compiled into the auto-generated `src/lib/puckPluginRegistry.ts` (`node scripts/generate-puck-plugin-registry.js`). The manifest declaration (`frontend.puckComponents`), the export contract (single `puckComponentDef` + default render vs. multi `puckComponents`), the activate → regenerate → restart flow and `--wjs-*` token theming are documented in `documentation/plugins.md` §13.
-*   **Editor Page**: `src/app/admin/pages/[id]/page.tsx` renders the editor interface (via `PuckEditor.tsx`).
-*   **Canvas & responsive preview**: `PuckEditor.tsx` renders the canvas in Puck's **iframe** for true WYSIWYG (the page's own styles/fonts and the fixed header/scroll behave as on the live site). A device switcher (desktop/tablet/mobile) sizes the iframe to the device width via `PreviewFrame` — desktop is full-bleed, tablet/mobile use a scaled device frame — so the responsive breakpoints evaluate against the device width and match the live site. Text/heading blocks are edited in place by `InlineTiptap` (see above).
-*   **Render Pages**: the public routes — `src/app/(public)/page.tsx` (home), `src/app/(public)/[slug]/page.tsx`, `src/app/(public)/[slug]/[postSlug]/page.tsx`, `src/app/(public)/pages/[slug]/page.tsx`, and `src/app/(public)/preview/[slug]/page.tsx` (the `force-dynamic`, `noindex` draft preview) — are **async Server Components** that fetch content server-side (see **Public Site Rendering (SSR)**) and hand it to the `PostContent`/`HomeContent` renderers — themselves Server Components, which render Puck-authored layouts through `src/components/content/ContentRenderer.tsx` (not Puck's `<Render>`, whose dist entry drags in client hooks and the full editor `Config`) and sanitized HTML for classic content. (`search/page.tsx` is the sixth `(public)` route; it renders its own result list rather than `PostContent`. There is no `[...slug]` catch-all route.)
+*   **Block registry**: `src/lib/verso/registry.ts` defines the field contract; `src/lib/verso/coreBlocks.tsx` declares the 30 core blocks against it (`CORE_BLOCK_TYPES`) and reuses the shared field controls from `src/components/blocks/` and the custom pickers still exported by `src/components/versoConfig.tsx` (`CategoryField`, `TemplateField`, `ColumnDistributionControl`, `ColumnStyleAccordion`) — one implementation, no drift.
+*   **Plugin blocks**: active plugins' Verso components are compiled into the auto-generated `src/lib/versoPluginRegistry.ts` (`node scripts/generate-verso-plugin-registry.js`). The manifest declaration (`frontend.versoComponents`), the export contract (single `versoComponentDef` + default render vs. multi `versoComponents`), the deprecated-but-still-supported pre-rename spellings, the activate → regenerate → restart flow and `--wjs-*` token theming are documented in `documentation/plugins.md` §13.
+*   **Editor Page**: `src/app/admin/pages/[id]/page.tsx` and `src/app/admin/posts/[id]/page.tsx` mount `src/components/verso/editor/VersoEditor.tsx`. The site chrome has its own thin variant of the same engine at `/admin/chrome` (`ChromeVersoEditor`).
+*   **Document store**: `src/lib/verso/store.ts` keeps the document as a normalized id→node map. It changes **only** through commands inside `transact()`, and history is stored as inverse patches, so undo/redo is a replay of inverses rather than a snapshot diff. A transaction that throws rolls back whole, and the `tx` object is sealed on exit so a stray async continuation can't mutate a committed document.
+*   **Canvas & responsive preview**: the canvas is an iframe (`src/components/verso/canvas/FrameController.tsx`) whose document is the `/admin/canvas-frame` route; the React tree is teleported into it through a portal, so no stylesheet mixes with the parent. The selection/drag/action-bar layer stays in the **parent** document, measured by `src/components/verso/overlay/GeometryStore.ts`. The device switcher (`ViewportControls.tsx` + the pure arithmetic in `canvas/viewport.ts`) sets the canvas container's CSS width to the real device width — desktop 1280, tablet 768, mobile 375 — and scales it down to fit, so the site's actual `@media` breakpoints fire instead of being simulated.
+*   **Drag and drop**: `src/lib/verso/dnd/resolve.ts` is a pure drop-target resolver with no DnD library behind it. (`@dnd-kit` is still a dependency, but only `/admin/widgets` uses it — the editor does not.)
+*   **Render Pages**: the public routes — `src/app/(public)/page.tsx` (home), `src/app/(public)/[slug]/page.tsx`, `src/app/(public)/[slug]/[postSlug]/page.tsx`, `src/app/(public)/pages/[slug]/page.tsx`, and `src/app/(public)/preview/[slug]/page.tsx` (the `force-dynamic`, `noindex` draft preview) — are **async Server Components** that fetch content server-side (see **Public Site Rendering (SSR)**) and hand it to the `PostContent`/`HomeContent` renderers — themselves Server Components, which render editor-authored layouts through `src/components/content/ContentRenderer.tsx` and sanitized HTML for classic content. (`search/page.tsx` is the sixth `(public)` route; it renders its own result list rather than `PostContent`. There is no `[...slug]` catch-all route.)
 
 ### Available Components
 
@@ -248,7 +262,7 @@ WordJS integrates **Puck** (by Measured) as its visual page builder.
 
 ### Component Security
 
-Two render-time components self-enforce XSS hardening (independent of the HTML sanitizer). Both now live under `src/components/content/` — `VideoEmbedBlock` in `blocks.tsx`, `SearchBarBlock` in its own island module — and `puckConfig.tsx` delegates to them, so the editor canvas and the live site enforce the same rules:
+Two render-time components self-enforce XSS hardening (independent of the HTML sanitizer). Both now live under `src/components/content/` — `VideoEmbedBlock` in `blocks.tsx`, `SearchBarBlock` in its own island module — and the Verso block registry delegates to them, so the editor canvas and the live site enforce the same rules:
 
 *   **VideoEmbed** renders an `<iframe>` only when the resolved URL is `https:` with a hostname in `{www.youtube.com, (www.)youtube-nocookie.com, player.vimeo.com}`; anything else (arbitrary `src`, `javascript:`/`data:`, a non-embed host) renders a placeholder instead. Every embed carries `sandbox="allow-scripts allow-same-origin allow-presentation"` + `referrerPolicy="strict-origin-when-cross-origin"`.
 *   **SearchBar** confines navigation to a same-origin **relative path**: the editor-controlled `searchPage` is resolved against `window.location.origin` and only its `pathname` is used when the origin matches; otherwise it falls back to `/search`. So an absolute/scheme/protocol-relative URL cannot become an open redirect or a `javascript:` navigation.
@@ -262,9 +276,12 @@ All components include a `css` field that allows custom styling with:
 - And more...
 
 ### Registering Custom Blocks
-Plugins can inject custom blocks into Puck via the frontend plugin registry.
-1. Define the block in your plugin's `client/puck/` folder.
-2. The build auto-generates `src/lib/puckPluginRegistry.ts`, which exports `puckPluginComponents` — a map merged into the core Puck config so plugin blocks appear alongside the built-in ones.
+Plugins can inject custom blocks into Verso via the frontend plugin registry.
+1. Declare the block as `frontend.versoComponents: { "entry": "client/verso/MyPluginVerso.tsx" }` in `manifest.json`, or just drop the file at `client/verso/<Pascal>Verso.tsx` and let the folder convention find it.
+2. Export `versoComponentDef` plus a default render component for a single block, or a `versoComponents` map for several.
+3. The build auto-generates `src/lib/versoPluginRegistry.ts`, which exports `versoPluginComponents`; `src/lib/verso/pluginBlocks.tsx` adapts those entries to `BlockDefinition`s and registers them in the editor's `BlockRegistry`, so plugin blocks appear alongside the built-in ones and go through the same shared-field wrapper.
+
+**Compatibility, permanently:** the pre-rename spellings all still resolve — manifest key `frontend.puckComponents`, folder `client/puck/<Pascal>Puck.tsx`, exports `puckComponentDef` / `puckComponents`. When both spellings are present the Verso one wins; finding an old one logs one deprecation line per plugin and otherwise behaves identically. Plugin render components also still receive the legacy `puck` prop (`{ isEditing, metadata, dragRef, renderDropZone }`), with `renderDropZone({ zone })` mapped onto the engine's slots — so a bundle compiled against the old contract keeps working without a recompile. The single resolver behind all of this is `backend/scripts/plugin-block-contract.js`, shared by the registry generator and the plugin bundlers. Full walkthrough: `documentation/plugins.md` §13.
 
 ---
 
@@ -275,7 +292,7 @@ Plugins can inject custom blocks into Puck via the frontend plugin registry.
 *   **`MarketplaceTab.tsx`** (`src/app/admin/plugins/MarketplaceTab.tsx`) browses the merged plugin catalog with search + category filters, showing each entry's version, size, requested permissions (rendered via `permMeta` from `src/lib/permissionMeta.ts`) and installed/active/update state; the per-source status (`sources[]`, each URL's `ok`/`count`/`error`) is surfaced in the tab, and the source list itself is admin-editable.
 *   **API client:** `marketplaceApi` in `src/lib/api.ts` — `catalog(refresh?)` → `GET /marketplace/catalog`, `install(id)` → `POST /marketplace/install`, `getSources()` → `GET /marketplace/sources`, `setSources(urls)` → `PUT /marketplace/sources` (admin-configurable catalog sources — no hard-coded URL).
 *   **Install flow:** a confirm dialog previews the plugin's requested permissions, then the backend downloads the zip **server-side**, verifies its **sha256** against the catalog entry and runs the exact same security pipeline as a manual upload. The plugin then appears in the **Installed** tab **inactive** with **default-deny** grants, where the admin activates it and grants its capabilities.
-*   **Registries:** marketplace-installed plugins flow through the same auto-generated registries as bundled ones — `src/lib/pluginRegistry.ts` (admin pages, hybrid dev/prod loading) and `src/lib/puckPluginRegistry.ts` (Puck blocks) — via the standard activate → regenerate → restart flow.
+*   **Registries:** marketplace-installed plugins flow through the same auto-generated registries as bundled ones — `src/lib/pluginRegistry.ts` (admin pages, hybrid dev/prod loading) and `src/lib/versoPluginRegistry.ts` (editor blocks) — via the standard activate → regenerate → restart flow. Both files are generated per machine and **gitignored**; never commit them.
 
 ## Theme Marketplace (admin) 🛒
 
@@ -336,7 +353,7 @@ The admin dashboard is fully translated. The public-facing site renders user con
 
 ## HTML Sanitization (isomorphic) 🛡️
 
-User-generated and Puck-rendered HTML is sanitized before it hits `dangerouslySetInnerHTML`. `src/lib/sanitize.ts` is **isomorphic** — it sanitizes on both the server (SSR) and the client so there is no pre-hydration XSS window.
+User-generated and editor-rendered HTML is sanitized before it hits `dangerouslySetInnerHTML`. `src/lib/sanitize.ts` is **isomorphic** — it sanitizes on both the server (SSR) and the client so there is no pre-hydration XSS window.
 
 > The file carries **no** `"use client"` directive — it is a shared module, so Server Components (`PostContent`/`HomeContent`, `components/content/blocks.tsx`) call `sanitizeHTML()` directly during RSC render, and Client Components keep using it through the DOMPurify path. The `typeof window` checks inside each export choose the implementation. Server Components that need plain text (SEO metadata) still use `htmlToText()` from `src/lib/server-api.ts`. Because server (`sanitize-html`) and client (DOMPurify) serialize styles slightly differently, the rendered HTML blocks set `suppressHydrationWarning`.
 
@@ -374,7 +391,7 @@ Companion headers: `X-Frame-Options: SAMEORIGIN`, `X-Content-Type-Options: nosni
 
 *   **`script-src` is permissive by necessity, so it is not the XSS control** — the server-side sanitizer in `sanitize.ts` is. Its directives stay because removing them is a regression:
     *   `blob:` is **required** — the admin loads each plugin's frontend bundle via `import(URL.createObjectURL(blob))` (`lib/pluginBundleLoader.ts`); without it every plugin admin UI and its icons fail (the "no icons" regression).
-    *   `'unsafe-eval'` — the Puck visual editor and some bundled libs use `Function()`/`eval` at runtime.
+    *   `'unsafe-eval'` — some bundled libs use `Function()`/`eval` at runtime. Note that the original reason for this directive was the retired Puck editor; Verso itself does not need it, and the directive has **not** been re-narrowed since the rewrite (see the caveat below).
     *   `'unsafe-inline'` — Next.js App Router emits inline bootstrap/hydration `<script>` tags (a per-request nonce migration is out of scope).
-*   **`https:` on `font-src`/`style-src`/`img-src`/`script-src`** is needed because the app loads its own theme assets and, crucially, the Puck editor renders the theme inside an `about:srcdoc` iframe where the CSP keyword `'self'` does **not** resolve to the page origin — same-origin `https:` assets would otherwise be blocked.
+*   **`https:` on `font-src`/`style-src`/`img-src`/`script-src`** covers the app's own theme assets (fonts under `/uploads/fonts`, theme CSS, images). It was widened for a second reason that **no longer applies**: the old editor rendered the theme inside an `about:srcdoc` iframe, where the CSP keyword `'self'` does not resolve to the page origin. Verso's canvas is an ordinary same-origin route (`<iframe src="/admin/canvas-frame">`) and there is no `srcdoc` iframe left in the frontend, so that justification is gone — but the policy in `frontend/next.config.ts` has not been re-narrowed yet, and its code comment still cites the retired editor. Tightening it is an open, unverified cleanup; do not assume it has happened.
 *   The **real structural value** is `frame-ancestors 'self'` (clickjacking, plus the legacy `X-Frame-Options: SAMEORIGIN`), `object-src 'none'`, and `base-uri 'self'`. `frame-ancestors` is `self` (not `none`) so WordJS can frame its OWN pages same-origin (the theme Customizer previews the live site in an iframe); cross-origin framing stays blocked.

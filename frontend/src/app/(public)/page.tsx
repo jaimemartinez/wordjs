@@ -63,7 +63,7 @@ export default async function HomePage() {
                 <div className="space-y-4">
                     {siteJsonLd}
                     <ThemeTemplate kind="home">
-                        <HomeContent post={page} />
+                        <HomeContent post={page} settings={settings} />
                     </ThemeTemplate>
                 </div>
             );

@@ -11,7 +11,7 @@
 /**
  * `icon` is the legacy Font Awesome class (still consumed elsewhere); `ms` is the Material Symbols
  * ligature name for the Stitch editor chrome (<MSym/>). The MS font is a NAMED-ICON SUBSET — a name
- * outside it renders as an empty box — so `ms` values MUST exist in the subset (see puck-theme.css);
+ * outside it renders as an empty box — so `ms` values MUST exist in the subset (see editor-theme.css);
  * consumers fall back to "widgets" when `ms` is missing.
  */
 export type BlockMeta = { icon: string; ms?: string; group: string; desc?: string; label?: string };

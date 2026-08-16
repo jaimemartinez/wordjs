@@ -719,6 +719,51 @@ describe("loadPluginBlockConfigs — only a 404 may be cached as 'ships no block
         const { loadActivePluginBlocks } = await freshLoader();
         await expect(loadActivePluginBlocks(['broken', 'faq'])).resolves.toEqual({});
         expect(console.warn).toHaveBeenCalledWith(
-            expect.stringContaining("Puck blocks unavailable for 'broken'"), expect.anything());
+            expect.stringContaining("Blocks unavailable for 'broken'"), expect.anything());
+    });
+});
+
+/**
+ * The editor was renamed to Verso, but a plugin's block bundle is a COMPILED artifact published by a
+ * third party: every catalog bundle on disk still exports the historical `puckComponents` /
+ * `puckComponentDef`, and nothing in this repo rebuilds them. If the loader read only the new names it
+ * would resolve `{}` for all of them — every marketplace block would disappear from the editor
+ * silently, with no error to trace. So BOTH spellings are read, new first.
+ */
+describe("blocksFromModule — the block-export contract accepts the new AND the historical names", () => {
+    const def = { label: 'FAQ', fields: {}, defaultProps: {} };
+    const render = () => null;
+
+    it("MULTI, new name: `versoComponents` is spread as-is", async () => {
+        const { blocksFromModule } = await freshLoader();
+        expect(blocksFromModule('faq', { versoComponents: { A: def, B: def } })).toEqual({ A: def, B: def });
+    });
+
+    it("MULTI, historical name: `puckComponents` still works (the 31 published bundles)", async () => {
+        const { blocksFromModule } = await freshLoader();
+        expect(blocksFromModule('faq', { puckComponents: { A: def } })).toEqual({ A: def });
+    });
+
+    it("SINGLE, new name: `versoComponentDef` + default is composed under the PascalCase slug", async () => {
+        const { blocksFromModule } = await freshLoader();
+        expect(blocksFromModule('online-store', { versoComponentDef: def, default: render }))
+            .toEqual({ OnlineStore: { ...def, render } });
+    });
+
+    it("SINGLE, historical name: `puckComponentDef` + default is composed identically", async () => {
+        const { blocksFromModule } = await freshLoader();
+        expect(blocksFromModule('online-store', { puckComponentDef: def, default: render }))
+            .toEqual({ OnlineStore: { ...def, render } });
+    });
+
+    it("the NEW name wins when a bundle somehow exports both", async () => {
+        const { blocksFromModule } = await freshLoader();
+        const fresh = { Fresh: def };
+        expect(blocksFromModule('faq', { versoComponents: fresh, puckComponents: { Old: def } })).toEqual(fresh);
+    });
+
+    it("a bundle exporting neither yields {} (no block, not a crash)", async () => {
+        const { blocksFromModule } = await freshLoader();
+        expect(blocksFromModule('faq', { default: render })).toEqual({});
     });
 });

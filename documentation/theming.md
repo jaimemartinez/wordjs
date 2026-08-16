@@ -102,7 +102,7 @@ only if you want a specific on-color.
 ### Alias tokens (visual-editor block names) — do not override
 
 The framework `:root` also defines **21 alias tokens** that map the token names referenced by the
-visual-editor (Puck) block renderer onto the canonical tokens above: `--wjs-h{1..6}-size` →
+visual-editor (Verso) block renderer onto the canonical tokens above: `--wjs-h{1..6}-size` →
 `--wjs-h{1..6}`, `--wjs-h{1..6}-weight` → `--wjs-heading-weight`, plus `--wjs-font-family`,
 `--wjs-color-text-heading`, `--wjs-color-text-dim`, `--wjs-color-primary-text` (→
 `--wjs-color-on-primary`), `--wjs-foreground`, `--wjs-bg-surface-hover`, `--wjs-border-radius`,
@@ -262,7 +262,8 @@ on top of it:
   oversized desktop headings shrink on phones while a smaller theme scale still wins.
 - **Content containment (every width)** — wide tables and `pre` blocks scroll inside their own
   container, and long unbreakable strings (URLs, tokens) wrap, in both `.wjs-content` and the visual
-  editor's `.puck-content` / `.wp-block-*`, so author content never forces body-level horizontal
+  editor's `.puck-content` / `.wp-block-*` (both class names are part of the public HTML contract and
+  are deliberately unchanged by the editor rename), so author content never forces body-level horizontal
   scroll.
 - **Device visibility** — the editor's per-block "hide on device" renders as `.wjs-hide-mobile` /
   `.wjs-hide-tablet` / `.wjs-hide-desktop` (breakpoints `<768` / `768–1023` / `≥1024`).

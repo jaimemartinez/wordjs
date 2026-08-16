@@ -1,22 +1,22 @@
 "use client";
 
 /**
- * Accessibility audit for the Puck canvas (Webflow-audit parity), dependency-free.
+ * Accessibility audit del lienzo del editor (Webflow-audit parity), dependency-free.
  *
  * `runA11yAudit(doc)` walks the CANVAS document (pass `iframe.contentDocument`) and returns a
  * flat issue list; each issue is mapped back to its block by climbing to the closest
- * `data-puck-component` ancestor (the attribute the fork's DraggableComponent stamps on every
- * block root inside the iframe). `A11yPanel` renders the list in the editor chrome (M3 --ed-*
- * tokens) and reports clicks so the integrator can select the offending block via
- * `window.puckDispatch({ type: "setUi", ui: { itemSelector } })`.
+ * `data-wjs-block-id` ancestor (el atributo que VersoBlock estampa en la raíz de cada bloque dentro
+ * del iframe). `A11yPanel` renders the list in the editor chrome (M3 --ed-* tokens) y reporta los
+ * clics para que el integrador seleccione el bloque infractor.
  *
  * SSR-safe: no `window`/`document` at module scope; the audit only touches the doc it is given.
  */
 
 import React from "react";
 import MSym from "./MSym";
+import { BLOCK_ATTR, SCAFFOLD_ATTR } from "./canvasGuides";
 import { useI18n } from "@/contexts/I18nContext";
-import { trStr } from "@/lib/puckI18n";
+import { trStr } from "@/lib/editorI18n";
 
 export type A11yIssue = {
     severity: "error" | "warning";
@@ -30,24 +30,30 @@ export type A11yIssue = {
 // Audit
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Editor-owned elements inside the canvas doc (guides/overlays) — never audited. */
-const EDITOR_OVERLAY_SELECTOR =
-    // NOT [data-puck-dnd] as an ANCESTOR match: every block ROOT carries it (dnd-kit handle), so a
-    // closest() on it silently limited the whole audit to theme chrome. The root itself IS editor
-    // scaffolding though (role="button" + aria from dnd-kit → phantom "unnamed button" findings),
-    // so isEditorEl also skips the element when IT carries the attribute — content stays audited.
-    "#wjs-spacing-overlay, #wjs-guides, [data-puck-overlay], [data-puck-overlay-portal]";
+/**
+ * Editor-owned elements inside the canvas doc (guides/overlays) — never audited.
+ *
+ * Solo los dos artefactos de guías: en este motor la capa de selección/arrastre vive en el
+ * documento PADRE, no dentro del iframe, así que no hay más andamio que saltar aquí. (El fork
+ * viejo sí metía su overlay en el iframe y este selector listaba además sus `[data-puck-overlay*]`;
+ * borrado el fork, nadie los estampa y emparejarlos era una comprobación muerta.)
+ *
+ * El elemento marcado con SCAFFOLD_ATTR se salta ÉL, no su subárbol — su contenido sigue
+ * auditándose. Emparejar el andamio como ANCESTRO limitaba la auditoría entera al chrome del tema:
+ * defecto real y caro de diagnosticar, de ahí la separación en isEditorEl.
+ */
+const EDITOR_OVERLAY_SELECTOR = "#wjs-spacing-overlay, #wjs-guides";
 
 function isEditorEl(el: Element): boolean {
     try {
-        return el.hasAttribute("data-puck-dnd") || !!el.closest(EDITOR_OVERLAY_SELECTOR);
+        return el.hasAttribute(SCAFFOLD_ATTR) || !!el.closest(EDITOR_OVERLAY_SELECTOR);
     } catch {
         return false;
     }
 }
 
 function blockIdOf(el: Element): string | undefined {
-    return el.closest("[data-puck-component]")?.getAttribute("data-puck-component") || undefined;
+    return el.closest(`[${BLOCK_ATTR}]`)?.getAttribute(BLOCK_ATTR) || undefined;
 }
 
 /** Compact, single-line description of the element (opening tag + a slice of its text). */
@@ -98,10 +104,14 @@ function hasAssociatedLabel(input: Element, doc: Document): boolean {
     if (input.closest("label")) return true;
     const id = input.getAttribute("id");
     if (id) {
-        try {
-            if (doc.querySelector(`label[for="${id.replace(/"/g, '\\"')}"]`)) return true;
-        } catch {
-            /* invalid id for a selector — fall through */
+        // No se construye un selector por concatenación. Escapar SOLO `"` era saneo incompleto: el
+        // propio escape (`\`) quedaba sin escapar, así que un id `a\` producía `label[for="a\"]` —
+        // la comilla quedaba anulada y el selector se comía el resto del documento (o lanzaba, y la
+        // pregunta se respondía "no" por accidente). Se compara el atributo REAL, sin sintaxis CSS
+        // de por medio: ningún id puede cambiar el significado de la consulta.
+        const labels = doc.getElementsByTagName("label");
+        for (let i = 0; i < labels.length; i++) {
+            if (labels[i].getAttribute("for") === id) return true;
         }
     }
     const title = input.getAttribute("title");
@@ -178,6 +188,7 @@ const CONTRAST_SKIP_TAGS = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE", "
 
 /** Run every rule over the canvas document. Returns [] for a missing/empty doc. */
 export function runA11yAudit(doc: Document): A11yIssue[] {
+    const isEditor = isEditorEl;
     const issues: A11yIssue[] = [];
     if (!doc || !doc.body) return issues;
     const win = doc.defaultView;
@@ -188,7 +199,7 @@ export function runA11yAudit(doc: Document): A11yIssue[] {
 
     // 1) Images without alt (alt="" = decorative → ok).
     doc.body.querySelectorAll("img").forEach((img) => {
-        if (isEditorEl(img) || img.getAttribute("aria-hidden") === "true") return;
+        if (isEditor(img) || img.getAttribute("aria-hidden") === "true") return;
         if (img.getAttribute("role") === "presentation") return;
         if (img.getAttribute("alt") === null) {
             push("error", "img-alt", "La imagen no tiene texto alternativo (alt)", img);
@@ -199,7 +210,7 @@ export function runA11yAudit(doc: Document): A11yIssue[] {
     let prevLevel: number | null = null;
     let h1Count = 0;
     doc.body.querySelectorAll("h1,h2,h3,h4,h5,h6").forEach((h) => {
-        if (isEditorEl(h)) return;
+        if (isEditor(h)) return;
         const level = Number(h.tagName[1]);
         if (level === 1) {
             h1Count++;
@@ -213,7 +224,7 @@ export function runA11yAudit(doc: Document): A11yIssue[] {
 
     // 3) Links/buttons without an accessible name.
     doc.body.querySelectorAll("a[href], button, [role='button']").forEach((el) => {
-        if (isEditorEl(el) || el.getAttribute("aria-hidden") === "true") return;
+        if (isEditor(el) || el.getAttribute("aria-hidden") === "true") return;
         if (!accessibleName(el, doc)) {
             push("error", "accessible-name", "Enlace o botón sin texto accesible", el);
         }
@@ -225,7 +236,7 @@ export function runA11yAudit(doc: Document): A11yIssue[] {
             "input:not([type=hidden]):not([type=button]):not([type=submit]):not([type=reset]):not([type=image]), select, textarea"
         )
         .forEach((el) => {
-            if (isEditorEl(el) || el.getAttribute("aria-hidden") === "true") return;
+            if (isEditor(el) || el.getAttribute("aria-hidden") === "true") return;
             if (!hasAssociatedLabel(el, doc)) {
                 push("error", "input-label", "Campo de formulario sin etiqueta asociada", el);
             }
@@ -234,7 +245,7 @@ export function runA11yAudit(doc: Document): A11yIssue[] {
     // 5) Text contrast (WCAG AA: 4.5:1; large text — ≥24px, or ≥18.66px bold — 3:1).
     if (win) {
         doc.body.querySelectorAll("*").forEach((el) => {
-            if (CONTRAST_SKIP_TAGS.has(el.tagName) || isEditorEl(el) || !hasDirectText(el)) return;
+            if (CONTRAST_SKIP_TAGS.has(el.tagName) || isEditor(el) || !hasDirectText(el)) return;
             const rect = el.getBoundingClientRect();
             if (rect.width <= 1 || rect.height <= 1) return; // hidden / sr-only clipped
             const cs = win.getComputedStyle(el);
@@ -255,14 +266,14 @@ export function runA11yAudit(doc: Document): A11yIssue[] {
 
     // 6) Iframes without a title.
     doc.body.querySelectorAll("iframe").forEach((el) => {
-        if (isEditorEl(el)) return;
+        if (isEditor(el)) return;
         const title = el.getAttribute("title") || el.getAttribute("aria-label");
         if (!title || !title.trim()) push("warning", "iframe-title", "El iframe no tiene título", el);
     });
 
     // 7) Positive tabindex.
     doc.body.querySelectorAll("[tabindex]").forEach((el) => {
-        if (isEditorEl(el)) return;
+        if (isEditor(el)) return;
         const v = parseInt(el.getAttribute("tabindex") || "", 10);
         if (Number.isFinite(v) && v > 0) push("warning", "tabindex-positive", "Evita tabindex mayor que 0", el);
     });
@@ -408,7 +419,7 @@ export function A11yPanel({
                                         </span>
                                         <span
                                             className="text-[10px] text-[var(--ed-on-surface-variant)] truncate"
-                                            style={{ fontFamily: "var(--puck-font-family-monospaced)" }}
+                                            style={{ fontFamily: "var(--ed-font-family-monospaced)" }}
                                         >
                                             {issue.snippet}
                                         </span>

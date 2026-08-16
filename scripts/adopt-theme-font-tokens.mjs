@@ -27,6 +27,20 @@ const asked = argv.filter((a, i) => !a.startsWith("--") && !(rootIdx >= 0 && i =
 /** Strip comments so a commented-out rule never wins. */
 const decomment = (css) => css.replace(/\/\*[\s\S]*?\*\//g, "");
 
+/**
+ * Read a file, or report "not there" — instead of asking existsSync() first and reading afterwards.
+ * The two-step form answers a question about theme.json a moment before this script REWRITES it
+ * (js/file-system-race); one syscall cannot be raced against itself.
+ */
+function readTextOrNull(p) {
+    try {
+        return fs.readFileSync(p, "utf8");
+    } catch (e) {
+        if (e.code === "ENOENT" || e.code === "ENOTDIR" || e.code === "EISDIR") return null;
+        throw e;
+    }
+}
+
 /** The font-family declared by the first rule whose selector list matches one of `selectors`. */
 function familyFor(css, selectors) {
     const re = /([^{}]+)\{([^}]*)\}/g;
@@ -42,10 +56,10 @@ function familyFor(css, selectors) {
 
 /** Families the theme actually ships, in @font-face order — the last-resort source. */
 function shippedFamilies(dir) {
-    const p = path.join(dir, "fonts.css");
-    if (!fs.existsSync(p)) return [];
+    const fontsCss = readTextOrNull(path.join(dir, "fonts.css"));
+    if (fontsCss === null) return [];
     const out = [];
-    for (const m of fs.readFileSync(p, "utf8").matchAll(/font-family:\s*['"]([^'"]+)['"]/g)) {
+    for (const m of fontsCss.matchAll(/font-family:\s*['"]([^'"]+)['"]/g)) {
         if (!out.includes(m[1])) out.push(m[1]);
     }
     return out;
@@ -60,11 +74,14 @@ for (const slug of slugs) {
     const dir = path.join(ROOT, slug);
     const metaPath = path.join(dir, "theme.json");
     const cssPath = path.join(dir, "style.css");
-    if (!fs.existsSync(metaPath) || !fs.existsSync(cssPath)) continue;
+    // The read IS the "is this a theme dir?" test — and it is the same read whose result we use.
+    const metaRaw = readTextOrNull(metaPath);
+    const cssRaw = readTextOrNull(cssPath);
+    if (metaRaw === null || cssRaw === null) continue;
 
-    const meta = JSON.parse(fs.readFileSync(metaPath, "utf8"));
+    const meta = JSON.parse(metaRaw);
     meta.tokens = meta.tokens || {};
-    const css = decomment(fs.readFileSync(cssPath, "utf8"));
+    const css = decomment(cssRaw);
     // A theme that already declares the family — in tokens or anywhere in its CSS — is left alone.
     if (Object.keys(meta.tokens).some((k) => k.startsWith("--wjs-font-family-")) || /--wjs-font-family-/.test(css)) continue;
 

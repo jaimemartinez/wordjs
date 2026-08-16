@@ -94,17 +94,37 @@ export const CHROME_MAX_BYTES = 64 * 1024;
 export const CHROME_MAX_BLOCKS = 100;
 export const CHROME_MAX_DEPTH = 3;
 
-// ChromeButton.href: relative path ("/...") or absolute http(s) only. "//host" is protocol-RELATIVE
-// (navigates to an external host), so it does NOT count as relative; javascript:, data: and every
-// other scheme fail the http(s) test.
+// Tabulador, salto de linea y retorno de carro: los tres caracteres que el parser de URL del
+// navegador BORRA de la cadena ANTES de parsearla (WHATWG URL, "remove all ASCII tab or newline").
+// Validar la cadena CRUDA es por tanto validar algo que el navegador nunca llega a ver.
+const URL_STRIPPED_CONTROLS = /[\t\n\r]/g;
+
+// ChromeButton.href: ruta relativa ("/...") o http(s) absoluta, nada mas. "//host" es
+// protocolo-RELATIVA (navega a un host externo), asi que NO cuenta como relativa; javascript:,
+// data: y cualquier otro esquema fallan el test de http(s).
+//
+// RESOLVER, no predicado: devuelve el valor LIMPIO que debe llegar al atributo, porque validar una
+// cadena y pintar OTRA es justamente el hueco. "/\t/evil.example" empieza por "/" y su segundo
+// caracter no es "/" ni "\", asi que pasaba el chequeo — pero el navegador borra el tabulador y
+// acaba resolviendo https://evil.example/ (open redirect almacenado). Se limpia ANTES de decidir,
+// exactamente lo que borra el parser, para que lo validado sea lo que el navegador vera.
+// Espejado en backend/src/core/chrome-validate.ts (isSafeHref).
+export function safeChromeHref(raw: unknown): string | undefined {
+    if (typeof raw !== "string" || raw.length === 0) return undefined;
+    const href = raw.replace(URL_STRIPPED_CONTROLS, "");
+    // La limpieza puede vaciar la cadena ("\t\n" era todo control): un href vacio no es navegable.
+    if (href.length === 0) return undefined;
+    // '\' cuenta como '/' al parsear, asi que '/\evil.example' es authority-relative igual que
+    // '//evil.example' y navega fuera del sitio. Se rechazan ambas grafias.
+    if (/^\/[/\\]/.test(href)) return undefined;
+    if (href.startsWith("/")) return href;
+    return /^https?:\/\//i.test(href) ? href : undefined;
+}
+
+// Envoltorio fino para los consumidores que solo necesitan el si/no (el spec de props de abajo).
+// Quien vaya a PINTAR el valor debe usar safeChromeHref y pintar SU retorno, no la cadena cruda.
 export function isSafeChromeHref(href: unknown): href is string {
-    if (typeof href !== "string" || href.length === 0) return false;
-    // '\' counts as '/' during URL parsing, so '/\evil.example' is authority-relative just like
-    // '//evil.example' and navigates off-site. Both spellings are rejected (mirrored in the backend
-    // validator — the parity harness pins the two implementations together).
-    if (/^\/[/\\]/.test(href)) return false;
-    if (href.startsWith("/")) return true;
-    return /^https?:\/\//i.test(href);
+    return safeChromeHref(href) !== undefined;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {

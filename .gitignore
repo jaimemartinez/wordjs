@@ -89,6 +89,10 @@ backend/plugins/toscano-platform/
 frontend/src/app/portal/toscano/
 
 
+# Verso: corpus de contenido REAL de producción para el gate de round-trip (títulos/HTML sin
+# anonimizar, incluye bloques de plugins de cliente) — regenerable con scripts/verso-corpus-export.mjs
+documentation/verso/corpus/
+
 # Local knowledge-graph cache + scratch files (regenerated; do not track)
 graphify-out/
 temp_*
@@ -115,5 +119,5 @@ gateway/cluster-tokens.json
 # NOTE: assetVersion.generated.ts is deliberately NOT here — it is a deterministic hash of
 # wordjs-ui.css and CI has a drift gate that fails if it is untracked.
 frontend/src/lib/pluginRegistry.ts
-frontend/src/lib/puckPluginRegistry.ts
+frontend/src/lib/versoPluginRegistry.ts
 frontend/src/app/admin/plugin/\[slug\]/page.tsx

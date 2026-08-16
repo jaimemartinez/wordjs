@@ -93,6 +93,9 @@ router.use('/webhooks', require('./webhooks'));
 router.use('/audit', require('./audit'));
 router.use('/forms', require('./forms'));
 router.use('/presence', require('./presence'));
+// Colaboración en tiempo real de Verso (SSE de bajada + POST de subida). Distinta de `/presence`,
+// que es un aviso de "alguien más tiene esto abierto"; esta es la edición simultánea real.
+router.use('/collab', require('./collab'));
 router.use('/import', require('./import'));
 router.use('/', exportRoutes);
 

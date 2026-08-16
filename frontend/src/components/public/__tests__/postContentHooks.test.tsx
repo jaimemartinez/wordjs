@@ -50,7 +50,7 @@ const basePost = {
     author: { displayName: 'Ada' },
 } as unknown as Post;
 
-const puckPost = {
+const versoPost = {
     ...basePost,
     meta: {
         _puck_data: {
@@ -76,7 +76,7 @@ const emits = (html: string, cls: string) =>
 
 describe('PostContent — the post frame is emitted on both body paths', () => {
     const classic = render(basePost, 'travel-notes');
-    const puck = render(puckPost, 'travel-notes');
+    const puck = render(versoPost, 'travel-notes');
 
     it('renders two genuinely different bodies (or the comparison below is worthless)', () => {
         // The classic body is the sanitized HTML; the Puck body is the rendered block tree. If either

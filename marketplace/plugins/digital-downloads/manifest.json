@@ -13,8 +13,8 @@
             "entry": "client/admin/page.tsx",
             "slug": "downloads"
         },
-        "puckComponents": {
-            "entry": "client/puck/DigitalDownloadsPuck.tsx"
+        "versoComponents": {
+            "entry": "client/verso/DigitalDownloadsVerso.tsx"
         }
     },
     "adminMenu": {

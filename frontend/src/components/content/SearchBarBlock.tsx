@@ -1,10 +1,10 @@
 "use client";
 /**
  * SearchBar block — client island (input state + same-origin navigation guard). Shared verbatim by
- * the editor canvas (via puckConfig) and the public ContentRenderer.
+ * the editor canvas (via versoConfig) and the public ContentRenderer.
  */
 import React from "react";
-import { blockVars, unit } from "@/components/puck/blockVars";
+import { blockVars, unit } from "@/components/blocks/blockVars";
 
 export default function SearchBarBlock({ placeholder, buttonText, searchPage, align, width, inputBg, inputBorderColor, inputRadius, buttonBg, buttonColor, buttonRadius, css }: any) {
     const [query, setQuery] = React.useState("");

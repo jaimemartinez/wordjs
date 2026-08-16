@@ -2,7 +2,7 @@
     "id": "contact-forms",
     "name": "Contact Forms",
     "version": "1.0.0",
-    "description": "Form builder (Contact Form 7 / WPForms parity): create forms with custom fields, embed them anywhere with the Puck block ContactForms, collect visitor submissions into an admin inbox with unread tracking, CSV export and optional email notification.",
+    "description": "Form builder (Contact Form 7 / WPForms parity): create forms with custom fields, embed them anywhere with the Verso block ContactForms, collect visitor submissions into an admin inbox with unread tracking, CSV export and optional email notification.",
     "author": "WordJS",
     "isolated": true,
     "backend": {
@@ -13,8 +13,8 @@
             "entry": "client/admin/page.tsx",
             "slug": "contact-forms"
         },
-        "puckComponents": {
-            "entry": "client/puck/ContactFormsPuck.tsx"
+        "versoComponents": {
+            "entry": "client/verso/ContactFormsVerso.tsx"
         }
     },
     "adminMenu": {

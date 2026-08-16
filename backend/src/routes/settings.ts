@@ -49,6 +49,11 @@ const PUBLIC_SETTINGS = [
     'site_chrome_header',   // site-level composable chrome (JSON, contract v1) — the SSR public
     'site_chrome_footer',   //   layout renders these; written ONLY via PUT /api/v1/chrome/:part
     'site_chrome_announcement', // optional top/announcement bar, full-bleed above the header
+    'wjs_ix_presets',       // preajustes de interacción del sitio (JSON, motor F9). PÚBLICO porque
+                            // el renderer del sitio los necesita para compilar el CSS de la página
+                            // en el servidor. No son secreto: describen movimiento, y su efecto ya
+                            // es visible en la hoja emitida. Un bloque guarda solo el ID del
+                            // preajuste, así que editarlos NO toca un byte de `_puck_data`.
     'users_can_register',
     // 'admin_email' - SECURITY: Removed from public to prevent email harvesting
     'default_role',
@@ -113,7 +118,15 @@ const DEDICATED_WRITE_API = new Set([
 // Public settings that are DERIVED, not stored. Computed per request from the memoized theme scan
 // (core/themes), so they add no SQL and no fs to the read path — and deliberately absent from
 // ALL_SETTINGS, because an option row for one of these could only ever drift from the theme on disk.
-const DERIVED_PUBLIC_SETTINGS: Record<string, () => Promise<any>> = {
+//
+// A MAP, not an object literal (SECURITY / CodeQL #611, js/unvalidated-dynamic-method-call). The key
+// arrives from the URL (`GET /settings/:key`) and selects a FUNCTION TO CALL — it chooses STRUCTURE,
+// not a value. An object indexed by an outside string is one prototype hop away from dispatching
+// `constructor` / `toString` / `valueOf`, and `__proto__` is a live accessor on every object literal;
+// a hasOwnProperty guard closes today's hole but leaves the dangerous SHAPE (an external string
+// indexing an object) in place for the next edit to reopen. A Map has no prototype chain to walk and
+// no property access at all: `.get()` can only ever return something `.set()` put there.
+const DERIVED_PUBLIC_SETTINGS: Map<string, () => Promise<any>> = new Map(Object.entries({
     // theme.json `version` of the ACTIVE theme. The frontend appends it to the theme stylesheet URL
     // so an in-place theme edit (PUT /api/v1/themes/:slug bumps the patch) busts the browser/CDN
     // copy — the build-time asset version cannot see that edit. That route purges the 'settings' tag.
@@ -126,7 +139,7 @@ const DERIVED_PUBLIC_SETTINGS: Record<string, () => Promise<any>> = {
     // Boolean, not a string: `Boolean("false")` is true, and a health flag that reads backwards when
     // stringified is worse than no flag. Derived, so it can never drift from the directory on disk.
     active_theme_missing: isActiveThemeMissing
-};
+}));
 
 // Admin-ONLY derived settings: computed per request, never stored, and returned only from GET
 // /settings/all (behind authenticate + isAdmin). Same shape as DERIVED_PUBLIC_SETTINGS, but deliberately
@@ -136,7 +149,10 @@ const DERIVED_PUBLIC_SETTINGS: Record<string, () => Promise<any>> = {
 //
 // State is read from core/plugin-isolate (populated by the boot-time probe, or lazily on first isolate
 // load). 'unknown' until the probe resolves; 'degraded' is the dangerous "looks secure but isn't" state.
-const DERIVED_ADMIN_SETTINGS: Record<string, () => Promise<any>> = {
+// Same Map discipline as DERIVED_PUBLIC_SETTINGS above (this one is only ever enumerated, never
+// indexed by an outside key — keeping the two the same shape is what stops a future single-key admin
+// route from reintroducing the object-indexing pattern).
+const DERIVED_ADMIN_SETTINGS: Map<string, () => Promise<any>> = new Map(Object.entries({
     // Raw hardening state enum: 'unknown' | 'unsupported' | 'disabled' | 'active' | 'degraded'.
     sandbox_hardening_state: async () => {
         try { return require('../core/plugin-isolate').getSandboxHardeningState(); } catch { return 'unknown'; }
@@ -155,11 +171,20 @@ const DERIVED_ADMIN_SETTINGS: Record<string, () => Promise<any>> = {
     email_provider_available: async () => {
         try { return require('../core/mail-provider').isEmailProviderAvailable() === true; } catch { return false; }
     }
-};
+}));
 
-const derivedSetting = (key: string) =>
-    // hasOwnProperty, not `in`: `constructor`/`toString` must not resolve through the prototype.
-    Object.prototype.hasOwnProperty.call(DERIVED_PUBLIC_SETTINGS, key) ? DERIVED_PUBLIC_SETTINGS[key] : null;
+/**
+ * Resolve a URL-supplied key to a derived-setting COMPUTE FUNCTION, or null.
+ *
+ * The allowlist IS the Map: `.get()` on a Map never consults a prototype, so `constructor`,
+ * `__proto__`, `toString`, `valueOf` and every other inherited member resolve to undefined instead of
+ * to a callable. `?? null` normalizes the miss, and the `typeof === 'function'` assertion is the last
+ * word: only something this module put in the Map is ever invoked.
+ */
+const derivedSetting = (key: string): (() => Promise<any>) | null => {
+    const compute = DERIVED_PUBLIC_SETTINGS.get(key);
+    return typeof compute === 'function' ? compute : null;
+};
 
 // ---------------------------------------------------------------------------
 // Per-key write validation
@@ -182,7 +207,52 @@ const TEXT_DIRECTIONS = ['', 'ltr', 'rtl', 'auto'];
 // character admitted ends up in an attribute.
 const LOCALE_RE = /^[A-Za-z]{2,3}([-_][A-Za-z]{4})?([-_]([A-Za-z]{2}|[0-9]{3}))?$/;
 
+// Preajustes de interacción del sitio (`wjs_ix_presets`, motor F9). Se guardan como JSON y los
+// consume el compilador del frontend, que YA los trata como dato hostil: los pasa uno a uno por
+// `normalizeIxPreset` y descarta lo que no encaje (frontend/src/lib/verso/interactions/sitePresets).
+//
+// Esto es la SEGUNDA vuelta de la llave, en la escritura, y deliberadamente ESTRUCTURAL en vez de
+// semántica: el backend no compila animaciones y no va a mantener una copia de las 8 propiedades
+// permitidas —dos validadores de la misma gramática acaban discrepando, y el que manda es el que
+// compila—. Lo que sí impone aquí es lo que el lector no puede arreglar después: que sea JSON, que
+// sea una lista, que no ocupe megabytes y que no venga con 10.000 entradas. Un JSON de 40 MB
+// bloquea el hilo del render antes de que ningún normalizador llegue a opinar.
+const IX_PRESETS_MAX_BYTES = 256 * 1024;
+const IX_PRESETS_MAX_ENTRIES = 50;
+const IX_PRESET_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+
 const SETTING_VALIDATORS: Record<string, (v: any) => string | null> = {
+    wjs_ix_presets: (v: any) => {
+        if (v === '' || v === null || v === undefined) return null; // sin preajustes de sitio
+        if (typeof v !== 'string') return 'wjs_ix_presets must be a JSON string.';
+        if (v.length > IX_PRESETS_MAX_BYTES) {
+            return `wjs_ix_presets must be at most ${IX_PRESETS_MAX_BYTES} characters.`;
+        }
+        let parsed: any;
+        try {
+            parsed = JSON.parse(v);
+        } catch {
+            return 'wjs_ix_presets must be valid JSON.';
+        }
+        if (!Array.isArray(parsed)) return 'wjs_ix_presets must be a JSON array of presets.';
+        if (parsed.length > IX_PRESETS_MAX_ENTRIES) {
+            return `wjs_ix_presets must contain at most ${IX_PRESETS_MAX_ENTRIES} presets.`;
+        }
+        for (const entry of parsed) {
+            if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+                return 'Each wjs_ix_presets entry must be an object.';
+            }
+            // El id `sys:` está RESERVADO al catálogo del código: si un ajuste pudiera declararlo,
+            // redefiniría en silencio el movimiento que traen los bloques nuevos por defecto.
+            if (typeof entry.id !== 'string' || !IX_PRESET_ID_RE.test(entry.id)) {
+                return 'Each wjs_ix_presets entry needs an `id` slug (a-z, 0-9, - and _; the `sys:` namespace is reserved).';
+            }
+            if (!Array.isArray(entry.tracks)) {
+                return 'Each wjs_ix_presets entry needs a `tracks` array.';
+            }
+        }
+        return null;
+    },
     WPLANG: (v: any) => {
         if (v === '' || v === null || v === undefined) return null; // unset → the resolver's "en"
         if (typeof v !== 'string' || !LOCALE_RE.test(v)) {
@@ -220,7 +290,7 @@ router.get('/', asyncHandler(async (req: Request, res: Response) => {
         ...PUBLIC_SETTINGS.map(async (key) => {
             settings[key] = await getOption(key);
         }),
-        ...Object.entries(DERIVED_PUBLIC_SETTINGS).map(async ([key, compute]) => {
+        ...[...DERIVED_PUBLIC_SETTINGS].map(async ([key, compute]) => {
             settings[key] = await compute();
         })
     ]);
@@ -250,7 +320,7 @@ router.get('/all', authenticate, isAdmin, asyncHandler(async (req: Request, res:
             settings[key] = await getOption(key);
         }),
         // Admin-only derived flags (sandbox hardening posture) — computed, never stored.
-        ...Object.entries(DERIVED_ADMIN_SETTINGS).map(async ([key, compute]) => {
+        ...[...DERIVED_ADMIN_SETTINGS].map(async ([key, compute]) => {
             settings[key] = await compute();
         })
     ]);

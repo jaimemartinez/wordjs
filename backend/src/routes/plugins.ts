@@ -19,6 +19,7 @@ const { isAdmin } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
 const { recordAudit } = require('../core/audit');
 const { execFile } = require('child_process');
+const { resolveWithin } = require('../core/safe-path');
 
 /**
  * @swagger
@@ -27,9 +28,22 @@ const { execFile } = require('child_process');
  *   description: Plugin management (Install, Activate, Delete)
  */
 
+/**
+ * The ONE directory an install zip may ever live in, absolute and resolved once at load.
+ *
+ * It used to be the string 'os-tmp/' here and `path.resolve(PLUGINS_DIR, '..', 'os-tmp')` further down —
+ * the same directory only as long as process.cwd() happened to be the backend root. Resolving it once,
+ * from PLUGINS_DIR, makes that an invariant instead of a coincidence, and gives the containment guard
+ * inside installPluginFromZip() a fixed base to prove against. (io-guard already treats ROOT_DIR/os-tmp
+ * as scratch.)
+ */
+const OS_TMP_DIR = path.resolve(PLUGINS_DIR, '..', 'os-tmp');
+
 // Configure multer for zip uploads
 const upload = multer({
-    dest: 'os-tmp/', // Use system temp dir or local tmp
+    // Absoluto a proposito: es la base de contencion que installPluginFromZip() comprueba inline.
+    // Sigue siendo almacenamiento EN DISCO — memoryStorage cargaria en RAM plugins enteros.
+    dest: OS_TMP_DIR,
     limits: {
         fileSize: 10 * 1024 * 1024, // 10MB limit
         // SECURITY: Prevent CVE-2025-47935/47944 DoS
@@ -54,7 +68,7 @@ function regenerateRegistry() {
     // In production the frontend ships as a pre-built .next bundle, so the registries are baked in at
     // build time — regenerating the source .ts at runtime can't help (and frontend/scripts may not
     // ship). Only useful in dev, where rewriting the registry sources triggers Next HMR so a newly
-    // activated plugin's admin page / Puck blocks appear WITHOUT the old manual "regenerate + restart".
+    // activated plugin's admin page / editor blocks appear WITHOUT the old manual "regenerate + restart".
     // (The path was '../../../admin-next/scripts' — a directory that does not exist — so this silently
     // no-op'd on every activate/deactivate. The real generators live in frontend/scripts/.)
     if (process.env.NODE_ENV === 'production') return;
@@ -62,7 +76,7 @@ function regenerateRegistry() {
     const scripts = [
         'generate-plugin-registry.js',         // Frontend components
         'generate-admin-plugin-registry.js',   // Admin pages
-        'generate-puck-plugin-registry.js'     // Puck components
+        'generate-verso-plugin-registry.js'    // Verso block components
     ];
 
     // Resolve the authoritative active list IN-PROCESS and hand it to the generators via env.
@@ -77,18 +91,18 @@ function regenerateRegistry() {
             const scriptPath = path.join(scriptsDir, script);
 
             if (!fs.existsSync(scriptPath)) {
-                console.log(`⚠️  Script not found: ${script}`);
+                console.log('⚠️  Script not found: %s', script);
                 continue;
             }
 
             // SECURITY: Use execFile instead of exec to prevent command injection
             execFile('node', [scriptPath], { env }, (error: Error | null, stdout: string, stderr: string) => {
                 if (error) {
-                    console.error(`❌ Failed to run ${script}:`, error.message);
+                    console.error('❌ Failed to run %s:', script, error.message);
                     return;
                 }
                 if (process.env.NODE_ENV !== 'production') {
-                    console.log(`🔄 ${script}:`);
+                    console.log('🔄 %s:', script);
                     console.log(stdout);
                 }
             });
@@ -115,24 +129,76 @@ function removePluginDirPreservingData(dir: string) {
     }
 }
 
-/**
- * SECURITY: Validate plugin slug to prevent path traversal
- */
-function validateSlug(slug: string) {
-    // Only allow alphanumeric, dashes, and underscores
-    if (!/^[a-zA-Z0-9_-]+$/.test(slug)) {
-        return false;
-    }
-    // Ensure the resolved path is still within PLUGINS_DIR
-    const safePath = path.resolve(PLUGINS_DIR, slug);
-    return safePath.startsWith(path.resolve(PLUGINS_DIR));
-}
-
 // Strict plugin-slug charset. A slug is a SINGLE path segment (starts alnum, then alnum/dash/underscore,
 // max 64) — so it can never be '.', '..', a separator, or resolve to a parent/other directory.
+// IDENTICAL to core/plugin-permissions' PLUGIN_SLUG (asserted in backend/src/tests/plugin-path-guards.test.ts).
 const SLUG_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
 function isValidSlug(slug: any): boolean {
     return typeof slug === 'string' && SLUG_RE.test(slug);
+}
+
+/**
+ * Resolve a REQUEST-supplied slug to the validated slug string, or null.
+ *
+ * This replaces the old `validateSlug()`, which was the exact anti-pattern this codebase keeps
+ * re-shipping: it validated a COPY and returned a BOOLEAN, so every one of its ten call sites went on to
+ * re-read the RAW `req.params.slug` and concatenate that. Worse, its containment test was a BARE prefix
+ * (`resolved.startsWith(path.resolve(PLUGINS_DIR))`, no `path.sep`) — the very check safe-path exists to
+ * stop us writing, because `plugins-evil` "starts with" `plugins`.
+ *
+ * Here the FORM gate (SLUG_RE) and the CONTAINMENT proof (safe-path.resolveWithin → absolute, normalized,
+ * `base + path.sep`) both run, and what comes back is the value the caller must use. Null = fail closed;
+ * callers turn it into 400 and never touch the raw parameter again.
+ */
+function safeSlugParam(raw: unknown): string | null {
+    if (!isValidSlug(raw)) return null;
+    const slug = raw as string;
+    // Proves the slug names a proper CHILD of PLUGINS_DIR (never PLUGINS_DIR itself, never an ancestor).
+    return resolveWithin(PLUGINS_DIR, slug) ? slug : null;
+}
+
+/**
+ * `<PLUGINS_DIR>/<slug>/<...rest>` with the same three-part defense, or null. The single helper every
+ * read of a plugin-owned file goes through, so no route re-invents path.join(PLUGINS_DIR, slug, …) —
+ * including the ones fed by a readdir listing (an entry name is still a segment we did not write).
+ */
+function pluginFile(slug: unknown, ...rest: string[]): string | null {
+    if (!isValidSlug(slug)) return null;
+    return resolveWithin(PLUGINS_DIR, slug as string, ...rest);
+}
+
+/**
+ * La respuesta a un paquete de instalacion que no esta dentro de nuestro directorio de trabajo.
+ *
+ * Es una FUNCION, no una constante compartida: cada rechazo devuelve su propio objeto, para que un
+ * llamante que decore `body` no contamine el siguiente rechazo. La prueba de contencion en si NO vive
+ * aqui — vive escrita dentro de installPluginFromZip, junto al sumidero (ver el comentario alli).
+ */
+function refuseUncontainedZip(): { ok: boolean; status: number; body: any } {
+    return { ok: false, status: 400, body: { error: 'Install package is not inside the plugin scratch directory' } };
+}
+
+/**
+ * Allocate a PRIVATE scratch directory for a downloaded install package.
+ *
+ * A predictable path in a shared temp dir is a file to be pre-created, not a file to be written: whoever
+ * owns the inode first owns the bytes, and `writeFileSync` follows a symlink that is already there — the
+ * `{ mode: 0o600 }` argument is ignored entirely for an existing file. mkdtemp is the fix rather than a
+ * longer random name: the kernel creates the directory exclusively, at 0700, so there is no window in
+ * which a name can be squatted and no other user can look inside it.
+ *
+ * The file itself is then written with `flag: 'wx'` (exclusive create — refuses to follow anything) into
+ * that fresh dir. Callers MUST call dispose() in a finally: the install pipeline deletes the ZIP, never
+ * the directory around it.
+ */
+function createInstallTmp(): { dir: string; zipPath: string; dispose: () => void } {
+    fs.mkdirSync(OS_TMP_DIR, { recursive: true, mode: 0o700 });
+    const dir = fs.mkdtempSync(path.join(OS_TMP_DIR, 'install-'));
+    return {
+        dir,
+        zipPath: path.join(dir, 'package.zip'),
+        dispose: () => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best-effort */ } },
+    };
 }
 
 /**
@@ -155,15 +221,16 @@ const DELETE_STOP_TIMEOUT_MS = 3000;
 // Resolves an untrusted slug to its plugin dir or THROWS (400), guaranteeing the result is a proper CHILD
 // of PLUGINS_DIR — never PLUGINS_DIR itself (which would let a failure-path rmSync wipe every plugin) or
 // an ancestor (which a crafted '..' filename / './'-prefixed zip entry could otherwise reach).
+// The containment proof itself is core/safe-path's resolveWithin — ONE implementation for themes and
+// plugins alike, so the two can never drift into different dialects of "inside".
 function resolveSafePluginDir(slug: any): string {
     if (!isValidSlug(slug)) {
         const e: any = new Error(`Invalid plugin slug: ${JSON.stringify(slug)}`);
         e.status = 400;
         throw e;
     }
-    const base = path.resolve(PLUGINS_DIR);
-    const dir = path.resolve(base, slug);
-    if (dir === base || !dir.startsWith(base + path.sep)) {
+    const dir = resolveWithin(PLUGINS_DIR, slug as string);
+    if (!dir) {
         const e: any = new Error('Invalid plugin slug: resolves outside the plugins directory');
         e.status = 400;
         throw e;
@@ -218,7 +285,35 @@ router.post('/upload', authenticate, isAdmin, upload.single('plugin'), asyncHand
  *   Mismatch is refused rather than retargeted: silently extracting a zip into a directory it did not
  *   name would let a zip for one plugin overwrite another.
  */
-async function installPluginFromZip(zipPath: string, originalName: string, expectedSlug?: string): Promise<{ ok: boolean; status: number; body: any }> {
+async function installPluginFromZip(zipPathIn: string, originalName: string, expectedSlug?: string): Promise<{ ok: boolean; status: number; body: any }> {
+    // CONTENCION PRIMERO — INLINE, Y AQUI SE QUEDA.
+    //
+    // POR QUE AQUI Y NO EN UN HELPER (no lo refactorices a una utilidad). Esta funcion borra su zip
+    // con fs.unlinkSync en trece caminos de fallo y ademas lo abre como archivo, y la ruta se la elige
+    // el LLAMANTE: el fichero temporal de multer en POST /plugins/upload, la descarga del marketplace,
+    // el zip de la actualizacion. Antes esto delegaba en un `assertZipInOsTmp(zipPathIn)` que hacia
+    // exactamente las mismas tres comprobaciones — y no servia, porque el analisis de rutas
+    // contaminadas razona DENTRO de una funcion: un barrier escrito en otra funcion no apaga el
+    // sumidero de esta, aunque devuelva el valor ya probado. De ahi que la alerta js/path-injection
+    // siguiera senalando el unlink de discardZip(). Sacar esto a un helper la vuelve a encender.
+    //
+    // Las tres partes de la defensa, sobre el valor QUE SE USA despues (nunca sobre el argumento):
+    //   1. FORMA: cadena no vacia y sin NUL (un NUL trunca la ruta que ve la capa C);
+    //   2. RESOLUCION CANONICA: path.resolve() da la ruta absoluta y normalizada que recibira el
+    //      syscall, no el texto que paso el llamante;
+    //   3. CONTENCION PROBADA contra `base + path.sep` — nunca un prefijo pelado, que aceptaria un
+    //      hermano llamado `os-tmp-evil`, y exigiendo un HIJO, nunca el propio directorio base.
+    // Falla cerrado: una ruta que no podemos situar dentro de nuestro scratch no se ofrece como
+    // objetivo de borrado; se devuelve 400 y no se toca el disco.
+    if (typeof zipPathIn !== 'string' || zipPathIn.length === 0 || zipPathIn.includes('\0')) {
+        return refuseUncontainedZip();
+    }
+    const zipPath = path.resolve(zipPathIn);
+    if (!zipPath.startsWith(OS_TMP_DIR + path.sep)) {
+        return refuseUncontainedZip();
+    }
+    // ONE deletion helper, so no failure path can grow a raw unlink again.
+    const discardZip = () => { try { fs.unlinkSync(zipPath); } catch { /* already gone */ } };
     try {
         const zip = new AdmZip(zipPath);
         const zipEntries = zip.getEntries();
@@ -228,7 +323,7 @@ async function installPluginFromZip(zipPath: string, originalName: string, expec
         try {
             assertZipWithinBudget(zipEntries, { kind: 'plugin' });
         } catch (e: any) {
-            fs.unlinkSync(zipPath);
+            discardZip();
             return { ok: false, status: 400, body: { error: e.message } };
         }
 
@@ -264,7 +359,7 @@ async function installPluginFromZip(zipPath: string, originalName: string, expec
         };
         const contentEntries = zipEntries.filter((e: any) => !isJunkEntry(e.entryName));
         if (contentEntries.length === 0) {
-            fs.unlinkSync(zipPath);
+            discardZip();
             return { ok: false, status: 400, body: { error: 'Zip contains no plugin files.' } };
         }
 
@@ -275,7 +370,7 @@ async function installPluginFromZip(zipPath: string, originalName: string, expec
             const first = String(e.entryName).replace(/\\/g, '/').split('/')[0];
             if (!first) continue;
             if (first === '.' || first === '..') {
-                fs.unlinkSync(zipPath);
+                discardZip();
                 return { ok: false, status: 400, body: { error: 'Malicious zip: entry names contain "." / ".." path segments.' } };
             }
             rootDirs.add(first);
@@ -284,14 +379,14 @@ async function installPluginFromZip(zipPath: string, originalName: string, expec
         const singleRoot = rootDirs.size === 1;
         const intendedSlug = (singleRoot ? Array.from(rootDirs)[0] : zipName) as string;
         if (!isValidSlug(intendedSlug)) {
-            fs.unlinkSync(zipPath);
+            discardZip();
             return { ok: false, status: 400, body: { error: `Refused: '${intendedSlug}' is not a valid plugin folder name (expected a single [A-Za-z0-9_-] segment, no dots or separators).` } };
         }
         // Replacing a specific plugin: the zip must name that same plugin. See expectedSlug above —
         // installing to a different directory here is silently destructive, so fail loudly instead
         // and let the caller roll back.
         if (expectedSlug && intendedSlug !== expectedSlug) {
-            fs.unlinkSync(zipPath);
+            discardZip();
             return {
                 ok: false,
                 status: 400,
@@ -321,7 +416,7 @@ async function installPluginFromZip(zipPath: string, originalName: string, expec
             const isContained = dest === confineDir || dest.startsWith(confineDir + path.sep);
             const hasDotDotSegment = rel.split('/').includes('..');
             if (!isContained || hasDotDotSegment) {
-                fs.unlinkSync(zipPath);
+                discardZip();
                 return { ok: false, status: 400, body: { error: 'Malicious zip file detected (Zip Slip / path traversal)' } };
             }
         }
@@ -331,13 +426,13 @@ async function installPluginFromZip(zipPath: string, originalName: string, expec
         const canonSlug = String(intendedSlug).normalize('NFC').toLowerCase();
         const RESERVED_SLUGS: string[] = [];
         if (RESERVED_SLUGS.some(s => String(s).normalize('NFC').toLowerCase() === canonSlug)) {
-            fs.unlinkSync(zipPath);
+            discardZip();
             return { ok: false, status: 409, body: { error: `Refused: '${intendedSlug}' is a reserved system plugin slug and cannot be uploaded or overwritten.` } };
         }
         try {
             const clash = fs.readdirSync(PLUGINS_DIR).find((d: string) => d !== intendedSlug && d.normalize('NFC').toLowerCase() === canonSlug);
             if (clash) {
-                fs.unlinkSync(zipPath);
+                discardZip();
                 return { ok: false, status: 409, body: { error: `Refused: name collides with existing plugin '${clash}' (case/Unicode squat).` } };
             }
         } catch { /* PLUGINS_DIR missing — nothing to clobber */ }
@@ -345,7 +440,7 @@ async function installPluginFromZip(zipPath: string, originalName: string, expec
         // INTEGRITY: refuse to overwrite a RUNNING plugin's code in place — a botched extract would
         // corrupt a working plugin and the next reload would swap live code with no warning.
         if (await isPluginActive(intendedSlug)) {
-            fs.unlinkSync(zipPath);
+            discardZip();
             return { ok: false, status: 409, body: { error: `Plugin '${intendedSlug}' is currently active. Deactivate it before re-uploading (this prevents corrupting a running plugin).` } };
         }
 
@@ -365,7 +460,7 @@ async function installPluginFromZip(zipPath: string, originalName: string, expec
                 residualOnly = fs.readdirSync(installedDir).every((e: string) => e === 'data');
             } catch { /* unreadable → treat as a real plugin and refuse */ }
             if (!residualOnly) {
-                fs.unlinkSync(zipPath);
+                discardZip();
                 return { ok: false, status: 409, body: { error: `A plugin directory '${intendedSlug}' already exists. Uninstall it before installing this one (this prevents overwriting or deleting an existing plugin).` } };
             }
             hadResidualData = fs.existsSync(path.join(installedDir, 'data'));
@@ -385,7 +480,7 @@ async function installPluginFromZip(zipPath: string, originalName: string, expec
             const isContained = dest === confineDir || dest.startsWith(confineDir + path.sep);
             const hasDotDotSegment = rel.split('/').includes('..');
             if (!isContained || hasDotDotSegment) {
-                fs.unlinkSync(zipPath);
+                discardZip();
                 return { ok: false, status: 400, body: { error: 'Malicious zip file detected (Zip Slip / path traversal)' } };
             }
             // When adopting residual runtime data, the zip's own data/ payload is ignored ENTIRELY:
@@ -424,17 +519,17 @@ async function installPluginFromZip(zipPath: string, originalName: string, expec
                 if (hadResidualData) removePluginDirPreservingData(installedDir);
                 else fs.rmSync(installedDir, { recursive: true, force: true });
             } catch { /* best-effort */ }
-            fs.unlinkSync(zipPath);
+            discardZip();
             return { ok: false, status: 400, body: { error: valErr.message, details: { missingPermissions: valErr.missingPermissions, dangerousCalls: valErr.dangerousCalls } } };
         }
 
         // Cleanup temp file
-        fs.unlinkSync(zipPath);
+        discardZip();
 
         return { ok: true, status: 200, body: { success: true, message: 'Plugin installed successfully', slug: pluginSlug } };
     } catch (error: any) {
         // Cleanup temp file on error
-        if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath);
+        discardZip();
         return { ok: false, status: 500, body: { error: `Failed to install plugin: ${error.message}` } };
     }
 }
@@ -447,9 +542,8 @@ async function installPluginFromZip(zipPath: string, originalName: string, expec
 // update it. This is the feature previously proposed as PR #258 (held), re-implemented on top of the
 // isolate-teardown invariants that landed in #260.
 
-// The stash of the old code lives HERE (a project dir backups exclude), not the OS temp — so a crash
-// mid-update leaves it where `recoverInterruptedPluginUpdates()` can find it at the next boot.
-const OS_TMP_DIR = path.resolve(PLUGINS_DIR, '..', 'os-tmp');
+// The stash of the old code lives in OS_TMP_DIR (a project dir backups exclude), not the OS temp — so a
+// crash mid-update leaves it where `recoverInterruptedPluginUpdates()` can find it at the next boot.
 // Stash dir name: `plugin-update-<slug>-<16 hex>`; slug is a validated single segment, the hex is random.
 const STASH_RE = /^plugin-update-([a-zA-Z0-9][a-zA-Z0-9_-]{0,63})-[0-9a-f]{16}$/;
 
@@ -558,7 +652,7 @@ async function runPluginUpdate(
         try { removePluginDirPreservingData(installedDir); } catch { /* */ }
         if (stashDir) { try { moveEntriesInto(stashDir, installedDir); fs.rmSync(stashDir, { recursive: true, force: true }); } catch { /* */ } stashDir = null; }
         await restoreGrants();
-        if (wasActive) { try { await core.activatePlugin(slug); } catch (e: any) { console.warn(`[plugin-update ${logSafe(slug)}] rollback reactivate failed: ${logSafe(e && e.message)}`); } }
+        if (wasActive) { try { await core.activatePlugin(slug); } catch (e: any) { console.warn('[plugin-update %s] rollback reactivate failed: %s', logSafe(slug), logSafe(e && e.message)); } }
     };
 
     try {
@@ -663,18 +757,18 @@ async function recoverInterruptedPluginUpdates(): Promise<void> {
         let installedDir: string;
         try { installedDir = resolveSafePluginDir(slug); } catch { continue; }
         const lease = await distLock.acquireBlocking(`wordjs:plugin-op:${slug}`, { ttlMs: 60000, renewMs: 20000, timeoutMs: 1500 });
-        if (!lease.held) { console.warn(`[plugin-update] '${logSafe(slug)}' stash owned by another node — skipping recovery here.`); continue; }
+        if (!lease.held) { console.warn("[plugin-update] '%s' stash owned by another node — skipping recovery here.", logSafe(slug)); continue; }
         try {
             if (fs.existsSync(path.join(installedDir, 'manifest.json'))) {
                 fs.rmSync(stashDir, { recursive: true, force: true });
-                console.log(`[plugin-update] discarded a completed update's stash for '${logSafe(slug)}'.`);
+                console.log("[plugin-update] discarded a completed update's stash for '%s'.", logSafe(slug));
             } else {
                 moveEntriesInto(stashDir, installedDir);
                 fs.rmSync(stashDir, { recursive: true, force: true });
-                console.log(`[plugin-update] recovered an interrupted update for '${logSafe(slug)}' — restored the previous version.`);
+                console.log("[plugin-update] recovered an interrupted update for '%s' — restored the previous version.", logSafe(slug));
             }
         } catch (e: any) {
-            console.warn(`[plugin-update] recovery failed for '${logSafe(slug)}': ${logSafe(e && e.message)}`);
+            console.warn("[plugin-update] recovery failed for '%s': %s", logSafe(slug), logSafe(e && e.message));
         } finally {
             try { await lease.release(); } catch { /* */ }
         }
@@ -712,9 +806,11 @@ router.get('/registry', asyncHandler(async (req: Request, res: Response) => {
     const registry: any[] = [];
 
     for (const plugin of activePlugins) {
-        const manifestPath = path.join(PLUGINS_DIR, plugin.slug, 'manifest.json');
+        // A directory name read back from disk is still a segment we did not write — resolve it through
+        // the same allowlist + containment proof, and treat "cannot resolve" as "no manifest" (fail closed).
+        const manifestPath = pluginFile(plugin.slug, 'manifest.json');
 
-        if (fs.existsSync(manifestPath)) {
+        if (manifestPath && fs.existsSync(manifestPath)) {
             try {
                 const manifestContent = fs.readFileSync(manifestPath, 'utf8');
                 const manifest = JSON.parse(manifestContent);
@@ -724,7 +820,7 @@ router.get('/registry', asyncHandler(async (req: Request, res: Response) => {
                     path: `/plugins/${plugin.slug}`
                 });
             } catch (err) {
-                console.warn(`Failed to read manifest for ${plugin.slug}:`, err.message);
+                console.warn('Failed to read manifest for %s:', logSafe(plugin.slug), err.message);
                 // Still include basic info even without manifest
                 registry.push({
                     id: plugin.slug,
@@ -800,7 +896,8 @@ router.get('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: Re
         // Companion theme (option B): does this plugin bundle a theme/, and is it installed already?
         // lstat (not stat) so a symlinked theme/ reads as "no theme" — install-theme refuses it anyway.
         let hasTheme = false;
-        try { hasTheme = fs.lstatSync(path.join(PLUGINS_DIR, p.slug, 'theme')).isDirectory(); } catch { /* none */ }
+        const themeProbe = pluginFile(p.slug, 'theme');
+        try { hasTheme = !!themeProbe && fs.lstatSync(themeProbe).isDirectory(); } catch { /* none */ }
         return {
             ...p,
             requestedPermissions: requested,
@@ -821,9 +918,10 @@ router.get('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: Re
  *     security: [{ bearerAuth: [] }]
  */
 router.get('/:slug/status', authenticate, isAdmin, asyncHandler(async (req: any, res: Response) => {
-    if (!validateSlug(req.params.slug)) return res.status(400).json({ error: 'Invalid slug' });
+    const slug = safeSlugParam(req.params.slug);
+    if (!slug) return res.status(400).json({ error: 'Invalid slug' });
     const { getIsolateStatus } = require('../core/plugin-isolate');
-    const status = getIsolateStatus(req.params.slug);
+    const status = getIsolateStatus(slug);
     if (!status) return res.status(404).json({ error: 'Plugin is not a loaded isolate.' });
     res.json(status);
 }));
@@ -848,10 +946,10 @@ router.get('/:slug/status', authenticate, isAdmin, asyncHandler(async (req: any,
  */
 router.post('/:slug/activate', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     // SECURITY: Validate slug to prevent path traversal
-    if (!validateSlug(req.params.slug as string)) {
+    const slug = safeSlugParam(req.params.slug);
+    if (!slug) {
         return res.status(400).json({ error: 'Invalid plugin slug' });
     }
-    const slug = req.params.slug;
 
     // Default-deny grants: when an admin activates a plugin (having seen its requested permissions in the
     // activation dialog), grant exactly what its manifest DECLARES — but ONLY if it has no grant record
@@ -873,12 +971,12 @@ router.post('/:slug/activate', authenticate, isAdmin, asyncHandler(async (req: R
                 .map((perm: any) => (perm && perm.scope) ? (perm.scope === 'network' ? 'network' : `${perm.scope}:${perm.access || 'read'}`) : null)
                 .filter(Boolean))) as string[];
             if (declared.length) { _setGrantsInMemory(slug, declared); seededDeclared = declared; }
-        } catch (e: any) { console.warn(`[Permissions] grant-on-activate (seed) for '${slug}' failed:`, e && e.message); }
+        } catch (e: any) { console.warn("[Permissions] grant-on-activate (seed) for '%s' failed:", logSafe(slug), e && e.message); }
     }
 
     let result;
     try {
-        result = await activatePlugin(req.params.slug);
+        result = await activatePlugin(slug);
     } catch (e: any) {
         // Activation failed (scan/test/init) — undo the in-memory grant seed so nothing is persisted and
         // a failed-activation plugin holds no grants.
@@ -899,7 +997,7 @@ router.post('/:slug/activate', authenticate, isAdmin, asyncHandler(async (req: R
 
     // Activation succeeded — NOW persist the grants we seeded (idempotent; only when it had none before).
     if (seededDeclared && hadNoGrants && getGrants(slug).length > 0) {
-        try { await setGrants(slug, seededDeclared); } catch (e: any) { console.warn(`[Permissions] grant-on-activate (persist) for '${slug}' failed:`, e && e.message); }
+        try { await setGrants(slug, seededDeclared); } catch (e: any) { console.warn("[Permissions] grant-on-activate (persist) for '%s' failed:", logSafe(slug), e && e.message); }
     }
 
     // Trigger frontend registry regeneration
@@ -920,10 +1018,10 @@ router.post('/:slug/activate', authenticate, isAdmin, asyncHandler(async (req: R
  *     security: [{ bearerAuth: [] }]
  */
 router.post('/:slug/permissions', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
-    if (!validateSlug(req.params.slug as string)) {
+    const slug = safeSlugParam(req.params.slug);
+    if (!slug) {
         return res.status(400).json({ error: 'Invalid plugin slug' });
     }
-    const slug = req.params.slug;
     const { setGrants, getGrants } = require('../core/plugin-permissions');
 
     // Body: { granted: ["scope:access", ...], network: boolean }. The admin's granted set is the source
@@ -942,7 +1040,7 @@ router.post('/:slug/permissions', authenticate, isAdmin, asyncHandler(async (req
         const { reloadIsolatedPlugin, isIsolated } = require('../core/plugin-isolate');
         if (isIsolated(slug)) { await reloadIsolatedPlugin(slug); reloaded = true; }
     } catch (e: any) {
-        console.warn(`[Permissions] reload of '${slug}' after grant change failed:`, e && e.message);
+        console.warn("[Permissions] reload of '%s' after grant change failed:", logSafe(slug), e && e.message);
     }
 
     const granted = getGrants(slug);
@@ -969,15 +1067,15 @@ router.post('/:slug/permissions', authenticate, isAdmin, asyncHandler(async (req
  *     security: [{ bearerAuth: [] }]
  */
 router.get('/:slug/egress-hosts', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
-    if (!validateSlug(req.params.slug as string)) return res.status(400).json({ error: 'Invalid plugin slug' });
-    const slug = req.params.slug;
+    const slug = safeSlugParam(req.params.slug);
+    if (!slug) return res.status(400).json({ error: 'Invalid plugin slug' });
     const { getEgressAllowlist, getGrants } = require('../core/plugin-permissions');
     res.json({ slug, hosts: getEgressAllowlist(slug), network: getGrants(slug).includes('network') });
 }));
 
 router.post('/:slug/egress-hosts', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
-    if (!validateSlug(req.params.slug as string)) return res.status(400).json({ error: 'Invalid plugin slug' });
-    const slug = req.params.slug;
+    const slug = safeSlugParam(req.params.slug);
+    if (!slug) return res.status(400).json({ error: 'Invalid plugin slug' });
     const { setEgressAllowlist, getEgressAllowlist } = require('../core/plugin-permissions');
     // Body: { hosts: ["api.stripe.com", "*.example.com", ...] }. Invalid entries (schemes/paths/ports) are
     // dropped by setEgressAllowlist. An empty array clears the list (back to allow-all-public).
@@ -991,7 +1089,7 @@ router.post('/:slug/egress-hosts', authenticate, isAdmin, asyncHandler(async (re
         const { reloadIsolatedPlugin, isIsolated } = require('../core/plugin-isolate');
         if (isIsolated(slug)) { await reloadIsolatedPlugin(slug); reloaded = true; }
     } catch (e: any) {
-        console.warn(`[EgressHosts] reload of '${slug}' after egress change failed:`, e && e.message);
+        console.warn("[EgressHosts] reload of '%s' after egress change failed:", logSafe(slug), e && e.message);
     }
 
     const saved = getEgressAllowlist(slug);
@@ -1027,10 +1125,10 @@ router.post('/:slug/egress-hosts', authenticate, isAdmin, asyncHandler(async (re
  */
 router.post('/:slug/reload', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     // SECURITY: Validate slug to prevent path traversal
-    if (!validateSlug(req.params.slug as string)) {
+    const slug = safeSlugParam(req.params.slug);
+    if (!slug) {
         return res.status(400).json({ error: 'Invalid plugin slug' });
     }
-    const slug = req.params.slug as string;
 
     // Reuse the exact same reload the grants route and the dev watcher use: tear the child process
     // down and load it again from its original entry file — the full pipeline (AST scan included)
@@ -1082,9 +1180,11 @@ router.post('/:slug/reload', authenticate, isAdmin, asyncHandler(async (req: Req
  *         description: The companion theme is already installed
  */
 router.post('/:slug/install-theme', authenticate, isAdmin, asyncHandler(async (req: any, res: Response) => {
-    // Throws 400 on any traversal-shaped slug BEFORE any fs op (single choke point).
-    const pluginDir = resolveSafePluginDir(req.params.slug);
-    const slug = req.params.slug as string;
+    // Validate ONCE and use what came back — reading req.params.slug again below would be the same
+    // "guard a copy, then re-concatenate the raw value" shape this file just finished removing.
+    const slug = safeSlugParam(req.params.slug);
+    if (!slug) return res.status(400).json({ error: 'Invalid plugin slug' });
+    const pluginDir = resolveSafePluginDir(slug);
     if (!fs.existsSync(pluginDir)) {
         return res.status(404).json({ error: `Plugin '${slug}' is not installed` });
     }
@@ -1134,8 +1234,8 @@ router.post('/:slug/install-theme', authenticate, isAdmin, asyncHandler(async (r
 // for the consensual port-liberation flow below — the endpoints can never act on arbitrary ports.
 function getClaimedPorts(slug: string): number[] {
     try {
-        const manifestPath = path.join(PLUGINS_DIR, slug, 'manifest.json');
-        if (!fs.existsSync(manifestPath)) return [];
+        const manifestPath = pluginFile(slug, 'manifest.json');
+        if (!manifestPath || !fs.existsSync(manifestPath)) return [];
         const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
         if (!Array.isArray(manifest.claimPorts)) return [];
         return manifest.claimPorts.filter((p: any) => Number.isInteger(p) && p > 0 && p < 65536);
@@ -1154,10 +1254,10 @@ function getClaimedPorts(slug: string): number[] {
  *       - bearerAuth: []
  */
 router.get('/:slug/port-conflicts', authenticate, isAdmin, asyncHandler(async (req: any, res: Response) => {
-    if (!validateSlug(req.params.slug as string)) {
+    const slug = safeSlugParam(req.params.slug);
+    if (!slug) {
         return res.status(400).json({ error: 'Invalid plugin slug' });
     }
-    const slug = req.params.slug as string;
     const claimPorts = getClaimedPorts(slug);
     const { detectPortConflict } = require('../core/port-conflicts');
     const conflicts = [];
@@ -1177,10 +1277,10 @@ router.get('/:slug/port-conflicts', authenticate, isAdmin, asyncHandler(async (r
  *       - bearerAuth: []
  */
 router.post('/:slug/free-port', authenticate, isAdmin, asyncHandler(async (req: any, res: Response) => {
-    if (!validateSlug(req.params.slug as string)) {
+    const slug = safeSlugParam(req.params.slug);
+    if (!slug) {
         return res.status(400).json({ error: 'Invalid plugin slug' });
     }
-    const slug = req.params.slug as string;
     const port = req.body?.port;
     // The port MUST be one the plugin's manifest claims — this endpoint is a targeted fix for a
     // declared need, not a generic service-stopping API (core/port-conflicts additionally only ever
@@ -1231,18 +1331,19 @@ router.post('/:slug/free-port', authenticate, isAdmin, asyncHandler(async (req: 
  *         description: Plugin deactivated
  */
 router.post('/:slug/deactivate', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
-    // SECURITY: Validate slug
-    if (!validateSlug(req.params.slug as string)) {
+    // SECURITY: Validate slug — and use the VALIDATED value below, never req.params.slug again.
+    const slug = safeSlugParam(req.params.slug);
+    if (!slug) {
         return res.status(400).json({ error: 'Invalid plugin slug' });
     }
 
-    const result = await deactivatePlugin(req.params.slug);
+    const result = await deactivatePlugin(slug);
 
     // Trigger frontend registry regeneration
     regenerateRegistry();
 
     // AUDIT: an admin deactivated a plugin. Slug only — no secret material.
-    await recordAudit((req as any).user && (req as any).user.id, 'plugin.deactivate', 'plugin', req.params.slug, {});
+    await recordAudit((req as any).user && (req as any).user.id, 'plugin.deactivate', 'plugin', slug, {});
 
     res.json(result);
 }));
@@ -1357,10 +1458,10 @@ router.delete('/:slug', authenticate, isAdmin, asyncHandler(async (req: any, res
     // 409 below means a process really is still alive, not that a Map entry lingered.
     const isolate = require('../core/plugin-isolate');
     if (isolate.isIsolated(slug)) {
-        console.warn(`[plugin ${logSafe(slug)}] delete: a child process is still registered although the plugin is not listed active (orphaned isolate) — stopping it before removing the directory.`);
+        console.warn('[plugin %s] delete: a child process is still registered although the plugin is not listed active (orphaned isolate) — stopping it before removing the directory.', logSafe(slug));
     }
     try { isolate.unloadIsolatedPlugin(slug); }
-    catch (e: any) { console.error(`[plugin ${logSafe(slug)}] delete: could not stop the isolate / cancel its pending restart: ${logSafe(e && e.message)}`); }
+    catch (e: any) { console.error('[plugin %s] delete: could not stop the isolate / cancel its pending restart: %s', logSafe(slug), logSafe(e && e.message)); }
     //
     // THE WAIT IS BOUNDED, AND THE REFUSAL CAN BE PERMANENT — an accepted trade, new here (main deleted
     // unconditionally). A pid enters the live set at spawn and leaves it in the child's OWN 'exit'
@@ -1383,7 +1484,7 @@ router.delete('/:slug', authenticate, isAdmin, asyncHandler(async (req: any, res
     // directly, and gives the restart as the guaranteed way out.
     if (!(await isolate.awaitIsolateStopped(slug, DELETE_STOP_TIMEOUT_MS))) {
         const stuckPids: number[] = (typeof isolate.getLivePids === 'function' && isolate.getLivePids(slug)) || [];
-        console.error(`[plugin ${logSafe(slug)}] delete REFUSED: a child process was still alive ${logSafe(DELETE_STOP_TIMEOUT_MS)}ms after it was told to stop (pid ${logSafe(stuckPids.join(', ') || 'unknown')}) — the plugin directory was left untouched.`);
+        console.error('[plugin %s] delete REFUSED: a child process was still alive %sms after it was told to stop (pid %s) — the plugin directory was left untouched.', logSafe(slug), logSafe(DELETE_STOP_TIMEOUT_MS), logSafe(stuckPids.join(', ') || 'unknown'));
         return res.status(409).json({
             message: `'${slug}' still has a running process${stuckPids.length ? ` (pid ${stuckPids.join(', ')})` : ''} that did not stop within ${DELETE_STOP_TIMEOUT_MS}ms. Nothing was deleted. End that process, or restart the server, then delete the plugin again.`,
             stillRunning: true,
@@ -1421,7 +1522,7 @@ router.delete('/:slug', authenticate, isAdmin, asyncHandler(async (req: any, res
         try {
             await require('../core/plugin-origins').removePluginOrigin(slug);
         } catch (e: any) {
-            console.warn(`[plugin-delete ${logSafe(slug)}] could not clear origin binding: ${logSafe(e && e.message)}`);
+            console.warn('[plugin-delete %s] could not clear origin binding: %s', logSafe(slug), logSafe(e && e.message));
         }
 
         // Regenerate registry to remove traces
@@ -1585,6 +1686,10 @@ module.exports = router;
 // Exposed for unit tests of the path-traversal guards (the router remains the default export).
 module.exports.isValidSlug = isValidSlug;
 module.exports.resolveSafePluginDir = resolveSafePluginDir;
+module.exports.safeSlugParam = safeSlugParam;
+module.exports.pluginFile = pluginFile;
+module.exports.createInstallTmp = createInstallTmp;
+module.exports.OS_TMP_DIR = OS_TMP_DIR;
 // The shared zip-install pipeline — consumed by routes/marketplace.ts so marketplace installs
 // go through the exact same security gauntlet as manual uploads.
 module.exports.installPluginFromZip = installPluginFromZip;

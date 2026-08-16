@@ -420,7 +420,7 @@ Async by necessity (crosses the boundary). Each maps to a current direct use:
   `teardown()` splices out every host-side registration it made.
 
 ### 3.3 Frontend components
-Plugins ship React components under `client/` that the admin/puck UI imports today. Those are **build-
+Plugins ship React components under `client/` that the admin and editor UI import today. Those are **build-
 time** assets, unaffected by runtime isolation — they keep being bundled (and reviewed) as now. Only the
 **backend** logic moves into the isolate.
 

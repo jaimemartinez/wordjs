@@ -2,15 +2,15 @@
     "id": "related-posts",
     "name": "Related Posts",
     "version": "1.0.0",
-    "description": "Automatic per-post related articles (WordPress YARPP / Jetpack Related Posts parity). Ships a Puck block \"RelatedPosts\" that detects the current post from the URL on the public site, finds published posts sharing its category via the core public REST API, and renders responsive related-article cards with optional image, date and excerpt.",
+    "description": "Automatic per-post related articles (WordPress YARPP / Jetpack Related Posts parity). Ships a Verso block \"RelatedPosts\" that detects the current post from the URL on the public site, finds published posts sharing its category via the core public REST API, and renders responsive related-article cards with optional image, date and excerpt.",
     "author": "WordJS",
     "isolated": true,
     "backend": {
         "entry": "index.js"
     },
     "frontend": {
-        "puckComponents": {
-            "entry": "client/puck/RelatedPostsPuck.tsx"
+        "versoComponents": {
+            "entry": "client/verso/RelatedPostsVerso.tsx"
         }
     },
     "permissions": []

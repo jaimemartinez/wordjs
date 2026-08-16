@@ -78,20 +78,89 @@ function uriEncodeSegment(seg: string): string {
     return encodeURIComponent(seg).replace(/[!'()*]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase());
 }
 
-/** Build the {host, path} pair for a bucket+key, virtual-hosted for real S3, path-style for endpoints. */
+// ---- destination validation --------------------------------------------------------------------
+//
+// bucket, region and endpoint do not "ride along" in this request — they CHOOSE ITS DESTINATION.
+// `bucket` and `region` are interpolated straight into the HOST of a virtual-hosted request and the
+// bucket also into the PATH of a path-style one; `endpoint` replaces the host outright. They come
+// from wordjs-config.json / the environment, and until now not one character of them was looked at:
+// a typo'd (or tampered) `WORDJS_S3_REGION` of `foo.evil.com/x#` produced the host
+// `bucket.s3.foo.evil.com/x#.amazonaws.com`, and `WORDJS_S3_ENDPOINT` accepted any scheme and any
+// host, including 169.254.169.254. That is a backup archive — plus a live SigV4 Authorization
+// header — aimed somewhere it was never meant to go.
+//
+// So each is checked against a POSITIVE shape allowlist (never "does it contain something bad?").
+// A value outside its shape is refused with a clear error; it is not repaired and never silently
+// tolerated. offloadBackup already catches everything an upload throws, so a misconfigured bucket
+// reports `upload-failed` and leaves the good LOCAL backup exactly where it is.
+const S3_PROTOCOLS = ['http:', 'https:'];
+/** AWS bucket-naming rules, which are also what makes a bucket safe to splice into a host label. */
+const S3_BUCKET_RE = /^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/;
+/** AWS region codes: lowercase letters, digits and hyphens (`us-east-1`, `eu-central-1`, …). */
+const S3_REGION_RE = /^[a-z0-9-]{1,32}$/;
+/** An endpoint host: DNS labels (underscore allowed for container service names) or an IPv4 literal. */
+const S3_HOST_RE = /^[a-z0-9_](?:[a-z0-9_-]*[a-z0-9_])?(?:\.[a-z0-9_](?:[a-z0-9_-]*[a-z0-9_])?)*\.?$/;
+/** One object-key segment. No empty segments, no `.`/`..`, nothing that could re-point the path. */
+const S3_KEY_SEGMENT_RE = /^[A-Za-z0-9!_.*'()-]+$/;
+
+function assertShape(value: string, re: RegExp, what: string): string {
+    if (typeof value !== 'string' || !re.test(value)) {
+        throw new Error(`S3 offload refused: ${what} has an unsupported shape (${JSON.stringify(String(value)).slice(0, 80)})`);
+    }
+    return value;
+}
+
+/** Validate an object key: every segment must be a plain name, and `.`/`..` are never one. */
+function assertKey(key: string): string[] {
+    const segments = String(key).split('/');
+    if (!segments.length) throw new Error('S3 offload refused: empty object key');
+    for (const seg of segments) {
+        assertShape(seg, S3_KEY_SEGMENT_RE, 'object-key segment');
+        if (seg === '.' || seg === '..') throw new Error('S3 offload refused: relative object-key segment');
+    }
+    return segments;
+}
+
+/**
+ * Build the {host, path} pair for a bucket+key, virtual-hosted for real S3, path-style for endpoints.
+ * Every input that lands in the host or the path is shape-checked FIRST (see above), and the
+ * endpoint is rebuilt from its parsed, validated pieces rather than reused as written.
+ */
 function resolveTarget(s3: S3Config, key: string): { host: string; canonicalUri: string; protocol: string; port: number | null } {
-    const encodedKey = key.split('/').map(uriEncodeSegment).join('/');
+    const bucket = assertShape(s3.bucket, S3_BUCKET_RE, 'bucket name');
+    const encodedKey = assertKey(key).map(uriEncodeSegment).join('/');
     if (s3.endpoint) {
-        const u = new URL(s3.endpoint);
+        let u: URL;
+        try {
+            u = new URL(String(s3.endpoint));
+        } catch {
+            throw new Error('S3 offload refused: endpoint is not a URL');
+        }
+        // The scheme that gets used is the LITERAL from the allowlist, not the configured text.
+        const protocol = S3_PROTOCOLS.find((p) => p === u.protocol);
+        if (!protocol) throw new Error(`S3 offload refused: endpoint scheme ${u.protocol} is not http/https`);
+        if (u.username || u.password || u.search || u.hash) {
+            throw new Error('S3 offload refused: endpoint carries credentials, a query or a fragment');
+        }
+        // A path-style endpoint is an ORIGIN — the bucket and key are the path. A path here would
+        // silently prefix (or, with a `..`, escape) the object path we sign.
+        if (u.pathname.replace(/\/+$/, '') !== '') throw new Error('S3 offload refused: endpoint must not carry a path');
+        const host = u.hostname.toLowerCase();
+        if (!S3_HOST_RE.test(host)) throw new Error(`S3 offload refused: endpoint host ${host} is not a plain host name`);
+        const port = u.port ? Number(u.port) : null;
+        if (port !== null && (!Number.isInteger(port) || port < 1 || port > 65535)) {
+            throw new Error('S3 offload refused: endpoint port is out of range');
+        }
         return {
-            host: u.hostname,
-            protocol: u.protocol,
-            port: u.port ? Number(u.port) : null,
-            canonicalUri: `/${s3.bucket}/${encodedKey}`, // path style
+            host,
+            protocol,
+            port,
+            canonicalUri: `/${bucket}/${encodedKey}`, // path style
         };
     }
+    const region = assertShape(s3.region, S3_REGION_RE, 'region');
     return {
-        host: `${s3.bucket}.s3.${s3.region}.amazonaws.com`,
+        host: `${bucket}.s3.${region}.amazonaws.com`,
         protocol: 'https:',
         port: null,
         canonicalUri: `/${encodedKey}`, // virtual-hosted style
@@ -99,20 +168,24 @@ function resolveTarget(s3: S3Config, key: string): { host: string; canonicalUri:
 }
 
 /**
- * PUT a local file to S3 with a SigV4-signed request. Resolves on 2xx; rejects otherwise.
- * @param deps injectable { request, readFile, now } for tests (never hit a real bucket in tests).
+ * Everything the request needs to know ABOUT the payload — and nothing of the payload itself.
+ * SigV4 signs the content digest and S3 needs the byte count, so exactly two numbers-as-facts about
+ * the archive cross into the request configuration; the archive's BYTES only ever reach `req.end()`.
+ * Splitting it out is what makes that division checkable instead of a claim in a comment.
  */
-function uploadToS3(localPath: string, key: string, s3: S3Config, deps: any = {}): Promise<{ status: number }> {
-    const requestFn = deps.request || https.request;
-    const readFile = deps.readFile || fs.readFileSync;
-    const now: Date = deps.now || new Date();
+type PayloadMeta = { sha256: string; length: number };
 
-    const body: Buffer = readFile(localPath);
-    const target = resolveTarget(s3, key);
-
+/**
+ * Build the signed PUT request options for a destination + payload description.
+ *
+ * Deliberately takes NO file contents: the destination comes from config (validated in
+ * resolveTarget), the credentials from config, and the only payload-derived inputs are the two
+ * primitives in `meta`. Nothing here can move the request.
+ */
+function buildSignedPutOptions(target: ReturnType<typeof resolveTarget>, s3: S3Config, meta: PayloadMeta, now: Date): any {
     const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, ''); // YYYYMMDDTHHMMSSZ
     const dateStamp = amzDate.slice(0, 8);
-    const payloadHash = sha256Hex(body);
+    const payloadHash = meta.sha256;
     const hostHeader = target.port ? `${target.host}:${target.port}` : target.host;
 
     // Canonical (signed) headers — sorted, lower-cased. Include the session token when present.
@@ -155,7 +228,7 @@ function uploadToS3(localPath: string, key: string, s3: S3Config, deps: any = {}
         'X-Amz-Date': amzDate,
         'X-Amz-Content-Sha256': payloadHash,
         Authorization: authorization,
-        'Content-Length': String(body.length),
+        'Content-Length': String(meta.length),
         'Content-Type': 'application/zip',
     };
     if (s3.sessionToken) headers['X-Amz-Security-Token'] = s3.sessionToken;
@@ -168,6 +241,28 @@ function uploadToS3(localPath: string, key: string, s3: S3Config, deps: any = {}
         protocol: target.protocol,
     };
     if (target.port) options.port = target.port;
+    return options;
+}
+
+/**
+ * PUT a local file to S3 with a SigV4-signed request. Resolves on 2xx; rejects otherwise.
+ *
+ * The two halves are kept apart on purpose. WHERE this goes and HOW it is signed is decided by
+ * buildSignedPutOptions from config alone; the archive's bytes are read here and handed to exactly
+ * one place — `req.end(body)`, the request BODY. This is the whole answer to "can file data redirect
+ * this request?": it cannot reach the URL, the host, the port or the path, because none of them are
+ * computed from it.
+ *
+ * @param deps injectable { request, readFile, now } for tests (never hit a real bucket in tests).
+ */
+function uploadToS3(localPath: string, key: string, s3: S3Config, deps: any = {}): Promise<{ status: number }> {
+    const requestFn = deps.request || https.request;
+    const readFile = deps.readFile || fs.readFileSync;
+    const now: Date = deps.now || new Date();
+
+    const target = resolveTarget(s3, key); // destination: config only, shape-validated
+    const body: Buffer = readFile(localPath); // payload: never consulted for the destination
+    const options = buildSignedPutOptions(target, s3, { sha256: sha256Hex(body), length: body.length }, now);
 
     return new Promise((resolve, reject) => {
         const req = requestFn(options, (res: any) => {

@@ -17,6 +17,10 @@
 const esbuild = require('esbuild');
 const fs = require('fs');
 const path = require('path');
+// THE single resolver for "where does this plugin's block live" — manifest key and folder convention,
+// both spellings, new first. Never re-derive it here: a local copy of exactly this logic already
+// drifted in build-marketplace.js and shipped bundle-less zips.
+const { resolveBlockEntry } = require('./plugin-block-contract');
 
 // Defaults to backend/plugins (the installed set). build-marketplace.js points this at
 // marketplace/plugins so catalog zips ship their pre-compiled dist/*.bundle.js — without that, a
@@ -90,25 +94,21 @@ async function buildPlugin(slug) {
 
     // Find frontend entry points
     const adminEntry = manifest.frontend?.adminPage?.entry;
-    // The Puck block entry. Prefer the explicit puckComponents.entry (what plugins actually declare),
-    // then legacy components[0].entry, then the conventional client/puck/<Pascal>Puck.tsx — the SAME
-    // resolution generate-puck-plugin-registry.js uses. Without this the block bundle never built (the
-    // old code only read the unused `components[0]` key), so marketplace plugins shipped no runtime
-    // block and their Puck blocks couldn't load in production.
-    let componentEntry = manifest.frontend?.puckComponents?.entry || manifest.frontend?.components?.[0]?.entry;
-    if (!componentEntry) {
-        const pascal = String(manifest.id || path.basename(pluginDir)).split('-')
-            .map((s) => s.charAt(0).toUpperCase() + s.slice(1)).join('');
-        const conv = `client/puck/${pascal}Puck.tsx`;
-        if (fs.existsSync(path.join(pluginDir, conv))) componentEntry = conv;
-    }
+    // The editor block entry, resolved by plugin-block-contract.js: frontend.versoComponents.entry,
+    // then the legacy frontend.puckComponents.entry (deprecation warning, still builds), then the
+    // legacy components[0].entry channel, then the folder convention (client/verso/<Pascal>Verso.tsx
+    // before client/puck/<Pascal>Puck.tsx). Without this the block bundle never built (the old code
+    // only read the unused `components[0]` key), so marketplace plugins shipped no runtime block and
+    // their blocks couldn't load in production.
+    const block = resolveBlockEntry(pluginDir, manifest, { componentsChannel: true });
+    const componentEntry = block ? block.entry : null;
     const hooksEntry = manifest.frontend?.hooks;
 
     // A DECLARED entry whose file is missing is a build error, not something to skip past. Silently
     // dropping it produced a plugin that installs fine and whose UI is simply absent at runtime — the
-    // exact shape of the bug this pipeline keeps hitting (admin pages, then Puck blocks, then hooks).
-    // The conventional client/puck/<Pascal>Puck.tsx fallback above is DISCOVERY, not a declaration, so
-    // it only reaches here when the file exists.
+    // exact shape of the bug this pipeline keeps hitting (admin pages, then editor blocks, then hooks).
+    // The folder-convention fallback above is DISCOVERY, not a declaration, so it only reaches here
+    // when the file exists.
     const entryPoints = [];
     const missing = [];
 

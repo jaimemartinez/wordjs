@@ -2,7 +2,7 @@
     "id": "vendor-marketplace",
     "name": "Marketplace",
     "version": "1.0.0",
-    "description": "Multi-vendor directory: vendors apply publicly, the admin approves them, and each vendor manages their own product listings through a code-protected self-service portal. Buyers browse approved vendors' products in a Puck block and contact vendors via per-product inquiries (v1 = lead generation, no centralized checkout).",
+    "description": "Multi-vendor directory: vendors apply publicly, the admin approves them, and each vendor manages their own product listings through a code-protected self-service portal. Buyers browse approved vendors' products in a Verso block and contact vendors via per-product inquiries (v1 = lead generation, no centralized checkout).",
     "author": "WordJS",
     "isolated": true,
     "backend": {
@@ -13,8 +13,8 @@
             "entry": "client/admin/page.tsx",
             "slug": "vendor-marketplace"
         },
-        "puckComponents": {
-            "entry": "client/puck/VendorMarketplacePuck.tsx"
+        "versoComponents": {
+            "entry": "client/verso/VendorMarketplaceVerso.tsx"
         }
     },
     "adminMenu": {

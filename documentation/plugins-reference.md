@@ -98,7 +98,7 @@ global IPC message rates are token-bucket capped, with inbound/outbound payload 
 Manages image carousels for Hero sections or content sliders.
 
 *   **Shortcode:** `[carousel id="123"]` (async — expanded via `doShortcodeAsync`)
-*   **Puck Component:** `PhotoCarouselPuck` (registry key `PhotoCarousel`; renders the `HeroCarousel` location component internally)
+*   **Verso block:** `client/verso/PhotoCarouselVerso.tsx` (registry key `PhotoCarousel`; renders the `HeroCarousel` location component internally)
 *   **Permissions:** `settings` (read/write), `database` (write).
 *   **Sandbox:** isolated (like every plugin). Routes namespaced under `/api/v1/plugin/photo-carousel/*`. Default-deny: an admin grants its declared `settings`/`database` capabilities in `/admin/plugins`.
 
@@ -111,8 +111,8 @@ Displays event or promo cards as a full-width stack whose content alternates lef
 "zigzag"). There is no grid mode — the block's only fields are the gallery to show and an optional
 anchor id.
 
-*   **Rendering:** via the `PromoCards` / `CardGalleryPuck` frontend component (no shortcode is registered at runtime — `index.js` calls no `shortcodes.add`).
-*   **Puck Component:** `CardGalleryPuck` (PromoCards)
+*   **Rendering:** via the block itself (no shortcode is registered at runtime — `index.js` calls no `shortcodes.add`). `client/components/PromoCards.tsx` is the separate legacy *location* component declared in `frontend.components[]`; the block does not import it.
+*   **Verso block:** `client/verso/CardGalleryVerso.tsx` (registry key `CardGallery`), self-contained — it embeds its own `.promo-card*` CSS.
 *   **Permissions:** `settings` (read/write), `database` (write).
 *   **Sandbox:** isolated (like every plugin). Routes namespaced under `/api/v1/plugin/card-gallery/*`. Default-deny: an admin grants its declared `settings`/`database` capabilities in `/admin/plugins`.
 
@@ -127,9 +127,9 @@ Manages YouTube video carousels. Galleries and their videos are stored in **opti
 *   **Shortcode:** `[vgallery]` — registered, but the handler returns the tag text rather than markup:
     the public frontend (`HomeContent.tsx`) matches the bare `[vgallery]` literal in the home page's
     HTML body and swaps it for the plugin's client component.
-*   **Puck Component:** `VideoGalleryPuck` (registry key `VideoGallery`). Note its manifest sets
-    `frontend.puckComponents` to `null`; the block is picked up by the generator's **convention
-    fallback** on `client/puck/<Pascal>Puck.tsx`.
+*   **Verso Component:** `VideoGalleryVerso` (registry key `VideoGallery`). Note its manifest sets
+    `frontend.versoComponents` to `null`; the block is picked up by the generator's **convention
+    fallback** on `client/verso/<Pascal>Verso.tsx`.
 *   **Permissions:** `settings` (read/write), `database` (write).
 *   **Sandbox:** isolated (like every plugin). Routes namespaced under `/api/v1/plugin/video-gallery/*`. Default-deny: an admin grants its declared `settings`/`database` capabilities in `/admin/plugins`.
 
@@ -217,13 +217,13 @@ Reference plugin for hooks + DB access through the bridge (`wordjs.db.createTabl
 ## 9. YouTube Videos 🎥
 **ID:** `youtube-videos` | **Version:** 1.0.0
 
-Pulls the videos of a YouTube channel (links, thumbnails, titles) and ships a Puck carousel block
+Pulls the videos of a YouTube channel (links, thumbnails, titles) and ships a carousel block
 with title filtering and a video-count limit. Works **keyless** out of the box via the channel RSS
 feed (latest 15 videos); add a YouTube Data API v3 key for the full upload history.
 
 *   **Distribution:** first-party **marketplace** plugin (installed via the Marketplace catalog in §10) — not bundled with core.
 *   **Routes:** `GET /`, `GET /status`, `POST /refresh`, `POST /settings` (namespaced under `/api/v1/plugin/youtube-videos/*`)
-*   **Puck Component:** `YoutubeVideosPuck` (carousel with title filter + count limit)
+*   **Verso block:** `client/verso/YoutubeVideosVerso.tsx` (registry key `YoutubeVideos`) — carousel with title filter + count limit
 *   **Admin page:** `/admin/plugin/youtube`
 *   **Requested capabilities:** `settings` (read/write — configured channel + cached video list), `database` (read/write — the Data API key lives in the plugin's own `wjp_youtube_videos_*` table, **not** in options, because options are readable by other plugins), `network` (fetch youtube.com RSS / googleapis.com Data API — public egress only, like every `network` grant).
 *   **Sandbox:** isolated (like every plugin). Default-deny: activation grants its declared capabilities, refinable in `/admin/plugins`.
@@ -274,34 +274,34 @@ Test Schema are bundled with core):
 | `analytics-tag` | Site-wide analytics tag (GA4, Plausible or Matomo) with optional cookie-consent gating | `settings` r/w, routes, admin menu, `assets:write` |
 | `auctions` | Auction listings with bidding, anti-snipe extension, live polling, winner reporting | `database` r/w, routes, admin menu, `email:admin` |
 | `bookings` | Appointment booking: services, weekly availability, race-safe slot reservations, email confirmations, admin agenda | `database` r/w, `settings` r/w, routes, admin menu, `email:admin` |
-| `breadcrumbs` | Breadcrumbs Puck block with optional BreadcrumbList JSON-LD | — (frontend-only) |
-| `card-gallery` | Event/promo cards as an alternating-alignment ("zigzag") stack via the CardGalleryPuck block | `settings` r/w, `database` write |
+| `breadcrumbs` | Breadcrumbs Verso block with optional BreadcrumbList JSON-LD | — (frontend-only) |
+| `card-gallery` | Event/promo cards as an alternating-alignment ("zigzag") stack via the `CardGalleryVerso` block | `settings` r/w, `database` write |
 | `conference-manager` | Conference inscriptions/registration, hotel & room auto-assignment, per-inscription payments, attendee portal, reports + CSV export | `database` r/w, routes, admin menu |
-| `contact-forms` | Form builder with Puck embed block, submissions inbox, CSV export, email notification | `database` r/w, routes, admin menu, `email:admin` |
+| `contact-forms` | Form builder with a Verso embed block, submissions inbox, CSV export, email notification | `database` r/w, routes, admin menu, `email:admin` |
 | `cookie-consent` | GDPR cookie banner, anonymous consent logging, version-based re-consent | `database` r/w, `settings` r/w, routes, admin menu, `assets:write` |
 | `digital-downloads` | Sell/give away downloadable products with expiring token-gated download links | `database` r/w, `settings` r/w, routes, admin menu, `email:admin` |
 | `donations` | Donation campaigns with goal thermometer, manual payment + optional Stripe Checkout, CSV export | `database` r/w, `settings` r/w, routes, admin menu, `email:admin`, `network` |
 | `event-tickets` | Ticket types with quantity caps, unique ticket codes, attendee check-in | `database` r/w, `settings` r/w, routes, admin menu, `email:admin` |
-| `events-calendar` | Admin-managed events shown as an upcoming list or monthly calendar Puck block | `database` r/w, routes, admin menu |
+| `events-calendar` | Admin-managed events shown as an upcoming list or monthly calendar Verso block | `database` r/w, routes, admin menu |
 | `faq` | Database-managed FAQ accordion with categories + Google FAQPage JSON-LD | `database` r/w, routes, admin menu |
 | `image-lightbox` | Site-wide click-to-zoom lightbox for content images (captions, keyboard nav) | `settings` r/w, routes, admin menu, `assets:write` |
 | `invoices` | Invoices with statuses, dashboard totals, CSV export, public token URL + print view, email to client | `database` r/w, `settings` r/w, routes, admin menu, `email:admin` |
-| `job-board` | Job listings with anti-spam public application form, applications inbox, filterable Puck block | `database` r/w, `settings` r/w, routes, admin menu, `email:admin` |
+| `job-board` | Job listings with anti-spam public application form, applications inbox, filterable Verso block | `database` r/w, `settings` r/w, routes, admin menu, `email:admin` |
 | `mail-server` | Full SMTP server: inbound listener + direct-MX outbound delivery, DKIM signing, host-wide mail sender + email notification transport | `settings` r/w, `database` r/w, `email:admin`+provider, `notifications`, `filesystem` r/w, `users` read, `network` |
 | `newsletter` | Subscriptions (double opt-in when mail is configured), subscriber CSV, HTML campaigns with unsubscribe links | `database` r/w, routes, admin menu, `email:admin` |
 | `notification-bar` | Slim site-wide announcement bar with CTA, dismissal versioning, schedule window | `settings` r/w, routes, admin menu, `assets:write` |
 | `online-store` | Product catalog (variants, galleries, categories) + cart + checkout with server-side price validation, coupons, shipping zones and taxes, orders admin with refunds and transactional emails, sales reports + CSV, optional Stripe Checkout | `database` r/w, `settings` r/w, routes, admin menu, `email:admin`, `network` |
-| `photo-carousel` | Image carousels for Hero sections / content sliders via the PhotoCarousel Puck block + `[carousel]` shortcode | `settings` r/w, `database` write |
-| `polls` | WP-Polls-style polls with a voting + animated-results Puck block | `database` r/w, routes, admin menu |
+| `photo-carousel` | Image carousels for Hero sections / content sliders via the `PhotoCarouselVerso` block + `[carousel]` shortcode | `settings` r/w, `database` write |
+| `polls` | WP-Polls-style polls with a voting + animated-results Verso block | `database` r/w, routes, admin menu |
 | `popup-builder` | Site-wide popups with triggers (delay/scroll/exit intent), frequency capping, view/click stats | `database` r/w, routes, admin menu, `assets:write` |
 | `related-posts` | Automatic per-post related articles via the core public REST API (YARPP parity) | — (frontend-only) |
 | `restaurant-menu` | Menu sections/dishes with photos, diet tags and EU-14 allergens; priced modifier groups; opening-hours gating; cart with WhatsApp hand-off, cash, or Stripe Checkout; QR table ordering, table reservations, a live kitchen board and sales reports | `database` r/w, `settings` r/w, routes, admin menu, `email:admin`, `notifications:send`, `network` |
-| `social-share` | Share buttons Puck block (Facebook, X, WhatsApp, LinkedIn, Telegram, Email, copy link) — the sharing itself is entirely client-side (share intents via `window.open`, copy via the Clipboard API) | — (declares no permissions; its `init` only registers the sidebar item) |
+| `social-share` | Share buttons Verso block (Facebook, X, WhatsApp, LinkedIn, Telegram, Email, copy link) — the sharing itself is entirely client-side (share intents via `window.open`, copy via the Clipboard API) | — (declares no permissions; its `init` only registers the sidebar item) |
 | `table-of-contents` | Automatic nested TOC from page H2/H3 with anchors, smooth scroll, active highlighting | — (frontend-only) |
-| `testimonials` | Database-backed testimonials with moderation and optional public submission form; carousel/grid Puck block | `database` r/w, `settings` r/w, routes, admin menu |
+| `testimonials` | Database-backed testimonials with moderation and optional public submission form; carousel/grid Verso block | `database` r/w, `settings` r/w, routes, admin menu |
 | `vendor-marketplace` | Multi-vendor directory: vendor applications, admin approval, self-service listings, per-product inquiries | `database` r/w, routes, admin menu, `email:admin` |
-| `video-gallery` | YouTube video carousels via the VideoGalleryPuck block + `[vgallery]` shortcode | `settings` r/w, `database` write |
-| `youtube-videos` | Pulls a YouTube channel's videos (keyless RSS or Data API v3) into a filterable, count-limited Puck carousel block | `settings` r/w, `database` r/w, `network` |
+| `video-gallery` | YouTube video carousels via the `VideoGalleryVerso` block + `[vgallery]` shortcode | `settings` r/w, `database` write |
+| `youtube-videos` | Pulls a YouTube channel's videos (keyless RSS or Data API v3) into a filterable, count-limited Verso carousel block | `settings` r/w, `database` r/w, `network` |
 
 *(“routes” = `express:register_route`; “admin menu” = `admin_menu:register`. Every capability is
 manifest-requested and admin-granted, default-deny, exactly like the bundled plugins. Note that

@@ -163,6 +163,12 @@ const SETTINGS_OPTIONS = new Set([
     // is worse than it sounds: switching a site to Arabic would have left every already-rendered page
     // announcing lang="en" and laying out LTR until the ISR window happened to expire.
     'WPLANG', 'site_text_direction',
+    // Interaction presets (F9): a block stores only the preset's ID, so editing one changes NOTHING
+    // in `_puck_data` — the whole point of the design. The propagation therefore rides entirely on
+    // this purge: every page that references the preset recompiles its interaction CSS (with a new
+    // content hash, so the browser cannot serve the old sheet) on its next navigation. Without this
+    // entry the edit would be invisible until each page's ISR window happened to expire.
+    'wjs_ix_presets',
 ]);
 
 /** Wire the content hooks. Call ONCE from initialize() after the hook system is up. */

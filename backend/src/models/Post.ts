@@ -500,12 +500,31 @@ class Post {
             }
         }
 
-        // Post status
+        // Post status.
+        //
+        // `status: 'any'` is a WordPress-compatible PSEUDO-status meaning "every status a reader could
+        // legitimately be shown", NOT a literal value: it used to fall through to `post_status = 'any'`,
+        // a string that matches no row, so every caller asking for 'any' silently got ZERO posts
+        // (exportSite() exported an empty site on an install with 17 posts + 38 pages — F7/H1). It is
+        // resolved here, in the ONE shared builder, so findAll() and count() can never disagree and no
+        // caller needs a local patch.
+        //
+        // Semantics (WordPress `post_status=any`): everything EXCEPT the statuses WP marks
+        // exclude_from_search — 'trash' (soft-deleted: restoring it is the trash UI's job, an export or
+        // a listing must not resurrect it) and 'auto-draft' (an empty row the editor created and the
+        // author never saved). 'inherit' stays IN, as in WP: attachments carry it (revisions do too, but
+        // they are excluded by post_type, never by status).
+        //
+        // Callers that really want EVERY row, trash included, ask explicitly: pass
+        // `includeStatuses: [...]` with the exact list, or `status: null` for no status filter at all.
         if (includeStatuses) {
             conditions.push(`${col}post_status IN (${includeStatuses.map(() => '?').join(',')})`);
             params.push(...includeStatuses);
         } else if (status) {
-            if (Array.isArray(status)) {
+            if (status === 'any') {
+                conditions.push(`${col}post_status NOT IN (?, ?)`);
+                params.push('trash', 'auto-draft');
+            } else if (Array.isArray(status)) {
                 conditions.push(`${col}post_status IN (${status.map(() => '?').join(',')})`);
                 params.push(...status);
             } else {
@@ -1283,6 +1302,43 @@ class Post {
                 bucket[row.meta_key] = JSON.parse(row.meta_value);
             } catch {
                 bucket[row.meta_key] = row.meta_value;
+            }
+        }
+        return result;
+    }
+
+    /**
+     * Batch-load all meta for many post IDs, RAW — meta_value exactly as stored, never JSON.parse()d.
+     *
+     * getAllMeta()/getAllMetaForIds() parse each value for API consumers, which is lossy for a
+     * byte-faithful export: JSON.parse -> JSON.stringify drops the original whitespace and turns a
+     * stored `"changed"` into `changed`. The WXR exporter must ship the bytes the editor wrote
+     * (_puck_data is the whole page tree), so it reads through here instead.
+     *
+     * Returns { [postId]: Array<{ key, value }> } with an entry for every requested id (empty array if
+     * the post has no meta). Order within a post is the DB's row order for that post_id, which keeps a
+     * re-export of a re-import stable. Chunked so a 10k-post export cannot blow the driver's bound-
+     * parameter ceiling (SQLite/MySQL both cap it).
+     */
+    static async getAllMetaRawForIds(ids: any) {
+        const result: Record<string, Array<{ key: string; value: string }>> = {};
+        if (!Array.isArray(ids) || ids.length === 0) return result;
+
+        const uniqueIds = [...new Set(ids)].filter((id) => id != null);
+        for (const id of uniqueIds) result[id] = [];
+
+        const CHUNK = 500;
+        for (let i = 0; i < uniqueIds.length; i += CHUNK) {
+            const chunk = uniqueIds.slice(i, i + CHUNK);
+            const placeholders = chunk.map(() => '?').join(',');
+            const rows = await dbAsync.all(
+                `SELECT post_id, meta_key, meta_value FROM post_meta WHERE post_id IN (${placeholders}) ORDER BY meta_id ASC`,
+                chunk
+            );
+            for (const row of rows) {
+                const bucket = result[row.post_id];
+                if (!bucket) continue;
+                bucket.push({ key: row.meta_key, value: row.meta_value == null ? '' : String(row.meta_value) });
             }
         }
         return result;

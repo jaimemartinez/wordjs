@@ -1,0 +1,287 @@
+/**
+ * Verso — normalización y serialización del documento.
+ *
+ * `toNormalized(data)` convierte la forma persistida (contrato `_puck_data`) en el
+ * documento normalizado (mapa plano id→nodo). `fromNormalized(doc)` reconstruye la
+ * forma persistida EXACTA. Gate: round-trip deep-equal sobre el corpus de producción
+ * (verso-roundtrip.test.ts); las únicas diferencias permitidas son la normalización
+ * zones→slots ya vigente en el editor actual.
+ *
+ * Política fail-soft (ratificada): lo que no se entiende se PRESERVA verbatim y se
+ * anota en `doc.warnings` — nunca throw, nunca pérdida. La clasificación slot/prop
+ * es irrelevante para la exactitud del round-trip (un slot se re-emite en la misma
+ * clave con la misma forma); solo afecta a qué puede editarse como hijos.
+ */
+
+import {
+  ROOT_ID,
+  ROOT_SLOT,
+  type SlotResolver,
+  type VersoData,
+  type VersoDoc,
+  type VersoItem,
+  type VersoNode,
+} from "./types";
+
+const DATA_KEYS = new Set(["content", "root", "zones"]);
+const ITEM_KEYS = new Set(["type", "props"]);
+
+/** ¿Es `value` estructuralmente un VersoItem (bloque persistido)? */
+export function isVersoItem(value: unknown): value is VersoItem {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const v = value as Record<string, unknown>;
+  if (typeof v.type !== "string") return false;
+  const props = v.props;
+  if (typeof props !== "object" || props === null || Array.isArray(props)) return false;
+  return typeof (props as Record<string, unknown>).id === "string";
+}
+
+/** ¿Es `value` un array NO VACÍO cuyos elementos son todos VersoItem? (detección estructural de slot) */
+export function isVersoItemArray(value: unknown): value is VersoItem[] {
+  return Array.isArray(value) && value.length > 0 && value.every(isVersoItem);
+}
+
+/**
+ * Regla ÚNICA de clasificación slot/prop (compartida por `normalizeItem`, el
+ * `internItem` de commands.ts y `resolveInsertTarget`):
+ * - `declared === true` (el registry lo declara slot): es slot si el valor es un
+ *   array vacío o un array de VersoItem — cualquier otro valor NO se re-clasifica.
+ * - `declared === false` (declarado NO-slot): jamás es slot, sea cual sea la forma.
+ * - `declared === undefined` (sin opinión del registry): detección estructural.
+ */
+export function classifySlotProp(declared: boolean | undefined, value: unknown): boolean {
+  if (declared === true) return Array.isArray(value) && (value.length === 0 || isVersoItemArray(value));
+  if (declared === false) return false;
+  return isVersoItemArray(value);
+}
+
+interface NormalizeCtx {
+  nodes: Record<string, VersoNode>;
+  warnings: string[];
+  isSlot?: SlotResolver;
+}
+
+function internKey(ctx: NormalizeCtx, id: string): string {
+  // Object.hasOwn, no `in` (F6, cazado por el fuzzer): un id "constructor"/"hasOwnProperty"
+  // matcheaba por la CADENA DE PROTOTIPOS y se desambiguaba (o pisaba) sin colisión real.
+  // ROOT_ID también colisiona (F6): un props.id "verso:root" hacía que sus hijos llevaran
+  // parentId === ROOT_ID y los comandos los trataran como hijos de la raíz (inversos rotos).
+  if (id !== ROOT_ID && !Object.hasOwn(ctx.nodes, id)) return id;
+  // Sondeo de clave libre (espejo de internItem en commands.ts): un contador por id
+  // se descolocaba cuando el propio dato traía claves `#dupN` literales (p.ej.
+  // content ids ["a","a#dup2","a"]) y PISABA un nodo ya interneado.
+  let n = 2;
+  while (Object.hasOwn(ctx.nodes, `${id}#dup${n}`)) n += 1;
+  const key = `${id}#dup${n}`;
+  ctx.warnings.push(`id duplicado "${id}" — esta aparición se indexa como "${key}" (props.id intacto)`);
+  return key;
+}
+
+function normalizeItem(
+  ctx: NormalizeCtx,
+  item: VersoItem,
+  parentId: string,
+  slotKey: string,
+  index: number,
+): string {
+  const key = internKey(ctx, item.props.id);
+
+  // Las props se construyen EN EL ORDEN ORIGINAL de claves (incluida la posición
+  // de `id`): forzar id-primero reordenaba el JSON al primer guardado y ensuciaba
+  // los diffs de revisiones aunque deep-equal pasara (cazado en el gate F4).
+  const props = {} as VersoNode["props"];
+  const slots: Record<string, string[]> = {};
+
+  // Registrar el nodo ANTES de descender: los hijos necesitan que el padre exista
+  // para la detección de duplicados y para parentId estable.
+  const node: VersoNode = { id: key, type: item.type, props, slots, parentId, slotKey, index };
+
+  // Claves desconocidas a nivel de item (p.ej. readOnly) → preservar verbatim.
+  for (const k of Object.keys(item)) {
+    if (!ITEM_KEYS.has(k)) {
+      (node.extras ??= {})[k] = (item as unknown as Record<string, unknown>)[k];
+    }
+  }
+
+  ctx.nodes[key] = node;
+
+  for (const [k, v] of Object.entries(item.props)) {
+    if (k === "id") {
+      (props as Record<string, unknown>).id = item.props.id;
+      continue;
+    }
+    if (classifySlotProp(ctx.isSlot?.(item.type, k), v)) {
+      slots[k] = (v as VersoItem[]).map((child, i) => normalizeItem(ctx, child, key, k, i));
+    } else {
+      props[k] = v;
+    }
+  }
+  // Dato corrupto sin id (imposible vía isVersoItem, cinturón igualmente):
+  if (!("id" in props)) (props as Record<string, unknown>).id = item.props.id;
+
+  // Orden original de claves del item — solo se materializa cuando hay ≥1 slot
+  // (sin slots, el orden de `props` ya ES el original y `keyOrder` sobraría).
+  if (Object.keys(slots).length > 0) node.keyOrder = Object.keys(item.props);
+
+  return key;
+}
+
+export function toNormalized(data: VersoData, isSlot?: SlotResolver): VersoDoc {
+  const ctx: NormalizeCtx = { nodes: {}, warnings: [], isSlot };
+
+  // FAIL-SOFT (F6, cazado por el fuzzer): un `content` array con CUALQUIER entrada
+  // que no sea un VersoItem bien formado (null, escalar, props no-objeto, id no-string)
+  // hacía throw a normalizeItem (`item.props.id` sobre null) — violando la política
+  // "nunca throw, nunca pérdida". Mismo canal que el content no-array: el array entero
+  // se preserva VERBATIM (round-trip byte-exacto; el doc no es editable, que es lo
+  // correcto para dato corrupto).
+  const contentIsCleanArray = Array.isArray(data.content) && data.content.every(isVersoItem);
+  const contentKeyState: VersoDoc["contentKeyState"] = contentIsCleanArray
+    ? "array"
+    : "content" in data
+      ? "verbatim"
+      : "absent";
+  const content = contentKeyState === "array" ? data.content : [];
+  if (contentKeyState === "verbatim") {
+    ctx.warnings.push(
+      Array.isArray(data.content)
+        ? "`content` con entradas malformadas (no-VersoItem) — preservado verbatim sin normalizar"
+        : "`content` presente pero no-array — preservado verbatim sin normalizar",
+    );
+  }
+
+  const rootChildren = content.map((item, i) => normalizeItem(ctx, item, ROOT_ID, ROOT_SLOT, i));
+
+  // Zonas legacy: merge en el slot del nodo destino cuando existe; huérfanas → verbatim.
+  const orphanZones: Record<string, VersoItem[]> = {};
+  const zonesIsObject =
+    "zones" in data && typeof data.zones === "object" && data.zones !== null && !Array.isArray(data.zones);
+  const zonesKeyPresent = zonesIsObject;
+  if (zonesIsObject && data.zones) {
+    for (const [compound, items] of Object.entries(data.zones)) {
+      const sep = compound.indexOf(":");
+      const targetId = sep === -1 ? "" : compound.slice(0, sep);
+      const slotName = sep === -1 ? "" : compound.slice(sep + 1);
+      // Object.hasOwn: un targetId "constructor" resolvía a Function por prototipo y reventaba.
+      const target = Object.hasOwn(ctx.nodes, targetId) ? ctx.nodes[targetId] : undefined;
+      if (target && slotName && Array.isArray(items) && items.every(isVersoItem)) {
+        if (target.slots[slotName]) {
+          // El slot ya venía poblado en props (dato mixto anómalo): no fusionar a ciegas.
+          orphanZones[compound] = items;
+          ctx.warnings.push(`zona legacy "${compound}" ignorada: el slot ya existe en props — preservada verbatim`);
+        } else {
+          target.slots[slotName] = items.map((child, i) => normalizeItem(ctx, child, targetId, slotName, i));
+        }
+      } else {
+        orphanZones[compound] = items as VersoItem[];
+        ctx.warnings.push(`zona legacy huérfana "${compound}" — preservada verbatim`);
+      }
+    }
+  }
+
+  // Claves top-level desconocidas → preservar verbatim. Un `zones` que NO sea objeto
+  // plano (null, array, string…) también se preserva aquí tal cual (fail-soft).
+  const extras: Record<string, unknown> = {};
+  for (const k of Object.keys(data)) {
+    if (!DATA_KEYS.has(k)) extras[k] = (data as unknown as Record<string, unknown>)[k];
+  }
+  if ("zones" in data && !zonesIsObject) {
+    extras.zones = (data as unknown as Record<string, unknown>).zones;
+    ctx.warnings.push("`zones` no era un objeto plano — preservado verbatim sin normalizar");
+  }
+  if (contentKeyState === "verbatim") {
+    extras.content = (data as unknown as Record<string, unknown>).content;
+  }
+
+  return {
+    nodes: ctx.nodes,
+    rootChildren,
+    root: data.root ?? {},
+    orphanZones,
+    zonesKeyPresent,
+    contentKeyState,
+    rootKeyPresent: "root" in data,
+    topKeyOrder: Object.keys(data),
+    extras,
+    warnings: ctx.warnings,
+  };
+}
+
+/**
+ * Emite las props de un nodo respetando `keyOrder` (cada clave: slot reconstruido
+ * si está en `slots`, prop si está en `props`), después las props nuevas fuera de
+ * `keyOrder` y por último los slots nuevos fuera de `keyOrder`. Sin `keyOrder`
+ * (nodo sin slots al internear) equivale a props-en-orden-de-inserción + slots.
+ * Compartida con `subtreeToItem`/`duplicateItemFromNode` de commands.ts.
+ */
+export function emitNodeProps(node: VersoNode, buildChild: (childKey: string) => VersoItem): VersoItem["props"] {
+  const props = {} as VersoItem["props"];
+  const bag = props as Record<string, unknown>;
+  const emitted = new Set<string>();
+  // Object.hasOwn, no `in` (F6, cazado por el fuzzer): una prop llamada "constructor"
+  // resolvía por la cadena de prototipos a Function y `.map` reventaba el emisor.
+  for (const k of node.keyOrder ?? []) {
+    if (emitted.has(k)) continue;
+    if (Object.hasOwn(node.slots, k)) {
+      bag[k] = node.slots[k].map(buildChild);
+      emitted.add(k);
+    } else if (Object.hasOwn(node.props, k)) {
+      bag[k] = node.props[k];
+      emitted.add(k);
+    }
+    // Clave de keyOrder ya eliminada (setProps con undefined): se omite.
+  }
+  for (const [k, v] of Object.entries(node.props)) {
+    if (!emitted.has(k)) bag[k] = v;
+  }
+  for (const [k, children] of Object.entries(node.slots)) {
+    if (!emitted.has(k)) bag[k] = children.map(buildChild);
+  }
+  return props;
+}
+
+function buildItem(doc: VersoDoc, nodeKey: string): VersoItem {
+  const node = Object.hasOwn(doc.nodes, nodeKey) ? doc.nodes[nodeKey] : undefined;
+  if (!node) {
+    // Referencia rota (no debería ocurrir: los comandos mantienen la integridad).
+    // Fail-soft: emitir un placeholder imposible de confundir en vez de lanzar.
+    return { type: "verso:missing", props: { id: nodeKey } };
+  }
+  const props = emitNodeProps(node, (c) => buildItem(doc, c));
+  const item: VersoItem = { type: node.type, props };
+  if (node.extras) Object.assign(item as unknown as Record<string, unknown>, node.extras);
+  return item;
+}
+
+export function fromNormalized(doc: VersoDoc): VersoData {
+  const rebuilt = doc.rootChildren.map((c) => buildItem(doc, c));
+  // Qué claves se emiten (misma semántica de siempre)…
+  const emitContent = doc.contentKeyState === "array" || rebuilt.length > 0;
+  const emitRoot = doc.rootKeyPresent || Object.keys(doc.root).length > 0;
+  const emitZones = doc.zonesKeyPresent || Object.keys(doc.orphanZones).length > 0;
+  const extras = doc.extras;
+  // …emitidas EN EL ORDEN TOP-LEVEL ORIGINAL (docs reales guardan `root` antes que
+  // `content`); las claves nuevas que el original no tenía van al final.
+  const out = {} as Record<string, unknown>;
+  const emitted = new Set<string>();
+  const emitKey = (k: string): void => {
+    if (emitted.has(k)) return;
+    if (k === "content" && emitContent) {
+      // Los hijos REALES ganan sobre un `content` verbatim corrupto de extras.
+      out.content = rebuilt.length > 0 || !("content" in extras) ? rebuilt : extras.content;
+      emitted.add(k);
+    } else if (k === "root" && emitRoot) {
+      out.root = doc.root;
+      emitted.add(k);
+    } else if (k === "zones" && emitZones) {
+      out.zones = { ...doc.orphanZones };
+      emitted.add(k);
+    } else if (k in extras) {
+      out[k] = k === "content" && rebuilt.length > 0 ? rebuilt : extras[k];
+      emitted.add(k);
+    }
+  };
+  for (const k of doc.topKeyOrder) emitKey(k);
+  for (const k of ["content", "root", "zones", ...Object.keys(extras)]) emitKey(k);
+  return out as unknown as VersoData;
+}

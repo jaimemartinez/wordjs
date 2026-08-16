@@ -1,21 +1,23 @@
 "use client";
 
-import { useEffect, useState, useRef, useMemo } from "react";
+import { useEffect, useState, useRef } from "react";
 import { createPortal } from "react-dom";
 import { useRouter, useParams } from "next/navigation";
+import EditorBootFallback, { EditorSkeleton } from "@/components/verso/editor/EditorBootFallback";
 import { postsApi, settingsApi } from "@/lib/api";
-import { pageConfig } from "@/components/puckConfig";
-import { useRuntimePuckConfig } from "@/lib/useRuntimePuckConfig";
-import { localizeConfig } from "@/lib/puckI18n";
-import PuckEditor from "@/components/PuckEditor";
-import PuckEditorSkeleton from "@/components/PuckEditorSkeleton";
 import EditorLoadError from "@/components/EditorLoadError";
-import { unhydratedSaveBlocked } from "@/lib/editorGuards";
-import { Data } from "@wordjs/puck";
+import VersoEditor from "@/components/verso/editor/VersoEditor";
+import { rootFieldsPage } from "@/lib/verso/coreBlocks";
+import { serializeContentFallback } from "@/lib/verso/contentFallback";
+import type { EditorHandle } from "@/lib/verso/store";
+import type { VersoData } from "@/lib/verso/types";
+import { unhydratedSaveBlocked, seedLegacyVersoData, applyLegacyHtmlFallback, resolveWjsTemplateForSave, isWithinPostMountGrace, EDITOR_DATA_META_KEY } from "@/lib/editorGuards";
+// La forma persistida `{ content, root }` — el mismo tipo que exponía el fork, ahora propio.
+import type { VersoData as Data } from "@/lib/verso/types";
 import { useUnsavedChanges } from "@/contexts/UnsavedChangesContext";
 import { useModal } from "@/contexts/ModalContext";
 import { useI18n } from "@/contexts/I18nContext";
-import { trStr } from "@/lib/puckI18n";
+import { trStr } from "@/lib/editorI18n";
 import { useAuth } from "@/contexts/AuthContext";
 
 export default function PageEditorPage() {
@@ -40,11 +42,12 @@ export default function PageEditorPage() {
     // every keystroke) and is only ever read inside handleSubmit — never during render. As state it
     // re-rendered the whole editor on each letter typed.
     const contentRef = useRef("");
-    const [initialPuckData, setInitialPuckData] = useState<Data | null>(null);
-    const puckDataRef = useRef<Data>({ content: [], root: {} }); // For saving without causing re-renders
+    const [initialVersoData, setInitialVersoData] = useState<Data | null>(null);
+    const versoDataRef = useRef<Data>({ content: [], root: {} }); // For saving without causing re-renders
     const [status, setStatus] = useState("draft");
     // The author's per-page theme-template pick (`_wjs_template` meta). State (not just a root prop
-    // read at save time) because the canvas preview re-wraps on it live — see PuckEditor.assignedTemplate.
+    // read at save time) because the canvas preview re-wraps on it live — VersoThemeTemplate reads the
+    // pick straight from the store root, so the canvas follows the dropdown without a save.
     const [assignedTemplate, setAssignedTemplate] = useState("");
     const [saving, setSaving] = useState(false);
     const [isLoading, setIsLoading] = useState(!isNew);
@@ -61,6 +64,10 @@ export default function PageEditorPage() {
     // swallowed (save stayed disabled, autosave never armed). A short post-mount grace window
     // ignores init noise without ever eating a human edit.
     const mountedAtRef = useRef(Date.now());
+
+    // Handle vivo del motor: el guardado lee getData() de aquí — el documento REAL del store, sin
+    // mirrors.
+    const versoHandleRef = useRef<EditorHandle | null>(null);
 
     // Set initial dirty state for new pages
     useEffect(() => {
@@ -79,14 +86,14 @@ export default function PageEditorPage() {
                 .replace(/[\s_-]+/g, '-')
                 .replace(/^-+|-+$/g, '');
             setSlug(generatedSlug);
-            // Update puckDataRef for saving (no re-render)
-            puckDataRef.current = {
-                ...puckDataRef.current,
+            // Update versoDataRef for saving (no re-render)
+            versoDataRef.current = {
+                ...versoDataRef.current,
                 root: {
-                    ...(puckDataRef.current.root as any),
+                    ...(versoDataRef.current.root as any),
                     slug: generatedSlug,
                     props: {
-                        ...((puckDataRef.current.root as any)?.props || {}),
+                        ...((versoDataRef.current.root as any)?.props || {}),
                         slug: generatedSlug
                     }
                 }
@@ -126,8 +133,8 @@ export default function PageEditorPage() {
             setAssignedTemplate(savedTemplate);
 
             // Load Puck data from meta if available
-            if (page.meta && page.meta._puck_data) {
-                const stored = page.meta._puck_data;
+            if (page.meta && page.meta[EDITOR_DATA_META_KEY]) {
+                const stored = page.meta[EDITOR_DATA_META_KEY];
                 const withTemplate = {
                     ...stored,
                     root: {
@@ -135,8 +142,8 @@ export default function PageEditorPage() {
                         props: { ...((stored.root as any)?.props || {}), _wjs_template: savedTemplate }
                     }
                 };
-                setInitialPuckData(withTemplate);
-                puckDataRef.current = withTemplate;
+                setInitialVersoData(withTemplate);
+                versoDataRef.current = withTemplate;
                 legacyHtmlRef.current = null; // real Puck blocks — not a legacy HTML body
                 if (stored.root?.title) {
                     setTitle(stored.root.title);
@@ -145,30 +152,21 @@ export default function PageEditorPage() {
                 // Seed Puck data with existing info for legacy pages. A legacy/imported page keeps its
                 // body as HTML in `content` with no _puck_data. Wrap that HTML in an HTMLEmbed block so it
                 // is VISIBLE and editable in the canvas instead of opening blank. The block renders the
-                // HTML sanitized (see puckConfig HTMLEmbed); the onChange serializer round-trips props.html
+                // HTML sanitized (see versoConfig HTMLEmbed); the onChange serializer round-trips props.html
                 // back into `content`, so the body is preserved (and updated when edited).
-                const legacyHtml = page.content || "";
-                const seededData: any = {
-                    content: legacyHtml
-                        ? [{ type: "HTMLEmbed", props: { id: `HTMLEmbed-legacy-${pageId}`, html: legacyHtml } }]
-                        : [],
-                    root: {
-                        title: page.title,
-                        slug: page.slug,
-                        props: {
-                            title: page.title,
-                            slug: page.slug,
-                            category: "",
-                            _wjs_template: savedTemplate
-                        }
-                    }
-                };
-                setInitialPuckData(seededData);
-                puckDataRef.current = seededData;
+                const { data: seededData, legacyHtml } = seedLegacyVersoData({
+                    html: page.content || "",
+                    title: page.title,
+                    slug: page.slug,
+                    recordId: pageId as number,
+                    wjsTemplate: savedTemplate
+                });
+                setInitialVersoData(seededData as any);
+                versoDataRef.current = seededData as any;
                 // Safety net (belt-and-braces): keep the original body so an empty-canvas save can't blank
                 // the page if the HTMLEmbed block is deleted before its HTML round-trips. Once the block
                 // round-trips through onChange (content.length > 0), legacyHtmlRef is cleared.
-                legacyHtmlRef.current = legacyHtml || null;
+                legacyHtmlRef.current = legacyHtml;
             }
             setLoaded(true); // content is now hydrated — saving is safe
         } catch (error) {
@@ -204,11 +202,13 @@ export default function PageEditorPage() {
         }
 
         try {
-            // Flush any open inline editor (so its latest keystrokes land in Puck's store), then read
-            // the LIVE store rather than the mirrored ref — Puck's onChange has a deep-equal guard that
-            // can leave puckDataRef stale, which would persist pre-edit content ("changes don't save").
-            try { (window as any).puckCommitActive?.(); } catch { /* no open editor */ }
-            const liveData = ((window as any).puckGetData?.() ?? puckDataRef.current);
+            // Flush any open inline editor (so its latest keystrokes land in the store), then read the
+            // LIVE store rather than the mirrored ref — el mirror puede quedarse stale y persistiría
+            // contenido pre-edición ("los cambios no se guardan").
+            try {
+                versoHandleRef.current?.commitInline();
+            } catch { /* no open editor */ }
+            const liveData = (versoHandleRef.current?.getData() as any) ?? versoDataRef.current;
             const root = liveData.root as any;
             const finalTitle = root?.props?.title || root?.title || title;
             const finalSlug = root?.props?.slug || root?.slug || slug;
@@ -227,10 +227,11 @@ export default function PageEditorPage() {
                 status,
                 type: "page",
                 meta: {
-                    _puck_data: liveData,
+                    // Clave histórica CONGELADA a propósito — ver EDITOR_DATA_META_KEY.
+                    [EDITOR_DATA_META_KEY]: liveData,
                     // Per-page theme template. Always sent (backend merges meta per key): '' explicitly
                     // CLEARS a previous assignment — omitting the key would leave it stale forever.
-                    _wjs_template: typeof root?.props?._wjs_template === 'string' ? root.props._wjs_template : ''
+                    _wjs_template: resolveWjsTemplateForSave(root?.props)
                 },
                 // Autosaves skip the revision snapshot server-side (see routes/posts.ts).
                 ...(isAutosave ? { autosave: true } : {})
@@ -238,16 +239,13 @@ export default function PageEditorPage() {
 
             // Legacy body preservation: a legacy page still on a blank canvas must not be blanked — keep
             // its original HTML and don't stamp empty Puck data over it (which would orphan the body).
-            if (!(liveData.content && liveData.content.length) && legacyHtmlRef.current) {
-                pageData.content = legacyHtmlRef.current;
-                delete (pageData.meta as any)._puck_data;
-            }
+            const finalPageData = applyLegacyHtmlFallback(pageData, liveData.content?.length ?? 0, legacyHtmlRef.current);
 
             const effectiveId = pageId ?? createdIdRef.current;
             if (effectiveId) {
-                await postsApi.update(effectiveId, pageData as any);
+                await postsApi.update(effectiveId, finalPageData as any);
             } else {
-                const created = await postsApi.create(pageData as any);
+                const created = await postsApi.create(finalPageData as any);
                 if (created?.id) {
                     createdIdRef.current = created.id;
                     // Keep the URL honest without remounting the editor mid-session.
@@ -268,17 +266,13 @@ export default function PageEditorPage() {
         }
     };
 
-    const localizedConfig = useMemo(() => localizeConfig(pageConfig, language), [language]);
-    // Add active marketplace plugins' Puck blocks to the editor palette/canvas at runtime.
-    const runtimeConfig = useRuntimePuckConfig(localizedConfig);
-
     // Never mount the editor for a user without edit rights (redirect to /admin/account is in flight).
     if (!allowedToEdit) {
-        return <PuckEditorSkeleton />;
+        return <EditorSkeleton />;
     }
 
     if (isLoading) {
-        return <PuckEditorSkeleton />;
+        return <EditorBootFallback />;
     }
 
     // Load failed → show a blocking error (with retry) instead of an empty, savable editor that would
@@ -289,82 +283,55 @@ export default function PageEditorPage() {
 
     return (
         <div className="h-full w-full overflow-hidden flex flex-col">
-            <PuckEditor
-                config={runtimeConfig}
-                initialData={initialPuckData || { content: [], root: {} }}
-                status={status}
-                onStatusChange={setStatus}
-                saving={saving}
-                hasChanges={isDirty}
-                onSave={handleSubmit as any}
-                onCancel={() => router.back()}
-                pageId={pageId || undefined}
-                previewSlug={slug || undefined}
-                // OLA 3: preview the page inside the theme's `page` template (page-<slug> → page). The
-                // author's dropdown pick is hoisted to the front of that chain, live (OLA 5).
-                templateKind="page"
-                assignedTemplate={assignedTemplate || undefined}
-                onChange={(data) => {
-                    // Ignore init-time events only (see mountedAtRef note above).
-                    if (Date.now() - mountedAtRef.current > 800) {
-                        setIsDirty(true);
-                    }
-
-                    // Store in ref for saving (no re-render)
-                    puckDataRef.current = data;
-                    const root = data.root as any;
-                    const newTitle = root?.props?.title || root?.title;
-                    const newSlug = root?.props?.slug || root?.slug;
-                    if (newTitle !== undefined) {
-                        setTitle(newTitle);
-                    }
-                    if (newSlug !== undefined && newSlug !== slug) {
-                        // User manually edited slug in sidebar
-                        setSlugManuallyEdited(true);
-                        setSlug(newSlug);
-                    }
-                    // Template pick from the sidebar dropdown — state so the canvas re-wraps live.
-                    // Guarded on change (it fires per keystroke for unrelated edits, the value rarely moves).
-                    const newTemplate = root?.props?._wjs_template;
-                    if (typeof newTemplate === 'string' && newTemplate !== assignedTemplate) {
-                        setAssignedTemplate(newTemplate);
-                    }
-                    // Regenerate fallback HTML from blocks — EXCEPT a legacy page still on a blank canvas
-                    // (its body is HTML in `content`, not blocks): don't clobber it to "".
-                    if (data.content.length > 0) legacyHtmlRef.current = null;
-                    if (!(data.content.length === 0 && legacyHtmlRef.current)) {
-                    let html = "";
-                    data.content.forEach((item: any) => {
-                        const props = item.props;
-                        if (item.type === 'Heading') {
-                            html += `<${props.level} class="wp-block-heading font-bold my-4">${props.title}</${props.level}>`;
-                        } else if (item.type === 'Text') {
-                            html += `<div class="wp-block-text prose">${props.content}</div>`;
-                        } else if (item.type === 'Image') {
-                            html += `<img src="${props.src}" alt="${props.alt}" class="wp-block-image max-w-full my-4 rounded shadow-sm"/>`;
-                        } else if (item.type === 'Button') {
-                            const alignClass = props.align === 'center' ? 'text-center' : props.align === 'right' ? 'text-right' : 'text-left';
-                            html += `<div class="wp-block-button my-6 ${alignClass}"><a href="${props.href}" class="wp-button button-${props.variant}">${props.label}</a></div>`;
-                        } else if (item.type === 'Card') {
-                            html += `
-                                <div class="wp-block-card card-theme-${props.theme} p-8 rounded-3xl border my-6">
-                                    ${props.icon ? `<i class="fa-solid ${props.icon} text-2xl mb-4"></i>` : ''}
-                                    <h3 class="text-xl font-bold mb-2">${props.title}</h3>
-                                    <p class="opacity-80">${props.description}</p>
-                                </div>`;
-                        } else if (item.type === 'Divider') {
-                            html += `<hr class="wp-block-divider divider-${props.type} my-10 border-gray-100" />`;
-                        } else if (item.type === 'HTMLEmbed') {
-                            // Legacy/custom HTML block: emit its raw HTML verbatim so a legacy page's body
-                            // round-trips into `content` unchanged (sanitized once on save, server-side).
-                            // Editing the block updates the body via the same path.
-                            html += props.html || '';
+                {/* MOTOR VERSO — el único. Carga/seeding ya hechos arriba (loadPage/seedLegacyVersoData),
+                   handleSubmit lee el doc vivo vía versoHandleRef, root fields de PAGE (asimetría del
+                   CMS), y el onChange serializa el fallback HTML COMPLETO compartido
+                   (lib/verso/contentFallback). */}
+                <VersoEditor
+                    initialData={(initialVersoData || { content: [], root: {} }) as unknown as VersoData}
+                    status={status}
+                    onStatusChange={setStatus}
+                    saving={saving}
+                    hasChanges={isDirty}
+                    onSave={handleSubmit as any}
+                    onCancel={() => router.back()}
+                    pageId={pageId || undefined}
+                    previewSlug={slug || undefined}
+                    rootFields={rootFieldsPage}
+                    // W30: el canvas envuelve en la plantilla `page` del tema (el pick _wjs_template
+                    // lo lee VersoThemeTemplate EN VIVO del root del store — sin prop).
+                    templateKind="page"
+                    handleRef={versoHandleRef}
+                    onChange={(data: VersoData) => {
+                        // Ignore init-time events only (see mountedAtRef note above).
+                        if (!isWithinPostMountGrace(mountedAtRef.current, Date.now())) {
+                            setIsDirty(true);
                         }
-                    });
-                    contentRef.current = html;
-                    }
-                }}
-            />
+                        // Mirror de última instancia (el guardado prefiere versoHandleRef.getData()).
+                        versoDataRef.current = data as unknown as Data;
+                        const root = data.root as any;
+                        const newTitle = root?.props?.title || root?.title;
+                        const newSlug = root?.props?.slug || root?.slug;
+                        if (newTitle !== undefined) {
+                            setTitle(newTitle);
+                        }
+                        if (newSlug !== undefined && newSlug !== slug) {
+                            // User manually edited slug in sidebar
+                            setSlugManuallyEdited(true);
+                            setSlug(newSlug);
+                        }
+                        const newTemplate = root?.props?._wjs_template;
+                        if (typeof newTemplate === 'string' && newTemplate !== assignedTemplate) {
+                            setAssignedTemplate(newTemplate);
+                        }
+                        // Fallback HTML desde bloques — EXCEPTO una página legacy aún en lienzo vacío
+                        // (su cuerpo vive como HTML en `content`): no machacarlo a "".
+                        if (data.content.length > 0) legacyHtmlRef.current = null;
+                        if (!(data.content.length === 0 && legacyHtmlRef.current)) {
+                            contentRef.current = serializeContentFallback(data.content);
+                        }
+                    }}
+                />
         </div>
     );
 }

@@ -767,21 +767,43 @@ function buildSeccompBpf(archKey: string): Buffer | null {
     out.push(ins(RET, 0, 0, ALLOW)); out.push(ins(RET, 0, 0, EPERM));
     return Buffer.concat(out);
 }
-// Lazily write the host-arch BPF to a 0600 temp file once; each child opens its own read fd for --seccomp.
+// Lazily write the host-arch BPF to a private temp dir once; each child opens its own read fd for --seccomp.
 // Returns the path, or null if the arch is unsupported or the write fails (→ hardening without seccomp).
+//
+// SECURITY — why a mkdtemp directory and not a named file in /tmp. The path used to be
+// `${os.tmpdir()}/wjs-seccomp-${process.pid}.bpf`: fully PREDICTABLE (a pid is 5 digits and observable),
+// in a world-writable shared directory, written with plain writeFileSync. `mode: 0o600` bought nothing —
+// it is ignored for a file that already exists, and 'w' happily follows a symlink someone planted at that
+// name. The payoff for winning that race is not a leak, it is the SANDBOX: these bytes ARE the syscall
+// filter, handed to `bwrap --seccomp <fd>`. Substitute an allow-everything program and every isolated
+// plugin runs with seccomp reported ACTIVE and enforcing nothing — the exact "looks secure but isn't"
+// state sandboxHardeningState exists to make visible.
+//
+// mkdtempSync is the structural fix: the kernel creates the directory exclusively, at 0700, under a name
+// nobody can predict or pre-create; the file inside is then written with `flag: 'wx'` (exclusive create,
+// never follows), so a hostile inode at the target is an error rather than a redirect. The whole
+// directory is removed on process exit.
 let seccompBpfPath: string | null | undefined;
 function getSeccompBpfPath(): string | null {
     if (seccompBpfPath !== undefined) return seccompBpfPath;
     const result: string | null = (() => {
+        const fsmod = require('fs'); const osmod = require('os'); const pathmod = require('path');
+        let dir: string | null = null;
         try {
             const bpf = buildSeccompBpf(process.arch);
             if (!bpf) return null;
-            const fsmod = require('fs'); const osmod = require('os'); const pathmod = require('path');
-            const p = pathmod.join(osmod.tmpdir(), `wjs-seccomp-${process.pid}.bpf`);
-            fsmod.writeFileSync(p, bpf, { mode: 0o600 });
-            try { process.on('exit', () => { try { fsmod.unlinkSync(p); } catch { /* */ } }); } catch { /* */ }
+            dir = fsmod.mkdtempSync(pathmod.join(osmod.tmpdir(), 'wjs-seccomp-'));
+            const p = pathmod.join(dir as string, 'filter.bpf');
+            fsmod.writeFileSync(p, bpf, { mode: 0o600, flag: 'wx' });
+            const cleanup = () => { try { fsmod.rmSync(dir, { recursive: true, force: true }); } catch { /* */ } };
+            try { process.on('exit', cleanup); } catch { /* */ }
             return p;
-        } catch { return null; }
+        } catch {
+            // Fail closed on the ARTIFACT, not on the process: no filter file is left half-written for a
+            // child to open, and the caller falls back to bwrap hardening without seccomp.
+            if (dir) { try { fsmod.rmSync(dir, { recursive: true, force: true }); } catch { /* */ } }
+            return null;
+        }
     })();
     seccompBpfPath = result;
     return result;
@@ -920,8 +942,12 @@ function probeKernelHardening(): Promise<boolean> {
             try { const s = require('../config/app').sandbox; netOptOut = !!(s && s.unshareNetwork === false); } catch { /* */ }
             if (netOptOut) { sandboxNetnsState = 'disabled'; }
             else {
+                // mkdtemp gives the probe dir a kernel-exclusive 0700 name; the finally below guarantees it
+                // is removed even when the probe throws (it used to leak one dir per failed boot).
+                let ndir: string | null = null;
                 try {
-                    const ndir = fsmod.mkdtempSync(pathmod.join(osmod.tmpdir(), 'wjs-netns-probe-'));
+                    ndir = fsmod.mkdtempSync(pathmod.join(osmod.tmpdir(), 'wjs-netns-probe-')) as string;
+                    const probeDir: string = ndir;
                     const nbpf = getSeccompBpfPath();
                     const netOk = await new Promise<boolean>((res) => {
                         let proc: any, got = false, done = false, probeFd = -1;
@@ -932,19 +958,19 @@ function probeKernelHardening(): Promise<boolean> {
                         const seccompArgs: string[] = [];
                         if (nbpf) { try { probeFd = fsmod.openSync(nbpf, 'r'); stdio.push(probeFd); seccompArgs.push('--seccomp', '4'); } catch { probeFd = -1; } }
                         try {
-                            proc = spawn('bwrap', [...seccompArgs, ...bwrapProfile(ndir, true), '--', process.execPath, '-e', src],
+                            proc = spawn('bwrap', [...seccompArgs, ...bwrapProfile(probeDir, true), '--', process.execPath, '-e', src],
                                 { stdio, serialization: 'advanced', timeout: 18000 });
                         } catch { clearTimeout(overall); finish(false); return; }
                         proc.on('message', (m: any) => { if (m === 'ok') got = true; });
                         proc.on('error', () => { clearTimeout(overall); finish(false); });
                         proc.on('exit', (code: number) => { clearTimeout(overall); finish(got && code === 0); });
                     });
-                    try { fsmod.rmSync(ndir, { recursive: true, force: true }); } catch { /* */ }
                     netnsHardeningSupported = netOk;
                     sandboxNetnsState = netOk ? 'active' : 'degraded';
                     if (netOk) console.log('[Sandbox] network-namespace isolation ACTIVE (bwrap --unshare-net: a non-network plugin gets an EMPTY netns — no metadata/host-loopback/public egress at the kernel level, under the JS network neuter).');
                     else console.warn('[Sandbox] network-namespace isolation UNAVAILABLE (--unshare-net probe failed: CLONE_NEWNET restricted or old bwrap) — non-network plugins keep full bwrap hardening but WITHOUT the kernel netns backstop.');
                 } catch { netnsHardeningSupported = false; sandboxNetnsState = 'degraded'; }
+                finally { if (ndir) { try { fsmod.rmSync(ndir, { recursive: true, force: true }); } catch { /* */ } } }
             }
         } else {
             sandboxNetnsState = 'degraded'; // base hardening failed → no bwrap at all, so no netns either

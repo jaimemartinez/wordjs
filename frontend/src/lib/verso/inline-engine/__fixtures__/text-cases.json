@@ -1,0 +1,409 @@
+{
+    "meta": {
+        "spec": "documentation/verso/inline-engine-spec.md",
+        "selectionMarkers": "'[[' abre la seleccion y ']]' la cierra, embebidos en el texto de initialHtml; '[[]]' = caret colapsado. Se retiran antes de cargar el documento.",
+        "normalization": "expectedHtml en la forma canonica de la spec seccion 1: subset p/br/strong/em/a[href,target,rel]/ul/ol/li (li>p), orden de marcas strong>em>a, fusion voraz, doc vacio = cadena vacia, comparacion byte a byte. En schemaKind 'plain', initialHtml/expectedHtml son el valor de TEXTO plano.",
+        "sanitizeFixedPoint": "para todo caso rich: sanitizeHTML(expectedHtml) === expectedHtml (rama cliente DOMPurify de frontend/src/lib/sanitize.ts)"
+    },
+    "cases": [
+        {
+            "name": "bold-aplica-seleccion-simple",
+            "schemaKind": "rich",
+            "initialHtml": "<p>hola [[mundo]]</p>",
+            "op": { "kind": "bold" },
+            "expectedHtml": "<p>hola <strong>mundo</strong></p>"
+        },
+        {
+            "name": "bold-quita-marca-completa",
+            "schemaKind": "rich",
+            "initialHtml": "<p><strong>[[hola]]</strong></p>",
+            "op": { "kind": "bold" },
+            "expectedHtml": "<p>hola</p>"
+        },
+        {
+            "name": "bold-unifica-seleccion-parcialmente-marcada",
+            "schemaKind": "rich",
+            "initialHtml": "<p>[[ho<strong>la]]</strong></p>",
+            "op": { "kind": "bold" },
+            "expectedHtml": "<p><strong>hola</strong></p>"
+        },
+        {
+            "name": "bold-quita-subrango-interior-parte-el-run",
+            "schemaKind": "rich",
+            "initialHtml": "<p><strong>ho[[l]]a</strong></p>",
+            "op": { "kind": "bold" },
+            "expectedHtml": "<p><strong>ho</strong>l<strong>a</strong></p>"
+        },
+        {
+            "name": "bold-cruza-parrafos",
+            "schemaKind": "rich",
+            "initialHtml": "<p>uno [[dos</p><p>tres]] cuatro</p>",
+            "op": { "kind": "bold" },
+            "expectedHtml": "<p>uno <strong>dos</strong></p><p><strong>tres</strong> cuatro</p>"
+        },
+        {
+            "name": "bold-envuelve-em-orden-canonico-strong-fuera",
+            "schemaKind": "rich",
+            "initialHtml": "<p>[[a<em>b</em>c]]</p>",
+            "op": { "kind": "bold" },
+            "expectedHtml": "<p><strong>a<em>b</em>c</strong></p>"
+        },
+        {
+            "name": "bold-fusiona-con-run-adyacente",
+            "schemaKind": "rich",
+            "initialHtml": "<p><strong>ab</strong>[[cd]]</p>",
+            "op": { "kind": "bold" },
+            "expectedHtml": "<p><strong>abcd</strong></p>"
+        },
+        {
+            "name": "bold-caret-colapsado-no-cambia-html",
+            "schemaKind": "rich",
+            "initialHtml": "<p>ho[[]]la</p>",
+            "op": { "kind": "bold" },
+            "expectedHtml": "<p>hola</p>"
+        },
+        {
+            "name": "italic-aplica",
+            "schemaKind": "rich",
+            "initialHtml": "<p>[[texto]]</p>",
+            "op": { "kind": "italic" },
+            "expectedHtml": "<p><em>texto</em></p>"
+        },
+        {
+            "name": "italic-quita",
+            "schemaKind": "rich",
+            "initialHtml": "<p><em>[[texto]]</em></p>",
+            "op": { "kind": "italic" },
+            "expectedHtml": "<p>texto</p>"
+        },
+        {
+            "name": "italic-dentro-de-strong-anida-canonico",
+            "schemaKind": "rich",
+            "initialHtml": "<p><strong>ho[[la]]</strong></p>",
+            "op": { "kind": "italic" },
+            "expectedHtml": "<p><strong>ho<em>la</em></strong></p>"
+        },
+        {
+            "name": "bold-sobre-em-parcial-fuerza-split-canonico",
+            "schemaKind": "rich",
+            "initialHtml": "<p><em>ho[[la]]</em></p>",
+            "op": { "kind": "bold" },
+            "expectedHtml": "<p><em>ho</em><strong><em>la</em></strong></p>"
+        },
+        {
+            "name": "link-aplica-simple",
+            "schemaKind": "rich",
+            "initialHtml": "<p>ver [[aqui]]</p>",
+            "op": { "kind": "link", "args": { "href": "/pagina" } },
+            "expectedHtml": "<p>ver <a href=\"/pagina\">aqui</a></p>"
+        },
+        {
+            "name": "link-nueva-pestana-emite-target-y-rel",
+            "schemaKind": "rich",
+            "initialHtml": "<p>[[externo]]</p>",
+            "op": { "kind": "link", "args": { "href": "https://ejemplo.test", "newTab": true } },
+            "expectedHtml": "<p><a href=\"https://ejemplo.test\" target=\"_blank\" rel=\"noopener noreferrer\">externo</a></p>"
+        },
+        {
+            "name": "link-seleccion-parcial-extiende-y-reemplaza-enlace-entero",
+            "schemaKind": "rich",
+            "initialHtml": "<p><a href=\"/vieja\">ho[[la]]</a> resto</p>",
+            "op": { "kind": "link", "args": { "href": "/nueva" } },
+            "expectedHtml": "<p><a href=\"/nueva\">hola</a> resto</p>"
+        },
+        {
+            "name": "link-sobre-marcas-mixtas-a-es-la-mas-interna",
+            "schemaKind": "rich",
+            "initialHtml": "<p>[[<strong>negrita</strong> y normal]]</p>",
+            "op": { "kind": "link", "args": { "href": "/x" } },
+            "expectedHtml": "<p><strong><a href=\"/x\">negrita</a></strong><a href=\"/x\"> y normal</a></p>"
+        },
+        {
+            "name": "unlink-caret-interior-quita-el-enlace-completo",
+            "schemaKind": "rich",
+            "initialHtml": "<p><a href=\"/x\">ho[[l]]a</a></p>",
+            "op": { "kind": "unlink" },
+            "expectedHtml": "<p>hola</p>"
+        },
+        {
+            "name": "link-href-vacio-equivale-a-unlink",
+            "schemaKind": "rich",
+            "initialHtml": "<p><a href=\"/x\">[[hola]]</a></p>",
+            "op": { "kind": "link", "args": { "href": "   " } },
+            "expectedHtml": "<p>hola</p>"
+        },
+        {
+            "name": "link-absorbe-enlace-previo-dentro-de-la-seleccion",
+            "schemaKind": "rich",
+            "initialHtml": "<p>[[<a href=\"/a\">uno</a> dos]]</p>",
+            "op": { "kind": "link", "args": { "href": "/c" } },
+            "expectedHtml": "<p><a href=\"/c\">uno dos</a></p>"
+        },
+        {
+            "name": "list-ul-parrafo-unico",
+            "schemaKind": "rich",
+            "initialHtml": "<p>[[item]]</p>",
+            "op": { "kind": "list", "args": { "ordered": false } },
+            "expectedHtml": "<ul><li><p>item</p></li></ul>"
+        },
+        {
+            "name": "list-ul-multiparrafo-un-li-por-parrafo",
+            "schemaKind": "rich",
+            "initialHtml": "<p>[[uno</p><p>dos]]</p>",
+            "op": { "kind": "list", "args": { "ordered": false } },
+            "expectedHtml": "<ul><li><p>uno</p></li><li><p>dos</p></li></ul>"
+        },
+        {
+            "name": "list-ol-parrafo-unico",
+            "schemaKind": "rich",
+            "initialHtml": "<p>[[uno]]</p>",
+            "op": { "kind": "list", "args": { "ordered": true } },
+            "expectedHtml": "<ol><li><p>uno</p></li></ol>"
+        },
+        {
+            "name": "unlist-saca-solo-el-item-seleccionado",
+            "schemaKind": "rich",
+            "initialHtml": "<ul><li><p>[[uno]]</p></li><li><p>dos</p></li></ul>",
+            "op": { "kind": "unlist" },
+            "expectedHtml": "<p>uno</p><ul><li><p>dos</p></li></ul>"
+        },
+        {
+            "name": "list-cambia-ul-a-ol",
+            "schemaKind": "rich",
+            "initialHtml": "<ul><li><p>[[uno]]</p></li></ul>",
+            "op": { "kind": "list", "args": { "ordered": true } },
+            "expectedHtml": "<ol><li><p>uno</p></li></ol>"
+        },
+        {
+            "name": "list-conserva-marcas-del-texto",
+            "schemaKind": "rich",
+            "initialHtml": "<p>[[<strong>uno</strong> dos]]</p>",
+            "op": { "kind": "list", "args": { "ordered": false } },
+            "expectedHtml": "<ul><li><p><strong>uno</strong> dos</p></li></ul>"
+        },
+        {
+            "name": "enter-divide-item-de-lista",
+            "schemaKind": "rich",
+            "initialHtml": "<ul><li><p>uno[[]]</p></li></ul>",
+            "op": { "kind": "enter" },
+            "expectedHtml": "<ul><li><p>uno</p></li><li><p></p></li></ul>"
+        },
+        {
+            "name": "enter-en-item-vacio-sale-de-la-lista",
+            "schemaKind": "rich",
+            "initialHtml": "<ul><li><p>uno</p></li><li><p>[[]]</p></li></ul>",
+            "op": { "kind": "enter" },
+            "expectedHtml": "<ul><li><p>uno</p></li></ul><p></p>"
+        },
+        {
+            "name": "clearformat-quita-todas-las-marcas-incluido-enlace",
+            "schemaKind": "rich",
+            "initialHtml": "<p>[[<strong>a</strong><em>b</em><a href=\"/x\">c</a>]]</p>",
+            "op": { "kind": "clearFormat" },
+            "expectedHtml": "<p>abc</p>"
+        },
+        {
+            "name": "clearformat-conserva-estructura-de-lista",
+            "schemaKind": "rich",
+            "initialHtml": "<ul><li><p>[[<strong>uno</strong>]]</p></li></ul>",
+            "op": { "kind": "clearFormat" },
+            "expectedHtml": "<ul><li><p>uno</p></li></ul>"
+        },
+        {
+            "name": "clearformat-solo-el-subrango-seleccionado",
+            "schemaKind": "rich",
+            "initialHtml": "<p><strong>ho[[la]]</strong></p>",
+            "op": { "kind": "clearFormat" },
+            "expectedHtml": "<p><strong>ho</strong>la</p>"
+        },
+        {
+            "name": "type-inserta-en-caret",
+            "schemaKind": "rich",
+            "initialHtml": "<p>hola[[]]</p>",
+            "op": { "kind": "typeText", "args": { "text": " mundo" } },
+            "expectedHtml": "<p>hola mundo</p>"
+        },
+        {
+            "name": "type-reemplaza-la-seleccion",
+            "schemaKind": "rich",
+            "initialHtml": "<p>[[hola]]</p>",
+            "op": { "kind": "typeText", "args": { "text": "adios" } },
+            "expectedHtml": "<p>adios</p>"
+        },
+        {
+            "name": "type-dentro-de-marca-hereda-la-marca",
+            "schemaKind": "rich",
+            "initialHtml": "<p><strong>ho[[]]la</strong></p>",
+            "op": { "kind": "typeText", "args": { "text": "X" } },
+            "expectedHtml": "<p><strong>hoXla</strong></p>"
+        },
+        {
+            "name": "type-tras-strong-hereda-marca-inclusive",
+            "schemaKind": "rich",
+            "initialHtml": "<p><strong>hola</strong>[[]]</p>",
+            "op": { "kind": "typeText", "args": { "text": "!" } },
+            "expectedHtml": "<p><strong>hola!</strong></p>"
+        },
+        {
+            "name": "type-tras-link-no-extiende-marca-no-inclusive",
+            "schemaKind": "rich",
+            "initialHtml": "<p><a href=\"/x\">liga</a>[[]]</p>",
+            "op": { "kind": "typeText", "args": { "text": "!" } },
+            "expectedHtml": "<p><a href=\"/x\">liga</a>!</p>"
+        },
+        {
+            "name": "type-escapa-html-como-texto-literal",
+            "schemaKind": "rich",
+            "initialHtml": "<p>[[]]</p>",
+            "op": { "kind": "typeText", "args": { "text": "<b>no</b> & \"ok\"" } },
+            "expectedHtml": "<p>&lt;b&gt;no&lt;/b&gt; &amp; \"ok\"</p>"
+        },
+        {
+            "name": "type-vacio-sobre-todo-borra-y-emite-cadena-vacia",
+            "schemaKind": "rich",
+            "initialHtml": "<p>[[hola mundo]]</p>",
+            "op": { "kind": "typeText", "args": { "text": "" } },
+            "expectedHtml": ""
+        },
+        {
+            "name": "enter-divide-parrafo",
+            "schemaKind": "rich",
+            "initialHtml": "<p>ho[[]]la</p>",
+            "op": { "kind": "enter" },
+            "expectedHtml": "<p>ho</p><p>la</p>"
+        },
+        {
+            "name": "shift-enter-inserta-br",
+            "schemaKind": "rich",
+            "initialHtml": "<p>ho[[]]la</p>",
+            "op": { "kind": "enter", "args": { "shift": true } },
+            "expectedHtml": "<p>ho<br>la</p>"
+        },
+        {
+            "name": "enter-sobre-seleccion-borra-y-divide",
+            "schemaKind": "rich",
+            "initialHtml": "<p>a[[bc]]d</p>",
+            "op": { "kind": "enter" },
+            "expectedHtml": "<p>a</p><p>d</p>"
+        },
+        {
+            "name": "paste-html-proyecta-al-subset-h1-a-p-b-a-strong-i-a-em",
+            "schemaKind": "rich",
+            "initialHtml": "<p>[[]]</p>",
+            "op": { "kind": "paste", "args": { "html": "<h1>Titulo</h1><p><b>negrita</b> e <i>cursiva</i></p>" } },
+            "expectedHtml": "<p>Titulo</p><p><strong>negrita</strong> e <em>cursiva</em></p>"
+        },
+        {
+            "name": "paste-html-descarta-script-y-atributos-peligrosos",
+            "schemaKind": "rich",
+            "initialHtml": "<p>[[]]</p>",
+            "op": { "kind": "paste", "args": { "html": "<p>ok<script>alert(1)</script><span onclick=\"x()\">span</span></p>" } },
+            "expectedHtml": "<p>okspan</p>"
+        },
+        {
+            "name": "paste-html-span-con-style-se-desenvuelve-y-pierde-estilo",
+            "schemaKind": "rich",
+            "initialHtml": "<p>[[]]</p>",
+            "op": { "kind": "paste", "args": { "html": "<p><span style=\"color: rgb(220, 38, 38)\">rojo</span> normal</p>" } },
+            "expectedHtml": "<p>rojo normal</p>"
+        },
+        {
+            "name": "paste-texto-plano-multilinea-un-parrafo-por-linea",
+            "schemaKind": "rich",
+            "initialHtml": "<p>a[[]]b</p>",
+            "op": { "kind": "paste", "args": { "text": "uno\ndos" } },
+            "expectedHtml": "<p>auno</p><p>dosb</p>"
+        },
+        {
+            "name": "paste-lista-normaliza-li-a-li-p-y-conserva-marcas",
+            "schemaKind": "rich",
+            "initialHtml": "<p>[[]]</p>",
+            "op": { "kind": "paste", "args": { "html": "<ul><li>uno</li><li><b>dos</b></li></ul>" } },
+            "expectedHtml": "<ul><li><p>uno</p></li><li><p><strong>dos</strong></p></li></ul>"
+        },
+        {
+            "name": "paste-lista-anidada-se-aplana-a-un-nivel",
+            "schemaKind": "rich",
+            "initialHtml": "<p>[[]]</p>",
+            "op": { "kind": "paste", "args": { "html": "<ul><li>uno<ul><li>sub</li></ul></li><li>dos</li></ul>" } },
+            "expectedHtml": "<ul><li><p>uno</p></li><li><p>sub</p></li><li><p>dos</p></li></ul>"
+        },
+        {
+            "name": "paste-url-como-texto-sin-linkonpaste",
+            "schemaKind": "rich",
+            "initialHtml": "<p>[[seleccion]]</p>",
+            "op": { "kind": "paste", "args": { "text": "https://ejemplo.test/ruta" } },
+            "expectedHtml": "<p>https://ejemplo.test/ruta</p>"
+        },
+        {
+            "name": "bold-cruza-frontera-de-enlace-split-y-fusion-canonicos",
+            "schemaKind": "rich",
+            "initialHtml": "<p><a href=\"/x\">un[[o</a> d]]os</p>",
+            "op": { "kind": "bold" },
+            "expectedHtml": "<p><a href=\"/x\">un</a><strong><a href=\"/x\">o</a> d</strong>os</p>"
+        },
+        {
+            "name": "plain-type-inserta",
+            "schemaKind": "plain",
+            "initialHtml": "Titulo[[]]",
+            "op": { "kind": "typeText", "args": { "text": "!" } },
+            "expectedHtml": "Titulo!"
+        },
+        {
+            "name": "plain-enter-bloqueado-sin-cambio",
+            "schemaKind": "plain",
+            "initialHtml": "Ti[[]]tulo",
+            "op": { "kind": "enter" },
+            "expectedHtml": "Titulo"
+        },
+        {
+            "name": "plain-shift-enter-bloqueado-sin-cambio",
+            "schemaKind": "plain",
+            "initialHtml": "Ti[[]]tulo",
+            "op": { "kind": "enter", "args": { "shift": true } },
+            "expectedHtml": "Titulo"
+        },
+        {
+            "name": "plain-bold-es-noop",
+            "schemaKind": "plain",
+            "initialHtml": "[[Titulo]]",
+            "op": { "kind": "bold" },
+            "expectedHtml": "Titulo"
+        },
+        {
+            "name": "plain-paste-html-se-aplana-a-una-linea",
+            "schemaKind": "plain",
+            "initialHtml": "[[]]",
+            "op": { "kind": "paste", "args": { "html": "<p><b>uno</b></p><p>dos</p>" } },
+            "expectedHtml": "uno dos"
+        },
+        {
+            "name": "plain-paste-texto-multilinea-se-aplana-con-espacios",
+            "schemaKind": "plain",
+            "initialHtml": "A[[]]Z",
+            "op": { "kind": "paste", "args": { "text": "uno\ndos\r\ntres" } },
+            "expectedHtml": "Auno dos tresZ"
+        },
+        {
+            "name": "plain-type-conserva-angulos-y-ampersand-verbatim",
+            "schemaKind": "plain",
+            "initialHtml": "[[]]",
+            "op": { "kind": "typeText", "args": { "text": "<b>literal</b> & \"x\"" } },
+            "expectedHtml": "<b>literal</b> & \"x\""
+        },
+        {
+            "name": "plain-vaciar-emite-cadena-vacia",
+            "schemaKind": "plain",
+            "initialHtml": "[[Titulo]]",
+            "op": { "kind": "typeText", "args": { "text": "" } },
+            "expectedHtml": ""
+        },
+        {
+            "name": "typetext-caret-inicio-parrafo-largo-real-no-trunca",
+            "schemaKind": "rich",
+            "initialHtml": "<p>[[]]Explore the core atomic components of WordJS. Every block is engineered for precision, high-focus creativity, and extreme adaptability across dark-first digital experiences.</p>",
+            "op": { "kind": "typeText", "args": { "text": "X" } },
+            "expectedHtml": "<p>XExplore the core atomic components of WordJS. Every block is engineered for precision, high-focus creativity, and extreme adaptability across dark-first digital experiences.</p>"
+        }
+    ]
+}

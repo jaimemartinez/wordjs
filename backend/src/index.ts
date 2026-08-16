@@ -1234,6 +1234,10 @@ async function initialize() {
         // join the cluster notification bus so SSE pushes reach clients on any node. No-op w/o Redis.
         require('./core/coherence').initCoherence();
         require('./core/notifications').initClusterBus();
+        // Salas de edición colaborativa (Verso F8): el gateway hace round-robin en cada petición, así
+        // que dos editores de la misma página caen en nodos distintos por construcción. El bus reparte
+        // sus ops entre nodos; sin Redis (mononodo) es un no-op y el fan-out se queda en memoria.
+        require('./core/collab-rooms').initClusterBus();
 
         // Outgoing webhooks: subscribe the dispatcher to content hooks and start the delivery poller.
         require('./core/webhooks').initWebhooks();

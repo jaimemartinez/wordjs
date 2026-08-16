@@ -4,6 +4,19 @@ on:
   push:
   pull_request:
 
+# Least privilege for the GITHUB_TOKEN handed to every job below. Without this block the token keeps
+# the repository's DEFAULT permissions, which on many repos still includes write access to contents,
+# packages, issues and pull-requests — a scope no CI job here needs, and one that a compromised
+# dependency running inside `npm ci`/`npm test` would inherit for free.
+#
+# Every job in this workflow only READS the repository (checkout + install + typecheck/lint/test/build).
+# Nothing publishes a release, comments on a PR, pushes a commit or writes a package. `contents: read`
+# is therefore the exact scope in use; anything a future job needs must be granted on THAT job, not
+# widened here. (actions/upload-artifact in the verso-e2e job authenticates with the Actions runtime
+# token, not the GITHUB_TOKEN, so it needs no permission entry.)
+permissions:
+  contents: read
+
 jobs:
   backend:
     name: Backend (typecheck + test)
@@ -203,12 +216,6 @@ jobs:
       - name: Install dependencies
         working-directory: frontend
         run: npm ci || npm install
-      - name: Build vendored editor (@wordjs/puck)
-        # The editor is a vendored Puck fork (packages/puck) built from source by tsup; its dist/ is
-        # gitignored, so it must be built before type-check/lint/test/build can resolve `@wordjs/puck`.
-        # predev/prebuild build it locally too, but CI runs these steps individually — hence its own step.
-        working-directory: frontend
-        run: npm run build:editor
       - name: Audit (block high/critical prod vulns)
         working-directory: frontend
         run: npm audit --omit=dev --audit-level=high
@@ -217,7 +224,7 @@ jobs:
         # plugins (e.g. the gitignored conference-manager). Regenerate here so type-check, lint and
         # build only reference plugins present in this checkout — otherwise tsc fails on a missing module.
         working-directory: frontend
-        run: node scripts/generate-plugin-registry.js && node scripts/generate-admin-plugin-registry.js && node scripts/generate-puck-plugin-registry.js
+        run: node scripts/generate-plugin-registry.js && node scripts/generate-admin-plugin-registry.js && node scripts/generate-verso-plugin-registry.js
       - name: Token manifest anti-drift gate
         # backend/public/theme-tokens.json is COMMITTED and derived deterministically from
         # backend/public/css/wordjs-ui.css (no timestamps, stable key order), so unlike the plugin
@@ -256,6 +263,71 @@ jobs:
       - name: Build
         working-directory: frontend
         run: npm run build
+
+  verso-e2e:
+    # F6 — programa E2E del editor Verso (Playwright chromium headless) contra un
+    # MONOLITO EFÍMERO en HTTP plano (WORDJS_HTTP=1). El webServer lo arranca el
+    # propio Playwright (frontend/playwright.config.ts: `npm run dev:mono` desde la
+    # raíz; en CI reuseExistingServer=false, así que el runner siempre levanta el
+    # suyo). El proyecto `setup` hace login por API (admin/admin123 — la cuenta
+    # seed del primer boot en dev) y comparte storageState con los specs.
+    #
+    # SUPUESTO DOCUMENTADO (F6b lo verifica en el runner): un checkout limpio +
+    # dev:mono auto-siembra config/BD/admin en el primer boot, igual que el flujo
+    # local de desarrollo. Si el primer boot en Actions exigiera un paso de setup
+    # explícito (p. ej. siteUrl/guard de migración), el plan es añadir AQUÍ un paso
+    # previo `node setup/index.js --install` con la config mínima HTTP — NUNCA
+    # tocar los jobs existentes.
+    #
+    # PERF (F6b): perf.spec.ts corre con sus presupuestos por defecto
+    # (input p95<16ms · transact p95<30ms · TTI<2500ms) medidos sobre dev-mode; el
+    # número FINAL de CI se calibrará en este runner y, si hace falta, se fijará
+    # vía VERSO_PERF_*_MS en este job (ver el comentario del spec).
+    name: Verso E2E (Playwright chromium, monolito efímero HTTP)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: |
+            package-lock.json
+            backend/package-lock.json
+            frontend/package-lock.json
+            gateway/package-lock.json
+      - name: Install root dependencies (concurrently/helmet/compression del monolito)
+        run: npm ci || npm install
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm ci || npm install
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci || npm install
+      - name: Install Playwright chromium (with system deps)
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+      - name: Run Verso E2E suite (webServer arranca dev:mono WORDJS_HTTP=1)
+        working-directory: frontend
+        env:
+          CI: 'true'
+          # Un checkout limpio arranca SIN instalar (todas las rutas 503
+          # setup_required), así que el setup e2e instala la instancia por el
+          # camino oficial de automatización: servidor y cliente comparten este
+          # token efímero (core/install-token.ts lo honra vía env var). El
+          # instalador exige contraseña de ≥10 caracteres — de ahí que la de CI
+          # no sea la de dev.
+          WORDJS_INSTALL_TOKEN: ci-verso-e2e-install-token
+          VERSO_E2E_USER: admin
+          VERSO_E2E_PASS: verso-e2e-ci-pass
+        run: npx playwright test
+      - name: Upload traces on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verso-e2e-traces
+          path: frontend/e2e/.results/
+          retention-days: 7
 
   bundle-boot:
     # SHIFT-LEFT of the release smoke gate: build the real compiled bundle and DEPLOY it ON EVERY PR, so

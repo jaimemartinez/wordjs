@@ -2,7 +2,7 @@
     "id": "newsletter",
     "name": "Newsletter",
     "version": "1.0.0",
-    "description": "Visitor newsletter subscriptions (double opt-in when mail is configured, single opt-in fallback otherwise), subscriber management with CSV export, and HTML campaign composing/sending with per-subscriber unsubscribe links. Ships a Puck 'Newsletter' subscribe block.",
+    "description": "Visitor newsletter subscriptions (double opt-in when mail is configured, single opt-in fallback otherwise), subscriber management with CSV export, and HTML campaign composing/sending with per-subscriber unsubscribe links. Ships a Verso 'Newsletter' subscribe block.",
     "author": "WordJS",
     "isolated": true,
     "backend": {
@@ -13,8 +13,8 @@
             "entry": "client/admin/page.tsx",
             "slug": "newsletter"
         },
-        "puckComponents": {
-            "entry": "client/puck/NewsletterPuck.tsx"
+        "versoComponents": {
+            "entry": "client/verso/NewsletterVerso.tsx"
         }
     },
     "adminMenu": {

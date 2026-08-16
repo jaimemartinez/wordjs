@@ -8,6 +8,7 @@ import {
     buildChromeBindings,
     buildMenuTree,
     isSafeChromeHref,
+    safeChromeHref,
     STARTER_TEMPLATES,
     CHROME_MAX_BLOCKS,
     CHROME_DOCUMENT_SCOPED_BLOCKS,
@@ -156,6 +157,11 @@ describe('parseChromeData', () => {
         expect(parseChromeData(withHref('data:text/html,x')).ok).toBe(false);
         // Protocol-relative smuggles an external host — not a relative path.
         expect(parseChromeData(withHref('//evil.example')).ok).toBe(false);
+        // Misma forma authority-relative, escondida tras los caracteres que el parser de URL del
+        // navegador borra antes de parsear: las tres resuelven a https://evil.test/.
+        for (const raw of ['/\t/evil.test', '/\n/evil.test', '/\r\\evil.test']) {
+            expect(parseChromeData(withHref(raw)).ok, JSON.stringify(raw)).toBe(false);
+        }
         expect(parseChromeData(withHref('/about')).ok).toBe(true);
         expect(parseChromeData(withHref('https://example.com/x')).ok).toBe(true);
         expect(parseChromeData(withHref('http://example.com')).ok).toBe(true);
@@ -424,6 +430,40 @@ describe('helpers', () => {
         expect(isSafeChromeHref('mailto:a@b.c')).toBe(false);
         expect(isSafeChromeHref('')).toBe(false);
         expect(isSafeChromeHref(42)).toBe(false);
+    });
+
+    // El navegador BORRA tabulador, salto de linea y retorno de carro antes de parsear la URL, asi
+    // que decidir sobre la cadena cruda es decidir sobre algo que el navegador nunca ve: las tres
+    // grafias de abajo empiezan por '/' con un control en segunda posicion (ni '/' ni '\'), pasaban
+    // el chequeo y acababan navegando a https://evil.test/.
+    it('safeChromeHref rejects authority-relative smuggled behind stripped control characters', () => {
+        for (const raw of ['/\t/evil.test', '/\n/evil.test', '/\r\\evil.test', '/\t\\evil.test', '/\r\n/evil.test']) {
+            expect(safeChromeHref(raw), JSON.stringify(raw)).toBeUndefined();
+            expect(isSafeChromeHref(raw), JSON.stringify(raw)).toBe(false);
+        }
+        // Verificado contra el parser WHATWG real: lo que el resolver rechaza es exactamente lo que
+        // el navegador habria resuelto fuera del sitio.
+        for (const raw of ['/\t/evil.test', '/\n/evil.test', '/\r\\evil.test']) {
+            expect(new URL(raw, 'https://site.test/').origin, JSON.stringify(raw)).toBe('https://evil.test');
+        }
+    });
+
+    // Un RESOLVER, no un predicado: devuelve la cadena LIMPIA, que es la que debe llegar al atributo.
+    // Validar una cadena y pintar otra es justamente el hueco que se cierra aqui.
+    it('safeChromeHref returns the cleaned value the browser will actually parse', () => {
+        expect(safeChromeHref('/x')).toBe('/x');
+        expect(safeChromeHref('https://a.b/p')).toBe('https://a.b/p');
+        // Los controles se borran tambien en las que SI son seguras — se devuelve lo ya limpio.
+        expect(safeChromeHref('/con\ttacto')).toBe('/contacto');
+        expect(safeChromeHref('https://a.b/\nx')).toBe('https://a.b/x');
+        // Una cadena que era toda controles queda vacia: un href vacio no es navegable.
+        expect(safeChromeHref('\t\n\r')).toBeUndefined();
+        expect(safeChromeHref('')).toBeUndefined();
+        expect(safeChromeHref(42)).toBeUndefined();
+        expect(safeChromeHref(null)).toBeUndefined();
+        // La limpieza NO puede abrir la puerta a un esquema: sigue sin casar la allowlist.
+        expect(safeChromeHref('java\tscript:alert(1)')).toBeUndefined();
+        expect(safeChromeHref('\tjavascript:alert(1)')).toBeUndefined();
     });
 
     it('parseChromeSocials handles string, array and garbage forms', () => {

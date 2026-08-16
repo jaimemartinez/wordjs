@@ -36,10 +36,10 @@ function loadSanitizeHtml(): any {
 // Allowlist of iframe embed hosts (mirrors the backend posts.ts sanitize()). Arbitrary iframe src is
 // NOT permitted — only these hosts — and every surviving iframe is forced to carry a sandbox attribute.
 // CSP `frame-src 'self'` (next.config.ts) is the backstop if anything slips past this list.
-const ALLOWED_IFRAME_HOSTS = ['www.youtube.com', 'player.vimeo.com'];
+export const ALLOWED_IFRAME_HOSTS = ['www.youtube.com', 'player.vimeo.com'];
 const IFRAME_SANDBOX = 'allow-scripts allow-same-origin allow-presentation';
 
-function isAllowedIframeSrc(src: string | null | undefined): boolean {
+export function isAllowedIframeSrc(src: string | null | undefined): boolean {
     if (!src) return false;
     try {
         const u = new URL(src, 'https://invalid.invalid');
@@ -48,6 +48,106 @@ function isAllowedIframeSrc(src: string | null | undefined): boolean {
     } catch {
         return false;
     }
+}
+
+/* ── Video embeds: ONE provider table, shared with the video-embed block ──────────────────────────
+ * The block used to classify a URL by substring (`url.includes("youtube.com/watch")`,
+ * `url.includes("vimeo.com/")`), which `https://youtube.com.evil.test/watch?v=…` and
+ * `https://vimeo.com.evil.test/1` both satisfy: the attacker chose the provider AND the id that got
+ * pasted into the embed URL. Here the URL is PARSED and the host compared whole (an exact hostname,
+ * never a prefix/suffix/`includes`), the id must match its provider's shape, and the result is
+ * rebuilt from our own constants — an attacker-supplied string never survives into the src.
+ * `ALLOWED_EMBED_HOSTS` is ALLOWED_IFRAME_HOSTS plus youtube's cookie-less mirror of the same
+ * player, which the block has always honored when the author pasted one. */
+const YT_STANDARD_HOSTS = new Set(['youtube.com', 'www.youtube.com', 'm.youtube.com', 'music.youtube.com']);
+const YT_NOCOOKIE_HOSTS = new Set(['youtube-nocookie.com', 'www.youtube-nocookie.com']);
+const YT_SHORT_HOSTS = new Set(['youtu.be', 'www.youtu.be']);
+const VIMEO_PAGE_HOSTS = new Set(['vimeo.com', 'www.vimeo.com']);
+const VIMEO_PLAYER_HOST = 'player.vimeo.com';
+export const ALLOWED_EMBED_HOSTS: readonly string[] = [...ALLOWED_IFRAME_HOSTS, 'www.youtube-nocookie.com'];
+// Path shapes that carry the id, and the id shapes themselves. Anything else → no embed.
+const YT_ID_PATH = new Set(['embed', 'shorts', 'v', 'live']);
+const YT_VIDEO_ID = /^[A-Za-z0-9_-]{1,64}$/;
+const VIMEO_ID = /^\d{1,20}$/;
+const VIMEO_HASH = /^[A-Za-z0-9]{1,40}$/;
+
+/**
+ * A root-relative path served by THIS site — or null. Use it wherever a value decides "is this ours",
+ * because same-origin-by-construction is what makes it safe to evaluate during SSR, where there is no
+ * window.location to compare against.
+ *
+ * Two spellings have to be rejected, and only one of them is obvious:
+ *   · `//host/x`  — protocol-relative, i.e. remote. The old check caught this one.
+ *   · `/\host/x`  — the parser treats `\` exactly like `/` for a special scheme, so this is ALSO
+ *                   authority-relative and ALSO remote. The old check waved it through.
+ * Tab, LF and CR are stripped first because the URL parser strips them before parsing: `/\t/host/x`
+ * reaches the network as `//host/x`. Validating a string the browser will never see is not a guard.
+ */
+export function sameOriginPath(raw: unknown): string | null {
+    if (typeof raw !== 'string') return null;
+    const clean = raw.replace(/[\t\n\r]/g, '');
+    if (!clean.startsWith('/')) return null;
+    if (/^\/[/\\]/.test(clean)) return null;
+    return clean;
+}
+
+/**
+ * Canonical, allowlisted embed URL for a pasted video URL — or null when the URL is not a video from
+ * a provider we embed (the caller renders a placeholder, never an iframe).
+ */
+export function resolveVideoEmbedUrl(raw: unknown): string | null {
+    if (typeof raw !== 'string' || !raw.trim()) return null;
+    let u: URL;
+    try {
+        u = new URL(raw.trim());
+    } catch {
+        return null; // relative/garbage: not an embeddable third-party video
+    }
+    if (u.protocol !== 'https:' && u.protocol !== 'http:') return null; // javascript:, data:, …
+    const host = u.hostname.toLowerCase();
+    const seg = u.pathname.split('/').filter(Boolean);
+
+    // ── YouTube (standard + nocookie + youtu.be short links) ──
+    const nocookie = YT_NOCOOKIE_HOSTS.has(host);
+    if (nocookie || YT_STANDARD_HOSTS.has(host) || YT_SHORT_HOSTS.has(host)) {
+        let id = '';
+        let fromEmbed = false;
+        if (YT_SHORT_HOSTS.has(host)) {
+            id = seg[0] ?? '';
+        } else if (seg[0] === 'watch') {
+            id = u.searchParams.get('v') ?? '';
+        } else if (seg[0] && YT_ID_PATH.has(seg[0])) {
+            id = seg[1] ?? '';
+            fromEmbed = seg[0] === 'embed';
+        }
+        if (!YT_VIDEO_ID.test(id)) return null;
+        const out = new URL(`https://${nocookie ? 'www.youtube-nocookie.com' : 'www.youtube.com'}/embed/${id}`);
+        // An already-embed URL keeps its player params (start=, list=…) — re-encoded through the URL
+        // API, so they stay params and cannot grow a second path or host.
+        if (fromEmbed && u.search) {
+            for (const [k, v] of u.searchParams) out.searchParams.set(k, v);
+        } else {
+            out.searchParams.set('rel', '0');
+            out.searchParams.set('modestbranding', '1');
+        }
+        return out.toString();
+    }
+
+    // ── Vimeo (page URL or an already-built player URL) ──
+    if (VIMEO_PAGE_HOSTS.has(host) || host === VIMEO_PLAYER_HOST) {
+        const rest = host === VIMEO_PLAYER_HOST ? (seg[0] === 'video' ? seg.slice(1) : []) : seg;
+        const idx = rest.findIndex((s) => VIMEO_ID.test(s)); // vimeo.com/channels/<name>/<id> too
+        if (idx < 0) return null;
+        const hash = rest[idx + 1] && VIMEO_HASH.test(rest[idx + 1]) ? `/${rest[idx + 1]}` : '';
+        const out = new URL(`https://${VIMEO_PLAYER_HOST}/video/${rest[idx]}${hash}`);
+        // An unlisted video does not play without its hash; vimeo spells it either as a trailing
+        // path segment or as `?h=` — keep whichever the author pasted (shape-checked, nothing else).
+        const h = u.searchParams.get('h');
+        if (!hash && h && VIMEO_HASH.test(h)) out.searchParams.set('h', h);
+        return out.toString();
+    }
+
+    return null;
 }
 
 // Inline styles: the visual editor's rich text (Tiptap TextStyle / FontSize / Color / BackgroundColor

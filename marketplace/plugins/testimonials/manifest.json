@@ -2,7 +2,7 @@
     "id": "testimonials",
     "name": "Testimonials",
     "version": "1.0.0",
-    "description": "Dynamic, database-backed testimonials with moderation (pending/approved) and an optional public submission form. Ships the Puck block \"Testimonials\" (carousel or grid) that pulls approved testimonials live from the database — unlike the core static \"Testimonial\" block, which is a single testimonial typed directly in the editor.",
+    "description": "Dynamic, database-backed testimonials with moderation (pending/approved) and an optional public submission form. Ships the Verso block \"Testimonials\" (carousel or grid) that pulls approved testimonials live from the database — unlike the core static \"Testimonial\" block, which is a single testimonial typed directly in the editor.",
     "author": "WordJS",
     "isolated": true,
     "backend": {
@@ -13,8 +13,8 @@
             "entry": "client/admin/page.tsx",
             "slug": "testimonials"
         },
-        "puckComponents": {
-            "entry": "client/puck/TestimonialsPuck.tsx"
+        "versoComponents": {
+            "entry": "client/verso/TestimonialsVerso.tsx"
         }
     },
     "adminMenu": {

@@ -38,6 +38,19 @@ const rootIdx = argv.indexOf("--root");
 const ROOT = path.resolve(rootIdx >= 0 ? argv[rootIdx + 1] : "marketplace/themes");
 const asked = argv.filter((a, i) => !a.startsWith("--") && !(rootIdx >= 0 && i === rootIdx + 1));
 
+/**
+ * Read a file, or report "not there" — instead of asking existsSync() first and reading afterwards.
+ * One syscall cannot be raced against itself; a check followed by a use can (js/file-system-race).
+ */
+function readTextOrNull(p) {
+    try {
+        return fs.readFileSync(p, "utf8");
+    } catch (e) {
+        if (e.code === "ENOENT" || e.code === "ENOTDIR" || e.code === "EISDIR") return null;
+        throw e;
+    }
+}
+
 const MANIFEST = JSON.parse(fs.readFileSync("backend/public/theme-tokens.json", "utf8"));
 const KNOWN = new Set(Object.keys(MANIFEST.tokens || {}));
 
@@ -455,7 +468,6 @@ function build(slug, design, existing, styles) {
         // When the logo is ALREADY the primary colour, hovering to primary is a no-op — the mark just
         // doesn't respond. Shift it instead of repeating it.
         "--wjs-logo-color-hover": accentInk.toLowerCase() === primary.toLowerCase() ? mix(primary, toward, 0.28) : primary,
-        "--wjs-social-hover-color": onFill,
 
         // ---- socials, images, tables, dividers
         "--wjs-social-bg": r.line === "none" ? alpha(primary, 0.12) : "transparent",
@@ -490,13 +502,18 @@ for (const slug of targets) {
     const dir = path.join(ROOT, slug);
     const metaPath = path.join(dir, "theme.json");
     const designPath = path.join(dir, ".design", "stitch.json");
-    if (!fs.existsSync(metaPath) || !fs.existsSync(designPath)) {
+    // Read both, and let the read itself report the missing file. The existsSync() pair it replaces
+    // was a check on theme.json a few lines before this loop REWRITES theme.json — a check→use race
+    // (js/file-system-race) whose answer is stale on arrival.
+    const metaRaw = readTextOrNull(metaPath);
+    const designRaw = readTextOrNull(designPath);
+    if (metaRaw === null || designRaw === null) {
         console.error(`  ✗ ${slug}: needs theme.json + .design/stitch.json`);
         process.exitCode = 1;
         continue;
     }
-    const meta = JSON.parse(fs.readFileSync(metaPath, "utf8"));
-    const design = JSON.parse(fs.readFileSync(designPath, "utf8"));
+    const meta = JSON.parse(metaRaw);
+    const design = JSON.parse(designRaw);
     const fresh = build(slug, design, meta.tokens || {}, meta.styles || {});
     meta.tokens = { ...(meta.tokens || {}), ...fresh };
     if (!DRY) fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2) + "\n");

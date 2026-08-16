@@ -1,7 +1,7 @@
 /**
  * Shared, SERVER-COMPATIBLE render components for the public content blocks (perf F3).
  *
- * Single source of truth: puckConfig's per-block `render` delegates here, and the public
+ * Single source of truth: versoConfig's per-block `render` delegates here, and the public
  * ContentRenderer (server) imports these directly — the editor canvas and the live site can never
  * drift. NO "use client", no hooks, no fetching: blocks are purely presentational; anything
  * interactive lives in its own client-island module, not here.
@@ -10,8 +10,8 @@
  * style both surfaces the same way.
  */
 import React from "react";
-import { blockVars, cx, unit } from "@/components/puck/blockVars";
-import { sanitizeHTML } from "@/lib/sanitize";
+import { blockVars, cx, unit } from "@/components/blocks/blockVars";
+import { resolveVideoEmbedUrl, sameOriginPath, sanitizeHTML } from "@/lib/sanitize";
 import { sizesForWidth } from "@/lib/imageSrcset";
 import SelfHostedVideo from "./SelfHostedVideo";
 import AudioTransport from "./AudioTransport";
@@ -168,7 +168,7 @@ export function ButtonBlock({ label, href, variant, align, bg, color, radius, pa
  * shipping four identical ones.
  *
  * BOTH CHECKS ARE ENFORCED AGAIN HERE, and that is not belt-and-braces — it is load-bearing. These
- * components are also rendered by ContentRenderer/puckConfig with `{...props}` spread straight out of
+ * components are also rendered by ContentRenderer/versoConfig with `{...props}` spread straight out of
  * `_puck_data`, which is AUTHOR-controlled and whose write-side sanitizer only classifies string leaves
  * as HTML- or URL-bearing: a structural prop passes through it untouched. That is precisely the hole
  * that produced the `level: "script"` stored-XSS (see HEADING_TAGS above). So `tag` is resolved through
@@ -646,58 +646,31 @@ export function VideoEmbedBlock({ url, poster, aspectRatio, radius, bg, css }: a
         ...css,
     };
 
-    // A file served by THIS site plays inline in a real <video>, with no third party in
-    // the request path at all. Restricted to a root-relative path: that is same-origin by
-    // construction and safe to evaluate during SSR, where there is no window.location to
-    // compare an absolute URL against. '//host/x' is protocol-relative (i.e. remote) and
-    // is deliberately excluded.
-    const isSelfHosted = typeof url === 'string' && url.startsWith('/') && !url.startsWith('//');
-    if (isSelfHosted) {
+    // A file served by THIS site plays inline in a real <video>, with no third party in the request
+    // path at all. `sameOriginPath` (lib/sanitize.ts) is what decides that: root-relative only, and
+    // it rejects BOTH authority-relative spellings — '//host/x' and '/\host/x' — after stripping the
+    // control characters the URL parser drops. The inline test this replaces only knew about '//',
+    // so '/\evil.test/v.mp4' was treated as ours and the <video> fetched from evil.test.
+    const selfHostedSrc = sameOriginPath(url);
+    if (selfHostedSrc) {
         return (
             <SelfHostedVideo
-                src={url}
-                poster={poster && poster.startsWith('/') && !poster.startsWith('//') ? poster : ''}
+                src={selfHostedSrc}
+                poster={sameOriginPath(poster) ?? ''}
                 vars={vars}
             />
         );
     }
 
-    // Convert regular YouTube URLs to embed format
-    let embedUrl = url;
-
-    if (url?.includes("youtube.com/watch")) {
-        const videoId = url.split("v=")[1]?.split("&")[0];
-        embedUrl = `https://www.youtube.com/embed/${videoId}?rel=0&modestbranding=1`;
-    } else if (url?.includes("youtu.be/")) {
-        const videoId = url.split("youtu.be/")[1]?.split("?")[0];
-        embedUrl = `https://www.youtube.com/embed/${videoId}?rel=0&modestbranding=1`;
-    } else if (url?.includes("youtube.com/embed/")) {
-        // Already an embed URL. Canonicalize the host to https://www.youtube.com so host
-        // variants (bare youtube.com, m.youtube.com, http://) still pass the allowlist
-        // below, preserving the existing embed UX, and add params if not present.
-        const path = url.split("youtube.com/embed/")[1] || "";
-        const hasQuery = path.includes("?");
-        embedUrl = `https://www.youtube.com/embed/${hasQuery ? path : `${path}?rel=0&modestbranding=1`}`;
-    } else if (url?.includes("vimeo.com/") && !url?.includes("player.vimeo.com")) {
-        const videoId = url.split("vimeo.com/")[1]?.split("?")[0];
-        embedUrl = `https://player.vimeo.com/video/${videoId}`;
-    }
-
-    // Validate the resolved embed URL against an allowlist of trusted embed
-    // providers (mirrors lib/sanitize.ts isAllowedIframeSrc): require https and a
-    // hostname in {www.youtube.com, player.vimeo.com}. Anything else (arbitrary src,
-    // javascript:/data: schemes, non-embed hosts) renders a placeholder, never an iframe.
-    const ALLOWED_EMBED_HOSTS = ["www.youtube.com", "youtube-nocookie.com", "www.youtube-nocookie.com", "player.vimeo.com"];
-    let isAllowedEmbed = false;
-    try {
-        const parsed = new URL(embedUrl);
-        isAllowedEmbed = parsed.protocol === "https:" && ALLOWED_EMBED_HOSTS.includes(parsed.hostname.toLowerCase());
-    } catch {
-        isAllowedEmbed = false;
-    }
+    // Classify + canonicalize through the SHARED provider table (lib/sanitize.ts), which parses the
+    // URL and compares the WHOLE host. The substring version this replaces (`url.includes("youtube.com/watch")`,
+    // `url.includes("vimeo.com/")`) accepted `https://youtube.com.evil.test/watch?v=…`: the attacker
+    // picked the provider and the id that went into the iframe src. The resolver returns null for
+    // anything that is not a video on a provider we embed → placeholder, never an iframe.
+    const embedUrl = resolveVideoEmbedUrl(url);
 
     // Show placeholder if no URL or the URL is not a trusted embed
-    if (!url || !isAllowedEmbed) {
+    if (!url || !embedUrl) {
         return (
             <div className="wp-block-video-embed" style={vars}>
                 <div className="wp-block-video-embed__placeholder">
@@ -782,7 +755,7 @@ export function HeroBlock({ title, subtitle, bgImage, overlay, overlayColor, hei
     );
 }
 
-// Shared post-date formatter for the dynamic blocks (also used by puckConfig's editor paths).
+// Shared post-date formatter for the dynamic blocks (also used by versoConfig's editor paths).
 export const MESES_ES = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
 export const fmtPostDate = (raw: string): string => {
     const d = new Date(String(raw).replace(" ", "T") + (/[Zz]|[+-]\d\d:?\d\d$/.test(raw) ? "" : "Z"));
@@ -792,7 +765,7 @@ export const fmtPostDate = (raw: string): string => {
 
 /**
  * PostsGrid markup. `posts` arrives ALREADY RESOLVED: server-side via resolveDynamicBlocks on the
- * public site; from the useEditorPosts hook (which stays in puckConfig — client) in the editor.
+ * public site; from the useEditorPosts hook (which stays in versoConfig — client) in the editor.
  * The hook's public branch returns the injected list untouched, so passing it straight through
  * here is the same derivation, not a re-implementation.
  */

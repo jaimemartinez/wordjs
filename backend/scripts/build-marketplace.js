@@ -14,6 +14,10 @@ const path = require('path');
 const crypto = require('crypto');
 const AdmZip = require('adm-zip');
 const { spawnSync } = require('child_process');
+// The catalog advertises "this plugin ships an editor block". Read that through the SHARED resolver,
+// never by naming one manifest key here: a local copy of this logic already drifted once (it looked
+// for `frontend.component.entry`, a key that never existed) and shipped bundle-less zips.
+const { readDeclaredBlockEntry } = require('./plugin-block-contract');
 
 // Repo root. WORDJS_MARKETPLACE_ROOT lets the catalog tests drive THIS script (the real producer)
 // over a small fixture tree instead of re-implementing the packing rules in the test — a test whose
@@ -63,10 +67,11 @@ function toPascalCase(slug) {
  *
  * WHICH entries exist is decided by build-plugin.js alone — do NOT re-derive it here. A local copy of
  * that logic drifted from the real manifest shape and silently shipped bundle-less zips: it looked for
- * `frontend.component.entry` (the key is `puckComponents.entry`/`components[0].entry`) and
+ * `frontend.component.entry` (the block entry is resolved by plugin-block-contract.js —
+ * `versoComponents` / the deprecated `puckComponents` / `components[0]` / the folder convention) and
  * `frontend.hooks.entry` (`hooks` is a plain STRING), so any plugin without an adminPage — the
  * block-only ones, breadcrumbs / related-posts / table-of-contents — built nothing at all, and their
- * Puck blocks could never load at runtime.
+ * editor blocks could never load at runtime.
  */
 function buildFrontendBundles(slug, manifest) {
     if (!manifest.frontend) return;
@@ -117,6 +122,10 @@ function buildOne(slug) {
     fs.writeFileSync(path.join(DIST, file), buf);
 
     const fe = manifest.frontend || {};
+    // Both manifest spellings count as "ships a block" — after the Verso rename the catalog would
+    // otherwise have reported `false` for every migrated plugin and the marketplace UI would have
+    // silently dropped its block badge.
+    const declaredBlock = readDeclaredBlockEntry(manifest);
     return {
         id: slug,
         name: manifest.name || slug,
@@ -126,8 +135,13 @@ function buildOne(slug) {
         category: CATEGORIES[slug] || 'General',
         permissions: manifest.permissions || [],
         hasAdminPage: !!(fe.adminPage && fe.adminPage.entry),
-        hasPuckBlock: !!(fe.puckComponents && fe.puckComponents.entry),
-        blockName: fe.puckComponents ? toPascalCase(slug) : null,
+        hasVersoBlock: !!declaredBlock,
+        // DEPRECATED MIRROR, deliberately still emitted: the catalog is fetched at RUNTIME from the
+        // GitHub Release, so an install running an older frontend reads a newer catalog. Dropping the
+        // old field would make the "Bloque X" badge vanish on every such install. Remove it only once
+        // no supported version reads it.
+        hasPuckBlock: !!declaredBlock,
+        blockName: declaredBlock ? toPascalCase(slug) : null,
         adminMenu: manifest.adminMenu ? { label: manifest.adminMenu.label, icon: manifest.adminMenu.icon } : null,
         file,
         size: buf.length,

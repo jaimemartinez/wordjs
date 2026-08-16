@@ -1,13 +1,24 @@
 /**
- * Canvas guide helpers for the Puck editor iframe (`.puck-container iframe`).
+ * Canvas guide helpers para el iframe del editor.
  *
  * Both helpers operate on the CANVAS document (pass `iframe.contentDocument`), never on the
- * editor chrome's document. Every root element of a block inside the canvas carries the
- * `data-puck-component="<blockId>"` attribute (set by the fork's DraggableComponent), which is
- * what the outline mode targets and what the a11y audit uses to map an element back to a block.
+ * editor chrome's document. Todo elemento raíz de un bloque dentro del lienzo lleva el atributo
+ * `data-wjs-block-id="<blockId>"` (lo estampa VersoBlock), que es lo que apunta el modo de guías y
+ * lo que usa la auditoría de a11y para mapear un elemento de vuelta a su bloque.
  *
  * SSR-safe: no `window`/`document` access at module scope — everything hangs off the `doc` param.
  */
+
+/**
+ * Atributos DOM del lienzo — ÚNICO propietario (este módulo es hoja: no importa nada, así que
+ * A11yAudit y el lado Verso pueden leerlos sin ciclo). Hasta la retirada del fork estos helpers
+ * llevaban un parámetro opcional cuyo default era el `data-puck-component`/`data-puck-dnd` del
+ * motor viejo y que Verso sobreescribía en cada llamada; borrado el motor viejo no queda segundo
+ * llamador, así que el parámetro desaparece y los atributos de Verso son los únicos.
+ */
+export const BLOCK_ATTR = "data-wjs-block-id";
+/** Andamio del editor (no es contenido del autor): se excluye de la auditoría de a11y. */
+export const SCAFFOLD_ATTR = "data-verso-scaffold";
 
 const GUIDES_STYLE_ID = "wjs-guides";
 const OVERLAY_ID = "wjs-spacing-overlay";
@@ -33,8 +44,8 @@ export function setOutlineMode(doc: Document, on: boolean): void {
     // likely to be near-black as near-white — the original dark-indigo-at-55% was invisible on
     // dark themes (user-reported). #818cf8 reads clearly on both.
     style.textContent = [
-        "[data-puck-component]{outline:1px dashed #818cf8 !important;outline-offset:-1px;}",
-        "[data-puck-component]:hover{outline:1px solid #6366f1 !important;}",
+        `[${BLOCK_ATTR}]{outline:1px dashed #818cf8 !important;outline-offset:-1px;}`,
+        `[${BLOCK_ATTR}]:hover{outline:1px solid #6366f1 !important;}`,
     ].join("\n");
     (doc.head || doc.documentElement).appendChild(style);
 }
@@ -56,7 +67,7 @@ const MARGIN_LABEL = "#92400e";
  * calls it on selection change and on scroll/resize of the canvas.
  */
 /**
- * The element whose spacing is actually worth measuring. The block ROOT ([data-puck-component])
+ * The element whose spacing is actually worth measuring. The block ROOT ([data-wjs-block-id])
  * is dnd scaffolding with zero padding/margin — the author's box (Appearance padding, the block's
  * own p-*) lives a level or two down. Descend through sole-child wrappers (incl. the shared
  * display:contents wrapper) until something has real spacing; a genuinely spacing-less block

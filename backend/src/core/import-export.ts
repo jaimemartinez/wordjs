@@ -466,7 +466,11 @@ async function importSite(data: any, options: Record<string, any> = {}) {
         // `users`) or inject SQL fragments through identifier names. Restrict to simple, unqualified
         // identifiers and forbid the core tables — symmetric with the export, which never dumps core tables
         // (CORE_TABLES) and only ever emits simple non-core table names, so legit round-trips are preserved.
-        const IMPORT_IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+        // Identifier authority: core/safe-sql (the SAME module createPluginTable validates with, so the
+        // two ends of this path cannot drift). safeIdent returns the CANONICAL identifier rebuilt from a
+        // constant alphabet, or null — and it is that RETURNED value that is interpolated below, never
+        // `table.name` / the raw column key.
+        const { safeIdent } = require('./safe-sql');
         const CORE_TABLES = [
             'posts', 'post_meta',
             'users', 'user_meta',
@@ -480,39 +484,44 @@ async function importSite(data: any, options: Record<string, any> = {}) {
             try {
                 // Reject anything that is not a plain identifier (blocks dotted/schema-qualified names,
                 // SQL fragments, comments) or that targets a protected core table.
-                if (typeof table?.name !== 'string' || !IMPORT_IDENT_RE.test(table.name)) {
+                const tableName = safeIdent(table?.name);
+                if (tableName === null) {
                     throw new Error(`invalid table name (must be a simple identifier)`);
                 }
-                if (CORE_TABLES.includes(table.name.toLowerCase())) {
+                if (CORE_TABLES.includes(tableName.toLowerCase())) {
                     throw new Error(`refusing to import into core table '${table.name}'`);
                 }
                 // Defense-in-depth: also refuse SQLite's reserved internal tables (sqlite_master,
                 // sqlite_sequence, sqlite_stat*, …). These pass the simple-identifier shape but are
                 // engine-internal; SQLite already rejects writes to them, so blocking here just turns a
                 // confusing per-table error into a clear refusal (and forbids accidental schema probing).
-                if (table.name.toLowerCase().startsWith('sqlite_')) {
+                if (tableName.toLowerCase().startsWith('sqlite_')) {
                     throw new Error(`refusing to import into reserved table '${table.name}'`);
                 }
 
-                // 1. Reconstruct Schema (Create Table)
+                // 1. Reconstruct Schema (Create Table). createPluginTable re-validates both the name and
+                //    every column DEFINITION through core/safe-sql — this is not the only gate.
                 if (table.schema && table.schema.columns) {
-                    await createPluginTable(table.name, table.schema.columns);
+                    await createPluginTable(tableName, table.schema.columns);
                     results.custom_tables.created++;
                 }
 
                 // 2. Insert Data
                 if (table.rows && table.rows.length > 0) {
                     for (const row of table.rows) {
-                        const cols = Object.keys(row);
-                        // Every column identifier must also be a simple identifier before it is interpolated.
-                        for (const col of cols) {
-                            if (!IMPORT_IDENT_RE.test(col)) {
+                        // Every column identifier is canonicalized before it is interpolated, and it is the
+                        // CANONICAL value that goes into the statement (the raw key is never concatenated).
+                        const cols: string[] = [];
+                        for (const col of Object.keys(row)) {
+                            const safeCol = safeIdent(col);
+                            if (safeCol === null) {
                                 throw new Error(`invalid column name '${col}' (must be a simple identifier)`);
                             }
+                            cols.push(safeCol);
                         }
                         const vals = Object.values(row);
                         const placeholders = cols.map(() => '?').join(',');
-                        const sql = `INSERT INTO ${table.name} (${cols.join(',')}) VALUES (${placeholders})`;
+                        const sql = `INSERT INTO ${tableName} (${cols.join(',')}) VALUES (${placeholders})`;
 
                         // Try insert (ignore duplicate key errors if simple backup)
                         try {
@@ -572,10 +581,48 @@ async function importFromFile(filepath: any, options = {}) {
 
 
 /**
+ * Post meta that must NOT travel in an export.
+ *
+ * Kept in lockstep with the SKIP_META set the WXR importer applies on read (core/wxr-import.ts):
+ * these are volatile editor bookkeeping (who holds the lock, when), meaningless in another install and
+ * a needless leak of an editor's user id. Everything else — crucially `_puck_data`, the page tree —
+ * ships verbatim.
+ */
+const NON_PORTABLE_META = new Set(['_edit_lock', '_edit_last']);
+
+/**
+ * CDATA payload that cannot break out of its own section.
+ *
+ * A literal `]]>` inside post content or a meta value would terminate the CDATA early and produce
+ * malformed XML (or, worse, let content escape into markup). WordPress splits the sequence across two
+ * sections; do exactly the same.
+ */
+function cdata(value: any) {
+    if (value === null || value === undefined) return '<![CDATA[]]>';
+    return `<![CDATA[${String(value).split(']]>').join(']]]]><![CDATA[>')}]]>`;
+}
+
+/**
  * Generate WordPress-compatible WXR export (Async)
+ *
+ * FIDELITY CONTRACT: every content item exported by exportSite() becomes an <item> carrying its REAL
+ * wp:post_type and its wp:postmeta. This used to walk `data.content.posts` only, hard-code
+ * `<wp:post_type>post</wp:post_type>` and emit not one <wp:postmeta> — so pages were absent entirely
+ * and `_puck_data` (i.e. the whole visual layout of every page on the site) never left the install:
+ * re-importing a WordJS export produced zero documents (F7/H2). The importer already reads
+ * wp:postmeta, so the gap was purely on this side.
  */
 async function exportToWXR() {
     const data = await exportSite();
+
+    // Meta is read RAW (never JSON.parse -> stringify) so _puck_data ships byte-identical to what the
+    // editor stored; exportSite()'s `meta` map is parsed for API readability and is lossy for this.
+    const collections = [
+        { items: data.content.posts || [], defaultType: 'post' },
+        { items: data.content.pages || [], defaultType: 'page' }
+    ];
+    const allIds = collections.flatMap((c) => c.items.map((p: any) => p.id)).filter((id: any) => id != null);
+    const metaById = await Post.getAllMetaRawForIds(allIds);
 
     let wxr = `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0"
@@ -601,26 +648,44 @@ async function exportToWXR() {
     <wp:term_id>${cat.id}</wp:term_id>
     <wp:category_nicename>${escapeXml(cat.slug)}</wp:category_nicename>
     <wp:category_parent>${cat.parent || ''}</wp:category_parent>
-    <wp:cat_name><![CDATA[${cat.name}]]></wp:cat_name>
+    <wp:cat_name>${cdata(cat.name)}</wp:cat_name>
   </wp:category>`;
     }
 
-    // Add posts
-    for (const post of data.content.posts || []) {
-        wxr += `
+    // Add every content item (posts AND pages — and anything exportSite gains later), each with its
+    // real post_type and its portable postmeta.
+    for (const { items, defaultType } of collections) {
+        for (const post of items) {
+            const type = post.type || defaultType;
+            const pubDate = post.date ? new Date(post.date) : null;
+            wxr += `
   <item>
     <title>${escapeXml(post.title)}</title>
-    <link>${data.site.url}/${post.slug}</link>
-    <pubDate>${new Date(post.date).toUTCString()}</pubDate>
-    <dc:creator><![CDATA[admin]]></dc:creator>
-    <content:encoded><![CDATA[${post.content}]]></content:encoded>
-    <excerpt:encoded><![CDATA[${post.excerpt || ''}]]></excerpt:encoded>
-    <wp:post_id>${post.id}</wp:post_id>
-    <wp:post_date>${post.date}</wp:post_date>
+    <link>${escapeXml(`${data.site.url}/${post.slug || ''}`)}</link>
+    <pubDate>${pubDate && !isNaN(pubDate.getTime()) ? pubDate.toUTCString() : ''}</pubDate>
+    <dc:creator>${cdata('admin')}</dc:creator>
+    <content:encoded>${cdata(post.content || '')}</content:encoded>
+    <excerpt:encoded>${cdata(post.excerpt || '')}</excerpt:encoded>
+    <wp:post_id>${escapeXml(post.id)}</wp:post_id>
+    <wp:post_date>${escapeXml(post.date)}</wp:post_date>
     <wp:post_name>${escapeXml(post.slug)}</wp:post_name>
-    <wp:status>${post.status}</wp:status>
-    <wp:post_type>post</wp:post_type>
+    <wp:status>${escapeXml(post.status)}</wp:status>
+    <wp:post_parent>${escapeXml(post.parentId || 0)}</wp:post_parent>
+    <wp:menu_order>${escapeXml(post.menuOrder || 0)}</wp:menu_order>
+    <wp:post_type>${escapeXml(type)}</wp:post_type>`;
+
+            for (const { key, value } of metaById[post.id] || []) {
+                if (NON_PORTABLE_META.has(key)) continue;
+                wxr += `
+    <wp:postmeta>
+      <wp:meta_key>${cdata(key)}</wp:meta_key>
+      <wp:meta_value>${cdata(value)}</wp:meta_value>
+    </wp:postmeta>`;
+            }
+
+            wxr += `
   </item>`;
+        }
     }
 
     wxr += `
@@ -631,8 +696,10 @@ async function exportToWXR() {
 }
 
 function escapeXml(str: any) {
-    if (!str) return '';
-    return str
+    // NOTE: `if (!str) return ''` was wrong for numerics — it turned a legitimate 0 (wp:post_parent,
+    // wp:menu_order) into an empty element, and any non-string argument crashed on .replace().
+    if (str === null || str === undefined) return '';
+    return String(str)
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;')

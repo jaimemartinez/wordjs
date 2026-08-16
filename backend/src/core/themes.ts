@@ -6,7 +6,10 @@
 const fs = require('fs');
 const path = require('path');
 const { getOption, updateOption } = require('./options');
-const { doAction, applyFilters } = require('./hooks');
+const { doAction } = require('./hooks');
+// The one place a name becomes a path: allowlist the FORM, resolve canonically, prove containment on
+// the value RETURNED (core/safe-path).
+const { resolveThemeDir, resolveWithin, isThemeSlug, isPlainSegment } = require('./safe-path');
 
 const THEMES_DIR = path.resolve('./themes');
 
@@ -1054,12 +1057,20 @@ function installThemeFromDir(sourceDir: string, targetSlug: string, opts: { them
   const themesDir = path.resolve(opts.themesDir || THEMES_DIR);
 
   // Target slug must be a single safe path segment (same charset theme-engine.init later enforces).
-  if (typeof targetSlug !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(targetSlug)) {
-    fail(`Invalid theme slug: ${JSON.stringify(targetSlug)}`);
-  }
-  const targetDir = path.resolve(themesDir, targetSlug);
-  if (targetDir === themesDir || !targetDir.startsWith(themesDir + path.sep)) {
-    fail('Invalid theme slug: resolves outside the themes directory');
+  // Through core/safe-path so the FORM check, the canonical resolve and the containment proof are the
+  // same three steps every other path in this project takes — and so the directory used below is the
+  // one that was proved, not a re-resolve of the raw argument. The regex and the prefix test that
+  // used to live here were correct, but they made the guard a pair of statements whose only link to
+  // the write was that the same variable happened to be in scope.
+  //
+  // The refusal is an INLINE `throw`, not a call to the `fail()` helper the rest of this function
+  // uses: a guard whose exit is hidden behind an indirect call is a guard neither a reader nor a
+  // static analyzer can follow to the sink it protects. Here the barrier and the use are adjacent.
+  const targetDir = resolveThemeDir(themesDir, targetSlug);
+  if (targetDir === null) {
+    const err: any = new Error(`Invalid theme slug: ${JSON.stringify(targetSlug)}`);
+    err.code = 'THEME_INVALID';
+    throw err;
   }
 
   const src = path.resolve(sourceDir);
@@ -1074,34 +1085,47 @@ function installThemeFromDir(sourceDir: string, targetSlug: string, opts: { them
   }
 
   // Enumerate with lstat (never following links) and enforce the budget BEFORE writing anything.
-  const files: Array<{ abs: string; rel: string }> = [];
+  // `segments` (not a joined `rel` string) is what the copy loop below re-resolves under targetDir:
+  // a list of names cannot smuggle a separator between two of them, and each one is checked as a
+  // single plain segment on the way in. The joined form is kept only for the error messages.
+  const files: Array<{ abs: string; segments: string[] }> = [];
   let totalBytes = 0;
   let entries = 0;
-  const walk = (dir: string, rel: string) => {
+  const walk = (dir: string, prefix: string[]) => {
     for (const entry of fs.readdirSync(dir)) {
+      const rel = prefix.length ? `${prefix.join('/')}/` : '';
+      // A readdir entry is a single name by construction — assert it anyway. This is the boundary
+      // where a name from an UPLOADED, attacker-authored theme becomes a path segment, and "the OS
+      // would never hand us a separator" is an assumption about the OS, not a check.
+      if (!isPlainSegment(entry)) fail(`Theme source contains an unusable file name (${rel}${entry}) — refusing to install`);
       const abs = path.join(dir, entry);
       const st = fs.lstatSync(abs);
       if (st.isSymbolicLink()) fail(`Theme source contains a symlink (${rel}${entry}) — refusing to install`);
       entries += 1;
       if (entries > maxEntries) fail(`Theme has over ${maxEntries} entries — refusing to install`);
       if (st.isDirectory()) {
-        walk(abs, `${rel}${entry}/`);
+        walk(abs, [...prefix, entry]);
       } else if (st.isFile()) {
         totalBytes += st.size;
         if (totalBytes > maxTotalBytes) fail('Theme exceeds the size budget — refusing to install');
-        files.push({ abs, rel: `${rel}${entry}` });
+        files.push({ abs, segments: [...prefix, entry] });
       } else {
         // FIFOs, sockets, devices: nothing a theme legitimately ships — fail closed.
         fail(`Theme source contains an unsupported file type (${rel}${entry})`);
       }
     }
   };
-  walk(src, '');
+  walk(src, []);
 
   fs.mkdirSync(targetDir, { recursive: true });
   try {
     for (const f of files) {
-      const dest = path.join(targetDir, f.rel);
+      // Containment is proved again on the destination actually written, under the target directory
+      // that was itself proved above — not on the source listing that produced the segments.
+      const dest = resolveWithin(targetDir, ...f.segments);
+      if (dest === null) {
+        throw new Error(`Theme source entry ${JSON.stringify(f.segments.join('/'))} does not resolve inside the theme directory`);
+      }
       fs.mkdirSync(path.dirname(dest), { recursive: true });
       fs.copyFileSync(f.abs, dest);
     }
@@ -1118,24 +1142,45 @@ function installThemeFromDir(sourceDir: string, targetSlug: string, opts: { them
 }
 
 /**
- * Create a zip of a theme for download
+ * Create a zip of a theme for download.
+ *
+ * THE SLUG CHOOSES TWO PATHS HERE, and until now neither was checked in this function: the folder
+ * that gets packed, and the file the zip is written to. The route (GET /themes/:slug/download) did
+ * call its slug guard first — but that guard returns a BOOLEAN and the handler then passed the RAW
+ * `req.params.slug` on, so the value that reached `path.join(cwd, 'os-tmp', `${slug}.zip`)` was
+ * never the value anything had proved. That is the same defect the theme routes were already fixed
+ * for once; a callee that trusts "my caller validated this" is where it survives.
+ *
+ * So the form is checked here, the destination is RESOLVED under os-tmp/ and proved contained, and
+ * the packed directory is proved to be inside THEMES_DIR — scanThemes reads it off disk, which makes
+ * it data, not a constant.
  */
 async function createThemeZip(slug: string) {
+  if (!isThemeSlug(slug)) {
+    throw new Error(`Invalid theme slug: ${JSON.stringify(String(slug))}`);
+  }
   const themes = scanThemes();
   const theme = themes.find(t => t.slug === slug);
   if (!theme) {
     throw new Error(`Theme ${slug} not found`);
   }
+  const themeDir = resolveThemeDir(THEMES_DIR, theme.slug);
+  if (themeDir === null) {
+    throw new Error(`Invalid theme slug: ${JSON.stringify(String(slug))}`);
+  }
+
+  const tmpDir = path.resolve(process.cwd(), 'os-tmp');
+  const tempPath = resolveWithin(tmpDir, `${slug}.zip`);
+  if (tempPath === null) {
+    throw new Error(`Invalid theme slug: ${JSON.stringify(String(slug))}`);
+  }
+  if (!fs.existsSync(tmpDir)) {
+    fs.mkdirSync(tmpDir, { recursive: true });
+  }
 
   const AdmZip = require('adm-zip');
   const zip = new AdmZip();
-  zip.addLocalFolder(theme.path);
-
-  const tempPath = path.join(process.cwd(), 'os-tmp', `${slug}.zip`);
-  if (!fs.existsSync(path.dirname(tempPath))) {
-    fs.mkdirSync(path.dirname(tempPath), { recursive: true });
-  }
-
+  zip.addLocalFolder(themeDir);
   zip.writeZip(tempPath);
   return tempPath;
 }

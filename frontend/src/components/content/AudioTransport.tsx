@@ -4,7 +4,7 @@
  * scrubbing). The block's outer element renders on the server (blocks.tsx AudioPlayerBlock).
  */
 import React, { useState } from "react";
-import { cx } from "@/components/puck/blockVars";
+import { cx } from "@/components/blocks/blockVars";
 import { fmtTime } from "./SelfHostedVideo";
 
 const AudioTransport = ({ src, title }: { src: string; title: string }) => {
