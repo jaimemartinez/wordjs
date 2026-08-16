@@ -217,7 +217,14 @@ describe("PROPIEDAD: quien respeta la espera del servidor no puede acabar fuera 
           "si no llega ninguno, no prueba nada",
         ).toBeGreaterThan(0);
       }
-    });
+      // PLAZO EXPLÍCITO. El reloj es virtual (ManualTimers), así que estos segundos no son espera:
+      // son CPU de verdad — once escenarios que recorren miles de iteraciones del cliente REAL contra
+      // el doble. En esta máquina cada caso ronda 1-2 s y los 5 s por defecto de vitest sobran; en el
+      // runner de CI, que es más lento, tres casos los rozaban y caían por plazo, no por la propiedad.
+      // Subirlo NO tapa nada: lo que se afirma sigue siendo lo mismo, y si la propiedad se rompe el
+      // test falla igual, con su mensaje. Bajar el trabajo (menos escenarios o menos iteraciones) sí
+      // taparía algo: la matriz completa es lo que hizo visible el defecto que sobrevivió tres rondas.
+    }, 30_000);
   }
 
   /**
