@@ -347,6 +347,18 @@ router.post('/install', async (req: any, res: Response) => {
             await loadRoles();
             await syncRoles({});
 
+            // Post types + taxonomies for THIS process. index.ts registers them inside the
+            // `if (isInstalled())` boot branch, so a process that booted in SETUP MODE and then
+            // installed IN-PROCESS never had them: `getPostType('page')` returned null and the very
+            // first "create page" after finishing the wizard was rejected with 400
+            // rest_invalid_post_type — with the wizard's own demo content already in the database
+            // (Post.create does not gate on the registry, the write ROUTES do). Same class as the
+            // frontend-purge hook fixed earlier in initialize(): registration that a fresh install
+            // silently skips. Registration is idempotent, so this is safe on every install path.
+            const { initPostTypes, initTaxonomies } = require('../core/post-types');
+            await initPostTypes();
+            await initTaxonomies();
+
             const Term = require('../models/Term');
             await Term.create({ name: 'Uncategorized', taxonomy: 'category', slug: 'uncategorized', description: 'Default category' });
 

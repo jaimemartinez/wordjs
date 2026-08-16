@@ -1,6 +1,13 @@
 /**
  * Verso F6 (a) — crear página real en /admin/pages/new?engine=verso:
  * 3 bloques por paleta, edición de props, guardar, recargar, persistencia.
+ *
+ * REGRESIÓN QUE ESTE SPEC PINEA (cazada por él en CI): en un checkout limpio el
+ * proceso arranca en SETUP MODE e instala IN-PROCESS, y los post types se
+ * registraban solo en la rama `if (isInstalled())` del boot — la primera página
+ * creada tras el asistente moría con 400 rest_invalid_post_type. El instalador
+ * los registra ahora (routes/setup.ts); este spec es el único gate que recorre
+ * ese camino entero (instalar → crear contenido) sin reiniciar el servidor.
  */
 import { expect, test } from "@playwright/test";
 import {
