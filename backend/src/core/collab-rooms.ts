@@ -193,6 +193,25 @@ type Conn = {
     rateNotice: number;
     rateRetryAt: number;
     rateAck: number;
+    /**
+     * IDENTIDAD DE QUIEN ACUÑA LOS AVISOS. El número de serie es por conexión y arranca en 0 en cada
+     * una, así que un número SUELTO no dice de qué conexión habla: al reconectar, un POST que sale de
+     * la conexión vieja y aterriza en la nueva traía un acuse de 4 contra un contador que iba por 0, y
+     * `Math.max` lo grababa para siempre. A partir de ahí el servidor creía que el cliente ya había
+     * acusado avisos que todavía no había emitido, y el primer 429 real de la conexión nueva ya
+     * contaba como desobediencia: expulsión garantizada de alguien impecable (ronda 5).
+     *
+     * El sello se acuña UNA vez por conexión, viaja en cada 429 y el cliente lo devuelve junto al
+     * número. Un acuse sin ESTE sello no se puede aplicar aquí, así que un número acuñado por otra
+     * conexión no es un acuse "viejo": no es un acuse en absoluto.
+     */
+    rateSeal: string;
+    /**
+     * El `welcome` de esta conexión YA SALIÓ por el cable. Hasta entonces se rechaza por ritmo (la
+     * contrapresión protege al servidor y no depende de nadie), pero NO se suma strike: una conexión
+     * que todavía no se ha presentado no puede exigirle a nadie que reconozca sus instrucciones.
+     */
+    welcomed: boolean;
     authFailures: number;
     revalidate: Revalidate | null;
     closed: boolean;
@@ -673,6 +692,12 @@ function writeEvent(conn: Conn, event: string, data: any): boolean {
     if (socketDead(conn)) { void leave(conn); return false; }
     try {
         conn.res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+        // ESCRIBIR EL `welcome` ES PRESENTARSE, así que el sello de "ya me he presentado" se pone
+        // AQUÍ y no en la ruta: escribirlo es el acto, y una ruta nueva no puede olvidarse de marcar
+        // algo que marca la propia escritura. Antes de esta línea la conexión existe —`join()` la da
+        // de alta de forma síncrona, mucho antes de que la ruta escriba nada— y `rateGate` no le deja
+        // acumular strikes (ver allí).
+        if (event === 'welcome') conn.welcomed = true;
         return true;
     } catch {
         void leave(conn);
@@ -779,6 +804,11 @@ async function join(params: {
         rateNotice: 0,
         rateRetryAt: 0,
         rateAck: 0,
+        // Sello NUEVO en cada conexión, y por eso el acuse de la anterior no puede aplicarse aquí.
+        // Aleatorio y no derivado del `connId` a propósito: el `connId` lleva dentro el `NODE_ID` y
+        // un contador del proceso, y esto viaja al cliente en cada 429.
+        rateSeal: crypto.randomBytes(9).toString('base64url'),
+        welcomed: false,
         authFailures: 0,
         revalidate: params.revalidate || null,
         closed: false,
@@ -1025,8 +1055,11 @@ async function sweepIdleRooms(maxAgeMs = 60 * 60 * 1000): Promise<number> {
 /* Límites de ritmo                                                                              */
 /* ------------------------------------------------------------------------------------------- */
 
-/** La instrucción que acompaña SIEMPRE a un rechazo por ritmo: cuánto esperar y con qué nº de serie. */
-export type RateInstruction = { retryAfterMs: number; notice: number };
+/**
+ * La instrucción que acompaña SIEMPRE a un rechazo por ritmo: cuánto esperar, con qué nº de serie y
+ * —lo que hace que el número signifique algo— DE QUÉ CONEXIÓN sale ese número (`seal`).
+ */
+export type RateInstruction = { retryAfterMs: number; notice: number; seal: string };
 
 type RateVerdict =
     | { ok: true }
@@ -1059,17 +1092,31 @@ function refill(conn: Conn, now: number): void {
  *
  * Así que la expulsión pasa a exigir PRUEBA, y la prueba la firma el propio cliente:
  *
- *   · cada rechazo emite una INSTRUCCIÓN `{retryAfterMs, notice}` — `notice` es un número de serie
- *     monótono por conexión y `rateRetryAt` su plazo, medido con el RELOJ DEL SERVIDOR;
- *   · el cliente devuelve en cada frame el último `notice` que ha VISTO (`conn.rateAck`);
+ *   · cada rechazo emite una INSTRUCCIÓN `{retryAfterMs, notice, seal}` — `notice` es un número de
+ *     serie monótono por conexión, `rateRetryAt` su plazo (medido con el RELOJ DEL SERVIDOR) y
+ *     `seal` la identidad de la conexión que lo acuñó;
+ *   · el cliente devuelve en cada frame el último `notice` que ha VISTO **con su sello**;
  *   · solo es desobediencia un frame que llega con `rateAck >= notice` vigente y ANTES del plazo: el
  *     cliente reconoce haber recibido esta instrucción concreta y aun así mandó dentro de su ventana.
  *
- * Un frame en vuelo trae un `rateAck` ANTERIOR y por construcción nunca puede contar. Un cliente que
- * espera manda después del plazo y tampoco. Ninguna latencia, ningún planificador roto y ningún
- * reparto de la carga entre canales puede fabricar esa prueba: por eso el defecto no puede volver a
- * mudarse de sitio, y por eso el número de la espera ya no puede desincronizarse (solo hay uno,
- * `CONFIG.RATE_RETRY_MS`, y viaja con cada rechazo).
+ * EL SELLO ES LA RONDA 5, y es lo que hace verdadera la frase de la ronda 4. Aquella decía «un frame
+ * en vuelo trae un acuse ANTERIOR y por construcción no puede contar», y era FALSA con reconexiones:
+ * la condición no mira el acuse que trae el frame juzgado, mira `conn.rateAck`, el máximo monótono de
+ * la conexión. Como el número de serie es POR CONEXIÓN y la nueva nace en 0, un POST rezagado de la
+ * conexión anterior con acuse 4 dejaba `rateAck = 4` contra `rateNotice = 0`: a partir de ahí TODOS
+ * los avisos 1..4 de la conexión nueva nacían ya "reconocidos" y cualquier frame dentro de un plazo
+ * vivo —en vuelo o no— sumaba strike. Un cliente impecable acababa fuera en ~4 s. Con el sello, ese
+ * acuse ni siquiera se anota (ver `noteRateAck`): no hay número que un tercero —ni el propio cliente
+ * en otra conexión— pueda aplicar aquí.
+ *
+ * Y `conn.welcomed` cierra la otra mitad de la misma ventana: entre el alta síncrona de `join()` y el
+ * `welcome` que escribe la ruta, la conexión ya acepta frames pero todavía no se ha presentado; ahí
+ * se rechaza, pero no se castiga.
+ *
+ * Un cliente que espera manda después del plazo y tampoco cuenta. Ninguna latencia, ningún
+ * planificador roto, ninguna reconexión y ningún reparto de la carga entre canales puede fabricar esa
+ * prueba: por eso el defecto no puede volver a mudarse de sitio, y por eso el número de la espera ya
+ * no puede desincronizarse (solo hay uno, `CONFIG.RATE_RETRY_MS`, y viaja con cada rechazo).
  *
  * Lo que NO cambia: el rechazo en sí. La contrapresión —no aceptar el frame y decir cuánto esperar—
  * es lo que protege al servidor, y se aplica a todo el mundo, pruebe lo que pruebe. Cerrar la sesión
@@ -1103,10 +1150,15 @@ function rateGate(conn: Conn, ops: number, bytes: number, presence = 0): RateVer
         (bytes > 0 && conn.byteTokens < bytes) ||
         (presence > 0 && conn.presenceTokens < presence);
     if (falta) {
-        // ¿Hay una instrucción VIGENTE y este frame demuestra conocerla? Ésa es toda la condición de
-        // expulsión del módulo, y está escrita una sola vez.
+        // ¿Hay una instrucción VIGENTE de ESTA conexión, ya presentada, y este frame demuestra
+        // conocerla? Ésa es toda la condición de expulsión del módulo, y está escrita una sola vez.
+        //
+        // `conn.welcomed` cierra la ventana alta→`welcome`: `join()` da de alta la conexión de forma
+        // SÍNCRONA y desde ese instante acepta frames, pero la ruta todavía no ha escrito el
+        // `welcome`. Una conexión que aún no se ha presentado no puede exigirle a nadie que reconozca
+        // sus instrucciones — el cliente ni siquiera sabe que existe.
         const vigente = now < conn.rateRetryAt;
-        if (vigente && conn.rateAck >= conn.rateNotice) {
+        if (vigente && conn.welcomed && conn.rateAck >= conn.rateNotice) {
             conn.strikes++;
             if (conn.strikes >= CONFIG.MAX_STRIKES) {
                 writeEvent(conn, 'error', { code: 'rate_limit', message: 'Demasiadas operaciones: conexión cerrada.' });
@@ -1126,7 +1178,13 @@ function rateGate(conn: Conn, ops: number, bytes: number, presence = 0): RateVer
             ok: false,
             code: 'rate',
             message: 'Demasiadas operaciones. Reduce el ritmo.',
-            rate: { retryAfterMs: Math.max(0, conn.rateRetryAt - now), notice: conn.rateNotice },
+            rate: {
+                retryAfterMs: Math.max(0, conn.rateRetryAt - now),
+                notice: conn.rateNotice,
+                // El número va SIEMPRE acompañado de quién lo acuñó: sin esto, "aviso 1" es una frase
+                // sin sujeto y el acuse de una conexión se aplica en otra.
+                seal: conn.rateSeal,
+            },
         };
     }
 
@@ -1153,16 +1211,29 @@ function rateFailure(v: Extract<RateVerdict, { ok: false }>): {
 }
 
 /**
- * Anota el número de aviso que el cliente DICE haber visto. Se llama desde `connGate`, que es la
- * única puerta por la que una ruta de subida consigue una `conn`: así ningún camino nuevo puede
- * olvidarse de pasarlo (que fue exactamente cómo el defecto se mudó de camino tres veces).
+ * Anota el aviso que el cliente DICE haber visto. Se llama desde `connGate`, que es la única puerta
+ * por la que una ruta de subida consigue una `conn`: así ningún camino nuevo puede olvidarse de
+ * pasarlo (que fue exactamente cómo el defecto se mudó de camino tres veces).
  *
- * Es un dato del cliente y se trata como tal: solo puede perjudicarle. Declarar de menos = no se le
- * puede probar nada (y se le sigue rechazando todo); declarar de más = se autoinculpa. Nunca afecta a
- * otra conexión, porque el número de serie es por conexión.
+ * UN ACUSE ES UN PAR, NO UN NÚMERO. El número de serie lo lleva la CONEXIÓN y arranca en 0 en cada
+ * una, así que un número suelto no dice de qué conexión habla. Con solo el número, el defecto de la
+ * ronda 5 era inevitable y no hacía falta ningún cliente malintencionado: al reconectar, un POST
+ * que sale de la conexión vieja aterriza en la nueva —`join()` la da de alta de forma síncrona,
+ * antes del `welcome`— con un acuse de, digamos, 4; `Math.max` lo grababa contra un contador que iba
+ * por 0 y ya no bajaba nunca. Desde ese momento el servidor creía que el cliente había acusado
+ * avisos que aún no había emitido y el PRIMER 429 real ya contaba como desobediencia.
+ *
+ * Ahora el acuse solo se aplica si viene sellado por ESTA conexión. Uno de otra no es un acuse
+ * viejo: no es un acuse, y se ignora entero. Por eso no hay caso especial de "reconexión" en ningún
+ * sitio — no hay una frontera que reconocer, hay una identidad que no coincide.
+ *
+ * Sigue siendo un dato del cliente y solo puede perjudicarle: declarar de menos = no se le puede
+ * probar nada (y se le rechaza todo igualmente); declarar de más = se autoinculpa, y el sello lo
+ * tiene porque se lo mandamos a él.
  */
-function noteRateAck(conn: Conn, raw: any): void {
-    const n = Number(raw);
+function noteRateAck(conn: Conn, rawAck: any, rawSeal: any): void {
+    if (typeof rawSeal !== 'string' || rawSeal !== conn.rateSeal) return;
+    const n = Number(rawAck);
     if (!Number.isFinite(n) || n <= 0) return;
     conn.rateAck = Math.max(conn.rateAck, Math.min(n, Number.MAX_SAFE_INTEGER));
 }

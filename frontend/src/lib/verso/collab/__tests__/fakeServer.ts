@@ -35,6 +35,8 @@ type PostBody = {
   vv?: Record<string, number>;
   /** Acuse del último aviso de espera que el cliente dice haber visto (ver `ritmo`). */
   rateAck?: unknown;
+  /** Sello de la CONEXIÓN que acuñó ese número. Sin él el acuse no se aplica (ver `ritmo`). */
+  rateSeal?: unknown;
 };
 
 /** Estado de ritmo por sitio: los cubos y la INSTRUCCIÓN de espera vigente. */
@@ -47,6 +49,8 @@ type Rate = {
   notice: number;
   retryAt: number;
   ack: number;
+  /** Identidad de esta CONEXIÓN a efectos de avisos, como el `rateSeal` del `Conn` real. */
+  seal: string;
 };
 
 export interface FakeClient {
@@ -165,8 +169,23 @@ export class FakeCollabServer {
    */
   latencyMs = 0;
 
+  /**
+   * LO QUE TARDA EL CLIENTE EN TENER EL `welcome` DELANTE. Por defecto 0, como antes.
+   *
+   * Que fuera SIEMPRE 0 dejaba ciega a la suite entera justo donde estaba el defecto de la ronda 5:
+   * el `welcome` se entregaba en el mismo tick que se abría el stream, así que la frontera de la
+   * reconexión —el único sitio donde los contadores del cliente y los del servidor pueden hablar de
+   * conexiones distintas— era ESTRUCTURALMENTE IRREPRESENTABLE, y los escenarios con cortes pasaban
+   * con el defecto dentro. No es un margen teórico: el `welcome` lleva el snapshot del epoch y el log
+   * entero, y el cliente todavía tiene que hacerle `JSON.parse` + `toCrdt` + aplicar las ops.
+   */
+  welcomeDelayMs = 0;
+
   /** Cuántos 429 seguidos servir por camino, saltándose los cubos. Fuerza el rechazo en un test. */
   readonly refuse: Record<string, number> = {};
+
+  /** Sellos acuñados, para que cada conexión del doble tenga el suyo como en el servidor real. */
+  private sellos = 0;
 
   /** Reloj del test (normalmente `timers.time`): sin él no se puede medir CUÁNTO esperó el cliente. */
   clock: () => number = () => 0;
@@ -217,6 +236,14 @@ export class FakeCollabServer {
   readonly posted: { path: string; at: number; servedAt: number; status: number }[] = [];
 
   /**
+   * FRAMES QUE LLEGARON CON EL ACUSE DE OTRA CONEXIÓN. Es la huella de la carrera de la ronda 5, y
+   * está aquí para que un escenario pueda EXIGIR que se haya producido: sin esta cuenta, «reconectar
+   * con el `welcome` lento no expulsa a nadie» puede ser cierto sencillamente porque el frame
+   * rezagado nunca llegó a existir, y el escenario sería decorativo.
+   */
+  acusesDeOtraConexion = 0;
+
+  /**
    * DERIVACIÓN de la identidad de réplica, igual que hace el servidor real: lo que el cliente pone
    * en la query es un NONCE, y la identidad con la que firma sale del `welcome`.
    *
@@ -263,9 +290,12 @@ export class FakeCollabServer {
         const members = [...this.presence.values()].filter((m) => m.siteId !== siteId);
         this.presence.set(siteId, { ...self, sel: null, at: 0 });
 
-        // El `welcome` se entrega SIEMPRE de inmediato: es la semilla del estado, y retrasarlo
-        // solo probaría que un cliente sin estado no hace nada.
-        h.onEvent("welcome", {
+        // El `welcome` se compone AHORA (como `join()`, que lee la sala antes de que la ruta escriba
+        // nada) pero puede tardar en llegar: ver `welcomeDelayMs`. Con retardo, entre que la conexión
+        // nueva existe en el servidor y que el cliente la reconoce hay un hueco en el que el cliente
+        // sigue posteando con lo que sabía de la conexión ANTERIOR — que es el escenario de la
+        // ronda 5, y sin este parámetro no se puede escribir.
+        const welcome = {
           epoch: this.epoch,
           base: this.base,
           ops: [...this.log],
@@ -279,7 +309,16 @@ export class FakeCollabServer {
             maxFrameBytes: this.limits.maxFrameBytes,
             rateRetryMs: this.rateRetryMs,
           },
-        });
+        };
+        if (this.welcomeDelayMs > 0) {
+          void this.sleep(this.welcomeDelayMs).then(() => {
+            // Si el stream se cerró (o lo reemplazó otro) mientras tanto, este `welcome` ya no es de
+            // nadie: entregarlo resucitaría una sesión muerta.
+            if (this.handlers.get(siteId) === h) h.onEvent("welcome", welcome);
+          });
+        } else {
+          h.onEvent("welcome", welcome);
+        }
         for (const [other] of this.handlers) {
           if (other !== siteId) this.enqueue(other, "members", { joined: { ...self, sel: null, at: 0 } });
         }
@@ -329,9 +368,10 @@ export class FakeCollabServer {
    * aserción «el cliente nunca recibe un 409 collab_no_session» se cumpliría sola y no probaría nada.
    * Hay un test de control negativo que comprueba que expulsa de verdad.
    *
-   * La regla: un rechazo emite una instrucción `{retryAfterMs, notice}`; solo suma strike un frame
-   * que llega con `rateAck >= notice` VIGENTE y antes del plazo, o sea uno cuyo emisor reconoce haber
-   * recibido esa instrucción concreta. Un frame en vuelo trae un acuse anterior y nunca puede contar.
+   * La regla: un rechazo emite una instrucción `{retryAfterMs, notice, seal}`; solo suma strike un
+   * frame que llega con `rateAck >= notice` VIGENTE, antes del plazo y SELLADO por esta conexión, o
+   * sea uno cuyo emisor reconoce haber recibido esa instrucción concreta. Un frame en vuelo trae un
+   * acuse anterior; uno de la conexión anterior trae además otro sello y no se anota siquiera.
    */
   private ritmo(siteId: string, path: string, payload: PostBody): PostResponse | null {
     if (path !== "ops" && path !== "presence" && path !== "resync") return null;
@@ -339,8 +379,14 @@ export class FakeCollabServer {
     const now = this.clock();
     const r = this.rateState(siteId, now);
 
-    const ack = Number(payload?.rateAck);
-    if (Number.isFinite(ack) && ack > r.ack) r.ack = ack;
+    // El acuse solo se aplica si viene sellado por ESTA conexión: el número de serie empieza en 0 en
+    // cada una, así que uno acuñado por la anterior no es un acuse viejo, no es un acuse.
+    if (typeof payload?.rateSeal === "string" && payload.rateSeal === r.seal) {
+      const ack = Number(payload?.rateAck);
+      if (Number.isFinite(ack) && ack > r.ack) r.ack = ack;
+    } else if (typeof payload?.rateSeal === "string") {
+      this.acusesDeOtraConexion++;
+    }
 
     const ops = path === "ops" ? (payload.ops ?? []).length : path === "resync" ? this.limits.resyncOpCost : 0;
     const bytes = path === "ops" ? JSON.stringify(payload.ops ?? null).length : 0;
@@ -386,6 +432,7 @@ export class FakeCollabServer {
         code: "collab_rate_limit",
         retryAfterMs: Math.max(0, r.retryAt - now),
         rateNotice: r.notice,
+        rateSeal: r.seal,
       },
     };
   }
@@ -399,6 +446,9 @@ export class FakeCollabServer {
         presenceTokens: this.limits.presenceBurst,
         lastRefill: now,
         strikes: 0, notice: 0, retryAt: 0, ack: 0,
+        // Conexión nueva, sello nuevo: `openStream` tira el estado anterior, así que esto se acuña
+        // una vez por conexión igual que en `join()`.
+        seal: `sello${++this.sellos}`,
       };
       this.rate.set(siteId, r);
       return r;

@@ -54,10 +54,12 @@ export interface RateGateTimers {
   clear: (handle: unknown) => void;
 }
 
-/** Lo que un 429 trae del servidor. Ambos campos son opcionales: un proxy puede no ponerlos. */
+/** Lo que un 429 trae del servidor. Todos los campos son opcionales: un proxy puede no ponerlos. */
 export interface RateRefusal {
   retryAfterMs?: unknown;
   rateNotice?: unknown;
+  /** Identidad de la CONEXIÓN que acuñó `rateNotice`. Ver `rechazado`. */
+  rateSeal?: unknown;
 }
 
 export class RateGate {
@@ -67,6 +69,12 @@ export class RateGate {
   private visto = 0;
   /** Último número de aviso ya convertido en espera: un 429 en vuelo no la alarga dos veces. */
   private aplicado = 0;
+  /**
+   * QUIÉN ACUÑÓ los números que hay en `visto`/`aplicado`. Sin esto, los dos contadores son números
+   * sin sujeto y comparar el aviso nuevo contra ellos solo tiene sentido mientras no cambie la
+   * conexión del servidor — que es justo lo que cambia en una reconexión.
+   */
+  private emisor: string | null = null;
   private freno: unknown = null;
   private esperando: (() => void)[] = [];
 
@@ -85,8 +93,7 @@ export class RateGate {
   publica(rateRetryMs: unknown): void {
     const n = Number(rateRetryMs);
     if (Number.isFinite(n) && n > 0) this.ventanaMs = n;
-    this.visto = 0;
-    this.aplicado = 0;
+    this.olvidaAvisos(null);
   }
 
   /**
@@ -95,8 +102,22 @@ export class RateGate {
    * Un aviso YA aplicado no vuelve a frenar: dos frames en vuelo pueden traer el mismo rechazo, y
    * reiniciar el freno con cada copia alargaría la espera sin motivo. Uno NUEVO sí lo reinicia
    * —es una instrucción posterior— y por eso el freno se rearma en vez de acumularse.
+   *
+   * EL SELLO ES QUIEN CONVIERTE ESO EN CIERTO. «Ya aplicado» solo significa algo comparando números
+   * del MISMO emisor: el servidor los numera por conexión y vuelve a empezar en 1 en cada una. Sin
+   * mirar el sello, el primer 429 real de una conexión nueva (aviso 1) parecía un duplicado en vuelo
+   * de la anterior (aplicado 4) y el cliente NO FRENABA — mientras el servidor, envenenado por el
+   * mismo desajuste, ya lo contaba como desobediencia. Los dos lados fallaban a la vez y hacia el
+   * mismo sitio: expulsión de un cliente impecable (ronda 5).
+   *
+   * Con sello, un emisor distinto no es "un aviso viejo": es OTRA numeración, y lo anterior se
+   * olvida entero. `publica()` sigue reiniciando en el `welcome`, pero ya no es de lo que depende la
+   * corrección — depende de que el número y su sello viajen juntos, y llegan juntos en cada 429.
    */
   rechazado(body: RateRefusal | null | undefined): void {
+    const sello = typeof body?.rateSeal === "string" && body.rateSeal ? body.rateSeal : null;
+    if (sello !== this.emisor) this.olvidaAvisos(sello);
+
     const aviso = Number(body?.rateNotice);
     if (Number.isFinite(aviso) && aviso > 0) {
       if (aviso > this.visto) this.visto = aviso;
@@ -104,6 +125,13 @@ export class RateGate {
       this.aplicado = aviso;
     }
     this.frena(this.derivaEspera(body?.retryAfterMs));
+  }
+
+  /** Numeración NUEVA: lo acusado hasta ahora no habla de ella y no puede silenciar sus avisos. */
+  private olvidaAvisos(sello: string | null): void {
+    this.emisor = sello;
+    this.visto = 0;
+    this.aplicado = 0;
   }
 
   /**
@@ -128,6 +156,15 @@ export class RateGate {
   /** El número de aviso que hay que devolverle al servidor en CADA frame. */
   get ack(): number {
     return this.visto;
+  }
+
+  /**
+   * El SELLO del emisor de ese número, que viaja pegado a él. El servidor descarta un acuse que no
+   * lleve el suyo, así que mandar el número solo equivale a no acusar nada: el cliente se quedaría
+   * sin poder demostrar que obedece y —peor— sin que su propia numeración significara nada.
+   */
+  get sello(): string | null {
+    return this.emisor;
   }
 
   get frenado(): boolean {

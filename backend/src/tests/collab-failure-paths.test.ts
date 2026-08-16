@@ -164,7 +164,7 @@ before(async () => {
     await seedUser('mano', 'administrator');
 
     for (const key of ['join', 'log', 'latido', 'viva', 'carrera', 'retirada', 'aviso', 'cubo', 'presencia',
-        'docfail', 'barrido', 'ciego', 'logciego', 'entrando']) {
+        'docfail', 'barrido', 'ciego', 'logciego', 'entrando', 'sello', 'ventana']) {
         P[key] = (await Post.create({ authorId: U.jefa, title: `post ${key}`, type: 'post', status: 'draft' })).id;
         await Post.updateMeta(P[key], '_puck_data', VACIO);
     }
@@ -877,14 +877,19 @@ describe('el límite de ritmo frena, pero no deja a nadie mudo', () => {
             let rechazos = 0;
             let cerrado = false;
             let rateAck = 0;
+            let rateSeal: string | undefined;
             for (let i = 0; i < 40 && !cerrado; i++) {
                 const r = await post('mano', `/collab/${P.presencia}/presence`, {
-                    siteId: a.site, sel: { nodeId: `n${i}` }, rateAck,
+                    siteId: a.site, sel: { nodeId: `n${i}` }, rateAck, rateSeal,
                 });
                 if (r.status === 429) {
                     rechazos++;
                     assert.ok(r.body.retryAfterMs > 0, 'un 429 tiene que decir CUÁNTO esperar');
-                    rateAck = r.body.rateNotice;      // se entera… y vuelve dentro de la ventana
+                    // Se entera… y vuelve dentro de la ventana. El acuse va con SU SELLO: sin él el
+                    // servidor lo descarta, y con razón (ver `noteRateAck`) — así que un cliente que
+                    // quiera desobedecer de forma demostrable tiene que devolver el par entero.
+                    rateAck = r.body.rateNotice;
+                    rateSeal = r.body.rateSeal;
                 }
                 if (r.status === 409 && r.body.code === 'collab_no_session') cerrado = true;
             }
@@ -915,10 +920,12 @@ describe('el límite de ritmo frena, pero no deja a nadie mudo', () => {
             let rechazos = 0;
             let counter = 500;
             let rateAck = 0;
+            let rateSeal: string | undefined;
             for (let i = 0; i < 60 && !cerrado; i++) {
                 const ops = Array.from({ length: 3 }, () => opPropSet(a!.site, counter++, `k${counter}`, 'y'.repeat(200)));
-                const r = await post('jefa', `/collab/${P.cubo}/ops`, { siteId: a.site, epoch: a.welcome.epoch, ops, rateAck });
-                if (r.status === 429) { rechazos++; rateAck = r.body.rateNotice; }
+                const r = await post('jefa', `/collab/${P.cubo}/ops`, { siteId: a.site, epoch: a.welcome.epoch, ops, rateAck, rateSeal });
+                // El acuse completo: número Y sello de quien lo acuñó (ver `noteRateAck`).
+                if (r.status === 429) { rechazos++; rateAck = r.body.rateNotice; rateSeal = r.body.rateSeal; }
                 if (r.status === 409 && r.body.code === 'collab_no_session') cerrado = true;
             }
             assert.ok(rechazos > 0, 'el límite de ritmo tiene que dispararse');
@@ -996,6 +1003,146 @@ describe('el límite de ritmo frena, pero no deja a nadie mudo', () => {
                 `la espera anunciada sale de RATE_RETRY_MS: ${visto.retryAfterMs}`);
             assert.equal(typeof visto.rateNotice, 'number', 'sin `rateNotice` no hay nada que acusar');
             assert.ok(visto.rateNotice > 0, 'el número de aviso empieza en 1');
+            assert.equal(typeof visto.rateSeal, 'string', 'sin `rateSeal` el número no dice de QUÉ conexión habla');
+            assert.ok(visto.rateSeal.length > 0, 'y un sello vacío no identifica nada');
+        } finally {
+            a?.close();
+            collab.CONFIG.PRESENCE_BURST = burst;
+            collab.CONFIG.MAX_PRESENCE_PER_SEC = perSec;
+            await settle(250);
+        }
+    });
+
+    /* --------------------------------------------------------------------------------------- */
+    /* RONDA 5 — el acuse está atado a la conexión que lo acuñó                                  */
+    /* --------------------------------------------------------------------------------------- */
+
+    test('RECONECTAR no puede envenenar el contador: un acuse de la conexión ANTERIOR no cuenta en la nueva', async () => {
+        // EL DEFECTO DE LA RONDA 5, reproducido contra el router real.
+        //
+        // El número de aviso es POR CONEXIÓN y arranca en 0, pero el acuse se fundía con `Math.max` y
+        // nunca bajaba. Al reconectar, `join()` da de alta la conexión NUEVA de forma SÍNCRONA —desde
+        // ese instante `findConn` la devuelve y acepta frames— y un POST rezagado de la conexión
+        // anterior aterrizaba en ella con un acuse de, digamos, 4: `conn.rateAck = 4` contra un
+        // contador que iba por 0, y para siempre. A partir de ahí el servidor creía que el cliente ya
+        // había acusado avisos que aún no había emitido, así que el PRIMER 429 real de la conexión
+        // nueva ya nacía "reconocido" y cualquier frame en vuelo dentro de su ventana sumaba strike:
+        // tres seguidos y fuera. Un cliente impecable, expulsado en ~4 s (el verificador lo midió con
+        // el `welcome` de 1,80 MB de una sala de 5000 ops).
+        //
+        // El arreglo no es un caso especial de reconexión: el acuse deja de ser un número suelto y
+        // pasa a ser un PAR (número + sello de la conexión que lo acuñó). Uno de otra conexión no es
+        // un acuse viejo — no es un acuse, y no se anota.
+        const burst = collab.CONFIG.PRESENCE_BURST;
+        const perSec = collab.CONFIG.MAX_PRESENCE_PER_SEC;
+        collab.CONFIG.PRESENCE_BURST = 2;
+        collab.CONFIG.MAX_PRESENCE_PER_SEC = 1;
+        let a: Session | null = null;
+        let b: Session | null = null;
+        try {
+            // --- CONEXIÓN 1: se gana un aviso de VERDAD (429 con su instrucción) y lo acusa.
+            a = await openSession('jefa', P.sello, NONCE_A);
+            let aviso: any = null;
+            for (let i = 0; i < 6 && !aviso; i++) {
+                const r = await post('jefa', `/collab/${P.sello}/presence`, { siteId: a.site, sel: { nodeId: `n${i}` } });
+                if (r.status === 429) aviso = r.body;
+            }
+            assert.ok(aviso, 'hacía falta un 429 en la conexión 1 o no hay acuse que reutilizar');
+
+            // --- RECONEXIÓN. El MISMO nonce da la misma identidad de réplica (el HMAC lleva dentro el
+            // userId), así que es la misma persona volviendo tras un parpadeo de red: conexión nueva,
+            // contador de avisos a 0, cubos llenos.
+            a.close();
+            await settle(200);
+            b = await openSession('jefa', P.sello, NONCE_A);
+
+            // EL FRAME REZAGADO: salió pensando en la conexión vieja y llega a la nueva. Lleva el
+            // acuse de aquélla, sello incluido — o sea el peor caso posible, no una versión suavizada.
+            const rezagado = await post('jefa', `/collab/${P.sello}/presence`, {
+                siteId: b.site, sel: { nodeId: 'rezagado' },
+                rateAck: aviso.rateNotice, rateSeal: aviso.rateSeal,
+            });
+            assert.ok(rezagado.status === 200 || rezagado.status === 429,
+                `el frame rezagado se sirve o se frena, pero no cierra nada: ${rezagado.status}`);
+
+            const conn = collab.findConn(P.sello, b.site, U.jefa);
+            assert.ok(conn, 'la conexión nueva tiene que seguir viva');
+            assert.equal(conn.rateAck, 0,
+                `un acuse acuñado por otra conexión no puede anotarse aquí (rateAck=${conn.rateAck}, ` +
+                `rateNotice=${conn.rateNotice}): con eso el servidor da por reconocidos avisos que aún no ha emitido`);
+
+            // --- Y AHORA EL CLIENTE OBEDIENTE de la conexión nueva: frames SIN acuse, que es lo que
+            // trae cualquier frame que ya iba por el cable. Ninguno puede costarle la sesión.
+            const status: number[] = [];
+            for (let i = 0; i < 12; i++) {
+                const r = await post('jefa', `/collab/${P.sello}/presence`, { siteId: b.site, sel: { nodeId: `m${i}` } });
+                status.push(r.status);
+            }
+            assert.ok(status.includes(429), 'la contrapresión tiene que actuar: si no, el test no prueba nada');
+            assert.equal(status.includes(409), false,
+                `reconectar no puede acabar en expulsión de quien no ha desobedecido: ${JSON.stringify(status)}`);
+            assert.equal(b.ended(), false, 'y el stream de la conexión nueva sigue abierto');
+            assert.equal(b.events.some((e) => e.event === 'error'), false,
+                `ni un evento de error: ${JSON.stringify(b.events.filter((e) => e.event === 'error'))}`);
+        } finally {
+            a?.close();
+            b?.close();
+            collab.CONFIG.PRESENCE_BURST = burst;
+            collab.CONFIG.MAX_PRESENCE_PER_SEC = perSec;
+            await settle(250);
+        }
+    });
+
+    test('una conexión que todavía no ha mandado su `welcome` no acumula strikes', async () => {
+        // LA OTRA MITAD DE LA MISMA VENTANA. `join()` da de alta la conexión ANTES de sus `await` de
+        // BD (para cerrar el TOCTOU de los cupos) y la ruta escribe el `welcome` DESPUÉS: entre esos
+        // dos instantes la conexión ya acepta frames pero el cliente no sabe que existe. Castigar ahí
+        // es castigar por no reconocer una instrucción de alguien que aún no se ha presentado.
+        //
+        // El estado se reproduce poniendo `welcomed` a false, que es EXACTAMENTE lo que vale dentro
+        // de esa ventana; el resto de la sesión es real (router real, sockets reales). Y la segunda
+        // mitad del test es su propio control de vacuidad: con el mismo cliente y los mismos frames,
+        // en cuanto la conexión SÍ se ha presentado, la expulsión vuelve a ocurrir.
+        const burst = collab.CONFIG.PRESENCE_BURST;
+        const perSec = collab.CONFIG.MAX_PRESENCE_PER_SEC;
+        collab.CONFIG.PRESENCE_BURST = 2;
+        collab.CONFIG.MAX_PRESENCE_PER_SEC = 1;
+        let a: Session | null = null;
+        try {
+            a = await openSession('jefa', P.ventana, NONCE_A);
+            const conn = collab.findConn(P.ventana, a.site, U.jefa);
+            assert.ok(conn, 'la sesión tiene que estar viva');
+            conn.welcomed = false;   // …volvemos a la ventana alta→`welcome`
+
+            // Cliente que ACUSA con el sello bueno y no espera: la desobediencia más demostrable que
+            // existe. Aun así, mientras no nos hayamos presentado, no hay strike que valga.
+            let rateAck = 0;
+            let rateSeal: string | undefined;
+            const status: number[] = [];
+            for (let i = 0; i < 12; i++) {
+                const r = await post('jefa', `/collab/${P.ventana}/presence`, {
+                    siteId: a.site, sel: { nodeId: `n${i}` }, rateAck, rateSeal,
+                });
+                status.push(r.status);
+                if (r.status === 429) { rateAck = r.body.rateNotice; rateSeal = r.body.rateSeal; }
+            }
+            assert.ok(status.includes(429), 'la contrapresión sigue actuando ahí dentro: rechazar no es castigar');
+            assert.equal(status.includes(409), false,
+                `sin habernos presentado no se puede expulsar a nadie: ${JSON.stringify(status)}`);
+            assert.equal(conn.strikes, 0, `y no se acumula ni un strike (strikes=${conn.strikes})`);
+
+            // CONTROL DE VACUIDAD: mismo cliente, mismos frames, ya presentados ⇒ acaba fuera.
+            conn.welcomed = true;
+            let cerrado = false;
+            for (let i = 0; i < 30 && !cerrado; i++) {
+                const r = await post('jefa', `/collab/${P.ventana}/presence`, {
+                    siteId: a.site, sel: { nodeId: `z${i}` }, rateAck, rateSeal,
+                });
+                if (r.status === 429) { rateAck = r.body.rateNotice; rateSeal = r.body.rateSeal; }
+                if (r.status === 409 && r.body.code === 'collab_no_session') cerrado = true;
+            }
+            assert.ok(cerrado,
+                'presentados, la regla vuelve a valer: si esto no expulsa, la mitad de arriba no prueba nada');
         } finally {
             a?.close();
             collab.CONFIG.PRESENCE_BURST = burst;

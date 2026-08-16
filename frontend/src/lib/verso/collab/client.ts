@@ -860,12 +860,17 @@ export class VersoCollabSession {
    * devolver el último aviso que se ha visto EN EL MOMENTO DE ENVIAR. Si se serializara al programar,
    * un frame que sale tras una espera llevaría un acuse viejo y el servidor no podría distinguirlo
    * de uno en vuelo (le daríamos inmunidad gratis, que es tan malo como que nos expulse).
+   *
+   * `rateAck` y `rateSeal` salen JUNTOS y del mismo sitio: el número dice qué aviso se reconoce y el
+   * sello de qué conexión del servidor era ese número. Mandar el número sin el sello equivale a no
+   * acusar nada (el servidor lo descarta), y mandar uno de otra conexión es lo que envenenaba el
+   * contador del servidor al reconectar.
    */
   private async post(path: string, body: () => object): Promise<PostResponse> {
     const espera = this.gate.ready();
     if (espera) await espera;
     if (this.stopped) return { status: 0, body: null };
-    return this.postNow(path, { ...body(), rateAck: this.gate.ack });
+    return this.postNow(path, { ...body(), rateAck: this.gate.ack, rateSeal: this.gate.sello });
   }
 
   /** Envío SIN freno. Solo para `/leave`, que el servidor no cobra al ritmo (ver `stop()`). */

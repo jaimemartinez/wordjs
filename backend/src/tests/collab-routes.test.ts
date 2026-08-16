@@ -90,7 +90,12 @@ type Stream = {
     close: () => void;
 };
 
-function openStream(login: string, postId: number, siteId: string, opts: { origin?: string } = {}): Promise<Stream> {
+function openStream(
+    login: string,
+    postId: number,
+    siteId: string,
+    opts: { origin?: string; authorization?: string } = {},
+): Promise<Stream> {
     return new Promise((resolve, reject) => {
         const req = http.get({
             host: '127.0.0.1',
@@ -100,6 +105,10 @@ function openStream(login: string, postId: number, siteId: string, opts: { origi
                 Cookie: `wordjs_token=${tok(login)}`,
                 Origin: opts.origin === undefined ? origin : opts.origin,
                 Accept: 'text/event-stream',
+                // `authenticate` IGNORA un `Bearer null`/`Bearer undefined` y cae a la cookie. Poder
+                // mandarlo desde aquí es lo que permite comprobar que la RE-autorización elige la
+                // misma credencial que la autenticación (ver el test del bypass más abajo).
+                ...(opts.authorization ? { Authorization: opts.authorization } : {}),
             },
         }, (res: any) => {
             const events: { event: string; data: any }[] = [];
@@ -270,6 +279,43 @@ describe('autorización de sala: la capacidad de editar ESE post, y nada más', 
             await User.updateMeta(U.otra, 'token_valid_after', String(Math.floor(Date.now() / 1000) + 60));
             const err = await a.waitFor('error', 3000);
             assert.equal(err.code, 'unauthorized');
+        } finally {
+            a?.close();
+            collab.CONFIG.KEEPALIVE_MS = keepalive;
+            collab.CONFIG.REAUTH_EVERY_TICKS = every;
+            await User.deleteMeta(U.otra, 'token_valid_after');
+            await settle(300);
+        }
+    });
+
+    test('un `Authorization: Bearer null` NO puede desactivar la re-autorización del stream', async () => {
+        // BYPASS REAL (CodeQL #688, `js/user-controlled-bypass`). La re-autorización decidía QUÉ
+        // credencial verificar mirando la FORMA de la cadena: `rawToken.split('.').length === 3` ⇒
+        // "esto parece un JWT". Y `sessionToken()` la sacaba del header `Authorization` en cuanto
+        // empezaba por `Bearer `, mientras que `authenticate` IGNORA `Bearer null` y `Bearer
+        // undefined` (lo que manda un frontend que hace `localStorage.getItem('token')` sin
+        // comprobar) y cae a la cookie.
+        //
+        // O sea: con `Authorization: Bearer null` + la cookie de sesión válida, se autenticaba por
+        // cookie y aquí se recogía la cadena `"null"` — que no tiene dos puntos, así que caía en la
+        // rama "no hay JWT que verificar" y el stream sobrevivía a cerrar sesión, a cambiar la
+        // contraseña y a que caducara el token. Un valor que pone quien llama decidía si se
+        // comprobaba la revocación, y el editor revocado seguía recibiendo cada tecla de los demás.
+        const User = require('../models/User');
+        const keepalive = collab.CONFIG.KEEPALIVE_MS;
+        const every = collab.CONFIG.REAUTH_EVERY_TICKS;
+        collab.CONFIG.KEEPALIVE_MS = 40;
+        collab.CONFIG.REAUTH_EVERY_TICKS = 1;
+        let a: Session | null = null;
+        try {
+            const s = await openStream('otra', P.ajeno, NONCE_B, { authorization: 'Bearer null' });
+            const welcome = await s.waitFor('welcome');
+            a = Object.assign(s, { site: String(welcome.self.siteId), welcome });
+
+            await User.updateMeta(U.otra, 'token_valid_after', String(Math.floor(Date.now() / 1000) + 60));
+            const err = await a.waitFor('error', 3000);
+            assert.equal(err.code, 'unauthorized',
+                'la revocación tiene que cerrar el stream aunque el cliente mande un `Bearer null`');
         } finally {
             a?.close();
             collab.CONFIG.KEEPALIVE_MS = keepalive;
