@@ -4,7 +4,7 @@
  */
 
 const crypto = require('crypto');
-const { db, dbAsync } = require('../config/database');
+const { dbAsync } = require('../config/database');
 const { diffText, diffStats } = require('./text-diff');
 
 /**
