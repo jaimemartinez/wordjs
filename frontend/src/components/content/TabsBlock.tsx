@@ -4,13 +4,13 @@
  * public ContentRenderer.
  */
 import React from "react";
-import { blockVars, cx, unit } from "@/components/blocks/blockVars";
+import { bc, blockVars, cx, unit } from "@/components/blocks/blockVars";
 
 export default function TabsBlock({ tabs, color, activeColor, borderColor, borderWidth, tabPad, panelBg, panelPad, panelRadius, css }: any) {
     const [activeTab, setActiveTab] = React.useState(0);
     return (
         <div
-            className="wp-block-tabs"
+            className={bc('tabs')}
             style={{
                 ...blockVars('tabs', {
                     color,
@@ -25,21 +25,21 @@ export default function TabsBlock({ tabs, color, activeColor, borderColor, borde
                 ...css,
             }}
         >
-            <div className="wp-block-tabs__list" role="tablist">
+            <div className={bc('tabs__list')} role="tablist">
                 {tabs?.map((tab: any, index: number) => (
                     <button
                         key={index}
                         type="button"
                         role="tab"
                         aria-selected={activeTab === index}
-                        className={cx('wp-block-tabs__tab', activeTab === index && 'is-active')}
+                        className={cx(bc('tabs__tab'), activeTab === index && 'is-active')}
                         onClick={() => setActiveTab(index)}
                     >
                         {tab.label}
                     </button>
                 ))}
             </div>
-            <div className="wp-block-tabs__panel" role="tabpanel">
+            <div className={bc('tabs__panel')} role="tabpanel">
                 {tabs?.[activeTab]?.content}
             </div>
         </div>

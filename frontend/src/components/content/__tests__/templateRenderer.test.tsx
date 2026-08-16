@@ -79,16 +79,16 @@ describe('TemplateRenderer', () => {
     it('renders the element the template chose, for every tag and every container', () => {
         for (const tag of ['article', 'aside', 'div', 'footer', 'header', 'section']) {
             const html = render([{ type: 'Section', props: { tag, items: [slot] } }]);
-            expect(html.startsWith(`<${tag} class="wp-block-section"`), `${tag}: ${html.slice(0, 80)}`).toBe(true);
-            expect(html).toContain('wp-block-section__inner'); // the inner wrapper is untouched
+            expect(html.startsWith(`<${tag} class="wjs-block-section wp-block-section"`), `${tag}: ${html.slice(0, 80)}`).toBe(true);
+            expect(html).toContain('wjs-block-section__inner wp-block-section__inner'); // the inner wrapper is untouched
         }
         // The other three containers default to <div> and must honour the prop just the same.
         expect(render([{ type: 'Grid', props: { tag: 'header', columns: 2, items: [slot] } }]))
-            .toMatch(/^<header class="wp-block-grid"/);
+            .toMatch(/^<header class="wjs-block-grid wp-block-grid"/);
         expect(render([{ type: 'FlexRow', props: { tag: 'footer', items: [slot] } }]))
-            .toMatch(/^<footer class="wp-block-flex-row"/);
+            .toMatch(/^<footer class="wjs-block-flex-row wp-block-flex-row"/);
         expect(render([{ type: 'Columns', props: { tag: 'aside', columns: 2, items: [slot] } }]))
-            .toMatch(/^<aside class="wp-block-columns"/);
+            .toMatch(/^<aside class="wjs-block-columns wp-block-columns"/);
     });
 
     it('keeps each container default when no tag is given', () => {
@@ -105,12 +105,14 @@ describe('TemplateRenderer', () => {
                 items: [{ type: 'Grid', props: { columns: 2, className: 'cards', items: [slot] } }],
             },
         }]);
-        // Framework class FIRST, theme's appended. If it ever replaced instead, every .wp-block-*
-        // selector, token and stylesheet rule would come off the element at once.
-        expect(html).toContain('class="wp-block-section site-hero brand"');
-        expect(html).toContain('class="wp-block-grid cards"');
+        // Framework classes FIRST, theme's appended. If they were ever replaced instead, every
+        // .wjs-block-* / .wp-block-* selector, token and stylesheet rule would come off the element at
+        // once. BOTH framework classes are asserted, in order: WordJS's own identity leads and the
+        // historical alias follows it, which is the block-class contract (blockVars.ts's bc()).
+        expect(html).toContain('class="wjs-block-section wp-block-section site-hero brand"');
+        expect(html).toContain('class="wjs-block-grid wp-block-grid cards"');
         // …and the slot wrapper the grid layout lives on is untouched by the theme's class.
-        expect(html).toContain('class="wp-block-grid__items"');
+        expect(html).toContain('class="wjs-block-grid__items wp-block-grid__items"');
     });
 
     it('drops a malformed className rather than emitting it — these components also get _puck_data', () => {
@@ -132,8 +134,8 @@ describe('TemplateRenderer', () => {
         expect(html).not.toContain('<script');
         expect(html).not.toContain('onclick');
         expect(html).not.toContain('alert(1)');
-        // Falls back to the block's own element and its own class, alone.
-        expect(html).toMatch(/^<section class="wp-block-section"/);
+        // Falls back to the block's own element and its own classes, alone.
+        expect(html).toMatch(/^<section class="wjs-block-section wp-block-section"/);
         expect(html).toContain('id="page-content"');
     });
 

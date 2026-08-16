@@ -1168,15 +1168,17 @@ theme picks from a set WordJS owns, and it appends to a hook WordJS emits.
 { "type": "Section", "props": { "tag": "header", "className": "site-hero", "items": [] } }
 ```
 
-renders `<header class="wp-block-section site-hero">`. Two rules make that safe, and both are enforced
+renders `<header class="wjs-block-section wp-block-section site-hero">` (the block's own class plus its
+deprecated alias — [block-class-identity.md](block-class-identity.md)). Two rules make that safe, and both are enforced
 by the validator *and* re-checked inside the block itself:
 
 - **`tag` is an enum, never a string you supply.** `main` is deliberately not in it — the public layout
   already wraps every template in `<main id="main-content">`, and a nested `<main>` is an invalid
   landmark. Leaf blocks (`Spacer`, `Divider`, `PageContent`) have no wrapper worth naming and accept
   neither prop.
-- **`className` is appended, never a replacement.** The block's own `wp-block-*` class always comes
-  first, so every framework selector, `--wjs-*` token and stylesheet rule keeps its grip on the element.
+- **`className` is appended, never a replacement.** The block's own `wjs-block-*` class (and its
+  `wp-block-*` alias) always come first, so every framework selector, `--wjs-*` token and stylesheet
+  rule keeps its grip on the element.
   The shape is checked strictly and a value that misses it is **rejected, not cleaned up**: `.hero`,
   `HERO`, `hero:hover`, `hero_unit`, `hero" onclick="…`, four tokens, a tab instead of a space — all of
   them fail the template rather than becoming a quietly different class name.
@@ -1482,7 +1484,7 @@ All editor blocks have built-in overflow containment (shipped in the framework `
 
 ```css
 /* Already defined in wordjs-ui.css */
-[class*="wp-block-"] {
+[class*="wjs-block-"], [class*="wp-block-"] {
   overflow: hidden;
   max-width: 100%;
 }

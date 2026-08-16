@@ -4,7 +4,7 @@
  * the editor canvas (via versoConfig) and the public ContentRenderer.
  */
 import React from "react";
-import { blockVars, unit } from "@/components/blocks/blockVars";
+import { bc, blockVars, unit } from "@/components/blocks/blockVars";
 
 export default function SearchBarBlock({ placeholder, buttonText, searchPage, align, width, inputBg, inputBorderColor, inputRadius, buttonBg, buttonColor, buttonRadius, css }: any) {
     const [query, setQuery] = React.useState("");
@@ -29,7 +29,7 @@ export default function SearchBarBlock({ placeholder, buttonText, searchPage, al
 
     return (
         <div
-            className="wp-block-search-wrap"
+            className={bc('search-wrap')}
             style={{
                 ...blockVars('search', {
                     align,
@@ -44,15 +44,15 @@ export default function SearchBarBlock({ placeholder, buttonText, searchPage, al
                 ...css,
             }}
         >
-            <form className="wp-block-search" onSubmit={handleSubmit}>
+            <form className={bc('search')} onSubmit={handleSubmit}>
                 <input
                     type="search"
-                    className="wp-block-search__input"
+                    className={bc('search__input')}
                     placeholder={placeholder}
                     value={query}
                     onChange={(e) => setQuery(e.target.value)}
                 />
-                <button type="submit" className="wp-block-search__button">
+                <button type="submit" className={bc('search__button')}>
                     <i className="fa-solid fa-search" aria-hidden="true"></i>
                     {buttonText && <span>{buttonText}</span>}
                 </button>

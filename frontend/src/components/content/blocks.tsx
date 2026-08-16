@@ -6,11 +6,14 @@
  * drift. NO "use client", no hooks, no fetching: blocks are purely presentational; anything
  * interactive lives in its own client-island module, not here.
  *
- * Markup contract: identical class names (wp-block-*) and identical blockVars() emission — themes
- * style both surfaces the same way.
+ * Markup contract: identical class names and identical blockVars() emission — themes style both
+ * surfaces the same way. Every block class is built by `bc()` (components/blocks/blockVars.ts), the
+ * single point that emits WordJS's own identity first and the historical WordPress-compatible alias
+ * second: `class="wjs-block-heading wp-block-heading"`. Never spell a block class inline here — the
+ * suite in __tests__/blockClassEmission.test.tsx fails the build if you do.
  */
 import React from "react";
-import { blockVars, cx, unit } from "@/components/blocks/blockVars";
+import { bc, blockVars, cx, unit } from "@/components/blocks/blockVars";
 import { resolveVideoEmbedUrl, sameOriginPath, sanitizeHTML } from "@/lib/sanitize";
 import { sizesForWidth } from "@/lib/imageSrcset";
 import SelfHostedVideo from "./SelfHostedVideo";
@@ -19,7 +22,7 @@ import AudioTransport from "./AudioTransport";
 export function AudioPlayerBlock({ src, title, bg, borderColor, radius, pad, iconSize, iconBg, iconColor, css }: any) {
     return (
         <div
-            className="wp-block-audio-player"
+            className={bc('audio-player')}
             style={{
                 ...blockVars('audio', {
                     bg,
@@ -54,7 +57,7 @@ export function HeadingBlock({ title, level, elementId, color, size, weight, tra
     return (
         <Tag
             id={elementId || undefined}
-            className={`wp-block-heading heading-${tag}`}
+            className={cx(bc('heading'), `heading-${tag}`)}
             style={{
                 ...blockVars('heading', {
                     color,
@@ -103,7 +106,7 @@ export function ImageBlock({ src, alt, borderRadius, radius, shadow, width, fit,
                 }),
                 ...css,
             }}
-            className="wp-block-image"
+            className={bc('image')}
         />
     );
 }
@@ -121,20 +124,20 @@ export function DividerBlock({ type, color, width, length, gap, css }: any) {
     };
     // A gradient rule needs a painted box, a line needs a border — different elements.
     if (type === 'gradient') {
-        return <div className="wp-block-divider wp-block-divider--gradient" style={vars} />;
+        return <div className={bc('divider', 'divider--gradient')} style={vars} />;
     }
-    return <hr className={cx('wp-block-divider', `wp-block-divider--${type === 'dashed' ? 'dashed' : 'solid'}`)} style={vars} />;
+    return <hr className={cx(bc('divider'), bc(`divider--${type === 'dashed' ? 'dashed' : 'solid'}`))} style={vars} />;
 }
 
 export function ButtonBlock({ label, href, variant, align, bg, color, radius, padY, padX, size, weight, css, isEditing }: any) {
     return (
         <div
-            className="wp-block-button"
+            className={bc('button')}
             style={blockVars('button', { align })}
         >
             <a
                 href={href}
-                className={cx('wp-block-button__link', `button-variant-${variant}`)}
+                className={cx(bc('button__link'), `button-variant-${variant}`)}
                 // Swallow clicks ONLY inside the editor canvas (so selecting the block
                 // doesn't navigate). Server renders never pass isEditing, so the ternary
                 // resolves to undefined there and no handler crosses the RSC boundary.
@@ -203,20 +206,21 @@ const extraClass = (value: any): string | undefined => {
  * ContentRenderer passes a plain wrapper div with recursively rendered items (same DOM: Puck's
  * SlotRender emits `<div className>…</div>`).
  *
- * The framework's own class always comes FIRST and is never replaced — a theme appends, so every
- * `.wp-block-*` selector, token and stylesheet hook keeps working on a container the theme has named.
+ * The framework's own classes always come FIRST and are never replaced — a theme appends, so every
+ * `.wjs-block-*` / `.wp-block-*` selector, token and stylesheet hook keeps working on a container the
+ * theme has named.
  */
 export function SectionBlock({ maxWidth, pad, bg, css, slot, tag, className }: any) {
     const Tag = containerTag(tag, 'section');
     return (
         <Tag
-            className={cx('wp-block-section', extraClass(className))}
+            className={cx(bc('section'), extraClass(className))}
             style={{
                 ...blockVars('section', { pad: unit(pad), bg, 'max-width': maxWidth }),
                 ...css,
             }}
         >
-            <div className="wp-block-section__inner">
+            <div className={bc('section__inner')}>
                 {slot()}
             </div>
         </Tag>
@@ -227,7 +231,7 @@ export function GridBlock({ columns, gap, columnsTablet, columnsMobile, css, slo
     const Tag = containerTag(tag, 'div');
     return (
         <Tag
-            className={cx('wp-block-grid', extraClass(className))}
+            className={cx(bc('grid'), extraClass(className))}
             style={{
                 ...blockVars('grid', {
                     columns,
@@ -243,7 +247,7 @@ export function GridBlock({ columns, gap, columnsTablet, columnsMobile, css, slo
                 make that single wrapper the only grid item: every child stacked into track
                 1 while the other tracks sat empty. Both the editor DropZone and the public
                 SlotRender accept a className, so the layout goes where the children are. */}
-            {slot("wp-block-grid__items")}
+            {slot(bc('grid__items'))}
         </Tag>
     );
 }
@@ -252,7 +256,7 @@ export function FlexRowBlock({ justify, align, gap, wrap, direction, css, slot, 
     const Tag = containerTag(tag, 'div');
     return (
         <Tag
-            className={cx('wp-block-flex-row', extraClass(className))}
+            className={cx(bc('flex-row'), extraClass(className))}
             style={{
                 ...blockVars('flex', {
                     justify,
@@ -266,7 +270,7 @@ export function FlexRowBlock({ justify, align, gap, wrap, direction, css, slot, 
         >
             {/* Same reason as Grid: the flex row must be the slot's own wrapper, or all
                 children become one flex item and justify/align/gap do nothing. */}
-            {slot("wp-block-flex-row__items")}
+            {slot(bc('flex-row__items'))}
         </Tag>
     );
 }
@@ -284,7 +288,7 @@ export function ColumnsBlock({ distribution, columnStyles, gap, minHeight, bg, r
     return (
         <Tag
             id={elementId || undefined}
-            className={cx('wp-block-columns', extraClass(className))}
+            className={cx(bc('columns'), extraClass(className))}
             style={{
                 ...blockVars('columns', {
                     template: widths.slice(0, columnCount).map((w: number) => `${w}%`).join(' '),
@@ -303,7 +307,7 @@ export function ColumnsBlock({ distribution, columnStyles, gap, minHeight, bg, r
                 return (
                     <div
                         key={i}
-                        className="wp-block-columns__col"
+                        className={bc('columns__col')}
                         // Per-column overrides only: an untouched column emits nothing and
                         // inherits whatever the theme set for --wjs-col-*.
                         style={blockVars('col', {
@@ -328,7 +332,7 @@ export function ColumnsBlock({ distribution, columnStyles, gap, minHeight, bg, r
 export function CardBlock({ title, description, icon, theme, bg, color, borderColor, radius, pad, shadow, iconSize, iconBg, iconColor, titleSize, titleWeight, titleTransform, css }: any) {
     return (
         <div
-            className={cx('wp-block-card', `card-theme-${theme}`)}
+            className={cx(bc('card'), `card-theme-${theme}`)}
             style={{
                 ...blockVars('card', {
                     bg,
@@ -350,12 +354,12 @@ export function CardBlock({ title, description, icon, theme, bg, color, borderCo
             {icon && (
                 // Legacy class kept alongside the __ one so themes written against
                 // `wp-block-card-icon` keep matching.
-                <div className="wp-block-card__icon wp-block-card-icon">
+                <div className={cx(bc('card__icon'), 'wp-block-card-icon')}>
                     <i className={`fa-solid ${icon}`}></i>
                 </div>
             )}
-            <h3 className="wp-block-card__title wp-block-card-title">{title}</h3>
-            <p className="wp-block-card__description wp-block-card-description">{description}</p>
+            <h3 className={cx(bc('card__title'), 'wp-block-card-title')}>{title}</h3>
+            <p className={cx(bc('card__description'), 'wp-block-card-description')}>{description}</p>
         </div>
     );
 }
@@ -372,18 +376,18 @@ export function QuoteBlock({ text, cite, style, accent, size, color, quoteStyle,
     };
     if (style === "large") {
         return (
-            <figure className="wp-block-quote wp-block-quote--large" style={vars}>
-                <i className="fa-solid fa-quote-left wp-block-quote__mark" aria-hidden="true"></i>
-                <blockquote className="wp-block-quote__body">{text}</blockquote>
-                {cite && <figcaption className="wp-block-quote__cite">— {cite}</figcaption>}
+            <figure className={bc('quote', 'quote--large')} style={vars}>
+                <i className={cx('fa-solid fa-quote-left', bc('quote__mark'))} aria-hidden="true"></i>
+                <blockquote className={bc('quote__body')}>{text}</blockquote>
+                {cite && <figcaption className={bc('quote__cite')}>— {cite}</figcaption>}
             </figure>
         );
     }
     return (
-        <figure className="wp-block-quote wp-block-quote--bar" style={vars}>
-            <blockquote className="wp-block-quote__body">
+        <figure className={bc('quote', 'quote--bar')} style={vars}>
+            <blockquote className={bc('quote__body')}>
                 {text}
-                {cite && <footer className="wp-block-quote__cite">— {cite}</footer>}
+                {cite && <footer className={bc('quote__cite')}>— {cite}</footer>}
             </blockquote>
         </figure>
     );
@@ -395,11 +399,11 @@ export function TableBlock({ header, rows, striped, stripeBg, css }: any) {
     const cols = head.length;
     return (
         <div
-            className={cx('wp-block-table', striped === "true" && 'wp-block-table--striped')}
+            className={cx(bc('table'), striped === "true" && bc('table--striped'))}
             style={{ ...blockVars('table', { 'stripe-bg': stripeBg }), ...css }}
         >
             {/* Bare <table> — the WordJS UI framework styles it with theme tokens. */}
-            <table className="wp-block-table__table">
+            <table className={bc('table__table')}>
                 <thead>
                     <tr>
                         {head.map((h, i) => <th key={i}>{h}</th>)}
@@ -423,7 +427,7 @@ export function TableBlock({ header, rows, striped, stripeBg, css }: any) {
 export function IconListBlock({ items, columns, gap, iconSize, iconBg, iconColor, css }: any) {
     return (
         <div
-            className="wp-block-icon-list"
+            className={bc('icon-list')}
             style={{
                 ...blockVars('icon-list', {
                     columns: parseInt(columns || "3", 10),
@@ -436,13 +440,13 @@ export function IconListBlock({ items, columns, gap, iconSize, iconBg, iconColor
             }}
         >
             {(items || []).map((it: any, i: number) => (
-                <div key={i} className="wp-block-icon-list__item">
-                    <span className="wp-block-icon-list__icon">
+                <div key={i} className={bc('icon-list__item')}>
+                    <span className={bc('icon-list__icon')}>
                         <i className={`fa-solid ${it.icon || "fa-check"}`}></i>
                     </span>
                     <span>
-                        <span className="wp-block-icon-list__title">{it.title}</span>
-                        {it.text && <span className="wp-block-icon-list__text">{it.text}</span>}
+                        <span className={bc('icon-list__title')}>{it.title}</span>
+                        {it.text && <span className={bc('icon-list__text')}>{it.text}</span>}
                     </span>
                 </div>
             ))}
@@ -453,7 +457,7 @@ export function IconListBlock({ items, columns, gap, iconSize, iconBg, iconColor
 export function SocialLinksBlock({ items, align, size, radius, bg, color, hoverBg, gap, css, isEditing }: any) {
     return (
         <div
-            className="wp-block-social-links"
+            className={bc('social-links')}
             style={{
                 ...blockVars('social', {
                     justify: align,
@@ -474,7 +478,7 @@ export function SocialLinksBlock({ items, align, size, radius, bg, color, hoverB
                     target="_blank"
                     rel="noopener noreferrer"
                     aria-label={it.network}
-                    className="wp-block-social-links__link"
+                    className={bc('social-links__link')}
                     onClick={isEditing ? (e: React.MouseEvent) => e.preventDefault() : undefined}
                 >
                     <i className={`fa-brands fa-${it.network || "link"}`}></i>
@@ -487,7 +491,7 @@ export function SocialLinksBlock({ items, align, size, radius, bg, color, hoverB
 export function StatsBlock({ items, gap, valueSize, valueColor, labelColor, labelTransform, css }: any) {
     return (
         <div
-            className="wp-block-stats"
+            className={bc('stats')}
             style={{
                 ...blockVars('stats', {
                     columns: (items || []).length || 1,
@@ -501,9 +505,9 @@ export function StatsBlock({ items, gap, valueSize, valueColor, labelColor, labe
             }}
         >
             {(items || []).map((it: any, i: number) => (
-                <div key={i} className="wp-block-stats__item">
-                    <div className="wp-block-stats__value">{it.value}</div>
-                    <div className="wp-block-stats__label">{it.label}</div>
+                <div key={i} className={bc('stats__item')}>
+                    <div className={bc('stats__value')}>{it.value}</div>
+                    <div className={bc('stats__label')}>{it.label}</div>
                 </div>
             ))}
         </div>
@@ -515,7 +519,7 @@ export function HTMLEmbedBlock({ html, css }: any) {
         // Double-sanitized: the backend cleans the `html` meta field on save (PUCK_HTML_FIELDS)
         // and sanitizeHTML (DOMPurify allowlist, no scripts/handlers) runs again at render.
         <div
-            className="wp-block-html-embed"
+            className={bc('html-embed')}
             style={css}
             suppressHydrationWarning
             dangerouslySetInnerHTML={{ __html: sanitizeHTML(html || "") }}
@@ -526,7 +530,7 @@ export function HTMLEmbedBlock({ html, css }: any) {
 export function PricingTableBlock({ plans, accent, bg, pad, radius, gap, priceSize, highlightScale, css, isEditing }: any) {
     return (
         <div
-            className="wp-block-pricing"
+            className={bc('pricing')}
             style={{
                 ...blockVars('pricing', {
                     columns: plans?.length || 3,
@@ -544,16 +548,16 @@ export function PricingTableBlock({ plans, accent, bg, pad, radius, gap, priceSi
             {plans?.map((plan: any, index: number) => (
                 <div
                     key={index}
-                    className={cx('wp-block-pricing__plan', plan.highlighted === "true" && 'wp-block-pricing__plan--highlighted')}
+                    className={cx(bc('pricing__plan'), plan.highlighted === "true" && bc('pricing__plan--highlighted'))}
                 >
-                    <h3 className="wp-block-pricing__name">{plan.name}</h3>
-                    <div className="wp-block-pricing__price">
+                    <h3 className={bc('pricing__name')}>{plan.name}</h3>
+                    <div className={bc('pricing__price')}>
                         {plan.price}
-                        <span className="wp-block-pricing__period">{plan.period}</span>
+                        <span className={bc('pricing__period')}>{plan.period}</span>
                     </div>
-                    <ul className="wp-block-pricing__features">
+                    <ul className={bc('pricing__features')}>
                         {plan.features?.split("\n").map((feature: string, i: number) => (
-                            <li key={i} className="wp-block-pricing__feature">
+                            <li key={i} className={bc('pricing__feature')}>
                                 <i className="fa-solid fa-check"></i>
                                 {feature}
                             </li>
@@ -561,7 +565,7 @@ export function PricingTableBlock({ plans, accent, bg, pad, radius, gap, priceSi
                     </ul>
                     <a
                         href={plan.buttonLink}
-                        className="wp-block-pricing__button"
+                        className={bc('pricing__button')}
                         onClick={isEditing ? (e: React.MouseEvent) => e.preventDefault() : undefined}
                     >
                         {plan.buttonText}
@@ -575,7 +579,7 @@ export function PricingTableBlock({ plans, accent, bg, pad, radius, gap, priceSi
 export function TestimonialBlock({ quote, author, role, avatar, bg, pad, radius, quoteSize, accent, avatarSize, css }: any) {
     return (
         <div
-            className="wp-block-testimonial"
+            className={bc('testimonial')}
             style={{
                 ...blockVars('testimonial', {
                     bg,
@@ -589,21 +593,21 @@ export function TestimonialBlock({ quote, author, role, avatar, bg, pad, radius,
                 ...css,
             }}
         >
-            <div className="wp-block-testimonial__mark" aria-hidden="true">&quot;</div>
-            <p className="wp-block-testimonial__quote">{quote}</p>
-            <div className="wp-block-testimonial__person">
+            <div className={bc('testimonial__mark')} aria-hidden="true">&quot;</div>
+            <p className={bc('testimonial__quote')}>{quote}</p>
+            <div className={bc('testimonial__person')}>
                 {avatar ? (
-                    <img src={avatar} alt={author} className="wp-block-testimonial__avatar" />
+                    <img src={avatar} alt={author} className={bc('testimonial__avatar')} />
                 ) : (
                     // Initials fallback — the old default pointed at i.pravatar.cc (external
                     // request + random stranger's face on every fresh testimonial).
-                    <div aria-hidden className="wp-block-testimonial__avatar wp-block-testimonial__avatar--initials">
+                    <div aria-hidden className={bc('testimonial__avatar', 'testimonial__avatar--initials')}>
                         {(author || "?").trim().charAt(0).toUpperCase()}
                     </div>
                 )}
                 <div>
-                    <div className="wp-block-testimonial__author">{author}</div>
-                    <div className="wp-block-testimonial__role">{role}</div>
+                    <div className={bc('testimonial__author')}>{author}</div>
+                    <div className={bc('testimonial__role')}>{role}</div>
                 </div>
             </div>
         </div>
@@ -613,7 +617,7 @@ export function TestimonialBlock({ quote, author, role, avatar, bg, pad, radius,
 export function CTABannerBlock({ title, subtitle, buttonText, buttonLink, variant, bg, color, pad, radius, titleSize, buttonBg, buttonColor, css, isEditing }: any) {
     return (
         <div
-            className={cx('wp-block-cta-banner', `cta-variant-${variant || 'gradient'}`)}
+            className={cx(bc('cta-banner'), `cta-variant-${variant || 'gradient'}`)}
             style={{
                 ...blockVars('cta', {
                     bg,
@@ -627,11 +631,11 @@ export function CTABannerBlock({ title, subtitle, buttonText, buttonLink, varian
                 ...css,
             }}
         >
-            <h2 className="wp-block-cta-banner__title">{title}</h2>
-            <p className="wp-block-cta-banner__subtitle">{subtitle}</p>
+            <h2 className={bc('cta-banner__title')}>{title}</h2>
+            <p className={bc('cta-banner__subtitle')}>{subtitle}</p>
             <a
                 href={buttonLink}
-                className="wp-block-cta-banner__button"
+                className={bc('cta-banner__button')}
                 onClick={isEditing ? (e: React.MouseEvent) => e.preventDefault() : undefined}
             >
                 {buttonText}
@@ -672,8 +676,8 @@ export function VideoEmbedBlock({ url, poster, aspectRatio, radius, bg, css }: a
     // Show placeholder if no URL or the URL is not a trusted embed
     if (!url || !embedUrl) {
         return (
-            <div className="wp-block-video-embed" style={vars}>
-                <div className="wp-block-video-embed__placeholder">
+            <div className={bc('video-embed')} style={vars}>
+                <div className={bc('video-embed__placeholder')}>
                     <div>
                         <i className="fa-solid fa-video" aria-hidden="true"></i>
                         <p>{url ? "Unsupported video URL (use YouTube or Vimeo)" : "Enter a video URL"}</p>
@@ -684,7 +688,7 @@ export function VideoEmbedBlock({ url, poster, aspectRatio, radius, bg, css }: a
     }
 
     return (
-        <div className="wp-block-video-embed" style={vars}>
+        <div className={bc('video-embed')} style={vars}>
             <iframe
                 src={embedUrl}
                 sandbox="allow-scripts allow-same-origin allow-presentation"
@@ -708,7 +712,7 @@ export function HeroBlock({ title, subtitle, bgImage, overlay, overlayColor, hei
     return (
         <section
             id={elementId || undefined}
-            className="wp-block-hero"
+            className={bc('hero')}
             style={{
                 ...blockVars('hero', {
                     'bg-image': bgImage ? `url(${bgImage})` : undefined,
@@ -732,17 +736,17 @@ export function HeroBlock({ title, subtitle, bgImage, overlay, overlayColor, hei
                 ...css,
             }}
         >
-            {dim > 0 && <div className="wp-block-hero__overlay" aria-hidden="true" />}
-            <div className="wp-block-hero__inner">
-                <h1 className="wp-block-hero__title">{title}</h1>
-                {subtitle && <p className="wp-block-hero__subtitle">{subtitle}</p>}
+            {dim > 0 && <div className={bc('hero__overlay')} aria-hidden="true" />}
+            <div className={bc('hero__inner')}>
+                <h1 className={bc('hero__title')}>{title}</h1>
+                {subtitle && <p className={bc('hero__subtitle')}>{subtitle}</p>}
                 {buttons?.length > 0 && (
-                    <div className="wp-block-hero__actions">
+                    <div className={bc('hero__actions')}>
                         {buttons.map((b: any, i: number) => (
                             <a
                                 key={i}
                                 href={b.href || "#"}
-                                className={cx('wp-block-hero__button', b.variant === "outline" && 'wp-block-hero__button--outline')}
+                                className={cx(bc('hero__button'), b.variant === "outline" && bc('hero__button--outline'))}
                                 onClick={isEditing ? (e: React.MouseEvent) => e.preventDefault() : undefined}
                             >
                                 {b.label}
@@ -773,7 +777,7 @@ export function PostsGridBlock({ posts, columns, gap, bg, borderColor, radius, p
     const list: any[] = Array.isArray(posts) ? posts : [];
     if (!list.length) {
         return (
-            <div className="wp-block-posts-grid__empty" style={css}>
+            <div className={bc('posts-grid__empty')} style={css}>
                 {isEditing
                     ? "Aquí se listarán tus entradas publicadas. Aún no hay ninguna."
                     : "No hay entradas publicadas todavía."}
@@ -783,7 +787,7 @@ export function PostsGridBlock({ posts, columns, gap, bg, borderColor, radius, p
 
     return (
         <div
-            className="wp-block-posts-grid"
+            className={bc('posts-grid')}
             style={{
                 ...blockVars('posts', {
                     columns,
@@ -798,24 +802,24 @@ export function PostsGridBlock({ posts, columns, gap, bg, borderColor, radius, p
             }}
         >
             {list.map((post) => (
-                <article key={post.id} className="wp-block-posts-grid__card">
+                <article key={post.id} className={bc('posts-grid__card')}>
                     {/* The image travels as a CUSTOM PROPERTY (same bridge HeroBlock uses for its
                         bg-image): a literal inline background-image would beat the stylesheet and
                         lock the treatment, whereas the var lets wordjs-ui.css own the layering —
                         its thumb rule paints var(--wjs-posts-thumb-scrim) ABOVE this image, so a
                         theme can composite a gradient scrim without touching the content's photo. */}
                     <div
-                        className="wp-block-posts-grid__thumb"
+                        className={bc('posts-grid__thumb')}
                         aria-hidden="true"
                         style={post.image
                             ? ({ "--wjs-posts-thumb-image": `url(${post.image})` } as React.CSSProperties)
                             : undefined}
                     ></div>
-                    {post.date && <div className="wp-block-posts-grid__date">{fmtPostDate(post.date)}</div>}
-                    <h3 className="wp-block-posts-grid__title">
+                    {post.date && <div className={bc('posts-grid__date')}>{fmtPostDate(post.date)}</div>}
+                    <h3 className={bc('posts-grid__title')}>
                         <a href={post.href} onClick={isEditing ? (e: React.MouseEvent) => e.preventDefault() : undefined}>{post.title}</a>
                     </h3>
-                    {post.excerpt && <p className="wp-block-posts-grid__excerpt">{post.excerpt}</p>}
+                    {post.excerpt && <p className={bc('posts-grid__excerpt')}>{post.excerpt}</p>}
                 </article>
             ))}
         </div>
@@ -838,22 +842,22 @@ export function CategoryPostsBlock({ posts, categorySlug, layout, columns, gap, 
     };
 
     const heading = (
-        <h3 className="wp-block-category-posts__heading">
+        <h3 className={bc('category-posts__heading')}>
             <i className="fa-solid fa-folder" aria-hidden="true"></i> {categorySlug}
             {/* Say it out loud when the category matched nothing and this is really "latest
                 posts" — silently showing unrelated entries under a category name is worse
                 than showing none. */}
             {isEditing && resolvedFiltered === false && (
-                <span className="wp-block-category-posts__note"> · sin entradas en esta categoría, mostrando las últimas</span>
+                <span className={bc('category-posts__note')}> · sin entradas en esta categoría, mostrando las últimas</span>
             )}
         </h3>
     );
 
     if (!list.length) {
         return (
-            <div className="wp-block-category-posts" style={vars}>
+            <div className={bc('category-posts')} style={vars}>
                 {heading}
-                <p className="wp-block-category-posts__empty">
+                <p className={bc('category-posts__empty')}>
                     {isEditing ? "Aún no hay entradas publicadas para mostrar aquí." : "No hay entradas en esta categoría."}
                 </p>
             </div>
@@ -862,13 +866,13 @@ export function CategoryPostsBlock({ posts, categorySlug, layout, columns, gap, 
 
     if (layout === "grid") {
         return (
-            <div className="wp-block-category-posts wp-block-category-posts--grid" style={vars}>
+            <div className={bc('category-posts', 'category-posts--grid')} style={vars}>
                 {list.map((post) => (
-                    <div key={post.id} className="wp-block-category-posts__card">
-                        <h4 className="wp-block-category-posts__card-title">
+                    <div key={post.id} className={bc('category-posts__card')}>
+                        <h4 className={bc('category-posts__card-title')}>
                             <a href={post.href} onClick={isEditing ? (e: React.MouseEvent) => e.preventDefault() : undefined}>{post.title}</a>
                         </h4>
-                        {post.excerpt && <p className="wp-block-category-posts__excerpt">{post.excerpt}</p>}
+                        {post.excerpt && <p className={bc('category-posts__excerpt')}>{post.excerpt}</p>}
                     </div>
                 ))}
             </div>
@@ -876,14 +880,14 @@ export function CategoryPostsBlock({ posts, categorySlug, layout, columns, gap, 
     }
 
     return (
-        <div className="wp-block-category-posts" style={vars}>
+        <div className={bc('category-posts')} style={vars}>
             {heading}
-            <ul className="wp-block-category-posts__list">
+            <ul className={bc('category-posts__list')}>
                 {list.map((post) => (
-                    <li key={post.id} className="wp-block-category-posts__item">
+                    <li key={post.id} className={bc('category-posts__item')}>
                         <a
                             href={post.href}
-                            className="wp-block-category-posts__link"
+                            className={bc('category-posts__link')}
                             onClick={isEditing ? (e: React.MouseEvent) => e.preventDefault() : undefined}
                         >
                             {post.title}
@@ -898,7 +902,7 @@ export function CategoryPostsBlock({ posts, categorySlug, layout, columns, gap, 
 export function SpacerBlock({ height, css }: any) {
     return (
         <div
-            className="wp-block-spacer"
+            className={bc('spacer')}
             style={{ ...blockVars('spacer', { height: unit(height) }), ...css }}
         />
     );
@@ -908,7 +912,7 @@ export function TextBlock({ content, elementId, color, size, leading, measure, c
     return (
         <div
             id={elementId || undefined}
-            className="wp-block-text prose max-w-none"
+            className={cx(bc('text'), 'prose max-w-none')}
             style={{
                 ...blockVars('text', {
                     color,

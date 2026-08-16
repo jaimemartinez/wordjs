@@ -5,6 +5,11 @@ HTML element and ships Bootstrap-like components and utilities. A theme customiz
 primarily by declaring **design tokens** (`--wjs-*` CSS custom properties) in its own stylesheet,
 plus its own CSS for whatever the tokens don't parameterize (see *What tokens cover today* below).
 
+> **Block classes:** every block element carries WordJS's own class first and a deprecated
+> WordPress-compatible alias second — `class="wjs-block-heading wp-block-heading"`. Write new CSS
+> against **`.wjs-block-*`**; the alias is kept for one major version so themes and content that
+> predate the change keep working. See **[block-class-identity.md](block-class-identity.md)**.
+
 > **Declarative alternative — and what every first-party marketplace theme uses:** instead of
 > hand-writing the token block, a theme declares `seeds` / `tokens` / `styles` in its `theme.json`
 > and WordJS compiles the `style.css` block (`node backend/cli/wordjs.js build theme <slug>`). All
@@ -170,7 +175,7 @@ weight, transform, letter-spacing, color, hover color, hover decoration, transit
 
 A token block like the one above re-skins everything **the framework owns**: the auto-styled HTML
 elements, the components and utilities below, `.wjs-content` long-form rules, and the visual-editor
-`.wp-block-*` blocks. The public React chrome (header, footer, blog roll) reads the core tokens
+`.wjs-block-*` blocks. The public React chrome (header, footer, blog roll) reads the core tokens
 too. Tokens are now the normal way to build a theme — **44 of the 64** marketplace themes are
 tokens-only, their whole `style.css` being a `fonts.css` `@import` plus a compiled `:root` block:
 
@@ -198,7 +203,8 @@ whenever this document and the CSS disagree. Current counts: **754 tokens**, **1
 - `flags` — `alias` (the 21 do-not-override remaps), `editor-internal` (the 22 `--wjs-r-*`),
   `chrome-phantom` (the 4 React-chrome tokens); omitted when empty.
 
-An `elements` registry (33 entries) maps each `.wp-block-*` class seen in `wordjs-ui.css` — plus
+An `elements` registry (33 entries) maps each block class seen in `wordjs-ui.css` — recorded under its
+historical `.wp-block-*` spelling, see [block-class-identity.md](block-class-identity.md) — plus
 chrome entries for `header` (`.wjs-header`), `logo` (`.wjs-header-logo`), `nav`
 (`.wjs-header-nav`) and `footer` — to its platform selector and observed structured child
 selectors.
@@ -262,7 +268,7 @@ on top of it:
   oversized desktop headings shrink on phones while a smaller theme scale still wins.
 - **Content containment (every width)** — wide tables and `pre` blocks scroll inside their own
   container, and long unbreakable strings (URLs, tokens) wrap, in both `.wjs-content` and the visual
-  editor's `.puck-content` / `.wp-block-*` (both class names are part of the public HTML contract and
+  editor's `.puck-content` / `.wjs-block-*` (both class names are part of the public HTML contract and
   are deliberately unchanged by the editor rename), so author content never forces body-level horizontal
   scroll.
 - **Device visibility** — the editor's per-block "hide on device" renders as `.wjs-hide-mobile` /

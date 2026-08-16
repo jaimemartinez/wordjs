@@ -157,7 +157,7 @@ body {
    outside its box: the hero's overlay, the testimonial's oversized quote glyph, the featured
    pricing plan's scale(1.02). The contract sets overflow/position on the specific blocks that
    need them (hero, video, accordion), which is the only place that decision belongs. */
-[class*="wp-block-"],
+[class*="wjs-block-"], [class*="wp-block-"],
 [class*="puck-"],
 .puck-content>div,
 .puck-content section,
@@ -180,9 +180,9 @@ iframe {
 /* Grid and flex children: `min-width: 0` is what actually stops a long unbreakable string from
    blowing the track out. `overflow: hidden` was cargo-culted alongside it and clipped hover
    lifts and scaled cards, so it is gone. */
-[class*="wp-block-grid"]>*,
-[class*="wp-block-flex"]>*,
-[class*="wp-block-columns"]>*,
+[class*="wjs-block-grid"]>*, [class*="wp-block-grid"]>*,
+[class*="wjs-block-flex"]>*, [class*="wp-block-flex"]>*,
+[class*="wjs-block-columns"]>*, [class*="wp-block-columns"]>*,
 [class*="columns-grid"]>* {
     min-width: 0;
 }

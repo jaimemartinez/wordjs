@@ -17,7 +17,18 @@
  * winning over the bare-element rules here, so in practice this styles raw
  * content HTML and provides opt-in classes everywhere it's loaded.
  *
+ * BLOCK CLASSES COME IN PAIRS: `.wjs-block-x, .wp-block-x { … }`. The first is
+ * WordJS's own name and the SOURCE — write new rules against it. The second is a
+ * DEPRECATED WordPress-compatible alias, listed in the same grouped selector so
+ * that themes written before the change, content already saved in a database and
+ * anything a WXR import brings over from WordPress keep their styling. The markup
+ * emits both classes on every element (frontend components/blocks/blockVars.ts,
+ * `bc()`), so the two alternatives always match the same elements. When you add a
+ * block rule here, list BOTH — and when the alias is removed in the next major
+ * version, delete the `.wp-block-*` alternative from each group.
+ *
  * Token reference + class reference: documentation/theming.md
+ * Block-class contract + removal plan: documentation/block-class-identity.md
  * ========================================================================== */
 
 /* ------------------------------------------------------------------ TOKENS - */
@@ -1014,7 +1025,7 @@ a.list-group-item:hover, .list-group-item-action:hover { background-color: var(-
 .wjs-content table, .puck-content table { display: block; max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
 .wjs-content pre, .puck-content pre { max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
 .wjs-content, .widget-area { overflow-wrap: break-word; }
-.puck-content, .wp-block-text, .wp-block-heading, .wp-block-card { overflow-wrap: break-word; word-break: break-word; }
+.puck-content, .wjs-block-text, .wp-block-text, .wjs-block-heading, .wp-block-heading, .wjs-block-card, .wp-block-card { overflow-wrap: break-word; word-break: break-word; }
 /* Media inside visual-editor content can never exceed its container. */
 .puck-content img, .puck-content video, .puck-content iframe { max-width: 100%; height: auto; }
 
@@ -1165,7 +1176,7 @@ a.list-group-item:hover, .list-group-item-action:hover { background-color: var(-
 }
 
 /* ------------------------------------------------------------------- HEADING - */
-.wp-block-heading {
+.wjs-block-heading, .wp-block-heading {
   margin: 0 0 var(--wjs-heading-mb, 0.5em);
   font-family: var(--wjs-heading-family, var(--wjs-font-family-heading));
   line-height: var(--wjs-heading-leading, var(--wjs-heading-line-height));
@@ -1177,33 +1188,33 @@ a.list-group-item:hover, .list-group-item-action:hover { background-color: var(-
 }
 /* Per level, so an unstyled H2 keeps the theme's H2 size instead of collapsing to 1em. The
  * block's own `--wjs-heading-size` wins when the author set one; otherwise the theme's --wjs-hN. */
-h1.wp-block-heading {
+h1.wjs-block-heading, h1.wp-block-heading {
   color: var(--wjs-heading-color, var(--wjs-h1-color, var(--wjs-color-heading)));
   line-height: var(--wjs-heading-leading, var(--wjs-h1-leading, var(--wjs-heading-line-height)));
   font-size: var(--wjs-heading-size, var(--wjs-h1));
   font-weight: var(--wjs-heading-font-weight, var(--wjs-h1-weight));
   letter-spacing: var(--wjs-heading-tracking, var(--wjs-h1-tracking));
 }
-h2.wp-block-heading {
+h2.wjs-block-heading, h2.wp-block-heading {
   color: var(--wjs-heading-color, var(--wjs-h2-color, var(--wjs-color-heading)));
   line-height: var(--wjs-heading-leading, var(--wjs-h2-leading, var(--wjs-heading-line-height)));
   font-size: var(--wjs-heading-size, var(--wjs-h2));
   font-weight: var(--wjs-heading-font-weight, var(--wjs-h2-weight));
   letter-spacing: var(--wjs-heading-tracking, var(--wjs-h2-tracking));
 }
-h3.wp-block-heading {
+h3.wjs-block-heading, h3.wp-block-heading {
   color: var(--wjs-heading-color, var(--wjs-h3-color, var(--wjs-color-heading)));
   line-height: var(--wjs-heading-leading, var(--wjs-h3-leading, var(--wjs-heading-line-height)));
   font-size: var(--wjs-heading-size, var(--wjs-h3));
   font-weight: var(--wjs-heading-font-weight, var(--wjs-h3-weight));
   letter-spacing: var(--wjs-heading-tracking, var(--wjs-h3-tracking));
 }
-h4.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h4)); font-weight: var(--wjs-heading-font-weight, var(--wjs-h4-weight)); letter-spacing: var(--wjs-heading-tracking, normal); }
-h5.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h5)); font-weight: var(--wjs-heading-font-weight, var(--wjs-h5-weight)); letter-spacing: var(--wjs-heading-tracking, normal); }
-h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-weight: var(--wjs-heading-font-weight, var(--wjs-h6-weight)); letter-spacing: var(--wjs-heading-tracking, normal); }
+h4.wjs-block-heading, h4.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h4)); font-weight: var(--wjs-heading-font-weight, var(--wjs-h4-weight)); letter-spacing: var(--wjs-heading-tracking, normal); }
+h5.wjs-block-heading, h5.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h5)); font-weight: var(--wjs-heading-font-weight, var(--wjs-h5-weight)); letter-spacing: var(--wjs-heading-tracking, normal); }
+h6.wjs-block-heading, h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-weight: var(--wjs-heading-font-weight, var(--wjs-h6-weight)); letter-spacing: var(--wjs-heading-tracking, normal); }
 
 /* ---------------------------------------------------------------------- TEXT - */
-.wp-block-text {
+.wjs-block-text, .wp-block-text {
   color: var(--wjs-text-color, var(--wjs-color-text-main));
   font-size: var(--wjs-text-size, var(--wjs-font-size-base));
   line-height: var(--wjs-text-leading, var(--wjs-line-height-base));
@@ -1211,11 +1222,11 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   max-width: var(--wjs-text-measure, none);
 }
 /* The block owns its outer rhythm; the rich-text's first/last child must not add to it. */
-.wp-block-text > :first-child { margin-top: 0; }
-.wp-block-text > :last-child { margin-bottom: 0; }
+.wjs-block-text > :first-child, .wp-block-text > :first-child { margin-top: 0; }
+.wjs-block-text > :last-child, .wp-block-text > :last-child { margin-bottom: 0; }
 
 /* --------------------------------------------------------------------- IMAGE - */
-.wp-block-image {
+.wjs-block-image, .wp-block-image {
   display: block;
   width: var(--wjs-image-width, auto);
   max-width: 100%;
@@ -1226,7 +1237,7 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
 }
 
 /* ---------------------------------------------------------------------- CARD - */
-.wp-block-card {
+.wjs-block-card, .wp-block-card {
   display: flex;
   flex-direction: column;
   padding: var(--wjs-card-pad, var(--wjs-xl));
@@ -1238,13 +1249,13 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
 }
 /* Lift on hover is opt-in: `none` by default so a card that should sit still, sits still. */
-.wp-block-card:hover {
+.wjs-block-card:hover, .wp-block-card:hover {
   background: var(--wjs-card-hover-bg, var(--wjs-card-bg, var(--wjs-bg-surface)));
   transform: var(--wjs-card-hover-transform, none);
   border-color: var(--wjs-card-hover-border-color, var(--wjs-card-border-color, var(--wjs-border-subtle)));
   box-shadow: var(--wjs-card-hover-shadow, var(--wjs-card-shadow, var(--wjs-inset-highlight)));
 }
-.wp-block-card__icon {
+.wjs-block-card__icon, .wp-block-card__icon {
   display: grid;
   place-items: center;
   flex: none;
@@ -1257,7 +1268,7 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   /* Glyph scales with the tile so one field resizes both */
   font-size: var(--wjs-card-icon-glyph, calc(var(--wjs-card-icon-size, 48px) * 0.45));
 }
-.wp-block-card__title {
+.wjs-block-card__title, .wp-block-card__title {
   margin: 0 0 var(--wjs-sm);
   font-family: var(--wjs-font-family-heading);
   font-size: var(--wjs-card-title-size, var(--wjs-h4));
@@ -1267,7 +1278,7 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   text-transform: var(--wjs-card-title-transform, none);
   color: var(--wjs-card-title-color, inherit);
 }
-.wp-block-card__description {
+.wjs-block-card__description, .wp-block-card__description {
   margin: 0;
   font-family: var(--wjs-card-desc-family, inherit);
   font-size: var(--wjs-card-desc-size, inherit);
@@ -1276,7 +1287,7 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
 }
 /* Variants set the block's OWN tokens, so an inline author choice still outranks them, and a
  * theme retunes a variant through its `--wjs-card-<variant>-*` seam rather than a new rule. */
-.wp-block-card.card-theme-dark {
+.wjs-block-card.card-theme-dark, .wp-block-card.card-theme-dark {
   --wjs-card-bg: var(--wjs-card-dark-bg, var(--wjs-color-dark));
   --wjs-card-color: var(--wjs-card-dark-color, var(--wjs-color-on-dark));
   /* The variant must also re-point the TITLE token: themes set `--wjs-card-title-color` to their
@@ -1287,7 +1298,7 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   --wjs-card-icon-bg: var(--wjs-card-dark-icon-bg, rgba(255, 255, 255, 0.1));
   --wjs-card-icon-color: var(--wjs-card-dark-icon-color, #fff);
 }
-.wp-block-card.card-theme-accent {
+.wjs-block-card.card-theme-accent, .wp-block-card.card-theme-accent {
   --wjs-card-bg: var(--wjs-card-accent-bg, var(--wjs-color-accent));
   --wjs-card-color: var(--wjs-card-accent-color, var(--wjs-color-on-accent));
   --wjs-card-title-color: var(--wjs-card-accent-title-color, var(--wjs-card-accent-color, var(--wjs-color-on-accent)));
@@ -1298,7 +1309,7 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
 }
 
 /* ------------------------------------------------------------------- DIVIDER - */
-.wp-block-divider {
+.wjs-block-divider, .wp-block-divider {
   /* The vertical rhythm lives in tokens so a theme owns the page's spacing, not the block. */
   margin: var(--wjs-divider-mt, var(--wjs-xl)) auto var(--wjs-divider-mb, var(--wjs-xl));
   width: var(--wjs-divider-length, 100%);
@@ -1306,10 +1317,10 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   border: 0;
   opacity: 1;
 }
-.wp-block-divider--solid { border-top: var(--wjs-divider-width, 1px) solid var(--wjs-divider-color, var(--wjs-border-subtle)); }
-.wp-block-divider--dashed { border-top: var(--wjs-divider-width, 1px) dashed var(--wjs-divider-color, var(--wjs-border-subtle)); }
+.wjs-block-divider--solid, .wp-block-divider--solid { border-top: var(--wjs-divider-width, 1px) solid var(--wjs-divider-color, var(--wjs-border-subtle)); }
+.wjs-block-divider--dashed, .wp-block-divider--dashed { border-top: var(--wjs-divider-width, 1px) dashed var(--wjs-divider-color, var(--wjs-border-subtle)); }
 /* A gradient needs a painted box, not a border — hence the separate element in the renderer. */
-.wp-block-divider--gradient {
+.wjs-block-divider--gradient, .wp-block-divider--gradient {
   height: var(--wjs-divider-width, 2px);
   background: var(--wjs-divider-gradient, linear-gradient(90deg, transparent, var(--wjs-divider-color, var(--wjs-color-primary)), transparent));
 }
@@ -1317,8 +1328,8 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
 /* -------------------------------------------------------------------- BUTTON - */
 /* `align` is text-align on the wrapper: `justify-content: left|right` is legal Box-Alignment but
  * flexbox ignores those two keywords in most engines, which silently broke left/right. */
-.wp-block-button { text-align: var(--wjs-button-align, left); }
-.wp-block-button__link {
+.wjs-block-button, .wp-block-button { text-align: var(--wjs-button-align, left); }
+.wjs-block-button__link, .wp-block-button__link {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1340,45 +1351,45 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   transition: transform 0.15s ease, filter 0.2s ease, background 0.2s ease, color 0.2s ease;
 }
 /* `a:hover` in the reboot recolours links; restate the token so a button keeps its own colour. */
-.wp-block-button__link:hover {
+.wjs-block-button__link:hover, .wp-block-button__link:hover {
   background: var(--wjs-button-hover-bg, var(--wjs-button-bg, var(--wjs-color-primary)));
   color: var(--wjs-button-hover-color, var(--wjs-button-color, var(--wjs-color-on-primary)));
   box-shadow: var(--wjs-button-hover-shadow, var(--wjs-button-shadow, var(--wjs-shadow-2)));
   filter: brightness(1.08);
   transform: var(--wjs-button-hover-transform, scale(1.03));
 }
-.wp-block-button__link:active { transform: var(--wjs-button-active-transform, scale(0.96)); }
+.wjs-block-button__link:active, .wp-block-button__link:active { transform: var(--wjs-button-active-transform, scale(0.96)); }
 /* Variants get DEDICATED seams first: without them a theme's primary `--wjs-button-bg/color`
  * bleeds into every variant (secondary ≡ primary; outline inherits on-primary text, invisible
  * on light canvases). The old chain stays as fallback so pre-seam themes keep their look. */
-.wp-block-button__link.button-variant-secondary {
+.wjs-block-button__link.button-variant-secondary, .wp-block-button__link.button-variant-secondary {
   background: var(--wjs-button-secondary-bg, var(--wjs-button-bg, var(--wjs-color-secondary)));
   color: var(--wjs-button-secondary-color, var(--wjs-button-color, var(--wjs-color-on-secondary)));
 }
-.wp-block-button__link.button-variant-secondary:hover { color: var(--wjs-button-secondary-color, var(--wjs-button-color, var(--wjs-color-on-secondary))); }
-.wp-block-button__link.button-variant-outline {
+.wjs-block-button__link.button-variant-secondary:hover, .wp-block-button__link.button-variant-secondary:hover { color: var(--wjs-button-secondary-color, var(--wjs-button-color, var(--wjs-color-on-secondary))); }
+.wjs-block-button__link.button-variant-outline, .wp-block-button__link.button-variant-outline {
   background: var(--wjs-button-outline-bg, transparent);
   border-color: var(--wjs-button-outline-border-color, var(--wjs-button-border-color, var(--wjs-outline)));
   color: var(--wjs-button-outline-color, var(--wjs-color-text-main));
   box-shadow: none;
 }
-.wp-block-button__link.button-variant-outline:hover {
+.wjs-block-button__link.button-variant-outline:hover, .wp-block-button__link.button-variant-outline:hover {
   background: var(--wjs-button-outline-hover-bg, rgba(127, 127, 127, 0.12));
   color: var(--wjs-button-outline-color, var(--wjs-color-text-main));
   filter: none;
 }
 
 /* -------------------------------------------------------------------- SPACER - */
-.wp-block-spacer { width: 100%; height: var(--wjs-spacer-height, var(--wjs-lg)); }
+.wjs-block-spacer, .wp-block-spacer { width: 100%; height: var(--wjs-spacer-height, var(--wjs-lg)); }
 
 /* ------------------------------------------------------------------- SECTION - */
-.wp-block-section {
+.wjs-block-section, .wp-block-section {
   width: 100%;
   padding: var(--wjs-section-pad, var(--wjs-2xl) var(--wjs-lg));
   background: var(--wjs-section-bg, transparent);
   color: var(--wjs-section-color, inherit);
 }
-.wp-block-section__inner {
+.wjs-block-section__inner, .wp-block-section__inner {
   width: 100%;
   max-width: var(--wjs-section-max-width, var(--wjs-container-max));
   margin-inline: auto;
@@ -1388,17 +1399,17 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
 /* The outer element only carries tokens. The GRID lives on "__items", the wrapper Puck puts around
  * a slot's children: declared on the outer element instead, that single wrapper became the only
  * grid item, so every child stacked into track 1 and the remaining tracks rendered empty. */
-.wp-block-grid__items {
+.wjs-block-grid__items, .wp-block-grid__items {
   display: grid;
   gap: var(--wjs-grid-gap, var(--wjs-md));
   grid-template-columns: repeat(var(--wjs-grid-columns, 3), minmax(0, 1fr));
 }
-.wp-block-grid__items > * { min-width: 0; }
-@media (max-width: 1023.98px) { .wp-block-grid__items { grid-template-columns: repeat(var(--wjs-grid-columns-tablet, 2), minmax(0, 1fr)); } }
-@media (max-width: 767.98px) { .wp-block-grid__items { grid-template-columns: repeat(var(--wjs-grid-columns-mobile, 1), minmax(0, 1fr)); } }
+.wjs-block-grid__items > *, .wp-block-grid__items > * { min-width: 0; }
+@media (max-width: 1023.98px) { .wjs-block-grid__items, .wp-block-grid__items { grid-template-columns: repeat(var(--wjs-grid-columns-tablet, 2), minmax(0, 1fr)); } }
+@media (max-width: 767.98px) { .wjs-block-grid__items, .wp-block-grid__items { grid-template-columns: repeat(var(--wjs-grid-columns-mobile, 1), minmax(0, 1fr)); } }
 
 /* ------------------------------------------------------------------ FLEX ROW - */
-.wp-block-flex-row__items {
+.wjs-block-flex-row__items, .wp-block-flex-row__items {
   display: flex;
   flex-direction: var(--wjs-flex-direction, row);
   justify-content: var(--wjs-flex-justify, flex-start);
@@ -1406,10 +1417,10 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   gap: var(--wjs-flex-gap, var(--wjs-md));
   flex-wrap: var(--wjs-flex-wrap, wrap);
 }
-.wp-block-flex-row__items > * { min-width: 0; }
+.wjs-block-flex-row__items > *, .wp-block-flex-row__items > * { min-width: 0; }
 
 /* ------------------------------------------------------------------- COLUMNS - */
-.wp-block-columns {
+.wjs-block-columns, .wp-block-columns {
   display: grid;
   width: 100%;
   align-items: stretch;
@@ -1420,7 +1431,7 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   border-radius: var(--wjs-columns-radius, 0);
 }
 /* Each column carries its own `--wjs-col-*` set inline (the editor's per-column style panel). */
-.wp-block-columns__col {
+.wjs-block-columns__col, .wp-block-columns__col {
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -1430,14 +1441,14 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   border: var(--wjs-col-border-width, 0) solid var(--wjs-col-border-color, var(--wjs-border-subtle));
   border-radius: var(--wjs-col-radius, 0);
 }
-@media (max-width: 767.98px) { .wp-block-columns { grid-template-columns: 1fr; } }
+@media (max-width: 767.98px) { .wjs-block-columns, .wp-block-columns { grid-template-columns: 1fr; } }
 
 /* ----------------------------------------------------------------- ACCORDION - */
 /* Two shapes, one contract. DEFAULT: a single joined panel, items divided by a hairline. The other
  * is a STACK OF CARDS — each item its own surface with its own border and radius, separated by a
  * gap. A theme picks the second by giving the container a flex direction + gap, zeroing the
  * separator, and giving the item a box. Every base below is what it already rendered. */
-.wp-block-accordion {
+.wjs-block-accordion, .wp-block-accordion {
   display: var(--wjs-accordion-display, block);
   flex-direction: column;
   gap: var(--wjs-accordion-item-gap, 0);
@@ -1449,27 +1460,27 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   border-radius: var(--wjs-accordion-radius, var(--wjs-radius-lg));
   box-shadow: var(--wjs-accordion-shadow, none);
 }
-.wp-block-accordion__item {
+.wjs-block-accordion__item, .wp-block-accordion__item {
   overflow: hidden;
   background: var(--wjs-accordion-item-bg, transparent);
   border: var(--wjs-accordion-item-border-width, 0) solid var(--wjs-accordion-item-border-color, var(--wjs-border-subtle));
   border-radius: var(--wjs-accordion-item-radius, 0);
   transition: border-color var(--wjs-transition), background var(--wjs-transition), box-shadow var(--wjs-transition);
 }
-.wp-block-accordion__item:hover {
+.wjs-block-accordion__item:hover, .wp-block-accordion__item:hover {
   border-color: var(--wjs-accordion-item-hover-border-color, var(--wjs-accordion-item-border-color, var(--wjs-border-subtle)));
 }
-.wp-block-accordion__item.is-open {
+.wjs-block-accordion__item.is-open, .wp-block-accordion__item.is-open {
   background: var(--wjs-accordion-active-bg, var(--wjs-accordion-item-bg, transparent));
   border-color: var(--wjs-accordion-active-border-color, var(--wjs-accordion-item-border-color, var(--wjs-border-subtle)));
   box-shadow: var(--wjs-accordion-active-shadow, none);
 }
 /* The divider between items. Chained through `--wjs-accordion-border-width` so the 12 themes that
  * only ever set THAT keep their hairline; a card stack sets the separator to 0 on its own. */
-.wp-block-accordion__item + .wp-block-accordion__item {
+.wjs-block-accordion__item + .wjs-block-accordion__item, .wp-block-accordion__item + .wp-block-accordion__item {
   border-top: var(--wjs-accordion-separator-width, var(--wjs-accordion-border-width, 1px)) solid var(--wjs-accordion-separator-color, var(--wjs-accordion-border-color, var(--wjs-border-subtle)));
 }
-.wp-block-accordion__header {
+.wjs-block-accordion__header, .wp-block-accordion__header {
   display: flex;
   width: 100%;
   align-items: center;
@@ -1491,11 +1502,11 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   cursor: pointer;
   transition: background var(--wjs-transition), color var(--wjs-transition);
 }
-.wp-block-accordion__header:hover { background: var(--wjs-accordion-header-hover-bg, var(--wjs-bg-muted)); }
-.wp-block-accordion__icon { flex: none; color: var(--wjs-accordion-icon-color, inherit); transition: transform 0.2s ease; }
-.wp-block-accordion__item.is-open .wp-block-accordion__icon { transform: var(--wjs-accordion-icon-open-transform, rotate(180deg)); }
-.wp-block-accordion__item.is-open .wp-block-accordion__header { color: var(--wjs-accordion-active-color, var(--wjs-color-primary)); }
-.wp-block-accordion__panel {
+.wjs-block-accordion__header:hover, .wp-block-accordion__header:hover { background: var(--wjs-accordion-header-hover-bg, var(--wjs-bg-muted)); }
+.wjs-block-accordion__icon, .wp-block-accordion__icon { flex: none; color: var(--wjs-accordion-icon-color, inherit); transition: transform 0.2s ease; }
+.wjs-block-accordion__item.is-open .wjs-block-accordion__icon, .wp-block-accordion__item.is-open .wp-block-accordion__icon { transform: var(--wjs-accordion-icon-open-transform, rotate(180deg)); }
+.wjs-block-accordion__item.is-open .wjs-block-accordion__header, .wp-block-accordion__item.is-open .wp-block-accordion__header { color: var(--wjs-accordion-active-color, var(--wjs-color-primary)); }
+.wjs-block-accordion__panel, .wp-block-accordion__panel {
   padding: var(--wjs-accordion-panel-pad, var(--wjs-md) var(--wjs-lg));
   font-family: var(--wjs-accordion-panel-family, inherit);
   background: var(--wjs-accordion-panel-bg, var(--wjs-bg-muted));
@@ -1503,10 +1514,10 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
 }
 
 /* ---------------------------------------------------------------------- TABS - */
-.wp-block-tabs { display: block; }
+.wjs-block-tabs, .wp-block-tabs { display: block; }
 /* The list is either an underlined rule (default) or a filled "pill" bar — a theme picks by
  * setting `--wjs-tabs-list-bg`/`-radius`/`-pad` and zeroing the border width. */
-.wp-block-tabs__list {
+.wjs-block-tabs__list, .wp-block-tabs__list {
   display: flex;
   flex-wrap: wrap;
   /* Tabs are separated by a GAP in the reference, not by horizontal tab padding — the two look the
@@ -1518,7 +1529,7 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   border-bottom: var(--wjs-tabs-list-border-width, var(--wjs-tabs-border-width, 2px)) solid var(--wjs-tabs-list-border-color, var(--wjs-tabs-border-color, var(--wjs-border-subtle)));
   border-radius: var(--wjs-tabs-list-radius, 0);
 }
-.wp-block-tabs__tab {
+.wjs-block-tabs__tab, .wp-block-tabs__tab {
   padding: var(--wjs-tabs-tab-pad, 12px 24px);
   /* Pull the tab's own underline over the list's, so the active tab "cuts" the rule. */
   margin-bottom: calc(var(--wjs-tabs-border-width, 2px) * -1);
@@ -1535,8 +1546,8 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   cursor: pointer;
   transition: color var(--wjs-transition), border-color var(--wjs-transition), background var(--wjs-transition);
 }
-.wp-block-tabs__tab:hover { color: var(--wjs-tabs-active-color, var(--wjs-color-primary)); }
-.wp-block-tabs__tab.is-active {
+.wjs-block-tabs__tab:hover, .wp-block-tabs__tab:hover { color: var(--wjs-tabs-active-color, var(--wjs-color-primary)); }
+.wjs-block-tabs__tab.is-active, .wp-block-tabs__tab.is-active {
   font-weight: var(--wjs-tabs-active-weight, 700);
   color: var(--wjs-tabs-active-color, var(--wjs-color-primary));
   background: var(--wjs-tabs-active-bg, transparent);
@@ -1544,7 +1555,7 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   border-bottom-width: var(--wjs-tabs-active-border-width, var(--wjs-tabs-border-width, 2px));
   border-bottom-color: var(--wjs-tabs-active-border-color, var(--wjs-tabs-active-color, var(--wjs-color-primary)));
 }
-.wp-block-tabs__panel {
+.wjs-block-tabs__panel, .wp-block-tabs__panel {
   padding: var(--wjs-tabs-panel-pad, var(--wjs-lg));
   background: var(--wjs-tabs-panel-bg, var(--wjs-bg-surface));
   border-top: var(--wjs-tabs-panel-border-width, 0) solid var(--wjs-tabs-panel-border-color, var(--wjs-border-subtle));
@@ -1553,7 +1564,7 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
 }
 
 /* --------------------------------------------------------------- VIDEO EMBED - */
-.wp-block-video-embed {
+.wjs-block-video-embed, .wp-block-video-embed {
   position: relative;
   width: 100%;
   height: 0;
@@ -1564,9 +1575,9 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   border-radius: var(--wjs-video-radius, var(--wjs-radius-lg));
   box-shadow: var(--wjs-video-shadow, none);
 }
-.wp-block-video-embed iframe,
-.wp-block-video-embed video { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
-.wp-block-video-embed__placeholder {
+.wjs-block-video-embed iframe, .wp-block-video-embed iframe,
+.wjs-block-video-embed video, .wp-block-video-embed video { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+.wjs-block-video-embed__placeholder, .wp-block-video-embed__placeholder {
   position: absolute;
   inset: 0;
   display: grid;
@@ -1574,11 +1585,11 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   text-align: center;
   color: var(--wjs-video-placeholder-color, var(--wjs-color-text-muted));
 }
-.wp-block-video-embed__placeholder i { font-size: 2rem; margin-bottom: var(--wjs-sm); }
+.wjs-block-video-embed__placeholder i, .wp-block-video-embed__placeholder i { font-size: 2rem; margin-bottom: var(--wjs-sm); }
 
 /* The poster cover: a real <button> filling the frame, so the whole poster is one keyboard-
  * reachable target rather than a div with a click handler. It unmounts once playback starts. */
-.wp-block-video-embed__cover {
+.wjs-block-video-embed__cover, .wp-block-video-embed__cover {
   position: absolute;
   inset: 0;
   display: grid;
@@ -1588,16 +1599,16 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   border: 0;
   cursor: pointer;
 }
-.wp-block-video-embed__scrim {
+.wjs-block-video-embed__scrim, .wp-block-video-embed__scrim {
   position: absolute;
   inset: 0;
   background: var(--wjs-video-scrim, rgba(0, 0, 0, 0.4));
   transition: background var(--wjs-transition);
 }
-.wp-block-video-embed__cover:hover .wp-block-video-embed__scrim {
+.wjs-block-video-embed__cover:hover .wjs-block-video-embed__scrim, .wp-block-video-embed__cover:hover .wp-block-video-embed__scrim {
   background: var(--wjs-video-scrim-hover, var(--wjs-video-scrim, rgba(0, 0, 0, 0.25)));
 }
-.wp-block-video-embed__play {
+.wjs-block-video-embed__play, .wp-block-video-embed__play {
   position: relative;
   display: grid;
   place-items: center;
@@ -1611,13 +1622,13 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   transition: transform 0.15s ease, background var(--wjs-transition);
 }
 /* Nudge right: a play triangle is optically off-centre in a circle when centred geometrically. */
-.wp-block-video-embed__play i { transform: var(--wjs-video-play-glyph-transform, translateX(6%)); }
-.wp-block-video-embed__cover:hover .wp-block-video-embed__play { transform: var(--wjs-video-play-hover-transform, scale(1.06)); }
-.wp-block-video-embed__cover:focus-visible {
+.wjs-block-video-embed__play i, .wp-block-video-embed__play i { transform: var(--wjs-video-play-glyph-transform, translateX(6%)); }
+.wjs-block-video-embed__cover:hover .wjs-block-video-embed__play, .wp-block-video-embed__cover:hover .wp-block-video-embed__play { transform: var(--wjs-video-play-hover-transform, scale(1.06)); }
+.wjs-block-video-embed__cover:focus-visible, .wp-block-video-embed__cover:focus-visible {
   outline: var(--wjs-block-focus-outline, 2px solid var(--wjs-color-primary));
   outline-offset: calc(var(--wjs-block-focus-offset, 2px) * -1);
 }
-.wp-block-video-embed__chip {
+.wjs-block-video-embed__chip, .wp-block-video-embed__chip {
   position: absolute;
   inset-inline-end: var(--wjs-md);
   bottom: var(--wjs-md);
@@ -1628,13 +1639,13 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   background: var(--wjs-video-chip-bg, rgba(0, 0, 0, 0.65));
   color: var(--wjs-video-chip-color, #fff);
 }
-.wp-block-video-embed__placeholder p { margin: 0; }
+.wjs-block-video-embed__placeholder p, .wp-block-video-embed__placeholder p { margin: 0; }
 
 /* --------------------------------------------------------------- AUDIO PLAYER - */
 /* The transport is OURS, not the browser's. `<audio controls>` paints chrome no stylesheet can
  * reach, so the element is kept as the media engine only (see .__engine) and every visible part
  * below is real markup behind --wjs-audio-* tokens. */
-.wp-block-audio-player {
+.wjs-block-audio-player, .wp-block-audio-player {
   display: flex;
   align-items: center;
   gap: var(--wjs-md);
@@ -1647,7 +1658,7 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
 
 /* Play / pause. Sized off the same token the old icon tile used, so a theme that already set
  * --wjs-audio-icon-* keeps its geometry. */
-.wp-block-audio-player__button {
+.wjs-block-audio-player__button, .wp-block-audio-player__button {
   display: grid;
   place-items: center;
   flex: none;
@@ -1663,10 +1674,10 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   cursor: pointer;
   transition: transform 0.15s ease, filter 0.2s ease;
 }
-.wp-block-audio-player__button:hover { transform: var(--wjs-audio-icon-hover-transform, scale(1.05)); filter: brightness(1.06); }
-.wp-block-audio-player__button:active { transform: var(--wjs-audio-icon-active-transform, scale(0.96)); }
+.wjs-block-audio-player__button:hover, .wp-block-audio-player__button:hover { transform: var(--wjs-audio-icon-hover-transform, scale(1.05)); filter: brightness(1.06); }
+.wjs-block-audio-player__button:active, .wp-block-audio-player__button:active { transform: var(--wjs-audio-icon-active-transform, scale(0.96)); }
 
-.wp-block-audio-player__body { flex: 1; min-width: 0; }
+.wjs-block-audio-player__body, .wp-block-audio-player__body { flex: 1; min-width: 0; }
 
 /* Marquee: the label is rendered twice and the pair slides exactly half its width, so the loop has
  * no seam. Motion is opt-in per theme AND disabled outright under prefers-reduced-motion. */
@@ -1674,24 +1685,24 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
  * the overflow); the track INSIDE it is as wide as its content and is the thing that moves. Doing
  * both jobs on one element makes it grow past the player, and then there is nothing left to clip
  * against — the title spills out of the pill. */
-.wp-block-audio-player__marquee {
+.wjs-block-audio-player__marquee, .wp-block-audio-player__marquee {
   width: 100%;
   margin-bottom: var(--wjs-xs);
   overflow: hidden;
 }
-.wp-block-audio-player__track {
+.wjs-block-audio-player__track, .wp-block-audio-player__track {
   display: flex;
   gap: var(--wjs-audio-marquee-gap, var(--wjs-xl));
   min-width: 0;
 }
-.wp-block-audio-player__track.is-scrolling { width: max-content; }
+.wjs-block-audio-player__track.is-scrolling, .wp-block-audio-player__track.is-scrolling { width: max-content; }
 /* Not scrolling: the single label must ellipsize rather than push the column wider. */
-.wp-block-audio-player__track:not(.is-scrolling) .wp-block-audio-player__title {
+.wjs-block-audio-player__track:not(.is-scrolling) .wjs-block-audio-player__title, .wp-block-audio-player__track:not(.is-scrolling) .wp-block-audio-player__title {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.wp-block-audio-player__title {
+.wjs-block-audio-player__title, .wp-block-audio-player__title {
   flex: none;
   font-family: var(--wjs-audio-title-family, inherit);
   font-size: var(--wjs-audio-title-size, inherit);
@@ -1702,7 +1713,7 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   color: var(--wjs-audio-title-color, var(--wjs-color-text-main));
 }
 @media screen and (prefers-reduced-motion: no-preference) {
-  .wp-block-audio-player__track.is-scrolling {
+  .wjs-block-audio-player__track.is-scrolling, .wp-block-audio-player__track.is-scrolling {
     animation: wjs-audio-marquee var(--wjs-audio-marquee-duration, 0s) linear infinite;
   }
 }
@@ -1714,7 +1725,7 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
 /* Scrubber. A real range input: keyboard seeking and screen-reader semantics come for free, which
  * is exactly what hand-rolled slider divs throw away. The fill is a gradient stop driven by the
  * --wjs-audio-progress-pct the component writes on each frame. */
-.wp-block-audio-player__scrub {
+.wjs-block-audio-player__scrub, .wp-block-audio-player__scrub {
   -webkit-appearance: none;
   appearance: none;
   display: block;
@@ -1724,7 +1735,7 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   background: transparent;
   cursor: pointer;
 }
-.wp-block-audio-player__scrub::-webkit-slider-runnable-track {
+.wjs-block-audio-player__scrub::-webkit-slider-runnable-track, .wp-block-audio-player__scrub::-webkit-slider-runnable-track {
   height: var(--wjs-audio-track-height, 4px);
   border-radius: var(--wjs-audio-track-radius, 999px);
   background: linear-gradient(
@@ -1734,7 +1745,7 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   );
   box-shadow: var(--wjs-audio-progress-shadow, none);
 }
-.wp-block-audio-player__scrub::-moz-range-track {
+.wjs-block-audio-player__scrub::-moz-range-track, .wp-block-audio-player__scrub::-moz-range-track {
   height: var(--wjs-audio-track-height, 4px);
   border-radius: var(--wjs-audio-track-radius, 999px);
   background: linear-gradient(
@@ -1746,7 +1757,7 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
 }
 /* The handle is hidden by default (the reference shows a bare bar) but stays a real, focusable
  * target; it appears on hover and whenever the control has keyboard focus. */
-.wp-block-audio-player__scrub::-webkit-slider-thumb {
+.wjs-block-audio-player__scrub::-webkit-slider-thumb, .wp-block-audio-player__scrub::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
   width: var(--wjs-audio-thumb-size, 12px);
@@ -1758,7 +1769,7 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   opacity: var(--wjs-audio-thumb-opacity, 0);
   transition: opacity var(--wjs-transition);
 }
-.wp-block-audio-player__scrub::-moz-range-thumb {
+.wjs-block-audio-player__scrub::-moz-range-thumb, .wp-block-audio-player__scrub::-moz-range-thumb {
   width: var(--wjs-audio-thumb-size, 12px);
   height: var(--wjs-audio-thumb-size, 12px);
   border: 0;
@@ -1767,16 +1778,16 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   opacity: var(--wjs-audio-thumb-opacity, 0);
   transition: opacity var(--wjs-transition);
 }
-.wp-block-audio-player__scrub:hover::-webkit-slider-thumb,
-.wp-block-audio-player__scrub:focus-visible::-webkit-slider-thumb { opacity: 1; }
-.wp-block-audio-player__scrub:hover::-moz-range-thumb,
-.wp-block-audio-player__scrub:focus-visible::-moz-range-thumb { opacity: 1; }
-.wp-block-audio-player__scrub:focus-visible {
+.wjs-block-audio-player__scrub:hover::-webkit-slider-thumb, .wp-block-audio-player__scrub:hover::-webkit-slider-thumb,
+.wjs-block-audio-player__scrub:focus-visible::-webkit-slider-thumb, .wp-block-audio-player__scrub:focus-visible::-webkit-slider-thumb { opacity: 1; }
+.wjs-block-audio-player__scrub:hover::-moz-range-thumb, .wp-block-audio-player__scrub:hover::-moz-range-thumb,
+.wjs-block-audio-player__scrub:focus-visible::-moz-range-thumb, .wp-block-audio-player__scrub:focus-visible::-moz-range-thumb { opacity: 1; }
+.wjs-block-audio-player__scrub:focus-visible, .wp-block-audio-player__scrub:focus-visible {
   outline: var(--wjs-block-focus-outline, 2px solid var(--wjs-color-primary));
   outline-offset: var(--wjs-block-focus-offset, 4px);
 }
 
-.wp-block-audio-player__times {
+.wjs-block-audio-player__times, .wp-block-audio-player__times {
   display: flex;
   justify-content: space-between;
   margin-top: var(--wjs-xs);
@@ -1787,16 +1798,16 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
 
 /* The engine. Present for the media API and as the no-JS download link; never shown, because its
  * own controls are the thing this block exists to replace. */
-.wp-block-audio-player__engine { display: none; }
+.wjs-block-audio-player__engine, .wp-block-audio-player__engine { display: none; }
 
 /* ------------------------------------------------------------- PRICING TABLE - */
-.wp-block-pricing {
+.wjs-block-pricing, .wp-block-pricing {
   display: grid;
   align-items: stretch;
   gap: var(--wjs-pricing-gap, var(--wjs-lg));
   grid-template-columns: repeat(var(--wjs-pricing-columns, 3), minmax(0, 1fr));
 }
-.wp-block-pricing__plan {
+.wjs-block-pricing__plan, .wp-block-pricing__plan {
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -1807,12 +1818,12 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   box-shadow: var(--wjs-pricing-shadow, var(--wjs-inset-highlight));
   transition: transform 0.3s ease, box-shadow 0.3s ease, border-color 0.3s ease;
 }
-.wp-block-pricing__plan:hover {
+.wjs-block-pricing__plan:hover, .wp-block-pricing__plan:hover {
   border-color: var(--wjs-pricing-hover-border-color, var(--wjs-pricing-border-color, var(--wjs-border-subtle)));
   transform: var(--wjs-pricing-hover-transform, translateY(-8px));
   box-shadow: var(--wjs-pricing-hover-shadow, var(--wjs-pricing-shadow, var(--wjs-inset-highlight)));
 }
-.wp-block-pricing__plan--highlighted {
+.wjs-block-pricing__plan--highlighted, .wp-block-pricing__plan--highlighted {
   background: var(--wjs-pricing-highlight-bg, var(--wjs-bg-surface-raised));
   border: var(--wjs-pricing-highlight-border-width, 2px) solid var(--wjs-pricing-highlight-border-color, var(--wjs-pricing-accent, var(--wjs-color-primary)));
   box-shadow: var(--wjs-pricing-highlight-shadow, var(--wjs-shadow-3));
@@ -1827,11 +1838,11 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   --wjs-pricing-price-color: var(--wjs-pricing-highlight-price-color, var(--wjs-pricing-highlight-color, var(--wjs-color-heading)));
   --wjs-pricing-period-color: var(--wjs-pricing-highlight-period-color, var(--wjs-pricing-highlight-color, var(--wjs-color-text-muted)));
 }
-.wp-block-pricing__plan--highlighted:hover {
+.wjs-block-pricing__plan--highlighted:hover, .wp-block-pricing__plan--highlighted:hover {
   transform: var(--wjs-pricing-highlight-hover-transform, scale(var(--wjs-pricing-highlight-scale, 1.02)) translateY(-6px));
   box-shadow: var(--wjs-pricing-highlight-hover-shadow, var(--wjs-pricing-highlight-shadow, var(--wjs-shadow-3)));
 }
-.wp-block-pricing__name {
+.wjs-block-pricing__name, .wp-block-pricing__name {
   margin: 0 0 var(--wjs-sm);
   font-family: var(--wjs-pricing-name-family, inherit);
   font-size: var(--wjs-pricing-name-size, var(--wjs-h5));
@@ -1841,7 +1852,7 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   letter-spacing: var(--wjs-pricing-name-tracking, normal);
   color: var(--wjs-pricing-name-color, var(--wjs-color-text-main));
 }
-.wp-block-pricing__price {
+.wjs-block-pricing__price, .wp-block-pricing__price {
   margin-bottom: var(--wjs-lg);
   font-family: var(--wjs-pricing-price-family, var(--wjs-font-family-heading));
   font-size: var(--wjs-pricing-price-size, 40px);
@@ -1850,13 +1861,13 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   letter-spacing: var(--wjs-pricing-price-tracking, var(--wjs-h1-tracking));
   color: var(--wjs-pricing-price-color, var(--wjs-color-heading));
 }
-.wp-block-pricing__period {
+.wjs-block-pricing__period, .wp-block-pricing__period {
   margin-inline-start: var(--wjs-xs);
   font-size: var(--wjs-pricing-period-size, var(--wjs-small));
   font-weight: 500;
   color: var(--wjs-pricing-period-color, var(--wjs-color-text-muted));
 }
-.wp-block-pricing__features {
+.wjs-block-pricing__features, .wp-block-pricing__features {
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -1865,7 +1876,7 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   padding: 0;
   list-style: none;
 }
-.wp-block-pricing__feature {
+.wjs-block-pricing__feature, .wp-block-pricing__feature {
   display: flex;
   align-items: center;
   gap: var(--wjs-md);
@@ -1873,8 +1884,8 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   font-size: var(--wjs-pricing-feature-size, var(--wjs-small));
   color: var(--wjs-pricing-feature-color, var(--wjs-color-text-muted));
 }
-.wp-block-pricing__feature i { flex: none; font-size: var(--wjs-pricing-feature-icon-size, 18px); color: var(--wjs-pricing-accent, var(--wjs-color-primary)); }
-.wp-block-pricing__button {
+.wjs-block-pricing__feature i, .wp-block-pricing__feature i { flex: none; font-size: var(--wjs-pricing-feature-icon-size, 18px); color: var(--wjs-pricing-accent, var(--wjs-color-primary)); }
+.wjs-block-pricing__button, .wp-block-pricing__button {
   display: block;
   margin-top: auto;
   padding: var(--wjs-pricing-button-pad, 12px 20px);
@@ -1887,31 +1898,31 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   border-radius: var(--wjs-pricing-button-radius, var(--wjs-radius));
   transition: filter 0.2s ease, transform 0.15s ease;
 }
-.wp-block-pricing__button:hover {
+.wjs-block-pricing__button:hover, .wp-block-pricing__button:hover {
   background: var(--wjs-pricing-button-hover-bg, var(--wjs-pricing-button-bg, var(--wjs-surface-highest)));
   color: var(--wjs-pricing-button-color, var(--wjs-color-primary));
   filter: brightness(1.08);
 }
 /* The highlighted plan's CTA is the page's primary action — it takes the accent fill. */
-.wp-block-pricing__plan--highlighted .wp-block-pricing__button {
+.wjs-block-pricing__plan--highlighted .wjs-block-pricing__button, .wp-block-pricing__plan--highlighted .wp-block-pricing__button {
   background: var(--wjs-pricing-highlight-button-bg, var(--wjs-pricing-accent, var(--wjs-color-primary)));
   color: var(--wjs-pricing-button-on-accent, var(--wjs-color-on-primary));
   border-color: transparent;
   box-shadow: var(--wjs-pricing-highlight-button-shadow, none);
 }
-.wp-block-pricing__plan--highlighted .wp-block-pricing__button:hover {
+.wjs-block-pricing__plan--highlighted .wjs-block-pricing__button:hover, .wp-block-pricing__plan--highlighted .wp-block-pricing__button:hover {
   background: var(--wjs-pricing-highlight-button-bg, var(--wjs-pricing-accent, var(--wjs-color-primary)));
   color: var(--wjs-pricing-button-on-accent, var(--wjs-color-on-primary));
 }
-.wp-block-pricing__plan--highlighted .wp-block-pricing__button:hover { color: var(--wjs-pricing-button-on-accent, var(--wjs-color-on-primary)); }
+.wjs-block-pricing__plan--highlighted .wjs-block-pricing__button:hover, .wp-block-pricing__plan--highlighted .wp-block-pricing__button:hover { color: var(--wjs-pricing-button-on-accent, var(--wjs-color-on-primary)); }
 @media (max-width: 767.98px) {
-  .wp-block-pricing { grid-template-columns: 1fr; }
-  .wp-block-pricing__plan--highlighted { transform: var(--wjs-pricing-highlight-mobile-transform, none); }
-  .wp-block-pricing__plan--highlighted:hover { transform: var(--wjs-pricing-highlight-mobile-hover-transform, translateY(-6px)); }
+  .wjs-block-pricing, .wp-block-pricing { grid-template-columns: 1fr; }
+  .wjs-block-pricing__plan--highlighted, .wp-block-pricing__plan--highlighted { transform: var(--wjs-pricing-highlight-mobile-transform, none); }
+  .wjs-block-pricing__plan--highlighted:hover, .wp-block-pricing__plan--highlighted:hover { transform: var(--wjs-pricing-highlight-mobile-hover-transform, translateY(-6px)); }
 }
 
 /* --------------------------------------------------------------- TESTIMONIAL - */
-.wp-block-testimonial {
+.wjs-block-testimonial, .wp-block-testimonial {
   position: relative;
   padding: var(--wjs-testimonial-pad, var(--wjs-xl));
   font-family: var(--wjs-testimonial-family, inherit);
@@ -1920,7 +1931,7 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   border-radius: var(--wjs-testimonial-radius, var(--wjs-radius-lg));
   box-shadow: var(--wjs-testimonial-shadow, var(--wjs-shadow-2));
 }
-.wp-block-testimonial__mark {
+.wjs-block-testimonial__mark, .wp-block-testimonial__mark {
   position: absolute;
   top: 12px;
   inset-inline-end: 24px;
@@ -1932,7 +1943,7 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   opacity: var(--wjs-testimonial-mark-opacity, 0.1);
   pointer-events: none;
 }
-.wp-block-testimonial__quote {
+.wjs-block-testimonial__quote, .wp-block-testimonial__quote {
   position: relative;
   z-index: 1;
   margin: 0 0 var(--wjs-xl);
@@ -1942,15 +1953,15 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   line-height: 1.6;
   color: var(--wjs-testimonial-quote-color, var(--wjs-color-text-main));
 }
-.wp-block-testimonial__person { display: flex; align-items: center; gap: var(--wjs-md); }
-.wp-block-testimonial__avatar {
+.wjs-block-testimonial__person, .wp-block-testimonial__person { display: flex; align-items: center; gap: var(--wjs-md); }
+.wjs-block-testimonial__avatar, .wp-block-testimonial__avatar {
   flex: none;
   width: var(--wjs-testimonial-avatar-size, 48px);
   height: var(--wjs-testimonial-avatar-size, 48px);
   border-radius: var(--wjs-testimonial-avatar-radius, 50%);
   object-fit: cover;
 }
-.wp-block-testimonial__avatar--initials {
+.wjs-block-testimonial__avatar--initials, .wp-block-testimonial__avatar--initials {
   display: grid;
   place-items: center;
   background: var(--wjs-testimonial-avatar-bg, var(--wjs-color-primary));
@@ -1958,12 +1969,12 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   font-weight: var(--wjs-testimonial-initials-weight, 700);
   font-size: calc(var(--wjs-testimonial-avatar-size, 48px) * 0.4);
 }
-.wp-block-testimonial__author {
+.wjs-block-testimonial__author, .wp-block-testimonial__author {
   font-family: var(--wjs-testimonial-author-family, inherit);
   font-weight: var(--wjs-testimonial-author-weight, 700);
   color: var(--wjs-testimonial-author-color, var(--wjs-color-text-main));
 }
-.wp-block-testimonial__role {
+.wjs-block-testimonial__role, .wp-block-testimonial__role {
   font-family: var(--wjs-testimonial-role-family, inherit);
   font-size: var(--wjs-testimonial-role-size, var(--wjs-small));
   font-weight: var(--wjs-testimonial-role-weight, inherit);
@@ -1973,7 +1984,7 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
 }
 
 /* ---------------------------------------------------------------- CTA BANNER - */
-.wp-block-cta-banner {
+.wjs-block-cta-banner, .wp-block-cta-banner {
   /* Layout is a token too: `block` gives the centred stack, `flex` turns the same three children
    * into a banner row (the flex properties below are inert while display is block). */
   display: var(--wjs-cta-display, block);
@@ -1994,19 +2005,19 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
 }
 /* Each variant carries its OWN legible text colour: one shared `--wjs-cta-color` cannot be right
  * on both an accent fill and a near-black one. The author's inline value still outranks all three. */
-.wp-block-cta-banner.cta-variant-primary {
+.wjs-block-cta-banner.cta-variant-primary, .wp-block-cta-banner.cta-variant-primary {
   --wjs-cta-variant-bg: var(--wjs-cta-primary-bg, var(--wjs-color-primary));
   color: var(--wjs-cta-color, var(--wjs-cta-primary-color, var(--wjs-color-on-primary)));
 }
-.wp-block-cta-banner.cta-variant-dark {
+.wjs-block-cta-banner.cta-variant-dark, .wp-block-cta-banner.cta-variant-dark {
   --wjs-cta-variant-bg: var(--wjs-cta-dark-bg, var(--wjs-color-dark));
   color: var(--wjs-cta-color, var(--wjs-cta-dark-color, var(--wjs-color-on-dark)));
 }
-.wp-block-cta-banner.cta-variant-gradient {
+.wjs-block-cta-banner.cta-variant-gradient, .wp-block-cta-banner.cta-variant-gradient {
   --wjs-cta-variant-bg: var(--wjs-cta-gradient, linear-gradient(135deg, var(--wjs-color-primary), var(--wjs-color-accent)));
   color: var(--wjs-cta-color, var(--wjs-cta-gradient-color, var(--wjs-color-on-primary)));
 }
-.wp-block-cta-banner__title {
+.wjs-block-cta-banner__title, .wp-block-cta-banner__title {
   order: var(--wjs-cta-title-order, 0);
   flex: var(--wjs-cta-title-flex, 0 1 auto);
   margin: var(--wjs-cta-title-margin, 0 0 var(--wjs-md));
@@ -2020,7 +2031,7 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   text-transform: var(--wjs-cta-title-transform, none);
   color: var(--wjs-cta-title-color, inherit);
 }
-.wp-block-cta-banner__subtitle {
+.wjs-block-cta-banner__subtitle, .wp-block-cta-banner__subtitle {
   order: var(--wjs-cta-subtitle-order, 0);
   flex: var(--wjs-cta-subtitle-flex, 0 1 auto);
   margin: var(--wjs-cta-subtitle-margin, 0 auto var(--wjs-xl));
@@ -2029,7 +2040,7 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   color: inherit;
   opacity: var(--wjs-cta-subtitle-opacity, 0.85);
 }
-.wp-block-cta-banner__button {
+.wjs-block-cta-banner__button, .wp-block-cta-banner__button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -2052,7 +2063,7 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   box-shadow: var(--wjs-cta-button-shadow, var(--wjs-shadow-2));
   transition: transform 0.15s ease, filter 0.2s ease;
 }
-.wp-block-cta-banner__button:hover {
+.wjs-block-cta-banner__button:hover, .wp-block-cta-banner__button:hover {
   background: var(--wjs-cta-button-hover-bg, var(--wjs-cta-button-bg, var(--wjs-bg-surface)));
   color: var(--wjs-cta-button-hover-color, var(--wjs-cta-button-color, var(--wjs-color-primary)));
   box-shadow: var(--wjs-cta-button-hover-shadow, var(--wjs-cta-button-shadow, var(--wjs-shadow-2)));
@@ -2061,12 +2072,12 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
 }
 
 /* ---------------------------------------------------------------- POSTS GRID - */
-.wp-block-posts-grid {
+.wjs-block-posts-grid, .wp-block-posts-grid {
   display: grid;
   gap: var(--wjs-posts-gap, var(--wjs-lg));
   grid-template-columns: repeat(var(--wjs-posts-columns, 3), minmax(0, 1fr));
 }
-.wp-block-posts-grid__card {
+.wjs-block-posts-grid__card, .wp-block-posts-grid__card {
   padding: var(--wjs-posts-pad, var(--wjs-lg));
   font-family: var(--wjs-posts-family, inherit);
   background: var(--wjs-posts-bg, var(--wjs-bg-surface));
@@ -2075,12 +2086,12 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   box-shadow: var(--wjs-posts-shadow, none);
   transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
 }
-.wp-block-posts-grid__card:hover {
+.wjs-block-posts-grid__card:hover, .wp-block-posts-grid__card:hover {
   transform: var(--wjs-posts-hover-transform, none);
   border-color: var(--wjs-posts-hover-border-color, var(--wjs-posts-border-color, var(--wjs-border-subtle)));
   box-shadow: var(--wjs-posts-hover-shadow, var(--wjs-posts-shadow, none));
 }
-.wp-block-posts-grid__thumb {
+.wjs-block-posts-grid__thumb, .wp-block-posts-grid__thumb {
   height: var(--wjs-posts-thumb-height, 160px);
   margin-bottom: var(--wjs-md);
   border-radius: var(--wjs-posts-thumb-radius, var(--wjs-radius));
@@ -2096,26 +2107,26 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   background-size: cover;
   background-position: center;
 }
-.wp-block-posts-grid__date {
+.wjs-block-posts-grid__date, .wp-block-posts-grid__date {
   margin-bottom: var(--wjs-sm);
   font-size: var(--wjs-label);
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--wjs-posts-date-color, var(--wjs-color-text-muted));
 }
-.wp-block-posts-grid__title {
+.wjs-block-posts-grid__title, .wp-block-posts-grid__title {
   margin: 0 0 var(--wjs-sm);
   font-size: var(--wjs-posts-title-size, var(--wjs-h6));
   font-weight: var(--wjs-posts-title-weight, 600);
   color: var(--wjs-posts-title-color, var(--wjs-color-text-main));
 }
-.wp-block-posts-grid__excerpt { margin: 0; font-size: var(--wjs-small); color: var(--wjs-posts-excerpt-color, var(--wjs-color-text-muted)); }
-@media (max-width: 767.98px) { .wp-block-posts-grid { grid-template-columns: 1fr; } }
+.wjs-block-posts-grid__excerpt, .wp-block-posts-grid__excerpt { margin: 0; font-size: var(--wjs-small); color: var(--wjs-posts-excerpt-color, var(--wjs-color-text-muted)); }
+@media (max-width: 767.98px) { .wjs-block-posts-grid, .wp-block-posts-grid { grid-template-columns: 1fr; } }
 
 /* Honest empty states. These blocks list real published entries; when there are none they say so
  * instead of inventing rows — which is exactly what they used to do. */
-.wp-block-posts-grid__empty,
-.wp-block-category-posts__empty {
+.wjs-block-posts-grid__empty, .wp-block-posts-grid__empty,
+.wjs-block-category-posts__empty, .wp-block-category-posts__empty {
   margin: 0;
   padding: var(--wjs-lg);
   text-align: center;
@@ -2125,7 +2136,7 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   border: var(--wjs-posts-border-width, 1px) dashed var(--wjs-posts-border-color, var(--wjs-border-subtle));
   border-radius: var(--wjs-posts-radius, var(--wjs-radius-lg));
 }
-.wp-block-category-posts__note {
+.wjs-block-category-posts__note, .wp-block-category-posts__note {
   font-size: var(--wjs-label);
   font-weight: 400;
   text-transform: none;
@@ -2133,13 +2144,13 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   color: var(--wjs-color-text-muted);
 }
 /* Post titles are links now that they point at real entries. */
-.wp-block-posts-grid__title a,
-.wp-block-category-posts__card-title a { color: inherit; text-decoration: none; }
-.wp-block-posts-grid__title a:hover,
-.wp-block-category-posts__card-title a:hover { color: var(--wjs-catposts-link-hover-color, var(--wjs-color-primary)); }
+.wjs-block-posts-grid__title a, .wp-block-posts-grid__title a,
+.wjs-block-category-posts__card-title a, .wp-block-category-posts__card-title a { color: inherit; text-decoration: none; }
+.wjs-block-posts-grid__title a:hover, .wp-block-posts-grid__title a:hover,
+.wjs-block-category-posts__card-title a:hover, .wp-block-category-posts__card-title a:hover { color: var(--wjs-catposts-link-hover-color, var(--wjs-color-primary)); }
 
 /* ------------------------------------------------------------ CATEGORY POSTS - */
-.wp-block-category-posts__heading {
+.wjs-block-category-posts__heading, .wp-block-category-posts__heading {
   margin: 0 0 var(--wjs-lg);
   padding-bottom: var(--wjs-catposts-heading-pad, 0);
   font-family: var(--wjs-catposts-heading-family, inherit);
@@ -2151,46 +2162,46 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   border-bottom: var(--wjs-catposts-heading-border-width, 0) solid var(--wjs-catposts-heading-border-color, var(--wjs-border-subtle));
   color: var(--wjs-catposts-heading-color, var(--wjs-color-text-main));
 }
-.wp-block-category-posts__list { margin: 0; padding: 0; list-style: none; }
-.wp-block-category-posts__item {
+.wjs-block-category-posts__list, .wp-block-category-posts__list { margin: 0; padding: 0; list-style: none; }
+.wjs-block-category-posts__item, .wp-block-category-posts__item {
   margin: 0;
   padding: var(--wjs-catposts-item-pad, var(--wjs-md) 0);
   border-bottom: var(--wjs-catposts-border-width, 1px) solid var(--wjs-catposts-border-color, var(--wjs-border-subtle));
 }
-.wp-block-category-posts__item:last-child { border-bottom: 0; }
-.wp-block-category-posts__link {
+.wjs-block-category-posts__item:last-child, .wp-block-category-posts__item:last-child { border-bottom: 0; }
+.wjs-block-category-posts__link, .wp-block-category-posts__link {
   font-family: var(--wjs-catposts-link-family, inherit);
   font-size: var(--wjs-catposts-link-size, inherit);
   font-weight: var(--wjs-catposts-link-weight, 500);
   color: var(--wjs-catposts-link-color, var(--wjs-color-text-main));
   text-decoration: none;
 }
-.wp-block-category-posts__link:hover { color: var(--wjs-catposts-link-hover-color, var(--wjs-color-primary)); }
-.wp-block-category-posts--grid {
+.wjs-block-category-posts__link:hover, .wp-block-category-posts__link:hover { color: var(--wjs-catposts-link-hover-color, var(--wjs-color-primary)); }
+.wjs-block-category-posts--grid, .wp-block-category-posts--grid {
   display: grid;
   gap: var(--wjs-catposts-gap, var(--wjs-lg));
   grid-template-columns: repeat(var(--wjs-catposts-columns, 2), minmax(0, 1fr));
 }
-.wp-block-category-posts__card {
+.wjs-block-category-posts__card, .wp-block-category-posts__card {
   padding: var(--wjs-catposts-pad, var(--wjs-lg));
   background: var(--wjs-catposts-bg, var(--wjs-bg-surface));
   border: var(--wjs-catposts-border-width, 1px) solid var(--wjs-catposts-border-color, var(--wjs-border-subtle));
   border-radius: var(--wjs-catposts-radius, var(--wjs-radius-lg));
   box-shadow: var(--wjs-catposts-shadow, none);
 }
-.wp-block-category-posts__card-title { margin: 0 0 var(--wjs-sm); font-weight: 600; color: var(--wjs-catposts-heading-color, var(--wjs-color-text-main)); }
-.wp-block-category-posts__excerpt { margin: 0; font-size: var(--wjs-small); color: var(--wjs-color-text-muted); }
-@media (max-width: 767.98px) { .wp-block-category-posts--grid { grid-template-columns: 1fr; } }
+.wjs-block-category-posts__card-title, .wp-block-category-posts__card-title { margin: 0 0 var(--wjs-sm); font-weight: 600; color: var(--wjs-catposts-heading-color, var(--wjs-color-text-main)); }
+.wjs-block-category-posts__excerpt, .wp-block-category-posts__excerpt { margin: 0; font-size: var(--wjs-small); color: var(--wjs-color-text-muted); }
+@media (max-width: 767.98px) { .wjs-block-category-posts--grid, .wp-block-category-posts--grid { grid-template-columns: 1fr; } }
 
 /* ---------------------------------------------------------------- SEARCH BAR - */
-.wp-block-search-wrap { display: flex; width: 100%; justify-content: var(--wjs-search-align, flex-start); }
-.wp-block-search {
+.wjs-block-search-wrap, .wp-block-search-wrap { display: flex; width: 100%; justify-content: var(--wjs-search-align, flex-start); }
+.wjs-block-search, .wp-block-search {
   display: flex;
   gap: var(--wjs-sm);
   width: 100%;
   max-width: var(--wjs-search-width, 500px);
 }
-.wp-block-search__input {
+.wjs-block-search__input, .wp-block-search__input {
   flex: 1;
   min-width: 0;
   padding: var(--wjs-search-input-pad, 12px 16px);
@@ -2203,13 +2214,13 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   border-radius: var(--wjs-search-input-radius, var(--wjs-radius));
   box-shadow: var(--wjs-search-input-shadow, none);
 }
-.wp-block-search__input::placeholder { color: var(--wjs-search-placeholder-color, var(--wjs-color-text-muted)); }
-.wp-block-search__input:focus {
+.wjs-block-search__input::placeholder, .wp-block-search__input::placeholder { color: var(--wjs-search-placeholder-color, var(--wjs-color-text-muted)); }
+.wjs-block-search__input:focus, .wp-block-search__input:focus {
   outline: none;
   border-color: var(--wjs-search-focus-color, var(--wjs-color-primary));
   box-shadow: var(--wjs-search-focus-ring, 0 0 0 3px var(--wjs-focus-ring));
 }
-.wp-block-search__button {
+.wjs-block-search__button, .wp-block-search__button {
   display: inline-flex;
   align-items: center;
   gap: var(--wjs-sm);
@@ -2226,10 +2237,10 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   cursor: pointer;
   transition: filter var(--wjs-transition);
 }
-.wp-block-search__button:hover { filter: brightness(1.08); }
+.wjs-block-search__button:hover, .wp-block-search__button:hover { filter: brightness(1.08); }
 
 /* ---------------------------------------------------------------------- HERO - */
-.wp-block-hero {
+.wjs-block-hero, .wp-block-hero {
   position: relative;
   display: flex;
   align-items: center;
@@ -2249,15 +2260,15 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   background-size: cover;
   background-position: center;
 }
-.wp-block-hero__overlay {
+.wjs-block-hero__overlay, .wp-block-hero__overlay {
   position: absolute;
   inset: 0;
   background: var(--wjs-hero-overlay-color, #000);
   opacity: var(--wjs-hero-overlay, 0);
   pointer-events: none;
 }
-.wp-block-hero__inner { position: relative; z-index: 1; width: 100%; max-width: var(--wjs-hero-measure, 56rem); }
-.wp-block-hero__title {
+.wjs-block-hero__inner, .wp-block-hero__inner { position: relative; z-index: 1; width: 100%; max-width: var(--wjs-hero-measure, 56rem); }
+.wjs-block-hero__title, .wp-block-hero__title {
   margin: 0 0 var(--wjs-md);
   font-family: var(--wjs-font-family-heading);
   font-size: var(--wjs-hero-title-size, var(--wjs-h1));
@@ -2266,15 +2277,15 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   letter-spacing: var(--wjs-hero-title-tracking, var(--wjs-h1-tracking));
   color: var(--wjs-hero-title-color, inherit);
 }
-.wp-block-hero__subtitle {
+.wjs-block-hero__subtitle, .wp-block-hero__subtitle {
   margin: 0 0 var(--wjs-lg);
   font-size: var(--wjs-hero-subtitle-size, var(--wjs-h6));
   line-height: 1.6;
   color: var(--wjs-hero-subtitle-color, inherit);
   opacity: var(--wjs-hero-subtitle-opacity, 0.9);
 }
-.wp-block-hero__actions { display: flex; flex-wrap: wrap; gap: var(--wjs-md); justify-content: var(--wjs-hero-actions-justify, center); }
-.wp-block-hero__button {
+.wjs-block-hero__actions, .wp-block-hero__actions { display: flex; flex-wrap: wrap; gap: var(--wjs-md); justify-content: var(--wjs-hero-actions-justify, center); }
+.wjs-block-hero__button, .wp-block-hero__button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -2291,21 +2302,21 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   box-shadow: var(--wjs-shadow-2);
   transition: transform 0.15s ease, filter 0.2s ease, background 0.2s ease;
 }
-.wp-block-hero__button:hover { filter: brightness(1.08); transform: var(--wjs-hero-button-hover-transform, scale(1.03)); color: var(--wjs-hero-button-color, var(--wjs-color-on-primary)); }
-.wp-block-hero__button--outline {
+.wjs-block-hero__button:hover, .wp-block-hero__button:hover { filter: brightness(1.08); transform: var(--wjs-hero-button-hover-transform, scale(1.03)); color: var(--wjs-hero-button-color, var(--wjs-color-on-primary)); }
+.wjs-block-hero__button--outline, .wp-block-hero__button--outline {
   background: var(--wjs-hero-button-outline-bg, transparent);
   border-color: var(--wjs-hero-button-outline-border, var(--wjs-outline));
   color: var(--wjs-hero-button-outline-color, #fff);
   box-shadow: none;
 }
-.wp-block-hero__button--outline:hover {
+.wjs-block-hero__button--outline:hover, .wp-block-hero__button--outline:hover {
   background: var(--wjs-hero-button-outline-hover-bg, rgba(255, 255, 255, 0.08));
   color: var(--wjs-hero-button-outline-color, #fff);
   filter: none;
 }
 
 /* --------------------------------------------------------------------- QUOTE - */
-.wp-block-quote {
+.wjs-block-quote, .wp-block-quote {
   margin: 0 0 var(--wjs-lg);
   font-family: var(--wjs-quote-family, inherit);
   font-weight: var(--wjs-quote-weight, inherit);
@@ -2316,20 +2327,20 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
 }
 /* The reboot styles bare <blockquote> (bar + padding + size); inside the block the FIGURE owns
  * the frame, so the inner blockquote resets to plain text. */
-.wp-block-quote__body { margin: 0; padding: 0; border: 0; font: inherit; color: inherit; }
-.wp-block-quote__cite {
+.wjs-block-quote__body, .wp-block-quote__body { margin: 0; padding: 0; border: 0; font: inherit; color: inherit; }
+.wjs-block-quote__cite, .wp-block-quote__cite {
   display: block;
   margin-top: var(--wjs-md);
   font-size: var(--wjs-quote-cite-size, var(--wjs-small));
   font-style: normal;
   color: var(--wjs-quote-cite-color, var(--wjs-color-text-muted));
 }
-.wp-block-quote--bar {
+.wjs-block-quote--bar, .wp-block-quote--bar {
   padding-inline-start: var(--wjs-lg);
   border-inline-start: var(--wjs-quote-bar-width, 4px) solid var(--wjs-quote-accent, var(--wjs-color-primary));
 }
-.wp-block-quote--large { padding: var(--wjs-xl) var(--wjs-lg); text-align: var(--wjs-quote-large-align, center); }
-.wp-block-quote--large .wp-block-quote__mark {
+.wjs-block-quote--large, .wp-block-quote--large { padding: var(--wjs-xl) var(--wjs-lg); text-align: var(--wjs-quote-large-align, center); }
+.wjs-block-quote--large .wjs-block-quote__mark, .wp-block-quote--large .wp-block-quote__mark {
   display: block;
   margin-bottom: var(--wjs-md);
   font-size: var(--wjs-quote-mark-size, 40px);
@@ -2338,14 +2349,14 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
 }
 
 /* --------------------------------------------------------------------- TABLE - */
-.wp-block-table { width: 100%; overflow-x: auto; }
-.wp-block-table__table {
+.wjs-block-table, .wp-block-table { width: 100%; overflow-x: auto; }
+.wjs-block-table__table, .wp-block-table__table {
   width: 100%;
   border-collapse: collapse;
   text-align: start;
   font-size: var(--wjs-table-size, var(--wjs-small));
 }
-.wp-block-table__table th {
+.wjs-block-table__table th, .wp-block-table__table th {
   padding: var(--wjs-table-cell-pad, var(--wjs-sm) var(--wjs-md));
   font-family: var(--wjs-table-head-family, inherit);
   font-size: var(--wjs-table-head-size, inherit);
@@ -2356,21 +2367,21 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   background: var(--wjs-table-head-bg, transparent);
   border-bottom: var(--wjs-table-border-width, 1px) solid var(--wjs-table-border-color, var(--wjs-border-subtle));
 }
-.wp-block-table__table td {
+.wjs-block-table__table td, .wp-block-table__table td {
   padding: var(--wjs-table-cell-pad, var(--wjs-sm) var(--wjs-md));
   color: var(--wjs-table-color, inherit);
   border-bottom: var(--wjs-table-border-width, 1px) solid var(--wjs-table-border-color, var(--wjs-border-subtle));
 }
-.wp-block-table--striped tbody tr:nth-child(odd) { background: var(--wjs-table-stripe-bg, var(--wjs-bg-muted)); }
+.wjs-block-table--striped tbody tr:nth-child(odd), .wp-block-table--striped tbody tr:nth-child(odd) { background: var(--wjs-table-stripe-bg, var(--wjs-bg-muted)); }
 
 /* ----------------------------------------------------------------- ICON LIST - */
-.wp-block-icon-list {
+.wjs-block-icon-list, .wp-block-icon-list {
   display: grid;
   gap: var(--wjs-icon-list-gap, var(--wjs-lg));
   grid-template-columns: repeat(var(--wjs-icon-list-columns, 3), minmax(0, 1fr));
 }
-.wp-block-icon-list__item { display: flex; align-items: flex-start; gap: var(--wjs-md); min-width: 0; }
-.wp-block-icon-list__icon {
+.wjs-block-icon-list__item, .wp-block-icon-list__item { display: flex; align-items: flex-start; gap: var(--wjs-md); min-width: 0; }
+.wjs-block-icon-list__icon, .wp-block-icon-list__icon {
   display: grid;
   place-items: center;
   flex: none;
@@ -2381,28 +2392,28 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   color: var(--wjs-icon-list-icon-color, var(--wjs-color-primary));
   font-size: var(--wjs-icon-list-icon-glyph, calc(var(--wjs-icon-list-icon-size, 48px) * 0.42));
 }
-.wp-block-icon-list__title {
+.wjs-block-icon-list__title, .wp-block-icon-list__title {
   display: block;
   margin-bottom: var(--wjs-xs);
   font-size: var(--wjs-icon-list-title-size, inherit);
   font-weight: var(--wjs-icon-list-title-weight, 700);
   color: var(--wjs-icon-list-title-color, var(--wjs-color-text-main));
 }
-.wp-block-icon-list__text {
+.wjs-block-icon-list__text, .wp-block-icon-list__text {
   display: block;
   font-size: var(--wjs-icon-list-text-size, var(--wjs-small));
   color: var(--wjs-icon-list-text-color, var(--wjs-color-text-muted));
 }
-@media (max-width: 767.98px) { .wp-block-icon-list { grid-template-columns: 1fr; } }
+@media (max-width: 767.98px) { .wjs-block-icon-list, .wp-block-icon-list { grid-template-columns: 1fr; } }
 
 /* -------------------------------------------------------------- SOCIAL LINKS - */
-.wp-block-social-links {
+.wjs-block-social-links, .wp-block-social-links {
   display: flex;
   flex-wrap: wrap;
   gap: var(--wjs-social-gap, var(--wjs-md));
   justify-content: var(--wjs-social-justify, flex-start);
 }
-.wp-block-social-links__link {
+.wjs-block-social-links__link, .wp-block-social-links__link {
   display: grid;
   place-items: center;
   width: var(--wjs-social-size, 44px);
@@ -2414,19 +2425,19 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   color: var(--wjs-social-color, var(--wjs-color-text-main));
   transition: background var(--wjs-transition), color var(--wjs-transition), transform 0.15s ease;
 }
-.wp-block-social-links__link:hover {
+.wjs-block-social-links__link:hover, .wp-block-social-links__link:hover {
   background: var(--wjs-social-hover-bg, var(--wjs-color-primary));
   color: var(--wjs-social-hover-color, var(--wjs-color-on-primary));
   transform: var(--wjs-social-hover-transform, translateY(-2px));
 }
 
 /* --------------------------------------------------------------------- STATS - */
-.wp-block-stats {
+.wjs-block-stats, .wp-block-stats {
   display: grid;
   gap: var(--wjs-stats-gap, var(--wjs-lg));
   grid-template-columns: repeat(var(--wjs-stats-columns, 3), minmax(0, 1fr));
 }
-.wp-block-stats__item {
+.wjs-block-stats__item, .wp-block-stats__item {
   padding: var(--wjs-stats-pad, var(--wjs-xl));
   text-align: var(--wjs-stats-align, center);
   background: var(--wjs-stats-bg, var(--wjs-bg-surface));
@@ -2434,7 +2445,7 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   border-radius: var(--wjs-stats-radius, var(--wjs-radius-lg));
   box-shadow: var(--wjs-stats-shadow, none);
 }
-.wp-block-stats__value {
+.wjs-block-stats__value, .wp-block-stats__value {
   margin-bottom: var(--wjs-xs);
   font-family: var(--wjs-stats-value-family, var(--wjs-font-family-heading));
   font-size: var(--wjs-stats-value-size, 48px);
@@ -2443,7 +2454,7 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   letter-spacing: var(--wjs-stats-value-tracking, var(--wjs-h1-tracking));
   color: var(--wjs-stats-value-color, var(--wjs-primary-fixed));
 }
-.wp-block-stats__label {
+.wjs-block-stats__label, .wp-block-stats__label {
   font-family: var(--wjs-stats-label-family, inherit);
   font-size: var(--wjs-stats-label-size, var(--wjs-small));
   font-weight: var(--wjs-stats-label-weight, inherit);
@@ -2452,24 +2463,24 @@ h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-we
   letter-spacing: var(--wjs-stats-label-tracking, 0.08em);
   color: var(--wjs-stats-label-color, var(--wjs-color-text-muted));
 }
-@media (max-width: 767.98px) { .wp-block-stats { grid-template-columns: 1fr; } }
+@media (max-width: 767.98px) { .wjs-block-stats, .wp-block-stats { grid-template-columns: 1fr; } }
 
 /* ---------------------------------------------------------------- HTML EMBED - */
-.wp-block-html-embed { color: var(--wjs-html-color, inherit); }
-.wp-block-html-embed > :first-child { margin-top: 0; }
-.wp-block-html-embed > :last-child { margin-bottom: 0; }
+.wjs-block-html-embed, .wp-block-html-embed { color: var(--wjs-html-color, inherit); }
+.wjs-block-html-embed > :first-child, .wp-block-html-embed > :first-child { margin-top: 0; }
+.wjs-block-html-embed > :last-child, .wp-block-html-embed > :last-child { margin-bottom: 0; }
 
 /* ---------------------------------------------------------------- FOCUS RING - */
 /* Keyboard focus for every control a block renders, in one place. :focus-visible means a mouse
  * click never paints it — only keyboard/AT navigation does. */
-.wp-block-accordion__header:focus-visible,
-.wp-block-tabs__tab:focus-visible,
-.wp-block-search__button:focus-visible,
-.wp-block-button__link:focus-visible,
-.wp-block-hero__button:focus-visible,
-.wp-block-pricing__button:focus-visible,
-.wp-block-cta-banner__button:focus-visible,
-.wp-block-social-links__link:focus-visible {
+.wjs-block-accordion__header:focus-visible, .wp-block-accordion__header:focus-visible,
+.wjs-block-tabs__tab:focus-visible, .wp-block-tabs__tab:focus-visible,
+.wjs-block-search__button:focus-visible, .wp-block-search__button:focus-visible,
+.wjs-block-button__link:focus-visible, .wp-block-button__link:focus-visible,
+.wjs-block-hero__button:focus-visible, .wp-block-hero__button:focus-visible,
+.wjs-block-pricing__button:focus-visible, .wp-block-pricing__button:focus-visible,
+.wjs-block-cta-banner__button:focus-visible, .wp-block-cta-banner__button:focus-visible,
+.wjs-block-social-links__link:focus-visible, .wp-block-social-links__link:focus-visible {
   outline: var(--wjs-block-focus-outline, 2px solid var(--wjs-color-primary));
   outline-offset: var(--wjs-block-focus-offset, 2px);
 }

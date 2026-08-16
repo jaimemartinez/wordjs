@@ -5,7 +5,13 @@
  * Los fixtures esperados están EXTRAÍDOS del código actual de pages (whitespace del template
  * literal de Card incluido, construido aquí con \n + " ".repeat para que el pin sea explícito,
  * no un copy-paste del template que se auto-confirmaría). La divergencia con posts (4 tipos, sin
- * clases wp-block-*) se resolvió hacia ESTE lado — decisión ratificada W47.
+ * clases de bloque) se resolvió hacia ESTE lado — decisión ratificada W47.
+ *
+ * CONTRATO ACTUALIZADO: cada clase de bloque va DOBLE y la propia primero — `wjs-block-heading
+ * wp-block-heading`. Este HTML de fallback es HTML público (lectores sin _puck_data, RSS, excerpts),
+ * así que lleva la misma identidad que el render de bloques. Las cadenas siguen escritas a mano, sin
+ * llamar a bc(): un pin que se construyera con la misma función que el código bajo prueba se
+ * autoconfirmaría, que es justo lo que este fichero evita desde W47.
  */
 import { describe, expect, it } from "vitest";
 import { serializeContentFallback } from "../contentFallback";
@@ -18,13 +24,13 @@ describe("serializeContentFallback — byte-igual al switch de pages", () => {
             serializeContentFallback([
                 { type: "Heading", props: { id: "h1", level: "h2", title: "Hola" } },
             ]),
-        ).toBe('<h2 class="wp-block-heading font-bold my-4">Hola</h2>');
+        ).toBe('<h2 class="wjs-block-heading wp-block-heading font-bold my-4">Hola</h2>');
     });
 
     it("Text", () => {
         expect(
             serializeContentFallback([{ type: "Text", props: { id: "t1", content: "<p>Cuerpo</p>" } }]),
-        ).toBe('<div class="wp-block-text prose"><p>Cuerpo</p></div>');
+        ).toBe('<div class="wjs-block-text wp-block-text prose"><p>Cuerpo</p></div>');
     });
 
     it("Image", () => {
@@ -32,7 +38,7 @@ describe("serializeContentFallback — byte-igual al switch de pages", () => {
             serializeContentFallback([
                 { type: "Image", props: { id: "i1", src: "/uploads/a.png", alt: "Alt" } },
             ]),
-        ).toBe('<img src="/uploads/a.png" alt="Alt" class="wp-block-image max-w-full my-4 rounded shadow-sm"/>');
+        ).toBe('<img src="/uploads/a.png" alt="Alt" class="wjs-block-image wp-block-image max-w-full my-4 rounded shadow-sm"/>');
     });
 
     it("Button — las 3 alineaciones", () => {
@@ -41,20 +47,20 @@ describe("serializeContentFallback — byte-igual al switch de pages", () => {
                 { type: "Button", props: { id: "b1", align, href: "/x", variant: "primary", label: "Ir" } },
             ]);
         expect(btn("center")).toBe(
-            '<div class="wp-block-button my-6 text-center"><a href="/x" class="wp-button button-primary">Ir</a></div>',
+            '<div class="wjs-block-button wp-block-button my-6 text-center"><a href="/x" class="wp-button button-primary">Ir</a></div>',
         );
         expect(btn("right")).toBe(
-            '<div class="wp-block-button my-6 text-right"><a href="/x" class="wp-button button-primary">Ir</a></div>',
+            '<div class="wjs-block-button wp-block-button my-6 text-right"><a href="/x" class="wp-button button-primary">Ir</a></div>',
         );
         expect(btn("left")).toBe(
-            '<div class="wp-block-button my-6 text-left"><a href="/x" class="wp-button button-primary">Ir</a></div>',
+            '<div class="wjs-block-button wp-block-button my-6 text-left"><a href="/x" class="wp-button button-primary">Ir</a></div>',
         );
     });
 
     it("Card — con icono (whitespace del template literal EXACTO)", () => {
         const expected =
             "\n" +
-            sp(32) + '<div class="wp-block-card card-theme-dark p-8 rounded-3xl border my-6">\n' +
+            sp(32) + '<div class="wjs-block-card wp-block-card card-theme-dark p-8 rounded-3xl border my-6">\n' +
             sp(36) + '<i class="fa-solid fa-star text-2xl mb-4"></i>\n' +
             sp(36) + '<h3 class="text-xl font-bold mb-2">Título</h3>\n' +
             sp(36) + '<p class="opacity-80">Descripción</p>\n' +
@@ -72,7 +78,7 @@ describe("serializeContentFallback — byte-igual al switch de pages", () => {
     it("Card — sin icono (la interpolación vacía deja la línea de 36 espacios)", () => {
         const expected =
             "\n" +
-            sp(32) + '<div class="wp-block-card card-theme-light p-8 rounded-3xl border my-6">\n' +
+            sp(32) + '<div class="wjs-block-card wp-block-card card-theme-light p-8 rounded-3xl border my-6">\n' +
             sp(36) + "\n" +
             sp(36) + '<h3 class="text-xl font-bold mb-2">T</h3>\n' +
             sp(36) + '<p class="opacity-80">D</p>\n' +
@@ -87,7 +93,7 @@ describe("serializeContentFallback — byte-igual al switch de pages", () => {
     it("Divider", () => {
         expect(
             serializeContentFallback([{ type: "Divider", props: { id: "d1", type: "solid" } }]),
-        ).toBe('<hr class="wp-block-divider divider-solid my-10 border-gray-100" />');
+        ).toBe('<hr class="wjs-block-divider wp-block-divider divider-solid my-10 border-gray-100" />');
     });
 
     it("HTMLEmbed — verbatim, y '' cae a cadena vacía", () => {
@@ -103,7 +109,7 @@ describe("serializeContentFallback — byte-igual al switch de pages", () => {
             { type: "Hero", props: { id: "x" } }, // no serializado — igual que hoy
             { type: "HTMLEmbed", props: { id: "e", html: "<b>B</b>" } },
         ]);
-        expect(out).toBe('<h3 class="wp-block-heading font-bold my-4">A</h3><b>B</b>');
+        expect(out).toBe('<h3 class="wjs-block-heading wp-block-heading font-bold my-4">A</h3><b>B</b>');
     });
 
     it("lienzo vacío → cadena vacía", () => {

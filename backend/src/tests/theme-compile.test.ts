@@ -647,7 +647,11 @@ describe('compileTheme (declarative theme compiler)', () => {
             // frontend/src/components/content/__tests__/templateRenderer.test.tsx
             // ("APPENDS the theme's class — the framework's own hook always survives").
             const blocks = fs.readFileSync(path.join(frontendSrc, 'components', 'content', 'blocks.tsx'), 'utf8');
-            assert.match(blocks, /cx\('wp-block-section', extraClass\(className\)\)/,
+            // `bc('section')` is the single point that builds the block's own class list — it emits
+            // `wjs-block-section wp-block-section`, own identity first (frontend components/blocks/
+            // blockVars.ts). What this pins is unchanged: the template's className is APPENDED to the
+            // block's own classes rather than replacing them.
+            assert.match(blocks, /cx\(bc\('section'\), extraClass\(className\)\)/,
                 'the container no longer appends the template class the variation is written against');
         });
 

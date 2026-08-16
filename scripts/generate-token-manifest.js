@@ -468,6 +468,35 @@ function walkDeclarations(css, onRuleOpen, onDeclaration) {
     }
 }
 
+/**
+ * Collapse a rule's own-identity/alias pair back to ONE canonical selector.
+ *
+ * ui.css lists both block classes on every rule (`.wjs-block-card, .wp-block-card { … }`) because the
+ * markup emits both — see documentation/block-class-identity.md. The MANIFEST is not a record of which
+ * aliases exist; it is the token contract a theme is compiled against, so it names each surface ONCE.
+ * The historical spelling is the one it keeps for now, and that is a deliberate compatibility choice:
+ * `theme-tokens.json` is a committed CI drift gate, and the theme compiler, theme-doctor and every
+ * built theme read consumer selectors out of it. Rewriting them to the new name would have rippled
+ * through all of that for zero behavioural gain, since both classes are on every element anyway.
+ * Dropping the twin here is what keeps the regenerated manifest byte-identical.
+ *
+ * The rewrite is `wjs-block-` → `wp-block-` (not "delete the wjs alternative"), so a rule that ever
+ * carries ONLY the own class still registers its consumer instead of vanishing from the manifest.
+ * When the alias is removed in the next major, this function is what flips — one line, one place.
+ */
+function canonicalSelector(prelude) {
+    if (!prelude.includes('wjs-block-')) return prelude;
+    const seen = new Set();
+    const out = [];
+    for (const part of prelude.split(',')) {
+        const canonical = collapse(part).replace(/wjs-block-/g, 'wp-block-');
+        if (!canonical || seen.has(canonical)) continue;
+        seen.add(canonical);
+        out.push(canonical);
+    }
+    return out.join(', ');
+}
+
 // Effective consumer context: selector path (keyframe steps keep their
 // `@keyframes <name>` prefix), plus the @media condition when present.
 function contextOf(stack) {
@@ -478,7 +507,7 @@ function contextOf(stack) {
         if (p.startsWith('@media')) media.push(p.slice('@media'.length).trim());
         else if (p.startsWith('@keyframes')) sel.push(p);
         else if (p.startsWith('@')) continue; // @supports etc. — no selector part
-        else sel.push(p);
+        else sel.push(canonicalSelector(p));
     }
     return { selector: sel.join(' '), media: media.length ? media.join(' and ') : null };
 }

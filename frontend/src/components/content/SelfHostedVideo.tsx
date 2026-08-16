@@ -5,7 +5,7 @@
  * element itself is server-rendered HTML; this component only owns the cover interaction.
  */
 import React, { useState } from "react";
-import { cx } from "@/components/blocks/blockVars";
+import { bc, cx } from "@/components/blocks/blockVars";
 
 export const fmtTime = (s: number): string => {
     if (!isFinite(s) || s < 0) return '--:--';
@@ -37,7 +37,7 @@ const SelfHostedVideo = ({ src, poster, vars }: { src: string; poster: string; v
     };
 
     return (
-        <div className={cx('wp-block-video-embed', started && 'is-playing')} style={vars}>
+        <div className={cx(bc('video-embed'), started && 'is-playing')} style={vars}>
             <video
                 ref={ref}
                 src={src}
@@ -48,12 +48,12 @@ const SelfHostedVideo = ({ src, poster, vars }: { src: string; poster: string; v
                 onLoadedMetadata={(e) => setTotal(e.currentTarget.duration)}
             />
             {!started && (
-                <button type="button" className="wp-block-video-embed__cover" onClick={start} aria-label="Reproducir el vídeo">
-                    <span className="wp-block-video-embed__scrim" aria-hidden="true" />
-                    <span className="wp-block-video-embed__play" aria-hidden="true">
+                <button type="button" className={bc('video-embed__cover')} onClick={start} aria-label="Reproducir el vídeo">
+                    <span className={bc('video-embed__scrim')} aria-hidden="true" />
+                    <span className={bc('video-embed__play')} aria-hidden="true">
                         <i className="fa-solid fa-play"></i>
                     </span>
-                    {isFinite(total) && <span className="wp-block-video-embed__chip">{fmtTime(total)}</span>}
+                    {isFinite(total) && <span className={bc('video-embed__chip')}>{fmtTime(total)}</span>}
                 </button>
             )}
         </div>

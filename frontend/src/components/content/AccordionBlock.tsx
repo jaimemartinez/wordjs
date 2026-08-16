@@ -4,13 +4,13 @@
  * public ContentRenderer.
  */
 import React from "react";
-import { blockVars, cx, unit } from "@/components/blocks/blockVars";
+import { bc, blockVars, cx, unit } from "@/components/blocks/blockVars";
 
 export default function AccordionBlock({ items, bg, borderColor, radius, pad, headerBg, headerColor, activeColor, panelBg, panelColor, css }: any) {
     const [openIndex, setOpenIndex] = React.useState<number | null>(0);
     return (
         <div
-            className="wp-block-accordion"
+            className={bc('accordion')}
             style={{
                 ...blockVars('accordion', {
                     bg,
@@ -29,17 +29,17 @@ export default function AccordionBlock({ items, bg, borderColor, radius, pad, he
             {items?.map((item: any, index: number) => {
                 const open = openIndex === index;
                 return (
-                    <div key={index} className={cx('wp-block-accordion__item', open && 'is-open')}>
+                    <div key={index} className={cx(bc('accordion__item'), open && 'is-open')}>
                         <button
                             type="button"
-                            className="wp-block-accordion__header"
+                            className={bc('accordion__header')}
                             aria-expanded={open}
                             onClick={() => setOpenIndex(open ? null : index)}
                         >
                             {item.title}
-                            <i className="fa-solid fa-chevron-down wp-block-accordion__icon" aria-hidden="true"></i>
+                            <i className={cx('fa-solid fa-chevron-down', bc('accordion__icon'))} aria-hidden="true"></i>
                         </button>
-                        {open && <div className="wp-block-accordion__panel">{item.content}</div>}
+                        {open && <div className={bc('accordion__panel')}>{item.content}</div>}
                     </div>
                 );
             })}

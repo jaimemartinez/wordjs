@@ -8,6 +8,27 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Changed
 
+- **Blocks now carry WordJS's own class, `wjs-block-*`, alongside the historical `wp-block-*` one —
+  which is deprecated.** The public HTML emits both, own identity first:
+  `class="wjs-block-heading wp-block-heading"`. The framework stylesheet inverts authority to match —
+  `.wjs-block-heading, .wp-block-heading { … }` — so `.wjs-block-*` is the source and `.wp-block-*` is
+  an alias in the same grouped selector.
+
+  **Nothing breaks, by construction.** A theme written against `.wp-block-*` keeps matching, because
+  that class is still on every element. Content already saved in your database, and everything a WXR
+  import brings over from WordPress, keeps its framework styling, because the alias is still in the
+  stylesheet. Plugins are unaffected: they style their own `.wjs-p-<slug>-*` namespace, which the
+  manifest validator enforces and which this change does not widen.
+
+  **`wp-block-*` will be removed in the next major version.** Write new themes, plugins and custom CSS
+  against `.wjs-block-*`. The compatibility window, what is on each side of it, and the exact edits the
+  removal takes are documented in
+  [documentation/block-class-identity.md](documentation/block-class-identity.md).
+
+  Cost, measured on production HTML with gzip (what the server negotiates): +0.24 % to +0.90 % on a
+  blog post, +1.92 % on the home page. Block-catalogue demo pages, which stack every block many times
+  over, are the outlier at +2.2 % to +4.8 %; the duplication ends when the alias does.
+
 - **The visual editor is now called Verso, and the code carries that name.** WordJS's block editor
   started life as a vendored fork of [Puck](https://github.com/measuredco/puck) and the whole surface
   around it — modules, folders, CSS classes, generated registries — was named after it. The fork is

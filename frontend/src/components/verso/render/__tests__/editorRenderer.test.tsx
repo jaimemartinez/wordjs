@@ -134,7 +134,9 @@ describe("EditorRenderer — estructura", () => {
     expect(html.match(/data-wjs-slot="verso:root:content"/g)).toHaveLength(1);
     expect(html.match(/data-wjs-slot="sec1:children"/g)).toHaveLength(1);
     // Grid pone su layout en el wrapper del slot — contrato de ContentRenderer.
-    expect(html).toContain('<div class="wp-block-grid__items" data-wjs-slot="grid1:children">');
+    // Las DOS clases de bloque, la propia primero (bc() en blockVars.ts): el canvas emite exactamente
+  // el mismo className que el público, así que el contrato se fija aquí con la cadena completa.
+  expect(html).toContain('<div class="wjs-block-grid__items wp-block-grid__items" data-wjs-slot="grid1:children">');
     // Los hijos del grid viven DENTRO de ese único div, en orden.
     const slotAt = html.indexOf('data-wjs-slot="grid1:children"');
     const h1At = html.indexOf('data-wjs-block-id="h1"');

@@ -711,9 +711,9 @@ article:hover {
 
 /* Buttons — the gradient pill is the WordJS call to action */
 .wjs-btn-primary,
-.wp-block-button a,
+.wjs-block-button a, .wp-block-button a,
 .wp-button.button-primary,
-.wp-block-button .wp-block-button__link {
+.wjs-block-button .wjs-block-button__link, .wp-block-button .wp-block-button__link {
   background: var(--wjs-gradient) !important;
   color: #ffffff !important;
   border: none !important;
@@ -722,9 +722,9 @@ article:hover {
   transition: transform 0.2s ease, box-shadow 0.2s ease, filter 0.2s ease;
 }
 .wjs-btn-primary:hover,
-.wp-block-button a:hover,
+.wjs-block-button a:hover, .wp-block-button a:hover,
 .wp-button.button-primary:hover,
-.wp-block-button .wp-block-button__link:hover {
+.wjs-block-button .wjs-block-button__link:hover, .wp-block-button .wp-block-button__link:hover {
   transform: translateY(-2px);
   filter: brightness(1.05);
   box-shadow: 0 12px 26px -8px rgba(124, 58, 237, 0.6);
@@ -764,14 +764,14 @@ footer .w-10:hover {
    #fff)\` and lets the title inherit it). On the usual dark gradient that painted the title in the dark
    heading color — invisible. Restore the framework's own declaration verbatim so \`--wjs-hero-title-color\`
    still wins when a theme or block instance sets it. Same treatment the footer and CTA bands already get. */
-.wp-block-hero h1, .wp-block-hero h2, .wp-block-hero__title {
+.wjs-block-hero h1, .wp-block-hero h1, .wjs-block-hero h2, .wp-block-hero h2, .wjs-block-hero__title, .wp-block-hero__title {
   font-family: var(--wjs-font-family-heading) !important;
   color: var(--wjs-hero-title-color, inherit) !important;
 }
 
 /* Stats — gradient figures */
-.wp-block-stats .stat-value,
-.wp-block-stats [class*="value"] {
+.wjs-block-stats .stat-value, .wp-block-stats .stat-value,
+.wjs-block-stats [class*="value"], .wp-block-stats [class*="value"] {
   background: var(--wjs-gradient);
   -webkit-background-clip: text;
   background-clip: text;
@@ -780,33 +780,33 @@ footer .w-10:hover {
 }
 
 /* Accordion */
-.wp-block-accordion {
+.wjs-block-accordion, .wp-block-accordion {
   background: var(--wjs-bg-surface) !important;
   border: 1px solid var(--wjs-border-subtle) !important;
   border-radius: var(--wjs-radius) !important;
 }
-.wp-block-accordion .accordion-item button { color: var(--wjs-color-heading) !important; }
-.wp-block-accordion .accordion-item button i { color: var(--wjs-color-primary) !important; }
-.wp-block-accordion .accordion-item > div { background: var(--wjs-gradient-soft) !important; color: var(--wjs-color-text-muted) !important; }
+.wjs-block-accordion .accordion-item button, .wp-block-accordion .accordion-item button { color: var(--wjs-color-heading) !important; }
+.wjs-block-accordion .accordion-item button i, .wp-block-accordion .accordion-item button i { color: var(--wjs-color-primary) !important; }
+.wjs-block-accordion .accordion-item > div, .wp-block-accordion .accordion-item > div { background: var(--wjs-gradient-soft) !important; color: var(--wjs-color-text-muted) !important; }
 
 /* Tabs — gradient indicator */
-.wp-block-tabs > div:first-child { border-bottom: 1px solid var(--wjs-border-subtle) !important; }
-.wp-block-tabs button { color: var(--wjs-color-text-muted) !important; }
-.wp-block-tabs button:hover,
-.wp-block-tabs button:focus {
+.wjs-block-tabs > div:first-child, .wp-block-tabs > div:first-child { border-bottom: 1px solid var(--wjs-border-subtle) !important; }
+.wjs-block-tabs button, .wp-block-tabs button { color: var(--wjs-color-text-muted) !important; }
+.wjs-block-tabs button:hover, .wp-block-tabs button:hover,
+.wjs-block-tabs button:focus, .wp-block-tabs button:focus {
   color: var(--wjs-color-primary) !important;
   border-bottom-color: var(--wjs-color-primary) !important;
 }
 
 /* Pricing — featured tier wears the gradient */
-.wp-block-pricing > div {
+.wjs-block-pricing > div, .wp-block-pricing > div {
   background: var(--wjs-bg-surface) !important;
   border: 1px solid var(--wjs-border-subtle) !important;
   border-radius: var(--wjs-radius-md) !important;
   transition: border-color 0.25s ease, box-shadow 0.25s ease, transform 0.25s ease;
 }
-.wp-block-pricing > div:hover { border-color: rgba(79, 70, 229, 0.4) !important; box-shadow: var(--wjs-shadow-md); }
-.wp-block-pricing > div[style*="scale(1.05)"] {
+.wjs-block-pricing > div:hover, .wp-block-pricing > div:hover { border-color: rgba(79, 70, 229, 0.4) !important; box-shadow: var(--wjs-shadow-md); }
+.wjs-block-pricing > div[style*="scale(1.05)"], .wp-block-pricing > div[style*="scale(1.05)"] {
   border: 2px solid transparent !important;
   background:
     linear-gradient(var(--wjs-bg-surface), var(--wjs-bg-surface)) padding-box,
@@ -815,22 +815,22 @@ footer .w-10:hover {
 }
 
 /* Testimonial */
-.wp-block-testimonial {
+.wjs-block-testimonial, .wp-block-testimonial {
   background: var(--wjs-bg-surface) !important;
   border: 1px solid var(--wjs-border-subtle) !important;
   border-radius: var(--wjs-radius-md) !important;
 }
-.wp-block-testimonial > div:first-child { color: var(--wjs-color-primary) !important; }
+.wjs-block-testimonial > div:first-child, .wp-block-testimonial > div:first-child { color: var(--wjs-color-primary) !important; }
 
 /* CTA Banner — full gradient */
-.wp-block-cta-banner {
+.wjs-block-cta-banner, .wp-block-cta-banner {
   background: var(--wjs-gradient) !important;
   color: #ffffff !important;
   border: none !important;
   border-radius: var(--wjs-radius-lg) !important;
 }
-.wp-block-cta-banner h2, .wp-block-cta-banner p { color: #ffffff !important; }
-.wp-block-cta-banner a {
+.wjs-block-cta-banner h2, .wp-block-cta-banner h2, .wjs-block-cta-banner p, .wp-block-cta-banner p { color: #ffffff !important; }
+.wjs-block-cta-banner a, .wp-block-cta-banner a {
   background: #ffffff !important;
   color: var(--wjs-color-primary) !important;
   border-radius: var(--wjs-radius-pill) !important;
@@ -838,30 +838,30 @@ footer .w-10:hover {
 }
 
 /* Posts grid */
-.wp-block-posts-grid article { border-radius: var(--wjs-radius-md) !important; }
-.wp-block-posts-grid article:hover { border-color: rgba(79, 70, 229, 0.35) !important; }
+.wjs-block-posts-grid article, .wp-block-posts-grid article { border-radius: var(--wjs-radius-md) !important; }
+.wjs-block-posts-grid article:hover, .wp-block-posts-grid article:hover { border-color: rgba(79, 70, 229, 0.35) !important; }
 
 /* Category posts */
-.wp-block-category-posts h3 { color: var(--wjs-color-primary) !important; }
-.wp-block-category-posts li { border-color: var(--wjs-border-subtle) !important; }
-.wp-block-category-posts li a:hover { color: var(--wjs-color-primary) !important; }
+.wjs-block-category-posts h3, .wp-block-category-posts h3 { color: var(--wjs-color-primary) !important; }
+.wjs-block-category-posts li, .wp-block-category-posts li { border-color: var(--wjs-border-subtle) !important; }
+.wjs-block-category-posts li a:hover, .wp-block-category-posts li a:hover { color: var(--wjs-color-primary) !important; }
 
 /* Icon list */
-.wp-block-icon-list i, .wp-block-icon-list .icon { color: var(--wjs-color-primary) !important; }
+.wjs-block-icon-list i, .wp-block-icon-list i, .wjs-block-icon-list .icon, .wp-block-icon-list .icon { color: var(--wjs-color-primary) !important; }
 
 /* Search */
-.wp-block-search input {
+.wjs-block-search input, .wp-block-search input {
   background: var(--wjs-bg-surface) !important;
   border: 1px solid var(--wjs-border-subtle) !important;
   border-radius: var(--wjs-radius-pill) !important;
   color: var(--wjs-color-text-main) !important;
 }
-.wp-block-search input:focus {
+.wjs-block-search input:focus, .wp-block-search input:focus {
   border-color: var(--wjs-color-primary) !important;
   box-shadow: 0 0 0 4px var(--wjs-focus-ring);
   outline: none;
 }
-.wp-block-search button {
+.wjs-block-search button, .wp-block-search button {
   background: var(--wjs-gradient) !important;
   color: #ffffff !important;
   border: none !important;
@@ -869,14 +869,14 @@ footer .w-10:hover {
 }
 
 /* Divider / video / audio */
-.wp-block-divider { border-color: var(--wjs-border-subtle) !important; }
-.wp-block-video-embed { border-radius: var(--wjs-radius-md) !important; box-shadow: var(--wjs-shadow-md); }
-.wp-block-audio-player {
+.wjs-block-divider, .wp-block-divider { border-color: var(--wjs-border-subtle) !important; }
+.wjs-block-video-embed, .wp-block-video-embed { border-radius: var(--wjs-radius-md) !important; box-shadow: var(--wjs-shadow-md); }
+.wjs-block-audio-player, .wp-block-audio-player {
   background: var(--wjs-bg-surface) !important;
   border: 1px solid var(--wjs-border-subtle) !important;
   border-radius: var(--wjs-radius-md) !important;
 }
-.wp-block-audio-player div:first-child > div:first-child { background: var(--wjs-gradient) !important; color: #ffffff !important; }
+.wjs-block-audio-player div:first-child > div:first-child, .wp-block-audio-player div:first-child > div:first-child { background: var(--wjs-gradient) !important; color: #ffffff !important; }
 
 /* ===== Mobile (auto responsive pass) ===== */
 @media (max-width: 767.98px) {
@@ -889,10 +889,11 @@ footer .w-10:hover {
      above still matches on the same style attribute), so it stays
      visually "featured" without breaking the layout. !important is
      required to beat the inline style. */
-  .wp-block-pricing > div[style*="scale(1.05)"] {
+  .wjs-block-pricing > div[style*="scale(1.05)"], .wp-block-pricing > div[style*="scale(1.05)"] {
     transform: none !important;
   }
 }
+
 `;
   writeIfAbsent(path.join(defaultDir, 'style.css'), styleCss);
 

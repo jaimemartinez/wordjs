@@ -85,15 +85,20 @@ const RENDERS: Record<string, string[]> = {
  * cannot fire one, and there is no DOM environment here), `is-scrolling` needs a real overflow
  * measurement. For exactly these, the proof is the emitting cx() call in the component source —
  * base class and state class in the SAME call, so renaming either side fails here.
+ *
+ * The base class is now built by `bc('<name>')` rather than typed as a `wp-block-*` literal (block
+ * elements carry BOTH classes — see components/blocks/blockVars.ts), so the pattern matches the
+ * CALL. That is the same strength of proof as before: bc() is what puts the manifest's
+ * `.wp-block-video-embed` on the element, so a rename on either side still fails here.
  */
 const INTERACTION_ONLY: Record<string, { file: string; pattern: RegExp }> = {
     'video-embed.playing': {
         file: 'frontend/src/components/content/SelfHostedVideo.tsx',
-        pattern: /cx\(\s*['"]wp-block-video-embed['"][^)]{0,120}['"]is-playing['"]/,
+        pattern: /cx\(\s*bc\(\s*['"]video-embed['"]\s*\)[^)]{0,120}['"]is-playing['"]/,
     },
     'audio-player.scrolling': {
         file: 'frontend/src/components/content/AudioTransport.tsx',
-        pattern: /cx\(\s*['"]wp-block-audio-player__track['"][^)]{0,120}['"]is-scrolling['"]/,
+        pattern: /cx\(\s*bc\(\s*['"]audio-player__track['"]\s*\)[^)]{0,120}['"]is-scrolling['"]/,
     },
 };
 

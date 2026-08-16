@@ -4,7 +4,7 @@
  * scrubbing). The block's outer element renders on the server (blocks.tsx AudioPlayerBlock).
  */
 import React, { useState } from "react";
-import { cx } from "@/components/blocks/blockVars";
+import { bc, cx } from "@/components/blocks/blockVars";
 import { fmtTime } from "./SelfHostedVideo";
 
 const AudioTransport = ({ src, title }: { src: string; title: string }) => {
@@ -71,24 +71,24 @@ const AudioTransport = ({ src, title }: { src: string; title: string }) => {
         <>
             <button
                 type="button"
-                className="wp-block-audio-player__button"
+                className={bc('audio-player__button')}
                 onClick={toggle}
                 aria-label={playing ? 'Pausar' : 'Reproducir'}
             >
                 <i className={cx('fa-solid', playing ? 'fa-pause' : 'fa-play')} aria-hidden="true"></i>
             </button>
-            <div className="wp-block-audio-player__body" ref={bodyRef}>
+            <div className={bc('audio-player__body')} ref={bodyRef}>
                 {/* The label is duplicated so the marquee loops seamlessly; the copy exists only
                     while it actually scrolls, and is aria-hidden so the name is announced once. */}
-                <div className="wp-block-audio-player__marquee" title={title}>
-                    <div className={cx('wp-block-audio-player__track', scrolls && 'is-scrolling')}>
-                        <span className="wp-block-audio-player__title" ref={labelRef}>{title}</span>
-                        {scrolls && <span className="wp-block-audio-player__title" aria-hidden="true">{title}</span>}
+                <div className={bc('audio-player__marquee')} title={title}>
+                    <div className={cx(bc('audio-player__track'), scrolls && 'is-scrolling')}>
+                        <span className={bc('audio-player__title')} ref={labelRef}>{title}</span>
+                        {scrolls && <span className={bc('audio-player__title')} aria-hidden="true">{title}</span>}
                     </div>
                 </div>
                 <input
                     type="range"
-                    className="wp-block-audio-player__scrub"
+                    className={bc('audio-player__scrub')}
                     min={0}
                     max={isFinite(total) && total > 0 ? total : 0}
                     step="any"
@@ -98,14 +98,14 @@ const AudioTransport = ({ src, title }: { src: string; title: string }) => {
                     aria-valuetext={`${fmtTime(now)} de ${fmtTime(total)}`}
                     style={{ ['--wjs-audio-progress-pct' as any]: `${pct}%` }}
                 />
-                <div className="wp-block-audio-player__times">
+                <div className={bc('audio-player__times')}>
                     <span>{fmtTime(now)}</span>
                     <span>{fmtTime(total)}</span>
                 </div>
             </div>
             {/* No `controls`: the transport above replaces it. Kept in the DOM as the media engine
                 and as the no-JS fallback. */}
-            <audio ref={ref} src={src} preload="metadata" className="wp-block-audio-player__engine">
+            <audio ref={ref} src={src} preload="metadata" className={bc('audio-player__engine')}>
                 <a href={src}>Descargar el audio</a>
             </audio>
         </>
