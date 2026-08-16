@@ -201,6 +201,74 @@ describe("las otras salidas de la cola: ninguna es silenciosa", () => {
     return { session, avisos };
   }
 
+  it("un 200 MUDO (portal cautivo) no cuenta como entregado: se reintenta y se dice", async () => {
+    // LA PÉRDIDA MÁS CALLADA QUE HA TENIDO ESTE TRANSPORTE, y la más difícil de ver porque la
+    // CONTABILIDAD CUADRABA. Un portal cautivo, la página de mantenimiento de un balanceador o un
+    // service worker offline contestan 200 con algo que no es JSON; el transporte entrega `body: null`
+    // y el servidor no se ha enterado de nada. La guarda de `flush` empezaba por
+    // `typeof body?.accepted === "number"`, así que ante un cuerpo mudo era FALSA y el lote caía en la
+    // rama del `else`, que lo daba por entregado. Medido antes del arreglo: 20 ops aplicadas en el
+    // canvas del autor, ausentes del log y de la otra réplica, `pendientes: 0`, la identidad contable
+    // cuadrando y CERO avisos. Una suma que se cuadra a sí misma porque nadie comprueba que el
+    // servidor haya dicho algo.
+    const server = new FakeCollabServer(BASE, "auto");
+    server.register({ siteId: SITE_A, userId: 1, name: "Ana" });
+    const timers = server.useTimers(new ManualTimers());
+    const { session, avisos } = sesion(server.transport(), timers);
+    session.start();
+    await timers.run();
+
+    // El portal se traga los envíos de ops (el stream sigue vivo: es lo que hace el caso traicionero).
+    server.portalCautivo = (path) => path === "ops";
+    for (let i = 0; i < 4; i++) session.sendCommand({ kind: "setProps", nodeId: "t1", patch: { [`p${i}`]: `v${i}` } });
+    // Corto a propósito: lo justo para un par de envíos, sin llegar al tope de 8 reintentos (ese
+    // caso lo cubre la segunda mitad de este describe).
+    await timers.run(100);
+    expect(server.tragados.length, "el escenario tiene que tragarse envíos de verdad").toBeGreaterThan(0);
+    expect(server.log.length, "y el servidor no puede haber guardado nada").toBe(0);
+
+    const enVuelo = session.contabilidad();
+    expect(enVuelo.entregadas, "un 200 sin cuerpo NO es una confirmación").toBe(0);
+    expect(enVuelo.pendientes, "las 4 siguen en la cola, que es lo único honesto").toBe(4);
+    expect(enVuelo.emitidas).toBe(
+      enVuelo.entregadas + enVuelo.rechazadas + enVuelo.descartadas + enVuelo.pendientes,
+    );
+    expect(
+      avisos.some((a) => /no dice|no confirmó|reintent/i.test(a.message)),
+      `y se dice: ${JSON.stringify(avisos.map((a) => a.message))}`,
+    ).toBe(true);
+    // El aviso nombra la causa REAL, que no es «no se pudo guardar» sino «contestó sin decir nada»:
+    // el operador que lea esto tiene que poder sospechar del portal cautivo, no de su base de datos.
+    expect(avisos.some((a) => /sin decir/i.test(a.message))).toBe(true);
+  });
+
+  it("si el portal dura más que los reintentos, la sesión se RINDE diciéndolo y sin dar nada por entregado", async () => {
+    // La otra mitad, y es una decisión de diseño deliberada: el cliente no reintenta para siempre
+    // (machacaría al servidor y agotaría el limitador de la IP). Lo que NO puede hacer al rendirse es
+    // dar el lote por bueno ni callarse: las ops siguen en la cola, contadas como pendientes, y el
+    // aviso dice cuántas son y qué hacer.
+    const server = new FakeCollabServer(BASE, "auto");
+    server.register({ siteId: SITE_A, userId: 1, name: "Ana" });
+    const timers = server.useTimers(new ManualTimers());
+    const { session, avisos } = sesion(server.transport(), timers);
+    session.start();
+    await timers.run();
+
+    server.portalCautivo = (path) => path === "ops";
+    for (let i = 0; i < 4; i++) session.sendCommand({ kind: "setProps", nodeId: "t1", patch: { [`q${i}`]: `v${i}` } });
+    await timers.run(120_000);
+
+    const c = session.contabilidad();
+    expect(c.entregadas, "rendirse no es entregar").toBe(0);
+    expect(c.descartadas, "y tampoco es tirarlas: siguen ahí").toBe(0);
+    expect(c.pendientes).toBe(4);
+    expect(c.emitidas).toBe(c.entregadas + c.rechazadas + c.descartadas + c.pendientes);
+    expect(session.snapshot().status, "y el canal lo refleja").toBe("degraded");
+    const rendicion = avisos.filter((a) => /deja de reintentar/i.test(a.message));
+    expect(rendicion.length, `tiene que decirlo: ${JSON.stringify(avisos.map((a) => a.message))}`).toBeGreaterThan(0);
+    expect(rendicion[rendicion.length - 1].message, "con el número de cambios en juego").toMatch(/4 cambio/);
+  });
+
   it("un `collab_epoch` descarta la cola ENTERA de una vez, con el número exacto y contándolo", async () => {
     // Aquí las ops SÍ están perdidas para el canal —hablan de un estado que ya no existe— y por eso
     // la salida legítima es descartarlas. Lo que no es legítimo es hacerlo sin decir cuántas: antes
