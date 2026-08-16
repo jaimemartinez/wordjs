@@ -181,6 +181,9 @@ function VersoLabBench({ fixture }: { fixture: LabFixtureKey }) {
         if (!frameDoc) return;
         const onClick = (e: Event) => {
             const target = e.target as Element | null;
+            // F6: los clicks del BubbleMenu inline no son clicks de selección
+            // (mismo guard que VersoEditor — deseleccionaba en plena sesión).
+            if (target?.closest?.("[data-wjs-inline-bubble]")) return;
             const el = target?.closest?.("[data-wjs-block-id]") ?? null;
             handle.select(el ? el.getAttribute("data-wjs-block-id") : null);
         };

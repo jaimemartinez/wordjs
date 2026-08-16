@@ -265,15 +265,38 @@ function collectParagraph(nodes: ParseNode[]): Para {
  * paste-lista-anidada: uno, sub, dos).
  */
 function collectListItems(nodes: ParseNode[], items: Para[]): void {
+    // F6 (anti-pérdida, cazado por el fuzzer): un hijo directo de ul/ol que no es
+    // li/ul/ol es HTML inválido, pero descartarlo ENTERO tiraba su texto (política
+    // del programa: preservar > descartar). El contenido suelto se acumula y se
+    // emite como item IMPLÍCITO; el whitespace de pretty-print entre <li> sigue fuera.
+    let buf: InlineUnit[] = [];
+    const flushLoose = (): void => {
+        const para = normalizePara({ units: buf });
+        buf = [];
+        if (para.units.length > 0) items.push(para);
+    };
     for (const node of nodes) {
-        if (node.kind === "text") continue; // whitespace de pretty-print entre <li>
+        if (node.kind === "text") {
+            if (buf.length === 0 && node.text.trim().length === 0) continue;
+            buf.push({ kind: "text", text: node.text, marks: cloneMarks(NO_MARKS) });
+            continue;
+        }
         if (node.tag === "li") {
+            flushLoose();
             collectLi(node, items);
         } else if (node.tag === "ul" || node.tag === "ol") {
+            flushLoose();
             collectListItems(node.children, items);
+        } else if (PARAGRAPH_TAGS.has(node.tag)) {
+            flushLoose();
+            items.push(collectParagraph(node.children));
+        } else {
+            // Elemento inválido dentro de la lista: su contenido inline se preserva
+            // (desenvuelto, como cualquier elemento fuera del subset — D2).
+            collectInline([node], NO_MARKS, buf);
         }
-        // Cualquier otro hijo directo de ul/ol es inválido: se ignora.
     }
+    flushLoose();
 }
 
 function collectLi(li: ParseElement, items: Para[]): void {

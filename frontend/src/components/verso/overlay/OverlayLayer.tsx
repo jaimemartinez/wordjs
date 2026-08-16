@@ -27,6 +27,7 @@ import type { BlockRect, GeometryStore } from "./GeometryStore";
 
 const selectSelectedId = (s: VersoEditorState): string | null => s.selection.nodeId;
 const selectDragPreview = (s: VersoEditorState): DragPreview | null => s.dragPreview;
+const selectInlineEditingId = (s: VersoEditorState): string | null => s.inlineEditingId;
 
 function useGeometryRects(geometry: GeometryStore): ReadonlyMap<string, BlockRect> {
     const subscribe = React.useCallback(
@@ -114,6 +115,7 @@ export default function OverlayLayer({ handle, registry, geometry, frameDocument
     const rects = useGeometryRects(geometry);
     const selectedId = useStoreSlice(handle, selectSelectedId);
     const dragPreview = useStoreSlice(handle, selectDragPreview);
+    const inlineEditingId = useStoreSlice(handle, selectInlineEditingId);
     const hoveredId = useHoveredBlockId(frameDocument);
 
     // Un cambio de doc/preview reflowa el canvas sin disparar ResizeObserver
@@ -150,7 +152,13 @@ export default function OverlayLayer({ handle, registry, geometry, frameDocument
                     style={{ left: line.x, top: Math.max(0, line.y - 1), width: line.width }}
                 />
             )}
-            {selectedId && selectedRect && (
+            {/* F6 (cazado por el e2e del BubbleMenu): el ActionBar flota EXACTAMENTE
+                donde el bubble de la sesión inline (ambos sobre el bloque/selección) y,
+                al vivir en el documento PADRE, se queda con TODOS los clicks dirigidos
+                al bubble del iframe — y cualquier click sobre él es un outside-press
+                que cierra la sesión. Durante una sesión inline el ActionBar se OCULTA:
+                sus acciones (mover/duplicar/eliminar) no aplican mientras se edita texto. */}
+            {selectedId && selectedRect && inlineEditingId === null && (
                 <ActionBar handle={handle} registry={registry} nodeId={selectedId} rect={selectedRect} />
             )}
         </div>
