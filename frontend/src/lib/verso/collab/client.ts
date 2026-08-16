@@ -92,6 +92,33 @@ const RETRYABLE_REFUSALS = new Set([
   "site-taken", "too-many-tabs", "too-many-connections", "server-full", "server-error",
 ]);
 
+/**
+ * ESPERA MÍNIMA TRAS UN 429, y margen sobre la que exige el servidor.
+ *
+ * El servidor cuenta un strike a quien reintenta antes de su `RATE_RETRY_MS` y a los tres CIERRA la
+ * sesión — que este cliente trata como terminal: editor mudo hasta recargar la página. Estos 1000 ms
+ * fijos y los 900 del servidor vivían en ficheros distintos sin nada que los atara: funcionaba por
+ * 100 ms de casualidad. Ahora el servidor publica su ventana en `welcome.limits.rateRetryMs` y aquí
+ * se espera SIEMPRE algo más que ella; el suelo cubre a un servidor que no la publique y el techo
+ * impide que un valor absurdo (o manipulado) deje al editor parado indefinidamente.
+ */
+const RATE_BACKOFF_MS = 1000;
+const RATE_BACKOFF_MARGIN_MS = 100;
+const RATE_BACKOFF_CAP_MS = 30_000;
+
+/** Espera tras un fallo del servidor que NO es de ritmo (5xx, red caída). */
+const RETRY_BACKOFF_MS = 1000;
+
+/**
+ * Presupuesto de reintentos del envío. Sin tope, un 5xx permanente —o el 503 de una fila del log que
+ * no se puede releer, que por construcción no se arregla solo— dejaba la pestaña posteando `/ops`
+ * una vez por segundo PARA SIEMPRE: 3600 peticiones/hora, cada una pagando `authenticate` +
+ * `Post.findById` + `capsForType`, y el `apiLimiter` global (1000 req/15 min POR IP) agotado en ~17
+ * min para todo el que comparta esa IP. Es el mismo bucle que se cerró en el stream con
+ * `maxRetries`, por la otra puerta. Al agotarse se dice CLARO que hay que guardar a mano.
+ */
+const MAX_FLUSH_RETRIES = 8;
+
 export class VersoCollabSession {
   private readonly opts: Required<Pick<CollabSessionOptions, "postId" | "transport">> & CollabSessionOptions;
   private readonly listeners: SessionListeners;
@@ -149,6 +176,13 @@ export class VersoCollabSession {
   private stopped = false;
   /** Espera del PRÓXIMO envío. Un 429 o un fallo de guardado la suben; se consume una sola vez. */
   private backoffMs = 0;
+  /** Igual que `backoffMs`, para el canal de PRESENCIA, que tiene su propio temporizador. */
+  private presenceBackoffMs = 0;
+  /** Ventana de espera que el SERVIDOR publica en el `welcome` (`CONFIG.RATE_RETRY_MS`). */
+  private serverRetryMs = 0;
+  /** Reintentos consecutivos del envío sin que el servidor se haya hecho cargo del lote. */
+  private flushRetries = 0;
+  private flushGaveUp = false;
   /** Tope vivo de ops por POST: baja al recibir un 413 y vuelve al máximo al aceptarse un lote. */
   private flushCap = MAX_OPS_PER_FLUSH;
   /** Dots ya corregidos con el valor saneado del servidor: corta cualquier bucle de corrección. */
@@ -244,8 +278,17 @@ export class VersoCollabSession {
 
   private onWelcome(msg: WelcomeMessage): void {
     if (!msg || typeof msg !== "object") return;
-    // Sesión ESTABLECIDA: aquí, y solo aquí, se recupera el presupuesto de reintentos.
+    // Sesión ESTABLECIDA: aquí, y solo aquí, se recupera el presupuesto de reintentos —el de la
+    // reconexión y el del envío, que también se agota (ver `MAX_FLUSH_RETRIES`).
     this.retries = 0;
+    this.flushRetries = 0;
+    this.flushGaveUp = false;
+
+    // La espera que el servidor exige tras un 429 la dice ÉL. Duplicarla a ojo aquí es lo que hacía
+    // que 900 vs 1000 funcionara por casualidad y que tocar cualquiera de los dos números reabriera
+    // la expulsión sin un solo test en rojo.
+    const retry = Number(msg.limits?.rateRetryMs);
+    if (Number.isFinite(retry) && retry > 0) this.serverRetryMs = retry;
 
     // La identidad de réplica la manda el SERVIDOR y se adopta antes de tocar nada: con ella se
     // siembran las posiciones y se firman las ops. Que cambie con estado vivo es rarísimo (rotación
@@ -477,7 +520,10 @@ export class VersoCollabSession {
   }
 
   private flushSoon(): void {
-    if (this.flushTimer !== null || this.stopped) return;
+    // `flushGaveUp` corta el bucle AQUÍ, que es por donde se re-programaba (el `finally` de `flush`
+    // llama a este mismo camino). Se recupera con el `welcome` de una reconexión, no tecleando: si
+    // cada pulsación rearmara el reintento, el presupuesto no serviría de nada.
+    if (this.flushTimer !== null || this.stopped || this.flushGaveUp) return;
     // El freno vive AQUÍ y no en un instante absoluto: el reintento que programa el `finally` de
     // `flush()` pasa por este mismo camino, así que un 429 ya no puede acabar reenviando a los
     // 100 ms como si no hubiera pasado nada.
@@ -498,7 +544,7 @@ export class VersoCollabSession {
    * servidor no va a aceptar nunca, y eso se dice con un aviso.
    */
   async flush(): Promise<void> {
-    if (this.flushing || this.outbox.length === 0 || this.stopped || !this.self) return;
+    if (this.flushing || this.outbox.length === 0 || this.stopped || this.flushGaveUp || !this.self) return;
     this.flushing = true;
     // Un solo frame por POST: por encima del tope del validador el frame entero vuelve inválido, y
     // reenviarlo intacto es un bucle. Lo que no cabe se queda encolado para el envío siguiente.
@@ -525,13 +571,7 @@ export class VersoCollabSession {
         // un no-op exacto por el dot) en vez de darlas por entregadas.
         const accounted = (body?.accepted ?? 0) + (body?.known ?? 0) + rejected.length;
         if (typeof body?.accepted === "number" && accounted < batch.length) {
-          this.outbox = batch.concat(this.outbox);
-          this.backoffMs = 1000;
-          this.emitNotice({
-            code: "store-failed",
-            message: `El servidor no confirmó ${batch.length - accounted} cambio(s); se reintentan.`,
-            at: this.time(),
-          });
+          this.requeue(batch, RETRY_BACKOFF_MS, `El servidor no confirmó ${batch.length - accounted} cambio(s); se reintentan.`);
         } else if (body?.persisted === false) {
           // Difundido pero NO guardado: los demás lo ven, pero la sesión ya no es reanudable.
           this.setStatus("degraded");
@@ -541,10 +581,12 @@ export class VersoCollabSession {
             at: this.time(),
           });
         }
+        if (accounted >= batch.length) this.flushRetries = 0;   // el servidor SÍ se hizo cargo
         if (body?.normalized?.length) this.adoptNormalized(body.normalized);
       } else if (res.status === 429) {
+        // Un 429 no gasta presupuesto: es un freno, no un fallo, y el servidor dice cuánto esperar.
         this.outbox = batch.concat(this.outbox);
-        this.backoffMs = 1000;
+        this.backoffMs = this.rateBackoff();
         this.emitNotice({ code: "rate-limited", message: "Vas más rápido de lo que el servidor acepta; reintentando.", at: this.time() });
       } else if (res.status === 413) {
         // El frame no cabe. Se parte por la mitad y se reintenta; si ni una sola op cabe, esa op no
@@ -570,24 +612,40 @@ export class VersoCollabSession {
         });
       } else {
         // 5xx u otro status: el servidor NO se ha hecho cargo del lote. Vuelve a la cola con freno.
-        this.outbox = batch.concat(this.outbox);
-        this.backoffMs = 1000;
-        this.emitNotice({
-          code: "store-failed",
-          message: "El servidor no pudo guardar los últimos cambios; se están reintentando.",
-          at: this.time(),
-        });
+        this.requeue(batch, RETRY_BACKOFF_MS, "El servidor no pudo guardar los últimos cambios; se están reintentando.");
       }
     } catch {
       // Red caída: las ops vuelven a la cola INTACTAS y se reintentan al reconectar. Perderlas
       // aquí sería la pérdida silenciosa que este diseño no admite.
-      this.outbox = batch.concat(this.outbox);
-      this.backoffMs = 1000;
+      this.requeue(batch, RETRY_BACKOFF_MS, null);
     } finally {
       this.flushing = false;
       this.emitChange();
       if (this.outbox.length) this.flushSoon();
     }
+  }
+
+  /**
+   * Devuelve un lote a la cola CON PRESUPUESTO. Las ops nunca se tiran —eso sería la pérdida
+   * silenciosa— pero los reintentos sí se acaban: un 503 por una fila del log ilegible es permanente
+   * por construcción, y reintentarlo a 1 Hz para siempre agota el limitador global de la IP y no
+   * arregla nada. Al agotarse se deja de posear y se dice que hay que guardar a mano.
+   */
+  private requeue(batch: CollabOp[], backoff: number, message: string | null): void {
+    this.outbox = batch.concat(this.outbox);
+    this.backoffMs = backoff;
+    this.flushRetries++;
+    if (this.flushRetries >= MAX_FLUSH_RETRIES) {
+      this.flushGaveUp = true;
+      this.setStatus("degraded");
+      this.emitNotice({
+        code: "store-failed",
+        message: `El servidor lleva ${this.flushRetries} intentos sin aceptar ${this.outbox.length} cambio(s). Se deja de reintentar: guarda la página para conservarlos.`,
+        at: this.time(),
+      });
+      return;
+    }
+    if (message) this.emitNotice({ code: "store-failed", message, at: this.time() });
   }
 
   /**
@@ -653,13 +711,49 @@ export class VersoCollabSession {
     if (this.stopped || !this.self) return;
     this.pendingSel = sel;
     this.presenceDirty = true;
-    if (this.presenceTimer !== null) return;
-    this.presenceTimer = this.later(this.opts.presenceMs ?? DEFAULTS.presenceMs, () => {
+    this.presenceSoon();
+  }
+
+  /**
+   * LA PRESENCIA TAMBIÉN RESPETA LA ESPERA DE UN 429.
+   *
+   * Antes se posteaba cada `presenceMs` (50 ms por defecto) y el 429 ni se miraba
+   * (`.catch(() => undefined)` sobre un `void`). Bajar con las flechas por el documento son decenas
+   * de POST seguidos: si el cubo estaba en descubierto —cosa que un solo `resync` legítimo provoca—
+   * el servidor veía tres rechazos separados 50 ms, los contaba como "ignora la espera" y cerraba la
+   * sesión con `rate_limit`, que aquí es terminal. ~150 ms de mover el cursor y editor mudo hasta
+   * recargar. El servidor ya no rebota la presencia por un cubo de BYTES en rojo, pero el freno de
+   * presencia sigue existiendo (y debe): cuando salte, se espera como en `flush`.
+   */
+  private presenceSoon(): void {
+    if (this.presenceTimer !== null || this.stopped) return;
+    const delay = this.presenceBackoffMs || (this.opts.presenceMs ?? DEFAULTS.presenceMs);
+    this.presenceBackoffMs = 0;
+    this.presenceTimer = this.later(delay, () => {
       this.presenceTimer = null;
-      if (!this.presenceDirty) return;
+      if (!this.presenceDirty || this.stopped || !this.self) return;
       this.presenceDirty = false;
-      void this.post("presence", { siteId: this.siteId, sel: this.pendingSel }).catch(() => undefined);
+      void this.post("presence", { siteId: this.siteId, sel: this.pendingSel })
+        .then((res) => {
+          if (res?.status !== 429 || this.stopped) return;
+          // Se reintenta la ÚLTIMA selección conocida (la presencia es estado, no un log: lo viejo
+          // no interesa), y sobre todo se espera lo que el servidor pide antes de volver.
+          this.presenceDirty = true;
+          this.presenceBackoffMs = this.rateBackoff();
+          this.presenceSoon();
+        })
+        .catch(() => undefined);
     });
+  }
+
+  /**
+   * Espera antes de reintentar tras un 429, DERIVADA de la que el servidor publicó en el `welcome`.
+   * Nunca menos que la suya (eso es lo que el servidor castiga con un strike) ni menos que el suelo
+   * propio, y con techo para que un valor absurdo no deje al editor parado.
+   */
+  private rateBackoff(): number {
+    const server = Number(this.serverRetryMs) || 0;
+    return Math.min(Math.max(RATE_BACKOFF_MS, server + RATE_BACKOFF_MARGIN_MS), RATE_BACKOFF_CAP_MS);
   }
 
   /* ----------------------------------------------------------------------------------------- */

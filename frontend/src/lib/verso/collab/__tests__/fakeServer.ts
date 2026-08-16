@@ -52,6 +52,11 @@ export class ManualTimers {
     if (typeof handle === "number") this.items.delete(handle);
   };
 
+  /** Reloj simulado. Un test que mide ESPERAS necesita leerlo, no solo avanzarlo. */
+  get time(): number {
+    return this.clock;
+  }
+
   /** Dispara todo lo pendiente (incluido lo que se re-programe) y deja asentar las promesas. */
   async run(maxRounds = 200): Promise<void> {
     for (let i = 0; i < maxRounds && this.items.size > 0; i++) {
@@ -89,7 +94,16 @@ export function deriveSite(nonce: string): string {
   }
   let out = "";
   for (let i = 0; i < 16; i++) {
-    const mix = (i < 8 ? h1 >>> (i * 4) : h2 >>> ((i - 8) * 4)) ^ (i * 7);
+    // El `>>> 0` FINAL no es cosmético. `^` devuelve un int32 CON SIGNO: en cuanto el operando trae
+    // el bit alto puesto, `mix` era negativo, `mix % 32` negativo, y `SITE_ALPHABET[negativo]` es
+    // `undefined`, que se concatena como la CADENA "undefined". 3684 de 5000 nonces sintéticos
+    // salían así —`s_k53s2j6uundefined6qkmi5c`, 25 caracteres— y eso rompe justo la propiedad que
+    // este doble existe para modelar: la identidad derivada tiene que tener la MISMA FORMA que un
+    // nonce y pasar el filtro `^s_[a-z2-7]{1,32}$` de `routes/collab.ts` sin un solo 400, porque de
+    // ahí venía el SILENCIO del bug de producción. Con identidades visiblemente inválidas los tests
+    // seguían verdes (se anclan a `deriveSite(...)` literal, así que son autoconsistentes) mientras
+    // la convergencia CRDT se probaba con identificadores de sitio que no pueden existir.
+    const mix = ((i < 8 ? h1 >>> (i * 4) : h2 >>> ((i - 8) * 4)) ^ (i * 7)) >>> 0;
     out += SITE_ALPHABET[mix % 32];
   }
   return `s_${out}`;
@@ -110,6 +124,22 @@ export class FakeCollabServer {
    * REAL (`client.ts#openStream`): un test de reconexión que no la mire está probando el doble.
    */
   readonly openedWith: string[] = [];
+
+  /**
+   * Espera que este servidor exige tras un 429, tal cual la publica el real en
+   * `welcome.limits.rateRetryMs` (`CONFIG.RATE_RETRY_MS` = 900). Un test puede subirla para
+   * comprobar que el cliente DERIVA su backoff de ella en vez de llevar 1000 ms escritos a mano.
+   */
+  rateRetryMs = 900;
+
+  /** Cuántos 429 seguidos servir por camino. Es el freno de ritmo del servidor real, simulado. */
+  readonly refuse: Record<string, number> = {};
+
+  /** Reloj del test (normalmente `timers.time`): sin él no se puede medir CUÁNTO esperó el cliente. */
+  clock: () => number = () => 0;
+
+  /** Cada POST recibido con el instante del reloj simulado. La huella de las esperas del cliente. */
+  readonly posted: { path: string; at: number }[] = [];
 
   /**
    * DERIVACIÓN de la identidad de réplica, igual que hace el servidor real: lo que el cliente pone
@@ -163,7 +193,10 @@ export class FakeCollabServer {
           self,
           serverTime: 0,
           truncated: false,
-          limits: { maxOpsPerSec: 50, maxBytesPerSec: 65536, maxFrameBytes: 262144 },
+          limits: {
+            maxOpsPerSec: 50, maxBytesPerSec: 65536, maxFrameBytes: 262144,
+            rateRetryMs: this.rateRetryMs,
+          },
         });
         for (const [other] of this.handlers) {
           if (other !== siteId) this.enqueue(other, "members", { joined: { ...self, sel: null, at: 0 } });
@@ -175,6 +208,15 @@ export class FakeCollabServer {
         const path = url.split("/").pop() ?? "";
         const payload = body as { siteId?: string; epoch?: number; ops?: CollabOp[]; sel?: unknown; vv?: Record<string, number> };
         const siteId = String(payload?.siteId ?? "");
+        this.posted.push({ path, at: this.clock() });
+
+        // Freno de ritmo, como el real: 429 con la MISMA semántica —el lote no se ha aceptado y hay
+        // que esperar `rateRetryMs` antes de volver—. El servidor real cuenta strike a quien no
+        // espera y a los tres cierra la sesión, así que el cliente TIENE que respetarlo aquí también.
+        if ((this.refuse[path] ?? 0) > 0) {
+          this.refuse[path]--;
+          return { status: 429, body: { code: "collab_rate_limit" } };
+        }
 
         if (path === "ops") {
           if (Number(payload.epoch) !== this.epoch) {

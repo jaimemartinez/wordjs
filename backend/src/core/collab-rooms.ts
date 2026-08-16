@@ -65,7 +65,9 @@
  *     sala se podía retirar (epoch arriba, log borrado) con un editor DENTRO cuya fila de liveness
  *     había podado el barrido durante una caída de escrituras;
  *   · la SEÑAL DE CLÚSTER (`liveMembers`), que cubre a los editores de OTROS nodos y falla cerrado:
- *     si la consulta no se puede hacer, `null` ⇒ puede que haya gente ⇒ no se purga.
+ *     si la consulta no se puede hacer, `null` ⇒ puede que haya gente ⇒ no se purga. Y "no se puede
+ *     hacer" NO es "el driver lanzó": el driver de reserva devuelve `undefined`/`[]` en silencio, así
+ *     que la ausencia de una respuesta utilizable cuenta igual que una excepción (`countOrNull`).
  * El latido es un UPSERT: una fila podada tiene que poder volver, o el editor queda invisible para
  * siempre. Conservar de más cuesta unas filas; conservar de menos cuesta el trabajo de quien está
  * escribiendo ahora mismo. Y si aun así se retira una sala con gente dentro, se les AVISA por su
@@ -382,20 +384,42 @@ async function ensureDoc(postId: number, reseed = true, exceptConnId?: string | 
  * que se sirve ya no es el que se aceptó. Quien lo consuma tiene que decírselo al cliente.
  */
 async function loadOps(postId: number, epoch: number): Promise<{ ops: any[]; bytes: number; unreadable: number }> {
+    // Cuántas filas TIENE que traer la consulta. Se pregunta ANTES y no es redundante: `dbAsync.all`
+    // devuelve `[]` cuando el driver de reserva no puede leer (ver `countOrNull`), y un `[]` de fallo
+    // es indistinguible de un log vacío. Sin este contraste, un log de miles de ops que no se puede
+    // releer se servía como «vacío y COMPLETO» — `welcome.truncated: false` — y el cliente daba por
+    // recuperado un histórico del que no había leído ni una fila.
+    const total = await countOrNull(
+        'SELECT COUNT(*) AS c FROM collab_ops WHERE post_id = ? AND epoch = ?', [postId, epoch]);
     const rows = await dbAsync.all(
         'SELECT payload FROM collab_ops WHERE post_id = ? AND epoch = ? ORDER BY id ASC LIMIT ?',
         [postId, epoch, CONFIG.MAX_OPS_PER_EPOCH]
     );
+    const traidas: any[] = Array.isArray(rows) ? rows : [];
     const ops: any[] = [];
     let bytes = 0;
     let unreadable = 0;
-    for (const r of rows || []) {
+    for (const r of traidas) {
         // Los bytes se cuentan sobre el texto que ya viene de la BD: sirven para cobrar el coste de
         // un `resync` sin volver a serializar la respuesta entera solo para medirla.
         bytes += Buffer.byteLength(String(r.payload || ''), 'utf8');
         try { ops.push(JSON.parse(r.payload)); } catch { unreadable++; }
     }
-    if (unreadable) console.warn(`[collab] sala ${postId}: ${unreadable} fila(s) del log ilegibles`);
+
+    if (total === null) {
+        // Ni siquiera se sabe cuántas había: no se puede afirmar que el log servido sea el aceptado.
+        unreadable++;
+        console.warn(`[collab] sala ${postId}: no se pudo contar el log; la sesión NO es reanudable`);
+    } else {
+        const esperadas = Math.min(total, CONFIG.MAX_OPS_PER_EPOCH);
+        const faltan = Math.max(0, esperadas - traidas.length);
+        if (faltan > 0) {
+            unreadable += faltan;
+            console.warn(`[collab] sala ${postId}: ${faltan} fila(s) del log no llegaron a leerse`);
+        }
+    }
+
+    if (unreadable) console.warn(`[collab] sala ${postId}: ${unreadable} fila(s) del log ilegibles o no leídas`);
     return { ops, bytes, unreadable };
 }
 
@@ -405,26 +429,65 @@ async function opsCount(postId: number, epoch: number): Promise<number> {
 }
 
 /**
+ * `SELECT COUNT(*)` que distingue CERO de NO SÉ.
+ *
+ * «Falla cerrado» era una propiedad del DRIVER, no de este código. `sqlite-native` LANZA cuando la
+ * consulta no se puede hacer, y el `catch` devolvía `null` — correcto. Pero `sqlite-legacy` —el
+ * fallback AUTOMÁTICO que `config/database.ts` documenta para cuando el binario nativo no carga— NO
+ * LANZA: loguea el error y devuelve `undefined` desde `get` y `[]` desde `all`. Ahí
+ * `Number(undefined?.c) || 0` daba **0**, que es exactamente la señal de «no hay nadie ⇒ purga».
+ * Con `collab_members` inaccesible (una 0013 a medias, una imagen corrupta) el barrido borraba el
+ * log y subía el epoch de salas CON GENTE DENTRO — y los desprotegidos eran justo los editores de
+ * OTROS nodos, que son para quienes la señal de clúster existe.
+ *
+ * Una agregación SIEMPRE devuelve fila: si no viene una utilizable, la consulta falló. La ausencia
+ * de respuesta no es prueba de que no haya nadie.
+ */
+async function countOrNull(sql: string, params: any[]): Promise<number | null> {
+    let row: any;
+    try {
+        row = await dbAsync.get(sql, params);
+    } catch (e: any) {
+        console.warn('[collab] recuento fallido:', e && e.message);
+        return null;
+    }
+    if (!row || row.c === null || row.c === undefined) {
+        // El driver no lanzó, pero tampoco contestó. Es el mismo caso, no un cero.
+        console.warn('[collab] recuento sin fila utilizable: se trata como "no se sabe", no como cero');
+        return null;
+    }
+    const n = Number(row.c);
+    return Number.isFinite(n) ? n : null;
+}
+
+/**
  * Miembros VIVOS de la sala en todo el clúster (no solo en este proceso).
  *
  * Devuelve `null` cuando NO SE HA PODIDO SABER. Quien decide purgar tiene que tratar ese `null`
  * como "puede que haya gente": una consulta fallida no es permiso para borrar la sesión de nadie.
+ * El fallo cerrado NO puede depender de que el driver lance — ver `countOrNull`.
+ *
+ * @param incluirEntrantes cuenta también a quien está A MITAD DE ENTRAR (`seen_at` negativo). Los dos
+ *   usos de esta señal quieren cosas DISTINTAS y por eso es un parámetro y no una constante:
+ *     · `ensureDoc` decide si RE-SEMBRAR, y ahí un entrante NO puede contar — si contara, dos joins
+ *       simultáneos se verían el uno al otro y ninguno re-sembraría (el hallazgo 12);
+ *     · el BARRIDO decide si RETIRAR, que es destructivo, y ahí un entrante SÍ cuenta: retirar la
+ *       sala por debajo de alguien que está entrando le borra el log que acaba de leer.
  */
-async function liveMembers(postId: number, exceptConnId?: string | null): Promise<number | null> {
-    try {
-        const since = Date.now() - CONFIG.MEMBER_TTL_MS;
-        const r = exceptConnId
-            ? await dbAsync.get(
-                'SELECT COUNT(*) AS c FROM collab_members WHERE post_id = ? AND seen_at > ? AND conn_id <> ?',
-                [postId, since, exceptConnId])
-            : await dbAsync.get(
-                'SELECT COUNT(*) AS c FROM collab_members WHERE post_id = ? AND seen_at > ?',
-                [postId, since]);
-        return Number(r?.c) || 0;
-    } catch (e: any) {
-        console.warn('[collab] no se pudo leer la presencia de clúster:', e && e.message);
-        return null;
-    }
+async function liveMembers(
+    postId: number,
+    exceptConnId?: string | null,
+    incluirEntrantes = false,
+): Promise<number | null> {
+    const since = Date.now() - CONFIG.MEMBER_TTL_MS;
+    const edad = incluirEntrantes ? 'ABS(seen_at)' : 'seen_at';
+    return exceptConnId
+        ? countOrNull(
+            `SELECT COUNT(*) AS c FROM collab_members WHERE post_id = ? AND ${edad} > ? AND conn_id <> ?`,
+            [postId, since, exceptConnId])
+        : countOrNull(
+            `SELECT COUNT(*) AS c FROM collab_members WHERE post_id = ? AND ${edad} > ?`,
+            [postId, since]);
 }
 
 /** Miembros vivos de la sala EN ESTE PROCESO. Cinturón local de las decisiones destructivas. */
@@ -439,16 +502,23 @@ function localMembers(postId: number, exceptConnId?: string | null): number {
 /**
  * Reserva la fila de liveness de una conexión que está ENTRANDO.
  *
- * `seen_at = 0` a propósito: la fila existe (así el `leave` de un cliente que aborta a mitad tiene
- * qué borrar y nada queda huérfano) pero NO cuenta como miembro vivo hasta que el join termina. Sin
- * ese matiz, dos entradas simultáneas en una sala vacía se veían la una a la otra como "hay alguien
- * dentro" y NINGUNA re-sembraba: las dos abrían con el snapshot rancio del contenido que se había
- * guardado por fuera, que es el hallazgo 12 otra vez.
+ * `seen_at` NEGATIVO a propósito, y el signo es el arreglo de una carrera. La fila tiene que existir
+ * (así el `leave` de un cliente que aborta a mitad tiene qué borrar y nada queda huérfano) pero NO
+ * puede contar como miembro vivo hasta que el join termina: sin ese matiz, dos entradas simultáneas
+ * en una sala vacía se veían la una a la otra como «hay alguien dentro» y NINGUNA re-sembraba — las
+ * dos abrían con el snapshot rancio, que es el hallazgo 12 otra vez.
+ *
+ * Se marcaba con `seen_at = 0`, y ahí estaba el problema: para la PODA del barrido, un 0 es la marca
+ * de tiempo más vieja posible, así que una conexión a mitad de entrar en el nodo A era indistinguible
+ * de la fila de un nodo que murió hace horas. El barrido del nodo B la borraba y retiraba la sala —
+ * epoch arriba y log fuera— con A ya dentro. Guardando `-now` la fila sigue sin contar como viva
+ * (toda comparación de liveness es `seen_at > algo positivo`) pero LLEVA SU EDAD, así que la poda
+ * puede distinguir «entrando ahora» de «lleva horas colgada» mirando el valor absoluto.
  */
 async function claimMember(conn: Conn): Promise<void> {
     await dbAsync.run(
-        'INSERT INTO collab_members (conn_id, post_id, site_id, user_id, node_id, seen_at) VALUES (?, ?, ?, ?, ?, 0)',
-        [conn.connId, conn.postId, conn.siteId, conn.userId, NODE_ID]
+        'INSERT INTO collab_members (conn_id, post_id, site_id, user_id, node_id, seen_at) VALUES (?, ?, ?, ?, ?, ?)',
+        [conn.connId, conn.postId, conn.siteId, conn.userId, NODE_ID, -Date.now()]
     );
 }
 
@@ -555,13 +625,23 @@ async function retireRoom(
  * `exceptConnId` es la conexión que está ENTRANDO y provocó la re-siembra: a ella no se le avisa de
  * nada porque su `welcome` ya trae el estado nuevo.
  */
-async function announceReset(postId: number, exceptConnId?: string | null): Promise<void> {
+async function announceReset(postId: number, exceptConnId?: string | null): Promise<boolean> {
     const room = rooms.get(postId);
     const exceptSite = exceptConnId ? (room && room.conns.get(exceptConnId)?.siteId) || null : null;
-    await broadcast(postId, 'warning', {
+    const entregado = await broadcast(postId, 'warning', {
         code: 'room_reset',
         message: 'La sesión colaborativa se reinició con el contenido guardado. Revisa el documento antes de seguir.',
     }, exceptSite);
+    if (!entregado) {
+        // El superviviente que este aviso venía a rescatar está, por definición, en OTRO nodo: si el
+        // bus no lo lleva, vuelve exactamente al «live y mudo» que esto cierra. `cache.publish`
+        // devuelve `false` sin lanzar, así que sin esta línea la pérdida es INVISIBLE — ni un log.
+        // No se puede reintentar (el epoch ya subió), pero sí se puede dejar de ser silenciosa.
+        console.error(
+            `[collab] sala ${postId}: el aviso de reinicio NO cruzó el bus. ` +
+            'Los editores de otros nodos pueden haberse quedado en «live» y mudos: revisa Redis.');
+    }
+    return entregado;
 }
 
 /* ------------------------------------------------------------------------------------------- */
@@ -605,11 +685,16 @@ function deliverLocal(postId: number, event: string, data: any, exceptSite?: str
  * copiado de `core/notifications.ts`: nunca se depende del round-trip del bus para la entrega
  * local (el subscriber puede estar re-suscribiéndose, y un publish con 0 receptores "va bien").
  */
-async function broadcast(postId: number, event: string, data: any, exceptSite?: string | null): Promise<void> {
+/**
+ * @returns `false` si el tramo de CLÚSTER no se pudo entregar. `cache.publish` devuelve `false` y no
+ * lanza cuando Redis está caído, así que ignorar el resultado convierte "esto no llegó a los otros
+ * nodos" en silencio absoluto. Para la mayoría de eventos eso se recupera solo (el `resync` del
+ * cliente cierra el hueco); para el aviso de RETIRADA no, y por eso `announceReset` lo mira.
+ */
+async function broadcast(postId: number, event: string, data: any, exceptSite?: string | null): Promise<boolean> {
     deliverLocal(postId, event, data, exceptSite);
-    if (cache.pubsubAvailable()) {
-        await cache.publish(CHANNEL, { o: NODE_ID, p: postId, e: event, d: data, x: exceptSite || null });
-    }
+    if (!cache.pubsubAvailable()) return true;   // monolito: no hay tramo de clúster que fallar
+    return (await cache.publish(CHANNEL, { o: NODE_ID, p: postId, e: event, d: data, x: exceptSite || null })) !== false;
 }
 
 /** Suscribe este proceso al bus de salas. Llamar una vez al arranque. No-op sin Redis. */
@@ -862,8 +947,12 @@ async function sweepIdleRooms(maxAgeMs = 60 * 60 * 1000): Promise<number> {
         const cutoff = now - maxAgeMs;
 
         // Miembros de nodos que murieron sin cerrar: caducan muy por encima del TTL de liveness.
+        // `ABS` y no `seen_at` a secas: quien está a mitad de entrar guarda `-now` (ver
+        // `claimMember`), y con la comparación directa su fila —recién creada— parecía la más vieja
+        // de todas y se podaba. El barrido de OTRO nodo retiraba entonces la sala con esa conexión ya
+        // dentro. Con el valor absoluto se compara la EDAD, que es lo que aquí importa.
         try {
-            await dbAsync.run('DELETE FROM collab_members WHERE seen_at < ?', [now - CONFIG.MEMBER_TTL_MS * 4]);
+            await dbAsync.run('DELETE FROM collab_members WHERE ABS(seen_at) < ?', [now - CONFIG.MEMBER_TTL_MS * 4]);
         } catch (e: any) {
             console.warn('[collab] no se pudo podar collab_members:', e && e.message);
         }
@@ -878,7 +967,9 @@ async function sweepIdleRooms(maxAgeMs = 60 * 60 * 1000): Promise<number> {
                 continue;
             }
             if (ms > cutoff) continue;
-            const live = await liveMembers(postId);
+            // `true`: aquí SÍ cuentan los que están a mitad de entrar. Retirar es destructivo y una
+            // conexión que ya leyó el log en otro nodo no puede quedarse sin él por llegar tarde.
+            const live = await liveMembers(postId, null, true);
             if (live === null || live > 0) continue;               // viva en otro nodo, o no se sabe
             if (await retireRoom(postId) === 'retired') retired++;
         }
@@ -918,7 +1009,19 @@ function rateCheck(conn: Conn, ops: number, bytes: number, presence = 0): RateVe
         return { ok: false, code: 'too-large', message: 'La operación excede el máximo permitido.' };
     }
 
-    if (conn.opTokens < ops || conn.byteTokens < bytes || conn.presenceTokens < presence) {
+    // CADA CUBO FRENA SOLO LO QUE GASTA DE ÉL. `conn.byteTokens < bytes` con `bytes = 0` es cierto en
+    // cuanto el cubo está en DESCUBIERTO — y `chargeBytes` lo deja ahí a propósito tras servir un
+    // `resync`. Por esa puerta rebotaba TODA la presencia, que cuesta 0 ops y 0 bytes: mover el cursor
+    // por los bloques después de un resync legítimo se comía los tres strikes y expulsaba de la sala a
+    // quien no había hecho nada malo (y un co-editor lo provocaba a voluntad inflando el log). El
+    // arreglo del strike tapó el camino de `ops`, donde el cliente ya respetaba la espera, y dejó éste
+    // abierto: el candado estaba en la puerta que nadie forzaba. El suelo de la deuda acota el tiempo
+    // de recuperación; esto acota A QUÉ afecta esa deuda.
+    const falta =
+        (ops > 0 && conn.opTokens < ops) ||
+        (bytes > 0 && conn.byteTokens < bytes) ||
+        (presence > 0 && conn.presenceTokens < presence);
+    if (falta) {
         // EL STRIKE SOLO CUENTA SI EL CLIENTE IGNORÓ LA ESPERA. Sumar uno en cada rechazo cerraba la
         // sesión de quien se porta BIEN: un solo `resync` legítimo deja el cubo de bytes en
         // descubierto (se cobra el log entero DESPUÉS de servirlo), y a partir de ahí hasta un frame

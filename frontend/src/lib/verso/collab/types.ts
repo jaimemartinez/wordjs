@@ -48,7 +48,18 @@ export interface WelcomeMessage {
   serverTime: number;
   /** true ⇒ el log se truncó: la reanudación ya no está garantizada. */
   truncated: boolean;
-  limits: { maxOpsPerSec: number; maxBytesPerSec: number; maxFrameBytes: number };
+  limits: {
+    maxOpsPerSec: number;
+    maxBytesPerSec: number;
+    maxFrameBytes: number;
+    /**
+     * Espera que el servidor exige tras un 429 (`CONFIG.RATE_RETRY_MS`). Reintentar ANTES cuenta
+     * como strike y a los tres cierra la sesión, así que este número NO puede estar duplicado a
+     * ojo en el cliente: viaja por el cable y de él se deriva el backoff. Opcional para tolerar un
+     * servidor anterior a este campo, donde se usa el suelo del cliente.
+     */
+    rateRetryMs?: number;
+  };
 }
 
 export interface OpsMessage {
