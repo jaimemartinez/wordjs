@@ -124,8 +124,33 @@ const STATUS_VIEWS: Record<CollabStatus, StatusView> = {
     },
 };
 
-export function statusView(status: CollabStatus): StatusView {
-    return STATUS_VIEWS[status] ?? STATUS_VIEWS.off;
+/**
+ * `degraded` NO tiene una sola causa, y el `detail` es lo ÚNICO que queda en pantalla cuando el
+ * autor descarta el aviso: si miente, miente para siempre.
+ *
+ * El cliente pone `degraded` en tres sitios distintos (`collab/client.ts`): el registro de la
+ * sesión se llenó (`log-full`), la sala se reinició (`epoch-reset`/`identity-reset`) y —la que
+ * destapó esta verificación— se agotaron los reintentos de envío porque el servidor no estaba
+ * (`store-failed`, `reintenta()`). Con un único texto fijo, el tercer caso se anunciaba como el
+ * primero: «el registro se ha llenado: guarda y RECARGA», cuando recargar es justo lo que pierde
+ * los cambios que no se enviaron. El aviso (toast) ya decía la verdad; el chip no.
+ *
+ * Solo se especializan las causas que cambian QUÉ hacer. Lo demás cae al texto de siempre.
+ */
+const DEGRADED_DETAIL: Partial<Record<CollabNotice["code"], string>> = {
+    "store-failed":
+        "Hay cambios tuyos que el servidor no ha aceptado: siguen en esta página y se conservan al pulsar Guardar.",
+    "epoch-reset":
+        "La sesión colaborativa se reinició: revisa el documento antes de seguir, puede faltar algo que no llegó a enviarse.",
+    "identity-reset":
+        "La sesión colaborativa se reinició: revisa el documento antes de seguir, puede faltar algo que no llegó a enviarse.",
+};
+
+export function statusView(status: CollabStatus, cause?: CollabNotice["code"] | null): StatusView {
+    const base = STATUS_VIEWS[status] ?? STATUS_VIEWS.off;
+    if (status !== "degraded" || !cause) return base;
+    const detail = DEGRADED_DETAIL[cause];
+    return detail ? { ...base, detail } : base;
 }
 
 /**

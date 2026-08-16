@@ -43,10 +43,18 @@ describe("resolveCollabEnabled", () => {
         expect(resolveCollabEnabled({ stored: "", env: null, defaultOn: true })).toBe(true);
     });
 
-    it("HOY el default es APAGADO (el transporte tiene remediación pendiente)", () => {
-        // Este test es el recordatorio ejecutable de la decisión: cuando se encienda, se cambia
-        // aquí Y en la cabecera de flag.ts, a la vez y a propósito.
-        expect(COLLAB_DEFAULT_ON).toBe(false);
-        expect(resolveCollabEnabled({})).toBe(false);
+    it("HOY el default es ENCENDIDO (transporte remediado + multinodo + navegador)", () => {
+        // Este test es el recordatorio ejecutable de la decisión: la bandera no se mueve sola ni de
+        // rebote en un refactor. Cambiarla obliga a cambiar TAMBIÉN la cabecera de flag.ts, que es
+        // donde vive el porqué — y donde hay que actualizar qué se verificó y qué no.
+        expect(COLLAB_DEFAULT_ON).toBe(true);
+        expect(resolveCollabEnabled({})).toBe(true);
+    });
+
+    it("apagarla desde el despliegue o desde un navegador sigue ganándole al default", () => {
+        // Lo que hace defendible encenderla: se puede apagar sin recompilar, y por eso este par de
+        // rutas de escape se comprueba junto a la decisión, no en otro sitio.
+        expect(resolveCollabEnabled({ env: "off" })).toBe(false);
+        expect(resolveCollabEnabled({ stored: "off", env: "on" })).toBe(false);
     });
 });

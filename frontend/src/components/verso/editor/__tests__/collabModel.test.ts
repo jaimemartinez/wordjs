@@ -80,6 +80,38 @@ describe("statusView", () => {
     it("un estado desconocido no rompe la barra", () => {
         expect(statusView("lo-que-sea" as never).text).toBe(statusView("off").text);
     });
+
+    /**
+     * `degraded` NO tiene una sola causa: el cliente lo pone (a) cuando el registro de la sesión se
+     * llenó (`log-full`), (b) cuando la sala se reinició (`epoch-reset`) y (c) cuando se rinde de
+     * reintentar el envío porque el servidor no está (`store-failed`, client.ts `reintenta()`).
+     *
+     * Verificado en navegador el 2026-08-16: con el servidor parado, el aviso decía la verdad —
+     * «El servidor lleva 8 intentos sin aceptar 5 cambio(s). Se deja de reintentar: guarda la
+     * página para conservarlos.»— mientras el `title` del chip, que es lo que queda en pantalla
+     * cuando el aviso se descarta, afirmaba «La sesión es muy larga y el registro de cambios se ha
+     * llenado». Un diagnóstico FALSO en el sitio más persistente de los dos: manda al autor a
+     * recargar (que pierde lo no enviado) en vez de a guardar.
+     */
+    it("`degraded` explica LA causa real, no siempre la del registro lleno", () => {
+        const lleno = statusView("degraded", "log-full");
+        expect(lleno.detail).toMatch(/registro de cambios se ha llenado/i);
+
+        const sinEntregar = statusView("degraded", "store-failed");
+        expect(sinEntregar.tone).toBe("warn");
+        expect(sinEntregar.detail).not.toMatch(/registro de cambios se ha llenado/i);
+        expect(sinEntregar.detail).toMatch(/guarda/i);
+        expect(sinEntregar.detail).not.toMatch(/recarga/i); // recargar aquí PIERDE lo no enviado
+
+        const reinicio = statusView("degraded", "epoch-reset");
+        expect(reinicio.detail).toMatch(/reinici/i);
+        expect(reinicio.detail).not.toMatch(/registro de cambios se ha llenado/i);
+    });
+
+    it("sin causa conocida, `degraded` mantiene el texto de siempre (compatibilidad)", () => {
+        expect(statusView("degraded", null).detail).toBe(statusView("degraded").detail);
+        expect(statusView("degraded", "rate-limited").detail).toBe(statusView("degraded").detail);
+    });
 });
 
 describe("noticeSeverity", () => {

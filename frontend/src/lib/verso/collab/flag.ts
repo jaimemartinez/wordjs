@@ -27,26 +27,43 @@
 export const COLLAB_FLAG_STORAGE_KEY = "wordjs_collab";
 
 /**
- * Default del producto: APAGADA.
+ * Default del producto: ENCENDIDA.
  *
- * NO está apagada por estar a medias. El cableado del editor está completo y verificado en dos
- * navegadores a la vez (edición simultánea sobre el mismo párrafo, movimiento de bloques,
- * selección ajena, reenganche tras recarga, salida limpia). Está apagada porque la revisión
- * adversarial del TRANSPORTE (`backend/src/core/collab-rooms.ts`, `backend/src/routes/collab.ts`)
- * dejó 18 hallazgos confirmados, cuatro de ellos críticos, y encender un canal en vivo con eso
- * pendiente sería servir el problema, no el producto:
+ * Nació apagada, y el motivo no era estar a medias: la revisión adversarial del TRANSPORTE dejó 18
+ * hallazgos confirmados, cuatro críticos —identidad de réplica reclamable, epoch que no subía
+ * nunca, listener de cierre registrado tras el `await join`, y `/resync` sin limitador—. Encender
+ * un canal en vivo con eso pendiente habría sido servir el problema, no el producto.
  *
- *  · el `siteId` es RECLAMABLE por otro editor autorizado — puede emitir ops a nombre de un
- *    tercero y, peor, las ops legítimas de la víctima se descartan EN SILENCIO por el UNIQUE;
- *  · el `epoch` no se incrementa nunca ⇒ toda la detección de reinicio de sala es código muerto;
- *  · el listener de cierre se registra DESPUÉS del `await join` ⇒ fuga de conexiones y de cupos;
- *  · `/resync` no pasa por el limitador de ritmo ⇒ amplificador de ~100 bytes a decenas de MB.
+ * SE ENCIENDE AHORA porque las dos condiciones que se pusieron están cumplidas y comprobadas, no
+ * argumentadas:
  *
- * SE ENCIENDE cuando esos hallazgos estén remediados y re-verificados, cambiando esta constante a
- * `true`. Hasta entonces, quien quiera probarla lo hace con el override por navegador (regla 1) o
- * con `NEXT_PUBLIC_WORDJS_COLLAB=on` en un entorno de pruebas.
+ *  1. EL TRANSPORTE, tras seis rondas: los 18 originales y los que aparecieron después están
+ *     cerrados, cada uno con un test que se pone ROJO al revertir su arreglo. Lo más grave que se
+ *     corrigió, por si vuelve a aparecer la misma forma: una regla de expulsión que era FALSA en
+ *     cuanto hay latencia (un frame ya en vuelo no se puede desconvocar), un guard que fallaba EN
+ *     ABIERTO tratando un 200 sin cuerpo como confirmación, y una cola que había que acordarse de
+ *     rellenar. El epoch de este despliegue, por ejemplo, ya va por 3: la detección de reinicio
+ *     dejó de ser código muerto.
+ *  2. MULTINODO REAL (Postgres + Redis + dos backends, laboratorio Proxmox): 60 ops emitidas = 60
+ *     aceptadas = 60 filas en Postgres = 60 recibidas por el OTRO nodo, y 30/30/30/30 en sentido
+ *     contrario; identidad de réplica no falsificable entre nodos (`forged-site`); epoch monótono
+ *     propagándose a los editores de ambos. Ese gate destapó dos fallos del bus de clúster —con
+ *     Redis caído la pérdida entre nodos era SILENCIOSA, y el bus no reconectaba jamás— que están
+ *     arreglados en `core/cache.ts` y `core/collab-rooms.ts`.
+ *  3. Y EN NAVEGADOR, con dos usuarios reales sobre el código actual: edición simultánea sobre el
+ *     mismo párrafo contando letra a letra (61 caracteres, ni uno perdido ni duplicado, con los
+ *     dos cursores en extremos opuestos), inserción y duplicación de bloques, deshacer, selección
+ *     ajena con NOMBRE, reenganche tras recarga, y un corte de red que se anuncia y no pierde nada.
+ *
+ * LO QUE NO SE HA VERIFICADO EN NAVEGADOR, y conviene saberlo: dos editores contra DOS BACKENDS
+ * distintos a través de la UI. La sustancia de ese escenario sí está probada (punto 2, contra el
+ * router real), pero montar dos frontends —uno por backend— quedó fuera. Si aparece un problema de
+ * colaboración sólo en despliegues multinodo, empieza por ahí.
+ *
+ * Para apagarla sin recompilar: `NEXT_PUBLIC_WORDJS_COLLAB=off` en el despliegue, o
+ * `localStorage.wordjs_collab="off"` en un navegador concreto.
  */
-export const COLLAB_DEFAULT_ON = false;
+export const COLLAB_DEFAULT_ON = true;
 
 /** Interpreta un valor de bandera. Lo que no es un sí/no reconocible NO opina (`undefined`). */
 export function parseFlagValue(raw: string | null | undefined): boolean | undefined {

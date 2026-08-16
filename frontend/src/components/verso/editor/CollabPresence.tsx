@@ -82,7 +82,17 @@ export default function CollabPresence({
     const [open, setOpen] = React.useState(false);
     const buttonRef = React.useRef<HTMLButtonElement | null>(null);
     const popoverRef = React.useRef<HTMLDivElement | null>(null);
-    const view = statusView(status);
+    // El chip explica la causa REAL de `degraded`: el último aviso es lo que la nombra. Se recuerda
+    // aunque el aviso se descarte — el chip sigue ahí y no puede quedarse contando otra historia.
+    const [degradedCause, setDegradedCause] = React.useState<CollabNotice["code"] | null>(null);
+    React.useEffect(() => {
+        if (status !== "degraded") {
+            setDegradedCause(null);
+            return;
+        }
+        if (notice) setDegradedCause(notice.code);
+    }, [status, notice]);
+    const view = statusView(status, degradedCause);
     const tr = React.useCallback((s: string) => trStr(s, language), [language]);
 
     // Cierre por Escape (con foco de vuelta al disparador) y por click fuera — el patrón del resto
