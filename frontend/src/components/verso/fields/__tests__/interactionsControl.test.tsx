@@ -336,6 +336,57 @@ describe("InteractionsControl — los tres niveles", () => {
   });
 });
 
+/**
+ * LA CURVA PROPIA (bez). El selector de curvas gana el sentinel «Curva propia…»; con `bez` en el
+ * paso, el dibujo (IxCurveEditor) se monta debajo y edita el mismo valor. Qué se ESCRIBE al elegir
+ * cada cosa está en ixPanelModel.test.ts (setStepBez/setStepEase); aquí, el markup y sus nombres.
+ */
+describe("InteractionsControl — la curva propia", () => {
+  const conBez = {
+    v: 1,
+    trigger: { on: "view", once: true },
+    tracks: [
+      {
+        target: { kind: "self" },
+        steps: [
+          { at: 0, set: { opacity: 0 }, bez: [0.16, 1, 0.3, 1] },
+          { at: 100, set: { opacity: 1 } },
+        ],
+      },
+    ],
+  };
+
+  it("el selector lista las curvas físicas y «Curva propia…»", () => {
+    const html = render(defaultIxSpec());
+    expect(html).toContain("Rebote");
+    expect(html).toContain("Elástico");
+    expect(html).toContain("Curva propia…");
+    // …pero sin `bez` el dibujo no se monta.
+    expect(html).not.toContain("Punto de control");
+  });
+
+  it("con `bez` en el paso se monta el dibujo: tiradores enfocables con nombre y los 4 números", () => {
+    const html = render(conBez);
+    // Dos tiradores, enfocables con teclado, con su posición en el nombre accesible.
+    expect(html).toContain('aria-label="Punto de control 1 (x 0.16, y 1.00)"');
+    expect(html).toContain('aria-label="Punto de control 2 (x 0.30, y 1.00)"');
+    expect((html.match(/tabindex="0"/g) ?? []).length).toBeGreaterThanOrEqual(2);
+    // La región que anuncia los movimientos de flecha.
+    expect(html).toContain('aria-live="polite"');
+    // El camino canónico: los cuatro campos numéricos, etiquetados por id.
+    const { fors, ids } = labelTargets(html);
+    for (const key of ["X1", "Y1", "X2", "Y2"]) expect(html).toContain(`>${key}</label>`);
+    for (const target of fors) expect(ids, `label sin destino: ${target}`).toContain(target);
+    // Y el selector enseña el sentinel, no un nombre.
+    expect(html).toContain("Curva propia…");
+  });
+
+  it("en solo lectura (preajuste enlazado) el dibujo NO se monta: cada arrastre escribiría", () => {
+    const html = render({ v: 1, preset: "aparecer-tarjetas" });
+    expect(html).not.toContain("Punto de control");
+  });
+});
+
 describe("InteractionsControl — enlazado a un preajuste", () => {
   it("los pasos se muestran en SOLO LECTURA y se ofrece desvincular", () => {
     const html = render({ v: 1, preset: "aparecer-tarjetas" });

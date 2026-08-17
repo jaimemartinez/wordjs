@@ -63,6 +63,7 @@ import {
   setScrubSrc,
   setStagger,
   setStepAt,
+  setStepBez,
   setStepEase,
   setStepProp,
   setTargetKind,
@@ -81,6 +82,7 @@ import {
   type IxPanelTriggerKind,
 } from "../editor/ixPanelModel";
 import { requestIxPreview, requestIxScrub } from "../canvas/IxCanvasEngine";
+import IxCurveEditor, { ixBezSeed, IX_BEZ_SENTINEL, type IxBez } from "./IxCurveEditor";
 import IxScrubberControl from "./IxScrubberControl";
 import VersoFieldControl from "./VersoFieldControl";
 
@@ -509,6 +511,7 @@ export default function InteractionsControl({
                     readOnly={linked}
                     onAt={(at) => onChange(setStepAt(value, i, at, ixCtx))}
                     onEase={(ease) => onChange(setStepEase(value, i, ease, ixCtx))}
+                    onBez={(bez) => onChange(setStepBez(value, i, bez, ixCtx))}
                     onProp={(key, v) => onChange(setStepProp(value, i, key, v, ixCtx))}
                     onRemove={() => onChange(removeStep(value, i, ixCtx))}
                   />
@@ -564,20 +567,26 @@ interface StepRowProps {
   readOnly: boolean;
   onAt: (at: number) => void;
   onEase: (ease: IxEase) => void;
+  onBez: (bez: IxBez) => void;
   onProp: (key: IxPropKey, value: number | undefined) => void;
   onRemove: () => void;
 }
 
-function StepRow({ step, index, total, readOnly, onAt, onEase, onProp, onRemove }: StepRowProps) {
+function StepRow({ step, index, total, readOnly, onAt, onEase, onBez, onProp, onRemove }: StepRowProps) {
   const isFirst = index === 0;
   const isLast = index === total - 1;
   const free = availableProps(step);
   const used = usedProps(step);
   const label = isFirst ? "Inicio (0 %)" : isLast ? "Final (100 %)" : `Paso ${index + 1}`;
 
+  // «Curva propia…» es un sentinel de UI (IX_BEZ_SENTINEL), no un IxEase: elegirlo siembra un
+  // `bez` con el equivalente de la curva que había puesta, y a partir de ahí manda el dibujo.
   const easeField: SelectVersoField = {
     type: "select",
-    options: EASES.map((e) => ({ label: IX_EASE_LABELS[e], value: e })),
+    options: [
+      ...EASES.map((e) => ({ label: IX_EASE_LABELS[e], value: e as string })),
+      { label: "Curva propia…", value: IX_BEZ_SENTINEL },
+    ],
   };
   const addField: SelectVersoField = {
     type: "select",
@@ -615,14 +624,24 @@ function StepRow({ step, index, total, readOnly, onAt, onEase, onProp, onRemove 
       )}
 
       {!isLast && (
-        <VersoFieldControl
-          field={easeField}
-          name={`ix-step-ease-${index}`}
-          label="Curva hasta el siguiente"
-          value={step.ease ?? "out"}
-          readOnly={readOnly}
-          onChange={(v) => onEase(v as IxEase)}
-        />
+        <>
+          <VersoFieldControl
+            field={easeField}
+            name={`ix-step-ease-${index}`}
+            label="Curva hasta el siguiente"
+            value={step.bez ? IX_BEZ_SENTINEL : (step.ease ?? "out")}
+            readOnly={readOnly}
+            onChange={(v) => (v === IX_BEZ_SENTINEL ? onBez(ixBezSeed(step.ease)) : onEase(v as IxEase))}
+          />
+          {/* Con `bez` puesto, el selector dice «Curva propia…» y el dibujo edita ese mismo valor;
+              volver a un nombre pasa por `setStepEase`, que retira el bez (una sola verdad por
+              paso). En solo lectura (preajuste enlazado) no se monta: cada arrastre escribiría. */}
+          {!readOnly && step.bez && (
+            <div className="mb-3">
+              <IxCurveEditor value={step.bez} onChange={onBez} />
+            </div>
+          )}
+        </>
       )}
 
       {used.map((key) => (

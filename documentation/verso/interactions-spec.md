@@ -140,6 +140,14 @@ export type IxEdge = { at: "cover" | "contain" | "entry" | "exit"; pct: number }
 modelo intermedio "amigable" tendría que traducirse en los dos sentidos y perdería casos. El panel
 traduce a lenguaje de autor; el DATO no.
 
+**Easing físico compilado (P2).** `bounce` y `elastic` no son beziers: son simulaciones (parábolas
+a trozos / seno amortiguado) MUESTREADAS a `linear()` en compilación (32 y 24 puntos equidistantes,
+3 decimales — el redondeo mata el ruido de último bit de `Math.sin` entre motores de JS, así que el
+texto es byte-estable). `linear()` es Baseline (Chrome 113 / Firefox 112 / Safari 17.2). La física
+corre UNA vez, en el compilador; el visitante solo interpola puntos — lo que IX3 hace con GSAP en
+el hilo del visitante, resuelto en compilación con cero JS. El bezier propio (`bez`) mantiene la
+invariante de hostilidad: cuatro números clampados que formatea el emisor, jamás una cadena.
+
 ### 3.3 Pistas y pasos
 
 ```ts
@@ -158,7 +166,9 @@ export type IxStep = {
   at: number;                      // 0..100 — % de la pista (tiempo o rango de scroll, mismo eje)
   set: IxProps;
   /** Easing DE ESTE PASO AL SIGUIENTE. Se emite en el selector del paso. Ignorado en el último. */
-  ease?: "linear" | "in" | "out" | "in-out" | "spring" | "back";
+  ease?: "linear" | "in" | "out" | "in-out" | "spring" | "back" | "bounce" | "elastic";
+  /** Curva propia del autor (P2): cubic-bezier como 4 NÚMEROS clampados (X 0..1, Y ±4). Gana a `ease`. */
+  bez?: [number, number, number, number];
 };
 
 /** LISTA CERRADA. La restricción "cero CLS" vive AQUÍ, en el tipo. */

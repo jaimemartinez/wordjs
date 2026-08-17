@@ -42,6 +42,7 @@ import {
     setScrubSrc,
     setStagger,
     setStepAt,
+    setStepBez,
     setStepEase,
     setStepProp,
     setTargetKind,
@@ -58,6 +59,9 @@ import {
     type IxPanelTargetKind,
     type IxPanelTriggerKind,
 } from "@/components/verso/editor/ixPanelModel";
+// El editor de curvas es agnóstico de tokens (currentColor + opacidades): se monta aquí y en el
+// panel del bloque sin arrastrar los `--ed-*` del editor, que es justo la frontera de esta pantalla.
+import IxCurveEditor, { ixBezSeed, IX_BEZ_SENTINEL } from "@/components/verso/fields/IxCurveEditor";
 import {
     IX_EASINGS,
     IX_MAX_STEPS,
@@ -497,16 +501,38 @@ export default function PresetEditor({
                                                 />
                                             </div>
                                         )}
+                                        {/* «Curva propia…» es un sentinel de UI, no un IxEase: elegirlo siembra
+                                            un `bez` con el equivalente de la curva puesta; volver a un nombre
+                                            pasa por `setStepEase`, que retira el bez. */}
                                         {!isLast && (
                                             <FieldSelect
                                                 id={`ixp-ease-${i}`}
                                                 label="Curva hasta el siguiente"
-                                                value={step.ease ?? "out"}
-                                                onChange={(v) => write(setStepEase(draft, i, v as IxEase))}
-                                                options={EASES.map((e) => ({ value: e, label: IX_EASE_LABELS[e] }))}
+                                                value={step.bez ? IX_BEZ_SENTINEL : (step.ease ?? "out")}
+                                                onChange={(v) =>
+                                                    v === IX_BEZ_SENTINEL
+                                                        ? write(setStepBez(draft, i, ixBezSeed(step.ease)))
+                                                        : write(setStepEase(draft, i, v as IxEase))
+                                                }
+                                                options={[
+                                                    ...EASES.map((e) => ({ value: e as string, label: IX_EASE_LABELS[e] })),
+                                                    { value: IX_BEZ_SENTINEL, label: "Curva propia…" },
+                                                ]}
                                             />
                                         )}
                                     </div>
+
+                                    {/* El dibujo edita el MISMO valor que sembró el selector; cada arrastre
+                                        pasa por el mismo escritor puro que el resto del formulario. */}
+                                    {!isLast && step.bez && (
+                                        <div className="mt-3">
+                                            <IxCurveEditor
+                                                id={`ixp-bez-${i}`}
+                                                value={step.bez}
+                                                onChange={(bez) => write(setStepBez(draft, i, bez))}
+                                            />
+                                        </div>
+                                    )}
 
                                     <div className="mt-3 grid gap-3 md:grid-cols-2">
                                         {used.map((key) => (

@@ -79,9 +79,42 @@ export const IX_DEFAULT_DELAY = 0;
 /* ------------------------------------------------------------------ */
 
 /**
+ * Muestreo de una física a `linear()`. Puntos EQUIDISTANTES a propósito: la sintaxis permite
+ * omitir los porcentajes cuando los puntos se reparten uniformes, y eso deja la curva en ~6 bytes
+ * por punto. Redondeo a 3 decimales: mata el ruido de último bit de `Math.sin`/`pow` entre motores
+ * de JS, así que el texto emitido es estable byte a byte también entre versiones de node.
+ */
+function sampleLinear(fn: (t: number) => number, n: number): string {
+  const pts: string[] = [];
+  for (let i = 0; i <= n; i++) {
+    pts.push(String(Math.round(fn(i / n) * 1000) / 1000));
+  }
+  return `linear(${pts.join(",")})`;
+}
+
+/** easeOutBounce clásico (parábolas a trozos, 4 rebotes). */
+const bounceOut = (t: number): number => {
+  const n1 = 7.5625;
+  const d1 = 2.75;
+  if (t < 1 / d1) return n1 * t * t;
+  if (t < 2 / d1) return n1 * (t -= 1.5 / d1) * t + 0.75;
+  if (t < 2.5 / d1) return n1 * (t -= 2.25 / d1) * t + 0.9375;
+  return n1 * (t -= 2.625 / d1) * t + 0.984375;
+};
+
+/** easeOutElastic clásico (seno amortiguado, se asienta en 1). */
+const elasticOut = (t: number): number =>
+  t === 0 ? 0 : t === 1 ? 1 : Math.pow(2, -10 * t) * Math.sin((t * 10 - 0.75) * ((2 * Math.PI) / 3)) + 1;
+
+/**
  * Easings. El autor elige un NOMBRE; la curva la pone esta tabla. `out` es exactamente la curva
  * que usan hoy las entradas de `wordjs-ui.css` (`cubic-bezier(0.16, 1, 0.3, 1)`), para que un
  * preset de sistema recorra el mismo camino visual que su clase estática.
+ *
+ * `bounce` y `elastic` son FÍSICAS compiladas a `linear()` (P2 del scorecard): la simulación corre
+ * aquí, una vez; el navegador solo interpola una lista de puntos. Es lo que IX3 hace con GSAP en el
+ * hilo principal del visitante, hecho gratis en compilación. El rebote lleva 32 puntos (sus picos
+ * son estrechos); el elástico con 24 va sobrado.
  */
 export const IX_EASINGS: Readonly<Record<IxEase, string>> = Object.freeze({
   linear: "linear",
@@ -90,9 +123,32 @@ export const IX_EASINGS: Readonly<Record<IxEase, string>> = Object.freeze({
   "in-out": "cubic-bezier(.65,0,.35,1)",
   spring: "cubic-bezier(.34,1.56,.64,1)",
   back: "cubic-bezier(.68,-.55,.27,1.55)",
+  bounce: sampleLinear(bounceOut, 32),
+  elastic: sampleLinear(elasticOut, 24),
 });
 
 const IX_EASE_KEYS = Object.keys(IX_EASINGS) as IxEase[];
+
+/**
+ * Topes del bezier propio: las X son abscisas de una curva de Bézier de easing y el estándar exige
+ * 0..1; las Y admiten rebasamiento (así se hace un overshoot) pero se acotan — un `y: 1e9` no "se
+ * ve fuerte", rompe la interpolación. ±4 cubre cualquier curva que un humano quiera.
+ */
+export const IX_BEZ_Y_MAX = 4;
+
+/** Los 4 números de un `cubic-bezier` del autor, clampados. `undefined` si no hay 4 números. */
+function normBez(raw: unknown): [number, number, number, number] | undefined {
+  if (!Array.isArray(raw) || raw.length !== 4) return undefined;
+  const nums = raw.map((v) => num(v));
+  if (nums.some((v) => v === undefined)) return undefined;
+  const [x1, y1, x2, y2] = nums as number[];
+  return [
+    clamp(x1, 0, 1),
+    clamp(y1, -IX_BEZ_Y_MAX, IX_BEZ_Y_MAX),
+    clamp(x2, 0, 1),
+    clamp(y2, -IX_BEZ_Y_MAX, IX_BEZ_Y_MAX),
+  ];
+}
 
 export const IX_EDGE_NAMES: readonly IxEdgeName[] = Object.freeze([
   "cover",
@@ -213,6 +269,8 @@ function normStep(raw: unknown): IxStep | undefined {
   const ease = oneOf(raw.ease, IX_EASE_KEYS);
   const step: IxStep = { at: clamp(at, 0, 100), set };
   if (ease) step.ease = ease;
+  const bez = normBez(raw.bez);
+  if (bez) step.bez = bez;
   return step;
 }
 

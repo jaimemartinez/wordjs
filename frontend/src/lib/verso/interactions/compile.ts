@@ -129,6 +129,19 @@ export function resolveIxBody(raw: unknown, ctx?: IxCompileCtx): IxResolved | nu
 /** Un número, redondeado igual que el canónico, y NADA más. No admite cadenas por diseño. */
 const n = (v: number): string => String(round4(v));
 
+/**
+ * La curva de UN paso, como texto CSS: el bezier PROPIO si lo hay (cuatro números clampados que
+ * formatea este emisor — jamás una cadena del autor), y si no el nombre de la tabla cerrada.
+ * `undefined` = el paso no declara curva.
+ */
+function easeCss(step: IxStep): string | undefined {
+  if (step.bez) {
+    const [x1, y1, x2, y2] = step.bez;
+    return `cubic-bezier(${n(x1)},${n(y1)},${n(x2)},${n(y2)})`;
+  }
+  return step.ease ? IX_EASINGS[step.ease] : undefined;
+}
+
 /* ------------------------------------------------------------------ */
 /* Un paso → declaraciones                                             */
 /* ------------------------------------------------------------------ */
@@ -197,7 +210,8 @@ function transitionProps(union: IxPropKey[]): string[] {
 /** El mismo estado, en forma WAAPI (backend 2 del IR). */
 function keyframeOf(step: IxStep, union: IxPropKey[]): IxKeyframe {
   const kf: IxKeyframe = { offset: round4(step.at / 100) };
-  if (step.ease) kf.easing = IX_EASINGS[step.ease];
+  const ease = easeCss(step);
+  if (ease) kf.easing = ease;
   if (union.includes("opacity")) kf.opacity = n(valOf(step.set, "opacity"));
   const tf = transformOf(step.set, union);
   if (tf) kf.transform = tf;
@@ -402,7 +416,7 @@ export function emitUnit(body: IxBody, hash: string): IxUnit {
     if (trigger.on === "hover" && track.steps.length === 2) {
       const [a, b] = track.steps;
       const props = transitionProps(union);
-      const ease = IX_EASINGS[a.ease ?? "out"];
+      const ease = easeCss(a) ?? IX_EASINGS.out;
       // Una transición no puede repetirse ni alternar: si el autor lo pidió, que lo sepa.
       if (track.repeat !== undefined || track.alt === true) {
         warnings.push(
@@ -557,7 +571,8 @@ function keyframesCss(name: string, steps: IxStep[], union: IxPropKey[]): string
     .map((s) => {
       const decls: string[] = [];
       // El easing de un paso vale HASTA EL SIGUIENTE; en el último no significa nada y se omite.
-      if (s.ease && s.at < 100) decls.push(`animation-timing-function:${IX_EASINGS[s.ease]}`);
+      const ease = s.at < 100 ? easeCss(s) : undefined;
+      if (ease) decls.push(`animation-timing-function:${ease}`);
       decls.push(...declsOf(s.set, union));
       return `${n(s.at)}%{${decls.join(";")}}`;
     })

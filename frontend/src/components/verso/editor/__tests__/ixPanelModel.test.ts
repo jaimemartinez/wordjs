@@ -45,6 +45,7 @@ import {
   setScrubSrc,
   setStagger,
   setStepAt,
+  setStepBez,
   setStepEase,
   setStepProp,
   setTargetKind,
@@ -493,6 +494,18 @@ describe("opciones del disparador y de la pista (P1: lo que el modelo sabía y e
     const ranged = setRangeEdge(scrub, "from", { pct: 10 }, CTX)!;
     expect(ranged.preset).toBe("aparecer-tarjetas");
     expect(ranged.tracks).toBeUndefined();
+  });
+
+  it("setStepBez escribe la curva propia clampada, null la quita, y elegir nombre la retira", () => {
+    const spec = defaultIxSpec();
+    const w = setStepBez(spec, 0, [0.2, 9, 0.4, -9], CTX)!;
+    expect(w.tracks![0].steps[0].bez).toEqual([0.2, 4, 0.4, -4]); // Y clampada a ±4 por el normalizador
+    assertWritable(w);
+    const cleared = setStepBez(w, 0, null, CTX)!;
+    expect("bez" in cleared.tracks![0].steps[0]).toBe(false);
+    const named = setStepEase(w, 0, "bounce", CTX)!;
+    expect(named.tracks![0].steps[0].ease).toBe("bounce");
+    expect("bez" in named.tracks![0].steps[0]).toBe(false);
   });
 
   it("setRepeat sobre un bloque enlazado DESVINCULA (es una edición del cuerpo)", () => {

@@ -81,9 +81,20 @@ export type IxStep = {
   set: IxProps;
   /** Easing DE ESTE PASO AL SIGUIENTE; se emite en el selector del paso. Ignorado en el último. */
   ease?: IxEase;
+  /**
+   * Curva PROPIA del autor: `cubic-bezier(x1,y1,x2,y2)`, como cuatro NÚMEROS (x clampada a 0..1,
+   * y acotada — la invariante de que ninguna cadena del autor llega al CSS se mantiene: el emisor
+   * formatea él mismo los cuatro escalares). Si está, gana a `ease`.
+   */
+  bez?: [number, number, number, number];
 };
 
-export type IxEase = "linear" | "in" | "out" | "in-out" | "spring" | "back";
+/**
+ * `bounce` y `elastic` no son beziers: son físicas muestreadas a `linear()` en COMPILACIÓN
+ * (Baseline: Chrome 113 / Firefox 112 / Safari 17.2). Cero JS en reproducción — la física corre
+ * una vez, en el compilador.
+ */
+export type IxEase = "linear" | "in" | "out" | "in-out" | "spring" | "back" | "bounce" | "elastic";
 
 /**
  * LISTA CERRADA — aquí vive "cero CLS". Ocho propiedades, todas de compositor.

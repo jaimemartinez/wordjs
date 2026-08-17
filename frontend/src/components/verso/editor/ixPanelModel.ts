@@ -84,6 +84,9 @@ export const IX_EASE_LABELS: Readonly<Record<IxEase, string>> = Object.freeze({
   "in-out": "Suave",
   spring: "Muelle",
   back: "Impulso",
+  // Físicas compiladas a `linear()` — cero JS en la página; la simulación corre en el compilador.
+  bounce: "Rebote",
+  elastic: "Elástico",
 });
 
 /**
@@ -610,7 +613,42 @@ export function setStepAt(raw: unknown, index: number, at: number, ctx?: IxCompi
 export function setStepEase(raw: unknown, index: number, ease: IxEase, ctx?: IxCompileCtx): IxWrite {
   return patchTrack0(raw, ctx, (t) => {
     if (index < 0 || index >= t.steps.length) return t;
-    return { ...t, steps: t.steps.map((s, i) => (i === index ? { ...s, ease } : s)) };
+    // Elegir un NOMBRE retira la curva propia: el panel enseña una sola verdad por paso.
+    return {
+      ...t,
+      steps: t.steps.map((s, i) => {
+        if (i !== index) return s;
+        const next: IxStep = { ...s, ease };
+        delete next.bez;
+        return next;
+      }),
+    };
+  });
+}
+
+/**
+ * Curva PROPIA del paso (cubic-bezier como 4 números). `null` la quita y el paso vuelve a su
+ * nombre de curva (o a ninguno). El clamp fino (X a 0..1, Y a ±4) lo hace el normalizador en
+ * `write()` — aquí solo se decide la forma.
+ */
+export function setStepBez(
+  raw: unknown,
+  index: number,
+  bez: [number, number, number, number] | null,
+  ctx?: IxCompileCtx,
+): IxWrite {
+  return patchTrack0(raw, ctx, (t) => {
+    if (index < 0 || index >= t.steps.length) return t;
+    return {
+      ...t,
+      steps: t.steps.map((s, i) => {
+        if (i !== index) return s;
+        const next: IxStep = { ...s };
+        if (bez === null) delete next.bez;
+        else next.bez = bez;
+        return next;
+      }),
+    };
   });
 }
 

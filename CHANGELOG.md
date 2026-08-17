@@ -8,6 +8,14 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Added
 
+- **Interactions: real motion curves, with zero JavaScript.** Every step can now carry its own
+  easing curve — either drawn/typed as a custom cubic-bezier in a new visual curve editor (fully
+  keyboard-operable), or picked from two new physical curves, *Rebote* (bounce) and *Elástico*
+  (elastic). The physics run once, in the compiler, which samples them into the CSS `linear()`
+  easing function (supported by every current browser) — the visitor's browser just interpolates a
+  list of points. Competing engines ship a JavaScript animation library to every visitor to get
+  the same look.
+
 - **Interactions: full trigger and playback controls in the panel.** What the engine's data model
   already supported now has switches an author can reach: repeat count / infinite / ping-pong
   playback, click-to-toggle (second click undoes), a trigger delay for load animations, the choice

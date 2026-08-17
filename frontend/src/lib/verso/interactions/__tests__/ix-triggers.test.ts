@@ -12,7 +12,7 @@
 import { describe, expect, it } from "vitest";
 import { compileIx, compileIxPage, toRuntimeUnit } from "../compile";
 import { IX_MAX_CHILDREN } from "../normalize";
-import type { IxSpec, IxTrack } from "../types";
+import type { IxSpec, IxStep, IxTrack } from "../types";
 
 const steps2 = [
   { at: 0, set: { opacity: 0 } },
@@ -253,6 +253,100 @@ describe("escalonado", () => {
       target: { kind: "block", id: "abc" }, stagger: { each: 60 },
     }))!;
     expect(u.warnings.join(" ")).toContain("hermanos");
+  });
+});
+
+describe("easing (P2): bezier propio y físicas compiladas a linear()", () => {
+  const stepsBez: IxStep[] = [
+    { at: 0, set: { opacity: 0 }, bez: [0.2, 1.8, 0.4, 1] },
+    { at: 100, set: { opacity: 1 } },
+  ];
+
+  it("un paso con `bez` emite SU cubic-bezier, formateado por el emisor", () => {
+    const u = compileIx(mk({ on: "load" }, { steps: stepsBez }))!;
+    expect(u.keyframes[0]).toContain("animation-timing-function:cubic-bezier(0.2,1.8,0.4,1)");
+  });
+
+  it("`bez` GANA a `ease` cuando conviven", () => {
+    const steps: IxStep[] = [
+      { at: 0, set: { opacity: 0 }, ease: "out", bez: [0, 0, 1, 1] },
+      { at: 100, set: { opacity: 1 } },
+    ];
+    const u = compileIx(mk({ on: "load" }, { steps }))!;
+    expect(u.keyframes[0]).toContain("cubic-bezier(0,0,1,1)");
+    expect(u.keyframes[0]).not.toContain("cubic-bezier(.16,1,.3,1)");
+  });
+
+  it("el bezier hostil se clampa: X a 0..1, Y a ±4 — y nada más llega al CSS", () => {
+    // Dato HOSTIL a propósito (fuera del tipo): entra por la frontera `unknown` del compilador.
+    const steps = [
+      { at: 0, set: { opacity: 0 }, bez: [-5, 999, 2, -999] },
+      { at: 100, set: { opacity: 1 } },
+    ] as unknown as IxStep[];
+    const u = compileIx(mk({ on: "load" }, { steps }))!;
+    expect(u.keyframes[0]).toContain("cubic-bezier(0,4,1,-4)");
+  });
+
+  it("un `bez` que no son 4 números finitos se DESCARTA (fail-open al ease o a nada)", () => {
+    for (const bad of [[0.1, 0.2, 0.3], "0,0,1,1", [0, 0, 1, "x"], [0, NaN, 1, 1], null]) {
+      const steps = [
+        { at: 0, set: { opacity: 0 }, bez: bad },
+        { at: 100, set: { opacity: 1 } },
+      ] as unknown as IxStep[];
+      const u = compileIx(mk({ on: "load" }, { steps }))!;
+      expect(u.keyframes[0]).not.toContain("cubic-bezier(");
+    }
+  });
+
+  it("`bounce` y `elastic` emiten una linear() muestreada que ACABA en 1", () => {
+    for (const ease of ["bounce", "elastic"] as const) {
+      const u = compileIx(mk({ on: "load" }, {
+        steps: [{ at: 0, set: { y: 20 }, ease }, { at: 100, set: { y: 0 } }],
+      }))!;
+      const m = /animation-timing-function:linear\(([^)]+)\)/.exec(u.keyframes[0]);
+      expect(m, `${ease} no emitió linear()`).not.toBeNull();
+      const pts = m![1].split(",").map(Number);
+      expect(pts.length).toBeGreaterThanOrEqual(20);
+      expect(pts[0]).toBe(0);
+      expect(pts[pts.length - 1]).toBe(1);
+      expect(pts.every(Number.isFinite)).toBe(true);
+    }
+  });
+
+  it("el elástico rebasa 1 por el camino (si no, no es elástico)", () => {
+    const u = compileIx(mk({ on: "load" }, {
+      steps: [{ at: 0, set: { y: 20 }, ease: "elastic" }, { at: 100, set: { y: 0 } }],
+    }))!;
+    const m = /linear\(([^)]+)\)/.exec(u.keyframes[0])!;
+    expect(Math.max(...m[1].split(",").map(Number))).toBeGreaterThan(1);
+  });
+
+  it("el IR WAAPI lleva la MISMA curva (paridad de backends)", () => {
+    const u = compileIx(mk({ on: "load" }, { steps: stepsBez }))!;
+    expect(Object.values(u.kf)[0][0].easing).toBe("cubic-bezier(0.2,1.8,0.4,1)");
+    const b = compileIx(mk({ on: "load" }, {
+      steps: [{ at: 0, set: { y: 20 }, ease: "bounce" }, { at: 100, set: { y: 0 } }],
+    }))!;
+    expect(Object.values(b.kf)[0][0].easing).toMatch(/^linear\(/);
+  });
+
+  it("`bez` entra en el hash: dos curvas distintas son dos unidades distintas", () => {
+    const otherBez: IxStep[] = [
+      { at: 0, set: { opacity: 0 }, bez: [0.3, 1.8, 0.4, 1] },
+      { at: 100, set: { opacity: 1 } },
+    ];
+    const a = compileIx(mk({ on: "load" }, { steps: stepsBez }))!;
+    const b = compileIx(mk({ on: "load" }, { steps: otherBez }))!;
+    expect(a.hash).not.toBe(b.hash);
+  });
+
+  it("en el hover de 2 pasos el bezier propio conduce la transición", () => {
+    const steps: IxStep[] = [
+      { at: 0, set: { scale: 1 }, bez: [0.5, 2, 0.5, 1] },
+      { at: 100, set: { scale: 1.1 } },
+    ];
+    const u = compileIx(mk({ on: "hover" }, { steps }))!;
+    expect(u.rules[0]).toContain("cubic-bezier(0.5,2,0.5,1)");
   });
 });
 
