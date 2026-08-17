@@ -74,6 +74,13 @@ export type IxHost = {
   pageProgress(): number;
   /** `(prefers-reduced-motion: reduce)`. Si es cierto, el runtime NO arma nada. */
   reducedMotion(): boolean;
+  /**
+   * ¿Casa la condición `@media` del gating responsive (P4)? La condición la construyó el
+   * compilador desde la lista cerrada de breakpoints. Se evalúa al ARMAR: cambiar el ancho de la
+   * ventana con la página abierta no re-arma unidades (documentado — el CSS nativo sí responde en
+   * vivo, el latch de JS no; recargar recompone ambos).
+   */
+  matchesMedia(cond: string): boolean;
   /** `CSS.supports("animation-timeline", fn)`. Decide si el chunk de scrub llega a bajar. */
   supportsTimeline(fn: string): boolean;
   /** Un ÚNICO IntersectionObserver por uso; `threshold: 0` fijo (ver el comentario en la isla). */
@@ -114,6 +121,8 @@ export function defaultIxHost(doc: Document): IxHost {
       return p < 0 ? 0 : p > 1 ? 1 : p;
     },
     reducedMotion: () => !!view?.matchMedia?.("(prefers-reduced-motion: reduce)").matches,
+    // Sin matchMedia (navegador arcaico) se asume que CASA: fail-open — la interacción corre.
+    matchesMedia: (cond) => (view?.matchMedia ? view.matchMedia(cond).matches : true),
     supportsTimeline: (fn) => {
       try {
         return typeof CSS !== "undefined" && CSS.supports?.("animation-timeline", fn) === true;

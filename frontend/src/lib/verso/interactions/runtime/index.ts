@@ -59,6 +59,10 @@ export function startIxRuntime(units: readonly IxRuntimeUnit[], host: IxHost): (
   const waapi: IxRuntimeUnit[] = [];
 
   for (const u of units) {
+    // Gating responsive (P4): la MISMA condición @media que envuelve las reglas en la hoja. Se
+    // evalúa al armar (ver el contrato en host.matchesMedia): en un dispositivo desactivado la
+    // unidad ni observa, ni escucha, ni baja chunk.
+    if (u.media && !host.matchesMedia(u.media)) continue;
     if (hasExternalTarget(u)) {
       waapi.push(u);
       continue;

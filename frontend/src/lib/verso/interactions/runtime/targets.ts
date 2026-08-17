@@ -39,11 +39,17 @@ export function resolveIxTargets(
 
 /**
  * Desfase del escalonado de UN hermano (ms). Aquí sí se conoce el recuento de hermanos, así que
- * `center` es EXACTO — a diferencia del CSS, que no puede contarlos y lo degrada a `start`.
+ * `center`, el tiempo TOTAL y la REJILLA son EXACTOS — como en el CSS con `sibling-index()`; el
+ * fallback de `:nth-child` es el único que aproxima, y avisa.
  */
 export function ixStaggerOffset(track: IxRuntimeTrack, index: number, count: number): number {
   const st = track.stagger;
   if (!st) return 0;
+  if (st.cols !== undefined) {
+    // Rejilla diagonal (fila + columna) — la MISMA fórmula que emite nativeStaggerExpr.
+    return (Math.floor(index / st.cols) + (index % st.cols)) * st.each;
+  }
+  if (st.total === true) return index * (st.each / Math.max(1, count - 1));
   if (st.from === "end") return (count - 1 - index) * st.each;
   if (st.from === "center") return Math.abs(index - (count - 1) / 2) * st.each;
   return index * st.each;

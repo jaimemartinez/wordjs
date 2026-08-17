@@ -13,9 +13,10 @@
  * es de dónde salen el `<label for>` con `useId`, el `fieldset/legend` del radiogrupo y el
  * `aria-label` posicional de los botones. Un control a mano aquí sería un control con su propia
  * accesibilidad, y sería la que se olvidase. Dos excepciones, ambas por tipos que `VersoField` no
- * tiene: los checkboxes de «Reproducción» (su `<label>` ENVUELVE al `<input>`, así que el nombre
- * accesible es intrínseco y no hay un `for`/`id` que se pueda desasociar) y el `<input type="color">`
- * de las propiedades de color, que replica el `label for` + `useId` de las filas numéricas.
+ * tiene: los checkboxes («Reproducción», las opciones del escalonado y «Dónde corre»; su `<label>`
+ * ENVUELVE al `<input>`, así que el nombre accesible es intrínseco y no hay un `for`/`id` que se
+ * pueda desasociar) y el `<input type="color">` de las propiedades de color, que replica el
+ * `label for` + `useId` de las filas numéricas.
  *
  * TODA LA LÓGICA SALE DE `ixPanelModel.ts`, que es puro y está probado en node: este fichero decide
  * qué se muestra, nunca qué se guarda. Cada escritura devuelve un valor NUEVO ya normalizado y sube
@@ -29,6 +30,7 @@
 import React, { useCallback, useId, useMemo } from "react";
 import MSym from "@/components/editor/MSym";
 import {
+  IX_BREAKPOINTS,
   IX_CLIP_DIRS,
   IX_EASINGS,
   IX_MAX_STEPS,
@@ -46,8 +48,12 @@ import {
   type IxEdgeName,
   type IxOrigin,
   type IxPropKey,
+  type IxStaggerFrom,
   type IxStep,
 } from "@/lib/verso/interactions";
+// Los topes de la rejilla (P4) no están en la superficie del índice: se leen del módulo que los
+// define, igual que el lienzo lee `runtime/` directamente.
+import { IX_STAGGER_COLS_MAX, IX_STAGGER_COLS_MIN } from "@/lib/verso/interactions";
 import type { NumberVersoField, RadioVersoField, SelectVersoField } from "@/lib/verso/registry";
 import {
   addStep,
@@ -61,6 +67,7 @@ import {
   removeStep,
   resetRange,
   setAlternate,
+  setBreakpointOff,
   setClickToggle,
   setClipDir,
   setDelay,
@@ -73,6 +80,9 @@ import {
   setRepeat,
   setScrubSrc,
   setStagger,
+  setStaggerCols,
+  setStaggerFrom,
+  setStaggerTotal,
   setStepAt,
   setStepBez,
   setStepEase,
@@ -82,6 +92,7 @@ import {
   setViewOnce,
   unlinkPreset,
   usedProps,
+  IX_BREAKPOINT_LABELS,
   IX_CLIP_DIR_LABELS,
   IX_COLOR_PROPS,
   IX_EASE_LABELS,
@@ -90,6 +101,7 @@ import {
   IX_PROP_INPUT,
   IX_PROP_LABELS,
   IX_PROP_UNITS,
+  IX_STAGGER_FROM_LABELS,
   IX_TARGET_LABELS,
   IX_TRIGGER_LABELS,
   type IxPanelTargetKind,
@@ -111,6 +123,8 @@ const CHECK =
 
 const TRIGGERS: IxPanelTriggerKind[] = ["view", "scrub", "hover", "click", "load"];
 const EASES = Object.keys(IX_EASINGS) as IxEase[];
+/** Órdenes del escalonado (P4), en el orden canónico de sus etiquetas. */
+const STAGGER_FROMS = Object.keys(IX_STAGGER_FROM_LABELS) as IxStaggerFrom[];
 /** Aristas de `animation-range`, en el orden en que se cruzan al hacer scroll. */
 const EDGES: IxEdgeName[] = ["cover", "entry", "contain", "exit"];
 
@@ -187,6 +201,8 @@ export default function InteractionsControl({
   const track = state.tracks[0];
   const trigger = state.trigger;
   const linked = state.presetId !== null;
+  // Dispositivos APAGADOS (P4). El dato guarda dónde NO corre; los checkboxes muestran lo contrario.
+  const offList = state.spec?.off ?? [];
   // Derivados del disparador para el editor de tramo. `hasOwnRange` distingue el rango DEL AUTOR del
   // por defecto del compilador: «Restablecer» solo tiene sentido cuando hay algo que borrar.
   const range = rangeEditable(trigger) ? effectiveRange(trigger) : null;
@@ -240,6 +256,10 @@ export default function InteractionsControl({
   const originField: SelectVersoField = {
     type: "select",
     options: IX_ORIGINS.map((o) => ({ label: IX_ORIGIN_LABELS[o], value: o })),
+  };
+  const staggerFromField: SelectVersoField = {
+    type: "select",
+    options: STAGGER_FROMS.map((f) => ({ label: IX_STAGGER_FROM_LABELS[f], value: f })),
   };
   const currentTarget = track?.target.kind;
   const targets: IxPanelTargetKind[] =
@@ -426,6 +446,30 @@ export default function InteractionsControl({
             </fieldset>
           )}
 
+          {/* ── Dónde corre (P4) — apagar la interacción por dispositivo. Vive en el BLOQUE, como
+              «Cuándo»: son los dos únicos overrides locales que un bloque enlazado a un preajuste
+              puede llevar, así que se ofrece también enlazado. Marcado = corre en ese dispositivo
+              (el dato guarda lo contrario: la lista `off`). */}
+          <fieldset className={GROUP}>
+            <legend className={LEGEND}>Dónde corre</legend>
+            <div className="flex flex-wrap items-center gap-x-3">
+              {IX_BREAKPOINTS.map((bp) => (
+                <label key={bp} className={CHECK}>
+                  <input
+                    type="checkbox"
+                    checked={!offList.includes(bp)}
+                    onChange={(e) => onChange(setBreakpointOff(value, bp, !e.target.checked, ixCtx))}
+                  />
+                  {IX_BREAKPOINT_LABELS[bp]}
+                </label>
+              ))}
+            </div>
+            <p className={`${HINT} mt-0`}>
+              Desmarcar los tres es quitarla, no acotarla: el modelo descarta ese gating y la
+              interacción sigue corriendo en todas partes.
+            </p>
+          </fieldset>
+
           {linked ? (
             <div
               role="note"
@@ -463,11 +507,87 @@ export default function InteractionsControl({
                 <VersoFieldControl
                   field={msField(0, IX_STAGGER_MAX)}
                   name="ix-stagger"
-                  label="Escalonado entre hermanos (ms)"
+                  label={
+                    // Con `total` los mismos ms dejan de ser "entre hermanos" y pasan a ser el
+                    // tiempo del primero al último: la etiqueta dice lo que el número significa.
+                    track.stagger?.total === true
+                      ? "Tiempo total (ms)"
+                      : "Escalonado entre hermanos (ms)"
+                  }
                   value={track.stagger?.each ?? 0}
                   onChange={(v) => onChange(setStagger(value, typeof v === "number" ? v : 0, ixCtx))}
                 />
               )}
+
+              {/* ── Opciones del escalonado (P4) — solo cuando HAY escalonado: sin él cada escritor
+                  es un no-op y el control mentiría. Con rejilla (`cols`) la onda avanza en diagonal
+                  e ignora el orden lineal: el selector se bloquea, no se esconde, para que se vea
+                  POR QUÉ no aplica. */}
+              {(track.target.kind === "children" || track.target.kind === "words") &&
+                track.stagger && (
+                  <fieldset className={GROUP}>
+                    <legend className={LEGEND}>Escalonado</legend>
+                    <VersoFieldControl
+                      field={staggerFromField}
+                      name="ix-stagger-from"
+                      label="Orden"
+                      value={track.stagger.from ?? "start"}
+                      readOnly={track.stagger.cols != null}
+                      onChange={(v) => onChange(setStaggerFrom(value, v as IxStaggerFrom, ixCtx))}
+                    />
+                    <label className={CHECK}>
+                      <input
+                        type="checkbox"
+                        checked={track.stagger.total === true}
+                        onChange={(e) => onChange(setStaggerTotal(value, e.target.checked, ixCtx))}
+                      />
+                      Repartir como tiempo total
+                    </label>
+                    <div className="flex flex-wrap items-end gap-x-2">
+                      <label className={CHECK}>
+                        <input
+                          type="checkbox"
+                          checked={track.stagger.cols != null}
+                          onChange={(e) =>
+                            onChange(
+                              setStaggerCols(
+                                value,
+                                e.target.checked ? IX_STAGGER_COLS_MIN : null,
+                                ixCtx,
+                              ),
+                            )
+                          }
+                        />
+                        En rejilla
+                      </label>
+                      {track.stagger.cols != null && (
+                        <div className="min-w-16 flex-1">
+                          <VersoFieldControl
+                            field={{
+                              type: "number",
+                              min: IX_STAGGER_COLS_MIN,
+                              max: IX_STAGGER_COLS_MAX,
+                              step: 1,
+                            }}
+                            name="ix-stagger-cols"
+                            label="Columnas"
+                            value={track.stagger.cols}
+                            onChange={(v) =>
+                              onChange(
+                                setStaggerCols(
+                                  value,
+                                  // Vaciar el input no apaga la rejilla: se conserva el valor puesto.
+                                  typeof v === "number" ? v : (track.stagger?.cols ?? null),
+                                  ixCtx,
+                                ),
+                              )
+                            }
+                          />
+                        </div>
+                      )}
+                    </div>
+                  </fieldset>
+                )}
 
               {isTimed(trigger.on) && (
                 <div className="flex gap-2">

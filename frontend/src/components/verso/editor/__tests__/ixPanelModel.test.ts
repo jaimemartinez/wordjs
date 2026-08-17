@@ -35,6 +35,7 @@ import {
   removeStep,
   resetRange,
   setAlternate,
+  setBreakpointOff,
   setClickToggle,
   setClipDir,
   setDelay,
@@ -42,6 +43,9 @@ import {
   setLoadDelay,
   setOrigin,
   setPersp,
+  setStaggerCols,
+  setStaggerFrom,
+  setStaggerTotal,
   setPresetChoice,
   setRangeEdge,
   setRepeat,
@@ -525,6 +529,41 @@ describe("opciones del disparador y de la pista (P1: lo que el modelo sabía y e
     assertWritable(up);
     assertWritable(tl);
     assertWritable(p);
+  });
+
+  it("escalonado P4: from/total/cols escriben sobre el stagger existente y el defecto borra", () => {
+    const base = setTargetKind(defaultIxSpec(), "children", CTX)!;
+    const st = setStagger(base, 80, CTX)!;
+    const fromEnd = setStaggerFrom(st, "end", CTX)!;
+    expect(fromEnd.tracks![0].stagger).toEqual({ each: 80, from: "end" });
+    expect("from" in setStaggerFrom(fromEnd, "start", CTX)!.tracks![0].stagger!).toBe(false);
+    const total = setStaggerTotal(st, true, CTX)!;
+    expect(total.tracks![0].stagger!.total).toBe(true);
+    const grid = setStaggerCols(st, 3, CTX)!;
+    expect(grid.tracks![0].stagger!.cols).toBe(3);
+    expect("cols" in setStaggerCols(grid, null, CTX)!.tracks![0].stagger!).toBe(false);
+    // Sin escalonado, los tres son no-op.
+    expect(setStaggerFrom(base, "end", CTX)!.tracks![0].stagger).toBeUndefined();
+    assertWritable(fromEnd);
+    assertWritable(grid);
+  });
+
+  it("setBreakpointOff conmuta dispositivos, conserva el enlace a preajuste y los TRES caen", () => {
+    const linked = { v: 1, preset: "aparecer-tarjetas" };
+    const offMobile = setBreakpointOff(linked, "mobile", true, CTX)!;
+    expect(offMobile.preset).toBe("aparecer-tarjetas");
+    expect(offMobile.off).toEqual(["mobile"]);
+    const offBoth = setBreakpointOff(offMobile, "desktop", true, CTX)!;
+    expect(offBoth.off).toEqual(["mobile", "desktop"]);
+    const backOn = setBreakpointOff(offBoth, "mobile", false, CTX)!;
+    expect(backOn.off).toEqual(["desktop"]);
+    // Apagar los tres = quitar el gating (lo decide el normalizador, avisando).
+    const all = setBreakpointOff(offBoth, "tablet", true, CTX)!; // mobile+desktop ya estaban
+    expect(all.off).toBeUndefined();
+    // Cuerpo propio: también funciona y es compilable.
+    const own = setBreakpointOff(defaultIxSpec(), "mobile", true, CTX)!;
+    expect(own.off).toEqual(["mobile"]);
+    assertWritable(own);
   });
 
   it("setRepeat sobre un bloque enlazado DESVINCULA (es una edición del cuerpo)", () => {

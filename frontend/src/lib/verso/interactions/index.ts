@@ -10,6 +10,7 @@
  */
 export type {
   IxBody,
+  IxBreakpoint,
   IxClipDir,
   IxEase,
   IxEdge,
@@ -49,6 +50,7 @@ export {
   normTracks,
   normTrigger,
   IX_BEZ_Y_MAX,
+  IX_BREAKPOINTS,
   IX_CLIP_DIRS,
   IX_DELAY_MAX,
   IX_DELAY_MIN,
@@ -68,7 +70,10 @@ export {
   IX_PROP_KEYS,
   IX_PROP_NEUTRAL,
   IX_REPEAT_MAX,
+  IX_STAGGER_COLS_MAX,
+  IX_STAGGER_COLS_MIN,
   IX_STAGGER_MAX,
+  IX_STAGGER_TOTAL_FALLBACK_N,
 } from "./normalize";
 export type { IxNormalizeResult } from "./normalize";
 
@@ -79,6 +84,7 @@ export {
   ixClassFor,
   ixCss,
   ixKeyframes,
+  ixMediaOf,
   resolveIxBody,
   toRuntimeUnit,
   IX_CLASS_PREFIX,

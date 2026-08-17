@@ -44,6 +44,9 @@ import {
     setRepeat,
     setScrubSrc,
     setStagger,
+    setStaggerCols,
+    setStaggerFrom,
+    setStaggerTotal,
     setStepAt,
     setStepBez,
     setStepEase,
@@ -60,6 +63,7 @@ import {
     IX_PROP_INPUT,
     IX_PROP_LABELS,
     IX_PROP_UNITS,
+    IX_STAGGER_FROM_LABELS,
     IX_TARGET_LABELS,
     IX_TRIGGER_LABELS,
     type IxPanelTargetKind,
@@ -87,11 +91,16 @@ import {
     type IxOrigin,
     type IxPropKey,
     type IxSpec,
+    type IxStaggerFrom,
 } from "@/lib/verso/interactions";
+// Los topes de la rejilla (P4) no están en la superficie del índice: se leen del módulo que los define.
+import { IX_STAGGER_COLS_MAX, IX_STAGGER_COLS_MIN } from "@/lib/verso/interactions";
 
 const TRIGGERS: IxPanelTriggerKind[] = ["view", "scrub", "hover", "click", "load"];
 const TARGETS: IxPanelTargetKind[] = ["self", "children", "words"];
 const EASES = Object.keys(IX_EASINGS) as IxEase[];
+/** Órdenes del escalonado (P4), en el orden canónico de sus etiquetas. */
+const STAGGER_FROMS = Object.keys(IX_STAGGER_FROM_LABELS) as IxStaggerFrom[];
 /** Aristas de `animation-range`, en el orden en que se cruzan al hacer scroll. */
 const EDGES: IxEdgeName[] = ["cover", "entry", "contain", "exit"];
 
@@ -331,7 +340,11 @@ export default function PresetEditor({
                     {(track.target.kind === "children" || track.target.kind === "words") && (
                         <div>
                             <label className={LABEL} htmlFor="ixp-stagger">
-                                Escalonado entre hermanos (ms)
+                                {/* Con `total` los ms dejan de ser "entre hermanos" y pasan a ser el
+                                    tiempo del primero al último: la etiqueta dice lo que significa. */}
+                                {track.stagger?.total === true
+                                    ? "Tiempo total (ms)"
+                                    : "Escalonado entre hermanos (ms)"}
                             </label>
                             <input
                                 id="ixp-stagger"
@@ -389,6 +402,78 @@ export default function PresetEditor({
                         {IX_MAX_WORDS} palabras: entonces se ve igual que siempre, sin movimiento.
                     </p>
                 )}
+
+                {/* Opciones del escalonado (P4) — solo cuando HAY escalonado: sin él cada escritor
+                    es un no-op y el control mentiría. Con rejilla (`cols`) la onda avanza en
+                    diagonal e ignora el orden lineal, así que el selector de orden se retira. */}
+                {(track.target.kind === "children" || track.target.kind === "words") &&
+                    track.stagger && (
+                        <fieldset className="mt-6 rounded-2xl border-2 border-gray-100 p-4">
+                            <legend className="px-1 text-sm font-bold text-gray-900">
+                                Escalonado
+                            </legend>
+                            <div className="mt-2 flex flex-wrap items-end gap-4">
+                                {track.stagger.cols == null && (
+                                    <div className="w-56">
+                                        <FieldSelect
+                                            id="ixp-stagger-from"
+                                            label="Orden"
+                                            value={track.stagger.from ?? "start"}
+                                            onChange={(v) =>
+                                                write(setStaggerFrom(draft, v as IxStaggerFrom))
+                                            }
+                                            options={STAGGER_FROMS.map((f) => ({
+                                                value: f,
+                                                label: IX_STAGGER_FROM_LABELS[f],
+                                            }))}
+                                        />
+                                    </div>
+                                )}
+                                <label className="mb-2.5 flex cursor-pointer select-none items-center gap-2 text-sm text-gray-700">
+                                    <input
+                                        type="checkbox"
+                                        checked={track.stagger.total === true}
+                                        onChange={(e) => write(setStaggerTotal(draft, e.target.checked))}
+                                    />
+                                    Repartir como tiempo total
+                                </label>
+                                <label className="mb-2.5 flex cursor-pointer select-none items-center gap-2 text-sm text-gray-700">
+                                    <input
+                                        type="checkbox"
+                                        checked={track.stagger.cols != null}
+                                        onChange={(e) =>
+                                            write(
+                                                setStaggerCols(
+                                                    draft,
+                                                    e.target.checked ? IX_STAGGER_COLS_MIN : null,
+                                                ),
+                                            )
+                                        }
+                                    />
+                                    En rejilla
+                                </label>
+                                {track.stagger.cols != null && (
+                                    <div className="w-36">
+                                        <label className={LABEL} htmlFor="ixp-stagger-cols">
+                                            Columnas
+                                        </label>
+                                        <input
+                                            id="ixp-stagger-cols"
+                                            type="number"
+                                            className={NUM}
+                                            min={IX_STAGGER_COLS_MIN}
+                                            max={IX_STAGGER_COLS_MAX}
+                                            step={1}
+                                            value={track.stagger.cols}
+                                            onChange={(e) =>
+                                                write(setStaggerCols(draft, Number(e.target.value)))
+                                            }
+                                        />
+                                    </div>
+                                )}
+                            </div>
+                        </fieldset>
+                    )}
 
                 {/* Tramo del recorrido: solo cuando el progreso lo marca el scroll (scrub, o view
                     que entra y sale). Con el scroll de la página las ARISTAS no significan nada —el

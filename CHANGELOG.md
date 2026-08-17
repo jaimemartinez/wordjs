@@ -8,6 +8,15 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Added
 
+- **Interactions: stagger that can count, and per-device control.** Staggered children can now
+  start from the center or the end exactly, spread a fixed total time across however many siblings
+  exist, or ripple diagonally across an author-declared grid — all in pure CSS via the new
+  `sibling-index()`/`sibling-count()` functions where the browser has them (Chrome, Safari, and
+  Firefox as of this week), with the classic per-child rules as fallback and the JavaScript path
+  sharing the exact same formulas. And any interaction can be switched off per device
+  (mobile/tablet/desktop, the same cutoffs as block visibility): the styles are fenced behind the
+  matching media query and the runtime doesn't even arm on a disabled device.
+
 - **Interactions: 14 new animatable properties, still zero layout shift by construction.** Full 3D
   (rotate on the Y axis, real depth on Z, per-track perspective), skew, independent X/Y scale, a
   filter family (brightness, contrast, saturation, grayscale, hue), and color animation for text,

@@ -25,6 +25,7 @@
  * que es el motivo entero de que los presets se guarden por referencia.
  */
 import {
+  IX_BREAKPOINTS,
   IX_DEFAULT_RANGES,
   IX_DELAY_MAX,
   IX_DELAY_MIN,
@@ -36,6 +37,7 @@ import {
   IX_STAGGER_MAX,
   normalizeIxSpec,
   resolveIxBody,
+  type IxBreakpoint,
   type IxClipDir,
   type IxCompileCtx,
   type IxEase,
@@ -46,11 +48,26 @@ import {
   type IxProps,
   type IxRange,
   type IxSpec,
+  type IxStaggerFrom,
   type IxStep,
   type IxTarget,
   type IxTrack,
   type IxTrigger,
 } from "@/lib/verso/interactions";
+
+/** Etiquetas de autor del gating responsive (P4) — el espejo de los botones de visibilidad. */
+export const IX_BREAKPOINT_LABELS: Readonly<Record<IxBreakpoint, string>> = Object.freeze({
+  mobile: "Móvil",
+  tablet: "Tablet",
+  desktop: "Escritorio",
+});
+
+/** Etiquetas del ORDEN del escalonado (P4). */
+export const IX_STAGGER_FROM_LABELS: Readonly<Record<IxStaggerFrom, string>> = Object.freeze({
+  start: "Desde el principio",
+  end: "Desde el final",
+  center: "Desde el centro",
+});
 
 /* ------------------------------------------------------------------ */
 /* Vocabulario del panel (el DATO no se traduce; la UI sí)             */
@@ -584,6 +601,67 @@ export function setStagger(raw: unknown, each: number, ctx?: IxCompileCtx): IxWr
     }
     return { ...t, stagger: { ...(t.stagger ?? {}), each: Math.min(each, IX_STAGGER_MAX) } };
   });
+}
+
+/** Orden del escalonado (P4). `start` (el defecto) borra la clave. Sin escalonado, no-op. */
+export function setStaggerFrom(raw: unknown, from: IxStaggerFrom, ctx?: IxCompileCtx): IxWrite {
+  return patchTrack0(raw, ctx, (t) => {
+    if (!t.stagger) return t;
+    const st = { ...t.stagger };
+    if (from === "start") delete st.from;
+    else st.from = from;
+    return { ...t, stagger: st };
+  });
+}
+
+/** Modo tiempo-TOTAL del escalonado (P4): `each` pasa a ser el tiempo del primero al último. */
+export function setStaggerTotal(raw: unknown, total: boolean, ctx?: IxCompileCtx): IxWrite {
+  return patchTrack0(raw, ctx, (t) => {
+    if (!t.stagger) return t;
+    const st = { ...t.stagger };
+    if (total) st.total = true;
+    else delete st.total;
+    return { ...t, stagger: st };
+  });
+}
+
+/** Rejilla del escalonado (P4): columnas declaradas por el autor. `null` vuelve al modo lineal. */
+export function setStaggerCols(raw: unknown, cols: number | null, ctx?: IxCompileCtx): IxWrite {
+  return patchTrack0(raw, ctx, (t) => {
+    if (!t.stagger) return t;
+    const st = { ...t.stagger };
+    if (cols === null || !Number.isFinite(cols)) delete st.cols;
+    else st.cols = cols;
+    return { ...t, stagger: st };
+  });
+}
+
+/**
+ * Gating responsive (P4): apagar/encender la interacción en un dispositivo. Es del BLOQUE — el
+ * único ajuste, junto al disparador, que un bloque enlazado a un preajuste puede llevar encima.
+ */
+export function setBreakpointOff(
+  raw: unknown,
+  bp: IxBreakpoint,
+  isOff: boolean,
+  ctx?: IxCompileCtx,
+): IxWrite {
+  const state = ixPanelState(raw, ctx);
+  const spec = normalizeIxSpec(raw)?.spec;
+  const cur = new Set<IxBreakpoint>(spec?.off ?? []);
+  if (isOff) cur.add(bp);
+  else cur.delete(bp);
+  const off = IX_BREAKPOINTS.filter((b) => cur.has(b));
+  if (state.presetId !== null) {
+    const w: IxSpec = { v: 1, preset: state.presetId };
+    if (spec?.trigger) w.trigger = spec.trigger;
+    if (off.length > 0) w.off = off;
+    return write(w);
+  }
+  const body = ownBody(raw, ctx);
+  const w: IxSpec = { v: 1, trigger: body.trigger, tracks: body.tracks };
+  if (off.length > 0) w.off = off;
+  return write(w);
 }
 
 export function setDuration(raw: unknown, ms: number, ctx?: IxCompileCtx): IxWrite {

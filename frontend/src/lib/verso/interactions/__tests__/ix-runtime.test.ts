@@ -102,7 +102,7 @@ type Harness = {
 
 function harness(
   els: FakeEl[],
-  opts: { reduced?: boolean; supports?: boolean; io?: boolean; pageP?: number } = {},
+  opts: { reduced?: boolean; supports?: boolean; io?: boolean; pageP?: number; media?: boolean } = {},
 ): Harness {
   const doc = new FakeDoc(els);
   const h: Harness = {
@@ -123,6 +123,7 @@ function harness(
     viewportHeight: () => 800,
     pageProgress: () => opts.pageP ?? 0,
     reducedMotion: () => opts.reduced === true,
+    matchesMedia: () => opts.media !== false,
     supportsTimeline: () => opts.supports !== false,
     observe: (cb): IxObserverLike | null => {
       if (opts.io === false) return null;
@@ -211,6 +212,32 @@ describe("salida rápida: lo que NO se paga", () => {
     expect(h.scrubLoads).toBe(0);
     expect(h.rafCalls).toBe(0);
     for (const el of els) expect(el.attrs.size).toBe(0);
+  });
+});
+
+describe("gating responsive (P4)", () => {
+  const gated = () =>
+    unitsOf([{ v: 1, trigger: { on: "view", once: true }, off: ["mobile"], tracks: [track()] }]);
+
+  it("la unidad lleva su condición @media en el manifiesto", () => {
+    expect(gated()[0].media).toBe("(min-width: 768px)");
+  });
+
+  it("si la condición NO casa, la unidad ni observa ni toca atributos", () => {
+    const u = gated();
+    const el = new FakeEl(u[0].cls);
+    const h = harness([el], { media: false });
+    startIxRuntime(u, h.host);
+    expect(h.observers).toHaveLength(0);
+    expect(el.attrs.size).toBe(0);
+  });
+
+  it("si casa, arma con normalidad", () => {
+    const u = gated();
+    const el = new FakeEl(u[0].cls);
+    const h = harness([el], { media: true });
+    startIxRuntime(u, h.host);
+    expect(el.getAttribute("data-wjs-ix")).toBe("armed");
   });
 });
 
@@ -470,6 +497,34 @@ describe("driver de scrub", () => {
     createScrubDriver(u, h.host);
     const delays = root.children.map((c) => (c.anims[0].opts as { delay: number }).delay);
     expect(delays).toEqual([100, 0, 100]);
+  });
+
+  it("total y rejilla son EXACTOS en el runtime: mismas fórmulas que el CSS nativo", () => {
+    // Tiempo total 700ms entre 8 hermanos → 100ms por hueco.
+    const uTotal = allUnitsOf([{
+      v: 1,
+      trigger: { on: "load" },
+      tracks: [track({ target: { kind: "children" }, stagger: { each: 700, total: true } })],
+    }]);
+    const rootT = new FakeEl(uTotal[0].cls);
+    rootT.children = Array.from({ length: 8 }, () => new FakeEl("c"));
+    const hT = harness([rootT]);
+    createScrubDriver(uTotal, hT.host);
+    const delaysT = rootT.children.map((c) => (c.anims[0].opts as { delay: number }).delay);
+    expect(delaysT).toEqual([0, 100, 200, 300, 400, 500, 600, 700]);
+
+    // Rejilla de 3 columnas → onda diagonal (fila + columna) * each.
+    const uGrid = allUnitsOf([{
+      v: 1,
+      trigger: { on: "load" },
+      tracks: [track({ target: { kind: "children" }, stagger: { each: 80, cols: 3 } })],
+    }]);
+    const rootG = new FakeEl(uGrid[0].cls);
+    rootG.children = Array.from({ length: 6 }, () => new FakeEl("c"));
+    const hG = harness([rootG]);
+    createScrubDriver(uGrid, hG.host);
+    const delaysG = rootG.children.map((c) => (c.anims[0].opts as { delay: number }).delay);
+    expect(delaysG).toEqual([0, 80, 160, 80, 160, 240]);
   });
 
   it("la limpieza cancela TODAS las animaciones creadas", () => {

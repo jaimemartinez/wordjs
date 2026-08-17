@@ -31,10 +31,12 @@ import {
   IX_PERSP_DEFAULT,
   IX_PROP_KEYS,
   IX_PROP_NEUTRAL,
+  IX_STAGGER_TOTAL_FALLBACK_N,
   normalizeIxSpec,
 } from "./normalize";
 import type {
   IxBody,
+  IxBreakpoint,
   IxClipDir,
   IxKeyframe,
   IxNeedsRuntime,
@@ -47,6 +49,7 @@ import type {
   IxRuntimeTrack,
   IxRuntimeUnit,
   IxSpec,
+  IxStagger,
   IxStep,
   IxTarget,
   IxTrack,
@@ -115,14 +118,58 @@ export function resolveIxBody(raw: unknown, ctx?: IxCompileCtx): IxResolved | nu
       tracks: preset.tracks,
       rev: preset.rev,
     };
+    // El gating es del BLOQUE aunque el cuerpo venga del preset: dos bloques con el mismo preajuste
+    // pueden desactivarse en dispositivos distintos (y por eso `off` entra en el hash: son
+    // unidades distintas).
+    if (spec.off) body.off = spec.off;
     return { body, warnings };
   }
 
   if (!spec.tracks || spec.tracks.length === 0) return null;
-  return {
-    body: { trigger: spec.trigger ?? IX_DEFAULT_TRIGGER, tracks: spec.tracks },
-    warnings,
-  };
+  const body: IxBody = { trigger: spec.trigger ?? IX_DEFAULT_TRIGGER, tracks: spec.tracks };
+  if (spec.off) body.off = spec.off;
+  return { body, warnings };
+}
+
+/* ------------------------------------------------------------------ */
+/* Gating responsive (P4)                                              */
+/* ------------------------------------------------------------------ */
+
+/** Los px de los breakpoints — LOS MISMOS que las clases `wjs-hide-*` de wordjs-ui.css. */
+const BP_RANGES: Readonly<Record<IxBreakpoint, readonly [string | null, string | null]>> =
+  Object.freeze({
+    mobile: [null, "767.98px"],
+    tablet: ["768px", "1023.98px"],
+    desktop: ["1024px", null],
+  });
+
+/**
+ * Condición `@media` que PERMITE los dispositivos no desactivados: los rangos permitidos contiguos
+ * se funden, y varios tramos salen como lista separada por comas (una media query list). Texto
+ * construido íntegramente por el compilador desde la lista cerrada — jamás del autor.
+ */
+export function ixMediaOf(off: readonly IxBreakpoint[]): string | undefined {
+  if (off.length === 0) return undefined;
+  const allowed = (["mobile", "tablet", "desktop"] as const).filter((b) => !off.includes(b));
+  if (allowed.length === 0) return undefined; // el normalizador ya lo impide; cinturón
+  // Fusionar tramos contiguos (mobile+tablet → [null, 1023.98px], etc.).
+  const merged: Array<[string | null, string | null]> = [];
+  for (const b of allowed) {
+    const [min, max] = BP_RANGES[b];
+    const last = merged[merged.length - 1];
+    const contiguous =
+      last &&
+      ((b === "tablet" && last[1] === "767.98px") || (b === "desktop" && last[1] === "1023.98px"));
+    if (contiguous) last[1] = max;
+    else merged.push([min, max]);
+  }
+  return merged
+    .map(([min, max]) => {
+      if (min && max) return `(min-width: ${min}) and (max-width: ${max})`;
+      if (min) return `(min-width: ${min})`;
+      return `(max-width: ${max})`;
+    })
+    .join(",");
 }
 
 /* ------------------------------------------------------------------ */
@@ -602,7 +649,10 @@ export function emitUnit(body: IxBody, hash: string): IxUnit {
     rules.push(...staggerRules(cls, track, trigger, suffix, delay, "animation-delay", warnings));
   });
 
-  return { hash, cls, body, rules, keyframes, kf, needsRuntime, warnings };
+  const unit: IxUnit = { hash, cls, body, rules, keyframes, kf, needsRuntime, warnings };
+  const media = body.off ? ixMediaOf(body.off) : undefined;
+  if (media) unit.media = media;
+  return unit;
 }
 
 /**
@@ -619,13 +669,42 @@ function wordsDelay(track: IxTrack, delay: number): string {
 }
 
 /**
- * Reglas `:nth-child()` del escalonado sobre hijos DIRECTOS.
+ * El retardo NATIVO de un hermano, como expresión `calc()` sobre `sibling-index()` /
+ * `sibling-count()` (P4). Devuelve `null` si el modo no tiene expresión (no ocurre hoy: todos la
+ * tienen). La expresión sirve además de CONDICIÓN del `@supports`: si el motor la parsea, la
+ * soporta — no hace falta una tabla de features por navegador.
+ */
+function nativeStaggerExpr(st: IxStagger, baseDelay: number): string {
+  const d = `${n(baseDelay)}ms`;
+  if (st.cols !== undefined) {
+    // Rejilla: onda diagonal fila+columna. El autor declara las columnas; el índice hace el resto.
+    const i = "(sibling-index() - 1)";
+    return `calc((round(down,${i} / ${n(st.cols)}) + mod(${i},${n(st.cols)})) * ${n(st.each)}ms + ${d})`;
+  }
+  if (st.total === true) {
+    // Tiempo TOTAL repartido entre el primero y el último. max() evita dividir por cero con 1 hijo.
+    return `calc((sibling-index() - 1) * (${n(st.each)}ms / max(1,sibling-count() - 1)) + ${d})`;
+  }
+  switch (st.from ?? "start") {
+    case "end":
+      return `calc((sibling-count() - sibling-index()) * ${n(st.each)}ms + ${d})`;
+    case "center":
+      return `calc(abs(sibling-index() - (sibling-count() + 1) / 2) * ${n(st.each)}ms + ${d})`;
+    case "start":
+      return `calc((sibling-index() - 1) * ${n(st.each)}ms + ${d})`;
+  }
+}
+
+/**
+ * Reglas del escalonado sobre hijos DIRECTOS: fallback `:nth-child()` + camino NATIVO.
  *
- * `from: "end"` se emite con `:nth-last-child()`, que es EXACTO sin conocer el número de hijos.
- * `from: "center"` no es expresable en CSS puro (haría falta el recuento) → se avisa y se trata
- * como `start`: nunca se rompe el render por una capacidad que falta.
- * Del hermano IX_MAX_CHILDREN en adelante, todos comparten el retardo del 24.º — documentado, no
- * silencioso: es el tope de reglas generadas.
+ * El fallback es el de siempre — `from: "end"` con `:nth-last-child()` (exacto sin contar),
+ * `center` degradado a `start`, tope de IX_MAX_CHILDREN reglas con el 24.º compartido. ENCIMA se
+ * emite UNA regla con `sibling-index()` dentro de un `@supports` cuya condición es la propia
+ * expresión: donde el motor la entiende (Chrome 138+, Safari 26.2+, Firefox 154+), una regla
+ * sustituye a veinticuatro, no hay tope de hermanos, y `center`, el tiempo total y la rejilla son
+ * EXACTOS. El selector del camino nativo es `>:nth-child(n)` a propósito: misma especificidad
+ * (0,2,0) que las reglas del fallback y posterior en la hoja — gana el empate donde aplica.
  */
 function staggerRules(
   cls: string,
@@ -640,11 +719,31 @@ function staggerRules(
   if (!st || st.each <= 0 || track.target.kind !== "children") return [];
 
   let from = st.from ?? "start";
-  if (from === "center") {
-    warnings.push("escalonado desde el centro: no es expresable en CSS puro, se usa `start`");
+  const grid = st.cols !== undefined;
+  const total = st.total === true;
+  if (grid && st.from) {
+    warnings.push("la rejilla escalona en diagonal (fila + columna): `from` se ignora con `cols`");
+  }
+  if (from === "center" && !grid && !total) {
+    warnings.push(
+      "escalonado desde el centro: exacto donde hay `sibling-index()` (Chrome/Safari/Firefox 154+); en los demás cae a `start`",
+    );
     from = "start";
   }
-  const nth = from === "end" ? "nth-last-child" : "nth-child";
+  // Fallback por hermano: la rejilla cae a lineal, y el tiempo total se reparte SUPONIENDO
+  // IX_STAGGER_TOTAL_FALLBACK_N hermanos (contar exige `sibling-count()`). Ambos avisan.
+  let fallbackEach = st.each;
+  if (total) {
+    fallbackEach = st.each / (IX_STAGGER_TOTAL_FALLBACK_N - 1);
+    warnings.push(
+      `tiempo total: exacto donde hay \`sibling-count()\`; el fallback reparte como si hubiera ${IX_STAGGER_TOTAL_FALLBACK_N} hermanos`,
+    );
+  }
+  if (grid) {
+    warnings.push("rejilla: exacta donde hay `sibling-index()`; en los demás cae a un escalonado lineal");
+  }
+
+  const nth = from === "end" && !grid && !total ? "nth-last-child" : "nth-child";
   const bases = stateSelectors(cls, trigger);
   // El camino de hover con 2 pasos escalona el estado BASE (la transición vive en `.cls`),
   // no el estado `:hover`; el resto escalona el selector del disparador.
@@ -652,11 +751,16 @@ function staggerRules(
   const out: string[] = [];
 
   for (let k = 1; k < IX_MAX_CHILDREN; k++) {
-    const d = baseDelay + (k - 1) * st.each;
+    const d = baseDelay + (k - 1) * fallbackEach;
     out.push(rule(joinSel(prefixes, `>:${nth}(${k})`), [`${prop}:${n(d)}ms`]));
   }
-  const last = baseDelay + (IX_MAX_CHILDREN - 1) * st.each;
+  const last = baseDelay + (IX_MAX_CHILDREN - 1) * fallbackEach;
   out.push(rule(joinSel(prefixes, `>:${nth}(n+${IX_MAX_CHILDREN})`), [`${prop}:${n(last)}ms`]));
+
+  const expr = nativeStaggerExpr(st, baseDelay);
+  out.push(
+    `@supports (${prop}:${expr}){${rule(joinSel(prefixes, ">:nth-child(n)"), [`${prop}:${expr}`])}}`,
+  );
   // `suffix` es siempre " > *" en esta rama (target `children`); se acepta como parámetro para que
   // la firma no mienta y para que un cambio futuro de sufijo no pase desapercibido.
   void suffix;
@@ -797,7 +901,14 @@ export function ixClassFor(raw: unknown, page: IxPage, ctx?: IxCompileCtx): stri
 export function ixCss(units: readonly IxUnit[]): string {
   const blocks: string[] = [];
   for (const u of units) {
-    blocks.push(...u.keyframes, ...u.rules);
+    blocks.push(...u.keyframes);
+    if (u.media && u.rules.length > 0) {
+      // Gating responsive (P4): las REGLAS de la unidad, bajo su @media. Los @keyframes quedan
+      // fuera — sin regla que los use no aplican, y así no se anidan tres niveles de condición.
+      blocks.push(`@media ${u.media}{\n${u.rules.join("\n")}\n}`);
+    } else {
+      blocks.push(...u.rules);
+    }
   }
   if (blocks.length === 0) return "";
   // Un salto de línea por bloque: no cuesta casi nada y hace que un `git diff` del CSS emitido sea
@@ -828,17 +939,21 @@ function toRuntimeTrack(track: IxTrack, trigger: IxTrigger): IxRuntimeTrack {
   };
   if (track.stagger && track.stagger.each > 0) {
     out.stagger = { each: track.stagger.each, from: track.stagger.from ?? "start" };
+    if (track.stagger.total === true) out.stagger.total = true;
+    if (track.stagger.cols !== undefined) out.stagger.cols = track.stagger.cols;
   }
   return out;
 }
 
 export function toRuntimeUnit(unit: IxUnit): IxRuntimeUnit {
-  return {
+  const out: IxRuntimeUnit = {
     cls: unit.cls,
     needsRuntime: unit.needsRuntime,
     trigger: unit.body.trigger,
     tracks: unit.body.tracks.map((t) => toRuntimeTrack(t, unit.body.trigger)),
   };
+  if (unit.media) out.media = unit.media;
+  return out;
 }
 
 export type { IxSpec };

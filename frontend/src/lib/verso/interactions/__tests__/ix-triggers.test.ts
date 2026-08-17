@@ -10,8 +10,9 @@
  *   always     → el CSS no puede: la isla de eventos, siempre.
  */
 import { describe, expect, it } from "vitest";
-import { compileIx, compileIxPage, toRuntimeUnit } from "../compile";
+import { compileIx, compileIxPage, ixMediaOf, toRuntimeUnit } from "../compile";
 import { IX_MAX_CHILDREN } from "../normalize";
+import { SYS_IX_PRESETS } from "../presets";
 import type { IxSpec, IxStep, IxTrack } from "../types";
 
 const steps2 = [
@@ -192,14 +193,59 @@ describe("qué CSS emite cada disparador", () => {
 });
 
 describe("escalonado", () => {
-  it("sobre hijos emite nth-child 1..23 + un catch-all para el 24 en adelante", () => {
+  it("sobre hijos emite nth-child 1..23 + catch-all + la regla NATIVA de sibling-index()", () => {
     const u = compileIx(mk({ on: "load" }, { target: { kind: "children" }, stagger: { each: 60 } }))!;
-    // 1 regla principal + 23 nth-child + 1 catch-all
-    expect(u.rules).toHaveLength(1 + IX_MAX_CHILDREN);
+    // 1 regla principal + 23 nth-child + 1 catch-all + 1 nativa (@supports sibling-index)
+    expect(u.rules).toHaveLength(1 + IX_MAX_CHILDREN + 1);
     expect(u.rules[1]).toBe(`.${u.cls}>:nth-child(1){animation-delay:0ms}`);
     expect(u.rules[2]).toBe(`.${u.cls}>:nth-child(2){animation-delay:60ms}`);
     expect(u.rules[IX_MAX_CHILDREN - 1]).toBe(`.${u.cls}>:nth-child(23){animation-delay:1320ms}`);
     expect(u.rules[IX_MAX_CHILDREN]).toBe(`.${u.cls}>:nth-child(n+24){animation-delay:1380ms}`);
+    // La nativa: UNA regla, sin tope de hermanos, condicionada por su propia expresión, y con
+    // selector `>:nth-child(n)` — misma especificidad que el fallback y posterior: gana el empate.
+    expect(u.rules[IX_MAX_CHILDREN + 1]).toBe(
+      `@supports (animation-delay:calc((sibling-index() - 1) * 60ms + 0ms)){.${u.cls}>:nth-child(n){animation-delay:calc((sibling-index() - 1) * 60ms + 0ms)}}`,
+    );
+  });
+
+  it("`from: center` nativo es EXACTO (abs + sibling-count) y el fallback cae a start avisando", () => {
+    const u = compileIx(mk({ on: "load" }, {
+      target: { kind: "children" }, stagger: { each: 50, from: "center" },
+    }))!;
+    expect(u.warnings.join(" ")).toContain("centro");
+    expect(u.rules[1]).toContain(">:nth-child(1){");
+    const native = u.rules[u.rules.length - 1];
+    expect(native).toContain("abs(sibling-index() - (sibling-count() + 1) / 2)");
+  });
+
+  it("modo TIEMPO TOTAL: nativo exacto con sibling-count; fallback reparte entre 8 y avisa", () => {
+    const u = compileIx(mk({ on: "load" }, {
+      target: { kind: "children" }, stagger: { each: 700, total: true },
+    }))!;
+    const native = u.rules[u.rules.length - 1];
+    expect(native).toContain("(700ms / max(1,sibling-count() - 1))");
+    // Fallback: 700 / (8-1) = 100ms por hermano.
+    expect(u.rules[2]).toBe(`.${u.cls}>:nth-child(2){animation-delay:100ms}`);
+    expect(u.warnings.join(" ")).toContain("8 hermanos");
+  });
+
+  it("REJILLA: onda diagonal fila+columna con las columnas del autor; `from` se ignora avisando", () => {
+    const u = compileIx(mk({ on: "load" }, {
+      target: { kind: "children" }, stagger: { each: 80, cols: 3, from: "end" },
+    }))!;
+    const native = u.rules[u.rules.length - 1];
+    expect(native).toContain("round(down,(sibling-index() - 1) / 3)");
+    expect(native).toContain("mod((sibling-index() - 1),3)");
+    expect(u.warnings.join(" ")).toContain("diagonal");
+    // El fallback de la rejilla es lineal por nth-child (nunca nth-last-child: `from` no aplica).
+    expect(u.rules[1]).toContain(">:nth-child(1){");
+  });
+
+  it("el runtime WAAPI lleva total y cols en el manifiesto (paridad exacta con el nativo)", () => {
+    const u = compileIx(mk({ on: "view", once: true }, {
+      target: { kind: "children" }, stagger: { each: 700, total: true, cols: 3 },
+    }))!;
+    expect(toRuntimeUnit(u).tracks[0].stagger).toEqual({ each: 700, from: "start", total: true, cols: 3 });
   });
 
   it("`from: end` usa nth-last-child, que es EXACTO sin conocer el recuento", () => {
@@ -443,6 +489,46 @@ describe("propiedades P3: transform 3D, filtros, colores, origin, clipDir, persp
       steps: two({ opacity: 0, y: 20 }, { opacity: 1, y: 0 }),
     }))!;
     expect(u.rules[1]).toBe(`.${u.cls}[data-wjs-ix="armed"]{opacity:0;transform:translate3d(0px,20px,0)}`);
+  });
+});
+
+describe("gating responsive (P4): la condición @media sale de la lista cerrada", () => {
+  it("cada combinación de apagados produce su complementaria exacta", () => {
+    expect(ixMediaOf(["mobile"])).toBe("(min-width: 768px)");
+    expect(ixMediaOf(["desktop"])).toBe("(max-width: 1023.98px)");
+    expect(ixMediaOf(["tablet"])).toBe("(max-width: 767.98px),(min-width: 1024px)");
+    expect(ixMediaOf(["mobile", "tablet"])).toBe("(min-width: 1024px)");
+    expect(ixMediaOf(["tablet", "desktop"])).toBe("(max-width: 767.98px)");
+    expect(ixMediaOf(["mobile", "desktop"])).toBe("(min-width: 768px) and (max-width: 1023.98px)");
+    expect(ixMediaOf([])).toBeUndefined();
+  });
+
+  it("las REGLAS de una unidad apagada en móvil van bajo su @media; los keyframes no", () => {
+    const page = compileIxPage([{ ...mk({ on: "load" }), off: ["mobile"] }]);
+    expect(page.css).toContain("@media (min-width: 768px){");
+    const kfAt = page.css.indexOf("@keyframes");
+    const mediaAt = page.css.indexOf("@media (min-width: 768px)");
+    expect(kfAt).toBeGreaterThan(-1);
+    expect(kfAt).toBeLessThan(mediaAt);
+  });
+
+  it("`off` entra en el hash: el mismo cuerpo con y sin gating son unidades distintas", () => {
+    const plain = compileIx(mk({ on: "load" }))!;
+    const gated = compileIx({ ...mk({ on: "load" }), off: ["mobile"] })!;
+    expect(plain.hash).not.toBe(gated.hash);
+    expect(gated.media).toBe("(min-width: 768px)");
+  });
+
+  it("apagar los TRES dispositivos es «Quitar»: se ignora el gating y se avisa", () => {
+    const u = compileIx({ ...mk({ on: "load" }), off: ["mobile", "tablet", "desktop"] })!;
+    expect(u.media).toBeUndefined();
+    expect(u.warnings.join(" ")).toContain("quitarla");
+  });
+
+  it("el gating es del BLOQUE aunque el cuerpo venga de un preajuste", () => {
+    const ctx = { presets: SYS_IX_PRESETS };
+    const u = compileIx({ v: 1, preset: "sys:fade-up", off: ["mobile"] }, ctx)!;
+    expect(u.media).toBe("(min-width: 768px)");
   });
 });
 

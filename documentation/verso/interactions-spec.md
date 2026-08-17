@@ -271,6 +271,14 @@ que las clases estáticas de `wordjs-ui.css` (gate de paridad visual en F9-B). N
 **Referencia rota** (preset borrado o `v` desconocida) → la unidad no se compila, el bloque se
 renderiza sin interacción, visible. **Fail-open siempre**: la única forma de fallar es no moverse.
 
+**Gating responsive (P4).** `IxSpec.off` desactiva la interacción por dispositivo (lista cerrada
+mobile/tablet/desktop, los MISMOS cortes que `wjs-hide-*`: 768/1024). Es del BLOQUE — nunca del
+preset: el mismo preajuste puede apagarse en móvil en un bloque y correr entero en otro — y entra
+en el hash. El compilador construye la `@media` complementaria (tramos contiguos fundidos, varios
+tramos como lista) y envuelve las REGLAS de la unidad; el runtime consulta la MISMA condición al
+armar y en un dispositivo apagado ni observa ni baja chunk. Apagar los tres es «Quitar»: el
+normalizador lo descarta avisando.
+
 ---
 
 ## 4. DECISIÓN 2 — Compilación a CSS nativo
@@ -307,7 +315,7 @@ export type IxUnit = {
 | `hover`, 2 pasos | **SÍ** | `transition` sobre el estado `:hover` de la capa ix | `never` |
 | `hover`, ≥3 pasos | **SÍ** | `.wjs-ix-<h>:hover { animation-name: … }` en la **capa ix**, que es propia — no comparte elemento con la apariencia ni con la entrada (misma razón que ya obligó a las dos capas anidadas) | `never` |
 | `click` | **NO** | Sin *latch* en CSS. `:target` es un truco de URL; el *checkbox hack* exige cambiar el markup y eso viola la restricción 5. | `always` |
-| `stagger` sobre `children` | **SÍ** | `.wjs-ix-<h> > :nth-child(k) { animation-delay: calc(<k-1> * <each>ms) }`, k = 1..24 | igual que su trigger |
+| `stagger` sobre `children` | **SÍ** | Fallback `:nth-child(k)` k=1..24 + UNA regla nativa `sibling-index()` bajo `@supports` cuya condición es la propia expresión (Chrome 138+, Safari 26.2+, Firefox 154+): sin tope de hermanos, y `center`, el tiempo TOTAL (`sibling-count()`) y la REJILLA (`round(down)`/`mod` con las columnas del autor) son EXACTOS. El selector nativo `>:nth-child(n)` empata especificidad con el fallback y gana por orden. El runtime WAAPI usa las mismas fórmulas (paridad exacta); solo el fallback aproxima, avisando. | igual que su trigger |
 | `stagger` sobre `words` | **SÍ** | `--wjs-ixv-i` inline por span + `calc(var(--wjs-ixv-i) * <each>ms)` | igual que su trigger |
 | `target: block` (otro bloque) | **NO** (F9-A/B) | Exigiría `timeline-scope`; Firefox no lo implementa | `always` |
 | Secuencia con dependencias entre pistas | **N/A** | Descartado (§1) | — |

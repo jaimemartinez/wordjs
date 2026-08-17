@@ -22,6 +22,7 @@
  * página rota. Por eso `normalizeIxSpec` devuelve `null` en vez de lanzar.
  */
 import type {
+  IxBreakpoint,
   IxClipDir,
   IxEase,
   IxEdge,
@@ -70,6 +71,16 @@ export const IX_DELAY_MIN = 0;
 export const IX_DELAY_MAX = 3000;
 /** Retardo entre hermanos del stagger (ms). */
 export const IX_STAGGER_MAX = 1000;
+/** Columnas del stagger en rejilla (P4). */
+export const IX_STAGGER_COLS_MIN = 2;
+export const IX_STAGGER_COLS_MAX = 12;
+/**
+ * Hermanos SUPUESTOS por el fallback del modo tiempo-total cuando no hay `sibling-count()`
+ * (Firefox estable): el reparto exacto necesita contar, y 8 tarjetas es el caso típico de una
+ * rejilla de contenido. El camino nativo y el runtime WAAPI son exactos; esto solo acota el error
+ * del único camino que no puede contar. Documentado, no silencioso: el compilador avisa.
+ */
+export const IX_STAGGER_TOTAL_FALLBACK_N = 8;
 /** Repeticiones finitas. `"inf"` es un token aparte. */
 export const IX_REPEAT_MAX = 50;
 
@@ -186,6 +197,13 @@ export const IX_ORIGINS: readonly IxOrigin[] = Object.freeze([
 export const IX_PERSP_MIN = 200;
 export const IX_PERSP_MAX = 4000;
 export const IX_PERSP_DEFAULT = 1000;
+
+/** Breakpoints del gating responsive (P4), en orden canónico. Los px viven en el compilador. */
+export const IX_BREAKPOINTS: readonly IxBreakpoint[] = Object.freeze([
+  "mobile",
+  "tablet",
+  "desktop",
+]);
 
 /**
  * ORDEN CANÓNICO de las propiedades. Es un array explícito y no `Object.keys` de un objeto
@@ -435,8 +453,16 @@ function normStagger(raw: unknown): IxStagger | undefined {
   const each = num(raw.each);
   if (each === undefined) return undefined;
   const from = oneOf<IxStaggerFrom>(raw.from, ["start", "end", "center"]);
-  const st: IxStagger = { each: clamp(each, 0, IX_STAGGER_MAX) };
+  // Con `total`, `each` es el tiempo del primero al último: el tope por hermano no aplica y se usa
+  // el de una animación entera (mismo techo que IX_DELAY_MAX: nadie espera >3s a que algo empiece).
+  const total = raw.total === true;
+  const st: IxStagger = { each: clamp(each, 0, total ? IX_DELAY_MAX : IX_STAGGER_MAX) };
   if (from) st.from = from;
+  if (total) st.total = true;
+  const cols = num(raw.cols);
+  if (cols !== undefined) {
+    st.cols = Math.round(clamp(cols, IX_STAGGER_COLS_MIN, IX_STAGGER_COLS_MAX));
+  }
   return st;
 }
 
@@ -569,6 +595,18 @@ export function normalizeIxSpec(raw: unknown): IxNormalizeResult {
 
   const trigger = normTrigger(raw.trigger);
   if (trigger) spec.trigger = trigger;
+
+  // P4 — gating responsive: subconjunto de la lista cerrada, en orden canónico y sin duplicados.
+  // Con los TRES apagados no hay interacción en ningún sitio: eso es «Quitar», no un gating — se
+  // descarta el `off` entero avisando, y el bloque se mueve en todas partes (fail-open).
+  if (Array.isArray(raw.off)) {
+    const off = IX_BREAKPOINTS.filter((b) => (raw.off as unknown[]).includes(b));
+    if (off.length === IX_BREAKPOINTS.length) {
+      warn("desactivada en móvil, tablet y escritorio a la vez: eso es quitarla — se ignora el gating");
+    } else if (off.length > 0) {
+      spec.off = off;
+    }
+  }
 
   if (hasPreset) {
     spec.preset = preset;

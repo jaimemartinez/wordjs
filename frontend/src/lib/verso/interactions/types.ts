@@ -33,7 +33,16 @@ export type IxSpec = {
   preset?: string;
   trigger?: IxTrigger;
   tracks?: IxTrack[];
+  /**
+   * Dispositivos donde la interacción NO corre (P4). Espejo de los botones de visibilidad
+   * (`wjs-hide-*`): mobile <768, tablet 768–1023, desktop ≥1024. Es del BLOQUE, no del preset — el
+   * mismo preajuste puede desactivarse en móvil en un bloque y correr entero en otro. En CSS se
+   * emite como `@media` complementaria; el runtime consulta la misma condición y no arma.
+   */
+  off?: IxBreakpoint[];
 };
+
+export type IxBreakpoint = "mobile" | "tablet" | "desktop";
 
 /* ------------------------------------------------------------------ */
 /* Disparador                                                          */
@@ -91,7 +100,13 @@ export type IxOrigin =
   | "bottom-left"
   | "bottom-right";
 
-export type IxStagger = { each: number; from?: IxStaggerFrom };
+/**
+ * Escalonado (P4): `each` son ms entre hermanos — salvo con `total: true`, donde `each` es el
+ * TIEMPO TOTAL del primero al último (exacto con `sibling-count()`; el fallback lo aproxima).
+ * `cols` activa el modo REJILLA: el autor declara las columnas y la onda avanza en diagonal
+ * (fila + columna); ignora `from`.
+ */
+export type IxStagger = { each: number; from?: IxStaggerFrom; total?: boolean; cols?: number };
 export type IxStaggerFrom = "start" | "end" | "center";
 
 export type IxStep = {
@@ -248,6 +263,8 @@ export type IxBody = {
   tracks: IxTrack[];
   /** `rev` del preset del que salió, si salió de uno. Cambiarlo cambia el hash → invalida caché. */
   rev?: number;
+  /** Dispositivos desactivados (P4). Del bloque, nunca del preset. Entra en el hash. */
+  off?: IxBreakpoint[];
 };
 
 export type IxUnit = {
@@ -263,6 +280,12 @@ export type IxUnit = {
   /** nombre → fotogramas, para el backend WAAPI. */
   kf: Record<string, IxKeyframe[]>;
   needsRuntime: IxNeedsRuntime;
+  /**
+   * Condición `@media` del gating responsive (P4), o ausente. La CONSTRUYE el compilador desde la
+   * lista cerrada de breakpoints — jamás una cadena del autor. `ixCss` envuelve las reglas; el
+   * runtime consulta la misma condición.
+   */
+  media?: string;
   /** Topes superados y capacidades no expresables: NUNCA rompen el render, se avisan. */
   warnings: string[];
 };
@@ -276,7 +299,7 @@ export type IxRuntimeTrack = {
   delay: number;
   repeat: number | "inf";
   alt: boolean;
-  stagger?: Required<IxStagger>;
+  stagger?: { each: number; from: IxStaggerFrom; total?: boolean; cols?: number };
 };
 
 export type IxRuntimeUnit = {
@@ -284,6 +307,8 @@ export type IxRuntimeUnit = {
   needsRuntime: IxNeedsRuntime;
   trigger: IxTrigger;
   tracks: IxRuntimeTrack[];
+  /** Condición `@media` del gating responsive (P4): el runtime no arma la unidad si no casa. */
+  media?: string;
 };
 
 /** Salida de la compilación de UNA página: lo que consumen las tres superficies de emisión. */
