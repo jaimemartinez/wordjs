@@ -60,9 +60,15 @@ export function siblingsOf(items: FlatMenuItem[], parentId: number): FlatMenuIte
         .sort((a, b) => a.order - b.order || a.id - b.id);
 }
 
-/** El `order` con el que un elemento NUEVO se añade al final del grupo de `parentId`. */
+/**
+ * El `order` con el que un elemento NUEVO se añade al final del grupo de `parentId`:
+ * max(order)+1 (0 si el grupo está vacío) — NO el número de hermanos. Con huecos en los orders
+ * (p.ej. quedan 2,3 tras borrar los elementos 0 y 1 con una herramienta que no renumera), `length`
+ * devolvería 2 y el alta "al final" aterrizaría EN MEDIO de la lista.
+ */
 export function nextMenuOrder(items: FlatMenuItem[], parentId: number): number {
-    return siblingsOf(items, parentId).length;
+    const sibs = siblingsOf(items, parentId);
+    return sibs.length ? sibs[sibs.length - 1].order + 1 : 0;
 }
 
 /**
@@ -82,6 +88,28 @@ function planGroup(items: FlatMenuItem[], parentId: number, orderedIds: number[]
         if (data.parent !== undefined || data.order !== undefined) out.push({ id, data });
     });
     return out;
+}
+
+/**
+ * Plan PREVIO al borrado de un elemento — lo que la UI promete («sus hijos suben de nivel») hecho
+ * verdad: el backend NO re-parenta ni renumera (MenuItem.delete borra solo la fila del elemento),
+ * así que sin este plan los hijos quedan huérfanos apuntando a un id muerto, pintados como raíces
+ * fantasma e irreparables desde la UI (el desanidar se deshabilita a profundidad 0).
+ *
+ * El plan: los hijos del borrado pasan al padre del borrado, añadidos AL FINAL de ese grupo en su
+ * orden relativo actual, y el grupo receptor — que es también el que el borrado abandona — queda
+ * renumerado contiguo 0..n-1 (los borrados no dejan huecos de order). El grupo abandonado por los
+ * hijos queda vacío: nada que renumerar. Los updates se aplican con el PUT existente ANTES del
+ * DELETE; el borrado mismo no forma parte del plan.
+ */
+export function planDeleteWithReparent(items: FlatMenuItem[], id: number): MenuItemUpdate[] {
+    const item = items.find((it) => it.id === id);
+    if (!item) return [];
+    const childIds = siblingsOf(items, id).map((it) => it.id);
+    const survivorIds = siblingsOf(items, item.parent)
+        .filter((it) => it.id !== id)
+        .map((it) => it.id);
+    return planGroup(items, item.parent, [...survivorIds, ...childIds]);
 }
 
 /**

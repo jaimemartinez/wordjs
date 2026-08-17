@@ -52,14 +52,21 @@ export const BLOCK_META: Record<string, BlockMeta> = {
     CTABanner: { icon: "fa-bullhorn", ms: "call_to_action", group: "Marketing", desc: "Banner de conversión" },
     Stats: { icon: "fa-chart-simple", ms: "insert_chart", group: "Marketing", desc: "Cifras destacadas" },
     SocialLinks: { icon: "fa-share-nodes", ms: "share", group: "Marketing", desc: "Iconos de redes sociales" },
-    // Navegación — `ms: "menu"` ships in the Material Symbols subset (an unlisted glyph renders as an
-    // empty box; see the BlockMeta note above).
-    NavMenu: { icon: "fa-bars", ms: "menu", group: "Navegación", desc: "Menú del sitio vinculado (por ubicación o id)", label: "Menú de navegación" },
+    // Navegación — CAUTION: `ms: "menu"` is NOT in the shipped subset (verified 2026-08-17 by dumping
+    // the GSUB ligatures of frontend/public/fonts/material-symbols-outlined-subset.woff2: 161 names,
+    // no 'menu' — the in-subset 'menu_book' is the substring-grep trap that fooled an earlier comment
+    // here). No subset manifest exists in the repo, so every `ms` below was picked from that verified
+    // dump; a name outside the subset renders as an empty box (see the BlockMeta note above).
+    // "list": a bound nav menu IS a list of links, and the row-of-lines glyph is the subset's closest
+    // relative of the hamburger.
+    NavMenu: { icon: "fa-bars", ms: "list", group: "Navegación", desc: "Menú del sitio vinculado (por ubicación o id)", label: "Menú de navegación" },
     // `ms` values below REUSE names already shipping in the Material Symbols subset (an unlisted glyph
-    // renders as an empty box; see the BlockMeta note above): "image"/"unfold_more"/"menu" are all in use.
+    // renders as an empty box; see the BlockMeta note above): "image"/"unfold_more" ship with Image/Spacer.
     SiteLogo: { icon: "fa-image", ms: "image", group: "Navegación", desc: "Logotipo o título del sitio (enlazado al inicio)", label: "Logotipo del sitio" },
     BackToTop: { icon: "fa-arrow-up", ms: "unfold_more", group: "Navegación", desc: "Botón flotante para volver arriba", label: "Volver arriba" },
-    OffCanvas: { icon: "fa-bars-staggered", ms: "menu", group: "Navegación", desc: "Cajón lateral con contenido (drawer)", label: "Cajón lateral (OffCanvas)" },
+    // "view_quilt" (large side panel + content tiles) is the subset's closest reading of a drawer
+    // beside the page; "menu" (the previous value) is absent from the subset — see the note above.
+    OffCanvas: { icon: "fa-bars-staggered", ms: "view_quilt", group: "Navegación", desc: "Cajón lateral con contenido (drawer)", label: "Cajón lateral (OffCanvas)" },
     // `ms: "view_column"` is REUSED from Columns (already in the Material Symbols subset — an unlisted
     // glyph renders as an empty box; see the BlockMeta note above): a mega menu is a row of columns.
     MegaMenu: { icon: "fa-table-columns", ms: "view_column", group: "Navegación", desc: "Menú vinculado con paneles de bloques por elemento", label: "Mega menú" },
@@ -85,14 +92,18 @@ export const GROUP_ICON: Record<string, string> = {
     "Navegación": "fa-compass",
     [FALLBACK_GROUP]: "fa-puzzle-piece",
 };
-/** Material Symbols counterpart of GROUP_ICON (same subset constraint as BlockMeta.ms). */
+/**
+ * Material Symbols counterpart of GROUP_ICON (same subset constraint as BlockMeta.ms — every name
+ * here was checked against the 2026-08-17 GSUB dump of the shipped woff2; 'menu' is NOT in it).
+ * "map" = wayfinding, the subset's counterpart of the group's FA compass.
+ */
 export const GROUP_MS_ICON: Record<string, string> = {
     "Diseño": "space_dashboard",
     "Contenido": "edit",
     "Medios": "imagesmode",
     "Marketing": "bolt",
     "Dinámicos": "rss_feed",
-    "Navegación": "menu",
+    "Navegación": "map",
     [FALLBACK_GROUP]: "widgets",
 };
 

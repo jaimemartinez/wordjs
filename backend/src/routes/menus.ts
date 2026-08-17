@@ -10,6 +10,18 @@ const { Menu, MenuItem } = require('../models/Menu');
 const { authenticate, optionalAuth } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
+// ISR: the public nav renders from Next Data Cache entries tagged 'menus' + 'menu:<ref>' with a 60s
+// revalidate (frontend/src/lib/server-api.ts getMenuByLocation/getMenuById). No content hook fires on
+// this router's mutations (menu items are written directly, not through wp_insert_post), so every
+// mutation here must purge explicitly or the editor shows the new nav while the public site serves
+// the stale one for up to a minute — breaking frontend-purge's own instant-purge contract, whose
+// docstring lists 'menus' among its tags.
+// The BROAD 'menus' tag is purged on purpose: both frontend fetches declare it alongside their
+// precise tag, the same menu is cached under a location key AND an id key at once, and the item
+// routes only know the item — per-ref precision would need reverse lookups (item → menu → locations)
+// for no real win (a site has a handful of menus, re-rendering them is cheap, and the flush is
+// debounced anyway).
+const { purgeFrontend } = require('../core/frontend-purge');
 
 // SECURITY (XSS-03): menu item urls render site-wide as <a href={item.url}> in the public nav, so a
 // `javascript:`/`data:`/`vbscript:` url set by an admin would execute stored XSS in every visitor's
@@ -207,6 +219,7 @@ router.post('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: R
     }
 
     const menu = await Menu.create({ name, slug, description });
+    purgeFrontend(['menus']);
     res.status(201).json(menu.toJSON());
 }));
 
@@ -254,6 +267,7 @@ router.put('/:id', authenticate, isAdmin, asyncHandler(async (req: Request, res:
     }
 
     const menu = await Menu.update(menuId, { name, slug, description });
+    purgeFrontend(['menus']);
     res.json(menu.toJSON());
 }));
 
@@ -290,6 +304,7 @@ router.delete('/:id', authenticate, isAdmin, asyncHandler(async (req: Request, r
     }
 
     await Menu.delete(menuId);
+    purgeFrontend(['menus']);
     res.json({ deleted: true, previous: menu.toJSON() });
 }));
 
@@ -334,6 +349,9 @@ router.post('/:id/location', authenticate, isAdmin, asyncHandler(async (req: Req
     }
 
     await Menu.setLocation(location, menuId);
+    // Also purged by the updated_option('nav_menu_locations') hook once wired; the explicit call keeps
+    // the route correct on its own and the debounced flush coalesces the two into one request.
+    purgeFrontend(['menus']);
     res.json({ success: true, location, menuId });
 }));
 
@@ -367,6 +385,7 @@ router.post('/:id/items', authenticate, isAdmin, asyncHandler(async (req: Reques
         classes
     });
 
+    purgeFrontend(['menus']);
     res.status(201).json(item.toJSON());
 }));
 
@@ -395,6 +414,7 @@ router.put('/items/:itemId', authenticate, isAdmin, asyncHandler(async (req: Req
     }
 
     const item = await MenuItem.update(itemId, updateData);
+    purgeFrontend(['menus']);
     res.json(item.toJSON());
 }));
 
@@ -415,6 +435,7 @@ router.delete('/items/:itemId', authenticate, isAdmin, asyncHandler(async (req: 
     }
 
     await MenuItem.delete(itemId);
+    purgeFrontend(['menus']);
     res.json({ deleted: true, previous: item.toJSON() });
 }));
 

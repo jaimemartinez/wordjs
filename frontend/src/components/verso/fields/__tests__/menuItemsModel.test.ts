@@ -12,6 +12,7 @@ import {
     nextMenuOrder,
     normalizeMenuItems,
     outdentMenuItem,
+    planDeleteWithReparent,
     siblingsOf,
     type FlatMenuItem,
 } from "../menuItemsModel";
@@ -61,6 +62,68 @@ describe("siblingsOf / nextMenuOrder", () => {
         expect(nextMenuOrder(fixture(), 0)).toBe(3);
         expect(nextMenuOrder(fixture(), 2)).toBe(2);
         expect(nextMenuOrder(fixture(), 999)).toBe(0);
+    });
+
+    it("con HUECOS de order el alta sigue cayendo AL FINAL: A(0)B(1)C(2)D(3), borrar A y B, añadir E", () => {
+        // Tras borrar A(0) y B(1) con una herramienta que no renumera, quedan C(2) y D(3). El bug:
+        // `length` (=2) empataba con C y el desempate por id (E es más nuevo) la colocaba EN MEDIO
+        // (C, E, D). max(order)+1 = 4 la deja detrás de D en todos los renders.
+        const survivors: FlatMenuItem[] = [
+            { id: 3, title: "C", url: "/c", target: "_self", parent: 0, order: 2 },
+            { id: 4, title: "D", url: "/d", target: "_self", parent: 0, order: 3 },
+        ];
+        const orderE = nextMenuOrder(survivors, 0);
+        expect(orderE).toBe(4);
+        const withE: FlatMenuItem[] = [
+            ...survivors,
+            { id: 9, title: "E", url: "/e", target: "_self", parent: 0, order: orderE },
+        ];
+        expect(siblingsOf(withE, 0).map((it) => it.title)).toEqual(["C", "D", "E"]);
+    });
+});
+
+describe("planDeleteWithReparent — los hijos suben de nivel y el grupo queda contiguo", () => {
+    it("escenario del huérfano: X(0), P(1){A,B}, Y(2) — borrar P sube A y B al final de la raíz", () => {
+        // Sin el plan, A y B quedaban con parent=P (id muerto): raíces fantasma con orders 0,1 que
+        // empataban con X e Y, y ningún control de la UI podía recolocarlas ni re-parentarlas.
+        const items: FlatMenuItem[] = [
+            { id: 10, title: "X", url: "/x", target: "_self", parent: 0, order: 0 },
+            { id: 11, title: "P", url: "/p", target: "_self", parent: 0, order: 1 },
+            { id: 12, title: "A", url: "/a", target: "_self", parent: 11, order: 0 },
+            { id: 13, title: "B", url: "/b", target: "_self", parent: 11, order: 1 },
+            { id: 14, title: "Y", url: "/y", target: "_self", parent: 0, order: 2 },
+        ];
+        expect(planDeleteWithReparent(items, 11)).toEqual([
+            { id: 14, data: { order: 1 } },              // Y sube el hueco que deja P
+            { id: 12, data: { parent: 0, order: 2 } },   // A → raíz, al final, en su orden relativo
+            { id: 13, data: { parent: 0, order: 3 } },   // B detrás de A
+        ]);
+    });
+
+    it("borrar una hoja renumera el grupo superviviente (sin huecos de order)", () => {
+        // Borrar Inicio(order 0): Blog y Contacto deben quedar 0,1 — el pliegue del fix de huecos.
+        expect(planDeleteWithReparent(fixture(), 1)).toEqual([
+            { id: 2, data: { order: 0 } },
+            { id: 3, data: { order: 1 } },
+        ]);
+    });
+
+    it("los nietos NO se tocan: siguen colgando de su padre, que se mueve con su subárbol", () => {
+        const items: FlatMenuItem[] = [
+            { id: 1, title: "P", url: "/p", target: "_self", parent: 0, order: 0 },
+            { id: 2, title: "hijo", url: "/h", target: "_self", parent: 1, order: 0 },
+            { id: 3, title: "nieto", url: "/n", target: "_self", parent: 2, order: 0 },
+        ];
+        // El hijo sube a la raíz (P se borra); el nieto conserva parent=2 — ni un update para él.
+        expect(planDeleteWithReparent(items, 1)).toEqual([
+            { id: 2, data: { parent: 0 } },
+        ]);
+    });
+
+    it("id inexistente o elemento sin hijos ni hermanos → plan vacío o mínimo, nunca revienta", () => {
+        expect(planDeleteWithReparent(fixture(), 999)).toEqual([]);
+        // Sub2 (hoja, 2º hijo): borrar solo puede renumerar a su hermano Sub1 (ya está en 0) → [].
+        expect(planDeleteWithReparent(fixture(), 5)).toEqual([]);
     });
 });
 

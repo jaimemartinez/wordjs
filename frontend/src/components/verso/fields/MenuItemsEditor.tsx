@@ -10,10 +10,18 @@
  * con el store real. Reordenar/anidar compone el PUT existente (parent y order son actualizables);
  * cero superficie nueva de backend.
  *
- * SEGURIDAD: las rutas de mutación son authenticate+isAdmin — un 403 degrada a lista de solo
- * lectura con aviso, nunca revienta. Las URLs que teclea el autor pasan por safeMenuUrl EN EL
- * BACKEND al escribir (no se puentea); los títulos se renderizan como texto plano (nunca
- * dangerouslySetInnerHTML).
+ * SEGURIDAD: las rutas de mutación son authenticate+isAdmin. El gate de solo-lectura es doble:
+ * PROACTIVO (una sonda a /auth/me por sesión espeja el isAdmin del backend — un autor sin permisos
+ * ve la lista de solo lectura desde el primer render, no una UI de mutación que revienta al usarla)
+ * y REACTIVO (un 403 de cualquier mutación degrada igualmente, por si el rol cambió a mitad de
+ * sesión). El gate nunca se hereda entre vinculaciones: el panel se REMONTA por key al repuntar.
+ * Las URLs que teclea el autor pasan por safeMenuUrl EN EL BACKEND al escribir (no se puentea);
+ * los títulos se renderizan como texto plano (nunca dangerouslySetInnerHTML).
+ *
+ * CARRERAS: cada load lleva un token monotónico y una resolución rancia se DESCARTA (sin el token,
+ * el refetch lento de una mutación sobre el menú A podía aterrizar tras el repunte al menú B y las
+ * altas siguientes escribirían en el menú equivocado). El remontaje por key es el cinturón; el
+ * token, los tirantes — la carrera también existe sin repunte, con dos loads del mismo menú.
  *
  * La referencia del bloque seleccionado se lee vía VersoPanelHandleContext (el contrato del campo
  * custom no entrega props hermanas); fuera del editor Verso el control degrada a un aviso.
@@ -33,6 +41,7 @@ import {
     nextMenuOrder,
     normalizeMenuItems,
     outdentMenuItem,
+    planDeleteWithReparent,
     siblingsOf,
     type FlatMenuItem,
     type MenuItemUpdate,
@@ -240,6 +249,146 @@ function messageOf(error: unknown): string {
     return error instanceof Error ? error.message : "Error inesperado";
 }
 
+/* ------------------------------------------------------------------ */
+/* Helpers puros/inyectables — exportados para test determinista.      */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Identidad de la vinculación, usada como `key` del panel: repuntar el bloque REMONTA el panel y
+ * ningún estado (items, forbidden, menú creado) sobrevive de un menú a otro. Misma forma que la
+ * refKey de useEditorMenu: con source=location el menuId es irrelevante y no cambia la key.
+ */
+export function menuBindingKey(binding: MenuBinding): string {
+    return binding.source === "menu"
+        ? `menu:${binding.menuId > 0 ? binding.menuId : 0}`
+        : `location:${binding.location || "header"}`;
+}
+
+/**
+ * Espejo EXACTO del gate del backend (middleware isAdmin: `getRole() !== 'administrator'` ⇒ 403).
+ * A propósito NO replica el `can()` de AuthContext (que además acepta la capability '*'): enseñar
+ * la UI de mutación a alguien que el backend va a rechazar es el defecto que este gate corrige.
+ */
+export function canManageMenus(user: unknown): boolean {
+    return !!user && typeof user === "object" && (user as { role?: unknown }).role === "administrator";
+}
+
+async function fetchMe(): Promise<unknown> {
+    const res = await fetch("/api/v1/auth/me", { credentials: "include" });
+    if (!res.ok) {
+        const error = new Error(`auth/me ${res.status}`) as Error & { status: number };
+        error.status = res.status;
+        throw error;
+    }
+    return res.json();
+}
+
+/**
+ * Sonda de permisos: /auth/me UNA vez por sesión de editor (promesa cacheada — cada NavMenu que se
+ * seleccione la reutiliza). Resultado: true = admin, false = el backend rechazará las mutaciones
+ * (403/401 o rol no admin), null = no se pudo saber (red caída) y el gate queda en manos del flip
+ * reactivo por 403. `me` es inyectable para test; la fábrica existe para poder crear sondas frescas.
+ */
+export function createAdminProbe(me: () => Promise<unknown> = fetchMe): () => Promise<boolean | null> {
+    let cached: Promise<boolean | null> | null = null;
+    return () => {
+        if (!cached) {
+            cached = me().then(
+                (user) => canManageMenus(user),
+                (e) => (is403(e) || (!!e && typeof e === "object" && (e as { status?: number }).status === 401) ? false : null),
+            );
+        }
+        return cached;
+    };
+}
+
+const adminProbe = createAdminProbe();
+
+/** Resultado completo de resolver una vinculación — todo lo que el panel pinta, en un solo commit. */
+export interface MenuLoadOutcome {
+    status: PanelStatus;
+    menu: { id: number; name: string } | null;
+    items: FlatMenuItem[];
+    error: string | null;
+}
+
+interface MenusReadApi {
+    get(id: number): Promise<unknown>;
+    getByLocation(location: string): Promise<unknown>;
+}
+
+export async function resolveMenuBinding(api: MenusReadApi, binding: MenuBinding): Promise<MenuLoadOutcome> {
+    const byMenu = binding.source === "menu";
+    const location = binding.location || "header";
+    if (byMenu && !(binding.menuId > 0)) {
+        return { status: "unbound", menu: null, items: [], error: null };
+    }
+    try {
+        const fetched = (byMenu ? await api.get(binding.menuId) : await api.getByLocation(location)) as {
+            id: number;
+            name: string;
+            items?: unknown;
+        };
+        return {
+            status: "ready",
+            menu: { id: fetched.id, name: fetched.name },
+            items: normalizeMenuItems(fetched.items),
+            error: null,
+        };
+    } catch (e) {
+        if (is404(e)) {
+            return byMenu
+                ? { status: "error", menu: null, items: [], error: `El menú #${binding.menuId} no existe.` }
+                : { status: "no-menu-at-location", menu: null, items: [], error: null };
+        }
+        return { status: "error", menu: null, items: [], error: messageOf(e) };
+    }
+}
+
+/**
+ * Cargador con guardia de secuencia: cada llamada toma un token monotónico y SOLO la resolución del
+ * token vigente llega a `commit` — una respuesta rancia (un refetch lento de mutación compitiendo
+ * con una carga más nueva) se descarta en vez de pisar el estado con datos de otra petición.
+ * Nunca rechaza: resolveMenuBinding convierte todo fallo en un outcome.
+ */
+export function createMenuLoader(
+    api: MenusReadApi,
+    commit: (outcome: MenuLoadOutcome) => void,
+): (binding: MenuBinding) => Promise<void> {
+    let seq = 0;
+    return async (binding: MenuBinding): Promise<void> => {
+        const token = ++seq;
+        const outcome = await resolveMenuBinding(api, binding);
+        if (token !== seq) return; // llegó tarde: hay una carga más nueva en vuelo o ya aterrizada
+        commit(outcome);
+    };
+}
+
+/**
+ * Crear-y-asignar IDEMPOTENTE: la pareja create+setLocation no es atómica y el reintento ciego
+ * duplicaba menús («Menú header», «Menú header», …) cuando el create triunfaba y el setLocation
+ * caía. `previouslyCreatedId` (el estado que el panel recuerda vía onCreated) salta el create en el
+ * reintento y solo reintenta la asignación. onCreated se invoca ANTES del setLocation precisamente
+ * para que un fallo posterior no pierda el id.
+ */
+export async function createAndAssignMenu(
+    api: { create(data: { name: string }): Promise<{ id: number }>; setLocation(id: number, location: string): Promise<unknown> },
+    location: string,
+    previouslyCreatedId: number | null,
+    onCreated: (id: number) => void,
+): Promise<void> {
+    let menuId = previouslyCreatedId ?? 0;
+    if (!(menuId > 0)) {
+        const created = await api.create({ name: `Menú ${location}` });
+        menuId = Number(created?.id);
+        if (!(Number.isFinite(menuId) && menuId > 0)) {
+            throw new Error("La API no devolvió el id del menú creado.");
+        }
+        onCreated(menuId);
+    }
+    await api.setLocation(menuId, location);
+}
+
 export function MenuItemsPanel({ binding }: { binding: MenuBinding }) {
     // Estado inicial DERIVADO: una referencia por menú sin menú elegido ya se sabe "unbound" sin
     // esperar a ningún efecto (y el primer render estático no miente con un "Cargando…").
@@ -255,44 +404,58 @@ export function MenuItemsPanel({ binding }: { binding: MenuBinding }) {
     const [editingId, setEditingId] = React.useState<number | null>(null);
     const [editDraft, setEditDraft] = React.useState<ItemDraft>(EMPTY_DRAFT);
     const [addDraft, setAddDraft] = React.useState<ItemDraft>(EMPTY_DRAFT);
+    // El menú que "Crear menú y asignarlo" YA creó, cuando la asignación posterior falló: el
+    // reintento lo reutiliza en vez de crear otro duplicado (ver createAndAssignMenu).
+    const [createdMenuId, setCreatedMenuId] = React.useState<number | null>(null);
 
-    const byMenu = binding.source === "menu";
     const location = binding.location || "header";
 
-    const load = React.useCallback(async (): Promise<void> => {
-        setError(null);
-        if (byMenu && !(binding.menuId > 0)) {
-            setStatus("unbound");
-            setMenu(null);
-            setItems([]);
-            return;
-        }
-        try {
-            const fetched = byMenu
-                ? await menusApi.get(binding.menuId)
-                : await menusApi.getByLocation(location);
-            setMenu({ id: fetched.id, name: fetched.name });
-            setItems(normalizeMenuItems(fetched.items));
-            setStatus("ready");
-        } catch (e) {
-            if (is404(e)) {
-                setMenu(null);
-                setItems([]);
-                setStatus(byMenu ? "error" : "no-menu-at-location");
-                if (byMenu) setError(`El menú #${binding.menuId} no existe.`);
-                return;
-            }
-            setStatus("error");
-            setError(messageOf(e));
-        }
-    }, [byMenu, binding.menuId, location]);
+    // Un commit tras desmontar sería un no-op de React, pero mejor ni intentarlo: el panel se
+    // remonta por key al repuntar y el panel viejo no debe tocar nada.
+    const deadRef = React.useRef(false);
+    React.useEffect(() => {
+        deadRef.current = false;
+        return () => {
+            deadRef.current = true;
+        };
+    }, []);
+
+    const commit = React.useCallback((outcome: MenuLoadOutcome): void => {
+        if (deadRef.current) return;
+        setMenu(outcome.menu);
+        setItems(outcome.items);
+        setError(outcome.error);
+        setStatus(outcome.status);
+    }, []);
+
+    // Un cargador POR MONTAJE del panel: su guardia de secuencia descarta resoluciones rancias
+    // (la carrera del refetch de mutación lento contra una carga más nueva).
+    const loaderRef = React.useRef<((b: MenuBinding) => Promise<void>) | null>(null);
+    if (!loaderRef.current) loaderRef.current = createMenuLoader(menusApi, commit);
+
+    const load = React.useCallback((): Promise<void> => loaderRef.current!(binding), [binding]);
 
     React.useEffect(() => {
         setStatus("loading");
         setDeletingId(null);
         setEditingId(null);
+        // Cinturón: el remontaje por key ya estrena `forbidden`; si esta vinculación cambiara sin
+        // remontar, el gate tampoco debe heredarse.
+        setForbidden(false);
         void load();
     }, [load]);
+
+    // Gate PROACTIVO: espeja el isAdmin del backend antes del primer click (la sonda es una promesa
+    // cacheada de sesión — gratis tras el primer NavMenu). null = no se supo; queda el flip por 403.
+    React.useEffect(() => {
+        let dead = false;
+        void adminProbe().then((admin) => {
+            if (!dead && admin === false) setForbidden(true);
+        });
+        return () => {
+            dead = true;
+        };
+    }, []);
 
     /** Toda mutación: API → refetch → invalidar la caché del canvas. 403 ⇒ modo solo lectura. */
     const runMutation = React.useCallback(async (mutate: () => Promise<void>): Promise<void> => {
@@ -303,15 +466,16 @@ export function MenuItemsPanel({ binding }: { binding: MenuBinding }) {
             await load();
             invalidateEditorMenus();
         } catch (e) {
+            // El estado local puede haber quedado a medias (p.ej. 2 de 3 PUTs de un reorden):
+            // refetch PRIMERO para pintar lo que el store REALMENTE tiene — y el aviso del fallo se
+            // fija DESPUÉS, porque el commit del load pisa `error` y el mensaje debe sobrevivir.
+            await load().catch(() => undefined);
+            invalidateEditorMenus();
             if (is403(e)) {
                 setForbidden(true);
             } else {
                 setError(messageOf(e));
             }
-            // El estado local puede haber quedado a medias (p.ej. 2 de 3 PUTs de un reorden):
-            // refetch igualmente para pintar lo que el store REALMENTE tiene.
-            await load().catch(() => undefined);
-            invalidateEditorMenus();
         } finally {
             setBusy(false);
         }
@@ -347,7 +511,12 @@ export function MenuItemsPanel({ binding }: { binding: MenuBinding }) {
         onDeleteConfirm: (id) => {
             setDeletingId(null);
             if (editingId === id) setEditingId(null);
+            // Los hijos suben de nivel DE VERDAD: el backend no re-parenta (dejaría huérfanos con
+            // un parent muerto), así que el plan puro se aplica vía el PUT existente ANTES del
+            // DELETE — y de paso renumera el grupo superviviente contiguo (sin huecos de order).
+            const updates = planDeleteWithReparent(items, id);
             void runMutation(async () => {
+                await applyUpdates(updates);
                 await menusApi.deleteItem(id);
             });
         },
@@ -385,8 +554,13 @@ export function MenuItemsPanel({ binding }: { binding: MenuBinding }) {
 
     const createAndAssign = (): void => {
         void runMutation(async () => {
-            const created = await menusApi.create({ name: `Menú ${location}` });
-            await menusApi.setLocation(created.id, location);
+            await createAndAssignMenu(menusApi, location, createdMenuId, (id) => {
+                setCreatedMenuId(id);
+                // La lista de menús YA cambió aunque la asignación falle después: los pickers deben
+                // enseñar el menú recién creado, no ocultar el efecto secundario.
+                refreshMenuCatalog();
+            });
+            setCreatedMenuId(null); // ciclo completo: un futuro «crear» parte de cero
             refreshMenuCatalog();
         });
     };
@@ -422,9 +596,13 @@ export function MenuItemsPanel({ binding }: { binding: MenuBinding }) {
             {status === "no-menu-at-location" && (
                 <div className="space-y-2">
                     <Notice>No hay ningún menú asignado a la ubicación «{location}».</Notice>
+                    {error && <Notice>{error}</Notice>}
+                    {!forbidden && createdMenuId !== null && (
+                        <Notice>El menú ya se creó; solo falló la asignación — reintenta sin miedo, no se duplica.</Notice>
+                    )}
                     {!forbidden && (
                         <button type="button" className={`${BTN_CLS} w-full`} disabled={busy} onClick={createAndAssign}>
-                            Crear menú y asignarlo
+                            {createdMenuId !== null ? "Reintentar la asignación" : "Crear menú y asignarlo"}
                         </button>
                     )}
                 </div>
@@ -502,7 +680,10 @@ function BoundMenuItemsEditor({ handle }: { handle: EditorHandle }) {
         // El campo `items` solo existe en NavMenu; esto es un cinturón defensivo, no un camino real.
         return <Notice>Selecciona un bloque de menú de navegación.</Notice>;
     }
-    return <MenuItemsPanel binding={binding} />;
+    // Key = identidad de la vinculación: repuntar REMONTA el panel (estado a estrenar — ni items,
+    // ni forbidden, ni el id del menú creado sobreviven de un menú a otro). La guardia de secuencia
+    // del cargador cubre además la carrera dentro de una MISMA vinculación.
+    return <MenuItemsPanel key={menuBindingKey(binding)} binding={binding} />;
 }
 
 export default function MenuItemsEditor() {

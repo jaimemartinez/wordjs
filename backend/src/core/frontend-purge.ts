@@ -320,6 +320,13 @@ function initFrontendPurge() {
     });
     addAction('updated_option', async (name: any) => {
         if (SETTINGS_OPTIONS.has(String(name))) purgeFrontend(['settings'], ['/']);
+        // nav_menu_locations is deliberately NOT in SETTINGS_OPTIONS: it is not part of the public
+        // settings payload, so purging 'settings' would be the wrong tag. Re-wiring which menu a
+        // location serves must invalidate the MENU caches instead — the broad 'menus' tag covers
+        // every menu:<ref> entry because both frontend fetches declare it (server-api.ts). The
+        // /menus routes also purge directly; this hook covers non-route writers (Menu.setLocation
+        // from the importer, plugins) so the option can never change silently under a cached nav.
+        if (String(name) === 'nav_menu_locations') purgeFrontend(['menus']);
     });
 }
 
