@@ -17,7 +17,7 @@ import { blockVars, unit } from "./blocks/blockVars";
 import SearchBarBlockIsland from "./content/SearchBarBlock";
 import AccordionBlockIsland from "./content/AccordionBlock";
 import TabsBlockIsland from "./content/TabsBlock";
-import { HeadingBlock, TextBlock, ImageBlock, DividerBlock, ButtonBlock, SpacerBlock, SectionBlock, GridBlock, FlexRowBlock, ColumnsBlock, CardBlock, QuoteBlock, TableBlock, IconListBlock, SocialLinksBlock, StatsBlock, HTMLEmbedBlock, PricingTableBlock, TestimonialBlock, CTABannerBlock, VideoEmbedBlock, HeroBlock, PostsGridBlock, CategoryPostsBlock, AudioPlayerBlock, ParticleFieldBlock, NavMenuBlock, SiteLogoBlock, OffCanvasBlock } from "./content/blocks";
+import { HeadingBlock, TextBlock, ImageBlock, DividerBlock, ButtonBlock, SpacerBlock, SectionBlock, GridBlock, FlexRowBlock, ColumnsBlock, CardBlock, QuoteBlock, TableBlock, IconListBlock, SocialLinksBlock, StatsBlock, HTMLEmbedBlock, PricingTableBlock, TestimonialBlock, CTABannerBlock, VideoEmbedBlock, HeroBlock, PostsGridBlock, CategoryPostsBlock, AudioPlayerBlock, ParticleFieldBlock, NavMenuBlock, SiteLogoBlock, OffCanvasBlock, BreadcrumbsBlock, LangSwitcherBlock, TableOfContentsBlock } from "./content/blocks";
 import BackToTopBlockIsland from "./content/BackToTop";
 import LinkField from "./blocks/LinkField";
 import { withSharedBlockFields } from "./blocks/VisibilityField";
@@ -2620,6 +2620,160 @@ const baseConfig: any = {
             render: ({ content: Content, ...props }: any) => (
                 <OffCanvasBlock {...props} slot={(cls?: string) => <Content className={cls} />} />
             )
+        },
+
+        Breadcrumbs: {
+            // Rastro de ancestros de ESTA página (post_parent), resuelto por-post en el servidor. No
+            // guarda copia. Campos = byte a byte con coreBlocks.Breadcrumbs.
+            label: "Migas de pan",
+            category: "layout",
+            fields: {
+                separator: {
+                    type: "select",
+                    label: "Separador",
+                    options: [
+                        { label: "›", value: "›" },
+                        { label: "/", value: "/" },
+                        { label: "—", value: "—" },
+                    ]
+                },
+                showHome: {
+                    type: "radio",
+                    label: "Mostrar «Inicio»",
+                    options: [
+                        { label: "Sí", value: true },
+                        { label: "No", value: false },
+                    ]
+                },
+                homeLabel: { type: "text", label: "Etiqueta de inicio" },
+                hideOnHome: {
+                    type: "radio",
+                    label: "Ocultar en la portada",
+                    options: [
+                        { label: "Sí", value: true },
+                        { label: "No", value: false },
+                    ]
+                },
+                css: {
+                    type: "custom",
+                    label: "Estilos CSS",
+                    render: ({ value, onChange }: any) => (
+                        <CSSPropertiesControl value={value} onChange={onChange} />
+                    )
+                }
+            },
+            defaultProps: {
+                separator: "›",
+                showHome: true,
+                homeLabel: "Inicio",
+                hideOnHome: true,
+                css: {}
+            },
+            render: (props: any) => <BreadcrumbsBlock {...props} isEditing />
+        },
+
+        LangSwitcher: {
+            // Enlaza a las traducciones de ESTA página (post.translations). Nada en un sitio monolingüe.
+            label: "Selector de idioma",
+            category: "layout",
+            fields: {
+                style: {
+                    type: "select",
+                    label: "Estilo",
+                    options: [
+                        { label: "En línea", value: "inline" },
+                        { label: "Desplegable", value: "dropdown" },
+                    ]
+                },
+                labelMode: {
+                    type: "select",
+                    label: "Etiqueta",
+                    options: [
+                        { label: "Nativo", value: "native" },
+                        { label: "Código", value: "tag" },
+                        { label: "Nombre", value: "name" },
+                    ]
+                },
+                showCurrent: {
+                    type: "radio",
+                    label: "Mostrar el idioma actual",
+                    options: [
+                        { label: "Sí", value: true },
+                        { label: "No", value: false },
+                    ]
+                },
+                css: {
+                    type: "custom",
+                    label: "Estilos CSS",
+                    render: ({ value, onChange }: any) => (
+                        <CSSPropertiesControl value={value} onChange={onChange} />
+                    )
+                }
+            },
+            defaultProps: {
+                style: "inline",
+                labelMode: "native",
+                showCurrent: true,
+                css: {}
+            },
+            render: (props: any) => <LangSwitcherBlock {...props} isEditing />
+        },
+
+        TableOfContents: {
+            // Índice de los títulos con ancla de ESTA página (resolvedHeadings del árbol de contenido).
+            label: "Tabla de contenidos",
+            category: "layout",
+            fields: {
+                title: { type: "text", label: "Título" },
+                minLevel: {
+                    type: "select",
+                    label: "Nivel mínimo",
+                    options: [
+                        { label: "H2", value: "H2" },
+                        { label: "H3", value: "H3" },
+                    ]
+                },
+                maxLevel: {
+                    type: "select",
+                    label: "Nivel máximo",
+                    options: [
+                        { label: "H3", value: "H3" },
+                        { label: "H4", value: "H4" },
+                    ]
+                },
+                ordered: {
+                    type: "radio",
+                    label: "Numerada",
+                    options: [
+                        { label: "Sí", value: true },
+                        { label: "No", value: false },
+                    ]
+                },
+                scrollSpy: {
+                    type: "radio",
+                    label: "Resaltar al desplazar",
+                    options: [
+                        { label: "Sí", value: true },
+                        { label: "No", value: false },
+                    ]
+                },
+                css: {
+                    type: "custom",
+                    label: "Estilos CSS",
+                    render: ({ value, onChange }: any) => (
+                        <CSSPropertiesControl value={value} onChange={onChange} />
+                    )
+                }
+            },
+            defaultProps: {
+                title: "En esta página",
+                minLevel: "H2",
+                maxLevel: "H3",
+                ordered: false,
+                scrollSpy: true,
+                css: {}
+            },
+            render: (props: any) => <TableOfContentsBlock {...props} isEditing />
         },
 
         ...versoPluginComponents,

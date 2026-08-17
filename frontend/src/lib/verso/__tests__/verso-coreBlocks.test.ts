@@ -63,7 +63,7 @@ const configComponents = (postConfig as { components: Record<string, Record<stri
 /* ------------------------------------------------------------------ */
 
 describe("coreBlocks — contrato de tipos", () => {
-  it("los 35 types coinciden con la lista literal del switch de ContentRenderer", () => {
+  it("los 38 types coinciden con la lista literal del switch de ContentRenderer", () => {
     // Lista LITERAL (no derivada): es el contrato de serialización de _puck_data.
     const CONTRACT = [
       "Heading", "Text", "Image", "Divider", "Button", "Spacer",
@@ -73,8 +73,9 @@ describe("coreBlocks — contrato de tipos", () => {
       "PostsGrid", "CategoryPosts", "AudioPlayer",
       "Accordion", "Tabs", "SearchBar", "Form", "Symbol",
       "ParticleField", "NavMenu", "SiteLogo", "BackToTop", "OffCanvas",
+      "Breadcrumbs", "LangSwitcher", "TableOfContents",
     ];
-    expect(CONTRACT).toHaveLength(35);
+    expect(CONTRACT).toHaveLength(38);
     expect([...CORE_BLOCK_TYPES]).toEqual(CONTRACT);
     expect(coreBlockDefinitions.map((d) => d.type).sort()).toEqual([...CONTRACT].sort());
   });
@@ -178,7 +179,7 @@ describe("coreBlocks — resolución de slots", () => {
   });
 
   it("el registry queda con exactamente 35 definiciones", () => {
-    expect(registry.list()).toHaveLength(35);
+    expect(registry.list()).toHaveLength(38);
   });
 });
 

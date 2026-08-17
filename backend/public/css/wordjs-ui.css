@@ -2857,3 +2857,32 @@ h6.wjs-block-heading, h6.wp-block-heading { font-size: var(--wjs-heading-size, v
   position: relative;
   z-index: 1;
 }
+
+/* ── Navigation content blocks: Breadcrumbs / Language switcher / Table of contents ──────────────────
+   Placed in PAGE CONTENT (not the masthead), so they paint from the main-text token set with hard-coded
+   fallbacks — a theme that omits the tokens still renders. Links/hover use the shared primary token; the
+   ToC active state (set by the scroll-spy island) and the breadcrumb/lang current item read as emphasis.
+   All colour by hook, no `wp-block-*` (chrome is `--wjs-*` territory). */
+.wjs-block-breadcrumbs, .wjs-block-lang-switcher, .wjs-block-toc {
+  color: var(--wjs-color-text-main, #374151);
+}
+.wjs-breadcrumbs__link, .wjs-lang-switcher__link, .wjs-toc__link, .wjs-lang-switcher__summary {
+  color: var(--wjs-color-text-muted, #6b7280);
+  text-decoration: none;
+  transition: color .15s ease;
+}
+.wjs-breadcrumbs__link:hover, .wjs-lang-switcher__link:hover, .wjs-toc__link:hover,
+.wjs-lang-switcher__summary:hover {
+  color: var(--wjs-color-primary, #2f6d86);
+}
+.wjs-breadcrumbs__sep { color: var(--wjs-color-text-muted, #9ca3af); }
+.wjs-breadcrumbs__current, .wjs-lang-switcher__current {
+  color: var(--wjs-color-text-main, #374151);
+  font-weight: 600;
+}
+/* Active ToC link — toggled by the scroll-spy island; a bar on the inline-start edge marks position. */
+.wjs-toc__link--active {
+  color: var(--wjs-color-primary, #2f6d86);
+  font-weight: 600;
+}
+.wjs-toc__title { color: var(--wjs-color-heading, var(--wjs-color-text-main, #1f2937)); }

@@ -66,7 +66,7 @@ import {
     TableBlock, IconListBlock, SocialLinksBlock, StatsBlock, HTMLEmbedBlock,
     PricingTableBlock, TestimonialBlock, CTABannerBlock, VideoEmbedBlock, HeroBlock,
     PostsGridBlock, CategoryPostsBlock, AudioPlayerBlock, ParticleFieldBlock, NavMenuBlock,
-    SiteLogoBlock, OffCanvasBlock,
+    SiteLogoBlock, OffCanvasBlock, BreadcrumbsBlock, LangSwitcherBlock, TableOfContentsBlock,
 } from "@/components/content/blocks";
 import BackToTopBlock from "@/components/content/BackToTop";
 import { useEditorIdentity } from "@/lib/useEditorIdentity";
@@ -96,6 +96,7 @@ export const CORE_BLOCK_TYPES = [
     "PostsGrid", "CategoryPosts", "AudioPlayer",
     "Accordion", "Tabs", "SearchBar", "Form", "Symbol",
     "ParticleField", "NavMenu", "SiteLogo", "BackToTop", "OffCanvas",
+    "Breadcrumbs", "LangSwitcher", "TableOfContents",
 ] as const;
 
 export type CoreBlockType = (typeof CORE_BLOCK_TYPES)[number];
@@ -259,8 +260,24 @@ function OffCanvasRender(props: BlockProps) {
     return <OffCanvasBlock {...rest} slot={asSlot(content)} isEditing={!!isEditing} />;
 }
 
+// Breadcrumbs / LangSwitcher / ToC (canvas): the editor has no per-post/server resolution pass, so the
+// bound data (trail, translations, headings) is absent — render with isEditing so each shows its
+// representative preview / authoring notice instead of the public empty (null) path.
+function BreadcrumbsRender(props: BlockProps) {
+    const { isEditing, ...rest } = props;
+    return <BreadcrumbsBlock {...rest} isEditing={!!isEditing} />;
+}
+function LangSwitcherRender(props: BlockProps) {
+    const { isEditing, ...rest } = props;
+    return <LangSwitcherBlock {...rest} isEditing={!!isEditing} />;
+}
+function TableOfContentsRender(props: BlockProps) {
+    const { isEditing, ...rest } = props;
+    return <TableOfContentsBlock {...rest} isEditing={!!isEditing} />;
+}
+
 /* ------------------------------------------------------------------ */
-/* La tabla: los 35 bloques.                                            */
+/* La tabla: los 38 bloques.                                            */
 /* ------------------------------------------------------------------ */
 
 export const coreBlockDefinitions: BlockDefinition[] = [
@@ -1663,10 +1680,146 @@ export const coreBlockDefinitions: BlockDefinition[] = [
         },
         render: OffCanvasRender,
     },
+    {
+        // Breadcrumbs: rastro de ancestros de ESTA página (post_parent), resuelto por-post en
+        // withResolvedBlocks. No guarda copia. Campos = byte a byte con versoConfig.Breadcrumbs.
+        type: "Breadcrumbs",
+        label: "Migas de pan",
+        category: "layout",
+        fields: {
+            separator: {
+                type: "select",
+                label: "Separador",
+                options: [
+                    { label: "›", value: "›" },
+                    { label: "/", value: "/" },
+                    { label: "—", value: "—" },
+                ],
+            },
+            showHome: {
+                type: "radio",
+                label: "Mostrar «Inicio»",
+                options: [
+                    { label: "Sí", value: true },
+                    { label: "No", value: false },
+                ],
+            },
+            homeLabel: { type: "text", label: "Etiqueta de inicio" },
+            hideOnHome: {
+                type: "radio",
+                label: "Ocultar en la portada",
+                options: [
+                    { label: "Sí", value: true },
+                    { label: "No", value: false },
+                ],
+            },
+            css: cssField(),
+        },
+        defaultProps: {
+            separator: "›",
+            showHome: true,
+            homeLabel: "Inicio",
+            hideOnHome: true,
+            css: {},
+        },
+        render: BreadcrumbsRender,
+    },
+    {
+        // LangSwitcher: enlaza a las traducciones de ESTA página (post.translations). Nada en monolingüe.
+        type: "LangSwitcher",
+        label: "Selector de idioma",
+        category: "layout",
+        fields: {
+            style: {
+                type: "select",
+                label: "Estilo",
+                options: [
+                    { label: "En línea", value: "inline" },
+                    { label: "Desplegable", value: "dropdown" },
+                ],
+            },
+            labelMode: {
+                type: "select",
+                label: "Etiqueta",
+                options: [
+                    { label: "Nativo", value: "native" },
+                    { label: "Código", value: "tag" },
+                    { label: "Nombre", value: "name" },
+                ],
+            },
+            showCurrent: {
+                type: "radio",
+                label: "Mostrar el idioma actual",
+                options: [
+                    { label: "Sí", value: true },
+                    { label: "No", value: false },
+                ],
+            },
+            css: cssField(),
+        },
+        defaultProps: {
+            style: "inline",
+            labelMode: "native",
+            showCurrent: true,
+            css: {},
+        },
+        render: LangSwitcherRender,
+    },
+    {
+        // TableOfContents: índice de los títulos con ancla de ESTA página (resolvedHeadings del árbol).
+        type: "TableOfContents",
+        label: "Tabla de contenidos",
+        category: "layout",
+        fields: {
+            title: { type: "text", label: "Título" },
+            minLevel: {
+                type: "select",
+                label: "Nivel mínimo",
+                options: [
+                    { label: "H2", value: "H2" },
+                    { label: "H3", value: "H3" },
+                ],
+            },
+            maxLevel: {
+                type: "select",
+                label: "Nivel máximo",
+                options: [
+                    { label: "H3", value: "H3" },
+                    { label: "H4", value: "H4" },
+                ],
+            },
+            ordered: {
+                type: "radio",
+                label: "Numerada",
+                options: [
+                    { label: "Sí", value: true },
+                    { label: "No", value: false },
+                ],
+            },
+            scrollSpy: {
+                type: "radio",
+                label: "Resaltar al desplazar",
+                options: [
+                    { label: "Sí", value: true },
+                    { label: "No", value: false },
+                ],
+            },
+            css: cssField(),
+        },
+        defaultProps: {
+            title: "En esta página",
+            minLevel: "H2",
+            maxLevel: "H3",
+            ordered: false,
+            scrollSpy: true,
+            css: {},
+        },
+        render: TableOfContentsRender,
+    },
 ];
 
 /**
- * Alta de los 35 bloques core en un registry, pasando CADA definición por el seam
+ * Alta de los 38 bloques core en un registry, pasando CADA definición por el seam
  * `withSharedVersoFields` — el mismo punto de inyección único que withSharedBlockFields hoy.
  */
 export function registerCoreBlocks(registry: BlockRegistry): void {

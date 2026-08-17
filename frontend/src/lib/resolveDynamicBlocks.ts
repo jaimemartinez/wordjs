@@ -49,8 +49,13 @@ export const resolveDynamicBlocks = cache(async (data: unknown): Promise<unknown
     // wjs_symbol posts for Symbol blocks, and the menu behind each distinct NavMenu reference.
     let needPosts = false;
     let needIdentity = false;
+    let needToc = false;
     const symbolIds = new Set<number>();
     const menuRefs = new Map<string, { source?: string; location?: string; menuId?: number | string }>();
+    // Every heading on the page that carries a real anchor, in document order — the raw material a
+    // TableOfContents block filters by level. Derived ONLY from the tree, so it is safe to compute in
+    // this cached-on-`data` pass (unlike the per-post trail/translations, which live in withResolvedBlocks).
+    const headings: Array<{ id: string; level: string; title: string }> = [];
     const scan = (nodes: unknown): void => {
         if (!Array.isArray(nodes)) return;
         for (const n of nodes) {
@@ -58,6 +63,16 @@ export const resolveDynamicBlocks = cache(async (data: unknown): Promise<unknown
             const node = n as { type?: string; props?: Record<string, unknown> };
             if (node.type && DYNAMIC.has(node.type)) needPosts = true;
             if (node.type === "SiteLogo") needIdentity = true;
+            if (node.type === "TableOfContents") needToc = true;
+            if (node.type === "Heading") {
+                const p = node.props as { elementId?: unknown; level?: unknown; title?: unknown } | undefined;
+                const id = typeof p?.elementId === "string" ? p.elementId.trim() : "";
+                if (id) headings.push({
+                    id,
+                    level: typeof p?.level === "string" ? p.level : "h2",
+                    title: typeof p?.title === "string" ? p.title : "",
+                });
+            }
             if (node.type === "Symbol") {
                 const id = Number((node.props as { symbolId?: unknown } | undefined)?.symbolId);
                 if (Number.isFinite(id) && id > 0) symbolIds.add(id);
@@ -70,7 +85,7 @@ export const resolveDynamicBlocks = cache(async (data: unknown): Promise<unknown
         }
     };
     scan((data as { content?: unknown }).content);
-    if (!needPosts && !needIdentity && symbolIds.size === 0 && menuRefs.size === 0) return data;
+    if (!needPosts && !needIdentity && !needToc && symbolIds.size === 0 && menuRefs.size === 0) return data;
 
     const all = needPosts ? (await getPosts("post", "publish")) || [] : [];
 
@@ -161,6 +176,12 @@ export const resolveDynamicBlocks = cache(async (data: unknown): Promise<unknown
                 props = { ...props, resolvedIdentity: identity ?? { blogname: "", siteLogo: "" } };
             }
 
+            if (node.type === "TableOfContents") {
+                // Every anchored heading on the page (the block filters by its own level range). Same list
+                // for every ToC; empty → the block's empty path runs (nothing on public, notice editing).
+                props = { ...props, resolvedHeadings: headings };
+            }
+
             if (node.type && DYNAMIC.has(node.type)) {
                 const count = Math.max(1, Number(props?.count) || 6);
                 const slug = String(props?.categorySlug || "").trim().toLowerCase();
@@ -179,17 +200,139 @@ export const resolveDynamicBlocks = cache(async (data: unknown): Promise<unknown
     return { ...(data as object), content: decorate((data as { content?: unknown }).content) };
 });
 
+/* ─────────────────────────────────────────────────────────────────────────────────────────────────
+ * PER-POST context: Breadcrumbs + LangSwitcher.
+ *
+ * These depend on the CONCRETE post, not just the block tree — the ancestor trail, whether it is the
+ * front page, and the sibling translations. That is exactly why this pass is SEPARATE from the
+ * `cache(data)`d resolver above and NON-cached: two different pages can carry byte-identical
+ * `_puck_data` (a shared template) yet need different trails, so injecting per-post here — keyed off
+ * the post, into a fresh tree — is the only way to avoid one page showing another's breadcrumb.
+ * ───────────────────────────────────────────────────────────────────────────────────────────────── */
+
+const POST_CTX_TYPES = new Set(["Breadcrumbs", "LangSwitcher"]);
+
+type TrailCrumb = { label: string; href?: string };
+interface PostContext {
+    trail: TrailCrumb[];
+    isFront: boolean;
+    translations: { language: string; currentHref: string; items: Array<{ language: string; href: string }> };
+}
+
+// Does the tree contain any type in `types`? Short-circuits on the first hit so a page with no
+// per-post block skips the fetches entirely.
+function treeHasType(data: unknown, types: Set<string>): boolean {
+    let found = false;
+    const walk = (nodes: unknown): void => {
+        if (found || !Array.isArray(nodes)) return;
+        for (const n of nodes) {
+            if (!n || typeof n !== "object") continue;
+            const node = n as { type?: string; props?: Record<string, unknown> };
+            if (node.type && types.has(node.type)) { found = true; return; }
+            if (node.props) for (const v of Object.values(node.props)) if (Array.isArray(v)) walk(v);
+        }
+    };
+    walk((data as { content?: unknown })?.content);
+    return found;
+}
+
+const slugToHref = (slug: unknown): string => (typeof slug === "string" && slug ? `/${slug}` : "/");
+
+// Build the trail / front-page flag / translations for THIS post. Ancestors walk `post_parent` up the
+// chain (capped) via React-cached getPostById; a failed hop just ends the walk (best-effort trail).
+async function buildPostContext(post: Post): Promise<PostContext> {
+    const p = post as unknown as {
+        id?: unknown; title?: unknown; slug?: unknown; parent?: unknown; language?: unknown;
+        translations?: Array<{ language?: unknown; slug?: unknown }>;
+    };
+
+    const ancestors: TrailCrumb[] = [];
+    let parentId = Number(p?.parent) || 0;
+    let guard = 0;
+    const seen = new Set<number>();
+    while (parentId > 0 && guard < 6 && !seen.has(parentId)) {
+        seen.add(parentId);
+        guard++;
+        let ap: { title?: unknown; slug?: unknown; parent?: unknown } | null = null;
+        try { ap = (await getPostById(parentId)) as unknown as { title?: unknown; slug?: unknown; parent?: unknown }; } catch { ap = null; }
+        if (!ap) break;
+        ancestors.unshift({ label: typeof ap.title === "string" ? ap.title : "…", href: slugToHref(ap.slug) });
+        parentId = Number(ap.parent) || 0;
+    }
+    // The current page is the LAST crumb and carries no href (the component marks it aria-current).
+    const trail: TrailCrumb[] = [...ancestors, { label: typeof p?.title === "string" ? p.title : "…" }];
+
+    let isFront = false;
+    try {
+        const s = await getSettings();
+        isFront = String(s?.show_on_front) === "page" && Number(s?.page_on_front) === Number(p?.id);
+    } catch { /* leave false — breadcrumbs simply show on the front too */ }
+
+    const list = Array.isArray(p?.translations) ? p.translations : [];
+    const translations = {
+        language: typeof p?.language === "string" ? p.language : "",
+        currentHref: slugToHref(p?.slug),
+        items: list
+            .filter((t) => t && typeof t.language === "string" && typeof t.slug === "string" && t.slug)
+            .map((t) => ({ language: t.language as string, href: slugToHref(t.slug) })),
+    };
+
+    return { trail, isFront, translations };
+}
+
+// Inject a READY per-post context into Breadcrumbs / LangSwitcher nodes. PURE + synchronous: it returns
+// a NEW tree and never mutates its input — the whole point, since its input is the SHARED, cache()d
+// resolver output. Exported so the cross-post-leak guard can prove that two different contexts injected
+// into the SAME tree produce different trails without touching the network or React's request cache.
+export function applyPostContext<T>(data: T, ctx: PostContext): T {
+    if (!data || typeof data !== "object") return data;
+    const inject = (nodes: unknown): unknown => {
+        if (!Array.isArray(nodes)) return nodes;
+        return nodes.map((n) => {
+            if (!n || typeof n !== "object") return n;
+            const node = n as { type?: string; props?: Record<string, unknown> };
+            let props = node.props;
+            if (props) {
+                let next: Record<string, unknown> | null = null;
+                for (const [k, v] of Object.entries(props)) {
+                    if (Array.isArray(v) && v.some((x) => x && typeof x === "object" && "type" in (x as object))) {
+                        (next ||= { ...props })[k] = inject(v);
+                    }
+                }
+                if (next) props = next;
+            }
+            if (node.type === "Breadcrumbs") props = { ...props, resolvedTrail: ctx.trail, resolvedIsFront: ctx.isFront };
+            if (node.type === "LangSwitcher") props = { ...props, resolvedTranslations: ctx.translations };
+            return props === node.props ? n : { ...node, props };
+        });
+    };
+    return { ...(data as object), content: inject((data as { content?: unknown }).content) } as T;
+}
+
+export type { PostContext };
+
+// Returns the SAME tree reference when there is nothing to inject (so withResolvedBlocks can skip the
+// copy); otherwise builds the per-post context and hands it to the pure applyPostContext above.
+async function injectPostContext<T>(data: T, post: Post): Promise<T> {
+    if (!data || typeof data !== "object" || !treeHasType(data, POST_CTX_TYPES)) return data;
+    const ctx = await buildPostContext(post);
+    return applyPostContext(data, ctx);
+}
+
 /**
  * Convenience for the public routes: hand back the post with its Puck data resolved.
  *
- * Copies rather than mutates — the Post comes from a React-cached fetch shared across the request,
- * and writing into it would let one route's resolution leak into another's.
+ * Two passes: the cache(data) resolver (posts / menu / identity / headings / symbols) then the
+ * per-post pass (breadcrumbs / language switcher). Copies rather than mutates — the Post comes from a
+ * React-cached fetch shared across the request, and writing into it would let one route's resolution
+ * leak into another's.
  */
 export async function withResolvedBlocks<T extends Post>(post: T): Promise<T> {
     const versoData = (post as unknown as { meta?: Record<string, unknown> }).meta?._puck_data;
     if (!versoData) return post;
     const resolved = await resolveDynamicBlocks(versoData);
-    if (resolved === versoData) return post;
-    const meta = { ...(post as unknown as { meta: Record<string, unknown> }).meta, _puck_data: resolved };
+    const withCtx = await injectPostContext(resolved, post);
+    if (withCtx === versoData) return post;
+    const meta = { ...(post as unknown as { meta: Record<string, unknown> }).meta, _puck_data: withCtx };
     return { ...post, meta } as T;
 }

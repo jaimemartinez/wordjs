@@ -60,6 +60,9 @@ export const BLOCK_META: Record<string, BlockMeta> = {
     SiteLogo: { icon: "fa-image", ms: "image", group: "Navegación", desc: "Logotipo o título del sitio (enlazado al inicio)", label: "Logotipo del sitio" },
     BackToTop: { icon: "fa-arrow-up", ms: "unfold_more", group: "Navegación", desc: "Botón flotante para volver arriba", label: "Volver arriba" },
     OffCanvas: { icon: "fa-bars-staggered", ms: "menu", group: "Navegación", desc: "Cajón lateral con contenido (drawer)", label: "Cajón lateral (OffCanvas)" },
+    Breadcrumbs: { icon: "fa-angle-right", ms: "subject", group: "Navegación", desc: "Rastro de ancestros de la página", label: "Migas de pan" },
+    LangSwitcher: { icon: "fa-language", ms: "web", group: "Navegación", desc: "Traducciones de la página (multilingüe)", label: "Selector de idioma" },
+    TableOfContents: { icon: "fa-list-ol", ms: "list_alt", group: "Navegación", desc: "Índice de los títulos de la página", label: "Tabla de contenidos" },
     // Dynamic
     PostsGrid: { icon: "fa-newspaper", ms: "newspaper", group: "Dinámicos", desc: "Cuadrícula de entradas" },
     CategoryPosts: { icon: "fa-folder-tree", ms: "category", group: "Dinámicos", desc: "Entradas por categoría" },

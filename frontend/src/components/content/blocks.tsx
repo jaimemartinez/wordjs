@@ -48,7 +48,9 @@ import ParticleFieldCanvas from "./ParticleField";
 import ChromeNavMobile from "@/components/chrome/ChromeNavMobile";
 import NavMenuMobile from "./NavMenuMobile";
 import OffCanvasClient from "./OffCanvasClient";
+import TocScrollSpy from "./TocScrollSpy";
 import { buildMenuTree, type ChromeMenuItem } from "@/lib/chromeData";
+import { parseLocale, isRtlLocale } from "@/lib/documentLanguage";
 
 export function AudioPlayerBlock({ src, title, bg, borderColor, radius, pad, iconSize, iconBg, iconColor, css }: any) {
     return (
@@ -416,6 +418,258 @@ export function OffCanvasBlock({ slot, triggerLabel = "Menú", triggerIcon = "fa
             </OffCanvasClient>
         </div>
     );
+}
+
+/**
+ * ── Breadcrumbs ──────────────────────────────────────────────────────────────────────────────────────
+ *
+ * The ancestor trail for the current page. Like NavMenu/SiteLogo it stores NO copy of the path: the
+ * ordered `resolvedTrail` (each { label, href }, the current page LAST with no href) is built for THIS
+ * concrete post in a NON-cached pass (resolveDynamicBlocks' withResolvedBlocks → injectPostContext),
+ * so the real chain lands in the SSR HTML for crawlers / no-JS. Pure SERVER-SAFE component.
+ *
+ * SECURITY (the NavMenu lesson): trail labels render as TEXT (React-escaped), every href is
+ * re-validated at render (safeNavHref), and the current page is plain text with aria-current="page" —
+ * author data fills the slots, it never chooses structure. Emits `.wjs-breadcrumbs`; bc('breadcrumbs').
+ */
+const BREADCRUMB_SEPARATORS = new Set(["›", "/", "—"]);
+
+export function BreadcrumbsBlock({ resolvedTrail, resolvedIsFront, separator = "›", showHome = true, homeLabel = "Inicio", hideOnHome = true, css, isEditing }: any) {
+    const sep = typeof separator === "string" && BREADCRUMB_SEPARATORS.has(separator) ? separator : "›";
+    const home = typeof homeLabel === "string" && homeLabel.trim() ? homeLabel : "Inicio";
+    const trail: Array<{ label?: unknown; href?: unknown }> = Array.isArray(resolvedTrail) ? resolvedTrail : [];
+
+    // The editor canvas has no published-post context — show a REPRESENTATIVE preview so the block is
+    // visible while composing. Never faked on the public path (no trail → render nothing there).
+    if (!trail.length) {
+        if (isEditing) {
+            const parts = [showHome !== false ? home : null, "…", "Esta página"].filter(Boolean) as string[];
+            return (
+                <nav aria-label="Breadcrumb" className={cx(bc("breadcrumbs", "breadcrumbs--preview"), "wjs-breadcrumbs")} style={css}>
+                    <ol className="wjs-breadcrumbs__list flex flex-wrap items-center gap-2 list-none m-0 p-0">
+                        {parts.map((p, i) => (
+                            <li key={i} className="wjs-breadcrumbs__item inline-flex items-center gap-2">
+                                {i > 0 && <span className="wjs-breadcrumbs__sep" aria-hidden="true">{sep}</span>}
+                                <span>{p}</span>
+                            </li>
+                        ))}
+                    </ol>
+                </nav>
+            );
+        }
+        return null;
+    }
+
+    // Nothing on the site front page when the author asked to hide it there.
+    if (hideOnHome !== false && resolvedIsFront) return null;
+
+    // The crumb list: optional Home, then the ancestor chain and the current page (last, not linked).
+    const crumbs: Array<{ label: string; href?: string }> = [];
+    if (showHome !== false) crumbs.push({ label: home, href: "/" });
+    for (const c of trail) {
+        const label = typeof c?.label === "string" && c.label.trim() ? c.label : "…";
+        const href = typeof c?.href === "string" && c.href ? c.href : undefined;
+        crumbs.push({ label, href });
+    }
+    const lastIndex = crumbs.length - 1;
+
+    // JSON-LD BreadcrumbList (rich results). Labels are strings, hrefs are same-origin paths through
+    // safeNavHref, and the whole object is JSON-encoded with `<` escaped so it cannot break the script.
+    const jsonLd = {
+        "@context": "https://schema.org",
+        "@type": "BreadcrumbList",
+        itemListElement: crumbs.map((c, i) => ({
+            "@type": "ListItem",
+            position: i + 1,
+            name: c.label,
+            ...(c.href && i !== lastIndex ? { item: safeNavHref(c.href) } : {}),
+        })),
+    };
+
+    return (
+        <nav aria-label="Breadcrumb" className={cx(bc("breadcrumbs"), "wjs-breadcrumbs")} style={css}>
+            <ol className="wjs-breadcrumbs__list flex flex-wrap items-center gap-2 list-none m-0 p-0">
+                {crumbs.map((c, i) => {
+                    const isLast = i === lastIndex;
+                    return (
+                        <li key={i} className="wjs-breadcrumbs__item inline-flex items-center gap-2">
+                            {i > 0 && <span className="wjs-breadcrumbs__sep" aria-hidden="true">{sep}</span>}
+                            {isLast || !c.href
+                                ? <span className="wjs-breadcrumbs__current" aria-current="page">{c.label}</span>
+                                : <a className="wjs-breadcrumbs__link" href={safeNavHref(c.href)}>{c.label}</a>}
+                        </li>
+                    );
+                })}
+            </ol>
+            <script
+                type="application/ld+json"
+                // eslint-disable-next-line react/no-danger
+                dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd).replace(/</g, "\\u003c") }}
+            />
+        </nav>
+    );
+}
+
+/**
+ * ── LangSwitcher (Language Switcher) ─────────────────────────────────────────────────────────────────
+ *
+ * Links to the current page's translations in other languages. It BINDS to the PUBLIC content
+ * translation model (post.language + post.translations) — NOT the admin i18n chrome. The resolved
+ * shape ({ language, currentHref, items:[{language, href}] }) is built for THIS post in the non-cached
+ * post-context pass, so the links land in the SSR HTML. Renders NOTHING when there are no translations,
+ * so a monolingual site costs zero. Pure SERVER component: the inline style is a plain list and the
+ * "dropdown" style is a CSS-only <details> disclosure — a theme never ships JS.
+ *
+ * SECURITY: each translation href is re-validated at render (safeNavHref); language labels are TEXT.
+ * Emits `.wjs-lang-switcher`; bc('lang-switcher').
+ */
+function langLabel(code: string, mode: string, displayLocale: string): string {
+    const parsed = parseLocale(code);
+    const tag = parsed ? parsed.tag : String(code || "");
+    if (mode === "tag") return tag.toUpperCase();
+    const inLocale = mode === "name" ? (parseLocale(displayLocale)?.tag || "en") : (parsed?.tag || String(code || "").toLowerCase());
+    try {
+        return new Intl.DisplayNames([inLocale], { type: "language" }).of(parsed?.language || tag) || tag.toUpperCase();
+    } catch {
+        return tag.toUpperCase();
+    }
+}
+
+const langDir = (code: string): "rtl" | "ltr" => (isRtlLocale(parseLocale(code)) ? "rtl" : "ltr");
+
+export function LangSwitcherBlock({ resolvedTranslations, style = "inline", labelMode = "native", showCurrent = true, css, isEditing }: any) {
+    const data = resolvedTranslations && typeof resolvedTranslations === "object" ? resolvedTranslations : null;
+    const currentLang = typeof data?.language === "string" ? data.language : "";
+    const currentHref = typeof data?.currentHref === "string" ? data.currentHref : "";
+    const items: Array<{ language?: unknown; href?: unknown }> = Array.isArray(data?.items) ? data!.items : [];
+    const mode = labelMode === "tag" || labelMode === "name" ? labelMode : "native";
+    const styleKind = style === "dropdown" ? "dropdown" : "inline";
+
+    // No translations → nothing on public. A quiet note while editing so the author knows the block is
+    // there (it will populate once the page is part of a translation group).
+    if (!items.length) {
+        if (isEditing) {
+            return (
+                <div className={cx(bc("lang-switcher", "lang-switcher--empty"), "wjs-lang-switcher")} style={css}>
+                    Este bloque mostrará las traducciones de la página. Aún no hay ninguna (sitio monolingüe).
+                </div>
+            );
+        }
+        return null;
+    }
+
+    type Opt = { code: string; href?: string; current: boolean };
+    const opts: Opt[] = [];
+    if (showCurrent !== false && currentLang) opts.push({ code: currentLang, href: currentHref || undefined, current: true });
+    for (const it of items) {
+        const code = typeof it?.language === "string" ? it.language : "";
+        const href = typeof it?.href === "string" ? it.href : "";
+        if (code && href) opts.push({ code, href, current: false });
+    }
+    if (!opts.length) return null;
+
+    const renderOption = (o: Opt, idx: number) => {
+        const label = langLabel(o.code, mode, currentLang);
+        const dir = langDir(o.code);
+        return o.current
+            ? <span key={idx} className="wjs-lang-switcher__current" lang={o.code} dir={dir} aria-current="true">{label}</span>
+            : <a key={idx} className="wjs-lang-switcher__link" lang={o.code} dir={dir} hrefLang={o.code} href={safeNavHref(o.href)}>{label}</a>;
+    };
+
+    if (styleKind === "dropdown") {
+        const summaryLabel = langLabel(currentLang || opts[0].code, mode, currentLang);
+        return (
+            <details className={cx(bc("lang-switcher", "lang-switcher--dropdown"), "wjs-lang-switcher relative inline-block")} style={css}>
+                <summary className="wjs-lang-switcher__summary cursor-pointer inline-flex items-center gap-2 select-none">
+                    <i className="fa-solid fa-language" aria-hidden="true"></i>
+                    <span lang={currentLang || undefined}>{summaryLabel}</span>
+                </summary>
+                <ul className="wjs-lang-switcher__menu absolute z-50 mt-1 min-w-[8rem] flex flex-col gap-1 list-none m-0 p-2 rounded-lg shadow-lg bg-[var(--wjs-bg-surface,white)] border border-[var(--wjs-border-subtle,#e5e7eb)]">
+                    {opts.map((o, i) => (
+                        <li key={i} className="wjs-lang-switcher__item">{renderOption(o, i)}</li>
+                    ))}
+                </ul>
+            </details>
+        );
+    }
+
+    return (
+        <nav aria-label="Idiomas" className={cx(bc("lang-switcher", "lang-switcher--inline"), "wjs-lang-switcher")} style={css}>
+            <ul className="wjs-lang-switcher__list flex flex-wrap items-center gap-3 list-none m-0 p-0">
+                {opts.map((o, i) => (
+                    <li key={i} className="wjs-lang-switcher__item inline-flex items-center">{renderOption(o, i)}</li>
+                ))}
+            </ul>
+        </nav>
+    );
+}
+
+/**
+ * ── TableOfContents (ToC) ────────────────────────────────────────────────────────────────────────────
+ *
+ * An in-page index of the page's headings. `resolvedHeadings` (each { id, level, title }) is collected
+ * from the content tree by resolveDynamicBlocks — ONLY headings that carry a non-empty elementId (a real
+ * anchor). The SERVER SHELL renders the `<nav>` of `#id` links (works with no JS); a tiny client island
+ * adds scroll-spy active-state when enabled, so the links themselves never depend on JS. Empty (no
+ * eligible headings) → nothing on public, a notice while editing. Emits `.wjs-toc`; bc('toc').
+ *
+ * SECURITY: each elementId is re-validated as a safe fragment before it becomes an `href="#…"`; heading
+ * text renders as TEXT (React-escaped).
+ */
+const TOC_ID_RE = /^[A-Za-z][\w-]*$/;
+const TOC_LEVEL_NUM: Record<string, number> = { H2: 2, H3: 3, H4: 4 };
+
+export function TableOfContentsBlock({ resolvedHeadings, title = "En esta página", minLevel = "H2", maxLevel = "H3", ordered = false, scrollSpy = true, css, isEditing }: any) {
+    const lo = Math.min(TOC_LEVEL_NUM[minLevel] || 2, TOC_LEVEL_NUM[maxLevel] || 3);
+    const hi = Math.max(TOC_LEVEL_NUM[minLevel] || 2, TOC_LEVEL_NUM[maxLevel] || 3);
+
+    const all: Array<{ id?: unknown; level?: unknown; title?: unknown }> = Array.isArray(resolvedHeadings) ? resolvedHeadings : [];
+    const eligible = all
+        .map((h) => ({
+            id: typeof h?.id === "string" ? h.id.trim() : "",
+            title: typeof h?.title === "string" ? h.title : "",
+            num: parseInt(String(typeof h?.level === "string" ? h.level : "h2").replace(/[^0-9]/g, ""), 10) || 2,
+        }))
+        // A ToC entry MUST anchor to a real, safe fragment id, and sit inside the chosen level range.
+        .filter((h) => h.id && TOC_ID_RE.test(h.id) && h.num >= lo && h.num <= hi);
+
+    if (!eligible.length) {
+        if (isEditing) {
+            return (
+                <div className={cx(bc("toc", "toc--empty"), "wjs-toc")} style={css}>
+                    La tabla de contenidos listará los títulos de esta página que tengan un ID / ancla. Aún no hay ninguno en el rango elegido.
+                </div>
+            );
+        }
+        return null;
+    }
+
+    const heading = typeof title === "string" && title.trim() ? title : "En esta página";
+    const ListTag: any = ordered ? "ol" : "ul";
+    const ids = eligible.map((h) => h.id);
+
+    const nav = (
+        <nav aria-label={heading} className={cx(bc("toc"), "wjs-toc")} style={css}>
+            <p className="wjs-toc__title font-semibold m-0 mb-2">{heading}</p>
+            <ListTag className={cx("wjs-toc__list m-0 flex flex-col gap-1", ordered ? "list-decimal ps-5" : "list-none p-0")}>
+                {eligible.map((h) => (
+                    <li
+                        key={h.id}
+                        className="wjs-toc__item"
+                        data-level={h.num}
+                        style={h.num > lo ? { marginInlineStart: `${(h.num - lo) * 12}px` } : undefined}
+                    >
+                        <a className="wjs-toc__link" data-toc-id={h.id} href={`#${h.id}`}>{h.title}</a>
+                    </li>
+                ))}
+            </ListTag>
+        </nav>
+    );
+
+    // Scroll-spy is the ONLY interactive part and it is progressive enhancement: the links above are
+    // fully server-rendered and work with no JS. The island observes the heading ids and toggles the
+    // active link; when scrollSpy is off there is no island at all.
+    return scrollSpy !== false ? <TocScrollSpy ids={ids}>{nav}</TocScrollSpy> : nav;
 }
 
 // SECURITY: the ONLY allowed element types for a heading. `level` arrives from _puck_data, which is

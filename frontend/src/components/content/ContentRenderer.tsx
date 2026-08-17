@@ -49,7 +49,7 @@ import {
     CardBlock, QuoteBlock, TableBlock, IconListBlock, SocialLinksBlock, StatsBlock, HTMLEmbedBlock,
     PricingTableBlock, TestimonialBlock, CTABannerBlock, VideoEmbedBlock, HeroBlock,
     PostsGridBlock, CategoryPostsBlock, AudioPlayerBlock, ParticleFieldBlock, NavMenuBlock,
-    SiteLogoBlock, OffCanvasBlock,
+    SiteLogoBlock, OffCanvasBlock, BreadcrumbsBlock, LangSwitcherBlock, TableOfContentsBlock,
 } from "./blocks";
 import AccordionBlock from "./AccordionBlock";
 import BackToTopBlock from "./BackToTop";
@@ -202,6 +202,12 @@ function renderCore(type: string, props: Record<string, any>, item: any, exclude
         // Drawer with a CONTENT slot: panel + slotted children render server-side (crawlable); only the
         // open/close toggle is a client island. Slot resolved exactly like Section's `children`.
         case "OffCanvas": return <OffCanvasBlock {...props} slot={slotOf(props, "content", exclude, ix)} />;
+        // Per-post site chrome: resolveDynamicBlocks' post-context pass injected resolvedTrail /
+        // resolvedTranslations for THIS page; ToC's resolvedHeadings comes from the cached tree pass.
+        // Each renders its links server-side (crawlable); an empty binding renders nothing on public.
+        case "Breadcrumbs": return <BreadcrumbsBlock {...props} />;
+        case "LangSwitcher": return <LangSwitcherBlock {...props} />;
+        case "TableOfContents": return <TableOfContentsBlock {...props} />;
         // Interactive islands — their own 'use client' modules, code-split per page.
         case "Accordion": return <AccordionBlock {...props} />;
         case "Tabs": return <TabsBlock {...props} />;
