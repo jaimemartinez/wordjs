@@ -2,8 +2,8 @@
   "version": 1,
   "source": "backend/public/css/wordjs-ui.css",
   "counts": {
-    "tokens": 774,
-    "varUses": 1760,
+    "tokens": 776,
+    "varUses": 1771,
     "elements": 51
   },
   "tokens": {
@@ -1411,6 +1411,10 @@
         {
           "selector": ".wjs-form-input, .wjs-form-textarea, .wjs-form-select",
           "property": "background"
+        },
+        {
+          "selector": ".wjs-motion-pause__label",
+          "property": "background"
         }
       ]
     },
@@ -1865,6 +1869,10 @@
         {
           "selector": ".wjs-form-input, .wjs-form-textarea, .wjs-form-select",
           "property": "border"
+        },
+        {
+          "selector": ".wjs-motion-pause__label",
+          "property": "border"
         }
       ]
     },
@@ -1999,6 +2007,10 @@
         },
         {
           "selector": ".widget .search-form input[type=\"search\"], .widget .search-form input[type=\"text\"]",
+          "property": "border"
+        },
+        {
+          "selector": ".wjs-motion-pause__label",
           "property": "border"
         }
       ]
@@ -4342,6 +4354,14 @@
           "property": "background"
         },
         {
+          "selector": ".wjs-motion-pause__label:hover",
+          "property": "border-color"
+        },
+        {
+          "selector": ".wjs-motion-pause__input:focus-visible + .wjs-motion-pause__label",
+          "property": "outline"
+        },
+        {
           "selector": ".wjs-breadcrumbs__link:hover, .wjs-lang-switcher__link:hover, .wjs-toc__link:hover, .wjs-lang-switcher__summary:hover",
           "property": "color"
         },
@@ -4744,6 +4764,10 @@
           "property": "color"
         },
         {
+          "selector": ".wjs-motion-pause__label:hover",
+          "property": "color"
+        },
+        {
           "selector": ".wp-block-breadcrumbs, .wp-block-lang-switcher, .wp-block-toc",
           "property": "color"
         },
@@ -4903,6 +4927,10 @@
         },
         {
           "selector": ".wp-block-stats__label",
+          "property": "color"
+        },
+        {
+          "selector": ".wjs-motion-pause__label",
           "property": "color"
         },
         {
@@ -10703,6 +10731,19 @@
         }
       ]
     },
+    "--wjs-radius-full": {
+      "group": "radius",
+      "declaredDefault": null,
+      "fallbacks": [
+        "999px"
+      ],
+      "consumers": [
+        {
+          "selector": ".wjs-motion-pause__label",
+          "property": "border-radius"
+        }
+      ]
+    },
     "--wjs-radius-lg": {
       "group": "radius",
       "declaredDefault": "0.75rem",
@@ -11515,6 +11556,10 @@
         },
         {
           "selector": ".wp-block-table__table td",
+          "property": "padding"
+        },
+        {
+          "selector": ".wjs-motion-pause",
           "property": "padding"
         }
       ]
@@ -13449,6 +13494,19 @@
         }
       ]
     },
+    "--wjs-text-sm": {
+      "group": "text",
+      "declaredDefault": null,
+      "fallbacks": [
+        "0.875rem"
+      ],
+      "consumers": [
+        {
+          "selector": ".wjs-motion-pause__label",
+          "property": "font-size"
+        }
+      ]
+    },
     "--wjs-transition": {
       "group": "transition",
       "declaredDefault": "0.15s ease-in-out",
@@ -13920,6 +13978,10 @@
         {
           "selector": ".wp-block-stats__value",
           "property": "margin-bottom"
+        },
+        {
+          "selector": ".wjs-motion-pause__label",
+          "property": "gap"
         }
       ]
     }

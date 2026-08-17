@@ -464,6 +464,12 @@ function animShorthand(
   if (wantsDelay) parts.push(delay);
   if (repeat !== 1) parts.push(repeat === "inf" ? "infinite" : n(repeat));
   if (alt) parts.push("alternate");
+  // MOVIMIENTO PERPETUO → el visitante tiene que poder pararlo (WCAG 2.2.2, nivel A: pausar, parar
+  // u ocultar todo lo que se mueva solo más de cinco segundos). El estado de reproducción es parte
+  // legítima del atajo `animation`, así que la pausa cuesta UN TOKEN y cero JavaScript: el control
+  // del pie del sitio pone `--wjs-ix-play: paused` en la raíz y todos los bucles se detienen a la
+  // vez. Solo se emite donde hace falta: una animación finita no lleva ni un byte de más.
+  if (repeat === "inf") parts.push("var(--wjs-ix-play,running)");
   parts.push("both");
   // Devuelve el VALOR (sin `animation:`): desde P5 las pistas de un mismo objetivo se unen en una
   // lista, y el nombre de la propiedad lo pone quien compone la declaración.
@@ -1065,6 +1071,10 @@ export function compileIxPage(rawSpecs: readonly unknown[], ctx?: IxCompileCtx):
     runtime: units.filter((u) => u.needsRuntime !== "never").map(toRuntimeUnit),
     classByBody,
     warnings,
+    // Movimiento PERPETUO en la página: decide si el renderer ofrece al visitante el control para
+    // pararlo (WCAG 2.2.2, nivel A). Se mira el cuerpo compilado, no la prop cruda: un preajuste
+    // del sitio con bucle cuenta igual que un cuerpo propio, que es justo lo que ve el visitante.
+    hasInfinite: units.some((u) => u.body.tracks.some((t) => t.repeat === "inf")),
   };
 }
 

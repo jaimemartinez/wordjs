@@ -42,6 +42,7 @@ import {
     type IxPreset,
 } from "@/lib/verso/interactions";
 import IxRuntimeIsland from "./IxRuntimeIsland";
+import MotionPause from "./MotionPause";
 import SharedBlockShell from "./SharedBlockShell";
 import {
     HeadingBlock, TextBlock, ImageBlock, DividerBlock, ButtonBlock, SpacerBlock,
@@ -95,6 +96,10 @@ export default function ContentRenderer({ data, ixPresets }: { data: any; ixPres
                 </style>
             )}
             {content.map((item: any, i: number) => renderItem(item, `c${i}`, undefined, env))}
+            {/* Movimiento PERPETUO en la página ⇒ el visitante tiene que poder pararlo (WCAG 2.2.2,
+                nivel A). El control es una casilla nativa y una regla `:has()`: cero JavaScript, y
+                solo aparece cuando hay algo que pausar. */}
+            {page.hasInfinite && <MotionPause />}
             {page.runtime.length > 0 && <IxRuntimeIsland units={page.runtime} />}
         </>
     );

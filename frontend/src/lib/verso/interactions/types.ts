@@ -365,4 +365,13 @@ export type IxPage = {
   /** JSON canónico del cuerpo → clase final (con sufijo de colisión si lo hubo). */
   classByBody: Map<string, string>;
   warnings: string[];
+  /**
+   * La página tiene movimiento PERPETUO (alguna pista con `repeat:"inf"`).
+   *
+   * No es telemetría: es lo que decide si hay que ofrecer al VISITANTE un control para pararlo.
+   * WCAG 2.2.2 (nivel A) exige poder pausar, parar u ocultar cualquier movimiento automático que
+   * dure más de cinco segundos, y un bucle infinito es el ejemplo literal de la norma. El renderer
+   * pinta el control SOLO cuando esto es cierto — una página sin bucles no paga ni un byte.
+   */
+  hasInfinite: boolean;
 };

@@ -180,7 +180,10 @@ describe("qué CSS emite cada disparador", () => {
       `.${compileIx(mk({ on: "load" }))!.cls}{animation:wjs-ixk-${compileIx(mk({ on: "load" }))!.hash} 600ms linear both}`,
     );
     const rep = compileIx(mk({ on: "load" }, { repeat: "inf", alt: true }))!;
-    expect(rep.rules[0]).toContain("600ms linear infinite alternate both");
+    // El bucle INFINITO lleva además el token de pausa dentro del propio atajo (WCAG 2.2.2): el
+    // control del visitante pone `--wjs-ix-play:paused` en la raíz y todos los bucles se detienen.
+    // Una animación finita NO lo lleva — se comprueba en el pin de arriba, que sigue siendo exacto.
+    expect(rep.rules[0]).toContain("600ms linear infinite alternate var(--wjs-ix-play,running) both");
   });
 
   it("un objetivo externo NO emite CSS y avisa de que va por runtime", () => {
@@ -224,7 +227,9 @@ describe("escalonado", () => {
     const animRules = u.rules.filter((r) => r.includes("{animation:"));
     expect(animRules).toHaveLength(1);
     expect(animRules[0]).toBe(
-      `.${u.cls}{animation:wjs-ixk-${u.hash}-0 600ms linear infinite alternate both,wjs-ixk-${u.hash}-1 600ms linear both}`,
+      // La pista infinita lleva el token de pausa; la finita, de la misma lista, NO — el peaje se
+      // paga exactamente donde la norma lo exige y en ningún sitio más.
+      `.${u.cls}{animation:wjs-ixk-${u.hash}-0 600ms linear infinite alternate var(--wjs-ix-play,running) both,wjs-ixk-${u.hash}-1 600ms linear both}`,
     );
     // Y como tocan propiedades distintas (opacity vs y), no hay aviso de solape.
     expect(u.warnings).toHaveLength(0);
@@ -591,6 +596,32 @@ describe("puntero (P6): sin CSS, con IR completo, y honestidad sobre lo que no a
   it("dur/delay/repeat/alt/escalonado no significan nada con el puntero: se AVISA", () => {
     const u = compileIx(mk({ on: "pointer" }, { dur: 900, repeat: 3, stagger: { each: 50 }, target: { kind: "children" } }))!;
     expect(u.warnings.join(" ")).toContain("POSICIONA");
+  });
+});
+
+describe("pausa del movimiento perpetuo (C3) — WCAG 2.2.2, nivel A", () => {
+  it("el token de pausa aparece SOLO en los bucles infinitos", () => {
+    const inf = compileIx(mk({ on: "load" }, { repeat: "inf" }))!;
+    expect(inf.rules[0]).toContain("var(--wjs-ix-play,running)");
+    // Finita y repetida 3 veces: se detiene sola, la norma no la nombra, no paga el token.
+    const finite = compileIx(mk({ on: "load" }, { repeat: 3 }))!;
+    expect(finite.rules[0]).not.toContain("--wjs-ix-play");
+    expect(compileIx(mk({ on: "load" }))!.rules[0]).not.toContain("--wjs-ix-play");
+  });
+
+  it("la PÁGINA declara si tiene movimiento perpetuo — es lo que enciende el control", () => {
+    const still = compileIxPage([mk({ on: "load" })]);
+    expect(still.hasInfinite).toBe(false);
+    const looping = compileIxPage([mk({ on: "load" }), mk({ on: "load" }, { repeat: "inf" })]);
+    expect(looping.hasInfinite).toBe(true);
+  });
+
+  it("el token NO se declara en la hoja: sin él, el valor de reserva del var() ya es `running`", () => {
+    const page = compileIxPage([mk({ on: "load" }, { repeat: "inf" })]);
+    // Declararlo en `:root` obligaría a pelear especificidades para apagarlo; el contrato es que el
+    // token solo EXISTE cuando alguien lo pone en `paused` (la regla `:has()` del framework).
+    expect(page.css).not.toContain("--wjs-ix-play:");
+    expect(page.css).toContain("var(--wjs-ix-play,running)");
   });
 });
 

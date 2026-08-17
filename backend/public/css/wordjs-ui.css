@@ -2875,6 +2875,49 @@ h6.wjs-block-heading, h6.wp-block-heading { font-size: var(--wjs-heading-size, v
   }
 }
 
+/* ---------------------------------------------------------------- PAUSA DEL MOVIMIENTO PERPETUO -
+ * WCAG 2.2.2 (nivel A): lo que se mueve solo más de cinco segundos tiene que poder pararse. El
+ * compilador emite `var(--wjs-ix-play,running)` dentro del atajo `animation` de cada bucle
+ * infinito; esta regla es la otra mitad: marcar la casilla pone el token en `paused` en la RAÍZ, y
+ * todos los bucles de la página se detienen a la vez. Cero JavaScript — una casilla nativa y
+ * `:has()`, que es Baseline en los tres motores.
+ *
+ * `--wjs-ix-play` NO se declara en `:root` a propósito: sin declarar, cada animación usa el valor
+ * de reserva `running` del propio `var()`. Así el token existe solo cuando alguien lo apaga. */
+html:has(#wjs-motion-pause:checked) { --wjs-ix-play: paused; }
+
+.wjs-motion-pause { display: flex; justify-content: center; padding: var(--wjs-sm) 0; }
+/* La casilla se oculta VISUALMENTE pero sigue enfocable y anunciable: nada de `display:none`, que
+ * la sacaría del orden de tabulación y del árbol de accesibilidad. */
+.wjs-motion-pause__input {
+  position: absolute;
+  width: 1px; height: 1px;
+  margin: -1px; padding: 0; border: 0;
+  clip-path: inset(50%);
+  overflow: hidden; white-space: nowrap;
+}
+.wjs-motion-pause__label {
+  display: inline-flex; align-items: center; gap: var(--wjs-xs);
+  padding: 0.35rem 0.8rem;
+  font-size: var(--wjs-text-sm, 0.875rem);
+  color: var(--wjs-color-text-muted);
+  background: var(--wjs-bg-surface);
+  border: var(--wjs-border-width) solid var(--wjs-border-subtle);
+  border-radius: var(--wjs-radius-full, 999px);
+  cursor: pointer;
+}
+.wjs-motion-pause__label:hover { color: var(--wjs-color-text-main); border-color: var(--wjs-color-primary); }
+/* El anillo de foco vive en la ETIQUETA porque la casilla está oculta visualmente: sin esto, un
+ * visitante con teclado no vería nunca dónde está. */
+.wjs-motion-pause__input:focus-visible + .wjs-motion-pause__label {
+  outline: 2px solid var(--wjs-color-primary);
+  outline-offset: 2px;
+}
+/* Un solo texto a la vez, y el que toca: sin marcar ofrece PAUSAR; marcada, REANUDAR. */
+.wjs-motion-pause__off { display: none; }
+.wjs-motion-pause__input:checked + .wjs-motion-pause__label .wjs-motion-pause__on { display: none; }
+.wjs-motion-pause__input:checked + .wjs-motion-pause__label .wjs-motion-pause__off { display: inline; }
+
 /* ═══════════════════════════════════════════════════════════════════════════
    INTERACTIONS ENGINE (Verso F9) — the static half
    ═══════════════════════════════════════════════════════════════════════════
