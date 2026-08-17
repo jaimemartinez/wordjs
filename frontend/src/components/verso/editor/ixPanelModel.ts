@@ -531,6 +531,9 @@ export function setScrubSrc(raw: unknown, src: "self" | "page", ctx?: IxCompileC
   const trigger: IxTrigger = { on: "scrub" };
   if (src === "page") trigger.src = "page";
   if (state.trigger.range) trigger.range = state.trigger.range;
+  // El suavizado (P10) viaja CON el disparador: reconstruirlo sin él lo borraría en silencio y
+  // devolvería la unidad al camino nativo — el mismo cuidado que setPointerArea tiene con el suyo.
+  if (state.trigger.smooth !== undefined) trigger.smooth = state.trigger.smooth;
   return writeTrigger(raw, ctx, trigger);
 }
 
@@ -634,7 +637,13 @@ export function setRangeEdge(
   if (patch.pct !== undefined) edge.pct = clampInput(Math.round(patch.pct), 0, 100, edge.pct);
   const trigger: IxTrigger =
     state.trigger.on === "scrub"
-      ? { on: "scrub", range, ...(state.trigger.src === "page" ? { src: "page" as const } : {}) }
+      ? {
+          on: "scrub",
+          range,
+          ...(state.trigger.src === "page" ? { src: "page" as const } : {}),
+          // El suavizado (P10) sobrevive a editar el rango: reconstruir sin él lo borraría.
+          ...(state.trigger.smooth !== undefined ? { smooth: state.trigger.smooth } : {}),
+        }
       : { on: "view", once: false, range };
   return writeTrigger(raw, ctx, trigger);
 }
@@ -645,7 +654,12 @@ export function resetRange(raw: unknown, ctx?: IxCompileCtx): IxWrite {
   if (!rangeEditable(state.trigger)) return normalizeIxSpec(raw)?.spec;
   const trigger: IxTrigger =
     state.trigger.on === "scrub"
-      ? { on: "scrub", ...(state.trigger.src === "page" ? { src: "page" as const } : {}) }
+      ? {
+          on: "scrub",
+          ...(state.trigger.src === "page" ? { src: "page" as const } : {}),
+          // El suavizado (P10) no es parte del rango: volver al rango por defecto no lo toca.
+          ...(state.trigger.smooth !== undefined ? { smooth: state.trigger.smooth } : {}),
+        }
       : { on: "view", once: false };
   return writeTrigger(raw, ctx, trigger);
 }
@@ -935,7 +949,16 @@ export function removeStep(raw: unknown, index: number, ctx?: IxCompileCtx, trac
 export function setStepAt(raw: unknown, index: number, at: number, ctx?: IxCompileCtx, track = 0): IxWrite {
   return patchTrack0(raw, ctx, (t) => {
     if (index < 0 || index >= t.steps.length) return t;
-    const value = clampInput(Math.round(at), 0, 100, t.steps[index].at);
+    // ACOTADO ENTRE VECINOS, aquí y solo aquí: el normalizador ordena por `at` y DEDUPLICA los
+    // iguales quedándose con el primero, así que un paso que alcanza el `at` de su vecino lo BORRA
+    // del documento con sus props y su curva — pérdida de datos por un gesto rutinario (arrastre,
+    // flechas o el campo numérico, todos pasan por este escritor). Los extremos no se acotan: el
+    // normalizador ya los reancla a 0/100. Sin hueco entre vecinos, no se escribe nada.
+    const isInner = index > 0 && index < t.steps.length - 1;
+    const lo = isInner ? t.steps[index - 1].at + 1 : 0;
+    const hi = isInner ? t.steps[index + 1].at - 1 : 100;
+    if (lo > hi) return t;
+    const value = clampInput(Math.round(at), lo, hi, t.steps[index].at);
     return { ...t, steps: t.steps.map((s, i) => (i === index ? { ...s, at: value } : s)) };
   }, track);
 }

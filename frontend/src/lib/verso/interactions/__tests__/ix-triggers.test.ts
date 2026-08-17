@@ -618,6 +618,33 @@ describe("trazo SVG (P12): draw → stroke-dashoffset bajo el contrato .wjs-ixd 
     const u = compileIx(mk({ on: "load" }, drawTrack))!;
     expect(toRuntimeUnit(u).tracks[0].target).toEqual({ kind: "svg" });
   });
+
+  it("la intensidad SATURA el trazado en 0..100: el offset jamás sale de 0..1 ni invierte el trazo", () => {
+    // Con amt 3, draw 0 escalaría a −200 → offset 3: sobre `stroke-dasharray: 1` el patrón DA LA
+    // VUELTA y el trazo «oculto» se pinta entero. Saturado: offset 1 exacto, y el neutro sigue en 0.
+    const u = compileIx({ v: 1, trigger: { on: "load" }, amt: 3, tracks: [drawTrack] })!;
+    expect(u.keyframes[0]).toContain("stroke-dashoffset:1");
+    expect(u.keyframes[0]).toContain("stroke-dashoffset:0");
+    expect(u.keyframes[0]).not.toContain("stroke-dashoffset:3");
+    // El IR WAAPI pasa por LA MISMA función: paridad byte a byte.
+    expect(Object.values(u.kf)[0][0].strokeDashoffset).toBe("1");
+  });
+
+  it("`event` sobre un objetivo externo (`block`) se declara SIN SOPORTE, no como promesa de runtime", () => {
+    // El bucket de eventos solo conmuta el atributo del propio bloque y el driver WAAPI no espera
+    // eventos: decir «se resuelve por runtime» aquí sería mentir. Aviso propio y pista inerte.
+    const u = compileIx({
+      v: 1,
+      trigger: { on: "event", name: "abrir" },
+      tracks: [{ target: { kind: "block", id: "hero" }, steps: [
+        { at: 0, set: { x: 0 } }, { at: 100, set: { x: 20 } },
+      ] as unknown as IxStep[] }],
+    })!;
+    expect(u.rules).toHaveLength(0);
+    expect(u.needsRuntime).toBe("always");
+    expect(u.warnings.some((w) => w.includes("sin soporte"))).toBe(true);
+    expect(u.warnings.some((w) => w.includes("se resuelve por runtime"))).toBe(false);
+  });
 });
 
 describe("evento a medida (P11) y suavizado del scrub (P10)", () => {

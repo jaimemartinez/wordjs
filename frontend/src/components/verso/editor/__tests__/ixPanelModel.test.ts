@@ -361,6 +361,43 @@ describe("pasos", () => {
     expect(ixPanelState(forzado, CTX).tracks[0].steps[0].at).toBe(0);
   });
 
+  it("el `at` intermedio queda ACOTADO entre vecinos: alcanzarlos deduplicaría y BORRARÍA el vecino", () => {
+    // El normalizador ordena por `at` y deduplica iguales quedándose con el primero: sin esta cota,
+    // arrastrar el 30 hasta el 60 borraba del documento el paso del 60 CON sus props y su curva.
+    const spec = {
+      v: 1,
+      trigger: { on: "load" },
+      tracks: [{
+        target: { kind: "self" },
+        steps: [
+          { at: 0, set: { x: 0 } },
+          { at: 30, set: { x: 10 }, ease: "spring" },
+          { at: 60, set: { x: 20 } },
+          { at: 100, set: { x: 30 } },
+        ],
+      }],
+    };
+    const arriba = ixPanelState(setStepAt(spec, 1, 60, CTX), CTX).tracks[0];
+    expect(arriba.steps.map((s) => s.at)).toEqual([0, 59, 60, 100]);
+    expect(arriba.steps[2].set.x).toBe(20); // el vecino SOBREVIVE, con sus props
+    // Hacia abajo el ancla 0 también acota; y saltar por encima de todo no reordena nada.
+    expect(ixPanelState(setStepAt(spec, 1, 0, CTX), CTX).tracks[0].steps.map((s) => s.at))
+      .toEqual([0, 1, 60, 100]);
+    expect(ixPanelState(setStepAt(spec, 2, 999, CTX), CTX).tracks[0].steps.map((s) => s.at))
+      .toEqual([0, 30, 99, 100]);
+  });
+
+  it("cambiar el src del scrub, editar su rango o resetearlo CONSERVA el suavizado (P10)", () => {
+    const base = setScrubSmooth(setTriggerKind(defaultIxSpec(), "scrub", CTX)!, 300, CTX)!;
+    const src = setScrubSrc(base, "page", CTX)!;
+    expect(src.trigger).toMatchObject({ on: "scrub", src: "page", smooth: 300 });
+    const edged = setRangeEdge(src, "from", { pct: 20 }, CTX)!;
+    expect(edged.trigger).toMatchObject({ on: "scrub", src: "page", smooth: 300 });
+    const reset = resetRange(edged, CTX)!;
+    expect(reset.trigger).toMatchObject({ on: "scrub", src: "page", smooth: 300 });
+    expect("range" in (reset.trigger as object)).toBe(false);
+  });
+
   it("la curva se guarda por paso", () => {
     const out = setStepEase(defaultIxSpec(), 0, "spring", CTX);
     expect(ixPanelState(out, CTX).tracks[0].steps[0].ease).toBe("spring");

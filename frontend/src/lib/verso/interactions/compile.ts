@@ -232,6 +232,16 @@ const scaledVal = (set: IxProps, k: IxPropKey, amt: number): number => {
   return IX_PROP_NEUTRAL[k] + (v - IX_PROP_NEUTRAL[k]) * amt;
 };
 
+/**
+ * `draw` → `stroke-dashoffset`, EL ÚNICO camino (CSS y WAAPI comparten esta función: paridad).
+ * El escalado por intensidad se SATURA en 0..100 antes de convertir: con `amt` > 1 un `draw: 0`
+ * escalaría a negativo y el offset saldría de 0..1 — y sobre `stroke-dasharray: 1` el patrón DA LA
+ * VUELTA: el trazo «oculto» se pinta entero. La intensidad acerca o aleja del neutro; jamás puede
+ * invertir la visibilidad del trazo.
+ */
+const drawOffset = (set: IxProps, ctx: TrackCssCtx): number =>
+  (100 - Math.min(100, Math.max(0, scaledVal(set, "draw", ctx.amt)))) / 100;
+
 /** Color 0xRRGGBB → `#rrggbb`. El emisor formatea; el autor jamás aporta la cadena. */
 const hexColor = (v: number): string => `#${(Math.round(v) & 0xffffff).toString(16).padStart(6, "0")}`;
 
@@ -322,7 +332,7 @@ function declsOf(set: IxProps, union: IxPropKey[], ctx: TrackCssCtx): string[] {
   if (fl) out.push(`filter:${fl}`);
   if (union.includes("clip")) out.push(`clip-path:${clipCss(scaledVal(set, "clip", ctx.amt), ctx.clipDir)}`);
   if (union.includes("draw")) {
-    out.push(`stroke-dashoffset:${n((100 - scaledVal(set, "draw", ctx.amt)) / 100)}`);
+    out.push(`stroke-dashoffset:${n(drawOffset(set, ctx))}`);
   }
   if (set.textColor !== undefined) out.push(`color:${hexColor(set.textColor)}`);
   if (set.bgColor !== undefined) out.push(`background-color:${hexColor(set.bgColor)}`);
@@ -363,7 +373,7 @@ function keyframeOf(step: IxStep, union: IxPropKey[], ctx: TrackCssCtx): IxKeyfr
   if (fl) kf.filter = fl;
   if (union.includes("clip")) kf.clipPath = clipCss(scaledVal(step.set, "clip", ctx.amt), ctx.clipDir);
   if (union.includes("draw")) {
-    kf.strokeDashoffset = n((100 - scaledVal(step.set, "draw", ctx.amt)) / 100);
+    kf.strokeDashoffset = n(drawOffset(step.set, ctx));
   }
   if (step.set.textColor !== undefined) kf.color = hexColor(step.set.textColor);
   if (step.set.bgColor !== undefined) kf.backgroundColor = hexColor(step.set.bgColor);
@@ -631,6 +641,17 @@ export function emitUnit(body: IxBody, hash: string): IxUnit {
     }
 
     const suffix = targetSuffix(track.target);
+    if (suffix === null && trigger.on === "event") {
+      // `event`+`block` NO está soportado (P11): el bucket de eventos del runtime solo conmuta el
+      // atributo de estado del propio bloque y nunca resuelve objetivos externos, y el driver WAAPI
+      // no sabe esperar a un evento. Decir «se resuelve por runtime» aquí sería una promesa rota:
+      // se avisa como límite declarado, y la pista queda inerte A SABIENDAS del autor.
+      needsRuntime = worseRuntime(needsRuntime, "always");
+      warnings.push(
+        "objetivo externo (`block`) con disparador `event`: combinación sin soporte — la pista no anima",
+      );
+      return;
+    }
     if (suffix === null) {
       // Objetivo externo: sin CSS, resuelto por runtime. La unidad entera pasa a "always".
       needsRuntime = worseRuntime(needsRuntime, "always");

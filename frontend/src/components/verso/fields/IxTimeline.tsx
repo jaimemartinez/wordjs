@@ -36,7 +36,7 @@
  * interactivo anidado. En SOLO LECTURA (preajuste enlazado) TODOS los carriles se pintan así:
  * se ve todo, se puede elegir pista, y nada se arrastra ni se enfoca.
  */
-import React, { useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { IX_DELAY_MAX, IX_DELAY_MIN, type IxTrack } from "@/lib/verso/interactions";
 
 /** Duración y retardo EFECTIVOS de una pista sin la clave puesta: los mismos del resto del panel. */
@@ -100,6 +100,18 @@ export default function IxTimeline({
   // ms) y cada movimiento es un delta sobre eso — sin acumulación, sin deriva.
   const dragDelay = useRef<{ startX: number; base: number } | null>(null);
   const [announce, setAnnounce] = useState("");
+  // CONTINUIDAD DE FOCO: activar una pista REEMPLAZA su carril (botón pasivo → div editable), así
+  // que el botón que tenía el foco se desmonta y el foco caería al <body> — expulsando al usuario
+  // de teclado justo antes de lo que su selección habilita. Se recuerda QUÉ pista pidió este
+  // componente (nunca se roba el foco por re-renders ajenos) y tras el re-render el foco aterriza
+  // en la etiqueta del carril ya activo.
+  const pendingFocus = useRef<number | null>(null);
+  const activeLabelRef = useRef<HTMLButtonElement | null>(null);
+  useEffect(() => {
+    if (pendingFocus.current === null || pendingFocus.current !== active) return;
+    pendingFocus.current = null;
+    activeLabelRef.current?.focus();
+  }, [active]);
 
   // La escala compartida en ms. Con disparadores de posición no se usa (la escala es 0–100 %).
   const totalMs = Math.max(
@@ -187,7 +199,12 @@ export default function IxTimeline({
         aria-pressed={isActive}
         aria-label={isActive ? `Pista ${ti + 1} (activa)` : `Pista ${ti + 1}`}
         title={isActive ? `Pista ${ti + 1} (activa)` : `Elegir la pista ${ti + 1}`}
-        onClick={() => onSelectTrack(ti)}
+        onClick={() => {
+          // Elegir pista va a REEMPLAZAR este botón por el carril editable: pedir el aterrizaje
+          // del foco ANTES del re-render (el efecto de arriba lo ejecuta después).
+          pendingFocus.current = ti;
+          onSelectTrack(ti);
+        }}
         className={`flex w-full items-center gap-2 rounded px-1 py-0.5 ${
           isActive ? "bg-current/10" : "opacity-60 hover:opacity-100"
         } ${RING}`}
@@ -224,6 +241,7 @@ export default function IxTimeline({
       <div key={ti} className="flex w-full items-center gap-2 rounded bg-current/10 px-1 py-0.5">
         <button
           type="button"
+          ref={activeLabelRef}
           aria-pressed={true}
           title={`Pista ${ti + 1} (activa)`}
           onClick={() => onSelectTrack(ti)}
