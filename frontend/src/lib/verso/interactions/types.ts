@@ -70,7 +70,26 @@ export type IxTrack = {
   /** `animation-direction: alternate`. */
   alt?: boolean;
   stagger?: IxStagger;
+  /** Dirección del revelado de `clip` (P3). Ausente = "right" (recorta el borde final), lo de siempre. */
+  clipDir?: IxClipDir;
+  /** `transform-origin` de la pista (P3), de lista cerrada. Ausente = center (el inicial de CSS). */
+  origin?: IxOrigin;
+  /** Perspectiva px de los efectos 3D (P3), clampada. Ausente = 1000 — lo que ya emitía rotateX. */
+  persp?: number;
 };
+
+export type IxClipDir = "left" | "right" | "up" | "down" | "center-h" | "center-v";
+
+export type IxOrigin =
+  | "center"
+  | "top"
+  | "bottom"
+  | "left"
+  | "right"
+  | "top-left"
+  | "top-right"
+  | "bottom-left"
+  | "bottom-right";
 
 export type IxStagger = { each: number; from?: IxStaggerFrom };
 export type IxStaggerFrom = "start" | "end" | "center";
@@ -97,9 +116,14 @@ export type IxStep = {
 export type IxEase = "linear" | "in" | "out" | "in-out" | "spring" | "back" | "bounce" | "elastic";
 
 /**
- * LISTA CERRADA — aquí vive "cero CLS". Ocho propiedades, todas de compositor.
- * Ninguna causa reflow; ninguna acepta una cadena del autor (todas son NÚMEROS, y el emisor los
- * formatea él mismo), así que no existe un camino por el que un valor hostil llegue al CSS.
+ * LISTA CERRADA — aquí vive "cero CLS". Propiedades de COMPOSITOR (transform/opacity/filter/
+ * clip-path) y, desde P3, tres de PINTADO (los colores: aceptables por contrato — pintan, no
+ * recolocan). Ninguna causa reflow; ninguna acepta una cadena del autor (todas son NÚMEROS — los
+ * colores viajan como entero 0xRRGGBB — y el emisor los formatea él mismo), así que no existe un
+ * camino por el que un valor hostil llegue al CSS.
+ *
+ * El ORDEN canónico (IX_PROP_KEYS) conserva las 8 originales PRIMERO: así todo `_puck_data`
+ * anterior a P3 emite bytes idénticos a los de siempre.
  */
 export type IxProps = Partial<{
   /** 0..1 */
@@ -116,8 +140,39 @@ export type IxProps = Partial<{
   rotateX: number;
   /** px → filter: blur() */
   blur: number;
-  /** 0..100 % de revelado → clip-path: inset() */
+  /** 0..100 % de revelado → clip-path: inset() (dirección en `IxTrack.clipDir`) */
   clip: number;
+  /* ── P3: transform ─────────────────────────────────────────────── */
+  /** px → componente Z de translate3d (necesita perspectiva; ver `IxTrack.persp`) */
+  z: number;
+  /** 1 = neutro */
+  scaleX: number;
+  /** 1 = neutro */
+  scaleY: number;
+  /** deg (Y) — misma regla de perspective que rotateX */
+  rotateY: number;
+  /** deg, ±89 (90 degenera la matriz) */
+  skewX: number;
+  /** deg, ±89 */
+  skewY: number;
+  /* ── P3: filter (pintado en motores no-Blink; compositor en Blink) ─ */
+  /** 1 = neutro; 0..10 → filter: brightness() */
+  brightness: number;
+  /** 1 = neutro; 0..10 → filter: contrast() */
+  contrast: number;
+  /** 1 = neutro; 0..10 → filter: saturate() */
+  saturate: number;
+  /** 0..100 % → filter: grayscale() */
+  grayscale: number;
+  /** deg ±360 → filter: hue-rotate() */
+  hue: number;
+  /* ── P3: colores (PINTADO, no compositor — documentado, jamás load-bearing para 60fps) ── */
+  /** 0..0xFFFFFF → color (texto). SIN relleno neutro: ausente = el color natural del bloque. */
+  textColor: number;
+  /** 0..0xFFFFFF → background-color. Ídem. */
+  bgColor: number;
+  /** 0..0xFFFFFF → border-color. Ídem. */
+  borderColor: number;
 }>;
 
 export type IxPropKey = keyof IxProps;
@@ -181,6 +236,10 @@ export type IxKeyframe = {
   transform?: string;
   filter?: string;
   clipPath?: string;
+  /** P3 — colores (pintado). Solo presentes en los pasos que los declaran: sin relleno neutro. */
+  color?: string;
+  backgroundColor?: string;
+  borderColor?: string;
 };
 
 /** El cuerpo NORMALIZADO de una interacción: lo único que entra en el hash. */

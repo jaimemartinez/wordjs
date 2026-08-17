@@ -36,9 +36,11 @@ import {
   IX_STAGGER_MAX,
   normalizeIxSpec,
   resolveIxBody,
+  type IxClipDir,
   type IxCompileCtx,
   type IxEase,
   type IxEdgeName,
+  type IxOrigin,
   type IxPreset,
   type IxPropKey,
   type IxProps,
@@ -110,6 +112,20 @@ export const IX_PROP_LABELS: Readonly<Record<IxPropKey, string>> = Object.freeze
   rotateX: "Voltear",
   blur: "Desenfoque",
   clip: "Revelado",
+  z: "Profundidad (Z)",
+  scaleX: "Escala X",
+  scaleY: "Escala Y",
+  rotateY: "Girar en Y",
+  skewX: "Sesgar X",
+  skewY: "Sesgar Y",
+  brightness: "Brillo",
+  contrast: "Contraste",
+  saturate: "Saturación",
+  grayscale: "Escala de grises",
+  hue: "Tono",
+  textColor: "Color del texto",
+  bgColor: "Color de fondo",
+  borderColor: "Color del borde",
 });
 
 export const IX_PROP_UNITS: Readonly<Record<IxPropKey, string>> = Object.freeze({
@@ -121,7 +137,31 @@ export const IX_PROP_UNITS: Readonly<Record<IxPropKey, string>> = Object.freeze(
   rotateX: "°",
   blur: "px",
   clip: "%",
+  z: "px",
+  scaleX: "×",
+  scaleY: "×",
+  rotateY: "°",
+  skewX: "°",
+  skewY: "°",
+  brightness: "×",
+  contrast: "×",
+  saturate: "×",
+  grayscale: "%",
+  hue: "°",
+  textColor: "",
+  bgColor: "",
+  borderColor: "",
 });
+
+/**
+ * Propiedades que el panel edita con un SELECTOR DE COLOR (el dato sigue siendo un número
+ * 0xRRGGBB; la conversión hex↔entero es cosa del control, nunca del documento).
+ */
+export const IX_COLOR_PROPS: ReadonlySet<IxPropKey> = new Set<IxPropKey>([
+  "textColor",
+  "bgColor",
+  "borderColor",
+]);
 
 /**
  * Rangos de los CONTROLES. Deliberadamente más estrechos que los del normalizador
@@ -140,6 +180,21 @@ export const IX_PROP_INPUT: Readonly<Record<IxPropKey, { min: number; max: numbe
     rotateX: { min: -180, max: 180, step: 1 },
     blur: { min: 0, max: 40, step: 1 },
     clip: { min: 0, max: 100, step: 1 },
+    z: { min: -1000, max: 1000, step: 1 },
+    scaleX: { min: 0, max: 3, step: 0.01 },
+    scaleY: { min: 0, max: 3, step: 0.01 },
+    rotateY: { min: -180, max: 180, step: 1 },
+    skewX: { min: -45, max: 45, step: 1 },
+    skewY: { min: -45, max: 45, step: 1 },
+    brightness: { min: 0, max: 3, step: 0.05 },
+    contrast: { min: 0, max: 3, step: 0.05 },
+    saturate: { min: 0, max: 3, step: 0.05 },
+    grayscale: { min: 0, max: 100, step: 1 },
+    hue: { min: -360, max: 360, step: 1 },
+    // Colores: el rango es el entero RGB completo; el control real es <input type="color">.
+    textColor: { min: 0, max: 0xffffff, step: 1 },
+    bgColor: { min: 0, max: 0xffffff, step: 1 },
+    borderColor: { min: 0, max: 0xffffff, step: 1 },
   });
 
 /* ------------------------------------------------------------------ */
@@ -563,6 +618,44 @@ export function setAlternate(raw: unknown, alt: boolean, ctx?: IxCompileCtx): Ix
     return next;
   });
 }
+
+/**
+ * Opciones de pista de P3. Se escriben tal cual y el normalizador BORRA los valores por defecto
+ * ("right" / "center" / 1000) en `write()`: la ausencia es el defecto y los bytes de origen se
+ * conservan sin que cada escritor repita la regla.
+ */
+export function setClipDir(raw: unknown, dir: IxClipDir, ctx?: IxCompileCtx): IxWrite {
+  return patchTrack0(raw, ctx, (t) => ({ ...t, clipDir: dir }));
+}
+
+export function setOrigin(raw: unknown, origin: IxOrigin, ctx?: IxCompileCtx): IxWrite {
+  return patchTrack0(raw, ctx, (t) => ({ ...t, origin }));
+}
+
+export function setPersp(raw: unknown, px: number, ctx?: IxCompileCtx): IxWrite {
+  return patchTrack0(raw, ctx, (t) => ({ ...t, persp: px }));
+}
+
+export const IX_CLIP_DIR_LABELS: Readonly<Record<IxClipDir, string>> = Object.freeze({
+  right: "Hacia la derecha",
+  left: "Hacia la izquierda",
+  down: "Hacia abajo",
+  up: "Hacia arriba",
+  "center-h": "Desde el centro (horizontal)",
+  "center-v": "Desde el centro (vertical)",
+});
+
+export const IX_ORIGIN_LABELS: Readonly<Record<IxOrigin, string>> = Object.freeze({
+  center: "Centro",
+  top: "Arriba",
+  bottom: "Abajo",
+  left: "Izquierda",
+  right: "Derecha",
+  "top-left": "Arriba izquierda",
+  "top-right": "Arriba derecha",
+  "bottom-left": "Abajo izquierda",
+  "bottom-right": "Abajo derecha",
+});
 
 export function setDelay(raw: unknown, ms: number, ctx?: IxCompileCtx): IxWrite {
   const delay = clampInput(ms, IX_DELAY_MIN, IX_DELAY_MAX, 0);

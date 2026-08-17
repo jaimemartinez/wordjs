@@ -34,9 +34,12 @@ import {
     resetRange,
     setAlternate,
     setClickToggle,
+    setClipDir,
     setDelay,
     setDuration,
     setLoadDelay,
+    setOrigin,
+    setPersp,
     setRangeEdge,
     setRepeat,
     setScrubSrc,
@@ -49,8 +52,11 @@ import {
     setTriggerKind,
     setViewOnce,
     usedProps,
+    IX_CLIP_DIR_LABELS,
+    IX_COLOR_PROPS,
     IX_EASE_LABELS,
     IX_EDGE_LABELS,
+    IX_ORIGIN_LABELS,
     IX_PROP_INPUT,
     IX_PROP_LABELS,
     IX_PROP_UNITS,
@@ -63,15 +69,22 @@ import {
 // panel del bloque sin arrastrar los `--ed-*` del editor, que es justo la frontera de esta pantalla.
 import IxCurveEditor, { ixBezSeed, IX_BEZ_SENTINEL } from "@/components/verso/fields/IxCurveEditor";
 import {
+    IX_CLIP_DIRS,
     IX_EASINGS,
     IX_MAX_STEPS,
     IX_MAX_WORDS,
+    IX_ORIGINS,
+    IX_PERSP_DEFAULT,
+    IX_PERSP_MAX,
+    IX_PERSP_MIN,
     IX_PRESET_NAME_MAX,
     IX_PROP_NEUTRAL,
     IX_REPEAT_MAX,
     IX_STAGGER_MAX,
+    type IxClipDir,
     type IxEase,
     type IxEdgeName,
+    type IxOrigin,
     type IxPropKey,
     type IxSpec,
 } from "@/lib/verso/interactions";
@@ -82,9 +95,31 @@ const EASES = Object.keys(IX_EASINGS) as IxEase[];
 /** Aristas de `animation-range`, en el orden en que se cruzan al hacer scroll. */
 const EDGES: IxEdgeName[] = ["cover", "entry", "contain", "exit"];
 
+/** Propiedades gobernadas por `transform-origin`: giros, escalas y sesgos. */
+const ORIGIN_PROPS: readonly IxPropKey[] = [
+    "scale",
+    "scaleX",
+    "scaleY",
+    "rotate",
+    "rotateX",
+    "rotateY",
+    "skewX",
+    "skewY",
+];
+/** Propiedades que necesitan una perspectiva: los efectos 3D. */
+const PERSP_PROPS: readonly IxPropKey[] = ["rotateX", "rotateY", "z"];
+
+/** Entero 0xRRGGBB → el `#rrggbb` que habla `<input type="color">`. */
+const intToHex = (v: number): string => `#${v.toString(16).padStart(6, "0")}`;
+/** "#rrggbb" → entero 0xRRGGBB (lo ÚNICO que el documento guarda; la cadena muere en el control). */
+const hexToInt = (hex: string): number => parseInt(hex.slice(1), 16);
+
 const LABEL = "block text-xs font-bold uppercase tracking-wide text-gray-500 mb-1.5";
 const NUM =
     "w-full rounded-xl border-2 border-gray-100 bg-gray-50/50 px-3 py-2 text-sm text-gray-900 focus:border-blue-400 focus:outline-none";
+/** El swatch nativo de las propiedades de color, con el mismo marco que los inputs numéricos. */
+const COLOR =
+    "h-10 w-full cursor-pointer rounded-xl border-2 border-gray-100 bg-gray-50/50 p-1 focus:border-blue-400 focus:outline-none";
 
 /**
  * Los desplegables son `<select>` NATIVOS y no el `Select` de `@/components/ui`.
@@ -159,6 +194,14 @@ export default function PresetEditor({
     const hasOwnRange = (trigger.on === "scrub" || trigger.on === "view") && trigger.range != null;
     const infinite = track?.repeat === "inf";
     const repeatCount = track && typeof track.repeat === "number" ? track.repeat : 1;
+    // Unión de propiedades usadas por los pasos de la pista: cada OPCIÓN DE PISTA se ofrece solo
+    // cuando algún paso usa una propiedad a la que afecta — un selector de perspectiva sin nada 3D
+    // no movería nada. Misma regla que el panel del bloque.
+    const trackProps = new Set<IxPropKey>();
+    for (const s of track?.steps ?? []) for (const k of usedProps(s)) trackProps.add(k);
+    const showClipDir = trackProps.has("clip");
+    const showOrigin = ORIGIN_PROPS.some((k) => trackProps.has(k));
+    const showPersp = PERSP_PROPS.some((k) => trackProps.has(k));
 
     /** Cada escritura devuelve un valor NUEVO ya normalizado; `undefined` (nada animable) se ignora. */
     const write = (next: IxSpec | undefined) => {
@@ -451,6 +494,55 @@ export default function PresetEditor({
                     </fieldset>
                 )}
 
+                {/* Opciones de pista (P3): cada control aparece solo cuando algún paso usa una
+                    propiedad a la que afecta — un selector de perspectiva sin nada 3D no movería
+                    nada. */}
+                {(showClipDir || showOrigin || showPersp) && (
+                    <div className="mt-6 grid gap-4 md:grid-cols-2">
+                        {showClipDir && (
+                            <FieldSelect
+                                id="ixp-clip-dir"
+                                label="Revelado"
+                                value={track.clipDir ?? "right"}
+                                onChange={(v) => write(setClipDir(draft, v as IxClipDir))}
+                                options={IX_CLIP_DIRS.map((d) => ({
+                                    value: d,
+                                    label: IX_CLIP_DIR_LABELS[d],
+                                }))}
+                            />
+                        )}
+                        {showOrigin && (
+                            <FieldSelect
+                                id="ixp-origin"
+                                label="Origen del giro y la escala"
+                                value={track.origin ?? "center"}
+                                onChange={(v) => write(setOrigin(draft, v as IxOrigin))}
+                                options={IX_ORIGINS.map((o) => ({
+                                    value: o,
+                                    label: IX_ORIGIN_LABELS[o],
+                                }))}
+                            />
+                        )}
+                        {showPersp && (
+                            <div>
+                                <label className={LABEL} htmlFor="ixp-persp">
+                                    Perspectiva 3D (px)
+                                </label>
+                                <input
+                                    id="ixp-persp"
+                                    type="number"
+                                    className={NUM}
+                                    min={IX_PERSP_MIN}
+                                    max={IX_PERSP_MAX}
+                                    step={50}
+                                    value={track.persp ?? IX_PERSP_DEFAULT}
+                                    onChange={(e) => write(setPersp(draft, Number(e.target.value)))}
+                                />
+                            </div>
+                        )}
+                    </div>
+                )}
+
                 {/* Pasos */}
                 <fieldset className="mt-8 border-t border-gray-100 pt-6">
                     <legend className="text-sm font-bold text-gray-900">
@@ -542,18 +634,32 @@ export default function PresetEditor({
                                                         {IX_PROP_LABELS[key]}
                                                         {IX_PROP_UNITS[key] ? ` (${IX_PROP_UNITS[key]})` : ""}
                                                     </label>
-                                                    <input
-                                                        id={`ixp-${i}-${key}`}
-                                                        type="number"
-                                                        className={NUM}
-                                                        min={IX_PROP_INPUT[key].min}
-                                                        max={IX_PROP_INPUT[key].max}
-                                                        step={IX_PROP_INPUT[key].step}
-                                                        value={step.set[key] ?? IX_PROP_NEUTRAL[key]}
-                                                        onChange={(e) =>
-                                                            write(setStepProp(draft, i, key, Number(e.target.value)))
-                                                        }
-                                                    />
+                                                    {IX_COLOR_PROPS.has(key) ? (
+                                                        /* El DATO sigue siendo el entero 0xRRGGBB: la conversión
+                                                           hex↔entero vive en el control, nunca en el documento. */
+                                                        <input
+                                                            id={`ixp-${i}-${key}`}
+                                                            type="color"
+                                                            className={COLOR}
+                                                            value={intToHex(step.set[key] ?? IX_PROP_NEUTRAL[key])}
+                                                            onChange={(e) =>
+                                                                write(setStepProp(draft, i, key, hexToInt(e.target.value)))
+                                                            }
+                                                        />
+                                                    ) : (
+                                                        <input
+                                                            id={`ixp-${i}-${key}`}
+                                                            type="number"
+                                                            className={NUM}
+                                                            min={IX_PROP_INPUT[key].min}
+                                                            max={IX_PROP_INPUT[key].max}
+                                                            step={IX_PROP_INPUT[key].step}
+                                                            value={step.set[key] ?? IX_PROP_NEUTRAL[key]}
+                                                            onChange={(e) =>
+                                                                write(setStepProp(draft, i, key, Number(e.target.value)))
+                                                            }
+                                                        />
+                                                    )}
                                                 </div>
                                                 <Button
                                                     type="button"

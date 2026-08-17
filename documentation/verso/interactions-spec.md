@@ -187,6 +187,20 @@ export type IxProps = Partial<{
 Ocho propiedades. `width`, `height`, `margin`, `padding`, `top/left`, `font-size` **no son
 representables**. No hay nada que auditar en el compilador: si no está en el tipo, no llega.
 
+**Ampliación P3 (2026-08-16).** La lista cerrada crece a 22 sin ceder la garantía: 6 de transform
+(`z`, `scaleX/Y`, `rotateY`, `skewX/Y` — compositor), 5 de filter (`brightness`, `contrast`,
+`saturate`, `grayscale`, `hue` — compositor en Blink, pintado en el resto), y 3 COLORES
+(`textColor`, `bgColor`, `borderColor` — PINTADO, aceptado por contrato: pintan, no recolocan;
+jamás sostienen una promesa de 60fps). Los colores viajan como **entero 0xRRGGBB** (la invariante
+"solo números" sobrevive; el emisor formatea `#rrggbb`) y quedan **fuera del relleno neutro**: se
+emiten solo en los pasos que los declaran, y el navegador interpola desde el color natural del
+bloque — la única semántica que el compilador no puede inventar. Además, tres opciones de pista de
+lista cerrada: `clipDir` (dirección del revelado; `right` = lo de siempre), `origin`
+(`transform-origin`, emitido como regla propia SIN estado y fuera de `@supports` para que rija
+también bajo el runtime de Firefox) y `persp` (perspectiva 3D, 200–4000, defecto 1000 = lo que
+`rotateX` ya emitía). Las 8 originales van PRIMERO en el orden canónico: un documento anterior a
+P3 emite bytes idénticos a los de siempre — hay un pin de paridad que lo vigila.
+
 ### 3.4 Objetivo
 
 ```ts

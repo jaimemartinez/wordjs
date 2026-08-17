@@ -28,14 +28,17 @@ import {
   IX_EASINGS,
   IX_MAX_CHILDREN,
   IX_MAX_UNITS_PER_PAGE,
+  IX_PERSP_DEFAULT,
   IX_PROP_KEYS,
   IX_PROP_NEUTRAL,
   normalizeIxSpec,
 } from "./normalize";
 import type {
   IxBody,
+  IxClipDir,
   IxKeyframe,
   IxNeedsRuntime,
+  IxOrigin,
   IxPage,
   IxPreset,
   IxProps,
@@ -163,60 +166,134 @@ function unionProps(steps: IxStep[]): IxPropKey[] {
 
 const valOf = (set: IxProps, k: IxPropKey): number => set[k] ?? IX_PROP_NEUTRAL[k];
 
+/** Color 0xRRGGBB → `#rrggbb`. El emisor formatea; el autor jamás aporta la cadena. */
+const hexColor = (v: number): string => `#${(Math.round(v) & 0xffffff).toString(16).padStart(6, "0")}`;
+
 /**
- * Una sola declaración `transform` con TODO lo que la pista toca, en orden fijo.
+ * Contexto de PISTA para emitir un estado: qué dirección recorta `clip`, con qué perspectiva se
+ * emiten los 3D y qué `transform-origin` lleva la regla. Sale del normalizador, listas cerradas.
+ */
+type TrackCssCtx = { clipDir: IxClipDir; persp: number };
+
+const trackCtx = (track: IxTrack): TrackCssCtx => ({
+  clipDir: track.clipDir ?? "right",
+  persp: track.persp ?? IX_PERSP_DEFAULT,
+});
+
+/**
+ * Una sola declaración `transform` con TODO lo que la pista toca, en orden fijo:
+ * perspective → translate3d → scale → scaleX/Y → rotate → rotateX/Y → skewX/Y.
  * `perspective()` va dentro del propio transform (no como propiedad `perspective` en el padre):
  * así la unidad es autocontenida y no depende de que algún ancestro coopere.
  */
-function transformOf(set: IxProps, union: IxPropKey[]): string | undefined {
+function transformOf(set: IxProps, union: IxPropKey[], ctx: TrackCssCtx): string | undefined {
   const has = (k: IxPropKey) => union.includes(k);
   const parts: string[] = [];
-  if (has("rotateX")) parts.push("perspective(1000px)");
-  if (has("x") || has("y")) {
-    parts.push(`translate3d(${n(valOf(set, "x"))}px,${n(valOf(set, "y"))}px,0)`);
+  if (has("rotateX") || has("rotateY") || has("z")) parts.push(`perspective(${n(ctx.persp)}px)`);
+  if (has("x") || has("y") || has("z")) {
+    parts.push(
+      `translate3d(${n(valOf(set, "x"))}px,${n(valOf(set, "y"))}px,${has("z") ? `${n(valOf(set, "z"))}px` : "0"})`,
+    );
   }
   if (has("scale")) parts.push(`scale(${n(valOf(set, "scale"))})`);
+  if (has("scaleX")) parts.push(`scaleX(${n(valOf(set, "scaleX"))})`);
+  if (has("scaleY")) parts.push(`scaleY(${n(valOf(set, "scaleY"))})`);
   if (has("rotate")) parts.push(`rotate(${n(valOf(set, "rotate"))}deg)`);
   if (has("rotateX")) parts.push(`rotateX(${n(valOf(set, "rotateX"))}deg)`);
+  if (has("rotateY")) parts.push(`rotateY(${n(valOf(set, "rotateY"))}deg)`);
+  if (has("skewX")) parts.push(`skewX(${n(valOf(set, "skewX"))}deg)`);
+  if (has("skewY")) parts.push(`skewY(${n(valOf(set, "skewY"))}deg)`);
   return parts.length > 0 ? parts.join(" ") : undefined;
 }
 
-/** Declaraciones CSS de un estado (`prop: valor`, sin `;`), en orden canónico. */
-function declsOf(set: IxProps, union: IxPropKey[]): string[] {
+/** La lista `filter` con lo que la pista toca, en orden canónico. blur va primero: era el único. */
+function filterOf(set: IxProps, union: IxPropKey[]): string | undefined {
+  const has = (k: IxPropKey) => union.includes(k);
+  const parts: string[] = [];
+  if (has("blur")) parts.push(`blur(${n(valOf(set, "blur"))}px)`);
+  if (has("brightness")) parts.push(`brightness(${n(valOf(set, "brightness"))})`);
+  if (has("contrast")) parts.push(`contrast(${n(valOf(set, "contrast"))})`);
+  if (has("saturate")) parts.push(`saturate(${n(valOf(set, "saturate"))})`);
+  if (has("grayscale")) parts.push(`grayscale(${n(valOf(set, "grayscale"))}%)`);
+  if (has("hue")) parts.push(`hue-rotate(${n(valOf(set, "hue"))}deg)`);
+  return parts.length > 0 ? parts.join(" ") : undefined;
+}
+
+/** `clip` es % REVELADO (100 = entero); la dirección dice qué borde(s) recorta el resto. */
+function clipCss(revealed: number, dir: IxClipDir): string {
+  const cut = n(100 - revealed);
+  const half = n((100 - revealed) / 2);
+  switch (dir) {
+    case "right":
+      return `inset(0 ${cut}% 0 0)`;
+    case "left":
+      return `inset(0 0 0 ${cut}%)`;
+    case "up":
+      return `inset(${cut}% 0 0 0)`;
+    case "down":
+      return `inset(0 0 ${cut}% 0)`;
+    case "center-h":
+      return `inset(0 ${half}% 0 ${half}%)`;
+    case "center-v":
+      return `inset(${half}% 0 ${half}% 0)`;
+  }
+}
+
+/**
+ * Declaraciones CSS de un estado (`prop: valor`, sin `;`), en orden canónico.
+ *
+ * Los COLORES no participan del relleno neutro: se emiten solo en los pasos que los declaran, y el
+ * navegador interpola desde el estilo computado del bloque — "desde su color natural", que es lo
+ * que el autor pidió y lo único que el compilador no puede conocer.
+ */
+function declsOf(set: IxProps, union: IxPropKey[], ctx: TrackCssCtx): string[] {
   const out: string[] = [];
   if (union.includes("opacity")) out.push(`opacity:${n(valOf(set, "opacity"))}`);
-  const tf = transformOf(set, union);
+  const tf = transformOf(set, union, ctx);
   if (tf) out.push(`transform:${tf}`);
-  if (union.includes("blur")) out.push(`filter:blur(${n(valOf(set, "blur"))}px)`);
-  // `clip` es % REVELADO: 100 = visible entero. `inset(0 X% 0 0)` recorta por el lado final.
-  if (union.includes("clip")) {
-    out.push(`clip-path:inset(0 ${n(100 - valOf(set, "clip"))}% 0 0)`);
-  }
+  const fl = filterOf(set, union);
+  if (fl) out.push(`filter:${fl}`);
+  if (union.includes("clip")) out.push(`clip-path:${clipCss(valOf(set, "clip"), ctx.clipDir)}`);
+  if (set.textColor !== undefined) out.push(`color:${hexColor(set.textColor)}`);
+  if (set.bgColor !== undefined) out.push(`background-color:${hexColor(set.bgColor)}`);
+  if (set.borderColor !== undefined) out.push(`border-color:${hexColor(set.borderColor)}`);
   return out;
 }
+
+const TRANSFORM_KEYS: readonly IxPropKey[] = Object.freeze([
+  "x", "y", "z", "scale", "scaleX", "scaleY", "rotate", "rotateX", "rotateY", "skewX", "skewY",
+]);
+const FILTER_KEYS: readonly IxPropKey[] = Object.freeze([
+  "blur", "brightness", "contrast", "saturate", "grayscale", "hue",
+]);
 
 /** Las propiedades CSS que la pista toca — para `transition-property`. */
 function transitionProps(union: IxPropKey[]): string[] {
   const out: string[] = [];
   if (union.includes("opacity")) out.push("opacity");
-  if (union.some((k) => k === "x" || k === "y" || k === "scale" || k === "rotate" || k === "rotateX")) {
-    out.push("transform");
-  }
-  if (union.includes("blur")) out.push("filter");
+  if (union.some((k) => TRANSFORM_KEYS.includes(k))) out.push("transform");
+  if (union.some((k) => FILTER_KEYS.includes(k))) out.push("filter");
   if (union.includes("clip")) out.push("clip-path");
+  if (union.includes("textColor")) out.push("color");
+  if (union.includes("bgColor")) out.push("background-color");
+  if (union.includes("borderColor")) out.push("border-color");
   return out;
 }
 
 /** El mismo estado, en forma WAAPI (backend 2 del IR). */
-function keyframeOf(step: IxStep, union: IxPropKey[]): IxKeyframe {
+function keyframeOf(step: IxStep, union: IxPropKey[], ctx: TrackCssCtx): IxKeyframe {
   const kf: IxKeyframe = { offset: round4(step.at / 100) };
   const ease = easeCss(step);
   if (ease) kf.easing = ease;
   if (union.includes("opacity")) kf.opacity = n(valOf(step.set, "opacity"));
-  const tf = transformOf(step.set, union);
+  const tf = transformOf(step.set, union, ctx);
   if (tf) kf.transform = tf;
-  if (union.includes("blur")) kf.filter = `blur(${n(valOf(step.set, "blur"))}px)`;
-  if (union.includes("clip")) kf.clipPath = `inset(0 ${n(100 - valOf(step.set, "clip"))}% 0 0)`;
+  const fl = filterOf(step.set, union);
+  if (fl) kf.filter = fl;
+  if (union.includes("clip")) kf.clipPath = clipCss(valOf(step.set, "clip"), ctx.clipDir);
+  if (step.set.textColor !== undefined) kf.color = hexColor(step.set.textColor);
+  if (step.set.bgColor !== undefined) kf.backgroundColor = hexColor(step.set.bgColor);
+  if (step.set.borderColor !== undefined) kf.borderColor = hexColor(step.set.borderColor);
   return kf;
 }
 
@@ -359,6 +436,19 @@ const pageRangeCss = (r: IxRange): string | null =>
 
 export const IX_CLASS_PREFIX = "wjs-ix-";
 export const IX_KEYFRAME_PREFIX = "wjs-ixk-";
+
+/** `transform-origin` de cada nombre de la lista cerrada (P3). El emisor pone el texto, nadie más. */
+const ORIGIN_CSS: Readonly<Record<IxOrigin, string>> = Object.freeze({
+  center: "50% 50%",
+  top: "50% 0%",
+  bottom: "50% 100%",
+  left: "0% 50%",
+  right: "100% 50%",
+  "top-left": "0% 0%",
+  "top-right": "100% 0%",
+  "bottom-left": "0% 100%",
+  "bottom-right": "100% 100%",
+});
 /** Índice del hermano dentro del stagger por palabras; la estampa el renderer del split (F9-D). */
 export const IX_WORD_INDEX_VAR = "--wjs-ixv-i";
 
@@ -383,8 +473,9 @@ export function emitUnit(body: IxBody, hash: string): IxUnit {
 
   body.tracks.forEach((track, i) => {
     const union = unionProps(track.steps);
+    const tcx = trackCtx(track);
     const name = `${IX_KEYFRAME_PREFIX}${hash}${multi ? `-${i}` : ""}`;
-    kf[name] = track.steps.map((s) => keyframeOf(s, union));
+    kf[name] = track.steps.map((s) => keyframeOf(s, union, tcx));
 
     // El escalonado desplaza HERMANOS: sobre `self` o sobre otro bloque no hay hermanos que
     // desplazar. Hoy eso se ignoraba en silencio — se avisa, como todo lo que no se emite.
@@ -412,6 +503,12 @@ export function emitUnit(body: IxBody, hash: string): IxUnit {
     const delay = (track.delay ?? IX_DEFAULT_DELAY) + loadDelay;
     const sel = joinSel(bases, suffix);
 
+    // `transform-origin` (P3): una regla propia, SIN estado y fuera de cualquier @supports — tiene
+    // que regir también cuando la animación la conduce el runtime de WAAPI en Firefox.
+    if (track.origin) {
+      rules.push(rule(`.${cls}${suffix}`, [`transform-origin:${ORIGIN_CSS[track.origin]}`]));
+    }
+
     /* ── Camino 1: transición de hover con 2 pasos ──────────────────── */
     if (trigger.on === "hover" && track.steps.length === 2) {
       const [a, b] = track.steps;
@@ -426,10 +523,10 @@ export function emitUnit(body: IxBody, hash: string): IxUnit {
       rules.push(
         rule(`.${cls}${suffix}`, [
           `transition:${props.map((p) => `${p} ${n(dur)}ms ${ease} ${n(delay)}ms`).join(",")}`,
-          ...declsOf(a.set, union),
+          ...declsOf(a.set, union, tcx),
         ]),
       );
-      rules.push(rule(sel, declsOf(b.set, union)));
+      rules.push(rule(sel, declsOf(b.set, union, tcx)));
       rules.push(...staggerRules(cls, track, trigger, suffix, delay, "transition-delay", warnings));
       if (track.target.kind === "words" && track.stagger && track.stagger.each > 0) {
         // El `calc()` por palabra solo existe en la vía de animación; una transición no tiene
@@ -443,7 +540,7 @@ export function emitUnit(body: IxBody, hash: string): IxUnit {
 
     /* ── Camino 2: progreso ligado al scroll (CSS puro donde lo haya) ─ */
     if (isTimeline(trigger)) {
-      keyframes.push(keyframesCss(name, track.steps, union));
+      keyframes.push(keyframesCss(name, track.steps, union, tcx));
       const fn = timelineFn(trigger);
       const isPage = fn === "scroll()";
       const pageRange = isPage ? pageRangeCss(rangeOf(trigger)) : null;
@@ -480,7 +577,7 @@ export function emitUnit(body: IxBody, hash: string): IxUnit {
     }
 
     /* ── Camino 3: animación temporal (load / click / hover ≥3 / view+once) ─ */
-    keyframes.push(keyframesCss(name, track.steps, union));
+    keyframes.push(keyframesCss(name, track.steps, union, tcx));
     const repeat = track.repeat ?? 1;
     const delayCss = wordsDelay(track, delay);
     // El easing POR PASO se emite dentro de los @keyframes; el de elemento se fija `linear` para
@@ -498,7 +595,7 @@ export function emitUnit(body: IxBody, hash: string): IxUnit {
     // pone el JS. El HTML servido NUNCA lo lleva, así que ni los rastreadores ni un visitante sin
     // JS ven jamás contenido oculto (§7.1 — cero CLS, cero FOUC, nada que tapar).
     if (trigger.on === "view" && trigger.once !== false) {
-      const armed = declsOf(track.steps[0].set, union);
+      const armed = declsOf(track.steps[0].set, union, tcx);
       if (armed.length > 0) rules.push(rule(`.${cls}[data-wjs-ix="armed"]${suffix}`, armed));
     }
 
@@ -566,14 +663,14 @@ function staggerRules(
   return out;
 }
 
-function keyframesCss(name: string, steps: IxStep[], union: IxPropKey[]): string {
+function keyframesCss(name: string, steps: IxStep[], union: IxPropKey[], ctx: TrackCssCtx): string {
   const body = steps
     .map((s) => {
       const decls: string[] = [];
       // El easing de un paso vale HASTA EL SIGUIENTE; en el último no significa nada y se omite.
       const ease = s.at < 100 ? easeCss(s) : undefined;
       if (ease) decls.push(`animation-timing-function:${ease}`);
-      decls.push(...declsOf(s.set, union));
+      decls.push(...declsOf(s.set, union, ctx));
       return `${n(s.at)}%{${decls.join(";")}}`;
     })
     .join("");
@@ -721,7 +818,7 @@ function toRuntimeTrack(track: IxTrack, trigger: IxTrigger): IxRuntimeTrack {
   const union = unionProps(track.steps);
   const loadDelay = trigger.on === "load" ? (trigger.delay ?? 0) : 0;
   const out: IxRuntimeTrack = {
-    kf: track.steps.map((s) => keyframeOf(s, union)),
+    kf: track.steps.map((s) => keyframeOf(s, union, trackCtx(track))),
     target: track.target,
     range: rangeOf(trigger),
     dur: track.dur ?? IX_DEFAULT_DUR,

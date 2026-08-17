@@ -36,9 +36,12 @@ import {
   resetRange,
   setAlternate,
   setClickToggle,
+  setClipDir,
   setDelay,
   setDuration,
   setLoadDelay,
+  setOrigin,
+  setPersp,
   setPresetChoice,
   setRangeEdge,
   setRepeat,
@@ -506,6 +509,22 @@ describe("opciones del disparador y de la pista (P1: lo que el modelo sabía y e
     const named = setStepEase(w, 0, "bounce", CTX)!;
     expect(named.tracks![0].steps[0].ease).toBe("bounce");
     expect("bez" in named.tracks![0].steps[0]).toBe(false);
+  });
+
+  it("setClipDir / setOrigin / setPersp escriben la opción y el DEFECTO borra la clave", () => {
+    const spec = defaultIxSpec();
+    const up = setClipDir(spec, "up", CTX)!;
+    expect(up.tracks![0].clipDir).toBe("up");
+    expect("clipDir" in setClipDir(up, "right", CTX)!.tracks![0]).toBe(false);
+    const tl = setOrigin(spec, "top-left", CTX)!;
+    expect(tl.tracks![0].origin).toBe("top-left");
+    expect("origin" in setOrigin(tl, "center", CTX)!.tracks![0]).toBe(false);
+    const p = setPersp(spec, 500, CTX)!;
+    expect(p.tracks![0].persp).toBe(500);
+    expect("persp" in setPersp(p, 1000, CTX)!.tracks![0]).toBe(false);
+    assertWritable(up);
+    assertWritable(tl);
+    assertWritable(p);
   });
 
   it("setRepeat sobre un bloque enlazado DESVINCULA (es una edición del cuerpo)", () => {

@@ -12,9 +12,10 @@
  * `number`) renderizado por el mismo componente que pinta el resto del panel. Eso no es estética —
  * es de dónde salen el `<label for>` con `useId`, el `fieldset/legend` del radiogrupo y el
  * `aria-label` posicional de los botones. Un control a mano aquí sería un control con su propia
- * accesibilidad, y sería la que se olvidase. Única excepción: los dos checkboxes de «Reproducción»
- * (`VersoField` no tiene tipo checkbox); su `<label>` ENVUELVE al `<input>`, así que el nombre
- * accesible es intrínseco y no hay un `for`/`id` que se pueda desasociar.
+ * accesibilidad, y sería la que se olvidase. Dos excepciones, ambas por tipos que `VersoField` no
+ * tiene: los checkboxes de «Reproducción» (su `<label>` ENVUELVE al `<input>`, así que el nombre
+ * accesible es intrínseco y no hay un `for`/`id` que se pueda desasociar) y el `<input type="color">`
+ * de las propiedades de color, que replica el `label for` + `useId` de las filas numéricas.
  *
  * TODA LA LÓGICA SALE DE `ixPanelModel.ts`, que es puro y está probado en node: este fichero decide
  * qué se muestra, nunca qué se guarda. Cada escritura devuelve un valor NUEVO ya normalizado y sube
@@ -28,15 +29,22 @@
 import React, { useCallback, useId, useMemo } from "react";
 import MSym from "@/components/editor/MSym";
 import {
+  IX_CLIP_DIRS,
   IX_EASINGS,
   IX_MAX_STEPS,
   IX_MAX_WORDS,
+  IX_ORIGINS,
+  IX_PERSP_DEFAULT,
+  IX_PERSP_MAX,
+  IX_PERSP_MIN,
   IX_PROP_NEUTRAL,
   IX_REPEAT_MAX,
   IX_STAGGER_MAX,
+  type IxClipDir,
   type IxCompileCtx,
   type IxEase,
   type IxEdgeName,
+  type IxOrigin,
   type IxPropKey,
   type IxStep,
 } from "@/lib/verso/interactions";
@@ -54,9 +62,12 @@ import {
   resetRange,
   setAlternate,
   setClickToggle,
+  setClipDir,
   setDelay,
   setDuration,
   setLoadDelay,
+  setOrigin,
+  setPersp,
   setPresetChoice,
   setRangeEdge,
   setRepeat,
@@ -71,8 +82,11 @@ import {
   setViewOnce,
   unlinkPreset,
   usedProps,
+  IX_CLIP_DIR_LABELS,
+  IX_COLOR_PROPS,
   IX_EASE_LABELS,
   IX_EDGE_LABELS,
+  IX_ORIGIN_LABELS,
   IX_PROP_INPUT,
   IX_PROP_LABELS,
   IX_PROP_UNITS,
@@ -114,6 +128,25 @@ const OFFERED_TARGETS: IxPanelTargetKind[] = ["self", "children"];
 
 /** Disparadores cuyo progreso lo marca el RELOJ (y por tanto tienen duración y retardo). */
 const isTimed = (on: IxPanelTriggerKind): boolean => on !== "scrub";
+
+/** Propiedades gobernadas por `transform-origin`: giros, escalas y sesgos. */
+const ORIGIN_PROPS: readonly IxPropKey[] = [
+  "scale",
+  "scaleX",
+  "scaleY",
+  "rotate",
+  "rotateX",
+  "rotateY",
+  "skewX",
+  "skewY",
+];
+/** Propiedades que necesitan una perspectiva: los efectos 3D. */
+const PERSP_PROPS: readonly IxPropKey[] = ["rotateX", "rotateY", "z"];
+
+/** Entero 0xRRGGBB → el `#rrggbb` que habla `<input type="color">`. */
+const intToHex = (v: number): string => `#${v.toString(16).padStart(6, "0")}`;
+/** "#rrggbb" → entero 0xRRGGBB (lo ÚNICO que el documento guarda; la cadena muere en el control). */
+const hexToInt = (hex: string): number => parseInt(hex.slice(1), 16);
 
 export interface InteractionsControlProps {
   /** El valor CRUDO de `props.ix` (dato hostil: el modelo lo normaliza). */
@@ -161,6 +194,14 @@ export default function InteractionsControl({
   const hasOwnRange = (trigger.on === "scrub" || trigger.on === "view") && trigger.range != null;
   const infinite = track?.repeat === "inf";
   const repeatCount = track && typeof track.repeat === "number" ? track.repeat : 1;
+  // Unión de propiedades usadas por los pasos de la pista 0: cada OPCIÓN DE PISTA se ofrece solo
+  // cuando algún paso usa una propiedad a la que afecta — un selector de perspectiva sin nada 3D
+  // no movería nada (el mismo criterio que retiró `words` de los bloques que no lo emiten).
+  const trackProps = new Set<IxPropKey>();
+  for (const s of track?.steps ?? []) for (const k of usedProps(s)) trackProps.add(k);
+  const showClipDir = trackProps.has("clip");
+  const showOrigin = ORIGIN_PROPS.some((k) => trackProps.has(k));
+  const showPersp = PERSP_PROPS.some((k) => trackProps.has(k));
 
   const presetField: SelectVersoField = { type: "select", options: presetOptions };
   const triggerField: RadioVersoField = {
@@ -191,6 +232,14 @@ export default function InteractionsControl({
   const edgeField: SelectVersoField = {
     type: "select",
     options: EDGES.map((e) => ({ label: IX_EDGE_LABELS[e], value: e })),
+  };
+  const clipDirField: SelectVersoField = {
+    type: "select",
+    options: IX_CLIP_DIRS.map((d) => ({ label: IX_CLIP_DIR_LABELS[d], value: d })),
+  };
+  const originField: SelectVersoField = {
+    type: "select",
+    options: IX_ORIGINS.map((o) => ({ label: IX_ORIGIN_LABELS[o], value: o })),
   };
   const currentTarget = track?.target.kind;
   const targets: IxPanelTargetKind[] =
@@ -487,6 +536,37 @@ export default function InteractionsControl({
                   </div>
                 </fieldset>
               )}
+
+              {/* ── Opciones de pista (P3) — cada una solo si algún paso usa lo que gobierna ── */}
+              {showClipDir && (
+                <VersoFieldControl
+                  field={clipDirField}
+                  name="ix-clip-dir"
+                  label="Revelado"
+                  value={track.clipDir ?? "right"}
+                  onChange={(v) => onChange(setClipDir(value, v as IxClipDir, ixCtx))}
+                />
+              )}
+              {showOrigin && (
+                <VersoFieldControl
+                  field={originField}
+                  name="ix-origin"
+                  label="Origen del giro y la escala"
+                  value={track.origin ?? "center"}
+                  onChange={(v) => onChange(setOrigin(value, v as IxOrigin, ixCtx))}
+                />
+              )}
+              {showPersp && (
+                <VersoFieldControl
+                  field={{ type: "number", min: IX_PERSP_MIN, max: IX_PERSP_MAX, step: 50 }}
+                  name="ix-persp"
+                  label="Perspectiva 3D (px)"
+                  value={track.persp ?? IX_PERSP_DEFAULT}
+                  onChange={(v) =>
+                    onChange(setPersp(value, typeof v === "number" ? v : IX_PERSP_DEFAULT, ixCtx))
+                  }
+                />
+              )}
             </>
           )}
 
@@ -647,14 +727,24 @@ function StepRow({ step, index, total, readOnly, onAt, onEase, onBez, onProp, on
       {used.map((key) => (
         <div key={key} className="flex items-end gap-1">
           <div className="flex-1">
-            <VersoFieldControl
-              field={{ type: "number", ...IX_PROP_INPUT[key] }}
-              name={`ix-step-${index}-${key}`}
-              label={`${IX_PROP_LABELS[key]}${IX_PROP_UNITS[key] ? ` (${IX_PROP_UNITS[key]})` : ""}`}
-              value={step.set[key]}
-              readOnly={readOnly}
-              onChange={(v) => onProp(key, typeof v === "number" ? v : undefined)}
-            />
+            {IX_COLOR_PROPS.has(key) ? (
+              // Colores: mismo label/id que una fila numérica, con el swatch nativo. Sin unidad.
+              <StepColorRow
+                label={IX_PROP_LABELS[key]}
+                value={step.set[key] ?? IX_PROP_NEUTRAL[key]}
+                readOnly={readOnly}
+                onChange={(v) => onProp(key, v)}
+              />
+            ) : (
+              <VersoFieldControl
+                field={{ type: "number", ...IX_PROP_INPUT[key] }}
+                name={`ix-step-${index}-${key}`}
+                label={`${IX_PROP_LABELS[key]}${IX_PROP_UNITS[key] ? ` (${IX_PROP_UNITS[key]})` : ""}`}
+                value={step.set[key]}
+                readOnly={readOnly}
+                onChange={(v) => onProp(key, typeof v === "number" ? v : undefined)}
+              />
+            )}
           </div>
           {!readOnly && (
             <button
@@ -679,5 +769,45 @@ function StepRow({ step, index, total, readOnly, onAt, onEase, onBez, onProp, on
         />
       )}
     </li>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Una propiedad de color de un paso                                   */
+/* ------------------------------------------------------------------ */
+
+interface StepColorRowProps {
+  label: string;
+  /** El entero 0xRRGGBB tal cual vive en el paso. */
+  value: number;
+  readOnly: boolean;
+  onChange: (value: number) => void;
+}
+
+/**
+ * `<input type="color">` de una propiedad de color. No es un `VersoField` (no existe el tipo), así
+ * que replica a mano lo que `VersoFieldControl` daría gratis: `<label for>` + `useId`. El DATO
+ * sigue siendo el entero 0xRRGGBB — aquí solo se traduce hacia y desde el `#rrggbb` del control.
+ */
+function StepColorRow({ label, value, readOnly, onChange }: StepColorRowProps) {
+  const id = useId();
+  return (
+    <div className="mb-3">
+      <label
+        htmlFor={id}
+        className="block text-xs font-medium text-[var(--ed-on-surface-variant)] mb-1"
+      >
+        {label}
+      </label>
+      {/* `readOnly` no existe en un input de color (no hay caret): `disabled` es el equivalente. */}
+      <input
+        id={id}
+        type="color"
+        className="h-8 w-full cursor-pointer rounded border border-[var(--ed-outline-variant)] bg-[var(--ed-surface-container-high)] p-0.5 disabled:cursor-default disabled:opacity-40"
+        value={intToHex(value)}
+        disabled={readOnly}
+        onChange={(e) => onChange(hexToInt(e.target.value))}
+      />
+    </div>
   );
 }

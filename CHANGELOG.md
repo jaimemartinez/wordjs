@@ -8,6 +8,14 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Added
 
+- **Interactions: 14 new animatable properties, still zero layout shift by construction.** Full 3D
+  (rotate on the Y axis, real depth on Z, per-track perspective), skew, independent X/Y scale, a
+  filter family (brightness, contrast, saturation, grayscale, hue), and color animation for text,
+  background and border. Colors travel as plain integers and only ever appear in the steps that
+  declare them, so a color step animates *from the block's natural color* — and the closed property
+  list still cannot express a single layout-shifting property. The clip reveal gained directions
+  (left/right/up/down/center), and rotation and scale can pick their transform origin.
+
 - **Interactions: real motion curves, with zero JavaScript.** Every step can now carry its own
   easing curve — either drawn/typed as a custom cubic-bezier in a new visual curve editor (fully
   keyboard-operable), or picked from two new physical curves, *Rebote* (bounce) and *Elástico*

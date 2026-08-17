@@ -22,9 +22,11 @@
  * página rota. Por eso `normalizeIxSpec` devuelve `null` en vez de lanzar.
  */
 import type {
+  IxClipDir,
   IxEase,
   IxEdge,
   IxEdgeName,
+  IxOrigin,
   IxPreset,
   IxProps,
   IxPropKey,
@@ -157,10 +159,39 @@ export const IX_EDGE_NAMES: readonly IxEdgeName[] = Object.freeze([
   "exit",
 ]);
 
+/** Direcciones del revelado de `clip` (P3). "right" (recortar el borde final) es la de siempre. */
+export const IX_CLIP_DIRS: readonly IxClipDir[] = Object.freeze([
+  "left",
+  "right",
+  "up",
+  "down",
+  "center-h",
+  "center-v",
+]);
+
+/** `transform-origin` de lista cerrada (P3). El dato jamás lleva una cadena libre del autor. */
+export const IX_ORIGINS: readonly IxOrigin[] = Object.freeze([
+  "center",
+  "top",
+  "bottom",
+  "left",
+  "right",
+  "top-left",
+  "top-right",
+  "bottom-left",
+  "bottom-right",
+]);
+
+/** Perspectiva 3D por pista (P3). 1000 es lo que rotateX ya emitía antes de ser configurable. */
+export const IX_PERSP_MIN = 200;
+export const IX_PERSP_MAX = 4000;
+export const IX_PERSP_DEFAULT = 1000;
+
 /**
- * ORDEN CANÓNICO de las 8 propiedades. Es un array explícito y no `Object.keys` de un objeto
+ * ORDEN CANÓNICO de las propiedades. Es un array explícito y no `Object.keys` de un objeto
  * literal: el orden de emisión de las declaraciones tiene que ser estable byte a byte, y no se va
- * a hacer depender de un detalle de motor.
+ * a hacer depender de un detalle de motor. Las 8 ORIGINALES van primero y en su orden de siempre:
+ * cualquier `_puck_data` anterior a P3 emite bytes idénticos a los de antes de P3.
  */
 export const IX_PROP_KEYS: readonly IxPropKey[] = Object.freeze([
   "opacity",
@@ -171,11 +202,29 @@ export const IX_PROP_KEYS: readonly IxPropKey[] = Object.freeze([
   "rotateX",
   "blur",
   "clip",
+  // P3 — transform:
+  "z",
+  "scaleX",
+  "scaleY",
+  "rotateY",
+  "skewX",
+  "skewY",
+  // P3 — filter:
+  "brightness",
+  "contrast",
+  "saturate",
+  "grayscale",
+  "hue",
+  // P3 — colores (pintado):
+  "textColor",
+  "bgColor",
+  "borderColor",
 ]);
 
 /**
  * Rango de cada propiedad. Los topes no son cosméticos: `blur: 1e9` o `scale: 1e12` no "se ven
  * feos", tumban el compositor del navegador. Un `_puck_data` hostil no puede pedir eso.
+ * `skew` se corta en ±89: 90° degenera la matriz. Los colores son un entero 0xRRGGBB.
  */
 const IX_PROP_RANGE: Readonly<Record<IxPropKey, readonly [number, number]>> = Object.freeze({
   opacity: [0, 1],
@@ -186,6 +235,20 @@ const IX_PROP_RANGE: Readonly<Record<IxPropKey, readonly [number, number]>> = Ob
   rotateX: [-3600, 3600],
   blur: [0, 100],
   clip: [0, 100],
+  z: [-2000, 2000],
+  scaleX: [0, 10],
+  scaleY: [0, 10],
+  rotateY: [-3600, 3600],
+  skewX: [-89, 89],
+  skewY: [-89, 89],
+  brightness: [0, 10],
+  contrast: [0, 10],
+  saturate: [0, 10],
+  grayscale: [0, 100],
+  hue: [-360, 360],
+  textColor: [0, 0xffffff],
+  bgColor: [0, 0xffffff],
+  borderColor: [0, 0xffffff],
 });
 
 /** Valor NEUTRO de cada propiedad: el estado en el que el bloque se ve como si no hubiera nada. */
@@ -198,7 +261,43 @@ export const IX_PROP_NEUTRAL: Readonly<Record<IxPropKey, number>> = Object.freez
   rotateX: 0,
   blur: 0,
   clip: 100,
+  z: 0,
+  scaleX: 1,
+  scaleY: 1,
+  rotateY: 0,
+  skewX: 0,
+  skewY: 0,
+  brightness: 1,
+  contrast: 1,
+  saturate: 1,
+  grayscale: 0,
+  hue: 0,
+  // Los colores NO tienen neutro real (el "neutro" es el color propio del bloque, que el
+  // compilador no conoce): estos valores existen para completar la tabla, pero el emisor NUNCA
+  // los usa — los colores quedan fuera del relleno de la unión (IX_PROPS_NO_FILL).
+  textColor: 0,
+  bgColor: 0,
+  borderColor: 0,
 });
+
+/**
+ * Propiedades EXCLUIDAS del relleno neutro de la unión. Para un color, "no declarado en este paso"
+ * significa "el color natural del bloque en ese punto", y eso solo puede expresarse OMITIENDO la
+ * propiedad del fotograma: el navegador interpola desde el estilo computado, que es exactamente la
+ * semántica que el autor pidió. Rellenar con un color fijo animaría hacia un color inventado.
+ */
+export const IX_PROPS_NO_FILL: ReadonlySet<IxPropKey> = new Set<IxPropKey>([
+  "textColor",
+  "bgColor",
+  "borderColor",
+]);
+
+/** Los colores se REDONDEAN a entero al normalizar (un 0xRRGGBB con decimales no es un color). */
+const IX_PROPS_INT: ReadonlySet<IxPropKey> = new Set<IxPropKey>([
+  "textColor",
+  "bgColor",
+  "borderColor",
+]);
 
 /**
  * Ids de preset y de bloque. No llegan al CSS (la clase sale del hash), pero el id de bloque SÍ
@@ -248,7 +347,7 @@ function normRange(raw: unknown): IxRange | undefined {
   return { from, to };
 }
 
-/** Las 8 propiedades, clampadas. Cualquier clave fuera de la lista se DESCARTA sin más. */
+/** Las propiedades de la lista cerrada, clampadas. Cualquier clave fuera se DESCARTA sin más. */
 export function normProps(raw: unknown): IxProps {
   const out: IxProps = {};
   if (!isObj(raw)) return out;
@@ -256,7 +355,8 @@ export function normProps(raw: unknown): IxProps {
     const n = num(raw[k]);
     if (n === undefined) continue;
     const [min, max] = IX_PROP_RANGE[k];
-    out[k] = clamp(n, min, max);
+    const v = clamp(n, min, max);
+    out[k] = IX_PROPS_INT.has(k) ? Math.round(v) : v;
   }
   return out;
 }
@@ -369,6 +469,18 @@ function normTrack(raw: unknown, warn: (w: string) => void): IxTrack | undefined
 
   const stagger = normStagger(raw.stagger);
   if (stagger) track.stagger = stagger;
+
+  // P3 — opciones de pista, todas de lista cerrada o número clampado; "right"/"center"/1000 son
+  // los valores iniciales y se BORRAN (ausencia = los bytes y el CSS de siempre).
+  const clipDir = oneOf<IxClipDir>(raw.clipDir, IX_CLIP_DIRS);
+  if (clipDir && clipDir !== "right") track.clipDir = clipDir;
+  const origin = oneOf<IxOrigin>(raw.origin, IX_ORIGINS);
+  if (origin && origin !== "center") track.origin = origin;
+  const persp = num(raw.persp);
+  if (persp !== undefined) {
+    const v = Math.round(clamp(persp, IX_PERSP_MIN, IX_PERSP_MAX));
+    if (v !== IX_PERSP_DEFAULT) track.persp = v;
+  }
 
   return track;
 }

@@ -98,8 +98,18 @@ describe("propiedades: la lista es CERRADA", () => {
     expect(neg).toEqual({ opacity: 0, scale: 0, blur: 0, clip: 0 });
   });
 
-  it("cubre las 8 propiedades declaradas y ninguna más", () => {
-    expect([...IX_PROP_KEYS]).toEqual(["opacity", "x", "y", "scale", "rotate", "rotateX", "blur", "clip"]);
+  it("cubre las propiedades declaradas y ninguna más — las 8 originales SIEMPRE primero", () => {
+    // El prefijo es sagrado: el orden canónico decide bytes de emisión, y las 8 primeras en su
+    // orden de siempre garantizan que un documento anterior a P3 emite CSS byte-idéntico.
+    expect([...IX_PROP_KEYS].slice(0, 8)).toEqual([
+      "opacity", "x", "y", "scale", "rotate", "rotateX", "blur", "clip",
+    ]);
+    expect([...IX_PROP_KEYS]).toEqual([
+      "opacity", "x", "y", "scale", "rotate", "rotateX", "blur", "clip",
+      "z", "scaleX", "scaleY", "rotateY", "skewX", "skewY",
+      "brightness", "contrast", "saturate", "grayscale", "hue",
+      "textColor", "bgColor", "borderColor",
+    ]);
   });
 });
 
@@ -345,11 +355,16 @@ describe("fuzz: jamás se emite CSS que escape de su regla", () => {
     }
   });
 
-  it("las declaraciones emitidas son SOLO opacity / transform / filter / clip-path", () => {
+  it("las declaraciones emitidas son SOLO las del contrato: compositor + colores de pintado", () => {
     const page = compileIxPage([
       { v: 1, tracks: [{ target: { kind: "self" }, steps: [
         { at: 0, set: { opacity: 0, x: 1, y: 2, scale: 0.5, rotate: 3, rotateX: 4, blur: 5, clip: 0 } },
         { at: 100, set: { opacity: 1, x: 0, y: 0, scale: 1, rotate: 0, rotateX: 0, blur: 0, clip: 100 } },
+      ] }] },
+      // P3: la unión completa de las propiedades nuevas, con origin/clipDir/persp puestos.
+      { v: 1, trigger: { on: "load" }, tracks: [{ target: { kind: "self" }, origin: "top-left", clipDir: "up", persp: 800, steps: [
+        { at: 0, set: { z: -80, scaleX: 0.5, scaleY: 1.5, rotateY: 45, skewX: 10, skewY: -5, brightness: 2, contrast: 1.5, saturate: 0.2, grayscale: 80, hue: 90, textColor: 0xff0000, bgColor: 0x00ff00, borderColor: 0x0000ff, clip: 0 } },
+        { at: 100, set: { z: 0, scaleX: 1, scaleY: 1, rotateY: 0, skewX: 0, skewY: 0, brightness: 1, contrast: 1, saturate: 1, grayscale: 0, hue: 0, clip: 100 } },
       ] }] },
       { v: 1, trigger: { on: "hover" }, tracks: [{ target: { kind: "self" }, steps: [
         { at: 0, set: { scale: 1 } }, { at: 100, set: { scale: 1.05 } },
@@ -360,6 +375,8 @@ describe("fuzz: jamás se emite CSS que escape de su regla", () => {
     const props = [...page.css.matchAll(/[{;]\s*([a-z-]+)\s*:/g)].map((m) => m[1]);
     const allowed = new Set([
       "opacity", "transform", "filter", "clip-path",
+      // P3: pintado permitido por contrato (pintan, no recolocan) + el origin de lista cerrada.
+      "color", "background-color", "border-color", "transform-origin",
       // Las de control de la propia animación (no pintan nada, no causan reflow).
       "animation", "animation-delay", "animation-timeline", "animation-range",
       "transition", "transition-delay",

@@ -350,6 +350,102 @@ describe("easing (P2): bezier propio y físicas compiladas a linear()", () => {
   });
 });
 
+describe("propiedades P3: transform 3D, filtros, colores, origin, clipDir, perspectiva", () => {
+  const two = (a: Record<string, unknown>, b: Record<string, unknown>): IxStep[] =>
+    [{ at: 0, set: a }, { at: 100, set: b }] as unknown as IxStep[];
+
+  it("los transform nuevos salen en ORDEN FIJO y con perspective delante cuando hay 3D", () => {
+    const u = compileIx(mk({ on: "load" }, {
+      steps: two(
+        { z: -100, scaleX: 0.5, scaleY: 1.5, rotateY: 90, skewX: 10, skewY: -5 },
+        { z: 0, scaleX: 1, scaleY: 1, rotateY: 0, skewX: 0, skewY: 0 },
+      ),
+    }))!;
+    expect(u.keyframes[0]).toContain(
+      "transform:perspective(1000px) translate3d(0px,0px,-100px) scaleX(0.5) scaleY(1.5) rotateY(90deg) skewX(10deg) skewY(-5deg)",
+    );
+  });
+
+  it("la perspectiva es configurable por pista y 1000 (el defecto) no cambia ni un byte", () => {
+    const custom = compileIx(mk({ on: "load" }, { persp: 500, steps: two({ rotateY: 90 }, { rotateY: 0 }) }))!;
+    expect(custom.keyframes[0]).toContain("perspective(500px)");
+    const def = compileIx(mk({ on: "load" }, { persp: 1000, steps: two({ rotateX: 70 }, { rotateX: 0 }) }))!;
+    const plain = compileIx(mk({ on: "load" }, { steps: two({ rotateX: 70 }, { rotateX: 0 }) }))!;
+    expect(def.hash).toBe(plain.hash); // persp=1000 se borra al normalizar: ausencia = defecto
+  });
+
+  it("los filtros nuevos comparten UNA declaración `filter` en orden canónico", () => {
+    const u = compileIx(mk({ on: "load" }, {
+      steps: two(
+        { blur: 5, brightness: 2, contrast: 1.5, saturate: 0.2, grayscale: 80, hue: 90 },
+        { blur: 0, brightness: 1, contrast: 1, saturate: 1, grayscale: 0, hue: 0 },
+      ),
+    }))!;
+    expect(u.keyframes[0]).toContain(
+      "filter:blur(5px) brightness(2) contrast(1.5) saturate(0.2) grayscale(80%) hue-rotate(90deg)",
+    );
+  });
+
+  it("los colores se emiten como #rrggbb SOLO en los pasos que los declaran (sin relleno neutro)", () => {
+    const u = compileIx(mk({ on: "load" }, {
+      steps: [
+        { at: 0, set: { bgColor: 0xff8800, opacity: 0 } },
+        { at: 50, set: { opacity: 0.5 } },
+        { at: 100, set: { bgColor: 0x0044ff, opacity: 1 } },
+      ] as unknown as IxStep[],
+    }))!;
+    const kf = u.keyframes[0];
+    expect(kf).toContain("background-color:#ff8800");
+    expect(kf).toContain("background-color:#0044ff");
+    // El paso intermedio NO gana un color inventado: interpola desde el estilo del bloque.
+    const mid = /50%\{([^}]*)\}/.exec(kf)![1];
+    expect(mid).not.toContain("background-color");
+    // Y la opacidad SÍ se rellena con el neutro en todos, como siempre.
+    expect(mid).toContain("opacity:0.5");
+  });
+
+  it("un color con ceros a la izquierda conserva los 6 dígitos", () => {
+    const u = compileIx(mk({ on: "load" }, {
+      steps: two({ textColor: 0x000012, opacity: 0 }, { textColor: 0xffffff, opacity: 1 }),
+    }))!;
+    expect(u.keyframes[0]).toContain("color:#000012");
+  });
+
+  it("clipDir cambia el borde recortado; `right` (el de siempre) no cambia bytes ni hash", () => {
+    const mkClip = (extra: Record<string, unknown>) =>
+      compileIx(mk({ on: "load" }, { ...extra, steps: two({ clip: 0 }, { clip: 100 }) }))!;
+    expect(mkClip({ clipDir: "up" }).keyframes[0]).toContain("clip-path:inset(100% 0 0 0)");
+    expect(mkClip({ clipDir: "center-h" }).keyframes[0]).toContain("clip-path:inset(0 50% 0 50%)");
+    expect(mkClip({ clipDir: "right" }).hash).toBe(mkClip({}).hash);
+    expect(mkClip({}).keyframes[0]).toContain("clip-path:inset(0 100% 0 0)");
+  });
+
+  it("`origin` emite UNA regla transform-origin propia, sin estado y fuera de @supports", () => {
+    const u = compileIx(mk({ on: "scrub" }, { origin: "top-left", steps: two({ rotate: 0 }, { rotate: 45 }) }))!;
+    expect(u.rules.some((r) => r === `.${u.cls}{transform-origin:0% 0%}`)).toBe(true);
+    // Y `center` (el inicial) no emite nada: ausencia = defecto.
+    const c = compileIx(mk({ on: "scrub" }, { origin: "center", steps: two({ rotate: 0 }, { rotate: 45 }) }))!;
+    expect(c.rules.every((r) => !r.includes("transform-origin"))).toBe(true);
+  });
+
+  it("el IR WAAPI lleva los colores por su clave camelCase", () => {
+    const u = compileIx(mk({ on: "load" }, {
+      steps: two({ bgColor: 0xff0000, opacity: 0 }, { opacity: 1 }),
+    }))!;
+    const first = Object.values(u.kf)[0][0];
+    expect(first.backgroundColor).toBe("#ff0000");
+    expect(Object.values(u.kf)[0][1].backgroundColor).toBeUndefined();
+  });
+
+  it("un cuerpo SOLO con las 8 propiedades de siempre emite bytes idénticos a los de antes de P3", () => {
+    // El pin de paridad: la regla completa, byte a byte, como en los tests previos a P3.
+    const u = compileIx(mk({ on: "view", once: true }, {
+      steps: two({ opacity: 0, y: 20 }, { opacity: 1, y: 0 }),
+    }))!;
+    expect(u.rules[1]).toBe(`.${u.cls}[data-wjs-ix="armed"]{opacity:0;transform:translate3d(0px,20px,0)}`);
+  });
+});
+
 describe("honestidad: opciones que un camino no puede expresar AVISAN, nunca callan", () => {
   it("un disparador de scroll ignora dur/delay/repeat/alt — y lo dice", () => {
     const u = compileIx(mk({ on: "scrub" }, { dur: 900, delay: 100, repeat: 3, alt: true }))!;
