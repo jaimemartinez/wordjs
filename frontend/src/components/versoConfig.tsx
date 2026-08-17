@@ -17,7 +17,7 @@ import { blockVars, unit } from "./blocks/blockVars";
 import SearchBarBlockIsland from "./content/SearchBarBlock";
 import AccordionBlockIsland from "./content/AccordionBlock";
 import TabsBlockIsland from "./content/TabsBlock";
-import { HeadingBlock, TextBlock, ImageBlock, DividerBlock, ButtonBlock, SpacerBlock, SectionBlock, GridBlock, FlexRowBlock, ColumnsBlock, CardBlock, QuoteBlock, TableBlock, IconListBlock, SocialLinksBlock, StatsBlock, HTMLEmbedBlock, PricingTableBlock, TestimonialBlock, CTABannerBlock, VideoEmbedBlock, HeroBlock, PostsGridBlock, CategoryPostsBlock, AudioPlayerBlock } from "./content/blocks";
+import { HeadingBlock, TextBlock, ImageBlock, DividerBlock, ButtonBlock, SpacerBlock, SectionBlock, GridBlock, FlexRowBlock, ColumnsBlock, CardBlock, QuoteBlock, TableBlock, IconListBlock, SocialLinksBlock, StatsBlock, HTMLEmbedBlock, PricingTableBlock, TestimonialBlock, CTABannerBlock, VideoEmbedBlock, HeroBlock, PostsGridBlock, CategoryPostsBlock, AudioPlayerBlock, ParticleFieldBlock } from "./content/blocks";
 import LinkField from "./blocks/LinkField";
 import { withSharedBlockFields } from "./blocks/VisibilityField";
 import { sanitizeHTML } from "@/lib/sanitize";
@@ -2328,6 +2328,60 @@ const baseConfig: any = {
                 css: {}
             },
             render: (props: any) => <HTMLEmbedBlock {...props} />
+        },
+
+        // Fondo animado de partículas (constelación): isla de cliente con <canvas>. El motor de
+        // interacciones compila a CSS sin JS y un tema nunca envía JS, así que el efecto es un BLOQUE.
+        ParticleField: {
+            label: "Campo de partículas",
+            category: "layout",
+            fields: {
+                count: { type: "number", label: "Número de partículas", min: 0, max: 200 },
+                color: { type: "text", label: "Color (vacío = color primario del tema)" },
+                speed: {
+                    type: "select",
+                    label: "Velocidad",
+                    options: [
+                        { label: "Lenta", value: "slow" },
+                        { label: "Media", value: "medium" },
+                        { label: "Rápida", value: "fast" },
+                    ]
+                },
+                linkLines: {
+                    type: "radio",
+                    label: "Conectar con líneas (constelación)",
+                    options: [
+                        { label: "Sí", value: "true" },
+                        { label: "No", value: "false" },
+                    ]
+                },
+                linkDistance: { type: "number", label: "Distancia máx. de las líneas (px)", min: 0, max: 400 },
+                pointer: {
+                    type: "radio",
+                    label: "Reaccionar al puntero",
+                    options: [
+                        { label: "Sí", value: "true" },
+                        { label: "No", value: "false" },
+                    ]
+                },
+                css: {
+                    type: "custom",
+                    label: "Estilos CSS",
+                    render: ({ value, onChange }: any) => (
+                        <CSSPropertiesControl value={value} onChange={onChange} />
+                    )
+                }
+            },
+            defaultProps: {
+                count: 70,
+                color: "",
+                speed: "medium",
+                linkLines: "true",
+                linkDistance: 130,
+                pointer: "false",
+                css: {}
+            },
+            render: (props: any) => <ParticleFieldBlock {...props} />
         },
 
         ...versoPluginComponents,

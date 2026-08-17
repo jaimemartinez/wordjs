@@ -25,6 +25,9 @@ export const BLOCK_META: Record<string, BlockMeta> = {
     FlexRow: { icon: "fa-grip-lines", ms: "view_stream", group: "Diseño", desc: "Fila flexible" },
     Spacer: { icon: "fa-arrows-up-down", ms: "unfold_more", group: "Diseño", desc: "Espaciado vertical" },
     Divider: { icon: "fa-minus", ms: "horizontal_rule", group: "Diseño", desc: "Línea divisoria" },
+    // `ms: "web"` (a connected network) is reused because it already ships in the Material Symbols
+    // subset — an unlisted glyph name renders as an empty box (see BlockMeta note above).
+    ParticleField: { icon: "fa-atom", ms: "web", group: "Diseño", desc: "Fondo animado de partículas (constelación)", label: "Campo de partículas" },
     // Content
     Heading: { icon: "fa-heading", ms: "title", group: "Contenido", desc: "Título" },
     Text: { icon: "fa-align-left", ms: "subject", group: "Contenido", desc: "Párrafo de texto enriquecido" },

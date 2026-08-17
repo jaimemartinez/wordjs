@@ -48,7 +48,7 @@ import {
     SectionBlock, GridBlock, FlexRowBlock, ColumnsBlock,
     CardBlock, QuoteBlock, TableBlock, IconListBlock, SocialLinksBlock, StatsBlock, HTMLEmbedBlock,
     PricingTableBlock, TestimonialBlock, CTABannerBlock, VideoEmbedBlock, HeroBlock,
-    PostsGridBlock, CategoryPostsBlock, AudioPlayerBlock,
+    PostsGridBlock, CategoryPostsBlock, AudioPlayerBlock, ParticleFieldBlock,
 } from "./blocks";
 import AccordionBlock from "./AccordionBlock";
 import TabsBlock from "./TabsBlock";
@@ -185,6 +185,9 @@ function renderCore(type: string, props: Record<string, any>, item: any, exclude
         case "PostsGrid": return <PostsGridBlock {...props} posts={props.resolvedPosts} />;
         case "CategoryPosts": return <CategoryPostsBlock {...props} posts={props.resolvedPosts} />;
         case "AudioPlayer": return <AudioPlayerBlock {...props} />;
+        // Background layer with its own client island (canvas). Code-splits away from pages
+        // that don't use it, exactly like the other islands.
+        case "ParticleField": return <ParticleFieldBlock {...props} />;
         // Interactive islands — their own 'use client' modules, code-split per page.
         case "Accordion": return <AccordionBlock {...props} />;
         case "Tabs": return <TabsBlock {...props} />;

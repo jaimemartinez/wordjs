@@ -1,6 +1,6 @@
 "use client";
 /**
- * Verso — registro de los 30 bloques core como TABLA DE DATOS (F3).
+ * Verso — registro de los 31 bloques core como TABLA DE DATOS (F3).
  *
  * Porta el registro de frontend/src/components/versoConfig.tsx al formato `BlockDefinition`:
  *  - `type`: EXACTAMENTE los strings del switch de ContentRenderer.tsx — contrato de serialización
@@ -63,7 +63,7 @@ import {
     SectionBlock, GridBlock, FlexRowBlock, ColumnsBlock, CardBlock, QuoteBlock,
     TableBlock, IconListBlock, SocialLinksBlock, StatsBlock, HTMLEmbedBlock,
     PricingTableBlock, TestimonialBlock, CTABannerBlock, VideoEmbedBlock, HeroBlock,
-    PostsGridBlock, CategoryPostsBlock, AudioPlayerBlock,
+    PostsGridBlock, CategoryPostsBlock, AudioPlayerBlock, ParticleFieldBlock,
 } from "@/components/content/blocks";
 import type { BlockDefinition, BlockRegistry, VersoField } from "./registry";
 import { withSharedVersoFields } from "./sharedFields";
@@ -73,8 +73,9 @@ import { withSharedVersoFields } from "./sharedFields";
 /* ------------------------------------------------------------------ */
 
 /**
- * Los 30 `item.type` EXACTOS del switch de ContentRenderer.tsx, en su orden. Es el contrato de
+ * Los 31 `item.type` EXACTOS del switch de ContentRenderer.tsx, en su orden. Es el contrato de
  * serialización con el sitio público — el test lo compara contra su propia lista literal.
+ * (ParticleField, el 31º, es el fondo animado de partículas: una isla de cliente con `<canvas>`.)
  */
 export const CORE_BLOCK_TYPES = [
     "Heading", "Text", "Image", "Divider", "Button", "Spacer",
@@ -83,6 +84,7 @@ export const CORE_BLOCK_TYPES = [
     "PricingTable", "Testimonial", "CTABanner", "VideoEmbed", "Hero",
     "PostsGrid", "CategoryPosts", "AudioPlayer",
     "Accordion", "Tabs", "SearchBar", "Form", "Symbol",
+    "ParticleField",
 ] as const;
 
 export type CoreBlockType = (typeof CORE_BLOCK_TYPES)[number];
@@ -217,7 +219,7 @@ function CategoryPostsRender(props: BlockProps) {
 }
 
 /* ------------------------------------------------------------------ */
-/* La tabla: los 30 bloques.                                            */
+/* La tabla: los 31 bloques.                                            */
 /* ------------------------------------------------------------------ */
 
 export const coreBlockDefinitions: BlockDefinition[] = [
@@ -1374,10 +1376,58 @@ export const coreBlockDefinitions: BlockDefinition[] = [
         },
         render: HTMLEmbedBlock,
     },
+    {
+        // Fondo animado de partículas (constelación). Isla de cliente con `<canvas>`: el motor de
+        // interacciones compila a CSS sin JS y un tema jamás envía JS, así que el efecto vive aquí.
+        type: "ParticleField",
+        label: "Campo de partículas",
+        category: "layout",
+        fields: {
+            count: { type: "number", label: "Número de partículas", min: 0, max: 200 },
+            color: { type: "text", label: "Color (vacío = color primario del tema)" },
+            speed: {
+                type: "select",
+                label: "Velocidad",
+                options: [
+                    { label: "Lenta", value: "slow" },
+                    { label: "Media", value: "medium" },
+                    { label: "Rápida", value: "fast" },
+                ],
+            },
+            linkLines: {
+                type: "radio",
+                label: "Conectar con líneas (constelación)",
+                options: [
+                    { label: "Sí", value: "true" },
+                    { label: "No", value: "false" },
+                ],
+            },
+            linkDistance: { type: "number", label: "Distancia máx. de las líneas (px)", min: 0, max: 400 },
+            pointer: {
+                type: "radio",
+                label: "Reaccionar al puntero",
+                options: [
+                    { label: "Sí", value: "true" },
+                    { label: "No", value: "false" },
+                ],
+            },
+            css: cssField(),
+        },
+        defaultProps: {
+            count: 70,
+            color: "",
+            speed: "medium",
+            linkLines: "true",
+            linkDistance: 130,
+            pointer: "false",
+            css: {},
+        },
+        render: ParticleFieldBlock,
+    },
 ];
 
 /**
- * Alta de los 30 bloques core en un registry, pasando CADA definición por el seam
+ * Alta de los 31 bloques core en un registry, pasando CADA definición por el seam
  * `withSharedVersoFields` — el mismo punto de inyección único que withSharedBlockFields hoy.
  */
 export function registerCoreBlocks(registry: BlockRegistry): void {

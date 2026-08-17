@@ -2776,3 +2776,33 @@ h6.wjs-block-heading, h6.wp-block-heading { font-size: var(--wjs-heading-size, v
 .wjs-ixw {
   display: inline-block;
 }
+
+/* ── Particle field ─────────────────────────────────────────────────────────────────────────────
+   A full-bleed animated <canvas> background (constellation / particle field). The block is a client
+   island (see components/content/ParticleField.tsx) placed as the FIRST child of a container; these
+   rules make that container its positioning context and keep the content legible ABOVE the canvas.
+
+   Direction-agnostic on purpose (dir="rtl" mirrors nothing here): `inset`, `inline-size`/`block-size`
+   and `z-index` carry no physical left/right. Zero CLS: the layer is out of flow and paints nothing
+   until its island hydrates — the served HTML is just an empty <canvas> mount point. */
+:where(.wjs-block-section, .wjs-block-columns, .wjs-block-flex-row, .wjs-block-grid):has(.wjs-block-particle-field) {
+  position: relative;
+}
+.wjs-block-particle-field {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+.wjs-block-particle-field > canvas {
+  display: block;
+  inline-size: 100%;
+  block-size: 100%;
+}
+/* The field is placed first inside its container; lift its siblings (the real content) above the
+   canvas. `position: relative` with no offset keeps them in flow, so nothing shifts. */
+.wjs-block-particle-field ~ * {
+  position: relative;
+  z-index: 1;
+}

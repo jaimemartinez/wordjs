@@ -1,5 +1,5 @@
 /**
- * GATE F3 — los 30 bloques core como tabla de datos + seam de shared fields.
+ * GATE F3 — los 31 bloques core como tabla de datos + seam de shared fields.
  *
  * ANTI-DRIFT: la fuente de verdad de la comparación es versoConfig.tsx IMPORTADO (no una copia):
  * defaultProps se comparan por deep-equal PROGRAMÁTICO campo a campo, y los `fields` por igualdad
@@ -63,7 +63,7 @@ const configComponents = (postConfig as { components: Record<string, Record<stri
 /* ------------------------------------------------------------------ */
 
 describe("coreBlocks — contrato de tipos", () => {
-  it("los 30 types coinciden con la lista literal del switch de ContentRenderer", () => {
+  it("los 31 types coinciden con la lista literal del switch de ContentRenderer", () => {
     // Lista LITERAL (no derivada): es el contrato de serialización de _puck_data.
     const CONTRACT = [
       "Heading", "Text", "Image", "Divider", "Button", "Spacer",
@@ -72,8 +72,9 @@ describe("coreBlocks — contrato de tipos", () => {
       "PricingTable", "Testimonial", "CTABanner", "VideoEmbed", "Hero",
       "PostsGrid", "CategoryPosts", "AudioPlayer",
       "Accordion", "Tabs", "SearchBar", "Form", "Symbol",
+      "ParticleField",
     ];
-    expect(CONTRACT).toHaveLength(30);
+    expect(CONTRACT).toHaveLength(31);
     expect([...CORE_BLOCK_TYPES]).toEqual(CONTRACT);
     expect(coreBlockDefinitions.map((d) => d.type).sort()).toEqual([...CONTRACT].sort());
   });
@@ -175,8 +176,8 @@ describe("coreBlocks — resolución de slots", () => {
     expect(isSlot("Section", "loQueSea")).toBeUndefined();
   });
 
-  it("el registry queda con exactamente 30 definiciones", () => {
-    expect(registry.list()).toHaveLength(30);
+  it("el registry queda con exactamente 31 definiciones", () => {
+    expect(registry.list()).toHaveLength(31);
   });
 });
 

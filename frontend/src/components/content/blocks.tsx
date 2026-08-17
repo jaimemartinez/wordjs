@@ -44,6 +44,7 @@ const splitForBlock = (text: unknown, html: boolean, p: IxTextProps) =>
 import { sizesForWidth } from "@/lib/imageSrcset";
 import SelfHostedVideo from "./SelfHostedVideo";
 import AudioTransport from "./AudioTransport";
+import ParticleFieldCanvas from "./ParticleField";
 
 export function AudioPlayerBlock({ src, title, bg, borderColor, radius, pad, iconSize, iconBg, iconColor, css }: any) {
     return (
@@ -63,6 +64,44 @@ export function AudioPlayerBlock({ src, title, bg, borderColor, radius, pad, ico
             }}
         >
             <AudioTransport src={src} title={title} />
+        </div>
+    );
+}
+
+/**
+ * ParticleField — a full-bleed animated canvas background (constellation / particle field). This
+ * is the SERVER half: an out-of-flow layer that carries no visible pixels until its client island
+ * (ParticleFieldCanvas) hydrates and starts drawing, so the served HTML causes ZERO CLS.
+ *
+ * Layout: `position:absolute; inset:0; z-index:0; pointer-events:none` — it fills its nearest
+ * positioned ancestor and sits BEHIND the content. wordjs-ui.css turns the host container into that
+ * positioning context and lifts the field's siblings to `z-index:1` (see the `.wjs-block-particle-field`
+ * rules there); the inline styles below keep the block self-describing even without that stylesheet.
+ * The author's colour travels as the `--wjs-particle-color` custom property (blockVars, omitted when
+ * empty → the theme's `--wjs-color-primary` wins) — a validated CSS value, never raw concatenated CSS.
+ */
+export function ParticleFieldBlock({ count, color, speed, linkLines, linkDistance, pointer, css }: any) {
+    return (
+        <div
+            className={bc('particle-field')}
+            aria-hidden="true"
+            style={{
+                position: 'absolute',
+                inset: 0,
+                zIndex: 0,
+                overflow: 'hidden',
+                pointerEvents: 'none',
+                ...blockVars('particle', { color }),
+                ...css,
+            }}
+        >
+            <ParticleFieldCanvas
+                count={count}
+                speed={speed}
+                linkLines={linkLines}
+                linkDistance={linkDistance}
+                pointer={pointer}
+            />
         </div>
     );
 }
