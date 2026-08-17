@@ -3,10 +3,31 @@ const { parse } = require('url');
 const next = require('next');
 const fs = require('fs');
 const path = require('path');
+const { backendUrlFromEnv, isProxiedPath, proxyToBackend, BACKEND_URL_ENV } = require('./backend-proxy-target.js');
 
 const dev = process.env.NODE_ENV !== 'production';
 const app = next({ dev });
 const handle = app.getRequestHandler();
+
+// PER-REPLICA BACKEND. Next resolves next.config.ts' rewrites at BUILD time into
+// .next/routes-manifest.json and never calls that function again at `next start`, so on a
+// pre-compiled release the rewrite's destination is frozen at whatever the packager saw. That makes
+// the rewrite alone useless for the case it exists for — N frontend replicas, each pinned to a
+// different backend, deployed from ONE artifact — so when WORDJS_BACKEND_URL is set this server
+// handles /api and /uploads itself, ahead of Next, and the baked rewrite is never reached.
+// Unset (the default): nothing below runs and behaviour is exactly what it was.
+// Monolith mode dispatches /api in-process before Next, so the override does not apply there.
+const backendTarget = process.env.WORDJS_MODE === 'mono' ? null : backendUrlFromEnv();
+if (backendTarget) {
+    console.log(`🔀 Proxying /api and /uploads → ${backendTarget} (from ${BACKEND_URL_ENV})`);
+}
+
+/** True when this request was handled by the backend proxy (so Next must not also see it). */
+function handledByBackendProxy(req, res, parsedUrl) {
+    if (!backendTarget || !isProxiedPath(parsedUrl.pathname)) return false;
+    proxyToBackend(req, res, backendTarget);
+    return true;
+}
 
 // Configuration for mTLS. SEPARATE mode: node-join writes the frontend's cert to frontend/certs. LOCAL
 // split (one machine): the install generates all service certs into backend/certs — so fall back there
@@ -48,6 +69,7 @@ app.prepare().then(() => {
                 // console.log(`[Frontend] [mTLS] Verified Identity: ${cert.subject.CN}`);
             }
 
+            if (handledByBackendProxy(req, res, parsedUrl)) return;
             handle(req, res, parsedUrl);
         }).listen(port, (err) => {
             if (err) throw err;
@@ -58,6 +80,7 @@ app.prepare().then(() => {
         const { createServer: createHttpServer } = require('http');
         createHttpServer((req, res) => {
             const parsedUrl = parse(req.url, true);
+            if (handledByBackendProxy(req, res, parsedUrl)) return;
             handle(req, res, parsedUrl);
         }).listen(port, (err) => {
             if (err) throw err;

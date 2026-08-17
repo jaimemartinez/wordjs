@@ -97,6 +97,72 @@ registered backends in its route group and round-robins across them. (`advertise
 > replica** (each with its own `--advertise`), then layer the shared Postgres/Redis and `jwtSecret` from
 > this guide onto every replica's `wordjs-config.json`.
 
+## Pinning a frontend replica to a backend — `WORDJS_BACKEND_URL`
+
+Normally you do **not** need this. The browser only ever calls the **relative** `/api/v1`
+(`frontend/src/lib/api.ts` — including the collaboration `EventSource`), and in the standard topology
+the gateway is the front door: it answers the public origin, sends `/api` to a backend and everything
+else to a frontend, so a frontend replica never has to know a backend address at all.
+
+You need it when a frontend replica is reached **directly** — no gateway in front of it, or an L7 load
+balancer that routes to frontends and lets them reach the API themselves. Then `/api/v1` lands on the
+frontend's own port and the frontend has to forward it. Which upstream it forwards to used to be
+readable only from `wordjs-config.json` (`gatewayPort` → `https://localhost:<port>`), i.e. from a file
+that is otherwise **identical on every replica** — so N frontends could not each be pointed at a
+different backend without editing N config files. Set the environment variable instead:
+
+```bash
+# frontend replica A
+WORDJS_BACKEND_URL=http://10.0.1.23:4000 npm start
+# frontend replica B
+WORDJS_BACKEND_URL=http://10.0.1.24:4000 npm start
+```
+
+**Precedence** (strongest first), resolved in `frontend/backend-proxy-target.js`:
+
+| # | Source | Value |
+|---|---|---|
+| 1 | `WORDJS_BACKEND_URL` | used as given (validated + canonicalised) |
+| 2 | `wordjs-config.json` → `gatewayPort` | `https://localhost:<gatewayPort>` |
+| 3 | compiled-in default | `http://localhost:3000` |
+
+Empty or unset means "no opinion" and falls through to 2. A value that is **not** a usable origin
+(bad scheme, credentials, a query string, an out-of-range port…) **fails the boot** with a message
+naming the variable and the value — it is never silently replaced by `localhost`, because that would
+send a replica's editors, and their live collaboration stream, to the wrong node with nothing in the
+logs pointing back at the typo.
+
+**It works on the pre-compiled release, and that is not free.** Next resolves `next.config.ts`'s
+`rewrites()` **once, during `next build`**, and freezes the result into
+`.next/routes-manifest.json`; `next start` reads that file and never calls the config again. An env
+var honoured only by `next.config.ts` would therefore work in `next dev` and in a build from source
+and do **nothing at all** on the release ZIP, which ships a prebuilt `.next` — precisely the artifact
+you deploy to N nodes. So `frontend/server.js` applies the same resolution **at runtime**: when
+`WORDJS_BACKEND_URL` is set it proxies `/api/*` and `/uploads/*` itself, ahead of Next, mirroring
+what Next's own rewrite proxy sends (upstream `Host` = the target, caller's host preserved in
+`x-forwarded-host`) so the backend's CSRF/Origin and host guards see exactly what they saw before.
+Streaming is passed straight through, which is what keeps the collaboration SSE channel live.
+
+Set it at **build** time as well if you build from source and want the baked rewrite to agree.
+
+Two knock-on settings when a frontend is reached directly rather than through the gateway:
+
+- **`siteUrl`** on the backend that replica talks to must be the origin the **browser** uses
+  (e.g. `http://10.0.1.23:3001`), or the backend's same-origin CSRF check rejects every POST —
+  including every collaboration op.
+- **`internalApiUrl`** / **`INTERNAL_API_URL`** points **server-side rendering** at the same backend
+  (`http://10.0.1.23:4000/api/v1`). `WORDJS_BACKEND_URL` covers the browser's path; SSR has its own
+  resolution (see [frontend.md](frontend.md)). Set both, to the same backend.
+
+### Real-time collaboration across replicas
+
+Collaborative editing (CRDT over SSE + POST) is cluster-aware: ops are persisted in the shared
+Postgres and fanned out between nodes over Redis, so two authors editing the same page through two
+different backends converge. Both requirements above apply — it is the shared **Postgres** that makes
+the ops durable and the shared **Redis** that makes the other node hear about them. With Redis down,
+cross-node fan-out degrades **visibly** (the editors are told) and nothing is written silently into a
+void; when Redis returns, the bus reconnects and fan-out resumes without restarting the nodes.
+
 ## How coordination works (automatic)
 
 - **Concurrent boot** — the first replica to boot takes a distributed lease lock (`wordjs:boot`) and

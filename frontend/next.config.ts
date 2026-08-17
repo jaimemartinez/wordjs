@@ -97,7 +97,14 @@ const nextConfig: NextConfig = {
     // Monolith mode: the single-process server dispatches /api and /uploads to the backend in-process
     // before Next sees them, so no proxy rewrite is needed (and there's no gateway port to target).
     if (process.env.WORDJS_MODE === 'mono') return [];
-    let backendUrl = 'http://localhost:3000';
+
+    // WHERE /api AND /uploads GO. Resolution + precedence + validation live in one shared module
+    // (./backend-proxy-target.js) because `server.js` has to reach the same answer: Next bakes these
+    // rewrites into .next/routes-manifest.json at BUILD time and `next start` never re-reads this
+    // function, so on the pre-compiled release the runtime proxy in server.js — not this rewrite —
+    // is what honours WORDJS_BACKEND_URL. See that module's header.
+    const { resolveBackendProxyTarget, BACKEND_URL_ENV, rewriteSources } = require('./backend-proxy-target.js');
+    let gatewayPort: unknown;
     try {
       const fs = require('fs');
       const path = require('path');
@@ -110,24 +117,28 @@ const nextConfig: NextConfig = {
 
       if (fs.existsSync(configPath)) {
         const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-        if (config.gatewayPort) {
-          backendUrl = `https://localhost:${config.gatewayPort}`;
-        }
+        gatewayPort = config.gatewayPort;
       }
     } catch (e: any) {
       console.warn('[NextConfig] Failed to load wordjs-config.json for rewrites:', e.message);
     }
 
-    return [
-      {
-        source: '/api/:path*',
-        destination: `${backendUrl}/api/:path*`,
-      },
-      {
-        source: '/uploads/:path*',
-        destination: `${backendUrl}/uploads/:path*`,
-      },
-    ];
+    // A malformed WORDJS_BACKEND_URL throws here on purpose — building a frontend whose API proxy
+    // silently points somewhere else is worse than not building it.
+    const { target: backendUrl, source } = resolveBackendProxyTarget({
+      env: process.env[BACKEND_URL_ENV],
+      gatewayPort,
+    });
+    if (source === 'env') {
+      console.log(`[NextConfig] backend prefixes → ${backendUrl} (from ${BACKEND_URL_ENV})`);
+    }
+
+    // Every prefix the backend owns, not just /api and /uploads — see PROXIED_PREFIXES. The list is
+    // shared with server.js so the build-time and runtime paths forward exactly the same things.
+    return rewriteSources().map((source: string) => ({
+      source,
+      destination: `${backendUrl}${source}`,
+    }));
   },
   reactStrictMode: false,
 };
