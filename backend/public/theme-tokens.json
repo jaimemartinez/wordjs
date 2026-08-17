@@ -3,7 +3,7 @@
   "source": "backend/public/css/wordjs-ui.css",
   "counts": {
     "tokens": 772,
-    "varUses": 1736,
+    "varUses": 1740,
     "elements": 51
   },
   "tokens": {
@@ -4020,6 +4020,10 @@
           "property": "background-color"
         },
         {
+          "selector": ".wp-block-nav-menu .wjs-chrome-nav a:hover",
+          "property": "color"
+        },
+        {
           "selector": ".wjs-chrome-button--ghost",
           "property": "color"
         },
@@ -4549,6 +4553,10 @@
         },
         {
           "selector": ".wjs-header-logo",
+          "property": "color"
+        },
+        {
+          "selector": ".wp-block-nav-menu .wjs-chrome-nav a",
           "property": "color"
         },
         {
@@ -8710,11 +8718,16 @@
       "group": "nav",
       "declaredDefault": null,
       "fallbacks": [
-        "var(--wjs-color-text-main)"
+        "var(--wjs-color-text-main)",
+        "var(--wjs-color-text-main, inherit)"
       ],
       "consumers": [
         {
           "selector": ".wjs-header-nav a, .wjs-header-mobile-panel a",
+          "property": "color"
+        },
+        {
+          "selector": ".wp-block-nav-menu .wjs-chrome-nav a",
           "property": "color"
         }
       ]
@@ -8728,6 +8741,10 @@
       "consumers": [
         {
           "selector": ".wjs-header-nav a:hover, .wjs-header-mobile-panel a:hover",
+          "property": "color"
+        },
+        {
+          "selector": ".wp-block-nav-menu .wjs-chrome-nav a:hover",
           "property": "color"
         }
       ]

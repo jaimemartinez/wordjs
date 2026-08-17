@@ -67,7 +67,8 @@
     "uuid": "^11.1.1"
   },
   "overrides": {
-    "nodemailer": "^9.0.1"
+    "nodemailer": "^9.0.1",
+    "deepmerge-ts": "^8.0.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
