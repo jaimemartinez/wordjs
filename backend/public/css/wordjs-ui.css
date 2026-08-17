@@ -387,6 +387,30 @@ a:not([href]):not([class]) { color: inherit; text-decoration: none; }
   color: var(--wjs-nav-color-hover, var(--wjs-color-primary));
 }
 
+/* SiteLogo block — the brand (logo image and/or site title) placed in PAGE CONTENT. Reuses the header
+ * brand hooks .wjs-header-logo (link/wrapper) and .wjs-site-title (title text) so themes style it with
+ * the rules they already ship. Scoped under .wjs-block-site-logo so an in-content title takes the page's
+ * own text colour instead of the masthead colour a bare .wjs-header-logo rule might carry. */
+.wjs-block-site-logo .wjs-header-logo { text-decoration: none; }
+.wjs-block-site-logo .wjs-site-title {
+  color: var(--wjs-nav-color, var(--wjs-color-text-main, inherit));
+  font-weight: 700;
+}
+.wjs-block-site-logo .wjs-header-logo-img { display: block; height: auto; }
+
+/* BackToTop block — a floating scroll-to-top control. The look comes from utility classes on the
+ * button; this only exposes a theme hook so a theme can restyle the floating affordance without
+ * fighting inline styles. */
+.wjs-block-back-to-top {
+  color: var(--wjs-color-on-primary, #ffffff);
+  background: var(--wjs-back-to-top-bg, var(--wjs-color-primary, #2F6D86));
+}
+
+/* OffCanvas block — a slide-in drawer in page content. The panel/overlay reuse the header's
+ * .wjs-header-mobile-panel / .wjs-header-mobile-overlay hooks so existing theme CSS applies; this only
+ * ensures the block wrapper itself adds no layout of its own (it is just the trigger + fixed drawer). */
+.wjs-block-offcanvas { display: inline-block; }
+
 .wjs-chrome-button--primary,
 .wjs-chrome-button--primary:hover { color: var(--wjs-color-on-primary, #ffffff); }
 .wjs-chrome-button--ghost { color: var(--wjs-color-primary, #2F6D86); }

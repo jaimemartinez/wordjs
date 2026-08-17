@@ -47,6 +47,7 @@ import AudioTransport from "./AudioTransport";
 import ParticleFieldCanvas from "./ParticleField";
 import ChromeNavMobile from "@/components/chrome/ChromeNavMobile";
 import NavMenuMobile from "./NavMenuMobile";
+import OffCanvasClient from "./OffCanvasClient";
 import { buildMenuTree, type ChromeMenuItem } from "@/lib/chromeData";
 
 export function AudioPlayerBlock({ src, title, bg, borderColor, radius, pad, iconSize, iconBg, iconColor, css }: any) {
@@ -296,6 +297,123 @@ export function NavMenuBlock({ menu, orientation = "horizontal", depth = 2, subm
     return (
         <div className={bc("nav-menu")} data-orientation={orient} style={css}>
             {body}
+        </div>
+    );
+}
+
+/**
+ * ── SiteLogo (Site Logo / Title) ───────────────────────────────────────────────────────────────────
+ *
+ * Renders the site's brand — its logo image, its title, or both — optionally linked home. Like NavMenu
+ * it BINDS to a store instead of storing its own copy: the site `blogname` + `site_logo` arrive already
+ * resolved (server-side via resolveDynamicBlocks → `resolvedIdentity`; from useEditorIdentity inside the
+ * editor canvas), so this is a pure, SERVER-SAFE presentational component — the real brand lands in the
+ * SSR HTML for crawlers / no-JS. Reuses the header brand hooks `.wjs-header-logo` (on the link/wrapper)
+ * and `.wjs-site-title` (on the title text) so themes style it through rules they already ship.
+ *
+ * SECURITY: `siteLogo` is re-validated at render (same allow-list shape as safeNavHref — same-origin
+ * path or absolute http(s), else no image); `blogname` renders as TEXT (React-escaped), never HTML.
+ */
+
+// Render-time image-src guard: a same-origin path or an absolute http(s) URL, else undefined (no img).
+// Mirrors sameOriginPath + the NAV_SAFE_SCHEMES allow-list; strips the WHATWG-removed controls first.
+function safeLogoSrc(raw: unknown): string | undefined {
+    if (typeof raw !== "string") return undefined;
+    const value = raw.replace(/[\t\n\r]/g, "").trim();
+    if (!value) return undefined;
+    if (/^\/[/\\]/.test(value)) return undefined; // authority-relative //host or /\host → external
+    if (value.startsWith("/")) return value; // same-origin path
+    try {
+        const proto = new URL(value).protocol;
+        if (proto === "http:" || proto === "https:") return value;
+    } catch { /* not absolute, not a same-origin path */ }
+    return undefined;
+}
+
+export function SiteLogoBlock({ mode = "both", linkToHome = true, maxHeight = 40, altOverride, identity, css, isEditing }: any) {
+    const blogname = typeof identity?.blogname === "string" ? identity.blogname : "";
+    const logoSrc = safeLogoSrc(identity?.siteLogo);
+    const alt = (typeof altOverride === "string" && altOverride.trim()) ? altOverride : (blogname || "Logo");
+
+    // mode: logo | title | both. A logo-only block with no logo falls back to the title so the brand is
+    // never invisible; a title-only block never shows the image.
+    const wantLogo = mode === "logo" || mode === "both";
+    const wantTitle = mode === "title" || mode === "both" || (mode === "logo" && !logoSrc);
+    const showLogo = wantLogo && !!logoSrc;
+    const showTitle = wantTitle && blogname.length > 0;
+
+    if (!showLogo && !showTitle) {
+        if (isEditing) {
+            return (
+                <div className={bc("site-logo", "site-logo--empty")} style={css}>
+                    Configura el nombre del sitio o el logotipo (Ajustes → Identidad) para que este bloque los muestre.
+                </div>
+            );
+        }
+        return null;
+    }
+
+    const maxH = unit(maxHeight);
+    const inner = (
+        <>
+            {showLogo && (
+                <img
+                    className="wjs-header-logo-img"
+                    src={logoSrc}
+                    alt={alt}
+                    decoding="async"
+                    style={maxH ? { maxHeight: maxH, width: "auto" } : { width: "auto" }}
+                />
+            )}
+            {showTitle && <span className="wjs-site-title">{blogname}</span>}
+        </>
+    );
+
+    // `.wjs-header-logo` is the brand hook themes target (Header.tsx emits it on this same <a>/<span>
+    // shape). Link home unless the author turned it off — logical, no author URL is involved.
+    const brand = linkToHome !== false
+        ? <a className="wjs-header-logo inline-flex items-center gap-2" href="/">{inner}</a>
+        : <span className="wjs-header-logo inline-flex items-center gap-2">{inner}</span>;
+
+    return (
+        <div className={bc("site-logo")} data-mode={mode} style={css}>
+            {brand}
+        </div>
+    );
+}
+
+/**
+ * ── OffCanvas (drawer) ─────────────────────────────────────────────────────────────────────────────
+ *
+ * A trigger button that opens a slide-in drawer holding a SLOT of arbitrary blocks (authors typically
+ * drop a NavMenu inside). This is the SERVER SHELL: the panel and its slotted children render here on
+ * the server (crawlable, in the SSR HTML) and are handed as `children` to OffCanvasClient — the small
+ * `"use client"` island that flips open/aria-expanded, optionally locks body scroll and closes on
+ * Escape. A nested NavMenu is already decorated by resolveDynamicBlocks (it recurses slots), so no new
+ * data wiring is needed for the common case. Emits `.wjs-offcanvas` and reuses the header's
+ * `.wjs-header-mobile-overlay` / `.wjs-header-mobile-panel` hooks so themes style it.
+ */
+export function OffCanvasBlock({ slot, triggerLabel = "Menú", triggerIcon = "fa-bars", side = "left", breakpoint = "always", closeOnEsc = true, scrollLock = true, css, isEditing }: any) {
+    const sideSafe = side === "right" ? "right" : "left";
+    const bpSafe = breakpoint === "md" || breakpoint === "lg" ? breakpoint : "always";
+    // The slot arrives as a render function on BOTH surfaces (editor DropZone / public wrapper div).
+    const panelChildren = typeof slot === "function" ? slot(bc("offcanvas__content")) : null;
+
+    return (
+        <div className={bc("offcanvas")} data-side={sideSafe} data-breakpoint={bpSafe} style={css}>
+            <OffCanvasClient
+                triggerLabel={triggerLabel}
+                triggerIcon={triggerIcon}
+                side={sideSafe}
+                breakpoint={bpSafe}
+                closeOnEsc={closeOnEsc !== false}
+                scrollLock={scrollLock !== false}
+            >
+                {panelChildren}
+                {isEditing && !panelChildren ? (
+                    <p className="text-[var(--wjs-color-text-muted,#6b7280)] text-sm">Arrastra bloques aquí (p. ej. un menú de navegación).</p>
+                ) : null}
+            </OffCanvasClient>
         </div>
     );
 }

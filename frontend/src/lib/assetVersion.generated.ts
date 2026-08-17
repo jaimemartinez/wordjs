@@ -1,4 +1,4 @@
 // GENERATED FILE — DO NOT EDIT.
 // Source: backend/public/css/wordjs-ui.css
 // Regenerate with: node scripts/generate-asset-version.js (runs in the frontend prebuild).
-export const UI_CSS_HASH = "da0051832a41";
+export const UI_CSS_HASH = "1423ac356ea3";

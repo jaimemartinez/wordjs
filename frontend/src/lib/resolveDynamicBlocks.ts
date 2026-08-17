@@ -1,5 +1,5 @@
 import { cache } from "react";
-import { getPosts, getPostById, getMenuByRef, type MenuItem } from "@/lib/server-api";
+import { getPosts, getPostById, getMenuByRef, getSettings, type MenuItem } from "@/lib/server-api";
 import type { Post } from "@/lib/api";
 import { toResolved, filterByCategory, type ResolvedPost } from "@/lib/resolvedPost";
 
@@ -48,6 +48,7 @@ export const resolveDynamicBlocks = cache(async (data: unknown): Promise<unknown
     // Only pay for fetches the page actually needs: posts for the dynamic listings, referenced
     // wjs_symbol posts for Symbol blocks, and the menu behind each distinct NavMenu reference.
     let needPosts = false;
+    let needIdentity = false;
     const symbolIds = new Set<number>();
     const menuRefs = new Map<string, { source?: string; location?: string; menuId?: number | string }>();
     const scan = (nodes: unknown): void => {
@@ -56,6 +57,7 @@ export const resolveDynamicBlocks = cache(async (data: unknown): Promise<unknown
             if (!n || typeof n !== "object") continue;
             const node = n as { type?: string; props?: Record<string, unknown> };
             if (node.type && DYNAMIC.has(node.type)) needPosts = true;
+            if (node.type === "SiteLogo") needIdentity = true;
             if (node.type === "Symbol") {
                 const id = Number((node.props as { symbolId?: unknown } | undefined)?.symbolId);
                 if (Number.isFinite(id) && id > 0) symbolIds.add(id);
@@ -68,9 +70,26 @@ export const resolveDynamicBlocks = cache(async (data: unknown): Promise<unknown
         }
     };
     scan((data as { content?: unknown }).content);
-    if (!needPosts && symbolIds.size === 0 && menuRefs.size === 0) return data;
+    if (!needPosts && !needIdentity && symbolIds.size === 0 && menuRefs.size === 0) return data;
 
     const all = needPosts ? (await getPosts("post", "publish")) || [] : [];
+
+    // Site identity (blogname + site_logo) for SiteLogo blocks — the single settings read is React-cached
+    // and tagged, so it collapses with every other `/settings` read on the page. Injected as a plain
+    // serializable object; a null/failed read becomes empty strings (the block's empty path handles it).
+    const identity = needIdentity
+        ? await (async () => {
+            try {
+                const s = await getSettings();
+                return {
+                    blogname: typeof s?.blogname === "string" ? s.blogname : "",
+                    siteLogo: typeof s?.site_logo === "string" ? s.site_logo : "",
+                };
+            } catch {
+                return { blogname: "", siteLogo: "" };
+            }
+        })()
+        : null;
 
     // Each distinct menu reference resolved ONCE, keyed by its ref string. A deleted/foreign/empty
     // reference resolves to [] — the block renders nothing on the public site (its editor state shows
@@ -134,6 +153,12 @@ export const resolveDynamicBlocks = cache(async (data: unknown): Promise<unknown
                 // ref → [], so the block's empty path runs (nothing on public, notice while editing).
                 const { key } = navRefOf(props);
                 props = { ...props, resolvedMenu: menuItems.get(key) ?? [] };
+            }
+
+            if (node.type === "SiteLogo") {
+                // The resolved site identity — same object for every SiteLogo on the page. Empty strings
+                // when settings are missing, so the block's empty path runs.
+                props = { ...props, resolvedIdentity: identity ?? { blogname: "", siteLogo: "" } };
             }
 
             if (node.type && DYNAMIC.has(node.type)) {

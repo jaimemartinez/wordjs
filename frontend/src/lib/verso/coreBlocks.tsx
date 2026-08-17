@@ -66,7 +66,10 @@ import {
     TableBlock, IconListBlock, SocialLinksBlock, StatsBlock, HTMLEmbedBlock,
     PricingTableBlock, TestimonialBlock, CTABannerBlock, VideoEmbedBlock, HeroBlock,
     PostsGridBlock, CategoryPostsBlock, AudioPlayerBlock, ParticleFieldBlock, NavMenuBlock,
+    SiteLogoBlock, OffCanvasBlock,
 } from "@/components/content/blocks";
+import BackToTopBlock from "@/components/content/BackToTop";
+import { useEditorIdentity } from "@/lib/useEditorIdentity";
 import type { BlockDefinition, BlockRegistry, VersoField } from "./registry";
 import { withSharedVersoFields } from "./sharedFields";
 
@@ -75,11 +78,15 @@ import { withSharedVersoFields } from "./sharedFields";
 /* ------------------------------------------------------------------ */
 
 /**
- * Los 32 `item.type` EXACTOS del switch de ContentRenderer.tsx, en su orden. Es el contrato de
+ * Los 35 `item.type` EXACTOS del switch de ContentRenderer.tsx, en su orden. Es el contrato de
  * serialización con el sitio público — el test lo compara contra su propia lista literal.
  * (ParticleField, el 31º, es el fondo animado de partículas: una isla de cliente con `<canvas>`.
  *  NavMenu, el 32º, VINCULA al menú del sitio por referencia: guarda solo la referencia y el store
- *  nav_menu sigue siendo la fuente de verdad — cero pérdida de datos.)
+ *  nav_menu sigue siendo la fuente de verdad — cero pérdida de datos.
+ *  SiteLogo (33º) BINDS a la identidad del sitio (blogname + site_logo) igual que NavMenu al menú.
+ *  BackToTop (34º) es un control flotante — el bloque ENTERO es una isla de cliente, sin SSR.
+ *  OffCanvas (35º) es un cajón con SLOT de contenido: el panel y sus hijos se renderizan en servidor
+ *  (rastreable) y solo el toggle es isla de cliente.)
  */
 export const CORE_BLOCK_TYPES = [
     "Heading", "Text", "Image", "Divider", "Button", "Spacer",
@@ -88,7 +95,7 @@ export const CORE_BLOCK_TYPES = [
     "PricingTable", "Testimonial", "CTABanner", "VideoEmbed", "Hero",
     "PostsGrid", "CategoryPosts", "AudioPlayer",
     "Accordion", "Tabs", "SearchBar", "Form", "Symbol",
-    "ParticleField", "NavMenu",
+    "ParticleField", "NavMenu", "SiteLogo", "BackToTop", "OffCanvas",
 ] as const;
 
 export type CoreBlockType = (typeof CORE_BLOCK_TYPES)[number];
@@ -236,8 +243,24 @@ function NavMenuRender(props: BlockProps) {
     return <NavMenuBlock {...rest} menu={menu} isEditing={editing} />;
 }
 
+// SiteLogo (canvas): the editor has no server pass, so the bound identity (blogname + site_logo) comes
+// from useEditorIdentity reading the same /settings store. Inert in público (resolvedIdentity injected).
+function SiteLogoRender(props: BlockProps) {
+    const { resolvedIdentity, isEditing, ...rest } = props;
+    const editing = !!isEditing;
+    const identity = useEditorIdentity(editing, resolvedIdentity as { blogname: string; siteLogo: string } | undefined);
+    return <SiteLogoBlock {...rest} identity={identity} isEditing={editing} />;
+}
+
+// OffCanvas (canvas): the content slot arrives as a function (Puck DropZone); pass it straight through
+// as `slot`, exactly like SectionRender. `isEditing` drives the empty-slot authoring hint.
+function OffCanvasRender(props: BlockProps) {
+    const { content, isEditing, ...rest } = props;
+    return <OffCanvasBlock {...rest} slot={asSlot(content)} isEditing={!!isEditing} />;
+}
+
 /* ------------------------------------------------------------------ */
-/* La tabla: los 32 bloques.                                            */
+/* La tabla: los 35 bloques.                                            */
 /* ------------------------------------------------------------------ */
 
 export const coreBlockDefinitions: BlockDefinition[] = [
@@ -1510,10 +1533,140 @@ export const coreBlockDefinitions: BlockDefinition[] = [
         },
         render: NavMenuRender,
     },
+    {
+        // SiteLogo: BINDS a la identidad del sitio (blogname + site_logo) — el store de ajustes es la
+        // fuente de verdad. Los campos deben coincidir BYTE A BYTE con versoConfig.SiteLogo.
+        type: "SiteLogo",
+        label: "Logotipo del sitio",
+        category: "layout",
+        fields: {
+            mode: {
+                type: "select",
+                label: "Mostrar",
+                options: [
+                    { label: "Logotipo", value: "logo" },
+                    { label: "Título", value: "title" },
+                    { label: "Ambos", value: "both" },
+                ],
+            },
+            linkToHome: {
+                type: "radio",
+                label: "Enlazar al inicio",
+                options: [
+                    { label: "Sí", value: true },
+                    { label: "No", value: false },
+                ],
+            },
+            maxHeight: { type: "number", label: "Altura máx. del logo (px)", min: 0 },
+            altOverride: { type: "text", label: "Texto alternativo (opcional)" },
+            css: cssField(),
+        },
+        defaultProps: {
+            mode: "both",
+            linkToHome: true,
+            maxHeight: 40,
+            altOverride: "",
+            css: {},
+        },
+        render: SiteLogoRender,
+    },
+    {
+        // BackToTop: el bloque ENTERO es una isla de cliente (control flotante, sin contenido SSR).
+        type: "BackToTop",
+        label: "Volver arriba",
+        category: "layout",
+        fields: {
+            showAfter: { type: "number", label: "Aparece tras (px)", min: 0 },
+            position: {
+                type: "select",
+                label: "Posición",
+                options: [
+                    { label: "Abajo derecha", value: "br" },
+                    { label: "Abajo izquierda", value: "bl" },
+                ],
+            },
+            smoothScroll: {
+                type: "radio",
+                label: "Desplazamiento suave",
+                options: [
+                    { label: "Sí", value: true },
+                    { label: "No", value: false },
+                ],
+            },
+            label: { type: "text", label: "Etiqueta accesible" },
+            icon: { type: "text", label: "Icono (Font Awesome, p. ej. fa-arrow-up)" },
+            css: cssField(),
+        },
+        defaultProps: {
+            showAfter: 400,
+            position: "br",
+            smoothScroll: true,
+            label: "Arriba",
+            icon: "fa-arrow-up",
+            css: {},
+        },
+        render: BackToTopBlock,
+    },
+    {
+        // OffCanvas: cajón con SLOT de contenido. El panel y sus hijos se renderizan en SERVIDOR; solo
+        // el toggle es isla de cliente. `content` es un slot como el `children` de Section.
+        type: "OffCanvas",
+        label: "Cajón lateral (OffCanvas)",
+        category: "layout",
+        fields: {
+            content: { type: "slot" },
+            triggerLabel: { type: "text", label: "Texto del botón" },
+            triggerIcon: { type: "text", label: "Icono del botón (Font Awesome)" },
+            side: {
+                type: "select",
+                label: "Lado",
+                options: [
+                    { label: "Izquierda", value: "left" },
+                    { label: "Derecha", value: "right" },
+                ],
+            },
+            breakpoint: {
+                type: "select",
+                label: "Mostrar como cajón",
+                options: [
+                    { label: "Siempre", value: "always" },
+                    { label: "Solo en móvil (< md)", value: "md" },
+                    { label: "Móvil y tablet (< lg)", value: "lg" },
+                ],
+            },
+            closeOnEsc: {
+                type: "radio",
+                label: "Cerrar con Escape",
+                options: [
+                    { label: "Sí", value: true },
+                    { label: "No", value: false },
+                ],
+            },
+            scrollLock: {
+                type: "radio",
+                label: "Bloquear scroll al abrir",
+                options: [
+                    { label: "Sí", value: true },
+                    { label: "No", value: false },
+                ],
+            },
+            css: cssField(),
+        },
+        defaultProps: {
+            triggerLabel: "Menú",
+            triggerIcon: "fa-bars",
+            side: "left",
+            breakpoint: "always",
+            closeOnEsc: true,
+            scrollLock: true,
+            css: {},
+        },
+        render: OffCanvasRender,
+    },
 ];
 
 /**
- * Alta de los 32 bloques core en un registry, pasando CADA definición por el seam
+ * Alta de los 35 bloques core en un registry, pasando CADA definición por el seam
  * `withSharedVersoFields` — el mismo punto de inyección único que withSharedBlockFields hoy.
  */
 export function registerCoreBlocks(registry: BlockRegistry): void {

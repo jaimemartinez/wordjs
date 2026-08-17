@@ -17,12 +17,14 @@ import { blockVars, unit } from "./blocks/blockVars";
 import SearchBarBlockIsland from "./content/SearchBarBlock";
 import AccordionBlockIsland from "./content/AccordionBlock";
 import TabsBlockIsland from "./content/TabsBlock";
-import { HeadingBlock, TextBlock, ImageBlock, DividerBlock, ButtonBlock, SpacerBlock, SectionBlock, GridBlock, FlexRowBlock, ColumnsBlock, CardBlock, QuoteBlock, TableBlock, IconListBlock, SocialLinksBlock, StatsBlock, HTMLEmbedBlock, PricingTableBlock, TestimonialBlock, CTABannerBlock, VideoEmbedBlock, HeroBlock, PostsGridBlock, CategoryPostsBlock, AudioPlayerBlock, ParticleFieldBlock, NavMenuBlock } from "./content/blocks";
+import { HeadingBlock, TextBlock, ImageBlock, DividerBlock, ButtonBlock, SpacerBlock, SectionBlock, GridBlock, FlexRowBlock, ColumnsBlock, CardBlock, QuoteBlock, TableBlock, IconListBlock, SocialLinksBlock, StatsBlock, HTMLEmbedBlock, PricingTableBlock, TestimonialBlock, CTABannerBlock, VideoEmbedBlock, HeroBlock, PostsGridBlock, CategoryPostsBlock, AudioPlayerBlock, ParticleFieldBlock, NavMenuBlock, SiteLogoBlock, OffCanvasBlock } from "./content/blocks";
+import BackToTopBlockIsland from "./content/BackToTop";
 import LinkField from "./blocks/LinkField";
 import { withSharedBlockFields } from "./blocks/VisibilityField";
 import { sanitizeHTML } from "@/lib/sanitize";
 import { useEditorPosts } from "@/lib/useEditorPosts";
 import { useEditorMenu } from "@/lib/useEditorMenu";
+import { useEditorIdentity } from "@/lib/useEditorIdentity";
 import { formBlockFields, formBlockDefaults, FormBlockRender } from "./blocks/FormBlock";
 import { symbolBlockFields, symbolBlockDefaults, SymbolRender } from "./blocks/SymbolBlock";
 
@@ -2462,6 +2464,162 @@ const baseConfig: any = {
                 const menu = useEditorMenu(editing, resolvedMenu, { source, location, menuId });
                 return <NavMenuBlock {...props} menu={menu} isEditing={editing} />;
             }
+        },
+
+        SiteLogo: {
+            // BINDS a la identidad del sitio (blogname + site_logo); el store de ajustes es la fuente de
+            // verdad. Campos idénticos (orden + estructura) a coreBlocks.SiteLogo — el gate los compara.
+            label: "Logotipo del sitio",
+            category: "layout",
+            fields: {
+                mode: {
+                    type: "select",
+                    label: "Mostrar",
+                    options: [
+                        { label: "Logotipo", value: "logo" },
+                        { label: "Título", value: "title" },
+                        { label: "Ambos", value: "both" },
+                    ]
+                },
+                linkToHome: {
+                    type: "radio",
+                    label: "Enlazar al inicio",
+                    options: [
+                        { label: "Sí", value: true },
+                        { label: "No", value: false },
+                    ]
+                },
+                maxHeight: { type: "number", label: "Altura máx. del logo (px)", min: 0 },
+                altOverride: { type: "text", label: "Texto alternativo (opcional)" },
+                css: {
+                    type: "custom",
+                    label: "Estilos CSS",
+                    render: ({ value, onChange }: any) => (
+                        <CSSPropertiesControl value={value} onChange={onChange} />
+                    )
+                }
+            },
+            defaultProps: {
+                mode: "both",
+                linkToHome: true,
+                maxHeight: 40,
+                altOverride: "",
+                css: {}
+            },
+            render: ({ resolvedIdentity, puck, ...props }: any) => {
+                // Identidad real en todas partes: inyectada por el resolver del servidor en el público;
+                // fetch del mismo store /settings vía useEditorIdentity dentro del canvas del editor.
+                const editing = !!puck?.isEditing;
+                const identity = useEditorIdentity(editing, resolvedIdentity);
+                return <SiteLogoBlock {...props} identity={identity} isEditing={editing} />;
+            }
+        },
+
+        BackToTop: {
+            // El bloque ENTERO es una isla de cliente (control flotante, sin contenido SSR).
+            label: "Volver arriba",
+            category: "layout",
+            fields: {
+                showAfter: { type: "number", label: "Aparece tras (px)", min: 0 },
+                position: {
+                    type: "select",
+                    label: "Posición",
+                    options: [
+                        { label: "Abajo derecha", value: "br" },
+                        { label: "Abajo izquierda", value: "bl" },
+                    ]
+                },
+                smoothScroll: {
+                    type: "radio",
+                    label: "Desplazamiento suave",
+                    options: [
+                        { label: "Sí", value: true },
+                        { label: "No", value: false },
+                    ]
+                },
+                label: { type: "text", label: "Etiqueta accesible" },
+                icon: { type: "text", label: "Icono (Font Awesome, p. ej. fa-arrow-up)" },
+                css: {
+                    type: "custom",
+                    label: "Estilos CSS",
+                    render: ({ value, onChange }: any) => (
+                        <CSSPropertiesControl value={value} onChange={onChange} />
+                    )
+                }
+            },
+            defaultProps: {
+                showAfter: 400,
+                position: "br",
+                smoothScroll: true,
+                label: "Arriba",
+                icon: "fa-arrow-up",
+                css: {}
+            },
+            render: (props: any) => <BackToTopBlockIsland {...props} />
+        },
+
+        OffCanvas: {
+            // Cajón con SLOT de contenido. El panel y sus hijos se renderizan en SERVIDOR (rastreable);
+            // solo el toggle es isla de cliente. `content` es un slot como el `children` de Section.
+            label: "Cajón lateral (OffCanvas)",
+            category: "layout",
+            fields: {
+                content: { type: "slot" },
+                triggerLabel: { type: "text", label: "Texto del botón" },
+                triggerIcon: { type: "text", label: "Icono del botón (Font Awesome)" },
+                side: {
+                    type: "select",
+                    label: "Lado",
+                    options: [
+                        { label: "Izquierda", value: "left" },
+                        { label: "Derecha", value: "right" },
+                    ]
+                },
+                breakpoint: {
+                    type: "select",
+                    label: "Mostrar como cajón",
+                    options: [
+                        { label: "Siempre", value: "always" },
+                        { label: "Solo en móvil (< md)", value: "md" },
+                        { label: "Móvil y tablet (< lg)", value: "lg" },
+                    ]
+                },
+                closeOnEsc: {
+                    type: "radio",
+                    label: "Cerrar con Escape",
+                    options: [
+                        { label: "Sí", value: true },
+                        { label: "No", value: false },
+                    ]
+                },
+                scrollLock: {
+                    type: "radio",
+                    label: "Bloquear scroll al abrir",
+                    options: [
+                        { label: "Sí", value: true },
+                        { label: "No", value: false },
+                    ]
+                },
+                css: {
+                    type: "custom",
+                    label: "Estilos CSS",
+                    render: ({ value, onChange }: any) => (
+                        <CSSPropertiesControl value={value} onChange={onChange} />
+                    )
+                }
+            },
+            defaultProps: {
+                triggerLabel: "Menú",
+                triggerIcon: "fa-bars",
+                side: "left",
+                breakpoint: "always",
+                closeOnEsc: true,
+                scrollLock: true,
+                css: {}
+            },
+            render: ({ content: Content, ...props }: any) => (
+                <OffCanvasBlock {...props} slot={(cls?: string) => <Content className={cls} />} />
+            )
         },
 
         ...versoPluginComponents,

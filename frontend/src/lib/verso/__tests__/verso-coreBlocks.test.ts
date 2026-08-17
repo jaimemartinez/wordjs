@@ -1,5 +1,5 @@
 /**
- * GATE F3 — los 32 bloques core como tabla de datos + seam de shared fields.
+ * GATE F3 — los 35 bloques core como tabla de datos + seam de shared fields.
  *
  * ANTI-DRIFT: la fuente de verdad de la comparación es versoConfig.tsx IMPORTADO (no una copia):
  * defaultProps se comparan por deep-equal PROGRAMÁTICO campo a campo, y los `fields` por igualdad
@@ -8,7 +8,7 @@
  * se compara literal). Cualquier drift en nombres de prop, opciones o defaults rompe aquí antes de
  * romper páginas guardadas o el theming.
  *
- * También cubre: la lista LITERAL de los 32 `item.type` del switch público (contrato de
+ * También cubre: la lista LITERAL de los 35 `item.type` del switch público (contrato de
  * serialización), la resolución de slots vía makeSlotResolver (igual que el editor actual),
  * los clamps de seguridad de anim (100–3000ms), el opt-out del seam y la asimetría de los campos
  * root post/page.
@@ -59,11 +59,11 @@ const wrappedByType = new Map<string, BlockDefinition>(
 const configComponents = (postConfig as { components: Record<string, Record<string, unknown>> }).components;
 
 /* ------------------------------------------------------------------ */
-/* 1. El contrato de tipos: los 32 EXACTOS del switch público.          */
+/* 1. El contrato de tipos: los 35 EXACTOS del switch público.          */
 /* ------------------------------------------------------------------ */
 
 describe("coreBlocks — contrato de tipos", () => {
-  it("los 32 types coinciden con la lista literal del switch de ContentRenderer", () => {
+  it("los 35 types coinciden con la lista literal del switch de ContentRenderer", () => {
     // Lista LITERAL (no derivada): es el contrato de serialización de _puck_data.
     const CONTRACT = [
       "Heading", "Text", "Image", "Divider", "Button", "Spacer",
@@ -72,9 +72,9 @@ describe("coreBlocks — contrato de tipos", () => {
       "PricingTable", "Testimonial", "CTABanner", "VideoEmbed", "Hero",
       "PostsGrid", "CategoryPosts", "AudioPlayer",
       "Accordion", "Tabs", "SearchBar", "Form", "Symbol",
-      "ParticleField", "NavMenu",
+      "ParticleField", "NavMenu", "SiteLogo", "BackToTop", "OffCanvas",
     ];
-    expect(CONTRACT).toHaveLength(32);
+    expect(CONTRACT).toHaveLength(35);
     expect([...CORE_BLOCK_TYPES]).toEqual(CONTRACT);
     expect(coreBlockDefinitions.map((d) => d.type).sort()).toEqual([...CONTRACT].sort());
   });
@@ -150,6 +150,7 @@ describe("coreBlocks — resolución de slots", () => {
     expect(isSlot("Columns", "col-0")).toBe(true);
     expect(isSlot("Columns", "col-1")).toBe(true);
     expect(isSlot("Columns", "col-2")).toBe(true);
+    expect(isSlot("OffCanvas", "content")).toBe(true);
   });
 
   it("un array item-shaped NUNCA es slot (Accordion.items, Tabs.tabs, PricingTable.plans…)", () => {
@@ -176,8 +177,8 @@ describe("coreBlocks — resolución de slots", () => {
     expect(isSlot("Section", "loQueSea")).toBeUndefined();
   });
 
-  it("el registry queda con exactamente 32 definiciones", () => {
-    expect(registry.list()).toHaveLength(32);
+  it("el registry queda con exactamente 35 definiciones", () => {
+    expect(registry.list()).toHaveLength(35);
   });
 });
 

@@ -49,8 +49,10 @@ import {
     CardBlock, QuoteBlock, TableBlock, IconListBlock, SocialLinksBlock, StatsBlock, HTMLEmbedBlock,
     PricingTableBlock, TestimonialBlock, CTABannerBlock, VideoEmbedBlock, HeroBlock,
     PostsGridBlock, CategoryPostsBlock, AudioPlayerBlock, ParticleFieldBlock, NavMenuBlock,
+    SiteLogoBlock, OffCanvasBlock,
 } from "./blocks";
 import AccordionBlock from "./AccordionBlock";
+import BackToTopBlock from "./BackToTop";
 import TabsBlock from "./TabsBlock";
 import SearchBarBlock from "./SearchBarBlock";
 import PluginBlockIsland from "./PluginBlockIsland";
@@ -192,6 +194,14 @@ function renderCore(type: string, props: Record<string, any>, item: any, exclude
         // (resolvedMenu), so the full <nav> + every <a> land in the SSR HTML; only the mobile toggle
         // is a client island. An empty/missing binding renders nothing on the public page.
         case "NavMenu": return <NavMenuBlock {...props} menu={props.resolvedMenu} />;
+        // Binds to the site identity: resolveDynamicBlocks injected the resolved { blogname, siteLogo }
+        // server-side (resolvedIdentity), so the real logo/title land in the SSR HTML.
+        case "SiteLogo": return <SiteLogoBlock {...props} identity={props.resolvedIdentity} />;
+        // Floating scroll-to-top control: a whole-block client island (no SSR content needed).
+        case "BackToTop": return <BackToTopBlock {...props} />;
+        // Drawer with a CONTENT slot: panel + slotted children render server-side (crawlable); only the
+        // open/close toggle is a client island. Slot resolved exactly like Section's `children`.
+        case "OffCanvas": return <OffCanvasBlock {...props} slot={slotOf(props, "content", exclude, ix)} />;
         // Interactive islands — their own 'use client' modules, code-split per page.
         case "Accordion": return <AccordionBlock {...props} />;
         case "Tabs": return <TabsBlock {...props} />;

@@ -55,6 +55,11 @@ export const BLOCK_META: Record<string, BlockMeta> = {
     // Navegación — `ms: "menu"` ships in the Material Symbols subset (an unlisted glyph renders as an
     // empty box; see the BlockMeta note above).
     NavMenu: { icon: "fa-bars", ms: "menu", group: "Navegación", desc: "Menú del sitio vinculado (por ubicación o id)", label: "Menú de navegación" },
+    // `ms` values below REUSE names already shipping in the Material Symbols subset (an unlisted glyph
+    // renders as an empty box; see the BlockMeta note above): "image"/"unfold_more"/"menu" are all in use.
+    SiteLogo: { icon: "fa-image", ms: "image", group: "Navegación", desc: "Logotipo o título del sitio (enlazado al inicio)", label: "Logotipo del sitio" },
+    BackToTop: { icon: "fa-arrow-up", ms: "unfold_more", group: "Navegación", desc: "Botón flotante para volver arriba", label: "Volver arriba" },
+    OffCanvas: { icon: "fa-bars-staggered", ms: "menu", group: "Navegación", desc: "Cajón lateral con contenido (drawer)", label: "Cajón lateral (OffCanvas)" },
     // Dynamic
     PostsGrid: { icon: "fa-newspaper", ms: "newspaper", group: "Dinámicos", desc: "Cuadrícula de entradas" },
     CategoryPosts: { icon: "fa-folder-tree", ms: "category", group: "Dinámicos", desc: "Entradas por categoría" },
