@@ -1,6 +1,6 @@
 "use client";
 /**
- * Verso — registro de los 31 bloques core como TABLA DE DATOS (F3).
+ * Verso — registro de los 32 bloques core como TABLA DE DATOS (F3).
  *
  * Porta el registro de frontend/src/components/versoConfig.tsx al formato `BlockDefinition`:
  *  - `type`: EXACTAMENTE los strings del switch de ContentRenderer.tsx — contrato de serialización
@@ -41,6 +41,8 @@ import React, { useState } from "react";
 import { t as translate, getStoredLanguage } from "@/lib/i18n";
 import { rememberPickedMedia } from "@/lib/imageSrcset";
 import { useEditorPosts } from "@/lib/useEditorPosts";
+import { useEditorMenu } from "@/lib/useEditorMenu";
+import type { ChromeMenuItem } from "@/lib/chromeData";
 import MediaPickerModal from "@/components/MediaPickerModal";
 import LinkField from "@/components/blocks/LinkField";
 import { CSSPropertiesControl, type CSSData } from "@/components/blocks/CSSControls";
@@ -63,7 +65,7 @@ import {
     SectionBlock, GridBlock, FlexRowBlock, ColumnsBlock, CardBlock, QuoteBlock,
     TableBlock, IconListBlock, SocialLinksBlock, StatsBlock, HTMLEmbedBlock,
     PricingTableBlock, TestimonialBlock, CTABannerBlock, VideoEmbedBlock, HeroBlock,
-    PostsGridBlock, CategoryPostsBlock, AudioPlayerBlock, ParticleFieldBlock,
+    PostsGridBlock, CategoryPostsBlock, AudioPlayerBlock, ParticleFieldBlock, NavMenuBlock,
 } from "@/components/content/blocks";
 import type { BlockDefinition, BlockRegistry, VersoField } from "./registry";
 import { withSharedVersoFields } from "./sharedFields";
@@ -73,9 +75,11 @@ import { withSharedVersoFields } from "./sharedFields";
 /* ------------------------------------------------------------------ */
 
 /**
- * Los 31 `item.type` EXACTOS del switch de ContentRenderer.tsx, en su orden. Es el contrato de
+ * Los 32 `item.type` EXACTOS del switch de ContentRenderer.tsx, en su orden. Es el contrato de
  * serialización con el sitio público — el test lo compara contra su propia lista literal.
- * (ParticleField, el 31º, es el fondo animado de partículas: una isla de cliente con `<canvas>`.)
+ * (ParticleField, el 31º, es el fondo animado de partículas: una isla de cliente con `<canvas>`.
+ *  NavMenu, el 32º, VINCULA al menú del sitio por referencia: guarda solo la referencia y el store
+ *  nav_menu sigue siendo la fuente de verdad — cero pérdida de datos.)
  */
 export const CORE_BLOCK_TYPES = [
     "Heading", "Text", "Image", "Divider", "Button", "Spacer",
@@ -84,7 +88,7 @@ export const CORE_BLOCK_TYPES = [
     "PricingTable", "Testimonial", "CTABanner", "VideoEmbed", "Hero",
     "PostsGrid", "CategoryPosts", "AudioPlayer",
     "Accordion", "Tabs", "SearchBar", "Form", "Symbol",
-    "ParticleField",
+    "ParticleField", "NavMenu",
 ] as const;
 
 export type CoreBlockType = (typeof CORE_BLOCK_TYPES)[number];
@@ -218,8 +222,22 @@ function CategoryPostsRender(props: BlockProps) {
     );
 }
 
+// NavMenu (canvas): el editor no tiene pase de servidor, así que el menú vinculado lo trae
+// useEditorMenu del mismo store nav_menu (una vez por sesión). Inerte en público (resolvedMenu ya
+// inyectado). Misma forma que PostsGridRender.
+function NavMenuRender(props: BlockProps) {
+    const { source, location, menuId, resolvedMenu, isEditing, ...rest } = props;
+    const editing = !!isEditing;
+    const menu = useEditorMenu(
+        editing,
+        resolvedMenu as ChromeMenuItem[] | undefined,
+        { source: source as string, location: location as string, menuId: menuId as number | string },
+    );
+    return <NavMenuBlock {...rest} menu={menu} isEditing={editing} />;
+}
+
 /* ------------------------------------------------------------------ */
-/* La tabla: los 31 bloques.                                            */
+/* La tabla: los 32 bloques.                                            */
 /* ------------------------------------------------------------------ */
 
 export const coreBlockDefinitions: BlockDefinition[] = [
@@ -1424,10 +1442,78 @@ export const coreBlockDefinitions: BlockDefinition[] = [
         },
         render: ParticleFieldBlock,
     },
+    {
+        // NavMenu: BINDS al menú del sitio por referencia (ubicación o id) — el store nav_menu sigue
+        // siendo la fuente de verdad. Render SSR completo del <nav> + cada <a>; solo el toggle móvil
+        // es isla de cliente. Los campos deben coincidir BYTE A BYTE con versoConfig.NavMenu.
+        type: "NavMenu",
+        label: "Menú de navegación",
+        category: "layout",
+        fields: {
+            source: {
+                type: "select",
+                label: "Origen",
+                options: [
+                    { label: "Ubicación", value: "location" },
+                    { label: "Menú", value: "menu" },
+                ],
+            },
+            location: { type: "text", label: "Ubicación del menú (p. ej. header)" },
+            menuId: { type: "number", label: "ID del menú (si el origen es Menú)", min: 0 },
+            orientation: {
+                type: "select",
+                label: "Orientación",
+                options: [
+                    { label: "Horizontal", value: "horizontal" },
+                    { label: "Vertical", value: "vertical" },
+                ],
+            },
+            depth: { type: "number", label: "Profundidad de submenús (1–3)", min: 1, max: 3 },
+            submenuTrigger: {
+                type: "select",
+                label: "Apertura de submenús",
+                options: [
+                    { label: "Hover", value: "hover" },
+                    { label: "Click", value: "click" },
+                ],
+            },
+            mobileBehavior: {
+                type: "select",
+                label: "En móvil",
+                options: [
+                    { label: "Colapsar", value: "collapse" },
+                    { label: "Cajón", value: "drawer" },
+                    { label: "Ninguno", value: "none" },
+                ],
+            },
+            align: {
+                type: "select",
+                label: "Alineación",
+                options: [
+                    { label: "Inicio", value: "start" },
+                    { label: "Centro", value: "center" },
+                    { label: "Fin", value: "end" },
+                ],
+            },
+            css: cssField(),
+        },
+        defaultProps: {
+            source: "location",
+            location: "header",
+            menuId: 0,
+            orientation: "horizontal",
+            depth: 2,
+            submenuTrigger: "hover",
+            mobileBehavior: "drawer",
+            align: "start",
+            css: {},
+        },
+        render: NavMenuRender,
+    },
 ];
 
 /**
- * Alta de los 31 bloques core en un registry, pasando CADA definición por el seam
+ * Alta de los 32 bloques core en un registry, pasando CADA definición por el seam
  * `withSharedVersoFields` — el mismo punto de inyección único que withSharedBlockFields hoy.
  */
 export function registerCoreBlocks(registry: BlockRegistry): void {

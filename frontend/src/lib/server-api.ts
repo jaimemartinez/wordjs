@@ -363,7 +363,32 @@ export const getMenuByLocation = cache((location: string): Promise<{ items: Menu
 );
 // `parent` is the flat hierarchy the location endpoint returns (MenuItem.toJSON → post_parent /
 // _menu_item_menu_item_parent). buildMenuTree nests it into ChromeNav submenus; 0 means a root item.
-export interface MenuItem { id: number | string; title: string; url: string; order?: number; parent?: number | string; }
+// `target` (default '_self' server-side) rides along so the NavMenu block can whitelist it at render.
+export interface MenuItem { id: number | string; title: string; url: string; order?: number; parent?: number | string; target?: string; }
+
+/**
+ * A menu addressed BY ID (source='menu' on a NavMenu block). GET /menus/:id returns the menu with its
+ * items already attached (routes/menus.ts). Cached + tagged like getMenuByLocation, keyed by id, so
+ * several NavMenu blocks naming the same menu on one page share a single backend call.
+ */
+export const getMenuById = cache((id: number): Promise<{ items: MenuItem[] } | null> =>
+    serverFetch<{ items: MenuItem[] }>(`/menus/${encodeURIComponent(String(id))}`, { revalidate: 60, tags: ['menus', `menu:${id}`] })
+);
+
+/**
+ * The menu a NavMenu block binds to — addressed either BY LOCATION (source='location', the site's
+ * header/footer slot) or BY ID (source='menu', one specific menu). The block stores ONLY this
+ * reference; the nav_menu store stays the single source of truth, so there is zero data to migrate.
+ * Location reuses getMenuByLocation verbatim; both reads are React-cached + tagged exactly like it.
+ * A malformed/missing ref resolves to null → the resolver hands the block an empty list.
+ */
+export const getMenuByRef = cache((ref: { source?: string; location?: string; menuId?: number | string }): Promise<{ items: MenuItem[] } | null> => {
+    if (ref?.source === 'menu') {
+        const id = Number(ref?.menuId);
+        return Number.isFinite(id) && id > 0 ? getMenuById(id) : Promise.resolve(null);
+    }
+    return getMenuByLocation(String(ref?.location || 'header'));
+});
 
 /**
  * Active theme's chrome composition file (composable-chrome contract v1, precedence level 2º).

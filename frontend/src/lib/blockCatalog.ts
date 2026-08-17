@@ -52,6 +52,9 @@ export const BLOCK_META: Record<string, BlockMeta> = {
     CTABanner: { icon: "fa-bullhorn", ms: "call_to_action", group: "Marketing", desc: "Banner de conversión" },
     Stats: { icon: "fa-chart-simple", ms: "insert_chart", group: "Marketing", desc: "Cifras destacadas" },
     SocialLinks: { icon: "fa-share-nodes", ms: "share", group: "Marketing", desc: "Iconos de redes sociales" },
+    // Navegación — `ms: "menu"` ships in the Material Symbols subset (an unlisted glyph renders as an
+    // empty box; see the BlockMeta note above).
+    NavMenu: { icon: "fa-bars", ms: "menu", group: "Navegación", desc: "Menú del sitio vinculado (por ubicación o id)", label: "Menú de navegación" },
     // Dynamic
     PostsGrid: { icon: "fa-newspaper", ms: "newspaper", group: "Dinámicos", desc: "Cuadrícula de entradas" },
     CategoryPosts: { icon: "fa-folder-tree", ms: "category", group: "Dinámicos", desc: "Entradas por categoría" },
@@ -61,13 +64,14 @@ export const BLOCK_META: Record<string, BlockMeta> = {
 };
 
 export const FALLBACK_GROUP = "Más";
-export const GROUP_ORDER = ["Diseño", "Contenido", "Medios", "Marketing", "Dinámicos", FALLBACK_GROUP];
+export const GROUP_ORDER = ["Diseño", "Contenido", "Medios", "Marketing", "Dinámicos", "Navegación", FALLBACK_GROUP];
 export const GROUP_ICON: Record<string, string> = {
     "Diseño": "fa-layer-group",
     "Contenido": "fa-pen-nib",
     "Medios": "fa-photo-film",
     "Marketing": "fa-bullhorn",
     "Dinámicos": "fa-bolt",
+    "Navegación": "fa-compass",
     [FALLBACK_GROUP]: "fa-puzzle-piece",
 };
 /** Material Symbols counterpart of GROUP_ICON (same subset constraint as BlockMeta.ms). */
@@ -77,6 +81,7 @@ export const GROUP_MS_ICON: Record<string, string> = {
     "Medios": "imagesmode",
     "Marketing": "bolt",
     "Dinámicos": "rss_feed",
+    "Navegación": "menu",
     [FALLBACK_GROUP]: "widgets",
 };
 

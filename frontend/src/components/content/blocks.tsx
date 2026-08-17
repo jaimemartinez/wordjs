@@ -45,6 +45,9 @@ import { sizesForWidth } from "@/lib/imageSrcset";
 import SelfHostedVideo from "./SelfHostedVideo";
 import AudioTransport from "./AudioTransport";
 import ParticleFieldCanvas from "./ParticleField";
+import ChromeNavMobile from "@/components/chrome/ChromeNavMobile";
+import NavMenuMobile from "./NavMenuMobile";
+import { buildMenuTree, type ChromeMenuItem } from "@/lib/chromeData";
 
 export function AudioPlayerBlock({ src, title, bg, borderColor, radius, pad, iconSize, iconBg, iconColor, css }: any) {
     return (
@@ -102,6 +105,197 @@ export function ParticleFieldBlock({ count, color, speed, linkLines, linkDistanc
                 linkDistance={linkDistance}
                 pointer={pointer}
             />
+        </div>
+    );
+}
+
+/**
+ * ── NavMenu (Navigation Menu) ────────────────────────────────────────────────────────────────────
+ *
+ * A CORE block that BINDS to the site's navigation menu instead of storing its own items: the block
+ * carries only a reference (a location key or a menu id) and the nav_menu store stays the single
+ * source of truth (zero data to migrate). `menu` arrives ALREADY RESOLVED — server-side via
+ * resolveDynamicBlocks on the public site, from useEditorMenu (a client fetch of the same store)
+ * inside the editor canvas — so this is a pure, SERVER-SAFE presentational component: the full <nav>
+ * and every <a> land in the SSR HTML (SEO / no-JS), and ONLY the mobile hamburger/collapse is a
+ * client island. It emits the ChromeNav vocabulary (.wjs-chrome-nav*, .wjs-chrome-nav-item,
+ * .wjs-has-submenu, .wjs-chrome-submenu) so themes style it through the rules they already ship,
+ * wrapped in .wjs-block-nav-menu which wordjs-ui.css gives the page-content surface.
+ *
+ * SECURITY (the HeadingBlock tag-whitelist lesson): author menu data may fill a slot but never choose
+ * structure. `target` is whitelisted to exactly _self|_blank and _blank forces rel="noopener
+ * noreferrer" (reverse-tabnabbing); labels render as TEXT (React-escaped), never as HTML; and every
+ * href is re-validated here (defence in depth) even though menu urls are sanitized on write.
+ */
+
+// Render-time href guard — mirrors backend routes/menus.ts safeMenuUrl's allow-list so a stale or
+// hand-edited value can never emit a javascript:/data:/vbscript: href. Same-origin relative / fragment
+// / query, or an absolute http(s)/mailto/tel URL; anything else collapses to '#'. The WHATWG-stripped
+// controls (tab/LF/CR) are removed FIRST so the validated string is the one the browser will parse.
+const NAV_SAFE_SCHEMES = new Set(["http:", "https:", "mailto:", "tel:"]);
+function safeNavHref(raw: unknown): string {
+    if (typeof raw !== "string") return "#";
+    const value = raw.replace(/[\t\n\r]/g, "").trim();
+    if (!value) return "#";
+    if (/^\/[/\\]/.test(value)) return "#"; // authority-relative //host or /\host → external
+    if (value.startsWith("/") || value.startsWith("#") || value.startsWith("?")) return value;
+    try {
+        if (NAV_SAFE_SCHEMES.has(new URL(value).protocol)) return value;
+    } catch { /* not absolute, not a recognized relative form */ }
+    return "#";
+}
+
+// target is author data → whitelist to the two valid values; _blank forces rel so the opened tab
+// cannot reach window.opener. Anything else coerces to _self.
+function navTargetRel(target: unknown): { target: "_self" | "_blank"; rel?: string } {
+    return target === "_blank"
+        ? { target: "_blank", rel: "noopener noreferrer" }
+        : { target: "_self" };
+}
+
+// depth is 1–3 (top level = 1). Clamp to the allow-set, then cut every branch past it so a hostile or
+// stale value can neither deepen the tree nor drop it below one visible level.
+function navClampDepth(depth: unknown): 1 | 2 | 3 {
+    const n = Number(depth);
+    return n === 1 || n === 3 ? n : 2;
+}
+function navPruneDepth(items: ChromeMenuItem[], maxDepth: number, level = 1): ChromeMenuItem[] {
+    return items.map((it) => ({
+        ...it,
+        children: level < maxDepth ? navPruneDepth(it.children ?? [], maxDepth, level + 1) : [],
+    }));
+}
+
+function NavMenuItem({
+    item,
+    orientation,
+    submenuTrigger,
+    depth,
+    targetOf,
+}: {
+    item: ChromeMenuItem;
+    orientation: "horizontal" | "vertical";
+    submenuTrigger: "hover" | "click";
+    depth: number;
+    targetOf: (id: string | number) => unknown;
+}) {
+    const children = item.children ?? [];
+    const tr = navTargetRel(targetOf(item.id));
+    // Label as TEXT (React escapes it) — never dangerouslySetInnerHTML.
+    const link = (
+        <a href={safeNavHref(item.url)} target={tr.target} rel={tr.rel}>
+            {item.title}
+        </a>
+    );
+
+    if (children.length === 0) {
+        return <li className="wjs-chrome-nav-item">{link}</li>;
+    }
+
+    const sublist = children.map((child) => (
+        <NavMenuItem key={child.id} item={child} orientation={orientation} submenuTrigger={submenuTrigger} depth={depth + 1} targetOf={targetOf} />
+    ));
+
+    // Vertical: a static indented list — every link is always shown (no hover affordance to reveal).
+    if (orientation === "vertical") {
+        return (
+            <li className="wjs-chrome-nav-item wjs-has-submenu">
+                {link}
+                <ul className="wjs-chrome-submenu flex flex-col gap-2 list-none m-0 mt-2 ps-4">{sublist}</ul>
+            </li>
+        );
+    }
+
+    // Horizontal: a CSS-only dropdown (no theme JS). Hidden with visibility until the parent <li> holds
+    // focus (keyboard / tap) and, when the trigger is "hover", also on hover. Logical start/ps keep it
+    // correct under RTL, exactly like ChromeNav.
+    const hoverOpen = submenuTrigger === "hover"
+        ? " group-hover:visible group-hover:opacity-100 group-hover:translate-y-0"
+        : "";
+    const panelPos = depth === 0 ? "top-full start-0 mt-1" : "top-0 start-full ms-1";
+    const panel =
+        "wjs-chrome-submenu absolute z-50 min-w-[12rem] flex flex-col gap-1 list-none m-0 p-2 rounded-lg shadow-lg "
+        + "bg-[var(--wjs-bg-surface,white)] border border-[var(--wjs-border-subtle,#e5e7eb)] "
+        + "invisible opacity-0 translate-y-1 transition-all duration-150 "
+        + "group-focus-within:visible group-focus-within:opacity-100 group-focus-within:translate-y-0"
+        + hoverOpen;
+    return (
+        <li className="wjs-chrome-nav-item wjs-has-submenu relative group">
+            <span className="inline-flex items-center gap-1">
+                {link}
+                <svg aria-hidden="true" className="w-3 h-3 opacity-70" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
+                </svg>
+            </span>
+            <ul className={`${panel} ${panelPos}`}>{sublist}</ul>
+        </li>
+    );
+}
+
+export function NavMenuBlock({ menu, orientation = "horizontal", depth = 2, submenuTrigger = "hover", mobileBehavior = "drawer", align = "start", css, isEditing }: any) {
+    const flat: ChromeMenuItem[] = Array.isArray(menu) ? menu : [];
+    const orient: "horizontal" | "vertical" = orientation === "vertical" ? "vertical" : "horizontal";
+    const trigger: "hover" | "click" = submenuTrigger === "click" ? "click" : "hover";
+    // `target` rides on the FLAT item, not on the tree buildMenuTree returns — look it up by id.
+    const targetById = new Map<string, unknown>();
+    for (const it of flat) {
+        const id = it && (it as { id?: unknown }).id;
+        if (id != null) targetById.set(String(id), (it as { target?: unknown }).target);
+    }
+    const targetOf = (id: string | number) => targetById.get(String(id));
+    const tree = navPruneDepth(buildMenuTree(flat), navClampDepth(depth));
+
+    if (tree.length === 0) {
+        // Nothing on the public site; a quiet authoring notice while editing (mirrors the dynamic blocks).
+        if (isEditing) {
+            return (
+                <div className={bc("nav-menu", "nav-menu--empty")} style={css}>
+                    Vincula este bloque a un menú (Origen → Ubicación / Menú). El menú elegido está vacío o no existe.
+                </div>
+            );
+        }
+        return null;
+    }
+
+    const hook = orient === "vertical" ? "wjs-footer-nav" : "wjs-header-nav";
+    const orientClass = orient === "vertical" ? "wjs-chrome-nav-vertical" : "wjs-chrome-nav-horizontal";
+    const alignClass = orient === "vertical"
+        ? (align === "center" ? "items-center" : align === "end" ? "items-end" : "items-start")
+        : (align === "center" ? "justify-center" : align === "end" ? "justify-end" : "justify-start");
+    const listClass = orient === "vertical"
+        ? cx("flex flex-col gap-2 list-none m-0 p-0", alignClass)
+        : cx("flex flex-wrap items-center gap-8 list-none m-0 p-0", alignClass);
+
+    const nav = (
+        <nav aria-label="Menu" className={cx("wjs-chrome-nav", orientClass, hook)}>
+            <ul className={listClass}>
+                {tree.map((item) => (
+                    <NavMenuItem key={item.id} item={item} orientation={orient} submenuTrigger={trigger} depth={0} targetOf={targetOf} />
+                ))}
+            </ul>
+        </nav>
+    );
+
+    // Mobile affordance — ONLY the small-screen toggle is a client island; the desktop <nav> above is
+    // fully server-rendered (so its links are always in the SSR HTML). Vertical menus are already
+    // stacked, so they stay visible at every width regardless of mobileBehavior.
+    let body: React.ReactNode = nav;
+    if (orient === "horizontal" && mobileBehavior === "drawer") {
+        // Reuse the header's hamburger + slide-in drawer; the desktop nav hides below md.
+        body = (
+            <>
+                <div className="hidden md:block">{nav}</div>
+                <ChromeNavMobile items={tree} />
+            </>
+        );
+    } else if (orient === "horizontal" && mobileBehavior === "collapse") {
+        body = <NavMenuMobile label="Menú">{nav}</NavMenuMobile>;
+    }
+    // mobileBehavior "none": the nav wraps and stays visible at all widths (no island).
+
+    return (
+        <div className={bc("nav-menu")} data-orientation={orient} style={css}>
+            {body}
         </div>
     );
 }

@@ -372,6 +372,21 @@ a:not([href]):not([class]) { color: inherit; text-decoration: none; }
   transition: var(--wjs-nav-transition, color var(--wjs-transition));
 }
 
+/* NavMenu block — the ChromeNav vocabulary placed in PAGE CONTENT (not the header/footer band). It
+ * emits the same .wjs-chrome-nav* hooks a composed chrome nav does, so the submenu / spacing /
+ * typography rules above already apply; this only supplies the content-context surface the band hooks
+ * would otherwise carry. Scoped under .wjs-block-nav-menu (specificity 0,2,1) so it out-ranks the band
+ * `a` rules (0,1,1): a VERTICAL content menu emits the .wjs-footer-nav hook, whose footer-dim colour is
+ * wrong on a light in-content background — here the link takes the page's own main text colour, and a
+ * theme keeps full control through --wjs-nav-color / --wjs-nav-color-hover. */
+.wjs-block-nav-menu .wjs-chrome-nav a {
+  color: var(--wjs-nav-color, var(--wjs-color-text-main, inherit));
+  text-decoration: none;
+}
+.wjs-block-nav-menu .wjs-chrome-nav a:hover {
+  color: var(--wjs-nav-color-hover, var(--wjs-color-primary));
+}
+
 .wjs-chrome-button--primary,
 .wjs-chrome-button--primary:hover { color: var(--wjs-color-on-primary, #ffffff); }
 .wjs-chrome-button--ghost { color: var(--wjs-color-primary, #2F6D86); }

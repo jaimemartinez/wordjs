@@ -1,5 +1,5 @@
 import { cache } from "react";
-import { getPosts, getPostById } from "@/lib/server-api";
+import { getPosts, getPostById, getMenuByRef, type MenuItem } from "@/lib/server-api";
 import type { Post } from "@/lib/api";
 import { toResolved, filterByCategory, type ResolvedPost } from "@/lib/resolvedPost";
 
@@ -31,10 +31,25 @@ export const resolveDynamicBlocks = cache(async (data: unknown): Promise<unknown
 
     const DYNAMIC = new Set(["PostsGrid", "CategoryPosts"]);
 
+    // A NavMenu binds to the site menu by REFERENCE (a location key or a menu id) — it never stores the
+    // items. This turns one such reference into a stable string so equal refs on one page fetch once,
+    // and so the same key can be recomputed in decorate() to pick the right list back out.
+    const navRefOf = (p: Record<string, unknown> | undefined): { key: string; ref: { source?: string; location?: string; menuId?: number | string } } => {
+        const source = String(p?.source ?? "location") === "menu" ? "menu" : "location";
+        if (source === "menu") {
+            const id = Number(p?.menuId);
+            const safe = Number.isFinite(id) && id > 0 ? id : 0;
+            return { key: `menu:${safe}`, ref: { source, menuId: safe } };
+        }
+        const location = String(p?.location || "header");
+        return { key: `location:${location}`, ref: { source, location } };
+    };
+
     // Only pay for fetches the page actually needs: posts for the dynamic listings, referenced
-    // wjs_symbol posts for Symbol blocks.
+    // wjs_symbol posts for Symbol blocks, and the menu behind each distinct NavMenu reference.
     let needPosts = false;
     const symbolIds = new Set<number>();
+    const menuRefs = new Map<string, { source?: string; location?: string; menuId?: number | string }>();
     const scan = (nodes: unknown): void => {
         if (!Array.isArray(nodes)) return;
         for (const n of nodes) {
@@ -45,13 +60,32 @@ export const resolveDynamicBlocks = cache(async (data: unknown): Promise<unknown
                 const id = Number((node.props as { symbolId?: unknown } | undefined)?.symbolId);
                 if (Number.isFinite(id) && id > 0) symbolIds.add(id);
             }
+            if (node.type === "NavMenu") {
+                const { key, ref } = navRefOf(node.props);
+                menuRefs.set(key, ref);
+            }
             if (node.props) for (const v of Object.values(node.props)) if (Array.isArray(v)) scan(v);
         }
     };
     scan((data as { content?: unknown }).content);
-    if (!needPosts && symbolIds.size === 0) return data;
+    if (!needPosts && symbolIds.size === 0 && menuRefs.size === 0) return data;
 
     const all = needPosts ? (await getPosts("post", "publish")) || [] : [];
+
+    // Each distinct menu reference resolved ONCE, keyed by its ref string. A deleted/foreign/empty
+    // reference resolves to [] — the block renders nothing on the public site (its editor state shows
+    // the authoring notice). The nav_menu store stays the source of truth; this only reads it.
+    const menuItems = new Map<string, MenuItem[]>();
+    await Promise.all(
+        [...menuRefs].map(async ([key, ref]) => {
+            try {
+                const res = await getMenuByRef(ref);
+                menuItems.set(key, Array.isArray(res?.items) ? (res!.items as MenuItem[]) : []);
+            } catch {
+                menuItems.set(key, []);
+            }
+        })
+    );
 
     // Symbol contents, keyed by id. A deleted/foreign reference resolves to [] — the block renders
     // nothing on the public site (its editor states handle the authoring side).
@@ -93,6 +127,13 @@ export const resolveDynamicBlocks = cache(async (data: unknown): Promise<unknown
                 // decorate() the symbol's own items too, so a dynamic block INSIDE a symbol still
                 // gets its real posts on the public site.
                 props = { ...props, resolvedSymbolItems: decorate(symbolItems.get(id) ?? []) };
+            }
+
+            if (node.type === "NavMenu") {
+                // The flat item array for THIS node's reference (same key the scan collected). A missing
+                // ref → [], so the block's empty path runs (nothing on public, notice while editing).
+                const { key } = navRefOf(props);
+                props = { ...props, resolvedMenu: menuItems.get(key) ?? [] };
             }
 
             if (node.type && DYNAMIC.has(node.type)) {

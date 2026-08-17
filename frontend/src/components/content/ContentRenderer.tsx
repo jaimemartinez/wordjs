@@ -48,7 +48,7 @@ import {
     SectionBlock, GridBlock, FlexRowBlock, ColumnsBlock,
     CardBlock, QuoteBlock, TableBlock, IconListBlock, SocialLinksBlock, StatsBlock, HTMLEmbedBlock,
     PricingTableBlock, TestimonialBlock, CTABannerBlock, VideoEmbedBlock, HeroBlock,
-    PostsGridBlock, CategoryPostsBlock, AudioPlayerBlock, ParticleFieldBlock,
+    PostsGridBlock, CategoryPostsBlock, AudioPlayerBlock, ParticleFieldBlock, NavMenuBlock,
 } from "./blocks";
 import AccordionBlock from "./AccordionBlock";
 import TabsBlock from "./TabsBlock";
@@ -188,6 +188,10 @@ function renderCore(type: string, props: Record<string, any>, item: any, exclude
         // Background layer with its own client island (canvas). Code-splits away from pages
         // that don't use it, exactly like the other islands.
         case "ParticleField": return <ParticleFieldBlock {...props} />;
+        // Binds to the site menu: resolveDynamicBlocks injected the resolved item array server-side
+        // (resolvedMenu), so the full <nav> + every <a> land in the SSR HTML; only the mobile toggle
+        // is a client island. An empty/missing binding renders nothing on the public page.
+        case "NavMenu": return <NavMenuBlock {...props} menu={props.resolvedMenu} />;
         // Interactive islands — their own 'use client' modules, code-split per page.
         case "Accordion": return <AccordionBlock {...props} />;
         case "Tabs": return <TabsBlock {...props} />;

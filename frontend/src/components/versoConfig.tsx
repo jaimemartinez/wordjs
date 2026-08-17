@@ -17,11 +17,12 @@ import { blockVars, unit } from "./blocks/blockVars";
 import SearchBarBlockIsland from "./content/SearchBarBlock";
 import AccordionBlockIsland from "./content/AccordionBlock";
 import TabsBlockIsland from "./content/TabsBlock";
-import { HeadingBlock, TextBlock, ImageBlock, DividerBlock, ButtonBlock, SpacerBlock, SectionBlock, GridBlock, FlexRowBlock, ColumnsBlock, CardBlock, QuoteBlock, TableBlock, IconListBlock, SocialLinksBlock, StatsBlock, HTMLEmbedBlock, PricingTableBlock, TestimonialBlock, CTABannerBlock, VideoEmbedBlock, HeroBlock, PostsGridBlock, CategoryPostsBlock, AudioPlayerBlock, ParticleFieldBlock } from "./content/blocks";
+import { HeadingBlock, TextBlock, ImageBlock, DividerBlock, ButtonBlock, SpacerBlock, SectionBlock, GridBlock, FlexRowBlock, ColumnsBlock, CardBlock, QuoteBlock, TableBlock, IconListBlock, SocialLinksBlock, StatsBlock, HTMLEmbedBlock, PricingTableBlock, TestimonialBlock, CTABannerBlock, VideoEmbedBlock, HeroBlock, PostsGridBlock, CategoryPostsBlock, AudioPlayerBlock, ParticleFieldBlock, NavMenuBlock } from "./content/blocks";
 import LinkField from "./blocks/LinkField";
 import { withSharedBlockFields } from "./blocks/VisibilityField";
 import { sanitizeHTML } from "@/lib/sanitize";
 import { useEditorPosts } from "@/lib/useEditorPosts";
+import { useEditorMenu } from "@/lib/useEditorMenu";
 import { formBlockFields, formBlockDefaults, FormBlockRender } from "./blocks/FormBlock";
 import { symbolBlockFields, symbolBlockDefaults, SymbolRender } from "./blocks/SymbolBlock";
 
@@ -2382,6 +2383,85 @@ const baseConfig: any = {
                 css: {}
             },
             render: (props: any) => <ParticleFieldBlock {...props} />
+        },
+
+        NavMenu: {
+            // BINDS al menú del sitio por referencia; el store nav_menu es la fuente de verdad. Campos
+            // idénticos (orden + estructura) a coreBlocks.NavMenu — el gate anti-drift los compara.
+            label: "Menú de navegación",
+            category: "layout",
+            fields: {
+                source: {
+                    type: "select",
+                    label: "Origen",
+                    options: [
+                        { label: "Ubicación", value: "location" },
+                        { label: "Menú", value: "menu" },
+                    ]
+                },
+                location: { type: "text", label: "Ubicación del menú (p. ej. header)" },
+                menuId: { type: "number", label: "ID del menú (si el origen es Menú)", min: 0 },
+                orientation: {
+                    type: "select",
+                    label: "Orientación",
+                    options: [
+                        { label: "Horizontal", value: "horizontal" },
+                        { label: "Vertical", value: "vertical" },
+                    ]
+                },
+                depth: { type: "number", label: "Profundidad de submenús (1–3)", min: 1, max: 3 },
+                submenuTrigger: {
+                    type: "select",
+                    label: "Apertura de submenús",
+                    options: [
+                        { label: "Hover", value: "hover" },
+                        { label: "Click", value: "click" },
+                    ]
+                },
+                mobileBehavior: {
+                    type: "select",
+                    label: "En móvil",
+                    options: [
+                        { label: "Colapsar", value: "collapse" },
+                        { label: "Cajón", value: "drawer" },
+                        { label: "Ninguno", value: "none" },
+                    ]
+                },
+                align: {
+                    type: "select",
+                    label: "Alineación",
+                    options: [
+                        { label: "Inicio", value: "start" },
+                        { label: "Centro", value: "center" },
+                        { label: "Fin", value: "end" },
+                    ]
+                },
+                css: {
+                    type: "custom",
+                    label: "Estilos CSS",
+                    render: ({ value, onChange }: any) => (
+                        <CSSPropertiesControl value={value} onChange={onChange} />
+                    )
+                }
+            },
+            defaultProps: {
+                source: "location",
+                location: "header",
+                menuId: 0,
+                orientation: "horizontal",
+                depth: 2,
+                submenuTrigger: "hover",
+                mobileBehavior: "drawer",
+                align: "start",
+                css: {}
+            },
+            render: ({ source, location, menuId, resolvedMenu, puck, ...props }: any) => {
+                // Menú real en todas partes: inyectado por el resolver del servidor en el público;
+                // fetch del mismo store nav_menu vía useEditorMenu dentro del canvas del editor.
+                const editing = !!puck?.isEditing;
+                const menu = useEditorMenu(editing, resolvedMenu, { source, location, menuId });
+                return <NavMenuBlock {...props} menu={menu} isEditing={editing} />;
+            }
         },
 
         ...versoPluginComponents,
