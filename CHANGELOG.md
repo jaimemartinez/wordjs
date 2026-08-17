@@ -8,6 +8,12 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Added
 
+- **Editor: motion gets its own bottom dock.** Interactions and the entrance animation move out of
+  the right-hand inspector into a collapsible dock under the canvas — the natural home of a
+  horizontal timeline, with the full canvas width instead of a 320-pixel column. Same controls,
+  same tests, same undo path; the inspector keeps style and visibility, and each property has
+  exactly one owner on screen. Collapsing the dock gives the canvas its space back instantly.
+
 - **Interactions: a real multi-lane timeline.** The step strip grew into a timeline: one lane per
   track on a shared scale (milliseconds for clock triggers, 0–100% for scroll and pointer), where
   the active lane's step markers and delay bar drag with the pointer or move with arrow keys —

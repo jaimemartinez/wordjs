@@ -5,7 +5,9 @@
  * MECANISMO (equivalencia documentada con el editor legacy, ya retirado): PuckEditor renderizaba UNA lista plana
  * de campos y la parte con CSS `:has()` sobre las clases marcador que solo llevan los 3 controles
  * compartidos (`.wjs-f-look` → Estilo; `.wjs-f-anim`/`.wjs-f-hide` → Avanzado; el resto →
- * Contenido — ver editor-theme.css [data-ptab]). En Verso el panel renderiza los campos él mismo
+ * Contenido — ver editor-theme.css [data-ptab]). Desde el dock de movimiento, `anim` ya no es una
+ * pestaña del inspector: vive abajo, junto a las interacciones (DOCK_FIELD_KEYS).
+ * En Verso el panel renderiza los campos él mismo
  * (VersoFieldControl por entrada), así que el filtrado se hace EXPLÍCITO por clave de campo — el
  * resultado visual es idéntico por construcción: hoy esas clases marcador viven exclusivamente en
  * VisibilityControl (`hide`), AnimationControl (`anim`) y AppearanceControl (`look`), los tres
@@ -22,7 +24,15 @@ export type PanelTab = "content" | "style" | "advanced";
 export const STYLE_FIELD_KEYS: readonly string[] = ["look"];
 
 /** Claves de campo que el panel muestra en la pestaña Avanzado. */
-export const ADVANCED_FIELD_KEYS: readonly string[] = ["anim", "hide"];
+export const ADVANCED_FIELD_KEYS: readonly string[] = ["hide"];
+
+/**
+ * Claves que viven en el DOCK inferior de movimiento (junto al panel de interacciones), NO en el
+ * inspector derecho: el reparto las salta y `dockFieldEntries` las entrega al dock. La animación de
+ * entrada y las interacciones son la misma preocupación de autor — el movimiento — y comparten
+ * panel propio con el ancho que el timeline necesita.
+ */
+export const DOCK_FIELD_KEYS: readonly string[] = ["anim"];
 
 /** Pestaña a la que pertenece una clave de campo (todo lo no compartido es Contenido). */
 export function tabOfFieldKey(key: string): PanelTab {
@@ -38,8 +48,18 @@ export function partitionFieldEntries(
     fields: Record<string, VersoField>,
 ): Record<PanelTab, FieldEntry[]> {
     const out: Record<PanelTab, FieldEntry[]> = { content: [], style: [], advanced: [] };
-    for (const entry of Object.entries(fields)) out[tabOfFieldKey(entry[0])].push(entry);
+    for (const entry of Object.entries(fields)) {
+        // Los campos del dock no pertenecen a NINGUNA pestaña: renderizarlos también en el
+        // inspector duplicaría el control y las dos copias pelearían por el mismo prop.
+        if (DOCK_FIELD_KEYS.includes(entry[0])) continue;
+        out[tabOfFieldKey(entry[0])].push(entry);
+    }
     return out;
+}
+
+/** Los campos que el DOCK inferior renderiza, preservando el orden de declaración. */
+export function dockFieldEntries(fields: Record<string, VersoField>): FieldEntry[] {
+    return Object.entries(fields).filter(([key]) => DOCK_FIELD_KEYS.includes(key));
 }
 
 export interface TabAvailability {

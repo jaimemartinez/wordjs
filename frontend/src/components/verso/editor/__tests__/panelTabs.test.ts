@@ -6,14 +6,13 @@
 import { describe, expect, it } from "vitest";
 import type { BlockDefinition, VersoField } from "@/lib/verso/registry";
 import { withSharedVersoFields } from "@/lib/verso/sharedFields";
-import { partitionFieldEntries, tabAvailability, tabOfFieldKey } from "../panelTabs";
+import { dockFieldEntries, partitionFieldEntries, tabAvailability, tabOfFieldKey } from "../panelTabs";
 
 const textField = (label: string): VersoField => ({ type: "text", label });
 
 describe("tabOfFieldKey", () => {
     it("mapea las claves compartidas y deja el resto en Contenido", () => {
         expect(tabOfFieldKey("look")).toBe("style");
-        expect(tabOfFieldKey("anim")).toBe("advanced");
         expect(tabOfFieldKey("hide")).toBe("advanced");
         expect(tabOfFieldKey("title")).toBe("content");
         expect(tabOfFieldKey("css")).toBe("content"); // el escape hatch css vive en Contenido, como hoy
@@ -32,7 +31,10 @@ describe("partitionFieldEntries / tabAvailability", () => {
         const parts = partitionFieldEntries(wrapped.fields);
         expect(parts.content.map(([k]) => k)).toEqual(["title"]);
         expect(parts.style.map(([k]) => k)).toEqual(["look"]);
-        expect(parts.advanced.map(([k]) => k)).toEqual(["hide", "anim"]);
+        // `anim` ya NO está en ninguna pestaña: vive en el dock de movimiento. Renderizarlo
+        // también aquí sería dos controles peleando por el mismo prop.
+        expect(parts.advanced.map(([k]) => k)).toEqual(["hide"]);
+        expect(dockFieldEntries(wrapped.fields).map(([k]) => k)).toEqual(["anim"]);
         const avail = tabAvailability(wrapped.fields);
         expect(avail).toEqual({ content: true, style: true, advanced: true });
     });
@@ -62,6 +64,11 @@ describe("partitionFieldEntries / tabAvailability", () => {
         };
         const parts = partitionFieldEntries(fields);
         expect(parts.content.map(([k]) => k)).toEqual(["b", "a"]);
-        expect(parts.advanced.map(([k]) => k)).toEqual(["hide", "anim"]);
+        expect(parts.advanced.map(([k]) => k)).toEqual(["hide"]);
+        expect(dockFieldEntries(fields).map(([k]) => k)).toEqual(["anim"]);
+    });
+
+    it("los root fields no aportan nada al dock — la página no se anima", () => {
+        expect(dockFieldEntries({ title: textField("Title") })).toEqual([]);
     });
 });

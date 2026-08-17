@@ -102,6 +102,7 @@ import SaveStateChip from "./SaveStateChip";
 import BlockPalette from "./BlockPalette";
 import OutlineTree from "./OutlineTree";
 import PropertiesPanel from "./PropertiesPanel";
+import IxDock from "./IxDock";
 import PatternsPanel from "./PatternsPanel";
 import VersoCommandPalette from "./VersoCommandPalette";
 import { buildVersoPaletteActions, importDataIntoHandle, saveSelectedAsSymbol } from "./paletteActions";
@@ -1157,9 +1158,14 @@ export default function VersoEditor({
                         </div>
                     </div>
 
+                    {/* COLUMNA CENTRAL — canvas arriba, dock de MOVIMIENTO abajo (interacciones +
+                        animación de entrada, con el ancho que el timeline necesita). El área de
+                        medida del canvas (`areaRef`) es el hijo flexible: abrir o plegar el dock
+                        re-mide y re-escala la tarjeta solo. */}
+                    <div className="flex-1 min-w-0 h-full min-h-0 flex flex-col">
                     {/* CANVAS — retícula de puntos + tarjeta/bisel a ancho real de dispositivo,
                         escalado a caber (piel exacta del PreviewFrame actual). */}
-                    <div ref={areaRef} className="flex-1 relative overflow-hidden bg-[var(--ed-surface-container-low)] h-full min-h-0">
+                    <div ref={areaRef} className="flex-1 relative overflow-hidden bg-[var(--ed-surface-container-low)] min-h-0">
                         <div
                             className="absolute inset-0 pointer-events-none"
                             style={{ backgroundImage: "radial-gradient(#c8c4d5 0.5px, transparent 0.5px)", backgroundSize: "20px 20px" }}
@@ -1259,6 +1265,10 @@ export default function VersoEditor({
                                 )}
                             </div>
                         </div>
+                    </div>
+
+                    {/* DOCK DE MOVIMIENTO — interacciones y animación de entrada, en su panel. */}
+                    <IxDock handle={handle} registry={registry} />
                     </div>
 
                     {/* PANEL DERECHO — propiedades (docked 320px / sheet móvil) */}

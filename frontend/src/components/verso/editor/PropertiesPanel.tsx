@@ -15,13 +15,9 @@
  *  - "Restablecer estilos": vuelve look/anim/hide a los defaultProps del tipo, vía transact
  *    (undoable), contenido intacto — la semántica exacta del reset actual.
  *
- * INTERACCIONES (F9-D): el panel de interacciones se monta en AVANZADO, junto a `anim` — es su
- * hermano mayor (`anim` es la entrada de siempre; `ix` es la timeline). Va aquí y NO como un campo
- * inyectado por `withSharedVersoFields` a propósito: ese seam está sujeto a un gate anti-drift que
- * compara clave a clave los `fields` de Verso con los de `versoConfig` (verso-coreBlocks.test.ts), y
- * `ix` no existe —ni va a existir— en el editor viejo, al que Verso sustituye. Inyectarlo allí
- * rompería el gate para los 30 bloques a cambio de nada: el dato es idéntico (`props.ix`) y la
- * escritura también (`transact`+`setProps`), solo cambia quién pinta el control.
+ * MOVIMIENTO: las interacciones (`ix`) y la animación de entrada (`anim`) YA NO se montan aquí —
+ * viven en el DOCK inferior de movimiento (IxDock), con el ancho que su línea de tiempo necesita.
+ * El reparto de panelTabs (DOCK_FIELD_KEYS) los retira de las pestañas: un solo dueño por prop.
  */
 import React, { useEffect, useMemo, useState } from "react";
 import MSym from "@/components/editor/MSym";
@@ -32,8 +28,6 @@ import type { EditorHandle } from "@/lib/verso/store";
 import type { BlockRegistry, VersoField } from "@/lib/verso/registry";
 import type { VersoEditorState } from "@/lib/verso/types";
 import { useStoreSlice } from "../render/context";
-import { useSiteIxPresets } from "../canvas/useSiteIxPresets";
-import InteractionsControl from "../fields/InteractionsControl";
 import VersoFieldControl, { type RenderExternalPicker } from "../fields/VersoFieldControl";
 import { partitionFieldEntries, tabAvailability, type PanelTab } from "./panelTabs";
 
@@ -66,14 +60,9 @@ export default function PropertiesPanel({ handle, registry, rootFields, renderEx
 
     const fields: Record<string, VersoField> = def?.fields ?? rootFields;
     const parts = useMemo(() => partitionFieldEntries(fields), [fields]);
-    // Con un bloque seleccionado, AVANZADO siempre tiene contenido: aunque su definición no declare
-    // `anim`/`hide` (el opt-out del seam), el panel de interacciones vive ahí y aplica a todos.
-    const availFields = useMemo(() => tabAvailability(fields), [fields]);
-    const avail = useMemo(
-        () => (node ? { ...availFields, advanced: true } : availFields),
-        [availFields, node],
-    );
-    const ixCtx = useSiteIxPresets();
+    // Las interacciones y la animación de entrada viven en el DOCK inferior de movimiento
+    // (IxDock + DOCK_FIELD_KEYS): el inspector ya no fuerza Avanzado — pestaña vacía, pestaña fuera.
+    const avail = useMemo(() => tabAvailability(fields), [fields]);
 
     const [tab, setTab] = useState<PanelTab>("content");
     useEffect(() => {
@@ -185,20 +174,6 @@ export default function PropertiesPanel({ handle, registry, rootFields, renderEx
                             renderExternalPicker={renderExternalPicker}
                         />
                     ))}
-                    {/* Interacciones — solo con bloque seleccionado: la página no es un objeto que
-                        se pueda animar, y `ix` es una prop de bloque (nunca de root). */}
-                    {tab === "advanced" && node && (
-                        <InteractionsControl
-                            key={`${node.id}:ix`}
-                            value={values.ix}
-                            ixCtx={ixCtx}
-                            // El objetivo «las palabras» solo se ofrece si el RENDER del bloque
-                            // emite los spans por palabra. Lo declara su definición (`ixText`), no
-                            // lo adivina el panel.
-                            supportsWords={def?.ixText === true}
-                            onChange={(v) => onFieldChange("ix", v)}
-                        />
-                    )}
                 </div>
                 {/* Estado de drag — los campos no pueden aplicar a un bloque en el aire. */}
                 {isDragging && (
