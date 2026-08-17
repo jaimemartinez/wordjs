@@ -2,8 +2,8 @@
   "version": 1,
   "source": "backend/public/css/wordjs-ui.css",
   "counts": {
-    "tokens": 773,
-    "varUses": 1757,
+    "tokens": 774,
+    "varUses": 1760,
     "elements": 51
   },
   "tokens": {
@@ -483,7 +483,7 @@
       ],
       "consumers": [
         {
-          "selector": ".wp-block-accordion__panel",
+          "selector": ".wp-block-accordion__panel-body",
           "property": "font-family"
         }
       ]
@@ -496,7 +496,7 @@
       ],
       "consumers": [
         {
-          "selector": ".wp-block-accordion__panel",
+          "selector": ".wp-block-accordion__panel-body",
           "property": "padding"
         }
       ]
@@ -511,6 +511,25 @@
         {
           "selector": ".wp-block-accordion",
           "property": "border-radius"
+        }
+      ]
+    },
+    "--wjs-accordion-reveal": {
+      "group": "accordion",
+      "declaredDefault": null,
+      "fallbacks": [
+        "280ms"
+      ],
+      "consumers": [
+        {
+          "selector": ".wp-block-accordion__panel",
+          "property": "transition",
+          "media": "screen and (prefers-reduced-motion: no-preference)"
+        },
+        {
+          "selector": ".wp-block-accordion__item.is-open > .wp-block-accordion__panel",
+          "property": "transition",
+          "media": "screen and (prefers-reduced-motion: no-preference)"
         }
       ]
     },
@@ -8544,7 +8563,7 @@
           "property": "padding"
         },
         {
-          "selector": ".wp-block-accordion__panel",
+          "selector": ".wp-block-accordion__panel-body",
           "property": "padding"
         },
         {
@@ -8705,7 +8724,7 @@
           "property": "padding"
         },
         {
-          "selector": ".wp-block-accordion__panel",
+          "selector": ".wp-block-accordion__panel-body",
           "property": "padding"
         },
         {
@@ -13926,6 +13945,9 @@
         },
         "panel": {
           "selector": ".wp-block-accordion__panel"
+        },
+        "panel-body": {
+          "selector": ".wp-block-accordion__panel-body"
         }
       }
     },

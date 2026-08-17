@@ -1602,11 +1602,55 @@ h6.wjs-block-heading, h6.wp-block-heading { font-size: var(--wjs-heading-size, v
 .wjs-block-accordion__icon, .wp-block-accordion__icon { flex: none; color: var(--wjs-accordion-icon-color, inherit); transition: transform 0.2s ease; }
 .wjs-block-accordion__item.is-open .wjs-block-accordion__icon, .wp-block-accordion__item.is-open .wp-block-accordion__icon { transform: var(--wjs-accordion-icon-open-transform, rotate(180deg)); }
 .wjs-block-accordion__item.is-open .wjs-block-accordion__header, .wp-block-accordion__item.is-open .wp-block-accordion__header { color: var(--wjs-accordion-active-color, var(--wjs-color-primary)); }
+/* El panel se REVELA con una transición de altura hecha con grid (0fr → 1fr). Se eligió esta
+ * técnica y no `interpolate-size`/`calc-size()` —que animan hasta `height:auto` y son mucho más
+ * directas— porque en 2026 esas dos siguen siendo exclusivas de Chromium: aquí funcionan los tres
+ * motores, y sin medir un solo píxel en JavaScript.
+ *
+ * El panel vive SIEMPRE en el DOM (su contenido es HTML del servidor, rastreable). Cerrado es
+ * `visibility:hidden`, así que sale del árbol de accesibilidad y del orden de tabulación — la
+ * misma postura que el cajón OffCanvas. La visibilidad se conmuta con `0s`: al ABRIR, de inmediato
+ * (si no, el contenido aparecería al final del recorrido); al CERRAR, con el retardo justo de la
+ * transición, para que no desaparezca antes de terminar de plegarse. */
 .wjs-block-accordion__panel, .wp-block-accordion__panel {
-  padding: var(--wjs-accordion-panel-pad, var(--wjs-md) var(--wjs-lg));
-  font-family: var(--wjs-accordion-panel-family, inherit);
+  display: grid;
+  grid-template-rows: 0fr;
+  visibility: hidden;
   background: var(--wjs-accordion-panel-bg, var(--wjs-bg-muted));
   color: var(--wjs-accordion-panel-color, var(--wjs-color-text-muted));
+}
+.wjs-block-accordion__item.is-open > .wjs-block-accordion__panel,
+.wp-block-accordion__item.is-open > .wp-block-accordion__panel {
+  grid-template-rows: 1fr;
+  visibility: visible;
+}
+/* La caja interior es SOLO el recorte: sin `min-height:0` la fila no puede bajar de la altura
+ * natural del contenido y no habría pliegue.
+ *
+ * Y el relleno NO puede vivir aquí: el `padding` no colapsa con `min-height:0` —la caja mide
+ * contenido(0) + relleno—, así que un panel cerrado se quedaba en 32px en vez de cero (medido en el
+ * navegador). Por eso el relleno baja un nivel más, DENTRO de la zona recortada, conservando el
+ * mismo nombre de token para que los temas que lo fijan no se enteren del cambio. */
+.wjs-block-accordion__panel-inner, .wp-block-accordion__panel-inner {
+  overflow: hidden;
+  min-height: 0;
+}
+.wjs-block-accordion__panel-body, .wp-block-accordion__panel-body {
+  padding: var(--wjs-accordion-panel-pad, var(--wjs-md) var(--wjs-lg));
+  font-family: var(--wjs-accordion-panel-family, inherit);
+}
+@media screen and (prefers-reduced-motion: no-preference) {
+  .wjs-block-accordion__panel, .wp-block-accordion__panel {
+    transition:
+      grid-template-rows var(--wjs-accordion-reveal, 280ms) cubic-bezier(.16, 1, .3, 1),
+      visibility 0s linear var(--wjs-accordion-reveal, 280ms);
+  }
+  .wjs-block-accordion__item.is-open > .wjs-block-accordion__panel,
+  .wp-block-accordion__item.is-open > .wp-block-accordion__panel {
+    transition:
+      grid-template-rows var(--wjs-accordion-reveal, 280ms) cubic-bezier(.16, 1, .3, 1),
+      visibility 0s;
+  }
 }
 
 /* ---------------------------------------------------------------------- TABS - */
