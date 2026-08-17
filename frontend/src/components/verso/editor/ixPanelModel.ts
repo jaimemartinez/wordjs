@@ -25,20 +25,24 @@
  * que es el motivo entero de que los presets se guarden por referencia.
  */
 import {
+  IX_DEFAULT_RANGES,
   IX_DELAY_MAX,
   IX_DELAY_MIN,
   IX_DUR_MAX,
   IX_DUR_MIN,
   IX_MAX_STEPS,
   IX_PROP_KEYS,
+  IX_REPEAT_MAX,
   IX_STAGGER_MAX,
   normalizeIxSpec,
   resolveIxBody,
   type IxCompileCtx,
   type IxEase,
+  type IxEdgeName,
   type IxPreset,
   type IxPropKey,
   type IxProps,
+  type IxRange,
   type IxSpec,
   type IxStep,
   type IxTarget,
@@ -80,6 +84,18 @@ export const IX_EASE_LABELS: Readonly<Record<IxEase, string>> = Object.freeze({
   "in-out": "Suave",
   spring: "Muelle",
   back: "Impulso",
+});
+
+/**
+ * Aristas de `animation-range`, en lenguaje de autor. El DATO conserva el vocabulario de la
+ * especificación (`cover`/`entry`/…); estas frases describen el RECORRIDO que cada arista define,
+ * que es lo que el autor está eligiendo.
+ */
+export const IX_EDGE_LABELS: Readonly<Record<IxEdgeName, string>> = Object.freeze({
+  cover: "Todo el recorrido",
+  entry: "Mientras entra",
+  contain: "Mientras está entero",
+  exit: "Mientras sale",
 });
 
 export const IX_PROP_LABELS: Readonly<Record<IxPropKey, string>> = Object.freeze({
@@ -375,14 +391,103 @@ export function setTriggerKind(raw: unknown, kind: IxPanelTriggerKind, ctx?: IxC
   return write({ v: 1, trigger, tracks: body.tracks });
 }
 
+/**
+ * Escribir un disparador nuevo conservando la naturaleza del cuerpo: el override de `trigger` es lo
+ * ÚNICO que un bloque enlazado a un preajuste puede llevar, así que la propagación sigue intacta.
+ */
+function writeTrigger(raw: unknown, ctx: IxCompileCtx | undefined, trigger: IxTrigger): IxWrite {
+  const state = ixPanelState(raw, ctx);
+  if (state.presetId !== null) return write({ v: 1, preset: state.presetId, trigger });
+  const body = ownBody(raw, ctx);
+  return write({ v: 1, trigger, tracks: body.tracks });
+}
+
 /** `view`: una sola vez (con latch de JS) o cada vez que entra y sale (CSS puro). */
 export function setViewOnce(raw: unknown, once: boolean, ctx?: IxCompileCtx): IxWrite {
   const state = ixPanelState(raw, ctx);
   if (state.trigger.on !== "view") return normalizeIxSpec(raw)?.spec;
+  // El rango del autor sobrevive al cambio de repetición: pertenece al "cuándo", no al "cuántas".
   const trigger: IxTrigger = { on: "view", once };
-  if (state.presetId !== null) return write({ v: 1, preset: state.presetId, trigger });
-  const body = ownBody(raw, ctx);
-  return write({ v: 1, trigger, tracks: body.tracks });
+  if (state.trigger.range) trigger.range = state.trigger.range;
+  return writeTrigger(raw, ctx, trigger);
+}
+
+/** `click`: conmutar (segundo clic deshace) o quedarse (el primer clic es definitivo). */
+export function setClickToggle(raw: unknown, toggle: boolean, ctx?: IxCompileCtx): IxWrite {
+  const state = ixPanelState(raw, ctx);
+  if (state.trigger.on !== "click") return normalizeIxSpec(raw)?.spec;
+  const trigger: IxTrigger = toggle ? { on: "click", toggle: true } : { on: "click" };
+  return writeTrigger(raw, ctx, trigger);
+}
+
+/** `load`: retardo del DISPARADOR (se suma al de cada pista). 0 lo quita. */
+export function setLoadDelay(raw: unknown, ms: number, ctx?: IxCompileCtx): IxWrite {
+  const state = ixPanelState(raw, ctx);
+  if (state.trigger.on !== "load") return normalizeIxSpec(raw)?.spec;
+  const delay = clampInput(ms, IX_DELAY_MIN, IX_DELAY_MAX, 0);
+  const trigger: IxTrigger = delay > 0 ? { on: "load", delay } : { on: "load" };
+  return writeTrigger(raw, ctx, trigger);
+}
+
+/** `scrub`: el progreso lo marca el recorrido del bloque (`self`) o el scroll de la página. */
+export function setScrubSrc(raw: unknown, src: "self" | "page", ctx?: IxCompileCtx): IxWrite {
+  const state = ixPanelState(raw, ctx);
+  if (state.trigger.on !== "scrub") return normalizeIxSpec(raw)?.spec;
+  const trigger: IxTrigger = { on: "scrub" };
+  if (src === "page") trigger.src = "page";
+  if (state.trigger.range) trigger.range = state.trigger.range;
+  return writeTrigger(raw, ctx, trigger);
+}
+
+/** ¿El disparador efectivo tiene un rango de scroll editable? (scrub, o view que entra y sale). */
+export function rangeEditable(trigger: IxTrigger): boolean {
+  return trigger.on === "scrub" || (trigger.on === "view" && trigger.once === false);
+}
+
+/**
+ * El rango que el panel debe MOSTRAR: el del autor si lo hay, y si no el por defecto del
+ * compilador — copiado en profundidad, porque el destino de este objeto es el documento y compartir
+ * la referencia congelada del compilador sería una fuga de aliasing.
+ */
+export function effectiveRange(trigger: IxTrigger): IxRange {
+  const base =
+    (trigger.on === "scrub" || trigger.on === "view" ? trigger.range : undefined) ??
+    IX_DEFAULT_RANGES[trigger.on === "scrub" ? "scrub" : "view"];
+  return {
+    from: { at: base.from.at, pct: base.from.pct },
+    to: { at: base.to.at, pct: base.to.pct },
+  };
+}
+
+/** Editar UN borde del rango (nombre de arista, %, o ambos). */
+export function setRangeEdge(
+  raw: unknown,
+  which: "from" | "to",
+  patch: { at?: IxEdgeName; pct?: number },
+  ctx?: IxCompileCtx,
+): IxWrite {
+  const state = ixPanelState(raw, ctx);
+  if (!rangeEditable(state.trigger)) return normalizeIxSpec(raw)?.spec;
+  const range = effectiveRange(state.trigger);
+  const edge = range[which];
+  if (patch.at !== undefined) edge.at = patch.at;
+  if (patch.pct !== undefined) edge.pct = clampInput(Math.round(patch.pct), 0, 100, edge.pct);
+  const trigger: IxTrigger =
+    state.trigger.on === "scrub"
+      ? { on: "scrub", range, ...(state.trigger.src === "page" ? { src: "page" as const } : {}) }
+      : { on: "view", once: false, range };
+  return writeTrigger(raw, ctx, trigger);
+}
+
+/** Volver al rango por defecto: se BORRA el del autor (ausencia = defecto del compilador). */
+export function resetRange(raw: unknown, ctx?: IxCompileCtx): IxWrite {
+  const state = ixPanelState(raw, ctx);
+  if (!rangeEditable(state.trigger)) return normalizeIxSpec(raw)?.spec;
+  const trigger: IxTrigger =
+    state.trigger.on === "scrub"
+      ? { on: "scrub", ...(state.trigger.src === "page" ? { src: "page" as const } : {}) }
+      : { on: "view", once: false };
+  return writeTrigger(raw, ctx, trigger);
 }
 
 /**
@@ -426,6 +531,34 @@ export function setStagger(raw: unknown, each: number, ctx?: IxCompileCtx): IxWr
 export function setDuration(raw: unknown, ms: number, ctx?: IxCompileCtx): IxWrite {
   const dur = clampInput(ms, IX_DUR_MIN, IX_DUR_MAX, 600);
   return patchTrack0(raw, ctx, (t) => ({ ...t, dur }));
+}
+
+/**
+ * Repetición de la pista 0. `1` es el valor inicial de CSS y se BORRA de la prop (mismo criterio
+ * que el emisor, que omite las partes del atajo con su valor inicial): un bloque al que el autor
+ * puso y quitó la repetición vuelve a sus bytes exactos.
+ */
+export function setRepeat(raw: unknown, rep: number | "inf", ctx?: IxCompileCtx): IxWrite {
+  return patchTrack0(raw, ctx, (t) => {
+    const next: IxTrack = { ...t };
+    if (rep === "inf") next.repeat = "inf";
+    else {
+      const v = clampInput(Math.round(rep), 1, IX_REPEAT_MAX, 1);
+      if (v <= 1) delete next.repeat;
+      else next.repeat = v;
+    }
+    return next;
+  });
+}
+
+/** Ida y vuelta (`animation-direction: alternate`). `false` borra la clave. */
+export function setAlternate(raw: unknown, alt: boolean, ctx?: IxCompileCtx): IxWrite {
+  return patchTrack0(raw, ctx, (t) => {
+    const next: IxTrack = { ...t };
+    if (alt) next.alt = true;
+    else delete next.alt;
+    return next;
+  });
 }
 
 export function setDelay(raw: unknown, ms: number, ctx?: IxCompileCtx): IxWrite {

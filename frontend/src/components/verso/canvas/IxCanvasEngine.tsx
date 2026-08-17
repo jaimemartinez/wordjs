@@ -29,12 +29,13 @@
  * contenido de un bloque no entra en ella, así que escribir texto no toca ni el CSS ni el runtime.
  * Sin eso, cada pulsación re-armaría los bloques y el canvas parpadearía sin parar.
  *
- * ⚠ DIFERENCIA CONOCIDA con el sitio público, acotada: las clases del canvas salen del hash
- * "desnudo" (`ixLayer` sin página, que es lo que estampa `VersoBlock`), mientras que el público
- * puede añadir un sufijo de desambiguación si dos cuerpos DISTINTOS colisionan en el mismo hash de
- * 32 bits dentro de una misma página. Cuando eso ocurre —y con decenas de unidades por página es
- * remotísimo— el canvas enseña el movimiento del primer cuerpo en el segundo bloque. Nunca al
- * revés, y nunca en el sitio publicado.
+ * CLASES CON SUFIJO DE COLISIÓN: la hoja que se emite aquí sale de `compileIxPage`, así que en una
+ * colisión de hash de 32 bits entre dos cuerpos distintos lleva las clases desambiguadas
+ * (`…__1`). Antes `VersoBlock` estampaba el hash desnudo y esa clase no casaba ni con esta hoja ni
+ * con el público; hoy el renderer del editor compila la MISMA página (`useCompiledIxPage`, en el
+ * contexto de render) y la clase del bloque sale de ella — una compilación, dos consumidores, cero
+ * margen para divergir. El test de colisión de editorRenderer.test.tsx lo vigila con una colisión
+ * FNV real.
  */
 import React from "react";
 import {

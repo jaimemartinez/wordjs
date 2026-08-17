@@ -66,11 +66,16 @@ export type IxCompileCtx = {
  */
 export const IX_DEFAULT_TRIGGER: IxTrigger = { on: "view", once: true };
 
-/** Rango por defecto de cada disparador ligado a scroll (§4.2 de la spec). */
-const DEFAULT_RANGE: Readonly<Record<"scrub" | "view", IxRange>> = Object.freeze({
+/**
+ * Rango por defecto de cada disparador ligado a scroll (§4.2 de la spec). Exportado para que el
+ * panel pueda EDITAR "el rango que hay" cuando el autor aún no puso ninguno — la alternativa sería
+ * duplicar estos valores en el modelo del panel y que un día divergieran.
+ */
+export const IX_DEFAULT_RANGES: Readonly<Record<"scrub" | "view", IxRange>> = Object.freeze({
   scrub: { from: { at: "cover", pct: 0 }, to: { at: "cover", pct: 100 } },
   view: { from: { at: "entry", pct: 0 }, to: { at: "cover", pct: 40 } },
 });
+const DEFAULT_RANGE = IX_DEFAULT_RANGES;
 
 /* ------------------------------------------------------------------ */
 /* Resolución del cuerpo (preset por referencia)                       */

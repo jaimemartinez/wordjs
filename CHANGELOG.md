@@ -8,6 +8,14 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Added
 
+- **Interactions: full trigger and playback controls in the panel.** What the engine's data model
+  already supported now has switches an author can reach: repeat count / infinite / ping-pong
+  playback, click-to-toggle (second click undoes), a trigger delay for load animations, the choice
+  of which scroll drives a scrub (the block's own journey or the page), and a range editor for
+  scroll-driven triggers in author language. Options a given path cannot express (repeat on a
+  scroll-driven track, stagger without siblings) now surface as visible warnings instead of
+  silently doing nothing.
+
 - **Verso, WordJS's own visual editor.** The editor is no longer a vendored fork with a wrapper
   around it: the document model, the canvas, drag-and-drop, undo/redo, the inline text engine and the
   block registry are all in-house. What that buys you day to day: block ids stay stable across edits,
@@ -49,6 +57,19 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   unusable value is a startup error rather than a silent fallback.
 
 ### Fixed
+
+- **Interactions: page-linked scrub now measures the same thing in every browser.** The fallback
+  driver used by browsers without native scroll-driven animations measured the element's journey
+  through the viewport even when the interaction was linked to the page's scroll; it now measures
+  document scroll progress, exactly like the native `scroll()` timeline. The compiler also stopped
+  emitting view-timeline range names for `scroll()` timelines — percentages only, which is the
+  portable meaning.
+
+- **Interactions: the editor canvas can no longer disagree with the published page about which
+  animation a block gets.** The canvas now resolves block classes from the same whole-page
+  compilation the public site uses, closing a corner case where two different interactions sharing
+  a 32-bit hash showed the first one's motion on the second block in the canvas (guarded by a test
+  built on a real hash collision found by brute force).
 
 - **Separate mode (three machines) was unusable, in three ways that only appear when the tiers are
   actually apart.** The installer recorded the *backend's* address as the public site origin — it read

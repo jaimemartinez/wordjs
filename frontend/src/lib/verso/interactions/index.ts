@@ -74,6 +74,7 @@ export {
   resolveIxBody,
   toRuntimeUnit,
   IX_CLASS_PREFIX,
+  IX_DEFAULT_RANGES,
   IX_DEFAULT_TRIGGER,
   IX_KEYFRAME_PREFIX,
   IX_WORD_INDEX_VAR,

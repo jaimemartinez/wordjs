@@ -15,7 +15,7 @@ import type React from "react";
 import type { EditorHandle } from "@/lib/verso/store";
 import type { VersoEditorState, VersoNode } from "@/lib/verso/types";
 import type { BlockRegistry } from "@/lib/verso/registry";
-import type { IxCompileCtx } from "@/lib/verso/interactions";
+import { compileIxPage, type IxCompileCtx, type IxPage } from "@/lib/verso/interactions";
 
 /**
  * Contrato de slot — el MISMO de ContentRenderer/TemplateRenderer y del editor
@@ -66,6 +66,15 @@ export interface VersoRenderContextValue {
    * peor forma posible de fallar.
    */
   ixCtx?: IxCompileCtx;
+  /**
+   * La página de interacciones COMPILADA (deduplicación + sufijos de colisión), la misma que el
+   * sitio público pasa a `SharedBlockShell`. Sin ella el bloque estamparía el hash "desnudo" y, si
+   * dos cuerpos distintos colisionan en el mismo hash de 32 bits, su clase no coincidiría con la
+   * hoja que emite `IxCanvasEngine` (que compila la página entera): el segundo bloque enseñaría el
+   * movimiento del primero. Con ella, la clase del lienzo y la del público salen del MISMO sitio
+   * por construcción. Identidad estable entre compilaciones equivalentes (ver `useCompiledIxPage`).
+   */
+  ixPage?: IxPage;
 }
 
 export const VersoRenderContext = createContext<VersoRenderContextValue | null>(null);
@@ -99,6 +108,75 @@ export function useStoreSlice<T>(handle: EditorHandle, selector: (state: VersoEd
 
 export const selectRootChildren = (s: VersoEditorState): string[] => s.doc.rootChildren;
 export const selectInlineEditingId = (s: VersoEditorState): string | null => s.inlineEditingId;
+const selectDocNodes = (s: VersoEditorState) => s.doc.nodes;
+
+/* ------------------------------------------------------------------ */
+/* Página de interacciones compilada, con identidad ESTABLE.           */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Compila las `ix` de TODOS los nodos con el mismo `compileIxPage` del sitio público, y devuelve un
+ * objeto cuya IDENTIDAD solo cambia cuando cambia lo compilado.
+ *
+ * La estabilidad no es cosmética, es doblemente obligatoria: (a) este objeto entra en el value del
+ * contexto del renderer, y los bloques (`React.memo`) re-renderizarían TODOS con cada identidad
+ * nueva; (b) `useSyncExternalStore` EXIGE que `getSnapshot` devuelva el mismo valor mientras el
+ * store no cambie. El mapa de nodos cambia de referencia con cada pulsación de texto, pero el TEXTO
+ * de un bloque no entra en la compilación — así que el snapshot se cachea en dos niveles: por
+ * identidad del mapa de nodos (no recompilar dentro del mismo estado) y por SALIDA (`css` + JSON
+ * del manifiesto del runtime, que juntos determinan unidades, clases y sufijos): si la salida es
+ * igual, se conserva el objeto anterior. Es la misma firma que ya usa `IxCanvasEngine` para no
+ * re-armar el runtime al teclear. Forma de external store y no de `useMemo`+ref porque mutar un ref
+ * durante el render está vetado (react-hooks/refs) y esto ES un store: el par
+ * {subscribe, getSnapshot} con caché es el contrato, no un truco.
+ */
+/**
+ * Caché por handle, en ámbito de MÓDULO (patrón reselect): `getSnapshot` tiene que devolver la
+ * misma referencia mientras nada cambie, y eso obliga a memoizar. Un ref o una variable del closure
+ * del componente lo prohíbe el linter del compilador de React (reasignar tras el render); una caché
+ * de módulo sobre un WeakMap es la memoización de derivados de toda la vida, se libera con el
+ * handle, y de paso queda UNA por editor aunque el hook se use desde varios consumidores.
+ */
+type IxPageCacheEntry = {
+  ctx: IxCompileCtx | undefined;
+  nodes: unknown;
+  page: IxPage;
+  sig: string;
+};
+const IX_PAGE_CACHE = new WeakMap<EditorHandle, IxPageCacheEntry>();
+
+function compiledIxPageSnapshot(handle: EditorHandle, ixCtx?: IxCompileCtx): IxPage {
+  const nodes = selectDocNodes(handle.getState());
+  const hit = IX_PAGE_CACHE.get(handle);
+  // Mismo mapa de nodos y mismo catálogo → mismo snapshot, sin recompilar (getSnapshot puede
+  // llamarse varias veces por render).
+  if (hit && hit.ctx === ixCtx && hit.nodes === nodes) return hit.page;
+
+  const specs = Object.values(nodes).map((node) => node.props.ix);
+  const page = compileIxPage(specs, ixCtx);
+  const sig = JSON.stringify(page.runtime);
+  // Salida byte-igual (css + manifiesto del runtime, que juntos determinan unidades, clases y
+  // sufijos) → se CONSERVA la identidad anterior y ningún memo aguas abajo se entera de que se
+  // tecleó texto.
+  if (hit && hit.ctx === ixCtx && hit.page.css === page.css && hit.sig === sig) {
+    IX_PAGE_CACHE.set(handle, { ctx: ixCtx, nodes, page: hit.page, sig: hit.sig });
+    return hit.page;
+  }
+  IX_PAGE_CACHE.set(handle, { ctx: ixCtx, nodes, page, sig });
+  return page;
+}
+
+export function useCompiledIxPage(handle: EditorHandle, ixCtx?: IxCompileCtx): IxPage {
+  const subscribe = useCallback(
+    (onStoreChange: () => void) => handle.subscribe(() => onStoreChange(), selectDocNodes),
+    [handle],
+  );
+  const getSnapshot = useCallback(
+    () => compiledIxPageSnapshot(handle, ixCtx),
+    [handle, ixCtx],
+  );
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+}
 
 /* ------------------------------------------------------------------ */
 /* Suscripción por nodo — la base del render selectivo.                */

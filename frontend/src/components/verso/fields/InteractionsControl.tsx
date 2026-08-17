@@ -8,11 +8,13 @@
  *                         sus hijos escalonados, las palabras), con duración y retardo.
  *   Nivel 3 — Pasos       tras un `<details>`: por paso, su momento, su curva y sus propiedades.
  *
- * TODO EL MARKUP SALE DE `VersoFieldControl`. No hay ni un `<input>` suelto en este fichero: cada
- * control es un `VersoField` (`select` / `radio` / `number`) renderizado por el mismo componente que
- * pinta el resto del panel. Eso no es estética — es de dónde salen el `<label for>` con `useId`, el
- * `fieldset/legend` del radiogrupo y el `aria-label` posicional de los botones. Un control a mano
- * aquí sería un control con su propia accesibilidad, y sería la que se olvidase.
+ * TODO EL MARKUP SALE DE `VersoFieldControl`: cada control es un `VersoField` (`select` / `radio` /
+ * `number`) renderizado por el mismo componente que pinta el resto del panel. Eso no es estética —
+ * es de dónde salen el `<label for>` con `useId`, el `fieldset/legend` del radiogrupo y el
+ * `aria-label` posicional de los botones. Un control a mano aquí sería un control con su propia
+ * accesibilidad, y sería la que se olvidase. Única excepción: los dos checkboxes de «Reproducción»
+ * (`VersoField` no tiene tipo checkbox); su `<label>` ENVUELVE al `<input>`, así que el nombre
+ * accesible es intrínseco y no hay un `for`/`id` que se pueda desasociar.
  *
  * TODA LA LÓGICA SALE DE `ixPanelModel.ts`, que es puro y está probado en node: este fichero decide
  * qué se muestra, nunca qué se guarda. Cada escritura devuelve un valor NUEVO ya normalizado y sube
@@ -30,9 +32,11 @@ import {
   IX_MAX_STEPS,
   IX_MAX_WORDS,
   IX_PROP_NEUTRAL,
+  IX_REPEAT_MAX,
   IX_STAGGER_MAX,
   type IxCompileCtx,
   type IxEase,
+  type IxEdgeName,
   type IxPropKey,
   type IxStep,
 } from "@/lib/verso/interactions";
@@ -41,13 +45,22 @@ import {
   addStep,
   availableProps,
   clearIx,
+  effectiveRange,
   ixPanelState,
   ixPresetChoice,
   ixPresetOptions,
+  rangeEditable,
   removeStep,
+  resetRange,
+  setAlternate,
+  setClickToggle,
   setDelay,
   setDuration,
+  setLoadDelay,
   setPresetChoice,
+  setRangeEdge,
+  setRepeat,
+  setScrubSrc,
   setStagger,
   setStepAt,
   setStepEase,
@@ -58,6 +71,7 @@ import {
   unlinkPreset,
   usedProps,
   IX_EASE_LABELS,
+  IX_EDGE_LABELS,
   IX_PROP_INPUT,
   IX_PROP_LABELS,
   IX_PROP_UNITS,
@@ -73,9 +87,16 @@ import VersoFieldControl from "./VersoFieldControl";
 const BTN =
   "rounded border border-[var(--ed-outline-variant)] px-2 py-1 text-[11px] text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container)] disabled:opacity-40";
 const HINT = "text-[10px] text-[var(--ed-outline)] mt-1.5";
+// Grupo compuesto (varios controles bajo una leyenda): mismo trazo que el fieldset de ObjectControl.
+const GROUP = "mb-3 rounded border border-[var(--ed-outline-variant)] p-2";
+const LEGEND = "px-1 text-xs font-medium text-[var(--ed-on-surface-variant)]";
+const CHECK =
+  "mb-3 flex cursor-pointer items-center gap-1.5 text-xs text-[var(--ed-on-surface-variant)]";
 
 const TRIGGERS: IxPanelTriggerKind[] = ["view", "scrub", "hover", "click", "load"];
 const EASES = Object.keys(IX_EASINGS) as IxEase[];
+/** Aristas de `animation-range`, en el orden en que se cruzan al hacer scroll. */
+const EDGES: IxEdgeName[] = ["cover", "entry", "contain", "exit"];
 
 /**
  * Objetivos que se ofrecen SIEMPRE. `words` (el split por palabras) no está aquí porque no es una
@@ -131,6 +152,13 @@ export default function InteractionsControl({
   const track = state.tracks[0];
   const trigger = state.trigger;
   const linked = state.presetId !== null;
+  // Derivados del disparador para el editor de tramo. `hasOwnRange` distingue el rango DEL AUTOR del
+  // por defecto del compilador: «Restablecer» solo tiene sentido cuando hay algo que borrar.
+  const range = rangeEditable(trigger) ? effectiveRange(trigger) : null;
+  const pageScrub = trigger.on === "scrub" && trigger.src === "page";
+  const hasOwnRange = (trigger.on === "scrub" || trigger.on === "view") && trigger.range != null;
+  const infinite = track?.repeat === "inf";
+  const repeatCount = track && typeof track.repeat === "number" ? track.repeat : 1;
 
   const presetField: SelectVersoField = { type: "select", options: presetOptions };
   const triggerField: RadioVersoField = {
@@ -143,6 +171,24 @@ export default function InteractionsControl({
       { label: "Una vez", value: true },
       { label: "Cada vez", value: false },
     ],
+  };
+  const clickToggleField: RadioVersoField = {
+    type: "radio",
+    options: [
+      { label: "Se queda", value: false },
+      { label: "Se deshace", value: true },
+    ],
+  };
+  const scrubSrcField: RadioVersoField = {
+    type: "radio",
+    options: [
+      { label: "El recorrido del bloque", value: "self" },
+      { label: "El scroll de la página", value: "page" },
+    ],
+  };
+  const edgeField: SelectVersoField = {
+    type: "select",
+    options: EDGES.map((e) => ({ label: IX_EDGE_LABELS[e], value: e })),
   };
   const currentTarget = track?.target.kind;
   const targets: IxPanelTargetKind[] =
@@ -243,6 +289,92 @@ export default function InteractionsControl({
             </>
           )}
 
+          {/* Las opciones de cada disparador viajan CON el disparador (el único override local que
+              un bloque enlazado a un preajuste puede llevar), así que se ofrecen también enlazado —
+              igual que «Cuándo». */}
+          {trigger.on === "click" && (
+            <VersoFieldControl
+              field={clickToggleField}
+              name="ix-click-toggle"
+              label="Al segundo clic"
+              value={trigger.toggle === true}
+              onChange={(v) => onChange(setClickToggle(value, v === true, ixCtx))}
+            />
+          )}
+
+          {trigger.on === "load" && (
+            <VersoFieldControl
+              field={msField(0, 3000)}
+              name="ix-load-delay"
+              label="Retardo del disparador (ms)"
+              value={trigger.delay ?? 0}
+              onChange={(v) => onChange(setLoadDelay(value, typeof v === "number" ? v : 0, ixCtx))}
+            />
+          )}
+
+          {trigger.on === "scrub" && (
+            <VersoFieldControl
+              field={scrubSrcField}
+              name="ix-scrub-src"
+              label="Qué scroll manda"
+              value={trigger.src === "page" ? "page" : "self"}
+              onChange={(v) => onChange(setScrubSrc(value, v === "page" ? "page" : "self", ixCtx))}
+            />
+          )}
+
+          {/* ── Tramo del recorrido (scrub, o view que entra y sale) ── */}
+          {range && (
+            <fieldset className={GROUP}>
+              <legend className={LEGEND}>Tramo del recorrido</legend>
+              {(["from", "to"] as const).map((which) => (
+                <div key={which} className="flex gap-2">
+                  {/* Con el scroll de la página las ARISTAS no significan nada (el compilador emite
+                      solo porcentajes ahí): se ofrecen únicamente los dos %. */}
+                  {!pageScrub && (
+                    <div className="flex-1">
+                      <VersoFieldControl
+                        field={edgeField}
+                        name={`ix-range-${which}-at`}
+                        label={which === "from" ? "Desde" : "Hasta"}
+                        value={range[which].at}
+                        onChange={(v) =>
+                          onChange(setRangeEdge(value, which, { at: v as IxEdgeName }, ixCtx))
+                        }
+                      />
+                    </div>
+                  )}
+                  <div className="flex-1">
+                    <VersoFieldControl
+                      field={{ type: "number", min: 0, max: 100, step: 5 }}
+                      name={`ix-range-${which}-pct`}
+                      label={which === "from" ? "Desde (%)" : "Hasta (%)"}
+                      value={range[which].pct}
+                      onChange={(v) =>
+                        onChange(
+                          setRangeEdge(
+                            value,
+                            which,
+                            { pct: typeof v === "number" ? v : range[which].pct },
+                            ixCtx,
+                          ),
+                        )
+                      }
+                    />
+                  </div>
+                </div>
+              ))}
+              {hasOwnRange && (
+                <button
+                  type="button"
+                  className={`${BTN} w-full`}
+                  onClick={() => onChange(resetRange(value, ixCtx))}
+                >
+                  Restablecer tramo
+                </button>
+              )}
+            </fieldset>
+          )}
+
           {linked ? (
             <div
               role="note"
@@ -311,6 +443,47 @@ export default function InteractionsControl({
                     />
                   </div>
                 </div>
+              )}
+
+              {/* Reproducción de la pista — solo con disparadores del RELOJ: con scrub el progreso
+                  lo marca la posición, y «repetir» no significa nada. Con «Infinita» marcada el
+                  número queda en blanco y bloqueado; desmarcarla vuelve a 1 (que borra la clave). */}
+              {isTimed(trigger.on) && (
+                <fieldset className={GROUP}>
+                  <legend className={LEGEND}>Reproducción</legend>
+                  <div className="flex flex-wrap items-end gap-x-2">
+                    <div className="min-w-16 flex-1">
+                      <VersoFieldControl
+                        field={{ type: "number", min: 1, max: IX_REPEAT_MAX, step: 1 }}
+                        name="ix-repeat"
+                        label="Repetición"
+                        value={infinite ? undefined : repeatCount}
+                        readOnly={infinite}
+                        onChange={(v) =>
+                          onChange(setRepeat(value, typeof v === "number" ? v : 1, ixCtx))
+                        }
+                      />
+                    </div>
+                    <label className={CHECK}>
+                      <input
+                        type="checkbox"
+                        checked={infinite}
+                        onChange={(e) =>
+                          onChange(setRepeat(value, e.target.checked ? "inf" : 1, ixCtx))
+                        }
+                      />
+                      Infinita
+                    </label>
+                    <label className={CHECK}>
+                      <input
+                        type="checkbox"
+                        checked={track.alt === true}
+                        onChange={(e) => onChange(setAlternate(value, e.target.checked, ixCtx))}
+                      />
+                      Ida y vuelta
+                    </label>
+                  </div>
+                </fieldset>
               )}
             </>
           )}

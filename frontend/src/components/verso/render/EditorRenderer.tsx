@@ -30,6 +30,7 @@ import IxCanvasEngine from "../canvas/IxCanvasEngine";
 import { useSiteIxPresets } from "../canvas/useSiteIxPresets";
 import {
   selectRootChildren,
+  useCompiledIxPage,
   useStoreSlice,
   VersoRenderContext,
   type VersoComponentMap,
@@ -62,9 +63,13 @@ export default function EditorRenderer({
 }: EditorRendererProps) {
   const rootChildren = useStoreSlice(handle, selectRootChildren);
   const ixCtx = useSiteIxPresets();
+  // La página compilada tiene identidad estable entre compilaciones equivalentes (teclear texto no
+  // la cambia), así que el value del contexto —y con él todos los bloques memo— no se re-crea por
+  // pulsación. Ver useCompiledIxPage.
+  const ixPage = useCompiledIxPage(handle, ixCtx);
   const contextValue = useMemo<VersoRenderContextValue>(
-    () => ({ handle, registry, componentMap, onBlockElement, editorChrome, collabLive, ixCtx }),
-    [handle, registry, componentMap, onBlockElement, editorChrome, collabLive, ixCtx],
+    () => ({ handle, registry, componentMap, onBlockElement, editorChrome, collabLive, ixCtx, ixPage }),
+    [handle, registry, componentMap, onBlockElement, editorChrome, collabLive, ixCtx, ixPage],
   );
   return (
     <VersoRenderContext.Provider value={contextValue}>

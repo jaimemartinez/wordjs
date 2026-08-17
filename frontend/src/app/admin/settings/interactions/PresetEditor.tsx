@@ -27,10 +27,19 @@ import { Button, Card, Input } from "@/components/ui";
 import {
     addStep,
     availableProps,
+    effectiveRange,
     ixPanelState,
+    rangeEditable,
     removeStep,
+    resetRange,
+    setAlternate,
+    setClickToggle,
     setDelay,
     setDuration,
+    setLoadDelay,
+    setRangeEdge,
+    setRepeat,
+    setScrubSrc,
     setStagger,
     setStepAt,
     setStepEase,
@@ -40,6 +49,7 @@ import {
     setViewOnce,
     usedProps,
     IX_EASE_LABELS,
+    IX_EDGE_LABELS,
     IX_PROP_INPUT,
     IX_PROP_LABELS,
     IX_PROP_UNITS,
@@ -54,8 +64,10 @@ import {
     IX_MAX_WORDS,
     IX_PRESET_NAME_MAX,
     IX_PROP_NEUTRAL,
+    IX_REPEAT_MAX,
     IX_STAGGER_MAX,
     type IxEase,
+    type IxEdgeName,
     type IxPropKey,
     type IxSpec,
 } from "@/lib/verso/interactions";
@@ -63,6 +75,8 @@ import {
 const TRIGGERS: IxPanelTriggerKind[] = ["view", "scrub", "hover", "click", "load"];
 const TARGETS: IxPanelTargetKind[] = ["self", "children", "words"];
 const EASES = Object.keys(IX_EASINGS) as IxEase[];
+/** Aristas de `animation-range`, en el orden en que se cruzan al hacer scroll. */
+const EDGES: IxEdgeName[] = ["cover", "entry", "contain", "exit"];
 
 const LABEL = "block text-xs font-bold uppercase tracking-wide text-gray-500 mb-1.5";
 const NUM =
@@ -135,6 +149,12 @@ export default function PresetEditor({
     const track = state.tracks[0];
     const trigger = state.trigger;
     const timed = trigger.on !== "scrub";
+    // Derivados del disparador para el editor de tramo — misma lógica que el panel del bloque.
+    const range = rangeEditable(trigger) ? effectiveRange(trigger) : null;
+    const pageScrub = trigger.on === "scrub" && trigger.src === "page";
+    const hasOwnRange = (trigger.on === "scrub" || trigger.on === "view") && trigger.range != null;
+    const infinite = track?.repeat === "inf";
+    const repeatCount = track && typeof track.repeat === "number" ? track.repeat : 1;
 
     /** Cada escritura devuelve un valor NUEVO ya normalizado; `undefined` (nada animable) se ignora. */
     const write = (next: IxSpec | undefined) => {
@@ -217,6 +237,50 @@ export default function PresetEditor({
                         />
                     )}
 
+                    {trigger.on === "click" && (
+                        <FieldSelect
+                            id="ixp-click-toggle"
+                            label="Al segundo clic"
+                            value={trigger.toggle === true ? "undo" : "stay"}
+                            onChange={(v) => write(setClickToggle(draft, v === "undo"))}
+                            options={[
+                                { value: "stay", label: "Se queda" },
+                                { value: "undo", label: "Se deshace" },
+                            ]}
+                        />
+                    )}
+
+                    {trigger.on === "load" && (
+                        <div>
+                            <label className={LABEL} htmlFor="ixp-load-delay">
+                                Retardo del disparador (ms)
+                            </label>
+                            <input
+                                id="ixp-load-delay"
+                                type="number"
+                                className={NUM}
+                                min={0}
+                                max={3000}
+                                step={50}
+                                value={trigger.delay ?? 0}
+                                onChange={(e) => write(setLoadDelay(draft, Number(e.target.value)))}
+                            />
+                        </div>
+                    )}
+
+                    {trigger.on === "scrub" && (
+                        <FieldSelect
+                            id="ixp-scrub-src"
+                            label="Qué scroll manda"
+                            value={trigger.src === "page" ? "page" : "self"}
+                            onChange={(v) => write(setScrubSrc(draft, v === "page" ? "page" : "self"))}
+                            options={[
+                                { value: "self", label: "El recorrido del bloque" },
+                                { value: "page", label: "El scroll de la página" },
+                            ]}
+                        />
+                    )}
+
                     {(track.target.kind === "children" || track.target.kind === "words") && (
                         <div>
                             <label className={LABEL} htmlFor="ixp-stagger">
@@ -277,6 +341,110 @@ export default function PresetEditor({
                         (Título y Cita). No se parte si el texto lleva formato o si pasa de{" "}
                         {IX_MAX_WORDS} palabras: entonces se ve igual que siempre, sin movimiento.
                     </p>
+                )}
+
+                {/* Tramo del recorrido: solo cuando el progreso lo marca el scroll (scrub, o view
+                    que entra y sale). Con el scroll de la página las ARISTAS no significan nada —el
+                    compilador emite solo porcentajes ahí—, así que se ofrecen únicamente los dos %. */}
+                {range && (
+                    <fieldset className="mt-6 rounded-2xl border-2 border-gray-100 p-4">
+                        <legend className="px-1 text-sm font-bold text-gray-900">
+                            Tramo del recorrido
+                        </legend>
+                        <div className="mt-2 grid gap-4 md:grid-cols-2">
+                            {(["from", "to"] as const).map((which) => (
+                                <div key={which} className="flex items-end gap-3">
+                                    {!pageScrub && (
+                                        <div className="min-w-0 flex-1">
+                                            <FieldSelect
+                                                id={`ixp-range-${which}-at`}
+                                                label={which === "from" ? "Desde" : "Hasta"}
+                                                value={range[which].at}
+                                                onChange={(v) =>
+                                                    write(setRangeEdge(draft, which, { at: v as IxEdgeName }))
+                                                }
+                                                options={EDGES.map((e) => ({
+                                                    value: e,
+                                                    label: IX_EDGE_LABELS[e],
+                                                }))}
+                                            />
+                                        </div>
+                                    )}
+                                    <div className="min-w-0 flex-1">
+                                        <label className={LABEL} htmlFor={`ixp-range-${which}-pct`}>
+                                            {which === "from" ? "Desde (%)" : "Hasta (%)"}
+                                        </label>
+                                        <input
+                                            id={`ixp-range-${which}-pct`}
+                                            type="number"
+                                            className={NUM}
+                                            min={0}
+                                            max={100}
+                                            step={5}
+                                            value={range[which].pct}
+                                            onChange={(e) =>
+                                                write(setRangeEdge(draft, which, { pct: Number(e.target.value) }))
+                                            }
+                                        />
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                        {hasOwnRange && (
+                            <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="mt-4"
+                                onClick={() => write(resetRange(draft))}
+                            >
+                                Restablecer tramo
+                            </Button>
+                        )}
+                    </fieldset>
+                )}
+
+                {/* Reproducción de la pista — solo con disparadores del RELOJ: con scrub el progreso
+                    lo marca la posición, y «repetir» no significa nada. Con «Infinita» marcada el
+                    número queda en blanco y bloqueado; desmarcarla vuelve a 1 (que borra la clave). */}
+                {timed && (
+                    <fieldset className="mt-6 rounded-2xl border-2 border-gray-100 p-4">
+                        <legend className="px-1 text-sm font-bold text-gray-900">Reproducción</legend>
+                        <div className="mt-2 flex flex-wrap items-end gap-4">
+                            <div className="w-36">
+                                <label className={LABEL} htmlFor="ixp-repeat">
+                                    Repetición
+                                </label>
+                                <input
+                                    id="ixp-repeat"
+                                    type="number"
+                                    className={NUM}
+                                    min={1}
+                                    max={IX_REPEAT_MAX}
+                                    step={1}
+                                    value={infinite ? "" : repeatCount}
+                                    disabled={infinite}
+                                    onChange={(e) => write(setRepeat(draft, Number(e.target.value)))}
+                                />
+                            </div>
+                            <label className="mb-2.5 flex cursor-pointer select-none items-center gap-2 text-sm text-gray-700">
+                                <input
+                                    type="checkbox"
+                                    checked={infinite}
+                                    onChange={(e) => write(setRepeat(draft, e.target.checked ? "inf" : 1))}
+                                />
+                                Infinita
+                            </label>
+                            <label className="mb-2.5 flex cursor-pointer select-none items-center gap-2 text-sm text-gray-700">
+                                <input
+                                    type="checkbox"
+                                    checked={track.alt === true}
+                                    onChange={(e) => write(setAlternate(draft, e.target.checked))}
+                                />
+                                Ida y vuelta
+                            </label>
+                        </div>
+                    </fieldset>
                 )}
 
                 {/* Pasos */}

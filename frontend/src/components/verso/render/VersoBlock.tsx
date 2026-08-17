@@ -37,7 +37,7 @@ import VersoSlot from "./VersoSlot";
 
 const VersoBlock = React.memo(function VersoBlock({ nodeId }: { nodeId: string }) {
   const ctx = useVersoRenderContext();
-  const { handle, registry, componentMap, onBlockElement, editorChrome, ixCtx } = ctx;
+  const { handle, registry, componentMap, onBlockElement, editorChrome, ixCtx, ixPage } = ctx;
   const node = useVersoNode(handle, nodeId);
   // Cambia como mucho dos veces por sesión de edición inline (entrar/salir).
   const inlineEditingId = useStoreSlice(handle, selectInlineEditingId);
@@ -148,6 +148,10 @@ const VersoBlock = React.memo(function VersoBlock({ nodeId }: { nodeId: string }
         // recibía capa ③ en el lienzo (el compilador no podía resolver la referencia) y el autor
         // veía su bloque quieto mientras la página publicada sí se movía.
         ixCtx={ixCtx}
+        // Y con la PÁGINA compilada: la clase sale de ahí (con su sufijo de colisión si lo hubo),
+        // igual que en el público — sin ella, dos cuerpos distintos con el mismo hash de 32 bits
+        // enseñarían en el lienzo el movimiento del primero sobre el segundo bloque.
+        ixPage={ixPage}
       >
         {content}
       </SharedBlockShell>

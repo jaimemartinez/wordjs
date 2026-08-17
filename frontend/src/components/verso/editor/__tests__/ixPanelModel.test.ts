@@ -27,13 +27,22 @@ import {
   availableProps,
   clearIx,
   defaultIxSpec,
+  effectiveRange,
   ixPanelState,
   ixPresetChoice,
   ixPresetOptions,
+  rangeEditable,
   removeStep,
+  resetRange,
+  setAlternate,
+  setClickToggle,
   setDelay,
   setDuration,
+  setLoadDelay,
   setPresetChoice,
+  setRangeEdge,
+  setRepeat,
+  setScrubSrc,
   setStagger,
   setStepAt,
   setStepEase,
@@ -46,6 +55,7 @@ import {
   IX_PANEL_CUSTOM,
   IX_PANEL_NONE,
 } from "../ixPanelModel";
+import { IX_DEFAULT_RANGES } from "@/lib/verso/interactions";
 
 const SITE = JSON.stringify([
   {
@@ -385,6 +395,114 @@ describe("pasos", () => {
 /* ------------------------------------------------------------------ */
 /* La invariante: lo que el panel escribe, el compilador lo emite      */
 /* ------------------------------------------------------------------ */
+
+describe("opciones del disparador y de la pista (P1: lo que el modelo sabía y el panel no ofrecía)", () => {
+  it("setClickToggle conmuta el flag, y quitarlo devuelve el disparador desnudo", () => {
+    const base = setTriggerKind(defaultIxSpec(), "click", CTX)!;
+    const on = setClickToggle(base, true, CTX)!;
+    expect(on.trigger).toEqual({ on: "click", toggle: true });
+    const off = setClickToggle(on, false, CTX)!;
+    expect(off.trigger).toEqual({ on: "click" });
+    assertWritable(on);
+    assertWritable(off);
+  });
+
+  it("setClickToggle sobre un disparador que NO es click no toca nada", () => {
+    const spec = defaultIxSpec();
+    expect(setClickToggle(spec, true, CTX)).toEqual(normalizeIxSpec(spec)?.spec);
+  });
+
+  it("setLoadDelay escribe el retardo del disparador, y 0 borra la clave", () => {
+    const base = setTriggerKind(defaultIxSpec(), "load", CTX)!;
+    const delayed = setLoadDelay(base, 500, CTX)!;
+    expect(delayed.trigger).toEqual({ on: "load", delay: 500 });
+    const back = setLoadDelay(delayed, 0, CTX)!;
+    expect(back.trigger).toEqual({ on: "load" });
+    assertWritable(delayed);
+  });
+
+  it("setScrubSrc alterna bloque/página CONSERVANDO el rango del autor", () => {
+    const base = setTriggerKind(defaultIxSpec(), "scrub", CTX)!;
+    const ranged = setRangeEdge(base, "from", { pct: 20 }, CTX)!;
+    const paged = setScrubSrc(ranged, "page", CTX)!;
+    expect(paged.trigger).toMatchObject({ on: "scrub", src: "page" });
+    expect((paged.trigger as { range?: unknown }).range).toMatchObject({ from: { pct: 20 } });
+    const back = setScrubSrc(paged, "self", CTX)!;
+    expect((back.trigger as { src?: string }).src).toBeUndefined();
+    assertWritable(paged);
+  });
+
+  it("setRepeat: 1 BORRA la clave (bytes de origen), 'inf' escribe el token, y se clampa", () => {
+    const spec = defaultIxSpec();
+    const three = setRepeat(spec, 3, CTX)!;
+    expect(three.tracks![0].repeat).toBe(3);
+    const one = setRepeat(three, 1, CTX)!;
+    expect("repeat" in one.tracks![0]).toBe(false);
+    expect(setRepeat(spec, "inf", CTX)!.tracks![0].repeat).toBe("inf");
+    expect(setRepeat(spec, 9999, CTX)!.tracks![0].repeat).toBe(50);
+    assertWritable(three);
+  });
+
+  it("setAlternate escribe `alt: true` y false borra la clave", () => {
+    const spec = defaultIxSpec();
+    const alt = setAlternate(spec, true, CTX)!;
+    expect(alt.tracks![0].alt).toBe(true);
+    const back = setAlternate(alt, false, CTX)!;
+    expect("alt" in back.tracks![0]).toBe(false);
+  });
+
+  it("el rango solo es editable donde el scroll manda: scrub y view+cada-vez", () => {
+    expect(rangeEditable({ on: "scrub" })).toBe(true);
+    expect(rangeEditable({ on: "view", once: false })).toBe(true);
+    expect(rangeEditable({ on: "view", once: true })).toBe(false);
+    expect(rangeEditable({ on: "click" })).toBe(false);
+    expect(rangeEditable({ on: "load" })).toBe(false);
+  });
+
+  it("effectiveRange devuelve una COPIA: mutarla no toca el defecto del compilador", () => {
+    const r = effectiveRange({ on: "scrub" });
+    r.from.pct = 99;
+    expect(IX_DEFAULT_RANGES.scrub.from.pct).toBe(0);
+  });
+
+  it("setRangeEdge parte del defecto del disparador y edita solo el borde pedido", () => {
+    const base = setTriggerKind(defaultIxSpec(), "scrub", CTX)!;
+    const w = setRangeEdge(base, "to", { at: "exit", pct: 60 }, CTX)!;
+    expect((w.trigger as { range?: unknown }).range).toEqual({
+      from: { at: "cover", pct: 0 },
+      to: { at: "exit", pct: 60 },
+    });
+    assertWritable(w);
+  });
+
+  it("resetRange borra el rango del autor: la ausencia ES el defecto", () => {
+    const base = setTriggerKind(defaultIxSpec(), "scrub", CTX)!;
+    const ranged = setRangeEdge(base, "from", { pct: 30 }, CTX)!;
+    const reset = resetRange(ranged, CTX)!;
+    expect("range" in (reset.trigger as object)).toBe(false);
+  });
+
+  it("sobre un bloque enlazado a un preajuste, TODAS las opciones de disparador conservan el enlace", () => {
+    const linked = { v: 1, preset: "aparecer-tarjetas" };
+    const click = setTriggerKind(linked, "click", CTX)!;
+    expect(click.preset).toBe("aparecer-tarjetas");
+    const toggled = setClickToggle(click, true, CTX)!;
+    expect(toggled.preset).toBe("aparecer-tarjetas");
+    expect(toggled.tracks).toBeUndefined();
+    const scrub = setTriggerKind(linked, "scrub", CTX)!;
+    const ranged = setRangeEdge(scrub, "from", { pct: 10 }, CTX)!;
+    expect(ranged.preset).toBe("aparecer-tarjetas");
+    expect(ranged.tracks).toBeUndefined();
+  });
+
+  it("setRepeat sobre un bloque enlazado DESVINCULA (es una edición del cuerpo)", () => {
+    const linked = { v: 1, preset: "aparecer-tarjetas" };
+    const w = setRepeat(linked, 3, CTX)!;
+    expect(w.preset).toBeUndefined();
+    expect(w.tracks![0].repeat).toBe(3);
+    expect(w.tracks![0].stagger?.each).toBe(80); // el cuerpo copiado es el del preset
+  });
+});
 
 describe("invariante de escritura", () => {
   it("una sesión larga de edición deja SIEMPRE un dato compilable", () => {

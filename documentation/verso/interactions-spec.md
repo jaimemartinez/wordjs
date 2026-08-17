@@ -276,7 +276,7 @@ export type IxUnit = {
 
 | Trigger / caso | ¿CSS puro? | Traducción | `needsRuntime` |
 |---|---|---|---|
-| `scrub` (progreso ligado al scroll) | **SÍ** | `animation-timeline: view()` \| `scroll()`, `animation-range: <from> <to>`, `animation-duration: 1ms` (dummy), `fill-mode: both` | `no-native` |
+| `scrub` (progreso ligado al scroll) | **SÍ** | `animation-timeline: view()` \| `scroll()`, `animation-range: <from> <to>`, `animation-duration: 1ms` (dummy), `fill-mode: both`. **Con `src:"page"`** el rango se emite SOLO con porcentajes (`20% 80%`) y se omite si es 0–100: los nombres `cover`/`entry`/… son vocabulario de las timelines de VISTA y sobre `scroll()` cada motor haría lo que quisiera. | `no-native` |
 | `view`, `once: false` (entra y sale) | **SÍ** | igual, con rango `entry 0% cover 40%` | `no-native` |
 | `view`, **`once: true`** (la entrada de hoy) | **NO** | No existe *latch* en CSS: `view()` retrocede al subir. **Este es el hallazgo que justifica conservar el `IntersectionObserver` actual tal cual.** | `always` |
 | `load` | **SÍ** | `animation` temporal normal, sin timeline | `never` |
@@ -414,7 +414,10 @@ En su lugar, el runtime recibe el IR (`kf` + rango + objetivo) directamente:
 1. Un **único** `IntersectionObserver` decide qué unidades están en pantalla.
 2. Un **único** bucle `rAF`, activo solo mientras haya unidades en pantalla, recorre las activas.
 3. Por unidad: progreso = posición del elemento dentro de su rango (`getBoundingClientRect` +
-   alto del viewport), y se aplica con **WAAPI**:
+   alto del viewport). **Una unidad de PÁGINA (`scrub`+`src:"page"`) no mide su elemento**: mide el
+   scroll del documento (`host.pageProgress()`, la definición de `scroll()`), ventaneado por los
+   porcentajes del rango — los nombres de vista se ignoran, igual que en el CSS emitido. Sin esto,
+   Firefox recorría el viaje del elemento donde Chrome recorría el documento. Se aplica con **WAAPI**:
    `anim = el.animate(kf, { duration: 1, fill: "both" }); anim.pause(); anim.currentTime = p;`
    La animación no corre: se **posiciona**. Es la misma técnica que el scrubber del panel (§6.3).
 4. Listeners `scroll`/`resize` **pasivos**, coalescidos por el `rAF` (nunca trabajo dentro del
@@ -439,7 +442,7 @@ también unidades `ix`.
 | Nivel | Qué muestra | Para quién |
 |---|---|---|
 | **1 — Preajuste** (por defecto) | Un `<select>` de presets (sistema + del sitio), intensidad, velocidad. **Es literalmente el `AnimationField` de hoy** con otra lista. | El 90 %. Nunca ve el nivel 2. |
-| **2 — Disparador** | *Cuándo*: al entrar en pantalla / con el scroll / al pasar el ratón / al hacer clic / al cargar. *A quién*: este bloque / sus hijos, escalonados / las palabras del titular. Sin timeline. | El autor que ya sabe lo que quiere. |
+| **2 — Disparador** | *Cuándo*: al entrar en pantalla / con el scroll / al pasar el ratón / al hacer clic / al cargar — **con sus opciones**: rango del recorrido (scrub y view+cada-vez; solo % si el scroll es de página), qué scroll manda (bloque/página), 2.º clic deshace, retardo del disparador (load). *A quién*: este bloque / sus hijos, escalonados / las palabras del titular. *Reproducción* (disparadores temporales, cuerpo propio): repetición 1–50 / infinita / ida y vuelta. Sin timeline. | El autor que ya sabe lo que quiere. |
 | **3 — Pasos** (tras un disclosure "Editar pasos") | Tira horizontal de pasos con su `%`, y por paso una fila con las 8 propiedades y su easing. | El diseñador. |
 
 ### 6.2 Los topes, y por qué son estos

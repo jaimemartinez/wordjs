@@ -16,6 +16,7 @@ import { describe, expect, it, vi } from "vitest";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createEditor, type EditorHandle } from "@/lib/verso/store";
+import { compileIxPage } from "@/lib/verso/interactions";
 import { createBlockRegistry, makeSlotResolver, type BlockRegistry } from "@/lib/verso/registry";
 import { ROOT_ID, ROOT_SLOT, type VersoData } from "@/lib/verso/types";
 import {
@@ -312,5 +313,52 @@ describe("EditorRenderer — suscripción por nodo (base del re-render selectivo
     const html = render(handle, registry);
     expect(html).toContain("Nuevo título");
     expect(html).not.toContain(">Hola<");
+  });
+});
+
+describe("fidelidad de clase ix: el canvas estampa la clase de la PÁGINA compilada", () => {
+  // Pareja hallada por fuerza bruta (459.549 cuerpos válidos probados): dos interacciones DISTINTAS
+  // cuyo cuerpo canónico produce el MISMO FNV-1a de 32 bits ("0ya52ej"). Es la condición que el
+  // sufijo de colisión existe para resolver — y la que antes hacía divergir canvas y público,
+  // porque VersoBlock estampaba el hash desnudo mientras la hoja del motor y el sitio publicado
+  // usaban la clase desambiguada.
+  const IX_A = {
+    v: 1,
+    trigger: { on: "load" },
+    tracks: [{ target: { kind: "self" }, steps: [{ at: 0, set: { x: -296, y: -589 } }, { at: 100, set: { x: 0 } }] }],
+  };
+  const IX_B = {
+    v: 1,
+    trigger: { on: "load" },
+    tracks: [{ target: { kind: "self" }, steps: [{ at: 0, set: { x: -218, y: 166 } }, { at: 100, set: { x: 0 } }] }],
+  };
+
+  it("la pareja colisiona DE VERDAD (si esto falla, el hash cambió: buscar otra pareja)", () => {
+    const page = compileIxPage([IX_A, IX_B]);
+    expect(page.units).toHaveLength(2);
+    const classes = page.units.map((u) => u.cls).sort();
+    expect(classes[0]).toBe("wjs-ix-0ya52ej");
+    expect(classes[1]).toBe("wjs-ix-0ya52ej__1");
+  });
+
+  it("los DOS bloques estampan su clase desambiguada, byte-igual a la del público", () => {
+    const registry = makeRegistry();
+    const handle = createEditor({
+      initialData: {
+        content: [
+          { type: "Heading", props: { id: "ca", title: "A", level: "h2", ix: IX_A } },
+          { type: "Heading", props: { id: "cb", title: "B", level: "h2", ix: IX_B } },
+        ],
+        root: { props: {} },
+      },
+      isSlot: makeSlotResolver(registry),
+    });
+    const html = renderToStaticMarkup(
+      <EditorRenderer handle={handle} registry={registry} componentMap={componentMap} />,
+    );
+    // Sin la página compilada en el contexto del renderer, los dos estamparían el hash desnudo y
+    // "__1" no aparecería: este contain es el que se pone rojo si el cableado se revierte.
+    expect(html).toContain('wjs-ix-0ya52ej"');
+    expect(html).toContain('wjs-ix-0ya52ej__1"');
   });
 });
