@@ -2,8 +2,8 @@
   "version": 1,
   "source": "backend/public/css/wordjs-ui.css",
   "counts": {
-    "tokens": 772,
-    "varUses": 1740,
+    "tokens": 773,
+    "varUses": 1745,
     "elements": 51
   },
   "tokens": {
@@ -1123,6 +1123,19 @@
         {
           "selector": ".wp-block-audio-player__scrub::-moz-range-track",
           "property": "border-radius"
+        }
+      ]
+    },
+    "--wjs-back-to-top-bg": {
+      "group": "back",
+      "declaredDefault": null,
+      "fallbacks": [
+        "var(--wjs-color-primary, #2F6D86)"
+      ],
+      "consumers": [
+        {
+          "selector": ".wp-block-back-to-top",
+          "property": "background"
         }
       ]
     },
@@ -3815,6 +3828,10 @@
           "property": "color"
         },
         {
+          "selector": ".wp-block-back-to-top",
+          "property": "color"
+        },
+        {
           "selector": ".wjs-chrome-button--primary, .wjs-chrome-button--primary:hover",
           "property": "color"
         },
@@ -4022,6 +4039,10 @@
         {
           "selector": ".wp-block-nav-menu .wjs-chrome-nav a:hover",
           "property": "color"
+        },
+        {
+          "selector": ".wp-block-back-to-top",
+          "property": "background"
         },
         {
           "selector": ".wjs-chrome-button--ghost",
@@ -4557,6 +4578,10 @@
         },
         {
           "selector": ".wp-block-nav-menu .wjs-chrome-nav a",
+          "property": "color"
+        },
+        {
+          "selector": ".wp-block-site-logo .wjs-site-title",
           "property": "color"
         },
         {
@@ -8728,6 +8753,10 @@
         },
         {
           "selector": ".wp-block-nav-menu .wjs-chrome-nav a",
+          "property": "color"
+        },
+        {
+          "selector": ".wp-block-site-logo .wjs-site-title",
           "property": "color"
         }
       ]
