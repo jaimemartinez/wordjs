@@ -7,6 +7,12 @@
             "runtimeArgs": ["run", "dev:mono"],
             "port": 3000,
             "env": { "WORDJS_HTTP": "1" }
+        },
+        {
+            "name": "verso-dock-drill",
+            "runtimeExecutable": "npm",
+            "runtimeArgs": ["--prefix", "frontend", "run", "dev", "--", "-p", "3005"],
+            "port": 3005
         }
     ]
 }

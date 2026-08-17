@@ -1503,7 +1503,12 @@ export const coreBlockDefinitions: BlockDefinition[] = [
             linkLines: "true",
             linkDistance: 130,
             pointer: "false",
-            css: {},
+            // El envoltorio del bloque es `absolute inset-0` (capa de fondo de una sección) y su
+            // `css` se aplica EL ÚLTIMO: estos defaults lo hacen VISIBLE recién insertado en la
+            // raíz de la página (donde sin ancestro posicionado con altura medía 0px y no se veía
+            // nada — cazado grabando el tutorial). Para usarlo como capa de fondo dentro de una
+            // sección, el autor borra estas dos entradas de «Estilos CSS» y vuelve al inset-0.
+            css: { position: "relative", minHeight: "420px" },
         },
         render: ParticleFieldBlock,
     },

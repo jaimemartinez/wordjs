@@ -2384,7 +2384,8 @@ const baseConfig: any = {
                 linkLines: "true",
                 linkDistance: 130,
                 pointer: "false",
-                css: {}
+                // Visible recién insertado (ver coreBlocks): a raíz de página el inset-0 medía 0px.
+                css: { position: "relative", minHeight: "420px" }
             },
             render: (props: any) => <ParticleFieldBlock {...props} />
         },

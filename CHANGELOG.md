@@ -6,6 +6,20 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Editor: palette cards insert on tap again, reliably.** Block cards inserted via the synthetic
+  `click` event, and when the editor re-rendered between press and release the browser silently
+  suppressed that click — cards "did nothing" with no error. Insertion now runs on pointer-up
+  with the same 5px threshold the drag sensor uses: less than that is a tap (insert), more is a
+  drag (the drop zones take over). Keyboard insertion (Enter/Space) is unchanged.
+
+- **Blocks: the particle field is visible the moment you insert it.** Freshly inserted at page
+  root — with no positioned, sized ancestor — the field's background-layer wrapper measured 0px
+  and nothing showed. New insertions now default to an in-flow 420px band via the block's own
+  CSS defaults; to use it as a section's background layer, clear those two entries and it
+  returns to its classic cover-the-parent behavior. Existing pages are untouched.
+
 ### Added
 
 - **Editor: the motion dock wears its Stitch design.** The dock's look now comes from the same

@@ -12,7 +12,7 @@
  * BlockPalette solo cubre la vista "blocks" del rail; la pestaña Plantillas (patrones) es un
  * panel aparte — editor/PatternsPanel.tsx (F3 ola 3, W27).
  */
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useRef, useState } from "react";
 import MSym from "@/components/editor/MSym";
 import { useI18n } from "@/contexts/I18nContext";
 import { trStr } from "@/lib/editorI18n";
@@ -37,6 +37,12 @@ export default function BlockPalette({ registry, onInsert }: BlockPaletteProps) 
     const { language } = useI18n();
     const [query, setQuery] = useState("");
     const [activeGroup, setActiveGroup] = useState("");
+    // TAP-PARA-INSERTAR por PUNTERO, no por `click`: el editor re-renderiza entre el down y el up
+    // (selección, drag preview…) y si el nodo de la tarjeta se remonta, el navegador SUPRIME el
+    // click sintético — la tarjeta «no hacía nada» sin error alguno (cazado en vivo: el evento
+    // click jamás llegaba al documento). El pointerup no depende de esa síntesis. El umbral de 5px
+    // es EL MISMO del DnDDriver: menos que eso es un tap (insertar); más, un arrastre (suyo).
+    const tapRef = useRef<{ name: string; x: number; y: number } | null>(null);
     // F4: los bloques de plugin llegan POST-hidratación con register() sobre el registry
     // identidad-estable — la versión es la dependencia real de estos memos.
     const registryVersion = useRegistryVersion(registry);
@@ -153,7 +159,17 @@ export default function BlockPalette({ registry, onInsert }: BlockPaletteProps) 
                                         tabIndex={0}
                                         data-wjs-palette-type={item.name}
                                         title={item.desc ? trStr(item.desc, language) : item.label}
-                                        onClick={() => onInsert(item.name)}
+                                        onPointerDown={(e) => {
+                                            if (e.button !== 0) return;
+                                            tapRef.current = { name: item.name, x: e.clientX, y: e.clientY };
+                                        }}
+                                        onPointerUp={(e) => {
+                                            const tap = tapRef.current;
+                                            tapRef.current = null;
+                                            if (!tap || tap.name !== item.name) return;
+                                            if (Math.hypot(e.clientX - tap.x, e.clientY - tap.y) >= 5) return;
+                                            onInsert(item.name);
+                                        }}
                                         onKeyDown={(e) => {
                                             if (e.key === "Enter" || e.key === " ") {
                                                 e.preventDefault();
