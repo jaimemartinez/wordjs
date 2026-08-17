@@ -153,6 +153,32 @@ export default function ParticleFieldCanvas({
                 }
             }
 
+            // Pointer "grab": bright links from the cursor to nearby particles — the unmistakable
+            // mouse reaction. Independent of `linkOn` so the field responds even with the
+            // constellation lines off. `pointerReach` is the block's link distance, or a sane
+            // default when links are disabled.
+            if (pointerOn && ptr.active) {
+                const pointerReach = linkDist > 0 ? linkDist : 150;
+                ctx.lineWidth = 1;
+                for (const p of particles) {
+                    const dx = p.x - ptr.x;
+                    const dy = p.y - ptr.y;
+                    const dist = Math.hypot(dx, dy);
+                    if (dist < pointerReach) {
+                        ctx.strokeStyle = `rgba(${r},${g},${b},${((1 - dist / pointerReach) * 0.9).toFixed(3)})`;
+                        ctx.beginPath();
+                        ctx.moveTo(ptr.x, ptr.y);
+                        ctx.lineTo(p.x, p.y);
+                        ctx.stroke();
+                    }
+                }
+                // A soft anchor dot at the cursor so the interaction has a visible origin.
+                ctx.fillStyle = `rgba(${r},${g},${b},0.9)`;
+                ctx.beginPath();
+                ctx.arc(ptr.x, ptr.y, 2.4, 0, Math.PI * 2);
+                ctx.fill();
+            }
+
             ctx.fillStyle = dotFill;
             for (const p of particles) {
                 ctx.beginPath();
@@ -219,6 +245,7 @@ export default function ParticleFieldCanvas({
         else window.addEventListener("resize", rebuild);
 
         let onPointerMove: ((e: PointerEvent) => void) | null = null;
+        let onPointerGone: (() => void) | null = null;
         if (pointerOn && !reduce) {
             // The layer itself is pointer-events:none, so read the pointer from the window.
             onPointerMove = (e: PointerEvent) => {
@@ -227,7 +254,12 @@ export default function ParticleFieldCanvas({
                 ptr.y = e.clientY - rect.top;
                 ptr.active = ptr.x >= 0 && ptr.y >= 0 && ptr.x <= width && ptr.y <= height;
             };
+            // When the pointer leaves the document or the window loses focus, drop the grab links
+            // instead of freezing them at the last position.
+            onPointerGone = () => { ptr.active = false; };
             window.addEventListener("pointermove", onPointerMove, { passive: true });
+            document.addEventListener("mouseleave", onPointerGone);
+            window.addEventListener("blur", onPointerGone);
         }
 
         return () => {
@@ -237,6 +269,10 @@ export default function ParticleFieldCanvas({
             window.removeEventListener("resize", rebuild);
             document.removeEventListener("visibilitychange", onVisibility);
             if (onPointerMove) window.removeEventListener("pointermove", onPointerMove);
+            if (onPointerGone) {
+                document.removeEventListener("mouseleave", onPointerGone);
+                window.removeEventListener("blur", onPointerGone);
+            }
         };
     }, [count, speed, linkLines, linkDistance, pointer]);
 
