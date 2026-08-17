@@ -6,6 +6,116 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Added
+
+- **Verso, WordJS's own visual editor.** The editor is no longer a vendored fork with a wrapper
+  around it: the document model, the canvas, drag-and-drop, undo/redo, the inline text engine and the
+  block registry are all in-house. What that buys you day to day: block ids stay stable across edits,
+  undo restores the document byte-for-byte, the canvas renders through the same components the public
+  site uses (so what you see is what gets published), and the whole editor is keyboard-operable —
+  insert, move, edit and save without touching the mouse.
+
+  **Your content is untouched.** Existing pages open in Verso and save back byte-identically; the
+  `_puck_data` post-meta key keeps its name and its shape. That was rehearsed against a copy of a real
+  installation before shipping: every stored document round-tripped byte-exact, revisions restored to
+  byte-identical bodies, and a full WXR export/import cycle came back unchanged.
+
+- **Real-time collaboration, on by default.** Two or more people can edit the same page at the same
+  time, in the same paragraph, without a lock and without losing keystrokes — a CRDT decides the
+  merge, so both screens converge on the same document whatever the order things arrive in. You see
+  who else is here and what they have selected, by name. If the connection drops you keep editing
+  locally and the editor says so; nothing is thrown away silently, and reconnecting replays what you
+  wrote.
+
+  Turn it off for a deployment with `NEXT_PUBLIC_WORDJS_COLLAB=off`, or for one browser with
+  `localStorage.wordjs_collab="off"`.
+
+- **Timeline interactions.** Blocks can carry entrance, hover, click and scroll-linked animations,
+  authored from a panel in the editor with a timeline of steps. They compile to native CSS
+  scroll-driven animations, so the common cases cost no JavaScript at all; the runtime is fetched only
+  by a page that needs something CSS cannot express, and never by a theme. `prefers-reduced-motion` is
+  honoured at three levels. Site-wide presets can be authored in **Settings → Interactions** and
+  applied by name, so changing one preset restyles every block that uses it without touching a single
+  page's stored data.
+
+- **`npm run gate:separate`** — a reproducible gate for the three-machine deployment. It stands up a
+  gateway/backend/frontend topology, enrols it over mutual TLS, verifies enrolment, mTLS role
+  enforcement, install, identity survival across a restart, and the public site serving complete, then
+  tears it down. It is proven to fail: reverting any of the three bugs fixed below turns it red on the
+  matching check.
+
+- **`WORDJS_BACKEND_URL`** — points one frontend replica at one backend, so N replicas can share the
+  same files and config and still each talk to their own upstream. Unset means "no opinion"; an
+  unusable value is a startup error rather than a silent fallback.
+
+### Fixed
+
+- **Separate mode (three machines) was unusable, in three ways that only appear when the tiers are
+  actually apart.** The installer recorded the *backend's* address as the public site origin — it read
+  the raw `Host` header, which the gateway rewrites — so every API call afterwards answered 409 asking
+  for a migration. Installing on an already-enrolled node re-minted the cluster CA over the one the
+  gateway issued and left the CA *private key* on the backend, which would have killed the cluster at
+  the next restart. And `/public` was never routed, so 161 KB of block CSS and 73 KB of icons 404'd —
+  that one also affected split mode on a single host.
+
+- **On-demand cache purge now works across machines.** It assumed backend and frontend shared a disk,
+  so in a cluster publishing fell back to timed revalidation. Measured on the three-machine lab:
+  ~25 s → ~0.8 s. A node enrolled before this repairs itself on next start instead of needing a manual
+  re-enrolment.
+
+- **A dead Redis bus was silent, and never came back.** With Redis down, cross-node fan-out reported
+  events as delivered without publishing them, and the client stopped reconnecting for good after
+  three attempts — one blip left cluster collaboration dead until the process was restarted, with
+  nothing in the log.
+
+- **The editor canvas selected by the author's block id**, which stops matching the store's key once a
+  document has been through a collaboration room. The page rendered perfectly and could not be
+  touched: clicking selected nothing, double-click opened no editor, dragging picked up nothing.
+
+- **Presence lied in a cluster**: the roster handed to someone joining was built from one node's
+  connections, so with one author per node the second to arrive was told nobody else was editing.
+
+- **The release packager shipped the developer's local directory.** A bundle built from a working tree
+  carried `.claude/` — 46 MB of a 97 MB artifact, including git worktrees and local tool configuration
+  that can hold credentials. Releases built by CI from a clean checkout were never affected. What
+  belongs in an artifact is now decided by what git tracks, plus an explicit allowlist of build output,
+  rather than by a list of names that is always one tool behind: 12 169 entries → 2 649, 97 MB → 17.7 MB.
+
+- **Cache purge named the wrong paths for pages** (`/<slug>` instead of `/pages/<slug>`, the URL the
+  menu builder links to). It worked only because the tag covered it.
+
+### Security
+
+- **Arbitrary file write via `POST /api/v1/certs/dns-finish`.** The `domain` field from the request
+  body went straight into the path where `privkey.pem` and `fullchain.pem` are written, with
+  `mkdir -p`. Demonstrated end to end before the fix: a traversal value returned `{"success":true}` and
+  wrote both files outside the certificate directory — an arbitrary write as the server user, with the
+  operator's own key material as the payload.
+
+- **Stored open redirect in menus and site chrome.** Link guards decided on the raw string while the
+  browser strips tab, newline and carriage return *before* parsing, and only `//host` was rejected —
+  never `/\host`, which is equally authority-relative. Both spellings navigated off-site from a menu
+  item or a footer social link. Menu URLs are not revalidated at render, so that guard was the only
+  defense.
+
+- **SQL identifier injection reachable from `POST /api/v1/import`.** Column definitions were checked by
+  a denylist applied to a *copy* of the value while the original was interpolated into the DDL; quote,
+  backtick and backslash all passed. Identifiers and column definitions now go through a shape
+  allowlist that rebuilds the value from a constant alphabet.
+
+- **A zip upload could silently overwrite an installed theme**, because the theme's identity came from
+  the multipart filename while extraction was driven by the zip entries — and an entry could write into
+  a *different* theme's directory.
+
+- **A revoked session kept reading live drafts.** The collaboration stream's credential handling had
+  drifted from the shared authenticator: `Authorization: Bearer null` plus a valid session cookie took
+  a branch that never re-verified the token, so the stream survived logout, a password change and JWT
+  expiry — a removed editor kept receiving every keystroke.
+
+- **Hardening against remote property injection** in the collaboration operation validator, and the
+  video block no longer classifies providers by substring (`youtube.com.evil.test/watch?v=…` let an
+  attacker choose both the provider and the id that reached the player).
+
 ### Changed
 
 - **Blocks now carry WordJS's own class, `wjs-block-*`, alongside the historical `wp-block-*` one —
