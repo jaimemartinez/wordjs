@@ -50,10 +50,19 @@ import {
     type IxPreset,
     type IxSpec,
 } from "@/lib/verso/interactions";
+import { normalizeVtStyle, type IxVtStyle } from "@/lib/verso/interactions/viewTransitions";
 import PresetEditor from "./PresetEditor";
 
 /** Estado del formulario. `null` = no hay ninguno abierto. */
 type Editing = { id: string | null; name: string; draft: IxSpec } | null;
+
+/** La clave del ajuste del sitio y las etiquetas de autor de sus tres valores. */
+const VT_SETTING = "wjs_view_transitions";
+const VT_OPTIONS: ReadonlyArray<{ value: IxVtStyle; label: string }> = [
+    { value: "off", label: "Sin transición" },
+    { value: "fade", label: "Fundido" },
+    { value: "slide", label: "Deslizar" },
+];
 
 export default function InteractionPresetsPage() {
     const { confirm, alert } = useModal();
@@ -67,10 +76,15 @@ export default function InteractionPresetsPage() {
     /** Recuento de usos por preajuste, para las tarjetas. `null` = aún no se sabe (cargando o falló). */
     const [usage, setUsage] = useState<Map<string, number> | null>(null);
 
+    /** Transición entre páginas (C1): ajuste del SITIO, vive aquí porque es movimiento, no tema. */
+    const [vt, setVt] = useState<IxVtStyle>("off");
+    const [vtSaving, setVtSaving] = useState(false);
+
     const load = useCallback(async () => {
         try {
             const data = await settingsApi.get();
             setCatalog(parseSiteIxPresets((data as Record<string, unknown> | null)?.[IX_PRESETS_SETTING]));
+            setVt(normalizeVtStyle((data as Record<string, unknown> | null)?.[VT_SETTING]));
         } catch (e) {
             console.error("No se pudieron leer los preajustes de interacción:", e);
             addToast("No se pudieron leer los preajustes.", "error");
@@ -82,6 +96,28 @@ export default function InteractionPresetsPage() {
     useEffect(() => {
         void load();
     }, [load]);
+
+    /**
+     * Guarda la transición entre páginas. Igual que el catálogo: se manda SOLO su clave, porque el
+     * backend mergea por clave y reenviar el resto pisaría lo que otra pestaña hubiera cambiado.
+     * Optimista con vuelta atrás: si el guardado falla, el botón activo vuelve al valor anterior.
+     */
+    const saveVt = async (next: IxVtStyle): Promise<void> => {
+        if (next === vt || vtSaving) return;
+        const prev = vt;
+        setVt(next);
+        setVtSaving(true);
+        try {
+            await settingsApi.update({ [VT_SETTING]: next });
+            addToast(next === "off" ? "Transiciones desactivadas." : "Transición guardada.", "success");
+        } catch (e) {
+            setVt(prev);
+            const message = e instanceof Error ? e.message : String(e);
+            await alert(`No se pudo guardar: ${message}`);
+        } finally {
+            setVtSaving(false);
+        }
+    };
 
     /** Orden estable por nombre: el ajuste puede llegar en cualquier orden, la lista no baila. */
     const list = useMemo(
@@ -263,6 +299,41 @@ export default function InteractionPresetsPage() {
                         Los preajustes que trae WordJS (los del sistema) no se editan ni se borran, y su
                         nombre está reservado: aquí solo viven los tuyos.
                     </p>
+                </Card>
+
+                {/* ── Transiciones entre páginas (C1) — ajuste del SITIO, no de un bloque ── */}
+                <Card className="mb-8">
+                    <h2 className="text-sm font-bold text-gray-900">Transiciones entre páginas</h2>
+                    <p className="mt-2 text-sm leading-relaxed text-gray-600">
+                        Al navegar de una página a otra, el sitio puede fundirse o deslizarse en vez de
+                        parpadear en blanco. Son <strong>dos reglas de CSS</strong>: cero JavaScript, y
+                        el visitante con «reducir movimiento» ve el cambio instantáneo, sin animación.
+                    </p>
+                    <p className="mt-2 text-sm leading-relaxed text-gray-500">
+                        En los navegadores que aún no lo implementan, la navegación es la de siempre.
+                    </p>
+                    <div className="mt-4 flex flex-wrap items-center gap-2" role="group" aria-label="Transición entre páginas">
+                        {VT_OPTIONS.map((opt) => {
+                            const active = vt === opt.value;
+                            return (
+                                <button
+                                    key={opt.value}
+                                    type="button"
+                                    aria-pressed={active}
+                                    disabled={vtSaving}
+                                    onClick={() => void saveVt(opt.value)}
+                                    className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors disabled:opacity-50 ${
+                                        active
+                                            ? "bg-gray-900 text-white"
+                                            : "border border-gray-200 text-gray-600 hover:border-gray-400 hover:text-gray-900"
+                                    }`}
+                                >
+                                    {opt.label}
+                                </button>
+                            );
+                        })}
+                        {vtSaving && <span className="text-xs text-gray-500">Guardando…</span>}
+                    </div>
                 </Card>
 
                 {editing && (

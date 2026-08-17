@@ -252,6 +252,38 @@ keyboard-operable, canvas preview, revert-red tests, browser-verified computed s
 
 ---
 
+## 3.2 Cycle 3 (2026-08-17): the platform gap — plan, refutation, improved plan
+
+**Method**: a 6-agent research pass (4 competitive fronts + our own inventory + a completeness
+critic), web-verified on 2026-08-17. The finding that reframes the cycle: **the moat is no longer
+capability breadth — GSAP 3.15 is now entirely free** (Webflow bought GreenSock) and Webflow put a
+visual timeline, SplitText and ScrollTrigger in every author's hands. Our timeline landed in cycle
+2, so parity on *effects* is reached. What no competitor occupies is the **platform layer**: the
+2026 browser gives away, in pure CSS, capabilities that every one of them still pays for in
+JavaScript — and emitting them safely (modern rule + fallback + `@supports` + the per-engine
+quirks) is exactly the work no hand-author sustains and a compiler does for free.
+
+**Drafted, then refuted, then improved:**
+
+| # | Item | Refutation verdict |
+|---|---|---|
+| **C1** | **View Transitions** — cross-document `@view-transition{navigation:auto}` + per-block morph | **BUILD, split in two**: the naive "compile it into `ix`" is wrong twice — page navigation is *site chrome*, not a block prop, and `view-transition-name` must be **unique per document** (a duplicate aborts the whole transition, and a CMS repeats blocks by nature). Improved: (a) a site setting, off by default, emitting the two rules plus a closed set of named transitions; (b) an opt-in per-block morph stamping `view-transition-name: wjs-vt-<block id>` — derived from the validated id, never an author string. Reduced-motion kills it; Firefox degrades to a normal navigation, which is the honest no-op |
+| **C2** | **`@starting-style` + `transition-behavior: allow-discrete`** for blocks that appear/disappear | **BUILD, not as a trigger**: entry/exit is driven by the block's own discrete state (`[open]`, `:popover-open`, our state attribute), so a new `IxTrigger` would be a lie about who owns the state. Improved: a closed *reveal* contract on the chrome blocks that already ship (OffCanvas, MegaMenu), compiled with the **Firefox-safe path** — that engine still cannot transition `display` (bugs 1834876/1834877), so the emitter pairs `visibility`+`opacity` instead of trusting the modern-only route |
+| **C3** | **WCAG 2.2.2 pause + reduced-motion "skip to end"** | **BUILD — this is a conformance defect, not a feature**: `repeat:"inf"` compiles to `animation-iteration-count:infinite` with no visitor control, which is the exact pattern the level-A criterion names. Improved: pause governed by CSS (`animation-play-state`) so the control costs no engine JS, plus a compiler warning. And reduced-motion gains *skip-to-end* (final frame) rather than killing an opacity fade that was never vestibular — the OS preference stays sovereign, only our execution matures |
+| **C4** | **Theme tokens in animated colors + RTL mirroring** | **BUILD, with the invariant intact**: animating a CSS *variable* on the hot path is correctly refused (main-thread recalc), but **reading** one is a different thing — emitting `var(--wjs-color-…)` from the theme manifest's closed list keeps "no author string reaches the stylesheet" and stops every re-colour of the site from leaving stale baked hex. RTL is cheap and currently absent everywhere: `x`, `skewX`, `clipDir` and `from:start|end` are direction-bearing and baked with a fixed sign — mirror them under `:dir(rtl)` at emission |
+| **C5** | **Sticky section + motion governance** | **BUILD, and it retires a "no" that wore a principle's clothes**: refusing GSAP's pin is right (its spacer mutates layout = CLS by design), but "use `position:sticky`" is only an answer if the layout system offers a sticky section an author can pair with `scrub` — otherwise section storytelling, half the reason people buy a builder, is simply missing. Governance is the other half nobody ships: a site-level motion scale/off switch, role limits (a contributor should not be able to ship 30 infinite loops), and a "where does my site move" inventory |
+| **C6** | **Measured INP on the Firefox path + pixel parity goldens** | **BUILD — evidence, not function**: the headline "zero JS on the hot path" is true in Chromium and WebKit and *false in the browser that justifies the whole fallback*, where every `scrub`/`view once`/external target runs IO+rAF+WAAPI on the main thread and has never been timed. And parity is defended by arithmetic: no golden of the emitted CSS, no deterministic frame comparison between the CSS and WAAPI paths, no proof the reduced-motion frame is the right one |
+| — | Lottie / Rive / dotLottie state machines / Spline / WebGL shaders | **OMIT reaffirmed, and it belongs in the docs as a decision, not a delay**: each is a third-party JS runtime on the visitor's page — the exact negation of native-first and of the byte budget. This is plugin-marketplace territory. (Fact checked while here: `lottie-web` is *not* deprecated; LottieFiles' players are, superseded by `dotlottie-wc`) |
+| — | ScrollSmoother-style smooth scroll | **OMIT reaffirmed**: it replaces the browser's scroll with a JS-driven one — scroll-jacking by construction, and the opposite bet from the native scroll timelines this engine is built on |
+| — | Split by characters | **OMIT, with an honest reason swap**: the accessibility argument was weak (we already ship the accessible pattern for words — full `aria-label` above, `aria-hidden` pieces). The real reasons are node cost and the inline editor. Lines stays constitutional: it needs measured rendered text, impossible under our SSR-parity rule |
+| — | Video scroll-scrub | **OMIT from the engine, noted as a market gap**: verified that *no* builder ships it natively (Webflow does it with GSAP cloneables, Framer with paid marketplace components). It is a block with a runtime, not an engine capability — recorded here so the decision is deliberate |
+
+Execution order: C1 → C2 (the native pair with the highest return) → C3 (conformance) → C4 →
+C5 → C6. Same hard gates as every cycle: native-first, zero CLS, keyboard-operable controls,
+canvas preview, revert-red tests, browser-verified computed styles, and CI+CodeQL green on main.
+
+---
+
 ## 4. Platform facts this plan leans on (verified 2026-08-16)
 
 - **Scroll-driven animations**: Chrome/Edge 115+, Safari 26.0+ (26.5 fixed range-edge bugs);

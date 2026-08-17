@@ -307,6 +307,11 @@ const SETTINGS_OPTIONS = new Set([
     // content hash, so the browser cannot serve the old sheet) on its next navigation. Without this
     // entry the edit would be invisible until each page's ISR window happened to expire.
     'wjs_ix_presets',
+    // Transiciones entre páginas (C1): su CSS lo emite el LAYOUT público en el servidor, así que un
+    // cambio solo se ve cuando la página se vuelve a renderizar. Y la variante entre documentos
+    // necesita la regla en los DOS documentos: sin esta purga, encenderla dejaría medio sitio con
+    // la regla y medio sin ella — es decir, sin transición y sin explicación.
+    'wjs_view_transitions',
 ]);
 
 /** Wire the content hooks. Call ONCE from initialize() after the hook system is up. */

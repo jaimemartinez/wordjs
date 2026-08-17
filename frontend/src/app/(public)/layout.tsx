@@ -5,6 +5,7 @@
 // tree (Next.js forbids async components inside a client tree). See PublicLayoutShell for the rationale.
 import { redirect } from "next/navigation";
 import PublicLayoutShell from "@/components/public/PublicLayoutShell";
+import ViewTransitions from "@/components/public/ViewTransitions";
 import ChromeRenderer from "@/components/chrome/ChromeRenderer";
 import { buildChromeBindings, resolveEffectiveChrome } from "@/lib/chromeData";
 import { parseThemeLayout } from "@/lib/themeLayout";
@@ -132,6 +133,10 @@ export default async function PublicLayout({
         >
             {/* RSS auto-discovery — React hoists this to <head> on every public page */}
             <link rel="alternate" type="application/rss+xml" title={settings?.blogname || "RSS"} href="/feed" />
+            {/* Transiciones entre páginas (C1): dos reglas de CSS, cero JS. Van en el LAYOUT porque
+                la variante entre documentos necesita la regla en el documento que sale y en el que
+                entra; aquí, toda página pública la lleva. Apagado por defecto. */}
+            <ViewTransitions setting={settings?.wjs_view_transitions} />
             {/* Plugin-enqueued styles + head scripts (validated + served from /plugins/<slug>/; the plugin
                 never controls markup — only these attributes). React hoists <link>/<script src> to <head>. */}
             {assets.styles.map((s) => <link key={s.handle} rel="stylesheet" href={s.src} media={s.media || undefined} />)}

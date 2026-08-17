@@ -54,6 +54,10 @@ const PUBLIC_SETTINGS = [
                             // en el servidor. No son secreto: describen movimiento, y su efecto ya
                             // es visible en la hoja emitida. Un bloque guarda solo el ID del
                             // preajuste, así que editarlos NO toca un byte de `_puck_data`.
+    'wjs_view_transitions',  // transiciones entre páginas (C1): 'off' | 'fade' | 'slide'. PÚBLICO
+                             // porque el layout público emite su CSS en el servidor, y la variante
+                             // entre documentos exige la regla en AMBOS documentos. No es secreto:
+                             // describe movimiento y su efecto ya se ve en la hoja emitida.
     'users_can_register',
     // 'admin_email' - SECURITY: Removed from public to prevent email harvesting
     'default_role',
@@ -199,6 +203,9 @@ const derivedSetting = (key: string): (() => Promise<any>) | null => {
 // `site_text_direction` admits '' as the DERIVE sentinel: no override, take the direction from the
 // locale. The three real values are exactly HTML's `dir` enum.
 const TEXT_DIRECTIONS = ['', 'ltr', 'rtl', 'auto'];
+// Transiciones entre páginas: el espejo EXACTO de IX_VT_STYLES en el frontend, más '' (= apagado).
+// Si un día crece la lista, crece en los dos sitios — el frontend manda, este gate solo cierra.
+const VIEW_TRANSITION_STYLES = ['', 'off', 'fade', 'slide'];
 // language [ - script ] [ - region ]. Underscore form ('es_ES') is what the WPLANG option has
 // always used (core/i18n keys the translation files by it), so it is accepted and normalized to a
 // BCP 47 tag on READ by whoever renders it — core/language-tag for the RSS <language>, the frontend
@@ -250,6 +257,16 @@ const SETTING_VALIDATORS: Record<string, (v: any) => string | null> = {
             if (!Array.isArray(entry.tracks)) {
                 return 'Each wjs_ix_presets entry needs a `tracks` array.';
             }
+        }
+        return null;
+    },
+    // Transiciones entre páginas (C1). Vocabulario CERRADO y diminuto: el frontend elige entre
+    // variantes ya escritas en código, así que aquí basta con rechazar lo que no sea uno de los
+    // tres nombres. '' es el mismo sentido que 'off' (sin transición), como en site_text_direction.
+    wjs_view_transitions: (v: any) => {
+        const s = v === null || v === undefined ? '' : v;
+        if (typeof s !== 'string' || !VIEW_TRANSITION_STYLES.includes(s)) {
+            return 'wjs_view_transitions must be one of "off", "fade", "slide".';
         }
         return null;
     },
