@@ -876,8 +876,10 @@ async function join(params: {
     const truncated = doc.truncated || ops.length >= CONFIG.MAX_OPS_PER_EPOCH || unreadable > 0;
 
     // Los demás, sin nosotros: nuestra conexión ya está `ready` y si no se excluyera nos veríamos a
-    // nosotros mismos en la lista de compañeros.
-    const members = livePresence(room, conn.siteId);
+    // nosotros mismos en la lista de compañeros. `clusterPresence`, not `livePresence`: the editors
+    // of the OTHER nodes belong in this snapshot too, and this is the only moment we get to tell the
+    // joiner about them — nothing re-announces an existing member (see `clusterPresence`).
+    const members = await clusterPresence(room, postId, conn.siteId);
     // Alta en presencia SIN selección: el hecho de estar es ya información útil para los demás.
     const entry: PresenceEntry = { siteId, userId, name: conn.name, color: conn.color, sel: null, at: Date.now() };
     room.presence.set(siteId, entry);
@@ -959,6 +961,108 @@ function livePresence(room: Room, exceptSite?: string | null): PresenceEntry[] {
             color: conn.color,
             sel: sel ? sel.sel : null,
             at: sel ? sel.at : now,
+        });
+    }
+    return out;
+}
+
+/**
+ * Display names for a set of user ids, for presence entries this node did not build itself.
+ * Best-effort: a name is a label, and an unreadable `users` table must not cost anyone their join.
+ */
+async function displayNames(userIds: number[]): Promise<Map<number, string>> {
+    const out = new Map<number, string>();
+    // Bounded by construction: a room's membership is capped, and an unbounded IN list is a way to
+    // turn a roster read into a scan.
+    const ids = [...new Set(userIds.filter((n) => Number.isInteger(n) && n > 0))].slice(0, 200);
+    if (!ids.length) return out;
+    try {
+        const rows = await dbAsync.all(
+            `SELECT id, display_name, user_login FROM users WHERE id IN (${ids.map(() => '?').join(',')})`,
+            ids,
+        );
+        for (const r of rows || []) {
+            // Same precedence the route uses when it names a live connection, so a member looks the
+            // same whichever node happens to describe them.
+            out.set(Number(r.id), String(r.display_name || r.user_login || ''));
+        }
+    } catch (e: any) {
+        console.warn('[collab] no se pudieron leer los nombres de los miembros remotos:', e && e.message);
+    }
+    return out;
+}
+
+/**
+ * WHO IS IN THE ROOM, ACROSS THE WHOLE CLUSTER.
+ *
+ * `livePresence` answers out of `room.conns` — the connections THIS process is serving — and that is
+ * the right answer to "who am I serving". It stops being the right answer to "who is editing this
+ * page" the moment there is a second node, and it fails one-sidedly, which is why it survived: the
+ * `members` broadcast DOES cross the bus, so whoever is already connected is told about a newcomer,
+ * while the newcomer's own `welcome` roster is assembled locally and never mentions the editors
+ * attached to other nodes. With one author per node, the second one to open the page is told
+ * «nobody else is editing this page» — and keeps being told that until somebody joins after them.
+ *
+ * This is the question the destructive decisions already ask BOTH sources (see LIVENESS EN EL
+ * CLÚSTER in the header): the local belt, plus `collab_members` — the shared row-per-connection
+ * signal that exists precisely to cover the editors of other nodes. The roster was the last place
+ * still answering it from one process's memory.
+ *
+ * The remote half is RECONSTRUCTED, not transported: `siteId`/`userId` come from the shared row, the
+ * colour is a pure function of the userId (so every node derives the same one without coordinating —
+ * see `colorForUser`), and the name is read from `users`. `sel` starts null deliberately: a cursor
+ * position is ephemeral and belongs to the node serving that author, and it arrives with their next
+ * `presence` broadcast — exactly as it does for a local member who has not moved yet.
+ *
+ * Never throws and never blocks a join. A roster is an adornment; an unreadable `collab_members`
+ * degrades to "the ones I can see", which is what the code did before this existed.
+ */
+async function clusterPresence(room: Room, postId: number, exceptSite?: string | null): Promise<PresenceEntry[]> {
+    const local = livePresence(room, exceptSite);
+    // Same question `broadcast` asks: is there a cluster tier AT ALL? In a single-node install every
+    // row in `collab_members` is already one of ours, so there is nothing to go and look for.
+    if (!cache.redisConfigured()) return local;
+
+    const since = Date.now() - CONFIG.MEMBER_TTL_MS;
+    let rows: any[];
+    try {
+        rows = await dbAsync.all(
+            // `seen_at > since` (positive) on purpose: it excludes the half-joined rows `claimMember`
+            // parks at `-now`, for the same reason the roster excludes local conns that are not
+            // `ready` — somebody who has not finished entering is not yet in the room.
+            'SELECT site_id, user_id FROM collab_members WHERE post_id = ? AND node_id <> ? AND seen_at > ?',
+            [postId, NODE_ID, since],
+        );
+    } catch (e: any) {
+        console.warn('[collab] no se pudo leer la presencia del clúster:', e && e.message);
+        return local;
+    }
+    if (!Array.isArray(rows) || !rows.length) return local;
+
+    // A siteId this node is already serving wins: our own connection is first-hand knowledge, and a
+    // reconnection that moved between nodes can leave the old row behind for up to MEMBER_TTL_MS.
+    const seen = new Set(local.map((m) => m.siteId));
+    if (exceptSite) seen.add(exceptSite);
+    const remote = new Map<string, number>();
+    for (const r of rows) {
+        const siteId = String((r && r.site_id) || '');
+        if (!siteId || seen.has(siteId)) continue;
+        seen.add(siteId);
+        remote.set(siteId, Number(r.user_id) || 0);
+    }
+    if (!remote.size) return local;
+
+    const names = await displayNames([...remote.values()]);
+    const now = Date.now();
+    const out = local.slice();
+    for (const [siteId, userId] of remote) {
+        out.push({
+            siteId,
+            userId,
+            name: names.get(userId) || '',
+            color: colorForUser(userId),
+            sel: null,
+            at: now,
         });
     }
     return out;
