@@ -9,6 +9,8 @@ import {
     buildMenuTree,
     isSafeChromeHref,
     safeChromeHref,
+    safeMenuHref,
+    menuTargetRel,
     STARTER_TEMPLATES,
     CHROME_MAX_BLOCKS,
     CHROME_DOCUMENT_SCOPED_BLOCKS,
@@ -495,5 +497,58 @@ describe('helpers', () => {
         expect(b.settings).toBe(settings);
         expect(b.menus.header).toBe(header);
         expect(b.menus.footer).toBe(footer);
+    });
+});
+
+/**
+ * safeMenuHref / menuTargetRel — the menu-item render floor shared by the desktop <a>s (blocks.tsx)
+ * and the mobile drawer (ChromeNavMobile). Extracted here precisely so BOTH surfaces validate the
+ * same way; these tests pin the resolver contract (return the value to paint, '#' when hostile) that
+ * the drawer-parity fix depends on.
+ */
+describe('safeMenuHref / menuTargetRel (shared menu-item render guards)', () => {
+    it('keeps same-origin relative forms and the safe absolute schemes', () => {
+        expect(safeMenuHref('/about')).toBe('/about');
+        expect(safeMenuHref('#section')).toBe('#section');
+        expect(safeMenuHref('?page=2')).toBe('?page=2');
+        expect(safeMenuHref('https://example.com/docs')).toBe('https://example.com/docs');
+        expect(safeMenuHref('http://example.com')).toBe('http://example.com');
+        expect(safeMenuHref('mailto:a@b.c')).toBe('mailto:a@b.c');
+        expect(safeMenuHref('tel:+34600000000')).toBe('tel:+34600000000');
+    });
+
+    it("collapses hostile or malformed values to '#' (an inert href, the label survives)", () => {
+        expect(safeMenuHref('javascript:alert(1)')).toBe('#');
+        expect(safeMenuHref('data:text/html,<script>1</script>')).toBe('#');
+        expect(safeMenuHref('vbscript:msgbox(1)')).toBe('#');
+        expect(safeMenuHref('//evil.example')).toBe('#');
+        expect(safeMenuHref('/\\evil.example')).toBe('#');
+        expect(safeMenuHref('')).toBe('#');
+        expect(safeMenuHref(undefined)).toBe('#');
+        expect(safeMenuHref(42 as any)).toBe('#');
+    });
+
+    it('strips the WHATWG-removed controls BEFORE validating (the "java\tscript:" smuggle)', () => {
+        expect(safeMenuHref('java\tscript:alert(1)')).toBe('#');
+        expect(safeMenuHref('\tjavascript:alert(1)\n')).toBe('#');
+        // and a control-padded legitimate path validates as what the browser will actually parse
+        expect(safeMenuHref('/abo\tut')).toBe('/about');
+    });
+
+    it('menuTargetRel whitelists _self|_blank and forces rel on _blank', () => {
+        expect(menuTargetRel('_blank')).toEqual({ target: '_blank', rel: 'noopener noreferrer' });
+        expect(menuTargetRel('_self')).toEqual({ target: '_self' });
+        expect(menuTargetRel('sneaky')).toEqual({ target: '_self' });
+        expect(menuTargetRel(undefined)).toEqual({ target: '_self' });
+    });
+
+    it('buildMenuTree threads `target` onto tree nodes (only when present) so the drawer can honor it', () => {
+        const tree = buildMenuTree([
+            { id: 1, title: 'Docs', url: 'https://example.com', target: '_blank' },
+            { id: 2, title: 'Home', url: '/' },
+        ]);
+        expect(tree.find((n) => n.id === 1)?.target).toBe('_blank');
+        // no undefined-valued key on items that carried no target (byte-stable snapshots)
+        expect(Object.prototype.hasOwnProperty.call(tree.find((n) => n.id === 2)!, 'target')).toBe(false);
     });
 });

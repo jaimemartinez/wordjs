@@ -1,16 +1,18 @@
 import { describe, it, expect, vi } from "vitest";
 
 // resolveDynamicBlocks pulls in the server-api module at import time; stub it so the module loads in a
-// plain node test. applyPostContext itself is pure (no network, no React request cache), so nothing here
-// calls the stubs — they only keep the import graph resolvable.
+// plain node test. applyPostContext itself is pure (no network, no React request cache), so nothing in
+// the first suite calls the stubs — the isFront suite below drives getSettings explicitly.
+const getSettings = vi.fn(async (): Promise<Record<string, unknown>> => ({}));
 vi.mock("@/lib/server-api", () => ({
     getPosts: vi.fn(async () => []),
     getPostById: vi.fn(async () => null),
     getMenuByRef: vi.fn(async () => ({ items: [] })),
-    getSettings: vi.fn(async () => ({})),
+    getSettings: (...args: unknown[]) => getSettings(...(args as [])),
 }));
 
-import { applyPostContext, type PostContext } from "@/lib/resolveDynamicBlocks";
+import { applyPostContext, withResolvedBlocks, type PostContext } from "@/lib/resolveDynamicBlocks";
+import type { Post } from "@/lib/api";
 
 // A tree with a Breadcrumbs nested inside a Section slot — the walker must reach it.
 const tree = () => ({
@@ -52,5 +54,43 @@ describe("applyPostContext — the cross-post cache guard", () => {
         const plain = { content: [{ type: "Heading", props: { title: "Hi" } }] };
         const out = applyPostContext(plain as any, ctxA) as any;
         expect(out.content[0].props).not.toHaveProperty("resolvedTrail");
+    });
+});
+
+/**
+ * isFront — the front-page flag Breadcrumbs' hideOnHome depends on.
+ *
+ * The anonymous /settings read identifies the static front page as `homepage_id`; the old
+ * comparison read show_on_front/page_on_front, which are ADMIN-ONLY (GET /settings/all) and
+ * vestigial — they never appear in the public payload, so resolvedIsFront was false on EVERY
+ * request and hideOnHome was dead code on every install. Pinned through the real seam
+ * (withResolvedBlocks → buildPostContext) with the settings shape the public endpoint serves.
+ */
+describe("withResolvedBlocks — resolvedIsFront comes from homepage_id", () => {
+    const postWithBreadcrumbs = (id: number): Post => ({
+        id,
+        title: "Página",
+        slug: `pagina-${id}`,
+        meta: { _puck_data: { content: [{ type: "Breadcrumbs", props: {} }] } },
+    } as unknown as Post);
+
+    const isFrontOf = (out: Post): unknown =>
+        (out.meta!._puck_data as { content: Array<{ props: Record<string, unknown> }> }).content[0].props.resolvedIsFront;
+
+    it("true when the rendered post IS the configured front page (homepage_id, string-typed option)", async () => {
+        getSettings.mockResolvedValueOnce({ homepage_id: "12" });
+        expect(isFrontOf(await withResolvedBlocks(postWithBreadcrumbs(12)))).toBe(true);
+    });
+
+    it("false for any other post", async () => {
+        getSettings.mockResolvedValueOnce({ homepage_id: "12" });
+        expect(isFrontOf(await withResolvedBlocks(postWithBreadcrumbs(13)))).toBe(false);
+    });
+
+    it("false when no static front page is configured (absent / 0 — the NaN/0 guard)", async () => {
+        getSettings.mockResolvedValueOnce({});
+        expect(isFrontOf(await withResolvedBlocks(postWithBreadcrumbs(12)))).toBe(false);
+        getSettings.mockResolvedValueOnce({ homepage_id: "0" });
+        expect(isFrontOf(await withResolvedBlocks(postWithBreadcrumbs(0)))).toBe(false);
     });
 });

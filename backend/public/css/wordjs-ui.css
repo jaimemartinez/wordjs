@@ -394,6 +394,35 @@ a:not([href]):not([class]) { color: inherit; text-decoration: none; }
   color: var(--wjs-nav-color-hover, var(--wjs-color-primary));
 }
 
+/* NavMenu submenu — the disclosure, moved HERE from Tailwind visible/invisible utilities for the same
+ * reason as the MegaMenu flyout below: the unlayered `.invisible { !important }` utility out-cascades
+ * any LAYERED utility toggle, so the old group-hover/group-focus-within reveal could NEVER open on the
+ * public surface. Scoped to the HORIZONTAL nav (the vertical/footer submenu is a static, always-visible
+ * indented list — it must stay untouched) and to the flyout position
+ * (`.wjs-has-submenu > .wjs-chrome-submenu`, nested levels included).
+ *
+ * Two trigger modes, keyed on the block's rendered data-trigger attr (like MegaMenu):
+ *  - hover: :hover and :focus-within open (keyboard-reachable — the trigger is a real link; Tab-out
+ *    closes). CSS-only, no JS.
+ *  - click: the caret is a real <button> and the NavClickSubmenus island flips [data-open] (Escape /
+ *    outside-click close). :focus-within must NOT open in this mode — the toggled-closed panel would
+ *    re-open (stick open) while the just-clicked button keeps focus.
+ * A theme restyles the panel surface via --wjs-bg-surface / --wjs-border-subtle and may retime the
+ * reveal via --wjs-transition. */
+.wjs-block-nav-menu .wjs-chrome-nav-horizontal .wjs-has-submenu > .wjs-chrome-submenu {
+  visibility: hidden;
+  opacity: 0;
+  translate: 0 4px;
+  transition: opacity var(--wjs-transition, 0.15s ease), translate var(--wjs-transition, 0.15s ease), visibility 0.15s;
+}
+.wjs-block-nav-menu[data-trigger="hover"] .wjs-chrome-nav-horizontal .wjs-has-submenu:hover > .wjs-chrome-submenu,
+.wjs-block-nav-menu[data-trigger="hover"] .wjs-chrome-nav-horizontal .wjs-has-submenu:focus-within > .wjs-chrome-submenu,
+.wjs-block-nav-menu .wjs-chrome-nav-horizontal .wjs-has-submenu[data-open="true"] > .wjs-chrome-submenu {
+  visibility: visible;
+  opacity: 1;
+  translate: 0 0;
+}
+
 /* MegaMenu flyout — the CSS-only disclosure lives HERE, on the block's own hooks, and deliberately
  * NOT in utility classes: this sheet ships an unlayered `.invisible { visibility: hidden !important }`
  * (utility set, above) that out-cascades any LAYERED utility toggle, so a Tailwind

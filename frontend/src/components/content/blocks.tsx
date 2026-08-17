@@ -47,9 +47,10 @@ import AudioTransport from "./AudioTransport";
 import ParticleFieldCanvas from "./ParticleField";
 import ChromeNavMobile from "@/components/chrome/ChromeNavMobile";
 import NavMenuMobile from "./NavMenuMobile";
+import NavClickSubmenus from "./NavClickSubmenus";
 import OffCanvasClient from "./OffCanvasClient";
 import TocScrollSpy from "./TocScrollSpy";
-import { buildMenuTree, type ChromeMenuItem } from "@/lib/chromeData";
+import { buildMenuTree, safeMenuHref, menuTargetRel, type ChromeMenuItem } from "@/lib/chromeData";
 import { parseLocale, isRtlLocale } from "@/lib/documentLanguage";
 
 export function AudioPlayerBlock({ src, title, bg, borderColor, radius, pad, iconSize, iconBg, iconColor, css }: any) {
@@ -133,28 +134,17 @@ export function ParticleFieldBlock({ count, color, speed, linkLines, linkDistanc
 
 // Render-time href guard — mirrors backend routes/menus.ts safeMenuUrl's allow-list so a stale or
 // hand-edited value can never emit a javascript:/data:/vbscript: href. Same-origin relative / fragment
-// / query, or an absolute http(s)/mailto/tel URL; anything else collapses to '#'. The WHATWG-stripped
-// controls (tab/LF/CR) are removed FIRST so the validated string is the one the browser will parse.
-const NAV_SAFE_SCHEMES = new Set(["http:", "https:", "mailto:", "tel:"]);
-function safeNavHref(raw: unknown): string {
-    if (typeof raw !== "string") return "#";
-    const value = raw.replace(/[\t\n\r]/g, "").trim();
-    if (!value) return "#";
-    if (/^\/[/\\]/.test(value)) return "#"; // authority-relative //host or /\host → external
-    if (value.startsWith("/") || value.startsWith("#") || value.startsWith("?")) return value;
-    try {
-        if (NAV_SAFE_SCHEMES.has(new URL(value).protocol)) return value;
-    } catch { /* not absolute, not a recognized relative form */ }
-    return "#";
-}
+// / query, or an absolute http(s)/mailto/tel URL; anything else collapses to '#'.
+//
+// The IMPLEMENTATION lives in chromeData.ts (safeMenuHref / menuTargetRel): the mobile drawer
+// (ChromeNavMobile) must apply the exact same floor, and this module imports that island — a helper
+// defined here could never flow back without a cycle. Kept under the historical local names so every
+// call site below reads unchanged.
+const safeNavHref = safeMenuHref;
 
 // target is author data → whitelist to the two valid values; _blank forces rel so the opened tab
-// cannot reach window.opener. Anything else coerces to _self.
-function navTargetRel(target: unknown): { target: "_self" | "_blank"; rel?: string } {
-    return target === "_blank"
-        ? { target: "_blank", rel: "noopener noreferrer" }
-        : { target: "_self" };
-}
+// cannot reach window.opener. Anything else coerces to _self. (Shared: see safeNavHref above.)
+const navTargetRel = menuTargetRel;
 
 // depth is 1–3 (top level = 1). Clamp to the allow-set, then cut every branch past it so a hostile or
 // stale value can neither deepen the tree nor drop it below one visible level.
@@ -209,26 +199,42 @@ function NavMenuItem({
         );
     }
 
-    // Horizontal: a CSS-only dropdown (no theme JS). Hidden with visibility until the parent <li> holds
-    // focus (keyboard / tap) and, when the trigger is "hover", also on hover. Logical start/ps keep it
-    // correct under RTL, exactly like ChromeNav.
-    const hoverOpen = submenuTrigger === "hover"
-        ? " group-hover:visible group-hover:opacity-100 group-hover:translate-y-0"
-        : "";
+    // Horizontal: a dropdown whose hidden/open state lives in wordjs-ui.css on the block's own hooks
+    // (`.wjs-has-submenu > .wjs-chrome-submenu`, the MegaMenu-flyout pattern) and deliberately NOT in
+    // Tailwind visible/invisible utilities: the framework sheet ships an UNLAYERED
+    // `.invisible { visibility: hidden !important }` that out-cascades any LAYERED utility toggle, so
+    // a group-hover/group-focus-within reveal could never open on the public surface. Here only the
+    // panel's position + tokenized surface. Logical start/ps keep it correct under RTL, like ChromeNav.
+    //
+    // hover trigger: CSS-only (opens on :hover and :focus-within under [data-trigger="hover"]).
+    // click trigger: the caret is a REAL <button> (aria-expanded/aria-haspopup) and the
+    // NavClickSubmenus island flips [data-open] on this <li> — a parent <a> with a real URL keeps
+    // navigating on click while the button, keyboard-activatable everywhere (Safari never focuses
+    // links on click, so :focus-within alone could never open it there), owns the disclosure.
     const panelPos = depth === 0 ? "top-full start-0 mt-1" : "top-0 start-full ms-1";
     const panel =
         "wjs-chrome-submenu absolute z-50 min-w-[12rem] flex flex-col gap-1 list-none m-0 p-2 rounded-lg shadow-lg "
-        + "bg-[var(--wjs-bg-surface,white)] border border-[var(--wjs-border-subtle,#e5e7eb)] "
-        + "invisible opacity-0 translate-y-1 transition-all duration-150 "
-        + "group-focus-within:visible group-focus-within:opacity-100 group-focus-within:translate-y-0"
-        + hoverOpen;
+        + "bg-[var(--wjs-bg-surface,white)] border border-[var(--wjs-border-subtle,#e5e7eb)]";
+    const caret = (
+        <svg aria-hidden="true" className="w-3 h-3 opacity-70" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
+        </svg>
+    );
     return (
-        <li className="wjs-chrome-nav-item wjs-has-submenu relative group">
+        <li className="wjs-chrome-nav-item wjs-has-submenu relative">
             <span className="inline-flex items-center gap-1">
                 {link}
-                <svg aria-hidden="true" className="w-3 h-3 opacity-70" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
-                </svg>
+                {submenuTrigger === "click" ? (
+                    <button
+                        type="button"
+                        className="wjs-submenu-toggle inline-flex items-center justify-center p-1 m-0 bg-transparent border-0 cursor-pointer text-current"
+                        aria-expanded={false}
+                        aria-haspopup="true"
+                        aria-label={`Abrir submenú de ${item.title}`}
+                    >
+                        {caret}
+                    </button>
+                ) : caret}
             </span>
             <ul className={`${panel} ${panelPos}`}>{sublist}</ul>
         </li>
@@ -284,11 +290,20 @@ export function NavMenuBlock({ menu, orientation = "horizontal", depth = 2, subm
     // stacked, so they stay visible at every width regardless of mobileBehavior.
     let body: React.ReactNode = nav;
     if (orient === "horizontal" && mobileBehavior === "drawer") {
-        // Reuse the header's hamburger + slide-in drawer; the desktop nav hides below md.
+        // Reuse the header's hamburger + slide-in drawer; the desktop nav hides below md. The tree
+        // handed over carries the SAME re-validated hrefs the desktop <a>s render (a stored
+        // javascript: url must collapse to '#' on BOTH surfaces) — and the drawer re-checks them
+        // itself, since it is shared with the composed header chrome (defence in depth, twice).
+        const sanitizeForDrawer = (items: ChromeMenuItem[]): ChromeMenuItem[] =>
+            items.map((it) => ({
+                ...it,
+                url: safeNavHref(it.url),
+                children: sanitizeForDrawer(it.children ?? []),
+            }));
         body = (
             <>
                 <div className="hidden md:block">{nav}</div>
-                <ChromeNavMobile items={tree} />
+                <ChromeNavMobile items={sanitizeForDrawer(tree)} />
             </>
         );
     } else if (orient === "horizontal" && mobileBehavior === "collapse") {
@@ -296,8 +311,17 @@ export function NavMenuBlock({ menu, orientation = "horizontal", depth = 2, subm
     }
     // mobileBehavior "none": the nav wraps and stays visible at all widths (no island).
 
+    // Click trigger only: the tiny delegated-listener island that flips [data-open] on the submenu
+    // <li>s (Escape / outside-click close). Hover mode stays zero-JS, and the editor canvas mounts
+    // no island (the Puck overlay owns pointer events there).
+    if (orient === "horizontal" && trigger === "click" && !isEditing) {
+        body = <NavClickSubmenus>{body}</NavClickSubmenus>;
+    }
+
+    // data-trigger is a RENDERED attr (not a stored prop): wordjs-ui.css keys the :hover /
+    // :focus-within reveal on [data-trigger="hover"], exactly like MegaMenu's flyout.
     return (
-        <div className={bc("nav-menu")} data-orientation={orient} style={css}>
+        <div className={bc("nav-menu")} data-orientation={orient} data-trigger={trigger} style={css}>
             {body}
         </div>
     );

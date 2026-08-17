@@ -76,6 +76,10 @@ export interface ChromeMenuItem {
     order?: number;
     parent?: string | number;
     children?: ChromeMenuItem[];
+    // Author data (server default '_self'). NEVER rendered raw: every consumer must pass it through
+    // menuTargetRel, which whitelists _self|_blank and forces rel on _blank. Threaded by
+    // buildMenuTree so tree consumers (the mobile drawer) see the same value the flat list carries.
+    target?: string;
 }
 
 export interface ChromeSocialLink {
@@ -125,6 +129,39 @@ export function safeChromeHref(raw: unknown): string | undefined {
 // Quien vaya a PINTAR el valor debe usar safeChromeHref y pintar SU retorno, no la cadena cruda.
 export function isSafeChromeHref(href: unknown): href is string {
     return safeChromeHref(href) !== undefined;
+}
+
+// ── Menu-item render guards ──────────────────────────────────────────────────────────────────────
+// Shared by EVERY surface that paints a bound menu item: the NavMenu/MegaMenu desktop <a>s
+// (blocks.tsx) AND the mobile drawer (ChromeNavMobile). They live HERE — not in blocks.tsx — because
+// blocks.tsx imports ChromeNavMobile, so a helper in blocks.tsx could never be imported back by the
+// drawer without a cycle. Mirrors backend routes/menus.ts safeMenuUrl's allow-list so a stale or
+// hand-edited value can never emit a javascript:/data:/vbscript: href (defence in depth: menu urls
+// are sanitized on write, and re-validated at EVERY render).
+//
+// Unlike safeChromeHref above (chrome buttons: path or http(s), else the link disappears), a menu
+// item may also be a fragment/query or a mailto:/tel: link, and an invalid value collapses to '#'
+// (an inert href) instead of vanishing — a menu item must keep its label. The WHATWG-stripped
+// controls (tab/LF/CR) are removed FIRST so the validated string is the one the browser will parse.
+const MENU_SAFE_SCHEMES = new Set(["http:", "https:", "mailto:", "tel:"]);
+export function safeMenuHref(raw: unknown): string {
+    if (typeof raw !== "string") return "#";
+    const value = raw.replace(URL_STRIPPED_CONTROLS, "").trim();
+    if (!value) return "#";
+    if (/^\/[/\\]/.test(value)) return "#"; // authority-relative //host or /\host → external
+    if (value.startsWith("/") || value.startsWith("#") || value.startsWith("?")) return value;
+    try {
+        if (MENU_SAFE_SCHEMES.has(new URL(value).protocol)) return value;
+    } catch { /* not absolute, not a recognized relative form */ }
+    return "#";
+}
+
+// target is author data → whitelist to the two valid values; _blank forces rel so the opened tab
+// cannot reach window.opener (reverse-tabnabbing). Anything else coerces to _self.
+export function menuTargetRel(target: unknown): { target: "_self" | "_blank"; rel?: string } {
+    return target === "_blank"
+        ? { target: "_blank", rel: "noopener noreferrer" }
+        : { target: "_self" };
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -355,7 +392,11 @@ export function buildMenuTree(items: ChromeMenuItem[] | null | undefined): Chrom
     // First pass: one fresh node per item (drop entries with no usable id — they can anchor nothing).
     for (const it of items) {
         if (!isPlainObject(it) || it.id === undefined || it.id === null) continue;
-        byId.set(String(it.id), { id: it.id, title: it.title, url: it.url, order: it.order, children: [] });
+        const node: Node = { id: it.id, title: it.title, url: it.url, order: it.order, children: [] };
+        // `target` rides along only when present (menuTargetRel whitelists it at render) — no
+        // undefined-valued key, so strict-equality snapshots of pre-target trees stay byte-stable.
+        if (typeof it.target === "string") node.target = it.target;
+        byId.set(String(it.id), node);
     }
     const roots: Node[] = [];
     // Second pass: attach each node to its parent, or promote it to a root.

@@ -8,7 +8,7 @@
 import Link from "next/link";
 import { createPortal } from "react-dom";
 import { useEffect, useId, useRef, useState } from "react";
-import type { ChromeMenuItem } from "@/lib/chromeData";
+import { safeMenuHref, menuTargetRel, type ChromeMenuItem } from "@/lib/chromeData";
 
 // Everything the drawer can hand focus to. Kept in one place: the open effect uses it both to place
 // the initial focus and to find the cycle ends for the Tab trap.
@@ -18,7 +18,15 @@ const FOCUSABLE = 'a[href], button:not([disabled])';
 // sub-list so the child links a desktop dropdown reveals on hover stay REACHABLE on touch — where
 // there is no hover. A leaf menu (no children anywhere) renders the same flat list of links it did
 // before submenus existed. `onNavigate` closes the drawer on any tap, at every depth.
-function MobileNavItems({
+//
+// SECURITY — the same render-time floor as the desktop <a>s (blocks.tsx NavMenuItem): every href is
+// re-validated through safeMenuHref (a stored javascript:/data: url collapses to '#', exactly like
+// desktop) and `target` goes through the menuTargetRel whitelist (_blank forces rel). The drawer is
+// SHARED between the NavMenu block and the composed header chrome, so the guard lives here — the
+// block also hands over a pre-sanitized tree, but this component must not depend on that.
+// Exported for the drawer-parity regression test (the drawer itself mounts behind a portal, so the
+// panel markup is unreachable from a static render of ChromeNavMobile).
+export function MobileNavItems({
     items,
     onNavigate,
     depth,
@@ -31,10 +39,13 @@ function MobileNavItems({
         <>
             {items.map((item) => {
                 const children = item.children ?? [];
+                const tr = menuTargetRel(item.target);
                 return (
                     <div key={item.id} className={depth > 0 ? "ps-4 border-s border-[var(--wjs-border-subtle,#f3f4f6)]" : ""}>
                         <Link
-                            href={item.url || "#"}
+                            href={safeMenuHref(item.url)}
+                            target={tr.target}
+                            rel={tr.rel}
                             className="block text-lg text-[var(--wjs-color-text-main,#374151)] hover:text-[var(--wjs-color-primary,#2F6D86)] font-medium py-2 border-b border-[var(--wjs-border-subtle,#f3f4f6)] transition-colors"
                             onClick={onNavigate}
                         >
@@ -177,17 +188,23 @@ export default function ChromeNavMobile({ items }: { items: ChromeMenuItem[] }) 
                         ) : hasSubmenus ? (
                             <MobileNavItems items={items} onNavigate={() => setOpen(false)} depth={0} />
                         ) : (
-                            // Flat menu — the exact per-link markup the drawer shipped before submenus.
-                            items.map((item) => (
-                                <Link
-                                    key={item.id}
-                                    href={item.url || "#"}
-                                    className="text-lg text-[var(--wjs-color-text-main,#374151)] hover:text-[var(--wjs-color-primary,#2F6D86)] font-medium py-2 border-b border-[var(--wjs-border-subtle,#f3f4f6)] transition-colors"
-                                    onClick={() => setOpen(false)}
-                                >
-                                    {item.title}
-                                </Link>
-                            ))
+                            // Flat menu — the per-link markup the drawer shipped before submenus,
+                            // with the SAME href/target render guard as the nested branch above.
+                            items.map((item) => {
+                                const tr = menuTargetRel(item.target);
+                                return (
+                                    <Link
+                                        key={item.id}
+                                        href={safeMenuHref(item.url)}
+                                        target={tr.target}
+                                        rel={tr.rel}
+                                        className="text-lg text-[var(--wjs-color-text-main,#374151)] hover:text-[var(--wjs-color-primary,#2F6D86)] font-medium py-2 border-b border-[var(--wjs-border-subtle,#f3f4f6)] transition-colors"
+                                        onClick={() => setOpen(false)}
+                                    >
+                                        {item.title}
+                                    </Link>
+                                );
+                            })
                         )}
                     </nav>
                 </div>

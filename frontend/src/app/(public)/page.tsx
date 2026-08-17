@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import HomeContent from "@/components/public/HomeContent";
 import JsonLd from "@/components/public/JsonLd";
 import { getSettings, getPostById, getPosts, htmlToText, buildWebSiteJsonLd, resolveSiteBase } from "@/lib/server-api";
+import { withResolvedBlocks } from "@/lib/resolveDynamicBlocks";
 import ThemeTemplate from "@/components/content/ThemeTemplate";
 
 // Server-rendered AND cached: the homepage serves from the Full-Route Cache (crawlers and first
@@ -59,11 +60,16 @@ export default async function HomePage() {
     if (homepageId) {
         const page = await getPostById(parseInt(homepageId, 10));
         if (page) {
+            // The same resolver pass every other public route runs ([slug], pages/[slug], preview):
+            // NavMenu / SiteLogo / ToC / PostsGrid on the configured front page get their real data
+            // injected HERE, at the route seam, so HomeContent stays a pure renderer. Without it the
+            // most-visited URL served raw _puck_data and those blocks rendered empty at '/'.
+            const withBlocks = await withResolvedBlocks(page);
             return (
                 <div className="space-y-4">
                     {siteJsonLd}
                     <ThemeTemplate kind="home">
-                        <HomeContent post={page} settings={settings} />
+                        <HomeContent post={withBlocks} settings={settings} />
                     </ThemeTemplate>
                 </div>
             );

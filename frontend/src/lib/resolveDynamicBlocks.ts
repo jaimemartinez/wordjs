@@ -20,6 +20,27 @@ import { toResolved, filterByCategory, type ResolvedPost } from "@/lib/resolvedP
 // client-side resolver (useEditorPosts) so author preview and published page can never drift.
 export type { ResolvedPost };
 
+// The ToC displays heading TEXT while HeadingBlock renders the same stored string as sanitized HTML —
+// so the collected title is reduced to plain text here: strip tags first, then decode the basic
+// entities (named + numeric), then collapse whitespace. Deliberately tiny and dependency-free (no
+// sanitizer on this path): the result is rendered React-escaped (blocks.tsx renders {h.title}), so a
+// decoded '<' stays inert text.
+const HEADING_NAMED_ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " " };
+function headingPlainText(raw: string): string {
+    const noTags = raw.replace(/<[^>]*>/g, "");
+    return noTags
+        .replace(/&(?:#(\d+)|#[xX]([0-9a-fA-F]+)|([a-zA-Z]+));/g, (match, dec, hex, name) => {
+            if (dec || hex) {
+                const cp = dec ? Number(dec) : parseInt(hex, 16);
+                return Number.isFinite(cp) && cp > 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : match;
+            }
+            const named = HEADING_NAMED_ENTITIES[String(name).toLowerCase()];
+            return named ?? match;
+        })
+        .replace(/\s+/g, " ")
+        .trim();
+}
+
 /**
  * Walk the Puck tree and give every dynamic block its `resolvedPosts`.
  *
@@ -52,11 +73,12 @@ export const resolveDynamicBlocks = cache(async (data: unknown): Promise<unknown
     let needToc = false;
     const symbolIds = new Set<number>();
     const menuRefs = new Map<string, { source?: string; location?: string; menuId?: number | string }>();
-    // Every heading on the page that carries a real anchor, in document order — the raw material a
-    // TableOfContents block filters by level. Derived ONLY from the tree, so it is safe to compute in
-    // this cached-on-`data` pass (unlike the per-post trail/translations, which live in withResolvedBlocks).
-    const headings: Array<{ id: string; level: string; title: string }> = [];
-    const scan = (nodes: unknown): void => {
+    // ONE collector, TWO passes: the page tree first, then — once symbol contents are fetched — each
+    // symbol's own content, so a NavMenu/SiteLogo/PostsGrid living ONLY inside a symbol still
+    // schedules its fetch (decorate() recurses into symbols, so their needs must be collected too).
+    // `collectSymbolIds` is false on the symbol pass: depth is capped at 1 — a Symbol nested inside a
+    // symbol never renders, so its interior must not schedule further fetches.
+    const collect = (nodes: unknown, collectSymbolIds: boolean): void => {
         if (!Array.isArray(nodes)) return;
         for (const n of nodes) {
             if (!n || typeof n !== "object") continue;
@@ -64,16 +86,7 @@ export const resolveDynamicBlocks = cache(async (data: unknown): Promise<unknown
             if (node.type && DYNAMIC.has(node.type)) needPosts = true;
             if (node.type === "SiteLogo") needIdentity = true;
             if (node.type === "TableOfContents") needToc = true;
-            if (node.type === "Heading") {
-                const p = node.props as { elementId?: unknown; level?: unknown; title?: unknown } | undefined;
-                const id = typeof p?.elementId === "string" ? p.elementId.trim() : "";
-                if (id) headings.push({
-                    id,
-                    level: typeof p?.level === "string" ? p.level : "h2",
-                    title: typeof p?.title === "string" ? p.title : "",
-                });
-            }
-            if (node.type === "Symbol") {
+            if (node.type === "Symbol" && collectSymbolIds) {
                 const id = Number((node.props as { symbolId?: unknown } | undefined)?.symbolId);
                 if (Number.isFinite(id) && id > 0) symbolIds.add(id);
             }
@@ -84,11 +97,74 @@ export const resolveDynamicBlocks = cache(async (data: unknown): Promise<unknown
                 const { key, ref } = navRefOf(node.props);
                 menuRefs.set(key, ref);
             }
-            if (node.props) for (const v of Object.values(node.props)) if (Array.isArray(v)) scan(v);
+            if (node.props) for (const v of Object.values(node.props)) if (Array.isArray(v)) collect(v, collectSymbolIds);
         }
     };
-    scan((data as { content?: unknown }).content);
+    collect((data as { content?: unknown }).content, true);
     if (!needPosts && !needIdentity && !needToc && symbolIds.size === 0 && menuRefs.size === 0) return data;
+
+    // Symbol contents FIRST (their ids are known from the page pass), keyed by id. A deleted/foreign
+    // reference resolves to [] — the block renders nothing on the public site (its editor states
+    // handle the authoring side).
+    const symbolItems = new Map<number, unknown[]>();
+    await Promise.all(
+        [...symbolIds].map(async (id) => {
+            try {
+                const post = (await getPostById(id)) as (Post & { meta?: Record<string, unknown> }) | null;
+                const content = post && (post as { type?: string }).type === "wjs_symbol"
+                    ? ((post.meta?._puck_data as { content?: unknown } | undefined)?.content)
+                    : undefined;
+                symbolItems.set(id, Array.isArray(content) ? content : []);
+            } catch {
+                symbolItems.set(id, []);
+            }
+        })
+    );
+    // Second collection pass, over the fetched symbol interiors, BEFORE the data fetches below — this
+    // is what lets a symbol-only header (NavMenu + SiteLogo inside a reusable Symbol) carry its real
+    // menu and identity on the public site instead of decorating against empty maps.
+    for (const items of symbolItems.values()) collect(items, false);
+
+    // Every heading that carries a real anchor, in DOCUMENT ORDER — the raw material a
+    // TableOfContents block filters by level. Walked AFTER the symbol fetch so a symbol's anchored
+    // headings land at the symbol's own position in the page order. Three collection rules:
+    //  - duplicate ids keep the FIRST occurrence only (duplicate React keys, plus the scroll-spy's
+    //    last-wins link map vs getElementById's first-wins target, would bind the active state to the
+    //    wrong entry);
+    //  - the title is reduced to PLAIN TEXT (headingPlainText above) so the index shows what the
+    //    visitor sees, not literal markup/entities;
+    //  - OffCanvas interiors are skipped (a heading inside a closed drawer cannot be scrolled to —
+    //    its ToC link would be permanently dead).
+    const headings: Array<{ id: string; level: string; title: string }> = [];
+    const seenHeadingIds = new Set<string>();
+    const collectHeadings = (nodes: unknown, inDrawer: boolean): void => {
+        if (!Array.isArray(nodes)) return;
+        for (const n of nodes) {
+            if (!n || typeof n !== "object") continue;
+            const node = n as { type?: string; props?: Record<string, unknown> };
+            if (node.type === "Heading" && !inDrawer) {
+                const p = node.props as { elementId?: unknown; level?: unknown; title?: unknown } | undefined;
+                const id = typeof p?.elementId === "string" ? p.elementId.trim() : "";
+                if (id && !seenHeadingIds.has(id)) {
+                    seenHeadingIds.add(id);
+                    headings.push({
+                        id,
+                        level: typeof p?.level === "string" ? p.level : "h2",
+                        title: headingPlainText(typeof p?.title === "string" ? p.title : ""),
+                    });
+                }
+            }
+            if (node.type === "Symbol") {
+                const id = Number((node.props as { symbolId?: unknown } | undefined)?.symbolId);
+                // The symbol's headings, at the symbol's position. A symbol nested inside a symbol
+                // was never fetched (depth cap 1), so its lookup is empty — nothing to walk.
+                collectHeadings(symbolItems.get(id) ?? [], inDrawer);
+            }
+            const drawer = inDrawer || node.type === "OffCanvas";
+            if (node.props) for (const v of Object.values(node.props)) if (Array.isArray(v)) collectHeadings(v, drawer);
+        }
+    };
+    collectHeadings((data as { content?: unknown }).content, false);
 
     const all = needPosts ? (await getPosts("post", "publish")) || [] : [];
 
@@ -124,23 +200,6 @@ export const resolveDynamicBlocks = cache(async (data: unknown): Promise<unknown
         })
     );
 
-    // Symbol contents, keyed by id. A deleted/foreign reference resolves to [] — the block renders
-    // nothing on the public site (its editor states handle the authoring side).
-    const symbolItems = new Map<number, unknown[]>();
-    await Promise.all(
-        [...symbolIds].map(async (id) => {
-            try {
-                const post = (await getPostById(id)) as (Post & { meta?: Record<string, unknown> }) | null;
-                const content = post && (post as { type?: string }).type === "wjs_symbol"
-                    ? ((post.meta?._puck_data as { content?: unknown } | undefined)?.content)
-                    : undefined;
-                symbolItems.set(id, Array.isArray(content) ? content : []);
-            } catch {
-                symbolItems.set(id, []);
-            }
-        })
-    );
-
     const decorate = (nodes: unknown): unknown => {
         if (!Array.isArray(nodes)) return nodes;
         return nodes.map((n) => {
@@ -161,8 +220,9 @@ export const resolveDynamicBlocks = cache(async (data: unknown): Promise<unknown
 
             if (node.type === "Symbol") {
                 const id = Number((props as { symbolId?: unknown } | undefined)?.symbolId);
-                // decorate() the symbol's own items too, so a dynamic block INSIDE a symbol still
-                // gets its real posts on the public site.
+                // decorate() the symbol's own items too — their needs were collected by the second
+                // collect() pass above, so a dynamic block INSIDE a symbol gets the same real
+                // posts / menu / identity / headings a page-level one does.
                 props = { ...props, resolvedSymbolItems: decorate(symbolItems.get(id) ?? []) };
             }
 
@@ -268,8 +328,13 @@ async function buildPostContext(post: Post): Promise<PostContext> {
     let isFront = false;
     try {
         const s = await getSettings();
-        isFront = String(s?.show_on_front) === "page" && Number(s?.page_on_front) === Number(p?.id);
-    } catch { /* leave false — breadcrumbs simply show on the front too */ }
+        // The anonymous /settings read identifies the static front page as `homepage_id` — the
+        // WordPress-named show_on_front/page_on_front pair lives in the admin-only settings list
+        // (and is vestigial: nothing in the product sets it), so it NEVER reaches this public
+        // fetch. NaN / 0 ("no static front page") can never equal a real post id.
+        const hid = Number(s?.homepage_id);
+        isFront = Number.isFinite(hid) && hid > 0 && hid === Number(p?.id);
+    } catch { /* settings read failed — false, so breadcrumbs show on the front too (fail-open) */ }
 
     const list = Array.isArray(p?.translations) ? p.translations : [];
     const translations = {

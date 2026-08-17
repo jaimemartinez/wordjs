@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import fs from "node:fs";
+import path from "node:path";
 import { NavMenuBlock } from "../blocks";
 
 /**
@@ -112,6 +114,77 @@ describe("NavMenuBlock — empty binding", () => {
         expect(html).toContain("wjs-block-nav-menu wp-block-nav-menu");
         expect(html).toContain("nav-menu--empty");
         expect(html).toContain("Vincula");
+    });
+});
+
+describe("NavMenuBlock — submenu disclosure lives in wordjs-ui.css (the MegaMenu pattern)", () => {
+    // The reveal must NOT ride on Tailwind visible/invisible utilities: wordjs-ui.css ships an
+    // UNLAYERED `.invisible { visibility: hidden !important }` that out-cascades any layered utility
+    // toggle — the old group-hover/group-focus-within reveal could literally never open on the real
+    // public page. The state now lives in the framework sheet on the block's own hooks.
+    const css = fs.readFileSync(path.resolve(__dirname, "../../../../../backend/public/css/wordjs-ui.css"), "utf8");
+
+    it("wordjs-ui.css ships the hidden/open rules on the block's hooks", () => {
+        expect(css).toContain(".wjs-block-nav-menu .wjs-chrome-nav-horizontal .wjs-has-submenu > .wjs-chrome-submenu");
+        expect(css).toContain('.wjs-block-nav-menu[data-trigger="hover"] .wjs-chrome-nav-horizontal .wjs-has-submenu:hover > .wjs-chrome-submenu');
+        expect(css).toContain('.wjs-block-nav-menu[data-trigger="hover"] .wjs-chrome-nav-horizontal .wjs-has-submenu:focus-within > .wjs-chrome-submenu');
+        // click mode: the island flips [data-open] and the sheet opens on it
+        expect(css).toContain('.wjs-block-nav-menu .wjs-chrome-nav-horizontal .wjs-has-submenu[data-open="true"] > .wjs-chrome-submenu');
+    });
+
+    it("the markup carries no utility-based reveal that the sheet would defeat", () => {
+        const html = renderToStaticMarkup(<NavMenuBlock menu={FLAT} mobileBehavior="none" />);
+        expect(html).not.toContain("invisible");
+        expect(html).not.toContain("group-hover");
+        expect(html).not.toContain("group-focus-within");
+        // …but the hooks the sheet keys on ARE there
+        expect(html).toContain("wjs-chrome-nav-horizontal");
+        expect(html).toContain("wjs-has-submenu");
+        expect(html).toContain("wjs-chrome-submenu");
+    });
+
+    it("emits data-trigger on the wrapper (a RENDERED attr — the ui.css hover gate, like MegaMenu)", () => {
+        expect(renderToStaticMarkup(<NavMenuBlock menu={FLAT} mobileBehavior="none" />)).toContain('data-trigger="hover"');
+        expect(renderToStaticMarkup(<NavMenuBlock menu={FLAT} mobileBehavior="none" submenuTrigger="click" />)).toContain('data-trigger="click"');
+        // a bogus value coerces to the hover default (author data never chooses structure)
+        expect(renderToStaticMarkup(<NavMenuBlock menu={FLAT} mobileBehavior="none" submenuTrigger="onmouseover=x" />)).toContain('data-trigger="hover"');
+    });
+
+    it("the vertical submenu stays a static always-visible list (the hidden rule is horizontal-scoped)", () => {
+        const html = renderToStaticMarkup(<NavMenuBlock menu={FLAT} orientation="vertical" />);
+        expect(html).toContain("wjs-chrome-nav-vertical");
+        expect(html).toContain("wjs-chrome-submenu");
+        expect(html).not.toContain("wjs-chrome-nav-horizontal");
+        // the hidden rule requires the horizontal hook in its compound selector, so it cannot match here
+        expect(css).not.toMatch(/\.wjs-block-nav-menu\s+\.wjs-has-submenu\s*>\s*\.wjs-chrome-submenu/);
+    });
+});
+
+describe("NavMenuBlock — submenuTrigger='click' renders a REAL toggle (the Safari/navigation fix)", () => {
+    // A parent <a href> click NAVIGATES (and Safari never focuses links on click), so click mode can
+    // never ride on :focus-within alone. The server renders the caret as a real <button> and the
+    // NavClickSubmenus island (mounted only on the public surface) flips [data-open].
+    it("click mode: the caret is a <button aria-expanded aria-haspopup> next to the still-navigable link", () => {
+        const html = renderToStaticMarkup(<NavMenuBlock menu={FLAT} mobileBehavior="none" submenuTrigger="click" />);
+        const btn = html.match(/<button\b[^>]*wjs-submenu-toggle[^>]*>/)?.[0] ?? "";
+        expect(btn).not.toBe("");
+        expect(btn).toContain('type="button"');
+        expect(btn).toContain('aria-expanded="false"');
+        expect(btn).toContain('aria-haspopup="true"');
+        // the parent link keeps its real URL — the button, not the link, owns the disclosure
+        expect(html).toContain('href="/about"');
+    });
+
+    it("hover mode (default): no button — the disclosure stays CSS-only, zero JS", () => {
+        const html = renderToStaticMarkup(<NavMenuBlock menu={FLAT} mobileBehavior="none" />);
+        expect(html).not.toContain("wjs-submenu-toggle");
+        expect(html).not.toContain("aria-haspopup");
+    });
+
+    it("items without children never render a toggle, even in click mode", () => {
+        const flatOnly = [{ id: 1, title: "Home", url: "/", parent: 0, order: 0 }];
+        const html = renderToStaticMarkup(<NavMenuBlock menu={flatOnly} mobileBehavior="none" submenuTrigger="click" />);
+        expect(html).not.toContain("wjs-submenu-toggle");
     });
 });
 
