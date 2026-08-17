@@ -41,7 +41,8 @@ export interface IxElementLike {
   addEventListener(type: string, listener: (ev: unknown) => void): void;
   removeEventListener(type: string, listener: (ev: unknown) => void): void;
   querySelectorAll(selector: string): ArrayLike<IxElementLike>;
-  getBoundingClientRect(): { top: number; height: number };
+  /** `left`/`width` los usa SOLO el eje X del puntero (P6); el resto del motor vive de top/height. */
+  getBoundingClientRect(): { top: number; height: number; left?: number; width?: number };
   readonly children: ArrayLike<IxElementLike>;
   animate?(keyframes: IxKeyframe[], options: IxAnimateOptions): IxAnimationLike;
 }
@@ -65,6 +66,8 @@ export type IxHost = {
   doc: IxDocumentLike;
   /** Alto del viewport del documento — en el canvas es el del IFRAME, no el de la ventana. */
   viewportHeight(): number;
+  /** Ancho del viewport — lo usa el eje X del puntero sobre `area: "page"` (P6). */
+  viewportWidth(): number;
   /**
    * Progreso 0..1 del scroll del DOCUMENTO — lo que `animation-timeline: scroll()` mide de forma
    * nativa. El driver lo necesita para que `scrub` + `src:"page"` recorra lo MISMO en Firefox que
@@ -111,6 +114,7 @@ export function defaultIxHost(doc: Document): IxHost {
   return {
     doc: doc as unknown as IxDocumentLike,
     viewportHeight: () => view?.innerHeight ?? doc.documentElement?.clientHeight ?? 0,
+    viewportWidth: () => view?.innerWidth ?? doc.documentElement?.clientWidth ?? 0,
     pageProgress: () => {
       const scroller = doc.scrollingElement ?? doc.documentElement;
       if (!scroller) return 0;

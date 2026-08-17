@@ -4,8 +4,8 @@
  * propiedades:
  *
  *   Nivel 1 — Preajuste   un desplegable (sistema + sitio + "Personalizada"). Lo que ve el 90 %.
- *   Nivel 2 — Disparador  cuándo (pantalla / scroll / ratón / clic / carga) y a quién (el bloque,
- *                         sus hijos escalonados, las palabras), con duración y retardo.
+ *   Nivel 2 — Disparador  cuándo (pantalla / scroll / ratón / clic / carga / puntero) y a quién
+ *                         (el bloque, sus hijos escalonados, las palabras), con duración y retardo.
  *   Nivel 3 — Pasos       tras un `<details>`: por paso, su momento, su curva y sus propiedades.
  *
  * TODO EL MARKUP SALE DE `VersoFieldControl`: cada control es un `VersoField` (`select` / `radio` /
@@ -62,6 +62,11 @@ import {
 // Los topes de la rejilla (P4) no están en la superficie del índice: se leen del módulo que los
 // define, igual que el lienzo lee `runtime/` directamente.
 import { IX_STAGGER_COLS_MAX, IX_STAGGER_COLS_MIN } from "@/lib/verso/interactions";
+// Los topes del suavizado del puntero (P6), por la misma razón: del módulo que los define.
+import {
+  IX_POINTER_SMOOTH_DEFAULT,
+  IX_POINTER_SMOOTH_MAX,
+} from "@/lib/verso/interactions";
 import type { NumberVersoField, RadioVersoField, SelectVersoField } from "@/lib/verso/registry";
 import {
   addStep,
@@ -85,6 +90,8 @@ import {
   setLoadDelay,
   setOrigin,
   setPersp,
+  setPointerArea,
+  setPointerSmooth,
   setPresetChoice,
   setRangeEdge,
   setRepeat,
@@ -98,10 +105,12 @@ import {
   setStepEase,
   setStepProp,
   setTargetKind,
+  setTrackAxis,
   setTriggerKind,
   setViewOnce,
   unlinkPreset,
   usedProps,
+  IX_AXIS_LABELS,
   IX_BREAKPOINT_LABELS,
   IX_CLIP_DIR_LABELS,
   IX_COLOR_PROPS,
@@ -131,10 +140,12 @@ const LEGEND = "px-1 text-xs font-medium text-[var(--ed-on-surface-variant)]";
 const CHECK =
   "mb-3 flex cursor-pointer items-center gap-1.5 text-xs text-[var(--ed-on-surface-variant)]";
 
-const TRIGGERS: IxPanelTriggerKind[] = ["view", "scrub", "hover", "click", "load"];
+const TRIGGERS: IxPanelTriggerKind[] = ["view", "scrub", "hover", "click", "load", "pointer"];
 const EASES = Object.keys(IX_EASINGS) as IxEase[];
 /** Órdenes del escalonado (P4), en el orden canónico de sus etiquetas. */
 const STAGGER_FROMS = Object.keys(IX_STAGGER_FROM_LABELS) as IxStaggerFrom[];
+/** Ejes del cursor (P6), en el orden canónico de sus etiquetas. */
+const AXES = Object.keys(IX_AXIS_LABELS) as Array<"x" | "y">;
 /** Aristas de `animation-range`, en el orden en que se cruzan al hacer scroll. */
 const EDGES: IxEdgeName[] = ["cover", "entry", "contain", "exit"];
 
@@ -150,8 +161,13 @@ const EDGES: IxEdgeName[] = ["cover", "entry", "contain", "exit"];
  */
 const OFFERED_TARGETS: IxPanelTargetKind[] = ["self", "children"];
 
-/** Disparadores cuyo progreso lo marca el RELOJ (y por tanto tienen duración y retardo). */
-const isTimed = (on: IxPanelTriggerKind): boolean => on !== "scrub";
+/**
+ * Disparadores cuyo progreso lo marca el RELOJ (y por tanto tienen duración y retardo). Ni `scrub`
+ * (la posición del scroll) ni `pointer` (la posición del cursor) lo son: ahí duración, retardo y
+ * reproducción no significan nada, y ofrecerlos sería ofrecer controles que el compilador avisa
+ * de que ignora.
+ */
+const isTimed = (on: IxPanelTriggerKind): boolean => on !== "scrub" && on !== "pointer";
 
 /** Propiedades gobernadas por `transform-origin`: giros, escalas y sesgos. */
 const ORIGIN_PROPS: readonly IxPropKey[] = [
@@ -271,6 +287,18 @@ export default function InteractionsControl({
       { label: "El recorrido del bloque", value: "self" },
       { label: "El scroll de la página", value: "page" },
     ],
+  };
+  const pointerAreaField: RadioVersoField = {
+    type: "radio",
+    options: [
+      { label: "El propio bloque", value: "self" },
+      { label: "Toda la página", value: "page" },
+    ],
+  };
+  // Eje del cursor por pista (P6): con la piel de pestañas del radiogrupo, como el resto.
+  const axisField: RadioVersoField = {
+    type: "radio",
+    options: AXES.map((a) => ({ label: IX_AXIS_LABELS[a], value: a })),
   };
   const edgeField: SelectVersoField = {
     type: "select",
@@ -436,6 +464,42 @@ export default function InteractionsControl({
             />
           )}
 
+          {/* ── `pointer` (P6): el cursor POSICIONA la animación, no la dispara. Área y suavizado
+              viven en el disparador (viajan con él, también enlazado a un preajuste). */}
+          {trigger.on === "pointer" && (
+            <>
+              <VersoFieldControl
+                field={pointerAreaField}
+                name="ix-pointer-area"
+                label="Qué área sigue el cursor"
+                value={trigger.area === "page" ? "page" : "self"}
+                onChange={(v) =>
+                  onChange(setPointerArea(value, v === "page" ? "page" : "self", ixCtx))
+                }
+              />
+              <VersoFieldControl
+                field={msField(0, IX_POINTER_SMOOTH_MAX, 10)}
+                name="ix-pointer-smooth"
+                label="Suavizado (ms)"
+                value={trigger.smooth ?? IX_POINTER_SMOOTH_DEFAULT}
+                onChange={(v) =>
+                  onChange(
+                    setPointerSmooth(
+                      value,
+                      typeof v === "number" ? v : IX_POINTER_SMOOTH_DEFAULT,
+                      ixCtx,
+                    ),
+                  )
+                }
+              />
+              <p className={HINT}>0 = sigue al cursor sin retraso.</p>
+              <p role="note" className={HINT}>
+                El puntero posiciona la animación (el paso 50 es el reposo). Inerte con
+                reduced-motion y en pantallas táctiles.
+              </p>
+            </>
+          )}
+
           {/* ── Tramo del recorrido (scrub, o view que entra y sale) ── */}
           {range && (
             <fieldset className={GROUP}>
@@ -588,7 +652,10 @@ export default function InteractionsControl({
                 </p>
               )}
 
-              {(track.target.kind === "children" || track.target.kind === "words") && (
+              {/* El escalonado es un reparto de RETARDOS, y con `pointer` no hay reloj que
+                  retrasar: el compilador lo ignora con aviso, así que no se ofrece. */}
+              {trigger.on !== "pointer" &&
+                (track.target.kind === "children" || track.target.kind === "words") && (
                 <VersoFieldControl
                   field={msField(0, IX_STAGGER_MAX)}
                   name="ix-stagger"
@@ -610,7 +677,8 @@ export default function InteractionsControl({
                   es un no-op y el control mentiría. Con rejilla (`cols`) la onda avanza en diagonal
                   e ignora el orden lineal: el selector se bloquea, no se esconde, para que se vea
                   POR QUÉ no aplica. */}
-              {(track.target.kind === "children" || track.target.kind === "words") &&
+              {trigger.on !== "pointer" &&
+                (track.target.kind === "children" || track.target.kind === "words") &&
                 track.stagger && (
                   <fieldset className={GROUP}>
                     <legend className={LEGEND}>Escalonado</legend>
@@ -682,6 +750,23 @@ export default function InteractionsControl({
                   </fieldset>
                 )}
 
+              {/* ── Eje del cursor (P6) — por pista: cada pista sigue UN eje, y dos pistas (una
+                  por eje) componen el efecto 2D. Solo en cuerpo propio, como el resto de pistas. */}
+              {trigger.on === "pointer" && (
+                <>
+                  <VersoFieldControl
+                    field={axisField}
+                    name="ix-axis"
+                    label="Eje del cursor"
+                    value={track.axis ?? "x"}
+                    onChange={(v) => onChange(setTrackAxis(value, v === "y" ? "y" : "x", ixCtx, active))}
+                  />
+                  <p className={HINT}>
+                    Dos pistas, una por eje, componen el efecto 2D (tilt/parallax).
+                  </p>
+                </>
+              )}
+
               {isTimed(trigger.on) && (
                 <div className="flex gap-2">
                   <div className="flex-1">
@@ -709,9 +794,10 @@ export default function InteractionsControl({
                 </div>
               )}
 
-              {/* Reproducción de la pista — solo con disparadores del RELOJ: con scrub el progreso
-                  lo marca la posición, y «repetir» no significa nada. Con «Infinita» marcada el
-                  número queda en blanco y bloqueado; desmarcarla vuelve a 1 (que borra la clave). */}
+              {/* Reproducción de la pista — solo con disparadores del RELOJ: con scrub o pointer
+                  el progreso lo marca la posición, y «repetir» no significa nada. Con «Infinita»
+                  marcada el número queda en blanco y bloqueado; desmarcarla vuelve a 1 (que borra
+                  la clave). */}
               {isTimed(trigger.on) && (
                 <fieldset className={GROUP}>
                   <legend className={LEGEND}>Reproducción</legend>

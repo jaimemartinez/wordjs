@@ -198,6 +198,10 @@ export const IX_PERSP_MIN = 200;
 export const IX_PERSP_MAX = 4000;
 export const IX_PERSP_DEFAULT = 1000;
 
+/** Persecución del puntero (P6): ms de suavizado del cursor. 120 se siente "vivo" sin ir a rastras. */
+export const IX_POINTER_SMOOTH_MAX = 1000;
+export const IX_POINTER_SMOOTH_DEFAULT = 120;
+
 /** Breakpoints del gating responsive (P4), en orden canónico. Los px viven en el compilador. */
 export const IX_BREAKPOINTS: readonly IxBreakpoint[] = Object.freeze([
   "mobile",
@@ -493,6 +497,10 @@ function normTrack(raw: unknown, warn: (w: string) => void): IxTrack | undefined
 
   if (raw.alt === true) track.alt = true;
 
+  // P6 — eje del puntero de la pista. "x" es el defecto y se borra (ausencia = defecto).
+  const axis = oneOf(raw.axis, ["x", "y"] as const);
+  if (axis === "y") track.axis = "y";
+
   const stagger = normStagger(raw.stagger);
   if (stagger) track.stagger = stagger;
 
@@ -556,6 +564,17 @@ export function normTrigger(raw: unknown): IxTrigger | undefined {
       const t: IxTrigger = { on: "load" };
       const delay = num(raw.delay);
       if (delay !== undefined) t.delay = clamp(delay, IX_DELAY_MIN, IX_DELAY_MAX);
+      return t;
+    }
+    case "pointer": {
+      const t: IxTrigger = { on: "pointer" };
+      const area = oneOf(raw.area, ["self", "page"] as const);
+      if (area === "page") t.area = "page";
+      const smooth = num(raw.smooth);
+      if (smooth !== undefined) {
+        const v = Math.round(clamp(smooth, 0, IX_POINTER_SMOOTH_MAX));
+        if (v !== IX_POINTER_SMOOTH_DEFAULT) t.smooth = v;
+      }
       return t;
     }
     default:

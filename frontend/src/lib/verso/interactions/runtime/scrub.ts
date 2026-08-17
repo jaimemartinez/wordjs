@@ -38,6 +38,17 @@ const isPageTimeline = (u: IxRuntimeUnit): boolean =>
   u.trigger.on === "scrub" && u.trigger.src === "page";
 
 /**
+ * Suavizado del puntero por defecto (ms). Literal duplicado A PROPÓSITO respecto a
+ * `IX_POINTER_SMOOTH_DEFAULT` (normalize.ts): importar el normalizador arrastraría el muestreo de
+ * `linear()` a este chunk perezoso. Un test los mantiene iguales (mismo patrón que IX_REPLAY_EVENT).
+ */
+export const POINTER_SMOOTH_DEFAULT = 120;
+/** dt fijo por frame (ms) para el factor de persecución: determinista y suficiente a 60 Hz. */
+const POINTER_DT = 16.7;
+/** Por debajo de esto el objetivo se considera alcanzado y el bucle puede dormirse. */
+const POINTER_EPS = 0.001;
+
+/**
  * Posición (en píxeles recorridos) de un borde de `animation-range`, siguiendo las definiciones de
  * la especificación de scroll-driven animations:
  *
@@ -92,6 +103,17 @@ function pageProgressOf(range: IxRange, pageP: number): number {
 
 type ScrubEntry = { anchor: IxElementLike; range: IxRange; anim: IxAnimationLike; page: boolean };
 
+/** Una animación POSICIONADA por el cursor (P6). `cur` persigue a `goal` con el suavizado. */
+type PointerEntry = {
+  anchor: IxElementLike;
+  anim: IxAnimationLike;
+  axis: "x" | "y";
+  area: "self" | "page";
+  smooth: number;
+  cur: number;
+  goal: number;
+};
+
 /**
  * Arranca el driver. Devuelve la limpieza: cancela TODAS las animaciones creadas, para el bucle y
  * desconecta el observer. Ninguna animación cancelada deja al elemento en un estado congelado —
@@ -102,15 +124,35 @@ export function createScrubDriver(units: readonly IxRuntimeUnit[], host: IxHost)
   const played: Array<{ el: IxElementLike; anim: IxAnimationLike }> = [];
   const byAnchor = new Map<IxElementLike, ScrubEntry[]>();
 
+  const pointers: PointerEntry[] = [];
+
   for (const unit of units) {
     const roots = toArray(host.doc.querySelectorAll(`.${unit.cls}`));
     const timeline = isTimeline(unit);
     const page = isPageTimeline(unit);
+    const pointer = unit.trigger.on === "pointer" ? unit.trigger : null;
     for (const root of roots) {
       for (const track of unit.tracks) {
         const targets = resolveIxTargets(root, track, host.doc);
         targets.forEach((el, i) => {
           if (typeof el.animate !== "function") return; // sin WAAPI → visible y quieto
+          if (pointer) {
+            // P6: la animación no corre NI con el reloj NI con el scroll — la posiciona el cursor.
+            // Reposo en el CENTRO de la pista (0.5): el paso 50 es el estado neutro por contrato.
+            const anim = el.animate(track.kf, { duration: SCRUB_MS, fill: "both", easing: "linear" });
+            anim.pause();
+            anim.currentTime = 0.5 * SCRUB_MS;
+            pointers.push({
+              anchor: root,
+              anim,
+              axis: track.axis ?? "x",
+              area: pointer.area ?? "self",
+              smooth: pointer.smooth ?? POINTER_SMOOTH_DEFAULT,
+              cur: 0.5,
+              goal: 0.5,
+            });
+            return;
+          }
           if (timeline) {
             // Escalonado ignorado en el camino de scroll, igual que en el CSS: el progreso ya lo
             // marca la posición del bloque, y desplazarlo por hermano no significaría nada.
@@ -144,7 +186,39 @@ export function createScrubDriver(units: readonly IxRuntimeUnit[], host: IxHost)
   const visible = new Set<IxElementLike>();
   let rafId: number | null = null;
 
-  const update = () => {
+  /* ── P6: estado del cursor, compartido por todas las entradas de puntero ── */
+  let px = 0;
+  let py = 0;
+  let pointerSeen = false;
+
+  /** ¿Alguna entrada de puntero sigue persiguiendo su objetivo? El bucle no duerme hasta llegar. */
+  const updatePointers = (): boolean => {
+    if (!pointerSeen) return false;
+    let settling = false;
+    const vw = host.viewportWidth();
+    const vh = host.viewportHeight();
+    for (const e of pointers) {
+      if (!visible.has(e.anchor)) continue;
+      if (e.area === "page") {
+        e.goal = clamp01(e.axis === "x" ? (vw > 0 ? px / vw : 0.5) : (vh > 0 ? py / vh : 0.5));
+      } else {
+        const rect = e.anchor.getBoundingClientRect();
+        e.goal =
+          e.axis === "x"
+            ? clamp01((rect.width ?? 0) > 0 ? (px - (rect.left ?? 0)) / (rect.width as number) : 0.5)
+            : clamp01(rect.height > 0 ? (py - rect.top) / rect.height : 0.5);
+      }
+      // Persecución exponencial con dt fijo: determinista, y a 60 Hz indistinguible del reloj real.
+      const k = e.smooth <= 0 ? 1 : 1 - Math.exp(-POINTER_DT / e.smooth);
+      e.cur += (e.goal - e.cur) * k;
+      if (Math.abs(e.goal - e.cur) <= POINTER_EPS) e.cur = e.goal;
+      else settling = true;
+      e.anim.currentTime = e.cur * SCRUB_MS;
+    }
+    return settling;
+  };
+
+  const update = (): boolean => {
     const vh = host.viewportHeight();
     // Se lee UNA vez por frame, no por unidad: todas las unidades de página miden el mismo scroll.
     let pageP: number | null = null;
@@ -160,19 +234,30 @@ export function createScrubDriver(units: readonly IxRuntimeUnit[], host: IxHost)
         }
       }
     }
+    return updatePointers();
   };
 
-  // UN solo bucle por documento, y solo mientras haya algo en pantalla. No hacen falta listeners
-  // de `scroll`/`resize`: el bucle ya está vivo exactamente durante la ventana en la que podrían
-  // aportar algo, y coalescer un listener con rAF acabaría en el mismo sitio con más código.
+  // UN solo bucle por documento, y solo mientras haya algo en pantalla (o un puntero aún
+  // persiguiendo su objetivo). No hacen falta listeners de `scroll`/`resize`: el bucle ya está
+  // vivo exactamente durante la ventana en la que podrían aportar algo.
   const loop = () => {
     rafId = null;
-    update();
-    if (visible.size > 0) start();
+    const settling = update();
+    if (visible.size > 0 && (byAnchor.size > 0 || settling || pointerSeen)) start();
   };
   const start = () => {
     if (rafId === null && visible.size > 0) rafId = host.raf(loop);
   };
+
+  const onPointerMove = (ev: unknown) => {
+    const e = ev as { clientX?: number; clientY?: number };
+    if (typeof e.clientX !== "number" || typeof e.clientY !== "number") return;
+    px = e.clientX;
+    py = e.clientY;
+    pointerSeen = true;
+    start();
+  };
+  if (pointers.length > 0) host.doc.addEventListener("pointermove", onPointerMove);
 
   const io = host.observe((obs) => {
     for (const e of obs) {
@@ -185,20 +270,24 @@ export function createScrubDriver(units: readonly IxRuntimeUnit[], host: IxHost)
     }
   });
 
-  if (io) for (const anchor of byAnchor.keys()) io.observe(anchor);
+  const anchors = new Set<IxElementLike>(byAnchor.keys());
+  for (const p of pointers) anchors.add(p.anchor);
+  if (io) for (const anchor of anchors) io.observe(anchor);
   else {
     // Sin IntersectionObserver: se posiciona una vez y se deja quieto. Visible siempre.
-    for (const anchor of byAnchor.keys()) visible.add(anchor);
+    for (const anchor of anchors) visible.add(anchor);
     update();
     visible.clear();
   }
 
   return () => {
     io?.disconnect();
+    if (pointers.length > 0) host.doc.removeEventListener("pointermove", onPointerMove);
     if (rafId !== null) host.caf(rafId);
     rafId = null;
     visible.clear();
     for (const e of entries) e.anim.cancel();
     for (const p of played) p.anim.cancel();
+    for (const p of pointers) p.anim.cancel();
   };
 }

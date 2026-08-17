@@ -89,6 +89,13 @@ export const IX_TRIGGER_LABELS: Readonly<Record<IxPanelTriggerKind, string>> = O
   hover: "Al pasar el ratón",
   click: "Al hacer clic",
   load: "Al cargar la página",
+  pointer: "Al mover el puntero",
+});
+
+/** Eje del cursor por pista (P6). */
+export const IX_AXIS_LABELS: Readonly<Record<"x" | "y", string>> = Object.freeze({
+  x: "Horizontal",
+  y: "Vertical",
 });
 
 export const IX_TARGET_LABELS: Readonly<Record<IxPanelTargetKind, string>> = Object.freeze({
@@ -460,7 +467,9 @@ export function setTriggerKind(raw: unknown, kind: IxPanelTriggerKind, ctx?: IxC
           ? { on: "click" }
           : kind === "hover"
             ? { on: "hover" }
-            : { on: "load" };
+            : kind === "pointer"
+              ? { on: "pointer" }
+              : { on: "load" };
 
   if (state.presetId !== null) return write({ v: 1, preset: state.presetId, trigger });
   const body = ownBody(raw, ctx);
@@ -513,6 +522,40 @@ export function setScrubSrc(raw: unknown, src: "self" | "page", ctx?: IxCompileC
   if (src === "page") trigger.src = "page";
   if (state.trigger.range) trigger.range = state.trigger.range;
   return writeTrigger(raw, ctx, trigger);
+}
+
+/** `pointer` (P6): qué área normaliza el cursor. `self` (el defecto) se escribe desnudo. */
+export function setPointerArea(raw: unknown, area: "self" | "page", ctx?: IxCompileCtx): IxWrite {
+  const state = ixPanelState(raw, ctx);
+  if (state.trigger.on !== "pointer") return normalizeIxSpec(raw)?.spec;
+  const trigger: IxTrigger = { on: "pointer" };
+  if (area === "page") trigger.area = "page";
+  if (state.trigger.smooth !== undefined) trigger.smooth = state.trigger.smooth;
+  return writeTrigger(raw, ctx, trigger);
+}
+
+/** `pointer` (P6): suavizado de persecución en ms. El defecto lo borra el normalizador. */
+export function setPointerSmooth(raw: unknown, ms: number, ctx?: IxCompileCtx): IxWrite {
+  const state = ixPanelState(raw, ctx);
+  if (state.trigger.on !== "pointer") return normalizeIxSpec(raw)?.spec;
+  const trigger: IxTrigger = { on: "pointer", smooth: ms };
+  if (state.trigger.area === "page") trigger.area = "page";
+  return writeTrigger(raw, ctx, trigger);
+}
+
+/** Eje del cursor de UNA pista (P6). "x" (el defecto) borra la clave. */
+export function setTrackAxis(raw: unknown, axis: "x" | "y", ctx?: IxCompileCtx, track = 0): IxWrite {
+  return patchTrack0(
+    raw,
+    ctx,
+    (t) => {
+      const next: IxTrack = { ...t };
+      if (axis === "y") next.axis = "y";
+      else delete next.axis;
+      return next;
+    },
+    track,
+  );
 }
 
 /** ¿El disparador efectivo tiene un rango de scroll editable? (scrub, o view que entra y sale). */

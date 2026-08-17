@@ -53,7 +53,16 @@ export type IxTrigger =
   | { on: "scrub"; range?: IxRange; src?: "self" | "page" }
   | { on: "hover" }
   | { on: "click"; toggle?: boolean }
-  | { on: "load"; delay?: number };
+  | { on: "load"; delay?: number }
+  /**
+   * P6 — el puntero conduce el progreso (parallax/tilt/follow). INEXPRESABLE en CSS: runtime en
+   * cuarentena, solo baja si se usa, inerte bajo reduced-motion y en dispositivos sin puntero fino
+   * (el bloque descansa en el CENTRO de la pista: diseña el paso 50 como estado neutro).
+   * `area`: el cursor se normaliza sobre el propio bloque (tilt) o sobre el viewport (parallax).
+   * `smooth`: ms de persecución (0 = directo). El EJE lo elige cada pista (`IxTrack.axis`):
+   * dos pistas x+y componen el tilt 2D — la composición multi-pista de P5, gratis.
+   */
+  | { on: "pointer"; area?: "self" | "page"; smooth?: number };
 
 /**
  * Mapea 1:1 a `animation-range`. Vocabulario de la especificación CSS SIN traducir (`cover 0%`,
@@ -79,6 +88,8 @@ export type IxTrack = {
   /** `animation-direction: alternate`. */
   alt?: boolean;
   stagger?: IxStagger;
+  /** Eje del cursor que conduce ESTA pista (P6, solo disparador `pointer`). Ausente = "x". */
+  axis?: "x" | "y";
   /** Dirección del revelado de `clip` (P3). Ausente = "right" (recorta el borde final), lo de siempre. */
   clipDir?: IxClipDir;
   /** `transform-origin` de la pista (P3), de lista cerrada. Ausente = center (el inicial de CSS). */
@@ -300,6 +311,8 @@ export type IxRuntimeTrack = {
   repeat: number | "inf";
   alt: boolean;
   stagger?: { each: number; from: IxStaggerFrom; total?: boolean; cols?: number };
+  /** Eje del cursor (P6, disparador `pointer`). */
+  axis?: "x" | "y";
 };
 
 export type IxRuntimeUnit = {

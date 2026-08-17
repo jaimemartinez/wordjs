@@ -87,7 +87,7 @@ class FakeDoc implements IxDocumentLike {
   removeEventListener(type: string, l: (ev: unknown) => void) {
     this.listeners.set(type, (this.listeners.get(type) ?? []).filter((x) => x !== l));
   }
-  fire(type: string) { for (const l of [...(this.listeners.get(type) ?? [])]) l({ type }); }
+  fire(type: string, ev: unknown = { type }) { for (const l of [...(this.listeners.get(type) ?? [])]) l(ev); }
 }
 
 type Harness = {
@@ -121,6 +121,7 @@ function harness(
   h.host = {
     doc,
     viewportHeight: () => 800,
+    viewportWidth: () => 1000,
     pageProgress: () => opts.pageP ?? 0,
     reducedMotion: () => opts.reduced === true,
     matchesMedia: () => opts.media !== false,
@@ -497,6 +498,86 @@ describe("driver de scrub", () => {
     createScrubDriver(u, h.host);
     const delays = root.children.map((c) => (c.anims[0].opts as { delay: number }).delay);
     expect(delays).toEqual([100, 0, 100]);
+  });
+
+  it("PUNTERO (P6): posiciona por el cursor con reposo en el centro, y el eje es de la pista", () => {
+    const u = unitsOf([{
+      v: 1,
+      trigger: { on: "pointer", area: "page", smooth: 0 },
+      tracks: [
+        track({ steps: [{ at: 0, set: { x: -20 } }, { at: 100, set: { x: 20 } }] }),
+        track({ axis: "y", steps: [{ at: 0, set: { y: -10 } }, { at: 100, set: { y: 10 } }] }),
+      ],
+    }]);
+    expect(u[0].needsRuntime).toBe("always");
+    const el = new FakeEl(u[0].cls);
+    const h = harness([el]);
+    createScrubDriver(u, h.host);
+    // Dos animaciones pausadas (una por pista), ambas en REPOSO: el centro de la pista.
+    expect(el.anims).toHaveLength(2);
+    expect(el.anims[0].currentTime).toBe(500);
+    expect(el.anims[1].currentTime).toBe(500);
+    // Visible + cursor en (250, 600) de un viewport 1000×800 → x=0.25, y=0.75. smooth 0 = directo.
+    h.observers[0].cb([{ target: el, isIntersecting: true }]);
+    h.doc.fire("pointermove", { clientX: 250, clientY: 600 });
+    h.flushRaf();
+    expect(el.anims[0].currentTime).toBe(250);
+    expect(el.anims[1].currentTime).toBe(750);
+  });
+
+  it("PUNTERO con suavizado: persigue el objetivo sin llegar de golpe, y el bucle sigue vivo", () => {
+    const u = unitsOf([{
+      v: 1,
+      trigger: { on: "pointer", area: "page", smooth: 300 },
+      tracks: [track({ steps: [{ at: 0, set: { x: -20 } }, { at: 100, set: { x: 20 } }] })],
+    }]);
+    const el = new FakeEl(u[0].cls);
+    const h = harness([el]);
+    createScrubDriver(u, h.host);
+    h.observers[0].cb([{ target: el, isIntersecting: true }]);
+    h.doc.fire("pointermove", { clientX: 1000, clientY: 0 });
+    h.flushRaf();
+    const first = el.anims[0].currentTime as number;
+    expect(first).toBeGreaterThan(500);
+    expect(first).toBeLessThan(1000); // no ha llegado: persigue
+    expect(h.rafQueue.length).toBeGreaterThan(0); // sigue persiguiendo
+    h.flushRaf();
+    expect(el.anims[0].currentTime as number).toBeGreaterThan(first);
+  });
+
+  it("PUNTERO fuera de pantalla: el cursor no mueve nada (el IO manda)", () => {
+    const u = unitsOf([{
+      v: 1,
+      trigger: { on: "pointer", area: "page", smooth: 0 },
+      tracks: [track({ steps: [{ at: 0, set: { x: -20 } }, { at: 100, set: { x: 20 } }] })],
+    }]);
+    const el = new FakeEl(u[0].cls);
+    const h = harness([el]);
+    createScrubDriver(u, h.host);
+    h.doc.fire("pointermove", { clientX: 900, clientY: 100 });
+    h.flushRaf();
+    expect(el.anims[0].currentTime).toBe(500); // sin intersecar, en reposo
+  });
+
+  it("la limpieza del puntero retira el listener y cancela sus animaciones", () => {
+    const u = unitsOf([{
+      v: 1,
+      trigger: { on: "pointer" },
+      tracks: [track({ steps: [{ at: 0, set: { x: -20 } }, { at: 100, set: { x: 20 } }] })],
+    }]);
+    const el = new FakeEl(u[0].cls);
+    const h = harness([el]);
+    const stop = createScrubDriver(u, h.host);
+    expect((h.doc.listeners.get("pointermove") ?? []).length).toBe(1);
+    stop();
+    expect((h.doc.listeners.get("pointermove") ?? []).length).toBe(0);
+    expect((el.anims[0] as FakeAnim).cancelled).toBe(true);
+  });
+
+  it("el suavizado por defecto del chunk es EL MISMO que el del normalizador (pin)", async () => {
+    const { POINTER_SMOOTH_DEFAULT } = await import("../runtime/scrub");
+    const { IX_POINTER_SMOOTH_DEFAULT } = await import("../normalize");
+    expect(POINTER_SMOOTH_DEFAULT).toBe(IX_POINTER_SMOOTH_DEFAULT);
   });
 
   it("total y rejilla son EXACTOS en el runtime: mismas fórmulas que el CSS nativo", () => {

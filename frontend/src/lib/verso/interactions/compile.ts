@@ -386,6 +386,7 @@ function stateSelectors(cls: string, trigger: IxTrigger): string[] {
       return [`.${cls}:hover`, `.${cls}:focus-visible`];
     case "scrub":
     case "load":
+    case "pointer":
       return [`.${cls}`];
   }
 }
@@ -450,6 +451,9 @@ function triggerRuntime(t: IxTrigger): IxNeedsRuntime {
       // IntersectionObserver de `entranceAnimation.ts` tal cual.
       return t.once === false ? "no-native" : "always";
     case "click":
+      return "always";
+    case "pointer":
+      // El cursor es inexpresable en CSS: el driver WAAPI, siempre — y SOLO si la página lo usa.
       return "always";
     case "hover":
     case "load":
@@ -577,6 +581,22 @@ export function emitUnit(body: IxBody, hash: string): IxUnit {
       // Objetivo externo: sin CSS, resuelto por runtime. La unidad entera pasa a "always".
       needsRuntime = worseRuntime(needsRuntime, "always");
       warnings.push("objetivo externo (`block`): se resuelve por runtime, sin CSS (F9-A/B)");
+      return;
+    }
+
+    /* ── P6: el puntero no emite CSS — la animación se POSICIONA con el cursor ─ */
+    if (trigger.on === "pointer") {
+      const ignored: string[] = [];
+      if (track.dur !== undefined) ignored.push("`dur`");
+      if (track.delay !== undefined) ignored.push("`delay`");
+      if (track.repeat !== undefined) ignored.push("`repeat`");
+      if (track.alt === true) ignored.push("`alt`");
+      if (track.stagger && track.stagger.each > 0) ignored.push("el escalonado");
+      if (ignored.length > 0) {
+        warnings.push(
+          `el puntero POSICIONA la animación (no la reproduce): ${ignored.join(", ")} se ignoran — la sensación se ajusta con el suavizado`,
+        );
+      }
       return;
     }
 
@@ -1023,6 +1043,7 @@ function toRuntimeTrack(track: IxTrack, trigger: IxTrigger): IxRuntimeTrack {
     if (track.stagger.total === true) out.stagger.total = true;
     if (track.stagger.cols !== undefined) out.stagger.cols = track.stagger.cols;
   }
+  if (track.axis === "y") out.axis = "y";
   return out;
 }
 

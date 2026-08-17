@@ -8,6 +8,13 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Added
 
+- **Interactions: pointer-driven motion (parallax, tilt, follow) — loaded only when used.** A new
+  trigger positions an animation with the cursor: normalize over the block itself (tilt) or the
+  whole page (parallax), pick a chase smoothing in milliseconds, and give each track its own axis —
+  two tracks, one per axis, compose the classic 3D tilt. It ships zero CSS and zero JavaScript
+  unless a page actually uses it; off-screen blocks ignore the cursor entirely; touch devices and
+  visitors with reduced motion simply see the block at rest.
+
 - **Interactions: three parallel tracks, editable, with a visual step strip.** An interaction could
   always carry up to three tracks (background parallax + rising foreground + staggered children,
   say), but the panel only edited the first. Now every track is editable — add (new tracks are

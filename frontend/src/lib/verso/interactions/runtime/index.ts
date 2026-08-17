@@ -63,6 +63,12 @@ export function startIxRuntime(units: readonly IxRuntimeUnit[], host: IxHost): (
     // evalúa al armar (ver el contrato en host.matchesMedia): en un dispositivo desactivado la
     // unidad ni observa, ni escucha, ni baja chunk.
     if (u.media && !host.matchesMedia(u.media)) continue;
+    // P6: el puntero vive en el chunk WAAPI (posiciona animaciones, como el scrub) y solo baja
+    // si la página lo usa.
+    if (u.trigger.on === "pointer") {
+      waapi.push(u);
+      continue;
+    }
     if (hasExternalTarget(u)) {
       waapi.push(u);
       continue;

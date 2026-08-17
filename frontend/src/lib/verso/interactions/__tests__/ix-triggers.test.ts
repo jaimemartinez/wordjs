@@ -44,6 +44,7 @@ describe("la columna `needsRuntime`", () => {
     ["hover, 3 pasos", mk({ on: "hover" }, { steps: steps3 }), "never"],
     ["click", mk({ on: "click" }), "always"],
     ["click con toggle", mk({ on: "click", toggle: true }), "always"],
+    ["puntero (parallax/tilt) — P6", mk({ on: "pointer" }), "always"],
     [
       "objetivo externo (otro bloque)",
       mk({ on: "load" }, { target: { kind: "block", id: "abc" } }),
@@ -540,6 +541,41 @@ describe("propiedades P3: transform 3D, filtros, colores, origin, clipDir, persp
       steps: two({ opacity: 0, y: 20 }, { opacity: 1, y: 0 }),
     }))!;
     expect(u.rules[1]).toBe(`.${u.cls}[data-wjs-ix="armed"]{opacity:0;transform:translate3d(0px,20px,0)}`);
+  });
+});
+
+describe("puntero (P6): sin CSS, con IR completo, y honestidad sobre lo que no aplica", () => {
+  it("no emite ni una regla ni un @keyframes: la animación se POSICIONA, no se reproduce", () => {
+    const u = compileIx(mk({ on: "pointer" }))!;
+    expect(u.rules).toHaveLength(0);
+    expect(u.keyframes).toHaveLength(0);
+    expect(Object.keys(u.kf)).toHaveLength(1); // el IR WAAPI sí, para el driver
+  });
+
+  it("el manifiesto lleva area/smooth del disparador y el eje de la pista", () => {
+    const u = compileIx({
+      v: 1,
+      trigger: { on: "pointer", area: "page", smooth: 300 },
+      tracks: [{ target: { kind: "self" }, axis: "y", steps: steps2 }],
+    })!;
+    const r = toRuntimeUnit(u);
+    expect(r.trigger).toEqual({ on: "pointer", area: "page", smooth: 300 });
+    expect(r.tracks[0].axis).toBe("y");
+  });
+
+  it("el suavizado por DEFECTO (120) y el eje por defecto (x) se borran: ausencia = defecto", () => {
+    const u = compileIx({
+      v: 1,
+      trigger: { on: "pointer", smooth: 120 },
+      tracks: [{ target: { kind: "self" }, axis: "x", steps: steps2 }],
+    })!;
+    expect(u.body.trigger).toEqual({ on: "pointer" });
+    expect("axis" in u.body.tracks[0]).toBe(false);
+  });
+
+  it("dur/delay/repeat/alt/escalonado no significan nada con el puntero: se AVISA", () => {
+    const u = compileIx(mk({ on: "pointer" }, { dur: 900, repeat: 3, stagger: { each: 50 }, target: { kind: "children" } }))!;
+    expect(u.warnings.join(" ")).toContain("POSICIONA");
   });
 });
 

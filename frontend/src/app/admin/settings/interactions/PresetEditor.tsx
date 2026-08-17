@@ -48,6 +48,8 @@ import {
     setLoadDelay,
     setOrigin,
     setPersp,
+    setPointerArea,
+    setPointerSmooth,
     setRangeEdge,
     setRepeat,
     setScrubSrc,
@@ -60,9 +62,11 @@ import {
     setStepEase,
     setStepProp,
     setTargetKind,
+    setTrackAxis,
     setTriggerKind,
     setViewOnce,
     usedProps,
+    IX_AXIS_LABELS,
     IX_CLIP_DIR_LABELS,
     IX_COLOR_PROPS,
     IX_EASE_LABELS,
@@ -104,12 +108,19 @@ import {
 } from "@/lib/verso/interactions";
 // Los topes de la rejilla (P4) no están en la superficie del índice: se leen del módulo que los define.
 import { IX_STAGGER_COLS_MAX, IX_STAGGER_COLS_MIN } from "@/lib/verso/interactions";
+// Los topes del suavizado del puntero (P6), por la misma razón: del módulo que los define.
+import {
+    IX_POINTER_SMOOTH_DEFAULT,
+    IX_POINTER_SMOOTH_MAX,
+} from "@/lib/verso/interactions";
 
-const TRIGGERS: IxPanelTriggerKind[] = ["view", "scrub", "hover", "click", "load"];
+const TRIGGERS: IxPanelTriggerKind[] = ["view", "scrub", "hover", "click", "load", "pointer"];
 const TARGETS: IxPanelTargetKind[] = ["self", "children", "words"];
 const EASES = Object.keys(IX_EASINGS) as IxEase[];
 /** Órdenes del escalonado (P4), en el orden canónico de sus etiquetas. */
 const STAGGER_FROMS = Object.keys(IX_STAGGER_FROM_LABELS) as IxStaggerFrom[];
+/** Ejes del cursor (P6), en el orden canónico de sus etiquetas. */
+const AXES = Object.keys(IX_AXIS_LABELS) as Array<"x" | "y">;
 /** Aristas de `animation-range`, en el orden en que se cruzan al hacer scroll. */
 const EDGES: IxEdgeName[] = ["cover", "entry", "contain", "exit"];
 
@@ -221,7 +232,9 @@ export default function PresetEditor({
         row.querySelector<HTMLElement>("input:enabled, select:enabled, button:enabled")?.focus();
     };
     const trigger = state.trigger;
-    const timed = trigger.on !== "scrub";
+    // Progreso marcado por el RELOJ: ni `scrub` (posición del scroll) ni `pointer` (posición del
+    // cursor) lo son — ahí duración, retardo y reproducción no significan nada y no se ofrecen.
+    const timed = trigger.on !== "scrub" && trigger.on !== "pointer";
     // Derivados del disparador para el editor de tramo — misma lógica que el panel del bloque.
     const range = rangeEditable(trigger) ? effectiveRange(trigger) : null;
     const pageScrub = trigger.on === "scrub" && trigger.src === "page";
@@ -427,7 +440,67 @@ export default function PresetEditor({
                         />
                     )}
 
-                    {(track.target.kind === "children" || track.target.kind === "words") && (
+                    {/* `pointer` (P6): el cursor POSICIONA la animación, no la dispara. Área y
+                        suavizado viven en el disparador; el eje es de CADA pista (dos pistas, una
+                        por eje, componen el 2D). */}
+                    {trigger.on === "pointer" && (
+                        <>
+                            <FieldSelect
+                                id="ixp-pointer-area"
+                                label="Qué área sigue el cursor"
+                                value={trigger.area === "page" ? "page" : "self"}
+                                onChange={(v) =>
+                                    write(setPointerArea(draft, v === "page" ? "page" : "self"))
+                                }
+                                options={[
+                                    { value: "self", label: "El propio bloque" },
+                                    { value: "page", label: "Toda la página" },
+                                ]}
+                            />
+                            <div>
+                                <label className={LABEL} htmlFor="ixp-pointer-smooth">
+                                    Suavizado (ms)
+                                </label>
+                                <input
+                                    id="ixp-pointer-smooth"
+                                    type="number"
+                                    className={NUM}
+                                    min={0}
+                                    max={IX_POINTER_SMOOTH_MAX}
+                                    step={10}
+                                    value={trigger.smooth ?? IX_POINTER_SMOOTH_DEFAULT}
+                                    onChange={(e) =>
+                                        write(setPointerSmooth(draft, Number(e.target.value)))
+                                    }
+                                />
+                                <p className="mt-1 text-xs text-gray-500">
+                                    0 = sigue al cursor sin retraso.
+                                </p>
+                            </div>
+                            <div>
+                                <FieldSelect
+                                    id="ixp-axis"
+                                    label="Eje del cursor"
+                                    value={track.axis ?? "x"}
+                                    onChange={(v) =>
+                                        write(setTrackAxis(draft, v === "y" ? "y" : "x", undefined, active))
+                                    }
+                                    options={AXES.map((a) => ({
+                                        value: a,
+                                        label: IX_AXIS_LABELS[a],
+                                    }))}
+                                />
+                                <p className="mt-1 text-xs text-gray-500">
+                                    Dos pistas, una por eje, componen el efecto 2D (tilt/parallax).
+                                </p>
+                            </div>
+                        </>
+                    )}
+
+                    {/* El escalonado es un reparto de RETARDOS, y con `pointer` no hay reloj que
+                        retrasar: el compilador lo ignora con aviso, así que no se ofrece. */}
+                    {trigger.on !== "pointer" &&
+                        (track.target.kind === "children" || track.target.kind === "words") && (
                         <div>
                             <label className={LABEL} htmlFor="ixp-stagger">
                                 {/* Con `total` los ms dejan de ser "entre hermanos" y pasan a ser el
@@ -499,10 +572,19 @@ export default function PresetEditor({
                     </p>
                 )}
 
+                {trigger.on === "pointer" && (
+                    <p role="note" className="mt-3 text-xs text-gray-500">
+                        El puntero posiciona la animación (el paso 50 es el reposo). Inerte con
+                        reduced-motion y en pantallas táctiles.
+                    </p>
+                )}
+
                 {/* Opciones del escalonado (P4) — solo cuando HAY escalonado: sin él cada escritor
                     es un no-op y el control mentiría. Con rejilla (`cols`) la onda avanza en
-                    diagonal e ignora el orden lineal, así que el selector de orden se retira. */}
-                {(track.target.kind === "children" || track.target.kind === "words") &&
+                    diagonal e ignora el orden lineal, así que el selector de orden se retira. Con
+                    `pointer` no se ofrece nada de esto (no hay reloj que repartir). */}
+                {trigger.on !== "pointer" &&
+                    (track.target.kind === "children" || track.target.kind === "words") &&
                     track.stagger && (
                         <fieldset className="mt-6 rounded-2xl border-2 border-gray-100 p-4">
                             <legend className="px-1 text-sm font-bold text-gray-900">
@@ -636,9 +718,10 @@ export default function PresetEditor({
                     </fieldset>
                 )}
 
-                {/* Reproducción de la pista — solo con disparadores del RELOJ: con scrub el progreso
-                    lo marca la posición, y «repetir» no significa nada. Con «Infinita» marcada el
-                    número queda en blanco y bloqueado; desmarcarla vuelve a 1 (que borra la clave). */}
+                {/* Reproducción de la pista — solo con disparadores del RELOJ: con scrub o pointer
+                    el progreso lo marca la posición, y «repetir» no significa nada. Con «Infinita»
+                    marcada el número queda en blanco y bloqueado; desmarcarla vuelve a 1 (que borra
+                    la clave). */}
                 {timed && (
                     <fieldset className="mt-6 rounded-2xl border-2 border-gray-100 p-4">
                         <legend className="px-1 text-sm font-bold text-gray-900">Reproducción</legend>
