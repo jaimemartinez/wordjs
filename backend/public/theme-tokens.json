@@ -3,7 +3,7 @@
   "source": "backend/public/css/wordjs-ui.css",
   "counts": {
     "tokens": 773,
-    "varUses": 1753,
+    "varUses": 1757,
     "elements": 51
   },
   "tokens": {
@@ -4043,7 +4043,7 @@
           "property": "background-color"
         },
         {
-          "selector": ".wp-block-nav-menu .wjs-chrome-nav a:hover",
+          "selector": ".wp-block-nav-menu .wjs-chrome-nav a:hover, .wp-block-mega-menu .wjs-chrome-nav a:hover",
           "property": "color"
         },
         {
@@ -4593,7 +4593,7 @@
           "property": "color"
         },
         {
-          "selector": ".wp-block-nav-menu .wjs-chrome-nav a",
+          "selector": ".wp-block-nav-menu .wjs-chrome-nav a, .wp-block-mega-menu .wjs-chrome-nav a",
           "property": "color"
         },
         {
@@ -8791,7 +8791,7 @@
           "property": "color"
         },
         {
-          "selector": ".wp-block-nav-menu .wjs-chrome-nav a",
+          "selector": ".wp-block-nav-menu .wjs-chrome-nav a, .wp-block-mega-menu .wjs-chrome-nav a",
           "property": "color"
         },
         {
@@ -8812,7 +8812,7 @@
           "property": "color"
         },
         {
-          "selector": ".wp-block-nav-menu .wjs-chrome-nav a:hover",
+          "selector": ".wp-block-nav-menu .wjs-chrome-nav a:hover, .wp-block-mega-menu .wjs-chrome-nav a:hover",
           "property": "color"
         }
       ]
@@ -13433,7 +13433,9 @@
     "--wjs-transition": {
       "group": "transition",
       "declaredDefault": "0.15s ease-in-out",
-      "fallbacks": [],
+      "fallbacks": [
+        "0.15s ease"
+      ],
       "consumers": [
         {
           "selector": "a",
@@ -13441,6 +13443,14 @@
         },
         {
           "selector": ".wjs-header-nav a, .wjs-chrome-nav a, .wjs-footer-nav a",
+          "property": "transition"
+        },
+        {
+          "selector": ".wp-block-nav-menu .wjs-chrome-nav-horizontal .wjs-has-submenu > .wjs-chrome-submenu",
+          "property": "transition"
+        },
+        {
+          "selector": ".wp-block-mega-menu .wjs-has-submenu > .wjs-mega-menu__panel",
           "property": "transition"
         },
         {
