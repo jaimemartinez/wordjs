@@ -236,20 +236,18 @@ function DockMotion({
                     >
                         {trStr("Probar todo", language)}
                     </button>
-                    {/* El playhead: recorrer la interacción a mano y pararse en un paso. El scrubber
-                        es el componente de siempre (deslizador + gemelo numérico), en fila. */}
-                    <div className="flex-1 min-w-0 [&>div]:mb-0">
-                        <IxScrubberControl
-                            enabled={st.active}
-                            scrollDriven={
-                                st.trigger.on === "scrub" ||
-                                (st.trigger.on === "view" && st.trigger.once === false)
-                            }
-                            // El escenario INTERCEPTA la posición para pintar el playhead sobre los
-                            // carriles, y la reenvía al lienzo por el camino de siempre.
-                            onScrub={onStageScrub}
-                        />
-                    </div>
+                    {/* El playhead: el scrubber de siempre en su VARIANTE de transporte — una sola
+                        fila alineada a la derecha, como la referencia. El escenario INTERCEPTA la
+                        posición (onStageScrub, referencia ESTABLE) para pintar la línea. */}
+                    <IxScrubberControl
+                        variant="transport"
+                        enabled={st.active}
+                        scrollDriven={
+                            st.trigger.on === "scrub" ||
+                            (st.trigger.on === "view" && st.trigger.once === false)
+                        }
+                        onScrub={onStageScrub}
+                    />
                 </div>
 
                 {/* La PALETA DE CLIPS: cada preajuste es un bloque que se ARRASTRA a la línea de
