@@ -3,7 +3,7 @@
   "source": "backend/public/css/wordjs-ui.css",
   "counts": {
     "tokens": 773,
-    "varUses": 1745,
+    "varUses": 1753,
     "elements": 51
   },
   "tokens": {
@@ -3531,7 +3531,8 @@
       "group": "color",
       "declaredDefault": "var(--wjs-color-text-main)",
       "fallbacks": [
-        "inherit"
+        "inherit",
+        "var(--wjs-color-text-main, #1f2937)"
       ],
       "consumers": [
         {
@@ -3568,6 +3569,10 @@
         },
         {
           "selector": ".wjs-form-label",
+          "property": "color"
+        },
+        {
+          "selector": ".wjs-toc__title",
           "property": "color"
         }
       ]
@@ -4013,7 +4018,8 @@
       "declaredDefault": "#2563eb",
       "fallbacks": [
         "#2F6D86",
-        "#2563eb"
+        "#2563eb",
+        "#2f6d86"
       ],
       "consumers": [
         {
@@ -4315,6 +4321,14 @@
         {
           "selector": ".wjs-form-submit:hover",
           "property": "background"
+        },
+        {
+          "selector": ".wjs-breadcrumbs__link:hover, .wjs-lang-switcher__link:hover, .wjs-toc__link:hover, .wjs-lang-switcher__summary:hover",
+          "property": "color"
+        },
+        {
+          "selector": ".wjs-toc__link--active",
+          "property": "color"
         }
       ]
     },
@@ -4553,7 +4567,9 @@
       "group": "color",
       "declaredDefault": "#1f2937",
       "fallbacks": [
-        "inherit"
+        "inherit",
+        "#374151",
+        "#1f2937"
       ],
       "consumers": [
         {
@@ -4707,13 +4723,28 @@
         {
           "selector": ".wjs-form-input, .wjs-form-textarea, .wjs-form-select",
           "property": "color"
+        },
+        {
+          "selector": ".wp-block-breadcrumbs, .wp-block-lang-switcher, .wp-block-toc",
+          "property": "color"
+        },
+        {
+          "selector": ".wjs-breadcrumbs__current, .wjs-lang-switcher__current",
+          "property": "color"
+        },
+        {
+          "selector": ".wjs-toc__title",
+          "property": "color"
         }
       ]
     },
     "--wjs-color-text-muted": {
       "group": "color",
       "declaredDefault": "#6b7280",
-      "fallbacks": [],
+      "fallbacks": [
+        "#6b7280",
+        "#9ca3af"
+      ],
       "consumers": [
         {
           "selector": ":root",
@@ -4853,6 +4884,14 @@
         },
         {
           "selector": ".wp-block-stats__label",
+          "property": "color"
+        },
+        {
+          "selector": ".wjs-breadcrumbs__link, .wjs-lang-switcher__link, .wjs-toc__link, .wjs-lang-switcher__summary",
+          "property": "color"
+        },
+        {
+          "selector": ".wjs-breadcrumbs__sep",
           "property": "color"
         }
       ]
