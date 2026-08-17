@@ -54,6 +54,8 @@ import {
     type ColumnDistribution,
     type ColumnStyle,
 } from "@/components/versoConfig";
+import { MenuLocationPickerControl, MenuPickerControl } from "@/components/verso/fields/MenuSourceControls";
+import MenuItemsEditor from "@/components/verso/fields/MenuItemsEditor";
 import { formBlockFields, formBlockDefaults, FormBlockRender } from "@/components/blocks/FormBlock";
 import { symbolBlockFields, symbolBlockDefaults } from "@/components/blocks/SymbolBlock";
 import VersoSymbolRender from "@/components/verso/blocks/VersoSymbolBlock";
@@ -1486,6 +1488,10 @@ export const coreBlockDefinitions: BlockDefinition[] = [
         // NavMenu: BINDS al menú del sitio por referencia (ubicación o id) — el store nav_menu sigue
         // siendo la fuente de verdad. Render SSR completo del <nav> + cada <a>; solo el toggle móvil
         // es isla de cliente. Los campos deben coincidir BYTE A BYTE con versoConfig.NavMenu.
+        //
+        // location/menuId son PICKERS (custom) que escriben las MISMAS props de siempre (string /
+        // number — contrato de serialización congelado); `items` es un campo VIRTUAL: edita el store
+        // nav_menu vía la API admin y NO guarda nada en _puck_data (su onChange no se invoca jamás).
         type: "NavMenu",
         label: "Menú de navegación",
         category: "layout",
@@ -1498,8 +1504,25 @@ export const coreBlockDefinitions: BlockDefinition[] = [
                     { label: "Menú", value: "menu" },
                 ],
             },
-            location: { type: "text", label: "Ubicación del menú (p. ej. header)" },
-            menuId: { type: "number", label: "ID del menú (si el origen es Menú)", min: 0 },
+            location: {
+                type: "custom",
+                label: "Ubicación del menú",
+                render: ({ value, onChange }) => (
+                    <MenuLocationPickerControl value={value} onChange={onChange} />
+                ),
+            },
+            menuId: {
+                type: "custom",
+                label: "Menú (si el origen es Menú)",
+                render: ({ value, onChange }) => (
+                    <MenuPickerControl value={value} onChange={onChange} />
+                ),
+            },
+            items: {
+                type: "custom",
+                label: "Elementos del menú",
+                render: () => <MenuItemsEditor />,
+            },
             orientation: {
                 type: "select",
                 label: "Orientación",

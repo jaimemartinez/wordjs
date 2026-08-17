@@ -93,6 +93,7 @@ import OverlayLayer from "../overlay/OverlayLayer";
 import DnDDriver from "../dnd/DnDDriver";
 import { editSelectedInline } from "../overlay/actionBarCommands";
 import type { RenderExternalPicker } from "../fields/VersoFieldControl";
+import { VersoPanelHandleContext } from "../fields/versoPanelHandleContext";
 import { runVersoA11yAudit, VERSO_BLOCK_ATTR } from "./a11y";
 import { startPresenceHeartbeat, type PresenceEditor } from "./presence";
 import CollabPresence from "./CollabPresence";
@@ -1271,19 +1272,23 @@ export default function VersoEditor({
                     <IxDock handle={handle} registry={registry} />
                     </div>
 
-                    {/* PANEL DERECHO — propiedades (docked 320px / sheet móvil) */}
+                    {/* PANEL DERECHO — propiedades (docked 320px / sheet móvil). El provider entrega
+                        el handle a los controles de campo custom que necesitan leer el nodo
+                        seleccionado (p.ej. el editor de elementos del menú de NavMenu). */}
                     {(showProperties || mobileSheet === "right") && (
-                        <PropertiesPanel
-                            handle={handle}
-                            registry={registry}
-                            rootFields={rootFields}
-                            renderExternalPicker={renderExternalPicker}
-                            onClose={() => {
-                                if (isPhone()) setMobileSheet(null);
-                                else setShowProperties(false);
-                            }}
-                            mobileOpen={mobileSheet === "right"}
-                        />
+                        <VersoPanelHandleContext.Provider value={handle}>
+                            <PropertiesPanel
+                                handle={handle}
+                                registry={registry}
+                                rootFields={rootFields}
+                                renderExternalPicker={renderExternalPicker}
+                                onClose={() => {
+                                    if (isPhone()) setMobileSheet(null);
+                                    else setShowProperties(false);
+                                }}
+                                mobileOpen={mobileSheet === "right"}
+                            />
+                        </VersoPanelHandleContext.Provider>
                     )}
                 </div>
 

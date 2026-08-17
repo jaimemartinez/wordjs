@@ -360,6 +360,8 @@ export interface MenuItem {
     target?: string;
     objectId?: number;
     parent_id: number | null;
+    /** Parent item id, 0 = raíz — the name the backend's toJSON actually returns and PUT /menus/items/:id updates. */
+    parent?: number;
     order: number;
     children?: MenuItem[];
 }

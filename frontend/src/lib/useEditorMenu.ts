@@ -36,6 +36,43 @@ function refKey(ref: MenuRef): string {
 // One in-flight/settled promise per reference key, shared across every NavMenu block in the session.
 const menuCache = new Map<string, Promise<ChromeMenuItem[]>>();
 
+/* ------------------------------------------------------------------ */
+/* Bus de invalidación — el editor de elementos escribe en el store    */
+/* nav_menu vía la API y el canvas debe reflejarlo SIN recargar.       */
+/* ------------------------------------------------------------------ */
+
+// Versión monotónica del store de menús tal y como lo conoce esta sesión del editor. Un bump
+// significa "lo cacheado puede estar rancio": los hooks montados refetchean.
+let menuStoreVersion = 0;
+const menuStoreListeners = new Set<() => void>();
+
+/** Snapshot para useSyncExternalStore (y para tests). */
+export function getEditorMenuVersion(): number {
+    return menuStoreVersion;
+}
+
+/** Suscripción al bus; devuelve la desuscripción. Referencia de módulo: estable por construcción. */
+export function subscribeEditorMenuInvalidation(listener: () => void): () => void {
+    menuStoreListeners.add(listener);
+    return () => {
+        menuStoreListeners.delete(listener);
+    };
+}
+
+/**
+ * Tras CUALQUIER mutación del store nav_menu (alta/edición/borrado/reorden de elementos, crear o
+ * asignar un menú): vacía la caché de sesión ENTERA y notifica a todos los NavMenu montados.
+ *
+ * Se vacía todo y no solo la referencia mutada a propósito: el mismo menú puede estar vinculado a
+ * la vez por ubicación (`location:header`) y por id (`menu:5`); invalidar solo la clave editada
+ * dejaría el alias enseñando el menú viejo.
+ */
+export function invalidateEditorMenus(): void {
+    menuCache.clear();
+    menuStoreVersion += 1;
+    for (const listener of Array.from(menuStoreListeners)) listener();
+}
+
 function fetchMenu(ref: MenuRef): Promise<ChromeMenuItem[]> {
     const key = refKey(ref);
     let promise = menuCache.get(key);
@@ -74,13 +111,20 @@ export function useEditorMenu(
         [ref?.source, ref?.location, ref?.menuId],
     );
     const [items, setItems] = React.useState<ChromeMenuItem[] | null>(null);
+    // El bus de invalidación entra como dependencia del efecto: un bump re-ejecuta el fetch (la
+    // caché ya está vacía) y el canvas enseña el menú recién editado sin recargar el editor.
+    const version = React.useSyncExternalStore(
+        subscribeEditorMenuInvalidation,
+        getEditorMenuVersion,
+        getEditorMenuVersion,
+    );
 
     React.useEffect(() => {
         if (!editing || hasInjected) return;
         let dead = false;
         fetchMenu(stableRef).then((menu) => { if (!dead) setItems(menu); });
         return () => { dead = true; };
-    }, [editing, hasInjected, stableRef]);
+    }, [editing, hasInjected, stableRef, version]);
 
     if (hasInjected) return injected as ChromeMenuItem[];
     if (!editing || !items) return [];

@@ -25,6 +25,8 @@ import { sanitizeHTML } from "@/lib/sanitize";
 import { useEditorPosts } from "@/lib/useEditorPosts";
 import { useEditorMenu } from "@/lib/useEditorMenu";
 import { useEditorIdentity } from "@/lib/useEditorIdentity";
+import { MenuLocationPickerControl, MenuPickerControl } from "@/components/verso/fields/MenuSourceControls";
+import MenuItemsEditor from "@/components/verso/fields/MenuItemsEditor";
 import { formBlockFields, formBlockDefaults, FormBlockRender } from "./blocks/FormBlock";
 import { symbolBlockFields, symbolBlockDefaults, SymbolRender } from "./blocks/SymbolBlock";
 
@@ -2390,6 +2392,8 @@ const baseConfig: any = {
         NavMenu: {
             // BINDS al menú del sitio por referencia; el store nav_menu es la fuente de verdad. Campos
             // idénticos (orden + estructura) a coreBlocks.NavMenu — el gate anti-drift los compara.
+            // location/menuId son pickers custom que escriben las MISMAS props de siempre; `items` es
+            // un campo VIRTUAL (edita el store vía la API admin, no guarda nada en _puck_data).
             label: "Menú de navegación",
             category: "layout",
             fields: {
@@ -2401,8 +2405,25 @@ const baseConfig: any = {
                         { label: "Menú", value: "menu" },
                     ]
                 },
-                location: { type: "text", label: "Ubicación del menú (p. ej. header)" },
-                menuId: { type: "number", label: "ID del menú (si el origen es Menú)", min: 0 },
+                location: {
+                    type: "custom",
+                    label: "Ubicación del menú",
+                    render: ({ value, onChange }: any) => (
+                        <MenuLocationPickerControl value={value} onChange={onChange} />
+                    )
+                },
+                menuId: {
+                    type: "custom",
+                    label: "Menú (si el origen es Menú)",
+                    render: ({ value, onChange }: any) => (
+                        <MenuPickerControl value={value} onChange={onChange} />
+                    )
+                },
+                items: {
+                    type: "custom",
+                    label: "Elementos del menú",
+                    render: () => <MenuItemsEditor />
+                },
                 orientation: {
                     type: "select",
                     label: "Orientación",
