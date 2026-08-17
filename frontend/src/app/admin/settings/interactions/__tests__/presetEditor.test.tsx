@@ -116,3 +116,71 @@ describe("PresetEditor — lo que distingue un alta de una edición", () => {
     expect(render(words)).toContain("Las palabras» solo mueve");
   });
 });
+
+/**
+ * DISPARADOR `event` (P11), SUAVIZADO DEL SCRUB (P10) Y TRAZO SVG (P12) — el espejo del panel del
+ * bloque. Qué ESCRIBE cada control está en ixPanelModel.test.ts (los mismos escritores puros);
+ * aquí, que el formulario los ofrezca, con la etiqueta por id y los textos de honestidad.
+ */
+describe("PresetEditor — evento a medida, suavizado del scrub y trazo SVG", () => {
+  it("«Cuándo» ofrece «Con un evento a medida»", () => {
+    expect(render()).toContain("Con un evento a medida");
+  });
+
+  it("con `event`: nombre etiquetado por id, prefijo real, regla del slug y conmutación", () => {
+    const evento: IxSpec = { ...defaultIxSpec(), trigger: { on: "event", name: "abrir-menu" } };
+    const html = render(evento);
+    expect(html).toContain('for="ixp-event-name"');
+    expect(html).toMatch(/<input[^>]*id="ixp-event-name"[^>]*value="abrir-menu"/);
+    expect(html).toContain("wjs:ix:");
+    expect(html).toContain("minúsculas, números y guiones");
+    expect(html).toContain("Cada evento alterna (entra/sale)");
+  });
+
+  it("la conmutación refleja el dato", () => {
+    const base: IxSpec = { ...defaultIxSpec(), trigger: { on: "event", name: "abrir-menu" } };
+    expect(render(base)).toMatch(/<input type="checkbox"\/>[^<]*Cada evento alterna/);
+    const conToggle: IxSpec = {
+      ...defaultIxSpec(),
+      trigger: { on: "event", name: "abrir-menu", toggle: true },
+    };
+    expect(render(conToggle)).toMatch(/<input type="checkbox" checked=""\/>[^<]*Cada evento alterna/);
+  });
+
+  it("con `scrub` se ofrece el suavizado (P10) con su nota de honestidad", () => {
+    const scrub: IxSpec = { ...defaultIxSpec(), trigger: { on: "scrub", smooth: 250 } };
+    const html = render(scrub);
+    expect(html).toContain('for="ixp-scrub-smooth"');
+    expect(html).toMatch(/<input[^>]*id="ixp-scrub-smooth"[^>]*value="250"/);
+    expect(html).toContain("0 = sin suavizado");
+    expect(html).toContain("camino puro de CSS");
+  });
+
+  it("«El trazo SVG» se ofrece y, elegido, la ayuda dice su contrato", () => {
+    expect(render()).toContain("El trazo SVG");
+    const svg: IxSpec = {
+      ...defaultIxSpec(),
+      tracks: [
+        {
+          target: { kind: "svg" },
+          steps: [
+            { at: 0, set: { draw: 0 } },
+            { at: 100, set: { draw: 100 } },
+          ],
+        },
+      ],
+    };
+    const html = render(svg);
+    expect(html).toContain("wjs-ixd");
+    expect(html).toContain("pathLength");
+    expect(html).toContain("no se anima nada");
+  });
+
+  it("el aviso de «Las palabras» dice que en otros bloques no mueve nada", () => {
+    const words: IxSpec = {
+      ...defaultIxSpec(),
+      tracks: [{ ...defaultIxSpec().tracks![0], target: { kind: "words" } }],
+    };
+    expect(render(words)).toContain("En cualquier otro bloque este objetivo no mueve nada");
+  });
+});

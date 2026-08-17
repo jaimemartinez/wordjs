@@ -47,6 +47,8 @@ import {
     setClipDir,
     setDelay,
     setDuration,
+    setEventName,
+    setEventToggle,
     setLoadDelay,
     setOrigin,
     setPersp,
@@ -54,6 +56,7 @@ import {
     setPointerSmooth,
     setRangeEdge,
     setRepeat,
+    setScrubSmooth,
     setScrubSrc,
     setStagger,
     setStaggerCols,
@@ -94,6 +97,7 @@ import {
     toRuntimeUnit,
     IX_CLIP_DIRS,
     IX_EASINGS,
+    IX_EVENT_PREFIX,
     IX_MAX_STEPS,
     IX_MAX_TRACKS,
     IX_MAX_WORDS,
@@ -130,8 +134,16 @@ import {
     type IxScrubber,
 } from "@/lib/verso/interactions/runtime/scrubber";
 
-const TRIGGERS: IxPanelTriggerKind[] = ["view", "scrub", "hover", "click", "load", "pointer"];
-const TARGETS: IxPanelTargetKind[] = ["self", "children", "words"];
+const TRIGGERS: IxPanelTriggerKind[] = [
+    "view",
+    "scrub",
+    "hover",
+    "click",
+    "load",
+    "pointer",
+    "event",
+];
+const TARGETS: IxPanelTargetKind[] = ["self", "children", "words", "svg"];
 const EASES = Object.keys(IX_EASINGS) as IxEase[];
 /** Órdenes del escalonado (P4), en el orden canónico de sus etiquetas. */
 const STAGGER_FROMS = Object.keys(IX_STAGGER_FROM_LABELS) as IxStaggerFrom[];
@@ -575,16 +587,71 @@ export default function PresetEditor({
                     )}
 
                     {trigger.on === "scrub" && (
-                        <FieldSelect
-                            id="ixp-scrub-src"
-                            label="Qué scroll manda"
-                            value={trigger.src === "page" ? "page" : "self"}
-                            onChange={(v) => write(setScrubSrc(draft, v === "page" ? "page" : "self"))}
-                            options={[
-                                { value: "self", label: "El recorrido del bloque" },
-                                { value: "page", label: "El scroll de la página" },
-                            ]}
-                        />
+                        <>
+                            <FieldSelect
+                                id="ixp-scrub-src"
+                                label="Qué scroll manda"
+                                value={trigger.src === "page" ? "page" : "self"}
+                                onChange={(v) => write(setScrubSrc(draft, v === "page" ? "page" : "self"))}
+                                options={[
+                                    { value: "self", label: "El recorrido del bloque" },
+                                    { value: "page", label: "El scroll de la página" },
+                                ]}
+                            />
+                            {/* Suavizado del scroll (P10) — opt-in: sin él, exactitud nativa 1:1. */}
+                            <div>
+                                <label className={LABEL} htmlFor="ixp-scrub-smooth">
+                                    Suavizado (ms)
+                                </label>
+                                <input
+                                    id="ixp-scrub-smooth"
+                                    type="number"
+                                    className={NUM}
+                                    min={0}
+                                    max={IX_POINTER_SMOOTH_MAX}
+                                    step={10}
+                                    value={trigger.smooth ?? 0}
+                                    onChange={(e) => write(setScrubSmooth(draft, Number(e.target.value)))}
+                                />
+                                <p className="mt-1 text-xs text-gray-500">
+                                    0 = sin suavizado (exactitud nativa 1:1). Con suavizado el
+                                    progreso lo persigue el runtime mínimo en JavaScript: se
+                                    renuncia al camino puro de CSS en el compositor.
+                                </p>
+                            </div>
+                        </>
+                    )}
+
+                    {/* `event` (P11): la escotilla para plugins y código propio — el runtime
+                        escucha el evento en el documento y arma o conmuta el estado. */}
+                    {trigger.on === "event" && (
+                        <>
+                            <div>
+                                <label className={LABEL} htmlFor="ixp-event-name">
+                                    Nombre del evento
+                                </label>
+                                <input
+                                    id="ixp-event-name"
+                                    type="text"
+                                    className={NUM}
+                                    value={trigger.name}
+                                    onChange={(e) => write(setEventName(draft, e.target.value))}
+                                />
+                                <p className="mt-1 text-xs text-gray-500">
+                                    El evento real del DOM es <code>{IX_EVENT_PREFIX}&lt;nombre&gt;</code>.
+                                    El nombre es un slug: minúsculas, números y guiones — con uno
+                                    inválido se conserva el último válido.
+                                </p>
+                            </div>
+                            <label className="flex cursor-pointer select-none items-center gap-2 self-center text-sm text-gray-700">
+                                <input
+                                    type="checkbox"
+                                    checked={trigger.toggle === true}
+                                    onChange={(e) => write(setEventToggle(draft, e.target.checked))}
+                                />
+                                Cada evento alterna (entra/sale)
+                            </label>
+                        </>
                     )}
 
                     {/* `pointer` (P6): el cursor POSICIONA la animación, no la dispara. Área y
@@ -716,6 +783,16 @@ export default function PresetEditor({
                         «Las palabras» solo mueve algo en los bloques que saben partir su texto
                         (Título y Cita). No se parte si el texto lleva formato o si pasa de{" "}
                         {IX_MAX_WORDS} palabras: entonces se ve igual que siempre, sin movimiento.
+                        En cualquier otro bloque este objetivo no mueve nada.
+                    </p>
+                )}
+
+                {/* Honestidad (P12): el trazo SVG exige el contrato del MARKUP del bloque. */}
+                {track.target.kind === "svg" && (
+                    <p className="mt-3 text-xs text-gray-500">
+                        «El trazo SVG» mueve el trazo de los SVG del bloque marcados con la clase
+                        wjs-ixd y pathLength=&quot;1&quot; (bloques propios o de plugins). Si el
+                        bloque no tiene ninguno, no se anima nada.
                     </p>
                 )}
 

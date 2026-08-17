@@ -41,6 +41,7 @@ import {
   IX_BREAKPOINTS,
   IX_CLIP_DIRS,
   IX_EASINGS,
+  IX_EVENT_PREFIX,
   IX_MAX_STEPS,
   IX_MAX_TRACKS,
   IX_MAX_WORDS,
@@ -70,7 +71,12 @@ import {
 } from "@/lib/verso/interactions";
 // Los topes de la intensidad (P7), por la misma razón: del módulo que los define.
 import { IX_AMT_MAX, IX_AMT_MIN } from "@/lib/verso/interactions";
-import type { NumberVersoField, RadioVersoField, SelectVersoField } from "@/lib/verso/registry";
+import type {
+  NumberVersoField,
+  RadioVersoField,
+  SelectVersoField,
+  TextVersoField,
+} from "@/lib/verso/registry";
 import {
   addStep,
   addTrack,
@@ -90,6 +96,8 @@ import {
   setClipDir,
   setDelay,
   setDuration,
+  setEventName,
+  setEventToggle,
   setIntensity,
   setLoadDelay,
   setOrigin,
@@ -99,6 +107,7 @@ import {
   setPresetChoice,
   setRangeEdge,
   setRepeat,
+  setScrubSmooth,
   setScrubSrc,
   setStagger,
   setStaggerCols,
@@ -145,7 +154,15 @@ const LEGEND = "px-1 text-xs font-medium text-[var(--ed-on-surface-variant)]";
 const CHECK =
   "mb-3 flex cursor-pointer items-center gap-1.5 text-xs text-[var(--ed-on-surface-variant)]";
 
-const TRIGGERS: IxPanelTriggerKind[] = ["view", "scrub", "hover", "click", "load", "pointer"];
+const TRIGGERS: IxPanelTriggerKind[] = [
+  "view",
+  "scrub",
+  "hover",
+  "click",
+  "load",
+  "pointer",
+  "event",
+];
 const EASES = Object.keys(IX_EASINGS) as IxEase[];
 /** Órdenes del escalonado (P4), en el orden canónico de sus etiquetas. */
 const STAGGER_FROMS = Object.keys(IX_STAGGER_FROM_LABELS) as IxStaggerFrom[];
@@ -163,6 +180,10 @@ const EDGES: IxEdgeName[] = ["cover", "entry", "contain", "exit"];
  *
  * Se añade en dos casos: cuando el bloque lo declara (`supportsWords`) y cuando el dato YA lo trae
  * puesto (puede llegar por la API o por una importación), para no dejar el radiogrupo sin selección.
+ *
+ * `svg` (P12) SÍ se ofrece siempre: su contrato no lo declara la definición sino el MARKUP del
+ * bloque (paths `.wjs-ixd` con `pathLength=1`), que el panel no puede conocer — la honestidad va en
+ * la línea de ayuda que aparece al elegirlo.
  */
 const OFFERED_TARGETS: IxPanelTargetKind[] = ["self", "children"];
 
@@ -330,8 +351,11 @@ export default function InteractionsControl({
     options: state.tracks.map((_, i) => ({ label: `Pista ${i + 1}`, value: i })),
   };
   const currentTarget = track?.target.kind;
-  const targets: IxPanelTargetKind[] =
-    supportsWords || currentTarget === "words" ? [...OFFERED_TARGETS, "words"] : OFFERED_TARGETS;
+  const targets: IxPanelTargetKind[] = [
+    ...OFFERED_TARGETS,
+    ...(supportsWords || currentTarget === "words" ? (["words"] as const) : []),
+    "svg",
+  ];
   const targetField: RadioVersoField = {
     type: "radio",
     options: targets.map((kind) => ({ label: IX_TARGET_LABELS[kind], value: kind })),
@@ -342,6 +366,8 @@ export default function InteractionsControl({
     max,
     step,
   });
+  // Nombre del evento (P11): un slug cerrado — la regla la aplica el escritor, no el control.
+  const eventNameField: TextVersoField = { type: "text" };
 
   return (
     // wjs-f-ix — marcador de sección, hermano de wjs-f-anim / wjs-f-look / wjs-f-hide.
@@ -490,13 +516,60 @@ export default function InteractionsControl({
           )}
 
           {trigger.on === "scrub" && (
-            <VersoFieldControl
-              field={scrubSrcField}
-              name="ix-scrub-src"
-              label="Qué scroll manda"
-              value={trigger.src === "page" ? "page" : "self"}
-              onChange={(v) => onChange(setScrubSrc(value, v === "page" ? "page" : "self", ixCtx))}
-            />
+            <>
+              <VersoFieldControl
+                field={scrubSrcField}
+                name="ix-scrub-src"
+                label="Qué scroll manda"
+                value={trigger.src === "page" ? "page" : "self"}
+                onChange={(v) => onChange(setScrubSrc(value, v === "page" ? "page" : "self", ixCtx))}
+              />
+              {/* ── Suavizado del scroll (P10) — opt-in: sin él, exactitud nativa 1:1. */}
+              <VersoFieldControl
+                field={msField(0, IX_POINTER_SMOOTH_MAX, 10)}
+                name="ix-scrub-smooth"
+                label="Suavizado (ms)"
+                value={trigger.smooth ?? 0}
+                onChange={(v) =>
+                  onChange(setScrubSmooth(value, typeof v === "number" ? v : 0, ixCtx))
+                }
+              />
+              <p className={HINT}>0 = sin suavizado (exactitud nativa 1:1).</p>
+              <p role="note" className={HINT}>
+                Con suavizado el progreso lo persigue el runtime mínimo en JavaScript: se renuncia
+                al camino puro de CSS en el compositor.
+              </p>
+            </>
+          )}
+
+          {/* ── `event` (P11): la escotilla para plugins y código propio — el runtime escucha el
+              evento en el documento. El nombre viaja CON el disparador, así que se ofrece también
+              enlazado a un preajuste, como el resto de opciones de «Cuándo». */}
+          {trigger.on === "event" && (
+            <>
+              <VersoFieldControl
+                field={eventNameField}
+                name="ix-event-name"
+                label="Nombre del evento"
+                value={trigger.name}
+                onChange={(v) =>
+                  onChange(setEventName(value, typeof v === "string" ? v : "", ixCtx))
+                }
+              />
+              <p className={HINT}>
+                El evento real del DOM es <code>{IX_EVENT_PREFIX}&lt;nombre&gt;</code>. El nombre
+                es un slug: minúsculas, números y guiones — con uno inválido se conserva el último
+                válido.
+              </p>
+              <label className={CHECK}>
+                <input
+                  type="checkbox"
+                  checked={trigger.toggle === true}
+                  onChange={(e) => onChange(setEventToggle(value, e.target.checked, ixCtx))}
+                />
+                Cada evento alterna (entra/sale)
+              </label>
+            </>
           )}
 
           {/* ── `pointer` (P6): el cursor POSICIONA la animación, no la dispara. Área y suavizado
@@ -684,6 +757,25 @@ export default function InteractionsControl({
                   El texto se parte en palabras y el bloque conserva su lectura completa para los
                   lectores de pantalla. No se parte si lleva formato (negritas, enlaces) o si pasa de{" "}
                   {IX_MAX_WORDS} palabras: entonces se ve igual que siempre, sin movimiento.
+                </p>
+              )}
+
+              {/* ── Honestidad (P13): el dato trae `words` pero este bloque no declara el split —
+                  puede llegar por la API o por una importación. El objetivo no mueve nada, y
+                  callárselo al autor sería dejarle buscar un fallo que no existe. */}
+              {track.target.kind === "words" && !supportsWords && (
+                <p role="note" className={HINT}>
+                  Este bloque no sabe partir su texto en palabras: con este objetivo no se mueve
+                  nada. Elige otro objetivo, o usa un bloque que lo declare (Título o Cita).
+                </p>
+              )}
+
+              {/* ── Honestidad (P12): el trazo SVG exige el contrato del MARKUP del bloque. */}
+              {track.target.kind === "svg" && (
+                <p className={HINT}>
+                  Mueve el trazo de los SVG del bloque marcados con la clase wjs-ixd y{" "}
+                  pathLength=&quot;1&quot; (bloques propios o de plugins). Si el bloque no tiene
+                  ninguno, no se anima nada.
                 </p>
               )}
 

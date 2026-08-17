@@ -17,7 +17,12 @@
 import { describe, expect, it } from "vitest";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { ixCtxFromSite, parseSiteIxPresets, type IxCompileCtx } from "@/lib/verso/interactions";
+import {
+  ixCtxFromSite,
+  parseSiteIxPresets,
+  IX_POINTER_SMOOTH_MAX,
+  type IxCompileCtx,
+} from "@/lib/verso/interactions";
 import { defaultIxSpec } from "../../editor/ixPanelModel";
 import InteractionsControl from "../InteractionsControl";
 
@@ -456,6 +461,132 @@ describe("InteractionsControl — el scrubber", () => {
     };
     expect(render(scrub)).toContain("avanza con el scroll");
     expect(render(defaultIxSpec())).toContain("pararte en cualquier punto");
+  });
+});
+
+/**
+ * DISPARADOR `event` (P11) Y SUAVIZADO DEL SCRUB (P10). Qué ESCRIBE cada control está en
+ * ixPanelModel.test.ts (setEventName/setEventToggle/setScrubSmooth); aquí, que el panel los ofrezca
+ * y que el markup refleje el dato — con sus textos de honestidad.
+ */
+describe("InteractionsControl — evento a medida y suavizado del scrub", () => {
+  const evento = {
+    v: 1,
+    trigger: { on: "event", name: "abrir-menu", toggle: true },
+    tracks: [
+      {
+        target: { kind: "self" },
+        steps: [
+          { at: 0, set: { opacity: 0 } },
+          { at: 100, set: { opacity: 1 } },
+        ],
+      },
+    ],
+  };
+
+  it("«Con un evento a medida» está entre las opciones de «Cuándo»", () => {
+    expect(render(defaultIxSpec())).toContain("Con un evento a medida");
+  });
+
+  it("con `event`: el nombre en un input de texto, el prefijo real y la regla del slug", () => {
+    const html = render(evento);
+    expect(html).toContain("Nombre del evento");
+    expect(html).toMatch(/<input[^>]*type="text"[^>]*value="abrir-menu"/);
+    // La honestidad: el evento REAL que hay que despachar, y la regla que aplica el escritor.
+    expect(html).toContain("wjs:ix:");
+    expect(html).toContain("minúsculas, números y guiones");
+  });
+
+  it("la conmutación es un checkbox y refleja el dato", () => {
+    expect(render(evento)).toMatch(/<input type="checkbox" checked=""\/>[^<]*Cada evento alterna/);
+    const sinToggle = { ...evento, trigger: { on: "event", name: "abrir-menu" } };
+    expect(render(sinToggle)).toMatch(/<input type="checkbox"\/>[^<]*Cada evento alterna/);
+  });
+
+  it("con `scrub` se ofrece el suavizado (P10), acotado y con su nota de honestidad", () => {
+    const scrub = {
+      v: 1,
+      trigger: { on: "scrub", smooth: 250 },
+      tracks: [
+        {
+          target: { kind: "self" },
+          steps: [
+            { at: 0, set: { y: 30 } },
+            { at: 100, set: { y: -30 } },
+          ],
+        },
+      ],
+    };
+    const html = render(scrub);
+    expect(html).toContain("Suavizado (ms)");
+    // React (SSR) emite `value` en último lugar, detrás de min/max/step.
+    expect(html).toMatch(
+      new RegExp(`<input[^>]*type="number"[^>]*max="${IX_POINTER_SMOOTH_MAX}"[^>]*value="250"`),
+    );
+    expect(html).toContain("0 = sin suavizado");
+    // El intercambio se dice: suavizar es renunciar al camino puro de CSS.
+    expect(html).toContain("camino puro de CSS");
+  });
+});
+
+/**
+ * OBJETIVOS NUEVOS: el trazo SVG (P12) y la honestidad del split por palabras (P13). El escritor
+ * (setTargetKind) ya está probado en ixPanelModel.test.ts; aquí, la oferta y las líneas de ayuda.
+ */
+describe("InteractionsControl — trazo SVG y honestidad de «Las palabras»", () => {
+  const conTarget = (kind: string, set0: object, set1: object) => ({
+    v: 1,
+    trigger: { on: "view", once: true },
+    tracks: [
+      {
+        target: { kind },
+        steps: [
+          { at: 0, set: set0 },
+          { at: 100, set: set1 },
+        ],
+      },
+    ],
+  });
+
+  it("«El trazo SVG» se ofrece siempre (su contrato es del markup, no de la definición)", () => {
+    expect(render(defaultIxSpec())).toContain("El trazo SVG");
+  });
+
+  it("elegido `svg`, la ayuda dice el contrato: .wjs-ixd + pathLength=1, o nada se anima", () => {
+    const html = render(conTarget("svg", { draw: 0 }, { draw: 100 }));
+    expect(html).toContain("wjs-ixd");
+    expect(html).toContain("pathLength");
+    expect(html).toContain("no se anima nada");
+  });
+
+  it("la propiedad «Trazado SVG» sale en «Añadir propiedad» (fluye por las tablas genéricas)", () => {
+    expect(render(defaultIxSpec())).toContain("Trazado SVG");
+  });
+
+  it("`words` en un bloque que NO sabe partir su texto: se avisa de que no mueve nada", () => {
+    const words = conTarget("words", { opacity: 0 }, { opacity: 1 });
+    expect(render(words)).toContain("no sabe partir su texto");
+    // En un bloque que lo declara, el aviso sobra y no se pinta.
+    expect(render(words, { supportsWords: true })).not.toContain("no sabe partir su texto");
+  });
+});
+
+/** El GEMELO NUMÉRICO del scrubber (P13): teclear el % exacto, con el mismo armado que el deslizador. */
+describe("InteractionsControl — el gemelo numérico del scrubber", () => {
+  it("hay un input numérico 0-100 con nombre propio, sincronizado y deshabilitado hasta armar", () => {
+    const html = render(defaultIxSpec());
+    const num = html.match(/<input type="number"[^>]*aria-label="Recorrido a mano \(%\)"[^>]*\/>/);
+    expect(num).not.toBeNull();
+    expect(num![0]).toContain('min="0"');
+    expect(num![0]).toContain('max="100"');
+    // Nace en el mismo 0 que el deslizador…
+    expect(num![0]).toContain('value="0"');
+    // …y deshabilitado hasta que alguien arma: hasta entonces el lienzo lo manda el CSS.
+    expect(num![0]).toContain("disabled");
+  });
+
+  it("sin interacción no aparece, igual que el deslizador", () => {
+    expect(render(undefined)).not.toContain('aria-label="Recorrido a mano (%)"');
   });
 });
 

@@ -62,12 +62,24 @@ export default function IxScrubberControl({ enabled, scrollDriven, onScrub }: Ix
 
   // Si la interacción desaparece (el autor la quita mientras recorre), el modo se cae solo.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- soltar es sincronizar el lienzo (sistema externo) Y bajar el modo; el booleano que se escribe apaga la propia condición, así que no hay cascada
     if (!enabled && armed) release();
   }, [enabled, armed, release]);
 
   const arm = () => {
     setArmed(true);
     onScrub(pct);
+  };
+
+  // El ÚNICO camino de escritura del porcentaje: lo comparten el deslizador y su gemelo numérico,
+  // para que los dos muevan el lienzo exactamente igual. El clamp solo trabaja para el numérico
+  // (un `type=number` acepta teclear fuera de rango; el deslizador ya vive en 0..100), y un valor
+  // no numérico (el campo vaciado a medio teclear) se ignora sin mover nada.
+  const move = (next: number): void => {
+    if (!Number.isFinite(next)) return;
+    const v = Math.min(100, Math.max(0, Math.round(next)));
+    setPct(v);
+    if (armed) onScrub(v);
   };
 
   return (
@@ -90,24 +102,38 @@ export default function IxScrubberControl({ enabled, scrollDriven, onScrub }: Ix
           {armed ? "Soltar" : "Recorrer"}
         </button>
       </div>
-      <input
-        id={id}
-        type="range"
-        min={0}
-        max={100}
-        step={1}
-        value={pct}
-        disabled={!enabled || !armed}
-        // El deslizador nativo ya anuncia su valor; `aria-valuetext` solo le pone la unidad, para
-        // que se lea "37 por ciento" y no un 37 suelto que no dice de qué.
-        aria-valuetext={`${pct} %`}
-        className="w-full accent-[var(--ed-primary)]"
-        onChange={(e) => {
-          const next = Number(e.target.value);
-          setPct(next);
-          if (armed) onScrub(next);
-        }}
-      />
+      <div className="flex items-center gap-2">
+        <input
+          id={id}
+          type="range"
+          min={0}
+          max={100}
+          step={1}
+          value={pct}
+          disabled={!enabled || !armed}
+          // El deslizador nativo ya anuncia su valor; `aria-valuetext` solo le pone la unidad, para
+          // que se lea "37 por ciento" y no un 37 suelto que no dice de qué.
+          aria-valuetext={`${pct} %`}
+          className="w-full accent-[var(--ed-primary)]"
+          onChange={(e) => move(Number(e.target.value))}
+        />
+        {/* El gemelo NUMÉRICO del deslizador (P13): teclear "37" y llegar exacto, sin flechas ni
+            arrastre. Mismo camino de escritura (`move`), mismo armado. La etiqueta visible del
+            grupo apunta al deslizador, así que este lleva su propio nombre por `aria-label` (un
+            `for` no puede señalar a dos controles). */}
+        <input
+          type="number"
+          min={0}
+          max={100}
+          step={1}
+          value={pct}
+          disabled={!enabled || !armed}
+          aria-label="Recorrido a mano (%)"
+          className="w-14 shrink-0 rounded border border-[var(--ed-outline-variant)] bg-[var(--ed-surface-container-high)] px-1.5 py-0.5 text-right text-[11px] text-[var(--ed-on-surface)] disabled:opacity-40"
+          // Vaciar el campo a medio teclear NO es pedir el 0 (`Number("")` lo es): se ignora.
+          onChange={(e) => e.target.value !== "" && move(Number(e.target.value))}
+        />
+      </div>
       {/* El cambio de MODO sí necesita anunciarse: el botón cambia de nombre, pero lo que cambia de
           verdad es quién manda sobre el lienzo. */}
       <p role="status" className="text-[10px] text-[var(--ed-outline)] mt-1">

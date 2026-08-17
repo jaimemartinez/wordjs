@@ -19,6 +19,7 @@ import {
   normalizeIxSpec,
   parseSiteIxPresets,
   IX_MAX_STEPS,
+  IX_POINTER_SMOOTH_MAX,
   SYS_IX_PRESETS,
   type IxCompileCtx,
 } from "@/lib/verso/interactions";
@@ -42,6 +43,8 @@ import {
   setClipDir,
   setDelay,
   setDuration,
+  setEventName,
+  setEventToggle,
   setIntensity,
   setLoadDelay,
   setOrigin,
@@ -52,6 +55,7 @@ import {
   setPresetChoice,
   setRangeEdge,
   setRepeat,
+  setScrubSmooth,
   setScrubSrc,
   setStagger,
   setStepAt,
@@ -575,6 +579,60 @@ describe("opciones del disparador y de la pista (P1: lo que el modelo sabía y e
     expect(w.preset).toBeUndefined();
     expect(w.tracks![0].repeat).toBe(3);
     expect(w.tracks![0].stagger?.each).toBe(80); // el cuerpo copiado es el del preset
+  });
+});
+
+describe("evento a medida (P11) y suavizado del scrub (P10)", () => {
+  it("setTriggerKind('event') siembra un nombre válido y setEventName lo cambia", () => {
+    const base = setTriggerKind(defaultIxSpec(), "event", CTX)!;
+    expect(base.trigger).toEqual({ on: "event", name: "mi-evento" });
+    const named = setEventName(base, "abrir-menu", CTX)!;
+    expect(named.trigger).toEqual({ on: "event", name: "abrir-menu" });
+    assertWritable(named);
+  });
+
+  it("setEventName con un slug inválido conserva el estado válido anterior", () => {
+    const base = setTriggerKind(defaultIxSpec(), "event", CTX)!;
+    for (const bad of ["", "Mayúsculas", "con espacio", "-empieza-mal", "acentós"]) {
+      expect(setEventName(base, bad, CTX)).toEqual(normalizeIxSpec(base)?.spec);
+    }
+  });
+
+  it("setEventToggle conmuta el flag y quitarlo devuelve el disparador desnudo", () => {
+    const base = setTriggerKind(defaultIxSpec(), "event", CTX)!;
+    const on = setEventToggle(base, true, CTX)!;
+    expect(on.trigger).toEqual({ on: "event", name: "mi-evento", toggle: true });
+    const off = setEventToggle(on, false, CTX)!;
+    expect(off.trigger).toEqual({ on: "event", name: "mi-evento" });
+    assertWritable(on);
+  });
+
+  it("setEventName conserva la conmutación puesta", () => {
+    const base = setEventToggle(setTriggerKind(defaultIxSpec(), "event", CTX)!, true, CTX)!;
+    const renamed = setEventName(base, "abrir", CTX)!;
+    expect(renamed.trigger).toEqual({ on: "event", name: "abrir", toggle: true });
+  });
+
+  it("setScrubSmooth escribe los ms clampados, 0 borra la clave y conserva src y rango", () => {
+    const base = setTriggerKind(defaultIxSpec(), "scrub", CTX)!;
+    const paged = setScrubSrc(setRangeEdge(base, "from", { pct: 20 }, CTX)!, "page", CTX)!;
+    const smooth = setScrubSmooth(paged, 250, CTX)!;
+    expect(smooth.trigger).toMatchObject({ on: "scrub", smooth: 250, src: "page" });
+    expect((smooth.trigger as { range?: unknown }).range).toMatchObject({ from: { pct: 20 } });
+    const back = setScrubSmooth(smooth, 0, CTX)!;
+    expect("smooth" in (back.trigger as object)).toBe(false);
+    // Fuera de rango: clampa el normalizador, al mismo tope que el puntero.
+    expect((setScrubSmooth(base, 99999, CTX)!.trigger as { smooth?: number }).smooth).toBe(
+      IX_POINTER_SMOOTH_MAX,
+    );
+    assertWritable(smooth);
+  });
+
+  it("setEventName / setEventToggle / setScrubSmooth sobre OTRO disparador no tocan nada", () => {
+    const spec = defaultIxSpec();
+    expect(setEventName(spec, "abrir", CTX)).toEqual(normalizeIxSpec(spec)?.spec);
+    expect(setEventToggle(spec, true, CTX)).toEqual(normalizeIxSpec(spec)?.spec);
+    expect(setScrubSmooth(spec, 100, CTX)).toEqual(normalizeIxSpec(spec)?.spec);
   });
 });
 
