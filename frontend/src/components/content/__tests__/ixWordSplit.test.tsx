@@ -191,9 +191,9 @@ describe("el split emite lo que el compilador espera encontrar", () => {
     const html = renderToStaticMarkup(<HeadingBlock title="Hola mundo cruel" ix={WORDS_IX} />);
     expect(html).toBe(
       '<h2 class="wjs-block-heading wp-block-heading heading-h2" aria-label="Hola mundo cruel">' +
-        '<span class="wjs-ixw" style="--wjs-ixv-i:0" aria-hidden="true">Hola</span> ' +
-        '<span class="wjs-ixw" style="--wjs-ixv-i:1" aria-hidden="true">mundo</span> ' +
-        '<span class="wjs-ixw" style="--wjs-ixv-i:2" aria-hidden="true">cruel</span>' +
+        '<span class="wjs-ixw" style="--wjs-ixv-i:0;--wjs-ixv-n:3" aria-hidden="true">Hola</span> ' +
+        '<span class="wjs-ixw" style="--wjs-ixv-i:1;--wjs-ixv-n:3" aria-hidden="true">mundo</span> ' +
+        '<span class="wjs-ixw" style="--wjs-ixv-i:2;--wjs-ixv-n:3" aria-hidden="true">cruel</span>' +
         "</h2>",
     );
   });
@@ -218,8 +218,8 @@ describe("el split emite lo que el compilador espera encontrar", () => {
     expect(html).toBe(
       '<figure class="wjs-block-quote wp-block-quote wjs-block-quote--bar wp-block-quote--bar">' +
         '<blockquote class="wjs-block-quote__body wp-block-quote__body" aria-label="Uno dos">' +
-        '<span class="wjs-ixw" style="--wjs-ixv-i:0" aria-hidden="true">Uno</span> ' +
-        '<span class="wjs-ixw" style="--wjs-ixv-i:1" aria-hidden="true">dos</span>' +
+        '<span class="wjs-ixw" style="--wjs-ixv-i:0;--wjs-ixv-n:2" aria-hidden="true">Uno</span> ' +
+        '<span class="wjs-ixw" style="--wjs-ixv-i:1;--wjs-ixv-n:2" aria-hidden="true">dos</span>' +
         "</blockquote>" +
         '<footer class="wjs-block-quote__cite wp-block-quote__cite">— Alguien</footer>' +
         "</figure>",
@@ -261,7 +261,7 @@ describe("fail-open: cuando no se puede partir, el bloque se ve igual que siempr
 
   it("una cita con `<` SÍ se parte: ahí el texto es un hijo de React, no HTML", () => {
     const html = renderToStaticMarkup(<QuoteBlock text={"a < b"} ix={WORDS_IX} />);
-    expect(html).toContain('<span class="wjs-ixw" style="--wjs-ixv-i:1" aria-hidden="true">&lt;</span>');
+    expect(html).toContain('<span class="wjs-ixw" style="--wjs-ixv-i:1;--wjs-ixv-n:3" aria-hidden="true">&lt;</span>');
     expect(html).toContain('aria-label="a &lt; b"');
   });
 

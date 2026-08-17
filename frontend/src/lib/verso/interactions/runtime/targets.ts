@@ -17,6 +17,8 @@ const toArray = <T>(list: ArrayLike<T>): T[] => Array.prototype.slice.call(list)
 
 /** La clase del span de palabra. Literal a propósito: este módulo no importa el compilador. */
 const WORD_SELECTOR = ".wjs-ixw";
+/** El trazo SVG (P12), mismo criterio de literal. */
+const SVG_SELECTOR = ".wjs-ixd";
 
 export function resolveIxTargets(
   root: IxElementLike,
@@ -30,6 +32,8 @@ export function resolveIxTargets(
       return toArray(root.children);
     case "words":
       return toArray(root.querySelectorAll(WORD_SELECTOR));
+    case "svg":
+      return toArray(root.querySelectorAll(SVG_SELECTOR));
     case "block":
       // El id está validado contra /^[A-Za-z0-9_-]{1,64}$/ en el normalizador: no puede romper el
       // selector ni traer nada que no sea alfanumérico.

@@ -97,6 +97,7 @@ export {
   IX_DEFAULT_RANGES,
   IX_DEFAULT_TRIGGER,
   IX_KEYFRAME_PREFIX,
+  IX_WORD_COUNT_VAR,
   IX_WORD_INDEX_VAR,
 } from "./compile";
 export type { IxCompileCtx, IxResolved } from "./compile";

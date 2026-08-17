@@ -18,7 +18,12 @@
  * accesibilidad ve UN nodo con el texto completo y cero nodos de texto sueltos.
  */
 import React from "react";
-import { IX_WORD_CLASS, IX_WORD_INDEX_VAR, type IxWordSplit } from "@/lib/verso/interactions";
+import {
+  IX_WORD_CLASS,
+  IX_WORD_COUNT_VAR,
+  IX_WORD_INDEX_VAR,
+  type IxWordSplit,
+} from "@/lib/verso/interactions";
 
 /**
  * Las palabras como spans, separadas por un espacio de texto normal.
@@ -38,7 +43,10 @@ export function ixWordSpans(split: IxWordSplit): React.ReactNode {
       {i > 0 ? " " : null}
       <span
         className={IX_WORD_CLASS}
-        style={{ [IX_WORD_INDEX_VAR]: i } as React.CSSProperties}
+        // El RECUENTO viaja junto al índice (P13): con los dos, el `calc()` del compilador puede
+        // escalonar también desde el final o el centro con exactitud. En cada span y no en el
+        // contenedor: el span es autocontenido y el contrato del bloque no crece.
+        style={{ [IX_WORD_INDEX_VAR]: i, [IX_WORD_COUNT_VAR]: split.words.length } as React.CSSProperties}
         aria-hidden="true"
       >
         {word}

@@ -77,7 +77,7 @@ export const IX_STAGGER_FROM_LABELS: Readonly<Record<IxStaggerFrom, string>> = O
 
 export type IxPanelTriggerKind = IxTrigger["on"];
 /** El panel no ofrece `block` (objetivo externo): sin `timeline-scope` sería siempre runtime. */
-export type IxPanelTargetKind = "self" | "children" | "words";
+export type IxPanelTargetKind = "self" | "children" | "words" | "svg";
 
 /** Sentinel del selector de preajuste: cuerpo propio, sin preset detrás. */
 export const IX_PANEL_CUSTOM = "@custom";
@@ -104,6 +104,8 @@ export const IX_TARGET_LABELS: Readonly<Record<IxPanelTargetKind, string>> = Obj
   self: "Este bloque",
   children: "Sus hijos",
   words: "Las palabras",
+  // P12 — solo hace algo en bloques cuyo SVG cumpla el contrato .wjs-ixd + pathLength=1.
+  svg: "El trazo SVG",
 });
 
 export const IX_EASE_LABELS: Readonly<Record<IxEase, string>> = Object.freeze({
@@ -153,6 +155,7 @@ export const IX_PROP_LABELS: Readonly<Record<IxPropKey, string>> = Object.freeze
   textColor: "Color del texto",
   bgColor: "Color de fondo",
   borderColor: "Color del borde",
+  draw: "Trazado SVG",
 });
 
 export const IX_PROP_UNITS: Readonly<Record<IxPropKey, string>> = Object.freeze({
@@ -178,6 +181,7 @@ export const IX_PROP_UNITS: Readonly<Record<IxPropKey, string>> = Object.freeze(
   textColor: "",
   bgColor: "",
   borderColor: "",
+  draw: "%",
 });
 
 /**
@@ -222,6 +226,7 @@ export const IX_PROP_INPUT: Readonly<Record<IxPropKey, { min: number; max: numbe
     textColor: { min: 0, max: 0xffffff, step: 1 },
     bgColor: { min: 0, max: 0xffffff, step: 1 },
     borderColor: { min: 0, max: 0xffffff, step: 1 },
+    draw: { min: 0, max: 100, step: 1 },
   });
 
 /* ------------------------------------------------------------------ */

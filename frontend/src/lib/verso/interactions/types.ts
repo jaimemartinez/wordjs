@@ -220,6 +220,9 @@ export type IxProps = Partial<{
   bgColor: number;
   /** 0..0xFFFFFF → border-color. Ídem. */
   borderColor: number;
+  /* ── P12: trazo SVG (pintado; exige el contrato del bloque: paths .wjs-ixd con pathLength=1) ── */
+  /** 0..100 % TRAZADO → stroke-dashoffset. 100 = dibujado entero (neutro). */
+  draw: number;
 }>;
 
 export type IxPropKey = keyof IxProps;
@@ -234,6 +237,8 @@ export type IxTarget =
   | { kind: "children" }
   /** Solo bloques que declaren soporte de split por palabras (F9-D). */
   | { kind: "words" }
+  /** Los trazos SVG del bloque (P12): paths con clase .wjs-ixd y pathLength=1 — contrato del bloque. */
+  | { kind: "svg" }
   /** Otro bloque, por `props.id`. Siempre `needsRuntime: "always"` en F9-A/B. */
   | { kind: "block"; id: string };
 
@@ -283,6 +288,8 @@ export type IxKeyframe = {
   transform?: string;
   filter?: string;
   clipPath?: string;
+  /** P12 — trazo SVG (0..1 con pathLength=1). */
+  strokeDashoffset?: string;
   /** P3 — colores (pintado). Solo presentes en los pasos que los declaran: sin relleno neutro. */
   color?: string;
   backgroundColor?: string;

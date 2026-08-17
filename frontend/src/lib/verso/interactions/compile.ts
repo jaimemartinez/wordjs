@@ -220,7 +220,7 @@ function unionProps(steps: IxStep[]): IxPropKey[] {
  */
 const IX_AMT_PROPS: ReadonlySet<IxPropKey> = new Set<IxPropKey>([
   "x", "y", "z", "scale", "scaleX", "scaleY", "rotate", "rotateX", "rotateY",
-  "skewX", "skewY", "blur", "clip",
+  "skewX", "skewY", "blur", "clip", "draw",
 ]);
 
 const valOf = (set: IxProps, k: IxPropKey): number => set[k] ?? IX_PROP_NEUTRAL[k];
@@ -321,6 +321,9 @@ function declsOf(set: IxProps, union: IxPropKey[], ctx: TrackCssCtx): string[] {
   const fl = filterOf(set, union, ctx);
   if (fl) out.push(`filter:${fl}`);
   if (union.includes("clip")) out.push(`clip-path:${clipCss(scaledVal(set, "clip", ctx.amt), ctx.clipDir)}`);
+  if (union.includes("draw")) {
+    out.push(`stroke-dashoffset:${n((100 - scaledVal(set, "draw", ctx.amt)) / 100)}`);
+  }
   if (set.textColor !== undefined) out.push(`color:${hexColor(set.textColor)}`);
   if (set.bgColor !== undefined) out.push(`background-color:${hexColor(set.bgColor)}`);
   if (set.borderColor !== undefined) out.push(`border-color:${hexColor(set.borderColor)}`);
@@ -341,6 +344,7 @@ function transitionProps(union: IxPropKey[]): string[] {
   if (union.some((k) => TRANSFORM_KEYS.includes(k))) out.push("transform");
   if (union.some((k) => FILTER_KEYS.includes(k))) out.push("filter");
   if (union.includes("clip")) out.push("clip-path");
+  if (union.includes("draw")) out.push("stroke-dashoffset");
   if (union.includes("textColor")) out.push("color");
   if (union.includes("bgColor")) out.push("background-color");
   if (union.includes("borderColor")) out.push("border-color");
@@ -358,6 +362,9 @@ function keyframeOf(step: IxStep, union: IxPropKey[], ctx: TrackCssCtx): IxKeyfr
   const fl = filterOf(step.set, union, ctx);
   if (fl) kf.filter = fl;
   if (union.includes("clip")) kf.clipPath = clipCss(scaledVal(step.set, "clip", ctx.amt), ctx.clipDir);
+  if (union.includes("draw")) {
+    kf.strokeDashoffset = n((100 - scaledVal(step.set, "draw", ctx.amt)) / 100);
+  }
   if (step.set.textColor !== undefined) kf.color = hexColor(step.set.textColor);
   if (step.set.bgColor !== undefined) kf.backgroundColor = hexColor(step.set.bgColor);
   if (step.set.borderColor !== undefined) kf.borderColor = hexColor(step.set.borderColor);
@@ -381,6 +388,9 @@ function targetSuffix(target: IxTarget): string | null {
       return ">*";
     case "words":
       return " .wjs-ixw";
+    case "svg":
+      // P12 — los trazos del bloque: paths que cumplen el contrato .wjs-ixd + pathLength=1.
+      return " .wjs-ixd";
     case "block":
       return null;
   }
@@ -518,6 +528,8 @@ const pageRangeCss = (r: IxRange): string | null =>
 
 export const IX_CLASS_PREFIX = "wjs-ix-";
 export const IX_KEYFRAME_PREFIX = "wjs-ixk-";
+/** Recuento de palabras del split (P13); lo estampa el renderer junto al índice. */
+export const IX_WORD_COUNT_VAR = "--wjs-ixv-n";
 
 /** `transform-origin` de cada nombre de la lista cerrada (P3). El emisor pone el texto, nadie más. */
 const ORIGIN_CSS: Readonly<Record<IxOrigin, string>> = Object.freeze({
@@ -814,7 +826,19 @@ export function emitUnit(body: IxBody, hash: string): IxUnit {
  */
 function wordsDelay(track: IxTrack, delay: number): string {
   if (track.target.kind === "words" && track.stagger && track.stagger.each > 0) {
-    return `calc(var(${IX_WORD_INDEX_VAR}, 0) * ${n(track.stagger.each)}ms + ${n(delay)}ms)`;
+    const each = n(track.stagger.each);
+    const d = n(delay);
+    const i = `var(${IX_WORD_INDEX_VAR}, 0)`;
+    const cnt = `var(${IX_WORD_COUNT_VAR}, 1)`;
+    // P13 — con índice Y recuento en cada span, los tres órdenes son exactos también en palabras.
+    switch (track.stagger.from ?? "start") {
+      case "end":
+        return `calc((${cnt} - 1 - ${i}) * ${each}ms + ${d}ms)`;
+      case "center":
+        return `calc(abs(${i} - (${cnt} - 1) / 2) * ${each}ms + ${d}ms)`;
+      case "start":
+        return `calc(${i} * ${each}ms + ${d}ms)`;
+    }
   }
   return `${n(delay)}ms`;
 }

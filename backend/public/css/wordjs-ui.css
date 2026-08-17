@@ -2755,7 +2755,8 @@ h6.wjs-block-heading, h6.wp-block-heading { font-size: var(--wjs-heading-size, v
 @media (prefers-reduced-motion: reduce) {
   [class*="wjs-ix-"],
   [class*="wjs-ix-"] > *,
-  .wjs-ixw {
+  .wjs-ixw,
+  .wjs-ixd {
     animation: none !important;
     transition: none !important;
   }
@@ -2775,6 +2776,17 @@ h6.wjs-block-heading, h6.wp-block-heading { font-size: var(--wjs-heading-size, v
    actually needs. */
 .wjs-ixw {
   display: inline-block;
+}
+
+/* The SVG stroke of the draw target (`target: { kind: "svg" }`, engine capability P12).
+   THE BLOCK'S CONTRACT: a block that declares its own SVG paths drawable stamps each one with
+   class="wjs-ixd" AND pathLength="1". With the length normalized to 1, `stroke-dasharray: 1` here
+   plus the compiler-emitted `stroke-dashoffset` (0..1) draw the stroke without measuring anything
+   — no getTotalLength(), no per-path JS, and paint-only (zero layout). The custom-HTML sanitizer
+   deliberately does NOT allow <svg> (mXSS surface): this ships for first-party/plugin blocks that
+   render their own SVG, not for author-pasted markup. */
+.wjs-ixd {
+  stroke-dasharray: 1;
 }
 
 /* ── Particle field ─────────────────────────────────────────────────────────────────────────────

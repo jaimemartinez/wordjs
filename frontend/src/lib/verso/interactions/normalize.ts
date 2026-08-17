@@ -253,6 +253,8 @@ export const IX_PROP_KEYS: readonly IxPropKey[] = Object.freeze([
   "textColor",
   "bgColor",
   "borderColor",
+  // P12 — trazo SVG (geometría del dash, no caja):
+  "draw",
 ]);
 
 /**
@@ -280,6 +282,7 @@ const IX_PROP_RANGE: Readonly<Record<IxPropKey, readonly [number, number]>> = Ob
   saturate: [0, 10],
   grayscale: [0, 100],
   hue: [-360, 360],
+  draw: [0, 100],
   textColor: [0, 0xffffff],
   bgColor: [0, 0xffffff],
   borderColor: [0, 0xffffff],
@@ -306,6 +309,7 @@ export const IX_PROP_NEUTRAL: Readonly<Record<IxPropKey, number>> = Object.freez
   saturate: 1,
   grayscale: 0,
   hue: 0,
+  draw: 100,
   // Los colores NO tienen neutro real (el "neutro" es el color propio del bloque, que el
   // compilador no conoce): estos valores existen para completar la tabla, pero el emisor NUNCA
   // los usa — los colores quedan fuera del relleno de la unión (IX_PROPS_NO_FILL).
@@ -456,7 +460,7 @@ function normSteps(raw: unknown, warn: (w: string) => void): IxStep[] | undefine
 function normTarget(raw: unknown): IxTarget | undefined {
   if (!isObj(raw)) return undefined;
   const kind = raw.kind;
-  if (kind === "self" || kind === "children" || kind === "words") return { kind };
+  if (kind === "self" || kind === "children" || kind === "words" || kind === "svg") return { kind };
   if (kind === "block") {
     const id = raw.id;
     if (typeof id === "string" && BLOCK_ID_RE.test(id)) return { kind: "block", id };

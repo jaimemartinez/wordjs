@@ -326,6 +326,21 @@ describe("escalonado", () => {
     );
   });
 
+  it("P13: `from` en palabras es EXACTO con índice + recuento (final y centro)", () => {
+    const end = compileIx(mk({ on: "load" }, {
+      target: { kind: "words" }, stagger: { each: 40, from: "end" },
+    }))!;
+    expect(end.rules[0]).toContain(
+      "animation-delay:calc((var(--wjs-ixv-n, 1) - 1 - var(--wjs-ixv-i, 0)) * 40ms + 0ms)",
+    );
+    const center = compileIx(mk({ on: "load" }, {
+      target: { kind: "words" }, stagger: { each: 40, from: "center" },
+    }))!;
+    expect(center.rules[0]).toContain(
+      "animation-delay:calc(abs(var(--wjs-ixv-i, 0) - (var(--wjs-ixv-n, 1) - 1) / 2) * 40ms + 0ms)",
+    );
+  });
+
   it("con hover de 2 pasos el escalonado va sobre transition-delay, no animation-delay", () => {
     const u = compileIx(mk({ on: "hover" }, {
       target: { kind: "children" }, stagger: { each: 30 },
@@ -576,6 +591,32 @@ describe("puntero (P6): sin CSS, con IR completo, y honestidad sobre lo que no a
   it("dur/delay/repeat/alt/escalonado no significan nada con el puntero: se AVISA", () => {
     const u = compileIx(mk({ on: "pointer" }, { dur: 900, repeat: 3, stagger: { each: 50 }, target: { kind: "children" } }))!;
     expect(u.warnings.join(" ")).toContain("POSICIONA");
+  });
+});
+
+describe("trazo SVG (P12): draw → stroke-dashoffset bajo el contrato .wjs-ixd + pathLength=1", () => {
+  const drawTrack = { target: { kind: "svg" as const }, steps: [
+    { at: 0, set: { draw: 0 } }, { at: 100, set: { draw: 100 } },
+  ] as unknown as IxStep[] };
+
+  it("emite contra los descendientes .wjs-ixd, en 0..1 (pathLength=1), sin medir nada", () => {
+    const u = compileIx(mk({ on: "view", once: false }, drawTrack))!;
+    expect(u.rules[0]).toContain(` .wjs-ixd{`);
+    expect(u.keyframes[0]).toContain("stroke-dashoffset:1");
+    expect(u.keyframes[0]).toContain("stroke-dashoffset:0");
+    expect(u.needsRuntime).toBe("no-native"); // el trazo con scroll sigue el camino nativo
+  });
+
+  it("la intensidad escala el trazado (es distancia recorrida) y el IR WAAPI lo lleva igual", () => {
+    const u = compileIx({ v: 1, trigger: { on: "load" }, amt: 0.5, tracks: [drawTrack] })!;
+    // draw 0 con amt 0.5 → 100+(0−100)×0.5 = 50 trazado → offset 0.5.
+    expect(u.keyframes[0]).toContain("stroke-dashoffset:0.5");
+    expect(Object.values(u.kf)[0][0].strokeDashoffset).toBe("0.5");
+  });
+
+  it("el runtime resuelve el objetivo svg por la clase del contrato", () => {
+    const u = compileIx(mk({ on: "load" }, drawTrack))!;
+    expect(toRuntimeUnit(u).tracks[0].target).toEqual({ kind: "svg" });
   });
 });
 

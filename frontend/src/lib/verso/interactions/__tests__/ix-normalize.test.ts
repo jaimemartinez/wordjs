@@ -109,6 +109,7 @@ describe("propiedades: la lista es CERRADA", () => {
       "z", "scaleX", "scaleY", "rotateY", "skewX", "skewY",
       "brightness", "contrast", "saturate", "grayscale", "hue",
       "textColor", "bgColor", "borderColor",
+      "draw",
     ]);
   });
 });
@@ -377,6 +378,8 @@ describe("fuzz: jamás se emite CSS que escape de su regla", () => {
       "opacity", "transform", "filter", "clip-path",
       // P3: pintado permitido por contrato (pintan, no recolocan) + el origin de lista cerrada.
       "color", "background-color", "border-color", "transform-origin",
+      // P12: el trazo SVG es geometría del dash, no caja — cero reflow del layout HTML.
+      "stroke-dashoffset",
       // Las de control de la propia animación (no pintan nada, no causan reflow).
       "animation", "animation-delay", "animation-timeline", "animation-range",
       "transition", "transition-delay",
