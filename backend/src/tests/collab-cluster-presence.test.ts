@@ -191,8 +191,8 @@ before(async () => {
 });
 
 after(async () => {
-    try { server && server.close(); } catch { /* ya cerrado */ }
-    try { fs.existsSync(TMP_DB) && fs.unlinkSync(TMP_DB); } catch { /* best effort */ }
+    try { if (server) server.close(); } catch { /* ya cerrado */ }
+    try { if (fs.existsSync(TMP_DB)) fs.unlinkSync(TMP_DB); } catch { /* best effort */ }
 });
 
 describe('presencia: el welcome nombra a los editores de OTROS nodos', () => {
