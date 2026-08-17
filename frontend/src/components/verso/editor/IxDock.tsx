@@ -42,9 +42,12 @@ import {
     setDelay,
     setDuration,
     setStepAt,
+    usedProps,
     IX_PANEL_CUSTOM,
     IX_PANEL_NONE,
+    IX_PROP_LABELS,
 } from "./ixPanelModel";
+import type { IxPropKey } from "@/lib/verso/interactions";
 import { dockFieldEntries } from "./panelTabs";
 
 const selectState = (s: VersoEditorState) => s;
@@ -157,6 +160,19 @@ function DockMotion({
         () => ixPresetOptions(ixCtx).filter((o) => o.value !== IX_PANEL_NONE && o.value !== IX_PANEL_CUSTOM),
         [ixCtx],
     );
+    // Rótulo de cada CLIP: sus propiedades (máx. 2), pintadas dentro de la barra como en el diseño.
+    const clipLabels = useMemo(
+        () =>
+            st.tracks.map((t) => {
+                const props = new Set<IxPropKey>();
+                for (const s of t.steps) for (const k of usedProps(s)) props.add(k);
+                return [...props].slice(0, 2).map((k) => IX_PROP_LABELS[k]).join(" · ") || undefined;
+            }),
+        [st.tracks],
+    );
+    // El PLAYHEAD del escenario: la posición del recorrido manual, para la línea vertical del
+    // timeline. `null` = nadie recorre (el scrubber suelta con null).
+    const [playhead, setPlayhead] = useState<number | null>(null);
 
     const onFieldChange = (key: string, value: unknown) => {
         handle.transact((tx) => tx.setProps(node.id, { [key]: value }), {
@@ -196,9 +212,10 @@ function DockMotion({
             {/* ESCENARIO — transporte arriba, línea de tiempo protagonista debajo. */}
             <div className="min-w-0 flex flex-col">
                 <div className="h-10 shrink-0 px-3 flex items-center gap-2 border-b border-[var(--ed-outline-variant)]">
+                    {/* «Probar» PRIMARIO (diseño Stitch): el play del transporte, índigo sólido. */}
                     <button
                         type="button"
-                        className={TBTN}
+                        className="inline-flex items-center gap-1 rounded bg-[var(--ed-primary)] px-2.5 py-0.5 text-[10px] font-semibold text-white hover:bg-[var(--ed-primary-container)] disabled:opacity-40 disabled:pointer-events-none transition-colors"
                         disabled={!st.active}
                         title={trStr("Reproducir la interacción de este bloque en el lienzo", language)}
                         aria-label="Probar la interacción de este bloque"
@@ -225,7 +242,12 @@ function DockMotion({
                                 st.trigger.on === "scrub" ||
                                 (st.trigger.on === "view" && st.trigger.once === false)
                             }
-                            onScrub={requestIxScrub}
+                            // El escenario INTERCEPTA la posición para pintar el playhead sobre los
+                            // carriles, y la reenvía al lienzo por el camino de siempre.
+                            onScrub={(pct) => {
+                                setPlayhead(pct);
+                                requestIxScrub(pct);
+                            }}
                         />
                     </div>
                 </div>
@@ -256,13 +278,17 @@ function DockMotion({
                     ))}
                 </div>
 
-                <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar px-4 py-3 text-[var(--ed-on-surface-variant)]">
+                {/* Tinta ÍNDIGO del timeline (diseño Stitch): clips lavanda, acentos primarios —
+                    el componente sigue siendo agnóstico (currentColor); el tono lo pone el dock. */}
+                <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar px-4 py-3 text-[var(--ed-primary-container)]">
                     {st.active && st.tracks.length > 0 ? (
                         <IxTimeline
                             tracks={st.tracks}
                             active={active}
                             timed={isTimed(st.trigger.on)}
                             readOnly={linked}
+                            labels={clipLabels}
+                            playhead={playhead}
                             onStepAt={(t, i, at) => onFieldChange("ix", setStepAt(ix, i, at, ixCtx, t))}
                             onDelay={(t, ms) => onFieldChange("ix", setDelay(ix, ms, ixCtx, t))}
                             onDur={(t, ms) => onFieldChange("ix", setDuration(ix, ms, ixCtx, t))}

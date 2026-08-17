@@ -99,6 +99,13 @@ export interface IxTimelineProps {
    * callback la línea de tiempo no es zona de suelta.
    */
   onDropPreset?: (delayMs: number, presetId: string) => void;
+  /** Rótulo del CLIP de cada pista (p.ej. sus propiedades), pintado dentro de su barra. */
+  labels?: readonly (string | undefined)[];
+  /**
+   * PLAYHEAD (diseño Stitch «Motion Dock»): posición 0–100 del recorrido manual, pintada como la
+   * línea vertical que cruza todos los carriles. `null`/ausente = sin línea (nadie recorre).
+   */
+  playhead?: number | null;
 }
 
 export default function IxTimeline({
@@ -113,6 +120,8 @@ export default function IxTimeline({
   onSelectTrack,
   onFocusStep,
   onDropPreset,
+  labels,
+  playhead,
 }: IxTimelineProps) {
   // El raíl del carril ACTIVO (solo hay uno): la regla que traduce clientX → posición.
   const railRef = useRef<HTMLDivElement | null>(null);
@@ -260,9 +269,13 @@ export default function IxTimeline({
           <span className="absolute inset-x-0 top-1/2 block h-px -translate-y-1/2 bg-current/25" />
           {timed && (
             <span
-              className="absolute top-1/2 block h-1.5 -translate-y-1/2 rounded-full bg-current/30"
+              className="absolute top-1/2 flex h-4 -translate-y-1/2 items-center overflow-hidden rounded border border-current/40 bg-current/15"
               style={{ left: `${(delay / totalMs) * 100}%`, width: `${(dur / totalMs) * 100}%` }}
-            />
+            >
+              {labels?.[ti] && (
+                <span className="truncate px-1.5 text-[9px] font-medium">{labels[ti]}</span>
+              )}
+            </span>
           )}
           {t.steps.map((s, si) => (
             <span
@@ -282,7 +295,11 @@ export default function IxTimeline({
     const dur = t.dur ?? DUR_FALLBACK;
     const last = t.steps.length - 1;
     return (
-      <div key={ti} className="flex w-full items-center gap-2 rounded bg-current/10 px-1 py-0.5">
+      <div
+        key={ti}
+        // Fila ACTIVA (diseño Stitch): tinte + acento izquierdo de 2px, el patrón del árbol de capas.
+        className="flex w-full items-center gap-2 rounded border-l-2 border-current bg-current/10 px-1 py-0.5"
+      >
         <button
           type="button"
           ref={activeLabelRef}
@@ -310,7 +327,7 @@ export default function IxTimeline({
                 width: `${(dur / totalMs) * 100}%`,
                 touchAction: "none",
               }}
-              className={`absolute top-1/2 h-2.5 -translate-y-1/2 cursor-grab rounded-full bg-current/30 hover:bg-current/40 ${RING}`}
+              className={`absolute top-1/2 flex h-4 -translate-y-1/2 cursor-grab items-center overflow-hidden rounded border border-current/50 bg-current/20 hover:bg-current/30 ${RING}`}
               onPointerDown={(e) => {
                 dragDelay.current = { startX: e.clientX, base: delay };
                 e.currentTarget.setPointerCapture(e.pointerId);
@@ -335,7 +352,16 @@ export default function IxTimeline({
                 dragDelay.current = null;
               }}
               onKeyDown={(e) => keyMoveDelay(e, ti, delay)}
-            />
+            >
+              {labels?.[ti] && (
+                <span
+                  aria-hidden="true"
+                  className="pointer-events-none truncate px-1.5 text-[9px] font-medium"
+                >
+                  {labels[ti]}
+                </span>
+              )}
+            </button>
           )}
           {/* El ASA del clip (borde derecho): arrastra la DURACIÓN, como recortar un clip de
               vídeo. Solo con reloj y solo si la superficie la pide (onDur). */}
@@ -345,7 +371,7 @@ export default function IxTimeline({
               aria-label={`Duración de la pista ${ti + 1} — ${dur} ms`}
               title={`Duración de la pista ${ti + 1} — ${dur} ms. Arrastra el borde, o ←/→ (±50 ms).`}
               style={{ left: `${((delay + dur) / totalMs) * 100}%`, touchAction: "none" }}
-              className={`absolute top-1/2 h-3.5 w-1.5 -translate-x-1/2 -translate-y-1/2 cursor-ew-resize rounded-sm bg-current/70 hover:bg-current ${RING}`}
+              className={`absolute top-1/2 h-4 w-1.5 -translate-x-full -translate-y-1/2 cursor-ew-resize rounded-r bg-current/80 hover:bg-current ${RING}`}
               onPointerDown={(e) => {
                 dragDur.current = { startX: e.clientX, base: dur };
                 e.currentTarget.setPointerCapture(e.pointerId);
@@ -479,15 +505,35 @@ export default function IxTimeline({
           : undefined
       }
     >
-      {/* La escala, decorativa: los valores canónicos viven en los campos numéricos del panel. */}
-      <div aria-hidden="true" className="mb-0.5 flex items-center gap-2 px-1 text-[9px] opacity-60">
+      {/* La REGLA (diseño Stitch «Motion Dock»): marcas a cuartos de la escala compartida,
+          decorativa — los valores canónicos viven en los campos numéricos del panel. */}
+      <div aria-hidden="true" className="mb-1 flex items-center gap-2 px-1 text-[8px] opacity-60">
         <span className={LABEL_COL} />
-        <span className="flex flex-1 justify-between">
-          <span>0</span>
-          <span>{timed ? `${totalMs} ms` : "100 %"}</span>
+        <span className="relative block h-3 flex-1 border-b border-current/20">
+          {[0, 25, 50, 75, 100].map((p) => (
+            <span
+              key={p}
+              className="absolute top-0"
+              style={{
+                left: `${p}%`,
+                transform: p === 0 ? "none" : p === 100 ? "translateX(-100%)" : "translateX(-50%)",
+              }}
+            >
+              {timed ? (p === 100 ? `${totalMs} ms` : Math.round((totalMs * p) / 100)) : `${p} %`}
+            </span>
+          ))}
         </span>
       </div>
-      <div className="space-y-1">
+      <div className="relative space-y-1">
+        {/* El PLAYHEAD: la posición del recorrido manual, cruzando todos los carriles. El raíl de
+            cada carril empieza tras la celda de etiqueta (px-1 + 3rem + hueco = 3.75rem). */}
+        {playhead != null && (
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-y-0 z-10 w-px bg-current"
+            style={{ left: `calc(3.75rem + (100% - 4rem) * ${clamp(playhead, 0, 100) / 100})` }}
+          />
+        )}
         {tracks.map((t, ti) => (ti === active && !readOnly ? activeLane(t, ti) : passiveLane(t, ti)))}
       </div>
       {/* Lo que anuncian las teclas: la posición NUEVA de lo movido (patrón de IxCurveEditor). */}

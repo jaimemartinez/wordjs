@@ -8,6 +8,14 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Added
 
+- **Editor: the motion dock wears its Stitch design.** The dock's look now comes from the same
+  Stitch project that designed the whole editor ("Architectural Precision"): a solid-indigo play
+  button in the transport, a millisecond ruler over the lanes, a vertical playhead line that
+  follows the manual scrub, clips drawn as labeled lavender bars (each showing the properties it
+  animates) with an integrated trim grip, and the active lane marked with the design system's
+  left-accent tint. The timeline component stays token-agnostic — the dock provides the indigo
+  ink, the preset admin keeps its gray — and every accessible name and behavior is unchanged.
+
 - **Editor: motion presets become draggable clips.** The dock's stage gains a clip palette: every
   motion preset is a block you drag onto the timeline — it lands as a new track at the exact drop
   position, video-editor style — or apply with a plain click (the same path, no mouse required).
