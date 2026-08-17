@@ -8,6 +8,13 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Added
 
+- **Editor: the motion dock gets a video-editor anatomy.** The dock now splits into an inspector
+  column (the full interactions control) and a stage: a transport bar with the play buttons and
+  the manual scrubber as a playhead, and the multi-lane timeline promoted to protagonist — always
+  visible at canvas width, no disclosure to open. Inspector and stage share the active track and
+  the same pure writers, so dragging a marker on the stage updates the inspector's numeric fields
+  live, and everything stays on the one undo history.
+
 - **Editor: motion gets its own bottom dock.** Interactions and the entrance animation move out of
   the right-hand inspector into a collapsible dock under the canvas — the natural home of a
   horizontal timeline, with the full canvas width instead of a 320-pixel column. Same controls,

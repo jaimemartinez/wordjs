@@ -193,7 +193,7 @@ const OFFERED_TARGETS: IxPanelTargetKind[] = ["self", "children"];
  * reproducción no significan nada, y ofrecerlos sería ofrecer controles que el compilador avisa
  * de que ignora.
  */
-const isTimed = (on: IxPanelTriggerKind): boolean => on !== "scrub" && on !== "pointer";
+export const isTimed = (on: IxPanelTriggerKind): boolean => on !== "scrub" && on !== "pointer";
 
 /** Propiedades gobernadas por `transform-origin`: giros, escalas y sesgos. */
 const ORIGIN_PROPS: readonly IxPropKey[] = [
@@ -234,6 +234,13 @@ export interface InteractionsControlProps {
   onPreview?: (scope: "page" | "block") => void;
   /** Inyectable para tests; por defecto emite el evento del scrubber en el documento. */
   onScrub?: (pct: number | null) => void;
+  /**
+   * ESCENARIO EXTERNO (IxDock): el dock monta la LÍNEA DE TIEMPO y el TRANSPORTE (probar +
+   * scrubber) en su escenario, a lo ancho — así que este control no los renderiza dentro, y la
+   * pista activa pasa a ser CONTROLADA para que escenario e inspector señalen la misma. Sin
+   * `stage`, el control es autónomo: exactamente el de siempre (PresetEditor no cambia).
+   */
+  stage?: { trackSel: number; onTrackSel: (track: number) => void };
 }
 
 export default function InteractionsControl({
@@ -243,6 +250,7 @@ export default function InteractionsControl({
   supportsWords = false,
   onPreview,
   onScrub,
+  stage,
 }: InteractionsControlProps) {
   const titleId = useId();
   const amtId = useId();
@@ -257,7 +265,10 @@ export default function InteractionsControl({
   // Pista ACTIVA (P5): estado LOCAL del panel — elegir pista no es editar y no escribe nada. El
   // `key` por bloque del panel remonta el componente al cambiar la selección (vuelta a la 0); el
   // clamp cubre el otro camino: si el recuento encoge por debajo del índice, se vuelve a la 0.
-  const [trackSel, setTrackSel] = useState(0);
+  // Con escenario externo (dock) la pista activa es CONTROLADA: las dos vistas señalan la misma.
+  const [ownTrackSel, setOwnTrackSel] = useState(0);
+  const trackSel = stage ? stage.trackSel : ownTrackSel;
+  const setTrackSel = stage ? stage.onTrackSel : setOwnTrackSel;
   const active = trackSel < state.tracks.length ? trackSel : 0;
   const track = state.tracks[active];
   // Filas del nivel 3, por índice de paso: la LÍNEA DE TIEMPO las enfoca desde sus marcadores.
@@ -381,26 +392,31 @@ export default function InteractionsControl({
           Interacción
         </h4>
         <span className="flex shrink-0 gap-1">
-          <button
-            type="button"
-            className={BTN}
-            disabled={!state.active}
-            title="Reproducir la interacción de este bloque en el lienzo"
-            aria-label="Probar la interacción de este bloque"
-            onClick={() => (onPreview ? onPreview("block") : requestIxPreview("block"))}
-          >
-            <MSym name="play_arrow" size={12} className="align-[-2px]" /> Probar
-          </button>
-          <button
-            type="button"
-            className={`${BTN} px-1.5`}
-            disabled={!state.active}
-            title="Reproducir todas las interacciones de la página en el lienzo"
-            aria-label="Probar todas las interacciones de la página"
-            onClick={() => (onPreview ? onPreview("page") : requestIxPreview("page"))}
-          >
-            Probar todo
-          </button>
+          {/* Con escenario externo, el TRANSPORTE (probar + scrubber) vive en el dock. */}
+          {!stage && (
+            <>
+              <button
+                type="button"
+                className={BTN}
+                disabled={!state.active}
+                title="Reproducir la interacción de este bloque en el lienzo"
+                aria-label="Probar la interacción de este bloque"
+                onClick={() => (onPreview ? onPreview("block") : requestIxPreview("block"))}
+              >
+                <MSym name="play_arrow" size={12} className="align-[-2px]" /> Probar
+              </button>
+              <button
+                type="button"
+                className={`${BTN} px-1.5`}
+                disabled={!state.active}
+                title="Reproducir todas las interacciones de la página en el lienzo"
+                aria-label="Probar todas las interacciones de la página"
+                onClick={() => (onPreview ? onPreview("page") : requestIxPreview("page"))}
+              >
+                Probar todo
+              </button>
+            </>
+          )}
           <button
             type="button"
             className={BTN}
@@ -432,12 +448,15 @@ export default function InteractionsControl({
           {/* Transporte: «Probar» (arriba) reproduce; esto recorre. Una entrada de 600 ms se ve
               pasar; una interacción ligada al scroll NO se puede ver pasar, porque su estado no
               depende del reloj sino de dónde está el bloque — para ajustar el paso intermedio hay
-              que poder pararse en él. */}
-          <IxScrubberControl
-            enabled={state.active}
-            scrollDriven={trigger.on === "scrub" || (trigger.on === "view" && trigger.once === false)}
-            onScrub={scrub}
-          />
+              que poder pararse en él. Con escenario externo, el scrubber vive en el transporte
+              del dock. */}
+          {!stage && (
+            <IxScrubberControl
+              enabled={state.active}
+              scrollDriven={trigger.on === "scrub" || (trigger.on === "view" && trigger.once === false)}
+              onScrub={scrub}
+            />
+          )}
 
           {/* ── Intensidad (P7) — Nivel 1, como el preajuste: multiplica la DISTANCIA al neutro de
               las propiedades espaciales, así que vale igual con un preajuste enlazado (es del
@@ -1017,19 +1036,22 @@ export default function InteractionsControl({
                   y el retardo se ARRASTRAN (o se mueven con flechas); un clic sin arrastre conserva
                   el gesto de la tira P5 — llevar el foco a la fila del paso. Nunca el único camino:
                   los campos numéricos de abajo son el canónico. El componente es agnóstico de
-                  tokens (`currentColor`): el tono lo pone esta superficie con su clase de texto. */}
-              <div className="mb-2 text-[var(--ed-on-surface-variant)]">
-                <IxTimeline
-                  tracks={state.tracks}
-                  active={active}
-                  timed={isTimed(trigger.on)}
-                  readOnly={linked}
-                  onStepAt={(t, i, at) => onChange(setStepAt(value, i, at, ixCtx, t))}
-                  onDelay={(t, ms) => onChange(setDelay(value, ms, ixCtx, t))}
-                  onSelectTrack={setTrackSel}
-                  onFocusStep={(t, i) => focusStepRow(i)}
-                />
-              </div>
+                  tokens (`currentColor`): el tono lo pone esta superficie con su clase de texto.
+                  Con escenario externo (dock) NO se pinta aquí: vive grande en el escenario. */}
+              {!stage && (
+                <div className="mb-2 text-[var(--ed-on-surface-variant)]">
+                  <IxTimeline
+                    tracks={state.tracks}
+                    active={active}
+                    timed={isTimed(trigger.on)}
+                    readOnly={linked}
+                    onStepAt={(t, i, at) => onChange(setStepAt(value, i, at, ixCtx, t))}
+                    onDelay={(t, ms) => onChange(setDelay(value, ms, ixCtx, t))}
+                    onSelectTrack={setTrackSel}
+                    onFocusStep={(t, i) => focusStepRow(i)}
+                  />
+                </div>
+              )}
               <ol className="space-y-2">
                 {track.steps.map((step, i) => (
                   <StepRow

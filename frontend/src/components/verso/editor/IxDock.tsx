@@ -1,36 +1,48 @@
 "use client";
 /**
- * Verso — DOCK DE MOVIMIENTO: el panel propio, abajo y a lo ancho, de las interacciones y la
- * animación de entrada del bloque seleccionado.
+ * Verso — DOCK DE MOVIMIENTO, con la anatomía de un editor de vídeo:
  *
- * POR QUÉ ABAJO: el movimiento se edita mirando el LIENZO, y su pieza central — la línea de tiempo
- * multipista (P9) — es horizontal por naturaleza. En los 320px del inspector derecho vivía
- * comprimida; aquí tiene el ancho del canvas, como el dock de cualquier herramienta de animación.
- * El inspector deja de renderizar `ix` y `anim` (el reparto de `panelTabs` los entrega aquí vía
- * `DOCK_FIELD_KEYS`): UN solo dueño por prop, nunca dos copias del control peleando por el dato.
+ *   ┌ cabecera (plegable) ───────────────────────────────────────────────┐
+ *   │ INSPECTOR (izq., 22rem, scroll) │ ESCENARIO                        │
+ *   │  · animación de entrada (anim)  │  · TRANSPORTE: probar / probar   │
+ *   │  · InteractionsControl entero   │    todo + scrubber (playhead)    │
+ *   │    (preajuste, disparador,      │  · LÍNEA DE TIEMPO (P9) GRANDE,  │
+ *   │     pasos…) SIN su timeline ni  │    siempre visible, arrastrable, │
+ *   │     su transporte internos      │    a todo el ancho del lienzo    │
+ *   └─────────────────────────────────┴──────────────────────────────────┘
  *
- * QUÉ NO CAMBIA: los controles son LOS MISMOS (`InteractionsControl` entero y el campo `anim` por
- * `VersoFieldControl`), con sus tests, su accesibilidad y sus escritores puros. Este componente es
- * solo la carcasa: cabecera plegable, reparto en columnas, y el mismo camino de escritura
- * (`handle.transact` con `coalesceKey`) que usa el inspector.
+ * La línea de tiempo es la PROTAGONISTA: antes vivía plegada dentro de «Editar pasos» y había que
+ * desplegarla; aquí está siempre a la vista, como en cualquier herramienta de animación. El
+ * inspector y el escenario comparten la PISTA ACTIVA (el control la acepta controlada vía `stage`)
+ * y los MISMOS escritores puros — un solo dueño por prop, un solo camino de escritura
+ * (`handle.transact` con `coalesceKey`), la misma historia de undo.
  *
- * SOLO ESCRITORIO/TABLETA (`hidden md:flex`): en móvil el editor trabaja con hojas (sheets) y el
- * borde inferior ya aloja la barra de navegación — el inspector móvil sigue siendo el camino.
+ * SOLO ESCRITORIO/TABLETA (`hidden md:flex`): en móvil el editor trabaja con hojas y el inspector
+ * móvil sigue siendo el camino.
  */
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import MSym from "@/components/editor/MSym";
 import { useI18n } from "@/contexts/I18nContext";
 import { trStr } from "@/lib/editorI18n";
 import type { EditorHandle } from "@/lib/verso/store";
-import type { BlockRegistry } from "@/lib/verso/registry";
+import type { BlockDefinition, BlockRegistry } from "@/lib/verso/registry";
 import type { VersoEditorState } from "@/lib/verso/types";
+import type { IxCompileCtx } from "@/lib/verso/interactions";
 import { useStoreSlice } from "../render/context";
 import { useSiteIxPresets } from "../canvas/useSiteIxPresets";
-import InteractionsControl from "../fields/InteractionsControl";
+import { requestIxPreview, requestIxScrub } from "../canvas/IxCanvasEngine";
+import InteractionsControl, { isTimed } from "../fields/InteractionsControl";
+import IxScrubberControl from "../fields/IxScrubberControl";
+import IxTimeline from "../fields/IxTimeline";
 import VersoFieldControl from "../fields/VersoFieldControl";
+import { ixPanelState, setDelay, setStepAt } from "./ixPanelModel";
 import { dockFieldEntries } from "./panelTabs";
 
 const selectState = (s: VersoEditorState) => s;
+
+/** Botón del transporte — la piel de los botones compactos del editor. */
+const TBTN =
+    "inline-flex items-center gap-1 rounded border border-[var(--ed-outline-variant)] px-2 py-0.5 text-[10px] font-semibold text-[var(--ed-on-surface-variant)] hover:border-[var(--ed-primary)] hover:text-[var(--ed-primary)] disabled:opacity-40 disabled:pointer-events-none transition-colors";
 
 export interface IxDockProps {
     handle: EditorHandle;
@@ -48,17 +60,6 @@ export default function IxDock({ handle, registry }: IxDockProps) {
 
     // Plegado LOCAL del dock (no por bloque): abierto de nacimiento — es el motivo del panel.
     const [open, setOpen] = useState(true);
-
-    const values: Record<string, unknown> = node ? node.props : {};
-    const dockFields = def ? dockFieldEntries(def.fields) : [];
-
-    const onFieldChange = (key: string, value: unknown) => {
-        if (!node) return;
-        handle.transact((tx) => tx.setProps(node.id, { [key]: value }), {
-            coalesceKey: `props:${node.id}:${key}`,
-            label: `Editar ${key}`,
-        });
-    };
 
     return (
         <section
@@ -90,8 +91,8 @@ export default function IxDock({ handle, registry }: IxDockProps) {
             </header>
 
             {open && (
-                <div className="relative h-[248px] shrink-0">
-                    {!node ? (
+                <div className="relative h-[280px] shrink-0">
+                    {!node || !def ? (
                         <div className="absolute inset-0 flex items-center justify-center text-center p-6 select-none">
                             <p className="text-[12px] text-[var(--ed-on-surface-variant)]">
                                 {trStr("Selecciona un bloque para editar su animación de entrada y sus interacciones.", language)}
@@ -105,36 +106,140 @@ export default function IxDock({ handle, registry }: IxDockProps) {
                             </p>
                         </div>
                     ) : (
-                        <div className="absolute inset-0 overflow-x-auto overflow-y-hidden custom-scrollbar px-3 py-3">
-                            {/* Columnas CSS: los controles (verticales por diseño) fluyen en columnas de
-                                20rem que crecen hacia la DERECHA — el dock se recorre en horizontal,
-                                como el timeline de cualquier herramienta de animación. El orden del DOM
-                                (y del teclado) no cambia: la fragmentación es solo visual. */}
-                            <div className="h-full [column-width:20rem] [column-fill:auto] [column-gap:1.25rem] [&_fieldset]:break-inside-avoid">
-                                {dockFields.map(([key, field]) => (
-                                    <VersoFieldControl
-                                        key={`${node.id}:${key}`}
-                                        field={field}
-                                        name={key}
-                                        label={field.label ? trStr(field.label, language) : undefined}
-                                        value={values[key]}
-                                        onChange={(v) => onFieldChange(key, v)}
-                                    />
-                                ))}
-                                <InteractionsControl
-                                    key={`${node.id}:ix`}
-                                    value={values.ix}
-                                    ixCtx={ixCtx}
-                                    // «Las palabras» solo si el RENDER del bloque emite los spans por
-                                    // palabra: lo declara su definición (`ixText`), no el panel.
-                                    supportsWords={def?.ixText === true}
-                                    onChange={(v) => onFieldChange("ix", v)}
-                                />
-                            </div>
-                        </div>
+                        // key por bloque: la pista activa y el estado del inspector vuelven a la 0
+                        // al cambiar de selección — la misma regla que el panel derecho.
+                        <DockMotion
+                            key={node.id}
+                            node={node}
+                            def={def}
+                            handle={handle}
+                            ixCtx={ixCtx}
+                            language={language}
+                        />
                     )}
                 </div>
             )}
         </section>
+    );
+}
+
+/** El cuerpo con bloque: inspector (izquierda) + escenario (transporte y línea de tiempo). */
+function DockMotion({
+    node,
+    def,
+    handle,
+    ixCtx,
+    language,
+}: {
+    node: { id: string; type: string; props: Record<string, unknown> };
+    def: BlockDefinition;
+    handle: EditorHandle;
+    ixCtx: IxCompileCtx | undefined;
+    language: ReturnType<typeof useI18n>["language"];
+}) {
+    const ix = node.props.ix;
+    // El MISMO modelo puro que el control: el escenario no inventa una segunda verdad.
+    const st = useMemo(() => ixPanelState(ix, ixCtx), [ix, ixCtx]);
+    const linked = st.presetId !== null;
+    const [trackSel, setTrackSel] = useState(0);
+    const active = trackSel < st.tracks.length ? trackSel : 0;
+
+    const onFieldChange = (key: string, value: unknown) => {
+        handle.transact((tx) => tx.setProps(node.id, { [key]: value }), {
+            coalesceKey: `props:${node.id}:${key}`,
+            label: `Editar ${key}`,
+        });
+    };
+
+    return (
+        <div className="absolute inset-0 grid grid-cols-[minmax(20rem,23rem)_1fr]">
+            {/* INSPECTOR — los controles de siempre, sin su timeline ni su transporte internos. */}
+            <div className="overflow-y-auto custom-scrollbar border-r border-[var(--ed-outline-variant)] px-3 py-3">
+                {def ? (
+                    dockFieldEntries(def.fields).map(([key, field]) => (
+                        <VersoFieldControl
+                            key={`${node.id}:${key}`}
+                            field={field}
+                            name={key}
+                            label={field.label ? trStr(field.label, language) : undefined}
+                            value={node.props[key]}
+                            onChange={(v) => onFieldChange(key, v)}
+                        />
+                    ))
+                ) : null}
+                <InteractionsControl
+                    key={`${node.id}:ix`}
+                    value={ix}
+                    ixCtx={ixCtx}
+                    // «Las palabras» solo si el RENDER del bloque emite los spans por palabra:
+                    // lo declara su definición (`ixText`), no el panel.
+                    supportsWords={def?.ixText === true}
+                    onChange={(v) => onFieldChange("ix", v)}
+                    stage={{ trackSel: active, onTrackSel: setTrackSel }}
+                />
+            </div>
+
+            {/* ESCENARIO — transporte arriba, línea de tiempo protagonista debajo. */}
+            <div className="min-w-0 flex flex-col">
+                <div className="h-10 shrink-0 px-3 flex items-center gap-2 border-b border-[var(--ed-outline-variant)]">
+                    <button
+                        type="button"
+                        className={TBTN}
+                        disabled={!st.active}
+                        title={trStr("Reproducir la interacción de este bloque en el lienzo", language)}
+                        aria-label="Probar la interacción de este bloque"
+                        onClick={() => requestIxPreview("block")}
+                    >
+                        <MSym name="play_arrow" size={14} className="align-[-3px]" /> {trStr("Probar", language)}
+                    </button>
+                    <button
+                        type="button"
+                        className={TBTN}
+                        disabled={!st.active}
+                        title={trStr("Reproducir todas las interacciones de la página en el lienzo", language)}
+                        aria-label="Probar todas las interacciones de la página"
+                        onClick={() => requestIxPreview("page")}
+                    >
+                        {trStr("Probar todo", language)}
+                    </button>
+                    {/* El playhead: recorrer la interacción a mano y pararse en un paso. El scrubber
+                        es el componente de siempre (deslizador + gemelo numérico), en fila. */}
+                    <div className="flex-1 min-w-0 [&>div]:mb-0">
+                        <IxScrubberControl
+                            enabled={st.active}
+                            scrollDriven={
+                                st.trigger.on === "scrub" ||
+                                (st.trigger.on === "view" && st.trigger.once === false)
+                            }
+                            onScrub={requestIxScrub}
+                        />
+                    </div>
+                </div>
+
+                <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar px-4 py-3 text-[var(--ed-on-surface-variant)]">
+                    {st.active && st.tracks.length > 0 ? (
+                        <IxTimeline
+                            tracks={st.tracks}
+                            active={active}
+                            timed={isTimed(st.trigger.on)}
+                            readOnly={linked}
+                            onStepAt={(t, i, at) => onFieldChange("ix", setStepAt(ix, i, at, ixCtx, t))}
+                            onDelay={(t, ms) => onFieldChange("ix", setDelay(ix, ms, ixCtx, t))}
+                            onSelectTrack={setTrackSel}
+                            // El gesto «clic quieto → fila del paso» exigiría alcanzar las filas del
+                            // inspector desde aquí; de momento el clic elige la pista, y los campos
+                            // numéricos del inspector siguen siendo el camino canónico.
+                            onFocusStep={(t) => setTrackSel(t)}
+                        />
+                    ) : (
+                        <div className="h-full flex items-center justify-center text-center">
+                            <p className="text-[12px]">
+                                {trStr("Elige un preajuste o añade una interacción en el inspector para ver su línea de tiempo aquí.", language)}
+                            </p>
+                        </div>
+                    )}
+                </div>
+            </div>
+        </div>
     );
 }
