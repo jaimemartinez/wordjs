@@ -324,6 +324,16 @@ const timelineFn = (t: IxTrigger): string =>
 const rangeCss = (r: IxRange): string =>
   `${r.from.at} ${n(r.from.pct)}% ${r.to.at} ${n(r.to.pct)}%`;
 
+/**
+ * Rango para una timeline de SCROLL (`scroll()`). Los nombres `cover`/`entry`/… son vocabulario de
+ * las timelines de VISTA y no están definidos para el scroll del documento: emitirlos aquí dejaría
+ * el comportamiento en manos de cómo cada motor trate un nombre inaplicable. Se emiten solo los
+ * porcentajes — que es lo único que significa algo sobre el recorrido total — y si son 0/100 no se
+ * emite nada, porque ese ES el valor inicial de `animation-range`.
+ */
+const pageRangeCss = (r: IxRange): string | null =>
+  r.from.pct === 0 && r.to.pct === 100 ? null : `${n(r.from.pct)}% ${n(r.to.pct)}%`;
+
 /* ------------------------------------------------------------------ */
 /* Emisión de una unidad                                               */
 /* ------------------------------------------------------------------ */
@@ -357,6 +367,19 @@ export function emitUnit(body: IxBody, hash: string): IxUnit {
     const name = `${IX_KEYFRAME_PREFIX}${hash}${multi ? `-${i}` : ""}`;
     kf[name] = track.steps.map((s) => keyframeOf(s, union));
 
+    // El escalonado desplaza HERMANOS: sobre `self` o sobre otro bloque no hay hermanos que
+    // desplazar. Hoy eso se ignoraba en silencio — se avisa, como todo lo que no se emite.
+    // ANTES del `return` del objetivo externo: también a él le aplica.
+    if (
+      track.stagger &&
+      track.stagger.each > 0 &&
+      (track.target.kind === "self" || track.target.kind === "block")
+    ) {
+      warnings.push(
+        "el escalonado necesita un objetivo con hermanos (`children`) o palabras (`words`): se ignora",
+      );
+    }
+
     const suffix = targetSuffix(track.target);
     if (suffix === null) {
       // Objetivo externo: sin CSS, resuelto por runtime. La unidad entera pasa a "always".
@@ -375,6 +398,12 @@ export function emitUnit(body: IxBody, hash: string): IxUnit {
       const [a, b] = track.steps;
       const props = transitionProps(union);
       const ease = IX_EASINGS[a.ease ?? "out"];
+      // Una transición no puede repetirse ni alternar: si el autor lo pidió, que lo sepa.
+      if (track.repeat !== undefined || track.alt === true) {
+        warnings.push(
+          "una interacción de hover con 2 pasos es una transición: `repeat` y `alt` se ignoran (añade un paso intermedio para animarla)",
+        );
+      }
       rules.push(
         rule(`.${cls}${suffix}`, [
           `transition:${props.map((p) => `${p} ${n(dur)}ms ${ease} ${n(delay)}ms`).join(",")}`,
@@ -397,17 +426,35 @@ export function emitUnit(body: IxBody, hash: string): IxUnit {
     if (isTimeline(trigger)) {
       keyframes.push(keyframesCss(name, track.steps, union));
       const fn = timelineFn(trigger);
+      const isPage = fn === "scroll()";
+      const pageRange = isPage ? pageRangeCss(rangeOf(trigger)) : null;
       const decls = [
         // Duración dummy de 1ms: el progreso lo conduce la timeline, no el reloj. El atajo va
         // PRIMERO porque resetea `animation-timeline`.
         `animation:${name} 1ms linear both`,
         `animation-timeline:${fn}`,
-        `animation-range:${rangeCss(rangeOf(trigger))}`,
+        ...(isPage
+          ? pageRange
+            ? [`animation-range:${pageRange}`]
+            : []
+          : [`animation-range:${rangeCss(rangeOf(trigger))}`]),
       ];
       rules.push(`@supports (animation-timeline:${fn}){${rule(sel, decls)}}`);
       if (track.stagger && track.stagger.each > 0) {
         warnings.push(
           "el escalonado no aplica a un disparador de scroll: el progreso ya lo marca la posición",
+        );
+      }
+      // Un disparador de scroll no tiene reloj: estas opciones no significan nada aquí y fingir
+      // que sí sería mentir en silencio — la misma honestidad que ya se aplica al escalonado.
+      const ignored: string[] = [];
+      if (track.dur !== undefined) ignored.push("`dur`");
+      if (track.delay !== undefined) ignored.push("`delay`");
+      if (track.repeat !== undefined) ignored.push("`repeat`");
+      if (track.alt === true) ignored.push("`alt`");
+      if (ignored.length > 0) {
+        warnings.push(
+          `un disparador de scroll ignora ${ignored.join(", ")}: el progreso lo marca la posición, no el reloj`,
         );
       }
       return;

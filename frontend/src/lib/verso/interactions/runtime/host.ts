@@ -65,6 +65,13 @@ export type IxHost = {
   doc: IxDocumentLike;
   /** Alto del viewport del documento — en el canvas es el del IFRAME, no el de la ventana. */
   viewportHeight(): number;
+  /**
+   * Progreso 0..1 del scroll del DOCUMENTO — lo que `animation-timeline: scroll()` mide de forma
+   * nativa. El driver lo necesita para que `scrub` + `src:"page"` recorra lo MISMO en Firefox que
+   * en Chrome: sin esto, el fallback solo sabía medir el recorrido del elemento por el viewport,
+   * que es la definición de `view()`, no la de `scroll()`.
+   */
+  pageProgress(): number;
   /** `(prefers-reduced-motion: reduce)`. Si es cierto, el runtime NO arma nada. */
   reducedMotion(): boolean;
   /** `CSS.supports("animation-timeline", fn)`. Decide si el chunk de scrub llega a bajar. */
@@ -97,6 +104,15 @@ export function defaultIxHost(doc: Document): IxHost {
   return {
     doc: doc as unknown as IxDocumentLike,
     viewportHeight: () => view?.innerHeight ?? doc.documentElement?.clientHeight ?? 0,
+    pageProgress: () => {
+      const scroller = doc.scrollingElement ?? doc.documentElement;
+      if (!scroller) return 0;
+      const vh = view?.innerHeight ?? scroller.clientHeight;
+      const max = scroller.scrollHeight - vh;
+      if (max <= 0) return 0;
+      const p = scroller.scrollTop / max;
+      return p < 0 ? 0 : p > 1 ? 1 : p;
+    },
     reducedMotion: () => !!view?.matchMedia?.("(prefers-reduced-motion: reduce)").matches,
     supportsTimeline: (fn) => {
       try {

@@ -100,7 +100,10 @@ type Harness = {
   flushRaf: () => void;
 };
 
-function harness(els: FakeEl[], opts: { reduced?: boolean; supports?: boolean; io?: boolean } = {}): Harness {
+function harness(
+  els: FakeEl[],
+  opts: { reduced?: boolean; supports?: boolean; io?: boolean; pageP?: number } = {},
+): Harness {
   const doc = new FakeDoc(els);
   const h: Harness = {
     doc,
@@ -118,6 +121,7 @@ function harness(els: FakeEl[], opts: { reduced?: boolean; supports?: boolean; i
   h.host = {
     doc,
     viewportHeight: () => 800,
+    pageProgress: () => opts.pageP ?? 0,
     reducedMotion: () => opts.reduced === true,
     supportsTimeline: () => opts.supports !== false,
     observe: (cb): IxObserverLike | null => {
@@ -406,6 +410,36 @@ describe("driver de scrub", () => {
     }
     // Cuatro definiciones distintas → cuatro progresos distintos para la misma posición.
     expect(seen.size).toBeGreaterThanOrEqual(3);
+  });
+
+  it("scrub de PÁGINA se posiciona por el scroll del documento, no por el rect del elemento", () => {
+    const u = unitsOf([{ v: 1, trigger: { on: "scrub", src: "page" }, tracks: [track()] }]);
+    const el = new FakeEl(u[0].cls);
+    // Rect absurdo a propósito: si el driver lo mirase (definición de view()), el progreso saldría
+    // 0. Tiene que salir del pageProgress del host — la definición de scroll().
+    el.rect = { top: 5000, height: 200 };
+    const h = harness([el], { pageP: 0.4 });
+    createScrubDriver(u, h.host);
+    h.observers[0].cb([{ target: el, isIntersecting: true }]);
+    expect(el.anims[0].currentTime).toBe(400);
+  });
+
+  it("el rango de página ventanea por PORCENTAJES (los nombres de vista se ignoran)", () => {
+    const u = unitsOf([{
+      v: 1,
+      trigger: {
+        on: "scrub",
+        src: "page",
+        range: { from: { at: "entry", pct: 25 }, to: { at: "exit", pct: 75 } },
+      },
+      tracks: [track()],
+    }]);
+    const el = new FakeEl(u[0].cls);
+    const h = harness([el], { pageP: 0.5 });
+    createScrubDriver(u, h.host);
+    h.observers[0].cb([{ target: el, isIntersecting: true }]);
+    // (0.5 − 0.25) / (0.75 − 0.25) = 0.5 → 500 de 1000.
+    expect(el.anims[0].currentTime).toBe(500);
   });
 
   it("un objetivo externo se resuelve por data-wjs-block-id y se reproduce, no se scrubbea", () => {

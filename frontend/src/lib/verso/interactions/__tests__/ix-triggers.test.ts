@@ -86,6 +86,24 @@ describe("qué CSS emite cada disparador", () => {
     expect(u.rules[0]).toContain("animation-timeline:scroll()");
   });
 
+  it("scrub de página NO emite nombres de rango de vista (y el rango 0–100 se omite: es el inicial)", () => {
+    // `cover`/`entry`/… están definidos para timelines de VISTA; sobre `scroll()` su comportamiento
+    // queda en manos de cada motor. El compilador emite solo porcentajes — lo único con significado.
+    const u = compileIx(mk({ on: "scrub", src: "page" }))!;
+    expect(u.rules[0]).not.toContain("animation-range");
+    expect(u.rules[0]).not.toContain("cover");
+  });
+
+  it("scrub de página con rango del autor emite SOLO los porcentajes", () => {
+    const u = compileIx(mk({
+      on: "scrub",
+      src: "page",
+      range: { from: { at: "cover", pct: 20 }, to: { at: "cover", pct: 80 } },
+    }))!;
+    expect(u.rules[0]).toContain("animation-range:20% 80%");
+    expect(u.rules[0]).not.toContain("cover");
+  });
+
   it("el atajo `animation` va ANTES de animation-timeline (el atajo la resetea)", () => {
     // Solo dentro del bloque de declaraciones: el `@supports (animation-timeline:…)` de fuera es
     // una condición, no una declaración.
@@ -223,6 +241,47 @@ describe("escalonado", () => {
     const u = compileIx(mk({ on: "scrub" }, { target: { kind: "children" }, stagger: { each: 60 } }))!;
     expect(u.rules).toHaveLength(1);
     expect(u.warnings.join(" ")).toContain("escalonado");
+  });
+
+  it("sobre `self` no hay hermanos que escalonar: se ignora y se AVISA (antes era silencio)", () => {
+    const u = compileIx(mk({ on: "load" }, { stagger: { each: 60 } }))!;
+    expect(u.warnings.join(" ")).toContain("hermanos");
+  });
+
+  it("sobre un objetivo externo tampoco: mismo aviso", () => {
+    const u = compileIx(mk({ on: "load" }, {
+      target: { kind: "block", id: "abc" }, stagger: { each: 60 },
+    }))!;
+    expect(u.warnings.join(" ")).toContain("hermanos");
+  });
+});
+
+describe("honestidad: opciones que un camino no puede expresar AVISAN, nunca callan", () => {
+  it("un disparador de scroll ignora dur/delay/repeat/alt — y lo dice", () => {
+    const u = compileIx(mk({ on: "scrub" }, { dur: 900, delay: 100, repeat: 3, alt: true }))!;
+    const w = u.warnings.join(" ");
+    expect(w).toContain("`dur`");
+    expect(w).toContain("`delay`");
+    expect(w).toContain("`repeat`");
+    expect(w).toContain("`alt`");
+    // Y el CSS sigue siendo el de siempre: la opción no emitida no cambia ni un byte.
+    expect(u.rules[0]).toContain("1ms linear both");
+  });
+
+  it("un scroll SIN esas opciones no gana ningún aviso nuevo", () => {
+    expect(compileIx(mk({ on: "scrub" }))!.warnings).toHaveLength(0);
+  });
+
+  it("hover de 2 pasos (transición) ignora repeat/alt — y lo dice", () => {
+    const u = compileIx(mk({ on: "hover" }, { repeat: "inf", alt: true }))!;
+    expect(u.warnings.join(" ")).toContain("transición");
+    expect(u.rules[0]).toContain("transition:");
+  });
+
+  it("hover de 3 pasos SÍ honra repeat/alt: sin aviso", () => {
+    const u = compileIx(mk({ on: "hover" }, { steps: steps3, repeat: "inf", alt: true }))!;
+    expect(u.warnings).toHaveLength(0);
+    expect(u.rules[0]).toContain("infinite alternate");
   });
 });
 

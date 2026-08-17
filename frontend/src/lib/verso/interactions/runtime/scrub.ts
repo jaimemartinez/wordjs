@@ -33,6 +33,10 @@ const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v);
 const isTimeline = (u: IxRuntimeUnit): boolean =>
   u.trigger.on === "scrub" || (u.trigger.on === "view" && u.trigger.once === false);
 
+/** `scrub` + `src:"page"`: el progreso es el del DOCUMENTO (`scroll()`), no el del elemento. */
+const isPageTimeline = (u: IxRuntimeUnit): boolean =>
+  u.trigger.on === "scrub" && u.trigger.src === "page";
+
 /**
  * Posición (en píxeles recorridos) de un borde de `animation-range`, siguiendo las definiciones de
  * la especificación de scroll-driven animations:
@@ -73,7 +77,20 @@ function progressOf(anchor: IxElementLike, range: IxRange, vh: number): number {
   return clamp01((vh - rect.top - from) / span);
 }
 
-type ScrubEntry = { anchor: IxElementLike; range: IxRange; anim: IxAnimationLike };
+/**
+ * Progreso de una unidad de PÁGINA: el scroll del documento, ventaneado por los PORCENTAJES del
+ * rango. Los nombres (`cover`/`entry`/…) se ignoran a propósito: son vocabulario de las timelines
+ * de vista y el compilador tampoco los emite para `scroll()` — los dos backends miden lo mismo.
+ */
+function pageProgressOf(range: IxRange, pageP: number): number {
+  const from = range.from.pct / 100;
+  const to = range.to.pct / 100;
+  const span = to - from;
+  if (span <= 0) return 0;
+  return clamp01((pageP - from) / span);
+}
+
+type ScrubEntry = { anchor: IxElementLike; range: IxRange; anim: IxAnimationLike; page: boolean };
 
 /**
  * Arranca el driver. Devuelve la limpieza: cancela TODAS las animaciones creadas, para el bucle y
@@ -88,6 +105,7 @@ export function createScrubDriver(units: readonly IxRuntimeUnit[], host: IxHost)
   for (const unit of units) {
     const roots = toArray(host.doc.querySelectorAll(`.${unit.cls}`));
     const timeline = isTimeline(unit);
+    const page = isPageTimeline(unit);
     for (const root of roots) {
       for (const track of unit.tracks) {
         const targets = resolveIxTargets(root, track, host.doc);
@@ -102,7 +120,7 @@ export function createScrubDriver(units: readonly IxRuntimeUnit[], host: IxHost)
               easing: "linear",
             });
             anim.pause();
-            const entry: ScrubEntry = { anchor: root, range: track.range, anim };
+            const entry: ScrubEntry = { anchor: root, range: track.range, anim, page };
             entries.push(entry);
             const list = byAnchor.get(root);
             if (list) list.push(entry);
@@ -128,11 +146,18 @@ export function createScrubDriver(units: readonly IxRuntimeUnit[], host: IxHost)
 
   const update = () => {
     const vh = host.viewportHeight();
+    // Se lee UNA vez por frame, no por unidad: todas las unidades de página miden el mismo scroll.
+    let pageP: number | null = null;
     for (const anchor of visible) {
       const list = byAnchor.get(anchor);
       if (!list) continue;
       for (const e of list) {
-        e.anim.currentTime = progressOf(anchor, e.range, vh) * SCRUB_MS;
+        if (e.page) {
+          if (pageP === null) pageP = host.pageProgress();
+          e.anim.currentTime = pageProgressOf(e.range, pageP) * SCRUB_MS;
+        } else {
+          e.anim.currentTime = progressOf(anchor, e.range, vh) * SCRUB_MS;
+        }
       }
     }
   };
