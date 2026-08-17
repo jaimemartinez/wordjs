@@ -60,6 +60,9 @@ export const BLOCK_META: Record<string, BlockMeta> = {
     SiteLogo: { icon: "fa-image", ms: "image", group: "Navegación", desc: "Logotipo o título del sitio (enlazado al inicio)", label: "Logotipo del sitio" },
     BackToTop: { icon: "fa-arrow-up", ms: "unfold_more", group: "Navegación", desc: "Botón flotante para volver arriba", label: "Volver arriba" },
     OffCanvas: { icon: "fa-bars-staggered", ms: "menu", group: "Navegación", desc: "Cajón lateral con contenido (drawer)", label: "Cajón lateral (OffCanvas)" },
+    // `ms: "view_column"` is REUSED from Columns (already in the Material Symbols subset — an unlisted
+    // glyph renders as an empty box; see the BlockMeta note above): a mega menu is a row of columns.
+    MegaMenu: { icon: "fa-table-columns", ms: "view_column", group: "Navegación", desc: "Menú vinculado con paneles de bloques por elemento", label: "Mega menú" },
     Breadcrumbs: { icon: "fa-angle-right", ms: "subject", group: "Navegación", desc: "Rastro de ancestros de la página", label: "Migas de pan" },
     LangSwitcher: { icon: "fa-language", ms: "web", group: "Navegación", desc: "Traducciones de la página (multilingüe)", label: "Selector de idioma" },
     TableOfContents: { icon: "fa-list-ol", ms: "list_alt", group: "Navegación", desc: "Índice de los títulos de la página", label: "Tabla de contenidos" },

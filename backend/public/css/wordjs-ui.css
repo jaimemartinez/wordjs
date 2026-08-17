@@ -378,13 +378,41 @@ a:not([href]):not([class]) { color: inherit; text-decoration: none; }
  * would otherwise carry. Scoped under .wjs-block-nav-menu (specificity 0,2,1) so it out-ranks the band
  * `a` rules (0,1,1): a VERTICAL content menu emits the .wjs-footer-nav hook, whose footer-dim colour is
  * wrong on a light in-content background — here the link takes the page's own main text colour, and a
- * theme keeps full control through --wjs-nav-color / --wjs-nav-color-hover. */
-.wjs-block-nav-menu .wjs-chrome-nav a {
+ * theme keeps full control through --wjs-nav-color / --wjs-nav-color-hover.
+ *
+ * The MegaMenu block shares the same in-content surface: its structure emits the same .wjs-chrome-nav
+ * vocabulary (plus the .wjs-mega-menu / .wjs-mega-menu__panel hooks), so the same scoped link colour
+ * applies under .wjs-block-mega-menu. The panel surface itself is tokenized in the block's own markup
+ * (--wjs-bg-surface / --wjs-border-subtle), exactly like the NavMenu submenu panel. */
+.wjs-block-nav-menu .wjs-chrome-nav a,
+.wjs-block-mega-menu .wjs-chrome-nav a {
   color: var(--wjs-nav-color, var(--wjs-color-text-main, inherit));
   text-decoration: none;
 }
-.wjs-block-nav-menu .wjs-chrome-nav a:hover {
+.wjs-block-nav-menu .wjs-chrome-nav a:hover,
+.wjs-block-mega-menu .wjs-chrome-nav a:hover {
   color: var(--wjs-nav-color-hover, var(--wjs-color-primary));
+}
+
+/* MegaMenu flyout — the CSS-only disclosure lives HERE, on the block's own hooks, and deliberately
+ * NOT in utility classes: this sheet ships an unlayered `.invisible { visibility: hidden !important }`
+ * (utility set, above) that out-cascades any LAYERED utility toggle, so a Tailwind
+ * visible/invisible reveal can never open on the public surface. Scoped to the flyout position
+ * (`.wjs-has-submenu > .wjs-mega-menu__panel`) so the editor's flat authoring panels are untouched.
+ * Keyboard: :focus-within opens (the trigger is a real link), Tab-out closes; :hover opens only when
+ * the block asked for it (data-trigger="hover"). A theme restyles the panel surface through
+ * --wjs-bg-surface / --wjs-border-subtle and may retime the reveal via --wjs-transition. */
+.wjs-block-mega-menu .wjs-has-submenu > .wjs-mega-menu__panel {
+  visibility: hidden;
+  opacity: 0;
+  translate: 0 4px;
+  transition: opacity var(--wjs-transition, 0.15s ease), translate var(--wjs-transition, 0.15s ease), visibility 0.15s;
+}
+.wjs-block-mega-menu .wjs-has-submenu:focus-within > .wjs-mega-menu__panel,
+.wjs-block-mega-menu[data-trigger="hover"] .wjs-has-submenu:hover > .wjs-mega-menu__panel {
+  visibility: visible;
+  opacity: 1;
+  translate: 0 0;
 }
 
 /* SiteLogo block — the brand (logo image and/or site title) placed in PAGE CONTENT. Reuses the header

@@ -17,7 +17,7 @@ import { blockVars, unit } from "./blocks/blockVars";
 import SearchBarBlockIsland from "./content/SearchBarBlock";
 import AccordionBlockIsland from "./content/AccordionBlock";
 import TabsBlockIsland from "./content/TabsBlock";
-import { HeadingBlock, TextBlock, ImageBlock, DividerBlock, ButtonBlock, SpacerBlock, SectionBlock, GridBlock, FlexRowBlock, ColumnsBlock, CardBlock, QuoteBlock, TableBlock, IconListBlock, SocialLinksBlock, StatsBlock, HTMLEmbedBlock, PricingTableBlock, TestimonialBlock, CTABannerBlock, VideoEmbedBlock, HeroBlock, PostsGridBlock, CategoryPostsBlock, AudioPlayerBlock, ParticleFieldBlock, NavMenuBlock, SiteLogoBlock, OffCanvasBlock, BreadcrumbsBlock, LangSwitcherBlock, TableOfContentsBlock } from "./content/blocks";
+import { HeadingBlock, TextBlock, ImageBlock, DividerBlock, ButtonBlock, SpacerBlock, SectionBlock, GridBlock, FlexRowBlock, ColumnsBlock, CardBlock, QuoteBlock, TableBlock, IconListBlock, SocialLinksBlock, StatsBlock, HTMLEmbedBlock, PricingTableBlock, TestimonialBlock, CTABannerBlock, VideoEmbedBlock, HeroBlock, PostsGridBlock, CategoryPostsBlock, AudioPlayerBlock, ParticleFieldBlock, NavMenuBlock, SiteLogoBlock, OffCanvasBlock, BreadcrumbsBlock, LangSwitcherBlock, TableOfContentsBlock, MegaMenuBlock } from "./content/blocks";
 import BackToTopBlockIsland from "./content/BackToTop";
 import LinkField from "./blocks/LinkField";
 import { withSharedBlockFields } from "./blocks/VisibilityField";
@@ -2484,6 +2484,99 @@ const baseConfig: any = {
                 const editing = !!puck?.isEditing;
                 const menu = useEditorMenu(editing, resolvedMenu, { source, location, menuId });
                 return <NavMenuBlock {...props} menu={menu} isEditing={editing} />;
+            }
+        },
+
+        MegaMenu: {
+            // HÍBRIDO: la ESTRUCTURA vincula al menú del sitio por referencia (mismo contrato congelado
+            // que NavMenu); el PANEL de cada elemento de nivel superior es un SLOT inline de bloques.
+            // Paneles = conjunto FIJO panel0…panel5 (slots estáticos, como col-0/col-1/col-2 de Columns)
+            // asignados a los 6 PRIMEROS elementos de nivel superior EN ORDEN. Un panel vacío deja su
+            // elemento como enlace simple. Campos idénticos (orden + estructura) a coreBlocks.MegaMenu —
+            // el gate anti-drift los compara.
+            label: "Mega menú",
+            category: "layout",
+            fields: {
+                source: {
+                    type: "select",
+                    label: "Origen",
+                    options: [
+                        { label: "Ubicación", value: "location" },
+                        { label: "Menú", value: "menu" },
+                    ]
+                },
+                location: {
+                    type: "custom",
+                    label: "Ubicación del menú",
+                    render: ({ value, onChange }: any) => (
+                        <MenuLocationPickerControl value={value} onChange={onChange} />
+                    )
+                },
+                menuId: {
+                    type: "custom",
+                    label: "Menú (si el origen es Menú)",
+                    render: ({ value, onChange }: any) => (
+                        <MenuPickerControl value={value} onChange={onChange} />
+                    )
+                },
+                fullWidth: {
+                    type: "radio",
+                    label: "Panel a todo el ancho",
+                    options: [
+                        { label: "Sí", value: true },
+                        { label: "No", value: false },
+                    ]
+                },
+                trigger: {
+                    type: "select",
+                    label: "Apertura del panel",
+                    options: [
+                        { label: "Hover", value: "hover" },
+                        { label: "Click", value: "click" },
+                    ]
+                },
+                panel0: { type: "slot" },
+                panel1: { type: "slot" },
+                panel2: { type: "slot" },
+                panel3: { type: "slot" },
+                panel4: { type: "slot" },
+                panel5: { type: "slot" },
+                css: {
+                    type: "custom",
+                    label: "Estilos CSS",
+                    render: ({ value, onChange }: any) => (
+                        <CSSPropertiesControl value={value} onChange={onChange} />
+                    )
+                }
+            },
+            defaultProps: {
+                source: "location",
+                location: "header",
+                menuId: 0,
+                fullWidth: true,
+                trigger: "hover",
+                panel0: [],
+                panel1: [],
+                panel2: [],
+                panel3: [],
+                panel4: [],
+                panel5: [],
+                css: {}
+            },
+            render: ({
+                source, location, menuId, resolvedMenu, puck,
+                panel0: P0, panel1: P1, panel2: P2, panel3: P3, panel4: P4, panel5: P5,
+                ...props
+            }: any) => {
+                // Menú real en todas partes (inyectado por el resolver en el público; useEditorMenu en el
+                // canvas). Los slots llegan como COMPONENTES aquí (precedente Columns) → funciones con
+                // className reenviado, en el mismo orden panel0…panel5.
+                const editing = !!puck?.isEditing;
+                const menu = useEditorMenu(editing, resolvedMenu, { source, location, menuId });
+                const panels = [P0, P1, P2, P3, P4, P5].map(
+                    (P: any) => (P ? (cls?: string) => <P className={cls} /> : null)
+                );
+                return <MegaMenuBlock {...props} menu={menu} panels={panels} isEditing={editing} />;
             }
         },
 

@@ -304,6 +304,133 @@ export function NavMenuBlock({ menu, orientation = "horizontal", depth = 2, subm
 }
 
 /**
+ * ── MegaMenu ───────────────────────────────────────────────────────────────────────────────────────
+ *
+ * HYBRID navigation block: the menu STRUCTURE stays BOUND to the canonical nav_menu store exactly like
+ * NavMenu (the block stores only source/location/menuId; `menu` arrives already resolved — server-side
+ * via resolveDynamicBlocks, from useEditorMenu inside the editor canvas), while each top-level item's
+ * rich flyout PANEL is an INLINE slot of arbitrary blocks.
+ *
+ * PANEL MAPPING (the Columns precedent): slots must be statically declared (`makeSlotResolver` reads
+ * the registry's `fields`, same as Columns' col-0/col-1/col-2), so the panels are the FIXED set
+ * panel0…panel5, mapped to the FIRST 6 top-level items of the bound menu IN ORDER (panel0 → first
+ * item, panel1 → second…). The editor shows the same mapping as a hint. An item whose panel is
+ * empty/absent renders as a plain link — byte-identical to a NavMenu top-level item. Depth is FIXED:
+ * top-level items + their panel; a MegaMenu never recurses submenus (bind a NavMenu for a cascade).
+ *
+ * The flyout is CSS-ONLY (a theme still ships no JS): hidden with visibility until the item holds
+ * focus (keyboard / tap; Tab-out closes) and, when `trigger` is "hover", also on hover — the same
+ * SEMANTICS as the NavMenu submenu. The state itself lives in wordjs-ui.css on the .wjs-* hooks
+ * (`.wjs-has-submenu > .wjs-mega-menu__panel`, opened by :focus-within and, under
+ * [data-trigger="hover"], by :hover) instead of the Tailwind visible/invisible utilities: the
+ * framework sheet ships an UNLAYERED `.invisible { visibility: hidden !important }` that
+ * out-cascades any LAYERED utility toggle, so a utility-based reveal never opens on the public
+ * surface. `fullWidth` panels span the nav's width (positioned against the relative <nav>);
+ * anchored panels hang from their own item. Panels render SERVER-side (crawlable); nested
+ * NavMenu/SiteLogo/etc. inside a panel are decorated by resolveDynamicBlocks, which recurses slot
+ * arrays.
+ *
+ * SECURITY (the NavMenu lessons, verbatim): every href re-validated at render (safeNavHref), target
+ * whitelisted to _self|_blank with rel="noopener noreferrer" forced on _blank, labels as escaped TEXT,
+ * and author data never chooses structure — the panel set and depth are fixed by this component.
+ */
+const MEGA_MENU_PANEL_COUNT = 6;
+export const MEGA_MENU_PANEL_SLOTS = Array.from({ length: MEGA_MENU_PANEL_COUNT }, (_, i) => `panel${i}`);
+
+export function MegaMenuBlock({ menu, fullWidth = true, trigger = "hover", panels, css, isEditing }: any) {
+    const flat: ChromeMenuItem[] = Array.isArray(menu) ? menu : [];
+    const trig: "hover" | "click" = trigger === "click" ? "click" : "hover";
+    const full = fullWidth !== false && fullWidth !== "false";
+    // A panel is a render function (the slot) or null (empty/absent → plain link).
+    const slotFns: Array<((className?: string) => React.ReactNode) | null> = Array.isArray(panels)
+        ? panels.map((p) => (typeof p === "function" ? p : null))
+        : [];
+    // `target` rides on the FLAT item, not on the tree buildMenuTree returns — look it up by id.
+    const targetById = new Map<string, unknown>();
+    for (const it of flat) {
+        const id = it && (it as { id?: unknown }).id;
+        if (id != null) targetById.set(String(id), (it as { target?: unknown }).target);
+    }
+    // Top-level items only, in menu order. Children in the bound menu are NOT rendered (fixed depth).
+    const top = buildMenuTree(flat);
+
+    if (top.length === 0) {
+        // Nothing on the public site; a quiet authoring notice while editing (same as NavMenu).
+        if (isEditing) {
+            return (
+                <div className={bc("mega-menu", "mega-menu--empty")} style={css}>
+                    Vincula este bloque a un menú (Origen → Ubicación / Menú). El menú elegido está vacío o no existe.
+                </div>
+            );
+        }
+        return null;
+    }
+
+    // Hidden/open state comes from wordjs-ui.css (see the block comment): here only the panel's
+    // position + tokenized surface. The li>panel CHILD relationship is the selector contract.
+    const panelCls =
+        "wjs-mega-menu__panel absolute z-50 m-0 p-4 rounded-lg shadow-lg "
+        + "bg-[var(--wjs-bg-surface,white)] border border-[var(--wjs-border-subtle,#e5e7eb)]"
+        + (full ? " top-full inset-x-0 mt-1" : " top-full start-0 mt-1 min-w-[16rem]");
+
+    const targetOf = (id: string | number) => targetById.get(String(id));
+    const items = top.map((item, i) => {
+        const tr = navTargetRel(targetOf(item.id));
+        // The trigger is a REAL link; the label as TEXT (React escapes it) — never innerHTML.
+        const link = (
+            <a href={safeNavHref(item.url)} target={tr.target} rel={tr.rel}>
+                {item.title}
+            </a>
+        );
+        // While editing, the nav shows plain links and the panels render ONCE in the authoring area
+        // below (a slot function must not be invoked twice — its drop zone is a single instance).
+        const panelFn = !isEditing && i < MEGA_MENU_PANEL_COUNT ? slotFns[i] ?? null : null;
+        if (!panelFn) {
+            // Byte-identical to a NavMenu top-level item without children.
+            return <li key={item.id} className="wjs-chrome-nav-item">{link}</li>;
+        }
+        return (
+            <li key={item.id} className={cx("wjs-chrome-nav-item wjs-has-submenu", !full && "relative")}>
+                <span className="inline-flex items-center gap-1">
+                    {link}
+                    <svg aria-hidden="true" className="w-3 h-3 opacity-70" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
+                    </svg>
+                </span>
+                {/* The slot's own wrapper div IS the panel (one div per slot, classed by the container). */}
+                {panelFn(panelCls)}
+            </li>
+        );
+    });
+
+    return (
+        <div className={bc("mega-menu")} data-full-width={full ? "true" : "false"} data-trigger={trig} style={css}>
+            <nav aria-label="Menu" className={cx("wjs-chrome-nav wjs-chrome-nav-horizontal wjs-header-nav wjs-mega-menu", full && "relative")}>
+                <ul className="flex flex-wrap items-center gap-8 list-none m-0 p-0">{items}</ul>
+            </nav>
+            {isEditing && (
+                <div className="wjs-mega-menu__editor-panels mt-2 flex flex-col gap-2">
+                    <p className="text-[var(--wjs-color-text-muted,#6b7280)] text-xs m-0">
+                        Paneles: se asignan a los 6 primeros elementos de nivel superior, en orden (panel 1 → primer
+                        elemento…). Un panel vacío deja su elemento como enlace simple.
+                    </p>
+                    {top.slice(0, MEGA_MENU_PANEL_COUNT).map((item, i) => {
+                        const fn = slotFns[i];
+                        if (!fn) return null;
+                        return (
+                            <div key={item.id} className="rounded-lg border border-[var(--wjs-border-subtle,#e5e7eb)] p-2">
+                                <p className="text-[var(--wjs-color-text-muted,#6b7280)] text-xs m-0 mb-1">Panel de «{item.title}»</p>
+                                {fn("wjs-mega-menu__panel")}
+                            </div>
+                        );
+                    })}
+                </div>
+            )}
+        </div>
+    );
+}
+
+/**
  * ── SiteLogo (Site Logo / Title) ───────────────────────────────────────────────────────────────────
  *
  * Renders the site's brand — its logo image, its title, or both — optionally linked home. Like NavMenu

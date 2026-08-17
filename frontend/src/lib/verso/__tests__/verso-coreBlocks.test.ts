@@ -63,7 +63,7 @@ const configComponents = (postConfig as { components: Record<string, Record<stri
 /* ------------------------------------------------------------------ */
 
 describe("coreBlocks — contrato de tipos", () => {
-  it("los 38 types coinciden con la lista literal del switch de ContentRenderer", () => {
+  it("los 39 types coinciden con la lista literal del switch de ContentRenderer", () => {
     // Lista LITERAL (no derivada): es el contrato de serialización de _puck_data.
     const CONTRACT = [
       "Heading", "Text", "Image", "Divider", "Button", "Spacer",
@@ -73,9 +73,9 @@ describe("coreBlocks — contrato de tipos", () => {
       "PostsGrid", "CategoryPosts", "AudioPlayer",
       "Accordion", "Tabs", "SearchBar", "Form", "Symbol",
       "ParticleField", "NavMenu", "SiteLogo", "BackToTop", "OffCanvas",
-      "Breadcrumbs", "LangSwitcher", "TableOfContents",
+      "Breadcrumbs", "LangSwitcher", "TableOfContents", "MegaMenu",
     ];
-    expect(CONTRACT).toHaveLength(38);
+    expect(CONTRACT).toHaveLength(39);
     expect([...CORE_BLOCK_TYPES]).toEqual(CONTRACT);
     expect(coreBlockDefinitions.map((d) => d.type).sort()).toEqual([...CONTRACT].sort());
   });
@@ -152,6 +152,13 @@ describe("coreBlocks — resolución de slots", () => {
     expect(isSlot("Columns", "col-1")).toBe(true);
     expect(isSlot("Columns", "col-2")).toBe(true);
     expect(isSlot("OffCanvas", "content")).toBe(true);
+    // MegaMenu: el conjunto FIJO de paneles (mecanismo Columns), y las props de VÍNCULO no son slots.
+    for (const panel of ["panel0", "panel1", "panel2", "panel3", "panel4", "panel5"]) {
+      expect(isSlot("MegaMenu", panel)).toBe(true);
+    }
+    expect(isSlot("MegaMenu", "source")).toBe(false);
+    expect(isSlot("MegaMenu", "location")).toBe(false);
+    expect(isSlot("MegaMenu", "menuId")).toBe(false);
   });
 
   it("un array item-shaped NUNCA es slot (Accordion.items, Tabs.tabs, PricingTable.plans…)", () => {
@@ -178,8 +185,8 @@ describe("coreBlocks — resolución de slots", () => {
     expect(isSlot("Section", "loQueSea")).toBeUndefined();
   });
 
-  it("el registry queda con exactamente 35 definiciones", () => {
-    expect(registry.list()).toHaveLength(38);
+  it("el registry queda con exactamente 39 definiciones", () => {
+    expect(registry.list()).toHaveLength(39);
   });
 });
 

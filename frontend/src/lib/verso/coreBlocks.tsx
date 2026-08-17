@@ -69,6 +69,7 @@ import {
     PricingTableBlock, TestimonialBlock, CTABannerBlock, VideoEmbedBlock, HeroBlock,
     PostsGridBlock, CategoryPostsBlock, AudioPlayerBlock, ParticleFieldBlock, NavMenuBlock,
     SiteLogoBlock, OffCanvasBlock, BreadcrumbsBlock, LangSwitcherBlock, TableOfContentsBlock,
+    MegaMenuBlock,
 } from "@/components/content/blocks";
 import BackToTopBlock from "@/components/content/BackToTop";
 import { useEditorIdentity } from "@/lib/useEditorIdentity";
@@ -88,7 +89,10 @@ import { withSharedVersoFields } from "./sharedFields";
  *  SiteLogo (33º) BINDS a la identidad del sitio (blogname + site_logo) igual que NavMenu al menú.
  *  BackToTop (34º) es un control flotante — el bloque ENTERO es una isla de cliente, sin SSR.
  *  OffCanvas (35º) es un cajón con SLOT de contenido: el panel y sus hijos se renderizan en servidor
- *  (rastreable) y solo el toggle es isla de cliente.)
+ *  (rastreable) y solo el toggle es isla de cliente.
+ *  MegaMenu (39º) es HÍBRIDO: la estructura VINCULA al menú del sitio por referencia (como NavMenu)
+ *  y el panel de cada elemento de nivel superior es un SLOT inline (panel0…panel5 → los 6 primeros
+ *  elementos EN ORDEN, el precedente multi-slot de Columns).)
  */
 export const CORE_BLOCK_TYPES = [
     "Heading", "Text", "Image", "Divider", "Button", "Spacer",
@@ -98,7 +102,7 @@ export const CORE_BLOCK_TYPES = [
     "PostsGrid", "CategoryPosts", "AudioPlayer",
     "Accordion", "Tabs", "SearchBar", "Form", "Symbol",
     "ParticleField", "NavMenu", "SiteLogo", "BackToTop", "OffCanvas",
-    "Breadcrumbs", "LangSwitcher", "TableOfContents",
+    "Breadcrumbs", "LangSwitcher", "TableOfContents", "MegaMenu",
 ] as const;
 
 export type CoreBlockType = (typeof CORE_BLOCK_TYPES)[number];
@@ -244,6 +248,25 @@ function NavMenuRender(props: BlockProps) {
         { source: source as string, location: location as string, menuId: menuId as number | string },
     );
     return <NavMenuBlock {...rest} menu={menu} isEditing={editing} />;
+}
+
+// MegaMenu (canvas): the bound structure comes from useEditorMenu exactly like NavMenu; the six panel
+// slots arrive as functions (drop zones) and pass through as `panels` in order — the block renders
+// them in its authoring area (one instance each). Inert in público (resolvedMenu already injected).
+function MegaMenuRender(props: BlockProps) {
+    const {
+        source, location, menuId, resolvedMenu, isEditing,
+        panel0, panel1, panel2, panel3, panel4, panel5, ...rest
+    } = props;
+    const editing = !!isEditing;
+    const menu = useEditorMenu(
+        editing,
+        resolvedMenu as ChromeMenuItem[] | undefined,
+        { source: source as string, location: location as string, menuId: menuId as number | string },
+    );
+    const panels = [panel0, panel1, panel2, panel3, panel4, panel5]
+        .map((p) => (typeof p === "function" ? (p as SlotFn) : null));
+    return <MegaMenuBlock {...rest} menu={menu} panels={panels} isEditing={editing} />;
 }
 
 // SiteLogo (canvas): the editor has no server pass, so the bound identity (blogname + site_logo) comes
@@ -1574,6 +1597,80 @@ export const coreBlockDefinitions: BlockDefinition[] = [
         render: NavMenuRender,
     },
     {
+        // MegaMenu: HÍBRIDO. La ESTRUCTURA vincula al menú del sitio por referencia (source/location/
+        // menuId, mismo contrato congelado que NavMenu — el store nav_menu sigue siendo la fuente de
+        // verdad); el PANEL de cada elemento de nivel superior es un SLOT inline de bloques.
+        // Los paneles son el conjunto FIJO panel0…panel5 (los slots se declaran estáticamente, como
+        // los col-0/col-1/col-2 de Columns) y se asignan a los 6 PRIMEROS elementos de nivel superior
+        // EN ORDEN (panel0 → primero…). Un panel vacío deja su elemento como enlace simple.
+        // Los campos deben coincidir BYTE A BYTE con versoConfig.MegaMenu.
+        type: "MegaMenu",
+        label: "Mega menú",
+        category: "layout",
+        fields: {
+            source: {
+                type: "select",
+                label: "Origen",
+                options: [
+                    { label: "Ubicación", value: "location" },
+                    { label: "Menú", value: "menu" },
+                ],
+            },
+            location: {
+                type: "custom",
+                label: "Ubicación del menú",
+                render: ({ value, onChange }) => (
+                    <MenuLocationPickerControl value={value} onChange={onChange} />
+                ),
+            },
+            menuId: {
+                type: "custom",
+                label: "Menú (si el origen es Menú)",
+                render: ({ value, onChange }) => (
+                    <MenuPickerControl value={value} onChange={onChange} />
+                ),
+            },
+            fullWidth: {
+                type: "radio",
+                label: "Panel a todo el ancho",
+                options: [
+                    { label: "Sí", value: true },
+                    { label: "No", value: false },
+                ],
+            },
+            trigger: {
+                type: "select",
+                label: "Apertura del panel",
+                options: [
+                    { label: "Hover", value: "hover" },
+                    { label: "Click", value: "click" },
+                ],
+            },
+            panel0: { type: "slot" },
+            panel1: { type: "slot" },
+            panel2: { type: "slot" },
+            panel3: { type: "slot" },
+            panel4: { type: "slot" },
+            panel5: { type: "slot" },
+            css: cssField(),
+        },
+        defaultProps: {
+            source: "location",
+            location: "header",
+            menuId: 0,
+            fullWidth: true,
+            trigger: "hover",
+            panel0: [],
+            panel1: [],
+            panel2: [],
+            panel3: [],
+            panel4: [],
+            panel5: [],
+            css: {},
+        },
+        render: MegaMenuRender,
+    },
+    {
         // SiteLogo: BINDS a la identidad del sitio (blogname + site_logo) — el store de ajustes es la
         // fuente de verdad. Los campos deben coincidir BYTE A BYTE con versoConfig.SiteLogo.
         type: "SiteLogo",
@@ -1842,7 +1939,7 @@ export const coreBlockDefinitions: BlockDefinition[] = [
 ];
 
 /**
- * Alta de los 38 bloques core en un registry, pasando CADA definición por el seam
+ * Alta de los 39 bloques core en un registry, pasando CADA definición por el seam
  * `withSharedVersoFields` — el mismo punto de inyección único que withSharedBlockFields hoy.
  */
 export function registerCoreBlocks(registry: BlockRegistry): void {

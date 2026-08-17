@@ -50,6 +50,7 @@ import {
     PricingTableBlock, TestimonialBlock, CTABannerBlock, VideoEmbedBlock, HeroBlock,
     PostsGridBlock, CategoryPostsBlock, AudioPlayerBlock, ParticleFieldBlock, NavMenuBlock,
     SiteLogoBlock, OffCanvasBlock, BreadcrumbsBlock, LangSwitcherBlock, TableOfContentsBlock,
+    MegaMenuBlock, MEGA_MENU_PANEL_SLOTS,
 } from "./blocks";
 import AccordionBlock from "./AccordionBlock";
 import BackToTopBlock from "./BackToTop";
@@ -194,6 +195,19 @@ function renderCore(type: string, props: Record<string, any>, item: any, exclude
         // (resolvedMenu), so the full <nav> + every <a> land in the SSR HTML; only the mobile toggle
         // is a client island. An empty/missing binding renders nothing on the public page.
         case "NavMenu": return <NavMenuBlock {...props} menu={props.resolvedMenu} />;
+        // Hybrid: the menu structure is BOUND (resolvedMenu, same injection as NavMenu) while each
+        // top-level item's flyout panel is an inline slot (panel0…panel5 → first 6 items in order,
+        // the Columns multi-slot precedent). An EMPTY panel passes null so the item renders as a
+        // plain link with no flyout markup; panel children render server-side (crawlable).
+        case "MegaMenu": return (
+            <MegaMenuBlock
+                {...props}
+                menu={props.resolvedMenu}
+                panels={MEGA_MENU_PANEL_SLOTS.map((name) =>
+                    Array.isArray(props[name]) && props[name].length > 0 ? slotOf(props, name, exclude, ix) : null,
+                )}
+            />
+        );
         // Binds to the site identity: resolveDynamicBlocks injected the resolved { blogname, siteLogo }
         // server-side (resolvedIdentity), so the real logo/title land in the SSR HTML.
         case "SiteLogo": return <SiteLogoBlock {...props} identity={props.resolvedIdentity} />;

@@ -77,7 +77,10 @@ export const resolveDynamicBlocks = cache(async (data: unknown): Promise<unknown
                 const id = Number((node.props as { symbolId?: unknown } | undefined)?.symbolId);
                 if (Number.isFinite(id) && id > 0) symbolIds.add(id);
             }
-            if (node.type === "NavMenu") {
+            if (node.type === "NavMenu" || node.type === "MegaMenu") {
+                // MegaMenu shares NavMenu's binding contract exactly (source/location/menuId → one
+                // resolved fetch per distinct ref); its inline panels are ordinary slot arrays, so
+                // the generic recursion below decorates anything nested inside them.
                 const { key, ref } = navRefOf(node.props);
                 menuRefs.set(key, ref);
             }
@@ -163,7 +166,7 @@ export const resolveDynamicBlocks = cache(async (data: unknown): Promise<unknown
                 props = { ...props, resolvedSymbolItems: decorate(symbolItems.get(id) ?? []) };
             }
 
-            if (node.type === "NavMenu") {
+            if (node.type === "NavMenu" || node.type === "MegaMenu") {
                 // The flat item array for THIS node's reference (same key the scan collected). A missing
                 // ref → [], so the block's empty path runs (nothing on public, notice while editing).
                 const { key } = navRefOf(props);
