@@ -29,6 +29,7 @@ import type { EditorHandle } from "@/lib/verso/store";
 import type { BlockRegistry } from "@/lib/verso/registry";
 import type { DndPoint, TextDir, ZoneFlow, ZoneGeom } from "@/lib/verso/dnd/types";
 import { useVersoCanvas } from "../canvas/FrameController";
+import { nodeKeyFromTarget } from "../render/nodeKey";
 import type { GeometryStore } from "../overlay/GeometryStore";
 import {
   DRAG_START_THRESHOLD,
@@ -211,8 +212,9 @@ export default function DnDDriver({ handle, registry, geometry, frameDocument }:
       // Edición inline activa: arrastrar para SELECCIONAR texto dentro del
       // contenteditable de Tiptap no debe arrancar un drag de bloque.
       if (isEditableTarget(pe.target)) return;
-      const el = (pe.target as Element | null)?.closest?.("[data-wjs-block-id]");
-      const id = el?.getAttribute("data-wjs-block-id");
+      // The STORE key: `geometry.getRect` is filled under the key VersoBlock renders with, and the
+      // drag source becomes a nodeId the transaction has to resolve (see render/nodeKey.ts).
+      const id = nodeKeyFromTarget(pe.target);
       if (!id) return;
       const rect = geometry.getRect(id);
       pending = {

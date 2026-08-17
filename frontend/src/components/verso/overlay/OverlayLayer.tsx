@@ -21,6 +21,7 @@ import { ROOT_ID } from "@/lib/verso/types";
 import type { EditorHandle } from "@/lib/verso/store";
 import type { BlockRegistry } from "@/lib/verso/registry";
 import { useStoreSlice } from "../render/context";
+import { nodeKeyFromTarget } from "../render/nodeKey";
 import { slotEntries } from "../render/VersoSlot";
 import { onColor, selectionsByNode, type RemoteBlockSelection } from "../editor/collabModel";
 import ActionBar from "./ActionBar";
@@ -39,15 +40,15 @@ function useGeometryRects(geometry: GeometryStore): ReadonlyMap<string, BlockRec
     return React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 
-/** Id de bloque bajo el puntero dentro del documento del iframe (data-wjs-block-id). */
+/** Store key of the block under the pointer inside the iframe document (see render/nodeKey.ts). */
 function useHoveredBlockId(frameDocument: Document | null): string | null {
     const [hovered, setHovered] = React.useState<string | null>(null);
     React.useEffect(() => {
         if (!frameDocument) return;
         const onOver = (e: Event) => {
-            const target = e.target as Element | null;
-            const el = target?.closest?.("[data-wjs-block-id]") ?? null;
-            setHovered(el ? el.getAttribute("data-wjs-block-id") : null);
+            // The STORE key: this id is looked up in the geometry registry, which VersoBlock fills
+            // under the same key it renders with (see render/nodeKey.ts).
+            setHovered(nodeKeyFromTarget(e.target));
         };
         const onLeave = () => setHovered(null);
         frameDocument.addEventListener("mouseover", onOver, true);

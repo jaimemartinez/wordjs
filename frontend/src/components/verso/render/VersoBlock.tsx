@@ -32,6 +32,7 @@ import {
   useVersoRenderContext,
   type VersoSlotRender,
 } from "./context";
+import { NODE_KEY_ATTR } from "./nodeKey";
 import VersoSlot from "./VersoSlot";
 
 const VersoBlock = React.memo(function VersoBlock({ nodeId }: { nodeId: string }) {
@@ -132,6 +133,9 @@ const VersoBlock = React.memo(function VersoBlock({ nodeId }: { nodeId: string }
   return (
     <div
       data-wjs-block-id={props.id}
+      // The AUTHOR's id above is document data and stops matching the store key the moment the doc
+      // has been through the CRDT (or a duplicate). The editor selects by THIS one — see nodeKey.ts.
+      {...{ [NODE_KEY_ATTR]: nodeId }}
       ref={registerElement}
       className={dimmed ? "opacity-40 transition-opacity" : undefined}
     >

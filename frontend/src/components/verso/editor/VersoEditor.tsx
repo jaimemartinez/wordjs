@@ -82,6 +82,7 @@ import { useRegistryVersion } from "@/lib/verso/useRegistryVersion";
 import { ROOT_ID, ROOT_SLOT, type VersoData, type VersoEditorState, type VersoItem } from "@/lib/verso/types";
 import EditorRenderer from "../render/EditorRenderer";
 import { useStoreSlice, type VersoComponentMap } from "../render/context";
+import { nodeKeyFromTarget } from "../render/nodeKey";
 import FrameController from "../canvas/FrameController";
 import VersoThemeTemplate from "../canvas/VersoThemeTemplate";
 import PublicLayoutShell from "@/components/public/PublicLayoutShell";
@@ -382,12 +383,12 @@ export default function VersoEditor({
             // este guard deseleccionaba (select(null)) en mitad de la sesión.
             if (target?.closest?.("[data-wjs-inline-bubble]")) return;
             if (target?.closest?.("a, button, [type='submit']")) e.preventDefault();
-            const el = target?.closest?.("[data-wjs-block-id]") ?? null;
-            handle.select(el ? el.getAttribute("data-wjs-block-id") : null);
+            // The STORE key, not props.id: they diverge as soon as the doc has been through the
+            // CRDT, and `select` drops an id it cannot find — silently (see render/nodeKey.ts).
+            handle.select(nodeKeyFromTarget(target));
         };
         const onDblClick = (e: Event) => {
-            const target = e.target as Element | null;
-            const id = target?.closest?.("[data-wjs-block-id]")?.getAttribute("data-wjs-block-id");
+            const id = nodeKeyFromTarget(e.target);
             if (id) editSelectedInline(handle, registry, id);
         };
         frameDoc.addEventListener("click", onClick, true);

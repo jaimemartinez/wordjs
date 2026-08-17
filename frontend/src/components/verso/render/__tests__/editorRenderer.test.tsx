@@ -161,8 +161,11 @@ describe("EditorRenderer — estructura", () => {
   it("un bloque sin hide/anim/look no gana wrapper del shell (rama 'nada')", () => {
     const { handle, registry } = makeEditor();
     const html = render(handle, registry);
-    // El <h2> del bloque cuelga DIRECTAMENTE del div raíz del bloque.
-    expect(html).toMatch(/<div data-wjs-block-id="h1"><h2/);
+    // El <h2> del bloque cuelga DIRECTAMENTE del div raíz del bloque. La raíz lleva los DOS
+    // identificadores y no son lo mismo: `data-wjs-block-id` es el id del AUTOR (dato del documento,
+    // el que apunta una interacción, presente también en el sitio público) y `data-wjs-node-key` es
+    // la CLAVE DEL STORE, lo único que aceptan `select`/`setInlineEditing` y las transacciones.
+    expect(html).toMatch(/<div data-wjs-block-id="h1" data-wjs-node-key="h1"><h2/);
   });
 
   it("aplica el wrapper de blockShell (clases wjs-*) vía SharedBlockShell, byte-idéntico al público", () => {
@@ -196,10 +199,10 @@ describe("EditorRenderer — estructura", () => {
     handle.setInlineEditing("h1");
     const html = render(handle, registry, { editorChrome: true });
     // El activo no se atenúa…
-    expect(html).toMatch(/<div data-wjs-block-id="h1"><h2/);
+    expect(html).toMatch(/<div data-wjs-block-id="h1" data-wjs-node-key="h1"><h2/);
     // …los demás sí.
-    expect(html).toMatch(/data-wjs-block-id="t1" class="[^"]*opacity-40/);
-    expect(html).toMatch(/data-wjs-block-id="card1" class="[^"]*opacity-40/);
+    expect(html).toMatch(/data-wjs-node-key="t1" class="[^"]*opacity-40/);
+    expect(html).toMatch(/data-wjs-node-key="card1" class="[^"]*opacity-40/);
     // Sin editorChrome, nadie se atenúa.
     const plain = render(handle, registry);
     expect(plain).not.toContain("opacity-40");
