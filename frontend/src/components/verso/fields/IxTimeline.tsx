@@ -37,7 +37,19 @@
  * se ve todo, se puede elegir pista, y nada se arrastra ni se enfoca.
  */
 import React, { useEffect, useRef, useState } from "react";
-import { IX_DELAY_MAX, IX_DELAY_MIN, type IxTrack } from "@/lib/verso/interactions";
+import {
+  IX_DELAY_MAX,
+  IX_DELAY_MIN,
+  IX_DUR_MAX,
+  IX_DUR_MIN,
+  type IxTrack,
+} from "@/lib/verso/interactions";
+
+/**
+ * Tipo MIME del arrastre de CLIPS (paleta del dock → línea de tiempo). Propio y explícito: el drop
+ * solo acepta lo que la paleta puso, jamás texto arbitrario del sistema.
+ */
+export const IX_CLIP_MIME = "application/x-wjs-ix-preset";
 
 /** Duración y retardo EFECTIVOS de una pista sin la clave puesta: los mismos del resto del panel. */
 const DUR_FALLBACK = 600;
@@ -73,9 +85,20 @@ export interface IxTimelineProps {
   onStepAt: (track: number, step: number, at: number) => void;
   /** Retardo (ms) nuevo de la pista, entero y acotado a 0..3000. */
   onDelay: (track: number, ms: number) => void;
+  /**
+   * Duración (ms) nueva de la pista — el ASA del borde derecho del clip (solo con reloj). Sin
+   * este callback el asa no se pinta: la superficie decide si sus clips se redimensionan.
+   */
+  onDur?: (track: number, ms: number) => void;
   onSelectTrack: (track: number) => void;
   /** Clic sin arrastre en un marcador del carril activo: el gesto de navegación de la tira P5. */
   onFocusStep: (track: number, step: number) => void;
+  /**
+   * SOLTAR UN CLIP (dock): un preajuste arrastrado desde la paleta cae sobre la línea de tiempo.
+   * `delayMs` es el punto de suelta en la escala compartida (0 con escalas de posición). Sin este
+   * callback la línea de tiempo no es zona de suelta.
+   */
+  onDropPreset?: (delayMs: number, presetId: string) => void;
 }
 
 export default function IxTimeline({
@@ -86,8 +109,10 @@ export default function IxTimeline({
   readOnly = false,
   onStepAt,
   onDelay,
+  onDur,
   onSelectTrack,
   onFocusStep,
+  onDropPreset,
 }: IxTimelineProps) {
   // El raíl del carril ACTIVO (solo hay uno): la regla que traduce clientX → posición.
   const railRef = useRef<HTMLDivElement | null>(null);
@@ -99,6 +124,10 @@ export default function IxTimeline({
   // Arrastre de la barra de retardo, ANCLADO al punto de agarre: se guarda dónde empezó (clientX y
   // ms) y cada movimiento es un delta sobre eso — sin acumulación, sin deriva.
   const dragDelay = useRef<{ startX: number; base: number } | null>(null);
+  // Arrastre del ASA de duración (el borde derecho del clip), con el mismo anclaje.
+  const dragDur = useRef<{ startX: number; base: number } | null>(null);
+  // Un clip de la paleta sobrevuela la línea de tiempo: anillo de zona de suelta.
+  const [dropOver, setDropOver] = useState(false);
   const [announce, setAnnounce] = useState("");
   // CONTINUIDAD DE FOCO: activar una pista REEMPLAZA su carril (botón pasivo → div editable), así
   // que el botón que tenía el foco se desmonta y el foco caería al <body> — expulsando al usuario
@@ -174,6 +203,21 @@ export default function IxTimeline({
     const clamped = clamp(Math.round(next), IX_DELAY_MIN, IX_DELAY_MAX);
     if (clamped !== delay) onDelay(track, clamped);
     setAnnounce(`Retardo de la pista ${track + 1} — ${clamped} ms`);
+  };
+
+  /** Flechas sobre el asa de duración: ±50 ms, acotado a los topes del modelo. */
+  const keyMoveDur = (e: React.KeyboardEvent, track: number, dur: number): void => {
+    const next =
+      e.key === "ArrowLeft"
+        ? dur - DELAY_KEY_STEP
+        : e.key === "ArrowRight"
+          ? dur + DELAY_KEY_STEP
+          : null;
+    if (next === null || !onDur) return;
+    e.preventDefault();
+    const clamped = clamp(Math.round(next), IX_DUR_MIN, IX_DUR_MAX);
+    if (clamped !== dur) onDur(track, clamped);
+    setAnnounce(`Duración de la pista ${track + 1} — ${clamped} ms`);
   };
 
   /** El nombre accesible de un marcador — los MISMOS de la tira P5 (los tests los fijan). */
@@ -293,6 +337,41 @@ export default function IxTimeline({
               onKeyDown={(e) => keyMoveDelay(e, ti, delay)}
             />
           )}
+          {/* El ASA del clip (borde derecho): arrastra la DURACIÓN, como recortar un clip de
+              vídeo. Solo con reloj y solo si la superficie la pide (onDur). */}
+          {timed && onDur && (
+            <button
+              type="button"
+              aria-label={`Duración de la pista ${ti + 1} — ${dur} ms`}
+              title={`Duración de la pista ${ti + 1} — ${dur} ms. Arrastra el borde, o ←/→ (±50 ms).`}
+              style={{ left: `${((delay + dur) / totalMs) * 100}%`, touchAction: "none" }}
+              className={`absolute top-1/2 h-3.5 w-1.5 -translate-x-1/2 -translate-y-1/2 cursor-ew-resize rounded-sm bg-current/70 hover:bg-current ${RING}`}
+              onPointerDown={(e) => {
+                dragDur.current = { startX: e.clientX, base: dur };
+                e.currentTarget.setPointerCapture(e.pointerId);
+              }}
+              onPointerMove={(e) => {
+                const d = dragDur.current;
+                const rail = railRef.current;
+                if (!d || !rail) return;
+                const rect = rail.getBoundingClientRect();
+                if (rect.width === 0) return;
+                const next = clamp(
+                  Math.round(d.base + ((e.clientX - d.startX) / rect.width) * totalMs),
+                  IX_DUR_MIN,
+                  IX_DUR_MAX,
+                );
+                if (next !== dur) onDur(ti, next);
+              }}
+              onPointerUp={() => {
+                dragDur.current = null;
+              }}
+              onPointerCancel={() => {
+                dragDur.current = null;
+              }}
+              onKeyDown={(e) => keyMoveDur(e, ti, dur)}
+            />
+          )}
           {t.steps.map((s, si) => {
             const name = markerName(t, si);
             const left = `${posPct(t, s.at)}%`;
@@ -356,6 +435,17 @@ export default function IxTimeline({
     );
   };
 
+  // ZONA DE SUELTA de clips (solo si la superficie la pide): el punto de suelta se convierte a la
+  // escala compartida con el raíl del carril activo como regla — la misma que usan los arrastres.
+  // Sin raíl (todo en solo lectura), el punto da igual: soltar aplica el preajuste tal cual.
+  const dropDelayAt = (clientX: number): number => {
+    if (!timed) return 0;
+    const rect = railRef.current?.getBoundingClientRect();
+    if (!rect || rect.width === 0) return 0;
+    const frac = clamp((clientX - rect.left) / rect.width, 0, 1);
+    return clamp(Math.round(frac * totalMs), IX_DELAY_MIN, IX_DELAY_MAX);
+  };
+
   return (
     <div
       id={id}
@@ -365,7 +455,29 @@ export default function IxTimeline({
           ? "Línea de tiempo de las pistas (ms)"
           : "Línea de tiempo de las pistas (0–100 % del recorrido)"
       }
-      className="w-full"
+      className={`w-full rounded ${dropOver ? "outline outline-2 outline-current/60" : ""}`}
+      onDragOver={
+        onDropPreset
+          ? (e) => {
+              if (![...e.dataTransfer.types].includes(IX_CLIP_MIME)) return;
+              e.preventDefault();
+              e.dataTransfer.dropEffect = "copy";
+              if (!dropOver) setDropOver(true);
+            }
+          : undefined
+      }
+      onDragLeave={onDropPreset ? () => setDropOver(false) : undefined}
+      onDrop={
+        onDropPreset
+          ? (e) => {
+              setDropOver(false);
+              const presetId = e.dataTransfer.getData(IX_CLIP_MIME);
+              if (!presetId) return;
+              e.preventDefault();
+              onDropPreset(dropDelayAt(e.clientX), presetId);
+            }
+          : undefined
+      }
     >
       {/* La escala, decorativa: los valores canónicos viven en los campos numéricos del panel. */}
       <div aria-hidden="true" className="mb-0.5 flex items-center gap-2 px-1 text-[9px] opacity-60">

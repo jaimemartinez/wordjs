@@ -33,9 +33,18 @@ import { useSiteIxPresets } from "../canvas/useSiteIxPresets";
 import { requestIxPreview, requestIxScrub } from "../canvas/IxCanvasEngine";
 import InteractionsControl, { isTimed } from "../fields/InteractionsControl";
 import IxScrubberControl from "../fields/IxScrubberControl";
-import IxTimeline from "../fields/IxTimeline";
+import IxTimeline, { IX_CLIP_MIME } from "../fields/IxTimeline";
 import VersoFieldControl from "../fields/VersoFieldControl";
-import { ixPanelState, setDelay, setStepAt } from "./ixPanelModel";
+import {
+    addTrackFromPreset,
+    ixPanelState,
+    ixPresetOptions,
+    setDelay,
+    setDuration,
+    setStepAt,
+    IX_PANEL_CUSTOM,
+    IX_PANEL_NONE,
+} from "./ixPanelModel";
 import { dockFieldEntries } from "./panelTabs";
 
 const selectState = (s: VersoEditorState) => s;
@@ -143,6 +152,11 @@ function DockMotion({
     const linked = st.presetId !== null;
     const [trackSel, setTrackSel] = useState(0);
     const active = trackSel < st.tracks.length ? trackSel : 0;
+    // La PALETA DE CLIPS: los preajustes reales (sin los centinelas «Ninguna»/«Personalizada…»).
+    const clips = useMemo(
+        () => ixPresetOptions(ixCtx).filter((o) => o.value !== IX_PANEL_NONE && o.value !== IX_PANEL_CUSTOM),
+        [ixCtx],
+    );
 
     const onFieldChange = (key: string, value: unknown) => {
         handle.transact((tx) => tx.setProps(node.id, { [key]: value }), {
@@ -216,6 +230,32 @@ function DockMotion({
                     </div>
                 </div>
 
+                {/* La PALETA DE CLIPS: cada preajuste es un bloque que se ARRASTRA a la línea de
+                    tiempo (y se aplica soltándolo donde caiga) — o se aplica con un clic, que es
+                    el mismo camino sin ratón. Con cuerpo propio, soltar AÑADE una pista-clip. */}
+                <div className="h-9 shrink-0 px-3 flex items-center gap-1.5 border-b border-[var(--ed-outline-variant)] overflow-x-auto custom-scrollbar">
+                    <span className="shrink-0 text-[9px] font-semibold uppercase tracking-wide text-[var(--ed-outline)]">
+                        {trStr("Clips", language)}
+                    </span>
+                    {clips.map((c) => (
+                        <button
+                            key={c.value}
+                            type="button"
+                            draggable
+                            data-ix-clip={c.value}
+                            title={trStr("Arrastra a la línea de tiempo, o pulsa para aplicar", language)}
+                            className="shrink-0 cursor-grab rounded-md border border-[var(--ed-outline-variant)] bg-[var(--ed-surface-container)] px-2 py-0.5 text-[10px] font-medium text-[var(--ed-on-surface-variant)] hover:border-[var(--ed-primary)] hover:text-[var(--ed-primary)] transition-colors"
+                            onDragStart={(e) => {
+                                e.dataTransfer.setData(IX_CLIP_MIME, c.value);
+                                e.dataTransfer.effectAllowed = "copy";
+                            }}
+                            onClick={() => onFieldChange("ix", addTrackFromPreset(ix, c.value, ixCtx))}
+                        >
+                            {c.label}
+                        </button>
+                    ))}
+                </div>
+
                 <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar px-4 py-3 text-[var(--ed-on-surface-variant)]">
                     {st.active && st.tracks.length > 0 ? (
                         <IxTimeline
@@ -225,16 +265,32 @@ function DockMotion({
                             readOnly={linked}
                             onStepAt={(t, i, at) => onFieldChange("ix", setStepAt(ix, i, at, ixCtx, t))}
                             onDelay={(t, ms) => onFieldChange("ix", setDelay(ix, ms, ixCtx, t))}
+                            onDur={(t, ms) => onFieldChange("ix", setDuration(ix, ms, ixCtx, t))}
                             onSelectTrack={setTrackSel}
                             // El gesto «clic quieto → fila del paso» exigiría alcanzar las filas del
                             // inspector desde aquí; de momento el clic elige la pista, y los campos
                             // numéricos del inspector siguen siendo el camino canónico.
                             onFocusStep={(t) => setTrackSel(t)}
+                            onDropPreset={(delayMs, presetId) =>
+                                onFieldChange("ix", addTrackFromPreset(ix, presetId, ixCtx, delayMs))
+                            }
                         />
                     ) : (
-                        <div className="h-full flex items-center justify-center text-center">
+                        <div
+                            className="h-full flex items-center justify-center text-center rounded border border-dashed border-[var(--ed-outline-variant)]"
+                            // También la zona VACÍA acepta el primer clip: soltar aplica el preajuste.
+                            onDragOver={(e) => {
+                                if ([...e.dataTransfer.types].includes(IX_CLIP_MIME)) e.preventDefault();
+                            }}
+                            onDrop={(e) => {
+                                const presetId = e.dataTransfer.getData(IX_CLIP_MIME);
+                                if (!presetId) return;
+                                e.preventDefault();
+                                onFieldChange("ix", addTrackFromPreset(ix, presetId, ixCtx));
+                            }}
+                        >
                             <p className="text-[12px]">
-                                {trStr("Elige un preajuste o añade una interacción en el inspector para ver su línea de tiempo aquí.", language)}
+                                {trStr("Arrastra un clip de la paleta (o elige un preajuste en el inspector) para encender la línea de tiempo.", language)}
                             </p>
                         </div>
                     )}

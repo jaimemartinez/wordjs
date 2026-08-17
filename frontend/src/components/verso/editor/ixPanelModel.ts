@@ -739,6 +739,40 @@ export function addTrack(raw: unknown, ctx?: IxCompileCtx): IxWrite {
   return withSpecExtras(raw, { v: 1, trigger: body.trigger, tracks: [...body.tracks, track] });
 }
 
+/**
+ * SOLTAR UN CLIP (dock, timeline de editor de vídeo): un preajuste arrastrado a la línea de tiempo.
+ *
+ * Dos comportamientos, ambos honestos con el modelo de presets:
+ *  - SIN cuerpo propio (nada, o enlazado a un preajuste): soltar APLICA el preajuste — el nivel 1
+ *    de siempre, por REFERENCIA (la propagación es el motivo entero de los presets). El punto de
+ *    suelta se ignora a propósito: poner un retardo bifurcaría el preajuste en silencio.
+ *  - CON cuerpo propio: la pista 0 del preajuste se COPIA como pista nueva — el clip — con el
+ *    retardo del punto de suelta. El disparador del preajuste se descarta: una interacción tiene
+ *    UN disparador (el del bloque), como el resto de escritores de pista. Al tope de pistas, o con
+ *    un preajuste inexistente, no se escribe nada.
+ */
+export function addTrackFromPreset(
+  raw: unknown,
+  presetId: string,
+  ctx?: IxCompileCtx,
+  delayMs?: number,
+): IxWrite {
+  const state = ixPanelState(raw, ctx);
+  if (!state.custom) return setPresetChoice(raw, presetId, ctx);
+  const body = ownBody(raw, ctx);
+  if (body.tracks.length >= IX_MAX_TRACKS) return normalizeIxSpec(raw)?.spec;
+  const resolved = resolveIxBody({ v: 1, preset: presetId }, ctx);
+  const src = resolved?.body.tracks[0];
+  if (!src) return normalizeIxSpec(raw)?.spec;
+  const track: IxTrack = { ...src };
+  if (delayMs !== undefined) {
+    const delay = clampInput(Math.round(delayMs), IX_DELAY_MIN, IX_DELAY_MAX, 0);
+    if (delay > 0) track.delay = delay;
+    else delete track.delay;
+  }
+  return withSpecExtras(raw, { v: 1, trigger: body.trigger, tracks: [...body.tracks, track] });
+}
+
 /** Quitar una pista. La última no se quita (para eso está «Quitar» la interacción entera). */
 export function removeTrack(raw: unknown, index: number, ctx?: IxCompileCtx): IxWrite {
   const body = ownBody(raw, ctx);

@@ -8,6 +8,14 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Added
 
+- **Editor: motion presets become draggable clips.** The dock's stage gains a clip palette: every
+  motion preset is a block you drag onto the timeline — it lands as a new track at the exact drop
+  position, video-editor style — or apply with a plain click (the same path, no mouse required).
+  On a block with no interaction yet, dropping a clip applies the preset by reference, so site-wide
+  preset propagation stays intact. Clips also grew a trim handle: drag the right edge of a lane's
+  bar (or press the arrow keys on it) to resize its duration, with the inspector's numeric fields
+  tracking live. One writer, one undo history, no new data shapes.
+
 - **Editor: the motion dock gets a video-editor anatomy.** The dock now splits into an inspector
   column (the full interactions control) and a stage: a transport bar with the play buttons and
   the manual scrubber as a playhead, and the multi-lane timeline promoted to protagonist — always

@@ -1047,6 +1047,7 @@ export default function InteractionsControl({
                     readOnly={linked}
                     onStepAt={(t, i, at) => onChange(setStepAt(value, i, at, ixCtx, t))}
                     onDelay={(t, ms) => onChange(setDelay(value, ms, ixCtx, t))}
+                    onDur={(t, ms) => onChange(setDuration(value, ms, ixCtx, t))}
                     onSelectTrack={setTrackSel}
                     onFocusStep={(t, i) => focusStepRow(i)}
                   />

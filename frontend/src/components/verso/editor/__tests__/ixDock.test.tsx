@@ -15,7 +15,18 @@ import { renderToStaticMarkup } from "react-dom/server";
 vi.mock("@/contexts/I18nContext", () => ({
     useI18n: () => ({ t: (k: string) => k, language: "es" }),
 }));
-vi.mock("../../canvas/useSiteIxPresets", () => ({ useSiteIxPresets: () => ({}) }));
+vi.mock("../../canvas/useSiteIxPresets", () => ({
+    useSiteIxPresets: () => ({
+        // Un preajuste de muestra: enciende la PALETA DE CLIPS del escenario.
+        presets: {
+            "sys:x": {
+                name: "Aparecer",
+                trigger: { on: "view", once: true },
+                tracks: [{ target: { kind: "self" }, steps: [{ at: 0, set: { opacity: 0 } }, { at: 100, set: { opacity: 1 } }] }],
+            },
+        },
+    }),
+}));
 vi.mock("../../canvas/IxCanvasEngine", () => ({
     requestIxPreview: () => {},
     requestIxScrub: () => {},
@@ -100,6 +111,10 @@ describe("IxDock — anatomía de editor de vídeo", () => {
         expect(html).toContain('data-timeline="1"');
         expect(html).toContain('data-readonly="0"');
         expect(html).toContain('data-timed="1"');
+        // La PALETA DE CLIPS: cada preajuste, arrastrable Y aplicable con clic.
+        expect(html).toContain('data-ix-clip="sys:x"');
+        expect(html).toContain('draggable="true"');
+        expect(html).toContain("Aparecer");
     });
 
     it("sin interacción aún: el escenario lo dice honesto y no pinta timeline", () => {
@@ -107,8 +122,9 @@ describe("IxDock — anatomía de editor de vídeo", () => {
         expect(html).toContain('data-verso-dock="block"');
         expect(html).not.toContain('data-timeline="1"');
         expect(html).toContain("línea de tiempo");
-        // El inspector sigue: desde ahí se elige el preajuste que la enciende.
+        // El inspector sigue, y la PALETA también: el primer clip se puede soltar en la zona vacía.
         expect(html).toContain('data-ix="1"');
+        expect(html).toContain('data-ix-clip="sys:x"');
     });
 
     it("sin selección: estado vacío honesto, sin controles", () => {

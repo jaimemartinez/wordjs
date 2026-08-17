@@ -26,6 +26,7 @@ import {
 import {
   addStep,
   addTrack,
+  addTrackFromPreset,
   availableProps,
   removeTrack,
   clearIx,
@@ -385,6 +386,28 @@ describe("pasos", () => {
       .toEqual([0, 1, 60, 100]);
     expect(ixPanelState(setStepAt(spec, 2, 999, CTX), CTX).tracks[0].steps.map((s) => s.at))
       .toEqual([0, 30, 99, 100]);
+  });
+
+  it("addTrackFromPreset (clip): sin cuerpo propio ENLAZA; con cuerpo, añade la pista con su retardo", () => {
+    const clipId = ixPresetOptions(CTX).find((o) => o.value.startsWith("sys:"))!.value;
+    // Vacío (o enlazado): soltar aplica el preajuste POR REFERENCIA — la propagación manda — y el
+    // punto de suelta se ignora a propósito (un retardo aquí bifurcaría el preajuste en silencio).
+    const linked = addTrackFromPreset(undefined, clipId, CTX, 400)!;
+    expect(linked).toMatchObject({ v: 1, preset: clipId });
+    expect("tracks" in (linked as object)).toBe(false);
+    // Cuerpo propio: la pista 0 del preajuste se copia como CLIP con el retardo del punto de suelta.
+    const custom = setPresetChoice(undefined, IX_PANEL_CUSTOM, CTX)!;
+    const dropped = addTrackFromPreset(custom, clipId, CTX, 400)!;
+    const st = ixPanelState(dropped, CTX);
+    expect(st.custom).toBe(true);
+    expect(st.tracks).toHaveLength(2);
+    expect(st.tracks[1].delay).toBe(400);
+    assertWritable(dropped);
+    // Un preajuste inexistente no escribe nada; al tope de pistas, tampoco.
+    expect(addTrackFromPreset(custom, "sys:no-existe", CTX, 0)).toEqual(normalizeIxSpec(custom)?.spec);
+    const full = addTrack(addTrack(custom, CTX), CTX);
+    expect(ixPanelState(full, CTX).tracks).toHaveLength(3);
+    expect(addTrackFromPreset(full, clipId, CTX)).toEqual(normalizeIxSpec(full)?.spec);
   });
 
   it("cambiar el src del scrub, editar su rango o resetearlo CONSERVA el suavizado (P10)", () => {

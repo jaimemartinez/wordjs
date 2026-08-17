@@ -1063,6 +1063,7 @@ export default function PresetEditor({
                             timed={timed}
                             onStepAt={(t, i, at) => write(setStepAt(draft, i, at, undefined, t))}
                             onDelay={(t, ms) => write(setDelay(draft, ms, undefined, t))}
+                            onDur={(t, ms) => write(setDuration(draft, ms, undefined, t))}
                             onSelectTrack={setTrackSel}
                             onFocusStep={(t, i) => focusStepRow(i)}
                         />
