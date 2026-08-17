@@ -30,9 +30,10 @@
  * PISTAS (P5): un cuerpo propio puede llevar hasta `IX_MAX_TRACKS` pistas sobre el MISMO
  * disparador. La pista ACTIVA es estado local del panel (elegirla no escribe nada en el documento;
  * el `key` por bloque del panel la devuelve a la 0 al cambiar de selección): todos los controles de
- * pista leen `tracks[activa]` y escriben pasando ese índice al modelo. La TIRA de pasos, sobre la
- * lista, es imagen más navegación — cada marcador es un botón que lleva el foco a la fila de su
- * paso — y nunca el único camino: las filas siguen debajo.
+ * pista leen `tracks[activa]` y escriben pasando ese índice al modelo. La LÍNEA DE TIEMPO (P9),
+ * sobre la lista, es imagen, navegación y ajuste — un carril por pista; en la activa, marcadores y
+ * retardo se arrastran o se mueven con flechas, y un clic sin arrastre lleva el foco a la fila del
+ * paso (el gesto de la tira P5) — y nunca el único camino: los campos numéricos siguen debajo.
  */
 import React, { useCallback, useId, useMemo, useRef, useState } from "react";
 import MSym from "@/components/editor/MSym";
@@ -132,6 +133,7 @@ import {
 import { requestIxPreview, requestIxScrub } from "../canvas/IxCanvasEngine";
 import IxCurveEditor, { ixBezSeed, IX_BEZ_SENTINEL, type IxBez } from "./IxCurveEditor";
 import IxScrubberControl from "./IxScrubberControl";
+import IxTimeline from "./IxTimeline";
 import VersoFieldControl from "./VersoFieldControl";
 
 const BTN =
@@ -237,7 +239,7 @@ export default function InteractionsControl({
   const [trackSel, setTrackSel] = useState(0);
   const active = trackSel < state.tracks.length ? trackSel : 0;
   const track = state.tracks[active];
-  // Filas del nivel 3, por índice de paso: la TIRA de arriba las enfoca desde sus marcadores.
+  // Filas del nivel 3, por índice de paso: la LÍNEA DE TIEMPO las enfoca desde sus marcadores.
   const stepRowRefs = useRef<Array<HTMLLIElement | null>>([]);
   const focusStepRow = (i: number): void => {
     const row = stepRowRefs.current[i];
@@ -918,38 +920,23 @@ export default function InteractionsControl({
                   Solo lectura: este bloque usa un preajuste. Desvincúlalo para editar sus pasos.
                 </p>
               )}
-              {/* La TIRA: los pasos de la pista activa sobre un raíl 0–100 %. Imagen MÁS navegación
-                  (cada marcador es un botón real que lleva el foco a la fila de su paso), nunca el
-                  único camino: las filas siguen debajo. */}
-              <div
-                role="group"
-                aria-label={`Pasos de la pista ${active + 1} sobre el recorrido (0–100 %)`}
-                className="relative mx-1.5 mb-2 h-6"
-              >
-                <div
-                  aria-hidden="true"
-                  className="absolute left-0 right-0 top-1/2 h-px -translate-y-1/2 bg-[var(--ed-outline-variant)]"
+              {/* La LÍNEA DE TIEMPO (P9): un carril por pista sobre una escala compartida (ms con
+                  reloj; 0–100 % con scrub/pointer). En la pista activa, los marcadores intermedios
+                  y el retardo se ARRASTRAN (o se mueven con flechas); un clic sin arrastre conserva
+                  el gesto de la tira P5 — llevar el foco a la fila del paso. Nunca el único camino:
+                  los campos numéricos de abajo son el canónico. El componente es agnóstico de
+                  tokens (`currentColor`): el tono lo pone esta superficie con su clase de texto. */}
+              <div className="mb-2 text-[var(--ed-on-surface-variant)]">
+                <IxTimeline
+                  tracks={state.tracks}
+                  active={active}
+                  timed={isTimed(trigger.on)}
+                  readOnly={linked}
+                  onStepAt={(t, i, at) => onChange(setStepAt(value, i, at, ixCtx, t))}
+                  onDelay={(t, ms) => onChange(setDelay(value, ms, ixCtx, t))}
+                  onSelectTrack={setTrackSel}
+                  onFocusStep={(t, i) => focusStepRow(i)}
                 />
-                {track.steps.map((step, i) => {
-                  const isFirst = i === 0;
-                  const isLast = i === track.steps.length - 1;
-                  const name = isFirst
-                    ? "Inicio — 0 %"
-                    : isLast
-                      ? "Final — 100 %"
-                      : `Paso ${i + 1} — ${step.at} %`;
-                  return (
-                    <button
-                      key={i}
-                      type="button"
-                      aria-label={name}
-                      title={`${name} — ir a su fila`}
-                      style={{ left: `${step.at}%` }}
-                      className="absolute top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full border border-[var(--ed-outline)] bg-[var(--ed-surface-container-high)] hover:border-[var(--ed-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--ed-primary)]"
-                      onClick={() => focusStepRow(i)}
-                    />
-                  );
-                })}
               </div>
               <ol className="space-y-2">
                 {track.steps.map((step, i) => (
