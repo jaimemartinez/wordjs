@@ -70,10 +70,17 @@ export const IX_STYLE_ID = "wjs-ix";
  */
 export const IX_PREVIEW_EVENT = "wjs-ix-preview";
 
-/** Pide una reproducción de las interacciones del canvas. No-op fuera del navegador. */
-export function requestIxPreview(doc?: Document | null): void {
+/** `detail` del replay (P5): `scope: "block"` reproduce SOLO el bloque seleccionado. */
+export type IxPreviewDetail = { scope?: "page" | "block" };
+
+/**
+ * Pide una reproducción de las interacciones del canvas. Con `scope: "block"` solo se re-arma el
+ * bloque SELECCIONADO — a quién, lo decide el motor leyendo la selección del store, igual que el
+ * scrubber: el panel no tiene por qué conocer su propio bloque. No-op fuera del navegador.
+ */
+export function requestIxPreview(scope: "page" | "block" = "page", doc?: Document | null): void {
   const target = doc ?? (typeof document === "undefined" ? null : document);
-  target?.dispatchEvent(new CustomEvent(IX_PREVIEW_EVENT));
+  target?.dispatchEvent(new CustomEvent<IxPreviewDetail>(IX_PREVIEW_EVENT, { detail: { scope } }));
 }
 
 /**
@@ -181,7 +188,43 @@ export default function IxCanvasEngine({ handle, ixCtx }: IxCanvasEngineProps) {
     const frameDoc = canvas?.getFrameDocument();
     if (!frameDoc) return;
     const editorDoc = typeof document === "undefined" ? null : document;
-    const onPreview = () => {
+
+    /**
+     * Replay de UN bloque (P5): re-armar solo lo suyo, sin tocar al resto del lienzo.
+     *  - El latch (`data-wjs-ix` / `data-wjs-anim`) se re-arma quitando el atributo, forzando un
+     *    reflow y reponiendo "in" — la misma secuencia que el replay global del runtime.
+     *  - Una animación CSS temporal (load) no tiene atributo que tocar: se reinicia con
+     *    `animation: none` + reflow + retirar el inline — el reinicio canónico de una animación.
+     * A quién: la SELECCIÓN del store, la única verdad sobre "el bloque que el autor edita".
+     */
+    const replayBlock = () => {
+      const nodeId = handle.getState().selection.nodeId;
+      if (!nodeId) return;
+      const root = frameDoc.querySelector(`[data-wjs-node-key="${nodeId}"]`);
+      if (!root) return;
+      for (const el of Array.from(root.querySelectorAll("[data-wjs-ix],[data-wjs-anim]"))) {
+        for (const attr of ["data-wjs-ix", "data-wjs-anim"] as const) {
+          if (el.getAttribute(attr) === "in") {
+            el.removeAttribute(attr);
+            void (el as HTMLElement).offsetWidth;
+            el.setAttribute(attr, "in");
+          }
+        }
+      }
+      for (const el of Array.from(root.querySelectorAll('[data-wjs-ix-on="load"]'))) {
+        const h = el as HTMLElement;
+        h.style.animation = "none";
+        void h.offsetWidth;
+        h.style.animation = "";
+      }
+    };
+
+    const onPreview = (ev: Event) => {
+      const scope = (ev as CustomEvent<IxPreviewDetail>).detail?.scope ?? "page";
+      if (scope === "block") {
+        replayBlock();
+        return;
+      }
       // El MISMO evento que ya re-arma las entradas: una sola reproducción mueve las dos capas.
       frameDoc.dispatchEvent(new CustomEvent(ANIM_REPLAY_EVENT));
     };
@@ -193,7 +236,7 @@ export default function IxCanvasEngine({ handle, ixCtx }: IxCanvasEngineProps) {
       editorDoc?.removeEventListener(IX_PREVIEW_EVENT, onPreview);
       if (frameDoc !== editorDoc) frameDoc.removeEventListener(IX_PREVIEW_EVENT, onPreview);
     };
-  }, [canvas]);
+  }, [canvas, handle]);
 
   /* ── 4. El scrubber: recorrer la interacción a mano ───────────────── */
   React.useEffect(() => {

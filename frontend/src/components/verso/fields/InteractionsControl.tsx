@@ -26,14 +26,22 @@
  * ANUNCIO DE CAMBIOS (AA): una región `role="status"` con el resumen de lo que hay puesto — el
  * RESULTADO, no el gesto. Quien no ve el lienzo necesita oír "al entrar en pantalla, sus hijos,
  * 2 pasos", no "botón pulsado".
+ *
+ * PISTAS (P5): un cuerpo propio puede llevar hasta `IX_MAX_TRACKS` pistas sobre el MISMO
+ * disparador. La pista ACTIVA es estado local del panel (elegirla no escribe nada en el documento;
+ * el `key` por bloque del panel la devuelve a la 0 al cambiar de selección): todos los controles de
+ * pista leen `tracks[activa]` y escriben pasando ese índice al modelo. La TIRA de pasos, sobre la
+ * lista, es imagen más navegación — cada marcador es un botón que lleva el foco a la fila de su
+ * paso — y nunca el único camino: las filas siguen debajo.
  */
-import React, { useCallback, useId, useMemo } from "react";
+import React, { useCallback, useId, useMemo, useRef, useState } from "react";
 import MSym from "@/components/editor/MSym";
 import {
   IX_BREAKPOINTS,
   IX_CLIP_DIRS,
   IX_EASINGS,
   IX_MAX_STEPS,
+  IX_MAX_TRACKS,
   IX_MAX_WORDS,
   IX_ORIGINS,
   IX_PERSP_DEFAULT,
@@ -57,6 +65,7 @@ import { IX_STAGGER_COLS_MAX, IX_STAGGER_COLS_MIN } from "@/lib/verso/interactio
 import type { NumberVersoField, RadioVersoField, SelectVersoField } from "@/lib/verso/registry";
 import {
   addStep,
+  addTrack,
   availableProps,
   clearIx,
   effectiveRange,
@@ -65,6 +74,7 @@ import {
   ixPresetOptions,
   rangeEditable,
   removeStep,
+  removeTrack,
   resetRange,
   setAlternate,
   setBreakpointOff,
@@ -175,8 +185,11 @@ export interface InteractionsControlProps {
    * bloque, se lo dice el bloque.
    */
   supportsWords?: boolean;
-  /** Inyectable para tests; por defecto emite el evento de previsualización en el documento. */
-  onPreview?: () => void;
+  /**
+   * Inyectable para tests; por defecto emite el evento de previsualización en el documento.
+   * `block` re-arma solo el bloque seleccionado; `page`, todas las interacciones del lienzo.
+   */
+  onPreview?: (scope: "page" | "block") => void;
   /** Inyectable para tests; por defecto emite el evento del scrubber en el documento. */
   onScrub?: (pct: number | null) => void;
 }
@@ -198,7 +211,21 @@ export default function InteractionsControl({
   );
   const state = useMemo(() => ixPanelState(value, ixCtx), [value, ixCtx]);
   const presetOptions = useMemo(() => ixPresetOptions(ixCtx), [ixCtx]);
-  const track = state.tracks[0];
+  // Pista ACTIVA (P5): estado LOCAL del panel — elegir pista no es editar y no escribe nada. El
+  // `key` por bloque del panel remonta el componente al cambiar la selección (vuelta a la 0); el
+  // clamp cubre el otro camino: si el recuento encoge por debajo del índice, se vuelve a la 0.
+  const [trackSel, setTrackSel] = useState(0);
+  const active = trackSel < state.tracks.length ? trackSel : 0;
+  const track = state.tracks[active];
+  // Filas del nivel 3, por índice de paso: la TIRA de arriba las enfoca desde sus marcadores.
+  const stepRowRefs = useRef<Array<HTMLLIElement | null>>([]);
+  const focusStepRow = (i: number): void => {
+    const row = stepRowRefs.current[i];
+    if (!row) return;
+    row.scrollIntoView({ block: "nearest" });
+    // El primer control OPERABLE de la fila: un input readOnly se enfoca; un select disabled, no.
+    row.querySelector<HTMLElement>("input:enabled, select:enabled, button:enabled")?.focus();
+  };
   const trigger = state.trigger;
   const linked = state.presetId !== null;
   // Dispositivos APAGADOS (P4). El dato guarda dónde NO corre; los checkboxes muestran lo contrario.
@@ -261,6 +288,11 @@ export default function InteractionsControl({
     type: "select",
     options: STAGGER_FROMS.map((f) => ({ label: IX_STAGGER_FROM_LABELS[f], value: f })),
   };
+  // Selector de pista (P5), con la piel de pestañas del radiogrupo de VersoFieldControl.
+  const trackField: RadioVersoField = {
+    type: "radio",
+    options: state.tracks.map((_, i) => ({ label: `Pista ${i + 1}`, value: i })),
+  };
   const currentTarget = track?.target.kind;
   const targets: IxPanelTargetKind[] =
     supportsWords || currentTarget === "words" ? [...OFFERED_TARGETS, "words"] : OFFERED_TARGETS;
@@ -291,10 +323,21 @@ export default function InteractionsControl({
             type="button"
             className={BTN}
             disabled={!state.active}
-            title="Reproducir la interacción en el lienzo"
-            onClick={() => (onPreview ? onPreview() : requestIxPreview())}
+            title="Reproducir la interacción de este bloque en el lienzo"
+            aria-label="Probar la interacción de este bloque"
+            onClick={() => (onPreview ? onPreview("block") : requestIxPreview("block"))}
           >
             <MSym name="play_arrow" size={12} className="align-[-2px]" /> Probar
+          </button>
+          <button
+            type="button"
+            className={`${BTN} px-1.5`}
+            disabled={!state.active}
+            title="Reproducir todas las interacciones de la página en el lienzo"
+            aria-label="Probar todas las interacciones de la página"
+            onClick={() => (onPreview ? onPreview("page") : requestIxPreview("page"))}
+          >
+            Probar todo
           </button>
           <button
             type="button"
@@ -487,12 +530,54 @@ export default function InteractionsControl({
             </div>
           ) : (
             <>
+              {/* ── Pistas (P5) — hasta IX_MAX_TRACKS cuerpos independientes sobre el MISMO
+                  disparador. Todo lo de abajo (objetivo, escalonado, tiempos, reproducción,
+                  opciones y pasos) lee y escribe SOLO la pista activa. */}
+              {state.tracks.length > 1 && (
+                <VersoFieldControl
+                  field={trackField}
+                  name="ix-track"
+                  label="Pista"
+                  value={active}
+                  onChange={(v) => setTrackSel(typeof v === "number" ? v : 0)}
+                />
+              )}
+              <div className="mb-3 flex gap-1">
+                {state.tracks.length < IX_MAX_TRACKS && (
+                  <button
+                    type="button"
+                    className={`${BTN} flex-1`}
+                    title="Añadir una pista nueva (nace neutra: no mueve nada hasta que la edites)"
+                    onClick={() => {
+                      onChange(addTrack(value, ixCtx));
+                      // La pista nueva queda seleccionada: su índice es el recuento ANTES de añadir.
+                      setTrackSel(state.tracks.length);
+                    }}
+                  >
+                    + Añadir pista
+                  </button>
+                )}
+                {state.tracks.length > 1 && (
+                  <button
+                    type="button"
+                    className={`${BTN} flex-1`}
+                    aria-label={`Quitar la pista ${active + 1}`}
+                    onClick={() => {
+                      onChange(removeTrack(value, active, ixCtx));
+                      setTrackSel(0);
+                    }}
+                  >
+                    Quitar pista
+                  </button>
+                )}
+              </div>
+
               <VersoFieldControl
                 field={targetField}
                 name="ix-target"
                 label="Qué se mueve"
                 value={track.target.kind}
-                onChange={(v) => onChange(setTargetKind(value, v as IxPanelTargetKind, ixCtx))}
+                onChange={(v) => onChange(setTargetKind(value, v as IxPanelTargetKind, ixCtx, active))}
               />
 
               {track.target.kind === "words" && (
@@ -515,7 +600,9 @@ export default function InteractionsControl({
                       : "Escalonado entre hermanos (ms)"
                   }
                   value={track.stagger?.each ?? 0}
-                  onChange={(v) => onChange(setStagger(value, typeof v === "number" ? v : 0, ixCtx))}
+                  onChange={(v) =>
+                    onChange(setStagger(value, typeof v === "number" ? v : 0, ixCtx, active))
+                  }
                 />
               )}
 
@@ -533,13 +620,17 @@ export default function InteractionsControl({
                       label="Orden"
                       value={track.stagger.from ?? "start"}
                       readOnly={track.stagger.cols != null}
-                      onChange={(v) => onChange(setStaggerFrom(value, v as IxStaggerFrom, ixCtx))}
+                      onChange={(v) =>
+                        onChange(setStaggerFrom(value, v as IxStaggerFrom, ixCtx, active))
+                      }
                     />
                     <label className={CHECK}>
                       <input
                         type="checkbox"
                         checked={track.stagger.total === true}
-                        onChange={(e) => onChange(setStaggerTotal(value, e.target.checked, ixCtx))}
+                        onChange={(e) =>
+                          onChange(setStaggerTotal(value, e.target.checked, ixCtx, active))
+                        }
                       />
                       Repartir como tiempo total
                     </label>
@@ -554,6 +645,7 @@ export default function InteractionsControl({
                                 value,
                                 e.target.checked ? IX_STAGGER_COLS_MIN : null,
                                 ixCtx,
+                                active,
                               ),
                             )
                           }
@@ -579,6 +671,7 @@ export default function InteractionsControl({
                                   // Vaciar el input no apaga la rejilla: se conserva el valor puesto.
                                   typeof v === "number" ? v : (track.stagger?.cols ?? null),
                                   ixCtx,
+                                  active,
                                 ),
                               )
                             }
@@ -598,7 +691,7 @@ export default function InteractionsControl({
                       label="Duración (ms)"
                       value={track.dur ?? 600}
                       onChange={(v) =>
-                        onChange(setDuration(value, typeof v === "number" ? v : 600, ixCtx))
+                        onChange(setDuration(value, typeof v === "number" ? v : 600, ixCtx, active))
                       }
                     />
                   </div>
@@ -609,7 +702,7 @@ export default function InteractionsControl({
                       label="Retardo (ms)"
                       value={track.delay ?? 0}
                       onChange={(v) =>
-                        onChange(setDelay(value, typeof v === "number" ? v : 0, ixCtx))
+                        onChange(setDelay(value, typeof v === "number" ? v : 0, ixCtx, active))
                       }
                     />
                   </div>
@@ -631,7 +724,7 @@ export default function InteractionsControl({
                         value={infinite ? undefined : repeatCount}
                         readOnly={infinite}
                         onChange={(v) =>
-                          onChange(setRepeat(value, typeof v === "number" ? v : 1, ixCtx))
+                          onChange(setRepeat(value, typeof v === "number" ? v : 1, ixCtx, active))
                         }
                       />
                     </div>
@@ -640,7 +733,7 @@ export default function InteractionsControl({
                         type="checkbox"
                         checked={infinite}
                         onChange={(e) =>
-                          onChange(setRepeat(value, e.target.checked ? "inf" : 1, ixCtx))
+                          onChange(setRepeat(value, e.target.checked ? "inf" : 1, ixCtx, active))
                         }
                       />
                       Infinita
@@ -649,7 +742,9 @@ export default function InteractionsControl({
                       <input
                         type="checkbox"
                         checked={track.alt === true}
-                        onChange={(e) => onChange(setAlternate(value, e.target.checked, ixCtx))}
+                        onChange={(e) =>
+                          onChange(setAlternate(value, e.target.checked, ixCtx, active))
+                        }
                       />
                       Ida y vuelta
                     </label>
@@ -664,7 +759,7 @@ export default function InteractionsControl({
                   name="ix-clip-dir"
                   label="Revelado"
                   value={track.clipDir ?? "right"}
-                  onChange={(v) => onChange(setClipDir(value, v as IxClipDir, ixCtx))}
+                  onChange={(v) => onChange(setClipDir(value, v as IxClipDir, ixCtx, active))}
                 />
               )}
               {showOrigin && (
@@ -673,7 +768,7 @@ export default function InteractionsControl({
                   name="ix-origin"
                   label="Origen del giro y la escala"
                   value={track.origin ?? "center"}
-                  onChange={(v) => onChange(setOrigin(value, v as IxOrigin, ixCtx))}
+                  onChange={(v) => onChange(setOrigin(value, v as IxOrigin, ixCtx, active))}
                 />
               )}
               {showPersp && (
@@ -683,7 +778,9 @@ export default function InteractionsControl({
                   label="Perspectiva 3D (px)"
                   value={track.persp ?? IX_PERSP_DEFAULT}
                   onChange={(v) =>
-                    onChange(setPersp(value, typeof v === "number" ? v : IX_PERSP_DEFAULT, ixCtx))
+                    onChange(
+                      setPersp(value, typeof v === "number" ? v : IX_PERSP_DEFAULT, ixCtx, active),
+                    )
                   }
                 />
               )}
@@ -694,6 +791,7 @@ export default function InteractionsControl({
           <details className="mt-1 rounded border border-[var(--ed-outline-variant)]">
             <summary className="cursor-pointer px-2 py-1.5 text-[11px] font-medium text-[var(--ed-on-surface-variant)]">
               Editar pasos ({track.steps.length})
+              {state.tracks.length > 1 ? ` — pista ${active + 1}` : ""}
             </summary>
             <div className="border-t border-[var(--ed-outline-variant)] p-2">
               {linked && (
@@ -701,6 +799,39 @@ export default function InteractionsControl({
                   Solo lectura: este bloque usa un preajuste. Desvincúlalo para editar sus pasos.
                 </p>
               )}
+              {/* La TIRA: los pasos de la pista activa sobre un raíl 0–100 %. Imagen MÁS navegación
+                  (cada marcador es un botón real que lleva el foco a la fila de su paso), nunca el
+                  único camino: las filas siguen debajo. */}
+              <div
+                role="group"
+                aria-label={`Pasos de la pista ${active + 1} sobre el recorrido (0–100 %)`}
+                className="relative mx-1.5 mb-2 h-6"
+              >
+                <div
+                  aria-hidden="true"
+                  className="absolute left-0 right-0 top-1/2 h-px -translate-y-1/2 bg-[var(--ed-outline-variant)]"
+                />
+                {track.steps.map((step, i) => {
+                  const isFirst = i === 0;
+                  const isLast = i === track.steps.length - 1;
+                  const name = isFirst
+                    ? "Inicio — 0 %"
+                    : isLast
+                      ? "Final — 100 %"
+                      : `Paso ${i + 1} — ${step.at} %`;
+                  return (
+                    <button
+                      key={i}
+                      type="button"
+                      aria-label={name}
+                      title={`${name} — ir a su fila`}
+                      style={{ left: `${step.at}%` }}
+                      className="absolute top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full border border-[var(--ed-outline)] bg-[var(--ed-surface-container-high)] hover:border-[var(--ed-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--ed-primary)]"
+                      onClick={() => focusStepRow(i)}
+                    />
+                  );
+                })}
+              </div>
               <ol className="space-y-2">
                 {track.steps.map((step, i) => (
                   <StepRow
@@ -709,11 +840,14 @@ export default function InteractionsControl({
                     index={i}
                     total={track.steps.length}
                     readOnly={linked}
-                    onAt={(at) => onChange(setStepAt(value, i, at, ixCtx))}
-                    onEase={(ease) => onChange(setStepEase(value, i, ease, ixCtx))}
-                    onBez={(bez) => onChange(setStepBez(value, i, bez, ixCtx))}
-                    onProp={(key, v) => onChange(setStepProp(value, i, key, v, ixCtx))}
-                    onRemove={() => onChange(removeStep(value, i, ixCtx))}
+                    rowRef={(el) => {
+                      stepRowRefs.current[i] = el;
+                    }}
+                    onAt={(at) => onChange(setStepAt(value, i, at, ixCtx, active))}
+                    onEase={(ease) => onChange(setStepEase(value, i, ease, ixCtx, active))}
+                    onBez={(bez) => onChange(setStepBez(value, i, bez, ixCtx, active))}
+                    onProp={(key, v) => onChange(setStepProp(value, i, key, v, ixCtx, active))}
+                    onRemove={() => onChange(removeStep(value, i, ixCtx, active))}
                   />
                 ))}
               </ol>
@@ -722,7 +856,7 @@ export default function InteractionsControl({
                   type="button"
                   className={`${BTN} mt-2 w-full`}
                   disabled={track.steps.length >= IX_MAX_STEPS}
-                  onClick={() => onChange(addStep(value, ixCtx))}
+                  onClick={() => onChange(addStep(value, ixCtx, active))}
                 >
                   + Añadir paso
                 </button>
@@ -765,6 +899,8 @@ interface StepRowProps {
   index: number;
   total: number;
   readOnly: boolean;
+  /** El `<li>` de la fila, para que la TIRA de pasos pueda enfocarla desde su marcador. */
+  rowRef: (el: HTMLLIElement | null) => void;
   onAt: (at: number) => void;
   onEase: (ease: IxEase) => void;
   onBez: (bez: IxBez) => void;
@@ -772,7 +908,18 @@ interface StepRowProps {
   onRemove: () => void;
 }
 
-function StepRow({ step, index, total, readOnly, onAt, onEase, onBez, onProp, onRemove }: StepRowProps) {
+function StepRow({
+  step,
+  index,
+  total,
+  readOnly,
+  rowRef,
+  onAt,
+  onEase,
+  onBez,
+  onProp,
+  onRemove,
+}: StepRowProps) {
   const isFirst = index === 0;
   const isLast = index === total - 1;
   const free = availableProps(step);
@@ -794,7 +941,7 @@ function StepRow({ step, index, total, readOnly, onAt, onEase, onBez, onProp, on
   };
 
   return (
-    <li className="rounded border border-[var(--ed-outline-variant)] p-2">
+    <li ref={rowRef} className="rounded border border-[var(--ed-outline-variant)] p-2">
       <div className="mb-1 flex items-center justify-between gap-2">
         <span className="text-[11px] font-medium text-[var(--ed-on-surface)]">{label}</span>
         {!readOnly && !isFirst && !isLast && (

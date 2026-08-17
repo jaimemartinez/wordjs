@@ -195,17 +195,68 @@ describe("qué CSS emite cada disparador", () => {
 describe("escalonado", () => {
   it("sobre hijos emite nth-child 1..23 + catch-all + la regla NATIVA de sibling-index()", () => {
     const u = compileIx(mk({ on: "load" }, { target: { kind: "children" }, stagger: { each: 60 } }))!;
-    // 1 regla principal + 23 nth-child + 1 catch-all + 1 nativa (@supports sibling-index)
+    // 23 nth-child + 1 catch-all + 1 nativa (@supports sibling-index) + 1 regla principal (P5: los
+    // grupos por objetivo se emiten tras el bucle, así que la principal va al final — el orden no
+    // cambia la cascada: los selectores de escalonado ganan por especificidad, no por posición).
     expect(u.rules).toHaveLength(1 + IX_MAX_CHILDREN + 1);
-    expect(u.rules[1]).toBe(`.${u.cls}>:nth-child(1){animation-delay:0ms}`);
-    expect(u.rules[2]).toBe(`.${u.cls}>:nth-child(2){animation-delay:60ms}`);
-    expect(u.rules[IX_MAX_CHILDREN - 1]).toBe(`.${u.cls}>:nth-child(23){animation-delay:1320ms}`);
-    expect(u.rules[IX_MAX_CHILDREN]).toBe(`.${u.cls}>:nth-child(n+24){animation-delay:1380ms}`);
+    expect(u.rules[0]).toBe(`.${u.cls}>:nth-child(1){animation-delay:0ms}`);
+    expect(u.rules[1]).toBe(`.${u.cls}>:nth-child(2){animation-delay:60ms}`);
+    expect(u.rules[IX_MAX_CHILDREN - 2]).toBe(`.${u.cls}>:nth-child(23){animation-delay:1320ms}`);
+    expect(u.rules[IX_MAX_CHILDREN - 1]).toBe(`.${u.cls}>:nth-child(n+24){animation-delay:1380ms}`);
     // La nativa: UNA regla, sin tope de hermanos, condicionada por su propia expresión, y con
     // selector `>:nth-child(n)` — misma especificidad que el fallback y posterior: gana el empate.
-    expect(u.rules[IX_MAX_CHILDREN + 1]).toBe(
+    expect(u.rules[IX_MAX_CHILDREN]).toBe(
       `@supports (animation-delay:calc((sibling-index() - 1) * 60ms + 0ms)){.${u.cls}>:nth-child(n){animation-delay:calc((sibling-index() - 1) * 60ms + 0ms)}}`,
     );
+    expect(u.rules[IX_MAX_CHILDREN + 1]).toContain(`animation:wjs-ixk-${u.hash} 600ms linear both`);
+  });
+
+  it("P5: dos pistas sobre el MISMO objetivo componen UNA lista de animation (nada se pisa)", () => {
+    const u = compileIx({
+      v: 1,
+      trigger: { on: "load" },
+      tracks: [
+        { target: { kind: "self" }, steps: steps2, repeat: "inf", alt: true },
+        { target: { kind: "self" }, steps: [{ at: 0, set: { y: 30 } }, { at: 100, set: { y: 0 } }] },
+      ],
+    })!;
+    const animRules = u.rules.filter((r) => r.includes("{animation:"));
+    expect(animRules).toHaveLength(1);
+    expect(animRules[0]).toBe(
+      `.${u.cls}{animation:wjs-ixk-${u.hash}-0 600ms linear infinite alternate both,wjs-ixk-${u.hash}-1 600ms linear both}`,
+    );
+    // Y como tocan propiedades distintas (opacity vs y), no hay aviso de solape.
+    expect(u.warnings).toHaveLength(0);
+  });
+
+  it("P5: dos pistas mismo objetivo tocando la MISMA propiedad avisan (manda la última)", () => {
+    const u = compileIx({
+      v: 1,
+      trigger: { on: "load" },
+      tracks: [
+        { target: { kind: "self" }, steps: steps2 },
+        { target: { kind: "self" }, steps: [{ at: 0, set: { opacity: 0.5 } }, { at: 100, set: { opacity: 1 } }] },
+      ],
+    })!;
+    expect(u.warnings.join(" ")).toContain("misma propiedad");
+  });
+
+  it("P5: dos pistas scrub sobre el mismo objetivo comparten timeline y rango en UNA regla", () => {
+    const u = compileIx({
+      v: 1,
+      trigger: { on: "scrub" },
+      tracks: [
+        { target: { kind: "self" }, steps: steps2 },
+        { target: { kind: "self" }, steps: [{ at: 0, set: { y: 30 } }, { at: 100, set: { y: 0 } }] },
+      ],
+    })!;
+    const supports = u.rules.filter((r) => r.startsWith("@supports"));
+    expect(supports).toHaveLength(1);
+    expect(supports[0]).toContain(
+      `animation:wjs-ixk-${u.hash}-0 1ms linear both,wjs-ixk-${u.hash}-1 1ms linear both`,
+    );
+    // Una sola timeline y un solo rango: son del disparador y se difunden por la lista.
+    expect(supports[0].slice(supports[0].indexOf("){")).match(/animation-timeline/g)).toHaveLength(1);
   });
 
   it("`from: center` nativo es EXACTO (abs + sibling-count) y el fallback cae a start avisando", () => {
@@ -213,8 +264,8 @@ describe("escalonado", () => {
       target: { kind: "children" }, stagger: { each: 50, from: "center" },
     }))!;
     expect(u.warnings.join(" ")).toContain("centro");
-    expect(u.rules[1]).toContain(">:nth-child(1){");
-    const native = u.rules[u.rules.length - 1];
+    expect(u.rules[0]).toContain(">:nth-child(1){");
+    const native = u.rules.find((r) => r.startsWith("@supports (animation-delay"))!;
     expect(native).toContain("abs(sibling-index() - (sibling-count() + 1) / 2)");
   });
 
@@ -222,10 +273,10 @@ describe("escalonado", () => {
     const u = compileIx(mk({ on: "load" }, {
       target: { kind: "children" }, stagger: { each: 700, total: true },
     }))!;
-    const native = u.rules[u.rules.length - 1];
+    const native = u.rules.find((r) => r.startsWith("@supports (animation-delay"))!;
     expect(native).toContain("(700ms / max(1,sibling-count() - 1))");
     // Fallback: 700 / (8-1) = 100ms por hermano.
-    expect(u.rules[2]).toBe(`.${u.cls}>:nth-child(2){animation-delay:100ms}`);
+    expect(u.rules[1]).toBe(`.${u.cls}>:nth-child(2){animation-delay:100ms}`);
     expect(u.warnings.join(" ")).toContain("8 hermanos");
   });
 
@@ -233,12 +284,12 @@ describe("escalonado", () => {
     const u = compileIx(mk({ on: "load" }, {
       target: { kind: "children" }, stagger: { each: 80, cols: 3, from: "end" },
     }))!;
-    const native = u.rules[u.rules.length - 1];
+    const native = u.rules.find((r) => r.startsWith("@supports (animation-delay"))!;
     expect(native).toContain("round(down,(sibling-index() - 1) / 3)");
     expect(native).toContain("mod((sibling-index() - 1),3)");
     expect(u.warnings.join(" ")).toContain("diagonal");
     // El fallback de la rejilla es lineal por nth-child (nunca nth-last-child: `from` no aplica).
-    expect(u.rules[1]).toContain(">:nth-child(1){");
+    expect(u.rules[0]).toContain(">:nth-child(1){");
   });
 
   it("el runtime WAAPI lleva total y cols en el manifiesto (paridad exacta con el nativo)", () => {
@@ -252,7 +303,7 @@ describe("escalonado", () => {
     const u = compileIx(mk({ on: "load" }, {
       target: { kind: "children" }, stagger: { each: 50, from: "end" },
     }))!;
-    expect(u.rules[1]).toContain(">:nth-last-child(1){");
+    expect(u.rules[0]).toContain(">:nth-last-child(1){");
     expect(u.warnings).toHaveLength(0);
   });
 
@@ -261,7 +312,7 @@ describe("escalonado", () => {
       target: { kind: "children" }, stagger: { each: 50, from: "center" },
     }))!;
     expect(u.warnings.join(" ")).toContain("centro");
-    expect(u.rules[1]).toContain(">:nth-child(1){");
+    expect(u.rules[0]).toContain(">:nth-child(1){");
     // …pero el manifiesto del runtime SÍ conserva `center`: allí se conoce el recuento y es exacto.
     expect(toRuntimeUnit(u).tracks[0].stagger).toEqual({ each: 50, from: "center" });
   });

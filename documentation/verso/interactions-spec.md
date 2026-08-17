@@ -475,7 +475,7 @@ también unidades `ix`.
 |---|---|---|
 | **1 — Preajuste** (por defecto) | Un `<select>` de presets (sistema + del sitio), intensidad, velocidad. **Es literalmente el `AnimationField` de hoy** con otra lista. | El 90 %. Nunca ve el nivel 2. |
 | **2 — Disparador** | *Cuándo*: al entrar en pantalla / con el scroll / al pasar el ratón / al hacer clic / al cargar — **con sus opciones**: rango del recorrido (scrub y view+cada-vez; solo % si el scroll es de página), qué scroll manda (bloque/página), 2.º clic deshace, retardo del disparador (load). *A quién*: este bloque / sus hijos, escalonados / las palabras del titular. *Reproducción* (disparadores temporales, cuerpo propio): repetición 1–50 / infinita / ida y vuelta. Sin timeline. | El autor que ya sabe lo que quiere. |
-| **3 — Pasos** (tras un disclosure "Editar pasos") | Tira horizontal de pasos con su `%`, y por paso una fila con las 8 propiedades y su easing. | El diseñador. |
+| **3 — Pasos** (tras un disclosure "Editar pasos") | Tira horizontal de pasos con su `%` (P5: marcadores-botón navegables que enfocan la fila del paso), y por paso una fila con las propiedades de la lista cerrada y su easing (con curva propia desde P2). **P5**: el panel edita LAS TRES pistas — selector «Pista 1/2/3» con añadir (nace NEUTRA: una pista nueva no mueve nada) y quitar (mínimo 1); todos los escritores llevan el índice de pista. El replay del panel es POR BLOQUE («Probar»; «Probar todo» re-arma la página), leyendo la selección del store — el mismo patrón que el scrubber. | El diseñador. |
 
 ### 6.2 Los topes, y por qué son estos
 

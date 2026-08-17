@@ -8,6 +8,14 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Added
 
+- **Interactions: three parallel tracks, editable, with a visual step strip.** An interaction could
+  always carry up to three tracks (background parallax + rising foreground + staggered children,
+  say), but the panel only edited the first. Now every track is editable — add (new tracks are
+  born neutral so nothing jumps), remove, and switch between them — and a horizontal strip shows
+  each step of the active track at its true position, with keyboard-navigable markers that jump to
+  the step's controls. Preview got block-scoped: "Probar" replays just the block you're editing,
+  "Probar todo" replays the page.
+
 - **Interactions: stagger that can count, and per-device control.** Staggered children can now
   start from the center or the end exactly, spread a fixed total time across however many siblings
   exist, or ripple diagonally across an author-declared grid — all in pure CSS via the new

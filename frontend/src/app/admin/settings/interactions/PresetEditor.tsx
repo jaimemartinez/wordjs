@@ -21,16 +21,24 @@
  * Un preajuste es EXACTAMENTE un cuerpo de interacción con nombre, así que el borrador se edita como
  * un `IxSpec` (`ixPresetToSpec`) y se convierte en preajuste al guardar. Por eso los escritores del
  * panel valen tal cual.
+ *
+ * PISTAS (P5): un preajuste puede llevar hasta `IX_MAX_TRACKS` pistas sobre el MISMO disparador. La
+ * pista ACTIVA es estado local del formulario (elegirla no toca el borrador); todos los controles de
+ * pista leen `tracks[activa]` y escriben pasando ese índice al modelo — el espejo exacto del panel
+ * del bloque. La TIRA de pasos, sobre la lista, es imagen más navegación (cada marcador es un botón
+ * que lleva el foco a la fila de su paso) y nunca el único camino: las filas siguen debajo.
  */
-import React from "react";
+import React, { useRef, useState } from "react";
 import { Button, Card, Input } from "@/components/ui";
 import {
     addStep,
+    addTrack,
     availableProps,
     effectiveRange,
     ixPanelState,
     rangeEditable,
     removeStep,
+    removeTrack,
     resetRange,
     setAlternate,
     setClickToggle,
@@ -76,6 +84,7 @@ import {
     IX_CLIP_DIRS,
     IX_EASINGS,
     IX_MAX_STEPS,
+    IX_MAX_TRACKS,
     IX_MAX_WORDS,
     IX_ORIGINS,
     IX_PERSP_DEFAULT,
@@ -194,7 +203,23 @@ export default function PresetEditor({
     // El estado del panel se deriva del borrador con la MISMA función que usa el editor de bloques,
     // así que el resumen, los avisos y los topes son idénticos en las dos pantallas.
     const state = ixPanelState(draft);
-    const track = state.tracks[0];
+    // Pista ACTIVA (P5): estado LOCAL del formulario — elegir pista no toca el borrador. La
+    // selección lleva el `id` del preajuste al que pertenece, así que pasar a editar OTRO la
+    // invalida por derivación pura (este componente no se remonta entre ediciones), sin efectos ni
+    // renders extra; y el clamp devuelve a la 0 si el recuento encoge por debajo del índice.
+    const [sel, setSel] = useState<{ id: string | null; track: number }>({ id, track: 0 });
+    const setTrackSel = (track: number): void => setSel({ id, track });
+    const active = sel.id === id && sel.track < state.tracks.length ? sel.track : 0;
+    const track = state.tracks[active];
+    // Filas de la lista de pasos, por índice: la TIRA las enfoca desde sus marcadores.
+    const stepRowRefs = useRef<Array<HTMLLIElement | null>>([]);
+    const focusStepRow = (i: number): void => {
+        const row = stepRowRefs.current[i];
+        if (!row) return;
+        row.scrollIntoView({ block: "nearest" });
+        // El primer control operable de la fila (en este formulario nada está en solo lectura).
+        row.querySelector<HTMLElement>("input:enabled, select:enabled, button:enabled")?.focus();
+    };
     const trigger = state.trigger;
     const timed = trigger.on !== "scrub";
     // Derivados del disparador para el editor de tramo — misma lógica que el panel del bloque.
@@ -263,6 +288,71 @@ export default function PresetEditor({
                     </p>
                 )}
 
+                {/* ── Pistas (P5) — hasta IX_MAX_TRACKS cuerpos independientes sobre el MISMO
+                    disparador. Todo lo de abajo (objetivo, escalonado, tiempos, reproducción,
+                    opciones y pasos) lee y escribe SOLO la pista activa. */}
+                <fieldset className="mb-6">
+                    <legend className={LABEL}>Pistas</legend>
+                    <div className="flex flex-wrap items-center gap-3">
+                        {state.tracks.length > 1 && (
+                            <div
+                                role="radiogroup"
+                                aria-label="Pista activa"
+                                className="flex rounded-xl border-2 border-gray-100 p-0.5"
+                            >
+                                {state.tracks.map((_, i) => (
+                                    <label
+                                        key={i}
+                                        className={`cursor-pointer rounded-lg px-3 py-1.5 text-sm ${
+                                            active === i
+                                                ? "bg-blue-600 font-medium text-white"
+                                                : "text-gray-700 hover:bg-gray-50"
+                                        }`}
+                                    >
+                                        <input
+                                            type="radio"
+                                            name="ixp-track"
+                                            className="sr-only"
+                                            checked={active === i}
+                                            onChange={() => setTrackSel(i)}
+                                        />
+                                        Pista {i + 1}
+                                    </label>
+                                ))}
+                            </div>
+                        )}
+                        {state.tracks.length < IX_MAX_TRACKS && (
+                            <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                title="Añadir una pista nueva (nace neutra: no mueve nada hasta que la edites)"
+                                onClick={() => {
+                                    write(addTrack(draft));
+                                    // La nueva queda seleccionada: su índice es el recuento ANTES de añadir.
+                                    setTrackSel(state.tracks.length);
+                                }}
+                            >
+                                + Añadir pista
+                            </Button>
+                        )}
+                        {state.tracks.length > 1 && (
+                            <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                aria-label={`Quitar la pista ${active + 1}`}
+                                onClick={() => {
+                                    write(removeTrack(draft, active));
+                                    setTrackSel(0);
+                                }}
+                            >
+                                Quitar pista
+                            </Button>
+                        )}
+                    </div>
+                </fieldset>
+
                 {/* Disparador y objetivo */}
                 <div className="grid gap-4 md:grid-cols-2">
                     <FieldSelect
@@ -276,7 +366,7 @@ export default function PresetEditor({
                         id="ixp-target"
                         label="Qué se mueve"
                         value={track.target.kind}
-                        onChange={(v) => write(setTargetKind(draft, v as IxPanelTargetKind))}
+                        onChange={(v) => write(setTargetKind(draft, v as IxPanelTargetKind, undefined, active))}
                         options={TARGETS.map((k) => ({ value: k, label: IX_TARGET_LABELS[k] }))}
                     />
 
@@ -354,7 +444,9 @@ export default function PresetEditor({
                                 max={IX_STAGGER_MAX}
                                 step={10}
                                 value={track.stagger?.each ?? 0}
-                                onChange={(e) => write(setStagger(draft, Number(e.target.value)))}
+                                onChange={(e) =>
+                                    write(setStagger(draft, Number(e.target.value), undefined, active))
+                                }
                             />
                         </div>
                     )}
@@ -373,7 +465,9 @@ export default function PresetEditor({
                                     max={3000}
                                     step={50}
                                     value={track.dur ?? 600}
-                                    onChange={(e) => write(setDuration(draft, Number(e.target.value)))}
+                                    onChange={(e) =>
+                                        write(setDuration(draft, Number(e.target.value), undefined, active))
+                                    }
                                 />
                             </div>
                             <div>
@@ -388,7 +482,9 @@ export default function PresetEditor({
                                     max={3000}
                                     step={50}
                                     value={track.delay ?? 0}
-                                    onChange={(e) => write(setDelay(draft, Number(e.target.value)))}
+                                    onChange={(e) =>
+                                        write(setDelay(draft, Number(e.target.value), undefined, active))
+                                    }
                                 />
                             </div>
                         </>
@@ -420,7 +516,7 @@ export default function PresetEditor({
                                             label="Orden"
                                             value={track.stagger.from ?? "start"}
                                             onChange={(v) =>
-                                                write(setStaggerFrom(draft, v as IxStaggerFrom))
+                                                write(setStaggerFrom(draft, v as IxStaggerFrom, undefined, active))
                                             }
                                             options={STAGGER_FROMS.map((f) => ({
                                                 value: f,
@@ -433,7 +529,9 @@ export default function PresetEditor({
                                     <input
                                         type="checkbox"
                                         checked={track.stagger.total === true}
-                                        onChange={(e) => write(setStaggerTotal(draft, e.target.checked))}
+                                        onChange={(e) =>
+                                            write(setStaggerTotal(draft, e.target.checked, undefined, active))
+                                        }
                                     />
                                     Repartir como tiempo total
                                 </label>
@@ -446,6 +544,8 @@ export default function PresetEditor({
                                                 setStaggerCols(
                                                     draft,
                                                     e.target.checked ? IX_STAGGER_COLS_MIN : null,
+                                                    undefined,
+                                                    active,
                                                 ),
                                             )
                                         }
@@ -466,7 +566,7 @@ export default function PresetEditor({
                                             step={1}
                                             value={track.stagger.cols}
                                             onChange={(e) =>
-                                                write(setStaggerCols(draft, Number(e.target.value)))
+                                                write(setStaggerCols(draft, Number(e.target.value), undefined, active))
                                             }
                                         />
                                     </div>
@@ -556,14 +656,18 @@ export default function PresetEditor({
                                     step={1}
                                     value={infinite ? "" : repeatCount}
                                     disabled={infinite}
-                                    onChange={(e) => write(setRepeat(draft, Number(e.target.value)))}
+                                    onChange={(e) =>
+                                        write(setRepeat(draft, Number(e.target.value), undefined, active))
+                                    }
                                 />
                             </div>
                             <label className="mb-2.5 flex cursor-pointer select-none items-center gap-2 text-sm text-gray-700">
                                 <input
                                     type="checkbox"
                                     checked={infinite}
-                                    onChange={(e) => write(setRepeat(draft, e.target.checked ? "inf" : 1))}
+                                    onChange={(e) =>
+                                        write(setRepeat(draft, e.target.checked ? "inf" : 1, undefined, active))
+                                    }
                                 />
                                 Infinita
                             </label>
@@ -571,7 +675,9 @@ export default function PresetEditor({
                                 <input
                                     type="checkbox"
                                     checked={track.alt === true}
-                                    onChange={(e) => write(setAlternate(draft, e.target.checked))}
+                                    onChange={(e) =>
+                                        write(setAlternate(draft, e.target.checked, undefined, active))
+                                    }
                                 />
                                 Ida y vuelta
                             </label>
@@ -589,7 +695,7 @@ export default function PresetEditor({
                                 id="ixp-clip-dir"
                                 label="Revelado"
                                 value={track.clipDir ?? "right"}
-                                onChange={(v) => write(setClipDir(draft, v as IxClipDir))}
+                                onChange={(v) => write(setClipDir(draft, v as IxClipDir, undefined, active))}
                                 options={IX_CLIP_DIRS.map((d) => ({
                                     value: d,
                                     label: IX_CLIP_DIR_LABELS[d],
@@ -601,7 +707,7 @@ export default function PresetEditor({
                                 id="ixp-origin"
                                 label="Origen del giro y la escala"
                                 value={track.origin ?? "center"}
-                                onChange={(v) => write(setOrigin(draft, v as IxOrigin))}
+                                onChange={(v) => write(setOrigin(draft, v as IxOrigin, undefined, active))}
                                 options={IX_ORIGINS.map((o) => ({
                                     value: o,
                                     label: IX_ORIGIN_LABELS[o],
@@ -621,7 +727,9 @@ export default function PresetEditor({
                                     max={IX_PERSP_MAX}
                                     step={50}
                                     value={track.persp ?? IX_PERSP_DEFAULT}
-                                    onChange={(e) => write(setPersp(draft, Number(e.target.value)))}
+                                    onChange={(e) =>
+                                        write(setPersp(draft, Number(e.target.value), undefined, active))
+                                    }
                                 />
                             </div>
                         )}
@@ -632,7 +740,41 @@ export default function PresetEditor({
                 <fieldset className="mt-8 border-t border-gray-100 pt-6">
                     <legend className="text-sm font-bold text-gray-900">
                         Pasos ({track.steps.length})
+                        {state.tracks.length > 1 ? ` — pista ${active + 1}` : ""}
                     </legend>
+                    {/* La TIRA: los pasos de la pista activa sobre un raíl 0–100 %. Imagen MÁS
+                        navegación (cada marcador es un botón real que lleva el foco a la fila de su
+                        paso), nunca el único camino: las filas siguen debajo. */}
+                    <div
+                        role="group"
+                        aria-label={`Pasos de la pista ${active + 1} sobre el recorrido (0–100 %)`}
+                        className="relative mx-2 mt-4 h-8"
+                    >
+                        <div
+                            aria-hidden="true"
+                            className="absolute left-0 right-0 top-1/2 h-0.5 -translate-y-1/2 rounded bg-gray-200"
+                        />
+                        {track.steps.map((step, i) => {
+                            const isFirst = i === 0;
+                            const isLast = i === track.steps.length - 1;
+                            const markerName = isFirst
+                                ? "Inicio — 0 %"
+                                : isLast
+                                  ? "Final — 100 %"
+                                  : `Paso ${i + 1} — ${step.at} %`;
+                            return (
+                                <button
+                                    key={i}
+                                    type="button"
+                                    aria-label={markerName}
+                                    title={`${markerName} — ir a su fila`}
+                                    style={{ left: `${step.at}%` }}
+                                    className="absolute top-1/2 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-gray-400 bg-white hover:border-blue-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500"
+                                    onClick={() => focusStepRow(i)}
+                                />
+                            );
+                        })}
+                    </div>
                     <ol className="mt-4 space-y-4">
                         {track.steps.map((step, i) => {
                             const isFirst = i === 0;
@@ -640,7 +782,13 @@ export default function PresetEditor({
                             const free = availableProps(step);
                             const used = usedProps(step);
                             return (
-                                <li key={i} className="rounded-2xl border-2 border-gray-100 p-4">
+                                <li
+                                    key={i}
+                                    ref={(el) => {
+                                        stepRowRefs.current[i] = el;
+                                    }}
+                                    className="rounded-2xl border-2 border-gray-100 p-4"
+                                >
                                     <div className="mb-3 flex items-center justify-between gap-3">
                                         <span className="text-sm font-bold text-gray-900">
                                             {isFirst ? "Inicio (0 %)" : isLast ? "Final (100 %)" : `Paso ${i + 1}`}
@@ -651,7 +799,7 @@ export default function PresetEditor({
                                                 variant="ghost"
                                                 size="sm"
                                                 aria-label={`Quitar el paso ${i + 1}`}
-                                                onClick={() => write(removeStep(draft, i))}
+                                                onClick={() => write(removeStep(draft, i, undefined, active))}
                                             >
                                                 Quitar paso
                                             </Button>
@@ -674,7 +822,9 @@ export default function PresetEditor({
                                                     max={99}
                                                     step={1}
                                                     value={step.at}
-                                                    onChange={(e) => write(setStepAt(draft, i, Number(e.target.value)))}
+                                                    onChange={(e) =>
+                                                        write(setStepAt(draft, i, Number(e.target.value), undefined, active))
+                                                    }
                                                 />
                                             </div>
                                         )}
@@ -688,8 +838,8 @@ export default function PresetEditor({
                                                 value={step.bez ? IX_BEZ_SENTINEL : (step.ease ?? "out")}
                                                 onChange={(v) =>
                                                     v === IX_BEZ_SENTINEL
-                                                        ? write(setStepBez(draft, i, ixBezSeed(step.ease)))
-                                                        : write(setStepEase(draft, i, v as IxEase))
+                                                        ? write(setStepBez(draft, i, ixBezSeed(step.ease), undefined, active))
+                                                        : write(setStepEase(draft, i, v as IxEase, undefined, active))
                                                 }
                                                 options={[
                                                     ...EASES.map((e) => ({ value: e as string, label: IX_EASE_LABELS[e] })),
@@ -706,7 +856,9 @@ export default function PresetEditor({
                                             <IxCurveEditor
                                                 id={`ixp-bez-${i}`}
                                                 value={step.bez}
-                                                onChange={(bez) => write(setStepBez(draft, i, bez))}
+                                                onChange={(bez) =>
+                                                    write(setStepBez(draft, i, bez, undefined, active))
+                                                }
                                             />
                                         </div>
                                     )}
@@ -728,7 +880,9 @@ export default function PresetEditor({
                                                             className={COLOR}
                                                             value={intToHex(step.set[key] ?? IX_PROP_NEUTRAL[key])}
                                                             onChange={(e) =>
-                                                                write(setStepProp(draft, i, key, hexToInt(e.target.value)))
+                                                                write(
+                                                                    setStepProp(draft, i, key, hexToInt(e.target.value), undefined, active),
+                                                                )
                                                             }
                                                         />
                                                     ) : (
@@ -741,7 +895,9 @@ export default function PresetEditor({
                                                             step={IX_PROP_INPUT[key].step}
                                                             value={step.set[key] ?? IX_PROP_NEUTRAL[key]}
                                                             onChange={(e) =>
-                                                                write(setStepProp(draft, i, key, Number(e.target.value)))
+                                                                write(
+                                                                    setStepProp(draft, i, key, Number(e.target.value), undefined, active),
+                                                                )
                                                             }
                                                         />
                                                     )}
@@ -752,7 +908,9 @@ export default function PresetEditor({
                                                     size="sm"
                                                     className="mb-1"
                                                     aria-label={`Quitar ${IX_PROP_LABELS[key]} del paso ${i + 1}`}
-                                                    onClick={() => write(setStepProp(draft, i, key, undefined))}
+                                                    onClick={() =>
+                                                        write(setStepProp(draft, i, key, undefined, undefined, active))
+                                                    }
                                                 >
                                                     ×
                                                 </Button>
@@ -771,6 +929,8 @@ export default function PresetEditor({
                                                             i,
                                                             v as IxPropKey,
                                                             IX_PROP_NEUTRAL[v as IxPropKey],
+                                                            undefined,
+                                                            active,
                                                         ),
                                                     )
                                                 }
@@ -792,7 +952,7 @@ export default function PresetEditor({
                         size="sm"
                         className="mt-4"
                         disabled={track.steps.length >= IX_MAX_STEPS}
-                        onClick={() => write(addStep(draft))}
+                        onClick={() => write(addStep(draft, undefined, active))}
                     >
                         + Añadir paso
                     </Button>

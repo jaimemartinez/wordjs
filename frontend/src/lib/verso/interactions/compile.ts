@@ -422,7 +422,9 @@ function animShorthand(
   if (repeat !== 1) parts.push(repeat === "inf" ? "infinite" : n(repeat));
   if (alt) parts.push("alternate");
   parts.push("both");
-  return `animation:${parts.join(" ")}`;
+  // Devuelve el VALOR (sin `animation:`): desde P5 las pistas de un mismo objetivo se unen en una
+  // lista, y el nombre de la propiedad lo pone quien compone la declaración.
+  return parts.join(" ");
 }
 
 /* ------------------------------------------------------------------ */
@@ -518,6 +520,39 @@ export function emitUnit(body: IxBody, hash: string): IxUnit {
   const bases = stateSelectors(cls, trigger);
   const multi = body.tracks.length > 1;
 
+  /**
+   * Agrupación POR SELECTOR (P5). Dos pistas sobre el MISMO objetivo no pueden emitir dos reglas
+   * `animation:` sobre el mismo selector — la segunda PISARÍA a la primera (lo cazó el drill de
+   * navegador: el computado solo corría la última). CSS compone animaciones como LISTA en una única
+   * declaración, así que las pistas se acumulan por sufijo de objetivo y se emiten juntas. Con una
+   * sola pista por objetivo la emisión es BYTE-IDÉNTICA a la de siempre. `animation-timeline` y
+   * `animation-range` salen del DISPARADOR (común a la unidad), y una longhand más corta que la
+   * lista de nombres se repite por especificación: un solo valor sirve para todas las pistas.
+   * Si dos pistas del mismo objetivo tocan la misma propiedad (p. ej. transform), manda la última
+   * de la lista — el mismo criterio last-wins de CSS, y se AVISA.
+   */
+  type TemporalPart = { name: string; dur: number; delayCss: string; repeat: number | "inf"; alt: boolean };
+  const temporalGroups = new Map<string, TemporalPart[]>();
+  const timelineGroups = new Map<string, string[]>();
+  const armedGroups = new Map<string, string[]>();
+  const seenHoverSuffix = new Set<string>();
+  const seenStaggerSuffix = new Set<string>();
+  const touchedBySuffix = new Map<string, Set<IxPropKey>>();
+
+  const noteOverlap = (suffix: string, union: IxPropKey[]) => {
+    const seen = touchedBySuffix.get(suffix);
+    if (!seen) {
+      touchedBySuffix.set(suffix, new Set(union));
+      return;
+    }
+    if (union.some((k) => seen.has(k))) {
+      warnings.push(
+        "dos pistas sobre el mismo objetivo tocan la misma propiedad: manda la última (componlas en una pista si no es lo que quieres)",
+      );
+    }
+    for (const k of union) seen.add(k);
+  };
+
   body.tracks.forEach((track, i) => {
     const union = unionProps(track.steps);
     const tcx = trackCtx(track);
@@ -567,6 +602,12 @@ export function emitUnit(body: IxBody, hash: string): IxUnit {
           "una interacción de hover con 2 pasos es una transición: `repeat` y `alt` se ignoran (añade un paso intermedio para animarla)",
         );
       }
+      if (seenHoverSuffix.has(suffix)) {
+        warnings.push(
+          "dos transiciones de hover sobre el mismo objetivo: manda la última (júntalas en una pista)",
+        );
+      }
+      seenHoverSuffix.add(suffix);
       rules.push(
         rule(`.${cls}${suffix}`, [
           `transition:${props.map((p) => `${p} ${n(dur)}ms ${ease} ${n(delay)}ms`).join(",")}`,
@@ -588,21 +629,10 @@ export function emitUnit(body: IxBody, hash: string): IxUnit {
     /* ── Camino 2: progreso ligado al scroll (CSS puro donde lo haya) ─ */
     if (isTimeline(trigger)) {
       keyframes.push(keyframesCss(name, track.steps, union, tcx));
-      const fn = timelineFn(trigger);
-      const isPage = fn === "scroll()";
-      const pageRange = isPage ? pageRangeCss(rangeOf(trigger)) : null;
-      const decls = [
-        // Duración dummy de 1ms: el progreso lo conduce la timeline, no el reloj. El atajo va
-        // PRIMERO porque resetea `animation-timeline`.
-        `animation:${name} 1ms linear both`,
-        `animation-timeline:${fn}`,
-        ...(isPage
-          ? pageRange
-            ? [`animation-range:${pageRange}`]
-            : []
-          : [`animation-range:${rangeCss(rangeOf(trigger))}`]),
-      ];
-      rules.push(`@supports (animation-timeline:${fn}){${rule(sel, decls)}}`);
+      noteOverlap(suffix, union);
+      const list = timelineGroups.get(suffix);
+      if (list) list.push(name);
+      else timelineGroups.set(suffix, [name]);
       if (track.stagger && track.stagger.each > 0) {
         warnings.push(
           "el escalonado no aplica a un disparador de scroll: el progreso ya lo marca la posición",
@@ -625,29 +655,80 @@ export function emitUnit(body: IxBody, hash: string): IxUnit {
 
     /* ── Camino 3: animación temporal (load / click / hover ≥3 / view+once) ─ */
     keyframes.push(keyframesCss(name, track.steps, union, tcx));
-    const repeat = track.repeat ?? 1;
-    const delayCss = wordsDelay(track, delay);
-    // El easing POR PASO se emite dentro de los @keyframes; el de elemento se fija `linear` para
-    // que no compita con él y el resultado sea el mismo en los dos backends.
-    const isCalc = delayCss.startsWith("calc(");
-    const decls = [
-      // Un `calc()` dentro del atajo es válido pero frágil de leer y de parsear: cuando el retardo
-      // es calculado (escalonado por palabras) se saca a su propia longhand.
-      animShorthand(name, dur, isCalc ? "0ms" : delayCss, repeat, track.alt === true),
-      ...(isCalc ? [`animation-delay:${delayCss}`] : []),
-    ];
-    rules.push(rule(sel, decls));
+    noteOverlap(suffix, union);
+    const part: TemporalPart = {
+      name,
+      dur,
+      delayCss: wordsDelay(track, delay),
+      repeat: track.repeat ?? 1,
+      alt: track.alt === true,
+    };
+    const parts = temporalGroups.get(suffix);
+    if (parts) parts.push(part);
+    else temporalGroups.set(suffix, [part]);
 
     // El estado ARMADO de una entrada `once`: el fotograma 0, congelado, bajo un atributo que solo
     // pone el JS. El HTML servido NUNCA lo lleva, así que ni los rastreadores ni un visitante sin
-    // JS ven jamás contenido oculto (§7.1 — cero CLS, cero FOUC, nada que tapar).
+    // JS ven jamás contenido oculto (§7.1 — cero CLS, cero FOUC, nada que tapar). Se ACUMULA por
+    // objetivo: dos pistas arman el mismo elemento con UNA regla (y last-wins si chocan, como la
+    // lista de animaciones).
     if (trigger.on === "view" && trigger.once !== false) {
       const armed = declsOf(track.steps[0].set, union, tcx);
-      if (armed.length > 0) rules.push(rule(`.${cls}[data-wjs-ix="armed"]${suffix}`, armed));
+      if (armed.length > 0) {
+        const acc = armedGroups.get(suffix);
+        if (acc) acc.push(...armed);
+        else armedGroups.set(suffix, [...armed]);
+      }
     }
 
+    if (track.stagger && track.stagger.each > 0 && track.target.kind === "children") {
+      if (seenStaggerSuffix.has(suffix)) {
+        warnings.push(
+          "dos pistas escalonan a los mismos hermanos: manda el escalonado de la última",
+        );
+      }
+      seenStaggerSuffix.add(suffix);
+    }
     rules.push(...staggerRules(cls, track, trigger, suffix, delay, "animation-delay", warnings));
   });
+
+  /* ── Emisión de los grupos por objetivo (P5) ──────────────────────── */
+  // El easing POR PASO se emite dentro de los @keyframes; el de elemento se fija `linear` para
+  // que no compita con él y el resultado sea el mismo en los dos backends. Un `calc()` dentro del
+  // atajo es válido pero frágil: cuando algún retardo es calculado (escalonado por palabras), TODOS
+  // los retardos del grupo salen a la longhand `animation-delay`, alineados con la lista.
+  for (const [suffix, parts] of temporalGroups) {
+    const sel = joinSel(bases, suffix);
+    const anyCalc = parts.some((p) => p.delayCss.startsWith("calc("));
+    const shorthands = parts.map((p) =>
+      animShorthand(p.name, p.dur, anyCalc ? "0ms" : p.delayCss, p.repeat, p.alt),
+    );
+    const decls = [`animation:${shorthands.join(",")}`];
+    if (anyCalc) decls.push(`animation-delay:${parts.map((p) => p.delayCss).join(",")}`);
+    rules.push(rule(sel, decls));
+  }
+  for (const [suffix, names] of timelineGroups) {
+    const sel = joinSel(bases, suffix);
+    const fn = timelineFn(trigger);
+    const isPage = fn === "scroll()";
+    const pageRange = isPage ? pageRangeCss(rangeOf(trigger)) : null;
+    const decls = [
+      // Duración dummy de 1ms: el progreso lo conduce la timeline, no el reloj. El atajo va
+      // PRIMERO porque resetea `animation-timeline`. La timeline y el rango son del DISPARADOR:
+      // un solo valor se repite por especificación sobre toda la lista de animaciones.
+      `animation:${names.map((nm) => `${nm} 1ms linear both`).join(",")}`,
+      `animation-timeline:${fn}`,
+      ...(isPage
+        ? pageRange
+          ? [`animation-range:${pageRange}`]
+          : []
+        : [`animation-range:${rangeCss(rangeOf(trigger))}`]),
+    ];
+    rules.push(`@supports (animation-timeline:${fn}){${rule(sel, decls)}}`);
+  }
+  for (const [suffix, decls] of armedGroups) {
+    rules.push(rule(`.${cls}[data-wjs-ix="armed"]${suffix}`, decls));
+  }
 
   const unit: IxUnit = { hash, cls, body, rules, keyframes, kf, needsRuntime, warnings };
   const media = body.off ? ixMediaOf(body.off) : undefined;

@@ -32,6 +32,7 @@ import {
   IX_DUR_MAX,
   IX_DUR_MIN,
   IX_MAX_STEPS,
+  IX_MAX_TRACKS,
   IX_PROP_KEYS,
   IX_REPEAT_MAX,
   IX_STAGGER_MAX,
@@ -566,33 +567,92 @@ export function resetRange(raw: unknown, ctx?: IxCompileCtx): IxWrite {
 }
 
 /**
- * Patch de la pista 0 (la única que el panel edita) conservando el resto tal cual.
+ * Patch de UNA pista conservando el resto tal cual (P5: el panel edita las tres).
  *
  * Escribe SIEMPRE un cuerpo propio. Si el bloque estaba enlazado a un preajuste, tocar un paso lo
  * DESVINCULA (copiando el cuerpo resuelto): es la única salida coherente, porque un `tracks` junto
  * a un `preset` sería una bifurcación silenciosa que rompe la propagación. El panel no ofrece ese
  * camino —con un preajuste puesto los pasos se muestran en solo lectura y hay un botón
  * "Desvincular"—, pero el modelo no puede devolver algo incoherente si alguien lo llama igual.
+ *
+ * `off` y el resto de claves de bloque sobreviven al patch: el cuerpo propio se reescribe entero,
+ * pero el spec de partida es el normalizado del bloque, así que el gating no se pierde al editar.
  */
+function patchTrack(
+  raw: unknown,
+  ctx: IxCompileCtx | undefined,
+  index: number,
+  patch: (track: IxTrack) => IxTrack | null,
+): IxWrite {
+  const body = ownBody(raw, ctx);
+  if (index < 0 || index >= body.tracks.length) return normalizeIxSpec(raw)?.spec;
+  const next = patch(body.tracks[index]);
+  const tracks =
+    next === null
+      ? body.tracks.filter((_, i) => i !== index)
+      : body.tracks.map((t, i) => (i === index ? next : t));
+  if (tracks.length === 0) return undefined;
+  return withSpecExtras(raw, { v: 1, trigger: body.trigger, tracks });
+}
+
+/** Compatibilidad interna: los escritores existentes editan la pista que se les indique (o la 0). */
 function patchTrack0(
   raw: unknown,
   ctx: IxCompileCtx | undefined,
   patch: (track: IxTrack) => IxTrack | null,
+  index = 0,
 ): IxWrite {
+  return patchTrack(raw, ctx, index, patch);
+}
+
+/** Conserva en el spec nuevo las claves de BLOQUE que no dependen del cuerpo (hoy: `off`). */
+function withSpecExtras(raw: unknown, spec: IxSpec): IxWrite {
+  const prev = normalizeIxSpec(raw)?.spec;
+  if (prev?.off) spec.off = prev.off;
+  return write(spec);
+}
+
+/* ------------------------------------------------------------------ */
+/* Pistas (P5)                                                         */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Añadir una pista (máx. IX_MAX_TRACKS). Nace NEUTRA de verdad —dos pasos de opacidad 1 a 1— no
+ * "aparecer subiendo": una segunda pista que moviera el bloque nada más nacer pisaría a la primera
+ * sin que el autor hubiera pedido nada. El normalizador exige que una pista toque ALGO: la
+ * opacidad declarada (aunque neutra) lo satisface, y el autor cambia lo que quiera desde ahí.
+ */
+export function addTrack(raw: unknown, ctx?: IxCompileCtx): IxWrite {
   const body = ownBody(raw, ctx);
-  const next = patch(body.tracks[0]);
-  const tracks = next === null ? body.tracks.slice(1) : [next, ...body.tracks.slice(1)];
-  if (tracks.length === 0) return undefined;
-  return write({ v: 1, trigger: body.trigger, tracks });
+  if (body.tracks.length >= IX_MAX_TRACKS) return normalizeIxSpec(raw)?.spec;
+  const track: IxTrack = {
+    target: { kind: "self" },
+    steps: [
+      { at: 0, set: { opacity: 1 }, ease: "out" },
+      { at: 100, set: { opacity: 1 } },
+    ],
+  };
+  return withSpecExtras(raw, { v: 1, trigger: body.trigger, tracks: [...body.tracks, track] });
 }
 
-export function setTargetKind(raw: unknown, kind: IxPanelTargetKind, ctx?: IxCompileCtx): IxWrite {
+/** Quitar una pista. La última no se quita (para eso está «Quitar» la interacción entera). */
+export function removeTrack(raw: unknown, index: number, ctx?: IxCompileCtx): IxWrite {
+  const body = ownBody(raw, ctx);
+  if (body.tracks.length <= 1) return normalizeIxSpec(raw)?.spec;
+  if (index < 0 || index >= body.tracks.length) return normalizeIxSpec(raw)?.spec;
+  return withSpecExtras(raw, {
+    v: 1,
+    trigger: body.trigger,
+    tracks: body.tracks.filter((_, i) => i !== index),
+  });
+}
+
+export function setTargetKind(raw: unknown, kind: IxPanelTargetKind, ctx?: IxCompileCtx, track = 0): IxWrite {
   const target: IxTarget = { kind };
-  return patchTrack0(raw, ctx, (t) => ({ ...t, target }));
+  return patchTrack0(raw, ctx, (t) => ({ ...t, target }), track);
 }
-
 /** Escalonado entre hermanos (ms). 0 lo quita. */
-export function setStagger(raw: unknown, each: number, ctx?: IxCompileCtx): IxWrite {
+export function setStagger(raw: unknown, each: number, ctx?: IxCompileCtx, track = 0): IxWrite {
   return patchTrack0(raw, ctx, (t) => {
     if (!Number.isFinite(each) || each <= 0) {
       const next: IxTrack = { ...t };
@@ -600,42 +660,38 @@ export function setStagger(raw: unknown, each: number, ctx?: IxCompileCtx): IxWr
       return next;
     }
     return { ...t, stagger: { ...(t.stagger ?? {}), each: Math.min(each, IX_STAGGER_MAX) } };
-  });
+  }, track);
 }
-
 /** Orden del escalonado (P4). `start` (el defecto) borra la clave. Sin escalonado, no-op. */
-export function setStaggerFrom(raw: unknown, from: IxStaggerFrom, ctx?: IxCompileCtx): IxWrite {
+export function setStaggerFrom(raw: unknown, from: IxStaggerFrom, ctx?: IxCompileCtx, track = 0): IxWrite {
   return patchTrack0(raw, ctx, (t) => {
     if (!t.stagger) return t;
     const st = { ...t.stagger };
     if (from === "start") delete st.from;
     else st.from = from;
     return { ...t, stagger: st };
-  });
+  }, track);
 }
-
 /** Modo tiempo-TOTAL del escalonado (P4): `each` pasa a ser el tiempo del primero al último. */
-export function setStaggerTotal(raw: unknown, total: boolean, ctx?: IxCompileCtx): IxWrite {
+export function setStaggerTotal(raw: unknown, total: boolean, ctx?: IxCompileCtx, track = 0): IxWrite {
   return patchTrack0(raw, ctx, (t) => {
     if (!t.stagger) return t;
     const st = { ...t.stagger };
     if (total) st.total = true;
     else delete st.total;
     return { ...t, stagger: st };
-  });
+  }, track);
 }
-
 /** Rejilla del escalonado (P4): columnas declaradas por el autor. `null` vuelve al modo lineal. */
-export function setStaggerCols(raw: unknown, cols: number | null, ctx?: IxCompileCtx): IxWrite {
+export function setStaggerCols(raw: unknown, cols: number | null, ctx?: IxCompileCtx, track = 0): IxWrite {
   return patchTrack0(raw, ctx, (t) => {
     if (!t.stagger) return t;
     const st = { ...t.stagger };
     if (cols === null || !Number.isFinite(cols)) delete st.cols;
     else st.cols = cols;
     return { ...t, stagger: st };
-  });
+  }, track);
 }
-
 /**
  * Gating responsive (P4): apagar/encender la interacción en un dispositivo. Es del BLOQUE — el
  * único ajuste, junto al disparador, que un bloque enlazado a un preajuste puede llevar encima.
@@ -664,17 +720,16 @@ export function setBreakpointOff(
   return write(w);
 }
 
-export function setDuration(raw: unknown, ms: number, ctx?: IxCompileCtx): IxWrite {
+export function setDuration(raw: unknown, ms: number, ctx?: IxCompileCtx, track = 0): IxWrite {
   const dur = clampInput(ms, IX_DUR_MIN, IX_DUR_MAX, 600);
-  return patchTrack0(raw, ctx, (t) => ({ ...t, dur }));
+  return patchTrack0(raw, ctx, (t) => ({ ...t, dur }), track);
 }
-
 /**
  * Repetición de la pista 0. `1` es el valor inicial de CSS y se BORRA de la prop (mismo criterio
  * que el emisor, que omite las partes del atajo con su valor inicial): un bloque al que el autor
  * puso y quitó la repetición vuelve a sus bytes exactos.
  */
-export function setRepeat(raw: unknown, rep: number | "inf", ctx?: IxCompileCtx): IxWrite {
+export function setRepeat(raw: unknown, rep: number | "inf", ctx?: IxCompileCtx, track = 0): IxWrite {
   return patchTrack0(raw, ctx, (t) => {
     const next: IxTrack = { ...t };
     if (rep === "inf") next.repeat = "inf";
@@ -684,36 +739,31 @@ export function setRepeat(raw: unknown, rep: number | "inf", ctx?: IxCompileCtx)
       else next.repeat = v;
     }
     return next;
-  });
+  }, track);
 }
-
 /** Ida y vuelta (`animation-direction: alternate`). `false` borra la clave. */
-export function setAlternate(raw: unknown, alt: boolean, ctx?: IxCompileCtx): IxWrite {
+export function setAlternate(raw: unknown, alt: boolean, ctx?: IxCompileCtx, track = 0): IxWrite {
   return patchTrack0(raw, ctx, (t) => {
     const next: IxTrack = { ...t };
     if (alt) next.alt = true;
     else delete next.alt;
     return next;
-  });
+  }, track);
 }
-
 /**
  * Opciones de pista de P3. Se escriben tal cual y el normalizador BORRA los valores por defecto
  * ("right" / "center" / 1000) en `write()`: la ausencia es el defecto y los bytes de origen se
  * conservan sin que cada escritor repita la regla.
  */
-export function setClipDir(raw: unknown, dir: IxClipDir, ctx?: IxCompileCtx): IxWrite {
-  return patchTrack0(raw, ctx, (t) => ({ ...t, clipDir: dir }));
+export function setClipDir(raw: unknown, dir: IxClipDir, ctx?: IxCompileCtx, track = 0): IxWrite {
+  return patchTrack0(raw, ctx, (t) => ({ ...t, clipDir: dir }), track);
 }
-
-export function setOrigin(raw: unknown, origin: IxOrigin, ctx?: IxCompileCtx): IxWrite {
-  return patchTrack0(raw, ctx, (t) => ({ ...t, origin }));
+export function setOrigin(raw: unknown, origin: IxOrigin, ctx?: IxCompileCtx, track = 0): IxWrite {
+  return patchTrack0(raw, ctx, (t) => ({ ...t, origin }), track);
 }
-
-export function setPersp(raw: unknown, px: number, ctx?: IxCompileCtx): IxWrite {
-  return patchTrack0(raw, ctx, (t) => ({ ...t, persp: px }));
+export function setPersp(raw: unknown, px: number, ctx?: IxCompileCtx, track = 0): IxWrite {
+  return patchTrack0(raw, ctx, (t) => ({ ...t, persp: px }), track);
 }
-
 export const IX_CLIP_DIR_LABELS: Readonly<Record<IxClipDir, string>> = Object.freeze({
   right: "Hacia la derecha",
   left: "Hacia la izquierda",
@@ -735,11 +785,10 @@ export const IX_ORIGIN_LABELS: Readonly<Record<IxOrigin, string>> = Object.freez
   "bottom-right": "Abajo derecha",
 });
 
-export function setDelay(raw: unknown, ms: number, ctx?: IxCompileCtx): IxWrite {
+export function setDelay(raw: unknown, ms: number, ctx?: IxCompileCtx, track = 0): IxWrite {
   const delay = clampInput(ms, IX_DELAY_MIN, IX_DELAY_MAX, 0);
-  return patchTrack0(raw, ctx, (t) => ({ ...t, delay }));
+  return patchTrack0(raw, ctx, (t) => ({ ...t, delay }), track);
 }
-
 const clampInput = (v: number, min: number, max: number, fallback: number): number =>
   Number.isFinite(v) ? Math.min(Math.max(v, min), max) : fallback;
 
@@ -752,36 +801,33 @@ const clampInput = (v: number, min: number, max: number, fallback: number): numb
  * final se queda donde estaba, así que añadir un paso nunca cambia dónde ACABA la animación (que es
  * la propiedad que el contrato de las entradas actuales protege a propósito — el `to` es neutro).
  */
-export function addStep(raw: unknown, ctx?: IxCompileCtx): IxWrite {
+export function addStep(raw: unknown, ctx?: IxCompileCtx, track = 0): IxWrite {
   return patchTrack0(raw, ctx, (t) => {
     if (t.steps.length >= IX_MAX_STEPS) return t;
     const last = t.steps.length - 1;
     const at = Math.round((t.steps[last - 1].at + t.steps[last].at) / 2);
     const steps = [...t.steps.slice(0, last), blankStep(at), t.steps[last]];
     return { ...t, steps };
-  });
+  }, track);
 }
-
 /** Quitar un paso. Los extremos no se quitan: una pista de 1 paso no interpola nada. */
-export function removeStep(raw: unknown, index: number, ctx?: IxCompileCtx): IxWrite {
+export function removeStep(raw: unknown, index: number, ctx?: IxCompileCtx, track = 0): IxWrite {
   return patchTrack0(raw, ctx, (t) => {
     if (t.steps.length <= 2) return t;
     if (index <= 0 || index >= t.steps.length - 1) return t;
     return { ...t, steps: t.steps.filter((_, i) => i !== index) };
-  });
+  }, track);
 }
-
 /** Momento del paso (%). Los extremos los reancla el normalizador a 0 y 100: aquí no se discute. */
-export function setStepAt(raw: unknown, index: number, at: number, ctx?: IxCompileCtx): IxWrite {
+export function setStepAt(raw: unknown, index: number, at: number, ctx?: IxCompileCtx, track = 0): IxWrite {
   return patchTrack0(raw, ctx, (t) => {
     if (index < 0 || index >= t.steps.length) return t;
     const value = clampInput(Math.round(at), 0, 100, t.steps[index].at);
     return { ...t, steps: t.steps.map((s, i) => (i === index ? { ...s, at: value } : s)) };
-  });
+  }, track);
 }
-
 /** Curva DE ESTE PASO AL SIGUIENTE. En el último no significa nada y el emisor la ignora. */
-export function setStepEase(raw: unknown, index: number, ease: IxEase, ctx?: IxCompileCtx): IxWrite {
+export function setStepEase(raw: unknown, index: number, ease: IxEase, ctx?: IxCompileCtx, track = 0): IxWrite {
   return patchTrack0(raw, ctx, (t) => {
     if (index < 0 || index >= t.steps.length) return t;
     // Elegir un NOMBRE retira la curva propia: el panel enseña una sola verdad por paso.
@@ -794,9 +840,8 @@ export function setStepEase(raw: unknown, index: number, ease: IxEase, ctx?: IxC
         return next;
       }),
     };
-  });
+  }, track);
 }
-
 /**
  * Curva PROPIA del paso (cubic-bezier como 4 números). `null` la quita y el paso vuelve a su
  * nombre de curva (o a ninguno). El clamp fino (X a 0..1, Y a ±4) lo hace el normalizador en
@@ -807,6 +852,7 @@ export function setStepBez(
   index: number,
   bez: [number, number, number, number] | null,
   ctx?: IxCompileCtx,
+  track = 0,
 ): IxWrite {
   return patchTrack0(raw, ctx, (t) => {
     if (index < 0 || index >= t.steps.length) return t;
@@ -820,9 +866,8 @@ export function setStepBez(
         return next;
       }),
     };
-  });
+  }, track);
 }
-
 /**
  * Valor de UNA de las 8 propiedades en UN paso. `undefined` la quita del paso.
  *
@@ -836,6 +881,7 @@ export function setStepProp(
   key: IxPropKey,
   value: number | undefined,
   ctx?: IxCompileCtx,
+  track = 0,
 ): IxWrite {
   return patchTrack0(raw, ctx, (t) => {
     if (index < 0 || index >= t.steps.length) return t;
@@ -849,9 +895,8 @@ export function setStepProp(
         return { ...s, set };
       }),
     };
-  });
+  }, track);
 }
-
 /** Propiedades que el paso NO tiene todavía — las que ofrece el desplegable "Añadir propiedad". */
 export function availableProps(step: IxStep): IxPropKey[] {
   return IX_PROP_KEYS.filter((k) => step.set[k] === undefined);

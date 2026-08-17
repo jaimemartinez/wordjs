@@ -24,7 +24,9 @@ import {
 } from "@/lib/verso/interactions";
 import {
   addStep,
+  addTrack,
   availableProps,
+  removeTrack,
   clearIx,
   defaultIxSpec,
   effectiveRange,
@@ -572,6 +574,48 @@ describe("opciones del disparador y de la pista (P1: lo que el modelo sabía y e
     expect(w.preset).toBeUndefined();
     expect(w.tracks![0].repeat).toBe(3);
     expect(w.tracks![0].stagger?.each).toBe(80); // el cuerpo copiado es el del preset
+  });
+});
+
+describe("pistas (P5): añadir, quitar y editar por índice", () => {
+  it("addTrack añade una pista NEUTRA hasta el tope y removeTrack respeta el mínimo de 1", () => {
+    const spec = defaultIxSpec();
+    const two = addTrack(spec, CTX)!;
+    expect(two.tracks).toHaveLength(2);
+    // La pista nueva no mueve nada: nace neutra (opacidad 1→1) para no pisar a la primera.
+    expect(two.tracks![1].steps.map((s) => s.set)).toEqual([{ opacity: 1 }, { opacity: 1 }]);
+    const three = addTrack(two, CTX)!;
+    expect(three.tracks).toHaveLength(3);
+    expect(addTrack(three, CTX)!.tracks).toHaveLength(3); // tope IX_MAX_TRACKS
+    const back = removeTrack(three, 1, CTX)!;
+    expect(back.tracks).toHaveLength(2);
+    expect(removeTrack(defaultIxSpec(), 0, CTX)!.tracks).toHaveLength(1); // la última no se quita
+    assertWritable(two);
+    assertWritable(three);
+  });
+
+  it("los escritores editan la pista PEDIDA y no tocan las demás", () => {
+    const two = addTrack(defaultIxSpec(), CTX)!;
+    const w = setTargetKind(two, "children", CTX, 1)!;
+    expect(w.tracks![1].target.kind).toBe("children");
+    expect(w.tracks![0].target.kind).toBe("self");
+    const d = setDuration(w, 1200, CTX, 1)!;
+    expect(d.tracks![1].dur).toBe(1200);
+    expect(d.tracks![0].dur).toBe(600);
+    const p = setStepProp(d, 0, "y", 40, CTX, 1)!;
+    expect(p.tracks![1].steps[0].set.y).toBe(40);
+    expect(p.tracks![0].steps[0].set.y).toBe(24);
+    // Índice fuera de rango: no-op normalizado, jamás lanza.
+    expect(setDuration(p, 900, CTX, 7)).toEqual(normalizeIxSpec(p)?.spec);
+    assertWritable(p);
+  });
+
+  it("el gating `off` SOBREVIVE a añadir pistas y a editar pasos", () => {
+    const gated = setBreakpointOff(defaultIxSpec(), "mobile", true, CTX)!;
+    const withTrack = addTrack(gated, CTX)!;
+    expect(withTrack.off).toEqual(["mobile"]);
+    const edited = setStepProp(withTrack, 0, "y", 10, CTX, 1)!;
+    expect(edited.off).toEqual(["mobile"]);
   });
 });
 

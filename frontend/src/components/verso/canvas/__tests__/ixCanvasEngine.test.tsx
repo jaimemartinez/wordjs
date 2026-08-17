@@ -53,12 +53,21 @@ describe("requestIxPreview — el canal de la previsualización", () => {
     const target = new EventTarget();
     const seen: string[] = [];
     target.addEventListener(IX_PREVIEW_EVENT, (e) => seen.push(e.type));
-    requestIxPreview(target as unknown as Document);
+    requestIxPreview("page", target as unknown as Document);
     expect(seen).toEqual([IX_PREVIEW_EVENT]);
   });
 
+  it("el scope viaja en el detail: `block` pide reproducir SOLO el bloque seleccionado", () => {
+    const target = new EventTarget();
+    const scopes: unknown[] = [];
+    target.addEventListener(IX_PREVIEW_EVENT, (e) => scopes.push((e as CustomEvent).detail?.scope));
+    requestIxPreview("block", target as unknown as Document);
+    requestIxPreview("page", target as unknown as Document);
+    expect(scopes).toEqual(["block", "page"]);
+  });
+
   it("sin documento (SSR) no revienta: simplemente no hace nada", () => {
-    expect(() => requestIxPreview(null)).not.toThrow();
+    expect(() => requestIxPreview("page", null)).not.toThrow();
   });
 
   it("el evento del panel y el del re-armado son DISTINTOS: el motor traduce uno en el otro", () => {
