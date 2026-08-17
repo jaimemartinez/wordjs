@@ -49,6 +49,8 @@ export {
   normProps,
   normTracks,
   normTrigger,
+  IX_AMT_MAX,
+  IX_AMT_MIN,
   IX_BEZ_Y_MAX,
   IX_BREAKPOINTS,
   IX_CLIP_DIRS,

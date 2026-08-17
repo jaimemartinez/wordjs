@@ -429,14 +429,15 @@ export function setPresetChoice(raw: unknown, choice: string, ctx?: IxCompileCtx
     const state = ixPanelState(raw, ctx);
     // Venir de un preset y elegir "Personalizada" ES desvincular: se copia el cuerpo resuelto.
     if (state.tracks.length > 0) {
-      return write({ v: 1, trigger: state.trigger, tracks: state.tracks });
+      return withSpecExtras(raw, { v: 1, trigger: state.trigger, tracks: state.tracks });
     }
-    return write(defaultIxSpec());
+    return withSpecExtras(raw, defaultIxSpec());
   }
   // Enlazar a un preset: el bloque guarda un ID y NADA MÁS (ni una copia del cuerpo). Un `trigger`
   // propio anterior se descarta a propósito: el preajuste trae el suyo, y conservar el viejo haría
-  // que elegir un preset diese un resultado distinto según lo que hubiera antes.
-  return write({ v: 1, preset: choice });
+  // que elegir un preset diese un resultado distinto según lo que hubiera antes. `off` y `amt` SÍ
+  // se conservan: son del bloque (dónde corre y con qué fuerza), no del movimiento elegido.
+  return withSpecExtras(raw, { v: 1, preset: choice });
 }
 
 /** "Desvincular del preajuste": copia el cuerpo a `tracks` y borra la referencia. Sin vuelta atrás. */
@@ -471,9 +472,7 @@ export function setTriggerKind(raw: unknown, kind: IxPanelTriggerKind, ctx?: IxC
               ? { on: "pointer" }
               : { on: "load" };
 
-  if (state.presetId !== null) return write({ v: 1, preset: state.presetId, trigger });
-  const body = ownBody(raw, ctx);
-  return write({ v: 1, trigger, tracks: body.tracks });
+  return writeTrigger(raw, ctx, trigger);
 }
 
 /**
@@ -482,9 +481,11 @@ export function setTriggerKind(raw: unknown, kind: IxPanelTriggerKind, ctx?: IxC
  */
 function writeTrigger(raw: unknown, ctx: IxCompileCtx | undefined, trigger: IxTrigger): IxWrite {
   const state = ixPanelState(raw, ctx);
-  if (state.presetId !== null) return write({ v: 1, preset: state.presetId, trigger });
+  if (state.presetId !== null) {
+    return withSpecExtras(raw, { v: 1, preset: state.presetId, trigger });
+  }
   const body = ownBody(raw, ctx);
-  return write({ v: 1, trigger, tracks: body.tracks });
+  return withSpecExtras(raw, { v: 1, trigger, tracks: body.tracks });
 }
 
 /** `view`: una sola vez (con latch de JS) o cada vez que entra y sale (CSS puro). */
@@ -648,10 +649,16 @@ function patchTrack0(
   return patchTrack(raw, ctx, index, patch);
 }
 
-/** Conserva en el spec nuevo las claves de BLOQUE que no dependen del cuerpo (hoy: `off`). */
+/**
+ * Conserva en el spec nuevo las claves de BLOQUE que no dependen del cuerpo (`off`, `amt`).
+ * TODO reconstructor de spec pasa por aquí: si no, cambiar el disparador o el preajuste perdería
+ * en silencio el gating por dispositivo o la intensidad — que son decisiones del BLOQUE, no del
+ * movimiento elegido.
+ */
 function withSpecExtras(raw: unknown, spec: IxSpec): IxWrite {
   const prev = normalizeIxSpec(raw)?.spec;
-  if (prev?.off) spec.off = prev.off;
+  if (prev?.off && spec.off === undefined) spec.off = prev.off;
+  if (prev?.amt !== undefined && spec.amt === undefined) spec.amt = prev.amt;
   return write(spec);
 }
 
@@ -736,6 +743,27 @@ export function setStaggerCols(raw: unknown, cols: number | null, ctx?: IxCompil
   }, track);
 }
 /**
+ * Intensidad del bloque (P7): multiplica la distancia al neutro de las propiedades espaciales.
+ * Del BLOQUE, como `off`: sobrevive enlazada a un preajuste sin bifurcarlo. 1 borra la clave.
+ */
+export function setIntensity(raw: unknown, amt: number, ctx?: IxCompileCtx): IxWrite {
+  const state = ixPanelState(raw, ctx);
+  const spec = normalizeIxSpec(raw)?.spec;
+  if (state.presetId !== null) {
+    const w: IxSpec = { v: 1, preset: state.presetId };
+    if (spec?.trigger) w.trigger = spec.trigger;
+    if (spec?.off) w.off = spec.off;
+    if (Number.isFinite(amt)) w.amt = amt;
+    return write(w);
+  }
+  const body = ownBody(raw, ctx);
+  const w: IxSpec = { v: 1, trigger: body.trigger, tracks: body.tracks };
+  if (spec?.off) w.off = spec.off;
+  if (Number.isFinite(amt)) w.amt = amt;
+  return write(w);
+}
+
+/**
  * Gating responsive (P4): apagar/encender la interacción en un dispositivo. Es del BLOQUE — el
  * único ajuste, junto al disparador, que un bloque enlazado a un preajuste puede llevar encima.
  */
@@ -755,11 +783,13 @@ export function setBreakpointOff(
     const w: IxSpec = { v: 1, preset: state.presetId };
     if (spec?.trigger) w.trigger = spec.trigger;
     if (off.length > 0) w.off = off;
+    if (spec?.amt !== undefined) w.amt = spec.amt;
     return write(w);
   }
   const body = ownBody(raw, ctx);
   const w: IxSpec = { v: 1, trigger: body.trigger, tracks: body.tracks };
   if (off.length > 0) w.off = off;
+  if (spec?.amt !== undefined) w.amt = spec.amt;
   return write(w);
 }
 

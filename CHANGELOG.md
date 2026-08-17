@@ -8,6 +8,15 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Added
 
+- **Interactions: a curated motion library, and per-block intensity.** The system catalog grows
+  from 16 to 26 presets, showcasing everything the engine learned: physics entrances (bounce,
+  elastic — compiled to CSS, zero JS), 3D flips and skewed slides, card cascades and grid ripples
+  over a block's children, cursor tilt and parallax, and scroll-driven reveal and color washes.
+  And every block gets an intensity dial (×0.1–×3) that scales the *movement* of whatever preset
+  or custom interaction it uses — never the fades or colors — without forking the preset: it's a
+  block-level choice, like the per-device switch, and survives changing the trigger or the preset.
+  The preset admin now shows live usage counts and previews a preset before saving.
+
 - **Interactions: pointer-driven motion (parallax, tilt, follow) — loaded only when used.** A new
   trigger positions an animation with the cursor: normalize over the block itself (tilt) or the
   whole page (parallax), pick a chase smoothing in milliseconds, and give each track its own axis —

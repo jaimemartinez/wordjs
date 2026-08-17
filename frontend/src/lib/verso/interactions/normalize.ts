@@ -198,6 +198,10 @@ export const IX_PERSP_MIN = 200;
 export const IX_PERSP_MAX = 4000;
 export const IX_PERSP_DEFAULT = 1000;
 
+/** Intensidad por bloque (P7): multiplica la distancia al neutro de las propiedades espaciales. */
+export const IX_AMT_MIN = 0.1;
+export const IX_AMT_MAX = 3;
+
 /** Persecución del puntero (P6): ms de suavizado del cursor. 120 se siente "vivo" sin ir a rastras. */
 export const IX_POINTER_SMOOTH_MAX = 1000;
 export const IX_POINTER_SMOOTH_DEFAULT = 120;
@@ -614,6 +618,13 @@ export function normalizeIxSpec(raw: unknown): IxNormalizeResult {
 
   const trigger = normTrigger(raw.trigger);
   if (trigger) spec.trigger = trigger;
+
+  // P7 — intensidad del bloque, clampada y a 2 decimales; 1 (el neutro) se borra: ausencia = 1.
+  const amt = num(raw.amt);
+  if (amt !== undefined) {
+    const v = Math.round(clamp(amt, IX_AMT_MIN, IX_AMT_MAX) * 100) / 100;
+    if (v !== 1) spec.amt = v;
+  }
 
   // P4 — gating responsive: subconjunto de la lista cerrada, en orden canónico y sin duplicados.
   // Con los TRES apagados no hay interacción en ningún sitio: eso es «Quitar», no un gating — se

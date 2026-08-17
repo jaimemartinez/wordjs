@@ -28,7 +28,7 @@
  * del bloque. La TIRA de pasos, sobre la lista, es imagen más navegación (cada marcador es un botón
  * que lleva el foco a la fila de su paso) y nunca el único camino: las filas siguen debajo.
  */
-import React, { useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Card, Input } from "@/components/ui";
 import {
     addStep,
@@ -85,6 +85,8 @@ import {
 // panel del bloque sin arrastrar los `--ed-*` del editor, que es justo la frontera de esta pantalla.
 import IxCurveEditor, { ixBezSeed, IX_BEZ_SENTINEL } from "@/components/verso/fields/IxCurveEditor";
 import {
+    compileIx,
+    toRuntimeUnit,
     IX_CLIP_DIRS,
     IX_EASINGS,
     IX_MAX_STEPS,
@@ -103,6 +105,7 @@ import {
     type IxEdgeName,
     type IxOrigin,
     type IxPropKey,
+    type IxRuntimeUnit,
     type IxSpec,
     type IxStaggerFrom,
 } from "@/lib/verso/interactions";
@@ -113,6 +116,14 @@ import {
     IX_POINTER_SMOOTH_DEFAULT,
     IX_POINTER_SMOOTH_MAX,
 } from "@/lib/verso/interactions";
+// La vista previa (P7) reutiliza el runtime del scrubber del panel —posicionar animaciones WAAPI
+// pausadas—: se lee de `runtime/` directamente, igual que el lienzo, porque es DOM y no superficie
+// del índice. Es SOLO del editor: ni isla de runtime ni hoja inyectada.
+import type { IxDocumentLike, IxElementLike } from "@/lib/verso/interactions/runtime/host";
+import {
+    createIxScrubber,
+    type IxScrubber,
+} from "@/lib/verso/interactions/runtime/scrubber";
 
 const TRIGGERS: IxPanelTriggerKind[] = ["view", "scrub", "hover", "click", "load", "pointer"];
 const TARGETS: IxPanelTargetKind[] = ["self", "children", "words"];
@@ -255,6 +266,80 @@ export default function PresetEditor({
         if (next) onDraft(next);
     };
 
+    /* ── Vista previa (P7) — el borrador compilado por el compilador REAL, sobre una caja de
+       muestra. No es una imitación interpolada a mano: son los MISMOS fotogramas que emitiría la
+       hoja, la misma razón por la que el scrubber del panel mueve el estado real. ────────────── */
+    // `null` = el cuerpo no anima nada todavía: los mandos se deshabilitan, nunca fallan.
+    const previewUnit = useMemo(() => compileIx(draft), [draft]);
+    const previewRef = useRef<HTMLDivElement | null>(null);
+    // La animación de «Probar» y el scrubber del deslizador, para retirarlos antes de reemplazarlos.
+    const previewAnim = useRef<Animation | null>(null);
+    const previewScrub = useRef<IxScrubber | null>(null);
+    const [previewPct, setPreviewPct] = useState(0);
+
+    const stopPreview = useCallback(() => {
+        // `cancel()` devuelve la caja a su estilo de hoja: nunca se queda congelada a medio camino.
+        previewAnim.current?.cancel();
+        previewAnim.current = null;
+        previewScrub.current?.stop();
+        previewScrub.current = null;
+    }, []);
+
+    // Cada edición recompila: lo que estuviera sonando salió de un cuerpo VIEJO y la limpieza lo
+    // retira (también al desmontar). El siguiente gesto —«Probar» o mover el deslizador— rearma.
+    useEffect(() => {
+        if (!previewUnit) stopPreview(); // el cuerpo dejó de animar: no hay nada que dejar puesto
+        return stopPreview;
+    }, [previewUnit, stopPreview]);
+
+    /** Reproduce la PISTA 0 del borrador compilado sobre la caja (disparadores del RELOJ). */
+    const playPreview = (): void => {
+        const el = previewRef.current;
+        if (!el || !previewUnit) return;
+        stopPreview();
+        // La caja es UN elemento: la pista 0 se reproduce sobre ella misma, sin resolver hijos ni
+        // palabras — es una vista previa del MOVIMIENTO, no del DOM del bloque que lo reciba.
+        const first = toRuntimeUnit(previewUnit).tracks[0];
+        if (!first) return;
+        try {
+            previewAnim.current = el.animate(first.kf, {
+                duration: first.dur,
+                delay: first.delay,
+                // `linear`: la curva de cada tramo ya viaja DENTRO de los fotogramas, igual que el
+                // compilador la emite dentro de los `@keyframes`. Una curva aquí se multiplicaría.
+                easing: "linear",
+                fill: "both",
+            });
+        } catch {
+            // Sin WAAPI o fotogramas que este motor no acepta: la peor vista previa es no verla.
+        }
+    };
+
+    /** Coloca la vista previa en el `pct` del recorrido (disparadores SIN reloj: scrub y pointer). */
+    const scrubPreview = (pct: number): void => {
+        setPreviewPct(pct);
+        const el = previewRef.current;
+        if (!el || !previewUnit) return;
+        if (!previewScrub.current) {
+            const unit = toRuntimeUnit(previewUnit);
+            // Cada pista se recorre sobre la PROPIA caja: aquí no hay hijos ni palabras que
+            // resolver, y una pista de `children` sobre una caja sin hijos no enseñaría nada.
+            const sample: IxRuntimeUnit = {
+                ...unit,
+                tracks: unit.tracks.map((t) => ({ ...t, target: { kind: "self" } })),
+            };
+            // Los casts son los MISMOS que hace `defaultIxHost` (ver IxCanvasEngine): las
+            // interfaces `*Like` del runtime son un subconjunto estructural de las del DOM que
+            // TypeScript no comprueba sin fricción a través de `NodeListOf`/`CSSNumberish`.
+            previewScrub.current = createIxScrubber(
+                el as unknown as IxElementLike,
+                sample,
+                document as unknown as IxDocumentLike,
+            );
+        }
+        previewScrub.current?.set(pct);
+    };
+
     if (!track) {
         return (
             <Card>
@@ -300,6 +385,63 @@ export default function PresetEditor({
                         {error}
                     </p>
                 )}
+
+                {/* ── Vista previa (P7) — con un disparador del RELOJ, «Probar» reproduce; con
+                    scrub o pointer no hay nada que reproducir —el progreso lo marca la posición—
+                    y el deslizador POSICIONA una animación pausada, la técnica del scrubber. */}
+                <fieldset className="mb-6 rounded-2xl border-2 border-gray-100 p-4">
+                    <legend className="px-1 text-sm font-bold text-gray-900">Vista previa</legend>
+                    <div className="mt-2 overflow-hidden rounded-xl bg-gray-50/50 p-6">
+                        <div
+                            ref={previewRef}
+                            className="flex h-24 w-full items-center justify-center rounded-xl border-2 border-gray-200 bg-white text-sm font-medium text-gray-600"
+                        >
+                            Vista previa
+                        </div>
+                    </div>
+                    {timed ? (
+                        <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="mt-4"
+                            disabled={!previewUnit}
+                            aria-label="Probar el preajuste sobre la caja de muestra"
+                            onClick={playPreview}
+                        >
+                            Probar
+                        </Button>
+                    ) : (
+                        <div className="mt-4">
+                            <label className={LABEL} htmlFor="ixp-preview-pct">
+                                Recorrido de la vista previa ({previewPct} %)
+                            </label>
+                            <input
+                                id="ixp-preview-pct"
+                                type="range"
+                                min={0}
+                                max={100}
+                                step={1}
+                                value={previewPct}
+                                disabled={!previewUnit}
+                                // El deslizador nativo ya anuncia su valor; esto le pone la unidad.
+                                aria-valuetext={`${previewPct} %`}
+                                className="w-full accent-blue-600"
+                                onChange={(e) => scrubPreview(Number(e.target.value))}
+                            />
+                            <p className="mt-1 text-xs text-gray-500">
+                                {trigger.on === "pointer"
+                                    ? "El cursor posiciona este preajuste: recórrelo a mano para ver los pasos intermedios."
+                                    : "Este preajuste avanza con el scroll: recórrelo a mano para ver los pasos intermedios."}
+                            </p>
+                        </div>
+                    )}
+                    {!previewUnit && (
+                        <p className="mt-2 text-xs text-gray-500">
+                            Aún no anima nada: añade alguna propiedad a sus pasos.
+                        </p>
+                    )}
+                </fieldset>
 
                 {/* ── Pistas (P5) — hasta IX_MAX_TRACKS cuerpos independientes sobre el MISMO
                     disparador. Todo lo de abajo (objetivo, escalonado, tiempos, reproducción,

@@ -266,7 +266,19 @@ a `tracks`, borra `preset`, y a partir de ahí es suyo. Una sola dirección, exp
 **Presets de sistema.** Los 12 tipos de entrada y los 4 efectos de scroll actuales se exponen como
 presets de solo lectura con id `sys:fade-up`, `sys:parallax`, … Compilan al MISMO recorrido visual
 que las clases estáticas de `wordjs-ui.css` (gate de paridad visual en F9-B). No sustituyen a
-`anim`: coexisten (§6.4).
+`anim`: coexisten (§6.4). **P7 amplió el catálogo a 26** (taxonomía pineada por test: 18 entrada /
+6 scroll / 2 puntero): físicas `linear()` (rebote, elástico), 3D y sesgo, cascada y rejilla sobre
+hijos, tilt y paralaje de puntero (compuestos por ANIDAMIENTO self+children: dos pistas sobre el
+mismo elemento pelearían por `transform`), y revelado/color con el scroll.
+
+**Intensidad por bloque (P7).** `IxSpec.amt` (0.1–3, defecto 1 borrado) multiplica la distancia al
+NEUTRO de las propiedades espaciales — nunca la opacidad ni los colores — y se HORNEA en
+compilación: entra en el hash, así que dos bloques con el mismo preset y la misma intensidad
+comparten unidad, y con intensidades distintas son dos (que es lo que son). Es del BLOQUE, como
+`off`: sobrevive a cambiar disparador o preajuste (garantizado por `withSpecExtras`, el único
+camino de reconstrucción de specs del panel). Sustituye al plan original del escalar
+`--wjs-ixv-amt` en runtime: hornear es más simple, testeable sin navegador y no toca el hilo
+principal; el canal inline queda reservado para el índice de palabra, su único uso real.
 
 **Referencia rota** (preset borrado o `v` desconocida) → la unidad no se compila, el bloque se
 renderiza sin interacción, visible. **Fail-open siempre**: la única forma de fallar es no moverse.

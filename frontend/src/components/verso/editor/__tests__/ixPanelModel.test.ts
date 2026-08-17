@@ -42,6 +42,7 @@ import {
   setClipDir,
   setDelay,
   setDuration,
+  setIntensity,
   setLoadDelay,
   setOrigin,
   setPersp,
@@ -574,6 +575,31 @@ describe("opciones del disparador y de la pista (P1: lo que el modelo sabía y e
     expect(w.preset).toBeUndefined();
     expect(w.tracks![0].repeat).toBe(3);
     expect(w.tracks![0].stagger?.each).toBe(80); // el cuerpo copiado es el del preset
+  });
+});
+
+describe("intensidad (P7) y conservación de las claves de bloque", () => {
+  it("setIntensity escribe amt clampado y 1 lo borra", () => {
+    const spec = defaultIxSpec();
+    const strong = setIntensity(spec, 2, CTX)!;
+    expect(strong.amt).toBe(2);
+    expect(setIntensity(strong, 99, CTX)!.amt).toBe(3); // clamp IX_AMT_MAX
+    expect("amt" in setIntensity(strong, 1, CTX)!).toBe(false);
+    assertWritable(strong);
+  });
+
+  it("off y amt SOBREVIVEN a cambiar el disparador y el preajuste: son del bloque", () => {
+    const base = setIntensity(setBreakpointOff(defaultIxSpec(), "mobile", true, CTX)!, 2, CTX)!;
+    expect(base.off).toEqual(["mobile"]);
+    expect(base.amt).toBe(2);
+    const t = setTriggerKind(base, "click", CTX)!;
+    expect(t.off).toEqual(["mobile"]);
+    expect(t.amt).toBe(2);
+    const p = setPresetChoice(base, "aparecer-tarjetas", CTX)!;
+    expect(p.preset).toBe("aparecer-tarjetas");
+    expect(p.off).toEqual(["mobile"]);
+    expect(p.amt).toBe(2);
+    assertWritable(p);
   });
 });
 

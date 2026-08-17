@@ -118,16 +118,18 @@ export function resolveIxBody(raw: unknown, ctx?: IxCompileCtx): IxResolved | nu
       tracks: preset.tracks,
       rev: preset.rev,
     };
-    // El gating es del BLOQUE aunque el cuerpo venga del preset: dos bloques con el mismo preajuste
-    // pueden desactivarse en dispositivos distintos (y por eso `off` entra en el hash: son
-    // unidades distintas).
+    // El gating y la intensidad son del BLOQUE aunque el cuerpo venga del preset: dos bloques con
+    // el mismo preajuste pueden desactivarse o intensificarse por separado (y por eso entran en el
+    // hash: son unidades distintas).
     if (spec.off) body.off = spec.off;
+    if (spec.amt !== undefined) body.amt = spec.amt;
     return { body, warnings };
   }
 
   if (!spec.tracks || spec.tracks.length === 0) return null;
   const body: IxBody = { trigger: spec.trigger ?? IX_DEFAULT_TRIGGER, tracks: spec.tracks };
   if (spec.off) body.off = spec.off;
+  if (spec.amt !== undefined) body.amt = spec.amt;
   return { body, warnings };
 }
 
@@ -211,7 +213,24 @@ function unionProps(steps: IxStep[]): IxPropKey[] {
   return IX_PROP_KEYS.filter((k) => seen.has(k));
 }
 
+/**
+ * Propiedades que la INTENSIDAD (P7) escala: las espaciales. La opacidad y los colores quedan
+ * fuera — una intensidad de 0.5 debe suavizar el movimiento, no dejar el fundido a medias — y los
+ * filtros de color (brillo/contraste/saturación/grises/tono) también: son apariencia, no recorrido.
+ */
+const IX_AMT_PROPS: ReadonlySet<IxPropKey> = new Set<IxPropKey>([
+  "x", "y", "z", "scale", "scaleX", "scaleY", "rotate", "rotateX", "rotateY",
+  "skewX", "skewY", "blur", "clip",
+]);
+
 const valOf = (set: IxProps, k: IxPropKey): number => set[k] ?? IX_PROP_NEUTRAL[k];
+
+/** El valor con la intensidad horneada: neutro + (valor − neutro) × amt, solo en las espaciales. */
+const scaledVal = (set: IxProps, k: IxPropKey, amt: number): number => {
+  const v = valOf(set, k);
+  if (amt === 1 || !IX_AMT_PROPS.has(k)) return v;
+  return IX_PROP_NEUTRAL[k] + (v - IX_PROP_NEUTRAL[k]) * amt;
+};
 
 /** Color 0xRRGGBB → `#rrggbb`. El emisor formatea; el autor jamás aporta la cadena. */
 const hexColor = (v: number): string => `#${(Math.round(v) & 0xffffff).toString(16).padStart(6, "0")}`;
@@ -220,11 +239,12 @@ const hexColor = (v: number): string => `#${(Math.round(v) & 0xffffff).toString(
  * Contexto de PISTA para emitir un estado: qué dirección recorta `clip`, con qué perspectiva se
  * emiten los 3D y qué `transform-origin` lleva la regla. Sale del normalizador, listas cerradas.
  */
-type TrackCssCtx = { clipDir: IxClipDir; persp: number };
+type TrackCssCtx = { clipDir: IxClipDir; persp: number; amt: number };
 
-const trackCtx = (track: IxTrack): TrackCssCtx => ({
+const trackCtx = (track: IxTrack, amt: number): TrackCssCtx => ({
   clipDir: track.clipDir ?? "right",
   persp: track.persp ?? IX_PERSP_DEFAULT,
+  amt,
 });
 
 /**
@@ -239,30 +259,30 @@ function transformOf(set: IxProps, union: IxPropKey[], ctx: TrackCssCtx): string
   if (has("rotateX") || has("rotateY") || has("z")) parts.push(`perspective(${n(ctx.persp)}px)`);
   if (has("x") || has("y") || has("z")) {
     parts.push(
-      `translate3d(${n(valOf(set, "x"))}px,${n(valOf(set, "y"))}px,${has("z") ? `${n(valOf(set, "z"))}px` : "0"})`,
+      `translate3d(${n(scaledVal(set, "x", ctx.amt))}px,${n(scaledVal(set, "y", ctx.amt))}px,${has("z") ? `${n(scaledVal(set, "z", ctx.amt))}px` : "0"})`,
     );
   }
-  if (has("scale")) parts.push(`scale(${n(valOf(set, "scale"))})`);
-  if (has("scaleX")) parts.push(`scaleX(${n(valOf(set, "scaleX"))})`);
-  if (has("scaleY")) parts.push(`scaleY(${n(valOf(set, "scaleY"))})`);
-  if (has("rotate")) parts.push(`rotate(${n(valOf(set, "rotate"))}deg)`);
-  if (has("rotateX")) parts.push(`rotateX(${n(valOf(set, "rotateX"))}deg)`);
-  if (has("rotateY")) parts.push(`rotateY(${n(valOf(set, "rotateY"))}deg)`);
-  if (has("skewX")) parts.push(`skewX(${n(valOf(set, "skewX"))}deg)`);
-  if (has("skewY")) parts.push(`skewY(${n(valOf(set, "skewY"))}deg)`);
+  if (has("scale")) parts.push(`scale(${n(scaledVal(set, "scale", ctx.amt))})`);
+  if (has("scaleX")) parts.push(`scaleX(${n(scaledVal(set, "scaleX", ctx.amt))})`);
+  if (has("scaleY")) parts.push(`scaleY(${n(scaledVal(set, "scaleY", ctx.amt))})`);
+  if (has("rotate")) parts.push(`rotate(${n(scaledVal(set, "rotate", ctx.amt))}deg)`);
+  if (has("rotateX")) parts.push(`rotateX(${n(scaledVal(set, "rotateX", ctx.amt))}deg)`);
+  if (has("rotateY")) parts.push(`rotateY(${n(scaledVal(set, "rotateY", ctx.amt))}deg)`);
+  if (has("skewX")) parts.push(`skewX(${n(scaledVal(set, "skewX", ctx.amt))}deg)`);
+  if (has("skewY")) parts.push(`skewY(${n(scaledVal(set, "skewY", ctx.amt))}deg)`);
   return parts.length > 0 ? parts.join(" ") : undefined;
 }
 
 /** La lista `filter` con lo que la pista toca, en orden canónico. blur va primero: era el único. */
-function filterOf(set: IxProps, union: IxPropKey[]): string | undefined {
+function filterOf(set: IxProps, union: IxPropKey[], ctx: TrackCssCtx): string | undefined {
   const has = (k: IxPropKey) => union.includes(k);
   const parts: string[] = [];
-  if (has("blur")) parts.push(`blur(${n(valOf(set, "blur"))}px)`);
-  if (has("brightness")) parts.push(`brightness(${n(valOf(set, "brightness"))})`);
-  if (has("contrast")) parts.push(`contrast(${n(valOf(set, "contrast"))})`);
-  if (has("saturate")) parts.push(`saturate(${n(valOf(set, "saturate"))})`);
-  if (has("grayscale")) parts.push(`grayscale(${n(valOf(set, "grayscale"))}%)`);
-  if (has("hue")) parts.push(`hue-rotate(${n(valOf(set, "hue"))}deg)`);
+  if (has("blur")) parts.push(`blur(${n(scaledVal(set, "blur", ctx.amt))}px)`);
+  if (has("brightness")) parts.push(`brightness(${n(scaledVal(set, "brightness", ctx.amt))})`);
+  if (has("contrast")) parts.push(`contrast(${n(scaledVal(set, "contrast", ctx.amt))})`);
+  if (has("saturate")) parts.push(`saturate(${n(scaledVal(set, "saturate", ctx.amt))})`);
+  if (has("grayscale")) parts.push(`grayscale(${n(scaledVal(set, "grayscale", ctx.amt))}%)`);
+  if (has("hue")) parts.push(`hue-rotate(${n(scaledVal(set, "hue", ctx.amt))}deg)`);
   return parts.length > 0 ? parts.join(" ") : undefined;
 }
 
@@ -295,12 +315,12 @@ function clipCss(revealed: number, dir: IxClipDir): string {
  */
 function declsOf(set: IxProps, union: IxPropKey[], ctx: TrackCssCtx): string[] {
   const out: string[] = [];
-  if (union.includes("opacity")) out.push(`opacity:${n(valOf(set, "opacity"))}`);
+  if (union.includes("opacity")) out.push(`opacity:${n(scaledVal(set, "opacity", ctx.amt))}`);
   const tf = transformOf(set, union, ctx);
   if (tf) out.push(`transform:${tf}`);
-  const fl = filterOf(set, union);
+  const fl = filterOf(set, union, ctx);
   if (fl) out.push(`filter:${fl}`);
-  if (union.includes("clip")) out.push(`clip-path:${clipCss(valOf(set, "clip"), ctx.clipDir)}`);
+  if (union.includes("clip")) out.push(`clip-path:${clipCss(scaledVal(set, "clip", ctx.amt), ctx.clipDir)}`);
   if (set.textColor !== undefined) out.push(`color:${hexColor(set.textColor)}`);
   if (set.bgColor !== undefined) out.push(`background-color:${hexColor(set.bgColor)}`);
   if (set.borderColor !== undefined) out.push(`border-color:${hexColor(set.borderColor)}`);
@@ -332,12 +352,12 @@ function keyframeOf(step: IxStep, union: IxPropKey[], ctx: TrackCssCtx): IxKeyfr
   const kf: IxKeyframe = { offset: round4(step.at / 100) };
   const ease = easeCss(step);
   if (ease) kf.easing = ease;
-  if (union.includes("opacity")) kf.opacity = n(valOf(step.set, "opacity"));
+  if (union.includes("opacity")) kf.opacity = n(scaledVal(step.set, "opacity", ctx.amt));
   const tf = transformOf(step.set, union, ctx);
   if (tf) kf.transform = tf;
-  const fl = filterOf(step.set, union);
+  const fl = filterOf(step.set, union, ctx);
   if (fl) kf.filter = fl;
-  if (union.includes("clip")) kf.clipPath = clipCss(valOf(step.set, "clip"), ctx.clipDir);
+  if (union.includes("clip")) kf.clipPath = clipCss(scaledVal(step.set, "clip", ctx.amt), ctx.clipDir);
   if (step.set.textColor !== undefined) kf.color = hexColor(step.set.textColor);
   if (step.set.bgColor !== undefined) kf.backgroundColor = hexColor(step.set.bgColor);
   if (step.set.borderColor !== undefined) kf.borderColor = hexColor(step.set.borderColor);
@@ -541,25 +561,38 @@ export function emitUnit(body: IxBody, hash: string): IxUnit {
   const armedGroups = new Map<string, string[]>();
   const seenHoverSuffix = new Set<string>();
   const seenStaggerSuffix = new Set<string>();
-  const touchedBySuffix = new Map<string, Set<IxPropKey>>();
+  const touchedBySuffix = new Map<string, Set<string>>();
 
+  // El solape se mide por PROPIEDAD CSS, no por clave del modelo: `rotateX` y `rotateY` son claves
+  // distintas pero comparten `transform`, y en una lista de animaciones la última se lleva el
+  // transform ENTERO. Para componer ejes/familias sobre el mismo bloque: pistas `self`+`children`
+  // (los transform anidados sí se multiplican), como hace el preset de tilt.
+  const cssPropOf = (k: IxPropKey): string =>
+    TRANSFORM_KEYS.includes(k)
+      ? "transform"
+      : FILTER_KEYS.includes(k)
+        ? "filter"
+        : k === "clip"
+          ? "clip-path"
+          : k; // opacity y los colores: propiedad propia por clave
   const noteOverlap = (suffix: string, union: IxPropKey[]) => {
+    const props = new Set(union.map(cssPropOf));
     const seen = touchedBySuffix.get(suffix);
     if (!seen) {
-      touchedBySuffix.set(suffix, new Set(union));
+      touchedBySuffix.set(suffix, props);
       return;
     }
-    if (union.some((k) => seen.has(k))) {
+    if ([...props].some((p) => seen.has(p))) {
       warnings.push(
-        "dos pistas sobre el mismo objetivo tocan la misma propiedad: manda la última (componlas en una pista si no es lo que quieres)",
+        "dos pistas sobre el mismo objetivo compiten por la misma propiedad CSS: manda la última (usa `self`+`children` para componer transform por anidamiento)",
       );
     }
-    for (const k of union) seen.add(k);
+    for (const p of props) seen.add(p);
   };
 
   body.tracks.forEach((track, i) => {
     const union = unionProps(track.steps);
-    const tcx = trackCtx(track);
+    const tcx = trackCtx(track, body.amt ?? 1);
     const name = `${IX_KEYFRAME_PREFIX}${hash}${multi ? `-${i}` : ""}`;
     kf[name] = track.steps.map((s) => keyframeOf(s, union, tcx));
 
@@ -1026,11 +1059,11 @@ export function ixKeyframes(unit: IxUnit): Record<string, IxKeyframe[]> {
 /* Manifiesto del runtime                                              */
 /* ------------------------------------------------------------------ */
 
-function toRuntimeTrack(track: IxTrack, trigger: IxTrigger): IxRuntimeTrack {
+function toRuntimeTrack(track: IxTrack, trigger: IxTrigger, amt: number): IxRuntimeTrack {
   const union = unionProps(track.steps);
   const loadDelay = trigger.on === "load" ? (trigger.delay ?? 0) : 0;
   const out: IxRuntimeTrack = {
-    kf: track.steps.map((s) => keyframeOf(s, union, trackCtx(track))),
+    kf: track.steps.map((s) => keyframeOf(s, union, trackCtx(track, amt))),
     target: track.target,
     range: rangeOf(trigger),
     dur: track.dur ?? IX_DEFAULT_DUR,
@@ -1052,7 +1085,7 @@ export function toRuntimeUnit(unit: IxUnit): IxRuntimeUnit {
     cls: unit.cls,
     needsRuntime: unit.needsRuntime,
     trigger: unit.body.trigger,
-    tracks: unit.body.tracks.map((t) => toRuntimeTrack(t, unit.body.trigger)),
+    tracks: unit.body.tracks.map((t) => toRuntimeTrack(t, unit.body.trigger, unit.body.amt ?? 1)),
   };
   if (unit.media) out.media = unit.media;
   return out;

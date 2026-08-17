@@ -64,6 +64,8 @@ export default function InteractionPresetsPage() {
     const [saving, setSaving] = useState(false);
     const [editing, setEditing] = useState<Editing>(null);
     const [error, setError] = useState<string | null>(null);
+    /** Recuento de usos por preajuste, para las tarjetas. `null` = aún no se sabe (cargando o falló). */
+    const [usage, setUsage] = useState<Map<string, number> | null>(null);
 
     const load = useCallback(async () => {
         try {
@@ -152,20 +154,22 @@ export default function InteractionPresetsPage() {
     };
 
     /**
-     * Recuento de usos ANTES de borrar (riesgo R6 de la spec).
+     * Recuento de usos: cuántos bloques REFERENCIAN cada preajuste por id (riesgo R6 de la spec).
      *
-     * Se cuenta al pulsar y no al cargar: el escaneo lee el contenido de todas las páginas y entradas
-     * y no hay razón para pagarlo cada vez que alguien abre esta pantalla. Solo se cuentan las
-     * REFERENCIAS por id — un bloque que desvinculó el preajuste ya tiene su propio cuerpo y borrar
-     * este no le afecta.
+     * Es UNA pasada sobre el contenido (dos GET: páginas y entradas, los mismos listados del admin)
+     * con dos consumidores: las tarjetas de la lista, que lo pagan una vez al abrir la pantalla, y
+     * la confirmación de borrado, que lo REHACE al pulsar — el de las tarjetas puede llevar un rato
+     * en pantalla y otra pestaña puede haber enlazado el preajuste mientras tanto. Solo se cuentan
+     * las referencias por id: un bloque que desvinculó el preajuste ya tiene su propio cuerpo y
+     * borrar este no le afecta.
      */
-    const countUsage = async (id: string): Promise<number | null> => {
+    const scanUsage = useCallback(async (): Promise<Map<string, number> | null> => {
         try {
             const [pages, posts] = await Promise.all([
                 postsApi.list("page", "any"),
                 postsApi.list("post", "any"),
             ]);
-            const usage = new Map<string, number>();
+            const counts = new Map<string, number>();
             let sawContent = false;
             for (const post of [...pages, ...posts]) {
                 const raw = post.meta?._puck_data;
@@ -179,17 +183,32 @@ export default function InteractionPresetsPage() {
                         continue;
                     }
                 }
-                ixPresetUsage(data, usage);
+                ixPresetUsage(data, counts);
             }
             // Si NINGUNA entrada trajo su contenido, el recuento sería un 0 mentiroso.
-            return sawContent ? (usage.get(id) ?? 0) : null;
+            return sawContent ? counts : null;
         } catch {
             return null;
         }
-    };
+    }, []);
+
+    // El recuento de las tarjetas, una vez al montar. Si el escaneo no puede saber (falló, o nada
+    // trajo contenido), `usage` se queda en `null` y las tarjetas enseñan «—», nunca un 0 inventado.
+    useEffect(() => {
+        let alive = true;
+        void scanUsage().then((counts) => {
+            if (alive && counts) setUsage(counts);
+        });
+        return () => {
+            alive = false;
+        };
+    }, [scanUsage]);
 
     const remove = async (preset: IxPreset) => {
-        const uses = await countUsage(preset.id);
+        // Recuento FRESCO al pulsar (y de paso se refrescan las tarjetas, que pueden estar viejas).
+        const counts = await scanUsage();
+        if (counts) setUsage(counts);
+        const uses = counts ? (counts.get(preset.id) ?? 0) : null;
         const detail =
             uses === null
                 ? "Los bloques que lo usen se seguirán viendo, pero dejarán de moverse."
@@ -296,6 +315,9 @@ export default function InteractionPresetsPage() {
                                                 {summaryOfTarget(preset)} ·{" "}
                                                 {preset.tracks[0].steps.length} pasos · revisión {preset.rev}
                                             </p>
+                                            <p className="mt-1 text-xs text-gray-500">
+                                                {usageLabel(usage, preset.id)}
+                                            </p>
                                         </div>
                                         <div className="flex shrink-0 gap-2">
                                             <Button
@@ -339,6 +361,14 @@ export default function InteractionPresetsPage() {
             </div>
         </div>
     );
+}
+
+/** «Lo usan N bloques» — referencias por id del escaneo de arriba; «—» mientras no se sabe. */
+function usageLabel(usage: Map<string, number> | null, id: string): string {
+    if (!usage) return "—";
+    const n = usage.get(id) ?? 0;
+    if (n === 0) return "Sin usos";
+    return n === 1 ? "Lo usa 1 bloque" : `Lo usan ${n} bloques`;
 }
 
 /** «Este bloque» / «Sus hijos» / «Las palabras» — el objetivo de la primera pista, en cristiano. */

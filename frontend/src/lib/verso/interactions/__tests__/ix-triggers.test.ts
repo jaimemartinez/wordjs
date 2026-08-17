@@ -579,6 +579,57 @@ describe("puntero (P6): sin CSS, con IR completo, y honestidad sobre lo que no a
   });
 });
 
+describe("intensidad (P7): del bloque, horneada, y solo sobre lo espacial", () => {
+  const spatial = (amt?: number) => compileIx({
+    v: 1,
+    trigger: { on: "load" },
+    ...(amt !== undefined ? { amt } : {}),
+    tracks: [{ target: { kind: "self" }, steps: [
+      { at: 0, set: { y: 24, opacity: 0, bgColor: 0xff0000 } },
+      { at: 100, set: { y: 0, opacity: 1 } },
+    ] }],
+  })!;
+
+  it("amt 0.5 escala la distancia al neutro de las espaciales; opacidad y color quedan intactos", () => {
+    const u = spatial(0.5);
+    expect(u.keyframes[0]).toContain("translate3d(0px,12px,0)");
+    expect(u.keyframes[0]).toContain("opacity:0");
+    expect(u.keyframes[0]).toContain("background-color:#ff0000");
+  });
+
+  it("la escala respeta el neutro de cada propiedad (scale 1, clip 100)", () => {
+    const u = compileIx({
+      v: 1, trigger: { on: "load" }, amt: 2,
+      tracks: [{ target: { kind: "self" }, steps: [
+        { at: 0, set: { scale: 0.9, clip: 60 } }, { at: 100, set: { scale: 1, clip: 100 } },
+      ] }],
+    })!;
+    // scale: 1 + (0.9−1)×2 = 0.8; clip revelado 60 → 100+(60−100)×2 = 20 → recorte 80%.
+    expect(u.keyframes[0]).toContain("scale(0.8)");
+    expect(u.keyframes[0]).toContain("inset(0 80% 0 0)");
+  });
+
+  it("amt entra en el hash (unidades distintas) y amt 1 se borra (bytes de siempre)", () => {
+    expect(spatial(0.5).hash).not.toBe(spatial().hash);
+    expect(spatial(1).hash).toBe(spatial().hash);
+    expect("amt" in spatial(1).body).toBe(false);
+  });
+
+  it("sobre un preset la intensidad es del BLOQUE: escala el cuerpo del preset sin tocarlo", () => {
+    const ctx = { presets: SYS_IX_PRESETS };
+    const strong = compileIx({ v: 1, preset: "sys:fade-up", amt: 2 }, ctx)!;
+    const plain = compileIx({ v: 1, preset: "sys:fade-up" }, ctx)!;
+    expect(plain.keyframes[0]).toContain("translate3d(0px,28px,0)");
+    expect(strong.keyframes[0]).toContain("translate3d(0px,56px,0)");
+    expect(strong.hash).not.toBe(plain.hash);
+  });
+
+  it("el IR WAAPI lleva la MISMA escala (paridad de backends)", () => {
+    const u = spatial(0.5);
+    expect(Object.values(u.kf)[0][0].transform).toContain("translate3d(0px,12px,0)");
+  });
+});
+
 describe("gating responsive (P4): la condición @media sale de la lista cerrada", () => {
   it("cada combinación de apagados produce su complementaria exacta", () => {
     expect(ixMediaOf(["mobile"])).toBe("(min-width: 768px)");

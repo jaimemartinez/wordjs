@@ -124,6 +124,112 @@ const SYS_LIST: IxPreset[] = [
     { at: 0, set: { rotate: AMT * -0.06 } },
     { at: 100, set: { rotate: AMT * 0.06 } },
   ]),
+
+  // ── P7: la biblioteca curada — el escaparate de P2–P6 ──────────────
+  // Físicas de P2 (compiladas a linear(): cero JS):
+  enter("rebote", "Rebotar al entrar", [
+    { at: 0, set: { opacity: 0, y: -60 }, ease: "bounce" },
+    { at: 100, set: { opacity: 1, y: 0 } },
+  ]),
+  enter("elastico", "Entrada elástica", [
+    { at: 0, set: { opacity: 0, scale: 0.7 }, ease: "elastic" },
+    { at: 100, set: { opacity: 1, scale: 1 } },
+  ]),
+  // 3D y sesgo de P3:
+  enter("volteo-3d", "Volteo 3D", [
+    { at: 0, set: { opacity: 0, rotateY: -90 }, ease: "out" },
+    { at: 100, set: { opacity: 1, rotateY: 0 } },
+  ]),
+  enter("sesgo", "Deslizar con sesgo", [
+    { at: 0, set: { opacity: 0, x: -40, skewX: 8 }, ease: "out" },
+    { at: 100, set: { opacity: 1, x: 0, skewX: 0 } },
+  ]),
+  // Escalonados de P4 sobre los HIJOS del bloque (cascada lineal y onda de rejilla):
+  {
+    id: "sys:tarjetas-cascada",
+    name: "Tarjetas en cascada",
+    trigger: { on: "view", once: true },
+    tracks: [{
+      target: { kind: "children" },
+      steps: [
+        { at: 0, set: { opacity: 0, y: 24 }, ease: "out" },
+        { at: 100, set: { opacity: 1, y: 0 } },
+      ],
+      dur: DUR,
+      stagger: { each: 80 },
+    }],
+    rev: 1,
+  },
+  {
+    id: "sys:tarjetas-rejilla",
+    name: "Tarjetas en rejilla",
+    trigger: { on: "view", once: true },
+    tracks: [{
+      target: { kind: "children" },
+      steps: [
+        { at: 0, set: { opacity: 0, scale: 0.94 }, ease: "out" },
+        { at: 100, set: { opacity: 1, scale: 1 } },
+      ],
+      dur: DUR,
+      stagger: { each: 70, cols: 3 },
+    }],
+    rev: 1,
+  },
+  // Puntero de P6. El tilt compone los DOS ejes por ANIDAMIENTO (self + children): dos pistas
+  // sobre el mismo elemento pelearían por `transform` (last-wins de la lista); los transform de
+  // elementos anidados se multiplican, que es la composición de verdad.
+  {
+    id: "sys:tilt",
+    name: "Tilt con el puntero",
+    trigger: { on: "pointer" },
+    tracks: [
+      {
+        target: { kind: "self" },
+        steps: [{ at: 0, set: { rotateY: -8 } }, { at: 100, set: { rotateY: 8 } }],
+      },
+      {
+        target: { kind: "children" },
+        axis: "y",
+        steps: [{ at: 0, set: { rotateX: 6 } }, { at: 100, set: { rotateX: -6 } }],
+      },
+    ],
+    rev: 1,
+  },
+  {
+    id: "sys:parallax-puntero",
+    name: "Paralaje con el puntero",
+    trigger: { on: "pointer", area: "page", smooth: 250 },
+    tracks: [
+      {
+        target: { kind: "self" },
+        steps: [{ at: 0, set: { x: -18 } }, { at: 100, set: { x: 18 } }],
+      },
+      {
+        target: { kind: "children" },
+        axis: "y",
+        steps: [{ at: 0, set: { y: -12 } }, { at: 100, set: { y: 12 } }],
+      },
+    ],
+    rev: 1,
+  },
+  // Scroll con lo nuevo de P3 (dirección de revelado; filtros de color):
+  {
+    id: "sys:scroll-revelado",
+    name: "Revelado con el scroll",
+    trigger: { on: "scrub", range: { from: { at: "entry", pct: 0 }, to: { at: "cover", pct: 50 } } },
+    tracks: [{
+      target: { kind: "self" },
+      clipDir: "up",
+      steps: [{ at: 0, set: { clip: 0 } }, { at: 100, set: { clip: 100 } }],
+    }],
+    rev: 1,
+  },
+  scroll("scroll-color", "Color con el scroll", [
+    { at: 0, set: { grayscale: 100, saturate: 0.4 } },
+    { at: 40, set: { grayscale: 0, saturate: 1 } },
+    { at: 60, set: { grayscale: 0, saturate: 1 } },
+    { at: 100, set: { grayscale: 100, saturate: 0.4 } },
+  ]),
 ];
 
 /** Catálogo indexado por id, congelado: un preset de sistema no se edita en caliente. */

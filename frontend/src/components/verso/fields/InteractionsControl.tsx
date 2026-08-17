@@ -67,6 +67,8 @@ import {
   IX_POINTER_SMOOTH_DEFAULT,
   IX_POINTER_SMOOTH_MAX,
 } from "@/lib/verso/interactions";
+// Los topes de la intensidad (P7), por la misma razón: del módulo que los define.
+import { IX_AMT_MAX, IX_AMT_MIN } from "@/lib/verso/interactions";
 import type { NumberVersoField, RadioVersoField, SelectVersoField } from "@/lib/verso/registry";
 import {
   addStep,
@@ -87,6 +89,7 @@ import {
   setClipDir,
   setDelay,
   setDuration,
+  setIntensity,
   setLoadDelay,
   setOrigin,
   setPersp,
@@ -219,6 +222,7 @@ export default function InteractionsControl({
   onScrub,
 }: InteractionsControlProps) {
   const titleId = useId();
+  const amtId = useId();
   // Referencia ESTABLE: el scrubber la usa como dependencia de su efecto de limpieza, y una función
   // nueva en cada render lo soltaría y lo re-armaría en cada pulsación de tecla del panel.
   const scrub = useCallback(
@@ -246,6 +250,8 @@ export default function InteractionsControl({
   const linked = state.presetId !== null;
   // Dispositivos APAGADOS (P4). El dato guarda dónde NO corre; los checkboxes muestran lo contrario.
   const offList = state.spec?.off ?? [];
+  // Intensidad del bloque (P7): multiplicador del MOVIMIENTO. 1 = tal cual se diseñó (sin clave).
+  const amt = state.spec?.amt ?? 1;
   // Derivados del disparador para el editor de tramo. `hasOwnRange` distingue el rango DEL AUTOR del
   // por defecto del compilador: «Restablecer» solo tiene sentido cuando hay algo que borrar.
   const range = rangeEditable(trigger) ? effectiveRange(trigger) : null;
@@ -404,6 +410,33 @@ export default function InteractionsControl({
             scrollDriven={trigger.on === "scrub" || (trigger.on === "view" && trigger.once === false)}
             onScrub={scrub}
           />
+
+          {/* ── Intensidad (P7) — Nivel 1, como el preajuste: multiplica la DISTANCIA al neutro de
+              las propiedades espaciales, así que vale igual con un preajuste enlazado (es del
+              BLOQUE, como «Dónde corre»: no lo bifurca) y con cuerpo propio. No es un VersoField
+              —el contrato de campos no tiene tipo `range` y es público—, así que replica a mano el
+              `label for` + `useId` que aquel daría gratis, como el color de los pasos. */}
+          <div className="mb-3">
+            <label
+              htmlFor={amtId}
+              className="block text-xs font-medium text-[var(--ed-on-surface-variant)] mb-1"
+            >
+              Intensidad (×{amt.toFixed(1)})
+            </label>
+            <input
+              id={amtId}
+              type="range"
+              min={IX_AMT_MIN}
+              max={IX_AMT_MAX}
+              step={0.1}
+              value={amt}
+              // El deslizador nativo ya anuncia su valor; `aria-valuetext` le pone el formato «×».
+              aria-valuetext={`×${amt.toFixed(1)}`}
+              className="w-full accent-[var(--ed-primary)]"
+              onChange={(e) => onChange(setIntensity(value, Number(e.target.value), ixCtx))}
+            />
+            <p className={HINT}>Multiplica el movimiento (no la opacidad ni el color).</p>
+          </div>
 
           {/* ── Nivel 2 — disparador y objetivo ─────────────────────── */}
           <VersoFieldControl

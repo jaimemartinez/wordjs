@@ -222,10 +222,14 @@ describe("presupuestos y topes", () => {
     const page = compileIxPage(specs, ctx);
     expect(page.units).toHaveLength(5);
     expect(page.css.length).toBeLessThanOrEqual(8 * 1024);
-    // Y aunque la página usara los 16 presets del sistema a la vez.
+    // El CATÁLOGO ENTERO (26 presets, P7) a la vez es un caso extremo, no una página realista:
+    // pesa ~11,9 KB medidos — el grueso son los DOS bloques de fallback `nth-child` de
+    // cascada/rejilla (~1,2 KB cada uno) más las curvas linear() de las físicas. Se pinea el techo
+    // MEDIDO (mismo criterio que el "PEOR CASO" de abajo) para que cualquier engorde del emisor
+    // sea visible; el presupuesto de 8 KB de §7.3 sigue vigente para páginas con reutilización.
     const all = compileIxPage(SYS_IX_PRESET_IDS.map((id) => ({ v: 1 as const, preset: id })), ctx);
-    expect(all.units).toHaveLength(16);
-    expect(all.css.length).toBeLessThanOrEqual(8 * 1024);
+    expect(all.units).toHaveLength(26);
+    expect(all.css.length).toBeLessThanOrEqual(12 * 1024);
   });
 
   it("PEOR CASO MEDIDO: 30 unidades sin NADA compartido pesan ~8,4 KB", () => {
@@ -338,23 +342,32 @@ describe("los dos backends del IR salen del mismo sitio", () => {
 });
 
 describe("presets de sistema", () => {
-  it("los 16 compilan, y ninguno emite propiedades que provoquen reflow", () => {
-    expect(SYS_IX_PRESET_IDS).toHaveLength(16);
+  it("los 26 compilan, y ninguno emite propiedades que provoquen reflow", () => {
+    expect(SYS_IX_PRESET_IDS).toHaveLength(26);
     for (const id of SYS_IX_PRESET_IDS) {
       const unit = compileIx({ v: 1, preset: id }, ctx);
       expect(unit, id).not.toBeNull();
-      expect(unit!.rules.length, id).toBeGreaterThan(0);
+      // Los de PUNTERO no emiten CSS por diseño (la animación se posiciona): su IR va entero.
+      if (SYS_IX_PRESETS[id].trigger.on === "pointer") {
+        expect(unit!.rules, id).toHaveLength(0);
+        expect(Object.keys(unit!.kf).length, id).toBeGreaterThan(0);
+      } else {
+        expect(unit!.rules.length, id).toBeGreaterThan(0);
+      }
     }
   });
 
-  it("los 12 de entrada disparan con `view`+`once` y los 4 de scroll con `scrub`", () => {
-    const entrances = SYS_IX_PRESET_IDS.filter((id) => !id.startsWith("sys:scroll-") && id !== "sys:parallax");
-    expect(entrances).toHaveLength(12);
-    for (const id of entrances) {
-      expect(SYS_IX_PRESETS[id].trigger, id).toEqual({ on: "view", once: true });
+  it("la taxonomía del catálogo: 18 de entrada, 6 de scroll y 2 de puntero", () => {
+    const byTrigger = { view: [] as string[], scrub: [] as string[], pointer: [] as string[] };
+    for (const id of SYS_IX_PRESET_IDS) {
+      const on = SYS_IX_PRESETS[id].trigger.on;
+      (byTrigger as Record<string, string[]>)[on]?.push(id);
     }
-    for (const id of ["sys:parallax", "sys:scroll-fade", "sys:scroll-scale", "sys:scroll-rotate"]) {
-      expect(SYS_IX_PRESETS[id].trigger.on, id).toBe("scrub");
+    expect(byTrigger.view).toHaveLength(18);
+    expect(byTrigger.scrub).toHaveLength(6);
+    expect(byTrigger.pointer).toHaveLength(2);
+    for (const id of byTrigger.view) {
+      expect(SYS_IX_PRESETS[id].trigger, id).toEqual({ on: "view", once: true });
     }
   });
 });

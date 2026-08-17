@@ -40,6 +40,15 @@ export type IxSpec = {
    * emite como `@media` complementaria; el runtime consulta la misma condición y no arma.
    */
   off?: IxBreakpoint[];
+  /**
+   * INTENSIDAD del bloque (P7): multiplica la distancia al NEUTRO de las propiedades espaciales
+   * (x/y/z, giros, sesgos, escala, blur, revelado — nunca la opacidad ni los colores). Es del
+   * BLOQUE, como `off`: el mismo preajuste puede ser sutil en un bloque y dramático en otro. Se
+   * HORNEA en compilación y entra en el hash — dos bloques con el mismo preset y la misma
+   * intensidad siguen compartiendo unidad; con intensidades distintas son dos unidades, que es
+   * exactamente lo que son.
+   */
+  amt?: number;
 };
 
 export type IxBreakpoint = "mobile" | "tablet" | "desktop";
@@ -276,6 +285,8 @@ export type IxBody = {
   rev?: number;
   /** Dispositivos desactivados (P4). Del bloque, nunca del preset. Entra en el hash. */
   off?: IxBreakpoint[];
+  /** Intensidad del bloque (P7). Del bloque, nunca del preset. Entra en el hash. */
+  amt?: number;
 };
 
 export type IxUnit = {
