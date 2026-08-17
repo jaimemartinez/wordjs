@@ -20,7 +20,7 @@
  */
 import type { IxEdge, IxRange, IxRuntimeUnit } from "../types";
 import type { IxAnimationLike, IxElementLike, IxHost } from "./host";
-import { ixStaggerOffset, resolveIxTargets } from "./targets";
+import { ixKeyframesFor, ixStaggerOffset, resolveIxTargets } from "./targets";
 
 /** Duración virtual de la animación pausada. 1000 y no 1: da 3 decimales de resolución al 0–100 %. */
 const SCRUB_MS = 1000;
@@ -151,7 +151,7 @@ export function createScrubDriver(units: readonly IxRuntimeUnit[], host: IxHost)
           if (typeof el.animate !== "function") return; // sin WAAPI → visible y quieto
           if (chaseSmooth !== null) {
             // P10: como el scrub llano, pero `cur` PERSIGUE el progreso en vez de igualarlo.
-            const anim = el.animate(track.kf, { duration: SCRUB_MS, fill: "both", easing: "linear" });
+            const anim = el.animate(ixKeyframesFor(el, track), { duration: SCRUB_MS, fill: "both", easing: "linear" });
             anim.pause();
             chased.push({ anchor: root, anim, range: track.range, page, smooth: chaseSmooth, cur: 0 });
             return;
@@ -159,7 +159,7 @@ export function createScrubDriver(units: readonly IxRuntimeUnit[], host: IxHost)
           if (pointer) {
             // P6: la animación no corre NI con el reloj NI con el scroll — la posiciona el cursor.
             // Reposo en el CENTRO de la pista (0.5): el paso 50 es el estado neutro por contrato.
-            const anim = el.animate(track.kf, { duration: SCRUB_MS, fill: "both", easing: "linear" });
+            const anim = el.animate(ixKeyframesFor(el, track), { duration: SCRUB_MS, fill: "both", easing: "linear" });
             anim.pause();
             anim.currentTime = 0.5 * SCRUB_MS;
             pointers.push({
@@ -176,7 +176,7 @@ export function createScrubDriver(units: readonly IxRuntimeUnit[], host: IxHost)
           if (timeline) {
             // Escalonado ignorado en el camino de scroll, igual que en el CSS: el progreso ya lo
             // marca la posición del bloque, y desplazarlo por hermano no significaría nada.
-            const anim = el.animate(track.kf, {
+            const anim = el.animate(ixKeyframesFor(el, track), {
               duration: SCRUB_MS,
               fill: "both",
               easing: "linear",
@@ -188,7 +188,7 @@ export function createScrubDriver(units: readonly IxRuntimeUnit[], host: IxHost)
             if (list) list.push(entry);
             else byAnchor.set(root, [entry]);
           } else {
-            const anim = el.animate(track.kf, {
+            const anim = el.animate(ixKeyframesFor(el, track), {
               duration: track.dur,
               fill: "both",
               easing: "linear",

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * MATRIZ DE DISPARADORES — qué se expresa en CSS puro, qué no, y cuánto JS cuesta cada caso.
  *
  * Esta es la tabla que manda en todo el diseño (§4.2 de la spec) y por eso se prueba entera: si un
@@ -479,9 +479,12 @@ describe("propiedades P3: transform 3D, filtros, colores, origin, clipDir, persp
         { z: 0, scaleX: 1, scaleY: 1, rotateY: 0, skewX: 0, skewY: 0 },
       ),
     }))!;
+    // `skewX` es DIRECCIONAL y lleva el token del espejo RTL (C4); `skewY` y el resto, no. Y el
+    // valor CERO se emite limpio: un 0 no tiene lado que espejar y no paga el `calc`.
     expect(u.keyframes[0]).toContain(
-      "transform:perspective(1000px) translate3d(0px,0px,-100px) scaleX(0.5) scaleY(1.5) rotateY(90deg) skewX(10deg) skewY(-5deg)",
+      "transform:perspective(1000px) translate3d(0px,0px,-100px) scaleX(0.5) scaleY(1.5) rotateY(90deg) skewX(calc(var(--wjs-ix-dir,1) * 10deg)) skewY(-5deg)",
     );
+    expect(u.keyframes[0]).toContain("skewX(0deg)");
   });
 
   it("la perspectiva es configurable por pista y 1000 (el defecto) no cambia ni un byte", () => {
@@ -596,6 +599,47 @@ describe("puntero (P6): sin CSS, con IR completo, y honestidad sobre lo que no a
   it("dur/delay/repeat/alt/escalonado no significan nada con el puntero: se AVISA", () => {
     const u = compileIx(mk({ on: "pointer" }, { dur: 900, repeat: 3, stagger: { each: 50 }, target: { kind: "children" } }))!;
     expect(u.warnings.join(" ")).toContain("POSICIONA");
+  });
+});
+
+describe("espejo RTL del movimiento (C4) — y su paridad entre los dos backends", () => {
+  const pair = (a: Record<string, number>, b: Record<string, number>) =>
+    [{ at: 0, set: a }, { at: 100, set: b }] as unknown as IxStep[];
+  const slideIn = { steps: pair({ x: -40 }, { x: 0 }) };
+
+  it("el CSS multiplica los valores direccionales por el token; el resto no se toca", () => {
+    const u = compileIx(mk({ on: "load" }, slideIn))!;
+    expect(u.keyframes[0]).toContain("translate3d(calc(var(--wjs-ix-dir,1) * -40px),0px,0)");
+    // La Y no es direccional: se queda tal cual, sin `calc` ni token.
+    const vertical = compileIx(mk({ on: "load" }, { steps: pair({ y: -40 }, { y: 0 }) }))!;
+    expect(vertical.keyframes[0]).toContain("translate3d(0px,-40px,0)");
+    expect(vertical.keyframes[0]).not.toContain("--wjs-ix-dir");
+  });
+
+  it("el manifiesto del runtime lleva el juego ESPEJADO, con números y sin var()", () => {
+    const rt = toRuntimeUnit(compileIx(mk({ on: "load" }, slideIn))!);
+    const track = rt.tracks[0];
+    expect(track.kf[0].transform).toContain("translate3d(-40px,0px,0)");
+    // `var()` dentro de un fotograma de `Element.animate()` NO se resuelve: si se colara, la
+    // animación se caería en silencio justo en el navegador que depende del fallback.
+    expect(JSON.stringify(track.kf)).not.toContain("var(");
+    expect(track.kfRtl?.[0].transform).toContain("translate3d(40px,0px,0)");
+    expect(JSON.stringify(track.kfRtl)).not.toContain("var(");
+  });
+
+  it("sin nada direccional NO viaja un juego duplicado (bytes por nada)", () => {
+    const rt = toRuntimeUnit(compileIx(mk({ on: "load" }, { steps: pair({ y: 20 }, { y: 0 }) }))!);
+    expect(rt.tracks[0].kfRtl).toBeUndefined();
+    // Un `x: 0` tampoco cuenta: cero no tiene lado.
+    const zero = toRuntimeUnit(compileIx(mk({ on: "load" }, { steps: pair({ x: 0, y: 20 }, { x: 0, y: 0 }) }))!);
+    expect(zero.tracks[0].kfRtl).toBeUndefined();
+  });
+
+  it("los dos backends espejan LO MISMO: el signo invertido y nada más", () => {
+    const rt = toRuntimeUnit(compileIx(mk({ on: "load" }, slideIn))!);
+    const ltr = rt.tracks[0].kf.map((k) => k.transform);
+    const rtl = rt.tracks[0].kfRtl!.map((k) => k.transform);
+    expect(rtl).toEqual(ltr.map((t) => t!.replace("-40px", "40px")));
   });
 });
 

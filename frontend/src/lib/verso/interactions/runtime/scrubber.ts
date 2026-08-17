@@ -35,7 +35,7 @@
  */
 import type { IxRuntimeUnit } from "../types";
 import type { IxAnimationLike, IxDocumentLike, IxElementLike } from "./host";
-import { ixStaggerOffset, resolveIxTargets } from "./targets";
+import { ixKeyframesFor, ixStaggerOffset, resolveIxTargets } from "./targets";
 
 /**
  * Duración virtual de una pista conducida por scroll. Mismo valor que el driver (`SCRUB_MS`): tres
@@ -90,7 +90,7 @@ export function createIxScrubber(
       const duration = timeline ? IX_SCRUB_MS : track.dur;
       let anim: IxAnimationLike;
       try {
-        anim = el.animate(track.kf, {
+        anim = el.animate(ixKeyframesFor(el, track), {
           duration,
           fill: "both",
           // `linear` a nivel de elemento: la curva de cada tramo ya viaja DENTRO de los fotogramas

@@ -2886,6 +2886,20 @@ h6.wjs-block-heading, h6.wp-block-heading { font-size: var(--wjs-heading-size, v
  * de reserva `running` del propio `var()`. Así el token existe solo cuando alguien lo apaga. */
 html:has(#wjs-motion-pause:checked) { --wjs-ix-play: paused; }
 
+/* ------------------------------------------------------------------ ESPEJO RTL DEL MOVIMIENTO -
+ * `x` y `skewX` son DIRECCIONALES: «entra deslizando desde la izquierda» horneado con signo fijo
+ * entra por el lado equivocado en árabe o hebreo, y el movimiento va contra la lectura. El
+ * compilador multiplica esos valores por este token, así que UNA regla espeja toda la hoja — sin
+ * duplicar un solo `@keyframes` y sin que ninguna cadena del autor toque el CSS.
+ *
+ * El token NO se declara para LTR a propósito: sin declarar, el `var(--wjs-ix-dir,1)` de cada
+ * valor ya vale 1. Así el sitio normal no paga ni una declaración.
+ *
+ * La lista es TOLERANTE (`:where`): `:dir()` es reciente y el atributo `dir` es lo que escribe
+ * nuestro layout raíz; si un motor no entendiera el primero, el segundo sigue aplicando en vez de
+ * invalidar la regla entera. */
+:where([dir="rtl"], :dir(rtl)) { --wjs-ix-dir: -1; }
+
 .wjs-motion-pause { display: flex; justify-content: center; padding: var(--wjs-sm) 0; }
 /* La casilla se oculta VISUALMENTE pero sigue enfocable y anunciable: nada de `display:none`, que
  * la sacaría del orden de tabulación y del árbol de accesibilidad. */

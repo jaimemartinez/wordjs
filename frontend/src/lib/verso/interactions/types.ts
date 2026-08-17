@@ -334,6 +334,16 @@ export type IxUnit = {
 /** Lo que el runtime necesita de una unidad. Serializable: viaja como JSON a la isla. */
 export type IxRuntimeTrack = {
   kf: IxKeyframe[];
+  /**
+   * El MISMO recorrido con los valores direccionales (`x`, `skewX`) invertidos, para cuando el
+   * elemento se lee de derecha a izquierda (C4). Presente solo si hay algo que espejar.
+   *
+   * Existe porque `var()` no se resuelve dentro de un fotograma de `Element.animate()`: el camino
+   * CSS espeja con un token y el camino WAAPI necesita los números ya invertidos. Sin esto, un
+   * sitio en árabe vería el movimiento correcto en Chrome y el contrario en Firefox — justo la
+   * clase de divergencia que el motor existe para no tener.
+   */
+  kfRtl?: IxKeyframe[];
   target: IxTarget;
   range: IxRange;
   dur: number;

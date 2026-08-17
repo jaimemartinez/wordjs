@@ -10,7 +10,7 @@
  * `self` → el propio elemento, `children` → sus hijos DIRECTOS (`>*`), `words` → sus spans de
  * palabra (` .wjs-ixw`), `block` → otro bloque por su `data-wjs-block-id`.
  */
-import type { IxRuntimeTrack } from "../types";
+import type { IxKeyframe, IxRuntimeTrack } from "../types";
 import type { IxDocumentLike, IxElementLike } from "./host";
 
 const toArray = <T>(list: ArrayLike<T>): T[] => Array.prototype.slice.call(list) as T[];
@@ -19,6 +19,27 @@ const toArray = <T>(list: ArrayLike<T>): T[] => Array.prototype.slice.call(list)
 const WORD_SELECTOR = ".wjs-ixw";
 /** El trazo SVG (P12), mismo criterio de literal. */
 const SVG_SELECTOR = ".wjs-ixd";
+
+/**
+ * Los fotogramas que le tocan a ESTE elemento: el juego espejado si se lee de derecha a izquierda
+ * y la pista tiene algo direccional, el normal en cualquier otro caso (C4).
+ *
+ * El camino CSS espeja con el token `--wjs-ix-dir`; aquí no se puede, porque un `var()` dentro de
+ * un fotograma de `Element.animate()` no se resuelve y la animación se caería en silencio. Por eso
+ * el compilador manda los dos juegos ya calculados y aquí solo se elige — misma aritmética, mismo
+ * resultado, sin un segundo intérprete que un día discrepe.
+ *
+ * Se mira la dirección COMPUTADA del propio elemento, no la del documento: una página en español
+ * puede llevar una cita en árabe con su `dir="rtl"`, y es esa la que manda sobre su movimiento.
+ */
+export function ixKeyframesFor(el: IxElementLike, track: IxRuntimeTrack): IxKeyframe[] {
+  if (!track.kfRtl) return track.kf;
+  const view = (el as { ownerDocument?: { defaultView?: unknown } }).ownerDocument?.defaultView as
+    | { getComputedStyle?: (e: unknown) => { direction?: string } }
+    | undefined;
+  const dir = view?.getComputedStyle?.(el)?.direction;
+  return dir === "rtl" ? track.kfRtl : track.kf;
+}
 
 export function resolveIxTargets(
   root: IxElementLike,

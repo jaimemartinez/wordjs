@@ -251,6 +251,35 @@ const hexColor = (v: number): string => `#${(Math.round(v) & 0xffffff).toString(
  */
 type TrackCssCtx = { clipDir: IxClipDir; persp: number; amt: number };
 
+/**
+ * Cómo se emite un valor DIRECCIONAL (`x`, `skewX`) — el espejo RTL del motor (ciclo 3 · C4).
+ *
+ * El problema: «entra deslizando desde la izquierda» está horneado con signo fijo, así que en árabe
+ * o hebreo el bloque entra por el lado equivocado y el movimiento va CONTRA la lectura. En un CMS
+ * que importa sitios multilingües eso no es teoría.
+ *
+ *  · `css`   — el camino nativo multiplica por el token `--wjs-ix-dir` (1 en LTR, −1 en RTL, lo
+ *              declara wordjs-ui.css). Una sola regla global espeja TODA la hoja, sin duplicar ni
+ *              un `@keyframes` y sin que ninguna cadena del autor entre en el CSS.
+ *  · `num`   — el backend WAAPI: valores numéricos, porque `var()` dentro de un fotograma de
+ *              `Element.animate()` no se resuelve y la animación se caería en silencio.
+ *  · `rtl`   — el MISMO backend con el signo ya invertido. El runtime elige entre los dos juegos
+ *              mirando la dirección computada del elemento, así que Firefox y el resto de caminos
+ *              con JS espejan igual que el CSS. La paridad es el contrato; no se rompe por esto.
+ */
+type IxDirMode = "css" | "num" | "rtl";
+
+/** El token del signo. No se declara en `:root`: sin declarar, el `var()` ya vale 1. */
+const IX_DIR_VAR = "--wjs-ix-dir";
+
+/** Un valor direccional en la forma que toque, y SIN coste cuando vale cero (0 no tiene lado). */
+function dirVal(value: number, unit: "px" | "deg", dir: IxDirMode): string {
+  if (value === 0) return `0${unit}`;
+  if (dir === "rtl") return `${n(-value)}${unit}`;
+  if (dir === "num") return `${n(value)}${unit}`;
+  return `calc(var(${IX_DIR_VAR},1) * ${n(value)}${unit})`;
+}
+
 const trackCtx = (track: IxTrack, amt: number): TrackCssCtx => ({
   clipDir: track.clipDir ?? "right",
   persp: track.persp ?? IX_PERSP_DEFAULT,
@@ -263,13 +292,18 @@ const trackCtx = (track: IxTrack, amt: number): TrackCssCtx => ({
  * `perspective()` va dentro del propio transform (no como propiedad `perspective` en el padre):
  * así la unidad es autocontenida y no depende de que algún ancestro coopere.
  */
-function transformOf(set: IxProps, union: IxPropKey[], ctx: TrackCssCtx): string | undefined {
+function transformOf(
+  set: IxProps,
+  union: IxPropKey[],
+  ctx: TrackCssCtx,
+  dir: IxDirMode = "css",
+): string | undefined {
   const has = (k: IxPropKey) => union.includes(k);
   const parts: string[] = [];
   if (has("rotateX") || has("rotateY") || has("z")) parts.push(`perspective(${n(ctx.persp)}px)`);
   if (has("x") || has("y") || has("z")) {
     parts.push(
-      `translate3d(${n(scaledVal(set, "x", ctx.amt))}px,${n(scaledVal(set, "y", ctx.amt))}px,${has("z") ? `${n(scaledVal(set, "z", ctx.amt))}px` : "0"})`,
+      `translate3d(${dirVal(scaledVal(set, "x", ctx.amt), "px", dir)},${n(scaledVal(set, "y", ctx.amt))}px,${has("z") ? `${n(scaledVal(set, "z", ctx.amt))}px` : "0"})`,
     );
   }
   if (has("scale")) parts.push(`scale(${n(scaledVal(set, "scale", ctx.amt))})`);
@@ -278,7 +312,7 @@ function transformOf(set: IxProps, union: IxPropKey[], ctx: TrackCssCtx): string
   if (has("rotate")) parts.push(`rotate(${n(scaledVal(set, "rotate", ctx.amt))}deg)`);
   if (has("rotateX")) parts.push(`rotateX(${n(scaledVal(set, "rotateX", ctx.amt))}deg)`);
   if (has("rotateY")) parts.push(`rotateY(${n(scaledVal(set, "rotateY", ctx.amt))}deg)`);
-  if (has("skewX")) parts.push(`skewX(${n(scaledVal(set, "skewX", ctx.amt))}deg)`);
+  if (has("skewX")) parts.push(`skewX(${dirVal(scaledVal(set, "skewX", ctx.amt), "deg", dir)})`);
   if (has("skewY")) parts.push(`skewY(${n(scaledVal(set, "skewY", ctx.amt))}deg)`);
   return parts.length > 0 ? parts.join(" ") : undefined;
 }
@@ -362,12 +396,19 @@ function transitionProps(union: IxPropKey[]): string[] {
 }
 
 /** El mismo estado, en forma WAAPI (backend 2 del IR). */
-function keyframeOf(step: IxStep, union: IxPropKey[], ctx: TrackCssCtx): IxKeyframe {
+function keyframeOf(
+  step: IxStep,
+  union: IxPropKey[],
+  ctx: TrackCssCtx,
+  dir: IxDirMode = "num",
+): IxKeyframe {
   const kf: IxKeyframe = { offset: round4(step.at / 100) };
   const ease = easeCss(step);
   if (ease) kf.easing = ease;
   if (union.includes("opacity")) kf.opacity = n(scaledVal(step.set, "opacity", ctx.amt));
-  const tf = transformOf(step.set, union, ctx);
+  // WAAPI SIEMPRE numérico: un `var()` dentro de un fotograma de `Element.animate()` no se resuelve
+  // y la animación se caería sin decir nada. El espejo RTL viaja como un JUEGO APARTE de fotogramas.
+  const tf = transformOf(step.set, union, ctx, dir);
   if (tf) kf.transform = tf;
   const fl = filterOf(step.set, union, ctx);
   if (fl) kf.filter = fl;
@@ -1134,8 +1175,15 @@ export function ixKeyframes(unit: IxUnit): Record<string, IxKeyframe[]> {
 function toRuntimeTrack(track: IxTrack, trigger: IxTrigger, amt: number): IxRuntimeTrack {
   const union = unionProps(track.steps);
   const loadDelay = trigger.on === "load" ? (trigger.delay ?? 0) : 0;
+  const ctx = trackCtx(track, amt);
+  // El juego RTL solo viaja si la pista tiene algo DIRECCIONAL que espejar (`x`/`skewX` distintos
+  // de cero): en cualquier otro caso sería un duplicado exacto, bytes por nada en el manifiesto.
+  const mirrored =
+    (union.includes("x") || union.includes("skewX")) &&
+    track.steps.some((s) => (s.set.x ?? 0) !== 0 || (s.set.skewX ?? 0) !== 0);
   const out: IxRuntimeTrack = {
-    kf: track.steps.map((s) => keyframeOf(s, union, trackCtx(track, amt))),
+    kf: track.steps.map((s) => keyframeOf(s, union, ctx)),
+    ...(mirrored ? { kfRtl: track.steps.map((s) => keyframeOf(s, union, ctx, "rtl")) } : {}),
     target: track.target,
     range: rangeOf(trigger),
     dur: track.dur ?? IX_DEFAULT_DUR,
