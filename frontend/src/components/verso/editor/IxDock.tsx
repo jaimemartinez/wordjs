@@ -20,7 +20,7 @@
  * SOLO ESCRITORIO/TABLETA (`hidden md:flex`): en móvil el editor trabaja con hojas y el inspector
  * móvil sigue siendo el camino.
  */
-import React, { useMemo, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import MSym from "@/components/editor/MSym";
 import { useI18n } from "@/contexts/I18nContext";
 import { trStr } from "@/lib/editorI18n";
@@ -51,10 +51,6 @@ import type { IxPropKey } from "@/lib/verso/interactions";
 import { dockFieldEntries } from "./panelTabs";
 
 const selectState = (s: VersoEditorState) => s;
-
-/** Botón del transporte — la piel de los botones compactos del editor. */
-const TBTN =
-    "inline-flex items-center gap-1 rounded border border-[var(--ed-outline-variant)] px-2 py-0.5 text-[10px] font-semibold text-[var(--ed-on-surface-variant)] hover:border-[var(--ed-primary)] hover:text-[var(--ed-primary)] disabled:opacity-40 disabled:pointer-events-none transition-colors";
 
 export interface IxDockProps {
     handle: EditorHandle;
@@ -173,6 +169,13 @@ function DockMotion({
     // El PLAYHEAD del escenario: la posición del recorrido manual, para la línea vertical del
     // timeline. `null` = nadie recorre (el scrubber suelta con null).
     const [playhead, setPlayhead] = useState<number | null>(null);
+    // REFERENCIA ESTABLE, obligatoria: el scrubber usa `onScrub` como dependencia de su efecto de
+    // limpieza — una función nueva en cada render lo SOLTARÍA y desarmaría (la misma razón por la
+    // que InteractionsControl memoiza la suya). Cazado en el drill: el playhead nunca aparecía.
+    const onStageScrub = useCallback((pct: number | null) => {
+        setPlayhead(pct);
+        requestIxScrub(pct);
+    }, []);
 
     const onFieldChange = (key: string, value: unknown) => {
         handle.transact((tx) => tx.setProps(node.id, { [key]: value }), {
@@ -212,10 +215,10 @@ function DockMotion({
             {/* ESCENARIO — transporte arriba, línea de tiempo protagonista debajo. */}
             <div className="min-w-0 flex flex-col">
                 <div className="h-10 shrink-0 px-3 flex items-center gap-2 border-b border-[var(--ed-outline-variant)]">
-                    {/* «Probar» PRIMARIO (diseño Stitch): el play del transporte, índigo sólido. */}
+                    {/* «Probar» PRIMARIO — medidas exactas de la referencia: 28px, radio 2px. */}
                     <button
                         type="button"
-                        className="inline-flex items-center gap-1 rounded bg-[var(--ed-primary)] px-2.5 py-0.5 text-[10px] font-semibold text-white hover:bg-[var(--ed-primary-container)] disabled:opacity-40 disabled:pointer-events-none transition-colors"
+                        className="inline-flex h-7 items-center gap-1 rounded-[2px] bg-[var(--ed-primary)] px-3 text-[11px] font-medium text-white hover:bg-[var(--ed-primary-container)] disabled:opacity-40 disabled:pointer-events-none transition-colors"
                         disabled={!st.active}
                         title={trStr("Reproducir la interacción de este bloque en el lienzo", language)}
                         aria-label="Probar la interacción de este bloque"
@@ -225,7 +228,7 @@ function DockMotion({
                     </button>
                     <button
                         type="button"
-                        className={TBTN}
+                        className="inline-flex h-7 items-center rounded-[2px] border border-[var(--ed-outline-variant)] bg-[var(--ed-surface)] px-3 text-[11px] font-medium text-[var(--ed-on-surface)] hover:border-[var(--ed-primary)] hover:text-[var(--ed-primary)] disabled:opacity-40 disabled:pointer-events-none transition-colors"
                         disabled={!st.active}
                         title={trStr("Reproducir todas las interacciones de la página en el lienzo", language)}
                         aria-label="Probar todas las interacciones de la página"
@@ -244,10 +247,7 @@ function DockMotion({
                             }
                             // El escenario INTERCEPTA la posición para pintar el playhead sobre los
                             // carriles, y la reenvía al lienzo por el camino de siempre.
-                            onScrub={(pct) => {
-                                setPlayhead(pct);
-                                requestIxScrub(pct);
-                            }}
+                            onScrub={onStageScrub}
                         />
                     </div>
                 </div>
@@ -256,7 +256,7 @@ function DockMotion({
                     tiempo (y se aplica soltándolo donde caiga) — o se aplica con un clic, que es
                     el mismo camino sin ratón. Con cuerpo propio, soltar AÑADE una pista-clip. */}
                 <div className="h-9 shrink-0 px-3 flex items-center gap-1.5 border-b border-[var(--ed-outline-variant)] overflow-x-auto custom-scrollbar">
-                    <span className="shrink-0 text-[9px] font-semibold uppercase tracking-wide text-[var(--ed-outline)]">
+                    <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.5px] text-[var(--ed-on-surface-variant)]">
                         {trStr("Clips", language)}
                     </span>
                     {clips.map((c) => (
@@ -266,7 +266,7 @@ function DockMotion({
                             draggable
                             data-ix-clip={c.value}
                             title={trStr("Arrastra a la línea de tiempo, o pulsa para aplicar", language)}
-                            className="shrink-0 cursor-grab rounded-md border border-[var(--ed-outline-variant)] bg-[var(--ed-surface-container)] px-2 py-0.5 text-[10px] font-medium text-[var(--ed-on-surface-variant)] hover:border-[var(--ed-primary)] hover:text-[var(--ed-primary)] transition-colors"
+                            className="inline-flex h-6 shrink-0 cursor-grab items-center rounded-md border border-[var(--ed-outline-variant)] bg-[var(--ed-surface)] px-2 text-[11px] font-normal text-[var(--ed-on-surface)] hover:border-[var(--ed-primary)] hover:text-[var(--ed-primary)] transition-colors"
                             onDragStart={(e) => {
                                 e.dataTransfer.setData(IX_CLIP_MIME, c.value);
                                 e.dataTransfer.effectAllowed = "copy";
@@ -278,9 +278,9 @@ function DockMotion({
                     ))}
                 </div>
 
-                {/* Tinta ÍNDIGO del timeline (diseño Stitch): clips lavanda, acentos primarios —
-                    el componente sigue siendo agnóstico (currentColor); el tono lo pone el dock. */}
-                <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar px-4 py-3 text-[var(--ed-primary-container)]">
+                {/* Con la piel «stage» cada pieza lleva su color EXACTO de la referencia; la tinta
+                    del contenedor solo viste lo neutro (etiquetas de carril en gris #464553). */}
+                <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar px-4 py-3 text-[var(--ed-on-surface-variant)]">
                     {st.active && st.tracks.length > 0 ? (
                         <IxTimeline
                             tracks={st.tracks}
@@ -289,6 +289,7 @@ function DockMotion({
                             readOnly={linked}
                             labels={clipLabels}
                             playhead={playhead}
+                            skin="stage"
                             onStepAt={(t, i, at) => onFieldChange("ix", setStepAt(ix, i, at, ixCtx, t))}
                             onDelay={(t, ms) => onFieldChange("ix", setDelay(ix, ms, ixCtx, t))}
                             onDur={(t, ms) => onFieldChange("ix", setDuration(ix, ms, ixCtx, t))}

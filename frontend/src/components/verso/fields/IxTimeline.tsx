@@ -106,6 +106,14 @@ export interface IxTimelineProps {
    * línea vertical que cruza todos los carriles. `null`/ausente = sin línea (nadie recorre).
    */
   playhead?: number | null;
+  /**
+   * PIEL «stage» (dock de movimiento): los valores EXACTOS de la pantalla Stitch «Motion Dock»
+   * medidos computados — clip activo lavanda `--ed-primary-fixed` con borde `--ed-primary` y
+   * radio 2px, clip pasivo superficie con borde `--ed-outline-variant` y radio 6px, filas de
+   * 35px con la activa teñida al 30%, regla en mono de 10px, playhead primario de 1px. Sin
+   * `skin`, la piel agnóstica de tokens de siempre (currentColor) — el editor de preajustes.
+   */
+  skin?: "stage";
 }
 
 export default function IxTimeline({
@@ -122,7 +130,10 @@ export default function IxTimeline({
   onDropPreset,
   labels,
   playhead,
+  skin,
 }: IxTimelineProps) {
+  // La piel de escenario, medida contra la referencia: cada ternaria de abajo es un valor EXACTO.
+  const S = skin === "stage";
   // El raíl del carril ACTIVO (solo hay uno): la regla que traduce clientX → posición.
   const railRef = useRef<HTMLDivElement | null>(null);
   // Qué marcador se arrastra y si LLEGÓ A MOVERSE: un clic sin arrastre debe seguir navegando a la
@@ -265,22 +276,32 @@ export default function IxTimeline({
         <span aria-hidden="true" className={`${LABEL_COL} ${isActive ? "font-semibold" : "font-medium"}`}>
           Pista {ti + 1}
         </span>
-        <span aria-hidden="true" className="relative block h-6 flex-1">
-          <span className="absolute inset-x-0 top-1/2 block h-px -translate-y-1/2 bg-current/25" />
+        <span aria-hidden="true" className={`relative block flex-1 ${S ? "h-[35px]" : "h-6"}`}>
+          <span
+            className={`absolute inset-x-0 top-1/2 block h-px -translate-y-1/2 ${S ? "bg-[var(--ed-outline-variant)]" : "bg-current/25"}`}
+          />
           {timed && (
             <span
-              className="absolute top-1/2 flex h-4 -translate-y-1/2 items-center overflow-hidden rounded border border-current/40 bg-current/15"
+              className={`absolute top-1/2 flex -translate-y-1/2 items-center overflow-hidden ${
+                S
+                  ? "h-6 rounded-md border border-[var(--ed-outline-variant)] bg-[var(--ed-surface)]"
+                  : "h-4 rounded border border-current/40 bg-current/15"
+              }`}
               style={{ left: `${(delay / totalMs) * 100}%`, width: `${(dur / totalMs) * 100}%` }}
             >
               {labels?.[ti] && (
-                <span className="truncate px-1.5 text-[9px] font-medium">{labels[ti]}</span>
+                <span
+                  className={`truncate ${S ? "px-2 text-[11px] font-normal text-[var(--ed-on-surface)]" : "px-1.5 text-[9px] font-medium"}`}
+                >
+                  {labels[ti]}
+                </span>
               )}
             </span>
           )}
           {t.steps.map((s, si) => (
             <span
               key={si}
-              className="absolute top-1/2 block h-1.5 w-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-current/60"
+              className={`absolute top-1/2 block h-1.5 w-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full ${S ? "bg-[var(--ed-primary)]/60" : "bg-current/60"}`}
               style={{ left: `${posPct(t, s.at)}%` }}
             />
           ))}
@@ -297,8 +318,13 @@ export default function IxTimeline({
     return (
       <div
         key={ti}
-        // Fila ACTIVA (diseño Stitch): tinte + acento izquierdo de 2px, el patrón del árbol de capas.
-        className="flex w-full items-center gap-2 rounded border-l-2 border-current bg-current/10 px-1 py-0.5"
+        // Fila ACTIVA: en el escenario, el tinte EXACTO de la referencia (primary-fixed al 30%,
+        // sin acento — así lo mide la pantalla Stitch); fuera, el patrón agnóstico de siempre.
+        className={`flex w-full items-center gap-2 rounded px-1 ${
+          S
+            ? "h-[35px] bg-[var(--ed-primary-fixed)]/30"
+            : "border-l-2 border-current bg-current/10 py-0.5"
+        }`}
       >
         <button
           type="button"
@@ -310,10 +336,10 @@ export default function IxTimeline({
         >
           Pista {ti + 1}
         </button>
-        <div ref={railRef} className="relative h-6 flex-1">
+        <div ref={railRef} className={`relative flex-1 ${S ? "h-[35px]" : "h-6"}`}>
           <div
             aria-hidden="true"
-            className="absolute inset-x-0 top-1/2 h-px -translate-y-1/2 bg-current/25"
+            className={`absolute inset-x-0 top-1/2 h-px -translate-y-1/2 ${S ? "bg-[var(--ed-outline-variant)]" : "bg-current/25"}`}
           />
           {/* La barra de la animación (solo con reloj): su CUERPO se arrastra y mueve el retardo.
               La duración no se toca aquí — su campo numérico sigue siendo el camino. */}
@@ -327,7 +353,11 @@ export default function IxTimeline({
                 width: `${(dur / totalMs) * 100}%`,
                 touchAction: "none",
               }}
-              className={`absolute top-1/2 flex h-4 -translate-y-1/2 cursor-grab items-center overflow-hidden rounded border border-current/50 bg-current/20 hover:bg-current/30 ${RING}`}
+              className={`absolute top-1/2 flex -translate-y-1/2 cursor-grab items-center overflow-hidden ${
+                S
+                  ? "h-6 rounded-[2px] border border-[var(--ed-primary)] bg-[var(--ed-primary-fixed)]"
+                  : "h-4 rounded border border-current/50 bg-current/20 hover:bg-current/30"
+              } ${RING}`}
               onPointerDown={(e) => {
                 dragDelay.current = { startX: e.clientX, base: delay };
                 e.currentTarget.setPointerCapture(e.pointerId);
@@ -356,7 +386,11 @@ export default function IxTimeline({
               {labels?.[ti] && (
                 <span
                   aria-hidden="true"
-                  className="pointer-events-none truncate px-1.5 text-[9px] font-medium"
+                  className={`pointer-events-none truncate ${
+                    S
+                      ? "px-2 text-[11px] font-normal text-[var(--ed-on-primary-fixed)]"
+                      : "px-1.5 text-[9px] font-medium"
+                  }`}
                 >
                   {labels[ti]}
                 </span>
@@ -371,7 +405,11 @@ export default function IxTimeline({
               aria-label={`Duración de la pista ${ti + 1} — ${dur} ms`}
               title={`Duración de la pista ${ti + 1} — ${dur} ms. Arrastra el borde, o ←/→ (±50 ms).`}
               style={{ left: `${((delay + dur) / totalMs) * 100}%`, touchAction: "none" }}
-              className={`absolute top-1/2 h-4 w-1.5 -translate-x-full -translate-y-1/2 cursor-ew-resize rounded-r bg-current/80 hover:bg-current ${RING}`}
+              className={`absolute top-1/2 w-1.5 -translate-x-full -translate-y-1/2 cursor-ew-resize rounded-r ${
+                S
+                  ? "h-6 bg-[var(--ed-primary)]/70 hover:bg-[var(--ed-primary)]"
+                  : "h-4 bg-current/80 hover:bg-current"
+              } ${RING}`}
               onPointerDown={(e) => {
                 dragDur.current = { startX: e.clientX, base: dur };
                 e.currentTarget.setPointerCapture(e.pointerId);
@@ -411,7 +449,11 @@ export default function IxTimeline({
                   aria-label={name}
                   title={`${name} — ir a su fila`}
                   style={{ left }}
-                  className={`absolute top-1/2 h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-[2px] border border-current/70 bg-current/50 hover:bg-current/70 ${RING}`}
+                  className={`absolute top-1/2 h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-[2px] border ${
+                    S
+                      ? "border-[var(--ed-primary)]/70 bg-[var(--ed-primary)]/50 hover:bg-[var(--ed-primary)]/70"
+                      : "border-current/70 bg-current/50 hover:bg-current/70"
+                  } ${RING}`}
                   onClick={() => onFocusStep(ti, si)}
                 />
               );
@@ -423,7 +465,11 @@ export default function IxTimeline({
                 aria-label={name}
                 title={`${name} — arrastra o ←/→; clic para ir a su fila`}
                 style={{ left, touchAction: "none" }}
-                className={`absolute top-1/2 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 cursor-grab rounded-full border border-current bg-current/80 hover:bg-current ${RING}`}
+                className={`absolute top-1/2 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 cursor-grab rounded-full border ${
+                  S
+                    ? "border-[var(--ed-primary)] bg-[var(--ed-primary)]/80 hover:bg-[var(--ed-primary)]"
+                    : "border-current bg-current/80 hover:bg-current"
+                } ${RING}`}
                 onPointerDown={(e) => {
                   dragStep.current = { step: si, moved: false };
                   e.currentTarget.setPointerCapture(e.pointerId);
@@ -506,8 +552,13 @@ export default function IxTimeline({
       }
     >
       {/* La REGLA (diseño Stitch «Motion Dock»): marcas a cuartos de la escala compartida,
-          decorativa — los valores canónicos viven en los campos numéricos del panel. */}
-      <div aria-hidden="true" className="mb-1 flex items-center gap-2 px-1 text-[8px] opacity-60">
+          decorativa — los valores canónicos viven en los campos numéricos del panel. En el
+          escenario, la tipografía EXACTA de la referencia: mono de 10px en outline. */}
+      <div
+        aria-hidden="true"
+        className={`mb-1 flex items-center gap-2 px-1 ${S ? "text-[10px] text-[var(--ed-outline)]" : "text-[8px] opacity-60"}`}
+        style={S ? { fontFamily: "var(--ed-font-family-monospaced)" } : undefined}
+      >
         <span className={LABEL_COL} />
         <span className="relative block h-3 flex-1 border-b border-current/20">
           {[0, 25, 50, 75, 100].map((p) => (
@@ -530,7 +581,7 @@ export default function IxTimeline({
         {playhead != null && (
           <div
             aria-hidden="true"
-            className="pointer-events-none absolute inset-y-0 z-10 w-px bg-current"
+            className={`pointer-events-none absolute inset-y-0 z-10 w-px ${S ? "bg-[var(--ed-primary)]" : "bg-current"}`}
             style={{ left: `calc(3.75rem + (100% - 4rem) * ${clamp(playhead, 0, 100) / 100})` }}
           />
         )}

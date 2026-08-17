@@ -15,6 +15,12 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   animates) with an integrated trim grip, and the active lane marked with the design system's
   left-accent tint. The timeline component stays token-agnostic — the dock provides the indigo
   ink, the preset admin keeps its gray — and every accessible name and behavior is unchanged.
+  A follow-up pass made the match exact, measured computed-style against computed-style on the
+  rendered Stitch screen: 2px radii on the transport and active clip, 24px lavender clips with
+  their 11px deep-indigo captions, the 10px monospace ruler, 35px lanes with the active row
+  tinted at 30%, and gray lane labels. The same pass caught a real bug: the playhead callback
+  was recreated every render, which silently disarmed the scrubber — it is now stable, and the
+  playhead line verifiably follows the manual scrub.
 
 - **Editor: motion presets become draggable clips.** The dock's stage gains a clip palette: every
   motion preset is a block you drag onto the timeline — it lands as a new track at the exact drop
