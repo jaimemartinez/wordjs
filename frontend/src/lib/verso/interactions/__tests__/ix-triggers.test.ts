@@ -579,6 +579,35 @@ describe("puntero (P6): sin CSS, con IR completo, y honestidad sobre lo que no a
   });
 });
 
+describe("evento a medida (P11) y suavizado del scrub (P10)", () => {
+  it("event → latch `always` contra [data-wjs-ix=on], como el clic", () => {
+    const u = compileIx(mk({ on: "event", name: "abrir-menu" }))!;
+    expect(u.needsRuntime).toBe("always");
+    expect(u.rules[0].startsWith(`.${u.cls}[data-wjs-ix="on"]{`)).toBe(true);
+  });
+
+  it("un nombre que no es slug DESCARTA el disparador entero (fail-open al defecto)", () => {
+    for (const bad of ["", "Mayus", "con espacios", "a".repeat(60), "wjs:ix:x", null, 7]) {
+      const u = compileIx(mk({ on: "event", name: bad } as never))!;
+      // normTrigger devuelve undefined → cae al disparador por defecto (view+once).
+      expect(u.body.trigger).toEqual({ on: "view", once: true });
+    }
+  });
+
+  it("scrub con `smooth` pasa a `always`, NO emite CSS, y AVISA del intercambio", () => {
+    const u = compileIx(mk({ on: "scrub", smooth: 300 }))!;
+    expect(u.needsRuntime).toBe("always");
+    expect(u.rules).toHaveLength(0);
+    expect(u.keyframes).toHaveLength(0);
+    expect(Object.keys(u.kf)).toHaveLength(1);
+    expect(u.warnings.join(" ")).toContain("compositor");
+    // smooth: 0 = sin suavizado: el normalizador lo borra y vuelve el camino nativo.
+    const plain = compileIx(mk({ on: "scrub", smooth: 0 }))!;
+    expect(plain.needsRuntime).toBe("no-native");
+    expect(plain.hash).toBe(compileIx(mk({ on: "scrub" }))!.hash);
+  });
+});
+
 describe("intensidad (P7): del bloque, horneada, y solo sobre lo espacial", () => {
   const spatial = (amt?: number) => compileIx({
     v: 1,

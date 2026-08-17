@@ -59,10 +59,22 @@ export type IxBreakpoint = "mobile" | "tablet" | "desktop";
 
 export type IxTrigger =
   | { on: "view"; once?: boolean; range?: IxRange }
-  | { on: "scrub"; range?: IxRange; src?: "self" | "page" }
+  /**
+   * `smooth` (P10, opt-in): ms de persecución del progreso de scroll. Lo que IX3 llama "scrub
+   * smoothing". Inexpresable en CSS → la unidad entera pasa a runtime (`always`), COMO el puntero:
+   * es un intercambio explícito (tacto elástico a cambio del camino del compositor) y el
+   * compilador lo dice en un aviso. Ausente = exactitud nativa 1:1, lo de siempre.
+   */
+  | { on: "scrub"; range?: IxRange; src?: "self" | "page"; smooth?: number }
   | { on: "hover" }
   | { on: "click"; toggle?: boolean }
   | { on: "load"; delay?: number }
+  /**
+   * P11 — evento a medida: la escotilla para plugins y código propio. `name` es un slug CERRADO;
+   * el runtime escucha `wjs:ix:<name>` en el documento y arma el estado `on` (con `toggle`, lo
+   * conmuta). Jamás llega al CSS: el selector es el mismo atributo de estado que usa el clic.
+   */
+  | { on: "event"; name: string; toggle?: boolean }
   /**
    * P6 — el puntero conduce el progreso (parallax/tilt/follow). INEXPRESABLE en CSS: runtime en
    * cuarentena, solo baja si se usa, inerte bajo reduced-motion y en dispositivos sin puntero fino

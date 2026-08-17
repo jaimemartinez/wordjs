@@ -574,6 +574,55 @@ describe("driver de scrub", () => {
     expect((el.anims[0] as FakeAnim).cancelled).toBe(true);
   });
 
+  it("SCRUB SUAVIZADO (P10): persigue el progreso del scroll sin llegar de golpe", () => {
+    const u = unitsOf([{
+      v: 1,
+      trigger: { on: "scrub", smooth: 300 },
+      tracks: [track({ steps: [{ at: 0, set: { y: 30 } }, { at: 100, set: { y: -30 } }] })],
+    }]);
+    expect(u[0].needsRuntime).toBe("always");
+    const el = new FakeEl(u[0].cls);
+    el.rect = { top: 400, height: 200 }; // progreso objetivo = 0.4 (como el test del scrub llano)
+    const h = harness([el]);
+    createScrubDriver(u, h.host);
+    h.observers[0].cb([{ target: el, isIntersecting: true }]);
+    h.flushRaf();
+    const first = el.anims[0].currentTime as number;
+    expect(first).toBeGreaterThan(0);
+    expect(first).toBeLessThan(400); // persigue: aún no ha llegado al objetivo
+    h.flushRaf();
+    expect(el.anims[0].currentTime as number).toBeGreaterThan(first);
+  });
+
+  it("EVENTO (P11): `wjs:ix:<nombre>` arma el estado y `toggle` lo conmuta; la limpieza retira todo", () => {
+    const u = unitsOf([
+      { v: 1, trigger: { on: "event", name: "abrir" }, tracks: [track()] },
+      { v: 1, trigger: { on: "event", name: "conmutar", toggle: true }, tracks: [track({ steps: [{ at: 0, set: { y: 9 } }, { at: 100, set: { y: 0 } }] })] },
+    ]);
+    const a = new FakeEl(u[0].cls);
+    const b = new FakeEl(u[1].cls);
+    const h = harness([a, b]);
+    const stop = startIxRuntime(u, h.host);
+    h.doc.fire("wjs:ix:abrir");
+    expect(a.getAttribute("data-wjs-ix")).toBe("on");
+    expect(b.getAttribute("data-wjs-ix")).toBeNull(); // otro nombre: no se inmuta
+    h.doc.fire("wjs:ix:abrir");
+    expect(a.getAttribute("data-wjs-ix")).toBe("on"); // sin toggle: se queda
+    h.doc.fire("wjs:ix:conmutar");
+    expect(b.getAttribute("data-wjs-ix")).toBe("on");
+    h.doc.fire("wjs:ix:conmutar");
+    expect(b.getAttribute("data-wjs-ix")).toBeNull(); // toggle: conmuta
+    stop();
+    h.doc.fire("wjs:ix:abrir");
+    expect(a.getAttribute("data-wjs-ix")).toBeNull(); // listener retirado y estado limpio
+  });
+
+  it("el prefijo del evento en la isla es EL MISMO que el del normalizador (pin)", async () => {
+    const { EVENT_TRIGGER_PREFIX } = await import("../runtime");
+    const { IX_EVENT_PREFIX } = await import("../normalize");
+    expect(EVENT_TRIGGER_PREFIX).toBe(IX_EVENT_PREFIX);
+  });
+
   it("el suavizado por defecto del chunk es EL MISMO que el del normalizador (pin)", async () => {
     const { POINTER_SMOOTH_DEFAULT } = await import("../runtime/scrub");
     const { IX_POINTER_SMOOTH_DEFAULT } = await import("../normalize");

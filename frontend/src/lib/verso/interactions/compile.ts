@@ -399,6 +399,8 @@ function stateSelectors(cls: string, trigger: IxTrigger): string[] {
     case "view":
       return trigger.once === false ? [`.${cls}`] : [`.${cls}[data-wjs-ix="in"]`];
     case "click":
+    case "event":
+      // El evento a medida (P11) es un latch como el clic: el JS pone `on`, el CSS reacciona.
       return [`.${cls}[data-wjs-ix="on"]`];
     case "hover":
       // `:focus-visible` acompaña siempre a `:hover`: una interacción que solo existe para el ratón
@@ -457,20 +459,27 @@ const RUNTIME_RANK: Record<IxNeedsRuntime, number> = { never: 0, "no-native": 1,
 const worseRuntime = (a: IxNeedsRuntime, b: IxNeedsRuntime): IxNeedsRuntime =>
   RUNTIME_RANK[a] >= RUNTIME_RANK[b] ? a : b;
 
-/** ¿El disparador conduce el progreso con una timeline de scroll (y no con el tiempo)? */
+/**
+ * ¿El disparador conduce el progreso con una timeline de scroll NATIVA (y no con el tiempo)?
+ * Un scrub CON suavizado (P10) no cuenta: su progreso lo persigue el runtime, no la timeline.
+ */
 const isTimeline = (t: IxTrigger): boolean =>
-  t.on === "scrub" || (t.on === "view" && t.once === false);
+  (t.on === "scrub" && t.smooth === undefined) || (t.on === "view" && t.once === false);
 
 function triggerRuntime(t: IxTrigger): IxNeedsRuntime {
   switch (t.on) {
     case "scrub":
-      return "no-native";
+      // Con suavizado (P10) no hay camino nativo: la persecución es del runtime, como el puntero.
+      return t.smooth !== undefined ? "always" : "no-native";
     case "view":
       // once:false lo hace el CSS donde hay `animation-timeline`; once:true necesita un LATCH, y
       // en CSS no existe ninguno — este es el hallazgo que justifica conservar el
       // IntersectionObserver de `entranceAnimation.ts` tal cual.
       return t.once === false ? "no-native" : "always";
     case "click":
+      return "always";
+    case "event":
+      // Latch por evento del documento (P11): JS por definición.
       return "always";
     case "pointer":
       // El cursor es inexpresable en CSS: el driver WAAPI, siempre — y SOLO si la página lo usa.
@@ -614,6 +623,14 @@ export function emitUnit(body: IxBody, hash: string): IxUnit {
       // Objetivo externo: sin CSS, resuelto por runtime. La unidad entera pasa a "always".
       needsRuntime = worseRuntime(needsRuntime, "always");
       warnings.push("objetivo externo (`block`): se resuelve por runtime, sin CSS (F9-A/B)");
+      return;
+    }
+
+    /* ── P10: scrub con suavizado — el runtime PERSIGUE el progreso; sin CSS ── */
+    if (trigger.on === "scrub" && trigger.smooth !== undefined) {
+      warnings.push(
+        "suavizado del scroll: el efecto pasa a JS (persecución) y renuncia al camino nativo del compositor — quita el suavizado para volver a la exactitud 1:1",
+      );
       return;
     }
 

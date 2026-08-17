@@ -27,6 +27,7 @@
 import {
   IX_BREAKPOINTS,
   IX_DEFAULT_RANGES,
+  IX_EVENT_NAME_RE,
   IX_DELAY_MAX,
   IX_DELAY_MIN,
   IX_DUR_MAX,
@@ -90,6 +91,7 @@ export const IX_TRIGGER_LABELS: Readonly<Record<IxPanelTriggerKind, string>> = O
   click: "Al hacer clic",
   load: "Al cargar la página",
   pointer: "Al mover el puntero",
+  event: "Con un evento a medida",
 });
 
 /** Eje del cursor por pista (P6). */
@@ -470,7 +472,9 @@ export function setTriggerKind(raw: unknown, kind: IxPanelTriggerKind, ctx?: IxC
             ? { on: "hover" }
             : kind === "pointer"
               ? { on: "pointer" }
-              : { on: "load" };
+              : kind === "event"
+                ? { on: "event", name: "mi-evento" }
+                : { on: "load" };
 
   return writeTrigger(raw, ctx, trigger);
 }
@@ -557,6 +561,37 @@ export function setTrackAxis(raw: unknown, axis: "x" | "y", ctx?: IxCompileCtx, 
     },
     track,
   );
+}
+
+/** `event` (P11): nombre del evento. Un slug inválido se conserva como texto hasta ser válido NO —
+ * el escritor solo escribe slugs válidos; con uno inválido devuelve el spec sin tocar (el control
+ * enseña el error). */
+export function setEventName(raw: unknown, name: string, ctx?: IxCompileCtx): IxWrite {
+  const state = ixPanelState(raw, ctx);
+  if (state.trigger.on !== "event") return normalizeIxSpec(raw)?.spec;
+  if (!IX_EVENT_NAME_RE.test(name)) return normalizeIxSpec(raw)?.spec;
+  const trigger: IxTrigger = { on: "event", name };
+  if (state.trigger.toggle === true) trigger.toggle = true;
+  return writeTrigger(raw, ctx, trigger);
+}
+
+/** `event` (P11): conmutación, como el clic. */
+export function setEventToggle(raw: unknown, toggle: boolean, ctx?: IxCompileCtx): IxWrite {
+  const state = ixPanelState(raw, ctx);
+  if (state.trigger.on !== "event") return normalizeIxSpec(raw)?.spec;
+  const trigger: IxTrigger = { on: "event", name: state.trigger.name };
+  if (toggle) trigger.toggle = true;
+  return writeTrigger(raw, ctx, trigger);
+}
+
+/** `scrub` (P10): suavizado opt-in en ms; 0 lo quita y devuelve la exactitud nativa. */
+export function setScrubSmooth(raw: unknown, ms: number, ctx?: IxCompileCtx): IxWrite {
+  const state = ixPanelState(raw, ctx);
+  if (state.trigger.on !== "scrub") return normalizeIxSpec(raw)?.spec;
+  const trigger: IxTrigger = { on: "scrub", smooth: ms };
+  if (state.trigger.src === "page") trigger.src = "page";
+  if (state.trigger.range) trigger.range = state.trigger.range;
+  return writeTrigger(raw, ctx, trigger);
 }
 
 /** ¿El disparador efectivo tiene un rango de scroll editable? (scrub, o view que entra y sale). */

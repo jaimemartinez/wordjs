@@ -56,6 +56,7 @@ export function startIxRuntime(units: readonly IxRuntimeUnit[], host: IxHost): (
 
   const latch: IxRuntimeUnit[] = [];
   const clicks: IxRuntimeUnit[] = [];
+  const events: IxRuntimeUnit[] = [];
   const waapi: IxRuntimeUnit[] = [];
 
   for (const u of units) {
@@ -64,9 +65,14 @@ export function startIxRuntime(units: readonly IxRuntimeUnit[], host: IxHost): (
     // unidad ni observa, ni escucha, ni baja chunk.
     if (u.media && !host.matchesMedia(u.media)) continue;
     // P6: el puntero vive en el chunk WAAPI (posiciona animaciones, como el scrub) y solo baja
-    // si la página lo usa.
-    if (u.trigger.on === "pointer") {
+    // si la página lo usa. P10: el scrub con suavizado, ídem — la persecución es del driver.
+    if (u.trigger.on === "pointer" || (u.trigger.on === "scrub" && u.trigger.smooth !== undefined)) {
       waapi.push(u);
+      continue;
+    }
+    // P11: latch por evento del documento — la isla escucha, sin chunk.
+    if (u.trigger.on === "event") {
+      events.push(u);
       continue;
     }
     if (hasExternalTarget(u)) {
@@ -87,6 +93,7 @@ export function startIxRuntime(units: readonly IxRuntimeUnit[], host: IxHost): (
   const cleanups: Array<() => void> = [];
 
   if (latch.length > 0) cleanups.push(startLatch(latch, host));
+  if (events.length > 0) cleanups.push(startEvents(events, host));
   if (clicks.length > 0) cleanups.push(startClicks(clicks, host));
   if (waapi.length > 0) {
     let stop: (() => void) | null = null;
@@ -185,6 +192,45 @@ function startLatch(units: readonly IxRuntimeUnit[], host: IxHost): () => void {
  * responde a media parte del público. No se toca el rol ni el tabindex del bloque — eso es markup,
  * y el markup lo pone el compilador, no esto.
  */
+/**
+ * Prefijo del evento a medida (P11). Literal duplicado A PROPÓSITO respecto a `IX_EVENT_PREFIX`
+ * (normalize.ts): importar el normalizador metería el muestreo de `linear()` en la ISLA. Un test
+ * los mantiene iguales (mismo patrón que IX_REPLAY_EVENT y el suavizado del puntero).
+ */
+export const EVENT_TRIGGER_PREFIX = "wjs:ix:";
+
+/**
+ * P11 — latch por evento del documento: `document.dispatchEvent(new CustomEvent("wjs:ix:<name>"))`
+ * arma el estado `on` de todas las unidades con ese nombre (con `toggle`, lo conmuta). El nombre
+ * viene del normalizador como slug CERRADO; aquí solo se concatena al prefijo del motor.
+ */
+function startEvents(units: readonly IxRuntimeUnit[], host: IxHost): () => void {
+  const bound: Array<{ type: string; onFire: (ev: unknown) => void }> = [];
+  const touched: IxElementLike[] = [];
+
+  for (const u of units) {
+    if (u.trigger.on !== "event") continue;
+    const toggle = u.trigger.toggle === true;
+    const els = toArray(host.doc.querySelectorAll(`.${u.cls}`));
+    for (const el of els) touched.push(el);
+    const onFire = () => {
+      for (const el of els) {
+        const on = el.getAttribute(STATE_ATTR) === "on";
+        if (on && toggle) el.removeAttribute(STATE_ATTR);
+        else el.setAttribute(STATE_ATTR, "on");
+      }
+    };
+    const type = `${EVENT_TRIGGER_PREFIX}${u.trigger.name}`;
+    host.doc.addEventListener(type, onFire);
+    bound.push({ type, onFire });
+  }
+
+  return () => {
+    for (const { type, onFire } of bound) host.doc.removeEventListener(type, onFire);
+    for (const el of touched) el.removeAttribute(STATE_ATTR);
+  };
+}
+
 function startClicks(units: readonly IxRuntimeUnit[], host: IxHost): () => void {
   const bound: Array<{ el: IxElementLike; onClick: (ev: unknown) => void }> = [];
 

@@ -114,6 +114,16 @@ type PointerEntry = {
   goal: number;
 };
 
+/** Scrub con suavizado (P10): el objetivo es el progreso de scroll y `cur` lo persigue. */
+type ChasedEntry = {
+  anchor: IxElementLike;
+  anim: IxAnimationLike;
+  range: IxRange;
+  page: boolean;
+  smooth: number;
+  cur: number;
+};
+
 /**
  * Arranca el driver. Devuelve la limpieza: cancela TODAS las animaciones creadas, para el bucle y
  * desconecta el observer. Ninguna animación cancelada deja al elemento en un estado congelado —
@@ -125,17 +135,27 @@ export function createScrubDriver(units: readonly IxRuntimeUnit[], host: IxHost)
   const byAnchor = new Map<IxElementLike, ScrubEntry[]>();
 
   const pointers: PointerEntry[] = [];
+  const chased: ChasedEntry[] = [];
 
   for (const unit of units) {
     const roots = toArray(host.doc.querySelectorAll(`.${unit.cls}`));
     const timeline = isTimeline(unit);
     const page = isPageTimeline(unit);
     const pointer = unit.trigger.on === "pointer" ? unit.trigger : null;
+    const chaseSmooth =
+      unit.trigger.on === "scrub" && unit.trigger.smooth !== undefined ? unit.trigger.smooth : null;
     for (const root of roots) {
       for (const track of unit.tracks) {
         const targets = resolveIxTargets(root, track, host.doc);
         targets.forEach((el, i) => {
           if (typeof el.animate !== "function") return; // sin WAAPI → visible y quieto
+          if (chaseSmooth !== null) {
+            // P10: como el scrub llano, pero `cur` PERSIGUE el progreso en vez de igualarlo.
+            const anim = el.animate(track.kf, { duration: SCRUB_MS, fill: "both", easing: "linear" });
+            anim.pause();
+            chased.push({ anchor: root, anim, range: track.range, page, smooth: chaseSmooth, cur: 0 });
+            return;
+          }
           if (pointer) {
             // P6: la animación no corre NI con el reloj NI con el scroll — la posiciona el cursor.
             // Reposo en el CENTRO de la pista (0.5): el paso 50 es el estado neutro por contrato.
@@ -218,6 +238,28 @@ export function createScrubDriver(units: readonly IxRuntimeUnit[], host: IxHost)
     return settling;
   };
 
+  /** Persecución del scroll suavizado (P10). Devuelve si alguna entrada sigue en camino. */
+  const updateChased = (vh: number): boolean => {
+    let settling = false;
+    let pageP: number | null = null;
+    for (const e of chased) {
+      if (!visible.has(e.anchor)) continue;
+      let goal: number;
+      if (e.page) {
+        if (pageP === null) pageP = host.pageProgress();
+        goal = pageProgressOf(e.range, pageP);
+      } else {
+        goal = progressOf(e.anchor, e.range, vh);
+      }
+      const k = e.smooth <= 0 ? 1 : 1 - Math.exp(-POINTER_DT / e.smooth);
+      e.cur += (goal - e.cur) * k;
+      if (Math.abs(goal - e.cur) <= POINTER_EPS) e.cur = goal;
+      else settling = true;
+      e.anim.currentTime = e.cur * SCRUB_MS;
+    }
+    return settling;
+  };
+
   const update = (): boolean => {
     const vh = host.viewportHeight();
     // Se lee UNA vez por frame, no por unidad: todas las unidades de página miden el mismo scroll.
@@ -234,7 +276,9 @@ export function createScrubDriver(units: readonly IxRuntimeUnit[], host: IxHost)
         }
       }
     }
-    return updatePointers();
+    const chasing = updateChased(vh);
+    const pointing = updatePointers();
+    return chasing || pointing;
   };
 
   // UN solo bucle por documento, y solo mientras haya algo en pantalla (o un puntero aún
@@ -243,7 +287,9 @@ export function createScrubDriver(units: readonly IxRuntimeUnit[], host: IxHost)
   const loop = () => {
     rafId = null;
     const settling = update();
-    if (visible.size > 0 && (byAnchor.size > 0 || settling || pointerSeen)) start();
+    // Las entradas perseguidas (P10) mantienen el bucle vivo mientras haya algo visible: su
+    // objetivo cambia con cada scroll y no hay listener de scroll — el bucle ES el muestreo.
+    if (visible.size > 0 && (byAnchor.size > 0 || chased.length > 0 || settling || pointerSeen)) start();
   };
   const start = () => {
     if (rafId === null && visible.size > 0) rafId = host.raf(loop);
@@ -272,6 +318,7 @@ export function createScrubDriver(units: readonly IxRuntimeUnit[], host: IxHost)
 
   const anchors = new Set<IxElementLike>(byAnchor.keys());
   for (const p of pointers) anchors.add(p.anchor);
+  for (const c of chased) anchors.add(c.anchor);
   if (io) for (const anchor of anchors) io.observe(anchor);
   else {
     // Sin IntersectionObserver: se posiciona una vez y se deja quieto. Visible siempre.
@@ -289,5 +336,6 @@ export function createScrubDriver(units: readonly IxRuntimeUnit[], host: IxHost)
     for (const e of entries) e.anim.cancel();
     for (const p of played) p.anim.cancel();
     for (const p of pointers) p.anim.cancel();
+    for (const c of chased) c.anim.cancel();
   };
 }

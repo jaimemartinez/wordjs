@@ -210,7 +210,31 @@ AA, hostile input, English on GitHub).
 | **P8** | **SVG stroke draw (optional tail)** | `draw` property gated to `ixSvg`-declaring blocks; stroke-dash paint-only technique | Niche in a content CMS; explicitly last and demand-gated |
 
 **Agreed set for the Definition of Done**: every row above marked MATCH/SURPASS stays green; every
-BUILD row lands through P1–P7 (P8 demand-gated); every OMIT stands with its reason. Each phase
+BUILD row lands through P1–P7 (P8 demand-gated); every OMIT stands with its reason.
+
+---
+
+## 3.1 Cycle 2 (2026-08-17): "best at everything" — the plan, its refutation, the improved plan
+
+Owner directive: close every remaining gap. The hard rules stay sovereign — a gap whose only
+closure violates them gets its omission REAFFIRMED with a stronger reason, not silently reopened.
+
+**Drafted, then refuted, then improved:**
+
+| # | Item | Refutation verdict |
+|---|---|---|
+| **P9** | **Draggable multi-lane timeline** — drag step markers (live `setStepAt`), per-track lanes with delay/duration bars, playhead synced to the scrubber | **BUILD, trimmed**: pure UI over already-tested writers. Cut from the draft: multi-select, zoom, copy/paste — at a 0–100% axis with ≤6 steps they are IX3 cosplay, not value; the number inputs remain the canonical (and keyboard-first) path |
+| **P10** | **Opt-in scrub smoothing** (`scrub.smooth`) | **BUILD**: the original OMIT said "main-thread cost" — but rule 2 legitimizes runtime for what CSS cannot express, exactly like the pointer chase we already ship. Improved: opt-in only, converts the unit to `always` with an explicit compiler warning and panel copy («cambia el camino nativo por JS»), reuses the pointer chase verbatim |
+| **P11** | **Custom event trigger** `{on:"event", name}` | **BUILD**: the "for now" omission had no rule behind it, only prioritization. Closed slug (`[a-z0-9-]`), runtime listens `wjs:ix:<name>`, latch semantics like click. The plugin-developer escape hatch, with zero author strings near CSS |
+| **P12** | **SVG stroke draw** (was P8) | **BUILD, honestly bounded**: engine capability (`draw` prop → `stroke-dashoffset` under a `pathLength=1` + `.wjs-ixd` contract, paint-only) + wiring for the one block where author SVG actually lives (Custom HTML, post-sanitize stamping). If the sanitizer forbids SVG, the contract ships documented with a graceful no-op — a capability real blocks can adopt, not a demo |
+| **P13** | **Words `from:end` exact + honesty polish** | **BUILD**: closes a warning we ourselves emit (renderer stamps the word count var), plus the two audit leftovers: panel warns when the selected block's text will not split, scrubber gains a numeric % input |
+| — | Shuffled/random stagger | **OMIT reaffirmed, stronger**: the native path (`sibling-index()`) cannot shuffle, so the feature would ship two *different orders per browser* — a parity lie the fallback warning system exists to prevent |
+| — | Stagger distribution easing | **OMIT reaffirmed**: inexpressible in `calc()`; runtime-only would again fork native vs fallback ordering behavior for a niche |
+| — | `descendants` target scope | **OMIT reaffirmed, stronger**: ` *` would catch nested ix layers and word spans of child blocks — double animation by construction |
+| — | repeatDelay | **OMIT**: expressible by baking (stretch duration, compress offsets) but absent from every competitor gap list we scored; complexity without a scorecard row |
+| — | Size/layout props, arbitrary selectors, pin, snap, chars/lines, Lottie/Rive/Spline, scrub-JS-by-default | **OMIT: constitution** — each closure violates a hard rule (CLS, no-author-strings, native-first, a11y). "Best at everything" includes being the engine that refuses these |
+
+Execution order: P9 (largest remaining UX gap) → P10+P11 (small core siblings) → P13 → P12 → final sweep. Each phase
 ships under the program's hard gates: native-first compilation, zero CLS, panel controls
 keyboard-operable, canvas preview, revert-red tests, browser-verified computed styles, green
 `tsc`/`vitest`/`eslint`/build, and CI+CodeQL green on main.

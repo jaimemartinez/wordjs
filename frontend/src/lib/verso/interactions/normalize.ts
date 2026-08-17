@@ -202,6 +202,14 @@ export const IX_PERSP_DEFAULT = 1000;
 export const IX_AMT_MIN = 0.1;
 export const IX_AMT_MAX = 3;
 
+/**
+ * Nombre del evento a medida (P11). Slug corto y cerrado: viaja a un `addEventListener` con el
+ * prefijo `wjs:ix:` y a un atributo del panel — nunca al CSS.
+ */
+export const IX_EVENT_NAME_RE = /^[a-z0-9][a-z0-9-]{0,40}$/;
+/** Prefijo del evento del documento que arma un disparador `event` (P11). */
+export const IX_EVENT_PREFIX = "wjs:ix:";
+
 /** Persecución del puntero (P6): ms de suavizado del cursor. 120 se siente "vivo" sin ir a rastras. */
 export const IX_POINTER_SMOOTH_MAX = 1000;
 export const IX_POINTER_SMOOTH_DEFAULT = 120;
@@ -555,6 +563,12 @@ export function normTrigger(raw: unknown): IxTrigger | undefined {
       if (range) t.range = range;
       const src = oneOf(raw.src, ["self", "page"] as const);
       if (src) t.src = src;
+      // P10 — suavizado opt-in. 0 = exactitud nativa y se borra (ausencia = sin persecución).
+      const smooth = num(raw.smooth);
+      if (smooth !== undefined) {
+        const v = Math.round(clamp(smooth, 0, IX_POINTER_SMOOTH_MAX));
+        if (v > 0) t.smooth = v;
+      }
       return t;
     }
     case "hover":
@@ -579,6 +593,14 @@ export function normTrigger(raw: unknown): IxTrigger | undefined {
         const v = Math.round(clamp(smooth, 0, IX_POINTER_SMOOTH_MAX));
         if (v !== IX_POINTER_SMOOTH_DEFAULT) t.smooth = v;
       }
+      return t;
+    }
+    case "event": {
+      // P11 — el nombre es un slug CERRADO o el disparador entero se descarta (fail-open).
+      const name = raw.name;
+      if (typeof name !== "string" || !IX_EVENT_NAME_RE.test(name)) return undefined;
+      const t: IxTrigger = { on: "event", name };
+      if (raw.toggle === true) t.toggle = true;
       return t;
     }
     default:
