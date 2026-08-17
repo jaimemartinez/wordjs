@@ -189,7 +189,7 @@ export type IxTarget =
 
 **3.4.1 `words`** — solo en definiciones que declaren `ixText: true` (F9-D: `Heading` y `Quote`).
 El renderer —el MISMO código en canvas y público— parte el texto en
-`<span class="wjs-ixw" style="--i:3">` y pone `aria-label` con el texto íntegro en el contenedor y
+`<span class="wjs-ixw" style="--wjs-ixv-i:3">` y pone `aria-label` con el texto íntegro en el contenedor y
 `aria-hidden="true"` en los spans. Máx. 40 palabras; a partir de ahí no se parte (fail-open al
 texto normal).
 
@@ -284,7 +284,7 @@ export type IxUnit = {
 | `hover`, ≥3 pasos | **SÍ** | `.wjs-ix-<h>:hover { animation-name: … }` en la **capa ix**, que es propia — no comparte elemento con la apariencia ni con la entrada (misma razón que ya obligó a las dos capas anidadas) | `never` |
 | `click` | **NO** | Sin *latch* en CSS. `:target` es un truco de URL; el *checkbox hack* exige cambiar el markup y eso viola la restricción 5. | `always` |
 | `stagger` sobre `children` | **SÍ** | `.wjs-ix-<h> > :nth-child(k) { animation-delay: calc(<k-1> * <each>ms) }`, k = 1..24 | igual que su trigger |
-| `stagger` sobre `words` | **SÍ** | `--i` inline por span + `calc(var(--i) * <each>ms)` | igual que su trigger |
+| `stagger` sobre `words` | **SÍ** | `--wjs-ixv-i` inline por span + `calc(var(--wjs-ixv-i) * <each>ms)` | igual que su trigger |
 | `target: block` (otro bloque) | **NO** (F9-A/B) | Exigiría `timeline-scope`; Firefox no lo implementa | `always` |
 | Secuencia con dependencias entre pistas | **N/A** | Descartado (§1) | — |
 
@@ -374,7 +374,7 @@ ruta nueva, y un problema de invalidación que la deduplicación por `href` ya r
 alcanza. Las variables inline pueden parametrizar una animación existente (intensidad, duración),
 pero no pueden **crear** un `@keyframes` con los pasos que el autor definió. Por eso hay compilador
 y no solo tokens. Lo que **sí** se conserva del patrón: los valores escalares por bloque siguen
-viajando inline (`--wjs-ixv-amt`, `--i` del split), y las reglas viven en la hoja.
+viajando inline (`--wjs-ixv-amt`, `--wjs-ixv-i` del split), y las reglas viven en la hoja.
 
 > ⚠ **Pendiente de verificar EN NAVEGADOR antes de dar F9-B por hecho**: que `<style precedence>`
 > emitido desde el árbol portaleado no aterriza en el iframe. Es lectura estructural del código, no
@@ -463,9 +463,15 @@ visible en el panel. Nunca una página en blanco por un exceso de movimiento.
   las unidades `ix`. Mismo evento DOM, misma razón (cruza el iframe sin puente React).
 - **Scrubber**: para las unidades de scrub, un `range` 0–100 en el panel. Mientras el autor
   arrastra, el canvas aplica una animación **WAAPI pausada** sobre el bloque con
-  `currentTime = valor` — el **mismo backend** del fallback (§5.2). Al soltar, se retira y el CSS
-  nativo retoma. No se puede "scrubbear" una `view()` desde un slider; posicionar una WAAPI
-  equivalente sí, y es exacto porque sale del mismo IR.
+  `currentTime = valor` — el **mismo backend** del fallback (§5.2). No se puede "scrubbear" una
+  `view()` desde un slider; posicionar una WAAPI equivalente sí, y es exacto porque sale del mismo IR.
+
+  **DESVIACIÓN AL IMPLEMENTAR (F9-D): se retira con un CONMUTADOR explícito, no "al soltar".**
+  Esta sección decía que la animación se retiraba al soltar el ratón. Con teclado no existe soltar:
+  quien mueve el `range` con las flechas nunca dispararía esa retirada y se quedaría con el bloque
+  congelado a mitad de animación, sin forma de recuperarlo salvo deseleccionando. El control es por
+  tanto un botón `aria-pressed` que arma y desarma el modo, y al desarmarlo se cancelan las WAAPI y
+  el CSS nativo retoma. Mismo mecanismo, disparador accesible.
 
 ### 6.4 Migración desde `AnimationField` — **cero migración automática**
 
