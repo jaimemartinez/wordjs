@@ -126,10 +126,12 @@ export type IxSpec = {
 ```ts
 export type IxTrigger =
   | { on: "view";  once?: boolean; range?: IxRange }   // entrada en viewport
-  | { on: "scrub"; range?: IxRange; src?: "self" | "page" }
+  | { on: "scrub"; range?: IxRange; src?: "self" | "page"; smooth?: number } // P10: smooth ms opt-in
   | { on: "hover" }
   | { on: "click"; toggle?: boolean }
-  | { on: "load";  delay?: number };
+  | { on: "load";  delay?: number }
+  | { on: "pointer"; area?: "self" | "page"; smooth?: number }   // P6
+  | { on: "event"; name: string; toggle?: boolean };   // P11: DOM `wjs:ix:<name>`, slug cerrado
 
 /** Mapea 1:1 a `animation-range`. Nombres de la spec, sin traducir. */
 export type IxRange = { from: IxEdge; to: IxEdge };
@@ -208,12 +210,14 @@ export type IxTarget =
   | { kind: "self" }
   | { kind: "children" }                 // hijos DIRECTOS del bloque (para stagger)
   | { kind: "words" }                    // solo bloques que declaren soporte (§3.4.1)
-  | { kind: "block"; id: string };       // otro bloque, por props.id
+  | { kind: "block"; id: string }        // otro bloque, por props.id
+  | { kind: "svg" };                     // P12: descendientes `.wjs-ixd` (§3.4.3)
 ```
 
 **3.4.1 `words`** — solo en definiciones que declaren `ixText: true` (F9-D: `Heading` y `Quote`).
 El renderer —el MISMO código en canvas y público— parte el texto en
-`<span class="wjs-ixw" style="--wjs-ixv-i:3">` y pone `aria-label` con el texto íntegro en el contenedor y
+`<span class="wjs-ixw" style="--wjs-ixv-i:3;--wjs-ixv-n:6">` (índice Y total desde P13) y pone
+`aria-label` con el texto íntegro en el contenedor y
 `aria-hidden="true"` en los spans. Máx. 40 palabras; a partir de ahí no se parte (fail-open al
 texto normal).
 
@@ -328,9 +332,12 @@ export type IxUnit = {
 | `hover`, ≥3 pasos | **SÍ** | `.wjs-ix-<h>:hover { animation-name: … }` en la **capa ix**, que es propia — no comparte elemento con la apariencia ni con la entrada (misma razón que ya obligó a las dos capas anidadas) | `never` |
 | `click` | **NO** | Sin *latch* en CSS. `:target` es un truco de URL; el *checkbox hack* exige cambiar el markup y eso viola la restricción 5. | `always` |
 | `stagger` sobre `children` | **SÍ** | Fallback `:nth-child(k)` k=1..24 + UNA regla nativa `sibling-index()` bajo `@supports` cuya condición es la propia expresión (Chrome 138+, Safari 26.2+, Firefox 154+): sin tope de hermanos, y `center`, el tiempo TOTAL (`sibling-count()`) y la REJILLA (`round(down)`/`mod` con las columnas del autor) son EXACTOS. El selector nativo `>:nth-child(n)` empata especificidad con el fallback y gana por orden. El runtime WAAPI usa las mismas fórmulas (paridad exacta); solo el fallback aproxima, avisando. | igual que su trigger |
-| `stagger` sobre `words` | **SÍ** | `--wjs-ixv-i` inline por span + `calc(var(--wjs-ixv-i) * <each>ms)` | igual que su trigger |
+| `stagger` sobre `words` | **SÍ** | `--wjs-ixv-i` y `--wjs-ixv-n` inline por span (P13). `start`: `calc(var(--wjs-ixv-i) * <each>ms)`; `end`: `calc((var(--wjs-ixv-n) - 1 - var(--wjs-ixv-i)) * <each>ms)`; `center`: `calc(abs(var(--wjs-ixv-i) - (var(--wjs-ixv-n) - 1) / 2) * <each>ms)` — EXACTOS, sin la aproximación de 8 palabras | igual que su trigger |
 | `target: block` (otro bloque) | **NO** (F9-A/B) | Exigiría `timeline-scope`; Firefox no lo implementa | `always` |
 | `pointer` (P6: parallax/tilt por cursor) | **NO** | Inexpresable en CSS. El driver WAAPI POSICIONA la animación con el cursor normalizado (área bloque o página), con persecución exponencial (`smooth`, dt fijo determinista) y reposo en el CENTRO de la pista (el paso 50 es el estado neutro por contrato). El EJE lo elige cada pista (`axis`): dos pistas x+y componen el 2D con la lista multi-pista de P5. Sin CSS emitido, chunk solo si se usa, inerte con reduced-motion, IO-gated (fuera de pantalla el cursor no mueve nada), y en táctil el bloque descansa. | `always` |
+| `scrub` con `smooth` (P10) | **NO** | El progreso PERSIGUE al scroll con decaimiento exponencial (dt fijo determinista, la misma persecución del puntero). CSS no puede retrasar una timeline de scroll; opt-in que degrada la unidad a runtime con aviso del compilador. | `always` |
+| `event` (P11) | **NO** | Sin *latch* en CSS (como el clic). El runtime escucha `wjs:ix:<name>` en el documento — slug cerrado `[a-z0-9][a-z0-9-]{0,40}`, el prefijo lo pone el código, jamás el autor — y conmuta el mismo atributo de estado del clic. La escotilla para plugins. | `always` |
+| `draw` sobre `target: svg` (P12) | **SÍ** | `stroke-dashoffset` 0–1 bajo el contrato `.wjs-ixd` + `pathLength="1"` (`stroke-dasharray: 1` estático en `wordjs-ui.css`). Geometría del dash: pinta, no recoloca — cero reflow. El sanitizador EXCLUYE `<svg>` a propósito (superficie mXSS): la clase la estampan bloques first-party o de plugin, nunca el texto enriquecido. | igual que su trigger |
 | Secuencia con dependencias entre pistas | **N/A** | Descartado (§1) | — |
 
 `needsRuntime: "no-native"` significa: el CSS lo hace en Chrome y Safari 26+, y **solo en un

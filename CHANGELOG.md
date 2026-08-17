@@ -8,6 +8,33 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Added
 
+- **Interactions: a real multi-lane timeline.** The step strip grew into a timeline: one lane per
+  track on a shared scale (milliseconds for clock triggers, 0–100% for scroll and pointer), where
+  the active lane's step markers and delay bar drag with the pointer or move with arrow keys —
+  every change announced to screen readers, every value still editable in the numeric fields below,
+  which remain the canonical path. First and last steps render as fixed anchors (the data model
+  pins them to 0 and 100, so the UI doesn't pretend otherwise), and preset-linked blocks show the
+  whole timeline read-only.
+
+- **Interactions: SVG stroke drawing, and word cascades that count.** A new *Trazado* property
+  animates an SVG stroke being drawn (or undrawn) — compiled to pure CSS `stroke-dashoffset`
+  against a documented contract (`class="wjs-ixd"` + `pathLength="1"`) that first-party and plugin
+  blocks can adopt; the HTML sanitizer deliberately keeps refusing raw `<svg>` in rich text, so the
+  capability ships without widening any security surface. And word-by-word cascades from the end or
+  the center are now *exact*: the renderer stamps each span with the real word count, so a
+  six-word headline no longer times itself as if it had eight.
+
+- **Interactions: optional scroll smoothing.** Scroll-driven interactions can opt into a chase —
+  the animation eases toward the scroll position with an exponential decay measured in
+  milliseconds, the same deterministic chase the pointer trigger uses. It's honest about its cost:
+  the panel and the compiler both say it trades the pure-CSS path for the JavaScript runtime, and
+  it stays off unless an author asks for it.
+
+- **Interactions: a custom event trigger for plugin code.** Plugins can now drive interactions by
+  dispatching `wjs:ix:<name>` DOM events — the name is a closed slug the normalizer enforces, the
+  prefix is added by code (author strings never reach an event listener or the CSS), and the
+  trigger behaves like click: latch once, or toggle in and out.
+
 - **Interactions: a curated motion library, and per-block intensity.** The system catalog grows
   from 16 to 26 presets, showcasing everything the engine learned: physics entrances (bounce,
   elastic — compiled to CSS, zero JS), 3D flips and skewed slides, card cascades and grid ripples

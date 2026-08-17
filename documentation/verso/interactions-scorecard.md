@@ -239,6 +239,16 @@ ships under the program's hard gates: native-first compilation, zero CLS, panel 
 keyboard-operable, canvas preview, revert-red tests, browser-verified computed styles, green
 `tsc`/`vitest`/`eslint`/build, and CI+CodeQL green on main.
 
+**Cycle 2 status (2026-08-17):**
+
+| Phase | Status | Evidence |
+|---|---|---|
+| **P10** | **SHIPPED** (core `e141f02`, CI+CodeQL green) | `scrub.smooth` reuses the pointer chase (shared `POINTER_DT`/exp decay); compiler downgrades the unit to `always` with an explicit warning |
+| **P11** | **SHIPPED** (core `e141f02`) | `{on:"event", name}` closed slug `[a-z0-9-]{1,41}`, runtime listens `wjs:ix:<name>` on the document, latch/toggle like click; invalid names normalize away |
+| **P9** | **SHIPPED** (`9f66d56`) | Multi-lane timeline in both surfaces. Browser-drilled on real pointer math: marker drag wrote through to `_puck_data` (canvas hash recompiled), 99% clamp past the track's bar, click-after-drag suppression, ±1/±5 keyboard with `aria-live`, delay-bar drag landed exactly 200 ms on a 1000 ms scale; preset-linked blocks render every lane passive |
+| **P12** | **SHIPPED, bounded as refuted** (core `fbe9eb7`) | The sanitizer's `<svg>` exclusion is real (mXSS surface), so the anticipated fallback branch shipped: engine capability (`draw` → `stroke-dashoffset`, 0–1 under `pathLength=1`), `.wjs-ixd` statics in `wordjs-ui.css` (verified served, reduced-motion kill included), runtime target resolution, panel option. No first-party block renders inline SVG today — the contract is documented for plugin/theme blocks |
+| **P13** | **SHIPPED** (core `fbe9eb7`) | Spans stamp `--wjs-ixv-n`; browser-verified exact computed delays with n=6: `from:end` = 0.30/0.24/…/0 s, `from:center` = symmetric `abs(i−2.5)·60ms`. Panel polish (won't-split warning, scrubber numeric input) lands with the cycle's UI pass |
+
 ---
 
 ## 4. Platform facts this plan leans on (verified 2026-08-16)
