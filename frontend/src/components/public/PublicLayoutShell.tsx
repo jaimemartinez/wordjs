@@ -86,7 +86,11 @@ export default function PublicLayoutShell({
 
     return (
         <ActivePluginsProvider>
-            <div className="min-h-screen flex flex-col" style={shellStyle}>
+            {/* `wjs-shell` es un GANCHO estable, no un estilo: las transiciones entre páginas (C1)
+                necesitan un selector que alcance la cabecera y el pie SIN poder confundirlos con un
+                <header>/<footer> que un bloque de contenido pinte dentro de <main>. Hijo directo del
+                shell ⇒ es chrome del sitio, por construcción. */}
+            <div className="wjs-shell min-h-screen flex flex-col" style={shellStyle}>
                 <a
                     href="#main-content"
                     className="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:start-4 focus:z-[100] focus:px-4 focus:py-2 focus:rounded-lg focus:bg-[var(--wjs-color-primary,#2563eb)] focus:text-[var(--wjs-color-on-primary,#ffffff)] focus:shadow-lg"

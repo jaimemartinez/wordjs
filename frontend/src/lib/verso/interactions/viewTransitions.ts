@@ -63,6 +63,21 @@ export function compileVtCss(style: IxVtStyle): string {
 
     const out: string[] = ["@view-transition{navigation:auto}"];
 
+    // EL CHROME SE QUEDA QUIETO. Sin esto, la instantánea `root` incluye cabecera y pie, así que la
+    // página entera se funde o se desliza en bloque — bonito, pero indistinguible de recargar. Al
+    // darle a cada uno su propio nombre salen del grupo raíz y forman el suyo: con el mismo
+    // contenido a ambos lados de la navegación, su morfismo por defecto no produce cambio visible.
+    // Resultado: el contenido se mueve y la cabecera ni se inmuta — el gesto que distingue a una
+    // aplicación de un sitio.
+    //
+    // El selector es HIJO DIRECTO del shell a propósito: un bloque de contenido puede pintar su
+    // propio <header> dentro de <main>, y un `view-transition-name` DUPLICADO aborta la transición
+    // entera (regla del estándar). Hijo directo ⇒ chrome del sitio, único por construcción.
+    out.push(
+        ".wjs-shell>header{view-transition-name:wjs-vt-header}",
+        ".wjs-shell>footer{view-transition-name:wjs-vt-footer}",
+    );
+
     if (style === "fade") {
         // El fundido cruzado ya es el comportamiento por defecto del navegador: aquí solo se fija
         // la duración, para que la navegación tenga el mismo tempo que el resto del movimiento.

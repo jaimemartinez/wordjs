@@ -33,6 +33,17 @@ describe("compileVtCss — el texto emitido", () => {
         }
     });
 
+    it("el CHROME sale del grupo raíz para quedarse quieto, y por selector de hijo directo", () => {
+        for (const style of ["fade", "slide"] as const) {
+            const css = compileVtCss(style);
+            expect(css).toContain(".wjs-shell>header{view-transition-name:wjs-vt-header}");
+            expect(css).toContain(".wjs-shell>footer{view-transition-name:wjs-vt-footer}");
+            // NUNCA un selector suelto: un bloque de contenido puede pintar su propio <header>
+            // dentro de <main>, y un nombre DUPLICADO aborta la transición entera.
+            expect(/[^>]header\{view-transition-name/.test(css.replace(".wjs-shell>", ">"))).toBe(false);
+        }
+    });
+
     it("fade: solo fija el tempo del fundido por defecto del navegador", () => {
         const css = compileVtCss("fade");
         expect(css).toContain(`::view-transition-old(root),::view-transition-new(root){animation-duration:${IX_VT_DUR_MS}ms}`);
@@ -47,7 +58,12 @@ describe("compileVtCss — el texto emitido", () => {
         expect(css).toContain("::view-transition-new(root){animation:wjs-vt-in");
         // Toda declaración dentro de los keyframes: nada de layout (width/height/top/margin…).
         const decls = [...css.matchAll(/[{;]\s*([a-z-]+)\s*:/g)].map((m) => m[1]);
-        const allowed = new Set(["opacity", "transform", "animation", "animation-duration", "navigation"]);
+        const allowed = new Set([
+            "opacity", "transform", "animation", "animation-duration", "navigation",
+            // Identidad de transición, no layout: nombra un grupo para que el navegador lo capture
+            // aparte. No pinta ni recoloca nada por sí misma.
+            "view-transition-name",
+        ]);
         for (const d of decls) expect(allowed.has(d), d).toBe(true);
     });
 
