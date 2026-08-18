@@ -15,7 +15,7 @@ import { describe, expect, it } from "vitest";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { collectIxSpecs, compileIxPage, ixCtxFromSetting } from "@/lib/verso/interactions";
-import ContentRenderer from "../ContentRenderer";
+import ContentRenderer, { RenderSubtree } from "../ContentRenderer";
 
 const SITE_PRESETS = JSON.stringify([
   {
@@ -231,5 +231,16 @@ describe("ContentRenderer — la política de movimiento del SITIO (C5)", () => 
   it("un valor inventado del ajuste es el defecto, no un modo intermedio", () => {
     const data = { content: [heading("a", { v: 1, preset: "sys:fade-up" })] };
     expect(render(data, undefined, "APAGADO")).toBe(render(data));
+  });
+
+  it("`off` llega hasta un SUBÁRBOL anidado — lo que se repite en todas las páginas", () => {
+    // Revert-red: `RenderSubtree` construía su contexto solo con los preajustes, así que el
+    // movimiento de dentro de un símbolo (o del slot de un bloque de plugin) sobrevivía al apagado.
+    const nested = renderToStaticMarkup(
+      <RenderSubtree items={[withAnim("n")]} motion="off" />,
+    );
+    expect(nested).not.toContain("wjs-anim");
+    expect(nested).toContain("Título n");
+    expect(renderToStaticMarkup(<RenderSubtree items={[withAnim("n")]} />)).toContain("wjs-anim");
   });
 });

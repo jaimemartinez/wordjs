@@ -23,6 +23,7 @@
  */
 import React, { useEffect, useState } from "react";
 import { RenderSubtree } from "@/components/content/ContentRenderer";
+import { normalizeIxMotion } from "@/lib/verso/interactions";
 import { symbolsApi, SYMBOL_BLOCK_TYPE } from "@/lib/symbols";
 
 /** Cap de profundidad 1: Symbol jamás se renderiza dentro del subárbol de un Symbol. */
@@ -37,10 +38,16 @@ const noticeStyle: React.CSSProperties = {
     background: "rgba(240, 236, 246, 0.5)",
 };
 
-export default function VersoSymbolRender({ symbolId, resolvedSymbolItems, isEditing }: {
+export default function VersoSymbolRender({ symbolId, resolvedSymbolItems, isEditing, ixMotion }: {
     symbolId?: unknown;
     resolvedSymbolItems?: unknown;
     isEditing?: unknown;
+    /**
+     * Política de movimiento del SITIO (C5), inyectada por el renderer público. Sin ella, apagar el
+     * movimiento del sitio dejaba moviéndose todo lo que vive dentro de un símbolo — que es
+     * precisamente el contenido que se repite en TODAS las páginas.
+     */
+    ixMotion?: unknown;
 }) {
     const editing = !!isEditing;
     const id = Number(symbolId) || 0;
@@ -65,5 +72,5 @@ export default function VersoSymbolRender({ symbolId, resolvedSymbolItems, isEdi
     if (items === null) return editing ? <div style={noticeStyle}>Este símbolo fue eliminado — elige otro.</div> : null;
     if (!items.length) return editing ? <div style={noticeStyle}>El símbolo está vacío.</div> : null;
 
-    return <RenderSubtree items={items} exclude={SYMBOL_SUBTREE_EXCLUDE} />;
+    return <RenderSubtree items={items} exclude={SYMBOL_SUBTREE_EXCLUDE} motion={normalizeIxMotion(ixMotion)} />;
 }

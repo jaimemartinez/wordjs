@@ -39,6 +39,7 @@ import {
     ixCtxFromSite,
     parseSiteIxPresets,
     type IxCompileCtx,
+    type IxMotionPolicy,
     type IxPage,
     type IxPreset,
 } from "@/lib/verso/interactions";
@@ -127,10 +128,12 @@ export default function ContentRenderer({
  * que NO viaja es la página compilada: contiene un `Map` y este componente puede renderizarse en el
  * cliente. Sin ella la clase sale del hash desnudo, que es el mismo salvo colisión.
  */
-export function RenderSubtree({ items, exclude, ixPresets }: { items: unknown[]; exclude?: ReadonlySet<string>; ixPresets?: Record<string, IxPreset> }) {
+export function RenderSubtree({ items, exclude, ixPresets, motion }: { items: unknown[]; exclude?: ReadonlySet<string>; ixPresets?: Record<string, IxPreset>; motion?: IxMotionPolicy }) {
     const list = Array.isArray(items) ? items : [];
-    const env: IxEnv | undefined = ixPresets
-        ? { ctx: ixCtxFromSite(ixPresets), site: ixPresets }
+    // La política del sitio (C5) también baja hasta aquí: un bloque dentro de un Symbol no es una
+    // excepción al ajuste, y sin esto «apagar el movimiento» dejaba moviéndose justo lo anidado.
+    const env: IxEnv | undefined = ixPresets || motion
+        ? { ctx: { ...(ixPresets ? ixCtxFromSite(ixPresets) : {}), ...(motion ? { motion } : {}) }, ...(ixPresets ? { site: ixPresets } : {}) }
         : undefined;
     return <>{list.map((item: any, i: number) => renderItem(item, `s${i}`, exclude, env))}</>;
 }

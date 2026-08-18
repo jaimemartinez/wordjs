@@ -96,7 +96,7 @@ function usePluginBlockDef(type: string): PluginBlockDef | null {
  * del catálogo lo usan hoy, pero un plugin de terceros compilado contra el contrato viejo no debe
  * romperse. En el sitio público `isEditing` es SIEMPRE false.
  */
-function puckCompat(props: Record<string, unknown>, ixPresets?: Record<string, IxPreset>) {
+function puckCompat(props: Record<string, unknown>, ixPresets?: Record<string, IxPreset>, motion?: IxMotionPolicy) {
     return {
         isEditing: false,
         metadata: {},
@@ -105,19 +105,28 @@ function puckCompat(props: Record<string, unknown>, ixPresets?: Record<string, I
             const slot = props[zone];
             if (typeof slot === "function") return (slot as (cls?: string) => React.ReactNode)(className);
             // En el dato persistido un slot es un ARRAY de items: se pinta con el switch compartido.
-            if (Array.isArray(slot)) return <div className={className}><RenderSubtree items={slot} ixPresets={ixPresets} /></div>;
+            if (Array.isArray(slot)) return <div className={className}><RenderSubtree items={slot} ixPresets={ixPresets} motion={motion} /></div>;
             return null;
         },
     };
 }
 
-function PluginBlockRender({ type, props, ixPresets }: { type: string; props: Record<string, unknown>; ixPresets?: Record<string, IxPreset> }) {
+function PluginBlockRender({ type, props, ixPresets, motion }: { type: string; props: Record<string, unknown>; ixPresets?: Record<string, IxPreset>; motion?: IxMotionPolicy }) {
     const def = usePluginBlockDef(type);
     const Render = def?.render;
     // Tipo desconocido (plugin inactivo, bundle sin ese bloque, o aún cargando): no se pinta nada —
     // exactamente lo que hacía <Render> del fork con un componente no registrado.
     if (typeof Render !== "function") return null;
-    return <Render {...(def?.defaultProps || {})} {...props} puck={puckCompat(props, ixPresets)} />;
+    // `ixMotion` viaja como prop normal: los bloques que pintan un SUBÁRBOL (hoy, Symbol) tienen que
+    // poder pasarle la política del sitio, y un bloque que no la conozca simplemente la ignora.
+    return (
+        <Render
+            {...(def?.defaultProps || {})}
+            {...props}
+            {...(motion ? { ixMotion: motion } : {})}
+            puck={puckCompat(props, ixPresets, motion)}
+        />
+    );
 }
 
 /**
@@ -131,7 +140,7 @@ export default function PluginBlockHeavy({ item, ixPresets, motion }: { item: an
     const props = (item?.props || {}) as Record<string, unknown>;
     const inner = type === SYMBOL_BLOCK_TYPE
         ? <VersoSymbolRender symbolId={props.symbolId} resolvedSymbolItems={props.resolvedSymbolItems} />
-        : <PluginBlockRender type={type} props={props} ixPresets={ixPresets} />;
+        : <PluginBlockRender type={type} props={props} ixPresets={ixPresets} motion={motion} />;
     return (
         <SharedBlockShell hide={props.hide as any} anim={props.anim as any} look={props.look as any} ix={props.ix} ixCtx={{ ...(ixPresets ? ixCtxFromSite(ixPresets) : {}), ...(motion ? { motion } : {}) }}>
             {inner}
