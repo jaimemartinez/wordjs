@@ -117,6 +117,16 @@ export default function DnDDriver({ handle, registry, geometry, frameDocument }:
     return layout;
   }, [frameDocument, geometry, handle, registry]);
 
+  /* ---------------- el fantasma que SIGUE AL CURSOR ---------------- */
+
+  // Se mueve escribiendo en el DOM, no por estado de React: un `setState` por cada `pointermove`
+  // pondría a re-renderizar el árbol del editor sesenta veces por segundo para mover una etiqueta.
+  const ghostRef = React.useRef<HTMLDivElement | null>(null);
+  /** Último punto del puntero en coordenadas del documento PADRE (donde vive el fantasma). */
+  const parentPointRef = React.useRef<DndPoint | null>(null);
+  /** Qué se está arrastrando, para poder ponerle nombre al fantasma. */
+  const dragSourceRef = React.useRef<{ kind: "new"; type: string } | { kind: "existing"; nodeId: string } | null>(null);
+
   /* ---------------- sensor de puntero + autoscroll + Escape ---------------- */
 
   React.useEffect(() => {
@@ -137,9 +147,78 @@ export default function DnDDriver({ handle, registry, geometry, frameDocument }:
       cancelSession: (s) => s.cancel(),
       scheduleFrame,
       cancelFrame,
+      onSessionStart: () => {
+        showGhost();
+        // Si el navegador alcanzó a pintar algo en azul antes del umbral, se borra: durante un
+        // arrastre de bloques no hay ninguna selección de texto que tenga sentido.
+        frameWin?.getSelection?.()?.removeAllRanges();
+        parentDoc.defaultView?.getSelection?.()?.removeAllRanges();
+        setDragging(true);
+      },
     });
 
     let scrollRaf: number | null = null;
+
+    /**
+     * QUITARLE AL NAVEGADOR SU GESTO. Al pulsar sobre un bloque, el navegador cree que empiezas a
+     * seleccionar texto: pinta la selección y, si sigues arrastrando, la convierte en su PROPIO
+     * drag nativo — que cancela los eventos de puntero y deja el arrastre del editor muerto a
+     * medias. Es literalmente lo que se veía: "agarro un bloque y sale como si seleccionara texto".
+     *
+     * `user-select: none` mientras dura el gesto lo impide de raíz (sin selección no hay nada que
+     * arrastrar), y el cursor pasa a "grabbing" para que se vea que el editor sí tiene el gesto.
+     * Se aplica a los DOS documentos: la paleta vive en el padre y su etiqueta también se seleccionaba.
+     */
+    /**
+     * QUÉ estás arrastrando, escrito con todas las letras junto al cursor.
+     *
+     * Sin esto el arrastre era invisible: el hueco de destino aparecía en el lienzo, pero de la
+     * cosa arrastrada no había ni rastro — al agarrar un bloque no pasaba, aparentemente, nada.
+     * Vive en el documento PADRE (tiene que poder viajar por encima de la paleta y del lienzo) y
+     * es `pointer-events: none`, así que no se interpone en el hit-test que resuelve el destino.
+     */
+    const labelOf = (): string => {
+      const src = dragSourceRef.current;
+      if (!src) return "";
+      const type =
+        src.kind === "new" ? src.type : (handle.getDoc().nodes[src.nodeId]?.type ?? "");
+      return registry.get(type)?.label || type || "Bloque";
+    };
+
+    const showGhost = () => {
+      const el = ghostRef.current;
+      if (!el) return;
+      el.textContent = labelOf();
+      el.style.display = "block";
+      moveGhost();
+    };
+
+    const moveGhost = () => {
+      const el = ghostRef.current;
+      const p = parentPointRef.current;
+      if (!el || !p) return;
+      // +14/+10: el fantasma va al lado del cursor, no debajo — tapar el punto exacto de suelta
+      // es justo lo que no puede hacer.
+      el.style.transform = `translate3d(${Math.round(p.x + 14)}px, ${Math.round(p.y + 10)}px, 0)`;
+    };
+
+    const hideGhost = () => {
+      const el = ghostRef.current;
+      if (el) el.style.display = "none";
+    };
+
+    const setDragging = (on: boolean) => {
+      if (!on) hideGhost();
+      for (const el of [frameDocument.documentElement, parentDoc.documentElement]) {
+        el.style.userSelect = on ? "none" : "";
+        el.style.cursor = on ? "grabbing" : "";
+      }
+    };
+
+    /** Cancela el gesto NATIVO del navegador (selección y arrastre propio) mientras haya dedo puesto. */
+    const suppressNative = (e: Event) => {
+      if (gesture.armed()) e.preventDefault();
+    };
 
     // Aritmética pura en driverCore.toFramePoint (testeada con escala 0.75):
     // la escala se deriva de la propia caja del iframe (rect.width/clientWidth),
@@ -155,6 +234,15 @@ export default function DnDDriver({ handle, registry, geometry, frameDocument }:
         width: rect.width,
         clientWidth: iframe.clientWidth,
       });
+    };
+
+    /** Inversa de `toFramePoint`: del sistema del iframe al del documento padre. */
+    const toParentPoint = (p: DndPoint): DndPoint | null => {
+      const iframe = canvas.getFrameElement();
+      if (!iframe) return null;
+      const rect = iframe.getBoundingClientRect();
+      const scale = iframe.clientWidth > 0 ? rect.width / iframe.clientWidth : 1;
+      return { x: rect.left + p.x * scale, y: rect.top + p.y * scale };
     };
 
     const stopScroll = () => {
@@ -178,6 +266,10 @@ export default function DnDDriver({ handle, registry, geometry, frameDocument }:
       const pe = e as PointerEvent;
       const p = eventToFramePoint(pe, fromParent);
       if (!p) return;
+      // El fantasma vive en el padre: se guarda el punto en SUS coordenadas. Desde dentro del
+      // iframe hay que deshacer el desplazamiento y la escala del previsualizador de dispositivo.
+      parentPointRef.current = fromParent ? { x: pe.clientX, y: pe.clientY } : toParentPoint(p);
+      moveGhost();
       const overDrawer =
         fromParent && !!(pe.target as Element | null)?.closest?.("[data-wjs-palette]");
       gesture.move(p, overDrawer);
@@ -195,6 +287,8 @@ export default function DnDDriver({ handle, registry, geometry, frameDocument }:
       const id = nodeKeyFromTarget(pe.target);
       if (!id) return;
       const rect = geometry.getRect(id);
+      dragSourceRef.current = { kind: "existing", nodeId: id };
+      parentPointRef.current = toParentPoint({ x: pe.clientX, y: pe.clientY });
       gesture.down(
         { kind: "existing", nodeId: id, originRect: rect ? blockRectToDndRect(rect) : null },
         { x: pe.clientX, y: pe.clientY },
@@ -209,12 +303,15 @@ export default function DnDDriver({ handle, registry, geometry, frameDocument }:
       if (!type) return;
       const p = eventToFramePoint(pe, true);
       if (!p) return;
+      dragSourceRef.current = { kind: "new", type };
+      parentPointRef.current = { x: pe.clientX, y: pe.clientY };
       gesture.down({ kind: "new", type }, p);
     };
 
     const onUp = () => {
       gesture.up();
       stopScroll();
+      setDragging(false);
     };
 
     const onKeyDown = (e: Event) => {
@@ -223,6 +320,7 @@ export default function DnDDriver({ handle, registry, geometry, frameDocument }:
       if (!gesture.active() && !gesture.point()) return;
       gesture.cancel();
       stopScroll();
+      setDragging(false);
       ke.stopPropagation();
     };
 
@@ -237,6 +335,10 @@ export default function DnDDriver({ handle, registry, geometry, frameDocument }:
     parentDoc.addEventListener("pointerup", onUp, true);
     frameDocument.addEventListener("keydown", onKeyDown, true);
     parentDoc.addEventListener("keydown", onKeyDown, true);
+    for (const doc of [frameDocument, parentDoc]) {
+      doc.addEventListener("selectstart", suppressNative, true);
+      doc.addEventListener("dragstart", suppressNative, true);
+    }
 
     return () => {
       frameDocument.removeEventListener("pointerdown", onFrameDown, true);
@@ -247,6 +349,11 @@ export default function DnDDriver({ handle, registry, geometry, frameDocument }:
       parentDoc.removeEventListener("pointerup", onUp, true);
       frameDocument.removeEventListener("keydown", onKeyDown, true);
       parentDoc.removeEventListener("keydown", onKeyDown, true);
+      for (const doc of [frameDocument, parentDoc]) {
+        doc.removeEventListener("selectstart", suppressNative, true);
+        doc.removeEventListener("dragstart", suppressNative, true);
+      }
+      setDragging(false);
       gesture.cancel();
       stopScroll();
     };
@@ -278,8 +385,19 @@ export default function DnDDriver({ handle, registry, geometry, frameDocument }:
 
   // Live-region del overlay: anuncia los movimientos del modo teclado.
   return (
-    <div data-wjs-dnd-live="" role="status" aria-live="polite" className="sr-only">
-      {announcement}
-    </div>
+    <>
+      <div data-wjs-dnd-live="" role="status" aria-live="polite" className="sr-only">
+        {announcement}
+      </div>
+      {/* `aria-hidden`: es feedback visual del ratón; a quien mueve bloques con el teclado le habla
+          la región viva de arriba. Fijo respecto al viewport y fuera del flujo: no empuja nada. */}
+      <div
+        ref={ghostRef}
+        data-wjs-dnd-ghost=""
+        aria-hidden="true"
+        style={{ display: "none", position: "fixed", left: 0, top: 0, zIndex: 2147483000, pointerEvents: "none" }}
+        className="rounded-md border border-[var(--ed-primary)] bg-[var(--ed-surface-container-highest)] px-2.5 py-1.5 text-[11px] font-semibold text-[var(--ed-on-surface)] shadow-lg"
+      />
+    </>
   );
 }

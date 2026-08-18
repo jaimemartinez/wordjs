@@ -767,6 +767,45 @@ describe("gesto de puntero: lo decide la distancia, nunca el azar de los fotogra
     expect(h.log).toContain("mover:100,0:paleta");
   });
 
+  it("`armed()` es cierto DESDE el `down`: es lo que le quita la selección al navegador", () => {
+    // Esperar a `active()` llegaría tarde: el navegador empieza a seleccionar texto en el mismo
+    // `pointerdown`, así que para cuando el gesto supera el umbral ya hay medio párrafo en azul —
+    // y Chrome convierte esa selección en su propio arrastre nativo, que mata el del editor.
+    const h = harness();
+    expect(h.gesture.armed()).toBe(false);
+    h.gesture.down(nuevo, { x: 0, y: 0 });
+    expect(h.gesture.armed()).toBe(true);
+    expect(h.gesture.active()).toBe(false); // todavía no es un arrastre, pero ya hay dedo puesto
+    h.gesture.up();
+    expect(h.gesture.armed()).toBe(false);
+  });
+
+  it("avisa UNA sola vez de que el gesto se convirtió en arrastre", () => {
+    // De ese aviso cuelgan el `user-select: none` y el borrado de la selección: repetirlo por
+    // cada movimiento sería trabajo por fotograma, y no darlo deja el navegador con su gesto.
+    const inicios: number[] = [];
+    const frames: Array<() => void> = [];
+    const g = createPointerGesture<number>({
+      createSession: () => 1,
+      moveSession: () => {},
+      dropSession: () => {},
+      cancelSession: () => {},
+      scheduleFrame: (cb) => frames.push(cb),
+      cancelFrame: () => {},
+      onSessionStart: () => inicios.push(1),
+    });
+    g.down(nuevo, { x: 0, y: 0 });
+    expect(inicios).toHaveLength(0); // pulsar no es arrastrar
+    g.move({ x: 3, y: 0 });
+    g.up();
+    expect(inicios).toHaveLength(0); // un tap tampoco
+    g.down(nuevo, { x: 0, y: 0 });
+    g.move({ x: 100, y: 0 });
+    g.move({ x: 200, y: 0 });
+    g.up();
+    expect(inicios).toHaveLength(1);
+  });
+
   it("`active()` solo es cierto con un arrastre vivo — el autoscroll depende de eso", () => {
     const h = harness();
     expect(h.gesture.active()).toBe(false);

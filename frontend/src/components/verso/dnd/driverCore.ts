@@ -578,6 +578,8 @@ export interface PointerGestureDeps<S> {
   /** Agrupa el trabajo por fotograma (rAF). Devuelve el id que `cancelFrame` cancela. */
   scheduleFrame(cb: () => void): number;
   cancelFrame(id: number): void;
+  /** Se llama UNA vez, cuando el gesto pasa a ser un arrastre de verdad. */
+  onSessionStart?(): void;
 }
 
 export interface PointerGesture {
@@ -590,6 +592,12 @@ export interface PointerGesture {
   cancel(): void;
   /** ¿Hay un arrastre vivo? Lo usa el autoscroll, que solo corre mientras lo haya. */
   active(): boolean;
+  /**
+   * ¿Hay un dedo puesto sobre algo arrastrable? Cierto DESDE el `down`, antes de saber si habrá
+   * arrastre. Es lo que decide si se le quita al navegador su selección de texto: esperar a
+   * `active()` llegaría tarde — para entonces ya hay medio párrafo en azul.
+   */
+  armed(): boolean;
   /** Último punto conocido, en coordenadas del iframe. */
   point(): DndPoint | null;
 }
@@ -613,6 +621,7 @@ export function createPointerGesture<S>(deps: PointerGestureDeps<S>): PointerGes
       if (d < DRAG_START_THRESHOLD) return; // sigue siendo un tap
       session = deps.createSession(pending.source, pending.start);
       pending = null;
+      deps.onSessionStart?.();
     }
     if (session) deps.moveSession(session, last, overDrawer);
   };
@@ -650,6 +659,9 @@ export function createPointerGesture<S>(deps: PointerGestureDeps<S>): PointerGes
     },
     active() {
       return session !== null;
+    },
+    armed() {
+      return session !== null || pending !== null;
     },
     point() {
       return last;
