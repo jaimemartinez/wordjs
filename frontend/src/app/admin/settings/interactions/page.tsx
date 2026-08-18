@@ -46,11 +46,14 @@ import {
     serializeSiteIxPresets,
     IX_MAX_SITE_PRESETS,
     IX_PRESETS_SETTING,
+    SYS_IX_PRESETS,
     type IxCatalog,
     type IxPreset,
     type IxSpec,
 } from "@/lib/verso/interactions";
 import { normalizeVtStyle, type IxVtStyle } from "@/lib/verso/interactions/viewTransitions";
+import { normalizeIxMotion, type IxMotionPolicy } from "@/lib/verso/interactions";
+import { ixInventoryOf, type IxInventory, type IxInventoryEntry } from "@/lib/verso/interactions/inventory";
 import PresetEditor from "./PresetEditor";
 
 /** Estado del formulario. `null` = no hay ninguno abierto. */
@@ -62,6 +65,14 @@ const VT_OPTIONS: ReadonlyArray<{ value: IxVtStyle; label: string }> = [
     { value: "off", label: "Sin transición" },
     { value: "fade", label: "Fundido" },
     { value: "slide", label: "Deslizar" },
+];
+
+/** La política de movimiento del sitio (C5) y las etiquetas de sus tres valores. */
+const MOTION_SETTING = "wjs_motion";
+const MOTION_OPTIONS: ReadonlyArray<{ value: IxMotionPolicy; label: string; hint: string }> = [
+    { value: "full", label: "Completo", hint: "La página emite lo que cada autor puso." },
+    { value: "calm", label: "Tranquilo", hint: "Nada se mueve en bucle: cada animación se reproduce una vez y se queda quieta." },
+    { value: "off", label: "Apagado", hint: "Ni una regla de interacción ni un byte de motor: los bloques se ven en su estado natural." },
 ];
 
 export default function InteractionPresetsPage() {
@@ -80,11 +91,19 @@ export default function InteractionPresetsPage() {
     const [vt, setVt] = useState<IxVtStyle>("off");
     const [vtSaving, setVtSaving] = useState(false);
 
+    /** Política de movimiento del sitio (C5). Misma forma que la anterior: optimista con vuelta atrás. */
+    const [motion, setMotion] = useState<IxMotionPolicy>("full");
+    const [motionSaving, setMotionSaving] = useState(false);
+
+    /** Inventario «dónde se mueve mi sitio» (C5). `null` = aún no se sabe (cargando o falló). */
+    const [inventory, setInventory] = useState<IxInventory | null>(null);
+
     const load = useCallback(async () => {
         try {
             const data = await settingsApi.get();
             setCatalog(parseSiteIxPresets((data as Record<string, unknown> | null)?.[IX_PRESETS_SETTING]));
             setVt(normalizeVtStyle((data as Record<string, unknown> | null)?.[VT_SETTING]));
+            setMotion(normalizeIxMotion((data as Record<string, unknown> | null)?.[MOTION_SETTING]));
         } catch (e) {
             console.error("No se pudieron leer los preajustes de interacción:", e);
             addToast("No se pudieron leer los preajustes.", "error");
@@ -116,6 +135,27 @@ export default function InteractionPresetsPage() {
             await alert(`No se pudo guardar: ${message}`);
         } finally {
             setVtSaving(false);
+        }
+    };
+
+    /**
+     * Guarda la política de movimiento. Igual que la transición: solo su clave (el backend mergea) y
+     * optimista con vuelta atrás si el guardado falla.
+     */
+    const saveMotion = async (next: IxMotionPolicy): Promise<void> => {
+        if (next === motion || motionSaving) return;
+        const prev = motion;
+        setMotion(next);
+        setMotionSaving(true);
+        try {
+            await settingsApi.update({ [MOTION_SETTING]: next });
+            addToast("Política de movimiento guardada.", "success");
+        } catch (e) {
+            setMotion(prev);
+            const message = e instanceof Error ? e.message : String(e);
+            await alert(`No se pudo guardar: ${message}`);
+        } finally {
+            setMotionSaving(false);
         }
     };
 
@@ -228,6 +268,54 @@ export default function InteractionPresetsPage() {
         }
     }, []);
 
+    /**
+     * El inventario del movimiento. Recorre los mismos contenidos que el recuento de preajustes y
+     * los pasa por el COMPILADOR de verdad, así que lo que se lista es lo que las páginas emiten —
+     * incluida la política del sitio, que puede estar dejando quieto todo lo que aquí se cuenta.
+     */
+    const scanInventory = useCallback(async (): Promise<IxInventory | null> => {
+        try {
+            const [pages, posts] = await Promise.all([
+                postsApi.list("page", "any"),
+                postsApi.list("post", "any"),
+            ]);
+            const entries: IxInventoryEntry[] = [];
+            for (const post of [...pages, ...posts]) {
+                const raw = post.meta?._puck_data;
+                if (raw === undefined || raw === null) continue;
+                let data: unknown = raw;
+                if (typeof raw === "string") {
+                    try {
+                        data = JSON.parse(raw);
+                    } catch {
+                        continue;
+                    }
+                }
+                entries.push({
+                    id: post.id,
+                    title: typeof post.title === "string" ? post.title : `#${post.id}`,
+                    slug: typeof post.slug === "string" ? post.slug : "",
+                    type: typeof post.type === "string" ? post.type : "page",
+                    data,
+                });
+            }
+            return ixInventoryOf(entries, { presets: { ...SYS_IX_PRESETS, ...catalog }, motion });
+        } catch {
+            return null;
+        }
+    }, [catalog, motion]);
+
+    // El inventario se recalcula cuando cambia la política: es la pregunta «y ahora qué se mueve».
+    useEffect(() => {
+        let alive = true;
+        void scanInventory().then((inv) => {
+            if (alive) setInventory(inv);
+        });
+        return () => {
+            alive = false;
+        };
+    }, [scanInventory]);
+
     // El recuento de las tarjetas, una vez al montar. Si el escaneo no puede saber (falló, o nada
     // trajo contenido), `usage` se queda en `null` y las tarjetas enseñan «—», nunca un 0 inventado.
     useEffect(() => {
@@ -299,6 +387,117 @@ export default function InteractionPresetsPage() {
                         Los preajustes que trae WordJS (los del sistema) no se editan ni se borran, y su
                         nombre está reservado: aquí solo viven los tuyos.
                     </p>
+                </Card>
+
+                {/* ── Movimiento del sitio (C5) — la política que manda sobre TODAS las páginas ── */}
+                <Card className="mb-8">
+                    <h2 className="text-sm font-bold text-gray-900">Movimiento del sitio</h2>
+                    <p className="mt-2 text-sm leading-relaxed text-gray-600">
+                        Una decisión de sitio, por encima de lo que ponga cada bloque. Sirve para
+                        campañas, para accesibilidad y para apagarlo todo el día que haga falta —
+                        <strong> sin tocar ni una página</strong>.
+                    </p>
+                    <div className="mt-4 flex flex-wrap items-center gap-2" role="group" aria-label="Movimiento del sitio">
+                        {MOTION_OPTIONS.map((opt) => {
+                            const active = motion === opt.value;
+                            return (
+                                <button
+                                    key={opt.value}
+                                    type="button"
+                                    aria-pressed={active}
+                                    disabled={motionSaving}
+                                    onClick={() => void saveMotion(opt.value)}
+                                    className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors disabled:opacity-50 ${
+                                        active
+                                            ? "bg-gray-900 text-white"
+                                            : "border border-gray-200 text-gray-600 hover:border-gray-400 hover:text-gray-900"
+                                    }`}
+                                >
+                                    {opt.label}
+                                </button>
+                            );
+                        })}
+                        {motionSaving && <span className="text-xs text-gray-500">Guardando…</span>}
+                    </div>
+                    <p className="mt-3 text-sm leading-relaxed text-gray-500">
+                        {MOTION_OPTIONS.find((o) => o.value === motion)?.hint}
+                    </p>
+                </Card>
+
+                {/* ── Dónde se mueve mi sitio (C5) — el inventario, con el compilador de verdad ── */}
+                <Card className="mb-8">
+                    <h2 className="text-sm font-bold text-gray-900">Dónde se mueve mi sitio</h2>
+                    <p className="mt-2 text-sm leading-relaxed text-gray-600">
+                        Lo que las páginas <strong>emiten de verdad</strong>, no lo que alguien quiso
+                        poner: se compila cada página con el mismo motor que sirve el sitio. Primero
+                        lo que se mueve en bucle y lo que obliga a descargar JavaScript, que es lo
+                        que conviene revisar.
+                    </p>
+                    {inventory === null ? (
+                        <p className="mt-4 text-sm text-gray-500">Calculando…</p>
+                    ) : inventory.rows.length === 0 ? (
+                        <p className="mt-4 text-sm text-gray-500">
+                            {motion === "off"
+                                ? "El movimiento del sitio está apagado: ninguna página emite interacciones."
+                                : `Ninguna de las ${inventory.totals.pages} entradas tiene movimiento.`}
+                        </p>
+                    ) : (
+                        <>
+                            <p className="mt-4 text-xs text-gray-500">
+                                {inventory.totals.moving} de {inventory.totals.pages} con movimiento ·{" "}
+                                {inventory.totals.blocks} bloques · {inventory.totals.infinite} en bucle ·{" "}
+                                {inventory.totals.runtime} necesitan el motor ·{" "}
+                                {(inventory.totals.cssBytes / 1024).toFixed(1)} KB de CSS
+                            </p>
+                            <div className="mt-3 overflow-x-auto">
+                                <table className="w-full text-left text-xs">
+                                    <thead className="text-gray-500">
+                                        <tr>
+                                            <th scope="col" className="py-1 pr-3 font-semibold">Página</th>
+                                            <th scope="col" className="py-1 pr-3 font-semibold">Bloques</th>
+                                            <th scope="col" className="py-1 pr-3 font-semibold">En bucle</th>
+                                            <th scope="col" className="py-1 pr-3 font-semibold">Con motor</th>
+                                            <th scope="col" className="py-1 pr-3 font-semibold">Preajustes</th>
+                                            <th scope="col" className="py-1 font-semibold">CSS</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="text-gray-700">
+                                        {inventory.rows.map((row) => (
+                                            <tr key={`${row.type}-${row.id}`} className="border-t border-gray-100">
+                                                <td className="py-1.5 pr-3">
+                                                    <a
+                                                        href={`/admin/editor/${row.id}`}
+                                                        className="font-medium text-gray-900 hover:underline"
+                                                    >
+                                                        {row.title}
+                                                    </a>
+                                                    <span className="ml-1 text-gray-400">/{row.slug}</span>
+                                                </td>
+                                                <td className="py-1.5 pr-3">
+                                                    {row.blocks}
+                                                    {row.units !== row.blocks && (
+                                                        <span className="text-gray-400"> ({row.units} distintas)</span>
+                                                    )}
+                                                </td>
+                                                <td className={`py-1.5 pr-3 ${row.infinite > 0 ? "font-semibold text-gray-900" : "text-gray-400"}`}>
+                                                    {row.infinite || "—"}
+                                                </td>
+                                                <td className={`py-1.5 pr-3 ${row.runtime > 0 ? "text-gray-900" : "text-gray-400"}`}>
+                                                    {row.runtime || "—"}
+                                                </td>
+                                                <td className="py-1.5 pr-3 text-gray-500">
+                                                    {row.presets.length > 0 ? row.presets.join(", ") : "—"}
+                                                </td>
+                                                <td className="py-1.5 text-gray-500">
+                                                    {(row.cssBytes / 1024).toFixed(1)} KB
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </>
+                    )}
                 </Card>
 
                 {/* ── Transiciones entre páginas (C1) — ajuste del SITIO, no de un bloque ── */}

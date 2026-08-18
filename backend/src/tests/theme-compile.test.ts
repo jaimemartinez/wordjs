@@ -651,7 +651,10 @@ describe('compileTheme (declarative theme compiler)', () => {
             // `wjs-block-section wp-block-section`, own identity first (frontend components/blocks/
             // blockVars.ts). What this pins is unchanged: the template's className is APPENDED to the
             // block's own classes rather than replacing them.
-            assert.match(blocks, /cx\(bc\('section'\), extraClass\(className\)\)/,
+            // The modifier slot in between is deliberate room: a Section can carry its own state
+            // classes (the pinned scene of C5, and whatever comes next). What is pinned is the
+            // INVARIANT — own classes first, template class appended last — not the exact spelling.
+            assert.match(blocks, /cx\(bc\('section'\),[\s\S]{0,120}?extraClass\(className\)\)/,
                 'the container no longer appends the template class the variation is written against');
         });
 

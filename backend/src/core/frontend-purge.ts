@@ -312,6 +312,7 @@ const SETTINGS_OPTIONS = new Set([
     // necesita la regla en los DOS documentos: sin esta purga, encenderla dejaría medio sitio con
     // la regla y medio sin ella — es decir, sin transición y sin explicación.
     'wjs_view_transitions',
+    'wjs_motion',
 ]);
 
 /** Wire the content hooks. Call ONCE from initialize() after the hook system is up. */

@@ -66,7 +66,51 @@ import type {
 export type IxCompileCtx = {
   /** Presets del SITIO (ya normalizados con `normalizeIxPreset`) + los del sistema. */
   presets?: Readonly<Record<string, IxPreset>>;
+  /**
+   * POLÍTICA DE MOVIMIENTO DEL SITIO (C5). La decide quien administra, no cada bloque:
+   *
+   *   `full` — lo de siempre (y el defecto): la página emite exactamente lo que el autor puso.
+   *   `calm` — el movimiento PERPETUO deja de serlo: cada bucle se reproduce una vez y se queda en
+   *            su fotograma final, que por contrato del motor es el estado neutro del bloque. No se
+   *            pausa en el fotograma 0 a propósito: un bucle que empieza invisible se quedaría
+   *            invisible, y "tranquilo" no puede significar "roto".
+   *   `off`  — la página no emite NI UNA regla de interacción ni un byte de runtime. Los bloques se
+   *            ven en su estado natural, que es la misma degradación que ya tiene el visitante con
+   *            `prefers-reduced-motion` o sin JavaScript.
+   */
+  motion?: IxMotionPolicy;
 };
+
+export type IxMotionPolicy = "full" | "calm" | "off";
+export const IX_MOTION_POLICIES: readonly IxMotionPolicy[] = Object.freeze([
+  "full",
+  "calm",
+  "off",
+]);
+
+/** Lo que llegue de la configuración es dato hostil: fuera de la lista cerrada, `full`. */
+export function normalizeIxMotion(raw: unknown): IxMotionPolicy {
+  return raw === "calm" || raw === "off" ? raw : "full";
+}
+
+/**
+ * El cuerpo tal y como lo emite la política del sitio. Con `calm`, ninguna pista repite para
+ * siempre — y como el cuerpo es LO QUE SE HASHEA, la clase y el CSS resultantes son los de una
+ * interacción finita de verdad, no los de una infinita disfrazada.
+ */
+function applyMotionPolicy(body: IxBody, motion: IxMotionPolicy): IxBody {
+  if (motion !== "calm") return body;
+  if (!body.tracks.some((t) => t.repeat === "inf")) return body;
+  return {
+    ...body,
+    tracks: body.tracks.map((t) => {
+      if (t.repeat !== "inf") return t;
+      const next = { ...t };
+      delete next.repeat; // ausencia = 1, que es como se escribe "una vez" en este modelo
+      return next;
+    }),
+  };
+}
 
 /**
  * Disparador por defecto cuando la interacción no declara uno. Es la entrada de hoy: aparecer al
@@ -130,14 +174,14 @@ export function resolveIxBody(raw: unknown, ctx?: IxCompileCtx): IxResolved | nu
     // hash: son unidades distintas).
     if (spec.off) body.off = spec.off;
     if (spec.amt !== undefined) body.amt = spec.amt;
-    return { body, warnings };
+    return { body: applyMotionPolicy(body, normalizeIxMotion(ctx?.motion)), warnings };
   }
 
   if (!spec.tracks || spec.tracks.length === 0) return null;
   const body: IxBody = { trigger: spec.trigger ?? IX_DEFAULT_TRIGGER, tracks: spec.tracks };
   if (spec.off) body.off = spec.off;
   if (spec.amt !== undefined) body.amt = spec.amt;
-  return { body, warnings };
+  return { body: applyMotionPolicy(body, normalizeIxMotion(ctx?.motion)), warnings };
 }
 
 /* ------------------------------------------------------------------ */
@@ -1118,6 +1162,12 @@ const COLLIDE_SEP = "__";
 export function compileIxPage(rawSpecs: readonly unknown[], ctx?: IxCompileCtx): IxPage {
   const warnings: string[] = [];
   const byKey = new Map<string, { body: IxBody; warnings: string[] }>();
+
+  // El sitio con el movimiento APAGADO no compila nada: ni una regla, ni el manifiesto del runtime,
+  // ni la etiqueta <style>. Filtrar más abajo dejaría la página pagando bytes por no moverse.
+  if (normalizeIxMotion(ctx?.motion) === "off") {
+    return { css: "", units: [], runtime: [], classByBody: new Map(), warnings: [], hasInfinite: false };
+  }
 
   for (const raw of rawSpecs) {
     const resolved = resolveIxBody(raw, ctx);

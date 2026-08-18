@@ -602,6 +602,41 @@ describe("puntero (P6): sin CSS, con IR completo, y honestidad sobre lo que no a
   });
 });
 
+describe("política de movimiento del SITIO (C5) — la decisión está por encima del bloque", () => {
+  const looping = mk({ on: "load" }, { repeat: "inf" });
+  const plain = mk({ on: "view", once: false });
+
+  it("`full` es lo de siempre, byte a byte (el defecto no puede costar nada)", () => {
+    const base = compileIxPage([looping, plain]);
+    expect(compileIxPage([looping, plain], { motion: "full" }).css).toBe(base.css);
+    // Y un valor inventado del ajuste cae en el defecto, no en un modo intermedio inventado.
+    expect(compileIxPage([looping, plain], { motion: "apagadísimo" as never }).css).toBe(base.css);
+  });
+
+  it("`off` no emite NADA: ni CSS, ni manifiesto de runtime, ni control de pausa", () => {
+    const page = compileIxPage([looping, plain], { motion: "off" });
+    expect(page.css).toBe("");
+    expect(page.units).toHaveLength(0);
+    expect(page.runtime).toHaveLength(0);
+    expect(page.hasInfinite).toBe(false);
+  });
+
+  it("`calm` deja el bucle en UNA vuelta — y la deja en su fotograma final, no en el primero", () => {
+    const page = compileIxPage([looping], { motion: "calm" });
+    expect(page.css).not.toContain("infinite");
+    // `both` es lo que hace que se quede en el fotograma final: el estado neutro del bloque.
+    expect(page.css).toContain("both");
+    expect(page.hasInfinite).toBe(false);
+    // Y sin bucles no se paga el token de pausa: ya no hay nada perpetuo que pausar.
+    expect(page.css).not.toContain("--wjs-ix-play");
+  });
+
+  it("`calm` no toca lo que ya era finito", () => {
+    const finite = compileIxPage([plain]);
+    expect(compileIxPage([plain], { motion: "calm" }).css).toBe(finite.css);
+  });
+});
+
 describe("la ESCENA FIJA como fuente del scroll (C5)", () => {
   it("engancha la animación a la timeline CON NOMBRE que declara la sección", () => {
     const u = compileIx(mk({ on: "scrub", src: "scene" }))!;

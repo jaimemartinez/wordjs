@@ -55,6 +55,7 @@ const PUBLIC_SETTINGS = [
                             // es visible en la hoja emitida. Un bloque guarda solo el ID del
                             // preajuste, así que editarlos NO toca un byte de `_puck_data`.
     'wjs_view_transitions',  // transiciones entre páginas (C1): 'off' | 'fade' | 'slide'. PÚBLICO
+    'wjs_motion',            // política de movimiento del sitio (C5): 'full' | 'calm' | 'off'. PÚBLICO
                              // porque el layout público emite su CSS en el servidor, y la variante
                              // entre documentos exige la regla en AMBOS documentos. No es secreto:
                              // describe movimiento y su efecto ya se ve en la hoja emitida.
@@ -205,6 +206,9 @@ const derivedSetting = (key: string): (() => Promise<any>) | null => {
 const TEXT_DIRECTIONS = ['', 'ltr', 'rtl', 'auto'];
 // Transiciones entre páginas: el espejo EXACTO de IX_VT_STYLES en el frontend, más '' (= apagado).
 // Si un día crece la lista, crece en los dos sitios — el frontend manda, este gate solo cierra.
+/** Política de movimiento del sitio (C5). '' = sin ajuste = 'full'. */
+const MOTION_POLICIES = ['', 'full', 'calm', 'off'];
+
 const VIEW_TRANSITION_STYLES = ['', 'off', 'fade', 'slide'];
 // language [ - script ] [ - region ]. Underscore form ('es_ES') is what the WPLANG option has
 // always used (core/i18n keys the translation files by it), so it is accepted and normalized to a
@@ -257,6 +261,15 @@ const SETTING_VALIDATORS: Record<string, (v: any) => string | null> = {
             if (!Array.isArray(entry.tracks)) {
                 return 'Each wjs_ix_presets entry needs a `tracks` array.';
             }
+        }
+        return null;
+    },
+    // Política de movimiento del sitio (C5). Mismo trato que las transiciones: vocabulario cerrado
+    // y '' con el sentido del defecto ('full'), porque borrar un ajuste manda cadena vacía.
+    wjs_motion: (v: any) => {
+        const s = v === null || v === undefined ? '' : v;
+        if (typeof s !== 'string' || !MOTION_POLICIES.includes(s)) {
+            return 'wjs_motion must be one of "full", "calm", "off".';
         }
         return null;
     },

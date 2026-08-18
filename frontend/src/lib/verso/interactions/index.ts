@@ -99,12 +99,14 @@ export {
   toRuntimeUnit,
   IX_CLASS_PREFIX,
   IX_DEFAULT_RANGES,
+  IX_MOTION_POLICIES,
+  normalizeIxMotion,
   IX_DEFAULT_TRIGGER,
   IX_KEYFRAME_PREFIX,
   IX_WORD_COUNT_VAR,
   IX_WORD_INDEX_VAR,
 } from "./compile";
-export type { IxCompileCtx, IxResolved } from "./compile";
+export type { IxCompileCtx, IxMotionPolicy, IxResolved } from "./compile";
 
 export { ixLayer, IX_STATE_ATTR, IX_SYS_CTX, IX_TRIGGER_ATTR } from "./shell";
 export type { IxLayer } from "./shell";

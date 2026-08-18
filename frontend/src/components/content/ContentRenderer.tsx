@@ -34,6 +34,7 @@ import React from "react";
 import {
     collectIxSpecs,
     compileIxPage,
+    normalizeIxMotion,
     fnv1a32,
     ixCtxFromSite,
     parseSiteIxPresets,
@@ -74,13 +75,22 @@ interface IxEnv {
     site?: Record<string, IxPreset>;
 }
 
-export default function ContentRenderer({ data, ixPresets }: { data: any; ixPresets?: unknown }) {
+export default function ContentRenderer({
+    data,
+    ixPresets,
+    motion,
+}: {
+    data: any;
+    ixPresets?: unknown;
+    /** Política de movimiento del SITIO (C5), tal cual viene del ajuste: se normaliza aquí. */
+    motion?: unknown;
+}) {
     const content = Array.isArray(data?.content) ? data.content : [];
 
     // Los presets del sitio son dato hostil (los escribe un admin, pero también pueden llegar por
     // importación o restauración): `parseSiteIxPresets` los pasa entero por el normalizador.
     const site = parseSiteIxPresets(ixPresets);
-    const ctx = ixCtxFromSite(site);
+    const ctx: IxCompileCtx = { ...ixCtxFromSite(site), motion: normalizeIxMotion(motion) };
     const page = compileIxPage(collectIxSpecs(data), ctx);
     const hasSite = Object.keys(site).length > 0;
     const env: IxEnv = { ctx, page, ...(hasSite ? { site } : {}) };

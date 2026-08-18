@@ -62,7 +62,7 @@ export default function PostContent({ post, settings, category, showComments }: 
             {!isFramedPost ? (
                 versoData ? (
                     <div className="wjs-post-body puck-content">
-                        <ContentRenderer data={versoData} ixPresets={settings?.wjs_ix_presets} />
+                        <ContentRenderer data={versoData} ixPresets={settings?.wjs_ix_presets} motion={settings?.wjs_motion} />
                     </div>
                 ) : (
                     // Page fallback (no card). `wjs-post-body` rides here too: the FRAME is post-only,
@@ -127,7 +127,7 @@ export default function PostContent({ post, settings, category, showComments }: 
                         keeps `.puck-content`, which is what ui.css already treats as its twin. */}
                     {versoData ? (
                         <div className="wjs-post-body puck-content">
-                            <ContentRenderer data={versoData} ixPresets={settings?.wjs_ix_presets} />
+                            <ContentRenderer data={versoData} ixPresets={settings?.wjs_ix_presets} motion={settings?.wjs_motion} />
                         </div>
                     ) : (
                         <>
