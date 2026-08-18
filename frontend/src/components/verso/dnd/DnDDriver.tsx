@@ -32,16 +32,16 @@ import { useVersoCanvas } from "../canvas/FrameController";
 import { nodeKeyFromTarget } from "../render/nodeKey";
 import type { GeometryStore } from "../overlay/GeometryStore";
 import {
-  DRAG_START_THRESHOLD,
   autoscrollVelocity,
   blockRectToDndRect,
   buildDragLayout,
   createKeyboardMover,
+  createPointerGesture,
   slotAttrValue,
   toFramePoint,
   type SlotInfo,
 } from "./driverCore";
-import { createDragSession, type DragSession, type DragSource } from "./session";
+import { createDragSession, type DragSession } from "./session";
 
 export interface DnDDriverProps {
   handle: EditorHandle;
@@ -124,15 +124,21 @@ export default function DnDDriver({ handle, registry, geometry, frameDocument }:
     const parentDoc = document;
     const frameWin = frameDocument.defaultView;
 
-    interface Pending {
-      source: DragSource;
-      start: DndPoint;
-    }
-    let pending: Pending | null = null;
-    let session: DragSession | null = null;
-    let lastPoint: DndPoint | null = null;
-    let overDrawer = false;
-    let moveRaf: number | null = null;
+    // EL GESTO vive en driverCore (`createPointerGesture`), puro y probado en node: pulsar, mover,
+    // soltar y la decisión de si hubo arrastre. Aquí queda SOLO el cableado DOM — traducir eventos
+    // a puntos del iframe y decidir qué es un origen arrastrable. Estaba todo junto, y por eso el
+    // fallo que se midió en el navegador (soltar antes de que pasara un fotograma perdía el
+    // arrastre) no lo veía ningún test.
+    const gesture = createPointerGesture<DragSession>({
+      createSession: (source, startPoint) =>
+        createDragSession({ handle, registry, getLayout }, source, startPoint),
+      moveSession: (s, point, over) => s.move(point, { pointerOverDrawer: over }),
+      dropSession: (s) => s.drop(),
+      cancelSession: (s) => s.cancel(),
+      scheduleFrame,
+      cancelFrame,
+    });
+
     let scrollRaf: number | null = null;
 
     // Aritmética pura en driverCore.toFramePoint (testeada con escala 0.75):
@@ -151,59 +157,31 @@ export default function DnDDriver({ handle, registry, geometry, frameDocument }:
       });
     };
 
-    const stopRafs = () => {
-      if (moveRaf !== null) {
-        cancelFrame(moveRaf);
-        moveRaf = null;
-      }
+    const stopScroll = () => {
       if (scrollRaf !== null) {
         cancelFrame(scrollRaf);
         scrollRaf = null;
       }
     };
 
-    const teardown = () => {
-      pending = null;
-      session = null;
-      lastPoint = null;
-      overDrawer = false;
-      stopRafs();
-    };
-
     const stepScroll = () => {
       scrollRaf = null;
-      if (!session || !lastPoint || !frameWin) return;
-      const v = autoscrollVelocity(lastPoint, { width: frameWin.innerWidth, height: frameWin.innerHeight });
+      const point = gesture.point();
+      if (!gesture.active() || !point || !frameWin) return;
+      const v = autoscrollVelocity(point, { width: frameWin.innerWidth, height: frameWin.innerHeight });
       if (v.x === 0 && v.y === 0) return;
       frameWin.scrollBy(v.x, v.y);
       scrollRaf = scheduleFrame(stepScroll);
     };
 
-    const flushMove = () => {
-      moveRaf = null;
-      if (!lastPoint) return;
-      if (!session && pending) {
-        const d = Math.hypot(lastPoint.x - pending.start.x, lastPoint.y - pending.start.y);
-        if (d >= DRAG_START_THRESHOLD) {
-          session = createDragSession({ handle, registry, getLayout }, pending.source, pending.start);
-          pending = null;
-        }
-      }
-      if (session) {
-        session.move(lastPoint, { pointerOverDrawer: overDrawer });
-        if (scrollRaf === null) scrollRaf = scheduleFrame(stepScroll);
-      }
-    };
-
     const makeMoveHandler = (fromParent: boolean) => (e: Event) => {
-      if (!pending && !session) return;
       const pe = e as PointerEvent;
       const p = eventToFramePoint(pe, fromParent);
       if (!p) return;
-      lastPoint = p;
-      overDrawer =
+      const overDrawer =
         fromParent && !!(pe.target as Element | null)?.closest?.("[data-wjs-palette]");
-      if (moveRaf === null) moveRaf = scheduleFrame(flushMove);
+      gesture.move(p, overDrawer);
+      if (gesture.active() && scrollRaf === null) scrollRaf = scheduleFrame(stepScroll);
     };
 
     const onFrameDown = (e: Event) => {
@@ -217,10 +195,10 @@ export default function DnDDriver({ handle, registry, geometry, frameDocument }:
       const id = nodeKeyFromTarget(pe.target);
       if (!id) return;
       const rect = geometry.getRect(id);
-      pending = {
-        source: { kind: "existing", nodeId: id, originRect: rect ? blockRectToDndRect(rect) : null },
-        start: { x: pe.clientX, y: pe.clientY },
-      };
+      gesture.down(
+        { kind: "existing", nodeId: id, originRect: rect ? blockRectToDndRect(rect) : null },
+        { x: pe.clientX, y: pe.clientY },
+      );
     };
 
     const onParentDown = (e: Event) => {
@@ -231,19 +209,20 @@ export default function DnDDriver({ handle, registry, geometry, frameDocument }:
       if (!type) return;
       const p = eventToFramePoint(pe, true);
       if (!p) return;
-      pending = { source: { kind: "new", type }, start: p };
+      gesture.down({ kind: "new", type }, p);
     };
 
     const onUp = () => {
-      if (session) session.drop();
-      teardown();
+      gesture.up();
+      stopScroll();
     };
 
     const onKeyDown = (e: Event) => {
       const ke = e as KeyboardEvent;
-      if (ke.key !== "Escape" || (!session && !pending)) return;
-      session?.cancel();
-      teardown();
+      if (ke.key !== "Escape") return;
+      if (!gesture.active() && !gesture.point()) return;
+      gesture.cancel();
+      stopScroll();
       ke.stopPropagation();
     };
 
@@ -268,8 +247,8 @@ export default function DnDDriver({ handle, registry, geometry, frameDocument }:
       parentDoc.removeEventListener("pointerup", onUp, true);
       frameDocument.removeEventListener("keydown", onKeyDown, true);
       parentDoc.removeEventListener("keydown", onKeyDown, true);
-      session?.cancel();
-      teardown();
+      gesture.cancel();
+      stopScroll();
     };
   }, [frameDocument, canvas, handle, registry, geometry, getLayout]);
 

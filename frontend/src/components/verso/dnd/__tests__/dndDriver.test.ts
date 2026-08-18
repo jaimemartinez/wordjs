@@ -28,6 +28,7 @@ import {
   autoscrollVelocity,
   buildDragLayout,
   createDirectionTracker,
+  createPointerGesture,
   createKeyboardMover,
   createOriginTracker,
   frameScaleOf,
@@ -647,5 +648,134 @@ describe("buildDragLayout — doc + geometría medida → árbol de zonas del re
       getSlotInfo: () => null,
     });
     expect(layout).toBeNull();
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* 6. El GESTO: pulsar, mover, soltar                                  */
+/* ------------------------------------------------------------------ */
+
+describe("gesto de puntero: lo decide la distancia, nunca el azar de los fotogramas", () => {
+  /** Sesión de mentira que anota lo que le hacen, y un planificador de fotogramas MANUAL. */
+  const harness = () => {
+    const log: string[] = [];
+    const frames: Array<() => void> = [];
+    let nextId = 1;
+    const gesture = createPointerGesture<{ id: number }>({
+      createSession: (source, start) => {
+        log.push(`crear:${source.kind === "new" ? source.type : source.nodeId}@${start.x},${start.y}`);
+        return { id: nextId++ };
+      },
+      moveSession: (_s, p, over) => log.push(`mover:${p.x},${p.y}${over ? ":paleta" : ""}`),
+      dropSession: () => log.push("soltar"),
+      cancelSession: () => log.push("cancelar"),
+      scheduleFrame: (cb) => {
+        frames.push(cb);
+        return frames.length;
+      },
+      cancelFrame: (id) => {
+        frames[id - 1] = () => {};
+      },
+    });
+    /** Corre los fotogramas pendientes, como haría el navegador. */
+    const tick = () => {
+      const pending = frames.splice(0).filter(Boolean);
+      for (const cb of pending) cb();
+    };
+    return { gesture, log, tick, frames };
+  };
+
+  const nuevo = { kind: "new" as const, type: "Section" };
+
+  it("un gesto RÁPIDO (soltar antes de que pase un fotograma) suelta igual", () => {
+    // Este es el defecto medido en el navegador: `pointerdown` → `pointermove` → `pointerup`
+    // dentro del mismo fotograma. La sesión se creaba en el rAF, así que al soltar todavía no
+    // existía y el arrastre se descartaba EN SILENCIO — el bloque no se insertaba y no había error.
+    const h = harness();
+    h.gesture.down(nuevo, { x: 100, y: 100 });
+    h.gesture.move({ x: 400, y: 300 });
+    h.gesture.up(); // ← sin un solo `tick()`
+    expect(h.log).toEqual(["crear:Section@100,100", "mover:400,300", "soltar"]);
+  });
+
+  it("y suelta en el ÚLTIMO punto, no donde estaba el puntero un fotograma antes", () => {
+    // El drop lee el preview que solo escribe un `move` ya aplicado: sin vaciar la cola al soltar,
+    // el bloque caía en la posición del fotograma anterior. Un error de unos pocos píxeles casi
+    // siempre… y de un hueco entero justo cuando el puntero acaba de cruzar a otra zona.
+    const h = harness();
+    h.gesture.down(nuevo, { x: 0, y: 0 });
+    h.gesture.move({ x: 50, y: 50 });
+    h.tick();
+    h.gesture.move({ x: 900, y: 700 }); // el ajuste final, aún sin fotograma
+    h.gesture.up();
+    expect(h.log[h.log.length - 2]).toBe("mover:900,700");
+    expect(h.log[h.log.length - 1]).toBe("soltar");
+  });
+
+  it("un TAP no arrastra: por debajo del umbral no se crea sesión ni se suelta nada", () => {
+    // Es lo que protege el tap-para-insertar de la paleta: si esto se rompe, cada clic en una
+    // tarjeta se convertiría en un arrastre a ninguna parte.
+    const h = harness();
+    h.gesture.down(nuevo, { x: 10, y: 10 });
+    h.gesture.move({ x: 13, y: 12 }); // 3,6 px < 5
+    h.gesture.up();
+    expect(h.log).toEqual([]);
+  });
+
+  it("los movimientos se AGRUPAN por fotograma: cien ticks, una sola resolución", () => {
+    // El agrupado es la razón de ser del rAF y no se pierde con el arreglo.
+    const h = harness();
+    h.gesture.down(nuevo, { x: 0, y: 0 });
+    for (let i = 1; i <= 100; i++) h.gesture.move({ x: i * 10, y: i });
+    expect(h.log).toEqual([]); // aún nada: todo está en la cola del fotograma
+    h.tick();
+    expect(h.log).toEqual(["crear:Section@0,0", "mover:1000,100"]);
+  });
+
+  it("Escape cancela y deja el gesto muerto: soltar después no suelta nada", () => {
+    const h = harness();
+    h.gesture.down(nuevo, { x: 0, y: 0 });
+    h.gesture.move({ x: 200, y: 200 });
+    h.tick();
+    h.gesture.cancel();
+    h.gesture.up();
+    expect(h.log).toEqual(["crear:Section@0,0", "mover:200,200", "cancelar"]);
+  });
+
+  it("un `down` nuevo descarta el gesto anterior (no se acumulan sesiones)", () => {
+    const h = harness();
+    h.gesture.down(nuevo, { x: 0, y: 0 });
+    h.gesture.move({ x: 300, y: 0 });
+    h.tick();
+    h.gesture.down({ kind: "existing", nodeId: "b1", originRect: null }, { x: 500, y: 500 });
+    h.gesture.move({ x: 800, y: 500 });
+    h.gesture.up();
+    expect(h.log).toEqual([
+      "crear:Section@0,0",
+      "mover:300,0",
+      "crear:b1@500,500",
+      "mover:800,500",
+      "soltar",
+    ]);
+  });
+
+  it("el puntero sobre la paleta viaja hasta la sesión (es lo que suprime el drop ahí)", () => {
+    const h = harness();
+    h.gesture.down(nuevo, { x: 0, y: 0 });
+    h.gesture.move({ x: 100, y: 0 }, true);
+    h.gesture.up();
+    expect(h.log).toContain("mover:100,0:paleta");
+  });
+
+  it("`active()` solo es cierto con un arrastre vivo — el autoscroll depende de eso", () => {
+    const h = harness();
+    expect(h.gesture.active()).toBe(false);
+    h.gesture.down(nuevo, { x: 0, y: 0 });
+    expect(h.gesture.active()).toBe(false); // pulsar no es arrastrar
+    h.gesture.move({ x: 300, y: 0 });
+    h.tick();
+    expect(h.gesture.active()).toBe(true);
+    h.gesture.up();
+    expect(h.gesture.active()).toBe(false);
   });
 });

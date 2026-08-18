@@ -95,17 +95,48 @@ function GhostPlaceholder({ type }: { type: string }) {
   );
 }
 
+/**
+ * SUPERFICIE DE SUELTA DE UN SLOT VACÍO — sin ella, un contenedor vacío no se puede llenar.
+ *
+ * El DnD mide el elemento del slot: un slot sin hijos es un `div` sin contenido, y su caja mide
+ * CERO de alto. El resolutor contrae además cada candidato 6px por lado antes del hit-test, así que
+ * un rectángulo de altura cero no puede contener al puntero — jamás. Y el relleno del contenedor
+ * tampoco vale: sobre el "chrome" de un componente que tiene una zona activa, el resolutor devuelve
+ * a propósito "sin destino" (regla F-9, réplica fiel del fork, con su caso en el fixture).
+ *
+ * Entre las dos cosas, una sección recién creada era un agujero negro: se arrastraba un bloque
+ * encima y no pasaba nada, sin error ni pista. Medido en el editor real: el slot de una sección
+ * vacía ocupaba `113,528 → 1157,528`.
+ *
+ * Esto es chrome de AUTORÍA, igual que el fantasma del arrastre: vive solo en el lienzo del editor
+ * (el renderizador público tiene su propio camino), es `aria-hidden` y desaparece en cuanto el slot
+ * tiene un hijo — así que el HTML del sitio no cambia ni un byte.
+ */
+function EmptySlotDropArea() {
+  return (
+    <div
+      data-verso-empty-slot=""
+      aria-hidden="true"
+      className="min-h-12 rounded border border-dashed border-[var(--ed-outline-variant)] bg-[var(--ed-surface-container-lowest)]/40"
+    />
+  );
+}
+
 const VersoSlot = React.memo(function VersoSlot({ parentId, slotKey, childIds, className }: VersoSlotProps) {
   const preview = useConcernedPreview(parentId, slotKey, childIds);
   const entries = slotEntries(childIds, parentId, slotKey, preview);
   return (
     <div className={className} data-wjs-slot={`${parentId}:${slotKey}`}>
-      {entries.map((entry) =>
-        entry.kind === "node" ? (
-          <VersoBlock key={entry.id} nodeId={entry.id} />
-        ) : (
-          <GhostPlaceholder key="verso:ghost" type={entry.type} />
-        ),
+      {entries.length === 0 ? (
+        <EmptySlotDropArea />
+      ) : (
+        entries.map((entry) =>
+          entry.kind === "node" ? (
+            <VersoBlock key={entry.id} nodeId={entry.id} />
+          ) : (
+            <GhostPlaceholder key="verso:ghost" type={entry.type} />
+          ),
+        )
       )}
     </div>
   );

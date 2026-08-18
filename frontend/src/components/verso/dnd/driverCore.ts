@@ -27,6 +27,10 @@ import type {
 } from "@/lib/verso/dnd/types";
 import { ROOT_DROPPABLE_ID } from "@/lib/verso/dnd/resolve";
 import type { BlockRect } from "../overlay/GeometryStore";
+// Tipo SOLO: `session.ts` importa este módulo, así que un import de valor sería un ciclo. Un
+// `import type` se borra al compilar, de modo que en tiempo de ejecución la dependencia sigue
+// siendo en un solo sentido.
+import type { DragSource } from "./session";
 
 /** Umbral de activación del drag: 5px desde el pointerdown (spec §5, caso "other"). */
 export const DRAG_START_THRESHOLD = 5;
@@ -539,6 +543,116 @@ export function createKeyboardMover(deps: KeyboardMoverDeps): KeyboardMover {
         return true;
       }
       return false;
+    },
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* Máquina del GESTO de puntero                                        */
+/* ------------------------------------------------------------------ */
+
+/**
+ * EL GESTO, sin DOM: pulsar, mover, soltar — y la única pregunta que decide si hubo arrastre.
+ *
+ * Vivía dentro del `useEffect` del driver, mezclado con el cableado de eventos, y por eso ningún
+ * test lo veía. El defecto que eso escondía se midió en el navegador: los ticks de movimiento se
+ * agrupan por fotograma (rAF), así que un gesto rápido —pulsar, mover y soltar dentro del MISMO
+ * fotograma— llegaba al `up` con la sesión todavía sin crear y el arrastre se descartaba EN
+ * SILENCIO. Es decir: que un arrastre contara dependía de si por casualidad había pasado un
+ * fotograma, no de lo que hizo la persona. Y aun con la sesión creada, soltar justo después del
+ * último ajuste dejaba caer el bloque donde estaba el puntero un fotograma ANTES, porque el drop
+ * lee el preview que solo escribe un `move` ya aplicado.
+ *
+ * Aquí el `up` VACÍA la cola con el último punto real antes de soltar, así que la decisión es
+ * siempre la distancia recorrida. El agrupado por fotograma se conserva para lo que existe: no
+ * recalcular la geometría en cada uno de los cientos de `pointermove` de un arrastre.
+ *
+ * `S` es la sesión (opaca aquí): el driver inyecta cómo crearla, moverla, soltarla y cancelarla,
+ * y el planificador de fotogramas. Ambos son las costuras que hacen esto probable en node.
+ */
+export interface PointerGestureDeps<S> {
+  createSession(source: DragSource, start: DndPoint): S;
+  moveSession(session: S, point: DndPoint, overDrawer: boolean): void;
+  dropSession(session: S): void;
+  cancelSession(session: S): void;
+  /** Agrupa el trabajo por fotograma (rAF). Devuelve el id que `cancelFrame` cancela. */
+  scheduleFrame(cb: () => void): number;
+  cancelFrame(id: number): void;
+}
+
+export interface PointerGesture {
+  /** Pulsación sobre un origen arrastrable. Todavía NO es un arrastre: eso lo dice la distancia. */
+  down(source: DragSource, start: DndPoint): void;
+  move(point: DndPoint, overDrawer?: boolean): void;
+  /** Soltar: aplica lo pendiente y suelta si hubo arrastre. Un tap (<umbral) no suelta nada. */
+  up(): void;
+  /** Escape: cancela sin tocar el documento. */
+  cancel(): void;
+  /** ¿Hay un arrastre vivo? Lo usa el autoscroll, que solo corre mientras lo haya. */
+  active(): boolean;
+  /** Último punto conocido, en coordenadas del iframe. */
+  point(): DndPoint | null;
+}
+
+export function createPointerGesture<S>(deps: PointerGestureDeps<S>): PointerGesture {
+  let pending: { source: DragSource; start: DndPoint } | null = null;
+  let session: S | null = null;
+  let last: DndPoint | null = null;
+  let overDrawer = false;
+  let raf: number | null = null;
+
+  /** Aplica el último punto: crea la sesión si el gesto ya superó el umbral, y la mueve. */
+  const flush = (): void => {
+    if (raf !== null) {
+      deps.cancelFrame(raf);
+      raf = null;
+    }
+    if (!last) return;
+    if (!session && pending) {
+      const d = Math.hypot(last.x - pending.start.x, last.y - pending.start.y);
+      if (d < DRAG_START_THRESHOLD) return; // sigue siendo un tap
+      session = deps.createSession(pending.source, pending.start);
+      pending = null;
+    }
+    if (session) deps.moveSession(session, last, overDrawer);
+  };
+
+  const reset = (): void => {
+    if (raf !== null) {
+      deps.cancelFrame(raf);
+      raf = null;
+    }
+    pending = null;
+    session = null;
+    last = null;
+    overDrawer = false;
+  };
+
+  return {
+    down(source, start) {
+      reset();
+      pending = { source, start };
+    },
+    move(point, over = false) {
+      if (!pending && !session) return;
+      last = point;
+      overDrawer = over;
+      if (raf === null) raf = deps.scheduleFrame(() => { raf = null; flush(); });
+    },
+    up() {
+      flush();
+      if (session) deps.dropSession(session);
+      reset();
+    },
+    cancel() {
+      if (session) deps.cancelSession(session);
+      reset();
+    },
+    active() {
+      return session !== null;
+    },
+    point() {
+      return last;
     },
   };
 }
