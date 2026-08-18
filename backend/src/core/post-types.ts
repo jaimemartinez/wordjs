@@ -375,6 +375,52 @@ async function initTaxonomies() {
 }
 
 /**
+ * Save a custom taxonomy so it persists across restarts.
+ * Mirrors saveCustomPostType(), with one deliberate strengthening: what gets persisted is the
+ * NORMALIZED object returned by registerTaxonomy() — which THROWS on a malformed shape — so
+ * nothing is written unless the taxonomy actually registered, and the stored entry re-registers
+ * cleanly on the next boot instead of leaning on the initTaxonomies() per-entry guard.
+ */
+async function saveCustomTaxonomy(name: string, args: Record<string, any> = {}) {
+    // Register (and validate) FIRST: on a bad shape this throws and nothing is persisted.
+    const taxonomy = registerTaxonomy(name, args);
+
+    const stored = await getOption('custom_taxonomies', {});
+    // Same defensive spirit as the boot-time guard: a hand-edited/corrupt option (array, string,
+    // null) must not crash the writer — rebuild as a map. The null prototype makes every name a
+    // plain data key, so an entry can never be silently lost to object plumbing on assignment.
+    const customTaxonomies: Record<string, any> = Object.assign(
+        Object.create(null),
+        stored && typeof stored === 'object' && !Array.isArray(stored) ? stored : {}
+    );
+    customTaxonomies[name] = taxonomy;
+    await updateOption('custom_taxonomies', customTaxonomies);
+
+    return taxonomy;
+}
+
+/**
+ * Delete a custom taxonomy.
+ * Mirrors deleteCustomPostType(), except success means "the persisted entry is gone" rather than
+ * unregisterTaxonomy()'s return value: unlike post types, a persisted taxonomy can legitimately
+ * be absent from the live registry (initTaxonomies() SKIPS entries that fail validation), and
+ * deleting exactly such a poisoned entry is the cleanup path — it must not report failure.
+ * Built-ins stay protected: they are never sourced from the option, and unregisterTaxonomy()
+ * refuses them anyway.
+ */
+async function deleteCustomTaxonomy(name: string) {
+    const stored = await getOption('custom_taxonomies', {});
+    if (!stored || typeof stored !== 'object' || Array.isArray(stored)
+        || !Object.prototype.hasOwnProperty.call(stored, name)) {
+        return false;
+    }
+    delete stored[name];
+    await updateOption('custom_taxonomies', stored);
+    unregisterTaxonomy(name);
+    return true;
+}
+
+/**
  * Initialize default and custom post types
  */
 async function initPostTypes() {
@@ -453,5 +499,7 @@ module.exports = {
     unregisterTaxonomy,
     getTaxonomy,
     getTaxonomies,
-    taxonomyExists
+    taxonomyExists,
+    saveCustomTaxonomy,
+    deleteCustomTaxonomy
 };

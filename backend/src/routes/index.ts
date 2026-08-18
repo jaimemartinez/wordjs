@@ -23,6 +23,7 @@ const menusRoutes = require('./menus');
 const widgetsRoutes = require('./widgets');
 const revisionsRoutes = require('./revisions');
 const postTypesRoutes = require('./post-types');
+const taxonomiesRoutes = require('./taxonomies');
 const exportRoutes = require('./export');
 const setupRoutes = require('./setup');
 const rolesRoutes = require('./roles');
@@ -53,6 +54,7 @@ router.get('/', (req: Request, res: Response) => {
             widgets: '/api/v1/widgets',
             revisions: '/api/v1/revisions',
             types: '/api/v1/types',
+            taxonomies: '/api/v1/taxonomies',
             export: '/api/v1/export',
             import: '/api/v1/import',
             roles: '/api/v1/roles',
@@ -81,6 +83,7 @@ router.use('/menus', menusRoutes);
 router.use('/widgets', widgetsRoutes);
 router.use('/revisions', revisionsRoutes);
 router.use('/types', postTypesRoutes);
+router.use('/taxonomies', taxonomiesRoutes);
 router.use('/setup', setupRoutes);
 router.use('/roles', rolesRoutes);
 router.use('/notifications', notificationsRoutes);
