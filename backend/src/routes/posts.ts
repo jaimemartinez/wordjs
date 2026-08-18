@@ -326,6 +326,8 @@ router.post('/', authenticate, asyncHandler(async (req: any, res: Response) => {
         authorId: req.user.id,
         title: sanitizeHtml(title),
         content: sanitize(content),
+        // En la CREACIÓN no hay valor anterior que preservar, así que "ausente" y "vacío" son lo mismo:
+        // sanitize-html devuelve '' para undefined/null, que es justo el defecto de Post.create.
         excerpt: sanitizeHtml(excerpt),
         status: postStatus,
         type,
@@ -451,7 +453,12 @@ router.put('/:id', authenticate, asyncHandler(async (req: any, res: Response) =>
     const updated = await Post.update(postId, {
         title: title ? sanitizeHtml(title) : undefined,
         content: content ? sanitize(content) : undefined,
-        excerpt: excerpt ? sanitizeHtml(excerpt) : undefined,
+        // AUSENTE ≠ VACÍO. `Post.update` solo toca la columna cuando la clave llega `undefined`-libre,
+        // así que el viejo `excerpt ? … : undefined` colapsaba las dos cosas: mandar '' para BORRAR el
+        // extracto dejaba la columna intacta y el editor parecía haber aceptado el borrado hasta que se
+        // reabría el registro. Ahora sólo la ausencia de la clave deja el valor como está; un '' lo
+        // vacía de verdad, y todo valor no vacío sigue pasando por el saneado.
+        excerpt: excerpt === undefined || excerpt === null ? undefined : sanitizeHtml(String(excerpt)),
         status: postStatus,
         slug,
         parent,

@@ -30,13 +30,12 @@ export interface MediaQueryState {
     /** Free text; blank/whitespace means "no search" and must NOT be sent as an empty param. */
     search?: string;
     /**
-     * MIME prefix or exact type ("image/", "application/pdf").
+     * MIME family or exact type ("image", "image/", "application/pdf").
      *
-     * HONESTY NOTE: `GET /media` destructures `mime_type` but never forwards it to `Media.findAll`,
-     * so the server currently IGNORES it (backend/src/routes/media.ts + models/Post.buildWhere have
-     * no MIME condition). The query builder emits it — the wire format is right the day the backend
-     * honours it — but neither screen exposes a type filter control, because a filter that returns
-     * unfiltered results is worse than no filter.
+     * El servidor lo HONRA: `GET /media` lo pasa a `Media.findAll` Y a `Media.count`, y
+     * `Post.buildWhere` decide entre `=` (tipo completo) y `LIKE 'familia/%'`. Se manda a las dos
+     * consultas a propósito — filtrar sólo las filas dejaría el total contando la biblioteca entera y
+     * el paginador ofreciendo páginas vacías.
      */
     mimeType?: string;
 }

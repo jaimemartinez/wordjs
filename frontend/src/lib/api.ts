@@ -217,6 +217,16 @@ export async function apiGetPaged<T>(endpoint: string): Promise<{ data: T; total
     };
 }
 
+/**
+ * Un término tal y como la API lo serializa dentro de un post (backend `Post.toJSON`). `id` es el
+ * `term_id`, que es EXACTAMENTE lo que `Post.setTerms` espera de vuelta en `categories`/`tags`.
+ */
+export interface PostTermRef {
+    id: number;
+    name: string;
+    slug: string;
+}
+
 // Typed API calls
 export interface Post {
     id: number;
@@ -234,6 +244,14 @@ export interface Post {
     meta?: Record<string, any>;
     /** Set when the post has a featured image (backend Post.toJSON serializes it with an absolute URL). */
     featuredMedia?: { id: number; url: string; title?: string };
+    /**
+     * TAXONOMÍA. `Post.toJSON` emite SIEMPRE las dos claves (array vacío = "no tiene ninguno"), pero
+     * siguen declaradas opcionales para no romper los objetos parciales que construyen los tests y los
+     * callers que sintetizan un Post. Un consumidor que reciba la clave ausente debe tratarla como
+     * "no lo sé" y NO mandar la taxonomía de vuelta: `setTerms` REEMPLAZA.
+     */
+    categories?: PostTermRef[];
+    tags?: PostTermRef[];
     /** MULTILINGUAL (opt-in): the post's own BCP-47 language tag, or null on a monolingual site. */
     language?: string | null;
     /**

@@ -19,6 +19,20 @@ import {
 
 const SEARCH_DEBOUNCE_MS = 400;
 
+/**
+ * Filtro por tipo de archivo. Los valores son lo que entiende `GET /media?mime_type=…`: una FAMILIA
+ * ('image') filtra todo `image/*`, un tipo completo ('application/pdf') filtra exacto. '' = sin filtro.
+ * Se limita a las familias que la biblioteca puede recibir de verdad (ver Media.getAllowedMimeTypes).
+ */
+const MIME_FILTERS: Array<{ label: string; value: string }> = [
+    { label: "Todos los tipos", value: "" },
+    { label: "Imágenes", value: "image" },
+    { label: "Vídeo", value: "video" },
+    { label: "Audio", value: "audio" },
+    { label: "PDF", value: "application/pdf" },
+    { label: "Texto", value: "text" },
+];
+
 const fieldClass =
     "w-full px-4 py-3 bg-gray-50 border-2 border-gray-100 rounded-2xl text-sm font-medium text-gray-700 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all placeholder:text-gray-300";
 const labelClass = "text-[10px] font-black uppercase tracking-widest text-gray-400 block mb-1.5";
@@ -202,6 +216,9 @@ export default function MediaPage() {
     const [uploading, setUploading] = useState(false);
     const [searchInput, setSearchInput] = useState("");
     const [search, setSearch] = useState("");
+    // Filtro por tipo. Va al SERVIDOR (no se filtra la página ya traída): filtrar aquí sólo escondería
+    // filas de las 24 cargadas y el contador seguiría hablando de la biblioteca entera.
+    const [mimeType, setMimeType] = useState("");
     const [page, setPage] = useState(1);
     const [total, setTotal] = useState(0);
     const [totalPages, setTotalPages] = useState(1);
@@ -228,7 +245,7 @@ export default function MediaPage() {
     const loadMedia = useCallback(async () => {
         setLoading(true);
         try {
-            const res = await mediaApi.listPaged(buildMediaQuery({ page, perPage: LIBRARY_PAGE_SIZE, search }));
+            const res = await mediaApi.listPaged(buildMediaQuery({ page, perPage: LIBRARY_PAGE_SIZE, search, mimeType }));
             setMedia(res.data);
             setTotal(res.total);
             setTotalPages(res.totalPages);
@@ -243,7 +260,7 @@ export default function MediaPage() {
             setLoading(false);
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [page, search, refreshKey]);
+    }, [page, search, mimeType, refreshKey]);
 
     useEffect(() => { loadMedia(); }, [loadMedia]);
 
@@ -389,6 +406,23 @@ export default function MediaPage() {
                                 onChange={(e) => setSearchInput(e.target.value)}
                                 className="w-full md:w-64 pl-12 pr-6 py-4 bg-white border-2 border-gray-100 rounded-2xl text-sm font-bold text-gray-700 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all placeholder:text-gray-300 shadow-sm"
                             />
+                        </div>
+
+                        {/* Filtro por tipo — consulta al SERVIDOR (mime_type), igual que la búsqueda:
+                            el total y el paginador se recalculan con el filtro puesto. */}
+                        <div className="relative group">
+                            <i className="fa-solid fa-filter absolute left-5 top-1/2 -translate-y-1/2 text-gray-400 group-focus-within:text-blue-500 transition-colors pointer-events-none"></i>
+                            <label className="sr-only" htmlFor="media-type-filter">Filtrar por tipo de archivo</label>
+                            <select
+                                id="media-type-filter"
+                                value={mimeType}
+                                onChange={(e) => { setMimeType(e.target.value); setPage(1); }}
+                                className="w-full md:w-52 pl-12 pr-6 py-4 bg-white border-2 border-gray-100 rounded-2xl text-sm font-bold text-gray-700 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all shadow-sm appearance-none cursor-pointer"
+                            >
+                                {MIME_FILTERS.map((option) => (
+                                    <option key={option.value} value={option.value}>{option.label}</option>
+                                ))}
+                            </select>
                         </div>
 
                         {/* View Toggles */}

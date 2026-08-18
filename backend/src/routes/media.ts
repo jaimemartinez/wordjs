@@ -133,6 +133,11 @@ const upload = multer({
  *         name: search
  *         schema:
  *           type: string
+ *       - in: query
+ *         name: mime_type
+ *         description: Filter by MIME type. A full type filters exactly (`image/png`); a bare family filters the whole family (`image` or `image/`).
+ *         schema:
+ *           type: string
  *     responses:
  *       200:
  *         description: List of media files
@@ -163,8 +168,13 @@ router.get('/', optionalAuth, asyncHandler(async (req: any, res: any) => {
         id: 'id'
     };
 
+    // `mime_type` se desestructuraba desde SIEMPRE y no se pasaba a ninguna consulta: el filtro estaba
+    // INERTE (la biblioteca devolvía todo, pidieras lo que pidieras). Va a las DOS consultas — filtrar
+    // sólo las filas dejaría el total contando la biblioteca entera y el paginador ofreciendo páginas
+    // vacías. Post.buildWhere valida la forma y decide exacto vs. familia.
     const media = await Media.findAll({
         search,
+        mimeType: mime_type,
         limit,
         offset,
         orderBy: orderByMap[orderby] || 'post_date',
@@ -199,7 +209,7 @@ router.get('/', optionalAuth, asyncHandler(async (req: any, res: any) => {
     // Discount the attachments hidden on THIS page so the pager total does not advertise the
     // existence of items the caller was just denied (mirrors GET /:id returning 404, not 403).
     const hiddenOnPage = media.length - visibleMedia.length;
-    const total = Math.max(0, (await Media.count({ search })) - hiddenOnPage);
+    const total = Math.max(0, (await Media.count({ search, mimeType: mime_type })) - hiddenOnPage);
     const totalPages = Math.ceil(total / limit);
 
     res.set('X-WP-Total', total);

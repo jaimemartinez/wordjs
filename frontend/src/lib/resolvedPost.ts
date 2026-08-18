@@ -55,12 +55,19 @@ export function toResolved(p: Post): ResolvedPost {
     };
 }
 
-/** The category filter both resolvers share (slug match against the post's categories). */
+/**
+ * El filtro por categoría que comparten los dos resolutores (coincidencia por slug).
+ *
+ * Era CÓDIGO MUERTO: leía `p.categories`, una clave que la API nunca mandaba (`Post.toJSON` no
+ * serializaba los términos), así que un bloque CategoryPosts con categoría elegida devolvía SIEMPRE
+ * lista vacía. Ahora `toJSON` emite `categories: [{id,name,slug}]` y este filtro funciona; se sigue
+ * tolerando el `name` por si algún caller sintetiza posts sin slug.
+ */
 export function filterByCategory(all: Post[], categorySlug?: string): Post[] {
     const slug = String(categorySlug || "").trim().toLowerCase();
     if (!slug) return all;
     return all.filter((p) => {
-        const cats = (p as unknown as { categories?: Array<{ slug?: string; name?: string }> }).categories;
+        const cats = p.categories;
         return Array.isArray(cats) && cats.some((c) => (c.slug || c.name || "").toLowerCase() === slug);
     });
 }

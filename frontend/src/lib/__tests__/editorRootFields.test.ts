@@ -6,7 +6,7 @@
  * el repo no tiene jsdom, así que los controles se declaran como datos y aquí se comprueba el dato.
  */
 import { describe, it, expect } from "vitest";
-import type { Category, Post } from "@/lib/api";
+import type { Category, Post, Tag } from "@/lib/api";
 import {
     toFeaturedMediaRef,
     featuredMediaSummary,
@@ -18,6 +18,13 @@ import {
     categoryField,
     withRecordRootFields,
     seedRootPropsFromPost,
+    normalizeTermIds,
+    toTermRefs,
+    seedCategoryFromPost,
+    seedTagsFromPost,
+    resolveTagsForSave,
+    tagsField,
+    seedTaxonomyRootProps,
 } from "../editorRootFields";
 import { rootFieldsPost, rootFieldsPage } from "@/lib/verso/coreBlocks";
 import type { VersoField } from "@/lib/verso/registry";
@@ -161,26 +168,170 @@ describe("resolveCategoryId — el backend quiere IDs de término", () => {
 });
 
 describe("resolveCategoriesForSave — nunca borrar términos que el editor no puede ver", () => {
-    it("sin cambios NO manda `categories` (setTerms REEMPLAZA, y la API no devuelve los términos)", () => {
-        expect(resolveCategoriesForSave({ current: "3", seeded: "3", categories: CATS })).toBeUndefined();
-        expect(resolveCategoriesForSave({ current: "", seeded: "", categories: CATS })).toBeUndefined();
+    it("sin cambios NO manda `categories` (setTerms REEMPLAZA: mandarlo reescribiría la taxonomía)", () => {
+        expect(resolveCategoriesForSave({ current: "3", seeded: [3], categories: CATS })).toBeUndefined();
+        expect(resolveCategoriesForSave({ current: "", seeded: [], categories: CATS })).toBeUndefined();
+    });
+
+    it("acepta como semilla la lista `[{id,name,slug}]` tal cual la manda la API", () => {
+        expect(
+            resolveCategoriesForSave({ current: "3", seeded: [{ id: 3, name: "Noticias", slug: "noticias" }], categories: CATS }),
+        ).toBeUndefined();
     });
 
     it("elegir una categoría manda su ID numérico", () => {
-        expect(resolveCategoriesForSave({ current: "7", seeded: "", categories: CATS })).toEqual([7]);
+        expect(resolveCategoriesForSave({ current: "7", seeded: [], categories: CATS })).toEqual([7]);
     });
 
     it("migra un valor legacy por nombre al id al cambiarlo", () => {
-        expect(resolveCategoriesForSave({ current: "Noticias", seeded: "", categories: CATS })).toEqual([3]);
+        expect(resolveCategoriesForSave({ current: "Noticias", seeded: [], categories: CATS })).toEqual([3]);
     });
 
     it("vaciar la selección manda [] (desasignar es una intención legítima)", () => {
-        expect(resolveCategoriesForSave({ current: "", seeded: "3", categories: CATS })).toEqual([]);
+        expect(resolveCategoriesForSave({ current: "", seeded: [3], categories: CATS })).toEqual([]);
     });
 
     it("un valor irresoluble no manda nada en vez de mandar basura", () => {
-        expect(resolveCategoriesForSave({ current: "fantasma", seeded: "3", categories: CATS })).toBeUndefined();
-        expect(resolveCategoriesForSave({ current: "3", seeded: "", categories: [] })).toBeUndefined();
+        expect(resolveCategoriesForSave({ current: "fantasma", seeded: [3], categories: CATS })).toBeUndefined();
+        expect(resolveCategoriesForSave({ current: "3", seeded: [], categories: [] })).toBeUndefined();
+    });
+
+    it("PRESERVA las categorías que el select simple no enseña en vez de borrarlas", () => {
+        // El registro tiene 3 y 99; el select sólo puede enseñar la primera. Cambiarla a 7 no puede
+        // llevarse por delante la 99, que el autor nunca vio.
+        expect(resolveCategoriesForSave({ current: "7", seeded: [3, 99], categories: CATS })).toEqual([7, 99]);
+        // Y vaciar el select suelta la primera, no todas.
+        expect(resolveCategoriesForSave({ current: "", seeded: [3, 99], categories: CATS })).toEqual([99]);
+    });
+
+    it("no duplica cuando el autor elige una categoría que el registro ya tenía en segundo lugar", () => {
+        expect(resolveCategoriesForSave({ current: "7", seeded: [3, 7], categories: CATS })).toEqual([7]);
+    });
+});
+
+describe("seedCategoryFromPost — el REGISTRO manda sobre _puck_data", () => {
+    it("siembra el id de la primera categoría del post", () => {
+        expect(seedCategoryFromPost({ categories: [{ id: 7, name: "Tutoriales", slug: "tutoriales" }] } as Post)).toBe("7");
+    });
+
+    it("un post sin categorías (o sin la clave) siembra vacío", () => {
+        expect(seedCategoryFromPost({ categories: [] } as unknown as Post)).toBe("");
+        expect(seedCategoryFromPost({} as Post)).toBe("");
+        expect(seedCategoryFromPost(null)).toBe("");
+    });
+});
+
+/* ------------------------------------------------------------------ */
+/* Etiquetas.                                                          */
+/* ------------------------------------------------------------------ */
+
+const TAGS: Tag[] = [
+    { id: 11, name: "React", slug: "react", count: 2 },
+    { id: 12, name: "Astro", slug: "astro", count: 1 },
+];
+
+describe("normalizeTermIds / toTermRefs — sólo entra lo que el backend puede resolver", () => {
+    it("acepta refs de la API, ids pelados y strings numéricos, sin duplicar", () => {
+        expect(normalizeTermIds([{ id: 3 }, 7, "7", "11"])).toEqual([3, 7, 11]);
+    });
+
+    it("descarta lo que no es un entero positivo", () => {
+        expect(normalizeTermIds([{ id: 0 }, { id: -2 }, { id: 1.5 }, "abc", null, undefined])).toEqual([]);
+        expect(normalizeTermIds("3")).toEqual([]); // no es una lista
+    });
+
+    it("toTermRefs rellena el nombre cuando falta, para que el select nunca enseñe un hueco", () => {
+        expect(toTermRefs([{ id: 4 }])).toEqual([{ id: 4, name: "#4", slug: "" }]);
+    });
+});
+
+describe("seedTagsFromPost — el control arranca con las etiquetas REALES del registro", () => {
+    it("convierte post.tags en entradas del campo array", () => {
+        const post = { tags: [{ id: 11, name: "React", slug: "react" }, { id: 12, name: "Astro", slug: "astro" }] } as Post;
+        expect(seedTagsFromPost(post)).toEqual([{ tag: "11" }, { tag: "12" }]);
+    });
+
+    it("sin etiquetas (o sin la clave) arranca vacío", () => {
+        expect(seedTagsFromPost({} as Post)).toEqual([]);
+        expect(seedTagsFromPost(null)).toEqual([]);
+    });
+});
+
+describe("resolveTagsForSave — mismo fail-safe que las categorías", () => {
+    it("sin cambios NO manda `tags`", () => {
+        expect(resolveTagsForSave({ current: [{ tag: "11" }], seeded: [{ tag: "11" }] })).toBeUndefined();
+        expect(resolveTagsForSave({ current: [], seeded: [] })).toBeUndefined();
+    });
+
+    it("reordenar NO es un cambio: setTerms escribe term_order 0 en todas las filas", () => {
+        expect(resolveTagsForSave({ current: [{ tag: "12" }, { tag: "11" }], seeded: [{ tag: "11" }, { tag: "12" }] })).toBeUndefined();
+    });
+
+    it("añadir manda la lista completa de ids (setTerms REEMPLAZA)", () => {
+        expect(resolveTagsForSave({ current: [{ tag: "11" }, { tag: "12" }], seeded: [{ tag: "11" }] })).toEqual([11, 12]);
+    });
+
+    it("quitarlas todas manda [] — desasignar es una intención legítima", () => {
+        expect(resolveTagsForSave({ current: [], seeded: [{ tag: "11" }] })).toEqual([]);
+    });
+
+    it("una entrada recién añadida y sin elegir no viaja como término", () => {
+        expect(resolveTagsForSave({ current: [{ tag: "11" }, { tag: "" }], seeded: [{ tag: "11" }] })).toBeUndefined();
+    });
+});
+
+describe("tagsField — sólo se puede asignar lo que EXISTE, y nada del registro se queda sin opción", () => {
+    const asArrayField = (f: VersoField) =>
+        f as unknown as {
+            type: string;
+            arrayFields: { tag: { type: string; options: Array<{ label: string; value: string }> } };
+            getItemSummary: (item: Record<string, unknown>, index?: number) => string;
+        };
+
+    it("es un array de selects con el id como valor, ordenado por nombre", () => {
+        const f = asArrayField(tagsField(TAGS));
+        expect(f.type).toBe("array");
+        expect(f.arrayFields.tag.type).toBe("select");
+        expect(f.arrayFields.tag.options).toEqual([
+            { label: "Elige una etiqueta", value: "" },
+            { label: "Astro", value: "12" },
+            { label: "React", value: "11" },
+        ]);
+    });
+
+    it("una etiqueta del REGISTRO fuera de la página cargada sigue teniendo opción", () => {
+        const f = asArrayField(tagsField(TAGS, [{ id: 99, name: "Fotografía", slug: "fotografia" }]));
+        expect(f.arrayFields.tag.options).toContainEqual({ label: "Fotografía", value: "99" });
+    });
+
+    it("no duplica una etiqueta que está en las dos listas", () => {
+        const f = asArrayField(tagsField(TAGS, [{ id: 11, name: "React", slug: "react" }]));
+        expect(f.arrayFields.tag.options.filter((o) => o.value === "11")).toHaveLength(1);
+    });
+
+    it("el resumen de cada entrada es el NOMBRE de la etiqueta, no su id", () => {
+        const f = asArrayField(tagsField(TAGS));
+        expect(f.getItemSummary({ tag: "11" }, 0)).toBe("React");
+        expect(f.getItemSummary({ tag: "" }, 0)).toBe("Etiqueta 1");
+    });
+});
+
+describe("seedTaxonomyRootProps — una sola fuente para sembrar y para comparar al guardar", () => {
+    it("devuelve la categoría visible, TODAS las del registro, y las etiquetas", () => {
+        const post = {
+            categories: [{ id: 3, name: "Noticias", slug: "noticias" }, { id: 99, name: "Otra", slug: "otra" }],
+            tags: [{ id: 11, name: "React", slug: "react" }],
+        } as Post;
+        expect(seedTaxonomyRootProps(post)).toEqual({
+            category: "3",
+            categoryIds: [3, 99],
+            tags: [{ tag: "11" }],
+            tagRefs: [{ id: 11, name: "React", slug: "react" }],
+        });
+    });
+
+    it("un post sin taxonomía siembra vacío en las cuatro claves", () => {
+        expect(seedTaxonomyRootProps({} as Post)).toEqual({ category: "", categoryIds: [], tags: [], tagRefs: [] });
     });
 });
 
@@ -228,8 +379,32 @@ describe("withRecordRootFields — composición sobre los campos del registro", 
         ]);
         expect(fields.featuredImage.type).toBe("external");
         expect(fields.excerpt.type).toBe("textarea");
+    });
+
+    it("ENTRADAS con etiquetas: `tags` entra JUSTO detrás de la categoría, sin mover nada más", () => {
+        const fields = withRecordRootFields(rootFieldsPost, { categories: CATS, tags: TAGS });
+        expect(Object.keys(fields)).toEqual([
+            "title",
+            "slug",
+            "featuredImage",
+            "excerpt",
+            "category",
+            "tags",
+            "allowComments",
+            "_wjs_template",
+            "seo_title",
+            "seo_description",
+            "og_image",
+            "noindex",
+        ]);
+        expect(fields.tags.type).toBe("array");
+    });
+
+    it("sin lista de etiquetas NO se compone el campo (páginas no llevan taxonomía)", () => {
+        expect("tags" in withRecordRootFields(rootFieldsPost, { categories: CATS })).toBe(false);
+        expect("tags" in withRecordRootFields(rootFieldsPage, { seo: true })).toBe(false);
         // Los campos del registro llegan intactos (misma referencia).
-        expect(fields.allowComments).toBe(rootFieldsPost.allowComments);
+        expect(withRecordRootFields(rootFieldsPost, { categories: CATS }).allowComments).toBe(rootFieldsPost.allowComments);
     });
 
     it("PÁGINAS: los mismos dos campos, y NINGUNA categoría — la asimetría del CMS se respeta", () => {

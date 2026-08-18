@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef, useMemo } from "react";
 import { useRouter, useParams } from "next/navigation";
 import EditorBootFallback from "@/components/verso/editor/EditorBootFallback";
-import { postsApi, categoriesApi, Category } from "@/lib/api";
+import { postsApi, categoriesApi, tagsApi, Category, Tag, PostTermRef } from "@/lib/api";
 import EditorLoadError from "@/components/EditorLoadError";
 import VersoEditor from "@/components/verso/editor/VersoEditor";
 import { rootFieldsPost } from "@/lib/verso/coreBlocks";
@@ -22,13 +22,21 @@ import {
     featuredImageMetaValue,
     resolveExcerptForSave,
     resolveCategoriesForSave,
+    resolveTagsForSave,
+    seedTaxonomyRootProps,
     seedSeoRootProps,
     seoMetaForSave,
+    type TagSelection,
 } from "@/lib/editorRootFields";
 import { useUnsavedChanges } from "@/contexts/UnsavedChangesContext";
 import { useModal } from "@/contexts/ModalContext";
 import { useI18n } from "@/contexts/I18nContext";
 import { trStr } from "@/lib/editorI18n";
+
+// Paginación de la carga de etiquetas: el backend tapa `per_page` a 100, y el tope de páginas evita
+// que un sitio con miles de etiquetas dispare decenas de peticiones al abrir el editor.
+const TAG_PAGE_SIZE = 100;
+const TAG_MAX_PAGES = 10;
 
 export default function PostEditorPage() {
     const { t, language } = useI18n();
@@ -64,12 +72,19 @@ export default function PostEditorPage() {
     // ella para poder SINTETIZAR la opción de un valor que no case con ninguna categoría viva (el
     // NOMBRE que guardaba el control viejo) en vez de enseñar el campo vacío.
     const [rootCategory, setRootCategory] = useState("");
-    // Valores CONFIRMADOS por el servidor de los dos campos que solo viajan cuando cambian
-    // (ver resolveExcerptForSave / resolveCategoriesForSave: la API no devuelve los términos de un
-    // post, y devuelve un extracto DERIVADO cuando no hay uno propio — mandarlos siempre destruiría
-    // términos puestos por importación y congelaría el resumen automático).
+    // Etiquetas EXISTENTES del sitio (las opciones del control) y las del registro abierto (para que
+    // ninguna etiqueta suya se quede sin opción si cae fuera de las páginas cargadas).
+    const [allTags, setAllTags] = useState<Tag[]>([]);
+    const [recordTags, setRecordTags] = useState<PostTermRef[]>([]);
+    // Valores CONFIRMADOS por el servidor de los campos que solo viajan cuando cambian
+    // (ver resolveExcerptForSave / resolveCategoriesForSave / resolveTagsForSave: `setTerms` REEMPLAZA,
+    // y `toJSON` devuelve un extracto DERIVADO cuando no hay uno propio — mandarlos siempre
+    // reescribiría la taxonomía en cada autosave y congelaría el resumen automático).
     const seededExcerptRef = useRef("");
-    const seededCategoryRef = useRef("");
+    // TODOS los ids de categoría del registro: el select enseña el primero, y los demás se reenvían
+    // en vez de perderse (ver resolveCategoriesForSave).
+    const seededCategoryIdsRef = useRef<number[]>([]);
+    const seededTagsRef = useRef<TagSelection[]>([]);
     const [saving, setSaving] = useState(false);
     const [isLoading, setIsLoading] = useState(!isNew);
     // Data-safety hydration tracking: `loaded` is true only once the EXISTING post's content has
@@ -127,6 +142,7 @@ export default function PostEditorPage() {
 
     useEffect(() => {
         loadCategories();
+        loadTags();
         if (postId) {
             loadPost();
         }
@@ -159,19 +175,29 @@ export default function PostEditorPage() {
             // puede re-listar en el sitemap una página ocultada a propósito.
             // `allowComments` va en el mismo saco: el onChange lo copia a commentStatus, así que un
             // _puck_data con un valor viejo pisaba la columna real en cuanto se tocaba el lienzo.
+            // TAXONOMÍA: el REGISTRO manda, no `_puck_data`. `Post.toJSON` ya serializa `categories`
+            // y `tags`, así que un post etiquetado por importación o por API abre con sus términos a
+            // la vista en vez de aparecer vacío — que es lo que convertía cualquier guardado en un
+            // borrado silencioso (`setTerms` REEMPLAZA).
+            const taxonomy = seedTaxonomyRootProps(post);
             const seedRoot = {
                 ...seedRootPropsFromPost(post),
                 ...seedSeoRootProps(post),
+                category: taxonomy.category,
+                tags: taxonomy.tags,
                 allowComments: post.commentStatus || "open",
             };
             seededExcerptRef.current = seedRoot.excerpt;
+            seededCategoryIdsRef.current = taxonomy.categoryIds;
+            seededTagsRef.current = taxonomy.tags;
+            setRecordTags(taxonomy.tagRefs);
+            setRootCategory(taxonomy.category);
 
             // Load Puck data from meta if available
             if (post.meta && post.meta[EDITOR_DATA_META_KEY]) {
                 const stored = post.meta[EDITOR_DATA_META_KEY];
-                const storedCategory = String((stored.root as any)?.props?.category ?? "");
-                seededCategoryRef.current = storedCategory;
-                setRootCategory(storedCategory);
+                // OJO: `category`/`tags` NO se leen de aquí. Vienen en `seedRoot`, que se aplica
+                // DESPUÉS y por tanto pisa lo que arrastre un `_puck_data` viejo.
                 const withTemplate = {
                     ...stored,
                     root: {
@@ -197,11 +223,10 @@ export default function PostEditorPage() {
                     slug: post.slug,
                     recordId: postId as number,
                     wjsTemplate: savedTemplate,
-                    extraRootProps: seedRoot // ya incluye allowComments, imagen destacada, extracto y SEO
+                    // ya incluye allowComments, imagen destacada, extracto, SEO y taxonomía —
+                    // `extraRootProps` se aplica DESPUÉS del `category: ""` que siembra el helper.
+                    extraRootProps: seedRoot
                 });
-                // seedLegacyVersoData siembra `category: ""` — el registro no trae ninguna elección.
-                seededCategoryRef.current = "";
-                setRootCategory("");
                 setVersoData(seededData as any);
                 versoDataRef.current = seededData as any;
                 // Safety net (belt-and-braces): keep the original body so an empty-canvas save can't blank
@@ -224,6 +249,29 @@ export default function PostEditorPage() {
             setCategories(data);
         } catch (error) {
             console.error("Failed to load categories:", error);
+        }
+    };
+
+    // Las etiquetas del sitio, que son las OPCIONES del control (`Post.setTerms` resuelve por
+    // term_id, y `PUT /posts/:id` no crea términos: sólo se puede asignar lo que ya existe). El
+    // endpoint pagina y tapa `per_page` a 100, así que se recorren varias páginas — con tope, para
+    // que una biblioteca enorme no convierta abrir el editor en una ráfaga de peticiones.
+    const loadTags = async () => {
+        try {
+            const collected: Tag[] = [];
+            let page = 1;
+            let totalPages = 1;
+            do {
+                const res = await tagsApi.listPaged({ page, perPage: TAG_PAGE_SIZE, orderby: "name", order: "asc" });
+                collected.push(...res.data);
+                totalPages = res.totalPages;
+                page += 1;
+            } while (page <= totalPages && page <= TAG_MAX_PAGES);
+            setAllTags(collected);
+        } catch (error) {
+            // Sin lista de etiquetas el control queda sin opciones nuevas, pero las del registro
+            // siguen sembradas: el guardado nunca borra lo que el autor no llegó a ver.
+            console.error("Failed to load tags:", error);
         }
     };
 
@@ -290,9 +338,11 @@ export default function PostEditorPage() {
                 return false;
             }
 
-            // Campos de REGISTRO que viven en el root del lienzo. Extracto y categorías viajan SOLO
-            // si el autor los cambió (fail-closed — ver editorRootFields); la imagen destacada viaja
-            // siempre, porque '' es la única forma de borrar una asignación anterior.
+            // Campos de REGISTRO que viven en el root del lienzo. Extracto, categorías y etiquetas
+            // viajan SOLO si el autor los cambió (fail-safe — ver editorRootFields: `setTerms`
+            // REEMPLAZA, así que mandar la taxonomía sin necesidad la reescribe entera en cada
+            // autosave); la imagen destacada viaja siempre, porque '' es la única forma de borrar una
+            // asignación anterior.
             const rootProps = (root?.props ?? {}) as Record<string, unknown>;
             const excerptPatch = resolveExcerptForSave({
                 current: rootProps.excerpt,
@@ -300,8 +350,12 @@ export default function PostEditorPage() {
             });
             const categoriesPatch = resolveCategoriesForSave({
                 current: rootProps.category,
-                seeded: seededCategoryRef.current,
+                seeded: seededCategoryIdsRef.current,
                 categories,
+            });
+            const tagsPatch = resolveTagsForSave({
+                current: rootProps.tags,
+                seeded: seededTagsRef.current,
             });
 
             const postData = {
@@ -312,6 +366,7 @@ export default function PostEditorPage() {
                 commentStatus,
                 ...(excerptPatch !== undefined ? { excerpt: excerptPatch } : {}),
                 ...(categoriesPatch !== undefined ? { categories: categoriesPatch } : {}),
+                ...(tagsPatch !== undefined ? { tags: tagsPatch } : {}),
                 meta: {
                     // Clave histórica CONGELADA a propósito — ver EDITOR_DATA_META_KEY.
                     [EDITOR_DATA_META_KEY]: liveData, // Save the JSON structure for re-editing
@@ -355,7 +410,8 @@ export default function PostEditorPage() {
             // Lo que ya viajó pasa a ser la base: sin esto cada autosave posterior reenviaría el
             // mismo extracto y las mismas categorías eternamente. Solo tras un guardado CONFIRMADO.
             if (excerptPatch !== undefined) seededExcerptRef.current = excerptPatch;
-            if (categoriesPatch !== undefined) seededCategoryRef.current = String(rootProps.category ?? "");
+            if (categoriesPatch !== undefined) seededCategoryIdsRef.current = categoriesPatch;
+            if (tagsPatch !== undefined) seededTagsRef.current = tagsPatch.map((id) => ({ tag: String(id) }));
             // Stay in editor - no redirect
             setIsDirty(false); // Reset dirty state after successful save
             return true;
@@ -374,8 +430,13 @@ export default function PostEditorPage() {
     // sustituida por el select por ID (que es lo que Post.setTerms espera). Memorizado para no
     // reconstruir el objeto en cada pulsación.
     const rootFields = useMemo(
-        () => withRecordRootFields(rootFieldsPost, { categories, currentCategory: rootCategory }),
-        [categories, rootCategory],
+        () => withRecordRootFields(rootFieldsPost, {
+            categories,
+            currentCategory: rootCategory,
+            tags: allTags,
+            recordTags,
+        }),
+        [categories, rootCategory, allTags, recordTags],
     );
 
     if (isLoading) {

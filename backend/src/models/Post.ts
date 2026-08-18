@@ -48,6 +48,12 @@ class Post {
     // Shape: { post: Post|null, attachedFile: string|null } — null `post` means
     // "resolved, no featured image".
     _featuredImageCache?: { post: any; attachedFile: any } | undefined;
+    // Optional pre-loaded terms (set by hydrateRelations to avoid the per-post taxonomy query in
+    // toJSON()). Same contract as _featuredImageCache: `undefined` means "not resolved yet" and
+    // toJSON falls back to ONE per-post query; a post with no terms gets an empty-but-DEFINED bucket
+    // per taxonomy so the fallback is skipped (the "resolved none" branch).
+    // Shape: { category: [{id,name,slug}], post_tag: [...] } — only the taxonomies toJSON emits.
+    _termsCache?: Record<string, Array<{ id: number; name: string; slug: string }>> | undefined;
 
     constructor(data: any) {
         this.id = data.id;
@@ -97,6 +103,66 @@ class Post {
       WHERE tr.object_id = ? AND tt.taxonomy = ?
     `;
         return await dbAsync.all(stmt, [this.id, taxonomy]);
+    }
+
+    /**
+     * Las taxonomías que `toJSON()` serializa — y por tanto las únicas que se hidratan en lote.
+     * Deliberadamente NO es "todas": `nav_menu` cuelga de los `nav_menu_item`, y arrastrarla aquí
+     * metería cientos de filas de menú en la respuesta de un listado de entradas.
+     */
+    static SERIALIZED_TAXONOMIES = ['category', 'post_tag'] as const;
+
+    /** Un bucket vacío pero DEFINIDO para cada taxonomía serializada ("resuelto: ninguno"). */
+    static emptyTermsBucket(): Record<string, Array<{ id: number; name: string; slug: string }>> {
+        const bucket: Record<string, Array<{ id: number; name: string; slug: string }>> = {};
+        for (const taxonomy of Post.SERIALIZED_TAXONOMIES) bucket[taxonomy] = [];
+        return bucket;
+    }
+
+    /**
+     * Los términos de VARIOS posts en UNA sola consulta, agrupados por id de post y taxonomía.
+     *
+     * Es el gemelo de `getAllMetaForIds` para la taxonomía: sin esto, serializar los términos en
+     * `toJSON()` convertiría cualquier listado en un N+1 (una consulta de taxonomía por entrada).
+     * Todo id pedido sale con bucket definido, incluso si no tiene ningún término.
+     */
+    static async getTermsForIds(ids: any[]): Promise<Record<string, Record<string, Array<{ id: number; name: string; slug: string }>>>> {
+        const result: Record<string, Record<string, Array<{ id: number; name: string; slug: string }>>> = {};
+        const wanted = (Array.isArray(ids) ? ids : []).filter((id) => id != null);
+        for (const id of wanted) result[id] = Post.emptyTermsBucket();
+        if (wanted.length === 0) return result;
+
+        const idPh = wanted.map(() => '?').join(',');
+        const taxPh = Post.SERIALIZED_TAXONOMIES.map(() => '?').join(',');
+        const rows = await dbAsync.all(
+            `SELECT tr.object_id, t.term_id, t.name, t.slug, tt.taxonomy
+             FROM term_relationships tr
+             JOIN term_taxonomy tt ON tt.term_taxonomy_id = tr.term_taxonomy_id
+             JOIN terms t ON t.term_id = tt.term_id
+             WHERE tr.object_id IN (${idPh}) AND tt.taxonomy IN (${taxPh})
+             ORDER BY t.name`,
+            [...wanted, ...Post.SERIALIZED_TAXONOMIES]
+        );
+        for (const row of rows) {
+            const bucket = result[row.object_id];
+            if (!bucket) continue; // un id que no pedimos (no debería pasar) nunca crea entrada
+            const list = bucket[row.taxonomy];
+            if (!list) continue;
+            list.push({ id: row.term_id, name: row.name, slug: row.slug });
+        }
+        return result;
+    }
+
+    /**
+     * Los términos serializables de ESTE post. Prefiere el lote de `hydrateRelations`; si no lo hay
+     * (ruta de post único), hace UNA consulta y la memoriza en la instancia — mismo patrón exacto que
+     * el respaldo de la imagen destacada.
+     */
+    async getSerializedTerms(): Promise<Record<string, Array<{ id: number; name: string; slug: string }>>> {
+        if (this._termsCache !== undefined) return this._termsCache;
+        if (this.id == null) return (this._termsCache = Post.emptyTermsBucket());
+        const byId = await Post.getTermsForIds([this.id]);
+        return (this._termsCache = byId[this.id as any] || Post.emptyTermsBucket());
     }
 
     /**
@@ -210,6 +276,16 @@ class Post {
                 title: featuredImage.postTitle
             };
         }
+
+        // TAXONOMÍA. Ninguna ruta devolvía los términos de un post, así que el editor no podía sembrar
+        // un control de categoría/etiquetas: cualquier selector que mandase su valor BORRABA (setTerms
+        // REEMPLAZA) los términos que llegaron por importación o por API. Se emiten SIEMPRE las dos
+        // claves — un array vacío significa "este post no tiene ninguno", que es información, mientras
+        // que una clave ausente es indistinguible de "el servidor no lo manda" y obliga al cliente a
+        // ser fail-closed. `id` es el `term_id`, que es lo que `setTerms` espera de vuelta.
+        const terms = await this.getSerializedTerms();
+        json.categories = terms.category || [];
+        json.tags = terms.post_tag || [];
 
         return json;
     }
@@ -470,7 +546,8 @@ class Post {
             parent,
             includeStatuses = null,
             metaKey,
-            metaValue
+            metaValue,
+            mimeType
         } = options;
 
         const col = alias ? `${alias}.` : '';
@@ -543,6 +620,30 @@ class Post {
         if (parent !== undefined) {
             conditions.push(`${col}post_parent = ?`);
             params.push(parent);
+        }
+
+        // MIME type (lo usa la biblioteca de medios: los adjuntos guardan su tipo en post_mime_type).
+        // Vive AQUÍ, en el constructor compartido, precisamente para que el listado y el COUNT(*) no
+        // puedan divergir — un filtro aplicado sólo a las filas dejaría el paginador contando toda la
+        // biblioteca y anunciando páginas vacías.
+        //
+        // Dos formas, como acepta WordPress: 'image/png' filtra EXACTO, y 'image' o 'image/' filtra por
+        // familia. El caso exacto usa `=`, así que no hay comodines que escapar; el de familia usa LIKE,
+        // y por eso el prefijo se valida contra un juego de caracteres sin '%' ni '_' (que en LIKE SON
+        // comodines: un `mime_type=%` habría listado la biblioteca entera fingiendo ser un filtro).
+        // Un prefijo que no valida NO se ignora — se emite una condición imposible, para que filtro y
+        // total digan lo mismo (0) en vez de devolver la biblioteca completa.
+        if (mimeType !== undefined && mimeType !== null && String(mimeType).trim() !== '') {
+            const requested = String(mimeType).trim().replace(/\/+$/, '');
+            if (requested.includes('/')) {
+                conditions.push(`${col}post_mime_type = ?`);
+                params.push(requested);
+            } else if (/^[A-Za-z0-9][A-Za-z0-9.+-]{0,63}$/.test(requested)) {
+                conditions.push(`${col}post_mime_type LIKE ?`);
+                params.push(`${requested}/%`);
+            } else {
+                conditions.push('1 = 0');
+            }
         }
 
         // Search — the engine's native full-text index when this install has one, else the LIKE scan.
@@ -1402,6 +1503,14 @@ class Post {
             for (const post of posts) {
                 post._featuredImageCache = { post: null, attachedFile: null };
             }
+        }
+
+        // Batch-hydrate the taxonomy terms toJSON() serializes, in ONE query for the whole page.
+        // Same shape of contract as the two above: EVERY post ends with a defined bucket (empty when
+        // it has no terms), so toJSON never falls back to a per-post query on a hydrated list.
+        const termsById = await Post.getTermsForIds(ids);
+        for (const post of posts) {
+            post._termsCache = termsById[post.id] || Post.emptyTermsBucket();
         }
 
         return posts;
