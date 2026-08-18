@@ -126,6 +126,12 @@ export default function DnDDriver({ handle, registry, geometry, frameDocument }:
   const parentPointRef = React.useRef<DndPoint | null>(null);
   /** Qué se está arrastrando, para poder ponerle nombre al fantasma. */
   const dragSourceRef = React.useRef<{ kind: "new"; type: string } | { kind: "existing"; nodeId: string } | null>(null);
+  /**
+   * EL ELEMENTO agarrado, guardado en el propio `pointerdown`. No se vuelve a buscar por id a
+   * propósito: el `nodeId` del store no es el mismo valor que el atributo del DOM (ver
+   * render/nodeKey.ts), así que buscarlo por ahí devolvía `null` y el fantasma salía vacío.
+   */
+  const dragElRef = React.useRef<Element | null>(null);
 
   /* ---------------- sensor de puntero + autoscroll + Escape ---------------- */
 
@@ -170,25 +176,90 @@ export default function DnDDriver({ handle, registry, geometry, frameDocument }:
      * Se aplica a los DOS documentos: la paleta vive en el padre y su etiqueta también se seleccionaba.
      */
     /**
-     * QUÉ estás arrastrando, escrito con todas las letras junto al cursor.
+     * EL FANTASMA ES EL BLOQUE, no una etiqueta con su nombre.
      *
-     * Sin esto el arrastre era invisible: el hueco de destino aparecía en el lienzo, pero de la
-     * cosa arrastrada no había ni rastro — al agarrar un bloque no pasaba, aparentemente, nada.
-     * Vive en el documento PADRE (tiene que poder viajar por encima de la paleta y del lienzo) y
-     * es `pointer-events: none`, así que no se interpone en el hit-test que resuelve el destino.
+     * Lo que se arrastra tiene que verse: mientras el arrastre era invisible, agarrar un bloque
+     * parecía no hacer nada. Y una pastilla con el nombre tampoco es lo que estás moviendo — así
+     * que el fantasma es una COPIA REAL del bloque.
+     *
+     * El obstáculo es de dónde viven las cosas: el fantasma tiene que poder viajar por encima de la
+     * paleta Y del lienzo, así que vive en el documento PADRE… que no tiene la hoja de estilos del
+     * sitio. Una copia pelada ahí se vería sin estilo ninguno. Se monta por eso en un SHADOW ROOT
+     * que adopta las hojas del iframe: los estilos del lienzo entran, los del editor no se filtran,
+     * y ningún id o atributo duplicado queda visible para los selectores del documento.
+     *
+     * Un bloque NUEVO todavía no existe en el lienzo; ahí lo que estás moviendo es su tarjeta de la
+     * paleta, y esa sí vive en el padre: se clona tal cual.
      */
-    const labelOf = (): string => {
+    const CANVAS_GHOST_MAX_H = 220;
+
+    const buildGhost = (): void => {
+      const host = ghostRef.current;
       const src = dragSourceRef.current;
-      if (!src) return "";
-      const type =
-        src.kind === "new" ? src.type : (handle.getDoc().nodes[src.nodeId]?.type ?? "");
-      return registry.get(type)?.label || type || "Bloque";
+      if (!host || !src) return;
+      host.replaceChildren();
+
+      if (src.kind === "new") {
+        const clone = dragElRef.current?.cloneNode(true) as HTMLElement | undefined;
+        if (!clone) return;
+        // Sin el atributo: una copia inerte no debe parecerle a nadie un origen de arrastre.
+        clone.removeAttribute("data-wjs-palette-type");
+        host.appendChild(clone);
+        return;
+      }
+
+      const el = dragElRef.current;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      const iframe = canvas.getFrameElement();
+      const scale =
+        iframe && iframe.clientWidth > 0 ? iframe.getBoundingClientRect().width / iframe.clientWidth : 1;
+
+      const shadowHost = parentDoc.createElement("div");
+      const shadow = shadowHost.attachShadow({ mode: "open" });
+      // Las hojas del lienzo, clonadas: mismo origen, así que el navegador las sirve de su caché.
+      for (const node of frameDocument.querySelectorAll('link[rel="stylesheet"], style')) {
+        shadow.appendChild(node.cloneNode(true));
+      }
+      /**
+       * LOS TOKENS DEL TEMA, a mano. Las reglas que los declaran son `:root { --wjs-… }`, y `:root`
+       * es el elemento raíz del DOCUMENTO: dentro de un shadow root no casa con nada. Sin esto las
+       * hojas clonadas están ahí pero cada `var(--wjs-…)` queda sin valor, y el clon sale
+       * transparente — se veía el marco del fantasma y dentro, nada.
+       */
+      const rootStyle = frameDocument.defaultView?.getComputedStyle(frameDocument.documentElement);
+      let tokens = "";
+      if (rootStyle) {
+        for (let i = 0; i < rootStyle.length; i++) {
+          const prop = rootStyle.item(i);
+          if (prop.startsWith("--")) tokens += `${prop}:${rootStyle.getPropertyValue(prop)};`;
+        }
+      }
+
+      const box = parentDoc.createElement("div");
+      // Un bloque puede medir 800px de alto: como fantasma se recorta, o taparía media pantalla.
+      box.setAttribute(
+        "style",
+        `${tokens}width:${Math.round(rect.width)}px;max-height:${CANVAS_GHOST_MAX_H}px;overflow:hidden;` +
+          `transform:scale(${scale});transform-origin:top left;` +
+          // El fondo del lienzo, para que el clon no dependa de lo que haya detrás del cursor.
+          `background:${frameDocument.body ? frameDocument.defaultView!.getComputedStyle(frameDocument.body).backgroundColor : "transparent"};`,
+      );
+      box.appendChild(el.cloneNode(true));
+      shadow.appendChild(box);
+      shadowHost.setAttribute(
+        "style",
+        `width:${Math.round(rect.width * scale)}px;height:${Math.round(
+          Math.min(rect.height, CANVAS_GHOST_MAX_H) * scale,
+        )}px;overflow:hidden;`,
+      );
+      host.appendChild(shadowHost);
     };
 
     const showGhost = () => {
       const el = ghostRef.current;
       if (!el) return;
-      el.textContent = labelOf();
+      buildGhost();
       el.style.display = "block";
       moveGhost();
     };
@@ -204,7 +275,9 @@ export default function DnDDriver({ handle, registry, geometry, frameDocument }:
 
     const hideGhost = () => {
       const el = ghostRef.current;
-      if (el) el.style.display = "none";
+      if (!el) return;
+      el.style.display = "none";
+      el.replaceChildren(); // el clon no sobrevive al gesto: ni memoria ni un DOM viejo en pantalla
     };
 
     const setDragging = (on: boolean) => {
@@ -288,6 +361,7 @@ export default function DnDDriver({ handle, registry, geometry, frameDocument }:
       if (!id) return;
       const rect = geometry.getRect(id);
       dragSourceRef.current = { kind: "existing", nodeId: id };
+      dragElRef.current = (pe.target as Element | null)?.closest?.("[data-wjs-block-id]") ?? null;
       parentPointRef.current = toParentPoint({ x: pe.clientX, y: pe.clientY });
       gesture.down(
         { kind: "existing", nodeId: id, originRect: rect ? blockRectToDndRect(rect) : null },
@@ -304,6 +378,7 @@ export default function DnDDriver({ handle, registry, geometry, frameDocument }:
       const p = eventToFramePoint(pe, true);
       if (!p) return;
       dragSourceRef.current = { kind: "new", type };
+      dragElRef.current = item ?? null;
       parentPointRef.current = { x: pe.clientX, y: pe.clientY };
       gesture.down({ kind: "new", type }, p);
     };
@@ -395,8 +470,22 @@ export default function DnDDriver({ handle, registry, geometry, frameDocument }:
         ref={ghostRef}
         data-wjs-dnd-ghost=""
         aria-hidden="true"
-        style={{ display: "none", position: "fixed", left: 0, top: 0, zIndex: 2147483000, pointerEvents: "none" }}
-        className="rounded-md border border-[var(--ed-primary)] bg-[var(--ed-surface-container-highest)] px-2.5 py-1.5 text-[11px] font-semibold text-[var(--ed-on-surface)] shadow-lg"
+        style={{
+          display: "none",
+          position: "fixed",
+          left: 0,
+          top: 0,
+          zIndex: 2147483000,
+          pointerEvents: "none",
+          // Translúcido y con sombra: se lee como "esto lo llevas en la mano", no como contenido
+          // ya colocado. La rotación mínima es la misma pista, sin marear.
+          opacity: 0.85,
+          rotate: "-1deg",
+          filter: "drop-shadow(0 8px 20px rgba(0,0,0,.35))",
+          borderRadius: "6px",
+          overflow: "hidden",
+          outline: "2px solid var(--ed-primary)",
+        }}
       />
     </>
   );
