@@ -19,6 +19,7 @@ import { compileIxPage, toRuntimeUnit } from "../compile";
 import { IX_REPLAY_EVENT, startIxRuntime } from "../runtime";
 import { ANIM_REPLAY_EVENT } from "@/components/blocks/entranceAnimation";
 import { createScrubDriver } from "../runtime/scrub";
+import { ixKeyframesFor } from "../runtime/targets";
 import type {
   IxAnimationLike,
   IxDocumentLike,
@@ -27,7 +28,7 @@ import type {
   IxObserverEntry,
   IxObserverLike,
 } from "../runtime/host";
-import type { IxKeyframe, IxRuntimeUnit } from "../types";
+import type { IxKeyframe, IxRuntimeTrack, IxRuntimeUnit } from "../types";
 
 /* ------------------------------------------------------------------ */
 /* Host de mentira                                                     */
@@ -670,6 +671,69 @@ describe("driver de scrub", () => {
     (el as { animate?: unknown }).animate = undefined;
     const h = harness([el]);
     expect(() => createScrubDriver(units, h.host)()).not.toThrow();
+  });
+});
+
+describe("colores del TEMA en el camino WAAPI (C4) — paridad con el CSS", () => {
+  /** Una pista de runtime cualquiera: aquí solo importan sus fotogramas. */
+  const baseTrack: IxRuntimeTrack = {
+    target: { kind: "self" },
+    kf: [],
+    dur: 600,
+    delay: 0,
+    range: { from: { at: "entry", pct: 0 }, to: { at: "cover", pct: 100 } },
+    repeat: 1,
+    alt: false,
+  };
+
+  /** Un elemento con `ownerDocument.defaultView.getComputedStyle`, que es de donde salen los tokens. */
+  const withVars = (vars: Record<string, string>, direction = "ltr") => {
+    const el = new FakeEl("x") as FakeEl & { ownerDocument?: unknown };
+    el.ownerDocument = {
+      defaultView: {
+        getComputedStyle: () => ({
+          direction,
+          getPropertyValue: (p: string) => vars[p] ?? "",
+        }),
+      },
+    };
+    return el as unknown as IxElementLike;
+  };
+
+  const kfWith = (color: string): IxKeyframe[] => [
+    { offset: 0, opacity: "1", color },
+    { offset: 1, opacity: "1", color },
+  ];
+
+  it("el var() se sustituye por su valor computado: `Element.animate()` no resuelve variables", () => {
+    const el = withVars({ "--wjs-color-primary": " #22d3ee " });
+    const out = ixKeyframesFor(el, { ...baseTrack, kf: kfWith("var(--wjs-color-primary)") });
+    expect(out[0].color).toBe("#22d3ee"); // sin espacios: el valor computado viene con ellos
+    expect(JSON.stringify(out)).not.toContain("var(");
+  });
+
+  it("un token que no resuelve NO escribe basura: se cae la propiedad y manda el color del bloque", () => {
+    const el = withVars({});
+    const out = ixKeyframesFor(el, { ...baseTrack, kf: kfWith("var(--wjs-color-fantasma)") });
+    expect("color" in out[0]).toBe(false);
+    expect(out[0].opacity).toBe("1"); // el resto del fotograma queda intacto
+  });
+
+  it("sin `var()` no se copia nada: los fotogramas se devuelven TAL CUAL (misma referencia)", () => {
+    const el = withVars({ "--wjs-color-primary": "#22d3ee" });
+    const track = { ...baseTrack, kf: kfWith("#123456") };
+    expect(ixKeyframesFor(el, track)).toBe(track.kf);
+  });
+
+  it("en RTL se resuelve sobre el juego ESPEJADO, no sobre el otro", () => {
+    const el = withVars({ "--wjs-color-primary": "#22d3ee" }, "rtl");
+    const out = ixKeyframesFor(el, {
+      ...baseTrack,
+      kf: [{ offset: 0, transform: "translate3d(-40px,0px,0)", color: "var(--wjs-color-primary)" }],
+      kfRtl: [{ offset: 0, transform: "translate3d(40px,0px,0)", color: "var(--wjs-color-primary)" }],
+    });
+    expect(out[0].transform).toContain("translate3d(40px,0px,0)");
+    expect(out[0].color).toBe("#22d3ee");
   });
 });
 

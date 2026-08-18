@@ -282,6 +282,15 @@ Execution order: C1 → C2 (the native pair with the highest return) → C3 (con
 C5 → C6. Same hard gates as every cycle: native-first, zero CLS, keyboard-operable controls,
 canvas preview, revert-red tests, browser-verified computed styles, and CI+CodeQL green on main.
 
+**Cycle 3 status (2026-08-17):**
+
+| Item | Status | Evidence |
+|---|---|---|
+| **C1** | **SHIPPED** (`0aaec50` + `55d5c11`) | Site setting `wjs_view_transitions` (closed vocabulary `off`/`fade`/`slide`, public-exposed, purge-wired), pure `compileVtCss` emitting `@view-transition{navigation:auto}` at top level plus named header/footer transitions on the shell's stable hook class, reduced-motion kill inside the emitted sheet. The per-block morph was **dropped by the refutation itself**: `view-transition-name` must be unique per document, and two documents never share a block id — the value lives in the chrome |
+| **C2** | **SHIPPED** (`547b1e1`) | The accordion stopped unmounting its panel: three layers (`grid-template-rows: 0fr→1fr`, clipped inner, padded body) so the closed panel measures **0px** — the naive two-layer version measured 32px because padding does not collapse under `min-height:0`. Firefox-safe path (`visibility` paired with the transition, not `display`); `interpolate-size`/`calc-size()` deliberately not used (Chromium-only in 2026) |
+| **C3** | **SHIPPED** (`e1950f9`) | `repeat:"inf"` now compiles `animation-play-state: var(--wjs-ix-play,running)`, and a zero-JS checkbox control (`html:has(#wjs-motion-pause:checked)`) pauses every perpetual animation on the page. The token is never declared in the sheet — its absence *is* `running`, so nothing fights specificity. The page declares `hasInfinite`, which is what mounts the control at all: a still page pays nothing |
+| **C4** | **SHIPPED** (this commit) | RTL mirroring via `calc(var(--wjs-ix-dir,1) * …)` in CSS and a pre-baked `kfRtl` set for WAAPI (a `var()` inside `Element.animate()` never resolves — it would kill the animation in silence, precisely on the fallback browser). Theme colours travel in their own step key `tint` (closed list of 9 tokens × 3 colour properties) and emit `var(--wjs-color-…)`. Browser-verified on the served stylesheet: with the site re-coloured live, the tinted animation followed to `rgb(255,0,0)→rgb(0,255,0)` while the baked-hex twin stayed at the old palette — which is the whole point. The contract test caught a real defect on the way in: a track whose only animated property was a theme token was discarded by `normTrack`'s emptiness guard before the compiler ever saw it |
+
 ---
 
 ## 4. Platform facts this plan leans on (verified 2026-08-16)

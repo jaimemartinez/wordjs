@@ -40,6 +40,7 @@ import MSym from "@/components/editor/MSym";
 import {
   IX_BREAKPOINTS,
   IX_CLIP_DIRS,
+  IX_COLOR_TOKENS,
   IX_EASINGS,
   IX_EVENT_PREFIX,
   IX_MAX_STEPS,
@@ -53,6 +54,8 @@ import {
   IX_REPEAT_MAX,
   IX_STAGGER_MAX,
   type IxClipDir,
+  type IxColorPropKey,
+  type IxColorToken,
   type IxCompileCtx,
   type IxEase,
   type IxEdgeName,
@@ -117,6 +120,7 @@ import {
   setStepBez,
   setStepEase,
   setStepProp,
+  setStepTint,
   setTargetKind,
   setTrackAxis,
   setTriggerKind,
@@ -1068,6 +1072,7 @@ export default function InteractionsControl({
                     onEase={(ease) => onChange(setStepEase(value, i, ease, ixCtx, active))}
                     onBez={(bez) => onChange(setStepBez(value, i, bez, ixCtx, active))}
                     onProp={(key, v) => onChange(setStepProp(value, i, key, v, ixCtx, active))}
+                    onTint={(key, t) => onChange(setStepTint(value, i, key, t, ixCtx, active))}
                     onRemove={() => onChange(removeStep(value, i, ixCtx, active))}
                   />
                 ))}
@@ -1126,6 +1131,7 @@ interface StepRowProps {
   onEase: (ease: IxEase) => void;
   onBez: (bez: IxBez) => void;
   onProp: (key: IxPropKey, value: number | undefined) => void;
+  onTint: (key: IxColorPropKey, token: IxColorToken | undefined) => void;
   onRemove: () => void;
 }
 
@@ -1139,6 +1145,7 @@ function StepRow({
   onEase,
   onBez,
   onProp,
+  onTint,
   onRemove,
 }: StepRowProps) {
   const isFirst = index === 0;
@@ -1220,8 +1227,10 @@ function StepRow({
               <StepColorRow
                 label={IX_PROP_LABELS[key]}
                 value={step.set[key] ?? IX_PROP_NEUTRAL[key]}
+                token={step.tint?.[key as IxColorPropKey]}
                 readOnly={readOnly}
                 onChange={(v) => onProp(key, v)}
+                onToken={(t) => onTint(key as IxColorPropKey, t)}
               />
             ) : (
               <VersoFieldControl
@@ -1268,34 +1277,80 @@ interface StepColorRowProps {
   label: string;
   /** El entero 0xRRGGBB tal cual vive en el paso. */
   value: number;
+  /** El color del TEMA elegido, si lo hay: cuando está puesto MANDA él y el swatch se apaga. */
+  token?: IxColorToken;
   readOnly: boolean;
   onChange: (value: number) => void;
+  onToken: (token: IxColorToken | undefined) => void;
 }
 
+/** Los nueve colores del tema, con el nombre que el autor reconoce del personalizador. */
+const IX_COLOR_TOKEN_LABELS: Readonly<Record<IxColorToken, string>> = {
+  primary: "Primario",
+  secondary: "Secundario",
+  accent: "Acento",
+  success: "Éxito",
+  danger: "Peligro",
+  warning: "Aviso",
+  info: "Información",
+  heading: "Titulares",
+  link: "Enlaces",
+};
+
+/** El sentinel del desplegable para «no, quiero un color mío». */
+const IX_TINT_NONE = "";
+
 /**
- * `<input type="color">` de una propiedad de color. No es un `VersoField` (no existe el tipo), así
- * que replica a mano lo que `VersoFieldControl` daría gratis: `<label for>` + `useId`. El DATO
- * sigue siendo el entero 0xRRGGBB — aquí solo se traduce hacia y desde el `#rrggbb` del control.
+ * Una propiedad de color de un paso: color propio (swatch) o color DEL TEMA (desplegable).
+ *
+ * No es un `VersoField` (no existe el tipo), así que replica a mano lo que `VersoFieldControl`
+ * daría gratis: `<label for>` + `useId`. El DATO del swatch sigue siendo el entero 0xRRGGBB — aquí
+ * solo se traduce hacia y desde el `#rrggbb` del control.
+ *
+ * Con un token puesto, el swatch se DESHABILITA en vez de esconderse: el autor ve que su color
+ * sigue ahí debajo y que volver a él es quitar el token, no repintar. Es la misma razón por la que
+ * `setStepTint` no borra el número.
  */
-function StepColorRow({ label, value, readOnly, onChange }: StepColorRowProps) {
+function StepColorRow({ label, value, token, readOnly, onChange, onToken }: StepColorRowProps) {
   const id = useId();
+  const selId = `${id}-tok`;
   return (
     <div className="mb-3">
       <label
-        htmlFor={id}
+        htmlFor={token ? selId : id}
         className="block text-xs font-medium text-[var(--ed-on-surface-variant)] mb-1"
       >
         {label}
       </label>
-      {/* `readOnly` no existe en un input de color (no hay caret): `disabled` es el equivalente. */}
-      <input
-        id={id}
-        type="color"
-        className="h-8 w-full cursor-pointer rounded border border-[var(--ed-outline-variant)] bg-[var(--ed-surface-container-high)] p-0.5 disabled:cursor-default disabled:opacity-40"
-        value={intToHex(value)}
-        disabled={readOnly}
-        onChange={(e) => onChange(hexToInt(e.target.value))}
-      />
+      <div className="flex items-center gap-1">
+        {/* `readOnly` no existe en un input de color (no hay caret): `disabled` es el equivalente. */}
+        <input
+          id={id}
+          type="color"
+          aria-label={`${label}: color propio`}
+          className="h-8 w-12 shrink-0 cursor-pointer rounded border border-[var(--ed-outline-variant)] bg-[var(--ed-surface-container-high)] p-0.5 disabled:cursor-default disabled:opacity-40"
+          value={intToHex(value)}
+          disabled={readOnly || token !== undefined}
+          onChange={(e) => onChange(hexToInt(e.target.value))}
+        />
+        <select
+          id={selId}
+          aria-label={`${label}: color del tema`}
+          className="h-8 min-w-0 flex-1 rounded border border-[var(--ed-outline-variant)] bg-[var(--ed-surface-container-high)] px-1 text-xs text-[var(--ed-on-surface)] disabled:cursor-default disabled:opacity-40"
+          value={token ?? IX_TINT_NONE}
+          disabled={readOnly}
+          onChange={(e) =>
+            onToken(e.target.value === IX_TINT_NONE ? undefined : (e.target.value as IxColorToken))
+          }
+        >
+          <option value={IX_TINT_NONE}>Color propio</option>
+          {IX_COLOR_TOKENS.map((t) => (
+            <option key={t} value={t}>
+              Del tema: {IX_COLOR_TOKEN_LABELS[t]}
+            </option>
+          ))}
+        </select>
+      </div>
     </div>
   );
 }

@@ -153,7 +153,42 @@ export type IxStep = {
    * formatea él mismo los cuatro escalares). Si está, gana a `ease`.
    */
   bez?: [number, number, number, number];
+  /**
+   * COLOR TOMADO DEL TEMA (ciclo 3 · C4). Mismas tres claves que en `set`, pero por NOMBRE de token
+   * de una lista cerrada: el paso anima hacia `var(--wjs-color-<token>)` en vez de hacia un hex.
+   *
+   * Por qué existe: hasta ahora un color se horneaba como literal, así que recolorear el sitio
+   * dejaba las animaciones con el color VIEJO — deuda de sistema justo donde los rivales sitúan su
+   * salto de 2026 («animar variables del sistema de diseño»). Ojo a la distinción, que es la que
+   * mantiene la regla dura: ANIMAR una variable en el camino caliente se sigue rechazando (recalcula
+   * en el hilo principal); LEER una del manifiesto del tema no cuesta nada y no rompe la invariante
+   * de que ninguna cadena del autor llega al CSS, porque el nombre viene de una lista cerrada.
+   *
+   * Vive en su propia clave y no dentro de `set` a propósito: `set` es aritmética pura (se clampa,
+   * se escala por intensidad, se interpola), y meter ahí un texto obligaría a comprobar el tipo en
+   * cada operación numérica del compilador. Si un paso declara las dos, MANDA el token.
+   */
+  tint?: Partial<Record<IxColorPropKey, IxColorToken>>;
 };
+
+/** Las tres propiedades de color del motor. */
+export type IxColorPropKey = "textColor" | "bgColor" | "borderColor";
+
+/**
+ * Tokens de color del tema que un paso puede tomar prestados. LISTA CERRADA y deliberadamente
+ * corta: son los roles que un autor reconoce, y cada nombre existe en el manifiesto de tokens
+ * (`backend/public/theme-tokens.json`), así que ninguno puede resolver a la nada.
+ */
+export type IxColorToken =
+  | "primary"
+  | "secondary"
+  | "accent"
+  | "success"
+  | "danger"
+  | "warning"
+  | "info"
+  | "heading"
+  | "link";
 
 /**
  * `bounce` y `elastic` no son beziers: son físicas muestreadas a `linear()` en COMPILACIÓN

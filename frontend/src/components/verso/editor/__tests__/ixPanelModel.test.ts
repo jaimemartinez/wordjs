@@ -63,6 +63,7 @@ import {
   setStepBez,
   setStepEase,
   setStepProp,
+  setStepTint,
   setTargetKind,
   setTriggerKind,
   setViewOnce,
@@ -432,6 +433,27 @@ describe("pasos", () => {
     expect(ixPanelState(conEscala, CTX).tracks[0].steps[0].set.scale).toBe(0.8);
     const sinEscala = setStepProp(conEscala, 0, "scale", undefined, CTX);
     expect(ixPanelState(sinEscala, CTX).tracks[0].steps[0].set.scale).toBeUndefined();
+  });
+
+  it("el color del TEMA se pone y se quita sin tocar el color propio de debajo (C4)", () => {
+    const conHex = setStepProp(defaultIxSpec(), 1, "textColor", 0x112233, CTX);
+    const conToken = setStepTint(conHex, 1, "textColor", "primary", CTX);
+    const paso = ixPanelState(conToken, CTX).tracks[0].steps[1];
+    expect(paso.tint?.textColor).toBe("primary");
+    expect(paso.set.textColor).toBe(0x112233); // sigue ahí: quitar el token no repinta
+    assertWritable(conToken);
+
+    const sinToken = setStepTint(conToken, 1, "textColor", undefined, CTX);
+    const vuelta = ixPanelState(sinToken, CTX).tracks[0].steps[1];
+    expect(vuelta.tint).toBeUndefined(); // sin claves, la clave entera desaparece
+    expect(vuelta.set.textColor).toBe(0x112233);
+  });
+
+  it("una propiedad que SOLO tiene color del tema sigue siendo una propiedad del paso", () => {
+    const conToken = setStepTint(defaultIxSpec(), 1, "bgColor", "accent", CTX);
+    const paso = ixPanelState(conToken, CTX).tracks[0].steps[1];
+    expect(usedProps(paso)).toContain("bgColor");
+    expect(availableProps(paso)).not.toContain("bgColor"); // no se ofrece dos veces
   });
 
   it("un valor fuera de rango se CLAMPA (un blur de 1e9 tumba el compositor, no 'se ve feo')", () => {

@@ -602,6 +602,66 @@ describe("puntero (P6): sin CSS, con IR completo, y honestidad sobre lo que no a
   });
 });
 
+describe("colores tomados del TEMA (C4) — recolorear el sitio recolorea su movimiento", () => {
+  const tinted = {
+    steps: [
+      { at: 0, set: { opacity: 0 } },
+      { at: 100, set: { opacity: 1 }, tint: { textColor: "primary" } },
+    ] as unknown as IxStep[],
+  };
+
+  it("un paso con token emite var(--wjs-color-…) en vez de un hex horneado", () => {
+    const u = compileIx(mk({ on: "load" }, tinted))!;
+    expect(u.keyframes[0]).toContain("color:var(--wjs-color-primary)");
+    expect(u.keyframes[0]).not.toMatch(/color:#[0-9a-f]{6}/);
+  });
+
+  it("el token GANA al número cuando el paso trae los dos", () => {
+    const both = compileIx(mk({ on: "load" }, {
+      steps: [
+        { at: 0, set: { opacity: 0 } },
+        { at: 100, set: { opacity: 1, textColor: 0x123456 }, tint: { textColor: "accent" } },
+      ] as unknown as IxStep[],
+    }))!;
+    expect(both.keyframes[0]).toContain("var(--wjs-color-accent)");
+    expect(both.keyframes[0]).not.toContain("#123456");
+  });
+
+  it("un token declara la propiedad: una pista SOLO con token sí emite", () => {
+    const only = compileIx(mk({ on: "load" }, {
+      steps: [
+        { at: 0, set: {}, tint: { bgColor: "danger" } },
+        { at: 100, set: {}, tint: { bgColor: "success" } },
+      ] as unknown as IxStep[],
+    }))!;
+    expect(only.keyframes[0]).toContain("background-color:var(--wjs-color-danger)");
+    expect(only.keyframes[0]).toContain("background-color:var(--wjs-color-success)");
+  });
+
+  it("dato hostil: un token que no está en la lista cerrada NO llega a la hoja", () => {
+    const hostile = compileIx({
+      v: 1,
+      trigger: { on: "load" },
+      tracks: [
+        {
+          target: { kind: "self" },
+          steps: [
+            { at: 0, set: { opacity: 0 }, tint: { textColor: "primary); } body{display:none" } },
+            { at: 100, set: { opacity: 1 }, tint: { textColor: "primary", nope: "x" } },
+          ],
+        },
+      ],
+    } as unknown as IxSpec)!;
+    const css = hostile.keyframes.join("");
+    expect(css).not.toContain("display:none");
+    expect(css).not.toContain("body{");
+    expect(hostile.keyframes[0]).toContain("color:var(--wjs-color-primary)");
+    // El paso 0 se queda SIN token (el suyo era basura) y hereda el color natural del bloque:
+    // degradación honesta, no un token inventado.
+    expect(hostile.keyframes[0]).not.toMatch(/\{0%\{[^}]*color:/);
+  });
+});
+
 describe("espejo RTL del movimiento (C4) — y su paridad entre los dos backends", () => {
   const pair = (a: Record<string, number>, b: Record<string, number>) =>
     [{ at: 0, set: a }, { at: 100, set: b }] as unknown as IxStep[];

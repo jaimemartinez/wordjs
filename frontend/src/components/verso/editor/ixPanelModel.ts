@@ -26,6 +26,7 @@
  */
 import {
   IX_BREAKPOINTS,
+  IX_COLOR_PROP_KEYS,
   IX_DEFAULT_RANGES,
   IX_EVENT_NAME_RE,
   IX_DELAY_MAX,
@@ -41,6 +42,8 @@ import {
   resolveIxBody,
   type IxBreakpoint,
   type IxClipDir,
+  type IxColorPropKey,
+  type IxColorToken,
   type IxCompileCtx,
   type IxEase,
   type IxEdgeName,
@@ -187,12 +190,11 @@ export const IX_PROP_UNITS: Readonly<Record<IxPropKey, string>> = Object.freeze(
 /**
  * Propiedades que el panel edita con un SELECTOR DE COLOR (el dato sigue siendo un número
  * 0xRRGGBB; la conversión hex↔entero es cosa del control, nunca del documento).
+ *
+ * Sale de la lista canónica del normalizador, no de una copia: son las MISMAS claves que aceptan un
+ * color del tema, y dos listas escritas a mano acabarían discrepando el día que se añada la cuarta.
  */
-export const IX_COLOR_PROPS: ReadonlySet<IxPropKey> = new Set<IxPropKey>([
-  "textColor",
-  "bgColor",
-  "borderColor",
-]);
+export const IX_COLOR_PROPS: ReadonlySet<IxPropKey> = new Set<IxPropKey>(IX_COLOR_PROP_KEYS);
 
 /**
  * Rangos de los CONTROLES. Deliberadamente más estrechos que los del normalizador
@@ -1067,12 +1069,54 @@ export function setStepProp(
     };
   }, track);
 }
-/** Propiedades que el paso NO tiene todavía — las que ofrece el desplegable "Añadir propiedad". */
-export function availableProps(step: IxStep): IxPropKey[] {
-  return IX_PROP_KEYS.filter((k) => step.set[k] === undefined);
+/**
+ * El COLOR DEL TEMA de una propiedad de color en un paso (C4). `undefined` lo quita y devuelve el
+ * paso al color literal que ya tuviera.
+ *
+ * El token vive en su propia clave (`tint`) y no pisa el número de `set`: quitar el token deja el
+ * hex intacto debajo, que es lo que el autor espera al probar "a ver cómo queda con el color del
+ * tema" y volver atrás. Cuando hay token, MANDA el token (así lo decide el compilador).
+ */
+export function setStepTint(
+  raw: unknown,
+  index: number,
+  key: IxColorPropKey,
+  token: IxColorToken | undefined,
+  ctx?: IxCompileCtx,
+  track = 0,
+): IxWrite {
+  return patchTrack0(raw, ctx, (t) => {
+    if (index < 0 || index >= t.steps.length) return t;
+    return {
+      ...t,
+      steps: t.steps.map((s, i) => {
+        if (i !== index) return s;
+        const next: IxStep = { ...s };
+        const tint = { ...(s.tint ?? {}) };
+        if (token === undefined) delete tint[key];
+        else tint[key] = token;
+        if (Object.keys(tint).length === 0) delete next.tint;
+        else next.tint = tint;
+        return next;
+      }),
+    };
+  }, track);
 }
 
-/** Propiedades presentes en el paso, en el ORDEN CANÓNICO (nunca el de inserción del objeto). */
+/** Propiedades que el paso NO tiene todavía — las que ofrece el desplegable "Añadir propiedad". */
+export function availableProps(step: IxStep): IxPropKey[] {
+  const used = new Set(usedProps(step));
+  return IX_PROP_KEYS.filter((k) => !used.has(k));
+}
+
+/**
+ * Propiedades presentes en el paso, en el ORDEN CANÓNICO (nunca el de inserción del objeto).
+ *
+ * Una propiedad de color con SOLO token (sin número debajo) también está presente: el compilador la
+ * emite, así que el panel tiene que enseñarla o el autor no podría quitar lo que ya ve moverse.
+ */
 export function usedProps(step: IxStep): IxPropKey[] {
-  return IX_PROP_KEYS.filter((k) => step.set[k] !== undefined);
+  return IX_PROP_KEYS.filter(
+    (k) => step.set[k] !== undefined || step.tint?.[k as IxColorPropKey] !== undefined,
+  );
 }

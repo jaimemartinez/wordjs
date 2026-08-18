@@ -24,6 +24,8 @@
 import type {
   IxBreakpoint,
   IxClipDir,
+  IxColorPropKey,
+  IxColorToken,
   IxEase,
   IxEdge,
   IxEdgeName,
@@ -330,6 +332,30 @@ export const IX_PROPS_NO_FILL: ReadonlySet<IxPropKey> = new Set<IxPropKey>([
   "borderColor",
 ]);
 
+/** Las tres claves de color, en orden canónico — el orden de emisión también sale de aquí. */
+export const IX_COLOR_PROP_KEYS: readonly IxColorPropKey[] = Object.freeze([
+  "textColor",
+  "bgColor",
+  "borderColor",
+]);
+
+/**
+ * Tokens del TEMA que un paso puede tomar prestados (C4). Lista CERRADA: el autor elige un rol y
+ * el emisor escribe `var(--wjs-color-<token>)`, así que recolorear el sitio recolorea también sus
+ * animaciones — y ninguna cadena del autor llega nunca a la hoja.
+ */
+export const IX_COLOR_TOKENS: readonly IxColorToken[] = Object.freeze([
+  "primary",
+  "secondary",
+  "accent",
+  "success",
+  "danger",
+  "warning",
+  "info",
+  "heading",
+  "link",
+]);
+
 /** Los colores se REDONDEAN a entero al normalizar (un 0xRRGGBB con decimales no es un color). */
 const IX_PROPS_INT: ReadonlySet<IxPropKey> = new Set<IxPropKey>([
   "textColor",
@@ -409,7 +435,28 @@ function normStep(raw: unknown): IxStep | undefined {
   if (ease) step.ease = ease;
   const bez = normBez(raw.bez);
   if (bez) step.bez = bez;
+  const tint = normTint(raw.tint);
+  if (tint) step.tint = tint;
   return step;
+}
+
+/**
+ * Los colores tomados del TEMA (C4): solo las tres claves de color, y solo nombres de la lista
+ * cerrada. Cualquier otra clave o valor se DESCARTA en silencio, como el resto del normalizador —
+ * y si no queda ninguno válido no se escribe la clave, para que el dato no engorde con `{}`.
+ */
+function normTint(raw: unknown): Partial<Record<IxColorPropKey, IxColorToken>> | undefined {
+  if (!isObj(raw)) return undefined;
+  const out: Partial<Record<IxColorPropKey, IxColorToken>> = {};
+  let any = false;
+  for (const k of IX_COLOR_PROP_KEYS) {
+    const tok = oneOf(raw[k], IX_COLOR_TOKENS);
+    if (tok) {
+      out[k] = tok;
+      any = true;
+    }
+  }
+  return any ? out : undefined;
 }
 
 /**
@@ -493,10 +540,17 @@ function normTrack(raw: unknown, warn: (w: string) => void): IxTrack | undefined
   const steps = normSteps(raw.steps, warn);
   if (!steps) return undefined;
 
-  // Una pista que no toca NINGUNA de las 8 propiedades no anima nada: se descarta antes de entrar
-  // en el cuerpo. Si no, el emisor produciría `@keyframes n{0%{}100%{}}` y un `transition:` sin
-  // valor — CSS inerte, pero ruido en la hoja y en el hash.
-  if (!steps.some((s) => IX_PROP_KEYS.some((k) => s.set[k] !== undefined))) return undefined;
+  // Una pista que no toca NINGUNA propiedad no anima nada: se descarta antes de entrar en el
+  // cuerpo. Si no, el emisor produciría `@keyframes n{0%{}100%{}}` y un `transition:` sin valor —
+  // CSS inerte, pero ruido en la hoja y en el hash.
+  //
+  // Un color tomado del TEMA (C4) cuenta como propiedad tocada, exactamente igual que un número:
+  // este guard y `unionProps` del compilador tienen que decir lo MISMO, o una pista que solo usa
+  // tokens se caería aquí y el compilador no llegaría a verla nunca.
+  const touches = (s: IxStep) =>
+    IX_PROP_KEYS.some((k) => s.set[k] !== undefined) ||
+    (s.tint !== undefined && IX_COLOR_PROP_KEYS.some((k) => s.tint![k] !== undefined));
+  if (!steps.some(touches)) return undefined;
 
   const track: IxTrack = { target, steps };
 

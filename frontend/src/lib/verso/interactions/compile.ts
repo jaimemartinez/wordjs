@@ -29,6 +29,7 @@ import {
   IX_MAX_CHILDREN,
   IX_MAX_UNITS_PER_PAGE,
   IX_PERSP_DEFAULT,
+  IX_COLOR_PROP_KEYS,
   IX_PROP_KEYS,
   IX_PROP_NEUTRAL,
   IX_STAGGER_TOTAL_FALLBACK_N,
@@ -38,6 +39,7 @@ import type {
   IxBody,
   IxBreakpoint,
   IxClipDir,
+  IxColorPropKey,
   IxKeyframe,
   IxNeedsRuntime,
   IxOrigin,
@@ -209,7 +211,13 @@ function easeCss(step: IxStep): string | undefined {
  */
 function unionProps(steps: IxStep[]): IxPropKey[] {
   const seen = new Set<IxPropKey>();
-  for (const s of steps) for (const k of IX_PROP_KEYS) if (s.set[k] !== undefined) seen.add(k);
+  for (const s of steps) {
+    for (const k of IX_PROP_KEYS) if (s.set[k] !== undefined) seen.add(k);
+    // Un color tomado del TEMA (C4) declara la propiedad igual que un número: sin esto, una pista
+    // que solo usa tokens no aparecería en la unión y no se emitiría nada. Los colores están fuera
+    // del relleno neutro, así que entrar en la unión no obliga a inventar valores en otros pasos.
+    if (s.tint) for (const k of IX_COLOR_PROP_KEYS) if (s.tint[k]) seen.add(k);
+  }
   return IX_PROP_KEYS.filter((k) => seen.has(k));
 }
 
@@ -244,6 +252,21 @@ const drawOffset = (set: IxProps, ctx: TrackCssCtx): number =>
 
 /** Color 0xRRGGBB → `#rrggbb`. El emisor formatea; el autor jamás aporta la cadena. */
 const hexColor = (v: number): string => `#${(Math.round(v) & 0xffffff).toString(16).padStart(6, "0")}`;
+
+/**
+ * El color de una propiedad en un paso: token del TEMA si lo declara, y si no el hex del número.
+ * `undefined` = el paso no toca ese color, que es lo que hace que el navegador interpole desde el
+ * color natural del bloque (los colores no participan del relleno neutro).
+ *
+ * El token GANA al número cuando están los dos: si el autor eligió un rol del tema, esa es su
+ * intención, y el número que hubiera quedado detrás es historia de la edición.
+ */
+function colorOf(step: IxStep, key: IxColorPropKey): string | undefined {
+  const tok = step.tint?.[key];
+  if (tok) return `var(--wjs-color-${tok})`;
+  const v = step.set[key];
+  return v === undefined ? undefined : hexColor(v);
+}
 
 /**
  * Contexto de PISTA para emitir un estado: qué dirección recorta `clip`, con qué perspectiva se
@@ -357,7 +380,8 @@ function clipCss(revealed: number, dir: IxClipDir): string {
  * navegador interpola desde el estilo computado del bloque — "desde su color natural", que es lo
  * que el autor pidió y lo único que el compilador no puede conocer.
  */
-function declsOf(set: IxProps, union: IxPropKey[], ctx: TrackCssCtx): string[] {
+function declsOf(step: IxStep, union: IxPropKey[], ctx: TrackCssCtx): string[] {
+  const set = step.set;
   const out: string[] = [];
   if (union.includes("opacity")) out.push(`opacity:${n(scaledVal(set, "opacity", ctx.amt))}`);
   const tf = transformOf(set, union, ctx);
@@ -368,9 +392,12 @@ function declsOf(set: IxProps, union: IxPropKey[], ctx: TrackCssCtx): string[] {
   if (union.includes("draw")) {
     out.push(`stroke-dashoffset:${n(drawOffset(set, ctx))}`);
   }
-  if (set.textColor !== undefined) out.push(`color:${hexColor(set.textColor)}`);
-  if (set.bgColor !== undefined) out.push(`background-color:${hexColor(set.bgColor)}`);
-  if (set.borderColor !== undefined) out.push(`border-color:${hexColor(set.borderColor)}`);
+  const text = colorOf(step, "textColor");
+  if (text) out.push(`color:${text}`);
+  const bg = colorOf(step, "bgColor");
+  if (bg) out.push(`background-color:${bg}`);
+  const border = colorOf(step, "borderColor");
+  if (border) out.push(`border-color:${border}`);
   return out;
 }
 
@@ -416,9 +443,14 @@ function keyframeOf(
   if (union.includes("draw")) {
     kf.strokeDashoffset = n(drawOffset(step.set, ctx));
   }
-  if (step.set.textColor !== undefined) kf.color = hexColor(step.set.textColor);
-  if (step.set.bgColor !== undefined) kf.backgroundColor = hexColor(step.set.bgColor);
-  if (step.set.borderColor !== undefined) kf.borderColor = hexColor(step.set.borderColor);
+  // Los colores salen por el MISMO decisor que el CSS (token del tema o hex): dos caminos que
+  // eligieran por su cuenta acabarían discrepando, y el previsualizador enseñaría otra cosa.
+  const text = colorOf(step, "textColor");
+  if (text) kf.color = text;
+  const bg = colorOf(step, "bgColor");
+  if (bg) kf.backgroundColor = bg;
+  const border = colorOf(step, "borderColor");
+  if (border) kf.borderColor = border;
   return kf;
 }
 
@@ -761,10 +793,10 @@ export function emitUnit(body: IxBody, hash: string): IxUnit {
       rules.push(
         rule(`.${cls}${suffix}`, [
           `transition:${props.map((p) => `${p} ${n(dur)}ms ${ease} ${n(delay)}ms`).join(",")}`,
-          ...declsOf(a.set, union, tcx),
+          ...declsOf(a, union, tcx),
         ]),
       );
-      rules.push(rule(sel, declsOf(b.set, union, tcx)));
+      rules.push(rule(sel, declsOf(b, union, tcx)));
       rules.push(...staggerRules(cls, track, trigger, suffix, delay, "transition-delay", warnings));
       if (track.target.kind === "words" && track.stagger && track.stagger.each > 0) {
         // El `calc()` por palabra solo existe en la vía de animación; una transición no tiene
@@ -823,7 +855,7 @@ export function emitUnit(body: IxBody, hash: string): IxUnit {
     // objetivo: dos pistas arman el mismo elemento con UNA regla (y last-wins si chocan, como la
     // lista de animaciones).
     if (trigger.on === "view" && trigger.once !== false) {
-      const armed = declsOf(track.steps[0].set, union, tcx);
+      const armed = declsOf(track.steps[0], union, tcx);
       if (armed.length > 0) {
         const acc = armedGroups.get(suffix);
         if (acc) acc.push(...armed);
@@ -1017,7 +1049,7 @@ function keyframesCss(name: string, steps: IxStep[], union: IxPropKey[], ctx: Tr
       // El easing de un paso vale HASTA EL SIGUIENTE; en el último no significa nada y se omite.
       const ease = s.at < 100 ? easeCss(s) : undefined;
       if (ease) decls.push(`animation-timing-function:${ease}`);
-      decls.push(...declsOf(s.set, union, ctx));
+      decls.push(...declsOf(s, union, ctx));
       return `${n(s.at)}%{${decls.join(";")}}`;
     })
     .join("");

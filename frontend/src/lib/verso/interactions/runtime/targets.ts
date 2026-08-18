@@ -33,12 +33,49 @@ const SVG_SELECTOR = ".wjs-ixd";
  * puede llevar una cita en árabe con su `dir="rtl"`, y es esa la que manda sobre su movimiento.
  */
 export function ixKeyframesFor(el: IxElementLike, track: IxRuntimeTrack): IxKeyframe[] {
-  if (!track.kfRtl) return track.kf;
   const view = (el as { ownerDocument?: { defaultView?: unknown } }).ownerDocument?.defaultView as
-    | { getComputedStyle?: (e: unknown) => { direction?: string } }
+    | {
+        getComputedStyle?: (e: unknown) => {
+          direction?: string;
+          getPropertyValue?: (p: string) => string;
+        };
+      }
     | undefined;
-  const dir = view?.getComputedStyle?.(el)?.direction;
-  return dir === "rtl" ? track.kfRtl : track.kf;
+  const cs = view?.getComputedStyle?.(el);
+  const kf = track.kfRtl && cs?.direction === "rtl" ? track.kfRtl : track.kf;
+  return resolveVars(kf, cs);
+}
+
+/**
+ * Sustituye los `var(--token)` de los fotogramas por su valor COMPUTADO en este elemento (C4).
+ *
+ * Hace falta porque `Element.animate()` no resuelve variables: un fotograma con `var(...)` se
+ * descarta y la animación se cae EN SILENCIO — precisamente en el navegador que depende de este
+ * camino. El CSS sí las resuelve solo, así que esto es lo que mantiene la paridad entre los dos
+ * backends cuando un paso toma un color del tema.
+ *
+ * Solo toca los valores que son exactamente una variable (que es lo único que emite el compilador);
+ * si el token no resuelve a nada, se deja el fotograma sin esa propiedad en vez de escribir basura:
+ * el navegador interpolará desde el color natural del bloque, que es la degradación honesta.
+ */
+function resolveVars(kf: IxKeyframe[], cs?: { getPropertyValue?: (p: string) => string }): IxKeyframe[] {
+  if (!cs?.getPropertyValue) return kf;
+  let touched = false;
+  const out = kf.map((frame) => {
+    let copy: Record<string, unknown> | null = null;
+    for (const [k, v] of Object.entries(frame)) {
+      if (typeof v !== "string") continue;
+      const m = /^var\((--[a-z0-9-]+)\)$/i.exec(v);
+      if (!m) continue;
+      if (!copy) copy = { ...frame };
+      const resolved = cs.getPropertyValue!(m[1]).trim();
+      if (resolved) copy[k] = resolved;
+      else delete copy[k];
+      touched = true;
+    }
+    return (copy ?? frame) as IxKeyframe;
+  });
+  return touched ? out : kf;
 }
 
 export function resolveIxTargets(
