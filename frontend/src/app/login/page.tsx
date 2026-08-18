@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { AuthProvider, useAuth } from "@/contexts/AuthContext";
-import { authApi } from "@/lib/api";
+import { authApi, settingsApi } from "@/lib/api";
 
 function LoginForm() {
     const [username, setUsername] = useState("");
@@ -13,6 +13,10 @@ function LoginForm() {
     const [loading, setLoading] = useState(false);
     // "Forgot password?" is only offered when self-service reset can actually deliver mail (probe below).
     const [resetAvailable, setResetAvailable] = useState(false);
+    // Same rule for sign-up: only offer /register when the operator has actually turned
+    // `users_can_register` on. It is a PUBLIC setting, so this reads without a session, and a failed
+    // probe leaves the link hidden rather than advertising a form that would answer 403.
+    const [registerAvailable, setRegisterAvailable] = useState(false);
     const { login, verifyMfa } = useAuth();
     const router = useRouter();
     // When the account has MFA on, the password step returns a challenge token and we switch to a
@@ -24,6 +28,9 @@ function LoginForm() {
         let active = true;
         authApi.passwordResetAvailable()
             .then((r) => { if (active) setResetAvailable(!!r?.available); })
+            .catch(() => { /* probe failed — leave the link hidden */ });
+        settingsApi.get()
+            .then((s) => { if (active) setRegisterAvailable(String(s?.users_can_register ?? "") === "1"); })
             .catch(() => { /* probe failed — leave the link hidden */ });
         return () => { active = false; };
     }, []);
@@ -166,6 +173,15 @@ function LoginForm() {
                         <div className="text-center">
                             <a href="/reset-password" className="text-sm text-blue-600 hover:text-blue-700 font-medium">
                                 Forgot your password?
+                            </a>
+                        </div>
+                    )}
+
+                    {registerAvailable && (
+                        <div className="text-center">
+                            <span className="text-sm text-gray-500">¿No tienes cuenta? </span>
+                            <a href="/register" className="text-sm text-blue-600 hover:text-blue-700 font-medium">
+                                Crear una cuenta
                             </a>
                         </div>
                     )}

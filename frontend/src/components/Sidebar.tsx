@@ -36,6 +36,10 @@ const coreMenuItems: SidebarMenuItem[] = [
     { href: "/admin/users?type=subscribers", label: "nav.subscribers", icon: "fa-user-group", cap: "list_users" },
     { href: "/admin/users/roles", label: "nav.roles", icon: "fa-shield-halved", cap: "manage_options" },
     { href: "/admin/categories", label: "nav.categories", icon: "fa-folder", cap: "manage_categories" },
+    // Etiquetas (taxonomía post_tag). Literal en vez de clave i18n, como el resto de las entradas
+    // añadidas después del corte de traducciones; mismo permiso que el router (manage_categories),
+    // que es también el que gatea POST/PUT/DELETE en backend/src/routes/tags.ts.
+    { href: "/admin/tags", label: "Etiquetas", icon: "fa-tags", cap: "manage_categories" },
     { href: "/admin/plugins", label: "nav.plugins", icon: "fa-plug", cap: "activate_plugins" },
     { href: "/admin/themes", label: "nav.themes", icon: "fa-palette", cap: "switch_themes" },
     { href: "/admin/fonts", label: "nav.fonts", icon: "fa-font", cap: "manage_options" },
@@ -44,9 +48,17 @@ const coreMenuItems: SidebarMenuItem[] = [
     // las entradas añadidas después del corte de traducciones. Va DESPUÉS del índice 7, así que cae
     // en la sección de gestión junto a Ajustes — no mueve el reparto de secciones.
     { href: "/admin/settings/interactions", label: "Interacciones", icon: "fa-wand-magic-sparkles", cap: "manage_options" },
+    // Herramientas: exportación JSON/WXR (la mitad que faltaba de importar/exportar). El backend la
+    // gatea con isAdmin, que mira el ROL; `manage_options` es lo más cerca que la barra puede afinar
+    // con capabilities, y la propia página vuelve a comprobar el rol antes de ofrecer nada.
+    { href: "/admin/tools", label: "Herramientas", icon: "fa-screwdriver-wrench", cap: "manage_options" },
     { href: "/admin/import", label: "nav.import", icon: "fa-file-import", cap: "manage_options" },
     { href: "/admin/settings/backups", label: "nav.backups", icon: "fa-box-archive", cap: "manage_options" },
     { href: "/admin/security", label: "nav.security", icon: "fa-lock", cap: "manage_options" },
+    // Registro de auditoría (solo lectura). Igual que Herramientas: el backend lo gatea con isAdmin
+    // (rol), y la pantalla repite esa comprobación — aquí `manage_options` solo evita enseñar la
+    // entrada a quien seguro no la puede usar.
+    { href: "/admin/audit", label: "Auditoría", icon: "fa-clipboard-list", cap: "manage_options" },
     { href: "/admin/hooks", label: "nav.hooks", icon: "fa-microscope", cap: "manage_options" },
     { href: "/admin/db-migration", label: "nav.dbMigration", icon: "fa-database", cap: "manage_options" },
     // Outgoing webhooks — admin only (they can exfiltrate content changes), mirrors the backend isAdmin gate.

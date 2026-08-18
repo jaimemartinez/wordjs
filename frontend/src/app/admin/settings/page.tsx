@@ -32,6 +32,22 @@ const SITE_LOCALES: { value: string; label: string }[] = [
     { value: "ur", label: "اردو" },
 ];
 
+/**
+ * Un interruptor de la pantalla, leído del payload de ajustes.
+ *
+ * Hace falta porque una opción que EXISTE pero nunca se ha escrito vuelve como `null`, no como
+ * `undefined`: la ruta hace `getOption(key)` para toda la lista y mete el resultado tal cual. El
+ * `x !== undefined ? String(x) : defecto` que había aquí dejaba pasar ese `null` y lo convertía en
+ * la cadena `"null"` — que no es `"1"`, así que el interruptor se pintaba APAGADO por defecto
+ * (mal para `comments_enabled`, cuyo defecto es encendido) y, en cuanto alguien pulsaba «Guardar»,
+ * escribía el literal `"null"` en la base de datos. Un valor ausente debe caer en su defecto y en
+ * ningún otro sitio.
+ */
+export function boolSetting(value: unknown, fallback: "0" | "1"): string {
+    if (value === undefined || value === null || value === "") return fallback;
+    return String(value);
+}
+
 export default function SettingsPage() {
     const { t } = useI18n();
     const [settings, setSettings] = useState({
@@ -45,6 +61,10 @@ export default function SettingsPage() {
         comments_enabled: "1",
         users_can_register: "0",
         default_role: "subscriber",
+        // Verificación de correo en el alta pública. Es ADMIN-ONLY (está en ALL_SETTINGS pero no en
+        // PUBLIC_SETTINGS), así que solo llega por GET /settings/all — de ahí que se lea abajo desde
+        // el mismo payload de administración que el resto.
+        require_email_verification: "0",
         comment_registration: "0",
         redis_cache_enabled: "0",
         WPLANG: "en_US",
@@ -96,9 +116,30 @@ export default function SettingsPage() {
         }
     };
 
+    /**
+     * SE LEE POR /settings/all, NO POR /settings.
+     *
+     * GET /settings devuelve ÚNICAMENTE `PUBLIC_SETTINGS`. Esta pantalla, sin embargo, pinta y
+     * guarda claves que son admin-only a propósito: `admin_email` (fuera de lo público para que
+     * nadie coseche la dirección), `redis_cache_enabled` y `require_email_verification`. Leídas del
+     * endpoint público llegaban SIEMPRE `undefined`, así que el formulario las pintaba en su valor
+     * por defecto — apagado, vacío — dijera lo que dijera la base de datos, y el primer guardado
+     * escribía ese defecto encima del valor real. Un interruptor que miente en la dirección de
+     * LECTURA es exactamente el defecto que ya se corrigió una vez en el backend para
+     * `redis_cache_enabled`; corregirlo allí no bastaba mientras el formulario preguntase al sitio
+     * equivocado.
+     *
+     * El respaldo a GET /settings existe porque /settings/all exige `isAdmin`: quien llegue aquí sin
+     * ese rol ve al menos los ajustes públicos en vez de un formulario en blanco.
+     */
     const loadSettings = async () => {
         try {
-            const data = await settingsApi.get();
+            let data: Record<string, string>;
+            try {
+                data = await settingsApi.getAll();
+            } catch {
+                data = await settingsApi.get();
+            }
             setSettings({
                 blogname: data.blogname || "",
                 blogdescription: data.blogdescription || "",
@@ -107,11 +148,12 @@ export default function SettingsPage() {
                 site_logo: data.site_logo || "",
                 site_icon: data.site_icon || "",
                 homepage_id: data.homepage_id || "",
-                comments_enabled: data.comments_enabled !== undefined ? String(data.comments_enabled) : "1",
-                users_can_register: data.users_can_register !== undefined ? String(data.users_can_register) : "0",
+                comments_enabled: boolSetting(data.comments_enabled, "1"),
+                users_can_register: boolSetting(data.users_can_register, "0"),
                 default_role: data.default_role || "subscriber",
-                comment_registration: data.comment_registration !== undefined ? String(data.comment_registration) : "0",
-                redis_cache_enabled: data.redis_cache_enabled !== undefined ? String(data.redis_cache_enabled) : "0",
+                require_email_verification: boolSetting(data.require_email_verification, "0"),
+                comment_registration: boolSetting(data.comment_registration, "0"),
+                redis_cache_enabled: boolSetting(data.redis_cache_enabled, "0"),
                 WPLANG: data.WPLANG || "en_US",
                 site_text_direction: data.site_text_direction || "",
             });
@@ -411,6 +453,63 @@ export default function SettingsPage() {
                                             }))}
                                         />
                                     </div>
+                                )}
+                            </div>
+
+                            {/*
+                              * Verificación de correo en el alta pública (`require_email_verification`).
+                              *
+                              * Va pegado al interruptor de registro porque es su compañero: la ruta de alta
+                              * ya sabía crear la cuenta sin verificar, mintar el enlace y enviarlo, y
+                              * /verify-email ya sabe consumirlo — lo único que faltaba era poder encenderlo
+                              * sin llamar a la API a mano.
+                              *
+                              * Se enseña SIEMPRE, también con el registro cerrado, para que se pueda dejar
+                              * configurado ANTES de abrir las altas y no después. Los dos avisos de abajo
+                              * dicen la verdad sobre cuándo la opción no hace nada, en lugar de dejar un
+                              * interruptor encendido que el backend ignora: sin proveedor de correo el
+                              * propio backend resuelve esto como APAGADO (falla cerrado), porque un enlace
+                              * que nadie puede enviar dejaría cada cuenta nueva encerrada para siempre.
+                              */}
+                            <div className="p-5 bg-indigo-50/50 rounded-2xl border border-indigo-100 space-y-4 group hover:bg-indigo-100/50 transition-colors">
+                                <div className="flex items-center justify-between gap-6">
+                                    <div className="flex gap-4 items-center">
+                                        <div className="bg-white p-3 rounded-xl shadow-sm border border-indigo-200 text-indigo-600">
+                                            <i className="fa-solid fa-envelope-circle-check text-xl"></i>
+                                        </div>
+                                        <div>
+                                            <h4 className="text-sm font-bold text-gray-900">Verificar el correo al registrarse</h4>
+                                            <p className="text-xs text-gray-500 mt-0.5">
+                                                Quien cree una cuenta deberá confirmar su dirección desde un enlace antes de poder iniciar sesión.
+                                            </p>
+                                        </div>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        role="switch"
+                                        aria-checked={settings.require_email_verification === "1"}
+                                        aria-label="Verificar el correo al registrarse"
+                                        onClick={() => setSettings({ ...settings, require_email_verification: settings.require_email_verification === "1" ? "0" : "1" })}
+                                        className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 ${settings.require_email_verification === "1" ? 'bg-indigo-500' : 'bg-gray-200'}`}
+                                    >
+                                        <span
+                                            className={`inline-block h-5 w-5 transform rounded-full bg-white transition-transform duration-200 ease-in-out ${settings.require_email_verification === "1" ? 'translate-x-6' : 'translate-x-1'}`}
+                                        />
+                                    </button>
+                                </div>
+
+                                {settings.require_email_verification === "1" && emailProviderAvailable === false && (
+                                    <p className="pl-16 text-xs text-amber-800 leading-relaxed">
+                                        <i className="fa-solid fa-triangle-exclamation mr-1.5"></i>
+                                        No hay ningún proveedor de correo activo, así que esta opción queda inactiva: el sitio no
+                                        puede enviar el enlace y las cuentas nuevas seguirán entrando sin verificar.
+                                    </p>
+                                )}
+                                {settings.require_email_verification === "1" && settings.users_can_register !== "1" && (
+                                    <p className="pl-16 text-xs text-gray-500 leading-relaxed">
+                                        Solo afecta al alta pública, que ahora mismo está desactivada. Las cuentas que crea la
+                                        administración no necesitan confirmación.
+                                    </p>
                                 )}
                             </div>
 

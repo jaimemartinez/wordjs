@@ -1,58 +1,232 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { mediaApi, MediaItem } from "@/lib/api";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { mediaApi, MediaItem, MediaListOptions } from "@/lib/api";
 import { useI18n } from "@/contexts/I18nContext";
+
+/* -------------------------------------------------------------------------------------------------
+ * Shared media-library logic
+ *
+ * Both media screens (this picker and /admin/media) used to call `mediaApi.list()` with NO query
+ * string: the endpoint has always paged (per_page defaults to 20), so they received the first 20 rows
+ * and then filtered THAT truncated array client-side — a library of 500 files silently showed 20 and
+ * the search box could never find anything past them.
+ *
+ * The pure pieces of the fix (query building, page maths, the metadata diff sent to PUT /media/:id)
+ * live here as exported helpers so they can be unit-tested without a DOM, following the same
+ * helpers-exported-from-the-component convention as ContentTable (STATUS_TABS / statusBadgeView).
+ * ------------------------------------------------------------------------------------------------ */
+
+/** Rows per page in the picker grid (5 columns × ~5 rows). */
+export const SELECTOR_PAGE_SIZE = 25;
+/** Rows per page in the full media library screen (6 columns × 4 rows). */
+export const LIBRARY_PAGE_SIZE = 24;
+/** The backend caps per_page at 100 (backend/src/routes/media.ts); asking for more silently returns 100. */
+export const MAX_PER_PAGE = 100;
+
+export interface MediaQueryState {
+    page: number;
+    perPage: number;
+    /** Free text; blank/whitespace means "no search" and must NOT be sent as an empty param. */
+    search?: string;
+    /**
+     * MIME prefix or exact type ("image/", "application/pdf").
+     *
+     * HONESTY NOTE: `GET /media` destructures `mime_type` but never forwards it to `Media.findAll`,
+     * so the server currently IGNORES it (backend/src/routes/media.ts + models/Post.buildWhere have
+     * no MIME condition). The query builder emits it — the wire format is right the day the backend
+     * honours it — but neither screen exposes a type filter control, because a filter that returns
+     * unfiltered results is worse than no filter.
+     */
+    mimeType?: string;
+}
+
+const positiveInt = (value: number, fallback: number): number => {
+    const n = Math.floor(Number(value));
+    return Number.isFinite(n) && n > 0 ? n : fallback;
+};
+
+/**
+ * The exact query the media list endpoint understands. Blank search / mimeType are omitted rather
+ * than sent empty (an empty `search=` would still be truthy server-side in some drivers), and
+ * perPage is clamped to the server's own cap so the page maths below agree with the server's totals.
+ */
+export function buildMediaQuery(state: MediaQueryState): MediaListOptions {
+    const search = (state.search || "").trim();
+    const mimeType = (state.mimeType || "").trim();
+    const query: MediaListOptions = {
+        page: positiveInt(state.page, 1),
+        perPage: Math.min(positiveInt(state.perPage, 20), MAX_PER_PAGE),
+    };
+    if (search) query.search = search;
+    if (mimeType) query.mimeType = mimeType;
+    return query;
+}
+
+/**
+ * Keep the requested page inside [1, totalPages]. Needed because the page number outlives the result
+ * set: narrowing the search or deleting the last item of the last page leaves the UI pointing past
+ * the end, where the server honestly returns an empty array and the grid looks broken.
+ */
+export function clampPage(page: number, totalPages: number): number {
+    const max = positiveInt(totalPages, 1);
+    return Math.min(max, positiveInt(page, 1));
+}
+
+/** The 1-based row range this page shows, for the "1–24 de 137" counter. Empty library → 0–0 of 0. */
+export function pageRange(page: number, perPage: number, total: number): { from: number; to: number; total: number } {
+    const size = positiveInt(perPage, 20);
+    const count = Math.max(0, Math.floor(Number(total)) || 0);
+    if (count === 0) return { from: 0, to: 0, total: 0 };
+    const first = (positiveInt(page, 1) - 1) * size + 1;
+    if (first > count) return { from: count, to: count, total: count };
+    return { from: first, to: Math.min(count, first + size - 1), total: count };
+}
+
+/**
+ * The four fields `PUT /media/:id` accepts. The list endpoint already returns all of them
+ * (backend Media.formatAttachment), but the shared `MediaItem` type only declares `title`.
+ */
+export interface MediaMetaFields {
+    title: string;
+    description: string;
+    caption: string;
+    alt: string;
+}
+
+/** A media row with the metadata the detail panel edits. */
+export type EditableMediaItem = MediaItem & Partial<Omit<MediaMetaFields, "title">>;
+
+/** The editable metadata of an item, with every field a defined string (so inputs stay controlled). */
+export function mediaMetaOf(item: EditableMediaItem): MediaMetaFields {
+    return {
+        title: item.title || "",
+        description: item.description || "",
+        caption: item.caption || "",
+        alt: item.alt || "",
+    };
+}
+
+/**
+ * Only the fields the user actually changed. `Media.update` keys off `!== undefined`, so sending the
+ * untouched ones back is a needless write — and, between two editors, an overwrite of a field this
+ * user never looked at.
+ */
+export function mediaMetaPayload(original: MediaMetaFields, draft: MediaMetaFields): Partial<MediaMetaFields> {
+    const payload: Partial<MediaMetaFields> = {};
+    (Object.keys(original) as (keyof MediaMetaFields)[]).forEach((key) => {
+        if (draft[key] !== original[key]) payload[key] = draft[key];
+    });
+    return payload;
+}
+
+/** True when there is something to save (an empty payload must not fire a request). */
+export function hasMediaMetaChanges(original: MediaMetaFields, draft: MediaMetaFields): boolean {
+    return Object.keys(mediaMetaPayload(original, draft)).length > 0;
+}
+
+/**
+ * Thumbnail URL for a grid tile.
+ *
+ * Preview from the RELATIVE sourceUrl, NOT guid: guid embeds the upload-time host/IP (e.g.
+ * https://192.168.1.11:3000/...), so browsing from another origin (localhost / the real domain) makes
+ * the thumbnail 404 / fail the cert check and the tile renders blank. sourceUrl is origin-relative
+ * and always loads.
+ */
+export function mediaThumbnailUrl(item: MediaItem): string {
+    const base = item.sourceUrl || item.guid || "";
+    const thumb = item.mediaDetails?.sizes?.thumbnail?.file;
+    if (!thumb) return base;
+    const slash = base.lastIndexOf("/");
+    if (slash < 0) return base;
+    return base.substring(0, slash + 1) + thumb;
+}
+
+/* ---------------------------------------------------------------------------------------------- */
 
 interface MediaLibrarySelectorProps {
     onSelect: (item: MediaItem) => void;
     selectedId?: number | null;
 }
 
+/** Matches ContentTable's search debounce, so typing does not fire a request per keystroke. */
+const SEARCH_DEBOUNCE_MS = 400;
+
 export default function MediaLibrarySelector({ onSelect, selectedId }: MediaLibrarySelectorProps) {
     const { t } = useI18n();
     const [media, setMedia] = useState<MediaItem[]>([]);
     const [loading, setLoading] = useState(true);
+    const [searchInput, setSearchInput] = useState("");
     const [search, setSearch] = useState("");
+    const [page, setPage] = useState(1);
+    const [total, setTotal] = useState(0);
+    const [totalPages, setTotalPages] = useState(1);
+    const [refreshKey, setRefreshKey] = useState(0);
+    const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+    // Debounce the search box → the `search` value that actually queries the SERVER (the old
+    // client-side .filter() only ever saw the first page).
     useEffect(() => {
-        loadMedia();
-    }, []);
+        if (searchTimer.current) clearTimeout(searchTimer.current);
+        searchTimer.current = setTimeout(() => {
+            setSearch(searchInput.trim());
+            setPage(1);
+        }, SEARCH_DEBOUNCE_MS);
+        return () => { if (searchTimer.current) clearTimeout(searchTimer.current); };
+    }, [searchInput]);
 
-    const loadMedia = async () => {
+    const loadMedia = useCallback(async () => {
+        setLoading(true);
         try {
-            const data = await mediaApi.list();
-            setMedia(data);
+            const res = await mediaApi.listPaged(buildMediaQuery({ page, perPage: SELECTOR_PAGE_SIZE, search }));
+            setMedia(res.data);
+            setTotal(res.total);
+            setTotalPages(res.totalPages);
+            const safe = clampPage(page, res.totalPages);
+            if (safe !== page) setPage(safe);
         } catch (error) {
             console.error("Failed to load media:", error);
+            setMedia([]);
+            setTotal(0);
+            setTotalPages(1);
         } finally {
             setLoading(false);
         }
-    };
+        // `refreshKey` is intentionally a dependency: bumping it is how the refresh button re-runs
+        // this exact query. eslint cannot see that, since the value is never read in the body.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [page, search, refreshKey]);
 
-    const filteredMedia = media.filter(item =>
-        item.title.toLowerCase().includes(search.toLowerCase())
-    );
+    useEffect(() => { loadMedia(); }, [loadMedia]);
+
+    const range = pageRange(page, SELECTOR_PAGE_SIZE, total);
 
     return (
         <div className="flex flex-col h-full bg-white rounded-lg">
             {/* Toolbar */}
-            <div className="p-4 border-b flex justify-between items-center bg-gray-50 rounded-t-lg">
+            <div className="p-4 border-b flex justify-between items-center gap-3 bg-gray-50 rounded-t-lg">
                 <input
                     type="text"
                     placeholder={t('media.search')}
                     className="px-3 py-2 border rounded-md text-sm w-full max-w-xs"
-                    value={search}
-                    onChange={(e) => setSearch(e.target.value)}
+                    value={searchInput}
+                    onChange={(e) => setSearchInput(e.target.value)}
                 />
-                <button
-                    onClick={loadMedia}
-                    className="text-gray-500 hover:text-blue-600"
-                    title={t('common.refresh')}
-                    aria-label={t('common.refresh')}
-                >
-                    <i className="fa-solid fa-sync"></i>
-                </button>
+                <div className="flex items-center gap-3">
+                    {total > 0 && (
+                        <span className="hidden sm:inline text-xs font-semibold text-gray-400 whitespace-nowrap">
+                            {range.from}–{range.to} de {range.total}
+                        </span>
+                    )}
+                    <button
+                        onClick={() => setRefreshKey((k) => k + 1)}
+                        className="text-gray-500 hover:text-blue-600"
+                        title={t('common.refresh')}
+                        aria-label={t('common.refresh')}
+                    >
+                        <i className="fa-solid fa-sync"></i>
+                    </button>
+                </div>
             </div>
 
             {/* Grid */}
@@ -61,14 +235,14 @@ export default function MediaLibrarySelector({ onSelect, selectedId }: MediaLibr
                     <div className="flex justify-center items-center h-40">
                         <i className="fa-solid fa-circle-notch fa-spin text-4xl text-gray-300"></i>
                     </div>
-                ) : filteredMedia.length === 0 ? (
+                ) : media.length === 0 ? (
                     <div className="text-center text-gray-400 py-10">
                         <i className="fa-solid fa-images text-4xl mb-2"></i>
                         <p>{t('media.no.media')}</p>
                     </div>
                 ) : (
                     <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
-                        {filteredMedia.map((item) => (
+                        {media.map((item) => (
                             <div
                                 key={item.id}
                                 onClick={() => onSelect(item)}
@@ -78,16 +252,8 @@ export default function MediaLibrarySelector({ onSelect, selectedId }: MediaLibr
                                 `}
                             >
                                 {item.mimeType.startsWith('image/') ? (
-                                    // Preview from the RELATIVE sourceUrl, NOT guid: guid embeds the upload-time
-                                    // host/IP (e.g. https://192.168.1.11:3000/...), so browsing from another origin
-                                    // (localhost / the real domain) makes the thumbnail 404 / fail the cert check and
-                                    // the tile renders blank. sourceUrl is origin-relative and always loads.
                                     <img
-                                        src={
-                                            item.mediaDetails?.sizes?.thumbnail
-                                                ? (item.sourceUrl || item.guid).substring(0, (item.sourceUrl || item.guid).lastIndexOf('/') + 1) + item.mediaDetails.sizes.thumbnail.file
-                                                : (item.sourceUrl || item.guid)
-                                        }
+                                        src={mediaThumbnailUrl(item)}
                                         alt={item.title}
                                         className="w-full h-full object-cover"
                                     />
@@ -111,6 +277,31 @@ export default function MediaLibrarySelector({ onSelect, selectedId }: MediaLibr
                     </div>
                 )}
             </div>
+
+            {/* Pager — server-side, so the picker reaches the whole library and not just page 1. */}
+            {!loading && totalPages > 1 && (
+                <div className="px-4 py-3 border-t border-gray-100 bg-gray-50/50 rounded-b-lg flex items-center justify-between">
+                    <button
+                        type="button"
+                        onClick={() => setPage((p) => Math.max(1, p - 1))}
+                        disabled={page <= 1}
+                        className="px-4 py-2 rounded-xl border border-gray-200 text-xs font-bold text-gray-600 hover:border-blue-400 hover:text-blue-600 disabled:opacity-40 transition-all"
+                    >
+                        <i className="fa-solid fa-chevron-left mr-2"></i>{t('table.previous')}
+                    </button>
+                    <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">
+                        {t('table.pageOf').replace('{page}', String(page)).replace('{total}', String(totalPages))}
+                    </span>
+                    <button
+                        type="button"
+                        onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                        disabled={page >= totalPages}
+                        className="px-4 py-2 rounded-xl border border-gray-200 text-xs font-bold text-gray-600 hover:border-blue-400 hover:text-blue-600 disabled:opacity-40 transition-all"
+                    >
+                        {t('table.next')}<i className="fa-solid fa-chevron-right ml-2"></i>
+                    </button>
+                </div>
+            )}
         </div>
     );
 }

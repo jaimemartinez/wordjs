@@ -538,19 +538,80 @@ function pickOgImage(post: Post): string[] | undefined {
     if (post.featuredMedia?.url && /^(https?:\/\/|\/)/i.test(post.featuredMedia.url)) {
         return [post.featuredMedia.url];
     }
-    const m = (post.meta || {}) as Record<string, unknown>;
+    const m = postMetaRecord(post);
     const candidate = m.featured_image || m._thumbnail_url || m.thumbnail || m.og_image || m.image;
     if (typeof candidate === 'string' && /^(https?:\/\/|\/)/i.test(candidate)) return [candidate];
     return undefined;
 }
 
-/** Build full SEO metadata (title, description, OpenGraph, Twitter, canonical) for a post/page. */
+/**
+ * Post meta as a plain record, whatever shape it arrived in.
+ *
+ * The backend's Post.toJSON emits an OBJECT (models/Post.getAllMeta JSON.parses every row), but the
+ * same rows reach us as a raw JSON STRING through paths that never went through toJSON (an imported
+ * row, a plugin-supplied payload, a cached body written by an older version). Both are read here so
+ * a per-post SEO override is not silently dropped for one of them.
+ */
+function postMetaRecord(post: Post): Record<string, unknown> {
+    const raw: unknown = post.meta;
+    if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw as Record<string, unknown>;
+    if (typeof raw === 'string' && raw.trim()) {
+        try {
+            const parsed: unknown = JSON.parse(raw);
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                return parsed as Record<string, unknown>;
+            }
+        } catch { /* not JSON — no meta to read */ }
+    }
+    return {};
+}
+
+/**
+ * A meta value the author typed, as a non-empty single-line string — or '' when there is nothing to
+ * honour. Numbers are accepted because getAllMeta JSON.parses every stored value, so a title of
+ * `2026` comes back as the NUMBER 2026; anything else (object, boolean, null) is not author text.
+ */
+function metaText(value: unknown): string {
+    if (typeof value === 'string') return value.trim();
+    if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+    return '';
+}
+
+/**
+ * The stored `noindex` flag as a boolean. The editor writes a real boolean (String()'d to `true` /
+ * `false` on the way into post_meta and JSON.parsed back), but imports and legacy content use the
+ * `1` / `'yes'` / `'on'` spellings — all of which mean the author asked to be hidden. Anything else,
+ * including the absent key, means indexable: this is fail-OPEN by design, because guessing "hidden"
+ * from junk would de-list a live page.
+ */
+function metaFlag(value: unknown): boolean {
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'number') return value === 1;
+    if (typeof value === 'string') return ['true', '1', 'yes', 'on'].includes(value.trim().toLowerCase());
+    return false;
+}
+
+/**
+ * Build full SEO metadata (title, description, robots, OpenGraph, Twitter, canonical) for a post/page.
+ *
+ * PER-POST OVERRIDES. The editor persists `seo_title`, `seo_description`, `og_image` and `noindex`
+ * into post meta; this is the only place the public routes turn them into rendered <head>. An empty
+ * or absent override falls back EXACTLY to the previous derivation (post title / excerpt-or-body),
+ * so a post that never opened the SEO panel renders byte-for-byte what it rendered before.
+ *
+ * The override replaces the title/description everywhere they appear — document, OpenGraph and
+ * Twitter — because an og:title that disagrees with the <title> is what social validators flag.
+ */
 export function buildPostMetadata(
     post: Post,
     opts: { siteName?: string; canonicalPath?: string } = {}
 ): Metadata {
-    const title = post.title || 'Untitled';
-    const description = htmlToText(post.excerpt || post.content || '', 160) || undefined;
+    const meta = postMetaRecord(post);
+    const title = metaText(meta.seo_title) || post.title || 'Untitled';
+    const description = metaText(meta.seo_description)
+        || htmlToText(post.excerpt || post.content || '', 160)
+        || undefined;
+    const noindex = metaFlag(meta.noindex);
     const isArticle = post.type !== 'page';
     const images = pickOgImage(post);
     const canonical = opts.canonicalPath || `/${post.slug || post.id}`;
@@ -607,6 +668,9 @@ export function buildPostMetadata(
     return {
         title,
         description,
+        // `noindex` is the one override with no fallback shape: the key is emitted ONLY when the
+        // author asked to be hidden, so an ordinary post still ships no `robots` meta at all.
+        ...(noindex ? { robots: { index: false, follow: false } } : {}),
         alternates: { canonical, ...(hasAlternateLanguages ? { languages } : {}) },
         openGraph,
         twitter,

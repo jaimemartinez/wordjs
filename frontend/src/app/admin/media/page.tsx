@@ -1,23 +1,84 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
-import { mediaApi, MediaItem } from "@/lib/api";
+import { useEffect, useState, useCallback, useRef, useMemo } from "react";
+import { mediaApi } from "@/lib/api";
 import { useI18n } from "@/contexts/I18nContext";
 import ConfirmationModal from "@/components/ConfirmationModal";
 import { useToast } from "@/contexts/ToastContext";
 import { PageHeader, Button, EmptyState } from "@/components/ui";
+import {
+    LIBRARY_PAGE_SIZE,
+    buildMediaQuery,
+    clampPage,
+    pageRange,
+    mediaMetaOf,
+    mediaMetaPayload,
+    hasMediaMetaChanges,
+    type EditableMediaItem,
+} from "@/components/MediaLibrarySelector";
 
-// Image Preview Modal
-function ImagePreviewModal({ item, onClose, onRequestDelete }: { item: MediaItem; onClose: () => void; onRequestDelete: (id: number) => void }) {
+const SEARCH_DEBOUNCE_MS = 400;
+
+const fieldClass =
+    "w-full px-4 py-3 bg-gray-50 border-2 border-gray-100 rounded-2xl text-sm font-medium text-gray-700 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all placeholder:text-gray-300";
+const labelClass = "text-[10px] font-black uppercase tracking-widest text-gray-400 block mb-1.5";
+
+/**
+ * File detail panel: preview + the four metadata fields `PUT /media/:id` accepts.
+ *
+ * Until now nothing in the admin could call that endpoint, so `alt` — the accessibility text screen
+ * readers announce, and the only description search engines get for an image — could never be set
+ * after upload.
+ */
+function MediaDetailModal({
+    item,
+    onClose,
+    onRequestDelete,
+    onSaved,
+}: {
+    item: EditableMediaItem;
+    onClose: () => void;
+    onRequestDelete: (id: number) => void;
+    onSaved: (updated: EditableMediaItem) => void;
+}) {
     const { t } = useI18n();
     const { addToast } = useToast();
+    const original = useMemo(() => mediaMetaOf(item), [item]);
+    const [draft, setDraft] = useState(original);
+    const [saving, setSaving] = useState(false);
 
-    if (!item) return null;
+    // Re-seed the form when the item changes (including after a successful save, which swaps in the
+    // server's own copy — the source of truth for what is now stored).
+    useEffect(() => { setDraft(original); }, [original]);
+
+    const dirty = hasMediaMetaChanges(original, draft);
 
     const copyUrl = () => {
         navigator.clipboard.writeText(item.sourceUrl);
         addToast(t('media.url.copied'), "success");
     };
+
+    const handleSave = async () => {
+        const payload = mediaMetaPayload(original, draft);
+        if (Object.keys(payload).length === 0) return;
+        setSaving(true);
+        try {
+            const updated = await mediaApi.update(item.id, payload);
+            onSaved(updated as EditableMediaItem);
+            addToast("Detalles del archivo guardados", "success");
+        } catch (error) {
+            console.error("Failed to update media:", error);
+            // The backend answers a 403 `rest_forbidden` with a human message when the file belongs to
+            // another user; show it instead of a generic error so nobody retries a denied edit.
+            const message = error instanceof Error && error.message ? error.message : "No se pudieron guardar los cambios";
+            addToast(message, "error");
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    const setField = (key: keyof typeof draft) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
+        setDraft((d) => ({ ...d, [key]: e.target.value }));
 
     return (
         <div className="fixed inset-0 z-[6000] flex items-center justify-center p-6 bg-black/90 backdrop-blur-md animate-in fade-in duration-300">
@@ -29,7 +90,7 @@ function ImagePreviewModal({ item, onClose, onRequestDelete }: { item: MediaItem
                         <div className="relative w-full h-full flex items-center justify-center z-10">
                             <img
                                 src={item.sourceUrl}
-                                alt={item.title}
+                                alt={item.alt || item.title}
                                 className="max-w-full max-h-[60vh] object-contain shadow-2xl rounded-2xl"
                             />
                         </div>
@@ -37,33 +98,74 @@ function ImagePreviewModal({ item, onClose, onRequestDelete }: { item: MediaItem
                         <i className="fa-solid fa-file text-9xl text-gray-300 relative z-10"></i>
                     )}
                 </div>
-                <div className="w-full md:w-96 p-10 bg-white border-l border-gray-100 flex flex-col h-full overflow-y-auto">
+                <div className="w-full md:w-[26rem] p-8 bg-white border-l border-gray-100 flex flex-col h-full overflow-y-auto">
                     <button onClick={onClose} aria-label={t('common.close')} className="absolute top-6 right-6 w-10 h-10 rounded-full bg-gray-50 text-gray-400 hover:bg-gray-100 hover:text-gray-900 flex items-center justify-center transition-colors">
                         <i className="fa-solid fa-xmark text-lg"></i>
                     </button>
 
-                    <h3 className="text-3xl font-black text-gray-900 italic tracking-tighter mb-2 break-words" title={item.title}>
+                    <h3 className="text-2xl font-black text-gray-900 italic tracking-tighter mb-1 pr-12 break-words" title={item.title}>
                         {item.title}
                     </h3>
+                    <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-6">Detalles del archivo</p>
 
-                    <div className="space-y-6 my-8 flex-1">
+                    {/* Editable metadata — the four fields PUT /media/:id accepts. */}
+                    <div className="space-y-4">
                         <div>
-                            <span className="text-[10px] font-black uppercase tracking-widest text-gray-400 block mb-1">{t('media.type')}</span>
+                            <label className={labelClass} htmlFor="media-title">Título</label>
+                            <input id="media-title" type="text" className={fieldClass} value={draft.title} onChange={setField("title")} />
+                        </div>
+                        <div>
+                            <label className={labelClass} htmlFor="media-alt">Texto alternativo</label>
+                            <input
+                                id="media-alt"
+                                type="text"
+                                className={fieldClass}
+                                value={draft.alt}
+                                onChange={setField("alt")}
+                                placeholder="Describe la imagen para quien no puede verla"
+                                aria-describedby="media-alt-help"
+                            />
+                            <p id="media-alt-help" className="text-[11px] font-medium text-gray-400 mt-1.5 leading-snug">
+                                Lo que anuncian los lectores de pantalla. Déjalo vacío solo si la imagen es decorativa.
+                            </p>
+                        </div>
+                        <div>
+                            <label className={labelClass} htmlFor="media-caption">Leyenda</label>
+                            <input id="media-caption" type="text" className={fieldClass} value={draft.caption} onChange={setField("caption")} />
+                        </div>
+                        <div>
+                            <label className={labelClass} htmlFor="media-description">Descripción</label>
+                            <textarea id="media-description" rows={3} className={`${fieldClass} resize-y`} value={draft.description} onChange={setField("description")} />
+                        </div>
+                    </div>
+
+                    <div className="space-y-4 my-6">
+                        <div>
+                            <span className={labelClass}>{t('media.type')}</span>
                             <span className="font-bold text-gray-700 bg-gray-50 px-3 py-1 rounded-lg text-sm inline-block border border-gray-100">{item.mimeType}</span>
                         </div>
                         <div>
-                            <span className="text-[10px] font-black uppercase tracking-widest text-gray-400 block mb-1">{t('media.uploaded')}</span>
-                            <span className="font-bold text-gray-700 text-lg italic">{new Date(item.date).toLocaleDateString()}</span>
+                            <span className={labelClass}>{t('media.uploaded')}</span>
+                            <span className="font-bold text-gray-700 text-base italic">{new Date(item.date).toLocaleDateString()}</span>
                         </div>
                         <div>
-                            <span className="text-[10px] font-black uppercase tracking-widest text-gray-400 block mb-2">URL</span>
-                            <div className="bg-gray-50 rounded-xl p-3 border break-all text-xs font-mono text-gray-500 select-all border border-gray-200">
+                            <span className={labelClass}>URL</span>
+                            <div className="bg-gray-50 rounded-xl p-3 break-all text-xs font-mono text-gray-500 select-all border border-gray-200">
                                 {item.sourceUrl}
                             </div>
                         </div>
                     </div>
 
                     <div className="space-y-3 mt-auto pt-6 border-t border-gray-100">
+                        <Button
+                            icon="fa-floppy-disk"
+                            loading={saving}
+                            disabled={!dirty || saving}
+                            onClick={handleSave}
+                            className="w-full"
+                        >
+                            {saving ? t('common.saving') : "Guardar cambios"}
+                        </Button>
                         <button
                             onClick={copyUrl}
                             className="w-full py-4 px-6 bg-gray-50 hover:bg-gray-100 text-gray-900 rounded-2xl transition-all font-bold flex items-center justify-center gap-3 group border border-gray-200 hover:border-gray-300"
@@ -95,42 +197,55 @@ function ImagePreviewModal({ item, onClose, onRequestDelete }: { item: MediaItem
 export default function MediaPage() {
     const { t } = useI18n();
     const { addToast } = useToast();
-    const [media, setMedia] = useState<MediaItem[]>([]);
-    const [filteredMedia, setFilteredMedia] = useState<MediaItem[]>([]);
+    const [media, setMedia] = useState<EditableMediaItem[]>([]);
     const [loading, setLoading] = useState(true);
     const [uploading, setUploading] = useState(false);
-    const [searchQuery, setSearchQuery] = useState("");
+    const [searchInput, setSearchInput] = useState("");
+    const [search, setSearch] = useState("");
+    const [page, setPage] = useState(1);
+    const [total, setTotal] = useState(0);
+    const [totalPages, setTotalPages] = useState(1);
+    const [refreshKey, setRefreshKey] = useState(0);
     const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
-    const [previewItem, setPreviewItem] = useState<MediaItem | null>(null);
+    const [previewItem, setPreviewItem] = useState<EditableMediaItem | null>(null);
     // A real <button> nested in a <label> swallows the click and never forwards it to the file input
     // (HTML: an interactive descendant cancels the label's activation behaviour), so the picker never
     // opened. Trigger the hidden input explicitly instead.
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+    // Debounce the search box → the `search` value that queries the SERVER. The old code filtered the
+    // first (and only) page it had fetched, so anything past row 20 was unfindable.
     useEffect(() => {
-        loadMedia();
-    }, []);
+        if (searchTimer.current) clearTimeout(searchTimer.current);
+        searchTimer.current = setTimeout(() => {
+            setSearch(searchInput.trim());
+            setPage(1);
+        }, SEARCH_DEBOUNCE_MS);
+        return () => { if (searchTimer.current) clearTimeout(searchTimer.current); };
+    }, [searchInput]);
 
-    useEffect(() => {
-        if (!searchQuery) {
-            setFilteredMedia(media);
-        } else {
-            const lower = searchQuery.toLowerCase();
-            setFilteredMedia(media.filter(m => m.title.toLowerCase().includes(lower)));
-        }
-    }, [searchQuery, media]);
-
-    const loadMedia = async () => {
+    const loadMedia = useCallback(async () => {
+        setLoading(true);
         try {
-            const data = await mediaApi.list();
-            setMedia(data);
+            const res = await mediaApi.listPaged(buildMediaQuery({ page, perPage: LIBRARY_PAGE_SIZE, search }));
+            setMedia(res.data);
+            setTotal(res.total);
+            setTotalPages(res.totalPages);
+            // Deleting the last row of the last page (or narrowing the search) leaves `page` past the
+            // end, where the server correctly returns nothing; step back instead of showing an empty grid.
+            const safe = clampPage(page, res.totalPages);
+            if (safe !== page) setPage(safe);
         } catch (error) {
             console.error("Failed to load media:", error);
             addToast(t('media.load.failed'), "error");
         } finally {
             setLoading(false);
         }
-    };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [page, search, refreshKey]);
+
+    useEffect(() => { loadMedia(); }, [loadMedia]);
 
     const [uploadProgress, setUploadProgress] = useState(0);
 
@@ -149,7 +264,9 @@ export default function MediaPage() {
             await mediaApi.uploadWithProgress(formData, (progress) => {
                 setUploadProgress(Math.round(progress));
             });
-            await loadMedia();
+            // The upload lands newest-first on page 1, so go there and refetch.
+            setPage(1);
+            setRefreshKey((k) => k + 1);
             addToast(t('media.upload.success'), "success");
         } catch (error) {
             console.error("Failed to upload file:", error);
@@ -196,15 +313,24 @@ export default function MediaPage() {
         if (!mediaToDelete) return;
         try {
             await mediaApi.delete(mediaToDelete);
-            setMedia((prevMedia) => prevMedia.filter((item) => item.id !== mediaToDelete));
             if (previewItem?.id === mediaToDelete) setPreviewItem(null);
             setDeleteModalOpen(false);
+            // Refetch instead of splicing locally: with paging, removing a row must pull the next
+            // page's first item up, and the total must come from the server.
+            setRefreshKey((k) => k + 1);
             addToast(t('common.success'), "success");
         } catch (error) {
             console.error("Failed to delete file:", error);
             addToast(t('common.error'), "error");
         }
     };
+
+    const handleSaved = (updated: EditableMediaItem) => {
+        setMedia((items) => items.map((item) => (item.id === updated.id ? { ...item, ...updated } : item)));
+        setPreviewItem((current) => (current && current.id === updated.id ? { ...current, ...updated } : current));
+    };
+
+    const range = pageRange(page, LIBRARY_PAGE_SIZE, total);
 
     return (
         <div
@@ -224,9 +350,10 @@ export default function MediaPage() {
             />
 
             {previewItem && (
-                <ImagePreviewModal
+                <MediaDetailModal
                     item={previewItem}
                     onClose={() => setPreviewItem(null)}
+                    onSaved={handleSaved}
                     onRequestDelete={(id) => {
                         setPreviewItem(null);
                         setMediaToDelete(id);
@@ -249,7 +376,7 @@ export default function MediaPage() {
             {/* Header */}
             <PageHeader
                 title={t('media.title')}
-                subtitle={`${media.length} ${t('media.files.count')}`}
+                subtitle={`${total} ${t('media.files.count')}`}
                 actions={
                     <div className="flex flex-col md:flex-row gap-4 items-stretch md:items-center">
                         {/* Search */}
@@ -258,8 +385,8 @@ export default function MediaPage() {
                             <input
                                 type="text"
                                 placeholder={t('media.search.placeholder')}
-                                value={searchQuery}
-                                onChange={(e) => setSearchQuery(e.target.value)}
+                                value={searchInput}
+                                onChange={(e) => setSearchInput(e.target.value)}
                                 className="w-full md:w-64 pl-12 pr-6 py-4 bg-white border-2 border-gray-100 rounded-2xl text-sm font-bold text-gray-700 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all placeholder:text-gray-300 shadow-sm"
                             />
                         </div>
@@ -317,7 +444,7 @@ export default function MediaPage() {
                             <div key={i} className="aspect-square bg-white rounded-[32px] animate-pulse border-2 border-gray-100"></div>
                         ))}
                     </div>
-                ) : filteredMedia.length === 0 ? (
+                ) : media.length === 0 ? (
                     <EmptyState
                         icon="fa-images"
                         title={t('media.no.files.found')}
@@ -325,7 +452,7 @@ export default function MediaPage() {
                     />
                 ) : viewMode === 'grid' ? (
                     <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-6">
-                        {filteredMedia.map((item) => (
+                        {media.map((item) => (
                             <div
                                 key={item.id}
                                 onClick={() => setPreviewItem(item)}
@@ -334,7 +461,7 @@ export default function MediaPage() {
                                 <div className="aspect-square bg-gray-50 flex items-center justify-center overflow-hidden relative">
                                     {item.mimeType.startsWith('image/') ? (
                                         <div className="relative w-full h-full">
-                                            <img src={item.sourceUrl} alt={item.title} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110" />
+                                            <img src={item.sourceUrl} alt={item.alt || item.title} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110" />
                                             <div className="absolute inset-0 bg-blue-900/0 group-hover:bg-blue-900/20 transition-colors duration-500"></div>
                                         </div>
                                     ) : (
@@ -355,10 +482,10 @@ export default function MediaPage() {
                                         </button>
                                         <button
                                             className="w-12 h-12 bg-white text-blue-600 rounded-2xl shadow-xl flex items-center justify-center transform translate-y-0 md:translate-y-4 md:group-hover:translate-y-0 md:group-focus-within:translate-y-0 transition-all duration-300 delay-75 hover:scale-110 hover:bg-blue-50"
-                                            title={t('common.view')}
-                                            aria-label={t('common.view')}
+                                            title={t('common.edit')}
+                                            aria-label={t('common.edit')}
                                         >
-                                            <i className="fa-solid fa-eye"></i>
+                                            <i className="fa-solid fa-pen-to-square"></i>
                                         </button>
                                     </div>
                                 </div>
@@ -373,6 +500,12 @@ export default function MediaPage() {
                                             {new Date(item.date).toLocaleDateString()}
                                         </span>
                                     </div>
+                                    {/* Missing alt text is invisible until someone audits the site; surface it here. */}
+                                    {item.mimeType.startsWith('image/') && !item.alt && (
+                                        <span className="mt-2 inline-flex items-center gap-1.5 text-[9px] font-black uppercase tracking-wider text-amber-600 bg-amber-50 border border-amber-100 px-2 py-1 rounded-lg">
+                                            <i className="fa-solid fa-triangle-exclamation"></i> Sin texto alternativo
+                                        </span>
+                                    )}
                                 </div>
                             </div>
                         ))}
@@ -391,12 +524,12 @@ export default function MediaPage() {
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-gray-50">
-                                    {filteredMedia.map((item) => (
+                                    {media.map((item) => (
                                         <tr key={item.id} className="group hover:bg-blue-50/5 transition-colors cursor-pointer" onClick={() => setPreviewItem(item)}>
                                             <td className="px-8 py-4 w-32">
                                                 <div className="w-16 h-16 bg-gray-100 rounded-2xl overflow-hidden shadow-sm group-hover:shadow-md transition-all flex items-center justify-center">
                                                     {item.mimeType.startsWith('image/') ? (
-                                                        <img src={item.sourceUrl} className="w-full h-full object-cover" />
+                                                        <img src={item.sourceUrl} alt={item.alt || item.title} className="w-full h-full object-cover" />
                                                     ) : (
                                                         <i className="fa-solid fa-file text-gray-300 text-xl"></i>
                                                     )}
@@ -404,6 +537,11 @@ export default function MediaPage() {
                                             </td>
                                             <td className="px-8 py-4">
                                                 <span className="font-bold text-gray-700 group-hover:text-blue-600 transition-colors italic tracking-tight text-lg">{item.title}</span>
+                                                {item.mimeType.startsWith('image/') && !item.alt && (
+                                                    <span className="ml-3 inline-flex items-center gap-1.5 text-[9px] font-black uppercase tracking-wider text-amber-600 bg-amber-50 border border-amber-100 px-2 py-1 rounded-lg align-middle">
+                                                        <i className="fa-solid fa-triangle-exclamation"></i> Sin texto alternativo
+                                                    </span>
+                                                )}
                                             </td>
                                             <td className="px-8 py-4">
                                                 <span className="bg-gray-100 text-gray-500 px-3 py-1 rounded-lg text-xs font-bold uppercase tracking-wide">
@@ -426,6 +564,39 @@ export default function MediaPage() {
                                 </tbody>
                             </table>
                         </div>
+                    </div>
+                )}
+
+                {/* Pager — the counter and the page count come from the server's X-WP-Total headers, so
+                    they describe the whole library and not the slice currently on screen. */}
+                {!loading && total > 0 && (
+                    <div className="mt-8 bg-white rounded-[28px] border-2 border-gray-50 shadow-sm px-6 py-4 flex items-center justify-between gap-4">
+                        <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">
+                            {range.from}–{range.to} de {range.total} {t('media.files.count')}
+                        </span>
+                        {totalPages > 1 && (
+                            <div className="flex items-center gap-4">
+                                <button
+                                    type="button"
+                                    onClick={() => setPage((p) => Math.max(1, p - 1))}
+                                    disabled={page <= 1}
+                                    className="px-4 py-2 rounded-xl border border-gray-200 text-xs font-bold text-gray-600 hover:border-blue-400 hover:text-blue-600 disabled:opacity-40 transition-all"
+                                >
+                                    <i className="fa-solid fa-chevron-left mr-2"></i>{t('table.previous')}
+                                </button>
+                                <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest whitespace-nowrap">
+                                    {t('table.pageOf').replace('{page}', String(page)).replace('{total}', String(totalPages))}
+                                </span>
+                                <button
+                                    type="button"
+                                    onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                                    disabled={page >= totalPages}
+                                    className="px-4 py-2 rounded-xl border border-gray-200 text-xs font-bold text-gray-600 hover:border-blue-400 hover:text-blue-600 disabled:opacity-40 transition-all"
+                                >
+                                    {t('table.next')}<i className="fa-solid fa-chevron-right ml-2"></i>
+                                </button>
+                            </div>
+                        )}
                     </div>
                 )}
             </div>

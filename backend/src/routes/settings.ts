@@ -99,7 +99,19 @@ const ALL_SETTINGS = [
     // Opt-in email verification on self-registration (FRENTE C-3). '1' requires a newly self-registered
     // user to confirm their email via a tokenized link before they can log in; the auth layer fails this
     // CLOSED (treats it as OFF) when no mail provider can deliver. Admin-only (not in PUBLIC_SETTINGS).
-    'require_email_verification'
+    'require_email_verification',
+    // Interruptor maestro de la caché de objetos en Redis. Estaba SEEDEADO (core/options seedDefaults),
+    // se APLICA solo al escribirlo (updateOption → cache.setEnabled), se relee en cada arranque
+    // (initCacheSetting) y en cada nodo del clúster (core/coherence), y la pantalla de ajustes pinta un
+    // interruptor de verdad para él… pero no estaba en esta lista, así que GET /settings/all no lo
+    // devolvía y PUT lo descartaba en silencio: el interruptor no hacía nada en NINGUNA de las dos
+    // direcciones, y encima se pintaba siempre apagado aunque la caché estuviera encendida.
+    //
+    // ADMIN-ONLY a propósito (fuera de PUBLIC_SETTINGS): si hay una caché compartida delante del sitio
+    // es postura de infraestructura, del mismo tipo que sandbox_hardening_* — no lo necesita ningún
+    // render público, y contárselo a un visitante anónimo solo ayuda a quien mide la caché desde fuera.
+    // Tampoco es DERIVED: es un valor ALMACENADO, y el estado en memoria se deriva de él, no al revés.
+    'redis_cache_enabled'
 ];
 
 // Publicly readable, but NOT writable through the generic settings writers: these have a
@@ -232,7 +244,38 @@ const IX_PRESETS_MAX_BYTES = 256 * 1024;
 const IX_PRESETS_MAX_ENTRIES = 50;
 const IX_PRESET_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 
+// Opciones BOOLEANAS cuyo valor almacenado lo vuelve a leer OTRO consumidor más tarde.
+//
+// `cache.setEnabled` (core/cache) reconoce EXACTAMENTE `1`, `'1'` y `true`; todo lo demás es APAGADO,
+// y en silencio. Y updateOption le pasa el valor CRUDO que llegó por HTTP, así que un ajuste guardado
+// como `'on'`, `'yes'` o `'TRUE'` —formas que cualquiera escribiría queriendo decir SÍ— se acepta con
+// un 200, se almacena tal cual, y deja la caché apagada mientras el interruptor de la pantalla se
+// pinta encendido a partir de ese mismo valor. Un interruptor que dice lo contrario de lo que hace es
+// peor que uno roto, porque nadie vuelve a mirarlo.
+//
+// Por eso aquí el vocabulario se CIERRA (400 a lo que no sea booleano) y el valor se NORMALIZA a
+// '1'/'0' antes de escribir: es la única forma que entienden igual los tres lectores —el setEnabled
+// en caliente de updateOption, el initCacheSetting del arranque y el core/coherence de cada nodo—,
+// que además leen a través de getOption, y getOption hace JSON.parse ('1' → 1, y `1` sí está en la
+// lista de setEnabled).
+const BOOLEANISH_TRUE = new Set(['1', 'true', 'on', 'yes']);
+const BOOLEANISH_FALSE = new Set(['', '0', 'false', 'off', 'no']);
+/** '1' | '0' cuando el valor es un booleano reconocible; null cuando no lo es (→ 400). */
+const booleanishSetting = (v: any): '1' | '0' | null => {
+    if (v === true || v === 1) return '1';
+    if (v === false || v === 0 || v === null || v === undefined) return '0';
+    if (typeof v !== 'string') return null;
+    const s = v.trim().toLowerCase();
+    if (BOOLEANISH_TRUE.has(s)) return '1';
+    if (BOOLEANISH_FALSE.has(s)) return '0';
+    return null;
+};
+
 const SETTING_VALIDATORS: Record<string, (v: any) => string | null> = {
+    // Interruptor de la caché de objetos: booleano cerrado (ver booleanishSetting arriba).
+    redis_cache_enabled: (v: any) => booleanishSetting(v) === null
+        ? 'redis_cache_enabled must be a boolean ("1" or "0").'
+        : null,
     wjs_ix_presets: (v: any) => {
         if (v === '' || v === null || v === undefined) return null; // sin preajustes de sitio
         if (typeof v !== 'string') return 'wjs_ix_presets must be a JSON string.';
@@ -302,6 +345,18 @@ const SETTING_VALIDATORS: Record<string, (v: any) => string | null> = {
 /** null when the value is acceptable (or the key carries no validator), else the reason. */
 const settingWriteProblem = (key: string, value: any): string | null =>
     Object.prototype.hasOwnProperty.call(SETTING_VALIDATORS, key) ? SETTING_VALIDATORS[key](value) : null;
+
+// Canonicalización POR CLAVE, aplicada DESPUÉS de validar y justo antes de escribir. Una clave sin
+// entrada aquí se guarda tal cual, como siempre: esto es opt-in y no toca a nadie más.
+const SETTING_NORMALIZERS: Record<string, (v: any) => any> = {
+    // El validador ya garantizó que es reconocible; el `?? '0'` es solo un fail-closed defensivo por si
+    // algún día se escribe por un camino que no valide (apagado es el lado seguro).
+    redis_cache_enabled: (v: any) => booleanishSetting(v) ?? '0',
+};
+
+/** El valor EXACTO que se persiste para esta clave (idéntico al recibido si no hay normalizador). */
+const normalizedSettingValue = (key: string, value: any): any =>
+    Object.prototype.hasOwnProperty.call(SETTING_NORMALIZERS, key) ? SETTING_NORMALIZERS[key](value) : value;
 
 /**
  * @swagger
@@ -441,8 +496,12 @@ router.put('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: Re
 
     for (const [key, value] of Object.entries(updates)) {
         if (ALL_SETTINGS.includes(key) && !DEDICATED_WRITE_API.has(key)) {
-            await updateOption(key, value);
-            updated[key] = value;
+            // Se escribe (y se devuelve) el valor NORMALIZADO, no el recibido: la respuesta es lo que
+            // el cliente usa para repintar, y decirle otra cosa que lo almacenado es cómo un
+            // interruptor acaba mintiendo hasta el siguiente recargado.
+            const stored = normalizedSettingValue(key, value);
+            await updateOption(key, stored);
+            updated[key] = stored;
         }
     }
 
@@ -505,7 +564,7 @@ router.put('/:key', authenticate, isAdmin, asyncHandler(async (req: Request, res
         });
     }
 
-    await updateOption(key, value);
+    await updateOption(key, normalizedSettingValue(key, value));
 
     res.json({
         key,

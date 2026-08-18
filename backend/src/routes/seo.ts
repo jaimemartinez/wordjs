@@ -22,6 +22,24 @@ const { can } = require('../middleware/permissions');
  */
 
 /**
+ * Is this RAW `post_meta.meta_value` the author's "hide from search engines" flag?
+ *
+ * The value arrives straight from SQL (no model layer, so no JSON.parse): the editor stores a
+ * boolean, which Post.updateMeta String()s to `'true'` / `'false'`, while imported and legacy
+ * content uses `1` / `'yes'` / `'on'`. Everything else — an absent row, `'false'`, `'0'`, junk —
+ * means indexable. Deliberately fail-OPEN: reading "hidden" out of a value nobody recognises would
+ * silently pull a live page out of the sitemap.
+ */
+function isNoindexMeta(value: any): boolean {
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'number') return value === 1;
+    if (typeof value !== 'string') return false;
+    // A value written through JSON.stringify arrives quoted (`"true"`) — unwrap before comparing.
+    const normalized = value.trim().replace(/^"(.*)"$/, '$1').trim().toLowerCase();
+    return ['true', '1', 'yes', 'on'].includes(normalized);
+}
+
+/**
  * @swagger
  * /seo/sitemap.xml:
  *   get:
@@ -42,15 +60,24 @@ router.get('/sitemap.xml', async (req: Request, res: Response) => {
 
         // Only the columns the sitemap prints — findAll dragged up to 10 000 FULL rows
         // (post_content included) through the model layer to emit slug + lastmod.
+        //
+        // Plus the ONE meta the sitemap has to obey: `noindex`. A post the author hid from search
+        // engines must not be SUBMITTED to them either — generateSitemap has always skipped
+        // `post.noindex`, but nothing ever selected it, so the flag was permanently undefined.
+        // A correlated scalar subquery, not a JOIN: post_meta has no UNIQUE (post_id, meta_key)
+        // on legacy installs, and a duplicate row would print the same <url> twice.
         const { dbAsync } = require('../config/database');
         const rows = await dbAsync.all(
-            "SELECT post_name, post_type, post_status, post_modified, post_date FROM posts " +
-            "WHERE post_type IN ('post', 'page') AND post_status = 'publish' " +
-            "ORDER BY post_date DESC LIMIT 10000"
+            "SELECT p.post_name, p.post_type, p.post_status, p.post_modified, p.post_date, " +
+            "(SELECT pm.meta_value FROM post_meta pm WHERE pm.post_id = p.id AND pm.meta_key = 'noindex' LIMIT 1) AS noindex_meta " +
+            "FROM posts p " +
+            "WHERE p.post_type IN ('post', 'page') AND p.post_status = 'publish' " +
+            "ORDER BY p.post_date DESC LIMIT 10000"
         );
         const posts = rows.map((r: any) => ({
             postName: r.post_name, postType: r.post_type, postStatus: r.post_status,
             postModified: r.post_modified, postDate: r.post_date,
+            noindex: isNoindexMeta(r.noindex_meta),
         }));
 
         const xml = await generateSitemap(posts, { siteUrl });

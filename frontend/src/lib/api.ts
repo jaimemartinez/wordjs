@@ -416,6 +416,52 @@ export const categoriesApi = {
     delete: (id: number) => apiDelete(`/categories/${id}`),
 };
 
+// ── Tags (taxonomy `post_tag`) ─────────────────────────────────────────────────────────────────────
+// The backend has had a full CRUD router at /api/v1/tags since forever (routes/tags.ts, gated on
+// `manage_categories`) with NO client at all, so nothing in the admin could reach it. Mirrors
+// categoriesApi above, plus the get/update the tags router exposes and categories does not.
+export interface Tag {
+    id: number;
+    name: string;
+    slug: string;
+    /** always 'post_tag' from this endpoint — the router pins the taxonomy. */
+    taxonomy?: string;
+    description?: string;
+    parent?: number;
+    count: number;
+}
+
+export const tagsApi = {
+    /** Backend defaults per_page to 100 and caps it at 100; `hide_empty` drops unused tags. */
+    list: (opts: { page?: number; perPage?: number; search?: string; hideEmpty?: boolean; orderby?: string; order?: "asc" | "desc" } = {}) => {
+        const params = new URLSearchParams();
+        if (opts.page) params.append("page", String(opts.page));
+        if (opts.perPage) params.append("per_page", String(opts.perPage));
+        if (opts.search) params.append("search", opts.search);
+        if (opts.hideEmpty) params.append("hide_empty", "true");
+        if (opts.orderby) params.append("orderby", opts.orderby);
+        if (opts.order) params.append("order", opts.order);
+        const qs = params.toString();
+        return apiGet<Tag[]>(qs ? `/tags?${qs}` : "/tags");
+    },
+    /** Same list, with the X-WP-Total / X-WP-TotalPages totals the router already emits. */
+    listPaged: (opts: { page?: number; perPage?: number; search?: string; hideEmpty?: boolean; orderby?: string; order?: "asc" | "desc" } = {}) => {
+        const params = new URLSearchParams();
+        params.append("page", String(opts.page || 1));
+        params.append("per_page", String(opts.perPage || 20));
+        if (opts.search) params.append("search", opts.search);
+        if (opts.hideEmpty) params.append("hide_empty", "true");
+        if (opts.orderby) params.append("orderby", opts.orderby);
+        if (opts.order) params.append("order", opts.order);
+        return apiGetPaged<Tag[]>(`/tags?${params.toString()}`);
+    },
+    get: (id: number) => apiGet<Tag>(`/tags/${id}`),
+    create: (data: { name: string; slug?: string; description?: string }) => apiPost<Tag>("/tags", data),
+    update: (id: number, data: { name?: string; slug?: string; description?: string }) => apiPut<Tag>(`/tags/${id}`, data),
+    /** DELETE returns `{ deleted, previous }` — the previous term is what a "deshacer" toast would need. */
+    remove: (id: number) => apiDelete<{ deleted: boolean; previous: Tag }>(`/tags/${id}`),
+};
+
 export const usersApi = {
     list: () => apiGet<User[]>("/users"),
     get: (id: number) => apiGet<User>(`/users/${id}`),
@@ -434,6 +480,20 @@ export const authApi = {
     forgotPassword: (login: string) => apiPost<{ ok: boolean; message: string }>("/auth/forgot-password", { login }),
     resetPassword: (data: { uid: number; token: string; password: string }) =>
         apiPost<{ ok: boolean; message: string }>("/auth/reset-password", data),
+    /**
+     * Self-registration. 403 `rest_cannot_register` when the `users_can_register` option is off, so a
+     * sign-up screen must gate on that setting (it is PUBLIC) instead of assuming this works.
+     *
+     * TWO OUTCOMES: with email verification off the backend sets the session cookie and the caller is
+     * logged in; with `require_email_verification` on it returns `verificationRequired: true` and NO
+     * cookie — the account cannot log in until it confirms. Callers MUST branch on that flag rather
+     * than navigating straight to the dashboard, which would land on a signed-out redirect.
+     */
+    register: (data: { username: string; email: string; password: string; displayName?: string }) =>
+        apiPost<{ user: User; verificationRequired?: boolean; message?: string }>("/auth/register", data),
+    /** Consumes the single-use link from the verification email (/verify-email?uid=…&token=…). */
+    verifyEmail: (data: { uid: number; token: string }) =>
+        apiPost<{ ok: boolean; message: string }>("/auth/verify-email", data),
 };
 
 export const commentsApi = {
@@ -739,8 +799,42 @@ export interface MediaItem {
     };
 }
 
+/** The query the media list endpoint understands (backend/src/routes/media.ts GET /). */
+export interface MediaListOptions {
+    page?: number;
+    perPage?: number;
+    search?: string;
+    /** e.g. "image/" or "image/png" — matched server-side against the attachment's MIME type. */
+    mimeType?: string;
+    orderby?: "date" | "modified" | "title" | "id";
+    order?: "asc" | "desc";
+}
+
+const mediaListQuery = (opts: MediaListOptions): URLSearchParams => {
+    const params = new URLSearchParams();
+    params.append("page", String(opts.page || 1));
+    params.append("per_page", String(opts.perPage || 20));
+    if (opts.search) params.append("search", opts.search);
+    if (opts.mimeType) params.append("mime_type", opts.mimeType);
+    if (opts.orderby) params.append("orderby", opts.orderby);
+    if (opts.order) params.append("order", opts.order);
+    return params;
+};
+
 export const mediaApi = {
-    list: () => apiGet<MediaItem[]>("/media"),
+    /**
+     * The endpoint has ALWAYS paged (per_page defaults to 20, capped at 100), so the old no-argument
+     * `list()` was silently showing only the first page of a library and calling it the whole thing.
+     * Left callable with no arguments so existing callers keep working; pass options to page/search.
+     */
+    list: (opts: MediaListOptions = {}) => apiGet<MediaItem[]>(`/media?${mediaListQuery(opts).toString()}`),
+    /**
+     * Same query, plus the X-WP-Total / X-WP-TotalPages totals — which `apiGet` throws away, so a pager
+     * built on `list()` alone can never know how many items exist. Same shape as postsApi.listPaged.
+     * NOTE the totals are visibility-adjusted server-side (attachments of another author's unpublished
+     * post are discounted), so `total` is what THIS caller may see, not the raw table count.
+     */
+    listPaged: (opts: MediaListOptions = {}) => apiGetPaged<MediaItem[]>(`/media?${mediaListQuery(opts).toString()}`),
     upload: (formData: FormData) => api<MediaItem>("/media", {
         method: "POST",
         body: formData,
@@ -777,6 +871,17 @@ export const mediaApi = {
             xhr.send(formData);
         });
     },
+    /**
+     * Edit an attachment's metadata (the "detalles del archivo" panel). Only these four fields are
+     * accepted server-side; `alt` is the accessibility text and is stored as post meta, the other
+     * three are the attachment post's title/content/excerpt.
+     *
+     * Authorization is OWNERSHIP-based, not just `upload_files`: editing someone else's media needs
+     * `edit_others_posts`, so a 403 `rest_forbidden` here is expected for an author touching another
+     * user's upload and should be surfaced as such, not retried.
+     */
+    update: (id: number, data: { title?: string; description?: string; caption?: string; alt?: string }) =>
+        apiPut<MediaItem>(`/media/${id}`, data),
     delete: (id: number) => apiDelete(`/media/${id}`),
 };
 
@@ -1006,6 +1111,86 @@ export const formsApi = {
     names: () => apiGet<{ names: FormName[] }>("/forms/names"),
     removeSubmission: (id: number) =>
         apiDelete<{ deleted: boolean; previous: FormSubmission }>(`/forms/submissions/${id}`),
+};
+
+// ── Site export (admin only) ───────────────────────────────────────────────────────────────────────
+// GET /export (JSON) and GET /export/wxr (WordPress XML). Both are `authenticate + isAdmin` and both
+// answer with Content-Disposition: attachment, so the browser saves the file itself. Same navigation
+// trick as themesApi.download / backupsApi.download / themesApi.exportMods: the HttpOnly session
+// cookie rides along on a top-level GET, which is exactly why fetch()+blob is NOT used here (it would
+// buffer a whole site export in memory for no gain).
+
+/**
+ * What GET /export includes. The backend's defaults are INCLUDE for everything except users
+ * (`req.query.X !== 'false'`), so only the toggles that differ from the default are sent — and
+ * `users` is opt-IN because an export carrying user rows is a different kind of file to hand around.
+ */
+export interface ExportOptions {
+    media?: boolean;
+    posts?: boolean;
+    pages?: boolean;
+    users?: boolean;
+    settings?: boolean;
+    menus?: boolean;
+}
+
+/**
+ * The query string for GET /export. Exported so the caller can render a real link (and so the
+ * mapping to the backend's include-by-default semantics is testable without a browser).
+ */
+export function buildExportQuery(opts: ExportOptions = {}): string {
+    const params = new URLSearchParams();
+    // Include-by-default keys: only say something when the admin asks to LEAVE ONE OUT.
+    for (const key of ["media", "posts", "pages", "settings", "menus"] as const) {
+        if (opts[key] === false) params.append(key, "false");
+    }
+    // Opt-in key: only say something when the admin asks to PUT IT IN.
+    if (opts.users === true) params.append("users", "true");
+    return params.toString();
+}
+
+export const exportApi = {
+    /** Full site export as JSON (wordjs-export.json). */
+    downloadJson: (opts: ExportOptions = {}) => {
+        const qs = buildExportQuery(opts);
+        window.location.href = `${getBaseUrl()}/export${qs ? `?${qs}` : ""}`;
+    },
+    /** WordPress-compatible WXR export (wordjs-export.xml). Takes no options server-side. */
+    downloadWxr: () => {
+        window.location.href = `${getBaseUrl()}/export/wxr`;
+    },
+};
+
+// ── Audit trail (admin only, read-only) ────────────────────────────────────────────────────────────
+// GET /audit is the ONLY route on the append-only audit_log: there is deliberately no write, update
+// or delete. Newest first, and the values of a change are never recorded — only which keys changed.
+export interface AuditEntry {
+    id: number;
+    /** the acting user's id, or null for a system/unauthenticated action. */
+    actorId: number | null;
+    /** stable dotted action name, e.g. "settings.update". */
+    action: string;
+    targetType: string;
+    targetId: string;
+    /** sanitized structured context ({} when the row had none) — never raw option values. */
+    detail: Record<string, unknown>;
+    createdAt: string;
+}
+
+export const auditApi = {
+    /**
+     * A page of audit entries, newest first. The backend clamps per_page to 1..200 (default 50) and
+     * page to >= 1. The JSON body already carries `total`, and the same number rides on X-WP-Total —
+     * read through apiGetPaged so a pager gets `totalPages` without recomputing it.
+     */
+    list: (opts: { page?: number; perPage?: number } = {}) => {
+        const params = new URLSearchParams();
+        params.append("page", String(opts.page || 1));
+        params.append("per_page", String(opts.perPage || 50));
+        return apiGetPaged<{ entries: AuditEntry[]; total: number; page: number; perPage: number }>(
+            `/audit?${params.toString()}`
+        );
+    },
 };
 
 // ── Multi-factor auth (TOTP) ─────────────────────────────────────────────────────────────────────

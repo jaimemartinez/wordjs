@@ -15,11 +15,28 @@ import { unhydratedSaveBlocked, seedLegacyVersoData, applyLegacyHtmlFallback, re
 // La forma persistida `{ content, root }` — el mismo tipo que exponía el fork, ahora propio.
 import type { VersoData as Data } from "@/lib/verso/types";
 import { buildStatusPatch, dbDateToLocalInput, defaultScheduleInput } from "@/lib/editorSchedule";
+// Campos ROOT de REGISTRO (imagen destacada / extracto): una página también tiene portada y resumen
+// — ver la cabecera de editorRootFields.ts. Sin categoría: la asimetría del CMS no se colapsa.
+import {
+    withRecordRootFields,
+    seedRootPropsFromPost,
+    featuredImageMetaValue,
+    resolveExcerptForSave,
+    seedSeoRootProps,
+    seoMetaForSave,
+} from "@/lib/editorRootFields";
 import { useUnsavedChanges } from "@/contexts/UnsavedChangesContext";
 import { useModal } from "@/contexts/ModalContext";
 import { useI18n } from "@/contexts/I18nContext";
 import { trStr } from "@/lib/editorI18n";
 import { useAuth } from "@/contexts/AuthContext";
+
+/**
+ * Campos ROOT del inspector de PÁGINAS: los del registro más imagen destacada y extracto. No depende
+ * de nada del componente, así que se calcula UNA vez — el panel de propiedades recibe siempre la
+ * misma referencia.
+ */
+const PAGE_ROOT_FIELDS = withRecordRootFields(rootFieldsPage, { seo: true });
 
 export default function PageEditorPage() {
     const { t, language } = useI18n();
@@ -55,6 +72,9 @@ export default function PageEditorPage() {
     // read at save time) because the canvas preview re-wraps on it live — VersoThemeTemplate reads the
     // pick straight from the store root, so the canvas follows the dropdown without a save.
     const [assignedTemplate, setAssignedTemplate] = useState("");
+    // Extracto CONFIRMADO por el servidor: solo viaja cuando el autor lo cambia (la API devuelve un
+    // extracto DERIVADO del cuerpo cuando la página no tiene uno propio — ver resolveExcerptForSave).
+    const seededExcerptRef = useRef("");
     const [saving, setSaving] = useState(false);
     const [isLoading, setIsLoading] = useState(!isNew);
     // Data-safety hydration tracking: `loaded` is true only once the EXISTING page's content has loaded;
@@ -140,6 +160,13 @@ export default function PageEditorPage() {
             const savedTemplate = typeof page.meta?._wjs_template === "string" ? page.meta._wjs_template : "";
             setAssignedTemplate(savedTemplate);
 
+            // Imagen destacada y extracto: la BD manda sobre lo que traiga _puck_data (igual que
+            // _wjs_template), así que reabrir enseña SIEMPRE la portada real de la página.
+            // SEO: la meta manda igual que _wjs_template — si no, el primer guardado del editor
+            // borraría lo que puso la API o una importación (ver seedSeoRootProps).
+            const seedRoot = { ...seedRootPropsFromPost(page), ...seedSeoRootProps(page) };
+            seededExcerptRef.current = seedRoot.excerpt;
+
             // Load Puck data from meta if available
             if (page.meta && page.meta[EDITOR_DATA_META_KEY]) {
                 const stored = page.meta[EDITOR_DATA_META_KEY];
@@ -147,7 +174,7 @@ export default function PageEditorPage() {
                     ...stored,
                     root: {
                         ...(stored.root as any),
-                        props: { ...((stored.root as any)?.props || {}), _wjs_template: savedTemplate }
+                        props: { ...((stored.root as any)?.props || {}), _wjs_template: savedTemplate, ...seedRoot }
                     }
                 };
                 setInitialVersoData(withTemplate);
@@ -167,7 +194,8 @@ export default function PageEditorPage() {
                     title: page.title,
                     slug: page.slug,
                     recordId: pageId as number,
-                    wjsTemplate: savedTemplate
+                    wjsTemplate: savedTemplate,
+                    extraRootProps: seedRoot
                 });
                 setInitialVersoData(seededData as any);
                 versoDataRef.current = seededData as any;
@@ -249,18 +277,31 @@ export default function PageEditorPage() {
                 return false;
             }
 
+            // Extracto: solo si cambió (fail-closed — ver editorRootFields.resolveExcerptForSave).
+            const rootProps = (root?.props ?? {}) as Record<string, unknown>;
+            const excerptPatch = resolveExcerptForSave({
+                current: rootProps.excerpt,
+                seeded: seededExcerptRef.current,
+            });
+
             const pageData = {
                 title: finalTitle,
                 slug: finalSlug,
                 content: contentRef.current,
                 ...statusPatch,
                 type: "page",
+                ...(excerptPatch !== undefined ? { excerpt: excerptPatch } : {}),
                 meta: {
                     // Clave histórica CONGELADA a propósito — ver EDITOR_DATA_META_KEY.
                     [EDITOR_DATA_META_KEY]: liveData,
                     // Per-page theme template. Always sent (backend merges meta per key): '' explicitly
                     // CLEARS a previous assignment — omitting the key would leave it stale forever.
-                    _wjs_template: resolveWjsTemplateForSave(root?.props)
+                    _wjs_template: resolveWjsTemplateForSave(root?.props),
+                    // Imagen destacada; '' BORRA la asignación anterior (ver el editor de entradas).
+                    _thumbnail_id: featuredImageMetaValue(rootProps),
+                    // SEO. `buildPostMetadata` y el sitemap YA honran esta meta en páginas; hasta
+                    // ahora el editor de páginas no tenía con qué escribirla.
+                    ...seoMetaForSave(rootProps)
                 },
                 // Autosaves skip the revision snapshot server-side (see routes/posts.ts).
                 ...(isAutosave ? { autosave: true } : {})
@@ -289,6 +330,8 @@ export default function PageEditorPage() {
                 setStatus(saved.status);
                 if (saved.status === "future") setScheduleDate(dbDateToLocalInput(saved.dateGmt, saved.date));
             }
+            // Lo que ya viajó pasa a ser la base (si no, cada autosave reenviaría el mismo extracto).
+            if (excerptPatch !== undefined) seededExcerptRef.current = excerptPatch;
             // Stay in editor - no redirect
             setIsDirty(false); // Reset dirty state after successful save
             return true;
@@ -336,7 +379,7 @@ export default function PageEditorPage() {
                     onCancel={() => router.back()}
                     pageId={pageId || undefined}
                     previewSlug={slug || undefined}
-                    rootFields={rootFieldsPage}
+                    rootFields={PAGE_ROOT_FIELDS}
                     // W30: el canvas envuelve en la plantilla `page` del tema (el pick _wjs_template
                     // lo lee VersoThemeTemplate EN VIVO del root del store — sin prop).
                     templateKind="page"

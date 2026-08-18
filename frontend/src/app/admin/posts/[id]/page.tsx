@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useMemo } from "react";
 import { useRouter, useParams } from "next/navigation";
 import EditorBootFallback from "@/components/verso/editor/EditorBootFallback";
 import { postsApi, categoriesApi, Category } from "@/lib/api";
@@ -14,6 +14,17 @@ import { unhydratedSaveBlocked, seedLegacyVersoData, applyLegacyHtmlFallback, re
 // La forma persistida `{ content, root }` — el mismo tipo que exponía el fork, ahora propio.
 import type { VersoData as Data } from "@/lib/verso/types";
 import { buildStatusPatch, dbDateToLocalInput, defaultScheduleInput } from "@/lib/editorSchedule";
+// Campos ROOT de REGISTRO (imagen destacada / extracto / categoría): el editor los compone sobre los
+// del registro de bloques — ver la cabecera de editorRootFields.ts.
+import {
+    withRecordRootFields,
+    seedRootPropsFromPost,
+    featuredImageMetaValue,
+    resolveExcerptForSave,
+    resolveCategoriesForSave,
+    seedSeoRootProps,
+    seoMetaForSave,
+} from "@/lib/editorRootFields";
 import { useUnsavedChanges } from "@/contexts/UnsavedChangesContext";
 import { useModal } from "@/contexts/ModalContext";
 import { useI18n } from "@/contexts/I18nContext";
@@ -49,6 +60,16 @@ export default function PostEditorPage() {
     // pick straight from the store root, so the canvas follows the dropdown without a save.
     const [assignedTemplate, setAssignedTemplate] = useState("");
     const [categories, setCategories] = useState<Category[]>([]);
+    // Espejo de la categoría elegida en el root (state, no solo ref): el select se reconstruye con
+    // ella para poder SINTETIZAR la opción de un valor que no case con ninguna categoría viva (el
+    // NOMBRE que guardaba el control viejo) en vez de enseñar el campo vacío.
+    const [rootCategory, setRootCategory] = useState("");
+    // Valores CONFIRMADOS por el servidor de los dos campos que solo viajan cuando cambian
+    // (ver resolveExcerptForSave / resolveCategoriesForSave: la API no devuelve los términos de un
+    // post, y devuelve un extracto DERIVADO cuando no hay uno propio — mandarlos siempre destruiría
+    // términos puestos por importación y congelaría el resumen automático).
+    const seededExcerptRef = useRef("");
+    const seededCategoryRef = useRef("");
     const [saving, setSaving] = useState(false);
     const [isLoading, setIsLoading] = useState(!isNew);
     // Data-safety hydration tracking: `loaded` is true only once the EXISTING post's content has
@@ -130,14 +151,32 @@ export default function PostEditorPage() {
             const savedTemplate = typeof post.meta?._wjs_template === "string" ? post.meta._wjs_template : "";
             setAssignedTemplate(savedTemplate);
 
+            // Imagen destacada y extracto: la BD manda sobre lo que traiga _puck_data (pudieron
+            // cambiarse por la API o antes de que estos campos existieran), igual que _wjs_template.
+            // SEO: la META manda igual que _wjs_template. Sin esta siembra, un registro cuyo SEO se
+            // puso por la API/importación llegaba con root.props vacío y el primer guardado lo
+            // BORRABA (el body manda los cuatro campos siempre) — y hoy eso cambia el <title> real y
+            // puede re-listar en el sitemap una página ocultada a propósito.
+            // `allowComments` va en el mismo saco: el onChange lo copia a commentStatus, así que un
+            // _puck_data con un valor viejo pisaba la columna real en cuanto se tocaba el lienzo.
+            const seedRoot = {
+                ...seedRootPropsFromPost(post),
+                ...seedSeoRootProps(post),
+                allowComments: post.commentStatus || "open",
+            };
+            seededExcerptRef.current = seedRoot.excerpt;
+
             // Load Puck data from meta if available
             if (post.meta && post.meta[EDITOR_DATA_META_KEY]) {
                 const stored = post.meta[EDITOR_DATA_META_KEY];
+                const storedCategory = String((stored.root as any)?.props?.category ?? "");
+                seededCategoryRef.current = storedCategory;
+                setRootCategory(storedCategory);
                 const withTemplate = {
                     ...stored,
                     root: {
                         ...(stored.root as any),
-                        props: { ...((stored.root as any)?.props || {}), _wjs_template: savedTemplate }
+                        props: { ...((stored.root as any)?.props || {}), _wjs_template: savedTemplate, ...seedRoot }
                     }
                 };
                 setVersoData(withTemplate);
@@ -158,8 +197,11 @@ export default function PostEditorPage() {
                     slug: post.slug,
                     recordId: postId as number,
                     wjsTemplate: savedTemplate,
-                    extraRootProps: { allowComments: post.commentStatus || "open" }
+                    extraRootProps: seedRoot // ya incluye allowComments, imagen destacada, extracto y SEO
                 });
+                // seedLegacyVersoData siembra `category: ""` — el registro no trae ninguna elección.
+                seededCategoryRef.current = "";
+                setRootCategory("");
                 setVersoData(seededData as any);
                 versoDataRef.current = seededData as any;
                 // Safety net (belt-and-braces): keep the original body so an empty-canvas save can't blank
@@ -248,23 +290,40 @@ export default function PostEditorPage() {
                 return false;
             }
 
+            // Campos de REGISTRO que viven en el root del lienzo. Extracto y categorías viajan SOLO
+            // si el autor los cambió (fail-closed — ver editorRootFields); la imagen destacada viaja
+            // siempre, porque '' es la única forma de borrar una asignación anterior.
+            const rootProps = (root?.props ?? {}) as Record<string, unknown>;
+            const excerptPatch = resolveExcerptForSave({
+                current: rootProps.excerpt,
+                seeded: seededExcerptRef.current,
+            });
+            const categoriesPatch = resolveCategoriesForSave({
+                current: rootProps.category,
+                seeded: seededCategoryRef.current,
+                categories,
+            });
+
             const postData = {
                 title: finalTitle,
                 slug: finalSlug,
                 content: contentRef.current, // This content is now generated from Puck
                 ...statusPatch,
                 commentStatus,
+                ...(excerptPatch !== undefined ? { excerpt: excerptPatch } : {}),
+                ...(categoriesPatch !== undefined ? { categories: categoriesPatch } : {}),
                 meta: {
                     // Clave histórica CONGELADA a propósito — ver EDITOR_DATA_META_KEY.
                     [EDITOR_DATA_META_KEY]: liveData, // Save the JSON structure for re-editing
                     // Per-page theme template. Always sent (backend merges meta per key): '' explicitly
                     // CLEARS a previous assignment — omitting the key would leave it stale forever.
                     _wjs_template: resolveWjsTemplateForSave(root?.props),
-                    // SEO fields
-                    seo_title: root?.props?.seo_title || '',
-                    seo_description: root?.props?.seo_description || '',
-                    og_image: root?.props?.og_image || '',
-                    noindex: root?.props?.noindex === 'true'
+                    // Imagen destacada (Post.getFeaturedImage la resuelve desde aquí). Siempre
+                    // presente: '' BORRA la asignación anterior, omitirla la dejaría fija.
+                    _thumbnail_id: featuredImageMetaValue(rootProps),
+                    // SEO (título/descripción/imagen social/noindex). Una sola fuente para entradas y
+                    // páginas — ver editorRootFields.seoMetaForSave.
+                    ...seoMetaForSave(rootProps)
                 },
                 // Autosaves skip the revision snapshot server-side (see routes/posts.ts).
                 ...(isAutosave ? { autosave: true } : {})
@@ -293,6 +352,10 @@ export default function PostEditorPage() {
                 setStatus(saved.status);
                 if (saved.status === "future") setScheduleDate(dbDateToLocalInput(saved.dateGmt, saved.date));
             }
+            // Lo que ya viajó pasa a ser la base: sin esto cada autosave posterior reenviaría el
+            // mismo extracto y las mismas categorías eternamente. Solo tras un guardado CONFIRMADO.
+            if (excerptPatch !== undefined) seededExcerptRef.current = excerptPatch;
+            if (categoriesPatch !== undefined) seededCategoryRef.current = String(rootProps.category ?? "");
             // Stay in editor - no redirect
             setIsDirty(false); // Reset dirty state after successful save
             return true;
@@ -306,6 +369,14 @@ export default function PostEditorPage() {
             setSaving(false);
         }
     };
+
+    // Campos ROOT del inspector: los del registro MÁS imagen destacada/extracto, y la categoría
+    // sustituida por el select por ID (que es lo que Post.setTerms espera). Memorizado para no
+    // reconstruir el objeto en cada pulsación.
+    const rootFields = useMemo(
+        () => withRecordRootFields(rootFieldsPost, { categories, currentCategory: rootCategory }),
+        [categories, rootCategory],
+    );
 
     if (isLoading) {
         return <EditorBootFallback />;
@@ -338,7 +409,7 @@ export default function PostEditorPage() {
                     breadcrumbRoot="Entradas"
                     pageId={postId || undefined}
                     previewSlug={slug || undefined}
-                    rootFields={rootFieldsPost}
+                    rootFields={rootFields}
                     // W30: el canvas envuelve en la plantilla `single` (single-post → single → page),
                     // igual que la ruta pública del post; el pick _wjs_template se lee EN VIVO del store.
                     templateKind="single"
@@ -369,6 +440,11 @@ export default function PostEditorPage() {
                         const newTemplate = root?.props?._wjs_template;
                         if (typeof newTemplate === 'string' && newTemplate !== assignedTemplate) {
                             setAssignedTemplate(newTemplate);
+                        }
+                        // Espejo de la categoría: alimenta la opción sintetizada del select.
+                        const newCategory = String(root?.props?.category ?? "");
+                        if (newCategory !== rootCategory) {
+                            setRootCategory(newCategory);
                         }
                         // Fallback HTML desde bloques — EXCEPTO un post legacy aún en lienzo vacío
                         // (su cuerpo vive como HTML en `content`): no machacarlo a "".

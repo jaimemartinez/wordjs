@@ -23,6 +23,24 @@ export function toText(html: string | undefined | null, max = 160): string {
     return text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text;
 }
 
+/**
+ * URL de la imagen destacada tal y como la API la manda HOY: `featuredMedia:{id,url,title}`
+ * (backend Post.toJSON). El mapper leía `featuredImage`, una clave que la API nunca ha emitido, así
+ * que ningún post con imagen destacada llegaba nunca con miniatura a PostsGrid/PostsList.
+ * Se sigue tolerando la clave vieja (string, u objeto con `url`) por si algún caller la sintetiza.
+ */
+export function featuredImageUrl(raw: Record<string, unknown>): string | undefined {
+    const candidates: unknown[] = [raw.featuredMedia, raw.featuredImage];
+    for (const c of candidates) {
+        if (typeof c === "string" && c.trim()) return c;
+        if (c && typeof c === "object") {
+            const url = (c as { url?: unknown }).url;
+            if (typeof url === "string" && url.trim()) return url;
+        }
+    }
+    return undefined;
+}
+
 export function toResolved(p: Post): ResolvedPost {
     const raw = (p as unknown as Record<string, unknown>);
     return {
@@ -33,7 +51,7 @@ export function toResolved(p: Post): ResolvedPost {
         // Locale-independent: formatting here would bake the SERVER's locale into the HTML and then
         // mismatch on hydration. The block formats it.
         date: (raw.date as string) || (raw.dateGmt as string) || "",
-        image: (raw.featuredImage as string) || undefined,
+        image: featuredImageUrl(raw),
     };
 }
 
