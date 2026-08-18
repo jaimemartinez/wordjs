@@ -111,7 +111,7 @@ router.get('/feed.xml', async (req: Request, res: Response) => {
         const siteUrl = await getOption('siteurl', `${req.protocol}://${req.get('host')}`);
         const title = await getOption('blogname', 'WordJS Site');
         const description = await getOption('blogdescription', '');
-        // WPLANG holds a LOCALE (`en_US` — core/i18n keys the translation files by that exact
+        // WPLANG holds a LOCALE (`en_US` — locale files are named by that exact
         // spelling); RSS <language> wants a BCP 47 TAG, whose subtag separator is a hyphen. Convert
         // here, at the boundary, instead of storing a second spelling that could drift from the first.
         const language = toLanguageTag(await getOption('WPLANG', 'en'));

@@ -211,7 +211,7 @@ const MOTION_POLICIES = ['', 'full', 'calm', 'off'];
 
 const VIEW_TRANSITION_STYLES = ['', 'off', 'fade', 'slide'];
 // language [ - script ] [ - region ]. Underscore form ('es_ES') is what the WPLANG option has
-// always used (core/i18n keys the translation files by it), so it is accepted and normalized to a
+// always used (locale files are named by it), so it is accepted and normalized to a
 // BCP 47 tag on READ by whoever renders it — core/language-tag for the RSS <language>, the frontend
 // resolver for <html lang>. Both hyphenate; neither rewrites the stored value. Deliberately
 // narrower than full BCP 47: extensions/variants/private-use have no consumer here and every

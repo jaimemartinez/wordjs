@@ -2,7 +2,7 @@
  * The site locale, where it is RENDERED: RSS `<language>` (and, by the same corpus, `<html lang>`).
  *
  * THE BUG THIS PINS. `WPLANG` stores a WordPress-style LOCALE — `en_US`, underscore — because
- * core/i18n keys the translation files by exactly that string. Install seeding started writing
+ * locale files are named by exactly that string. Install seeding started writing
  * `WPLANG: 'en_US'` (core/options) and routes/seo handed the option straight to the feed generator,
  * so a fresh install emitted `<language>en_US</language>`. A language tag is BCP 47: subtags are
  * separated by a HYPHEN, and no feed validator accepts the underscore form. Before the seed existed
@@ -134,7 +134,7 @@ describe('the stored locale becomes a valid language tag', () => {
 
     // ------------------------------------------------------------------ 2. the data is not rewritten
 
-    it('does not rewrite the stored option — core/i18n keys the translation files by it', async () => {
+    it('does not rewrite the stored option — locale files are named by it', async () => {
         await updateOption('WPLANG', 'es_ES');
         assert.strictEqual(await feedLanguage(), 'es-ES');
         assert.strictEqual(

@@ -2,7 +2,7 @@
  * WordJS — the site locale, rendered as a LANGUAGE TAG.
  *
  * WHY THIS EXISTS. `WPLANG` stores a WordPress-style LOCALE (`en_US`, `pt_BR`, `pa_Arab_PK`) and it
- * has to keep storing one: `core/i18n` keys the translation files by it (`languages/default-es_ES.json`)
+ * has to keep storing one: locale files are named by it (`languages/default-es_ES.json`)
  * and `getAvailableLocales()` matches that underscore shape on disk. A locale is not a language tag.
  * RFC 7231/BCP 47 — and therefore RSS `<language>` and HTML `lang` — separate subtags with a HYPHEN,
  * so `en_US` is not a valid value for either. Seeding `WPLANG: 'en_US'` at install (core/options) is

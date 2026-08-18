@@ -240,7 +240,7 @@ async function initDefaultOptions(fullConfig: any) {
         date_format: 'Y-m-d',
         time_format: 'H:i',
         timezone_string: 'UTC',
-        // Site locale + writing direction. WPLANG already existed (core/i18n reads it, routes/seo
+        // Site locale + writing direction. WPLANG already existed (routes/seo
         // puts it in the RSS <language>); it now also drives <html lang>. site_text_direction is the
         // explicit <html dir> override — '' means "derive from WPLANG", which is what an Arabic or
         // Hebrew locale needs and what nothing in the tree could express before.
