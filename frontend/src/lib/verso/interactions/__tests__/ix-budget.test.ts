@@ -5,8 +5,10 @@
  * (qué navegador descarga qué) ya está clavado por los tests de la matriz de disparadores; lo que
  * NO había era un assert que se pusiera rojo si el runtime engorda por encima del presupuesto.
  *
- * CÓMO SE MIDE: se empaqueta CADA entrada con esbuild (que ya es dependencia transitiva de vitest —
- * no se añade nada), minificada y gzip, igual que viajaría. `./scrub` se marca external en la isla
+ * CÓMO SE MIDE: se empaqueta CADA entrada con esbuild, minificada y gzip, igual que viajaría.
+ * esbuild es una devDependency DECLARADA: este import se apoyaba en que llegase como transitiva de
+ * vitest, y esa suposición se rompió en cuanto un bump de dependencias reorganizó el árbol — el
+ * type-check caía con "Cannot find module 'esbuild'" en toda rama que tocara las dependencias. `./scrub` se marca external en la isla
  * porque en producción es un chunk aparte (dynamic import) que Chrome y Safari 26+ nunca bajan.
  * Se mide NUESTRO código, no el envoltorio de chunk de Next (que es del framework y ~constante):
  * el número exacto del navegador variará unos bytes, pero el presupuesto se vigila donde crece.
