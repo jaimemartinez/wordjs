@@ -17,10 +17,19 @@ on:
 permissions:
   contents: read
 
+# EVERY JOB BELOW CARRIES A `timeout-minutes`, because GitHub's default is SIX HOURS.
+#
+# Without one, a hung step does not fail — it stays "in progress" all afternoon, burns runner
+# minutes, and (the part that actually costs) is indistinguishable from a slow run, so nobody looks.
+# It happened: two consecutive runs sat 40 and 25 minutes inside the Playwright install while the
+# runs pushed after them finished in seven. The slowest job observed across recent green runs takes
+# 3 minutes; 15 is five times that — generous on a loaded runner, decisive against a hang.
+
 jobs:
   backend:
     name: Backend (typecheck + test)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     services:
       postgres:
         image: postgres:16
@@ -143,6 +152,7 @@ jobs:
     # that core is exactly what exercises the property.
     name: Multi-node coherence (2 backends, shared PG + Redis)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     services:
       postgres:
         image: postgres:16
@@ -186,6 +196,7 @@ jobs:
   gateway:
     name: Gateway (test)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
@@ -206,6 +217,7 @@ jobs:
   frontend:
     name: Frontend (lint + build)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
@@ -285,6 +297,7 @@ jobs:
     # vía VERSO_PERF_*_MS en este job (ver el comentario del spec).
     name: Verso E2E (Playwright chromium, monolito efímero HTTP)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
@@ -306,7 +319,13 @@ jobs:
         run: npm ci || npm install
       - name: Install Playwright chromium (with system deps)
         working-directory: frontend
-        run: npx playwright install --with-deps chromium
+        # `--with-deps` shells out to apt-get, and both that and the browser download have stalled
+        # here for 40+ minutes. `timeout` kills a stuck attempt at five minutes so the retry starts
+        # clean: a transient network stall heals itself instead of failing someone's PR, and a real
+        # hang fails in ten minutes rather than in six hours. The install itself takes under a minute.
+        run: |
+          timeout 5m npx playwright install --with-deps chromium ||
+          timeout 5m npx playwright install --with-deps chromium
       - name: Run Verso E2E suite (webServer arranca dev:mono WORDJS_HTTP=1)
         working-directory: frontend
         env:
@@ -342,6 +361,7 @@ jobs:
     # the one script).
     name: Compiled bundle smoke-boot
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6

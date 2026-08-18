@@ -37,6 +37,9 @@ jobs:
   hunt:
     name: "Shard ${{ matrix.shard }}"
     runs-on: ubuntu-latest
+    # GitHub's default job timeout is SIX HOURS: a hung step would look like a slow one
+    # forever. See the long note in ci.yml.
+    timeout-minutes: 180
     strategy:
       fail-fast: false # every shard must finish: we want the FREQUENCY, not the first failure
       matrix:

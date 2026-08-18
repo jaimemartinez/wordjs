@@ -22,6 +22,9 @@ jobs:
   analyze:
     name: Analyze
     runs-on: ubuntu-latest
+    # GitHub's default job timeout is SIX HOURS: a hung step would look like a slow one
+    # forever. See the long note in ci.yml.
+    timeout-minutes: 45
     permissions:
       actions: read # the analyze action reads the workflow run's own metadata
       contents: read # checkout
