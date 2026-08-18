@@ -703,18 +703,18 @@ describe("la ESCENA FIJA en el camino de fallback (C5)", () => {
     stop();
   });
 
-  it("sin escena por encima se mide el bloque: degradación honesta, no animación muerta", () => {
+  it("sin escena por encima NO se anima — y eso es exactamente lo que hace el CSS", () => {
+    // Paridad, no amabilidad: la regla CSS de una escena vive dentro de `.wjs-block-section--scene`,
+    // así que fuera de una escena el navegador nativo no anima nada. Si aquí se midiera el bloque,
+    // el visitante de Firefox vería una animación que el de Chrome no — y además el bloque quedaría
+    // a merced de su primer fotograma, que es como se ocultó uno de verdad antes del arreglo.
     const units = sceneUnits();
-    const el = new FakeEl(units[0].cls); // sin `closest`: un host viejo o un bloque suelto
+    const el = new FakeEl(units[0].cls); // sin `closest`: un bloque suelto
     el.rect = { top: 0, height: 400 };
     const h = harness([el]);
     const stop = createScrubDriver(units, h.host);
-    h.observers[0].cb([{ target: el, isIntersecting: true }]);
-    // Se mide el rect DEL BLOQUE con el rango de escena (`contain`): un bloque de 400 con la
-    // ventana en 800 ya está contenido del todo, así que el progreso está al final. Lo que importa
-    // es que hay progreso medido y no un `null` — la animación no se queda muerta.
-    expect(el.anims[0].currentTime).toBe(1000);
-    stop();
+    expect(el.anims).toHaveLength(0);
+    expect(() => stop()).not.toThrow();
   });
 });
 

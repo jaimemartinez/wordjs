@@ -536,7 +536,29 @@ function targetSuffix(target: IxTarget): string | null {
  * que canvas y público salgan del mismo código). Su CSS se escribe contra un atributo `data-wjs-ix`
  * que pone el runtime — el MISMO patrón que ya usa `data-wjs-anim` para la entrada de hoy.
  */
+/** La clase de una ESCENA FIJA (C5) — la misma que estampa `SectionBlock` y estiliza la hoja. */
+const SCENE_CLASS = "wjs-block-section--scene";
+
+/**
+ * Los selectores de un `scrub` anclado a una ESCENA (C5), y por qué no basta con `.cls`.
+ *
+ * Una timeline con nombre que no resuelve NO deja la animación quieta al final: la deja SIN
+ * resolver, y con `fill: both` el elemento se queda clavado en su PRIMER fotograma. Medido en el
+ * navegador: un bloque con `src:"scene"` fuera de toda escena se quedaba en `opacity: 0` para
+ * siempre — es decir, el motor ocultaba un bloque, que es justo lo que no puede pasar nunca.
+ *
+ * La condición «hay una escena por encima» sí es expresable en CSS, así que la regla solo existe
+ * dentro de una: sin escena no hay animación, y el bloque se ve en su estado natural. El
+ * `:where()` mantiene la especificidad intacta para no reordenar la cascada de las demás reglas.
+ * El segundo selector cubre el caso de que la propia sección fija sea el bloque animado.
+ */
+const sceneSelectors = (cls: string): string[] => [
+  `:where(.${SCENE_CLASS}) .${cls}`,
+  `.${cls}:where(.${SCENE_CLASS})`,
+];
+
 function stateSelectors(cls: string, trigger: IxTrigger): string[] {
+  if (trigger.on === "scrub" && trigger.src === "scene") return sceneSelectors(cls);
   switch (trigger.on) {
     case "view":
       return trigger.once === false ? [`.${cls}`] : [`.${cls}[data-wjs-ix="in"]`];

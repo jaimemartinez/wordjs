@@ -18,7 +18,9 @@
  *   · el token de pausa aparece SOLO en el bucle;
  *   · el espejo RTL viaja como `calc(var(--wjs-ix-dir,1) * …)`, no horneado;
  *   · el escalonado NO emite retardos sobre una timeline de scroll (el progreso ya lo da la
- *     posición: desplazar por hermano no significaría nada) — igual que en el runtime.
+ *     posición: desplazar por hermano no significaría nada) — igual que en el runtime;
+ *   · la unidad de ESCENA solo existe DENTRO de una escena (`:where(.wjs-block-section--scene)`):
+ *     fuera de ella, una timeline con nombre sin resolver congelaría el bloque en su fotograma 0.
  */
 import { describe, expect, it } from "vitest";
 import { compileIxPage } from "../compile";
@@ -64,7 +66,7 @@ const GOLDEN = `@media screen and (prefers-reduced-motion:no-preference){
 @keyframes wjs-ixk-1rv0lab{0%{transform:scale(1)}100%{transform:scale(1.05)}}
 .wjs-ix-1rv0lab{animation:wjs-ixk-1rv0lab 600ms linear infinite alternate var(--wjs-ix-play,running) both}
 @keyframes wjs-ixk-1kg2ymy{0%{opacity:0;transform:translate3d(calc(var(--wjs-ix-dir,1) * -40px),0px,0)}100%{opacity:1;transform:translate3d(0px,0px,0)}}
-@supports (animation-timeline:view()){.wjs-ix-1kg2ymy>*{animation:wjs-ixk-1kg2ymy 1ms linear both;animation-timeline:--wjs-ix-scene;animation-range:contain 0% contain 100%}}
+@supports (animation-timeline:view()){:where(.wjs-block-section--scene) .wjs-ix-1kg2ymy>*,.wjs-ix-1kg2ymy:where(.wjs-block-section--scene)>*{animation:wjs-ixk-1kg2ymy 1ms linear both;animation-timeline:--wjs-ix-scene;animation-range:contain 0% contain 100%}}
 @keyframes wjs-ixk-1erxz71{0%{opacity:0;transform:translate3d(0px,24px,0)}100%{opacity:1;transform:translate3d(0px,0px,0)}}
 @supports (animation-timeline:view()){.wjs-ix-1erxz71{animation:wjs-ixk-1erxz71 1ms linear both;animation-timeline:view();animation-range:entry 0% cover 40%}}
 }
@@ -84,9 +86,9 @@ describe("golden de la hoja emitida", () => {
     expect(compileIxPage(reversed).css).toBe(GOLDEN);
   });
 
-  it("son 855 bytes para tres interacciones — el presupuesto se mira, no se supone", () => {
+  it("son 940 bytes para tres interacciones — el presupuesto se mira, no se supone", () => {
     // Sin gzip y sin minificar: es lo que viaja dentro del HTML. Que el número esté escrito aquí es
     // lo que convierte "es poquísimo CSS" en una afirmación comprobable.
-    expect(GOLDEN.length).toBe(855);
+    expect(GOLDEN.length).toBe(940);
   });
 });

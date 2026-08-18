@@ -49,12 +49,14 @@ const SCENE_SELECTOR = ".wjs-block-section--scene";
  * la ventana y su progreso se quedaría clavado. Es la misma sustitución que hace el CSS al
  * enganchar la animación a la timeline con nombre de la sección.
  *
- * Si no hay escena por encima (el autor puso `scene` en un bloque suelto) se mide el bloque: la
- * degradación honesta es el comportamiento de siempre, no una animación muerta.
+ * `null` = NO ANIMAR. Ocurre cuando el autor pide la escena en un bloque que no está dentro de
+ * ninguna: el CSS tampoco anima ahí (su regla vive dentro de `.wjs-block-section--scene`), y los
+ * dos caminos tienen que enseñar lo mismo — el bloque quieto y a la vista. Medir el bloque en su
+ * lugar parecía más amable, pero era ENSEÑAR OTRA ANIMACIÓN que la del navegador de al lado.
  */
-const scrubAnchor = (root: IxElementLike, u: IxRuntimeUnit): IxElementLike => {
+const scrubAnchor = (root: IxElementLike, u: IxRuntimeUnit): IxElementLike | null => {
   if (u.trigger.on !== "scrub" || u.trigger.src !== "scene") return root;
-  return root.closest?.(SCENE_SELECTOR) ?? root;
+  return root.closest?.(SCENE_SELECTOR) ?? null;
 };
 
 /**
@@ -166,7 +168,9 @@ export function createScrubDriver(units: readonly IxRuntimeUnit[], host: IxHost)
       unit.trigger.on === "scrub" && unit.trigger.smooth !== undefined ? unit.trigger.smooth : null;
     for (const root of roots) {
       // El ANCLA del progreso puede no ser el bloque: dentro de una escena fija lo es la sección.
+      // Sin ancla no hay nada que medir y el bloque se queda visible y quieto (paridad con el CSS).
       const anchor = scrubAnchor(root, unit);
+      if (anchor === null) continue;
       for (const track of unit.tracks) {
         const targets = resolveIxTargets(root, track, host.doc);
         targets.forEach((el, i) => {

@@ -643,6 +643,24 @@ describe("la ESCENA FIJA como fuente del scroll (C5)", () => {
     expect(u.rules[0]).toContain("animation-timeline:--wjs-ix-scene");
   });
 
+  it("la regla SOLO existe dentro de una escena — o el bloque se quedaría INVISIBLE", () => {
+    // Revert-red del peor defecto posible: una timeline con nombre que no resuelve no deja la
+    // animación quieta al final, la deja sin resolver, y con `fill: both` el elemento se congela en
+    // su PRIMER fotograma. Medido en el navegador antes del arreglo: `opacity: 0` para siempre.
+    const u = compileIx(mk({ on: "scrub", src: "scene" }))!;
+    expect(u.rules[0]).toContain(`:where(.wjs-block-section--scene) .${u.cls}`);
+    // Y el caso de que la propia sección fija sea el bloque animado.
+    expect(u.rules[0]).toContain(`.${u.cls}:where(.wjs-block-section--scene)`);
+    // Nunca el selector desnudo, que es el que dejaba el bloque colgado fuera de una escena.
+    expect(u.rules[0]).not.toMatch(new RegExp(`\{\.${u.cls}\{`));
+  });
+
+  it("el `:where()` no sube la especificidad: la cascada entre reglas del motor no se reordena", () => {
+    const u = compileIx(mk({ on: "scrub", src: "scene" }))!;
+    expect(u.rules[0]).not.toContain(`.wjs-block-section--scene .${u.cls}`.replace(":where", ""));
+    expect(u.rules[0]).toContain(":where(.wjs-block-section--scene)");
+  });
+
   it("el @supports pregunta por `view()`, no por el nombre (un nombre no describe soporte)", () => {
     // `@supports (animation-timeline: --x)` es cierto en cuanto el motor entiende la SINTAXIS, que
     // no es lo que hay que saber; `view()` sí distingue al motor que trae timelines de scroll.
