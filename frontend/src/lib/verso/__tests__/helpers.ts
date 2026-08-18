@@ -33,6 +33,21 @@ export interface CorpusEntry {
  * los suites de corpus reventarían con un `undefined` en vez de saltarse. Normalizamos aquí, en el
  * único punto de carga, para que el resto de los tests vea siempre `versoData`.
  */
+/**
+ * Corpus de FORMAS: derivado del real con scripts/verso-corpus-anonymize.mjs y COMMITEADO.
+ *
+ * Existe porque el corpus real está gitignorado (contenido de clientes), así que en CI el suite que
+ * lo usa se saltaba entero — y un skip silencioso es indistinguible de un pase, justo en la garantía
+ * que más daño ha hecho al romperse. Este fichero conserva lo único que el round-trip mide
+ * (estructura, claves y su ORDEN, con la puntuación/markup/unicode intactos) y borra las palabras.
+ */
+export const SHAPES_CORPUS_PATH = resolve(__dirname, "fixtures/corpus.shapes.json");
+
+export function loadShapesCorpus(): CorpusEntry[] {
+  const raw = JSON.parse(readFileSync(SHAPES_CORPUS_PATH, "utf8")) as { entries: CorpusEntry[] };
+  return raw.entries ?? [];
+}
+
 export function loadVersoCorpus(): CorpusEntry[] {
   if (!existsSync(CORPUS_PATH)) return [];
   const raw = JSON.parse(readFileSync(CORPUS_PATH, "utf8")) as {

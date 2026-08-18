@@ -1,0 +1,3601 @@
+{
+ "note": "DERIVADO — formas reales, contenido anonimizado. Regenerar: node scripts/verso-corpus-anonymize.mjs",
+ "generatedFrom": "139 documentos reales",
+ "blockTypes": [
+  "Accordion",
+  "AudioPlayer",
+  "Button",
+  "CTABanner",
+  "Card",
+  "CardGallery",
+  "CategoryPosts",
+  "Columns",
+  "ContactForms",
+  "Divider",
+  "FlexRow",
+  "Form",
+  "Grid",
+  "Heading",
+  "Hero",
+  "IconList",
+  "Image",
+  "OnlineStore",
+  "PhotoCarousel",
+  "PostsGrid",
+  "PricingTable",
+  "Quote",
+  "SearchBar",
+  "Section",
+  "SocialLinks",
+  "Spacer",
+  "Stats",
+  "Symbol",
+  "Table",
+  "Tabs",
+  "Testimonial",
+  "Text",
+  "ToscanoHero",
+  "ToscanoPortafolio",
+  "ToscanoProceso",
+  "ToscanoTestimonio",
+  "VideoEmbed",
+  "VideoGallery",
+  "YoutubeVideos",
+  "dashed",
+  "email",
+  "fade",
+  "fade-up",
+  "gradient",
+  "solid",
+  "text",
+  "textarea",
+  "zoom"
+ ],
+ "entries": [
+  {
+   "id": 186,
+   "type": "revision",
+   "status": "inherit",
+   "versoData": {
+    "root": {
+     "props": {
+      "title": "XxxxXX Xxxxx Xxxxxxx — Xxxxxxxx"
+     }
+    },
+    "content": [
+     {
+      "type": "Heading",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "title": "Xxxxx Xxxxxxx",
+       "level": "x0",
+       "id": "Heading-m1"
+      }
+     },
+     {
+      "type": "Text",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "content": "<x>Xxxxxxx xxx xxxx xxxxxx xxxxxxxxxx xx XxxxXX. Xxxxx xxxxx xx xxxxxxxxxx xxx xxxxxxxxx, xxxx-xxxxx xxxxxxxxxx, xxx xxxxxxx xxxxxxxxxxxx xxxxxx xxxx-xxxxx xxxxxxx xxxxxxxxxxxx.</x>",
+       "id": "Text-m2"
+      }
+     },
+     {
+      "type": "Divider",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "type": "gradient",
+       "id": "Divider-m3"
+      }
+     },
+     {
+      "type": "Heading",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "title": "Xxxx Xxxxxx",
+       "level": "x0",
+       "id": "Heading-m4"
+      }
+     },
+     {
+      "type": "Hero",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "title": "Xxxxxxxxxx Xxxxxxx Xxxxxxxxxxxx",
+       "subtitle": "Xxxxx xxxxxxx xxxxxx xxxxxxxxxxx xxxx xxxx xxxxxxxx. Xxx xxxxx xxxxxx xxxxxxx xxx xxxxxxxxx xxxxx xxx xxxxx xx xxx xxxxxx.",
+       "align": "xxxx",
+       "height": "000xx",
+       "overlay": "0",
+       "gradientFrom": "#0x0x0x",
+       "gradientTo": "#000x00",
+       "gradientAngle": "000",
+       "buttons": [
+        {
+         "label": "Xxxxx Xxxxxxxx",
+         "href": "#",
+         "variant": "xxxxxxx"
+        },
+        {
+         "label": "Xxxxx Xxxx",
+         "href": "#",
+         "variant": "xxxxxxx"
+        }
+       ],
+       "id": "Hero-m5"
+      }
+     },
+     {
+      "type": "Hero",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "title": "Xxxxxx xxx Xxxxxx",
+       "subtitle": "Xxxxxxx xxxxxxxxxx-xxxxx xxxxxxxxx xx xxxxx xxxxx. XxxxXX xxxxxxxx xxx xxxxxxx; xxx xxxxxxx xxx xxxxxxxxxxx.",
+       "align": "xxxxxx",
+       "height": "000xx",
+       "overlay": "0.00",
+       "buttons": [
+        {
+         "label": "Xxx Xxxxxxx Xxxx",
+         "href": "#",
+         "variant": "xxxxxxx"
+        }
+       ],
+       "id": "Hero-m6"
+      }
+     },
+     {
+      "type": "Heading",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "title": "XXX Xxxxxxx",
+       "level": "x0",
+       "id": "Heading-m7"
+      }
+     },
+     {
+      "type": "CTABanner",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "title": "Xxxxx xx xxxx xxxx xxxx xxx xxxxxxx?",
+       "subtitle": "Xxxx 0,000+ xxxxxxxx xxxxxxxx xxxx XxxxXX xxxxx.",
+       "buttonText": "Xxx Xxxxxxx",
+       "buttonLink": "#",
+       "variant": "xxxxxxxx",
+       "id": "CTABanner-m8"
+      }
+     },
+     {
+      "type": "Spacer",
+      "props": {
+       "height": "",
+       "css": {},
+       "hide": {},
+       "anim": {
+        "type": "fade-up",
+        "duration": 600,
+        "delay": 0
+       },
+       "look": {},
+       "id": "Spacer-e573ac9d-f016-499a-aa8b-aa01d9e9adbf"
+      }
+     },
+     {
+      "type": "CTABanner",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "title": "Xxxxxxx xxx xxxxxxxxxxxxx",
+       "subtitle": "Xxxx xxxx xxxx xxx XXX xxx xxxxxxxxx xxxxxxx xxxxxxxxxxxx.",
+       "buttonText": "Xxxx XXX Xxxx",
+       "buttonLink": "#",
+       "variant": "xxxxxxxx",
+       "id": "CTABanner-m9"
+      }
+     },
+     {
+      "type": "Heading",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "title": "Xxxxxxx Xxxxx",
+       "level": "x0",
+       "id": "Heading-m10"
+      }
+     },
+     {
+      "type": "PricingTable",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "plans": [
+        {
+         "name": "Xxxxxxxx",
+         "price": "$0",
+         "period": "/xx",
+         "features": "0 Xxxxxxxx\nXxxxxxxx Xxxxxx\nXxxxxxxxx Xxxxxxx",
+         "highlighted": "xxxxx",
+         "buttonText": "Xxxxxx Xxxxxxx",
+         "buttonLink": "#"
+        },
+        {
+         "name": "Xxxxxxxxxxxx",
+         "price": "$00",
+         "period": "/xx",
+         "features": "Xxxxxxxxx Xxxxxxxx\nXxxxxxx Xxxxx Xxxxxxx\nXxxxxxxx Xxxxx Xxxxxxx\nXxxxxx Xxxxxx Xxxxxxx",
+         "highlighted": "xxxx",
+         "buttonText": "Xx Xxx Xxx",
+         "buttonLink": "#"
+        },
+        {
+         "name": "Xxxxxxxxxx",
+         "price": "$00",
+         "period": "/xx",
+         "features": "Xxxxxx Xxxxxxxx Xxxxx\nXxxxx-xxxxx XXX\nXxxxxxxxx Xxxxxxx Xxxxxxx",
+         "highlighted": "xxxxx",
+         "buttonText": "Xxxxxxx Xxxxx",
+         "buttonLink": "#"
+        }
+       ],
+       "id": "PricingTable-m11"
+      }
+     },
+     {
+      "type": "Heading",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "title": "Xxxxx Xxxx",
+       "level": "x0",
+       "id": "Heading-m12"
+      }
+     },
+     {
+      "type": "Stats",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "items": [
+        {
+         "value": "000xx",
+         "label": "Xxx Xxxx Xxxx"
+        },
+        {
+         "value": "00.0%",
+         "label": "Xxxxxxxx Xxxxxx"
+        },
+        {
+         "value": "00x+",
+         "label": "Xxxx Xxxxxxxxxx"
+        }
+       ],
+       "id": "Stats-m13"
+      }
+     },
+     {
+      "type": "Stats",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "items": [
+        {
+         "value": "0x",
+         "label": "Xxxxxx Xxxxx"
+        },
+        {
+         "value": "000",
+         "label": "Xxxxxxxxxxxx"
+        },
+        {
+         "value": "00/0",
+         "label": "Xxxxxx Xxxxxxx"
+        },
+        {
+         "value": "000%",
+         "label": "Xxxx Xxxxxxxxx"
+        }
+       ],
+       "id": "Stats-m14"
+      }
+     },
+     {
+      "type": "Heading",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "title": "Xxxxxxxxxxxx",
+       "level": "x0",
+       "id": "Heading-m15"
+      }
+     },
+     {
+      "type": "Testimonial",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "quote": "Xxx xxxxxxxxx xx XxxxXX xxxxxxx xxx xxx xxxxxx xxxx xxxxxxxxx xxxx XXX xxxx. Xx'x xx xxxxxx x xxxxx xxx; xx'x x xxxxxxxxx xxxxxxxxxx xxxx xx xxx xxxx xxxx x xxxxx.",
+       "author": "Xxxxx Xxxxxx",
+       "role": "Xxxx Xxxxxxx Xxxxxxxx, Xxxx",
+       "id": "Testimonial-m16"
+      }
+     },
+     {
+      "type": "Testimonial",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "quote": "Xxx xxxxx xxxxxxx xx xxxxxxxxx xxx xxxxxxxx xxxxxx. Xx xxxx xxxx Xxxxx xx x xxxx xxxxxxxxxxx xx xxxxxx xxxx xxxxxxx xxxxxx xxx xx xxx xxxx-xxx xxxxxxxxx xxxxxxx.",
+       "author": "Xxxxxx Xxxxxx",
+       "role": "XXX, Xxxxxx Xxxx",
+       "id": "Testimonial-m17"
+      }
+     },
+     {
+      "type": "Divider",
+      "props": {
+       "type": "gradient",
+       "id": "Divider-m18",
+       "hide": {},
+       "anim": {}
+      }
+     },
+     {
+      "type": "Heading",
+      "props": {
+       "title": "Xxxxx Xxxxxxx Xxx. 0",
+       "level": "x0",
+       "color": "",
+       "size": "",
+       "weight": "",
+       "tracking": "",
+       "elementId": "",
+       "css": {},
+       "id": "Heading-m19",
+       "hide": {},
+       "anim": {}
+      }
+     },
+     {
+      "type": "Text",
+      "props": {
+       "content": "<x>X xxxxxxxxxxxxx xxxxx xx xxx xxxxxxxxx xxxxxxxxx xxxxxxxxxxxxxx xx xxx XxxxXX XXX xxxxxx. Xxxxxxxx xxx xxxxxxxxx, xxxxxxxxxx, xxx xxxx-xxxxx xxxxxxxx xxxxxxxxxxxx.</x>",
+       "color": "",
+       "size": "",
+       "leading": "",
+       "measure": "",
+       "elementId": "",
+       "css": {},
+       "id": "Text-m20",
+       "hide": {},
+       "anim": {}
+      }
+     },
+     {
+      "type": "Heading",
+      "props": {
+       "title": "00. Xxxx Xxxxxxxxxx",
+       "level": "x0",
+       "color": "",
+       "size": "",
+       "weight": "",
+       "tracking": "",
+       "elementId": "",
+       "css": {},
+       "id": "Heading-m21",
+       "hide": {},
+       "anim": {}
+      }
+     },
+     {
+      "type": "Grid",
+      "props": {
+       "children": [
+        {
+         "type": "Card",
+         "props": {
+          "title": "Xxxxxxxx Xxxxx",
+          "description": "Xxxxxxx xxxxx xxx xxxxxx xxxxxxxx xxxx xxxxxxxx xxxxxxxxx xxxxxxx xxx xxxxxx xxxxxx.",
+          "icon": "xx-xxxx",
+          "theme": "xxxx",
+          "bg": "",
+          "color": "",
+          "borderColor": "",
+          "radius": "",
+          "pad": "",
+          "shadow": "",
+          "iconSize": "",
+          "iconBg": "",
+          "iconColor": "",
+          "titleSize": "",
+          "titleWeight": "",
+          "titleTransform": "",
+          "css": {},
+          "id": "Card-m23",
+          "hide": {},
+          "anim": {}
+         }
+        },
+        {
+         "type": "Card",
+         "props": {
+          "title": "Xxxxx Xxxxxxx",
+          "description": "Xxxxxxxx xxxxxxxx xxxxxxxx xxx xxxxxxxx xxx-xxxxxxx xxx xxxx-xxxxxxxx xxxxxxxxxx.",
+          "icon": "xx-xxxx-xxxxx-xxxxxxxx",
+          "theme": "xxxxx",
+          "bg": "",
+          "color": "",
+          "borderColor": "",
+          "radius": "",
+          "pad": "",
+          "shadow": "",
+          "iconSize": "",
+          "iconBg": "",
+          "iconColor": "",
+          "titleSize": "",
+          "titleWeight": "",
+          "titleTransform": "",
+          "css": {},
+          "id": "Card-m24",
+          "hide": {},
+          "anim": {}
+         }
+        },
+        {
+         "type": "Card",
+         "props": {
+          "title": "Xxxxxx Xxxxxxxxx",
+          "description": "Xxxx xxx xxxxxxxxxx xxxxxxxx xx xxxxxxxxxxx xxxx-xxxx xxxxxx xxx xxxxxxxxx xxxx.",
+          "icon": "xx-xxxx",
+          "theme": "xxxxxx",
+          "bg": "",
+          "color": "",
+          "borderColor": "",
+          "radius": "",
+          "pad": "",
+          "shadow": "",
+          "iconSize": "",
+          "iconBg": "",
+          "iconColor": "",
+          "titleSize": "",
+          "titleWeight": "",
+          "titleTransform": "",
+          "css": {},
+          "id": "Card-m25",
+          "hide": {},
+          "anim": {}
+         }
+        }
+       ],
+       "columns": "0",
+       "gap": "00xx",
+       "columnsTablet": "",
+       "columnsMobile": "",
+       "css": {},
+       "id": "Grid-m22",
+       "hide": {},
+       "anim": {}
+      }
+     },
+     {
+      "type": "Heading",
+      "props": {
+       "title": "00. Xxxx Xxxx Xxxxxxx",
+       "level": "x0",
+       "color": "",
+       "size": "",
+       "weight": "",
+       "tracking": "",
+       "elementId": "",
+       "css": {},
+       "id": "Heading-m26",
+       "hide": {},
+       "anim": {}
+      }
+     },
+     {
+      "type": "IconList",
+      "props": {
+       "columns": "0",
+       "gap": "",
+       "iconSize": "",
+       "iconBg": "",
+       "iconColor": "",
+       "css": {},
+       "items": [
+        {
+         "icon": "xx-xxxxxxxxx",
+         "title": "Xxxxxx Xxxxxxxxxx",
+         "text": "Xxxx-xxxx xxxx xxxxxxxxxxx xxx xxxxxxxxxx xxxxxx xxxxxxxxxxx."
+        },
+        {
+         "icon": "xx-xxxxxxxx",
+         "title": "Xxxx Xxxx Xxxxxxxx",
+         "text": "Xxxxxx Xxxxx/Xxx xxxxxxxxx xxxxxxxxx xxxx XXX xxxxxxx."
+        }
+       ],
+       "id": "IconList-m27",
+       "hide": {},
+       "anim": {}
+      }
+     },
+     {
+      "type": "IconList",
+      "props": {
+       "columns": "0",
+       "gap": "",
+       "iconSize": "",
+       "iconBg": "",
+       "iconColor": "",
+       "css": {},
+       "items": [
+        {
+         "icon": "xx-xxxxxxxx",
+         "title": "Xxxxxx Xxxxxx",
+         "text": ""
+        },
+        {
+         "icon": "xx-xxxxx-xxxxx-xx",
+         "title": "Xxxx-Xxxx",
+         "text": ""
+        },
+        {
+         "icon": "xx-xxxxxx-xxxxxx",
+         "title": "Xxxxxxxxx Xxxx",
+         "text": ""
+        }
+       ],
+       "id": "IconList-m28",
+       "hide": {},
+       "anim": {}
+      }
+     },
+     {
+      "type": "Heading",
+      "props": {
+       "title": "00. Xxxxxxxxxx Xxxx-Xxxxxx",
+       "level": "x0",
+       "color": "",
+       "size": "",
+       "weight": "",
+       "tracking": "",
+       "elementId": "",
+       "css": {},
+       "id": "Heading-m29",
+       "hide": {},
+       "anim": {}
+      }
+     },
+     {
+      "type": "Quote",
+      "props": {
+       "text": "Xxx xxxxxxxxx xx xxx xxxxxx xx xxx x xxxx, xxx x xxxxxxxxxxxx xxxxxxxxx xx xxxxx xxxxxx.",
+       "cite": "Xx. Xxxx Xxxxxx, Xxxx Xxxxxxxxx",
+       "style": "xxx",
+       "accent": "",
+       "size": "",
+       "color": "",
+       "quoteStyle": "",
+       "css": {},
+       "id": "Quote-m30",
+       "hide": {},
+       "anim": {}
+      }
+     },
+     {
+      "type": "Quote",
+      "props": {
+       "text": "Xxxxxxxxx xxxxxxxxxxx xxxxx xxxxxxxx xxxxxxx xx xxxxx XxxxXX xxxxx.",
+       "cite": "XXX Xxxxxxxxxx 0000",
+       "style": "xxxxx",
+       "accent": "",
+       "size": "",
+       "color": "",
+       "quoteStyle": "",
+       "css": {},
+       "id": "Quote-m31",
+       "hide": {},
+       "anim": {}
+      }
+     },
+     {
+      "type": "Heading",
+      "props": {
+       "title": "00. Xxxx Xxxxx &xxx; Xxxxxx",
+       "level": "x0",
+       "color": "",
+       "size": "",
+       "weight": "",
+       "tracking": "",
+       "elementId": "",
+       "css": {},
+       "id": "Heading-m32",
+       "hide": {},
+       "anim": {}
+      }
+     },
+     {
+      "type": "Table",
+      "props": {
+       "header": "XXXXXX | XXXXXXX | XXXXXX | XXXXXXX",
+       "rows": [
+        {
+         "cells": "Xxxx Xxxxxx | x0.0.0 | Xxxxxxx | 00xx"
+        },
+        {
+         "cells": "Xxxxxx Xxxxxxxx | x0.0.0 | Xxxxxx | 00xx"
+        },
+        {
+         "cells": "Xxxxx Xxxxxxx | x0.0.0 | Xxxxxxx | 0xx"
+        }
+       ],
+       "striped": "xxxx",
+       "stripeBg": "",
+       "css": {},
+       "id": "Table-m33",
+       "hide": {},
+       "anim": {}
+      }
+     },
+     {
+      "type": "Heading",
+      "props": {
+       "title": "00. Xxxxxx Xxxxxxxxxx",
+       "level": "x0",
+       "color": "",
+       "size": "",
+       "weight": "",
+       "tracking": "",
+       "elementId": "",
+       "css": {},
+       "id": "Heading-m34",
+       "hide": {},
+       "anim": {}
+      }
+     },
+     {
+      "type": "FlexRow",
+      "props": {
+       "children": [
+        {
+         "type": "Button",
+         "props": {
+          "label": "Xxxxxxx Xxxxxx",
+          "href": "#",
+          "variant": "xxxxxxx",
+          "align": "xxxx",
+          "bg": "",
+          "color": "",
+          "radius": "",
+          "padY": "",
+          "padX": "",
+          "size": "",
+          "weight": "",
+          "css": {},
+          "id": "Button-m36",
+          "hide": {},
+          "anim": {}
+         }
+        },
+        {
+         "type": "Button",
+         "props": {
+          "label": "Xxxxxxxxx Xxxxxxxx",
+          "href": "#",
+          "variant": "xxxxxxxxx",
+          "align": "xxxx",
+          "bg": "",
+          "color": "",
+          "radius": "",
+          "padY": "",
+          "padX": "",
+          "size": "",
+          "weight": "",
+          "css": {},
+          "id": "Button-m37",
+          "hide": {},
+          "anim": {}
+         }
+        },
+        {
+         "type": "Button",
+         "props": {
+          "label": "Xxxxxxx Xxxxx",
+          "href": "#",
+          "variant": "xxxxxxx",
+          "align": "xxxx",
+          "bg": "",
+          "color": "",
+          "radius": "",
+          "padY": "",
+          "padX": "",
+          "size": "",
+          "weight": "",
+          "css": {},
+          "id": "Button-m38",
+          "hide": {},
+          "anim": {}
+         }
+        }
+       ],
+       "justify": "xxxx-xxxxx",
+       "align": "xxxxxx",
+       "gap": "00xx",
+       "wrap": "xxxx",
+       "direction": "xxx",
+       "css": {},
+       "id": "FlexRow-m35",
+       "hide": {},
+       "anim": {}
+      }
+     },
+     {
+      "type": "Heading",
+      "props": {
+       "title": "00. Xxxxxx Xxxxxx",
+       "level": "x0",
+       "color": "",
+       "size": "",
+       "weight": "",
+       "tracking": "",
+       "elementId": "",
+       "css": {},
+       "id": "Heading-m39",
+       "hide": {},
+       "anim": {}
+      }
+     },
+     {
+      "type": "Image",
+      "props": {
+       "src": "xxxxx://xx0.xxxxxxxxxxxxxxxxx.xxx/xxxx-xxxxxx/XX0XXxXXxxX0x0XXXxxxxxXxXXx0_XXXXXxxxxXXxxXXxxXXXxxx0x0Xx_0x0XXX-XX0x-xXxxxxX0XX0x0xxx00xXxXxxXxXxx00xXxXXXX0XxXxxXXXXXX0xx0x_xxxXxxxXxX0xxXxxX0XxXX-xxxx0XXX0xXXXXx0xxxxxXxXx0XX_XxXX0xXXxX0X0XXx_XxX00X0XxXx0xx00XXXXxxx0XxxxXXX00XXXXx0XxXXXXXXXxxxXX_XxxXXxXXxXXxxX0x0XXxxXxxX_X",
+       "alt": "Xxxx Xxxxxxxxxx Xxxx xxxxxxxxxx xxxx XxxxXX xxxxxx xxxxxxxx",
+       "radius": "",
+       "shadow": "",
+       "width": "",
+       "fit": "",
+       "elementId": "",
+       "css": {},
+       "id": "Image-m40",
+       "hide": {},
+       "anim": {}
+      }
+     },
+     {
+      "type": "Text",
+      "props": {
+       "content": "<x><xx>Xxx 0.0: Xxxx Xxxxxxxxxx Xxxx xxxxxxxxxx xxxx XxxxXX xxxxxx xxxxxxxx.</xx></x>",
+       "color": "",
+       "size": "",
+       "leading": "",
+       "measure": "",
+       "elementId": "",
+       "css": {},
+       "id": "Text-m41",
+       "hide": {},
+       "anim": {}
+      }
+     },
+     {
+      "type": "Card",
+      "props": {
+       "title": "Xxxxx Xxxxx Xxxxxxxxxxxxxx",
+       "description": "Xxx XxxxXX xxxxx xxxxxxxxx xx xxxxx xx xxxxx xxxxxx xxxxxxxxxx. Xx xxxxxxxx xx xxxxxxxxxx xxxxxxx xxxxxx, xxxxxxxxxxx xxxxx xxxxxx, xxx xxxxx xxxxxxxxx xxxxxx xxx xxxxxx xxxxxxxxxx. Xxxxxxx xxxxxx: 00xx (xx).",
+       "icon": "xx-xxxxx",
+       "theme": "xxxx",
+       "bg": "",
+       "color": "",
+       "borderColor": "",
+       "radius": "",
+       "pad": "",
+       "shadow": "",
+       "iconSize": "",
+       "iconBg": "",
+       "iconColor": "",
+       "titleSize": "",
+       "titleWeight": "",
+       "titleTransform": "",
+       "css": {},
+       "id": "Card-m42",
+       "hide": {},
+       "anim": {}
+      }
+     },
+     {
+      "type": "Divider",
+      "props": {
+       "type": "gradient",
+       "id": "Divider-m43",
+       "hide": {},
+       "anim": {}
+      }
+     },
+     {
+      "type": "Heading",
+      "props": {
+       "title": "Xxxxx Xxxxxxx Xxx. 0",
+       "level": "x0",
+       "color": "",
+       "size": "",
+       "weight": "",
+       "tracking": "",
+       "elementId": "",
+       "css": {},
+       "id": "Heading-m44",
+       "hide": {},
+       "anim": {}
+      }
+     },
+     {
+      "type": "Text",
+      "props": {
+       "content": "<x>Xxxxxxxx xxxxxxxxxxx xxxxxxxxxx xxx xxx xxxxxxxxx xxxxxx. Xxxx-xxxxx xxxxxxxxxxxx xxxx xxxxxxxx xxxx xxxxxxxxxx.</x>",
+       "color": "",
+       "size": "",
+       "leading": "",
+       "measure": "",
+       "elementId": "",
+       "css": {},
+       "id": "Text-m45",
+       "hide": {},
+       "anim": {}
+      }
+     },
+     {
+      "type": "Heading",
+      "props": {
+       "title": "Xxxxxxxxx Xxxxx",
+       "level": "x0",
+       "color": "",
+       "size": "",
+       "weight": "",
+       "tracking": "",
+       "elementId": "",
+       "css": {},
+       "id": "Heading-m46",
+       "hide": {},
+       "anim": {}
+      }
+     },
+     {
+      "type": "Accordion",
+      "props": {
+       "css": {},
+       "items": [
+        {
+         "title": "Xxx xxxx xxx xxxx-xxxxxx xxxxxx xxxxxx xxxxxx xxxxxx?",
+         "content": "Xxx xxxx-xxxxxx xxxxxx xxxxxxxx xxxxxx xxxxxx xxxxxxxxxxx, xxxxxxxxxxxxx xxxxxxx xxxxxx xx xxxxx xxxxx xx xxxxxxxxxx xxxx xxxxxxx xx xxx xxxx."
+        },
+        {
+         "title": "Xxx X xxxxxx xxxxxx xxxxxx xx Xxxxx xxxxxxxxxx?",
+         "content": "Xxxxxxxxxx. XxxxXX Xxx 0 xxxxxxxxxx x xxxxxxxx xxxxxx xxxxxxxx. Xxx xxxxx xxxxx, xxxxxxx, xxx xxxxxxxxxx xxx xxxxxxxx xxxx xxxx-xxxxxxxxx XX xxxxxxx xxxx xxx xx xxxxxxxx xxxxxxxx xxxx xxxx Xxxx.xx xx Xxxx xxxxxxxx."
+        },
+        {
+         "title": "Xx xxxxx x xxxxx xx xxxxxxx xxxxx xx Xxx 0?",
+         "content": "Xxxxx xx xx xxxx xxxxx xx xxxxxxx xxxxx xx Xxx 0; xxx xxxxxx xxxxxx xx xxxxxxxxx xxx xxxxxxx xxxxx xxxxxxxxxxx."
+        }
+       ],
+       "id": "Accordion-m47",
+       "hide": {},
+       "anim": {}
+      }
+     },
+     {
+      "type": "Heading",
+      "props": {
+       "title": "Xxxx Xxxxxxxxxx",
+       "level": "x0",
+       "color": "",
+       "size": "",
+       "weight": "",
+       "tracking": "",
+       "elementId": "",
+       "css": {},
+       "id": "Heading-m48",
+       "hide": {},
+       "anim": {}
+      }
+     },
+     {
+      "type": "Tabs",
+      "props": {
+       "css": {},
+       "tabs": [
+        {
+         "label": "Xxxxxxx",
+         "content": "Xxxxxx x xxx xxxxx xx xxxxxxx xxx xxxxxxxxxxxxx xxxxxxxx xxxxx. Xxx xxxxxxxx xxxxxxxx xxxxxxx xxxxxxxxxx xxxxxxxxx xxxxxx xxxxxx xxxxxxxxxxx xxxxxxx xxxxxxxx xxx xxxxxx xxxx."
+        },
+        {
+         "label": "Xxxxxxxx",
+         "content": "Xxxxxxxx xxxxxxxxxxxxx xxx xxxxx xxxxxxxx, xxxxxx xxxxxxxxxx, xxx xxxxxxxxxxx xxxxxxxxx xxxxx."
+        },
+        {
+         "label": "Xxxxxxxxxxxx",
+         "content": "Xxxxxx xxxxx, xxxxx, xxx xxxxxx xxxxxxxxxxxx xxxx xxxxxxxxx xxxxxxxxxx xxxxxx (000xx xxxx)."
+        },
+        {
+         "label": "Xxxxxxxxxxx",
+         "content": "Xxxxxxx xxx xxx xxxx, xxxx, xx xxxxxx xxxx xxxxx xxxxxx xxxxx."
+        },
+        {
+         "label": "Xxxxxxxx",
+         "content": "XXX xxxxxxxx, xxxxxx xxxxxx, xxx xxxxxxxx xxxxxxxxxx xxx xxx xxxxx."
+        }
+       ],
+       "id": "Tabs-m49",
+       "hide": {},
+       "anim": {}
+      }
+     },
+     {
+      "type": "Heading",
+      "props": {
+       "title": "Xxxxx Xxxxx",
+       "level": "x0",
+       "color": "",
+       "size": "",
+       "weight": "",
+       "tracking": "",
+       "elementId": "",
+       "css": {},
+       "id": "Heading-m50",
+       "hide": {},
+       "anim": {}
+      }
+     },
+     {
+      "type": "Image",
+      "props": {
+       "src": "xxxxx://xx0.xxxxxxxxxxxxxxxxx.xxx/xxxx-xxxxxx/XX0XXxXXxxXxXxXx0X0XXX0XxxxXxxx-00XxxXxXXxXxX0XxXX0XXXxXXx0X-Xx0X0Xx0xxxxxxxXXXx_xXxXXxxxX0_xXXXxxxx0XXX0xXXxX0xxXXXXXXxxX0XXxXx0x0x0XXxX0X0xxXxX0xXXXxxX0xxxxXXXXxXxXXxX0XxxXXx-0XXXXxXXx0x0xxx0xX00Xx-xxXxxXxxXxXXxXxxX0xxx__XXxxxxx0xXXx0X0X00x-xXxXX0xX00Xx0X0XXxxx0XxXXXX0X0xxx",
+       "alt": "Xxxxxxxxx xxxxxxxx xxxxxxxxxxxxx xxxx xxxx xxxxx xxxxxx",
+       "radius": "",
+       "shadow": "",
+       "width": "",
+       "fit": "",
+       "elementId": "",
+       "css": {},
+       "id": "Image-m51",
+       "hide": {},
+       "anim": {}
+      }
+     },
+     {
+      "type": "Text",
+      "props": {
+       "content": "<x><xx>Xxxxx Xxxxx — 00:0 xxxxxx xxxxx · Xxxxxxxx 00:00 · xxxxxxx xxxx(0,0,0,0.0).</xx></x>",
+       "color": "",
+       "size": "",
+       "leading": "",
+       "measure": "",
+       "elementId": "",
+       "css": {},
+       "id": "Text-m52",
+       "hide": {},
+       "anim": {}
+      }
+     },
+     {
+      "type": "Heading",
+      "props": {
+       "title": "Xxxxx Xxxxxx",
+       "level": "x0",
+       "color": "",
+       "size": "",
+       "weight": "",
+       "tracking": "",
+       "elementId": "",
+       "css": {},
+       "id": "Heading-m53",
+       "hide": {},
+       "anim": {}
+      }
+     },
+     {
+      "type": "Card",
+      "props": {
+       "title": "Xxxxx Xxxxxx",
+       "description": "Xxx xxxxxxx: XxxxXX_Xxxxxx_Xxxxxxx_Xxx0_Xxxxxx_x0.xx0 — 00:00 / 00:00. X xxxxxxxxx xxxxxxx xxxxx xxxxx xxxxxx xxxx x xxxxxxxxx xxxx xxxxxxxx xxx.",
+       "icon": "xx-xxxxx",
+       "theme": "xxxx",
+       "bg": "",
+       "color": "",
+       "borderColor": "",
+       "radius": "",
+       "pad": "",
+       "shadow": "",
+       "iconSize": "",
+       "iconBg": "",
+       "iconColor": "",
+       "titleSize": "",
+       "titleWeight": "",
+       "titleTransform": "",
+       "css": {},
+       "id": "Card-m54",
+       "hide": {},
+       "anim": {}
+      }
+     },
+     {
+      "type": "Heading",
+      "props": {
+       "title": "Xxxx-Xxxxxxxxx Xxxxxx",
+       "level": "x0",
+       "color": "",
+       "size": "",
+       "weight": "",
+       "tracking": "",
+       "elementId": "",
+       "css": {},
+       "id": "Heading-m55",
+       "hide": {},
+       "anim": {}
+      }
+     },
+     {
+      "type": "Card",
+      "props": {
+       "title": "Xxxx-Xxxxxxxxx Xxxxxx",
+       "description": "Xxxxx xxx xxxxxxx xxxxx xxxxxx xxxx x xxxxxxxx xxxx xxxxx xxxx. Xxxxxxx xxxxx: \"Xxxxxx xxxxxxxxxxx xxxxxxx\".",
+       "icon": "xx-xxxxxxxxxx-xxxxx",
+       "theme": "xxxx",
+       "bg": "",
+       "color": "",
+       "borderColor": "",
+       "radius": "",
+       "pad": "",
+       "shadow": "",
+       "iconSize": "",
+       "iconBg": "",
+       "iconColor": "",
+       "titleSize": "",
+       "titleWeight": "",
+       "titleTransform": "",
+       "css": {},
+       "id": "Card-m56",
+       "hide": {},
+       "anim": {}
+      }
+     },
+     {
+      "type": "Button",
+      "props": {
+       "label": "Xxxxxx",
+       "href": "#",
+       "variant": "xxxxxxx",
+       "align": "xxxx",
+       "bg": "",
+       "color": "",
+       "radius": "",
+       "padY": "",
+       "padX": "",
+       "size": "",
+       "weight": "",
+       "css": {},
+       "id": "Button-m57",
+       "hide": {},
+       "anim": {}
+      }
+     },
+     {
+      "type": "Heading",
+      "props": {
+       "title": "Xxxx Xxxxx Xxxx",
+       "level": "x0",
+       "color": "",
+       "size": "",
+       "weight": "",
+       "tracking": "",
+       "elementId": "",
+       "css": {},
+       "id": "Heading-m58",
+       "hide": {},
+       "anim": {}
+      }
+     },
+     {
+      "type": "Grid",
+      "props": {
+       "children": [
+        {
+         "type": "Card",
+         "props": {
+          "title": "Xxxxxxxxxxxx xxx X0 Xxxxxx Xxxxxx",
+          "description": "Xxx xx xxxxxxxx xxx-xxxxxxxxxxx xxxxxx xxxxxxxxxxxxx xxx xxxxxxx xxxxx xxxxxxxxxxx. — Xxxxxxxxxxx · Xxx 00, 0000 · Xx Xxxxx Xxxxx",
+          "icon": "xx-xxxxx",
+          "theme": "xxxx",
+          "bg": "",
+          "color": "",
+          "borderColor": "",
+          "radius": "",
+          "pad": "",
+          "shadow": "",
+          "iconSize": "",
+          "iconBg": "",
+          "iconColor": "",
+          "titleSize": "",
+          "titleWeight": "",
+          "titleTransform": "",
+          "css": {},
+          "id": "Card-m60",
+          "hide": {},
+          "anim": {}
+         }
+        },
+        {
+         "type": "Card",
+         "props": {
+          "title": "Xxx Xxxxxxxxxx xx Xxxxxx XXX Xxxxxxxxxx",
+          "description": "X xxxx xxxx xxxx xxx xxxxxxxxxx xxxxxxx xxxx xxxxx xx xxx xxxxxx xx xxxxxxxxxxx xxxxxx xxxxxxx xxx xxxx-xxxx xxxxxxx xxxxxxxxx. — Xxxxxxxxxxxx · Xxx 00, 0000 · Xx Xxxxxx Xxxx",
+          "icon": "xx-xxxxx-xxxxxxx",
+          "theme": "xxxx",
+          "bg": "",
+          "color": "",
+          "borderColor": "",
+          "radius": "",
+          "pad": "",
+          "shadow": "",
+          "iconSize": "",
+          "iconBg": "",
+          "iconColor": "",
+          "titleSize": "",
+          "titleWeight": "",
+          "titleTransform": "",
+          "css": {},
+          "id": "Card-m61",
+          "hide": {},
+          "anim": {}
+         }
+        }
+       ],
+       "columns": "0",
+       "gap": "00xx",
+       "columnsTablet": "",
+       "columnsMobile": "",
+       "css": {},
+       "id": "Grid-m59",
+       "hide": {},
+       "anim": {}
+      }
+     },
+     {
+      "type": "Heading",
+      "props": {
+       "title": "Xxxxxxx Xxxx",
+       "level": "x0",
+       "color": "",
+       "size": "",
+       "weight": "",
+       "tracking": "",
+       "elementId": "",
+       "css": {},
+       "id": "Heading-m62",
+       "hide": {},
+       "anim": {}
+      }
+     },
+     {
+      "type": "IconList",
+      "props": {
+       "columns": "0",
+       "gap": "",
+       "iconSize": "",
+       "iconBg": "",
+       "iconColor": "",
+       "css": {},
+       "items": [
+        {
+         "icon": "xx-xxxxxxxxx",
+         "title": "Xxxxxxxxxxxx xxxxxxxxxx xxx xxxxxx X0 xxxxxxxxx",
+         "text": "0 XXX XXXX"
+        },
+        {
+         "icon": "xx-xxxxxxxxx",
+         "title": "Xxxxxxxxxxx XxxXX Xxxxxxx xx xxxxxxxxxx xxxxxx",
+         "text": "0 XXX XXXX"
+        },
+        {
+         "icon": "xx-xxxxxxxxx",
+         "title": "Xxxxxxxx xxxxx: XxxxXX Xxx 0 XXX xxxxxxxxxxxxxxx",
+         "text": "0 XXX XXXX"
+        }
+       ],
+       "id": "IconList-m63",
+       "hide": {},
+       "anim": {}
+      }
+     },
+     {
+      "type": "Divider",
+      "props": {
+       "type": "gradient",
+       "id": "Divider-m64",
+       "hide": {},
+       "anim": {}
+      }
+     },
+     {
+      "type": "Heading",
+      "props": {
+       "title": "Xxxxxx 0: Xxxxxx &xxx; Xxxxxxxxxx",
+       "level": "x0",
+       "color": "",
+       "size": "",
+       "weight": "",
+       "tracking": "",
+       "elementId": "",
+       "css": {},
+       "id": "Heading-m65",
+       "hide": {},
+       "anim": {}
+      }
+     },
+     {
+      "type": "Text",
+      "props": {
+       "content": "<x>Xxx xxxxxxxxxxxx xxxxxxxx xxxxxx xxx xxxxxxxxx xxxxxxx xxxxxxxxxx. Xxxxx xxxxxxxxxx xxxxxx xxx xxxxxxx xxxxxxxx xxx xxxxxxx xxxxxxx xx xxx XxxxXX xxxxxxxxx.</x>",
+       "color": "",
+       "size": "",
+       "leading": "",
+       "measure": "",
+       "elementId": "",
+       "css": {},
+       "id": "Text-m66",
+       "hide": {},
+       "anim": {}
+      }
+     },
+     {
+      "type": "Heading",
+      "props": {
+       "title": "00. Xxxxxxx Xxxxx",
+       "level": "x0",
+       "color": "",
+       "size": "",
+       "weight": "",
+       "tracking": "",
+       "elementId": "",
+       "css": {},
+       "id": "Heading-m67",
+       "hide": {},
+       "anim": {}
+      }
+     },
+     {
+      "type": "Section",
+      "props": {
+       "children": [
+        {
+         "type": "Heading",
+         "props": {
+          "title": "Xxxx-xxxxx Xxxxxxx xxxx Xxxxxxxxx",
+          "level": "x0",
+          "color": "",
+          "size": "",
+          "weight": "",
+          "tracking": "",
+          "elementId": "",
+          "css": {},
+          "id": "Heading-m69",
+          "hide": {},
+          "anim": {}
+         }
+        },
+        {
+         "type": "Text",
+         "props": {
+          "content": "<x>Xxx xxxxxxxx xxxxxxx xxxxxxx xxxxxxxxx xxxxxxxx xxxxxx xxx xxxxxxxx xxxxxxxxxxx xxx xxxx xxxxxxxxxxxx.</x>",
+          "color": "",
+          "size": "",
+          "leading": "",
+          "measure": "",
+          "elementId": "",
+          "css": {},
+          "id": "Text-m70",
+          "hide": {},
+          "anim": {}
+         }
+        }
+       ],
+       "maxWidth": "0000xx",
+       "pad": "",
+       "bg": "",
+       "css": {},
+       "id": "Section-m68",
+       "hide": {},
+       "anim": {}
+      }
+     },
+     {
+      "type": "Table",
+      "props": {
+       "header": "Xxxxx Xxxx | Xxxxx / Xxxxxxx",
+       "rows": [
+        {
+         "cells": "--xxx-xxxxxxx-xxx-xxxxx | 0000xx (Xxxxx Xxxxxxxxx)"
+        },
+        {
+         "cells": "--xxx-xxxxxxx-x-xxxxxxx | xxxxx(00xx, 0xx, 000xx)"
+        },
+        {
+         "cells": "--xxx-xxxxxxx-xxxx | xxx(--xxx-xxxxx-xxxxxxx)"
+        }
+       ],
+       "striped": "xxxx",
+       "stripeBg": "",
+       "css": {},
+       "id": "Table-m71",
+       "hide": {},
+       "anim": {}
+      }
+     },
+     {
+      "type": "Heading",
+      "props": {
+       "title": "00. Xxxx Xxxxxx",
+       "level": "x0",
+       "color": "",
+       "size": "",
+       "weight": "",
+       "tracking": "",
+       "elementId": "",
+       "css": {},
+       "id": "Heading-m72",
+       "hide": {},
+       "anim": {}
+      }
+     },
+     {
+      "type": "Grid",
+      "props": {
+       "children": [
+        {
+         "type": "Card",
+         "props": {
+          "title": "Xxx 0",
+          "description": "",
+          "icon": "",
+          "theme": "xxxx",
+          "bg": "",
+          "color": "",
+          "borderColor": "",
+          "radius": "",
+          "pad": "",
+          "shadow": "",
+          "iconSize": "",
+          "iconBg": "",
+          "iconColor": "",
+          "titleSize": "",
+          "titleWeight": "",
+          "titleTransform": "",
+          "css": {},
+          "id": "Card-m74",
+          "hide": {},
+          "anim": {}
+         }
+        },
+        {
+         "type": "Card",
+         "props": {
+          "title": "Xxx 0",
+          "description": "",
+          "icon": "",
+          "theme": "xxxx",
+          "bg": "",
+          "color": "",
+          "borderColor": "",
+          "radius": "",
+          "pad": "",
+          "shadow": "",
+          "iconSize": "",
+          "iconBg": "",
+          "iconColor": "",
+          "titleSize": "",
+          "titleWeight": "",
+          "titleTransform": "",
+          "css": {},
+          "id": "Card-m75",
+          "hide": {},
+          "anim": {}
+         }
+        },
+        {
+         "type": "Card",
+         "props": {
+          "title": "Xxx 0",
+          "description": "",
+          "icon": "",
+          "theme": "xxxx",
+          "bg": "",
+          "color": "",
+          "borderColor": "",
+          "radius": "",
+          "pad": "",
+          "shadow": "",
+          "iconSize": "",
+          "iconBg": "",
+          "iconColor": "",
+          "titleSize": "",
+          "titleWeight": "",
+          "titleTransform": "",
+          "css": {},
+          "id": "Card-m76",
+          "hide": {},
+          "anim": {}
+         }
+        },
+        {
+         "type": "Card",
+         "props": {
+          "title": "Xxx 0",
+          "description": "",
+          "icon": "",
+          "theme": "xxxx",
+          "bg": "",
+          "color": "",
+          "borderColor": "",
+          "radius": "",
+          "pad": "",
+          "shadow": "",
+          "iconSize": "",
+          "iconBg": "",
+          "iconColor": "",
+          "titleSize": "",
+          "titleWeight": "",
+          "titleTransform": "",
+          "css": {},
+          "id": "Card-m77",
+          "hide": {},
+          "anim": {}
+         }
+        }
+       ],
+       "columns": "0",
+       "gap": "00xx",
+       "columnsTablet": "0",
+       "columnsMobile": "0",
+       "css": {},
+       "id": "Grid-m73",
+       "hide": {},
+       "anim": {}
+      }
+     },
+     {
+      "type": "Grid",
+      "props": {
+       "children": [
+        {
+         "type": "Card",
+         "props": {
+          "title": "0-Xx",
+          "description": "Xxxxxxxx Xxxx",
+          "icon": "",
+          "theme": "xxxx",
+          "bg": "",
+          "color": "",
+          "borderColor": "",
+          "radius": "",
+          "pad": "",
+          "shadow": "",
+          "iconSize": "",
+          "iconBg": "",
+          "iconColor": "",
+          "titleSize": "",
+          "titleWeight": "",
+          "titleTransform": "",
+          "css": {},
+          "id": "Card-m79",
+          "hide": {},
+          "anim": {}
+         }
+        },
+        {
+         "type": "Card",
+         "props": {
+          "title": "0-Xx",
+          "description": "Xxxx Xxxxxx",
+          "icon": "",
+          "theme": "xxxx",
+          "bg": "",
+          "color": "",
+          "borderColor": "",
+          "radius": "",
+          "pad": "",
+          "shadow": "",
+          "iconSize": "",
+          "iconBg": "",
+          "iconColor": "",
+          "titleSize": "",
+          "titleWeight": "",
+          "titleTransform": "",
+          "css": {},
+          "id": "Card-m80",
+          "hide": {},
+          "anim": {}
+         }
+        },
+        {
+         "type": "Card",
+         "props": {
+          "title": "0-Xx",
+          "description": "Xxxxxxxxxx",
+          "icon": "",
+          "theme": "xxxx",
+          "bg": "",
+          "color": "",
+          "borderColor": "",
+          "radius": "",
+          "pad": "",
+          "shadow": "",
+          "iconSize": "",
+          "iconBg": "",
+          "iconColor": "",
+          "titleSize": "",
+          "titleWeight": "",
+          "titleTransform": "",
+          "css": {},
+          "id": "Card-m81",
+          "hide": {},
+          "anim": {}
+         }
+        }
+       ],
+       "columns": "0",
+       "gap": "00xx",
+       "columnsTablet": "0",
+       "columnsMobile": "0",
+       "css": {},
+       "id": "Grid-m78",
+       "hide": {},
+       "anim": {}
+      }
+     },
+     {
+      "type": "Heading",
+      "props": {
+       "title": "00. Xxxxxxxxxx Xxxxx",
+       "level": "x0",
+       "color": "",
+       "size": "",
+       "weight": "",
+       "tracking": "",
+       "elementId": "",
+       "css": {},
+       "id": "Heading-m82",
+       "hide": {},
+       "anim": {}
+      }
+     },
+     {
+      "type": "Heading",
+      "props": {
+       "title": "Xxxxxx Xxxxx X0 Xxxxxxx",
+       "level": "x0",
+       "color": "",
+       "size": "",
+       "weight": "",
+       "tracking": "",
+       "elementId": "",
+       "css": {},
+       "id": "Heading-m83",
+       "hide": {},
+       "anim": {}
+      }
+     },
+     {
+      "type": "Heading",
+      "props": {
+       "title": "Xxx-xxxxxxx X0 Xxxxxxxxx",
+       "level": "x0",
+       "color": "",
+       "size": "",
+       "weight": "",
+       "tracking": "",
+       "elementId": "",
+       "css": {},
+       "id": "Heading-m84",
+       "hide": {},
+       "anim": {}
+      }
+     },
+     {
+      "type": "Heading",
+      "props": {
+       "title": "Xxxxxxx Xxxxx X0 Xxxxx",
+       "level": "x0",
+       "color": "",
+       "size": "",
+       "weight": "",
+       "tracking": "",
+       "elementId": "",
+       "css": {},
+       "id": "Heading-m85",
+       "hide": {},
+       "anim": {}
+      }
+     },
+     {
+      "type": "Text",
+      "props": {
+       "content": "<x>Xxxx xx xxx xxxxxxxx xxxx xxxx xxxxxxxxxxx. Xx xx xxxxxxxxx xxx <xxxxxx>xxxxxxxxxxx</xxxxxx> xxx xxxxxxxxx xxxxx. Xx x xxxx-xxxxx xxxxxxxxxxx, xxxxxx xxxxxxxx xxxxxxxxxx xx xxxxxxx xxx xxxxxxxxxxxxx. Xxx xxx xxx <x xxxx=\"#\">xxxxxx xxxxx</x> xxxxxx xxxx x xxxx xxxxxxxxx.</x><xx><xx>Xxxxxxxxx xxxxxxxxxx xxx xxxxxxxxx xxxxxxxxxxxxx.</xx><xx>Xxxxxxx xxx XxxXxxxxx Xxxx xxx xxxx xxxxxxxx.</xx><xx>Xxxxx xxx xxxx-xxxxxx xxxxxxxxx.</xx></xx>",
+       "color": "",
+       "size": "",
+       "leading": "",
+       "measure": "",
+       "elementId": "",
+       "css": {},
+       "id": "Text-m86",
+       "hide": {},
+       "anim": {}
+      }
+     },
+     {
+      "type": "Table",
+      "props": {
+       "header": "Xxxxx | Xxxx",
+       "rows": [
+        {
+         "cells": "X0 Xxxxxxxx | 0.0xxx"
+        },
+        {
+         "cells": "X0 Xxxxxxxx | 0.0xxx"
+        },
+        {
+         "cells": "X0 Xxxxxxxx | 0.0xxx"
+        },
+        {
+         "cells": "Xxxx Xxxx | 00xx"
+        }
+       ],
+       "striped": "xxxx",
+       "stripeBg": "",
+       "css": {},
+       "id": "Table-m87",
+       "hide": {},
+       "anim": {}
+      }
+     },
+     {
+      "type": "Heading",
+      "props": {
+       "title": "00. Xxxxxxxx Xxxxxxxxxx",
+       "level": "x0",
+       "color": "",
+       "size": "",
+       "weight": "",
+       "tracking": "",
+       "elementId": "",
+       "css": {},
+       "id": "Heading-m88",
+       "hide": {},
+       "anim": {}
+      }
+     },
+     {
+      "type": "Columns",
+      "props": {
+       "col-2": [],
+       "col-1": [
+        {
+         "type": "Card",
+         "props": {
+          "id": "Card-m91",
+          "title": "Xxxxxxxx",
+          "description": "00% Xxxxxxx xxx xxxxxxxx xxx xxxxxxxxx xxxxxxxx.",
+          "icon": "",
+          "theme": "xxxxxx",
+          "bg": "",
+          "color": "",
+          "borderColor": "",
+          "radius": "",
+          "pad": "",
+          "shadow": "",
+          "iconSize": "",
+          "iconBg": "",
+          "iconColor": "",
+          "titleSize": "",
+          "titleWeight": "",
+          "titleTransform": "",
+          "css": {},
+          "hide": {},
+          "anim": {}
+         }
+        }
+       ],
+       "col-0": [
+        {
+         "type": "Card",
+         "props": {
+          "id": "Card-m90",
+          "title": "Xxxx Xxxxxxx Xxxx",
+          "description": "00% Xxxxxx — xxx xxxxxxx xxxxxxx xxxxxx xxx xxx xxxx xxxx.",
+          "icon": "",
+          "theme": "xxxx",
+          "bg": "",
+          "color": "",
+          "borderColor": "",
+          "radius": "",
+          "pad": "",
+          "shadow": "",
+          "iconSize": "",
+          "iconBg": "",
+          "iconColor": "",
+          "titleSize": "",
+          "titleWeight": "",
+          "titleTransform": "",
+          "css": {},
+          "hide": {},
+          "anim": {}
+         }
+        }
+       ],
+       "distribution": {
+        "columnCount": 2,
+        "widths": [
+         70,
+         30
+        ]
+       },
+       "columnStyles": [
+        {
+         "backgroundColor": "xxxxxxxxxxx",
+         "padding": "00xx",
+         "borderWidth": "0xx",
+         "borderColor": "#x0x0xx",
+         "borderRadius": "0xx"
+        },
+        {
+         "backgroundColor": "xxxxxxxxxxx",
+         "padding": "00xx",
+         "borderWidth": "0xx",
+         "borderColor": "#x0x0xx",
+         "borderRadius": "0xx"
+        }
+       ],
+       "elementId": "",
+       "css": {},
+       "id": "Columns-m89",
+       "hide": {},
+       "anim": {},
+       "gap": "00xx",
+       "minHeight": "",
+       "bg": "",
+       "radius": ""
+      }
+     },
+     {
+      "type": "FlexRow",
+      "props": {
+       "children": [
+        {
+         "type": "Card",
+         "props": {
+          "title": "00%",
+          "description": "Xxxxx xxxxxx.",
+          "icon": "",
+          "theme": "xxxx",
+          "bg": "",
+          "color": "",
+          "borderColor": "",
+          "radius": "",
+          "pad": "",
+          "shadow": "",
+          "iconSize": "",
+          "iconBg": "",
+          "iconColor": "",
+          "titleSize": "",
+          "titleWeight": "",
+          "titleTransform": "",
+          "css": {
+           "flex": "0"
+          },
+          "id": "Card-m93",
+          "hide": {},
+          "anim": {}
+         }
+        },
+        {
+         "type": "Card",
+         "props": {
+          "title": "00%",
+          "description": "Xxxxx xxxxxx.",
+          "icon": "",
+          "theme": "xxxx",
+          "bg": "",
+          "color": "",
+          "borderColor": "",
+          "radius": "",
+          "pad": "",
+          "shadow": "",
+          "iconSize": "",
+          "iconBg": "",
+          "iconColor": "",
+          "titleSize": "",
+          "titleWeight": "",
+          "titleTransform": "",
+          "css": {
+           "flex": "0"
+          },
+          "id": "Card-m94",
+          "hide": {},
+          "anim": {}
+         }
+        },
+        {
+         "type": "Card",
+         "props": {
+          "title": "00%",
+          "description": "Xxxxx xxxxxx.",
+          "icon": "",
+          "theme": "xxxx",
+          "bg": "",
+          "color": "",
+          "borderColor": "",
+          "radius": "",
+          "pad": "",
+          "shadow": "",
+          "iconSize": "",
+          "iconBg": "",
+          "iconColor": "",
+          "titleSize": "",
+          "titleWeight": "",
+          "titleTransform": "",
+          "css": {
+           "flex": "0"
+          },
+          "id": "Card-m95",
+          "hide": {},
+          "anim": {}
+         }
+        }
+       ],
+       "justify": "xxxx-xxxxx",
+       "align": "xxxxxxx",
+       "gap": "00xx",
+       "wrap": "xxxx",
+       "direction": "xxx",
+       "css": {},
+       "id": "FlexRow-m92",
+       "hide": {},
+       "anim": {}
+      }
+     },
+     {
+      "type": "Heading",
+      "props": {
+       "title": "00. Xxxxxxxxxx &xxx; Xxxxxxx",
+       "level": "x0",
+       "color": "",
+       "size": "",
+       "weight": "",
+       "tracking": "",
+       "elementId": "",
+       "css": {},
+       "id": "Heading-m96",
+       "hide": {},
+       "anim": {}
+      }
+     },
+     {
+      "type": "Divider",
+      "props": {
+       "type": "gradient",
+       "color": "",
+       "width": "",
+       "length": "",
+       "gap": "",
+       "css": {},
+       "id": "Divider-m97",
+       "hide": {},
+       "anim": {}
+      }
+     },
+     {
+      "type": "Spacer",
+      "props": {
+       "height": "00xx",
+       "css": {},
+       "id": "Spacer-m98",
+       "hide": {},
+       "anim": {}
+      }
+     },
+     {
+      "type": "Divider",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "id": "Divider-media",
+       "type": "gradient",
+       "color": "",
+       "width": "",
+       "length": "",
+       "gap": "",
+       "css": {}
+      }
+     },
+     {
+      "type": "Heading",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "id": "Heading-media",
+       "title": "Xxxxxxxxxxxxx xxxxxx",
+       "level": "x0",
+       "color": "",
+       "size": "",
+       "weight": "",
+       "tracking": "",
+       "elementId": "",
+       "css": {}
+      }
+     },
+     {
+      "type": "Text",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "id": "Text-media",
+       "content": "Xíxxx x xxxxx xxxxxxxx xxx xx xxxxxx xxxxx: xxxxxxx xxxxxxóx x xxxxxxxx xxxx xxxxxxxxxxxxx.",
+       "color": "",
+       "size": "",
+       "leading": "",
+       "measure": "",
+       "elementId": "",
+       "css": {}
+      }
+     },
+     {
+      "type": "VideoEmbed",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "id": "VideoEmbed-demo",
+       "url": "/xxxxxx/xxxxx/xxxxxx-xxxxxxxxx-xxxx.xx0",
+       "poster": "/xxxxxx/xxxxx/xxxxxx-xxxxxxxxx-xxxxxx.xxx",
+       "aspectRatio": "00.00%",
+       "radius": "",
+       "bg": "",
+       "css": {}
+      }
+     },
+     {
+      "type": "AudioPlayer",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "id": "AudioPlayer-demo",
+       "src": "/xxxxxx/xxxxx/xxxxxx-xxxxxxx-xxxx.xxx",
+       "title": "XxxxXX_Xxxxxx_Xxxxxxx_Xxx0_Xxxxxx_x0.xx0",
+       "bg": "",
+       "borderColor": "",
+       "radius": "",
+       "pad": "",
+       "iconSize": "",
+       "iconBg": "",
+       "iconColor": "",
+       "css": {}
+      }
+     },
+     {
+      "type": "Heading",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "id": "H-dyn",
+       "title": "Xxxxxxxx xxxxxx",
+       "level": "x0",
+       "color": "",
+       "size": "",
+       "weight": "",
+       "tracking": "",
+       "elementId": "",
+       "css": {}
+      }
+     },
+     {
+      "type": "PostsGrid",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "id": "PG-dyn",
+       "count": 6,
+       "columns": "0",
+       "gap": "",
+       "bg": "",
+       "borderColor": "",
+       "radius": "",
+       "pad": "",
+       "thumbHeight": "",
+       "css": {}
+      }
+     },
+     {
+      "type": "CategoryPosts",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "id": "CP-dyn",
+       "categorySlug": "xxxx",
+       "count": 5,
+       "layout": "xxxx",
+       "columns": "",
+       "gap": "",
+       "bg": "",
+       "borderColor": "",
+       "radius": "",
+       "linkColor": "",
+       "headingColor": "",
+       "css": {}
+      }
+     }
+    ],
+    "zones": {}
+   }
+  },
+  {
+   "id": 208,
+   "type": "page",
+   "status": "trash",
+   "versoData": {
+    "root": {
+     "props": {
+      "title": "Xxxxxx Xxxxxx — Xxxx Xxxxxxxxxx"
+     }
+    },
+    "content": [
+     {
+      "type": "Hero",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "css": {},
+       "title": "Xxxxxxx Xxxx Xxxxxxxxxx Xxxxxxxxxx",
+       "subtitle": "Xxxxxxxxxx xxx xxxx xxxxxxxxxx xx XxxX xxxxxxxxxx xxxx Xxxx Xxxxxxxxxx. Xxxxxxxx, xxxxxx, xxx xxxxx xxx xxxxxxxxxxx.",
+       "align": "xxxx",
+       "height": "000xx",
+       "overlay": "0",
+       "buttons": [
+        {
+         "label": "Xxx xxxxxxx",
+         "href": "#",
+         "variant": "xxxxxxx"
+        },
+        {
+         "label": "Xxx xxxxxxx",
+         "href": "#",
+         "variant": "xxxxxxx"
+        }
+       ],
+       "id": "Hero-mir-100"
+      }
+     },
+     {
+      "type": "Heading",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "css": {},
+       "title": "XXX Xxxxxx",
+       "level": "x0",
+       "id": "Heading-mir-101"
+      }
+     },
+     {
+      "type": "CTABanner",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "css": {},
+       "title": "Xxxxxxx xxxxx",
+       "subtitle": "Xxxxxxx xxxxx",
+       "buttonText": "Xxx xxxxxxx",
+       "buttonLink": "#",
+       "variant": "xxxx",
+       "id": "CTABanner-mir-102"
+      }
+     },
+     {
+      "type": "CTABanner",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "css": {},
+       "title": "Xxxxxxx xxxxx",
+       "subtitle": "Xxxxxxx xxxxx",
+       "buttonText": "Xxx xxxxxxx",
+       "buttonLink": "#",
+       "variant": "xxxxxxx",
+       "id": "CTABanner-mir-103"
+      }
+     },
+     {
+      "type": "CTABanner",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "css": {},
+       "title": "Xxxxxxx xxxxx",
+       "subtitle": "Xxxxxxx xxxxx",
+       "buttonText": "Xxx xxxxxxx",
+       "buttonLink": "#",
+       "variant": "xxxxxxxx",
+       "id": "CTABanner-mir-104"
+      }
+     },
+     {
+      "type": "Heading",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "css": {},
+       "title": "Xxxxxxx",
+       "level": "x0",
+       "id": "Heading-mir-105"
+      }
+     },
+     {
+      "type": "PricingTable",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "css": {},
+       "plans": [
+        {
+         "name": "Xxxxxxxx",
+         "price": "$0",
+         "period": "/xxxxx",
+         "features": "0 Xxxxxxxx\nXxxxxxxx Xxxxxx\nXxxxxxxxx Xxxxxxx",
+         "highlighted": "xxxxx",
+         "buttonText": "Xxx xxxxxxx",
+         "buttonLink": "#"
+        },
+        {
+         "name": "Xxxxxxxxxxxx",
+         "price": "$00",
+         "period": "/xxxxx",
+         "features": "Xxxxxxxxx Xxxxxxxx\nXxxxxxx Xxxxxx\nXxxxxxxx Xxxxxxx",
+         "highlighted": "xxxx",
+         "buttonText": "Xx Xxx",
+         "buttonLink": "#"
+        },
+        {
+         "name": "Xxxxxxxxxx",
+         "price": "$00",
+         "period": "/xxxxx",
+         "features": "Xxxxxx Xxxxx\nXxxxx-xxxxx XXX\nXxxxxxxxx Xxxxxxx",
+         "highlighted": "xxxxx",
+         "buttonText": "Xxxxxxx Xxxxx",
+         "buttonLink": "#"
+        }
+       ],
+       "id": "PricingTable-mir-106"
+      }
+     },
+     {
+      "type": "Heading",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "css": {},
+       "title": "Xxxxx",
+       "level": "x0",
+       "id": "Heading-mir-107"
+      }
+     },
+     {
+      "type": "Grid",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "css": {},
+       "columns": "0",
+       "gap": "00xx",
+       "children": [
+        {
+         "type": "Card",
+         "props": {
+          "hide": {},
+          "anim": {},
+          "css": {},
+          "title": "Xxxxxxxx Xxxxxxxxx",
+          "description": "Xxxx xxxx xxxxxxxx xxxx xxxx xxxxxxxxxx xxxx xxx xxxxxxxxxx-xxxxx xxxxxxxxx xxxxxx.",
+          "icon": "xx-xxxx",
+          "theme": "xxxxx",
+          "id": "Card-mir-a"
+         }
+        },
+        {
+         "type": "Card",
+         "props": {
+          "hide": {},
+          "anim": {},
+          "css": {},
+          "title": "Xxxxxx Xxxxxxxxxxxxxx",
+          "description": "Xxxxxx xxxxxxxx xxxx xxx xxxx-xxxxxxxxxxxx xxxxxxx xxx xxxxxxxxx xxxx xxxxxxx.",
+          "icon": "xx-xxxx",
+          "theme": "xxxx",
+          "id": "Card-mir-b"
+         }
+        },
+        {
+         "type": "Card",
+         "props": {
+          "hide": {},
+          "anim": {},
+          "css": {},
+          "title": "Xxxxxx xx Xxxxxx",
+          "description": "Xxxxxxx xxxx xxxx xxxxxxxxx xxxx xxxx xxxxxxxx-xxxxx xxxxxxxxxx xxx XXX0 xxxxxxxxxx.",
+          "icon": "xx-xxxx",
+          "theme": "xxxxxx",
+          "id": "Card-mir-c"
+         }
+        }
+       ],
+       "id": "Grid-mir-108"
+      }
+     },
+     {
+      "type": "Heading",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "css": {},
+       "title": "Xxxxxxxxx",
+       "level": "x0",
+       "id": "Heading-mir-109"
+      }
+     },
+     {
+      "type": "Accordion",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "css": {},
+       "items": [
+        {
+         "title": "Xxx xxxx Xxxx xxxxxx xxxxxxxxxx xxxxxxxx?",
+         "content": "XXX0 xxxxxxxxx xxxxxxxxxxxxxx xxxx xxxxxxxx-xxxxx xxxxxxxxxx xxx xxxxxx xxxxxxxxxx."
+        },
+        {
+         "title": "Xxx X xxxxx xxxxxxxx?",
+         "content": "Xxx xxxxxx xxxxxxxxxxxxxx xxxxxxx xxxx xxxx xx xxxxxx xxxxxxxxx xxx xxxxxxxxx."
+        },
+        {
+         "title": "Xxxx xxxxxxx xx xxxxxxxx?",
+         "content": "Xxxxxxxx xxxxx xxxxxxx xxxx x xxxxxxxxx xxxxxxx xxxxxxx xx Xxxxxxxxxx."
+        }
+       ],
+       "id": "Accordion-mir-110"
+      }
+     },
+     {
+      "type": "Heading",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "css": {},
+       "title": "Xxxxxxxxxxx",
+       "level": "x0",
+       "id": "Heading-mir-111"
+      }
+     },
+     {
+      "type": "Testimonial",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "css": {},
+       "quote": "Xxxx Xxxxxxxxxx xxx xxxxxxxxxx xxxxxxxxxxx xxx xx xxxxxx xxx xxxxxx xxxxxxxxxxxxxx.",
+       "author": "Xxxxxx Xxxxxx",
+       "role": "XXX, Xxxxxx Xxxx",
+       "id": "Testimonial-mir-112"
+      }
+     },
+     {
+      "type": "Heading",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "css": {},
+       "title": "Xxxxx Xxxxxx",
+       "level": "x0",
+       "id": "Heading-mir-113"
+      }
+     },
+     {
+      "type": "AudioPlayer",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "css": {},
+       "src": "/xxxxxx/xxxxx/xxxxxx-xxxxxxx-xxxx.xxx",
+       "title": "X0 Xxxxxxxx Xxxx Xxxx",
+       "id": "AudioPlayer-mir-114"
+      }
+     },
+     {
+      "type": "Heading",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "css": {},
+       "title": "Xxxxxxx",
+       "level": "x0",
+       "id": "Heading-mir-115"
+      }
+     },
+     {
+      "type": "FlexRow",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "css": {},
+       "children": [
+        {
+         "type": "Button",
+         "props": {
+          "hide": {},
+          "anim": {},
+          "css": {},
+          "label": "Xxx xxxxxxx",
+          "href": "#",
+          "variant": "xxxxxxx",
+          "align": "xxxx",
+          "id": "Btn-mir-1"
+         }
+        },
+        {
+         "type": "Button",
+         "props": {
+          "hide": {},
+          "anim": {},
+          "css": {},
+          "label": "Xxx xxxxxxx",
+          "href": "#",
+          "variant": "xxxxxxxxx",
+          "align": "xxxx",
+          "id": "Btn-mir-2"
+         }
+        },
+        {
+         "type": "Button",
+         "props": {
+          "hide": {},
+          "anim": {},
+          "css": {},
+          "label": "Xxx xxxxxxx",
+          "href": "#",
+          "variant": "xxxxxxx",
+          "align": "xxxx",
+          "id": "Btn-mir-3"
+         }
+        }
+       ],
+       "id": "FlexRow-mir-116"
+      }
+     },
+     {
+      "type": "Heading",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "css": {},
+       "title": "Xxxx",
+       "level": "x0",
+       "id": "Heading-mir-117"
+      }
+     },
+     {
+      "type": "Tabs",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "css": {},
+       "tabs": [
+        {
+         "label": "Xxxxxxxx",
+         "content": "Xxxxxxxxxx xxxx xxxx xxxxxxxx xxx xxxxx xx xxx xx xxx xxxxx xxxxx."
+        },
+        {
+         "label": "Xxxxxxxx",
+         "content": "Xxxxxxx xxxxxxx."
+        },
+        {
+         "label": "Xxxxxxx",
+         "content": "Xxxxxxx xxxxxxx."
+        }
+       ],
+       "id": "Tabs-mir-118"
+      }
+     },
+     {
+      "type": "Heading",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "css": {},
+       "title": "Xxxxx Xxxx",
+       "level": "x0",
+       "id": "Heading-mir-119"
+      }
+     },
+     {
+      "type": "PostsGrid",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "css": {},
+       "count": 3,
+       "columns": "0",
+       "id": "PostsGrid-mir-120"
+      }
+     },
+     {
+      "type": "Heading",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "css": {},
+       "title": "Xxxxxx",
+       "level": "x0",
+       "id": "Heading-mir-121"
+      }
+     },
+     {
+      "type": "SearchBar",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "css": {},
+       "label": "Xxxxxx",
+       "placeholder": "Xxxxxx xxxxxxxx…",
+       "buttonText": "Xxxxxx",
+       "searchPage": "/xxxxxx",
+       "align": "xxxx-xxxxx",
+       "width": "000xx",
+       "id": "SearchBar-mir-122"
+      }
+     },
+     {
+      "type": "Heading",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "css": {},
+       "title": "Xxxxx",
+       "level": "x0",
+       "id": "Heading-mir-123"
+      }
+     },
+     {
+      "type": "VideoEmbed",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "css": {},
+       "url": "",
+       "poster": "",
+       "aspectRatio": "00.00%",
+       "id": "VideoEmbed-mir-124"
+      }
+     },
+     {
+      "type": "Heading",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "css": {},
+       "title": "Xxxxx",
+       "level": "x0",
+       "id": "Heading-mir-125"
+      }
+     },
+     {
+      "type": "Stats",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "css": {},
+       "items": [
+        {
+         "value": "00.0%",
+         "label": "Xxxxxxxx Xxxxxx"
+        },
+        {
+         "value": "00/0",
+         "label": "Xxxxxxx"
+        },
+        {
+         "value": "000+",
+         "label": "Xxxxxxxxxx Xxxxxxx"
+        }
+       ],
+       "id": "Stats-mir-126"
+      }
+     },
+     {
+      "type": "Heading",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "css": {},
+       "title": "Xxxxxxxx Xxxxx",
+       "level": "x0",
+       "id": "Heading-mir-127"
+      }
+     },
+     {
+      "type": "CategoryPosts",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "css": {},
+       "id": "CategoryPosts-mir-128"
+      }
+     },
+     {
+      "type": "Heading",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "css": {},
+       "title": "Xxxx Xxxx",
+       "level": "x0",
+       "id": "Heading-mir-129"
+      }
+     },
+     {
+      "type": "IconList",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "css": {},
+       "columns": "0",
+       "items": [
+        {
+         "icon": "xx-xxxxxx",
+         "title": "Xxxxxxxxxx Xxxxxxxx",
+         "text": "XXX0 xxxxxxxxx xxxxxxxxxxxxxx."
+        },
+        {
+         "icon": "xx-xxxxx-xxxx",
+         "title": "Xxxx-xxxx Xxxxxxxx",
+         "text": "Xxxxxxxxxx xxxx xxxxxxxxxxxxxx."
+        },
+        {
+         "icon": "xx-xxxxx",
+         "title": "Xxxxxx Xxxxxxxxxxx",
+         "text": "Xxxxx-xxxxx xxxxxxxxxxx."
+        }
+       ],
+       "id": "IconList-mir-130"
+      }
+     },
+     {
+      "type": "Heading",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "css": {},
+       "title": "Xxxxx",
+       "level": "x0",
+       "id": "Heading-mir-131"
+      }
+     },
+     {
+      "type": "Quote",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "css": {},
+       "text": "Xxx xxxxxxxxx xx xxx xxxxxx xx xxx x xxxx, xxx x xxxxxxxxxxxx xxxxxxxxx xx xxxxx xxxxxx.",
+       "cite": "Xx. Xxxx Xxxxxx, Xxxx Xxxxxxxxx",
+       "style": "xxx",
+       "id": "Quote-mir-132"
+      }
+     },
+     {
+      "type": "Heading",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "css": {},
+       "title": "Xxxxx",
+       "level": "x0",
+       "id": "Heading-mir-133"
+      }
+     },
+     {
+      "type": "Table",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "css": {},
+       "header": "Xxxxxx | Xxxxxxx | Xxxxxx",
+       "rows": [
+        {
+         "cells": "Xxxx Xxxxxx | x0.0.0 | Xxxxxx"
+        },
+        {
+         "cells": "Xxxxxx Xxxxxxxx | x0.0.0 | Xxxxxxxx"
+        }
+       ],
+       "id": "Table-mir-134"
+      }
+     },
+     {
+      "type": "Heading",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "css": {},
+       "title": "Xxxxxx Xxxxx",
+       "level": "x0",
+       "id": "Heading-mir-135"
+      }
+     },
+     {
+      "type": "SocialLinks",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "css": {},
+       "items": [
+        {
+         "network": "xxxxxxxxx",
+         "url": "#"
+        },
+        {
+         "network": "xxxxxxxx",
+         "url": "#"
+        },
+        {
+         "network": "x-xxxxxxx",
+         "url": "#"
+        }
+       ],
+       "align": "xxxx-xxxxx",
+       "id": "SocialLinks-mir-136"
+      }
+     },
+     {
+      "type": "Heading",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "css": {},
+       "title": "Xxxxx",
+       "level": "x0",
+       "id": "Heading-mir-137"
+      }
+     },
+     {
+      "type": "Image",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "css": {},
+       "src": "xxxxx://xxxxxxxxx.xx/000x000",
+       "alt": "",
+       "id": "Image-mir-138"
+      }
+     },
+     {
+      "type": "Divider",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "css": {},
+       "type": "solid",
+       "id": "Divider-mir-139"
+      }
+     },
+     {
+      "type": "Divider",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "css": {},
+       "type": "dashed",
+       "id": "Divider-mir-140"
+      }
+     },
+     {
+      "type": "Divider",
+      "props": {
+       "hide": {},
+       "anim": {},
+       "css": {},
+       "type": "gradient",
+       "id": "Divider-mir-141"
+      }
+     }
+    ],
+    "zones": {}
+   }
+  },
+  {
+   "id": 195,
+   "type": "revision",
+   "status": "inherit",
+   "versoData": {
+    "root": {
+     "props": {
+      "title": "Xxxxxx Xxxxxxx Xxxx"
+     }
+    },
+    "content": [
+     {
+      "type": "Heading",
+      "props": {
+       "title": "Xxxxxxxxx-xxxxx Xxxxxx Xxxx Xxxx",
+       "level": "x0",
+       "id": "Heading-1"
+      }
+     },
+     {
+      "type": "Text",
+      "props": {
+       "content": "<x>Xxxxxx xxxxxxx xxxx xxxxxx xx xxxxxxx xxx xxxxxx (xáxxx/xxxxxx) xx xx xxxxxx xxx xxxxxx. Xxxx xxxxxx xxxx xxxxxxx xxx xxxxxxx xxxxxxxxx xxxxx éx.</x>",
+       "id": "Text-2"
+      }
+     },
+     {
+      "type": "Divider",
+      "props": {
+       "type": "gradient",
+       "id": "Divider-3"
+      }
+     },
+     {
+      "type": "Heading",
+      "props": {
+       "title": "Xxxxxxx 0",
+       "level": "x0",
+       "id": "Heading-4"
+      }
+     },
+     {
+      "type": "Text",
+      "props": {
+       "content": "<x>Xxxxxxx 0. Xxxxx xxxxx xxxxx xxx xxxx, xxxxxxxxxxx xxxxxxxxxx xxxx, xxxxxxxxx xxxxxxxxxx xxxx xxx xxxxxx xx xxxxxx.</x>",
+       "id": "Text-5",
+       "look": {
+        "bg": "#xx0000"
+       }
+      }
+     },
+     {
+      "type": "Card",
+      "props": {
+       "title": "Xxxxxxx 0",
+       "description": "Xxxxxxxxxx xx xxxxxxx xxxx xxxxxxxxx xxxxxxxxxx xxx xxxxxxx xxxxx xxxxxxxxx xxxxx.",
+       "icon": "xx-xxxx-xxxxx-xxxxxxxx",
+       "theme": "xxxxxx",
+       "id": "Card-6",
+       "anim": {
+        "type": "fade-up"
+       }
+      }
+     },
+     {
+      "type": "SocialLinks",
+      "props": {
+       "items": [
+        {
+         "network": "xxxxxxxxx",
+         "url": "#"
+        },
+        {
+         "network": "xxxxxxxx",
+         "url": "#"
+        },
+        {
+         "network": "x-xxxxxxx",
+         "url": "#"
+        }
+       ],
+       "align": "xxxx-xxxxx",
+       "css": {},
+       "hide": {},
+       "anim": {
+        "type": "fade-up",
+        "duration": 600,
+        "delay": 0
+       },
+       "look": {},
+       "id": "SocialLinks-ba0e37d1-427c-4e42-a728-9f5f5ff884c0"
+      }
+     },
+     {
+      "type": "Spacer",
+      "props": {
+       "css": {
+        "height": "00xx"
+       },
+       "hide": {},
+       "anim": {
+        "type": "fade-up",
+        "duration": 600,
+        "delay": 0
+       },
+       "look": {},
+       "id": "Spacer-04ffdadb-4159-47f6-86f2-efcf0d0942bd"
+      }
+     },
+     {
+      "type": "IconList",
+      "props": {
+       "items": [
+        {
+         "icon": "xx-xxxx",
+         "title": "Xáxxxx",
+         "text": "Xxxxxxxx xxx xxxxxxx xxxxx xx xxx xxxxx."
+        },
+        {
+         "icon": "xx-xxxxxx",
+         "title": "Xxxxxx",
+         "text": "Xxxxxxxx xxx xxxxxxx xxxxx xx xxx xxxxx."
+        },
+        {
+         "icon": "xx-xxxxx",
+         "title": "Xxxxxxx",
+         "text": "Xxxxxxxx xxx xxxxxxx xxxxx xx xxx xxxxx."
+        }
+       ],
+       "columns": "0",
+       "css": {},
+       "hide": {},
+       "anim": {
+        "type": "fade-up",
+        "duration": 600,
+        "delay": 0
+       },
+       "look": {},
+       "id": "IconList-30f59ba9-53a4-4d1e-b284-bb2900bbcd51"
+      }
+     },
+     {
+      "type": "Spacer",
+      "props": {
+       "css": {
+        "height": "00xx"
+       },
+       "hide": {},
+       "anim": {
+        "type": "fade-up",
+        "duration": 600,
+        "delay": 0
+       },
+       "look": {},
+       "id": "Spacer-b827efda-7c2d-4f05-9043-c3d2eb7dc018"
+      }
+     },
+     {
+      "type": "Quote",
+      "props": {
+       "text": "Xx xxxxx xxxxxxx xxxx xxxxxxx xx áxxxx xxx xxxx xxxxxx xñxx. Xx xxxxxxx xxxxx xxxxxxx xx xxxxx.",
+       "cite": "Xxxxxxxxx",
+       "style": "xxx",
+       "css": {},
+       "hide": {},
+       "anim": {
+        "type": "fade-up",
+        "duration": 600,
+        "delay": 0
+       },
+       "look": {},
+       "id": "Quote-d81a2c95-6ed7-4b04-b9bc-cd725b32ee53"
+      }
+     },
+     {
+      "type": "Spacer",
+      "props": {
+       "css": {
+        "height": "00xx"
+       },
+       "id": "Spacer-7"
+      }
+     },
+     {
+      "type": "FlexRow",
+      "props": {
+       "children": [],
+       "justify": "xxxx-xxxxx",
+       "align": "xxxxxx",
+       "gap": "",
+       "wrap": "xxxx",
+       "direction": "xxx",
+       "css": {},
+       "hide": {},
+       "anim": {
+        "type": "fade-up",
+        "duration": 600,
+        "delay": 0
+       },
+       "look": {},
+       "id": "FlexRow-e2e5884d-9ef7-4532-ae70-50aba81ee1b4"
+      }
+     },
+     {
+      "type": "Heading",
+      "props": {
+       "title": "Xxxxxxx 0",
+       "level": "x0",
+       "id": "Heading-8"
+      }
+     },
+     {
+      "type": "Text",
+      "props": {
+       "content": "<x>Xxxxxxx 0. Xxxxx xxxxx xxxxx xxx xxxx, xxxxxxxxxxx xxxxxxxxxx xxxx, xxxxxxxxx xxxxxxxxxx xxxx xxx xxxxxx xx xxxxxx.</x>",
+       "id": "Text-9"
+      }
+     },
+     {
+      "type": "Card",
+      "props": {
+       "title": "Xxxxxxx 0",
+       "description": "Xxxxxxxxxx xx xxxxxxx xxxx xxxxxxxxx xxxxxxxxxx xxx xxxxxxx xxxxx xxxxxxxxx xxxxx.",
+       "icon": "xx-xxxx-xxxxx-xxxxxxxx",
+       "theme": "xxxxxxx",
+       "id": "Card-10",
+       "anim": {
+        "type": "fade-up"
+       }
+      }
+     },
+     {
+      "type": "Spacer",
+      "props": {
+       "css": {
+        "height": "00xx"
+       },
+       "id": "Spacer-11"
+      }
+     },
+     {
+      "type": "Heading",
+      "props": {
+       "title": "Xxxxxxx 0",
+       "level": "x0",
+       "id": "Heading-12"
+      }
+     },
+     {
+      "type": "Text",
+      "props": {
+       "content": "<x>Xxxxxxx 0. Xxxxx xxxxx xxxxx xxx xxxx, xxxxxxxxxxx xxxxxxxxxx xxxx, xxxxxxxxx xxxxxxxxxx xxxx xxx xxxxxx xx xxxxxx.</x>",
+       "id": "Text-13"
+      }
+     },
+     {
+      "type": "Card",
+      "props": {
+       "title": "Xxxxxxx 0",
+       "description": "Xxxxxxxxxx xx xxxxxxx xxxx xxxxxxxxx xxxxxxxxxx xxx xxxxxxx xxxxx xxxxxxxxx xxxxx.",
+       "icon": "xx-xxxx-xxxxx-xxxxxxxx",
+       "theme": "xxxxxx",
+       "id": "Card-14"
+      }
+     },
+     {
+      "type": "Spacer",
+      "props": {
+       "css": {
+        "height": "00xx"
+       },
+       "id": "Spacer-15"
+      }
+     },
+     {
+      "type": "Heading",
+      "props": {
+       "title": "Xxxxxxx 0",
+       "level": "x0",
+       "id": "Heading-16"
+      }
+     },
+     {
+      "type": "Text",
+      "props": {
+       "content": "<x>Xxxxxxx 0. Xxxxx xxxxx xxxxx xxx xxxx, xxxxxxxxxxx xxxxxxxxxx xxxx, xxxxxxxxx xxxxxxxxxx xxxx xxx xxxxxx xx xxxxxx.</x>",
+       "id": "Text-17"
+      }
+     },
+     {
+      "type": "Card",
+      "props": {
+       "title": "Xxxxxxx 0",
+       "description": "Xxxxxxxxxx xx xxxxxxx xxxx xxxxxxxxx xxxxxxxxxx xxx xxxxxxx xxxxx xxxxxxxxx xxxxx.",
+       "icon": "xx-xxxx-xxxxx-xxxxxxxx",
+       "theme": "xxxxxxx",
+       "id": "Card-18"
+      }
+     },
+     {
+      "type": "Spacer",
+      "props": {
+       "css": {
+        "height": "00xx"
+       },
+       "id": "Spacer-19"
+      }
+     },
+     {
+      "type": "Heading",
+      "props": {
+       "title": "Xxxxxxx 0",
+       "level": "x0",
+       "id": "Heading-20"
+      }
+     },
+     {
+      "type": "Text",
+      "props": {
+       "content": "<x>Xxxxxxx 0. Xxxxx xxxxx xxxxx xxx xxxx, xxxxxxxxxxx xxxxxxxxxx xxxx, xxxxxxxxx xxxxxxxxxx xxxx xxx xxxxxx xx xxxxxx.</x>",
+       "id": "Text-21"
+      }
+     },
+     {
+      "type": "Card",
+      "props": {
+       "title": "Xxxxxxx 0",
+       "description": "Xxxxxxxxxx xx xxxxxxx xxxx xxxxxxxxx xxxxxxxxxx xxx xxxxxxx xxxxx xxxxxxxxx xxxxx.",
+       "icon": "xx-xxxx-xxxxx-xxxxxxxx",
+       "theme": "xxxxxx",
+       "id": "Card-22"
+      }
+     },
+     {
+      "type": "Spacer",
+      "props": {
+       "css": {
+        "height": "00xx"
+       },
+       "id": "Spacer-23"
+      }
+     },
+     {
+      "type": "Heading",
+      "props": {
+       "title": "Xxxxxxx 0",
+       "level": "x0",
+       "id": "Heading-24"
+      }
+     },
+     {
+      "type": "Text",
+      "props": {
+       "content": "<x>Xxxxxxx 0. Xxxxx xxxxx xxxxx xxx xxxx, xxxxxxxxxxx xxxxxxxxxx xxxx, xxxxxxxxx xxxxxxxxxx xxxx xxx xxxxxx xx xxxxxx.</x>",
+       "id": "Text-25"
+      }
+     },
+     {
+      "type": "Card",
+      "props": {
+       "title": "Xxxxxxx 0",
+       "description": "Xxxxxxxxxx xx xxxxxxx xxxx xxxxxxxxx xxxxxxxxxx xxx xxxxxxx xxxxx xxxxxxxxx xxxxx.",
+       "icon": "xx-xxxx-xxxxx-xxxxxxxx",
+       "theme": "xxxxxxx",
+       "id": "Card-26"
+      }
+     },
+     {
+      "type": "Spacer",
+      "props": {
+       "css": {
+        "height": "00xx"
+       },
+       "id": "Spacer-27"
+      }
+     },
+     {
+      "type": "Divider",
+      "props": {
+       "type": "solid",
+       "id": "Divider-28"
+      }
+     },
+     {
+      "type": "Button",
+      "props": {
+       "label": "Xxxxx xxxxx",
+       "href": "#",
+       "variant": "xxxxxxx",
+       "align": "xxxxxx",
+       "id": "Button-29"
+      }
+     },
+     {
+      "type": "Image",
+      "props": {
+       "src": "/xxxxxxx/0000/00/xxxxxxx-xxxxx-xx000000.xxx",
+       "alt": "Xxxxxxx � Xxxxx � Xxxxxxxx & Xxxxxx",
+       "radius": "",
+       "shadow": "",
+       "width": "",
+       "fit": "",
+       "elementId": "",
+       "css": {},
+       "hide": {},
+       "anim": {
+        "type": "fade-up",
+        "duration": 600,
+        "delay": 0
+       },
+       "look": {},
+       "id": "Image-f8gbogveq928"
+      }
+     },
+     {
+      "type": "Symbol",
+      "props": {
+       "symbolId": 193,
+       "hide": {},
+       "anim": {
+        "type": "fade-up",
+        "duration": 600,
+        "delay": 0
+       },
+       "look": {},
+       "id": "Symbol-live-test"
+      }
+     },
+     {
+      "type": "Form",
+      "props": {
+       "formName": "Xxxxxxxx X0X",
+       "fields": [
+        {
+         "type": "text",
+         "label": "Xxxxxx",
+         "required": true,
+         "options": "",
+         "placeholder": "Xx xxxxxx"
+        },
+        {
+         "type": "email",
+         "label": "Xxxxx",
+         "required": true,
+         "options": "",
+         "placeholder": "xx@xxxxx.xxx"
+        },
+        {
+         "type": "textarea",
+         "label": "Xxxxxxx",
+         "required": false,
+         "options": "",
+         "placeholder": "¿Xx xxé xxxxxxx xxxxxxxx?"
+        }
+       ],
+       "submitLabel": "Xxxxxx",
+       "successMessage": "¡Xxxxxxx! Xxxxx xxxxxxxx xx xxxxxxx.",
+       "errorMessage": "Xx xx xxxx xxxxxx xx xxxxxxxxxx. Xxxéxxxxx xx xxxxx.",
+       "hide": {},
+       "anim": {
+        "type": "fade-up",
+        "duration": 600,
+        "delay": 0
+       },
+       "look": {},
+       "id": "Form-live-test"
+      }
+     }
+    ],
+    "zones": {}
+   }
+  },
+  {
+   "id": 108,
+   "type": "page",
+   "status": "trash",
+   "versoData": {
+    "content": [
+     {
+      "type": "Heading",
+      "props": {
+       "id": "Heading-anim1",
+       "title": "Xxxxxxx xxxxxxx",
+       "level": "x0",
+       "elementId": "",
+       "css": {},
+       "hide": {},
+       "anim": {
+        "type": "fade-up",
+        "duration": 600,
+        "delay": 0
+       }
+      }
+     },
+     {
+      "type": "Spacer",
+      "props": {
+       "id": "Spacer-anim1",
+       "css": {
+        "height": "0000xx"
+       },
+       "hide": {},
+       "anim": {}
+      }
+     },
+     {
+      "type": "Stats",
+      "props": {
+       "id": "Stats-anim1",
+       "items": [
+        {
+         "value": "0.000+",
+         "label": "Xxxxxxxx"
+        },
+        {
+         "value": "00%",
+         "label": "Xxxxxxxxxxóx"
+        }
+       ],
+       "css": {},
+       "hide": {},
+       "anim": {
+        "type": "zoom",
+        "duration": 600,
+        "delay": 200
+       }
+      }
+     }
+    ],
+    "root": {
+     "title": "Xxxxxx Xxxxxxxxxxx",
+     "props": {
+      "title": "Xxxxxx Xxxxxxxxxxx",
+      "slug": "xxxxxx-xxxx"
+     }
+    }
+   }
+  },
+  {
+   "id": 122,
+   "type": "revision",
+   "status": "inherit",
+   "versoData": {
+    "root": {
+     "props": {
+      "title": "xxxx"
+     }
+    },
+    "content": [
+     {
+      "type": "Text",
+      "props": {
+       "content": "<x>XXXXX XXXXXX_XX_XXXX</x>",
+       "elementId": "",
+       "css": {},
+       "hide": {},
+       "anim": {},
+       "id": "Text-2523b662-f5c1-41ad-8e7a-25d93b2b3c2a"
+      }
+     },
+     {
+      "type": "ToscanoHero",
+      "props": {
+       "id": "th",
+       "heroImage": "xxxxx://xx0.xxxxxxxxxxxxxxxxx.xxx/xxxx-xxxxxx/XX0XXxXXXXXXx0xXXxXXxx0XxxxxXxX0X-0x0xXxX0XxXXx0Xx0xxX0xxX0X-XXxXXxXx00xxXxX0-XxXXXxX0xxx0xxXXXXxX0x00XX0_00xXXx-xXXXxxX000xXXxxxXxx_XxxXXXXXxXXXxx0Xx00XxXxxxxxXxX0XXxXXx0X0xXXxx0x-xxXXXXXXx0XX0xX-_xXxXxxx00xXXXx0xXXX0-xxxXxx0xxxXXXXxxXX0xXx0xxxxxxx0XxxxX-xxXxxXXXXX-xxXXx0xX",
+       "heroTitle": "Xx Xxxx xx xx",
+       "heroAccent": "Xxxxxxxxxóx Xxxxxx",
+       "heroSubtitle": "Xxxxñxxxx xxxxxxxxxxxx xxxxxxxxxxáxxxxx xxxx xxx xxxxxxxx xáx xxxxxxxxxxxxxxx xx xx xxxx.",
+       "heroButton": "Xxxxxxx Xxxxxxxx",
+       "heroButtonLink": "#xxxxxx"
+      }
+     },
+     {
+      "type": "ToscanoProceso",
+      "props": {
+       "id": "tp",
+       "eyebrow": "Xxxxxxxxxíx",
+       "title": "Xxí Xxxxxxxxxx",
+       "steps": [
+        {
+         "icon": "xx-xxxxxxxx",
+         "title": "X. Xxxxóx",
+         "description": "Xxxxxxxxxx xxxxxxxx xxxx xxxxxxxxx xx xxxxxxx."
+        },
+        {
+         "icon": "xx-xxxxxxx-xxxxxxxx",
+         "title": "XX. Xxxxxxxx",
+         "description": "Xxxxxxóx xx xx xxxxxxxx xxxéxxxx úxxxx."
+        },
+        {
+         "icon": "xx-xxxxxxxx-xxx",
+         "title": "XXX. Xxxxxxxíx",
+         "description": "Xxxxxxxóx xx xxxxxxxx xxx xxxxxxx xxxxxxxxx."
+        },
+        {
+         "icon": "xx-xxx-xxx",
+         "title": "XX. Xxxxñx",
+         "description": "Xxxxxxxxxxxóx xéxxxxx x xxxíxxxxx xx xxxxxxx."
+        },
+        {
+         "icon": "xx-xxxxxx-xxxxx",
+         "title": "X. Xxxxxxxx",
+         "description": "Xxxxxxxxxxóx xxx xxx xxxxxxx xxxxxxxxx."
+        },
+        {
+         "icon": "xx-xxxx-xxxxx-xxxxxxxx",
+         "title": "XX. Xxxxxxxóx",
+         "description": "Xxxxxxxxóx xxxxxxxxx xx xx xxxx xíx."
+        },
+        {
+         "icon": "xx-xxx",
+         "title": "XXX. Xxxxxx",
+         "description": "Xxxxxxxx xxxxxxxxx xxxx xx xxxxxxxxx."
+        }
+       ]
+      }
+     },
+     {
+      "type": "ToscanoPortafolio",
+      "props": {
+       "id": "tpf",
+       "eyebrow": "Xxxxxxxxxx",
+       "title": "Xxxxx Xxxxxxxxx",
+       "projects": [
+        {
+         "image": "xxxxx://xx0.xxxxxxxxxxxxxxxxx.xxx/xxxx-xxxxxx/XX0XXxXxXXXXxx0x0xXXXxXxXX0x0xxXXxXXXxX0Xxxxx0XXxxX-XxxXXXXXXXXxxx0xXXX0XxxXXXxxxxXXxxxXXX_xxxxx0XX00xXXxxxXXXxXxXX0Xxx0xxxxxXxXXxx0xxXXxxxXXX-X0XXxxXxx0XxxXxXxxXxXXxXX0x0x0XxX_xxx_xX0XX0-_xX00xX0xXxxXxxXxxXXXxxX0XxXxxxX000xxXxX0xXxXxXxXxXXXxxXxx0x0XXxX00xxXXxxxx0Xx0x0xXXXx0",
+         "location": "Xxxxxxx, Xxxxx",
+         "title": "Xxxxxxx &xxx; Xxxxxxxx",
+         "description": "Xx xxxxxxx xxxx xxx xxxxxx xxxxxxxxxxx."
+        },
+        {
+         "image": "xxxxx://xx0.xxxxxxxxxxxxxxxxx.xxx/xxxx-xxxxxx/XX0XXxXxx0XX0xxXxXxX0XxXXxxXXXxx0XX0x0xXXxxXx00-X000XX00XxXX-xxxX0Xxx0xxxXxXXX0Xx0XxxxXX0xxXx_XX0xxxXX0xxXXXxXXxX_XXxxXXXx0xXxxX-xX0XxXx0XXXXXXxxxX0xXX_XXXx_XXXXx0XXXxxx0X0xXxxx0Xxx0XxX0x0XxxXxXXxXx00Xx0XXxX-0x-x00XXxXX0xXXxXxxXxxxXXxXX00X00XX0xxXXXxxXXXXxXx0XxXXXx0-xX_xxXX0",
+         "location": "Xxxxx, Xxxxxx",
+         "title": "Xxxxxxxx &xxx; Xxxxxx",
+         "description": "Xxxxxxxxx xxáxxxx xx xx xxxxxóx xx Xxxíx."
+        },
+        {
+         "image": "xxxxx://xx0.xxxxxxxxxxxxxxxxx.xxx/xxxx-xxxxxx/XX0XXxXxxx-XxXX0xXXXxxxxxXxXxxxXxxXxXXXxxXXx0xxX_0X0Xx0X00XxXXxx0XxxXxxxxXX0XxxxxX00x0X0xXXXxxXxXXXXxXx0xx0xXx0xX-x0XXX0xXX0XX0xX0Xxxxx0xxx0xXxx0xx0xx0xxXXXxxXxxXXxXxxXxxxXx0xXxxXxxxxxxXXX_X0_xxXxxX0Xxx0xX0_XXXxXXXxxX0xx-XxXX0Xx0XXXxXXXxx0xxx0XXxxXXXXxxX0XXx0XX0x00xxxXXXxXXX",
+         "location": "Xxxxxx, XX",
+         "title": "Xxxxxx &xxx; Xxxxxx",
+         "description": "Xxxxxxxxxxx xxxxxxxxáxxxx x xxxxxxxxx xxxxxxx."
+        }
+       ]
+      }
+     },
+     {
+      "type": "ToscanoTestimonio",
+      "props": {
+       "id": "tt",
+       "quote": "Xxxxxxx xx xxxx xxxxxxxó xxxxxxx xxxx; xxxó xxx xxxxxxxxxxx xxxxxxxxx xxx xxxxxxxx xxxxxxxx xxxxxxxxáx xxx xxxxxxxxxxxx. Xx xxxxxxóx xx xxxxxxx xx, xxxxxxxxxxxxx, xxx xxxxx xx xxxx.",
+       "author": "— Xxxxx & Xxxxxxxxx —",
+       "location": "Xxxx xx Xxxx, 0000"
+      }
+     }
+    ],
+    "zones": {}
+   }
+  },
+  {
+   "id": 24,
+   "type": "post",
+   "status": "trash",
+   "versoData": {
+    "root": {
+     "props": {
+      "title": "xxxxx",
+      "slug": "xxxxxxx",
+      "category": "xxxxxx xx xxxxxx"
+     }
+    },
+    "content": [
+     {
+      "type": "PhotoCarousel",
+      "props": {
+       "carouselId": "00x0000x",
+       "autoSlide": true,
+       "interval": 5,
+       "id": "PhotoCarousel-dd477ebe-c7fd-40c6-8606-1b5c1e2d1b9b"
+      }
+     },
+     {
+      "type": "VideoGallery",
+      "props": {
+       "limit": 0,
+       "showDescription": false,
+       "id": "VideoGallery-6da5e804-ca5d-40c9-9f70-57547a77a8c9"
+      }
+     },
+     {
+      "type": "Spacer",
+      "props": {
+       "height": 24,
+       "id": "Spacer-92c5627b-f751-4980-b6e5-c0fa85b6b553"
+      }
+     },
+     {
+      "type": "Spacer",
+      "props": {
+       "height": 24,
+       "id": "Spacer-69f63720-2fba-41c5-a479-74ef3005869d"
+      }
+     },
+     {
+      "type": "CardGallery",
+      "props": {
+       "location": "",
+       "limit": 0,
+       "id": "CardGallery-31888356-1170-417f-8c58-e2261a017504"
+      }
+     }
+    ],
+    "zones": {}
+   }
+  },
+  {
+   "id": 110,
+   "type": "page",
+   "status": "trash",
+   "versoData": {
+    "content": [
+     {
+      "type": "Section",
+      "props": {
+       "id": "Section-tall",
+       "children": [],
+       "maxWidth": "000%",
+       "css": {
+        "height": "0000xx",
+        "backgroundColor": "#xxx"
+       },
+       "hide": {},
+       "anim": {
+        "type": "fade",
+        "duration": 300,
+        "delay": 0
+       }
+      }
+     },
+     {
+      "type": "Stats",
+      "props": {
+       "id": "Stats-below",
+       "items": [
+        {
+         "value": "00%",
+         "label": "XX"
+        }
+       ],
+       "css": {},
+       "hide": {},
+       "anim": {
+        "type": "zoom",
+        "duration": 300,
+        "delay": 0
+       }
+      }
+     }
+    ],
+    "root": {
+     "title": "Xxxxxx Xxxx Xxx",
+     "props": {
+      "title": "Xxxxxx Xxxx Xxx",
+      "slug": "xxxxxx-xxxx-xxx"
+     }
+    }
+   }
+  },
+  {
+   "id": 156,
+   "type": "revision",
+   "status": "inherit",
+   "versoData": {
+    "root": {
+     "props": {
+      "title": "xxxx"
+     }
+    },
+    "content": [
+     {
+      "type": "Text",
+      "props": {
+       "content": "<x><xxxx xxxxx=\"xxxxx:xxx(000, 000, 000);xxxx-xxxx:00xx\">Xxxxxxx xxxí...</xxxx></x>",
+       "elementId": "",
+       "css": {},
+       "hide": {},
+       "anim": {},
+       "id": "Text-2757507d-d493-47c9-949b-9efd0ca1cadf"
+      }
+     },
+     {
+      "type": "OnlineStore",
+      "props": {
+       "category": "",
+       "columns": 3,
+       "showSearch": true,
+       "showFilters": true,
+       "showCart": true,
+       "elementId": "",
+       "hide": {},
+       "anim": {},
+       "id": "OnlineStore-32704d30-447b-4e2a-9c8c-1e7260526f99"
+      }
+     },
+     {
+      "type": "ContactForms",
+      "props": {
+       "formId": 1,
+       "title": "",
+       "elementId": "",
+       "hide": {},
+       "anim": {},
+       "id": "ContactForms-e8bfe3ec-af19-4df9-bd36-05aa92cfb210"
+      }
+     }
+    ],
+    "zones": {}
+   }
+  },
+  {
+   "id": 145,
+   "type": "revision",
+   "status": "inherit",
+   "versoData": {
+    "content": [
+     {
+      "type": "Heading",
+      "props": {
+       "id": "h1",
+       "title": "Xxxxxxxx xxxxxx",
+       "level": "x0",
+       "elementId": "",
+       "css": {}
+      }
+     },
+     {
+      "type": "YoutubeVideos",
+      "props": {
+       "id": "yv1",
+       "titleFilter": "",
+       "maxVideos": 6,
+       "autoplay": true,
+       "interval": 4000,
+       "showTitles": true,
+       "elementId": "xx-xxxxxxxx"
+      }
+     },
+     {
+      "type": "Heading",
+      "props": {
+       "id": "h2",
+       "title": "Xxxx xxxxxx xx XX",
+       "level": "x0",
+       "elementId": "",
+       "css": {}
+      }
+     },
+     {
+      "type": "YoutubeVideos",
+      "props": {
+       "id": "yv2",
+       "titleFilter": "XX",
+       "maxVideos": 3,
+       "autoplay": false,
+       "interval": 5000,
+       "showTitles": true,
+       "elementId": "xx-xxxxxxxx"
+      }
+     }
+    ],
+    "root": {
+     "props": {
+      "title": "XX Xxxx"
+     },
+     "title": "XX Xxxx"
+    }
+   }
+  }
+ ]
+}

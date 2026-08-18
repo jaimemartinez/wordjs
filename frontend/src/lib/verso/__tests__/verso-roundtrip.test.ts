@@ -8,16 +8,20 @@
  * los casos el round-trip debe ser IDEMPOTENTE: una segunda pasada es un
  * punto fijo byte-a-byte.
  *
- * Corre también sobre el corpus REAL de producción (85 documentos exportados
- * por scripts/verso-corpus-export.mjs) cuando está presente en
- * documentation/verso/corpus/corpus.json (gitignorado: contenido real).
+ * Corre en DOS corpus además de los sintéticos:
+ *  · el de FORMAS (fixtures/corpus.shapes.json), commiteado y por tanto SIEMPRE ejercitado —
+ *    estructura real anonimizada, derivada con scripts/verso-corpus-anonymize.mjs;
+ *  · el REAL de producción (documentation/verso/corpus/corpus.json, gitignorado por contener
+ *    contenido de clientes), cuando la máquina lo tiene exportado.
+ * El primero existe porque el segundo falta en CI: sin él, este gate se saltaba entero y su verde
+ * no distinguía "pasó" de "no se ejecutó".
  */
 
 import { describe, expect, it } from "vitest";
 import { existsSync } from "node:fs";
 import { fromNormalized, toNormalized } from "../normalize";
 import type { SlotResolver, VersoData } from "../types";
-import { CORPUS_PATH, item, loadVersoCorpus, type CorpusEntry } from "./helpers";
+import { CORPUS_PATH, item, loadShapesCorpus, loadVersoCorpus, type CorpusEntry } from "./helpers";
 
 const roundTrip = (d: VersoData, isSlot?: SlotResolver) => fromNormalized(toNormalized(d, isSlot));
 
@@ -212,6 +216,37 @@ describe("verso round-trip — sintéticos", () => {
 // ---------------------------------------------------------------------------
 
 const corpusAvailable = existsSync(CORPUS_PATH);
+
+/**
+ * El mismo contrato que el bloque de abajo, pero sobre el corpus de FORMAS commiteado — y SIN
+ * skipIf, así que corre en CI y en cualquier máquina sin corpus exportado.
+ *
+ * POR QUÉ EXISTE: el corpus real está gitignorado (contenido de clientes), de modo que en CI el
+ * suite de producción se saltaba ENTERO y su verde no significaba nada. La pérdida de datos en la
+ * serialización es la clase de bug que más daño ha hecho en este árbol; su gate no puede depender
+ * de un fichero que la mitad de las máquinas no tiene. El fixture conserva estructura, claves y su
+ * orden (que es lo que el round-trip compara byte a byte) con el contenido anonimizado.
+ */
+describe("verso round-trip — corpus de formas (siempre)", () => {
+  const shapes: CorpusEntry[] = loadShapesCorpus();
+
+  it("el fixture commiteado existe y cubre formas reales", () => {
+    expect(shapes.length).toBeGreaterThan(0);
+  });
+
+  it("cada documento hace round-trip BYTE A BYTE", () => {
+    const failures: string[] = [];
+    for (const entry of shapes) {
+      const d = entry.versoData;
+      try {
+        expect(JSON.stringify(roundTrip(d))).toBe(JSON.stringify(d));
+      } catch {
+        failures.push(`doc ${entry.id} (${entry.type}/${entry.status})`);
+      }
+    }
+    expect(failures, `round-trip falló en:\n${failures.join("\n")}`).toEqual([]);
+  });
+});
 
 describe.skipIf(!corpusAvailable)("verso round-trip — corpus de producción", () => {
   const corpus: CorpusEntry[] = loadVersoCorpus();
