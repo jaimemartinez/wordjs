@@ -65,7 +65,13 @@ export type IxTrigger =
    * es un intercambio explícito (tacto elástico a cambio del camino del compositor) y el
    * compilador lo dice en un aviso. Ausente = exactitud nativa 1:1, lo de siempre.
    */
-  | { on: "scrub"; range?: IxRange; src?: "self" | "page"; smooth?: number }
+  /**
+   * `src` — QUÉ recorrido mide el progreso: el del propio bloque (`self`, el defecto), el del
+   * documento entero (`page`) o el de la ESCENA FIJA que lo contiene (`scene`, C5). Dentro de una
+   * escena, `self` se congela: mientras el escenario está fijo su posición en la ventana no cambia,
+   * así que es justo `scene` lo que hace legible el tiempo del "pin".
+   */
+  | { on: "scrub"; range?: IxRange; src?: "self" | "page" | "scene"; smooth?: number }
   | { on: "hover" }
   | { on: "click"; toggle?: boolean }
   | { on: "load"; delay?: number }

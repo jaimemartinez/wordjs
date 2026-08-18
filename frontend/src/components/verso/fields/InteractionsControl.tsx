@@ -111,6 +111,7 @@ import {
   setRangeEdge,
   setRepeat,
   setScrubSmooth,
+  scrubSrcOf,
   setScrubSrc,
   setStagger,
   setStaggerCols,
@@ -141,6 +142,7 @@ import {
   IX_TARGET_LABELS,
   IX_TRIGGER_LABELS,
   type IxPanelTargetKind,
+  type IxScrubSrc,
   type IxPanelTriggerKind,
 } from "../editor/ixPanelModel";
 import { requestIxPreview, requestIxScrub } from "../canvas/IxCanvasEngine";
@@ -330,6 +332,9 @@ export default function InteractionsControl({
     options: [
       { label: "El recorrido del bloque", value: "self" },
       { label: "El scroll de la página", value: "page" },
+      // C5 — dentro de una sección con «Escena fija», el recorrido del bloque se congela: es la
+      // escena la que avanza mientras el contenido se queda quieto.
+      { label: "La escena fija que lo contiene", value: "scene" },
     ],
   };
   const pointerAreaField: RadioVersoField = {
@@ -544,8 +549,8 @@ export default function InteractionsControl({
                 field={scrubSrcField}
                 name="ix-scrub-src"
                 label="Qué scroll manda"
-                value={trigger.src === "page" ? "page" : "self"}
-                onChange={(v) => onChange(setScrubSrc(value, v === "page" ? "page" : "self", ixCtx))}
+                value={scrubSrcOf(trigger)}
+                onChange={(v) => onChange(setScrubSrc(value, v as IxScrubSrc, ixCtx))}
               />
               {/* ── Suavizado del scroll (P10) — opt-in: sin él, exactitud nativa 1:1. */}
               <VersoFieldControl

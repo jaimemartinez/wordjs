@@ -619,7 +619,7 @@ export function normTrigger(raw: unknown): IxTrigger | undefined {
       const t: IxTrigger = { on: "scrub" };
       const range = normRange(raw.range);
       if (range) t.range = range;
-      const src = oneOf(raw.src, ["self", "page"] as const);
+      const src = oneOf(raw.src, ["self", "page", "scene"] as const);
       if (src) t.src = src;
       // P10 — suavizado opt-in. 0 = exactitud nativa y se borra (ausencia = sin persecución).
       const smooth = num(raw.smooth);

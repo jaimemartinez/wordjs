@@ -79,10 +79,15 @@ export const IX_DEFAULT_TRIGGER: IxTrigger = { on: "view", once: true };
  * panel pueda EDITAR "el rango que hay" cuando el autor aún no puso ninguno — la alternativa sería
  * duplicar estos valores en el modelo del panel y que un día divergieran.
  */
-export const IX_DEFAULT_RANGES: Readonly<Record<"scrub" | "view", IxRange>> = Object.freeze({
-  scrub: { from: { at: "cover", pct: 0 }, to: { at: "cover", pct: 100 } },
-  view: { from: { at: "entry", pct: 0 }, to: { at: "cover", pct: 40 } },
-});
+export const IX_DEFAULT_RANGES: Readonly<Record<"scrub" | "view" | "scene", IxRange>> =
+  Object.freeze({
+    scrub: { from: { at: "cover", pct: 0 }, to: { at: "cover", pct: 100 } },
+    view: { from: { at: "entry", pct: 0 }, to: { at: "cover", pct: 40 } },
+    // La ESCENA mide el tramo en que la sección TAPA la ventana entera — que es exactamente el
+    // tiempo que su escenario pasa fijo. `cover` incluiría además la entrada y la salida, y el
+    // movimiento empezaría antes de que el "pin" existiese.
+    scene: { from: { at: "contain", pct: 0 }, to: { at: "contain", pct: 100 } },
+  });
 const DEFAULT_RANGE = IX_DEFAULT_RANGES;
 
 /* ------------------------------------------------------------------ */
@@ -590,13 +595,27 @@ function triggerRuntime(t: IxTrigger): IxNeedsRuntime {
 }
 
 function rangeOf(t: IxTrigger): IxRange {
-  if (t.on === "scrub") return t.range ?? DEFAULT_RANGE.scrub;
+  if (t.on === "scrub") return t.range ?? DEFAULT_RANGE[t.src === "scene" ? "scene" : "scrub"];
   if (t.on === "view") return t.range ?? DEFAULT_RANGE.view;
   return DEFAULT_RANGE.view;
 }
 
+/** El nombre de la timeline de vista que declara una ESCENA FIJA en `wordjs-ui.css` (C5). */
+export const IX_SCENE_TIMELINE = "--wjs-ix-scene";
+
+/**
+ * QUÉ conduce el progreso: el scroll del documento (`scroll()`), la escena fija que contiene al
+ * bloque (la timeline CON NOMBRE que declara la sección, y que sus descendientes ven por herencia
+ * del árbol) o el recorrido del propio bloque por la ventana (`view()`, el defecto).
+ */
 const timelineFn = (t: IxTrigger): string =>
-  t.on === "scrub" && t.src === "page" ? "scroll()" : "view()";
+  t.on !== "scrub"
+    ? "view()"
+    : t.src === "page"
+      ? "scroll()"
+      : t.src === "scene"
+        ? IX_SCENE_TIMELINE
+        : "view()";
 
 const rangeCss = (r: IxRange): string =>
   `${r.from.at} ${n(r.from.pct)}% ${r.to.at} ${n(r.to.pct)}%`;
@@ -893,6 +912,10 @@ export function emitUnit(body: IxBody, hash: string): IxUnit {
     const sel = joinSel(bases, suffix);
     const fn = timelineFn(trigger);
     const isPage = fn === "scroll()";
+    // Una timeline con NOMBRE no se puede probar con `@supports (animation-timeline: --x)` de forma
+    // significativa (la consulta valida la sintaxis, no que la escena exista), así que el @supports
+    // pregunta por la forma genérica que sí describe el soporte del motor.
+    const supportsFn = fn === IX_SCENE_TIMELINE ? "view()" : fn;
     const pageRange = isPage ? pageRangeCss(rangeOf(trigger)) : null;
     const decls = [
       // Duración dummy de 1ms: el progreso lo conduce la timeline, no el reloj. El atajo va
@@ -906,7 +929,7 @@ export function emitUnit(body: IxBody, hash: string): IxUnit {
           : []
         : [`animation-range:${rangeCss(rangeOf(trigger))}`]),
     ];
-    rules.push(`@supports (animation-timeline:${fn}){${rule(sel, decls)}}`);
+    rules.push(`@supports (animation-timeline:${supportsFn}){${rule(sel, decls)}}`);
   }
   for (const [suffix, decls] of armedGroups) {
     rules.push(rule(`.${cls}[data-wjs-ix="armed"]${suffix}`, decls));

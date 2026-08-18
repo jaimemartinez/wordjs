@@ -38,6 +38,26 @@ const isPageTimeline = (u: IxRuntimeUnit): boolean =>
   u.trigger.on === "scrub" && u.trigger.src === "page";
 
 /**
+ * El selector de una ESCENA FIJA (C5). Literal a propósito, como `.wjs-ixw`: este chunk no importa
+ * el catálogo de bloques. La clase la escribe `SectionBlock` y la estiliza `wordjs-ui.css`.
+ */
+const SCENE_SELECTOR = ".wjs-block-section--scene";
+
+/**
+ * A QUÉ elemento se le mide el recorrido. Normalmente al propio bloque; con `src:"scene"`, a la
+ * sección fija que lo contiene — porque mientras el escenario está fijo el bloque no se mueve por
+ * la ventana y su progreso se quedaría clavado. Es la misma sustitución que hace el CSS al
+ * enganchar la animación a la timeline con nombre de la sección.
+ *
+ * Si no hay escena por encima (el autor puso `scene` en un bloque suelto) se mide el bloque: la
+ * degradación honesta es el comportamiento de siempre, no una animación muerta.
+ */
+const scrubAnchor = (root: IxElementLike, u: IxRuntimeUnit): IxElementLike => {
+  if (u.trigger.on !== "scrub" || u.trigger.src !== "scene") return root;
+  return root.closest?.(SCENE_SELECTOR) ?? root;
+};
+
+/**
  * Suavizado del puntero por defecto (ms). Literal duplicado A PROPÓSITO respecto a
  * `IX_POINTER_SMOOTH_DEFAULT` (normalize.ts): importar el normalizador arrastraría el muestreo de
  * `linear()` a este chunk perezoso. Un test los mantiene iguales (mismo patrón que IX_REPLAY_EVENT).
@@ -145,6 +165,8 @@ export function createScrubDriver(units: readonly IxRuntimeUnit[], host: IxHost)
     const chaseSmooth =
       unit.trigger.on === "scrub" && unit.trigger.smooth !== undefined ? unit.trigger.smooth : null;
     for (const root of roots) {
+      // El ANCLA del progreso puede no ser el bloque: dentro de una escena fija lo es la sección.
+      const anchor = scrubAnchor(root, unit);
       for (const track of unit.tracks) {
         const targets = resolveIxTargets(root, track, host.doc);
         targets.forEach((el, i) => {
@@ -153,7 +175,7 @@ export function createScrubDriver(units: readonly IxRuntimeUnit[], host: IxHost)
             // P10: como el scrub llano, pero `cur` PERSIGUE el progreso en vez de igualarlo.
             const anim = el.animate(ixKeyframesFor(el, track), { duration: SCRUB_MS, fill: "both", easing: "linear" });
             anim.pause();
-            chased.push({ anchor: root, anim, range: track.range, page, smooth: chaseSmooth, cur: 0 });
+            chased.push({ anchor, anim, range: track.range, page, smooth: chaseSmooth, cur: 0 });
             return;
           }
           if (pointer) {
@@ -182,11 +204,11 @@ export function createScrubDriver(units: readonly IxRuntimeUnit[], host: IxHost)
               easing: "linear",
             });
             anim.pause();
-            const entry: ScrubEntry = { anchor: root, range: track.range, anim, page };
+            const entry: ScrubEntry = { anchor, range: track.range, anim, page };
             entries.push(entry);
-            const list = byAnchor.get(root);
+            const list = byAnchor.get(anchor);
             if (list) list.push(entry);
-            else byAnchor.set(root, [entry]);
+            else byAnchor.set(anchor, [entry]);
           } else {
             const anim = el.animate(ixKeyframesFor(el, track), {
               duration: track.dur,

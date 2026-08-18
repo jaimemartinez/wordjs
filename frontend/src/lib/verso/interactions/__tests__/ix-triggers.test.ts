@@ -602,6 +602,51 @@ describe("puntero (P6): sin CSS, con IR completo, y honestidad sobre lo que no a
   });
 });
 
+describe("la ESCENA FIJA como fuente del scroll (C5)", () => {
+  it("engancha la animación a la timeline CON NOMBRE que declara la sección", () => {
+    const u = compileIx(mk({ on: "scrub", src: "scene" }))!;
+    expect(u.rules[0]).toContain("animation-timeline:--wjs-ix-scene");
+  });
+
+  it("el @supports pregunta por `view()`, no por el nombre (un nombre no describe soporte)", () => {
+    // `@supports (animation-timeline: --x)` es cierto en cuanto el motor entiende la SINTAXIS, que
+    // no es lo que hay que saber; `view()` sí distingue al motor que trae timelines de scroll.
+    const u = compileIx(mk({ on: "scrub", src: "scene" }))!;
+    expect(u.rules[0].startsWith("@supports (animation-timeline:view()){")).toBe(true);
+  });
+
+  it("su rango por defecto es el TIEMPO DEL PIN: `contain 0% contain 100%`", () => {
+    const u = compileIx(mk({ on: "scrub", src: "scene" }))!;
+    expect(u.rules[0]).toContain("animation-range:contain 0% contain 100%");
+    // Y no el de un scrub normal, que empieza antes de que la sección tape la ventana.
+    expect(compileIx(mk({ on: "scrub" }))!.rules[0]).toContain("animation-range:cover 0% cover 100%");
+  });
+
+  it("el rango del autor manda también aquí", () => {
+    const u = compileIx(mk({
+      on: "scrub",
+      src: "scene",
+      range: { from: { at: "contain", pct: 20 }, to: { at: "contain", pct: 60 } },
+    }))!;
+    expect(u.rules[0]).toContain("animation-range:contain 20% contain 60%");
+  });
+
+  it("sigue siendo camino nativo: paga runtime solo donde no hay timelines", () => {
+    const u = compileIx(mk({ on: "scrub", src: "scene" }))!;
+    expect(u.needsRuntime).toBe("no-native");
+  });
+
+  it("una fuente inventada se descarta y vuelve al recorrido del bloque", () => {
+    const u = compileIx({
+      v: 1,
+      trigger: { on: "scrub", src: "--wjs-ix-scene); } body{display:none" },
+      tracks: [{ target: { kind: "self" }, steps: steps2 }],
+    } as unknown as IxSpec)!;
+    expect(u.rules[0]).toContain("animation-timeline:view()");
+    expect(u.rules.join("")).not.toContain("display:none");
+  });
+});
+
 describe("colores tomados del TEMA (C4) — recolorear el sitio recolorea su movimiento", () => {
   const tinted = {
     steps: [

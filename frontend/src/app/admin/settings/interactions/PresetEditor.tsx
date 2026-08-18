@@ -57,6 +57,7 @@ import {
     setRangeEdge,
     setRepeat,
     setScrubSmooth,
+    scrubSrcOf,
     setScrubSrc,
     setStagger,
     setStaggerCols,
@@ -85,6 +86,7 @@ import {
     IX_TRIGGER_LABELS,
     type IxPanelTargetKind,
     type IxPanelTriggerKind,
+    type IxScrubSrc,
 } from "@/components/verso/editor/ixPanelModel";
 // El editor de curvas es agnóstico de tokens (currentColor + opacidades): se monta aquí y en el
 // panel del bloque sin arrastrar los `--ed-*` del editor, que es justo la frontera de esta pantalla.
@@ -591,11 +593,12 @@ export default function PresetEditor({
                             <FieldSelect
                                 id="ixp-scrub-src"
                                 label="Qué scroll manda"
-                                value={trigger.src === "page" ? "page" : "self"}
-                                onChange={(v) => write(setScrubSrc(draft, v === "page" ? "page" : "self"))}
+                                value={scrubSrcOf(trigger)}
+                                onChange={(v) => write(setScrubSrc(draft, v as IxScrubSrc))}
                                 options={[
                                     { value: "self", label: "El recorrido del bloque" },
                                     { value: "page", label: "El scroll de la página" },
+                                    { value: "scene", label: "La escena fija que lo contiene" },
                                 ]}
                             />
                             {/* Suavizado del scroll (P10) — opt-in: sin él, exactitud nativa 1:1. */}

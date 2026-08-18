@@ -526,12 +526,31 @@ export function setLoadDelay(raw: unknown, ms: number, ctx?: IxCompileCtx): IxWr
   return writeTrigger(raw, ctx, trigger);
 }
 
-/** `scrub`: el progreso lo marca el recorrido del bloque (`self`) o el scroll de la página. */
-export function setScrubSrc(raw: unknown, src: "self" | "page", ctx?: IxCompileCtx): IxWrite {
+/** De dónde sale el progreso de un `scrub`. `self` es el defecto y se escribe desnudo. */
+export type IxScrubSrc = "self" | "page" | "scene";
+
+/** La fuente EFECTIVA de un disparador, para pintar el desplegable. */
+export const scrubSrcOf = (t: IxTrigger): IxScrubSrc =>
+  t.on === "scrub" && (t.src === "page" || t.src === "scene") ? t.src : "self";
+
+/**
+ * La fuente, lista para reinyectarse al RECONSTRUIR un disparador de scrub.
+ *
+ * Existe porque reconstruir el disparador es lo que hacen media docena de escritores (rango, reset,
+ * suavizado…) y cada uno que se escribiera "a mano" volvería a perder la fuente en silencio — el
+ * defecto exacto que el barrido adversarial del ciclo 2 encontró con `smooth`.
+ */
+const carryScrubSrc = (t: IxTrigger): { src?: Exclude<IxScrubSrc, "self"> } => {
+  const src = scrubSrcOf(t);
+  return src === "self" ? {} : { src };
+};
+
+/** `scrub`: el progreso lo marca el bloque (`self`), el scroll de la página o la escena fija. */
+export function setScrubSrc(raw: unknown, src: IxScrubSrc, ctx?: IxCompileCtx): IxWrite {
   const state = ixPanelState(raw, ctx);
   if (state.trigger.on !== "scrub") return normalizeIxSpec(raw)?.spec;
   const trigger: IxTrigger = { on: "scrub" };
-  if (src === "page") trigger.src = "page";
+  if (src !== "self") trigger.src = src;
   if (state.trigger.range) trigger.range = state.trigger.range;
   // El suavizado (P10) viaja CON el disparador: reconstruirlo sin él lo borraría en silencio y
   // devolvería la unidad al camino nativo — el mismo cuidado que setPointerArea tiene con el suyo.
@@ -598,8 +617,7 @@ export function setEventToggle(raw: unknown, toggle: boolean, ctx?: IxCompileCtx
 export function setScrubSmooth(raw: unknown, ms: number, ctx?: IxCompileCtx): IxWrite {
   const state = ixPanelState(raw, ctx);
   if (state.trigger.on !== "scrub") return normalizeIxSpec(raw)?.spec;
-  const trigger: IxTrigger = { on: "scrub", smooth: ms };
-  if (state.trigger.src === "page") trigger.src = "page";
+  const trigger: IxTrigger = { on: "scrub", smooth: ms, ...carryScrubSrc(state.trigger) };
   if (state.trigger.range) trigger.range = state.trigger.range;
   return writeTrigger(raw, ctx, trigger);
 }
@@ -642,7 +660,7 @@ export function setRangeEdge(
       ? {
           on: "scrub",
           range,
-          ...(state.trigger.src === "page" ? { src: "page" as const } : {}),
+          ...carryScrubSrc(state.trigger),
           // El suavizado (P10) sobrevive a editar el rango: reconstruir sin él lo borraría.
           ...(state.trigger.smooth !== undefined ? { smooth: state.trigger.smooth } : {}),
         }
@@ -658,7 +676,7 @@ export function resetRange(raw: unknown, ctx?: IxCompileCtx): IxWrite {
     state.trigger.on === "scrub"
       ? {
           on: "scrub",
-          ...(state.trigger.src === "page" ? { src: "page" as const } : {}),
+          ...carryScrubSrc(state.trigger),
           // El suavizado (P10) no es parte del rango: volver al rango por defecto no lo toca.
           ...(state.trigger.smooth !== undefined ? { smooth: state.trigger.smooth } : {}),
         }

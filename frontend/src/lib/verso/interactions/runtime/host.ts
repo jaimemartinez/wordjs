@@ -44,6 +44,13 @@ export interface IxElementLike {
   /** `left`/`width` los usa SOLO el eje X del puntero (P6); el resto del motor vive de top/height. */
   getBoundingClientRect(): { top: number; height: number; left?: number; width?: number };
   readonly children: ArrayLike<IxElementLike>;
+  /**
+   * El ancestro más cercano que cumpla el selector, o `null`. Lo usa UNA cosa: anclar un `scrub`
+   * con `src:"scene"` a la sección fija que lo contiene (C5). Es opcional porque el DOM real
+   * siempre lo trae y ningún otro camino del runtime lo necesita: un host sin él degrada a medir
+   * el propio bloque, que es lo que se medía antes de que existieran las escenas.
+   */
+  closest?(selector: string): IxElementLike | null;
   animate?(keyframes: IxKeyframe[], options: IxAnimateOptions): IxAnimationLike;
 }
 

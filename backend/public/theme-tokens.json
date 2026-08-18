@@ -2,8 +2,8 @@
   "version": 1,
   "source": "backend/public/css/wordjs-ui.css",
   "counts": {
-    "tokens": 776,
-    "varUses": 1771,
+    "tokens": 778,
+    "varUses": 1777,
     "elements": 51
   },
   "tokens": {
@@ -14,6 +14,10 @@
       "consumers": [
         {
           "selector": ".wp-block-section",
+          "property": "padding"
+        },
+        {
+          "selector": ".wp-block-section__stage",
           "property": "padding"
         },
         {
@@ -8583,6 +8587,10 @@
           "property": "padding"
         },
         {
+          "selector": ".wp-block-section__stage",
+          "property": "padding"
+        },
+        {
           "selector": ".wp-block-columns",
           "property": "gap"
         },
@@ -11369,6 +11377,36 @@
         {
           "selector": ".wp-block-section",
           "property": "padding"
+        },
+        {
+          "selector": ".wp-block-section__stage",
+          "property": "padding"
+        }
+      ]
+    },
+    "--wjs-section-scene": {
+      "group": "section",
+      "declaredDefault": null,
+      "fallbacks": [
+        "2"
+      ],
+      "consumers": [
+        {
+          "selector": ".wp-block-section--scene",
+          "property": "min-height"
+        }
+      ]
+    },
+    "--wjs-section-stage-top": {
+      "group": "section",
+      "declaredDefault": null,
+      "fallbacks": [
+        "0px"
+      ],
+      "consumers": [
+        {
+          "selector": ".wp-block-section__stage",
+          "property": "top"
         }
       ]
     },
@@ -14716,6 +14754,9 @@
       "children": {
         "inner": {
           "selector": ".wp-block-section__inner"
+        },
+        "stage": {
+          "selector": ".wp-block-section__stage"
         }
       }
     },

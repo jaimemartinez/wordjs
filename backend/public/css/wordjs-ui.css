@@ -1491,6 +1491,44 @@ h6.wjs-block-heading, h6.wp-block-heading { font-size: var(--wjs-heading-size, v
   margin-inline: auto;
 }
 
+/* ESCENA FIJA — el "pin" honesto (C5).
+ *
+ * La sección reserva su altura POR ADELANTADO (`--wjs-section-scene` pantallas) y su escenario se
+ * queda quieto con `position: sticky` mientras esa altura pasa por delante. Nadie mueve el layout
+ * al hacer scroll: cero CLS por construcción, cero JS. Es la diferencia con el `pin` de las
+ * librerías, que inyecta un espaciador y REESCRIBE la maquetación en caliente.
+ *
+ * La sección declara además una timeline de vista con nombre: sus descendientes pueden engancharse
+ * a ella (`animation-timeline: --wjs-ix-scene`) y así el movimiento lee el TIEMPO DE LA ESCENA. Con
+ * `view()` a secas no funcionaría: mientras el escenario está fijo su posición en la ventana no
+ * cambia, así que su propio progreso se congela justo cuando debería avanzar.
+ *
+ * `100svh` es la altura de la ventana con la barra del navegador DESPLEGADA: sin ella, el escenario
+ * de un móvil sobresale y la sección "salta" al ocultarse la barra. `100vh` queda de reserva para
+ * quien no la entienda.
+ */
+.wjs-block-section--scene, .wp-block-section--scene {
+  min-height: calc(100vh * var(--wjs-section-scene, 2));
+  min-height: calc(100svh * var(--wjs-section-scene, 2));
+  padding-block: 0;
+}
+.wjs-block-section__stage, .wp-block-section__stage {
+  position: sticky;
+  top: var(--wjs-section-stage-top, 0px);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: 100vh;
+  min-height: 100svh;
+  padding: var(--wjs-section-pad, var(--wjs-2xl) var(--wjs-lg));
+}
+@supports (view-timeline-name: --x) {
+  .wjs-block-section--scene, .wp-block-section--scene {
+    view-timeline-name: --wjs-ix-scene;
+    view-timeline-axis: block;
+  }
+}
+
 /* ---------------------------------------------------------------------- GRID - */
 /* The outer element only carries tokens. The GRID lives on "__items", the wrapper Puck puts around
  * a slot's children: declared on the outer element instead, that single wrapper became the only

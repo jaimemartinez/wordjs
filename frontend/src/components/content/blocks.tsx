@@ -1007,19 +1007,29 @@ const extraClass = (value: any): string | undefined => {
  * `.wjs-block-*` / `.wp-block-*` selector, token and stylesheet hook keeps working on a container the
  * theme has named.
  */
-export function SectionBlock({ maxWidth, pad, bg, css, slot, tag, className }: any) {
+/**
+ * Cuántas pantallas dura una ESCENA FIJA (C5). Lista cerrada: el valor entra en un `calc()` de la
+ * hoja, así que solo puede ser uno de estos números — nunca una cadena del autor.
+ */
+const SECTION_SCENE_LENGTHS = ['2', '3', '4'] as const;
+const sceneLength = (raw: unknown): string | null =>
+    typeof raw === 'string' && (SECTION_SCENE_LENGTHS as readonly string[]).includes(raw) ? raw : null;
+
+export function SectionBlock({ maxWidth, pad, bg, stick, css, slot, tag, className }: any) {
     const Tag = containerTag(tag, 'section');
+    const scene = sceneLength(stick);
+    const inner = <div className={bc('section__inner')}>{slot()}</div>;
     return (
         <Tag
-            className={cx(bc('section'), extraClass(className))}
+            className={cx(bc('section'), scene && bc('section--scene'), extraClass(className))}
             style={{
-                ...blockVars('section', { pad: unit(pad), bg, 'max-width': maxWidth }),
+                ...blockVars('section', { pad: unit(pad), bg, 'max-width': maxWidth, scene }),
                 ...css,
             }}
         >
-            <div className={bc('section__inner')}>
-                {slot()}
-            </div>
+            {/* Sin escena NO hay envoltorio: el HTML de una sección de siempre queda idéntico byte a
+                byte, que es el contrato de esta capa (una interacción no puede cambiar el marcado). */}
+            {scene ? <div className={bc('section__stage')}>{inner}</div> : inner}
         </Tag>
     );
 }

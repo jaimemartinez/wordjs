@@ -674,6 +674,50 @@ describe("driver de scrub", () => {
   });
 });
 
+describe("la ESCENA FIJA en el camino de fallback (C5)", () => {
+  /** Un bloque dentro de una escena: `closest` devuelve la sección, que es más alta que la ventana. */
+  const inScene = (cls: string, sceneTop: number, sceneHeight: number) => {
+    const scene = new FakeEl("scene");
+    scene.rect = { top: sceneTop, height: sceneHeight };
+    const el = new FakeEl(cls) as FakeEl & { closest?: (s: string) => IxElementLike | null };
+    // El bloque está FIJO: su rect no se mueve mientras la escena pasa — que es justo el problema.
+    el.rect = { top: 0, height: 400 };
+    el.closest = (sel: string) => (sel === ".wjs-block-section--scene" ? scene : null);
+    return { el, scene };
+  };
+
+  const sceneUnits = () =>
+    allUnitsOf([{ v: 1, trigger: { on: "scrub", src: "scene" }, tracks: [track()] }]);
+
+  it("el progreso lo marca la SECCIÓN, no el bloque fijo (que no se movería nunca)", () => {
+    const units = sceneUnits();
+    // Escena de 1600px con la ventana en 800: `contain` va de top=0 a top=−800.
+    const { el, scene } = inScene(units[0].cls, -400, 1600);
+    const h = harness([el]);
+    const stop = createScrubDriver(units, h.host);
+    // Lo que el observer vigila es el ANCLA — la sección, no el bloque: si el driver se hubiera
+    // quedado anclado al bloque, este `isIntersecting` no despertaría nada y el test se caería.
+    h.observers[0].cb([{ target: scene, isIntersecting: true }]);
+    // A mitad del recorrido contenido: 400 de 800 → 50 % → currentTime 500 de 1000.
+    expect(el.anims[0].currentTime).toBe(500);
+    stop();
+  });
+
+  it("sin escena por encima se mide el bloque: degradación honesta, no animación muerta", () => {
+    const units = sceneUnits();
+    const el = new FakeEl(units[0].cls); // sin `closest`: un host viejo o un bloque suelto
+    el.rect = { top: 0, height: 400 };
+    const h = harness([el]);
+    const stop = createScrubDriver(units, h.host);
+    h.observers[0].cb([{ target: el, isIntersecting: true }]);
+    // Se mide el rect DEL BLOQUE con el rango de escena (`contain`): un bloque de 400 con la
+    // ventana en 800 ya está contenido del todo, así que el progreso está al final. Lo que importa
+    // es que hay progreso medido y no un `null` — la animación no se queda muerta.
+    expect(el.anims[0].currentTime).toBe(1000);
+    stop();
+  });
+});
+
 describe("colores del TEMA en el camino WAAPI (C4) — paridad con el CSS", () => {
   /** Una pista de runtime cualquiera: aquí solo importan sus fotogramas. */
   const baseTrack: IxRuntimeTrack = {

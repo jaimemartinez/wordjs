@@ -1330,6 +1330,18 @@ const baseConfig: any = {
                 },
                 pad: { type: "text", label: "Relleno (p. ej. 96 o 96px 24px)" },
                 bg: { type: "text", label: "Fondo (vacío = tema)" },
+                // ESCENA FIJA (C5): la sección reserva varias pantallas y su contenido se queda
+                // quieto mientras pasan. La altura se reserva antes de hacer scroll (cero CLS).
+                stick: {
+                    type: "select",
+                    label: "Escena fija (el contenido se queda mientras haces scroll)",
+                    options: [
+                        { label: "No", value: "" },
+                        { label: "Corta (2 pantallas)", value: "2" },
+                        { label: "Media (3 pantallas)", value: "3" },
+                        { label: "Larga (4 pantallas)", value: "4" },
+                    ]
+                },
                 css: {
                     type: "custom",
                     label: "Estilos CSS",
@@ -1342,6 +1354,7 @@ const baseConfig: any = {
                 maxWidth: "1280px",
                 pad: "",
                 bg: "",
+                stick: "",
                 // Padding/background moved out of inline css into --wjs-section-pad/-bg so a theme
                 // can own the page's vertical rhythm; `pad`/`bg` override it for one section.
                 css: {}

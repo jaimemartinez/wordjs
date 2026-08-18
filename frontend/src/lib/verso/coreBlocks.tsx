@@ -653,12 +653,26 @@ export const coreBlockDefinitions: BlockDefinition[] = [
             },
             pad: { type: "text", label: "Relleno (p. ej. 96 o 96px 24px)" },
             bg: { type: "text", label: "Fondo (vacío = tema)" },
+            // ESCENA FIJA (C5): la sección reserva varias pantallas de alto y su contenido se queda
+            // quieto mientras pasan. La altura se reserva ANTES de hacer scroll (cero CLS) y el
+            // movimiento de dentro puede leer el tiempo de la escena con «scrub» → «La escena».
+            stick: {
+                type: "select",
+                label: "Escena fija (el contenido se queda mientras haces scroll)",
+                options: [
+                    { label: "No", value: "" },
+                    { label: "Corta (2 pantallas)", value: "2" },
+                    { label: "Media (3 pantallas)", value: "3" },
+                    { label: "Larga (4 pantallas)", value: "4" },
+                ],
+            },
             css: cssField(),
         },
         defaultProps: {
             maxWidth: "1280px",
             pad: "",
             bg: "",
+            stick: "",
             css: {},
         },
         render: SectionRender,
