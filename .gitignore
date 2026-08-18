@@ -121,3 +121,9 @@ gateway/cluster-tokens.json
 frontend/src/lib/pluginRegistry.ts
 frontend/src/lib/versoPluginRegistry.ts
 frontend/src/app/admin/plugin/\[slug\]/page.tsx
+
+# Runtime log rotation state — a dev machine artifact, never source (was committed by accident)
+logs/
+
+# Internal audit write-ups stay OUT of the public repo until their findings are remediated
+/AUDITORIA_*.md
