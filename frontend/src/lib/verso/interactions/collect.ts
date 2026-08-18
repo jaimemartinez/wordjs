@@ -35,6 +35,39 @@ const isItem = (v: unknown): v is Item =>
  * absurdos): el compilador ya trata su entrada como hostil, y filtrar aquí duplicaría esa autoridad
  * en dos sitios que podrían discrepar.
  */
+/**
+ * Cuántos bloques del árbol llevan la ENTRADA CLÁSICA (`anim`), el sistema anterior al motor.
+ *
+ * El inventario del sitio (C5) la necesita para no mentir: casi todas las páginas ya publicadas se
+ * mueven por aquí y no por `ix`, así que contar solo las interacciones diría que un sitio entero
+ * está quieto. Se cuenta lo que MUEVE — una entrada con tipo o un efecto de scroll—, no la clave
+ * vacía que todos los bloques llevan por defecto.
+ */
+export function collectAnimCount(data: unknown): number {
+  let n = 0;
+  const root = (data as { content?: unknown } | null | undefined)?.content;
+  if (!Array.isArray(root)) return 0;
+  let visited = 0;
+  const walk = (items: readonly unknown[], depth: number): void => {
+    if (depth > IX_COLLECT_MAX_DEPTH) return;
+    for (const item of items) {
+      if (visited >= IX_COLLECT_MAX_NODES) return;
+      if (!isItem(item)) continue;
+      visited++;
+      const props = item.props;
+      if (typeof props !== "object" || props === null) continue;
+      const bag = props as Record<string, unknown>;
+      const anim = bag.anim as { type?: unknown; scroll?: unknown } | undefined;
+      if (anim && typeof anim === "object" && (anim.type || anim.scroll)) n++;
+      for (const value of Object.values(bag)) {
+        if (Array.isArray(value) && value.some(isItem)) walk(value, depth + 1);
+      }
+    }
+  };
+  walk(root, 0);
+  return n;
+}
+
 export function collectIxSpecs(data: unknown): unknown[] {
   const out: unknown[] = [];
   const root = (data as { content?: unknown } | null | undefined)?.content;

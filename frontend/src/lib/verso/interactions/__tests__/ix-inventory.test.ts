@@ -98,4 +98,28 @@ describe("inventario del movimiento", () => {
     ]);
     expect(inv.rows.map((r) => r.id)).toEqual([3]);
   });
+
+  it("cuenta también la ENTRADA CLÁSICA: una página que solo la usa NO está quieta", () => {
+    // Revert-red: mientras el inventario solo miraba `ix`, un sitio entero hecho con el sistema
+    // anterior salía como «ninguna página tiene movimiento» — la mentira más cara de esta pantalla.
+    const legacy = {
+      root: { props: {} },
+      content: [
+        { type: "Heading", props: { id: "h", anim: { type: "fade-up" } } },
+        { type: "Section", props: { id: "s", anim: {}, children: [
+          { type: "Card", props: { id: "c", anim: { scroll: "parallax" } } },
+        ] } },
+      ],
+    };
+    const inv = ixInventoryOf([entry(1, "Clásica", legacy)]);
+    expect(inv.rows).toHaveLength(1);
+    expect(inv.rows[0].entrances).toBe(2); // el `anim: {}` vacío del Section no cuenta
+    expect(inv.rows[0].units).toBe(0);
+    expect(inv.totals.entrances).toBe(2);
+  });
+
+  it("con el movimiento APAGADO tampoco se cuentan: el inventario dice lo mismo que la página", () => {
+    const legacy = { root: { props: {} }, content: [{ type: "Heading", props: { id: "h", anim: { type: "fade-up" } } }] };
+    expect(ixInventoryOf([entry(1, "Clásica", legacy)], { motion: "off" }).rows).toHaveLength(0);
+  });
 });

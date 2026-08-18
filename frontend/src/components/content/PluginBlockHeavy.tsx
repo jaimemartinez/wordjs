@@ -23,7 +23,7 @@
 import React from "react";
 import SharedBlockShell from "./SharedBlockShell";
 import { RenderSubtree } from "./ContentRenderer";
-import { ixCtxFromSite, type IxPreset } from "@/lib/verso/interactions";
+import { ixCtxFromSite, type IxMotionPolicy, type IxPreset } from "@/lib/verso/interactions";
 import VersoSymbolRender from "@/components/verso/blocks/VersoSymbolBlock";
 import { SYMBOL_BLOCK_TYPE } from "@/lib/symbols";
 import { fetchActivePluginIds, loadPluginBlockConfigs } from "@/lib/pluginBundleLoader";
@@ -126,14 +126,14 @@ function PluginBlockRender({ type, props, ixPresets }: { type: string; props: Re
  * un `Map` y no cruza la frontera de serialización — la clase sale del hash desnudo, que coincide
  * con el de la página salvo colisión de hash entre dos cuerpos distintos (ver SharedBlockShell).
  */
-export default function PluginBlockHeavy({ item, ixPresets }: { item: any; ixPresets?: Record<string, IxPreset> }) {
+export default function PluginBlockHeavy({ item, ixPresets, motion }: { item: any; ixPresets?: Record<string, IxPreset>; motion?: IxMotionPolicy }) {
     const type = typeof item?.type === "string" ? item.type : "";
     const props = (item?.props || {}) as Record<string, unknown>;
     const inner = type === SYMBOL_BLOCK_TYPE
         ? <VersoSymbolRender symbolId={props.symbolId} resolvedSymbolItems={props.resolvedSymbolItems} />
         : <PluginBlockRender type={type} props={props} ixPresets={ixPresets} />;
     return (
-        <SharedBlockShell hide={props.hide as any} anim={props.anim as any} look={props.look as any} ix={props.ix} ixCtx={ixPresets ? ixCtxFromSite(ixPresets) : undefined}>
+        <SharedBlockShell hide={props.hide as any} anim={props.anim as any} look={props.look as any} ix={props.ix} ixCtx={{ ...(ixPresets ? ixCtxFromSite(ixPresets) : {}), ...(motion ? { motion } : {}) }}>
             {inner}
         </SharedBlockShell>
     );

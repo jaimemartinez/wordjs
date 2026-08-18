@@ -58,8 +58,8 @@ const markupOnly = (html: string): string => {
   return out;
 };
 
-const render = (data: unknown, ixPresets?: unknown): string =>
-  renderToStaticMarkup(<ContentRenderer data={data} ixPresets={ixPresets} />);
+const render = (data: unknown, ixPresets?: unknown, motion?: unknown): string =>
+  renderToStaticMarkup(<ContentRenderer data={data} ixPresets={ixPresets} motion={motion} />);
 
 describe("ContentRenderer — la hoja de interacciones", () => {
   it("una página sin interacciones no emite NI UNA etiqueta del motor", () => {
@@ -195,5 +195,41 @@ describe("ContentRenderer — bloques anidados", () => {
   it("la capa de interacción es un elemento REAL y envuelve al bloque (nunca display:contents)", () => {
     const html = render({ content: [heading("a", { v: 1, preset: "sys:fade-up" })] });
     expect(html).toMatch(/<div class="wjs-ix-[a-z0-9]+" data-wjs-ix-on="view">[\s\S]*<h2/);
+  });
+});
+
+describe("ContentRenderer — la política de movimiento del SITIO (C5)", () => {
+  /** Un bloque con la entrada CLÁSICA (`anim`), que es lo que llevan las páginas de siempre. */
+  const withAnim = (id: string) => ({
+    type: "Heading",
+    props: { id, title: `Título ${id}`, level: "h2", anim: { type: "fade-up", duration: 600 } },
+  });
+
+  it("`off` no emite la hoja de interacciones ni la clase de la unidad", () => {
+    const data = { content: [heading("a", { v: 1, preset: "sys:fade-up" })] };
+    const on = render(data);
+    const off = render(data, undefined, "off");
+    expect(on).toContain('data-precedence="wjs-ix"');
+    expect(off).not.toContain('data-precedence="wjs-ix"');
+    expect(off).toContain("Título a"); // el bloque SIGUE ahí, visible
+  });
+
+  it("`off` apaga también la animación de ENTRADA clásica — el ajuste dice «movimiento del sitio»", () => {
+    // Revert-red: mientras la política solo miraba el motor nuevo, apagar el movimiento dejaba
+    // moviéndose justo lo que llevan casi todas las páginas ya publicadas.
+    const data = { content: [withAnim("a")] };
+    expect(render(data)).toContain("wjs-anim");
+    expect(render(data, undefined, "off")).not.toContain("wjs-anim");
+    expect(render(data, undefined, "off")).toContain("Título a");
+  });
+
+  it("`calm` NO toca la entrada clásica: no es movimiento perpetuo, se reproduce y se acaba", () => {
+    const data = { content: [withAnim("a")] };
+    expect(render(data, undefined, "calm")).toContain("wjs-anim");
+  });
+
+  it("un valor inventado del ajuste es el defecto, no un modo intermedio", () => {
+    const data = { content: [heading("a", { v: 1, preset: "sys:fade-up" })] };
+    expect(render(data, undefined, "APAGADO")).toBe(render(data));
   });
 });

@@ -155,7 +155,7 @@ function renderItem(item: any, fallbackKey: string, exclude?: ReadonlySet<string
     const core = renderCore(item.type, props, item, exclude, ix);
     if (core === undefined) {
         // Plugin block or Symbol: the client machinery renders it exactly as before F3.
-        return <PluginBlockIsland key={key} item={item} ixPresets={ix?.site} />;
+        return <PluginBlockIsland key={key} item={item} ixPresets={ix?.site} motion={ix?.ctx.motion} />;
     }
     return (
         <SharedBlockShell key={key} hide={props.hide} anim={props.anim} look={props.look} ix={props.ix} ixCtx={ix?.ctx} ixPage={ix?.page}>

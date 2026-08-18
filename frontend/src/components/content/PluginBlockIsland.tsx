@@ -8,14 +8,14 @@
  * in the SSR HTML; core blocks are unaffected (they render on the server).
  */
 import React from "react";
-import type { IxPreset } from "@/lib/verso/interactions";
+import type { IxMotionPolicy, IxPreset } from "@/lib/verso/interactions";
 
 const Heavy = React.lazy(() => import("./PluginBlockHeavy"));
 
-export default function PluginBlockIsland({ item, ixPresets }: { item: any; ixPresets?: Record<string, IxPreset> }) {
+export default function PluginBlockIsland({ item, ixPresets, motion }: { item: any; ixPresets?: Record<string, IxPreset>; motion?: IxMotionPolicy }) {
     return (
         <React.Suspense fallback={null}>
-            <Heavy item={item} ixPresets={ixPresets} />
+            <Heavy item={item} ixPresets={ixPresets} motion={motion} />
         </React.Suspense>
     );
 }

@@ -13,7 +13,7 @@
  * Es puro y no toca el DOM ni la red: quien llama trae los contenidos ya leídos. Así se prueba en
  * node y así puede usarlo tanto la pantalla de administración como cualquier informe futuro.
  */
-import { collectIxSpecs } from "./collect";
+import { collectAnimCount, collectIxSpecs } from "./collect";
 import { compileIxPage, type IxCompileCtx } from "./compile";
 
 /** Un contenido a inventariar. `data` es el `_puck_data` YA parseado (o cualquier basura). */
@@ -44,6 +44,12 @@ export type IxInventoryRow = {
   warnings: number;
   /** Bytes de CSS que esta página emite por su movimiento. */
   cssBytes: number;
+  /**
+   * Bloques con la ENTRADA CLÁSICA (`anim`), el sistema anterior al motor. Se cuenta aparte porque
+   * es lo que llevan casi todas las páginas ya publicadas: sin esta columna, el inventario diría
+   * que un sitio entero está quieto justo cuando no lo está.
+   */
+  entrances: number;
 };
 
 export type IxInventory = {
@@ -56,6 +62,7 @@ export type IxInventory = {
     infinite: number;
     runtime: number;
     cssBytes: number;
+    entrances: number;
   };
 };
 
@@ -79,15 +86,25 @@ export function ixInventoryOf(
   ctx?: IxCompileCtx,
 ): IxInventory {
   const rows: IxInventoryRow[] = [];
-  const totals = { pages: entries.length, moving: 0, blocks: 0, infinite: 0, runtime: 0, cssBytes: 0 };
+  const totals = {
+    pages: entries.length,
+    moving: 0,
+    blocks: 0,
+    infinite: 0,
+    runtime: 0,
+    cssBytes: 0,
+    entrances: 0,
+  };
 
   for (const entry of entries) {
     const specs = collectIxSpecs(entry.data);
-    if (specs.length === 0) continue;
-    const page = compileIxPage(specs, ctx);
-    if (page.units.length === 0) continue;
+    // La política del sitio manda también sobre la entrada clásica: con el movimiento apagado no
+    // se mueve NADA, y el inventario tiene que decir lo mismo que la página.
+    const entrances = ctx?.motion === "off" ? 0 : collectAnimCount(entry.data);
+    const page = specs.length > 0 ? compileIxPage(specs, ctx) : null;
+    if ((page === null || page.units.length === 0) && entrances === 0) continue;
 
-    const infinite = page.units.filter((u) =>
+    const infinite = (page?.units ?? []).filter((u) =>
       u.body.tracks.some((t) => t.repeat === "inf"),
     ).length;
     const row: IxInventoryRow = {
@@ -96,12 +113,13 @@ export function ixInventoryOf(
       slug: entry.slug,
       type: entry.type,
       blocks: specs.length,
-      units: page.units.length,
+      units: page?.units.length ?? 0,
       infinite,
-      runtime: page.runtime.length,
+      runtime: page?.runtime.length ?? 0,
       presets: presetsOf(specs),
-      warnings: page.warnings.length,
-      cssBytes: page.css.length,
+      warnings: page?.warnings.length ?? 0,
+      cssBytes: page?.css.length ?? 0,
+      entrances,
     };
     rows.push(row);
     totals.moving += 1;
@@ -109,13 +127,14 @@ export function ixInventoryOf(
     totals.infinite += row.infinite;
     totals.runtime += row.runtime;
     totals.cssBytes += row.cssBytes;
+    totals.entrances += row.entrances;
   }
 
   rows.sort(
     (a, b) =>
       b.infinite - a.infinite ||
       b.runtime - a.runtime ||
-      b.blocks - a.blocks ||
+      b.blocks + b.entrances - (a.blocks + a.entrances) ||
       a.title.localeCompare(b.title, "es") ||
       a.id - b.id,
   );

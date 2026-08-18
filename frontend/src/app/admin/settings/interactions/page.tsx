@@ -447,6 +447,7 @@ export default function InteractionPresetsPage() {
                                 {inventory.totals.moving} de {inventory.totals.pages} con movimiento ·{" "}
                                 {inventory.totals.blocks} bloques · {inventory.totals.infinite} en bucle ·{" "}
                                 {inventory.totals.runtime} necesitan el motor ·{" "}
+                                {inventory.totals.entrances} entradas clásicas ·{" "}
                                 {(inventory.totals.cssBytes / 1024).toFixed(1)} KB de CSS
                             </p>
                             <div className="mt-3 overflow-x-auto">
@@ -457,6 +458,7 @@ export default function InteractionPresetsPage() {
                                             <th scope="col" className="py-1 pr-3 font-semibold">Bloques</th>
                                             <th scope="col" className="py-1 pr-3 font-semibold">En bucle</th>
                                             <th scope="col" className="py-1 pr-3 font-semibold">Con motor</th>
+                                            <th scope="col" className="py-1 pr-3 font-semibold">Entradas</th>
                                             <th scope="col" className="py-1 pr-3 font-semibold">Preajustes</th>
                                             <th scope="col" className="py-1 font-semibold">CSS</th>
                                         </tr>
@@ -484,6 +486,11 @@ export default function InteractionPresetsPage() {
                                                 </td>
                                                 <td className={`py-1.5 pr-3 ${row.runtime > 0 ? "text-gray-900" : "text-gray-400"}`}>
                                                     {row.runtime || "—"}
+                                                </td>
+                                                {/* La entrada CLÁSICA (`anim`) es lo que llevan casi todas las páginas
+                                                    ya publicadas: sin esta columna el inventario diría que están quietas. */}
+                                                <td className={`py-1.5 pr-3 ${row.entrances > 0 ? "text-gray-900" : "text-gray-400"}`}>
+                                                    {row.entrances || "—"}
                                                 </td>
                                                 <td className="py-1.5 pr-3 text-gray-500">
                                                     {row.presets.length > 0 ? row.presets.join(", ") : "—"}

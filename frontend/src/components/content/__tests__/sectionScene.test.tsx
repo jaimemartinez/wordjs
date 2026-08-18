@@ -67,6 +67,17 @@ describe("escena fija — la hoja servida", () => {
         expect(CSS_RULES).toMatch(/\.wjs-block-section__stage[^{]*\{[^}]*position:\s*sticky/);
     });
 
+    it("el relleno lo pone SOLO el escenario: una escena no indenta más que una sección normal", () => {
+        // Revert-red: con `padding-block: 0` en vez de `padding: 0`, el relleno horizontal seguía
+        // aplicándose fuera Y dentro, y el contenido de una escena salía 48 px más estrecho que el
+        // de cualquier otra sección con el mismo `pad` (medido en el navegador: 1102 vs 1150).
+        const scene = /\.wjs-block-section--scene[^{]*\{([^}]*)\}/.exec(CSS_RULES)?.[1] ?? "";
+        expect(scene).toMatch(/padding:\s*0/);
+        expect(scene).not.toMatch(/padding-block/);
+        const stage = /\.wjs-block-section__stage[^{]*\{([^}]*)\}/.exec(CSS_RULES)?.[1] ?? "";
+        expect(stage).toMatch(/padding:\s*var\(--wjs-section-pad/);
+    });
+
     it("`100svh` acompaña a `100vh`: en móvil la barra del navegador cambia el alto de la ventana", () => {
         const scene = /\.wjs-block-section--scene[^{]*\{([^}]*)\}/.exec(CSS_RULES)?.[1] ?? "";
         expect(scene).toContain("100svh");

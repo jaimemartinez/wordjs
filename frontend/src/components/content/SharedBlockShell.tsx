@@ -54,7 +54,12 @@ export default function SharedBlockShell({ hide, anim: animProp, look: lookProp,
     children: React.ReactNode;
 }) {
     const hideCls = hideClasses(hide);
-    const anim = (animProp || {}) as AnimSpec;
+    // POLÍTICA DE MOVIMIENTO DEL SITIO (C5). Con el movimiento APAGADO también se cae la animación
+    // de entrada clásica (`anim`), no solo el motor de interacciones: el ajuste se llama
+    // «movimiento del sitio» y quien lo apaga espera un sitio quieto, no medio quieto. El bloque
+    // se renderiza entonces sin su envoltorio animado — visible y en su estado final, que es la
+    // misma degradación que ya tiene quien pide menos movimiento.
+    const anim = (ixCtx?.motion === "off" ? {} : animProp || {}) as AnimSpec;
     const animActive = !!anim.type;
     const scrollActive = !!anim.scroll;
     const wrapActive = animActive || scrollActive;

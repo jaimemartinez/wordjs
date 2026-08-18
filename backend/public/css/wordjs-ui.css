@@ -1510,7 +1510,10 @@ h6.wjs-block-heading, h6.wp-block-heading { font-size: var(--wjs-heading-size, v
 .wjs-block-section--scene, .wp-block-section--scene {
   min-height: calc(100vh * var(--wjs-section-scene, 2));
   min-height: calc(100svh * var(--wjs-section-scene, 2));
-  padding-block: 0;
+  /* El relleno pasa ENTERO al escenario, que es quien enmarca el contenido. Dejarlo también aquí
+   * lo aplicaría dos veces y una escena saldría más estrecha que cualquier otra sección — medido:
+   * 1102 px de contenido frente a los 1150 px de una sección normal con el mismo `pad`. */
+  padding: 0;
 }
 .wjs-block-section__stage, .wp-block-section__stage {
   position: sticky;
