@@ -24,6 +24,7 @@
  *   en el live-region aria-live de este componente.
  */
 import React from "react";
+import { createPortal } from "react-dom";
 import { cancelFrame, scheduleFrame } from "../frameScheduler";
 import type { EditorHandle } from "@/lib/verso/store";
 import type { BlockRegistry } from "@/lib/verso/registry";
@@ -132,6 +133,15 @@ export default function DnDDriver({ handle, registry, geometry, frameDocument }:
    * render/nodeKey.ts), así que buscarlo por ahí devolvía `null` y el fantasma salía vacío.
    */
   const dragElRef = React.useRef<Element | null>(null);
+  /**
+   * DÓNDE agarraste el bloque, dentro de él y en píxeles del documento padre. El fantasma cuelga de
+   * ese punto: se coge por donde se cogió, como un papel. Anclarlo por su esquina lo dejaba flotando
+   * lejos del cursor — medido: 122px a la derecha al agarrar una sección por el centro.
+   */
+  const grabOffsetRef = React.useRef<DndPoint>({ x: 0, y: 0 });
+  /** El portal solo existe en el cliente: el primer render del servidor no tiene `document`. */
+  const [mounted, setMounted] = React.useState(false);
+  React.useEffect(() => setMounted(true), []);
 
   /* ---------------- sensor de puntero + autoscroll + Escape ---------------- */
 
@@ -148,7 +158,19 @@ export default function DnDDriver({ handle, registry, geometry, frameDocument }:
     const gesture = createPointerGesture<DragSession>({
       createSession: (source, startPoint) =>
         createDragSession({ handle, registry, getLayout }, source, startPoint),
-      moveSession: (s, point, over) => s.move(point, { pointerOverDrawer: over }),
+      moveSession: (s, point, over) => {
+        s.move(point, { pointerOverDrawer: over });
+        // Un bloque NUEVO empieza mostrándose como su tarjeta (todavía no existe en el lienzo). En
+        // cuanto el lienzo pinta la vista previa REAL en el hueco de destino, el fantasma la adopta:
+        // a partir de ahí lo que llevas en la mano es el bloque, no su tarjeta.
+        if (!ghostFromCanvas && dragSourceRef.current?.kind === "new") {
+          if (frameDocument.querySelector("[data-verso-ghost]")) {
+            ghostFromCanvas = true;
+            buildGhost();
+            moveGhost();
+          }
+        }
+      },
       dropSession: (s) => s.drop(),
       cancelSession: (s) => s.cancel(),
       scheduleFrame,
@@ -164,6 +186,15 @@ export default function DnDDriver({ handle, registry, geometry, frameDocument }:
     });
 
     let scrollRaf: number | null = null;
+    /** ¿El fantasma ya enseña la vista previa del lienzo (y no la tarjeta de la paleta)? */
+    let ghostFromCanvas = false;
+    /**
+     * Tamaño del fantasma, anotado AL CONSTRUIRLO. Medirlo en cada movimiento leía la caja antes de
+     * que el clon estuviera montado, y el anclaje salía por donde no era.
+     */
+    let ghostSize = { w: 0, h: 0 };
+    /** Cuánto se subió el clon dentro de su recorte: el anclaje tiene que descontarlo. */
+    let ghostShiftY = 0;
 
     /**
      * QUITARLE AL NAVEGADOR SU GESTO. Al pulsar sobre un bloque, el navegador cree que empiezas a
@@ -200,16 +231,35 @@ export default function DnDDriver({ handle, registry, geometry, frameDocument }:
       host.replaceChildren();
 
       if (src.kind === "new") {
+        // El lienzo ya pinta el BLOQUE REAL en el hueco de destino: se clona ESE, no una imitación.
+        // Hasta que el puntero llega al lienzo no existe todavía, y ahí lo que agarraste es la
+        // tarjeta de la paleta — que es exactamente lo que se enseña mientras tanto.
+        const enCanvas = frameDocument.querySelector("[data-verso-ghost]");
+        if (enCanvas) {
+          mountCanvasClone(enCanvas);
+          return;
+        }
         const clone = dragElRef.current?.cloneNode(true) as HTMLElement | undefined;
         if (!clone) return;
         // Sin el atributo: una copia inerte no debe parecerle a nadie un origen de arrastre.
         clone.removeAttribute("data-wjs-palette-type");
         host.appendChild(clone);
+        const cr = dragElRef.current!.getBoundingClientRect();
+        ghostSize = { w: Math.round(cr.width), h: Math.round(cr.height) };
+        sizeGhostBox();
         return;
       }
 
       const el = dragElRef.current;
       if (!el) return;
+      mountCanvasClone(el);
+    };
+
+    /** Clona un elemento DEL LIENZO dentro del fantasma, con sus hojas y sus tokens. */
+    const mountCanvasClone = (el: Element): void => {
+      const host = ghostRef.current;
+      if (!host) return;
+      host.replaceChildren();
       const rect = el.getBoundingClientRect();
       const iframe = canvas.getFrameElement();
       const scale =
@@ -236,8 +286,21 @@ export default function DnDDriver({ handle, registry, geometry, frameDocument }:
         }
       }
 
+      /**
+       * SE RECORTA ALREDEDOR DE DONDE AGARRASTE, no por arriba.
+       *
+       * Un bloque puede medir 800px: como fantasma hay que recortarlo o taparía media pantalla. Pero
+       * recortar los primeros 220px de una sección enseña su RELLENO — el fantasma salía vacío,
+       * que es exactamente lo que no debe pasar. Se desplaza el clon para que la banda visible sea
+       * la que tenías bajo el cursor.
+       */
+      const scaleSafe = scale || 1;
+      const grabDentro = grabOffsetRef.current.y / scaleSafe; // px del bloque, sin escalar
+      const maxShift = Math.max(0, rect.height - CANVAS_GHOST_MAX_H);
+      const shift = Math.min(Math.max(0, grabDentro - CANVAS_GHOST_MAX_H / 2), maxShift);
+      ghostShiftY = shift * scaleSafe;
+
       const box = parentDoc.createElement("div");
-      // Un bloque puede medir 800px de alto: como fantasma se recorta, o taparía media pantalla.
       box.setAttribute(
         "style",
         `${tokens}width:${Math.round(rect.width)}px;max-height:${CANVAS_GHOST_MAX_H}px;overflow:hidden;` +
@@ -245,7 +308,10 @@ export default function DnDDriver({ handle, registry, geometry, frameDocument }:
           // El fondo del lienzo, para que el clon no dependa de lo que haya detrás del cursor.
           `background:${frameDocument.body ? frameDocument.defaultView!.getComputedStyle(frameDocument.body).backgroundColor : "transparent"};`,
       );
-      box.appendChild(el.cloneNode(true));
+      const inner = parentDoc.createElement("div");
+      inner.setAttribute("style", `margin-top:${-Math.round(shift)}px`);
+      inner.appendChild(el.cloneNode(true));
+      box.appendChild(inner);
       shadow.appendChild(box);
       shadowHost.setAttribute(
         "style",
@@ -254,6 +320,23 @@ export default function DnDDriver({ handle, registry, geometry, frameDocument }:
         )}px;overflow:hidden;`,
       );
       host.appendChild(shadowHost);
+      ghostSize = {
+        w: Math.round(rect.width * scale),
+        h: Math.round(Math.min(rect.height, CANVAS_GHOST_MAX_H) * scale),
+      };
+      sizeGhostBox();
+    };
+
+    /**
+     * El contenedor del fantasma se CIÑE a su clon. Sin medidas propias su caja no coincidía con lo
+     * que se ve —medido: 735px de ancho para un clon de 496— y el anclaje al punto de agarre caía
+     * fuera por la diferencia.
+     */
+    const sizeGhostBox = () => {
+      const el = ghostRef.current;
+      if (!el) return;
+      el.style.width = ghostSize.w > 0 ? `${ghostSize.w}px` : "";
+      el.style.height = ghostSize.h > 0 ? `${ghostSize.h}px` : "";
     };
 
     const showGhost = () => {
@@ -268,16 +351,27 @@ export default function DnDDriver({ handle, registry, geometry, frameDocument }:
       const el = ghostRef.current;
       const p = parentPointRef.current;
       if (!el || !p) return;
-      // +14/+10: el fantasma va al lado del cursor, no debajo — tapar el punto exacto de suelta
-      // es justo lo que no puede hacer.
-      el.style.transform = `translate3d(${Math.round(p.x + 14)}px, ${Math.round(p.y + 10)}px, 0)`;
+      // El clon se recorta (un bloque puede medir 800px): si agarraste por debajo del recorte, el
+      // desfase se limita a la caja que de verdad existe, o el fantasma saldría disparado.
+      const grab = grabOffsetRef.current;
+      const dx = ghostSize.w > 0 ? Math.min(grab.x, Math.max(0, ghostSize.w - 8)) : grab.x;
+      const dy =
+        ghostSize.h > 0
+          ? Math.min(Math.max(0, grab.y - ghostShiftY), Math.max(0, ghostSize.h - 8))
+          : grab.y;
+      el.style.transform = `translate3d(${Math.round(p.x - dx)}px, ${Math.round(p.y - dy)}px, 0)`;
     };
 
     const hideGhost = () => {
       const el = ghostRef.current;
       if (!el) return;
       el.style.display = "none";
-      el.replaceChildren(); // el clon no sobrevive al gesto: ni memoria ni un DOM viejo en pantalla
+      el.replaceChildren();
+      ghostFromCanvas = false;
+      ghostSize = { w: 0, h: 0 };
+      ghostShiftY = 0;
+      el.style.width = "";
+      el.style.height = ""; // el clon no sobrevive al gesto: ni memoria ni un DOM viejo en pantalla
     };
 
     const setDragging = (on: boolean) => {
@@ -361,7 +455,17 @@ export default function DnDDriver({ handle, registry, geometry, frameDocument }:
       if (!id) return;
       const rect = geometry.getRect(id);
       dragSourceRef.current = { kind: "existing", nodeId: id };
-      dragElRef.current = (pe.target as Element | null)?.closest?.("[data-wjs-block-id]") ?? null;
+      const grabbed = (pe.target as Element | null)?.closest?.("[data-wjs-block-id]") ?? null;
+      dragElRef.current = grabbed;
+      if (grabbed) {
+        const gr = grabbed.getBoundingClientRect();
+        const iframeEl = canvas.getFrameElement();
+        const sc =
+          iframeEl && iframeEl.clientWidth > 0
+            ? iframeEl.getBoundingClientRect().width / iframeEl.clientWidth
+            : 1;
+        grabOffsetRef.current = { x: (pe.clientX - gr.left) * sc, y: (pe.clientY - gr.top) * sc };
+      }
       parentPointRef.current = toParentPoint({ x: pe.clientX, y: pe.clientY });
       gesture.down(
         { kind: "existing", nodeId: id, originRect: rect ? blockRectToDndRect(rect) : null },
@@ -379,6 +483,10 @@ export default function DnDDriver({ handle, registry, geometry, frameDocument }:
       if (!p) return;
       dragSourceRef.current = { kind: "new", type };
       dragElRef.current = item ?? null;
+      const cardRect = item?.getBoundingClientRect();
+      grabOffsetRef.current = cardRect
+        ? { x: pe.clientX - cardRect.left, y: pe.clientY - cardRect.top }
+        : { x: 0, y: 0 };
       parentPointRef.current = { x: pe.clientX, y: pe.clientY };
       gesture.down({ kind: "new", type }, p);
     };
@@ -464,29 +572,37 @@ export default function DnDDriver({ handle, registry, geometry, frameDocument }:
       <div data-wjs-dnd-live="" role="status" aria-live="polite" className="sr-only">
         {announcement}
       </div>
-      {/* `aria-hidden`: es feedback visual del ratón; a quien mueve bloques con el teclado le habla
-          la región viva de arriba. Fijo respecto al viewport y fuera del flujo: no empuja nada. */}
-      <div
-        ref={ghostRef}
-        data-wjs-dnd-ghost=""
-        aria-hidden="true"
-        style={{
-          display: "none",
-          position: "fixed",
-          left: 0,
-          top: 0,
-          zIndex: 2147483000,
-          pointerEvents: "none",
-          // Translúcido y con sombra: se lee como "esto lo llevas en la mano", no como contenido
-          // ya colocado. La rotación mínima es la misma pista, sin marear.
-          opacity: 0.85,
-          rotate: "-1deg",
-          filter: "drop-shadow(0 8px 20px rgba(0,0,0,.35))",
-          borderRadius: "6px",
-          overflow: "hidden",
-          outline: "2px solid var(--ed-primary)",
-        }}
-      />
+      {/* AL BODY, por portal. Un `position: fixed` se resuelve contra el ancestro TRANSFORMADO más
+          cercano, no contra la ventana, y el editor tiene varios por el camino (paneles, el marco
+          del lienzo): el fantasma aparecía desplazado cientos de píxeles del cursor — medido, 270px
+          a la derecha. Colgando del body no hay ancestro que lo desvíe.
+          `aria-hidden`: es feedback visual del ratón; a quien mueve bloques con el teclado le habla
+          la región viva de arriba. */}
+      {mounted &&
+        createPortal(
+          <div
+            ref={ghostRef}
+            data-wjs-dnd-ghost=""
+            aria-hidden="true"
+            style={{
+              display: "none",
+              position: "fixed",
+              left: 0,
+              top: 0,
+              zIndex: 2147483000,
+              pointerEvents: "none",
+              // Translúcido y con sombra: se lee como "esto lo llevas en la mano", no como contenido
+              // ya colocado. La rotación mínima es la misma pista, sin marear.
+              opacity: 0.85,
+              rotate: "-1deg",
+              filter: "drop-shadow(0 8px 20px rgba(0,0,0,.35))",
+              borderRadius: "6px",
+              overflow: "hidden",
+              outline: "2px solid var(--ed-primary)",
+            }}
+          />,
+          document.body,
+        )}
     </>
   );
 }

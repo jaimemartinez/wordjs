@@ -81,8 +81,58 @@ function useConcernedPreview(parentId: string, slotKey: string, childIds: string
 }
 
 /**
- * Fantasma del item nuevo durante el drag. Sin texto (aria-hidden: es feedback
- * puramente visual); el tipo viaja en data-verso-ghost-type para overlay/tests.
+ * EL HUECO ES EL BLOQUE DE VERDAD, no un rectángulo de rayas.
+ *
+ * Mientras arrastras, el sitio donde va a caer el bloque enseña el bloque MISMO, renderizado con su
+ * propio componente y sus props por defecto. Aquí es donde eso sale gratis y exacto: estamos dentro
+ * del árbol del lienzo, así que el componente tiene su contexto, sus estilos y su tipografía sin
+ * copiar nada — cualquier intento de "previsualizar" fuera del iframe acaba peleándose con hojas de
+ * estilo prestadas.
+ *
+ * Es chrome de AUTORÍA: `aria-hidden`, sin eventos de puntero (no debe robarle el hit-test al
+ * resolutor) y translúcido, para que se lea como "esto va a quedar aquí" y no como contenido ya
+ * puesto. Vive solo en el editor; el renderizador público no pasa por aquí.
+ */
+function GhostPreview({ type }: { type: string }) {
+  const { registry, componentMap } = useVersoRenderContext();
+  const Component = componentMap[type];
+  const def = registry.get(type);
+  if (!Component || !def) return <GhostFallback />;
+
+  const props: Record<string, unknown> = { ...(def.defaultProps ?? {}), isEditing: true };
+  // Un bloque contenedor pide funciones de slot; en una vista previa no hay hijos que pintar.
+  for (const [key, field] of Object.entries(def.fields ?? {})) {
+    if ((field as { type?: string } | undefined)?.type === "slot") props[key] = () => null;
+  }
+  return <Component {...props} />;
+}
+
+/** Lo de siempre cuando el bloque no se puede pintar: un hueco con su forma. */
+function GhostFallback() {
+  return (
+    <div className="min-h-10 rounded border-2 border-dashed border-[var(--ed-primary)] bg-[var(--ed-surface-container-high)] opacity-60" />
+  );
+}
+
+/**
+ * Red de seguridad: un bloque puede reventar al pintarse con props por defecto (le falta un dato
+ * resuelto, un plugin a medias…). Sin esto, ese fallo derribaría el LIENZO ENTERO en mitad de un
+ * arrastre — un precio absurdo por una vista previa. Se cae al hueco de rayas y no se entera nadie.
+ */
+class GhostBoundary extends React.Component<{ children: React.ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+  render() {
+    return this.state.failed ? <GhostFallback /> : this.props.children;
+  }
+}
+
+/**
+ * Fantasma del item nuevo durante el drag. Sin texto propio (aria-hidden: es feedback puramente
+ * visual); el tipo viaja en data-verso-ghost-type para overlay/tests y para que el fantasma del
+ * cursor pueda clonar ESTO — el mismo HTML, no una imitación.
  */
 function GhostPlaceholder({ type }: { type: string }) {
   return (
@@ -90,8 +140,12 @@ function GhostPlaceholder({ type }: { type: string }) {
       data-verso-ghost=""
       data-verso-ghost-type={type}
       aria-hidden="true"
-      className="min-h-10 rounded border-2 border-dashed border-[var(--ed-primary)] bg-[var(--ed-surface-container-high)] opacity-60"
-    />
+      className="pointer-events-none opacity-70 outline-2 outline-dashed outline-[var(--ed-primary)]"
+    >
+      <GhostBoundary>
+        <GhostPreview type={type} />
+      </GhostBoundary>
+    </div>
   );
 }
 
