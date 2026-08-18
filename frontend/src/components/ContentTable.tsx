@@ -27,12 +27,21 @@ interface ContentTableProps {
     newLabel: string;
 }
 
-const STATUS_TABS = [
+export const STATUS_TABS = [
     { key: "any", labelKey: "table.status.all" },
     { key: "publish", labelKey: "table.status.published" },
+    { key: "future", labelKey: "table.status.scheduled" },
     { key: "draft", labelKey: "table.status.drafts" },
     { key: "pending", labelKey: "table.status.pending" },
 ];
+
+/** Badge props for a row's status — 'future' (a scheduled post) renders as the "scheduled" badge. */
+export function statusBadgeView(status: string, t: (k: string) => string): { status: string; label: string } {
+    if (status === "publish") return { status: "published", label: t("posts.published") };
+    if (status === "draft") return { status: "draft", label: t("posts.draft") };
+    if (status === "future") return { status: "scheduled", label: t("posts.scheduled") || "Scheduled" };
+    return { status, label: status };
+}
 
 export default function ContentTable({ type, basePath, emptyIcon, emptyTitle, newLabel }: ContentTableProps) {
     const { t } = useI18n();
@@ -218,10 +227,7 @@ export default function ContentTable({ type, basePath, emptyIcon, emptyTitle, ne
                                         </div>
                                     </td>
                                     <td className="px-6 py-6">
-                                        <StatusBadge
-                                            status={post.status === "publish" ? "published" : post.status === "future" ? "scheduled" : post.status}
-                                            label={post.status === "publish" ? t('posts.published') : post.status === "draft" ? t('posts.draft') : post.status === "future" ? (t('posts.scheduled') || 'Scheduled') : post.status}
-                                        />
+                                        <StatusBadge {...statusBadgeView(post.status, t)} />
                                     </td>
                                     <td className="px-6 py-6">
                                         <span className="text-sm font-bold text-gray-500">{new Date(post.date).toLocaleDateString()}</span>

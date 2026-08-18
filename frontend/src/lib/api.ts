@@ -227,6 +227,8 @@ export interface Post {
     status: string;
     type: string;
     date: string;
+    /** GMT twin of `date` (backend toJSON emits both). The editor prefers it to prefill the scheduler. */
+    dateGmt?: string;
     author: { id: number; displayName: string };
     commentStatus: string;
     meta?: Record<string, any>;

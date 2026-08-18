@@ -137,14 +137,16 @@ router.get('/', optionalAuth, asyncHandler(async (req: any, res: Response) => {
         const isPrivileged = req.user.can('edit_others_posts') || req.user.can('read_private_posts');
         // Logged in users can see their own drafts
         if (status === 'any') {
-            includeStatuses = ['publish', 'draft', 'pending', 'private'];
+            // 'future' (scheduled) is part of the author-facing set: without it a scheduled post
+            // simply vanished from the admin list until its publish moment.
+            includeStatuses = ['publish', 'draft', 'pending', 'private', 'future'];
             if (!isPrivileged) {
                 // Scope the unpublished content to the requesting user only.
                 authorFilter = req.user.id;
             }
         } else if (status !== 'publish' && !isPrivileged) {
-            // Asking for a specific non-publish status (draft/pending/private) without privilege:
-            // only the caller's own posts of that status may be returned.
+            // Asking for a specific non-publish status (draft/pending/private/future) without
+            // privilege: only the caller's own posts of that status may be returned.
             authorFilter = req.user.id;
         }
     } else if (status !== 'publish') {
@@ -261,7 +263,11 @@ router.get('/:id', optionalAuth, asyncHandler(async (req: any, res: Response) =>
  *                 type: string
  *               status:
  *                 type: string
- *                 enum: [publish, draft, pending]
+ *                 enum: [publish, future, draft, pending]
+ *               date:
+ *                 type: string
+ *                 format: date-time
+ *                 description: Publish date. A 'publish' with a future date is stored as 'future' and auto-publishes at that moment.
  *     responses:
  *       201:
  *         description: Post created
@@ -308,9 +314,11 @@ router.post('/', authenticate, asyncHandler(async (req: any, res: Response) => {
         return res.status(403).json({ code: 'rest_cannot_create', message: `You are not allowed to create content of type '${type}'.`, data: { status: 403 } });
     }
 
-    // Check if user can publish THIS type; if not, downgrade to pending (needs review).
+    // Check if user can publish THIS type; if not, downgrade to pending (needs review). 'future' IS
+    // deferred publishing (the model stores a future-dated 'publish' as 'future' and auto-flips it
+    // live), so it must clear the same bar — otherwise scheduling would be a side door around the gate.
     let postStatus = status;
-    if (status === 'publish' && !req.user.can(caps.publish)) {
+    if ((status === 'publish' || status === 'future') && !req.user.can(caps.publish)) {
         postStatus = 'pending';
     }
 
@@ -434,9 +442,9 @@ router.put('/:id', authenticate, asyncHandler(async (req: any, res: Response) =>
         language
     } = req.body;
 
-    // Check if user can publish THIS type
+    // Check if user can publish THIS type ('future' = deferred publish, same bar — see POST /).
     let postStatus = status;
-    if (status === 'publish' && !req.user.can(pcaps.publish)) {
+    if ((status === 'publish' || status === 'future') && !req.user.can(pcaps.publish)) {
         postStatus = post.postStatus === 'publish' ? 'publish' : 'pending';
     }
 

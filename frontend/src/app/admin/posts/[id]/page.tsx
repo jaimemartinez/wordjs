@@ -13,6 +13,7 @@ import type { VersoData } from "@/lib/verso/types";
 import { unhydratedSaveBlocked, seedLegacyVersoData, applyLegacyHtmlFallback, resolveWjsTemplateForSave, isWithinPostMountGrace, EDITOR_DATA_META_KEY } from "@/lib/editorGuards";
 // La forma persistida `{ content, root }` — el mismo tipo que exponía el fork, ahora propio.
 import type { VersoData as Data } from "@/lib/verso/types";
+import { buildStatusPatch, dbDateToLocalInput, defaultScheduleInput } from "@/lib/editorSchedule";
 import { useUnsavedChanges } from "@/contexts/UnsavedChangesContext";
 import { useModal } from "@/contexts/ModalContext";
 import { useI18n } from "@/contexts/I18nContext";
@@ -36,6 +37,12 @@ export default function PostEditorPage() {
     const [versoData, setVersoData] = useState<Data>({ content: [], root: {} });
     const versoDataRef = useRef<Data>({ content: [], root: {} });
     const [status, setStatus] = useState("draft");
+    // Programación: valor datetime-local del instante elegido (solo significativo con status 'future').
+    const [scheduleDate, setScheduleDate] = useState("");
+    // Último estado CONFIRMADO por el servidor. Distingue "publicar ya" sobre un post programado (hay
+    // que mandar date=now, o el modelo re-evaluaría la fecha futura ALMACENADA y re-programaría) de un
+    // publish normal, que no debe tocar post_date.
+    const lastServerStatusRef = useRef("draft");
     const [commentStatus, setCommentStatus] = useState("open");
     // The author's per-page theme-template pick (`_wjs_template` meta). State (not just a root prop
     // read at save time) because the canvas preview re-wraps on it live — VersoThemeTemplate reads the
@@ -114,6 +121,8 @@ export default function PostEditorPage() {
             setSlug(post.slug);
             contentRef.current = post.content;
             setStatus(post.status);
+            lastServerStatusRef.current = post.status;
+            if (post.status === "future") setScheduleDate(dbDateToLocalInput(post.dateGmt, post.date));
             setCommentStatus(post.commentStatus || "open");
             // The saved template assignment. META is the source of truth (it may have been set via the
             // API, or before this field existed), so it is injected into root.props below rather than
@@ -185,6 +194,18 @@ export default function PostEditorPage() {
     // Cleared once the user builds real blocks, after which the normal block→HTML path takes over.
     const legacyHtmlRef = useRef<string | null>(null);
 
+    // Cambiar estado o fecha programada marca dirty por sí solo — programar/despublicar no exige
+    // tocar el lienzo, y el botón Guardar se deshabilita sin cambios.
+    const handleStatusChange = (s: string) => {
+        setStatus(s);
+        setIsDirty(true);
+        if (s === "future" && !scheduleDate) setScheduleDate(defaultScheduleInput());
+    };
+    const handleScheduleDateChange = (v: string) => {
+        setScheduleDate(v);
+        setIsDirty(true);
+    };
+
     // Returns whether the save actually landed, so the editor chrome can distinguish success from
     // failure (saved-state pill, autosave backoff) instead of assuming every attempt succeeded.
     const handleSubmit = async (e?: React.FormEvent | { autosave?: boolean }): Promise<boolean> => {
@@ -218,11 +239,20 @@ export default function PostEditorPage() {
                 return false;
             }
 
+            // Estado + fecha: 'future' viaja como publish+date (el backend lo almacena como 'future'
+            // y arma el cron del flip); null = programar sin fecha válida → bloquear el guardado.
+            const statusPatch = buildStatusPatch(status, scheduleDate, lastServerStatusRef.current);
+            if (!statusPatch) {
+                if (!isAutosave) await alert(trStr("Elige fecha y hora para programar la publicación.", language));
+                setSaving(false);
+                return false;
+            }
+
             const postData = {
                 title: finalTitle,
                 slug: finalSlug,
                 content: contentRef.current, // This content is now generated from Puck
-                status,
+                ...statusPatch,
                 commentStatus,
                 meta: {
                     // Clave histórica CONGELADA a propósito — ver EDITOR_DATA_META_KEY.
@@ -245,15 +275,23 @@ export default function PostEditorPage() {
             const finalPostData = applyLegacyHtmlFallback(postData, liveData.content?.length ?? 0, legacyHtmlRef.current);
 
             const effectiveId = postId ?? createdIdRef.current;
+            let saved;
             if (effectiveId) {
-                await postsApi.update(effectiveId, finalPostData as any);
+                saved = await postsApi.update(effectiveId, finalPostData as any);
             } else {
-                const created = await postsApi.create({ ...finalPostData, type: "post" } as any);
-                if (created?.id) {
-                    createdIdRef.current = created.id;
+                saved = await postsApi.create({ ...finalPostData, type: "post" } as any);
+                if (saved?.id) {
+                    createdIdRef.current = saved.id;
                     // Keep the URL honest without remounting the editor mid-session.
-                    window.history.replaceState(null, "", `/admin/posts/${created.id}`);
+                    window.history.replaceState(null, "", `/admin/posts/${saved.id}`);
                 }
+            }
+            // El backend es la autoridad del estado final (resuelve publish→future o future→publish
+            // según la fecha): reflejarlo para que el selector nunca mienta tras guardar.
+            if (saved?.status) {
+                lastServerStatusRef.current = saved.status;
+                setStatus(saved.status);
+                if (saved.status === "future") setScheduleDate(dbDateToLocalInput(saved.dateGmt, saved.date));
             }
             // Stay in editor - no redirect
             setIsDirty(false); // Reset dirty state after successful save
@@ -290,7 +328,9 @@ export default function PostEditorPage() {
                 <VersoEditor
                     initialData={versoData as unknown as VersoData}
                     status={status}
-                    onStatusChange={setStatus}
+                    onStatusChange={handleStatusChange}
+                    scheduleDate={scheduleDate}
+                    onScheduleDateChange={handleScheduleDateChange}
                     saving={saving}
                     hasChanges={isDirty}
                     onSave={handleSubmit as any}

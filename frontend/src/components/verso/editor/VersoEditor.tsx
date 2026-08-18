@@ -110,6 +110,7 @@ import { buildVersoPaletteActions, importDataIntoHandle, saveSelectedAsSymbol } 
 import { symbolsApi } from "@/lib/symbols";
 import { PATTERNS, insertVersoPattern } from "./patterns";
 import { runBackgroundSave, runManualSave, type OnSave } from "./saveFlow";
+import { toLocalInputValue } from "@/lib/editorSchedule";
 
 export interface VersoEditorProps {
     /** Documento inicial (la forma persistida `_puck_data`). Se lee UNA vez al montar. */
@@ -118,6 +119,14 @@ export interface VersoEditorProps {
     onChange: (data: VersoData) => void;
     status?: string;
     onStatusChange?: (status: string) => void;
+    /**
+     * Programación ('future'): fecha/hora elegida, como valor de `<input type="datetime-local">`.
+     * Pasar onScheduleDateChange añade la opción "Programada" al selector de estado y muestra el
+     * input cuando está elegida; el HOST arma el payload (status 'publish' + date ISO — ver
+     * lib/editorSchedule.buildStatusPatch) y decide el valor por defecto al cambiar a 'future'.
+     */
+    scheduleDate?: string;
+    onScheduleDateChange?: (value: string) => void;
     saving?: boolean;
     hasChanges?: boolean;
     /** Contrato onSave del wrapper actual: false = bloqueado/fallido (sin stamp/toast). */
@@ -263,6 +272,8 @@ export default function VersoEditor({
     onChange,
     status = "draft",
     onStatusChange,
+    scheduleDate = "",
+    onScheduleDateChange,
     saving = false,
     hasChanges = true,
     onSave,
@@ -991,11 +1002,29 @@ export default function VersoEditor({
                                         { value: "draft", label: t("editor.status.draft") },
                                         { value: "publish", label: t("editor.status.publish") },
                                         { value: "pending", label: t("editor.status.pending") },
+                                        // La programación solo se ofrece cuando el host sabe armar el
+                                        // payload (posts/pages pasan onScheduleDateChange).
+                                        ...(onScheduleDateChange
+                                            ? [{ value: "future", label: t("editor.status.future") }]
+                                            : []),
                                     ]}
                                     placeholder={trStr("Select an option", language)}
                                     className="!py-1 !px-2 !bg-[var(--ed-surface-container)] !border-[var(--ed-outline-variant)] !rounded-md !text-[11px] min-w-[104px]"
                                 />
                             </div>
+                        )}
+
+                        {onStatusChange && onScheduleDateChange && status === "future" && (
+                            <input
+                                type="datetime-local"
+                                value={scheduleDate}
+                                min={toLocalInputValue(new Date())}
+                                onChange={(e) => onScheduleDateChange(e.target.value)}
+                                title={trStr("Fecha y hora de publicación programada", language)}
+                                aria-label={trStr("Fecha y hora de publicación programada", language)}
+                                className="hidden md:block h-7 px-2 rounded-md border border-[var(--ed-outline-variant)] bg-[var(--ed-surface-container)] text-[11px] text-[var(--ed-on-surface)]"
+                                style={{ colorScheme: "light dark" }}
+                            />
                         )}
 
                         {previewSlug && (
@@ -1018,7 +1047,11 @@ export default function VersoEditor({
                                 className="px-4 py-1.5 rounded-lg text-[12px] font-medium text-white bg-[var(--ed-primary)] hover:opacity-90 active:scale-95 duration-75 transition disabled:opacity-40 flex items-center gap-2"
                             >
                                 {saving && <MSym name="sync" size={12} className="animate-spin" />}
-                                {status === "draft" ? trStr("Guardar", language) : trStr("Publicar", language)}
+                                {status === "draft"
+                                    ? trStr("Guardar", language)
+                                    : status === "future"
+                                        ? trStr("Programar", language)
+                                        : trStr("Publicar", language)}
                             </button>
                         )}
 

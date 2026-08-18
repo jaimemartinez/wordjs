@@ -301,6 +301,9 @@ const CHROME_STRINGS: Tri[] = [
     { es: "Página", en: "Page", pt: "Página" },
     // Capitalized variant used by the toolbar (lowercase "Vista previa" already exists above).
     { es: "Vista Previa", en: "Preview", pt: "Pré-visualização" },
+    { es: "Programar", en: "Schedule", pt: "Agendar" },
+    { es: "Fecha y hora de publicación programada", en: "Scheduled publish date and time", pt: "Data e hora da publicação agendada" },
+    { es: "Elige fecha y hora para programar la publicación.", en: "Pick a date and time to schedule publishing.", pt: "Escolha data e hora para agendar a publicação." },
     { es: "Restablecer estilos", en: "Reset styles", pt: "Redefinir estilos" },
     { es: "Avanzado", en: "Advanced", pt: "Avançado" },
     { es: "Escritorio", en: "Desktop", pt: "Desktop" },
