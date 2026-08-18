@@ -34,9 +34,20 @@ import {
     statusView,
 } from "./collabModel";
 
-/** Clases del chip de estado por tono (los tonos los decide collabModel, no la piel). */
+/**
+ * Clases del chip de estado por tono (los tonos los decide collabModel, no la piel).
+ *
+ * TODOS los tonos son TINTE CLARO + TEXTO OSCURO. No es estética: es lo único que se lee. El tono
+ * `live` emparejaba `--ed-primary` (#1f108e) con `--ed-primary-container` (#3730a3) — dos índigos
+ * oscuros, medido en pantalla: **1,39:1**, cuando AA pide 4,5:1 para texto pequeño. El chip decía
+ * "En vivo" y no se veía: el texto se fundía con su propia píldora.
+ *
+ * La pareja correcta de un texto de marca es el tinte claro `--ed-primary-fixed` (10,66:1 medido),
+ * y "fixed" además significa que vale igual en tema claro y oscuro, que es justo lo que necesita un
+ * chip de estado. El fallback en línea es el mismo recurso que ya usaba el tono `off`.
+ */
 const TONE_CLASS: Record<string, string> = {
-    live: "text-[var(--ed-primary)] bg-[var(--ed-primary-container)] border-transparent",
+    live: "text-[var(--ed-primary)] bg-[var(--ed-primary-fixed,#e2dfff)] border-transparent",
     warn: "text-amber-800 bg-amber-50 border-amber-200",
     off: "text-[var(--ed-error,#b3261e)] bg-[var(--ed-error-container,#f9dedc)] border-transparent",
     idle: "text-[var(--ed-on-surface-variant)] bg-[var(--ed-surface-container)] border-[var(--ed-outline-variant)]",
