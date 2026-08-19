@@ -186,6 +186,10 @@ before(async () => {
     await database.initializeDatabase();
     dbAsync = database.getDbAsync();
     await roles.loadRoles();
+    // El REGISTRO de tipos, como en producción (`index.ts` lo llama al arrancar). Sin él
+    // `getPostType('post')` es `undefined`, la familia de capacidades cae al comodín y el gate
+    // por TIPO —lo que este fichero dice comprobar— no se ejercita en absoluto.
+    await require('../core/post-types').initPostTypes();
 
     await seedUser('jefa', 'administrator');
     await seedUser('colabora', 'contributor');

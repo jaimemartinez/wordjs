@@ -110,7 +110,7 @@ import { buildVersoPaletteActions, importDataIntoHandle, saveSelectedAsSymbol } 
 import { symbolsApi } from "@/lib/symbols";
 import { PATTERNS, insertVersoPattern } from "./patterns";
 import { runBackgroundSave, runManualSave, type OnSave } from "./saveFlow";
-import { toLocalInputValue } from "@/lib/editorSchedule";
+import { toLocalInputValue, shouldShowPostDateField, SCHEDULED_STATUS } from "@/lib/editorSchedule";
 
 export interface VersoEditorProps {
     /** Documento inicial (la forma persistida `_puck_data`). Se lee UNA vez al montar. */
@@ -120,10 +120,15 @@ export interface VersoEditorProps {
     status?: string;
     onStatusChange?: (status: string) => void;
     /**
-     * Programación ('future'): fecha/hora elegida, como valor de `<input type="datetime-local">`.
+     * Fecha del registro (`post_date`), como valor de `<input type="datetime-local">`.
      * Pasar onScheduleDateChange añade la opción "Programada" al selector de estado y muestra el
-     * input cuando está elegida; el HOST arma el payload (status 'publish' + date ISO — ver
+     * input; el HOST arma el payload (status 'publish' + date ISO — ver
      * lib/editorSchedule.buildStatusPatch) y decide el valor por defecto al cambiar a 'future'.
+     *
+     * El input ya NO se esconde fuera de 'future': se enseña siempre que el host haya sembrado una
+     * fecha (shouldShowPostDateField). Un host que la siembre debe además hacer viajar la edición
+     * —`buildStatusPatch(..., { dateEdited })`—, o el control mentiría; el editor de PÁGINAS aún
+     * siembra sólo en 'future', y por eso allí sigue apareciendo sólo al programar.
      */
     scheduleDate?: string;
     onScheduleDateChange?: (value: string) => void;
@@ -1014,14 +1019,23 @@ export default function VersoEditor({
                             </div>
                         )}
 
-                        {onStatusChange && onScheduleDateChange && status === "future" && (
+                        {/* Fecha del registro. Visible SIEMPRE que la haya (ver
+                            shouldShowPostDateField): esconderla salvo en 'future' dejaba al autor sin
+                            ver el post_date futuro huérfano que le reprogramaba la entrada al pulsar
+                            Publicar. El `min` sólo se impone al PROGRAMAR — una entrada publicada
+                            tiene por fuerza una fecha pasada y marcarla inválida sería absurdo. */}
+                        {onStatusChange && shouldShowPostDateField({ canSchedule: !!onScheduleDateChange, status, scheduleDate }) && (
                             <input
                                 type="datetime-local"
                                 value={scheduleDate}
-                                min={toLocalInputValue(new Date())}
-                                onChange={(e) => onScheduleDateChange(e.target.value)}
-                                title={trStr("Fecha y hora de publicación programada", language)}
-                                aria-label={trStr("Fecha y hora de publicación programada", language)}
+                                min={status === SCHEDULED_STATUS ? toLocalInputValue(new Date()) : undefined}
+                                onChange={(e) => onScheduleDateChange!(e.target.value)}
+                                title={status === SCHEDULED_STATUS
+                                    ? trStr("Fecha y hora de publicación programada", language)
+                                    : trStr("Fecha de publicación de la entrada", language)}
+                                aria-label={status === SCHEDULED_STATUS
+                                    ? trStr("Fecha y hora de publicación programada", language)
+                                    : trStr("Fecha de publicación de la entrada", language)}
                                 className="hidden md:block h-7 px-2 rounded-md border border-[var(--ed-outline-variant)] bg-[var(--ed-surface-container)] text-[11px] text-[var(--ed-on-surface)]"
                                 style={{ colorScheme: "light dark" }}
                             />

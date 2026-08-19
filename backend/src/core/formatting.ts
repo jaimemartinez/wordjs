@@ -5,17 +5,63 @@
 
 const sanitizeHtml = require('sanitize-html');
 const slugifyLib = require('slugify');
+// THE CLASS CHANNEL, one function for the whole package. `withClassBound` wraps a sanitize-html config
+// so every surviving element's `class` attribute is filtered token by token by the shared criterion
+// (see core/sanitize-meta.ts, mirrored from frontend/src/components/blocks/safeStyle.ts). Requiring it
+// here rather than re-declaring the rule is the point: this file is the write boundary for
+// post_content AND for comments, and a comment is the one place in the tree where an ANONYMOUS writer
+// reaches an ADMINISTRATOR's screen — admin/comments/page.tsx paints the moderation queue with
+// dangerouslySetInnerHTML, and `class="fixed inset-0 z-50 w-full h-full bg-white"` around an
+// attacker-chosen <a href> is a full-screen credential-phishing overlay inside /admin.
+// sanitize-meta.ts requires nothing from this module, so there is no cycle.
+const { withClassBound } = require('./sanitize-meta');
+
+/**
+ * The longest slug this function will produce.
+ *
+ * WHY A BOUND EXISTS AT ALL. A slug is written to a column MySQL must be able to INDEX, and MySQL
+ * cannot index an unbounded type — so `posts.post_name`, `terms.slug`, `options.option_name` and
+ * `post_meta.meta_key` all end up VARCHAR(255) there (declared by the TEXT rule, or narrowed by the
+ * driver when the index is declared later; see drivers/mysql-text-rule.ts). The session now also runs
+ * STRICT_TRANS_TABLES, which is the point of that change: a value that does not fit is an ERROR
+ * instead of a silent truncation. Silent truncation was itself a defect — two long titles truncated
+ * to the same 255 characters produced two posts with the SAME post_name — but replacing it with an
+ * uncaught ERROR 1406 only moves the damage: `POST /posts` with a 300-character title answers 500.
+ *
+ * A slug that long is not meaningful to anyone, so the producer bounds it. 200 leaves 55 characters
+ * of head-room for the `-2`, `-3`, … disambiguating suffix Post.generateUniqueSlug appends, so even a
+ * heavily-collided long title stays inside 255.
+ */
+const MAX_SLUG_LENGTH = 200;
 
 /**
  * Sanitize a string for use as a slug
  * Equivalent to sanitize_title()
+ *
+ * Bounded (see MAX_SLUG_LENGTH): the cut is made on the slug, at a `-` boundary when one is close
+ * enough, so the result is still a whole-word slug and never ends in a stray separator.
  */
 function sanitizeTitle(title: string) {
-    return slugifyLib(title, {
+    const slug = slugifyLib(title, {
         lower: true,
         strict: true,
         locale: 'en'
     });
+    return boundSlug(slug);
+}
+
+/**
+ * Cut a slug down to MAX_SLUG_LENGTH characters. Exported so any other producer of a slug-shaped
+ * value can apply the SAME bound rather than inventing a second one.
+ */
+function boundSlug(slug: string, maxLength: number = MAX_SLUG_LENGTH) {
+    const s = String(slug == null ? '' : slug);
+    if (s.length <= maxLength) return s;
+    const cut = s.slice(0, maxLength);
+    const lastSep = cut.lastIndexOf('-');
+    // Prefer a word boundary, but never throw away more than a quarter of the budget chasing one.
+    const bounded = lastSep >= Math.floor(maxLength * 0.75) ? cut.slice(0, lastSep) : cut;
+    return bounded.replace(/-+$/, '');
 }
 
 /**
@@ -81,7 +127,11 @@ function sanitizeContent(content: string, allowedTags: any = null) {
         allowedSchemes: ['http', 'https', 'mailto', 'tel']
     };
 
-    return sanitizeHtml(content, allowedTags || defaultAllowed);
+    // The bound is applied to the config that is actually USED, not only to the default one: the
+    // `allowedTags` parameter replaces the whole configuration, so a caller that passes its own would
+    // otherwise re-open the channel this function exists to close. withClassBound preserves whatever
+    // transformTags that config declares.
+    return sanitizeHtml(content, withClassBound(allowedTags || defaultAllowed));
 }
 
 /**
@@ -226,6 +276,8 @@ function currentTime() {
 
 module.exports = {
     sanitizeTitle,
+    boundSlug,
+    MAX_SLUG_LENGTH,
     sanitizeContent,
     escHtml,
     escAttr,

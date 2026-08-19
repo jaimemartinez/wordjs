@@ -8,6 +8,7 @@ const os = require('os');
 const path = require('path');
 const AdmZip = require('adm-zip');
 const { assertZipWithinBudget } = require('./zip-guard');
+const { resolveWithin } = require('./safe-path');
 const { exportSite, importSite } = require('./import-export');
 const config = require('../config/app');
 const { getOption } = require('./options');
@@ -67,6 +68,9 @@ function safeDumpFileName(entry: string): string {
  */
 async function createBackup() {
     console.log('📦 Starting backup process...');
+    // What this archive could NOT include. `complete:false` means the ZIP is missing something a
+    // restore will need — see the class note above withIncidents().
+    const incidents: BackupIncident[] = [];
 
     // 1. Generate Logical DB Export
     const siteData = await exportSite({
@@ -154,6 +158,13 @@ async function createBackup() {
             }
         } catch (e: any) {
             console.warn('   ⚠️ Could not add physical DB snapshot (logical export still included):', e && e.message);
+            // The PRODUCER half of the same class. An archive without the snapshot can only be
+            // restored logically, i.e. WITHOUT analytics, notifications, plugin tables or
+            // schema_migrations — a fact the operator can otherwise only discover during a recovery.
+            incidents.push({
+                stage: 'database',
+                message: `The physical database snapshot could not be added (${e && e.message}); this archive can only be restored logically, which does NOT cover analytics, notifications, plugin tables or schema_migrations.`
+            });
         }
     } else if (usesExternalDump(driver)) {
         // Postgres / MySQL: the logical JSON export OMITS analytics / notifications / plugin tables /
@@ -198,12 +209,14 @@ async function createBackup() {
         console.warn('   ⚠️ S3 offload error (local copy kept):', e && e.message);
     }
 
-    return {
+    // `s3` stays a field of its own (an unreachable bucket does not make the ARCHIVE incomplete);
+    // `complete`/`incidents` describe what is inside the ZIP.
+    return withIncidents({
         filename,
         size: fs.statSync(filepath).size,
         date: new Date(),
         s3
-    };
+    }, incidents);
 }
 
 /**
@@ -286,6 +299,30 @@ function getBackupPath(filename: string) {
 }
 
 /**
+ * ── WHAT DID NOT HAPPEN TRAVELS WITH THE RESULT ──────────────────────────────────────────────────
+ *
+ * THE CLASS: an operation here can complete PARTIALLY — an entry it could not write, a physical
+ * snapshot it could not take or could not restore, a cache it could not flush — and every one of
+ * those used to be told to `console.warn` alone, while the value returned to the caller was shaped
+ * exactly like a total success. The API then answered `{success:true}` and the operator concluded
+ * that a disaster recovery had brought everything back. That is the same lie the traversal fix
+ * removed in the other direction ("the restore aborted" ≠ "nothing was written"), and in a recovery
+ * it is the more expensive one: files the database still points at are simply gone.
+ *
+ * THE RULE, and it applies to every future partial outcome in this file: a step that could not do
+ * its job records an INCIDENT, and the return value of the operation always carries the incident
+ * list plus a boolean `complete`. Never a warning alone. `createBackup` already did this for the S3
+ * offload (it returns `s3`), which is why that one failure mode was the only visible one.
+ */
+type BackupIncident = { stage: string; message: string; items?: string[] };
+
+/** Attach the incident list to whatever the operation produced, without hiding its own shape. */
+function withIncidents<T>(result: T, incidents: BackupIncident[]): any {
+    const base = (result && typeof result === 'object' && !Array.isArray(result)) ? result : { result };
+    return { ...base, complete: incidents.length === 0, incidents };
+}
+
+/**
  * Restore a backup
  * WARNING: Destructive operation
  */
@@ -309,35 +346,95 @@ async function restoreBackup(filename: string) {
     // backup legitimately holds all uploads, so the cap is generous but finite.
     assertZipWithinBudget(zipEntries, { kind: 'backup', maxTotalBytes: 2 * 1024 * 1024 * 1024, maxEntries: 100000 });
 
-    // 1. Restore ONLY content directories, each entry path-contained. We deliberately do NOT extract
-    //    code or config from a backup (src/, node_modules/, package.json, wordjs-config*.json, .env):
-    //    overwriting those is an RCE / JWT-secret-swap primitive, and a crafted zip could plant them.
-    //    The previous guard only rejected the substring '..' and then extractAllTo'd the WHOLE archive
-    //    over backendRoot. DB content is restored below via importSite (parameterized), not from files.
-    const backendRoot = path.resolve(__dirname, '../../');
-    const ALLOWED_TOP = ['uploads/', 'plugins/', 'themes/'];
-    for (const entry of zipEntries) {
-        if (entry.isDirectory) continue;
-        const name = entry.entryName.replace(/\\/g, '/');
-        if (!ALLOWED_TOP.some(top => name.startsWith(top))) continue; // skip code/config/anything else
-        // Per-entry containment (defense-in-depth over adm-zip's own canonicalization): the resolved
-        // destination must stay strictly inside backendRoot.
-        const dest = path.resolve(backendRoot, name);
-        if (dest !== backendRoot && !dest.startsWith(backendRoot + path.sep)) {
-            throw new Error(`Malicious backup entry (path traversal): ${entry.entryName}`);
-        }
-        fs.mkdirSync(path.dirname(dest), { recursive: true });
-        fs.writeFileSync(dest, entry.getData());
-    }
-
-    // 3. Import Database
+    // 1. PROVE THIS IS A BACKUP BEFORE WRITING ANYTHING. Parsing wordjs-content.json used to happen
+    //    AFTER the extraction loop below, so an archive that turned out not to be a backup at all had
+    //    already dropped its files on disk by the time it was rejected. Validation first, writes second.
     const contentEntry = zip.getEntry('wordjs-content.json');
     if (!contentEntry) {
         throw new Error('Invalid backup: wordjs-content.json missing');
     }
-
     const contentJson = contentEntry.getData().toString('utf8');
     const data = JSON.parse(contentJson);
+
+    // 2. Restore ONLY content directories, each entry path-contained. We deliberately do NOT extract
+    //    code or config from a backup (src/, node_modules/, package.json, wordjs-config*.json, .env):
+    //    overwriting those is an RCE / JWT-secret-swap primitive, and a crafted zip could plant them.
+    //    DB content is restored below via importSite (parameterized), not from files.
+    //
+    //    WHAT THE PREVIOUS GUARD GOT WRONG — and it is the recurring shape in this codebase: it checked
+    //    ONE STRING and used ANOTHER. The prefix test ran on the RAW entry name (`name.startsWith('themes/')`)
+    //    while the write used `path.resolve(backendRoot, name)`, and containment was proved against
+    //    backendRoot instead of the content root the prefix claimed. So `themes/../dist/index.js`
+    //    passed the prefix test (it does start with `themes/`) AND the containment test (it resolves
+    //    inside backendRoot) and overwrote compiled code. adm-zip does not normalize entry names on
+    //    READ, so the name reaches us exactly as the archive author wrote it.
+    //
+    //    The defence is the one routes/themes.ts already uses for uploaded theme zips: split into
+    //    segments, drop empties, resolve with safe-path's resolveWithin (which rejects `..`, absolute
+    //    and drive-relative segments by FORM, not by substring search), and prove containment against
+    //    the CONCRETE content root.
+    //
+    //    TWO PASSES, AND THE REASON IS THE WHOLE POINT OF THE GUARD. Validating and writing in the
+    //    same loop meant a hostile archive could put N legitimate entries in front of its traversal
+    //    entry: the N were already on disk by the time the throw fired, so "the restore aborted"
+    //    (what the operator sees) and "nothing was written" (what they conclude) were different
+    //    statements — with plugin code planted under backend/plugins/<slug>/ in between. Pass 1
+    //    resolves and classifies EVERY entry and writes nothing; pass 2 writes a list that is already
+    //    proved. This is what routes/themes.ts and core/themes.ts do.
+    //
+    //    HOSTILE vs MERELY UNREPRESENTABLE. resolveWithin refuses a segment containing ':' or a
+    //    backslash for Win32 reasons (NTFS alternate data streams, separator ambiguity) — but ':' is
+    //    a perfectly legal character in a POSIX file name, and a backup's plugins/ and themes/ trees
+    //    are arbitrary. Treating that as an attack aborted the entire disaster recovery and told the
+    //    operator their backup was malicious. Disaster recovery is the one operation that must not
+    //    refuse to run: an entry that only fails because its NAME cannot be represented here is
+    //    SKIPPED and reported, while an entry that actually points somewhere else ('..', absolute,
+    //    drive-relative) still aborts the whole restore before anything is written.
+    const backendRoot = path.resolve(__dirname, '../../');
+    const RESTORABLE_ROOTS = ['uploads', 'plugins', 'themes'];
+    /** A segment that names somewhere OTHER than a child of the current directory. */
+    const escapesUpward = (seg: string) =>
+        seg === '..' || seg.includes('\0') || path.isAbsolute(seg) || /^[A-Za-z]:/.test(seg);
+    const planned: Array<{ dest: string; entry: any }> = [];
+    const skipped: string[] = [];
+    for (const entry of zipEntries) {
+        if (entry.isDirectory) continue;
+        const name = String(entry.entryName).replace(/\\/g, '/');
+        // '.' names the directory it sits in, so dropping it changes nothing; '..' must survive to be
+        // rejected below.
+        const segments = name.split('/').filter((s: string) => s !== '' && s !== '.');
+        const top = segments[0];
+        if (!RESTORABLE_ROOTS.includes(top)) continue; // skip code/config/anything else
+        if (segments.some(escapesUpward)) {
+            throw new Error(`Malicious backup entry (path traversal): ${entry.entryName}`);
+        }
+        const contentRoot = path.resolve(backendRoot, top);
+        const dest = resolveWithin(backendRoot, ...segments);
+        if (dest === null || !dest.startsWith(contentRoot + path.sep)) {
+            // Not upward-pointing (checked above) — the name simply cannot be written here.
+            skipped.push(entry.entryName);
+            continue;
+        }
+        planned.push({ dest, entry });
+    }
+    for (const { dest, entry } of planned) {
+        fs.mkdirSync(path.dirname(dest), { recursive: true });
+        fs.writeFileSync(dest, entry.getData());
+    }
+    const incidents: BackupIncident[] = [];
+    if (skipped.length) {
+        console.warn(`   ⚠️ ${skipped.length} backup entr${skipped.length === 1 ? 'y' : 'ies'} skipped — the name cannot be represented on this filesystem: ${skipped.slice(0, 10).join(', ')}${skipped.length > 10 ? ', …' : ''}`);
+        // …AND it goes back to the caller. A recovery that silently dropped files while answering
+        // `{success:true}` leaves the operator with broken media the database still references, or a
+        // plugin directory missing one file, and no way to know which.
+        incidents.push({
+            stage: 'files',
+            message: `${skipped.length} archive entr${skipped.length === 1 ? 'y' : 'ies'} could not be written: the name is not representable on this filesystem. Restore those file(s) by hand from the archive.`,
+            items: skipped
+        });
+    }
+
+    // 3. Import Database
 
     const dbModule = require('../config/database');
     const { getDbType, clearDatabase } = dbModule;
@@ -375,6 +472,13 @@ async function restoreBackup(filename: string) {
             console.log('   ✓ Physical database snapshot restored (all tables).');
         } catch (e: any) {
             console.warn('   ⚠️ Physical DB restore failed — falling back to logical import:', e && e.message);
+            // Same class as the skipped entries: the fallback restores the LOGICAL tables only, so
+            // analytics, notifications, plugin tables and schema_migrations do not come back. The
+            // operator must be told, not the log.
+            incidents.push({
+                stage: 'database',
+                message: `The physical database snapshot could not be restored (${e && e.message}); the logical import ran instead, which does NOT restore analytics, notifications, plugin tables or schema_migrations.`
+            });
             try { await dbModule.init(); } catch { /* ensure the DB is open again for the fallback below */ }
             physicalRestored = false;
         }
@@ -413,14 +517,16 @@ async function restoreBackup(filename: string) {
         });
         // The DB just time-traveled: every cached value (L1 included) describes the PRE-restore
         // state and would be served for up to its TTL. Drop it all.
-        try { await require('./cache').flush(); } catch { /* cache flush is best-effort */ }
-        console.log('✅ Restore complete (logical import)');
-        return results;
+        try { await require('./cache').flush(); }
+        catch (e: any) { incidents.push({ stage: 'cache', message: `The cache could not be flushed (${e && e.message}); pre-restore values may be served until their TTL expires.` }); }
+        console.log(`✅ Restore ${incidents.length ? 'finished with warnings' : 'complete'} (logical import)`);
+        return withIncidents(results, incidents);
     }
 
-    try { await require('./cache').flush(); } catch { /* cache flush is best-effort */ }
-    console.log('✅ Restore complete (physical snapshot)');
-    return { physical: true, driver: dbType.driver };
+    try { await require('./cache').flush(); }
+    catch (e: any) { incidents.push({ stage: 'cache', message: `The cache could not be flushed (${e && e.message}); pre-restore values may be served until their TTL expires.` }); }
+    console.log(`✅ Restore ${incidents.length ? 'finished with warnings' : 'complete'} (physical snapshot)`);
+    return withIncidents({ physical: true, driver: dbType.driver }, incidents);
 }
 
 module.exports = {

@@ -13,7 +13,8 @@
  * suite in __tests__/blockClassEmission.test.tsx fails the build if you do.
  */
 import React from "react";
-import { bc, blockVars, cx, unit } from "@/components/blocks/blockVars";
+import { bc, blockVars, cx, safeCss, safeClassToken, safeExtraClassList, unit } from "@/components/blocks/blockVars";
+import { safeCssValue } from "@/components/blocks/safeStyle";
 import { ixWordSpans } from "@/components/blocks/IxWords";
 import { ixSplitWords, ixTargetsWords, IX_SYS_CTX, type IxCompileCtx } from "@/lib/verso/interactions";
 import { resolveVideoEmbedUrl, sameOriginPath, sanitizeHTML } from "@/lib/sanitize";
@@ -67,7 +68,7 @@ export function AudioPlayerBlock({ src, title, bg, borderColor, radius, pad, ico
                     'icon-bg': iconBg,
                     'icon-color': iconColor,
                 }),
-                ...css,
+                ...safeCss(css),
             }}
         >
             <AudioTransport src={src} title={title} />
@@ -99,7 +100,7 @@ export function ParticleFieldBlock({ count, color, speed, linkLines, linkDistanc
                 overflow: 'hidden',
                 pointerEvents: 'none',
                 ...blockVars('particle', { color }),
-                ...css,
+                ...safeCss(css),
             }}
         >
             <ParticleFieldCanvas
@@ -258,7 +259,7 @@ export function NavMenuBlock({ menu, orientation = "horizontal", depth = 2, subm
         // Nothing on the public site; a quiet authoring notice while editing (mirrors the dynamic blocks).
         if (isEditing) {
             return (
-                <div className={bc("nav-menu", "nav-menu--empty")} style={css}>
+                <div className={bc("nav-menu", "nav-menu--empty")} style={safeCss(css)}>
                     Vincula este bloque a un menú (Origen → Ubicación / Menú). El menú elegido está vacío o no existe.
                 </div>
             );
@@ -321,7 +322,7 @@ export function NavMenuBlock({ menu, orientation = "horizontal", depth = 2, subm
     // data-trigger is a RENDERED attr (not a stored prop): wordjs-ui.css keys the :hover /
     // :focus-within reveal on [data-trigger="hover"], exactly like MegaMenu's flyout.
     return (
-        <div className={bc("nav-menu")} data-orientation={orient} data-trigger={trigger} style={css}>
+        <div className={bc("nav-menu")} data-orientation={orient} data-trigger={trigger} style={safeCss(css)}>
             {body}
         </div>
     );
@@ -382,7 +383,7 @@ export function MegaMenuBlock({ menu, fullWidth = true, trigger = "hover", panel
         // Nothing on the public site; a quiet authoring notice while editing (same as NavMenu).
         if (isEditing) {
             return (
-                <div className={bc("mega-menu", "mega-menu--empty")} style={css}>
+                <div className={bc("mega-menu", "mega-menu--empty")} style={safeCss(css)}>
                     Vincula este bloque a un menú (Origen → Ubicación / Menú). El menú elegido está vacío o no existe.
                 </div>
             );
@@ -428,7 +429,7 @@ export function MegaMenuBlock({ menu, fullWidth = true, trigger = "hover", panel
     });
 
     return (
-        <div className={bc("mega-menu")} data-full-width={full ? "true" : "false"} data-trigger={trig} style={css}>
+        <div className={bc("mega-menu")} data-full-width={full ? "true" : "false"} data-trigger={trig} style={safeCss(css)}>
             <nav aria-label="Menu" className={cx("wjs-chrome-nav wjs-chrome-nav-horizontal wjs-header-nav wjs-mega-menu", full && "relative")}>
                 <ul className="flex flex-wrap items-center gap-8 list-none m-0 p-0">{items}</ul>
             </nav>
@@ -498,7 +499,7 @@ export function SiteLogoBlock({ mode = "both", linkToHome = true, maxHeight = 40
     if (!showLogo && !showTitle) {
         if (isEditing) {
             return (
-                <div className={bc("site-logo", "site-logo--empty")} style={css}>
+                <div className={bc("site-logo", "site-logo--empty")} style={safeCss(css)}>
                     Configura el nombre del sitio o el logotipo (Ajustes → Identidad) para que este bloque los muestre.
                 </div>
             );
@@ -506,7 +507,11 @@ export function SiteLogoBlock({ mode = "both", linkToHome = true, maxHeight = 40
         return null;
     }
 
-    const maxH = unit(maxHeight);
+    // `unit()` only appends `px` to a bare number — anything else it passes through VERBATIM, and this
+    // is the one place a unit() result lands in a style attribute without going through blockVars. A
+    // stored `maxHeight` of "40px;position:fixed;inset:0" would therefore have been emitted whole
+    // (React does not escape `;` in a style value), so the same normalizer runs here too.
+    const maxH = safeCssValue("maxHeight", unit(maxHeight) ?? "");
     const inner = (
         <>
             {showLogo && (
@@ -529,7 +534,7 @@ export function SiteLogoBlock({ mode = "both", linkToHome = true, maxHeight = 40
         : <span className="wjs-header-logo inline-flex items-center gap-2">{inner}</span>;
 
     return (
-        <div className={bc("site-logo")} data-mode={mode} style={css}>
+        <div className={bc("site-logo")} data-mode={mode} style={safeCss(css)}>
             {brand}
         </div>
     );
@@ -553,7 +558,7 @@ export function OffCanvasBlock({ slot, triggerLabel = "Menú", triggerIcon = "fa
     const panelChildren = typeof slot === "function" ? slot(bc("offcanvas__content")) : null;
 
     return (
-        <div className={bc("offcanvas")} data-side={sideSafe} data-breakpoint={bpSafe} style={css}>
+        <div className={bc("offcanvas")} data-side={sideSafe} data-breakpoint={bpSafe} style={safeCss(css)}>
             <OffCanvasClient
                 triggerLabel={triggerLabel}
                 triggerIcon={triggerIcon}
@@ -596,7 +601,7 @@ export function BreadcrumbsBlock({ resolvedTrail, resolvedIsFront, separator = "
         if (isEditing) {
             const parts = [showHome !== false ? home : null, "…", "Esta página"].filter(Boolean) as string[];
             return (
-                <nav aria-label="Breadcrumb" className={cx(bc("breadcrumbs", "breadcrumbs--preview"), "wjs-breadcrumbs")} style={css}>
+                <nav aria-label="Breadcrumb" className={cx(bc("breadcrumbs", "breadcrumbs--preview"), "wjs-breadcrumbs")} style={safeCss(css)}>
                     <ol className="wjs-breadcrumbs__list flex flex-wrap items-center gap-2 list-none m-0 p-0">
                         {parts.map((p, i) => (
                             <li key={i} className="wjs-breadcrumbs__item inline-flex items-center gap-2">
@@ -638,7 +643,7 @@ export function BreadcrumbsBlock({ resolvedTrail, resolvedIsFront, separator = "
     };
 
     return (
-        <nav aria-label="Breadcrumb" className={cx(bc("breadcrumbs"), "wjs-breadcrumbs")} style={css}>
+        <nav aria-label="Breadcrumb" className={cx(bc("breadcrumbs"), "wjs-breadcrumbs")} style={safeCss(css)}>
             <ol className="wjs-breadcrumbs__list flex flex-wrap items-center gap-2 list-none m-0 p-0">
                 {crumbs.map((c, i) => {
                     const isLast = i === lastIndex;
@@ -701,7 +706,7 @@ export function LangSwitcherBlock({ resolvedTranslations, style = "inline", labe
     if (!items.length) {
         if (isEditing) {
             return (
-                <div className={cx(bc("lang-switcher", "lang-switcher--empty"), "wjs-lang-switcher")} style={css}>
+                <div className={cx(bc("lang-switcher", "lang-switcher--empty"), "wjs-lang-switcher")} style={safeCss(css)}>
                     Este bloque mostrará las traducciones de la página. Aún no hay ninguna (sitio monolingüe).
                 </div>
             );
@@ -730,7 +735,7 @@ export function LangSwitcherBlock({ resolvedTranslations, style = "inline", labe
     if (styleKind === "dropdown") {
         const summaryLabel = langLabel(currentLang || opts[0].code, mode, currentLang);
         return (
-            <details className={cx(bc("lang-switcher", "lang-switcher--dropdown"), "wjs-lang-switcher relative inline-block")} style={css}>
+            <details className={cx(bc("lang-switcher", "lang-switcher--dropdown"), "wjs-lang-switcher relative inline-block")} style={safeCss(css)}>
                 <summary className="wjs-lang-switcher__summary cursor-pointer inline-flex items-center gap-2 select-none">
                     <i className="fa-solid fa-language" aria-hidden="true"></i>
                     <span lang={currentLang || undefined}>{summaryLabel}</span>
@@ -745,7 +750,7 @@ export function LangSwitcherBlock({ resolvedTranslations, style = "inline", labe
     }
 
     return (
-        <nav aria-label="Idiomas" className={cx(bc("lang-switcher", "lang-switcher--inline"), "wjs-lang-switcher")} style={css}>
+        <nav aria-label="Idiomas" className={cx(bc("lang-switcher", "lang-switcher--inline"), "wjs-lang-switcher")} style={safeCss(css)}>
             <ul className="wjs-lang-switcher__list flex flex-wrap items-center gap-3 list-none m-0 p-0">
                 {opts.map((o, i) => (
                     <li key={i} className="wjs-lang-switcher__item inline-flex items-center">{renderOption(o, i)}</li>
@@ -787,7 +792,7 @@ export function TableOfContentsBlock({ resolvedHeadings, title = "En esta págin
     if (!eligible.length) {
         if (isEditing) {
             return (
-                <div className={cx(bc("toc", "toc--empty"), "wjs-toc")} style={css}>
+                <div className={cx(bc("toc", "toc--empty"), "wjs-toc")} style={safeCss(css)}>
                     La tabla de contenidos listará los títulos de esta página que tengan un ID / ancla. Aún no hay ninguno en el rango elegido.
                 </div>
             );
@@ -800,7 +805,7 @@ export function TableOfContentsBlock({ resolvedHeadings, title = "En esta págin
     const ids = eligible.map((h) => h.id);
 
     const nav = (
-        <nav aria-label={heading} className={cx(bc("toc"), "wjs-toc")} style={css}>
+        <nav aria-label={heading} className={cx(bc("toc"), "wjs-toc")} style={safeCss(css)}>
             <p className="wjs-toc__title font-semibold m-0 mb-2">{heading}</p>
             <ListTag className={cx("wjs-toc__list m-0 flex flex-col gap-1", ordered ? "list-decimal ps-5" : "list-none p-0")}>
                 {eligible.map((h) => (
@@ -838,7 +843,7 @@ export function HeadingBlock({ title, level, elementId, color, size, weight, tra
     const Tag = tag as any;
     const attrs = {
         id: elementId || undefined,
-        className: cx(bc('heading'), `heading-${tag}`),
+        className: cx(bc('heading'), safeClassToken('heading-', tag)),
         style: {
             ...blockVars('heading', {
                 color,
@@ -852,7 +857,7 @@ export function HeadingBlock({ title, level, elementId, color, size, weight, tra
                 'font-weight': weight,
                 tracking: unit(tracking),
             }),
-            ...css,
+            ...safeCss(css),
         },
     };
     // `html: true` — este bloque pinta su texto COMO HTML, así que el split se niega en cuanto el
@@ -901,7 +906,7 @@ export function ImageBlock({ src, alt, borderRadius, radius, shadow, width, fit,
                     width: unit(width),
                     fit,
                 }),
-                ...css,
+                ...safeCss(css),
             }}
             className={bc('image')}
         />
@@ -917,7 +922,7 @@ export function DividerBlock({ type, color, width, length, gap, css }: any) {
             mt: unit(gap),
             mb: unit(gap),
         }),
-        ...css,
+        ...safeCss(css),
     };
     // A gradient rule needs a painted box, a line needs a border — different elements.
     if (type === 'gradient') {
@@ -934,7 +939,7 @@ export function ButtonBlock({ label, href, variant, align, bg, color, radius, pa
         >
             <a
                 href={href}
-                className={cx(bc('button__link'), `button-variant-${variant}`)}
+                className={cx(bc('button__link'), safeClassToken('button-variant-', variant))}
                 // Swallow clicks ONLY inside the editor canvas (so selecting the block
                 // doesn't navigate). Server renders never pass isEditing, so the ternary
                 // resolves to undefined there and no handler crosses the RSC boundary.
@@ -949,7 +954,7 @@ export function ButtonBlock({ label, href, variant, align, bg, color, radius, pa
                         size: unit(size),
                         weight,
                     }),
-                    ...css,
+                    ...safeCss(css),
                 }}
             >
                 {label}
@@ -988,14 +993,14 @@ const CONTAINER_TAGS = new Set(['article', 'aside', 'div', 'footer', 'header', '
 const containerTag = (tag: any, fallback: 'section' | 'div'): any =>
     typeof tag === 'string' && CONTAINER_TAGS.has(tag) ? tag : fallback;
 
-/** Mirrors CLASS_TOKEN/MAX_CLASS_TOKENS in the validators: ≤3 tokens of `[a-z][a-z0-9-]{0,39}`. */
-const CLASS_TOKEN = /^[a-z][a-z0-9-]{0,39}$/;
-const extraClass = (value: any): string | undefined => {
-    if (typeof value !== 'string' || value === '' || value !== value.trim()) return undefined;
-    const tokens = value.split(' '); // single space, so a tab/newline/double-space FAILS the pattern
-    if (tokens.length > 3 || !tokens.every((t) => CLASS_TOKEN.test(t))) return undefined;
-    return value;
-};
+/**
+ * The theme's own hook on a container. The SHAPE bound (at most 3 tokens of `[a-z][a-z0-9-]{0,39}`)
+ * still mirrors CLASS_TOKEN/MAX_CLASS_TOKENS in the validators (lib/templateData.ts,
+ * backend/src/core/template-validate.ts) — but the shape was the WHOLE criterion, and three
+ * well-formed tokens are `fixed inset-0 z-50`. The decision now lives at the SINK, once, next to the
+ * other class criterion: see `safeExtraClassList` in components/blocks/safeStyle.ts.
+ */
+const extraClass = (value: any): string | undefined => safeExtraClassList(value);
 
 /**
  * CONTAINER blocks: the slot arrives as a render function `(className?) => ReactNode` so both
@@ -1024,7 +1029,7 @@ export function SectionBlock({ maxWidth, pad, bg, stick, css, slot, tag, classNa
             className={cx(bc('section'), scene && bc('section--scene'), extraClass(className))}
             style={{
                 ...blockVars('section', { pad: unit(pad), bg, 'max-width': maxWidth, scene }),
-                ...css,
+                ...safeCss(css),
             }}
         >
             {/* Sin escena NO hay envoltorio: el HTML de una sección de siempre queda idéntico byte a
@@ -1046,7 +1051,7 @@ export function GridBlock({ columns, gap, columnsTablet, columnsMobile, css, slo
                     'columns-tablet': columnsTablet,
                     'columns-mobile': columnsMobile,
                 }),
-                ...css,
+                ...safeCss(css),
             }}
         >
             {/* The GRID lives on the slot's own wrapper, not on this div. Puck renders a
@@ -1072,7 +1077,7 @@ export function FlexRowBlock({ justify, align, gap, wrap, direction, css, slot, 
                     wrap,
                     direction,
                 }),
-                ...css,
+                ...safeCss(css),
             }}
         >
             {/* Same reason as Grid: the flex row must be the slot's own wrapper, or all
@@ -1104,7 +1109,7 @@ export function ColumnsBlock({ distribution, columnStyles, gap, minHeight, bg, r
                     bg,
                     radius: unit(radius),
                 }),
-                ...css,
+                ...safeCss(css),
             }}
         >
             {Array.from({ length: columnCount }).map((_, i) => {
@@ -1139,7 +1144,7 @@ export function ColumnsBlock({ distribution, columnStyles, gap, minHeight, bg, r
 export function CardBlock({ title, description, icon, theme, bg, color, borderColor, radius, pad, shadow, iconSize, iconBg, iconColor, titleSize, titleWeight, titleTransform, css }: any) {
     return (
         <div
-            className={cx(bc('card'), `card-theme-${theme}`)}
+            className={cx(bc('card'), safeClassToken('card-theme-', theme))}
             style={{
                 ...blockVars('card', {
                     bg,
@@ -1155,14 +1160,14 @@ export function CardBlock({ title, description, icon, theme, bg, color, borderCo
                     'title-weight': titleWeight,
                     'title-transform': titleTransform,
                 }),
-                ...css,
+                ...safeCss(css),
             }}
         >
             {icon && (
                 // Legacy class kept alongside the __ one so themes written against
                 // `wp-block-card-icon` keep matching.
                 <div className={cx(bc('card__icon'), 'wp-block-card-icon')}>
-                    <i className={`fa-solid ${icon}`}></i>
+                    <i className={cx('fa-solid', safeClassToken('fa-', icon))}></i>
                 </div>
             )}
             <h3 className={cx(bc('card__title'), 'wp-block-card-title')}>{title}</h3>
@@ -1179,7 +1184,7 @@ export function QuoteBlock({ text, cite, style, accent, size, color, quoteStyle,
             color,
             style: quoteStyle,
         }),
-        ...css,
+        ...safeCss(css),
     };
     // `html: false` — aquí el texto es un HIJO de React, no HTML: React lo escapa igual en las dos
     // superficies, así que un `<` o un `&` en la cita no obligan a renunciar al split (a diferencia
@@ -1227,7 +1232,7 @@ export function TableBlock({ header, rows, striped, stripeBg, css }: any) {
     return (
         <div
             className={cx(bc('table'), striped === "true" && bc('table--striped'))}
-            style={{ ...blockVars('table', { 'stripe-bg': stripeBg }), ...css }}
+            style={{ ...blockVars('table', { 'stripe-bg': stripeBg }), ...safeCss(css) }}
         >
             {/* Bare <table> — the WordJS UI framework styles it with theme tokens. */}
             <table className={bc('table__table')}>
@@ -1263,13 +1268,13 @@ export function IconListBlock({ items, columns, gap, iconSize, iconBg, iconColor
                     'icon-bg': iconBg,
                     'icon-color': iconColor,
                 }),
-                ...css,
+                ...safeCss(css),
             }}
         >
             {(items || []).map((it: any, i: number) => (
                 <div key={i} className={bc('icon-list__item')}>
                     <span className={bc('icon-list__icon')}>
-                        <i className={`fa-solid ${it.icon || "fa-check"}`}></i>
+                        <i className={cx('fa-solid', safeClassToken('fa-', it.icon) ?? 'fa-check')}></i>
                     </span>
                     <span>
                         <span className={bc('icon-list__title')}>{it.title}</span>
@@ -1295,7 +1300,7 @@ export function SocialLinksBlock({ items, align, size, radius, bg, color, hoverB
                     'hover-bg': hoverBg,
                     gap: unit(gap),
                 }),
-                ...css,
+                ...safeCss(css),
             }}
         >
             {(items || []).map((it: any, i: number) => (
@@ -1308,7 +1313,7 @@ export function SocialLinksBlock({ items, align, size, radius, bg, color, hoverB
                     className={bc('social-links__link')}
                     onClick={isEditing ? (e: React.MouseEvent) => e.preventDefault() : undefined}
                 >
-                    <i className={`fa-brands fa-${it.network || "link"}`}></i>
+                    <i className={cx('fa-brands', safeClassToken('fa-', it.network) ?? 'fa-link')}></i>
                 </a>
             ))}
         </div>
@@ -1328,7 +1333,7 @@ export function StatsBlock({ items, gap, valueSize, valueColor, labelColor, labe
                     'label-color': labelColor,
                     'label-transform': labelTransform,
                 }),
-                ...css,
+                ...safeCss(css),
             }}
         >
             {(items || []).map((it: any, i: number) => (
@@ -1347,7 +1352,7 @@ export function HTMLEmbedBlock({ html, css }: any) {
         // and sanitizeHTML (DOMPurify allowlist, no scripts/handlers) runs again at render.
         <div
             className={bc('html-embed')}
-            style={css}
+            style={safeCss(css)}
             suppressHydrationWarning
             dangerouslySetInnerHTML={{ __html: sanitizeHTML(html || "") }}
         />
@@ -1367,9 +1372,17 @@ export function PricingTableBlock({ plans, accent, bg, pad, radius, gap, priceSi
                     pad: unit(pad),
                     radius: unit(radius),
                     'price-size': unit(priceSize),
+                    // FREE TEXT INTO `transform:`. The stylesheet writes
+                    // `transform: scale(var(--wjs-pricing-highlight-scale, 1.02))`, so this field is
+                    // a number the browser drops inside a `scale()` token — "200" covers the viewport
+                    // with an opaque plan whose `<a href>` the author also chose, and "2) rotate(45deg"
+                    // closes the token. It is NOT clamped here: the bound lives with every other
+                    // variable that reaches a geometry declaration, in `NARROWED_VAR_VALUE`
+                    // (components/blocks/safeStyle.ts), which `blockVars` applies to every name. A
+                    // clamp added at this call site would be a guard the next block does not inherit.
                     'highlight-scale': highlightScale,
                 }),
-                ...css,
+                ...safeCss(css),
             }}
         >
             {plans?.map((plan: any, index: number) => (
@@ -1417,7 +1430,7 @@ export function TestimonialBlock({ quote, author, role, avatar, bg, pad, radius,
                     'avatar-bg': accent,
                     'avatar-size': unit(avatarSize),
                 }),
-                ...css,
+                ...safeCss(css),
             }}
         >
             <div className={bc('testimonial__mark')} aria-hidden="true">&quot;</div>
@@ -1444,7 +1457,7 @@ export function TestimonialBlock({ quote, author, role, avatar, bg, pad, radius,
 export function CTABannerBlock({ title, subtitle, buttonText, buttonLink, variant, bg, color, pad, radius, titleSize, buttonBg, buttonColor, css, isEditing }: any) {
     return (
         <div
-            className={cx(bc('cta-banner'), `cta-variant-${variant || 'gradient'}`)}
+            className={cx(bc('cta-banner'), safeClassToken('cta-variant-', variant) ?? 'cta-variant-gradient')}
             style={{
                 ...blockVars('cta', {
                     bg,
@@ -1455,7 +1468,7 @@ export function CTABannerBlock({ title, subtitle, buttonText, buttonLink, varian
                     'button-bg': buttonBg,
                     'button-color': buttonColor,
                 }),
-                ...css,
+                ...safeCss(css),
             }}
         >
             <h2 className={bc('cta-banner__title')}>{title}</h2>
@@ -1474,7 +1487,7 @@ export function CTABannerBlock({ title, subtitle, buttonText, buttonLink, varian
 export function VideoEmbedBlock({ url, poster, aspectRatio, radius, bg, css }: any) {
     const vars = {
         ...blockVars('video', { aspect: aspectRatio, radius: unit(radius), bg }),
-        ...css,
+        ...safeCss(css),
     };
 
     // A file served by THIS site plays inline in a real <video>, with no third party in the request
@@ -1560,7 +1573,7 @@ export function HeroBlock({ title, subtitle, bgImage, overlay, overlayColor, hei
                     'title-tracking': unit(titleTracking),
                     'subtitle-size': unit(subtitleSize),
                 }),
-                ...css,
+                ...safeCss(css),
             }}
         >
             {dim > 0 && <div className={bc('hero__overlay')} aria-hidden="true" />}
@@ -1604,7 +1617,7 @@ export function PostsGridBlock({ posts, columns, gap, bg, borderColor, radius, p
     const list: any[] = Array.isArray(posts) ? posts : [];
     if (!list.length) {
         return (
-            <div className={bc('posts-grid__empty')} style={css}>
+            <div className={bc('posts-grid__empty')} style={safeCss(css)}>
                 {isEditing
                     ? "Aquí se listarán tus entradas publicadas. Aún no hay ninguna."
                     : "No hay entradas publicadas todavía."}
@@ -1625,7 +1638,7 @@ export function PostsGridBlock({ posts, columns, gap, bg, borderColor, radius, p
                     pad: unit(pad),
                     'thumb-height': unit(thumbHeight),
                 }),
-                ...css,
+                ...safeCss(css),
             }}
         >
             {list.map((post) => (
@@ -1634,12 +1647,18 @@ export function PostsGridBlock({ posts, columns, gap, bg, borderColor, radius, p
                         bg-image): a literal inline background-image would beat the stylesheet and
                         lock the treatment, whereas the var lets wordjs-ui.css own the layering —
                         its thumb rule paints var(--wjs-posts-thumb-scrim) ABOVE this image, so a
-                        theme can composite a gradient scrim without touching the content's photo. */}
+                        theme can composite a gradient scrim without touching the content's photo.
+                        Built by blockVars, NOT by hand: `post.image` is stored data, and a hand-rolled
+                        url() interpolates it bare into the style attribute — one quote or `)` in the
+                        URL closes the token and everything after it becomes declarations the author
+                        never chose. blockVars sees a `-image` suffix, so the value goes through
+                        safeCssUrl (same-origin or http(s), no quote/paren/backslash) and is re-emitted
+                        QUOTED; a rejected image drops the variable and the theme's fallback paints. */}
                     <div
                         className={bc('posts-grid__thumb')}
                         aria-hidden="true"
                         style={post.image
-                            ? ({ "--wjs-posts-thumb-image": `url(${post.image})` } as React.CSSProperties)
+                            ? blockVars('posts', { 'thumb-image': `url(${post.image})` })
                             : undefined}
                     ></div>
                     {post.date && <div className={bc('posts-grid__date')}>{fmtPostDate(post.date)}</div>}
@@ -1665,7 +1684,7 @@ export function CategoryPostsBlock({ posts, categorySlug, layout, columns, gap, 
             'link-color': linkColor,
             'heading-color': headingColor,
         }),
-        ...css,
+        ...safeCss(css),
     };
 
     const heading = (
@@ -1730,7 +1749,7 @@ export function SpacerBlock({ height, css }: any) {
     return (
         <div
             className={bc('spacer')}
-            style={{ ...blockVars('spacer', { height: unit(height) }), ...css }}
+            style={{ ...blockVars('spacer', { height: unit(height) }), ...safeCss(css) }}
         />
     );
 }
@@ -1747,7 +1766,7 @@ export function TextBlock({ content, elementId, color, size, leading, measure, c
                     leading,
                     measure: unit(measure),
                 }),
-                ...css,
+                ...safeCss(css),
             }}
             suppressHydrationWarning
             dangerouslySetInnerHTML={{ __html: sanitizeHTML(content) }}

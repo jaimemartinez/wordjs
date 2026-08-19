@@ -16,6 +16,34 @@ require('dotenv').config();
 // Import configuration
 const config = require('./config/app');
 
+/**
+ * WHERE THIS INSTALLATION LIVES ON DISK — the anchor every relative path in this file resolves
+ * against, and NOT the directory the process happens to have been started in.
+ *
+ * THE CLASS (round-2 re-verify of #27): a path two modules must agree on was COMPUTED TWICE, once
+ * against `__dirname` and once against the cwd, so the answer depended on how the service was
+ * launched. Every member bit the same way — silently:
+ *   · `path.resolve(config.mtls.*)` here vs `clusterCertPaths()` in core/frontend-purge (which
+ *     anchors to the installation, where core/certManager actually writes the certificates). From any
+ *     cwd but `backend/`, THIS file found no certificates: the backend served plain HTTP, advertised
+ *     itself as http://, and registered with the gateway over the PUBLIC port with
+ *     `rejectUnauthorized: false` — while the purge transport, reading the same config key, happily
+ *     did mTLS. Half the cluster identity working and half degraded to cleartext, with no message.
+ *   · `path.resolve('./themes' | './plugins' | './public')` here vs core/io-guard's SERVED_ROOTS,
+ *     which anchors to the installation. When they disagree the served tree is one the write guard
+ *     does not recognise, so the "published ∩ plugin-writable" channel #3 closed reopens.
+ * `installPath()` is the single answer, and backend/src/tests/install-root-paths.test.ts reads this
+ * file and fails on any relative path resolved without it. An ABSOLUTE configured path is returned
+ * untouched, exactly as before — operators who set one keep it.
+ *
+ * WORDJS_BACKEND_ROOT overrides the anchor for a test that stages a whole installation in a temp
+ * directory; core/frontend-purge honours the same variable so the two can never diverge.
+ */
+const INSTALL_ROOT: string = process.env.WORDJS_BACKEND_ROOT
+    ? path.resolve(String(process.env.WORDJS_BACKEND_ROOT))
+    : path.resolve(__dirname, '..');
+const installPath = (p: string): string => path.resolve(INSTALL_ROOT, String(p));
+
 // When embedded in the single-process monolith (../monolith.js sets WORDJS_EMBEDDED=1), this module
 // is required to obtain the configured Express app and mounted in-process — it must NOT self-listen on
 // config.port nor self-register with the gateway. Split mode (run via backend/server.js → dist/index.js)
@@ -135,6 +163,14 @@ app.use(cors((req: any, done: any) => {
 // Cookie Parser (for HttpOnly auth cookies)
 const cookieParser = require('cookie-parser');
 app.use(cookieParser());
+// …and IMMEDIATELY the type boundary for what it produced. cookie-parser applies JSONCookies
+// unconditionally, so `Cookie: wordjs_token=j:[1]` arrives as an Array and every `token.startsWith(...)`
+// in the auth middlewares threw an unhandledRejection with NO response written — an anonymous, free,
+// remote hang on every route with optionalAuth/authenticate. Mounted here, before ANY router, so the
+// guarantee is "no router can ever see a non-string cookie" rather than "the readers we remembered
+// check their type". See the long note in middleware/auth.ts:sanitizeCookies.
+const { sanitizeCookies } = require('./middleware/auth');
+app.use(sanitizeCookies);
 
 // Rate Limiters
 // Multi-node: when Redis is configured, back the limiters with a SHARED Redis store so the cap is
@@ -154,6 +190,18 @@ function limiterStore(prefix: string): any {
     }
 }
 
+// (#19) The path a limiter mounted at config.api.prefix actually sees. Express strips the mount from
+// req.url, so inside such a middleware `req.path` is ALREADY api-relative ('/collab/12/ops') — but a
+// guard that silently depends on that is the exact fixture-vs-producer trap this repo keeps hitting.
+// Derive it from originalUrl (the full path, query stripped) and fall back to req.path, so the answer
+// is the same whether the predicate runs mounted, unmounted or from a test.
+const apiRelativePath = (req: any): string => {
+    const full = String(req.originalUrl || req.url || '').split('?')[0];
+    if (full.startsWith(config.api.prefix)) return full.slice(config.api.prefix.length) || '/';
+    return String(req.path || '/');
+};
+const isCollabPath = (req: any): boolean => /^\/collab(\/|$)/.test(apiRelativePath(req));
+
 const apiLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
     max: 1000, // Limit each IP to 1000 requests per 15 mins
@@ -162,7 +210,92 @@ const apiLimiter = rateLimit({
     keyGenerator: ipKey,
     store: limiterStore('rl:api:'),
     passOnStoreError: true, // if the Redis store errors (outage), ALLOW the request rather than 500 the whole API
+    // (#19) COLLABORATION DOES NOT SHARE THIS BUDGET. Inline editing is DEFAULT ON and commits one
+    // transaction per keystroke, so its scheduler emits ~10 POST/s to /collab/:id/ops BY DESIGN. At
+    // 1000 requests / 15 min (1.11 req/s) a single author exhausted the window after ~2 minutes of
+    // typing — and from then on EVERY /api/v1/* call answered 429, including PUT /posts/:id, the
+    // manual Save the client advertises in every collaboration notice as the safety net. The traffic
+    // the feature generates was disabling the fallback for the feature. Collab has its own in-band
+    // gate (collab-rooms' rateGate, per connection) plus the dedicated per-IP backstop below.
+    skip: isCollabPath,
     message: { error: 'Too many requests, please try again later.' }
+});
+
+// (#19) The per-IP backstop for /api/v1/collab, DERIVED from collab-rooms' own CONFIG rather than a
+// fresh hand-written number. That matters: the one time a collaboration constant was re-typed by hand
+// somewhere else (the 900 ms retry as "1000 ms"), the two drifted and the client waited on a number
+// the server never used. CONFIG.MAX_OPS_PER_SEC is the sustained op rate the server COMMITS to
+// accepting on one connection, and a frame may legitimately carry a single op, so that is also the
+// per-connection ceiling on frame POSTs; CONFIG.MAX_CONNS_PER_USER is how many connections one person
+// may hold at once. Their product over the window is the most a well-behaved client can produce — a
+// coarse anti-flood net only. The BINDING rate control stays rateGate inside collab-rooms, which is
+// per connection, token-bucketed, and the only place that can answer with the RATE_RETRY_MS the
+// client derives its wait from.
+const COLLAB_WINDOW_MS = 60 * 1000;
+// The client's flush scheduler period (frontend/src/lib/verso/collab/client.ts DEFAULTS.flushMs). A
+// connection emits AT MOST one POST per period no matter how fast the author types — the ops of a
+// period are batched into one frame — so this, not the op rate, is what a per-REQUEST limiter must be
+// dimensioned against.
+const COLLAB_CLIENT_FLUSH_MS = 100;
+// Explicit slack for the traffic that is not the ops flush: presence beats, coalesced resyncs,
+// retries, and a couple of browser tabs. Named so a future change argues about a factor instead of
+// re-deriving a magic number.
+const COLLAB_SLACK = 2;
+// A hard ceiling that does not move when the CONFIG constants do. The derivation is a description of
+// legitimate traffic; this is the statement that no derivation may exceed it.
+const COLLAB_ABSOLUTE_MAX = 5000;
+let _collabMax: number | null = null;
+const collabWindowMax = (): number => {
+    if (_collabMax !== null) return _collabMax;
+    // Lazy: core/collab-rooms pulls in the DB layer, and this module is evaluated before config/database
+    // is initialized. Cached after the first request so it is not a per-request require().
+    const { CONFIG } = require('./core/collab-rooms');
+    // WHY NOT MAX_OPS_PER_SEC × MAX_CONNS_PER_USER. That product (50 × 10 × 60 = 30 000/min ≈ 500
+    // req/s) was malformed as a per-IP request ceiling in three separate ways: it multiplies a
+    // PER-CONNECTION op rate by a PER-USER connection cap and then applies the result to an IP that
+    // several users share; it counts OPS, while the limiter counts REQUESTS and the client batches a
+    // whole flush period into ONE request; and at 450× the global bucket it replaced, it removed the
+    // only per-IP brake the audit counted on when it accepted the #20 resync amplifier as bounded
+    // ("the op bucket AND the global per-IP limiter"). /collab is skipped by the global limiter, so
+    // this IS that brake now.
+    //
+    // Dimension it against the FRAMES a well-behaved client emits instead: one POST per flush period
+    // per connection, times the connections one author can legitimately hold on a post, times the
+    // window, times the slack above — then clamp. 10 req/s × 3 tabs × 60 s × 2 = 3600/min, i.e. ~6×
+    // the ~600/min a continuously-typing author actually produces, and ~8× tighter than the global
+    // bucket per unit time instead of 450× looser.
+    const framesPerSec = Math.ceil(1000 / COLLAB_CLIENT_FLUSH_MS);
+    const derived = Math.ceil(framesPerSec * CONFIG.MAX_CONNS_PER_USER_POST * (COLLAB_WINDOW_MS / 1000) * COLLAB_SLACK);
+    _collabMax = Math.min(derived, COLLAB_ABSOLUTE_MAX);
+    return _collabMax as number;
+};
+const collabLimiter = rateLimit({
+    windowMs: COLLAB_WINDOW_MS,
+    max: (req: any) => collabWindowMax(),
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: ipKey,
+    store: limiterStore('rl:collab:'),
+    passOnStoreError: true,
+    message: { error: 'Too many collaboration requests, please try again later.' }
+});
+
+// (#21) POST /analytics/track is anonymous, unauthenticated and writes a PERMANENT row per call. Its
+// only ceilings were generic (express.json's 10mb and the global apiLimiter's 1000/15min), which cap
+// TRAFFIC, not stored bytes — roughly 40 GB/hour of undeletable rows from one IP, and in monolith mode
+// a full disk takes down backend, frontend and database together. Give it the same shape every other
+// anonymous public surface has (forms/submit, setup, auth): its own tight per-IP bucket, mounted on
+// the exact route. The hard input bounds and the retention prune live in routes/analytics.ts and
+// core/analytics-retention.ts — a limiter alone only slows an unbounded table down.
+const analyticsLimiter = rateLimit({
+    windowMs: 60 * 1000, // 1 minute
+    max: 60, // one page view per second per IP, sustained — far above any real browsing session
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: ipKey,
+    store: limiterStore('rl:analytics:'),
+    passOnStoreError: true,
+    message: { error: 'Too many tracking events, please try again later.' }
 });
 
 const authLimiter = rateLimit({
@@ -228,6 +361,12 @@ const setupLimiter = rateLimit({
     message: { error: 'Too many setup attempts, please try again later.' }
 });
 
+// (#19) Collaboration's own budget, mounted BEFORE the global limiter — which now skips these paths
+// (see apiLimiter.skip). Both halves are required: mounting a second limiter does not exempt a
+// request from the first, and skipping without a replacement would leave the busiest write endpoint
+// on the server with no per-IP ceiling at all.
+app.use(`${config.api.prefix}/collab`, collabLimiter);
+
 // Apply global API limiter
 app.use(config.api.prefix, apiLimiter);
 
@@ -235,14 +374,26 @@ app.use(config.api.prefix, apiLimiter);
 // authenticate successfully never consume the budget; the escalating per-(IP+account) lockout in
 // routes/auth.ts is the primary brute-force control.
 app.use(`${config.api.prefix}/auth/login`, loginIpLimiter);
-// Scope the brute-force limiter to EXACTLY the second-factor verify (POST /auth/mfa), which is part of the
-// unauthenticated login and must be throttled per-IP like /auth/login. Using app.use() here was a PREFIX
-// mount that also swallowed the authenticated self-service management routes (/auth/mfa/status polled on
-// every account-page load, plus /setup, /enable, /disable, /backup-codes, /policy). A logged-in user
-// enabling then disabling their own 2FA burned the shared 10/hr/IP budget and locked THEMSELVES out of
-// login. app.post matches the full path exactly, so the sub-routes no longer count. Code-guess brute force
-// on those routes is still covered by the per-account 'mfa:' lockout inside routes/auth.ts.
-app.post(`${config.api.prefix}/auth/mfa`, loginIpLimiter);
+// The second-factor verify (POST /auth/mfa) is part of the unauthenticated login and must be throttled
+// per-IP like /auth/login. This was once a bare `app.use()` PREFIX mount, which also swallowed the
+// authenticated self-service routes (/auth/mfa/status polled on every account-page load, plus /setup,
+// /enable, /disable, /backup-codes, /policy): a logged-in user enabling then disabling their own 2FA
+// burned the shared 10/hr/IP budget and locked THEMSELVES out of login. The fix at the time was an
+// exact-path `app.post('/auth/mfa')`.
+// (#11) …but the exact-path mount left the ENROLLMENT routes completely unthrottled: '/auth/mfa'
+// never matches '/auth/mfa/setup' or '/auth/mfa/enable', which are precisely the two calls that turn
+// a hijacked session into a permanent account lockout (setup hands back the TOTP secret in clear, so
+// the attacker's first enable code is always correct and the per-account 'mfa:' bucket — which only
+// arms on WRONG codes — never fires either). Cover the whole subtree, but only for STATE-CHANGING
+// methods: the read routes are GET /mfa/status (polled on every account-page load) and GET
+// /mfa/policy, and swallowing those under a shared 10/hr/IP budget is the regression the exact-path
+// mount was introduced to fix. loginIpLimiter also has skipSuccessfulRequests, so a user who
+// legitimately enables then disables their own 2FA still consumes nothing.
+const MFA_SUBTREE = `${config.api.prefix}/auth/mfa`;
+app.use(MFA_SUBTREE, (req: Request, res: Response, next: NextFunction) => {
+    if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return next();
+    return loginIpLimiter(req, res, next);
+});
 app.use(`${config.api.prefix}/auth/register`, authLimiter);
 app.use(`${config.api.prefix}/auth/forgot-password`, authLimiter); // public, unauthenticated — throttle abuse
 app.use(`${config.api.prefix}/auth/reset-password`, authLimiter);
@@ -261,6 +412,9 @@ app.use(`${config.api.prefix}/setup`, setupLimiter); // tight cap on the public 
 // Exact-path mount (like /auth/mfa above) so the admin's authenticated /forms/submissions viewer never
 // consumes the public submit budget.
 app.post(`${config.api.prefix}/forms/submit`, formsSubmitLimiter);
+// (#21) Same exact-path shape for the anonymous tracking beacon, so the admin's authenticated
+// GET /analytics/stats never draws on the public write budget.
+app.post(`${config.api.prefix}/analytics/track`, analyticsLimiter);
 
 // SECURITY: CSRF Protection for all API routes
 const { csrfProtection } = require('./middleware/auth');
@@ -292,6 +446,11 @@ const EXECUTABLE_DOC_EXTS = new Set(['.html', '.htm', '.xhtml', '.xht', '.shtml'
 // falls through to express.static below, which serves the original exactly as before.
 const { imageNegotiation } = require('./middleware/image-negotiation');
 app.use('/uploads', imageNegotiation(config.uploads.dir));
+// `config.uploads.dir` is OPERATOR-configured and is resolved the same way by every writer
+// (routes/media.ts, models/Media.ts, core/backup.ts) and by core/io-guard's configuredUploadsRoot(),
+// so this one deliberately stays on the cwd-relative resolution they share — moving only the READ
+// side would publish a directory nothing writes to. Aligning the whole set is the follow-up noted in
+// backend/src/tests/install-root-paths.test.ts.
 app.use('/uploads', express.static(path.resolve(config.uploads.dir), {
     dotfiles: 'deny',
     // Media filenames are UUID-unique (never overwritten at the same URL), so they are safe to cache
@@ -319,7 +478,57 @@ app.use('/uploads', express.static(path.resolve(config.uploads.dir), {
 // app.use('/admin', express.static(path.resolve('./admin'))); // Removed legacy admin
 // Theme/plugin assets CAN change in place on update, so cache 1h (not immutable) — the browser reuses
 // them for an hour, then ETag-revalidates (cheap 304). Big win without risking stale code after an update.
-app.use('/themes', express.static(path.resolve('./themes'), { dotfiles: 'deny', maxAge: '1h' }));
+// THE /themes TWIN OF #3 — NOW CLOSED, not merely declared.
+//
+// The previous pass forced executable documents to download and left the rest: `express.static` over
+// the WHOLE theme tree. That still handed out `GET /themes/default/functions.js` — the theme's SERVER
+// code, verbatim, to anyone — and, because a theme's own directory is writable by the theme, it still
+// answered `GET /themes/<x>/leak.txt` for whatever a theme (or, before the io-guard change, ANY
+// plugin) chose to drop there. Forcing a download prevents execution as a document; it prevents
+// neither source disclosure nor exfiltration.
+//
+// So /themes is now the same shape as /plugins: an ALLOWLIST, declared once in core/io-guard
+// (isThemeServedRelPath — stylesheets, the JSON compositions, fonts, images, media; never .js, never
+// .html partials, never .md/.map/source), resolved with safe-path.resolveWithin, and READ-ONLY to the
+// theme (isPathSafe denies a theme writing anything that predicate would publish). One declaration
+// answers both "may this be served?" and "may the theme write it?", so the two cannot drift.
+const THEMES_ROOT = installPath('themes');
+const { resolveWithin, isThemeSlug } = require('./core/safe-path');
+const { isThemeServedRelPath } = require('./core/io-guard');
+app.use('/themes', (req: Request, res: Response, next: NextFunction) => {
+    if (req.method !== 'GET' && req.method !== 'HEAD') return next();
+    let segs: string[];
+    try {
+        // req.path is post-mount and NOT percent-decoded; decode each segment exactly once, then let
+        // resolveWithin reject anything that is not a plain segment ('..', '/', '\', 'C:', NUL, …).
+        segs = req.path.split('/').filter(Boolean).map((s: string) => decodeURIComponent(s));
+    } catch {
+        return res.status(404).end();
+    }
+    if (segs.length < 2) return res.status(404).end();
+    if (!isThemeSlug(segs[0])) return res.status(404).end();
+    if (!isThemeServedRelPath(segs.slice(1).join('/'))) return res.status(404).end();
+    const abs = resolveWithin(THEMES_ROOT, ...segs);
+    if (!abs) return res.status(404).end();
+
+    const headers: Record<string, string> = { 'X-Content-Type-Options': 'nosniff' };
+    if (path.extname(abs).toLowerCase() === '.svg') {
+        // Same treatment /uploads gives it: renders as a logo/icon, but a direct navigation can
+        // never run an embedded script.
+        headers['Content-Type'] = 'image/svg+xml';
+        headers['Content-Security-Policy'] = "default-src 'none'; style-src 'unsafe-inline'; sandbox";
+    }
+    // Theme assets change in place on update → 1h + ETag revalidation (unchanged policy). Path is
+    // RELATIVE to the root for the same reason as /plugins below: with no root, `send` judges
+    // dotfiles against the whole absolute path and a dot-directory in the install path 404s the site.
+    res.sendFile(path.relative(THEMES_ROOT, abs), { root: THEMES_ROOT, dotfiles: 'deny', maxAge: '1h', headers }, (err: any) => {
+        if (!err) return;
+        if (res.headersSent) { try { res.end(); } catch { /* client gone */ } return; }
+        const missing = err.status === 403 || err.status === 404
+            || err.code === 'ENOENT' || err.code === 'ENOTDIR' || err.code === 'EISDIR';
+        res.status(missing ? 404 : 500).end();
+    });
+});
 
 // Plugins declare an admin-page URL slug (manifest.frontend.adminPage.slug) that frequently DIFFERS
 // from the on-disk folder (e.g. slug "youtube" → folder "youtube-videos"). The admin shell requests a
@@ -328,7 +537,7 @@ app.use('/themes', express.static(path.resolve('./themes'), { dotfiles: 'deny', 
 // at RUNTIME isn't in that map, so its stylesheet 404s and its admin page renders UNSTYLED. Rewrite the
 // leading path segment slug→folder before the static handler so any asset resolves regardless of how the
 // plugin was installed (cached; no-op when the segment is already a real folder).
-const PLUGINS_ROOT = path.resolve('./plugins');
+const PLUGINS_ROOT = installPath('plugins');
 const adminSlugFolderCache = new Map<string, string>();
 // Resolve <folder>/manifest.json under PLUGINS_ROOT, confirming it stays inside the root (path-injection
 // barrier). Returns the absolute manifest path, or null if the segment escapes.
@@ -381,15 +590,82 @@ app.use('/plugins', (req: any, _res: any, next: any) => {
     }
     next();
 });
-app.use('/plugins', express.static(path.resolve('./plugins'), { dotfiles: 'deny', maxAge: '1h' }));
+// SECURITY (#3): this used to be `express.static(path.resolve('./plugins'))`, i.e. the ENTIRE plugin
+// tree published to the anonymous internet — source, tests, .map files, and every plugin's data/ dir
+// (mail-server's attachments + bayes.json were reachable on a CLEAN INSTALL). Combined with the fact
+// that a plugin may write its own directory with NO permission grant, that mount ANNULLED the whole
+// network-containment model: the `network` permission, the egress allowlist's loopback/RFC1918/
+// metadata blocks and bwrap's --unshare-net all police the SOCKET, and none of them can see a plugin
+// writing leak.txt and an attacker fetching https://site/plugins/<slug>/leak.txt. `dotfiles:'deny'`
+// only ever hid names starting with a dot.
+//
+// It is now an ALLOWLIST, declared once in core/io-guard (isPluginServedRelPath) so that "what is
+// published" and "what the plugin may not write" are the same statement: plugins/<slug>/public/ with
+// a servable extension, plus three fixed host-known files the admin shell requests by construction.
+// Everything else — data/, code, manifest-adjacent files, .map, node_modules — is a 404.
+//
+// The check is performed on the SAME value that is served. express.static re-parses and re-decodes
+// req.url itself, so a gate placed in front of it validates a string the file layer may read
+// differently (this repo has shipped that exact parser differential more than once). Instead the
+// segments are decoded ONCE, proved with safe-path.resolveWithin, and the RESOLVED absolute path is
+// what res.sendFile receives.
+// (resolveWithin is required above, with the /themes twin that uses the same containment proof.)
+const { isPluginServedRelPath } = require('./core/io-guard');
+// The /uploads denylist minus JS: a plugin asset .js is admin-installed, AST-scanned code that the
+// structured enqueue bridge (core/plugin-assets.ts) exists to emit as <script src>, and with nosniff
+// an octet-stream would simply refuse to load. Uploads are visitor-controlled bytes, so they keep the
+// stricter rule. .html is not reachable here at all — it is off the extension allowlist AND now
+// unwritable (io-guard's EXECUTABLE_CODE_EXT), so this is belt-and-braces.
+const PLUGIN_ATTACH_EXTS = new Set(Array.from(EXECUTABLE_DOC_EXTS).filter((e: string) => e !== '.js' && e !== '.mjs' && e !== '.cjs'));
+app.use('/plugins', (req: Request, res: Response, next: NextFunction) => {
+    if (req.method !== 'GET' && req.method !== 'HEAD') return next();
+    let segs: string[];
+    try {
+        // req.path is post-mount and NOT percent-decoded; decode each segment exactly once, then let
+        // resolveWithin reject anything that is not a plain segment ('..', '/', '\', 'C:', NUL, …).
+        segs = req.path.split('/').filter(Boolean).map((s: string) => decodeURIComponent(s));
+    } catch {
+        return res.status(404).end(); // malformed percent-escape → not a path we could have published
+    }
+    if (segs.length < 2) return res.status(404).end();
+    const folder = segs[0];
+    if (!/^[a-zA-Z0-9_-]+$/.test(folder)) return res.status(404).end();
+    if (!isPluginServedRelPath(segs.slice(1).join('/'))) return res.status(404).end();
+    const abs = resolveWithin(PLUGINS_ROOT, ...segs);
+    if (!abs) return res.status(404).end();
+
+    const ext = path.extname(abs).toLowerCase();
+    const headers: Record<string, string> = { 'X-Content-Type-Options': 'nosniff' };
+    if (PLUGIN_ATTACH_EXTS.has(ext)) {
+        headers['Content-Type'] = 'application/octet-stream';
+        headers['Content-Disposition'] = 'attachment';
+    }
+    // Plugin assets can change in place on update → 1h + ETag revalidation (same policy as before).
+    //
+    // REGRESSION FIXED: this passed the ABSOLUTE path with no `root`. In that mode `send` splits the
+    // WHOLE absolute path and `dotfiles: 'deny'` rejects the request if ANY component starts with a
+    // dot — so on an install under `~/.wordjs`, `/opt/.apps/wordjs`, or a CI checkout beneath
+    // `~/.cache/…`, every plugin asset (manifest.json, admin.css, the component bundle) answered 404
+    // deterministically. express.static never had that behaviour because it evaluates the parts
+    // RELATIVE to the mount root. Giving `send` the root back restores that: dotfiles is judged on
+    // the served subtree, which is the only place a dot segment could ever be attacker-influenced —
+    // and `isPluginServedRelPath` already rejects every dot segment before we get here.
+    res.sendFile(path.relative(PLUGINS_ROOT, abs), { root: PLUGINS_ROOT, dotfiles: 'deny', maxAge: '1h', headers }, (err: any) => {
+        if (!err) return;
+        if (res.headersSent) { try { res.end(); } catch { /* client gone */ } return; }
+        const missing = err.status === 403 || err.status === 404
+            || err.code === 'ENOENT' || err.code === 'ENOTDIR' || err.code === 'EISDIR';
+        res.status(missing ? 404 : 500).end();
+    });
+});
 // Serve .well-known (ACME support) - Allow dotfiles. NEVER cache challenge tokens (short-lived, per-order).
-app.use('/.well-known', express.static(path.resolve('./public/.well-known'), { dotfiles: 'allow' }));
+app.use('/.well-known', express.static(installPath('public/.well-known'), { dotfiles: 'allow' }));
 
 // Framework assets (wordjs-ui.css etc.) change only on a WordJS update → 1d + ETag revalidation.
 // DEV: force revalidation (ETag makes it a cheap 304) — wordjs-ui.css and friends change during
 // development but keep the same ?v= until a release bumps ASSET_VERSION, so a 1-day freshness
 // window serves day-old block styles to both the canvas iframe and the public preview.
-app.use('/public', express.static(path.resolve('./public'), {
+app.use('/public', express.static(installPath('public'), {
     dotfiles: 'deny',
     maxAge: config.nodeEnv === 'development' ? 0 : '1d',
     setHeaders: config.nodeEnv === 'development'
@@ -663,6 +939,10 @@ async function initialize() {
     // Registered unconditionally alongside the purge hook (it only reacts to cron events).
     require('./core/scheduled-publish').initScheduledPublish();
 
+    // (#21) Analytics retention: register the prune handler for the daily cron event armed below.
+    // Registered unconditionally alongside the two above (it only reacts to a cron event).
+    require('./core/analytics-retention').initAnalyticsRetention();
+
     // Check Installation Status
     const { isInstalled } = require('./core/configManager');
 
@@ -678,9 +958,12 @@ async function initialize() {
 
     // Start server (skipped when embedded — the monolith owns the single listener)
     if (!EMBEDDED) {
-    const caPath = path.resolve(config.mtls.ca);
-    const keyPath = path.resolve(config.mtls.key);
-    const certPath = path.resolve(config.mtls.cert);
+    // ONE resolver for the cluster material, shared with the purge transport (core/frontend-purge),
+    // so the listener, the /register client and the purge legs can never again disagree about where
+    // this node's identity lives. It anchors relative paths to the INSTALLATION — where certManager
+    // writes them — instead of to the cwd; see INSTALL_ROOT at the top of this file for the class.
+    const { clusterCertPaths } = require('./core/frontend-purge');
+    const { ca: caPath, key: keyPath, cert: certPath } = clusterCertPaths(config);
 
     const serverProtocol = (fs.existsSync(certPath) && fs.existsSync(keyPath) && fs.existsSync(caPath)) ? 'https' : 'http';
     let server;
@@ -810,8 +1093,17 @@ async function initialize() {
                         port: targetPort,
                         path: '/register',
                         method: 'POST',
-                        rejectUnauthorized: false, // For local dev/self-signed, but mTLS uses clientOpts.ca
-                        ...clientOpts, // Inject client certs for mTLS
+                        // ONE of the two shapes, never both: the literal `rejectUnauthorized: false`
+                        // used to sit here ABOVE the spread, so verification was only enabled because
+                        // clientOpts happens to carry `rejectUnauthorized: true` and object key order
+                        // let it win. Correctness must not depend on that: reorder the two lines, or
+                        // drop that key from refreshClientOpts, and this leg silently starts accepting
+                        // any certificate while still looking like mTLS. Spelled out instead:
+                        //  - cluster identity on disk → clientOpts (ca + key + cert + verification ON),
+                        //  - none yet → the pre-enrolment bootstrap against the PUBLIC gateway port,
+                        //    where there is no cluster CA to verify against and the front-door cert is
+                        //    typically self-signed. That is the ONLY case verification is relaxed.
+                        ...(useMtls ? clientOpts : { rejectUnauthorized: false }),
                         headers: {
                             'Content-Type': 'application/json',
                             'Content-Length': data.length,
@@ -836,10 +1128,20 @@ async function initialize() {
             };
 
             // NEW: Self-Sync logic - Fetch official URL from Gateway and update DB
+            //
+            // ONLY OVER AN AUTHENTICATED CHANNEL. THE CLASS: a decision taken from data a PEER
+            // supplied, when a verified attribute is available — here, the peer's cluster certificate.
+            // `siteurl`/`home` are the site's identity: every admin link, every password-reset mail and
+            // every canonical tag is built from them. Without mTLS this request goes to the gateway's
+            // PUBLIC port with `rejectUnauthorized: false`, i.e. to whoever answers on that address,
+            // and its reply used to be written straight into the options table. The pre-enrolment
+            // bootstrap exists so a fresh install can REGISTER; it is not an identity that may rewrite
+            // the site's own URL, so this leg simply does not run until the cluster identity is on disk.
             const syncFromGateway = async () => {
                 const useMtls = Object.keys(clientOpts).length > 0;
-                const protocol = useMtls ? https : http;
-                const targetPort = useMtls ? gatewayInternalPort : gatewayPort;
+                if (!useMtls) return;
+                const protocol = https;
+                const targetPort = gatewayInternalPort;
 
                 return new Promise<void>((resolve) => {
                     const req = protocol.request({
@@ -847,8 +1149,9 @@ async function initialize() {
                         port: targetPort,
                         path: '/info',
                         method: 'GET',
-                        rejectUnauthorized: false,
-                        ...clientOpts,
+                        // Same rule as /register above (twin leg, same peer, same port): verification
+                        // is decided here, once, not by which key the spread happens to overwrite.
+                        ...(useMtls ? clientOpts : { rejectUnauthorized: false }),
                         headers: {
                             'x-gateway-secret': process.env.GATEWAY_SECRET || (config.gatewaySecret) || 'secure-your-gateway-secret'
                         },
@@ -1234,6 +1537,17 @@ async function initialize() {
         // Start cron system
         const { startCron, initDefaultCronEvents, scheduleEvent, scheduleSingleEvent, unscheduleEvent, nextScheduled } = require('./core/cron');
         await initDefaultCronEvents();
+        // (#21) Daily analytics prune. Armed here rather than inside initDefaultCronEvents so the
+        // retention policy stays in one module with its handler; the guard is the same "only if not
+        // already scheduled" shape every default event uses, so a restart never duplicates it.
+        try {
+            const { HOOK: ANALYTICS_PRUNE_HOOK } = require('./core/analytics-retention');
+            if (!(await nextScheduled(ANALYTICS_PRUNE_HOOK))) {
+                await scheduleEvent(Date.now(), 'daily', ANALYTICS_PRUNE_HOOK);
+            }
+        } catch (e: any) {
+            console.error('Failed to schedule the analytics retention prune:', e && e.message);
+        }
         startCron();
 
         // Multi-node coherence: refresh in-process caches (roles) on cross-node option changes, and
@@ -1328,8 +1642,10 @@ if (require.main === module && !EMBEDDED) initialize().catch((error) => {
     // Auto-Fallback Logic
     const fs = require('fs');
     const path = require('path');
-    const backupFile = path.resolve('wordjs-config.backup.json');
-    const configFile = path.resolve('wordjs-config.json');
+    // The config file is configManager's declaration, not a second one: restoring a backup over a
+    // DIFFERENT path than the one the process reads is a fallback that silently does nothing.
+    const { CONFIG_FILE: configFile } = require('./core/configManager');
+    const backupFile = configFile.replace(/\.json$/, '.backup.json');
 
     if (fs.existsSync(backupFile)) {
         console.warn('⚠️  Startup Failed! Attempting automatic fallback to previous configuration...');

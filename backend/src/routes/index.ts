@@ -59,6 +59,7 @@ router.get('/', (req: Request, res: Response) => {
             import: '/api/v1/import',
             roles: '/api/v1/roles',
             notifications: '/api/v1/notifications',
+            notices: '/api/v1/notices',
             hooks: '/api/v1/hooks',
             forms: '/api/v1/forms',
             chrome: '/api/v1/chrome'
@@ -87,6 +88,11 @@ router.use('/taxonomies', taxonomiesRoutes);
 router.use('/setup', setupRoutes);
 router.use('/roles', rolesRoutes);
 router.use('/notifications', notificationsRoutes);
+// Admin notices get their OWN namespace (audit #30): they are not a setting, and living under
+// /settings is what let `GET /settings/:key` shadow them into a permanent 403. /settings/notices
+// still answers — routes/settings.ts mounts this very router there — but this is the canonical path
+// and the one the /admin/notices screen calls.
+router.use('/notices', require('./notices'));
 router.use('/fonts', require('./fonts'));
 router.use('/system/certs', certsRoutes);
 router.use('/health', healthRoutes);

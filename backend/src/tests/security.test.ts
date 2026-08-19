@@ -212,42 +212,98 @@ describe('IO Guard - Path Safety', () => {
 // ============================================================================
 // CSRF PROTECTION TESTS
 // ============================================================================
-describe('CSRF Protection', () => {
+// FIXTURE-VS-PRODUCER. This suite used to hand-build `{ method, path, get }` with path='/api/v1/posts'
+// and call csrfProtection directly. Express NEVER delivers that shape here: index.ts mounts the
+// middleware WITH the api prefix (`app.use(config.api.prefix, csrfProtection)`) and Express strips the
+// mount path from req.url before the handler runs, so the real req.path inside is '/posts'. The
+// fabricated shape is exactly what hid the dead `req.path.startsWith('/api/v1/setup')` exemption for as
+// long as it existed: under the fixture it looked reachable, in production it could never be true.
+//
+// So: mount the REAL middleware at the REAL prefix and drive it with supertest. The first test pins the
+// producer's shape itself, so a future refactor that reintroduces a full-path comparison fails loudly.
+describe('CSRF Protection (real middleware, mounted at the api prefix)', () => {
+    const express = require('express');
+    const request = require('supertest');
     const { csrfProtection } = require('../middleware/auth');
-    // Exercise the REAL middleware with a mock req/res. The gateway pins X-Forwarded-Host to the
-    // true client Host, so trusting it here is safe; these tests pin the origin-matching logic.
-    const run = (method: string, headers: any, path = '/api/v1/posts') => {
-        const h: any = {};
-        for (const k in headers) h[k.toLowerCase()] = (headers as any)[k];
-        const req: any = { method, path, get: (name: string) => h[String(name).toLowerCase()] };
-        let nexted = false, statusCode: number | null = null;
-        const res: any = { status(c: number) { statusCode = c; return this; }, json() { return this; } };
-        csrfProtection(req, res, () => { nexted = true; });
-        return { nexted, statusCode };
+    const config = require('../config/app');
+    const PREFIX = config.api.prefix;
+
+    const app = express();
+    app.use(PREFIX, csrfProtection);
+    // Terminal handler: reached only when csrfProtection called next(). Echoes what Express actually
+    // handed the middleware layer, so the assertions below can be about the real request shape.
+    app.use(PREFIX, (req: any, res: any) => res.json({ nexted: true, path: req.path, originalUrl: req.originalUrl }));
+
+    const post = (url: string, headers: Record<string, string> = {}) => {
+        let r = request(app).post(url);
+        for (const [k, v] of Object.entries(headers)) r = r.set(k, v);
+        return r;
     };
+    const SAME_ORIGIN = { Origin: 'https://example.com', 'X-Forwarded-Host': 'example.com' };
 
-    it('allows a genuine same-origin request (Origin host === X-Forwarded-Host)', () => {
-        const r = run('POST', { Origin: 'https://example.com', 'X-Forwarded-Host': 'example.com' });
-        assert.strictEqual(r.nexted, true);
+    it('Express hands the mounted middleware a TRIMMED path (the producer shape the old fixture faked)', async () => {
+        const res = await post(`${PREFIX}/posts`, SAME_ORIGIN);
+        assert.strictEqual(res.status, 200);
+        assert.strictEqual(res.body.path, '/posts', 'req.path is trimmed of the mount prefix');
+        assert.strictEqual(res.body.originalUrl, `${PREFIX}/posts`, 'only originalUrl carries the prefix');
     });
 
-    it('blocks a cross-origin state-changing request', () => {
-        const r = run('POST', { Origin: 'https://evil.com', 'X-Forwarded-Host': 'example.com' });
-        assert.strictEqual(r.nexted, false);
-        assert.strictEqual(r.statusCode, 403);
+    it('allows a genuine same-origin request (Origin host === X-Forwarded-Host)', async () => {
+        const res = await post(`${PREFIX}/posts`, SAME_ORIGIN);
+        assert.strictEqual(res.body.nexted, true);
     });
 
-    it('blocks origin-PREFIX confusion (example.com.evil.com must NOT match example.com)', () => {
+    it('blocks a cross-origin state-changing request', async () => {
+        const res = await post(`${PREFIX}/posts`, { Origin: 'https://evil.com', 'X-Forwarded-Host': 'example.com' });
+        assert.strictEqual(res.status, 403);
+        assert.strictEqual(res.body.code, 'rest_csrf_invalid');
+    });
+
+    it('blocks origin-PREFIX confusion (example.com.evil.com must NOT match example.com)', async () => {
         // Regression for the startsWith() allowlist bug: `https://example.com.evil.com`.startsWith
         // (`https://example.com`) was true → bypass. Exact-origin comparison must reject it.
-        const r = run('POST', { Origin: 'https://example.com.evil.com', 'X-Forwarded-Host': 'example.com' });
-        assert.strictEqual(r.nexted, false);
-        assert.strictEqual(r.statusCode, 403);
+        const res = await post(`${PREFIX}/posts`, { Origin: 'https://example.com.evil.com', 'X-Forwarded-Host': 'example.com' });
+        assert.strictEqual(res.status, 403);
     });
 
-    it('does not CSRF-check safe methods', () => {
-        const r = run('GET', { Origin: 'https://evil.com', 'X-Forwarded-Host': 'example.com' });
-        assert.strictEqual(r.nexted, true);
+    it('does not CSRF-check safe methods', async () => {
+        const res = await request(app).get(`${PREFIX}/posts`)
+            .set('Origin', 'https://evil.com').set('X-Forwarded-Host', 'example.com');
+        assert.strictEqual(res.status, 200);
+        assert.strictEqual(res.body.nexted, true);
+    });
+
+    it('blocks a header-less cookie request (no Origin, no Referer, no Bearer)', async () => {
+        const res = await post(`${PREFIX}/posts`);
+        assert.strictEqual(res.status, 403);
+    });
+
+    // The exemption the fixture hid: an installer POSTing to the wizard's endpoints on a site with no
+    // users yet has no configured origin to send, and the docs promise those are CSRF-exempt.
+    it('EXEMPTS the PRE-INSTALL setup endpoints from CSRF (was dead code under the mounted prefix)', async () => {
+        for (const url of [`${PREFIX}/setup/install`, `${PREFIX}/setup/test-db`]) {
+            const res = await post(url);
+            assert.strictEqual(res.status, 200, `${url} must be CSRF-exempt, got ${res.status}`);
+            assert.strictEqual(res.body.nexted, true);
+        }
+    });
+
+    it('does NOT exempt the rest of the /setup subtree — /migrate outlives the install', async () => {
+        // POST /setup/migrate is the one route of that subtree still alive AFTER installation, and it
+        // authenticates raw admin credentials from the body. A subtree exemption made its password oracle
+        // drivable from any visitor's browser — i.e. from the victim's IP, around the attacker's own
+        // per-IP limiter. The exemption is ENUMERATED, so only what actually predates the site gets it.
+        for (const url of [`${PREFIX}/setup/migrate`, `${PREFIX}/setup`]) {
+            const res = await post(url);
+            assert.strictEqual(res.status, 403, `${url} must NOT be CSRF-exempt, got ${res.status}`);
+            assert.strictEqual(res.body.code, 'rest_csrf_invalid');
+        }
+    });
+
+    it('the setup exemption matches the SEGMENT, not a string prefix', async () => {
+        // '/setupsomething' must not inherit the exemption just because it starts with the same letters.
+        const res = await post(`${PREFIX}/setupsomething`);
+        assert.strictEqual(res.status, 403);
     });
 });
 

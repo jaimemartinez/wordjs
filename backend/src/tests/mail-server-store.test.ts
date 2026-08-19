@@ -252,9 +252,14 @@ test('labels: CRUD, apply, folder listing, batch fetch, delete cascade', async (
     await Email.addLabelToEmails([m1.id, m2.id], label.id);
     await Email.addLabelToEmails([m1.id], label.id); // idempotent
 
-    const map = await Email.getLabelsForEmails([m1.id, m2.id]);
+    const map = await Email.getLabelsForEmails([m1.id, m2.id], U.id);
     assert.equal(map[m1.id].length, 1);
     assert.equal(map[m1.id][0].name, 'Clientes');
+    // A label is PRIVATE to the user who made it. Two accounts can be parties to the same row (any
+    // un-backfilled row is), so this join must be scoped or one mailbox renders the other's label
+    // names — and an absent user id returns nothing, never everything.
+    assert.deepEqual(await Email.getLabelsForEmails([m1.id, m2.id], 999), {}, 'another user sees no labels of mine');
+    assert.deepEqual(await Email.getLabelsForEmails([m1.id, m2.id], 0), {}, 'no user id, no labels');
 
     const listed = await Email.findAllByUser(U.id, U.email, 'label', 50, 0, label.id);
     assert.equal(listed.length, 2);
@@ -270,7 +275,7 @@ test('labels: CRUD, apply, folder listing, batch fetch, delete cascade', async (
     assert.equal((await Email.findAllByUser(U.id, U.email, 'label', 50, 0, label.id)).length, 1);
 
     assert.equal(await Email.deleteLabel(label.id, U.id), true);
-    assert.deepEqual(await Email.getLabelsForEmails([m1.id]), {}, 'junction rows cascaded');
+    assert.deepEqual(await Email.getLabelsForEmails([m1.id], U.id), {}, 'junction rows cascaded');
 });
 
 test('bulk flag updates apply to the whole id set', async () => {
@@ -351,7 +356,9 @@ test('suggestContacts returns correspondents from received and sent mail', async
     const U = { id: 14, email: 'me@site.com' };
     await Email.create({ messageId: '<c1@t>', fromAddress: 'carla@ext.com', fromName: 'Carla', toAddress: U.email, subject: 'hola', bodyText: 'x', userId: U.id });
     await Email.create({ messageId: '<c2@t>', fromAddress: U.email, toAddress: 'carlos@dest.com, otra@dest.com', subject: 're', bodyText: 'x', isSent: 1, userId: U.id });
-    const hits = await Email.suggestContacts(U.id, 'carl', 8);
+    // The address is now required: suggestContacts scopes itself with the ONE ownership predicate
+    // (which needs it for the un-backfilled arm), not a private copy of `m.user_id = ?`.
+    const hits = await Email.suggestContacts(U.id, U.email, 'carl', 8);
     const emails = hits.map((h: any) => h.email).sort();
     assert.deepEqual(emails, ['carla@ext.com', 'carlos@dest.com']);
 });

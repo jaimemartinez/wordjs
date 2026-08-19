@@ -35,6 +35,10 @@ const crypto = require('crypto');
 // it, including the admin Reply/Forward re-quote. See lib/sanitize-email-html.js for the allowlist
 // and why it is safe. (The admin compose sink is separately guarded client-side with DOMPurify.)
 const { sanitizeEmailHtml } = require('./lib/sanitize-email-html');
+// The store FACTORY, required here (not only where the store is constructed) so splitAddresses below
+// can BE the store's address parser instead of a second one. Two parsers for "which addresses are on
+// this row" is two ownership verdicts: this file split on [,;] while the predicate split on ',' alone.
+const createEmailStore = require('./lib/email-store');
 
 // Attachment storage lives in the plugin's OWN dir (untrusted plugins can't write shared uploads).
 // The single source of truth is Email.UPLOAD_DIR (set in email-store); mirror it here for path joins.
@@ -273,13 +277,7 @@ async function getOptionsBatch(pairs) {
 // The composer sends To/CC/BCC as raw strings; without this, a comma list was treated as ONE
 // malformed address and multi-recipient sends failed outright.
 function splitAddresses(value) {
-    if (Array.isArray(value)) {
-        return value.flatMap(v => splitAddresses(v));
-    }
-    return String(value || '')
-        .split(/[,;]+/)
-        .map(s => s.trim())
-        .filter(Boolean);
+    return createEmailStore.splitAddressList(value);
 }
 
 // Resolve (and briefly cache) the site admin user — the owner of catch-all inbound mail. Without an
@@ -291,6 +289,8 @@ async function getAdminUser() {
     let user = null;
     try {
         const adminEmail = await wordjs.site.adminEmail();
+        // NOT-A-DELIVERY-PATH: resolves the SITE ADMINISTRATOR, not an inbound recipient. The result
+        // owns catch-all mail that matched no mailbox; it never turns a recipient address into an inbox.
         if (adminEmail) user = await User.findByEmail(adminEmail);
     } catch (e) { /* no settings:read or no such user — catch-all rows stay unowned */ }
     _adminUserCache = { user, at: now };
@@ -340,8 +340,7 @@ async function maybeVacationAutoReply(user, senderEmail, origSubject) {
             subject,
             text: stripHtml(html),
             html,
-            fromEmail: user.userEmail,
-            fromName: user.displayName || user.username || '',
+            identity: sendingIdentityOf(user),
             userId: user.id,
             isAutoReply: true
         });
@@ -1281,6 +1280,9 @@ async function initSMTPServer() {
                             .map(s => s.trim())
                             .filter(Boolean);
                         for (const rid of refIds) {
+                            // NOT-A-USER-PATH: inbound SMTP delivery. The id is a Message-ID from the
+                            // message's own In-Reply-To/References header, read to thread the copy we
+                            // are about to write; no request chose it and nothing is returned to anyone.
                             const parent = await Email.findByMessageId(rid);
                             if (parent) { inboundThreadId = parent.thread_id || parent.id; break; }
                         }
@@ -1486,6 +1488,55 @@ function isValidEmail(email) {
     return emailRegex.test(email);
 }
 
+// === THE SENDING IDENTITY IS MINTED FROM AN ACCOUNT, NEVER READ OFF A ROW =====================
+//
+// THE FINDING. `from_address` is the one address column update() cannot rewrite, so on a pre-v2.1
+// shared row (user_id = 0, several local parties) it SURVIVES every rewrite — and the scheduled-send
+// queue used it verbatim as `fromEmail`. A party to such a row could therefore make the queue emit a
+// message, signed with the SITE's DKIM key, whose From is a COLLEAGUE'S address; local copies were
+// written with that same address, so the colleague's own mailbox showed mail "from the boss".
+// sendMail never checked that the From it was handed belonged to whoever asked for the send.
+//
+// THE SHAPE OF THE FIX. A string cannot carry provenance, so the identity is no longer a string
+// argument: it is a token these two functions mint FROM AN ACCOUNT OBJECT, tagged with a
+// module-private Symbol. `data.fromEmail` is dead as an input — sendMail ignores it (see below) —
+// so there is no spelling of a row column that can become a sending identity, and a queue that only
+// has a row must resolve the row's OWNER (user_id) to send at all. For an un-attributed row there is
+// no owner, so there is no user identity: it goes out as the site itself, which is the only identity
+// the server can actually vouch for.
+//
+// READERS AND WRITERS OF THE FROM HEADER, enumerated, because half a change is what produced the
+// finding: the only WRITER is `fromEmail` inside sendMail, computed solely from an identity token or
+// the site options; the READERS are the wire From/DKIM alignment (deliverDirect), the stored Sent
+// copy, the local inbox copies, the Message-ID right-hand side and sendBounce — and sendMail writes
+// the resolved value back into `data.fromEmail` before any of them runs, so all five read the value
+// the identity produced rather than the one the caller passed.
+const SENDING_IDENTITY = Symbol('mail-server:sending-identity');
+
+/** Mint the sending identity OF AN ACCOUNT (the requester, or a row's resolved owner). */
+function sendingIdentityOf(user) {
+    const fromEmail = String((user && user.userEmail) || '').trim().toLowerCase();
+    if (!fromEmail) return null;
+    const name = (user && (user.displayName || user.username || user.userLogin)) || '';
+    return { [SENDING_IDENTITY]: true, fromEmail, fromName: String(name) };
+}
+
+/**
+ * Mint the sending identity of the OWNER of a stored row — resolved from `user_id`, which is the
+ * ownership verdict itself, and never from the row's own from_address.
+ *
+ * Returns null for an un-attributed row (user_id = 0): nobody owns it, so nobody's identity may be
+ * spent on it. The caller then sends as the site (queue) or refuses (a user-facing route).
+ */
+async function sendingIdentityOfOwner(userId) {
+    const uid = parseInt(userId, 10) || 0;
+    if (!(uid > 0)) return null;
+    // NOT-A-DELIVERY-PATH: resolves the OWNER of an outbound row to use as its sending identity. It
+    // turns no recipient address into an inbox and writes no row.
+    const owner = await User.findById(uid).catch(() => null);
+    return owner ? sendingIdentityOf(owner) : null;
+}
+
 /**
  * Send an email directly using MX delivery or Fallback
  */
@@ -1511,8 +1562,14 @@ async function sendMail(data) {
     // Recipients are validated above; this defends the remaining user-controlled header fields at source.
     const stripCRLF = (v) => (typeof v === 'string' ? v.replace(/[\r\n]+/g, ' ').trim() : v);
     if (data.subject !== undefined) data.subject = stripCRLF(data.subject);
-    if (data.fromName !== undefined) data.fromName = stripCRLF(data.fromName);
-    if (data.fromEmail !== undefined) data.fromEmail = stripCRLF(data.fromEmail);
+
+    // A caller-supplied From is NOT an identity — see SENDING_IDENTITY above. Anything left in these
+    // two fields is dropped here, before a single reader of them runs, so that a value carried on a
+    // row (or on a request body reaching a provideMail consumer) can never reach the wire, the stored
+    // copy or the bounce. They are re-populated below from the identity token, if there is one.
+    delete data.fromEmail;
+    delete data.fromName;
+    const identity = (data.identity && data.identity[SENDING_IDENTITY]) ? data.identity : null;
 
     // Combine for distinct processing
     const allRecipients = [...toAttendees, ...ccAttendees, ...bccAttendees];
@@ -1544,8 +1601,15 @@ async function sendMail(data) {
     const mailDomain = resolveMailDomain(dkimDomain, siteDomain);
 
     // stripCRLF the resolved fromEmail/fromName too (covers the admin-configured option fallbacks).
-    const fromEmail = stripCRLF(data.fromEmail || optFromEmail || defaultEmail);
-    const fromName = stripCRLF(data.fromName || optFromName || defaultName);
+    // The identity token is the ONLY way a user address gets here; with no token the message is the
+    // SITE's, which is the only other identity this server can vouch for.
+    const fromEmail = stripCRLF((identity && identity.fromEmail) || optFromEmail || defaultEmail);
+    const fromName = stripCRLF((identity && identity.fromName) || optFromName || defaultName);
+    // Write the resolved identity back so every downstream reader of `data` — sendBounce is the one
+    // outside this function — sees the address that was actually sent from, not the one it was asked
+    // to send from. Two values for one header is how the row's from_address stayed alive.
+    data.fromEmail = fromEmail;
+    data.fromName = fromName;
 
     // One stable Message-ID reused for BOTH the stored Sent record AND the on-the-wire Message-ID
     // header. When the remote party replies, their In-Reply-To/References echo this exact value, so the
@@ -1580,6 +1644,12 @@ async function sendMail(data) {
             // Reuse the existing Sent record; nothing to (re)create.
         } else if (draftId) {
             console.log(`[MailServer] Updating draft ${draftId} to Sent status.`);
+            // NOT-A-USER-PATH: a continuation of POST /send, which has ALREADY put this row through
+            // Email._ownsRow before calling sendMail — draftId is that same checked id. Note the gate
+            // there answers the READ question while this call rewrites the address columns; for an
+            // un-attributed row those columns ARE the ownership verdict, so the store itself refuses
+            // any rewrite that would drop a party (mail_shared_row_party_narrowed). The route gate is
+            // not load-bearing for that; the store is.
             await Email.update(draftId, {
                 messageId: outboundMessageId,
                 toAddress: toAttendees.join(', '),
@@ -1782,7 +1852,20 @@ async function sendMail(data) {
             console.warn(`[MailServer] From '${fromEmail}' is off our sending domain, but '${sendingDomain}' is not a public mail domain (LAN host/IP/localhost) — keeping the original From. Set a DKIM domain or a real site URL for DMARC alignment.`);
         }
 
-        const attachments = (data.attachments || []).map(a => ({ filename: a.filename, path: a.path }));
+        // SECOND SINK of the client-path class (the first is Email.saveAttachment): nodemailer opens
+        // `path` and ships the bytes OUT over SMTP, so '../../src/index.ts' in a composed message is
+        // an exfiltration channel that never touches the attachment table at all. Same resolver, same
+        // roots — a path the store would refuse to copy is a path we refuse to send. Entries that do
+        // not resolve are DROPPED, not substituted, and the send continues with the rest.
+        const attachments = [];
+        for (const a of (data.attachments || [])) {
+            const source = await Email.resolveAttachmentSource(a && a.path);
+            if (!source) {
+                if (a && a.path) console.error(`[MailServer] Dropping outbound attachment outside the permitted upload roots: ${String(a.path).slice(0, 200)}`);
+                continue;
+            }
+            attachments.push({ filename: a.filename, path: source });
+        }
         // RFC 3834: an auto-generated reply announces itself so remote auto-responders don't answer it.
         const extraHeaders = data.isAutoReply ? { 'Auto-Submitted': 'auto-replied' } : undefined;
         const mailObj = { fromEmail: wireFrom, fromName, replyTo: wireReplyTo, subject: data.subject, text: data.text, html: data.html, attachments, messageId: outboundMessageId, headers: extraHeaders };
@@ -1847,11 +1930,15 @@ async function updateRetryState(sentRecordId, data, externalRecipients, failed) 
     if (!sentRecordId) return;
     // No external delivery was attempted (purely local) — leave as a normal sent message.
     if (externalRecipients.length === 0 && (!failed || failed.length === 0)) {
+        // NOT-A-USER-PATH: the delivery state machine. sentRecordId is the row sendMail JUST created
+        // (or the draft POST /send had already checked); this writes back the outcome of an SMTP
+        // transaction, and no request ever named this id.
         try { await Email.markSent(sentRecordId); } catch (e) { /* non-fatal */ }
         return;
     }
 
     if (!failed || failed.length === 0) {
+        // NOT-A-USER-PATH: same row, same delivery transaction — see above.
         try { await Email.markSent(sentRecordId); } catch (e) { /* non-fatal */ }
         return;
     }
@@ -1865,8 +1952,15 @@ async function updateRetryState(sentRecordId, data, externalRecipients, failed) 
     // mark failed and bounce to the sender.
     if (temporary.length === 0 || attempts >= MAX_DELIVERY_ATTEMPTS) {
         try {
+            // NOT-A-USER-PATH: the delivery state machine writing back the outcome for the row it is
+            // delivering. The toAddress rewrite narrows the recipient list to the failed ones, which
+            // on an un-attributed row would be a change of the ownership verdict — the store refuses
+            // that case itself (mail_shared_row_party_narrowed) and this catch keeps the queue moving.
             await Email.markFailed(sentRecordId, attempts, lastError);
             // Persist the failed recipients for visibility.
+            // NOT-A-USER-PATH: the delivery state machine's own row. This narrows the recipient list,
+            // which on an un-attributed row would BE a change of the ownership verdict — the store
+            // refuses that case itself (mail_shared_row_party_narrowed); the catch keeps the queue moving.
             await Email.update(sentRecordId, { toAddress: failed.map(f => f.recipient).join(', ') });
         } catch (e) { /* non-fatal */ }
         await sendBounce(data, failed);
@@ -1877,8 +1971,12 @@ async function updateRetryState(sentRecordId, data, externalRecipients, failed) 
     const backoffMinutes = Math.min(attempts * attempts, 360);
     const nextAttemptAt = new Date(Date.now() + backoffMinutes * 60 * 1000).toISOString();
     try {
+        // NOT-A-USER-PATH: as above — the queue's own record, mid-delivery. The store still refuses an
+        // address rewrite that would drop a party from an un-attributed row.
         await Email.markRetry(sentRecordId, attempts, nextAttemptAt, lastError);
         // Store ONLY the still-failed recipients so the next pass retries exactly those.
+        // NOT-A-USER-PATH: as above — the queue's own record, mid-delivery, and the store still
+        // refuses an address rewrite that would drop a party from an un-attributed row.
         await Email.update(sentRecordId, { toAddress: temporary.map(f => f.recipient).join(', ') });
     } catch (e) { /* non-fatal */ }
 
@@ -1893,6 +1991,8 @@ async function sendBounce(data, failedList) {
     try {
         const fromEmail = (data.fromEmail || '').toLowerCase();
         if (!fromEmail) return;
+        // NOT-A-DELIVERY-PATH: resolves the SENDER to notify them that their own message bounced.
+        // Nothing is delivered to this account and no inbox row is written for it.
         const user = await User.findByEmail(fromEmail);
         if (!user || !user.id) return;
         const detail = failedList.map(f => `${f.recipient} (${f.error})`).join(', ');
@@ -2117,7 +2217,52 @@ const isSecretOption = (key) => SECRET_OPTION_RE.test(String(key)) || SECRET_OPT
 
 exports.init = async function (bridge) {
     wordjs = bridge;
-    Email = require('./lib/email-store')(wordjs.db);
+    // The store cannot look a user up itself (the SQL guard denies every table outside its prefix), so
+    // it is handed the ONE identity question its one-time ownership backfill needs. It is used ONLY by
+    // _backfillOwnership, which attributes pre-v2.1 rows so the store can keep a single ownership
+    // predicate instead of the unanchored `to_address LIKE '%me%'` arm that let one mailbox read and
+    // permanently delete another's mail.
+    Email = createEmailStore(wordjs.db, {
+        // IDENTITY — "which site account IS this address" — and nothing else.
+        //
+        // It used to answer with mailboxAddressOf(account, domain), the DELIVERY predicate, which also
+        // demands the admin-granted professional-mailbox flag. Host migration 0006 leaves that flag OFF
+        // for every account that is neither an administrator nor able to edit_users, so on EXACTLY the
+        // upgrade this backfill exists for, every address resolved to 0, every historic row fell
+        // through to the catch-all owner, and the administrator inherited the whole site's mail —
+        // subject and snippet in a listing where it had never appeared, and destroyable with one
+        // "Empty trash" — while the real owners lost it from every listing, counter and search,
+        // IRREVERSIBLY (once a row is no longer user_id = 0 the exact-filtered path cannot find it).
+        //
+        // Identity is safe to trust here: the host refuses self-service assignment of an address on the
+        // mail domain (core/mailbox.refuseSelfServiceEmailChange, enforced on PUT /users/me,
+        // PUT /users/:id and POST /auth/register), so nobody can claim an unused corporate address and
+        // inherit its history — which is the hijack the delivery predicate was reached for.
+        //
+        // NOTE this uses findByEmail ALONE. mail-server-mailbox-gate.test.ts keys the delivery-path
+        // assertion on the `findByEmail || findByLogin` pair precisely so a non-delivery resolver like
+        // this one is not required to carry a delivery guard it must not have.
+        resolveUserIdByAddress: async (address) => {
+            try {
+                const want = String(address || '').trim().normalize('NFC').toLowerCase();
+                if (!want) return 0;
+                // NOT-A-DELIVERY-PATH: answers IDENTITY ("which account IS this address") for the
+                // ownership backfill. Adding a delivery guard here is the #5 regression: mailboxAddressOf
+                // is OFF for every non-administrator, so it would answer 0 for the whole site.
+                const account = await User.findByEmail(want);
+                return account && account.id ? account.id : 0;
+            } catch (e) {
+                // THROW, never 0. Returning 0 said "this address belongs to no account here", which is
+                // a FACT the store acts on: it is the difference between "nobody else would lose this
+                // message" and "we could not check". The store distinguishes them (UNKNOWN_IDENTITY)
+                // and refuses to destroy on the second — but only if we let the failure reach it.
+                throw new Error(`mail identity lookup failed for an address: ${e && e.message}`);
+            }
+        }
+        // NO fallbackOwnerId, deliberately: a row nobody claims — or that several accounts are party
+        // to — stays at user_id = 0, where the store's exact-filtered path already serves it to all of
+        // them. See _resolveLegacyOwner in lib/email-store.js.
+    });
 
     // getOption/updateOption transparently route secret/security-critical keys to the plugin's own
     // secrets table (the host blocks those via the generic options bridge) and everything else to
@@ -2181,6 +2326,9 @@ exports.init = async function (bridge) {
 
             for (const email of pending) {
                 try {
+                    // NOT-A-USER-PATH: the scheduled-send queue. `email` comes from
+                    // Email.getPendingScheduled() — rows the server selected by scheduled_at — so no
+                    // request supplied this id and nothing here is returned to a caller.
                     // Load attachments if any
                     const attachments = await Email.getAttachments(email.id);
                     const formattedAttachments = attachments.map(att => ({
@@ -2197,8 +2345,10 @@ exports.init = async function (bridge) {
                         subject: email.subject,
                         text: email.body_text,
                         html: email.body_html,
-                        fromEmail: email.from_address,
-                        fromName: email.from_name,
+                        // THE OWNER'S identity, resolved from user_id — never `email.from_address`,
+                        // which on a pre-v2.1 shared row is a COLLEAGUE'S address that no rewrite can
+                        // clear. A row nobody owns yields null and goes out as the site itself.
+                        identity: await sendingIdentityOfOwner(email.user_id),
                         parentId: email.parent_id,
                         threadId: email.thread_id,
                         userId: email.user_id || 0,
@@ -2225,10 +2375,13 @@ exports.init = async function (bridge) {
                     // to_address holds exactly the still-failed (external) recipients for this row.
                     const recipients = (email.to_address || '').split(',').map(s => s.trim()).filter(Boolean);
                     if (recipients.length === 0) {
+                        // NOT-A-USER-PATH: the retry queue, over rows Email.getPendingRetries()
+                        // selected by delivery_status/next_attempt_at.
                         await Email.markFailed(email.id, email.delivery_attempts || 0, 'No recipients to retry');
                         continue;
                     }
 
+                    // NOT-A-USER-PATH: the retry queue — same rows Email.getPendingRetries() selected.
                     const attachments = await Email.getAttachments(email.id);
                     const formattedAttachments = attachments.map(att => ({
                         filename: att.filename,
@@ -2240,8 +2393,10 @@ exports.init = async function (bridge) {
                         subject: email.subject,
                         text: email.body_text,
                         html: email.body_html,
-                        fromEmail: email.from_address,
-                        fromName: email.from_name,
+                        // THE OWNER'S identity, resolved from user_id — never `email.from_address`,
+                        // which on a pre-v2.1 shared row is a COLLEAGUE'S address that no rewrite can
+                        // clear. A row nobody owns yields null and goes out as the site itself.
+                        identity: await sendingIdentityOfOwner(email.user_id),
                         parentId: email.parent_id,
                         threadId: email.thread_id,
                         userId: email.user_id || 0,
@@ -2374,21 +2529,29 @@ exports.init = async function (bridge) {
         });
     });
 
-    // SECURITY: authorize a request against a single email record.
+    // SECURITY: authorize a request against a single email record — THE ownership predicate, and the
+    // SAME one every collection query in the store uses (Email._ownsRow is the JS twin of
+    // _ownerClause). There is deliberately one rule for the whole plugin.
     //
-    // The previous checks did `email.to_address !== req.user.userEmail`, but to_address (and
-    // cc_address/bcc_address) are COMMA-JOINED recipient lists — so (a) cc/bcc recipients were never
-    // matched (they could not read their own mail and, worse, the whole-string compare leaked nothing
-    // to them but also never authorized them) and (b) a member of a multi-recipient To list failed the
-    // exact-equality compare. Email.canUserAccess parses every recipient field into exact address
-    // tokens and checks membership across to + cc + bcc + sender.
+    // It used to be Email.canUserAccess(email, user.userEmail): pure ADDRESS membership. Under the
+    // ownership model every party holds their OWN copy of a message and every copy names every
+    // recipient — so address membership authorized Ana over MARIANA'S rows. That is how irreversible
+    // cross-user destruction survived the fix for it: emptyTrash was tightened to _ownsRow while
+    // DELETE /emails/:id and POST /emails/bulk {action:'delete'} kept the address rule and reached the
+    // very same Email.deleteManyPermanently — as did every flag writer (star/archive/read/spam/labels)
+    // and the attachment download. _ownsRow falls back to canUserAccess ONLY for un-backfilled
+    // (user_id = 0) rows, which nobody owns yet.
+    //
+    // (The address rule itself replaced `email.to_address !== req.user.userEmail`, which matched
+    // neither cc/bcc recipients nor a member of a multi-recipient To list; canUserAccess survives as
+    // that exact-token membership test inside _ownsRow's legacy arm.)
     //
     // The `administrator` override is preserved (existing behavior); note that in this sandboxed plugin
     // req.user is the users:read projection {id,userLogin,username,userEmail,displayName,role} and
     // carries no capability map, so the override keys off role. If/when a dedicated capability bridge
     // exists, gate this behind an explicit 'read_others_mail' capability instead of the bare role.
     const canAccessEmail = (email, user) =>
-        Email.canUserAccess(email, user.userEmail) || user.role === 'administrator';
+        !!user && (Email._ownsRow(email, user.id, user.userEmail) || user.role === 'administrator');
 
     // GET /api/v1/plugin/mail-server/emails/search — operator-aware (from:/to:/subject:/label:/in:/
     // has:attachment/is:unread/is:starred + free text), scoped to the requester's mailbox.
@@ -2406,7 +2569,7 @@ exports.init = async function (bridge) {
             const limit = Math.min(parseInt(req.query.limit || '50', 10) || 50, 100);
             const offset = Math.max(parseInt(req.query.offset || '0', 10) || 0, 0);
             const emails = await Email.search(req.user.id, req.user.userEmail, q, limit, offset);
-            const labels = await Email.getLabelsForEmails(emails.map(e => e.id));
+            const labels = await Email.getLabelsForEmails(emails.map(e => e.id), req.user.id);
             res.json({ emails, labels });
         } catch (error) {
             console.error("Search error:", error);
@@ -2439,7 +2602,7 @@ exports.init = async function (bridge) {
                 Email.countByUser(req.user.id, req.user.userEmail, folder, labelId),
                 Email.getCounts(req.user.id, req.user.userEmail)
             ]);
-            const labels = await Email.getLabelsForEmails(emails.map(e => e.id));
+            const labels = await Email.getLabelsForEmails(emails.map(e => e.id), req.user.id);
             res.json({ emails, total, counts, labels });
         } catch (error) {
             console.error('Listing failed:', error);
@@ -2476,12 +2639,15 @@ exports.init = async function (bridge) {
         }
 
         const threadIdToSearch = email.thread_id || email.id;
-        const thread = await Email.findByThreadId(threadIdToSearch, req.user.userEmail, { includeSpam: !!email.is_spam });
+        // The requester's ID as well as their address: the thread returns FULL rows, so it is filtered
+        // by OWNERSHIP (and excludes drafts, which are nobody else's conversation — an unsent reply in
+        // a shared thread was being handed over verbatim).
+        const thread = await Email.findByThreadId(threadIdToSearch, req.user.id, req.user.userEmail, { includeSpam: !!email.is_spam });
 
         const ids = [email.id, ...(thread || []).map(t => t.id)];
         const [attMap, labelMap] = await Promise.all([
             Email.getAttachmentsForEmails(ids),
-            Email.getLabelsForEmails(ids)
+            Email.getLabelsForEmails(ids, req.user.id)
         ]);
         const withExtras = (msg) => ({ ...msg, attachments: attMap[msg.id] || [], labels: labelMap[msg.id] || [] });
 
@@ -2500,9 +2666,22 @@ exports.init = async function (bridge) {
             return res.status(403).json({ error: 'Cannot delete this message' });
         }
 
-        // If already in trash, delete permanently
+        // If already in trash, delete permanently. The ACTOR travels with the call: the store's
+        // deleteManyPermanently re-checks every row against Email._mayDestroyRow, which is STRICTER
+        // than canAccessEmail above — an un-attributed (user_id = 0) row can have several site
+        // accounts as parties, and permanent destruction is not a thing any of them may do to the
+        // others. See the ownership header in lib/email-store.js.
         if (email.is_trash === 1) {
-            await Email.deletePermanently(req.params.id);
+            const destroyed = await Email.deletePermanently(req.params.id, {
+                userId: req.user.id, userEmail: req.user.userEmail
+            });
+            if (destroyed === 0) {
+                return res.status(409).json({
+                    code: 'mail_shared_legacy_row',
+                    error: 'This message predates the mailbox upgrade and more than one account is a ' +
+                        'party to it, so it cannot be destroyed permanently — it stays in your trash.'
+                });
+            }
             return res.json({ success: true, message: 'Deleted permanently' });
         }
 
@@ -2524,16 +2703,36 @@ exports.init = async function (bridge) {
     });
 
     // DELETE /api/v1/plugin/mail-server/trash/empty - Empty Trash
+    //
+    // This is a PERMANENT, collection-wide delete (attachment blobs included), and it is the only one
+    // reachable by a plain button press. The per-id routes above check canAccessEmail and /emails/bulk
+    // filters to `mine`; emptyTrash was the one path that deleted by clause alone, which is how one
+    // mailbox could destroy another's trash. Email.emptyTrash now applies the same exact ownership
+    // check to every row before deleting it, and reports how many were actually destroyed rather than
+    // an unconditional "Trash emptied".
     route('delete', '/trash/empty', { auth: true, mailbox: true }, async (req, res) => {
-        await Email.emptyTrash(req.user.id, req.user.userEmail);
-        res.json({ success: true, message: 'Trash emptied' });
+        try {
+            const deleted = await Email.emptyTrash(req.user.id, req.user.userEmail);
+            res.json({ success: true, deleted, message: `Trash emptied (${deleted} message(s) deleted)` });
+        } catch (e) {
+            // The store REFUSES rather than half-emptying a trash it could only partly enumerate.
+            // Reporting "Trash emptied (0 deleted)" over mail that is still there is the failure this
+            // replaces, so surface the refusal instead of swallowing it into a cheerful success.
+            if (e && (e.code === 'mail_legacy_scan_incomplete' || e.code === 'mail_identity_unavailable')) {
+                return res.status(503).json({ code: e.code, error: e.message });
+            }
+            console.error('[MailServer] Empty trash failed:', e && e.message);
+            res.status(500).json({ error: 'Empty trash failed' });
+        }
     });
 
     // PUT /api/v1/plugin/mail-server/emails/:id/star
     route('put', '/emails/:id/star', { auth: true, mailbox: true }, async (req, res) => {
         const email = await Email.findById(req.params.id);
         if (!email) return res.status(404).json({ error: 'Email not found' });
-        if (!Email.canUserAccess(email, req.user.userEmail)) return res.status(403).json({ error: 'Forbidden' });
+        // canAccessEmail, like every other per-id route: writing a flag onto ANOTHER user's row is a
+        // cross-mailbox mutation even when it is only a star.
+        if (!canAccessEmail(email, req.user)) return res.status(403).json({ error: 'Forbidden' });
 
         await Email.setStarred(req.params.id, req.body.starred);
         res.json({ success: true });
@@ -2543,7 +2742,7 @@ exports.init = async function (bridge) {
     route('put', '/emails/:id/archive', { auth: true, mailbox: true }, async (req, res) => {
         const email = await Email.findById(req.params.id);
         if (!email) return res.status(404).json({ error: 'Email not found' });
-        if (!Email.canUserAccess(email, req.user.userEmail)) return res.status(403).json({ error: 'Forbidden' });
+        if (!canAccessEmail(email, req.user)) return res.status(403).json({ error: 'Forbidden' });
 
         await Email.setArchived(req.params.id, req.body.archived);
         res.json({ success: true });
@@ -2574,9 +2773,9 @@ exports.init = async function (bridge) {
             // (The old code checked `email.isTrash` — the row property is is_trash — so "ham" never
             // actually restored anything.)
             if (category === 'spam') {
-                await Email.setSpam(id, true);
+                await Email.setSpam(id, true, req.user.id);
             } else if (category === 'ham') {
-                await Email.setSpam(id, false);
+                await Email.setSpam(id, false, req.user.id);
                 if (email.is_trash) await Email.restoreFromTrash(id);
             }
 
@@ -2621,15 +2820,39 @@ exports.init = async function (bridge) {
             let email;
             if (id) {
                 const existing = await Email.findById(id);
-                if (!existing || existing.from_address !== req.user.userEmail) {
+                // SECURITY (IDOR): the row must be the CALLER'S OWN, by ownership. Comparing
+                // from_address to the caller's address accepted the RECIPIENT'S COPY of any message
+                // this user had sent them — a row owned by that recipient — and Email.update below
+                // then overwrote its subject and body and flipped it to is_draft = 1, destroying the
+                // message in the other mailbox. _ownsRow still covers a legacy (user_id = 0) draft of
+                // the caller's through the exact-token address check.
+                if (!existing || !Email._ownsRow(existing, req.user.id, req.user.userEmail)) {
                     return res.status(403).json({ error: 'Access denied' });
                 }
-                email = await Email.update(id, data);
+                // SAVE AS NEW, NOT IN PLACE, on a pre-v2.1 row that is the only copy several
+                // mailboxes have. Rewriting it here would overwrite a colleague's message while every
+                // membership check still said yes — round 4's reproduction. The store refuses it
+                // outright (mail_shared_row_immutable); doing it deliberately HERE means the author
+                // keeps their draft, owned by them, instead of getting a 409 they cannot act on. The
+                // response carries the new id, so the composer's next autosave is an ordinary update.
+                if (await Email._isSharedRow(existing)) {
+                    email = await Email.create(data);
+                } else {
+                    email = await Email.update(id, data);
+                }
             } else {
                 email = await Email.create(data);
             }
             res.json({ success: true, id: email.id });
         } catch (error) {
+            // The store refuses to shrink the party set of a pre-v2.1 shared row — that is not a
+            // server fault, it is the other mailbox's copy being protected. Say so.
+            // Both refusals mean the same thing to a client: this row belongs to more than one
+            // mailbox, so it cannot be changed in place. The routes above already turn that into a
+            // save-as-new, so reaching here means a path that did not — say so instead of a 500.
+            if (error && (error.code === 'mail_shared_row_party_narrowed' || error.code === 'mail_shared_row_immutable')) {
+                return res.status(409).json({ error: error.message });
+            }
             console.error("Draft save failed:", error);
             res.status(500).json({ error: error.message });
         }
@@ -2664,14 +2887,21 @@ exports.init = async function (bridge) {
         }
 
         // SECURITY (IDOR): a supplied draft id must be the CALLER's own row — otherwise any user
-        // could overwrite (and effectively send as) another user's draft by guessing its id.
+        // could overwrite (and effectively send as) another user's draft by guessing its id. The
+        // `|| from_address matches me` arm that used to widen this accepted rows OWNED BY SOMEONE
+        // ELSE (their copy of a message I sent them carries my address); _ownsRow keeps the legacy
+        // (user_id = 0) case it was really there for and drops the rest.
+        // A pre-v2.1 row shared with another mailbox is not this caller's to promote into the
+        // outbox: doing so overwrote the colleague's message AND left the row's from_address — a
+        // colleague's address — as the identity the send queue would have used. Send it as a NEW
+        // message of the caller's own instead; the shared row is left exactly as it was.
+        let sendAsNew = false;
         if (id) {
             const existing = await Email.findById(id);
-            const ownsIt = existing && (
-                existing.user_id === req.user.id ||
-                String(existing.from_address || '').toLowerCase() === String(req.user.userEmail || '').toLowerCase()
-            );
-            if (!ownsIt) return res.status(403).json({ error: 'Access denied' });
+            if (!existing || !Email._ownsRow(existing, req.user.id, req.user.userEmail)) {
+                return res.status(403).json({ error: 'Access denied' });
+            }
+            sendAsNew = await Email._isSharedRow(existing);
         }
 
         let parentId = 0;
@@ -2719,7 +2949,7 @@ exports.init = async function (bridge) {
 
                 // Create or Update (if it was a draft)
                 let email;
-                if (id) {
+                if (id && !sendAsNew) {
                     await Email.update(id, data);
                     // update() doesn't persist attachment rows (create() does) — but the QUEUE delivers
                     // from the stored rows, so a draft promoted to the outbox must save them now.
@@ -2745,12 +2975,13 @@ exports.init = async function (bridge) {
                 subject,
                 text: isHtml ? stripHtml(body) : body,
                 html: isHtml ? body : null,
-                fromEmail: req.user.userEmail,
-                fromName: req.user.displayName || req.user.userLogin,
+                identity: sendingIdentityOf(req.user),
                 parentId,
                 threadId,
                 userId: req.user.id,
-                draftId: id,
+                // A shared row is never the record this send updates — see sendAsNew above. Without
+                // an id sendMail writes a fresh Sent copy owned by the sender.
+                draftId: sendAsNew ? 0 : id,
                 attachments: attachments || []
             });
             if (result.failed && result.failed.length > 0) {
@@ -2764,6 +2995,12 @@ exports.init = async function (bridge) {
             }
             res.json({ success: true, message: 'Message delivered', delivered: result.delivered });
         } catch (error) {
+            // Both refusals mean the same thing to a client: this row belongs to more than one
+            // mailbox, so it cannot be changed in place. The routes above already turn that into a
+            // save-as-new, so reaching here means a path that did not — say so instead of a 500.
+            if (error && (error.code === 'mail_shared_row_party_narrowed' || error.code === 'mail_shared_row_immutable')) {
+                return res.status(409).json({ error: error.message });
+            }
             res.status(500).json({ error: 'Delivery failed: ' + error.message });
         }
     });
@@ -2774,9 +3011,9 @@ exports.init = async function (bridge) {
     route('post', '/emails/:id/unsend', { auth: true, mailbox: true }, async (req, res) => {
         const email = await Email.findById(req.params.id);
         if (!email) return res.status(404).json({ error: 'Email not found' });
-        const isOwner = email.user_id === req.user.id ||
-            String(email.from_address || '').toLowerCase() === String(req.user.userEmail || '').toLowerCase();
-        if (!isOwner) return res.status(403).json({ error: 'Forbidden' });
+        // Same ownership predicate as every other per-id route (the from_address arm this replaces
+        // accepted rows owned by their recipient).
+        if (!Email._ownsRow(email, req.user.id, req.user.userEmail)) return res.status(403).json({ error: 'Forbidden' });
         if (email.is_sent === 1 || !email.scheduled_at) {
             return res.status(409).json({ error: 'Too late — the message was already handed off for delivery.' });
         }
@@ -2795,9 +3032,8 @@ exports.init = async function (bridge) {
     route('post', '/emails/:id/retry', { auth: true, mailbox: true }, async (req, res) => {
         const email = await Email.findById(req.params.id);
         if (!email) return res.status(404).json({ error: 'Email not found' });
-        const isOwner = email.user_id === req.user.id ||
-            String(email.from_address || '').toLowerCase() === String(req.user.userEmail || '').toLowerCase();
-        if (!isOwner && req.user.role !== 'administrator') return res.status(403).json({ error: 'Forbidden' });
+        // canAccessEmail is exactly "own it, or be an administrator", which is what this route meant.
+        if (!canAccessEmail(email, req.user)) return res.status(403).json({ error: 'Forbidden' });
         if (email.delivery_status !== 'failed' && email.delivery_status !== 'retry') {
             return res.status(409).json({ error: 'This message is not in a failed state — nothing to retry.' });
         }
@@ -2820,8 +3056,8 @@ exports.init = async function (bridge) {
                 subject: email.subject,
                 text: email.body_text,
                 html: email.body_html,
-                fromEmail: email.from_address,
-                fromName: email.from_name,
+                // The OWNER's identity, resolved from user_id — see the queue above.
+                identity: await sendingIdentityOfOwner(email.user_id),
                 parentId: email.parent_id,
                 threadId: email.thread_id,
                 userId: email.user_id || 0,
@@ -2969,6 +3205,8 @@ exports.init = async function (bridge) {
             // A LOCAL recipient (any local account's address) is delivered straight to the DB inbox and
             // never touches MX / DKIM / port 25 — so a green result there proves NOTHING about real
             // deliverability. Detect it and tell the admin plainly instead of a misleading "success".
+            // NOT-A-DELIVERY-PATH: a DIAGNOSTIC probe for the admin-only test route. It only decides the
+            // wording of the answer; sendMail below performs the real (guarded) delivery.
             const localUser = await User.findByEmail(to).catch(() => null);
             const result = await sendMail({
                 to,
@@ -3168,8 +3406,20 @@ exports.init = async function (bridge) {
 
     // POST /api/v1/plugin/mail-server/upload/attachment
     // Host parses the multipart upload (multer) and forwards req.file metadata to this handler.
-    route('post', '/upload/attachment', { auth: true, mailbox: true, multipart: 'file' }, (req, res) => {
+    route('post', '/upload/attachment', { auth: true, mailbox: true, multipart: 'file' }, async (req, res) => {
         if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+        // Teach the store where the HOST's multipart handler stages uploads. This is the ONLY way a
+        // directory ever becomes an accepted attachment source, and the value comes from multer (host
+        // configuration), never from the request body — so the composer can hand `path` back to
+        // /drafts and /send, and nothing else can. Remembered across restarts in our own secrets row.
+        try {
+            const stagingRoot = path.dirname(req.file.path);
+            if (Email.allowAttachmentRoot(stagingRoot)) {
+                if ((await Email.getSecret('_attach_staging_root', '')) !== stagingRoot) {
+                    await Email.setSecret('_attach_staging_root', stagingRoot);
+                }
+            }
+        } catch (e) { /* the upload itself still succeeds; worst case the file must be re-picked */ }
         res.json({
             success: true,
             file: {
@@ -3185,7 +3435,7 @@ exports.init = async function (bridge) {
     route('put', '/emails/:id/read', { auth: true, mailbox: true }, async (req, res) => {
         const email = await Email.findById(req.params.id);
         if (!email) return res.status(404).json({ error: 'Email not found' });
-        if (!Email.canUserAccess(email, req.user.userEmail)) return res.status(403).json({ error: 'Forbidden' });
+        if (!canAccessEmail(email, req.user)) return res.status(403).json({ error: 'Forbidden' });
 
         await Email.setRead(req.params.id, !!req.body.read);
         res.json({ success: true });
@@ -3198,7 +3448,10 @@ exports.init = async function (bridge) {
         if (!canAccessEmail(email, req.user)) return res.status(403).json({ error: 'Forbidden' });
 
         const state = !!req.body.spam;
-        await Email.setSpam(req.params.id, state);
+        // WHO flagged it is written to the row: the spam flag decides what site-wide retention
+        // permanently destroys, and this route only asks the READ question (an administrator passes
+        // it on anybody's mail). See Email._scopeClause / purgeOldSpam.
+        await Email.setSpam(req.params.id, state, req.user.id);
         try {
             await classifier.learn((email.subject || '') + ' ' + (email.body_text || ''), state ? 'spam' : 'ham');
             await saveBayes();
@@ -3217,7 +3470,11 @@ exports.init = async function (bridge) {
             if (ids.length === 0) return res.status(400).json({ error: 'No messages selected' });
 
             const rows = await Email.findByIds(ids);
-            const mine = rows.filter(r => r.user_id === req.user.id || canAccessEmail(r, req.user));
+            // ONE predicate. The `r.user_id === req.user.id ||` prefix that used to sit here was
+            // redundant (canAccessEmail now decides ownership first) and read as if the address arm
+            // after it were a mere widening for legacy rows — while in fact it authorized this
+            // caller over rows OWNED BY SOMEONE ELSE, and the 'delete' branch below is permanent.
+            const mine = rows.filter(r => canAccessEmail(r, req.user));
             const okIds = mine.map(r => r.id);
             if (okIds.length === 0) return res.status(403).json({ error: 'No accessible messages in selection' });
 
@@ -3228,9 +3485,15 @@ exports.init = async function (bridge) {
                 else await Email.removeLabelFromEmails(okIds, label.id);
             } else if (action === 'delete') {
                 // Permanent delete only for rows already in trash (mirrors the single-message rule).
-                await Email.deleteManyPermanently(mine.filter(r => r.is_trash === 1).map(r => r.id));
+                // The ACTOR is mandatory: the store re-checks each row against the STRICTER destruction
+                // predicate, so a shared un-attributed row survives a bulk delete just as it survives
+                // the per-id one. Same call, same gate, no third answer.
+                await Email.deleteManyPermanently(
+                    mine.filter(r => r.is_trash === 1).map(r => r.id),
+                    { userId: req.user.id, userEmail: req.user.userEmail }
+                );
             } else if (action === 'spam' || action === 'notspam') {
-                await Email.bulkSetFlags(okIds, { isSpam: action === 'spam' ? 1 : 0, isArchived: 0 });
+                await Email.bulkSetFlags(okIds, { isSpam: action === 'spam' ? 1 : 0, isArchived: 0 }, req.user.id);
                 // Teach the Bayes filter from a bounded sample (rows already carry full bodies here).
                 let trained = 0;
                 for (const r of mine) {
@@ -3248,7 +3511,7 @@ exports.init = async function (bridge) {
                     archive: { isArchived: 1 }, unarchive: { isArchived: 0 },
                     trash: { isTrash: 1 }, restore: { isTrash: 0 }
                 };
-                await Email.bulkSetFlags(okIds, map[action]);
+                await Email.bulkSetFlags(okIds, map[action], req.user.id);
             }
             res.json({ success: true, updated: okIds.length });
         } catch (error) {
@@ -3325,7 +3588,7 @@ exports.init = async function (bridge) {
             const label = await Email.findLabel(lid, req.user.id);
             if (label) await Email.removeLabelFromEmails([email.id], label.id);
         }
-        const labels = await Email.getLabelsForEmails([email.id]);
+        const labels = await Email.getLabelsForEmails([email.id], req.user.id);
         res.json({ success: true, labels: labels[email.id] || [] });
     });
 
@@ -3385,7 +3648,7 @@ exports.init = async function (bridge) {
             const mailDomain = await getMailDomain();
             const [users, history] = await Promise.all([
                 User.findAll({ search: query, limit: 5 }).catch(() => []),
-                Email.suggestContacts(req.user.id, query, 8).catch(() => [])
+                Email.suggestContacts(req.user.id, req.user.userEmail, query, 8).catch(() => [])
             ]);
             const out = new Map();
             for (const u of (users || [])) {

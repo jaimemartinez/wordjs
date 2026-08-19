@@ -1,4 +1,15 @@
 import React from "react";
+import { safeCustomPropValue, safeStyleObject, AUTHOR_CSS_PROPS } from "./safeStyle";
+
+/**
+ * THE OTHER SINK ON THE SAME ELEMENT. Re-exported from here so a block still imports ONE module to
+ * build its markup: `style` goes through `blockVars`/`safeCss`, `class` through `bc`/`cx` and — when
+ * a modifier carries author text — `safeClassToken`. The criterion itself lives in safeStyle.ts
+ * next to the value criterion, because a class name and a custom property are the same thing seen
+ * twice: a token whose meaning some stylesheet decides. See its header for why the prefix, not the
+ * token grammar, is the load-bearing half.
+ */
+export { safeClassToken, safeExtraClassList } from "./safeStyle";
 
 /**
  * PER-BLOCK CSS VARIABLE CONTRACT — the seam that makes blocks themeable.
@@ -18,18 +29,55 @@ import React from "react";
  * Rule 1 only outranks rule 2 when the author actually chose something — which is exactly why
  * `blockVars` OMITS every empty value instead of emitting `undefined`/`""`. An always-present
  * inline variable would pin the block to its default forever and lock the theme out again.
+ *
+ * EVERY VALUE IS AUTHOR TEXT, so every value goes through `safeCustomPropValue`. This used to be a
+ * bare `String(value)`: a free-text prop that feeds a variable (Heading/Text `color`, Section `bg`,
+ * Table `stripeBg`, …) therefore landed in the style attribute verbatim, and React does not escape
+ * `;` inside a style value — so one colour field could append `position:fixed;inset:0;…` and paint a
+ * full-screen overlay over the page. A rejected value is DROPPED, exactly like an empty one, so the
+ * block falls back to the theme's value instead of to a broken declaration.
+ *
+ * THE NAME BEING OURS IS NOT ENOUGH, and that is the whole point of `safeCustomPropValue` rather
+ * than the bare value criterion: the name decides WHICH DECLARATION the stylesheet drops this value
+ * into. `--wjs-pricing-highlight-scale` is a literal here and still ends up inside
+ * `transform: scale( … )`, so the free-text `highlightScale` field of PricingTable could scale an
+ * opaque plan — with its own `<a href>` — over the entire viewport. Which names are narrowed, and to
+ * what, is decided ONCE in safeStyle.ts (`NARROWED_VAR_VALUE`) against the stylesheet, never per
+ * call site: a clamp added next to one `blockVars(...)` call is a guard the next block will not have.
  */
 export function blockVars(
     prefix: string,
     map: Record<string, string | number | undefined | null | false>
 ): React.CSSProperties {
-    const out: Record<string, string> = {};
+    const out: Record<string, string | number> = {};
     for (const [key, value] of Object.entries(map)) {
         if (value === undefined || value === null || value === "" || value === false) continue;
-        out[`--wjs-${prefix}-${key}`] = String(value);
+        // The NAME is ours (a literal at every call site); only the value is untrusted. Still checked,
+        // because a name outside the contract is not a variable any stylesheet reads anyway.
+        const name = `--wjs-${prefix}-${key}`;
+        if (!/^--wjs-[A-Za-z0-9_-]+$/.test(name)) continue;
+        const safe = safeCustomPropValue(name, String(value));
+        if (safe === null) continue;
+        out[name] = safe;
     }
     return out as React.CSSProperties;
 }
+
+/**
+ * The `props.css` channel (the CSSData control), filtered to declarations the author is allowed to
+ * make. Blocks spread it straight into their style attribute (`style={{ ...blockVars(…), ...css }}`),
+ * which is the widest of the object-style channels: an arbitrary property name with an arbitrary
+ * value. Re-exported from here so a block only ever has to import ONE module to build its style.
+ *
+ * NOTE THE ASYMMETRY WITH `blockVars` ABOVE, and why it is not an inconsistency: there the variable
+ * NAME is a literal at the call site and only the value is author text, so any `--wjs-*` is fine;
+ * here the author picks the name too, and a name is a way to reach a declaration — `wordjs-ui.css`
+ * expands `--wjs-button-hover-transform` into `transform:`, which `AUTHOR_CSS_PROPS` excludes on
+ * purpose. `safeStyleObject` therefore admits only the closed `AUTHOR_CSS_VARS` list on this channel
+ * (see safeStyle.ts).
+ */
+export const safeCss = (css: unknown): React.CSSProperties =>
+    safeStyleObject(css, AUTHOR_CSS_PROPS) as React.CSSProperties;
 
 /** Join class names, dropping falsy entries. */
 export const cx = (...parts: (string | false | null | undefined)[]): string =>

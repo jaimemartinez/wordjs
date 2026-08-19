@@ -62,6 +62,8 @@ function applyFailure(state: State, now: number, policy: Policy): State {
 }
 
 class LoginThrottle {
+    /** Entries past which _write sweeps expired keys. A soft cap, not a hard one: never evicts live state. */
+    static MEM_SOFT_CAP = 5000;
     policy: Policy;
     now: () => number;
     mem: Map<string, { state: State; expiresAt: number }>;
@@ -109,6 +111,20 @@ class LoginThrottle {
             catch { /* Redis hiccup → record in-memory so this node still throttles */ }
         }
         this.mem.set(key, { state, expiresAt: now + ttl });
+        this._sweep(now);
+    }
+
+    /**
+     * Bound the in-process map. Half the key — the account — is the identifier SUBMITTED by an anonymous
+     * caller, and `_read` only ever expires the one key it was asked for, so a spray of never-repeated
+     * usernames left one entry each, for ever, in the default (no-Redis) deployment. Sweeping lazily and
+     * only past a soft cap keeps the hot path O(1) while making the map's size a function of live traffic
+     * rather than of everything ever seen. Nothing here changes throttling semantics: an entry is only
+     * dropped once its own TTL has already expired, which is when `_read` would have reported EMPTY.
+     */
+    private _sweep(now: number): void {
+        if (this.mem.size <= LoginThrottle.MEM_SOFT_CAP) return;
+        for (const [k, e] of this.mem) if (e.expiresAt <= now) this.mem.delete(k);
     }
 
     private async _delete(key: string): Promise<void> {

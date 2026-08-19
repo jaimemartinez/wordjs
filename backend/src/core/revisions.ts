@@ -8,6 +8,38 @@ const { dbAsync } = require('../config/database');
 const { diffText, diffStats } = require('./text-diff');
 
 /**
+ * THE VERSIONED META KEYS — the exact set a snapshot copies and a restore puts back.
+ *
+ * WHAT THE OLD CODE DID WRONG. saveRevision() copied EVERY meta row of the post, and restoreRevision()
+ * "restored" that by running `DELETE FROM post_meta WHERE post_id = ?` before re-inserting. So a
+ * restore did not roll the post back to the snapshot — it DELETED every key created since it:
+ * `_wjs_review_comments` (the whole editorial review thread), plugin meta, and `_wp_trash_meta_status`,
+ * whose absence makes Post.untrash() fall through to the literal 'draft' and bring a PUBLISHED post
+ * back as a draft. Nothing in the UI says a restore touches meta at all.
+ *
+ * WHY AN EXPLICIT LIST. "Everything" is not a version boundary — it makes the restore's blast radius
+ * depend on what any other feature happens to have stored. These are the keys the EDITOR authors and
+ * that therefore belong to a revision: the page tree, the theme-template pick, the featured image, and
+ * the SEO fields (frontend/src/lib/editorRootFields.ts SEO_META_KEYS). Snapshot and restore read the
+ * SAME constant, so the two halves cannot describe different sets — which is how they came to disagree.
+ */
+const REVISIONABLE_POST_META: string[] = [
+    '_puck_data',
+    '_wjs_template',
+    '_thumbnail_id',
+    'seo_title',
+    'seo_description',
+    'og_image',
+    'noindex',
+];
+const REVISIONABLE_SET: Set<string> = new Set(REVISIONABLE_POST_META);
+
+/** Is `key` a meta key a revision captures (and therefore one whose write deserves a snapshot)? */
+function isRevisionableMeta(key: unknown): boolean {
+    return typeof key === 'string' && REVISIONABLE_SET.has(key);
+}
+
+/**
  * Per-process counter that breaks ties WITHIN one millisecond.
  *
  * A revision's post_name used to be `${postId}-revision-v${Date.now()}` and the schema carries
@@ -84,8 +116,15 @@ async function saveRevision(postId: number) {
 
   const revisionId = result.lastID;
 
-  // Copy meta to revision
-  const meta = await dbAsync.all('SELECT meta_key, meta_value FROM post_meta WHERE post_id = ?', [postId]);
+  // Copy the VERSIONED meta to the revision — the same set restoreRevision() puts back, so a snapshot
+  // and a restore can never describe different keys (they used to: this copied everything, and the
+  // restore deleted everything). meta_value is carried RAW: the value is stored text and a
+  // JSON.parse/stringify round trip is lossy ("1.50" → "1.5", whitespace dropped).
+  const placeholders = REVISIONABLE_POST_META.map(() => '?').join(',');
+  const meta = await dbAsync.all(
+    `SELECT meta_key, meta_value FROM post_meta WHERE post_id = ? AND meta_key IN (${placeholders})`,
+    [postId, ...REVISIONABLE_POST_META]
+  );
   for (const row of meta) {
     await dbAsync.run('INSERT INTO post_meta (post_id, meta_key, meta_value) VALUES (?, ?, ?)', [revisionId, row.meta_key, row.meta_value]);
   }
@@ -103,9 +142,13 @@ async function saveRevision(postId: number) {
 async function getRevisions(postId: number, options: { limit?: number; offset?: number } = {}) {
   const { limit = 10, offset = 0 } = options;
 
+  // post_status = 'inherit' is the ONLY status saveRevision() emits, so it is the only thing a genuine
+  // revision can carry. Requiring it here (and in countRevisions/limitRevisions/getRevision) means a
+  // row that reached post_type='revision' by some other door — the generic POST /posts used to accept
+  // the internal `revision` type with an arbitrary `parent` — cannot pass itself off as history.
   const rows = await dbAsync.all(`
     SELECT * FROM posts
-    WHERE post_parent = ? AND post_type = 'revision'
+    WHERE post_parent = ? AND post_type = 'revision' AND post_status = 'inherit'
     ORDER BY post_modified DESC
     LIMIT ? OFFSET ?
   `, [postId, limit, offset]);
@@ -126,7 +169,7 @@ async function getRevisions(postId: number, options: { limit?: number; offset?: 
  */
 async function getRevision(revisionId: number) {
   const row = await dbAsync.get(`
-    SELECT * FROM posts WHERE id = ? AND post_type = 'revision'
+    SELECT * FROM posts WHERE id = ? AND post_type = 'revision' AND post_status = 'inherit'
   `, [revisionId]);
 
   if (!row) return null;
@@ -181,6 +224,23 @@ async function restoreRevision(revisionId: number) {
     console.error('Failed to snapshot current state before restoring revision:', error);
   }
 
+  // Lazy requires: core/revisions is pulled in by the CLI and by route modules, and models/Post drags
+  // in the cache + hook subsystems. Requiring them here keeps module load order unchanged.
+  const Post = require('../models/Post');
+  const { doAction } = require('./hooks');
+
+  // The PRIOR status, read before the write, so the post_updated listeners can tell a real transition
+  // from a re-save (this is exactly what Post.update passes them).
+  const parentRow = await dbAsync.get('SELECT post_status FROM posts WHERE id = ?', [revision.postId]);
+  const priorStatus = parentRow ? parentRow.post_status : undefined;
+
+  // The snapshot's VERSIONED meta, RAW. getRevision().meta JSON.parse()s every value for API
+  // consumers, and the old restore re-serialized that with JSON.stringify/String(...) — a lossy round
+  // trip that rewrote a stored "1.50" as "1.5" and dropped the editor's original whitespace. Post
+  // already has the byte-faithful reader the WXR exporter uses; reuse it rather than re-deriving.
+  const rawByPost = await Post.getAllMetaRawForIds([revision.id]);
+  const snapshotMeta = (rawByPost[revision.id] || []).filter((r: any) => isRevisionableMeta(r.key));
+
   try {
     // Run the restore as ONE atomic unit on a single connection. Previously this issued
     // BEGIN/UPDATE/.../COMMIT as separate dbAsync.run() calls; on the pg driver each call grabs a
@@ -199,25 +259,62 @@ async function restoreRevision(revisionId: number) {
         WHERE id = ?
       `, [revision.title, revision.content, revision.excerpt, revision.postId]);
 
-      // Restore Meta - ONLY if the revision has meta to restore
-      const metaEntries = Object.entries(revision.meta || {});
-      if (metaEntries.length > 0) {
-        // Delete current parent meta first
-        await tx.run('DELETE FROM post_meta WHERE post_id = ?', [revision.postId]);
+      // Restore Meta. The DELETE is SCOPED to REVISIONABLE_POST_META and runs UNCONDITIONALLY.
+      //
+      // The old statement was `DELETE FROM post_meta WHERE post_id = ?` — it removed every key the
+      // post had, including ones no revision ever captured (`_wjs_review_comments`, plugin meta,
+      // `_wp_trash_meta_status`). Restoring a version must only move the keys that version HAS an
+      // opinion about; the delete is what makes the restore exact (a key present live but absent from
+      // the snapshot is correctly cleared), and it must not reach beyond that set.
+      //
+      // WHY THERE IS NO `if (snapshotMeta.length > 0)` GUARD ANY MORE. That guard was written for the
+      // WIDE delete, where "the snapshot has no meta" had to mean "touch nothing" or the restore would
+      // wipe the post clean. Against the SCOPED delete it protects nothing and breaks the very
+      // exactness the scoping buys: an EMPTY snapshot is a real, meaningful state — the version being
+      // restored had no versioned meta — and skipping the delete for it made the commonest legacy case
+      // a visible no-op. A classic/imported post has no `_puck_data`; the author opens Verso, saves
+      // (which writes one), then restores the pre-Verso revision: post_content came back, `_puck_data`
+      // stayed, and PostContent.tsx renders `_puck_data` in preference to the classic body — so the
+      // API answered 200 and the public page did not change at all. Zero snapshot rows now means
+      // exactly what it says: the post goes back to having no versioned meta.
+      const placeholders = REVISIONABLE_POST_META.map(() => '?').join(',');
+      await tx.run(
+        `DELETE FROM post_meta WHERE post_id = ? AND meta_key IN (${placeholders})`,
+        [revision.postId, ...REVISIONABLE_POST_META]
+      );
 
-        // Insert revision meta into parent post
-        for (const [key, value] of metaEntries) {
-          const serialized = typeof value === 'object' ? JSON.stringify(value) : String(value);
-          await tx.run('INSERT INTO post_meta (post_id, meta_key, meta_value) VALUES (?, ?, ?)', [revision.postId, key, serialized]);
-        }
+      // Insert the snapshot's rows verbatim — the bytes saveRevision copied, unparsed.
+      for (const row of snapshotMeta) {
+        await tx.run('INSERT INTO post_meta (post_id, meta_key, meta_value) VALUES (?, ?, ?)', [revision.postId, row.key, row.value]);
       }
     });
-    return true;
   } catch (error) {
     // transaction() already rolled back on throw; just report.
     console.error('Failed to restore revision:', error);
     return false;
   }
+
+  // A RESTORE IS A POST WRITE, and until now it was the only one that did not say so. This module
+  // wrote raw SQL and stopped: no cache invalidation and no `post_updated`. The damage was not mere
+  // staleness but INCOHERENCE — Post.toJSON() reads the row from cache and the meta from the DB, so
+  // the very response to the restore mixed the pre-restore title/content with the post-restore
+  // _puck_data (and authorizeForPost's Post.findById, one call earlier, had just seeded that cache
+  // entry even if it was cold). The public page never revalidated either: core/frontend-purge hangs
+  // off post_updated, as does the post.updated webhook. Worst case was real data loss — the author
+  // reopened the editor, was served the OLD cached body, fixed a typo and saved the restore away.
+  //
+  // Both statements now happen after the commit, through the SAME helpers Post.update uses, so a
+  // restore is indistinguishable from any other write to every downstream listener.
+  await Post._invalidatePostCacheById(revision.postId);
+  Post._invalidateCounts();
+  await doAction('post_updated', revision.postId, {
+    title: revision.title,
+    content: revision.content,
+    excerpt: revision.excerpt,
+    restoredFromRevisionId: revision.id,
+  }, priorStatus);
+
+  return true;
 }
 
 /**
@@ -248,7 +345,7 @@ async function deleteAllRevisions(postId: number) {
 async function countRevisions(postId: number) {
   const row = await dbAsync.get(`
     SELECT COUNT(*) as count FROM posts
-    WHERE post_parent = ? AND post_type = 'revision'
+    WHERE post_parent = ? AND post_type = 'revision' AND post_status = 'inherit'
   `, [postId]);
 
   return row.count;
@@ -319,9 +416,12 @@ async function limitRevisions(postId: number, maxRevisions = 10) {
   // form is portable across all drivers. (A top-level LIMIT ? in the SELECT is fine on every engine.)
   // The `, id ASC` tiebreak makes the pick deterministic across engines: revisions copy the parent's
   // post_modified, so many share a timestamp — without it, which rows get pruned would vary by engine.
+  // Same predicate as countRevisions() above — the set being counted and the set being pruned must be
+  // the SAME set, or the count says "5 over the cap" while the select hands back rows that were never
+  // counted.
   const oldest = await dbAsync.all(`
     SELECT id FROM posts
-    WHERE post_parent = ? AND post_type = 'revision'
+    WHERE post_parent = ? AND post_type = 'revision' AND post_status = 'inherit'
     ORDER BY post_modified ASC, id ASC
     LIMIT ?
   `, [postId, toDelete]);
@@ -338,6 +438,8 @@ async function limitRevisions(postId: number, maxRevisions = 10) {
 }
 
 module.exports = {
+  REVISIONABLE_POST_META,
+  isRevisionableMeta,
   saveRevision,
   getRevisions,
   getRevision,

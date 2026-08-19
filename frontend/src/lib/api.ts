@@ -428,8 +428,78 @@ export const postsApi = {
     delete: (id: number) => apiDelete(`/posts/${id}`),
 };
 
+// ── Categories (taxonomy `category`) ───────────────────────────────────────────────────────────────
+// WHY THERE IS NO PLAIN `list()` ANY MORE: `GET /categories` is PAGED and hard-caps `per_page` at
+// 100 (routes/categories.ts), ordered by name. The old `list()` sent no pager at all, so every
+// consumer silently saw the first 100 categories and treated that as "all of them" — which on any
+// site with more (trivial after a WXR import) meant the post editor could not offer, nor even NAME,
+// a category past the cap, and the categories screen could neither show nor delete one. Reading the
+// taxonomy therefore goes through the bounded pager below, exactly like `tagsApi`.
+/** Page size for the category reads. The router CAPS `per_page` at 100, so asking for more is a lie. */
+export const CATEGORY_PAGE_SIZE = 100;
+/** Bound on the walk: a pathological taxonomy must not turn opening a screen into dozens of requests. */
+export const CATEGORY_MAX_PAGES = 20;
+
+interface CategoryListOptions {
+    page?: number;
+    perPage?: number;
+    search?: string;
+    hideEmpty?: boolean;
+    orderby?: string;
+    order?: "asc" | "desc";
+}
+
+function categoryListQuery(opts: CategoryListOptions): URLSearchParams {
+    const params = new URLSearchParams();
+    params.append("page", String(opts.page || 1));
+    params.append("per_page", String(opts.perPage || CATEGORY_PAGE_SIZE));
+    if (opts.search) params.append("search", opts.search);
+    if (opts.hideEmpty) params.append("hide_empty", "true");
+    if (opts.orderby) params.append("orderby", opts.orderby);
+    if (opts.order) params.append("order", opts.order);
+    return params;
+}
+
+/** One page, with the X-WP-Total / X-WP-TotalPages totals the router already emits. */
+function listCategoriesPaged(opts: CategoryListOptions = {}) {
+    return apiGetPaged<Category[]>(`/categories?${categoryListQuery(opts).toString()}`);
+}
+
+/**
+ * EVERY category, walking the pager up to `CATEGORY_MAX_PAGES`.
+ *
+ * `truncated` is part of the contract on purpose: a caller that renders a count (or a picker) must be
+ * able to say "there are more" instead of asserting that what it got is the whole taxonomy — the
+ * failure this replaces was precisely a UI stating something the database contradicted.
+ */
+async function listAllCategories(
+    opts: { search?: string; hideEmpty?: boolean; maxPages?: number } = {},
+): Promise<{ data: Category[]; total: number; truncated: boolean }> {
+    const maxPages = Math.max(1, opts.maxPages ?? CATEGORY_MAX_PAGES);
+    const collected: Category[] = [];
+    let page = 1;
+    let totalPages = 1;
+    let total = 0;
+    do {
+        const res = await listCategoriesPaged({
+            page,
+            perPage: CATEGORY_PAGE_SIZE,
+            search: opts.search,
+            hideEmpty: opts.hideEmpty,
+            orderby: "name",
+            order: "asc",
+        });
+        collected.push(...res.data);
+        totalPages = res.totalPages;
+        total = res.total;
+        page += 1;
+    } while (page <= totalPages && page <= maxPages);
+    return { data: collected, total, truncated: collected.length < total };
+}
+
 export const categoriesApi = {
-    list: () => apiGet<Category[]>("/categories"),
+    listPaged: listCategoriesPaged,
+    listAll: listAllCategories,
     create: (data: { name: string; slug?: string }) => apiPost<Category>("/categories", data),
     delete: (id: number) => apiDelete(`/categories/${id}`),
 };
@@ -480,14 +550,95 @@ export const tagsApi = {
     remove: (id: number) => apiDelete<{ deleted: boolean; previous: Tag }>(`/tags/${id}`),
 };
 
+/**
+ * ─── SUDO-GATED SELF-SERVICE FIELDS: the one place the UI learns which edits need a password ───────
+ *
+ * THE CLASS this closes: the backend hardened a set of SELF-EDIT fields behind a "re-enter your current
+ * password" gate (routes/users.ts), and every screen that submits one of them needs to (a) know which
+ * fields are gated, (b) ask for the password only when one of them ACTUALLY changed, and (c) read the
+ * refusal back as a password problem. One screen got that treatment (MfaSetup) and its twins did not, so
+ * the account page could no longer set a recovery email at all and editing your own user record 403'd
+ * with a generic "could not save". A rule that lives in N screens is a rule that covers N-1 of them.
+ *
+ * So the rule lives HERE, next to the call it governs, and every screen consumes it:
+ *   • frontend/src/app/admin/account/page.tsx      — the profile form
+ *   • frontend/src/app/admin/users/[id]/page.tsx   — the user editor, when the target is yourself
+ *   • frontend/src/app/admin/users/UserFormModal.tsx — the same, in modal form
+ * A screen that starts submitting one of these fields must call `selfEditNeedsCurrentPassword`; adding a
+ * newly gated field to SUDO_GATED_SELF_FIELDS then reaches all of them at once.
+ *
+ * The predicate MIRRORS the backend by intent, not by copy: an absent or blank address is "not supplied"
+ * and never a change (every profile form re-sends its whole object on every save, so presence alone would
+ * demand a password for "rename my display name"); comparison is case/whitespace-insensitive because that
+ * is how the addresses are normalized before they are stored.
+ */
+export const SUDO_GATED_SELF_FIELDS = ["password", "email", "personalEmail"] as const;
+
+export interface SelfEditFields {
+    email?: string | null;
+    personalEmail?: string | null;
+    password?: string | null;
+}
+
+const normalizeAddress = (v: unknown) => String(v ?? "").trim().toLowerCase();
+
+/** True when this self-edit will be refused unless it carries `currentPassword`. */
+export function selfEditNeedsCurrentPassword(current: SelfEditFields, submitted: SelfEditFields): boolean {
+    if (submitted.password) return true;
+    // Primary email: blank means "left alone" (the backend applies the identical rule).
+    if (submitted.email !== undefined) {
+        const next = normalizeAddress(submitted.email);
+        if (next !== "" && next !== normalizeAddress(current.email)) return true;
+    }
+    // Recovery email: CLEARING it is a change too — it moves where a reset link would go.
+    if (submitted.personalEmail !== undefined
+        && normalizeAddress(submitted.personalEmail) !== normalizeAddress(current.personalEmail)) return true;
+    return false;
+}
+
+/**
+ * Build exactly what goes on the wire: the submitted fields, plus `currentPassword` IF AND ONLY IF this
+ * save is sudo-gated. Screens call THIS rather than assembling the body themselves — the bug being closed
+ * here is precisely a screen that assembled its own body and left the proof out, and a second screen that
+ * did the same one directory away. Passing the proof when it is not needed is not harmless either: the
+ * backend would then spend a sudo attempt (and answer 403) on a save that required nothing.
+ */
+export function withSudoProof<T extends SelfEditFields>(
+    current: SelfEditFields,
+    submitted: T,
+    currentPassword: string | null | undefined,
+): T & { currentPassword?: string } {
+    if (!selfEditNeedsCurrentPassword(current, submitted)) return submitted;
+    return { ...submitted, currentPassword: String(currentPassword ?? "") };
+}
+
+/** The backend's refusal for a wrong/absent sudo password, so a screen can say so instead of "save failed". */
+export function isBadCurrentPassword(error: unknown): boolean {
+    return !!error && typeof error === "object"
+        && (error as { code?: string }).code === "rest_bad_current_password";
+}
+
 export const usersApi = {
     list: () => apiGet<User[]>("/users"),
     get: (id: number) => apiGet<User>(`/users/${id}`),
     create: (data: Partial<User> & { password: string }) => apiPost<User>("/users", data),
-    update: (id: number, data: Partial<User>) => apiPut<User>(`/users/${id}`, data),
-    // Self-service update for the logged-in user (any role). Changing the password requires currentPassword.
-    updateMe: (data: { displayName?: string; personalEmail?: string; password?: string; currentPassword?: string }) =>
+    update: (id: number, data: Partial<User> & { currentPassword?: string }) => apiPut<User>(`/users/${id}`, data),
+    // Self-service update for the logged-in user (any role). Changing the password OR either recovery
+    // address requires currentPassword — ask selfEditNeedsCurrentPassword, do not re-derive the rule.
+    updateMe: (data: { displayName?: string; email?: string; personalEmail?: string; password?: string; currentPassword?: string }) =>
         apiPut<User>("/users/me", data),
+    /**
+     * "Sign me out everywhere" — ends every session of MY account and leaves the API tokens alone.
+     *
+     * The documented recovery for a leaked machine token is "revoke the token"; on a site upgraded into
+     * the headless/session split that does not reach a 7-day cookie minted from the token BEFORE the
+     * upgrade, and single-token revocation deliberately does not stamp the JWT epoch (rotating a CI token
+     * must not sign the owner out of their browsers). This is the other half of that pair, and until now
+     * it had no client at all — a backend route no screen could reach is a capability nobody has.
+     * Sudo-gated, and it signs out the CALLING session too: send the user back to /login afterwards.
+     */
+    revokeSessions: (currentPassword: string) =>
+        apiPost<{ signedOut: boolean }>("/users/me/sessions/revoke", { currentPassword }),
     delete: (id: number) => apiDelete(`/users/${id}`),
 };
 
@@ -1222,12 +1373,40 @@ export interface MfaPolicy {
     graceDays: number;
     enforcedAt: number | null;
 }
+/**
+ * Enrolment is SUDO-GATED on the backend (routes/auth.ts): both /auth/mfa/setup — the call that hands
+ * out the TOTP secret — and /auth/mfa/enable — the call that actually locks the account — demand the
+ * account password, because a hijacked cookie must never be able to bind its own authenticator and lock
+ * the owner out. Calling either without `currentPassword` answers 403 `rest_bad_current_password`.
+ *
+ * Empty passwords are refused HERE, before the network: the backend proves the password through the SAME
+ * per-account lockout bucket as /auth/login, so a screen that fired setup() with a blank field would
+ * record a failed login attempt and could throttle the user out of their own account. The password must
+ * therefore be collected BEFORE setup() is called, not after the QR is on screen.
+ */
+function requireCurrentPassword(currentPassword: string): string {
+    const pw = String(currentPassword || "");
+    if (!pw) throw new Error("Your current password is required to change two-factor authentication.");
+    return pw;
+}
 export const mfaApi = {
     status: () => apiGet<MfaStatus>("/auth/mfa/status"),
-    setup: () => apiPost<{ secret: string; otpauthUri: string }>("/auth/mfa/setup", {}),
-    enable: (code: string) => apiPost<{ enabled: boolean; backupCodes: string[]; message: string }>("/auth/mfa/enable", { code }),
+    // `async` so the empty-password guard REJECTS like every other failure here: a method that throws
+    // synchronously for one input and rejects for the rest breaks any caller holding a bare .catch().
+    setup: async (currentPassword: string) =>
+        apiPost<{ secret: string; otpauthUri: string }>("/auth/mfa/setup", { currentPassword: requireCurrentPassword(currentPassword) }),
+    enable: async (code: string, currentPassword: string) =>
+        apiPost<{ enabled: boolean; backupCodes: string[]; message: string }>("/auth/mfa/enable", { code, currentPassword: requireCurrentPassword(currentPassword) }),
     disable: (code: string) => apiPost<{ disabled: boolean }>("/auth/mfa/disable", { code }),
     regenerateBackupCodes: (code: string) => apiPost<{ backupCodes: string[]; message: string }>("/auth/mfa/backup-codes", { code }),
     getPolicy: () => apiGet<{ policy: MfaPolicy }>("/auth/mfa/policy"),
     savePolicy: (policy: { requiredRoles: string[]; graceDays: number }) => apiPut<{ policy: MfaPolicy }>("/auth/mfa/policy", policy),
+    /**
+     * Administrative two-factor reset — the way OUT of a 2FA lockout, and the reason enrolment above can
+     * be password-gated without creating an unrecoverable state. It lives under the USERS router
+     * (POST /users/:id/mfa/reset), not /auth/mfa/*, because it is account administration: `edit_users`,
+     * session-only, never on yourself, and only an administrator may reset a privileged account.
+     * Clears every mfa_* key on the target, so they sign in with their password alone and can re-enrol.
+     */
+    resetForUser: (userId: number) => apiPost<{ reset: boolean; id: number }>(`/users/${userId}/mfa/reset`, {}),
 };

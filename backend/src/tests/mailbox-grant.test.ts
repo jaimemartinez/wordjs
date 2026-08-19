@@ -23,6 +23,11 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const jwt = require('jsonwebtoken');
+// Real hashes, not the 'x' placeholder: changing a recovery-bearing address (the primary email IS one —
+// recoveryTarget() falls back to it) now demands the sudo re-authentication, so these personas need a
+// password they can actually re-enter.
+const bcrypt = require('bcryptjs');
+const PASSWORD = 'Correct-Horse-9!';
 
 const config = require('../config/app');
 const TMP_DB = path.join(os.tmpdir(), `wjs-mailbox-${process.pid}-${Date.now()}.db`);
@@ -57,8 +62,8 @@ const as = (persona: string, m: string, p: string) =>
 
 async function seedUser(login: string, role: string, email: string) {
     const r = await dbAsync.run(
-        `INSERT INTO users (user_login, user_pass, user_email, display_name) VALUES (?, 'x', ?, ?)`,
-        [login, email, login]);
+        `INSERT INTO users (user_login, user_pass, user_email, display_name) VALUES (?, ?, ?, ?)`,
+        [login, bcrypt.hashSync(PASSWORD, 10), email, login]);
     await dbAsync.run(`INSERT INTO user_meta (user_id, meta_key, meta_value) VALUES (?, 'role', ?)`, [r.lastID, role]);
     U[login] = r.lastID;
     return r.lastID;
@@ -108,8 +113,10 @@ describe('the corporate-mailbox grant is admin-owned', () => {
         assert.equal(await emailOf(U.mallory), 'mallory@gmail.com', 'the address must be unchanged in the DB');
 
         // POSITIVE CONTROL: an ordinary, off-domain change still works, so the 403 above is the mail-domain
-        // rule and not a broken route.
-        const ok = await as('mallory', 'put', '/users/me').send({ email: 'mallory@outlook.com' });
+        // rule and not a broken route. It carries `currentPassword` because a genuine change to the primary
+        // address is a recovery-bearing write and now needs the sudo re-auth (the mail-domain refusal above
+        // is decided BEFORE that gate, which is why it still answers rest_reserved_mail_domain).
+        const ok = await as('mallory', 'put', '/users/me').send({ email: 'mallory@outlook.com', currentPassword: PASSWORD });
         assert.equal(ok.status, 200, 'a normal self-service email change must still succeed');
         assert.equal(await emailOf(U.mallory), 'mallory@outlook.com');
     });

@@ -230,9 +230,25 @@ router.post('/install', async (req: any, res: Response) => {
     // re-binding the listener to localhost where a remote gateway cannot reach it. Enrollment values are
     // authoritative here; the wizard only supplies what enrollment does not know (site identity, DB).
     const enrolledConfig = getConfig() || {};
+    // WHERE the certificate is, is NOT a question this call site may answer for itself.
+    //
+    // THE CLASS: "one declaration" of a path that is in fact two values computed differently. This line
+    // used to resolve `config.mtls.cert` against the CURRENT WORKING DIRECTORY, while core/frontend-purge
+    // `clusterCertPaths()` — the resolver the rest of the codebase was consolidated onto — anchors the
+    // same key to BACKEND_ROOT. Started from the repo root (or from any supervisor whose cwd is not
+    // backend/), this existsSync looked at <repo>/certs/backend.crt, which does not exist, so an ENROLLED
+    // node was mistaken for a fresh single-host box: the wizard then re-minted a different cluster CA over
+    // the certificates the gateway had issued, dropped the CA private key (which must never leave the
+    // gateway) onto this node, rotated gatewaySecret away from the gateway's, and re-bound the listener to
+    // localhost where the remote gateway cannot reach it. `purgeTransport` even documents that it uses
+    // "the same predicate as the installer" — so the two sides the code declares must agree had diverged.
+    // scripts/separate-mode-gate.mjs models exactly this as its 'install-identity' sabotage.
+    //
+    // One resolver, consumed — not a second copy of the arithmetic.
+    const { clusterCertPaths } = require('../core/frontend-purge');
     const isEnrolledNode = isEnrolledConfig(
         enrolledConfig,
-        !!enrolledConfig.mtls?.cert && fs.existsSync(path.resolve(enrolledConfig.mtls.cert))
+        !!enrolledConfig.mtls?.cert && fs.existsSync(clusterCertPaths(enrolledConfig).cert)
     );
     if (isEnrolledNode) {
         console.log(`🔗 Setup: cluster-enrolled node detected (advertiseHost=${enrolledConfig.advertiseHost}) — preserving enrollment identity and gateway wiring.`);
@@ -483,15 +499,23 @@ router.post('/install', async (req: any, res: Response) => {
             try {
                 const createdAdmin = await User.findByLogin(adminUser) || await User.findByEmail(adminEmailDisplay);
                 if (createdAdmin) {
-                    const { generateToken } = require('../middleware/auth');
+                    // THE ONE DOOR (middleware/auth.ts:issueSessionCookie) — not a hand-rolled res.cookie.
+                    // The rule "a headless request may never cause a session cookie to be emitted" is only
+                    // structural if every cookie-issuing site goes through the one function that enforces
+                    // it; a second, hand-written copy of the sink turns the rule back into a convention.
+                    // This particular call is a no-op today (the setup router carries no `authenticate`,
+                    // so req.apiToken never exists here), which is precisely why it was easy to miss — the
+                    // hygiene test in auth-headless-session.test.ts now fails if a third copy appears.
+                    const { generateToken, issueSessionCookie } = require('../middleware/auth');
                     const token = generateToken(createdAdmin);
-                    res.cookie('wordjs_token', token, {
+                    // Returns true when it REFUSED and already sent the response — the caller must return.
+                    if (issueSessionCookie(req, res, token, {
                         httpOnly: true,
                         secure: siteUrl.startsWith('https://'),
                         sameSite: 'lax',
                         maxAge: 7 * 24 * 60 * 60 * 1000,
                         path: '/'
-                    });
+                    })) return;
                     autoLoggedIn = true;
                 }
             } catch (e: any) {
@@ -540,9 +564,13 @@ router.post('/migrate', async (req: any, res: Response) => {
     try {
         // Why this endpoint MUST stay reachable pre-auth: during a domain move the Installation/Migration Guard
         // (index.ts) 409s every non-/setup route — including /auth/login — while siteUrl != detected host, so an
-        // admin CANNOT obtain a session to bootstrap out of the mismatch. /setup/migrate is the CSRF-exempt,
+        // admin CANNOT obtain a session to bootstrap out of the mismatch. /setup/migrate is the
         // guard-bypassed path that repairs siteUrl, so requiring an authenticated admin session here would break
-        // the very flow it exists for. It therefore authenticates raw credentials, which made it a password
+        // the very flow it exists for. It is NOT CSRF-exempt, though — that exemption is enumerated in
+        // middleware/auth.ts and covers only the two pre-install doors. This route needs no ambient cookie
+        // (the credentials are in the body), so the same-origin check costs the migration page nothing while
+        // keeping the password oracle below off any random visitor's browser. It authenticates raw
+        // credentials, which made it a password
         // ORACLE (#26): wrong password → 401, correct NON-admin password → 403, correct admin password → 200 were
         // all DISTINGUISHABLE, giving an unthrottled brute-force oracle (per #25 we deliberately never call
         // recordLoginFail here, so account lockout never trips it).
@@ -565,22 +593,42 @@ router.post('/migrate', async (req: any, res: Response) => {
         // clearLoginFails on a SUCCESSFUL admin auth stays (it requires the correct password, so it's not an
         // unauthenticated lever), and clears only the dedicated 'migrate:' bucket.
         const auth = require('./auth');
-        // Finding #14: dedicated 'migrate:' throttle bucket, mirroring the 'mfa:' pattern in routes/auth.ts.
-        const lockKey = 'migrate:' + (await auth.resolveLockIdentifier(username));
-        if (await auth.isLoginLocked(lockKey)) {
-            return res.status(429).json({ error: 'Too many failed attempts. Try again later.' });
-        }
-        // Concurrency backstop (audit AUTH-A3 class, mirrors /login and /auth/mfa): isLoginLocked above is
-        // check-then-arm and User.authenticate (bcrypt) yields the event loop, so a parallel burst of guesses
-        // would all clear the lock before recordLoginFail arms it — re-opening the distributed admin-password
-        // oracle this dedicated throttle (Finding #26) exists to close. Cap concurrent in-flight guesses for
-        // the 'migrate:' bucket; the slot is held only across the credential check, released in finally.
-        if (!(await auth.beginLoginAttempt(lockKey))) {
+        // ─── WHY THIS IS A WAIT AND NOT A LOCK ────────────────────────────────────────────────────
+        // The dedicated bucket (Finding #14) was the right half of the answer and the check-then-refuse
+        // was the wrong one. `username` comes from the body of an ANONYMOUS request, the lock was read
+        // BEFORE User.authenticate, and clearLoginFails only ran after a successful ADMIN authentication —
+        // which the lock itself prevented. So ten wrong passwords against {username:'admin'} answered the
+        // real administrator, holding the CORRECT password, with the same 429 as the attacker. And this is
+        // the worst possible door to jam: during a domain move the Installation/Migration Guard 409s every
+        // non-/setup route including /auth/login, so /setup/migrate is the ONLY way to repair siteUrl —
+        // the site is down and its escape hatch answers "too many attempts", renewably (authLimiter allows
+        // one arming per hour per IP; four addresses give permanent denial), with no owner action to clear
+        // it. That is exactly the Class 2 hostage routes/users.ts:511-527 declares erased.
+        //
+        // Same shape as the MFA doors now: the failures buy an escalating BOUNDED WAIT (auth.payFailureDelay
+        // — literally the sudo ladder, so the three cannot drift), paid INSIDE the concurrency slot, and the
+        // correct credential is never refused. recordLoginFail stays as the counter that feeds the ladder;
+        // 'migrate' is a COUNT-ONLY purpose in routes/auth.ts, so it arms no lock anywhere. The uniform 401
+        // below is what closes the oracle (#26); the wait is what makes guessing expensive.
+        const identity = await auth.resolveLockIdentifier(username);
+        // lockBucket, not a hand-built prefix: `'migrate:' + x` produced the same string, but only by
+        // coincidence — the day 'migrate' became a real purpose the two spellings would have silently
+        // merged into one counter with nothing comparing them. Now there is one spelling.
+        const lockKey = auth.lockBucket('migrate', identity);
+        // Concurrency backstop (audit AUTH-A3 class, mirrors /login and /auth/mfa): User.authenticate
+        // (bcrypt) yields the event loop, so a parallel burst of guesses would otherwise all sleep through
+        // the wait together and the ladder would bound latency instead of throughput. The slot is keyed by
+        // (account, source address) — NOT by account alone — because the wait is now paid inside it, and an
+        // account-wide slot held for seconds is a refusal an anonymous caller could inflict on the admin:
+        // the hostage in a different costume. Released in finally.
+        const slotKey = auth.lockBucket('migrate', `${identity}|${require('../core/client-ip').clientIp(req)}`);
+        if (!(await auth.beginLoginAttempt(slotKey))) {
             return res.status(429).json({ error: 'Too many simultaneous attempts. Try again in a moment.' });
         }
         const User = require('../models/User');
         let user: any = null;
         try {
+            await auth.payFailureDelay(lockKey);
             try { user = await User.authenticate(username, password); } catch { user = null; }
 
             // UNIFORM response for BOTH wrong password (user === null) and correct-password-non-admin (#26): same
@@ -593,7 +641,7 @@ router.post('/migrate', async (req: any, res: Response) => {
             }
             await auth.clearLoginFails(lockKey);
         } finally {
-            await auth.endLoginAttempt(lockKey);
+            await auth.endLoginAttempt(slotKey);
         }
 
         // Fix: Trust upstream Gateway protocol

@@ -87,10 +87,18 @@ router.get('/', optionalAuth, asyncHandler(async (req: any, res: any) => {
         commentStatus = '1';
     }
 
-    const orderByMap: Record<string, string> = {
+    // TWO request-value defects live in these three lines, and both are members of classes this repo has
+    // already fixed elsewhere and not here:
+    //  · PROTOTYPE — a `{}` literal answers orderByMap['constructor'] with a FUNCTION, so `|| 'x'` never
+    //    fires and a Function reaches the model layer (contained today only by Comment.findAll's own
+    //    allowlist, in another module, which nothing ties to this map). Object.create(null) has no
+    //    inherited keys to find. Same fix routes/posts.ts already carries.
+    //  · TYPE — `?order[]=asc` makes `order` an Array and `order.toLowerCase()` threw a 500 to an
+    //    ANONYMOUS caller. String() first, exactly as routes/categories.ts and routes/tags.ts do.
+    const orderByMap: Record<string, string> = Object.assign(Object.create(null), {
         date: 'comment_date',
         id: 'comment_id'
-    };
+    });
 
     const comments = await Comment.findAll({
         postId: post ? parseInt(post, 10) : undefined,
@@ -99,9 +107,9 @@ router.get('/', optionalAuth, asyncHandler(async (req: any, res: any) => {
         search,
         limit,
         offset,
-        orderBy: orderByMap[orderby] || 'comment_date',
+        orderBy: orderByMap[String(orderby)] || 'comment_date',
         // SECURITY: Whitelist order direction
-        order: ['asc', 'desc'].includes(order.toLowerCase()) ? order.toUpperCase() : 'DESC'
+        order: ['asc', 'desc'].includes(String(order).toLowerCase()) ? String(order).toUpperCase() : 'DESC'
     });
 
     const total = await Comment.count({

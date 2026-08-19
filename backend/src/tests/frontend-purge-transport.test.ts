@@ -23,7 +23,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { purgeTransport, gatewayPurgeOptions } = require('../core/frontend-purge');
+const { purgeTransport, gatewayPurgeOptions, isHandshakeFailure, isCleartextAgainstTls } = require('../core/frontend-purge');
 
 // The shape scripts/node-join.js writes on a SEPARATE-mode node, after the wizard has run.
 const enrolled = {
@@ -152,5 +152,43 @@ describe('gatewayPurgeOptions — the request rides the existing mTLS identity',
     test('unreadable cluster material returns null so the caller can degrade to TTL', () => {
         const broken = { ...cfg, mtls: { ...cfg.mtls, cert: path.join(dir, 'does-not-exist.crt') } };
         assert.strictEqual(gatewayPurgeOptions(broken, { host: '10.0.0.5', port: 3100 }, 42), null);
+    });
+});
+
+/**
+ * CONFIGURATION OR WEATHER? — the classification that decides whether a failure reaches the operator.
+ *
+ * A permanent misconfiguration goes to /health/details; "the peer is down" goes to a once-an-hour log
+ * line. The first version only classified failures on the TLS leg, which left the exact mirror image
+ * of audit #27 variant 2 unclassified: `frontendUrl` says http:// while the frontend enforces mTLS,
+ * so we speak cleartext, the peer answers with a TLS record, and Node reports a PARSE error — no
+ * handshake, no certificate, nothing that matches the TLS side. That failure went to the hourly
+ * channel and read as flakiness, which is precisely how the original bug survived for months.
+ */
+describe('permanent vs transient failure classification', () => {
+    test('a refused handshake on the TLS leg is configuration', () => {
+        assert.strictEqual(isHandshakeFailure({ code: 'ECONNRESET', message: 'socket hang up' }, true), true);
+        assert.strictEqual(isHandshakeFailure({ code: 'UNABLE_TO_VERIFY_LEAF_SIGNATURE', message: 'x' }, true), true);
+        assert.strictEqual(isHandshakeFailure({ code: 'ERR_TLS_CERT_ALTNAME_INVALID', message: 'x' }, true), true);
+    });
+
+    test('a peer that is simply down stays transient', () => {
+        for (const code of ['ECONNREFUSED', 'ETIMEDOUT', 'ENOTFOUND', 'EHOSTUNREACH']) {
+            assert.strictEqual(isHandshakeFailure({ code, message: code }, true), false, code);
+            assert.strictEqual(isCleartextAgainstTls({ code, message: code }, false), false, code);
+        }
+    });
+
+    test('TLS answered to a CLEARTEXT purge is configuration too — the mirror image of #27', () => {
+        // What Node actually reports when an https listener replies to an http client.
+        assert.strictEqual(isCleartextAgainstTls({ code: 'HPE_INVALID_CONSTANT', message: 'Parse Error: Expected HTTP/' }, false), true);
+        assert.strictEqual(isCleartextAgainstTls({ code: 'ERR_HTTP_INVALID_HEADER_VALUE', message: 'x' }, false), true);
+        assert.strictEqual(isCleartextAgainstTls({ message: 'Parse Error: Invalid header value char' }, false), true);
+    });
+
+    test('each classifier answers only for its own leg — no double-reporting', () => {
+        const parseErr = { code: 'HPE_INVALID_CONSTANT', message: 'Parse Error: Expected HTTP/' };
+        assert.strictEqual(isCleartextAgainstTls(parseErr, true), false, 'not a cleartext fault on a TLS leg');
+        assert.strictEqual(isHandshakeFailure({ code: 'ECONNRESET', message: 'socket hang up' }, false), false);
     });
 });

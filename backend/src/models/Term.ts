@@ -4,7 +4,7 @@
  */
 
 const { db, dbAsync } = require('../config/database');
-const { sanitizeTitle } = require('../core/formatting');
+const { sanitizeTitle, boundSlug } = require('../core/formatting');
 
 class Term {
     termId?: number;
@@ -86,10 +86,25 @@ class Term {
     }
 
     /**
-     * Generate unique slug
+     * Generate unique slug — and BOUND it, the same way Post.generateUniqueSlug does.
+     *
+     * THE CLASS: the bound lives in the usual PRODUCER and not where the WRITE happens. `sanitizeTitle`
+     * already bounds what it produces, so a slug derived from a name was safe; but `Term.create` accepts
+     * `slug || sanitizeTitle(name)` — a caller-supplied slug never passes through sanitizeTitle — and
+     * routes/categories.ts and routes/tags.ts hand that value straight from the request body. Those
+     * routes are gated by `manage_categories`, i.e. an EDITOR, not an administrator.
+     *
+     * Where it hurts: on MySQL, drivers/mysql-text-rule narrows a column that takes part in a key to
+     * VARCHAR(255), so an over-long terms.slug is errno 1406 (an unmapped 500) — while on SQLite the
+     * column is unbounded and nothing is observable, which is exactly why no suite saw it.
+     *
+     * The bound is applied HERE, once, and every disambiguated variant is built from the BOUNDED base —
+     * not from the caller's original string, or the `-2`, `-3`, … suffix would push the value back over.
+     * This function is the single point through which create() and the update paths reach terms.slug.
      */
     static async generateUniqueSlug(slug: string, excludeTermId: number | null = null) {
-        let uniqueSlug = slug;
+        const base = boundSlug(slug);
+        let uniqueSlug = base;
         let counter = 1;
 
         while (true) {
@@ -106,7 +121,7 @@ class Term {
             if (!existing) break;
 
             counter++;
-            uniqueSlug = `${slug}-${counter}`;
+            uniqueSlug = `${base}-${counter}`;
         }
 
         return uniqueSlug;

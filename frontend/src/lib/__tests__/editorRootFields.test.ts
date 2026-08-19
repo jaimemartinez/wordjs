@@ -348,7 +348,7 @@ describe("categoryField — el select guarda ids, y no esconde lo que hay guarda
 
     it("SINTETIZA la opción de un valor guardado que ya no casa (el nombre del control viejo)", () => {
         const f = categoryField(CATS, "Categoría borrada") as unknown as { options: Array<{ label: string; value: string }> };
-        expect(f.options.at(-1)).toEqual({ label: "Categoría borrada (sin asignar)", value: "Categoría borrada" });
+        expect(f.options.at(-1)).toEqual({ label: "Categoría borrada", value: "Categoría borrada" });
     });
 
     it("un valor que YA casa no se duplica", () => {

@@ -56,6 +56,13 @@ const ORIGINALS = {
     truncateSync: fs.truncateSync,
     chmod: fs.chmod,
     chmodSync: fs.chmodSync,
+    // rmdir/chown were named in the isWrite list below but never captured here, so patch() bailed out
+    // on them and they stayed UNGUARDED — the same "declared but not closed" shape this audit is
+    // about. rmdir deletes a directory anywhere the plugin can name; chown re-owns a file.
+    rmdir: fs.rmdir,
+    rmdirSync: fs.rmdirSync,
+    chown: fs.chown,
+    chownSync: fs.chownSync,
     // Copy/link ops read a SOURCE and create a DEST — both ends must be confined (a copy of the raw DB
     // or a hard link to a secret would otherwise be a read-confinement bypass / exfiltration primitive).
     copyFile: fs.copyFile,
@@ -122,13 +129,491 @@ function getConfiguredDbPaths(): string[] {
 // then renaming/copying it to .js — would be a scanner-evasion + self-code-modification primitive.
 // Data files (.json/.txt/images/etc.) stay writable in the plugin's safe zones. Covers native addons
 // (.node) and WebAssembly (.wasm) which are also loadable code, and TS variants defensively.
-const EXECUTABLE_CODE_EXT = /\.(?:c|m)?jsx?$|\.(?:c|m)?tsx?$|\.node$|\.wasm$/i;
+//
+// (#3) HTML BELONGS HERE TOO. The old pattern listed only things Node can `require()`, which read
+// "executable" as "executable BY THE SERVER". But the host also PUBLISHES files over HTTP, and a
+// .html file is executable BY THE BROWSER as a DOCUMENT IN THIS ORIGIN — where the global CSP allows
+// 'unsafe-inline' (index.ts) and the frontend shares the origin in both shipped modes (monolith and
+// gateway). A plugin that wrote pwn.html therefore had a stored-XSS primitive with zero permissions.
+// The serving side is now allowlisted (see isPluginServedRelPath below), and this closes the writing
+// side so the two defenses do not depend on each other.
+const EXECUTABLE_CODE_EXT = /\.(?:c|m)?jsx?$|\.(?:c|m)?tsx?$|\.node$|\.wasm$|\.(?:x|s)?html?$|\.xht$/i;
+
+// === THE PUBLICLY-SERVED ROOTS (the CLASS; every published surface below is derived from this) ===
+//
+// (#3, verification) The first remediation locked /plugins and left its TWINS open: `uploads/` and
+// `themes/` were blanket write zones for EVERY plugin (no grant at all) *and* both are mounted raw by
+// index.ts, so the very same exfiltration channel answered at /uploads/leak.txt and
+// /themes/<x>/leak.txt. Naming one mount in the guard could only ever close one mount.
+//
+// So the rule is stated over the SET of roots the host publishes, not over a path: a plugin may not
+// write ANYWHERE under a served root, except the non-published part of its own directory. Adding a
+// future static mount means adding it HERE, and the write denial follows automatically — the write
+// zones below are themselves FILTERED through this predicate, so a served root can never also be a
+// blanket write zone even if someone re-adds one to the list.
+// AND "the host" IS NOT ONLY THIS PROCESS (verification of #3, second round). The set below described
+// the BACKEND's mounts only, so a carve-out under frontend/.next handed every plugin — zero permissions —
+// a file that the OTHER process of the monolith deployment publishes: Next serves frontend/.next/static at
+// /_next/static (in dev it stats the file per request, so no restart is needed) and frontend/public at the
+// site root. Same origin, same anonymous reader, same channel. The property is "no plugin write zone lies
+// under ANY root published by ANY dispatcher of the deployment", so those roots belong in this list too.
+const SERVED_ROOTS: string[] = [
+    path.join(ROOT_DIR, 'uploads'),   // index.ts: app.use('/uploads', express.static(...))
+    path.join(ROOT_DIR, 'themes'),    // index.ts: the /themes allowlist handler
+    path.join(ROOT_DIR, 'plugins'),   // index.ts: the /plugins allowlist handler (+ routes/plugin-bundles)
+    path.join(ROOT_DIR, 'public'),    // index.ts: app.use('/public', express.static(...))
+    path.resolve(ROOT_DIR, '../frontend/.next/static'), // Next (monolith + gateway): /_next/static/*
+    path.resolve(ROOT_DIR, '../frontend/public'),       // Next: served at the site root
+];
+
+// …AND THE SAME ROOT MUST NOT BE TWO DIFFERENT DIRECTORIES. This module anchors every path on the
+// INSTALLATION (`__dirname`), while index.ts mounts its static handlers on CWD-relative paths
+// (`path.resolve('./themes')`, `./public`, `PLUGINS_ROOT`). They coincide only because the npm scripts
+// start the process from `backend/` — nothing enforces it, and under any other cwd the two lists name
+// DIFFERENT directories: fail-closed for serving (404), fail-OPEN for writing (index.ts publishes a tree
+// this guard would not recognise as served, so it stays a plugin write zone — hole #3, reopened by a
+// working directory). Until index.ts is anchored the same way (it should be: mount from SERVED_ROOTS),
+// the guard treats BOTH anchors as published, which can only ever deny more, never less.
+let _cwdRoots: string[] | null = null;
+let _cwdRootsFor: string | null = null;
+function cwdServedRoots(): string[] {
+    const cwd = path.resolve(process.cwd());
+    // Keyed on the cwd itself, never cached blindly: process.chdir() at runtime would otherwise leave the
+    // guard describing a directory tree the process no longer serves from.
+    if (_cwdRoots && _cwdRootsFor === cwd) return _cwdRoots;
+    const out: string[] = [];
+    if (cwd !== ROOT_DIR) {
+        const pluginsRoot = path.join(ROOT_DIR, 'plugins');
+        for (const name of ['uploads', 'themes', 'plugins', 'public']) {
+            const candidate = path.join(cwd, name);
+            // Never let a pathological cwd (e.g. inside plugins/<slug>) turn a plugin's OWN private
+            // storage into a "served root" — that would deny writes the plugin is entitled to.
+            if (under(candidate, pluginsRoot)) continue;
+            out.push(candidate);
+        }
+    }
+    _cwdRoots = out;
+    _cwdRootsFor = cwd;
+    return out;
+}
+
+// Per-segment folding for path COMPARISONS. Off Linux the filesystem folds case, so 'PUBLIC/x.css'
+// IS the file the host serves at '/public/x.css'. On Win32 the kernel additionally STRIPS trailing
+// dots and spaces from every component ('public.' IS 'public') while path.resolve does not — the
+// exact evasion the verification demonstrated on this machine.
+const _isWin = process.platform === 'win32';
+const _foldSeg = (s: string): string => {
+    const t = _isWin ? s.replace(/[. ]+$/, '') : s;
+    return process.platform === 'linux' ? t : t.toLowerCase();
+};
+const foldPath = (p: string): string => p.split(path.sep).map(_foldSeg).join(path.sep);
+const under = (candidate: string, dir: string): boolean => {
+    const c = foldPath(candidate), d = foldPath(dir);
+    return c === d || c.startsWith(d + path.sep);
+};
+
+/**
+ * CANONICALIZE for the published-surface comparison: the check must run on the value the SYSCALL
+ * will use, not on the string the plugin typed. `path.resolve` is purely lexical, so it walks around
+ * three real evasions, all of which realpath answers at once:
+ *   · a symlink/junction inside the plugin's own dir ('plugins/x/self' → 'plugins/x') makes
+ *     'plugins/x/self/public/leak.css' resolve lexically OUTSIDE public/ and land inside it;
+ *   · Win32 trailing dot/space ('public./leak.css' → 'public\leak.css');
+ *   · 8.3 short names ('PUBLIC~1'), which realpath returns as the long canonical name.
+ * The target may not exist yet, so realpath the nearest EXISTING ancestor and re-append the tail.
+ * Uses fs.realpathSync, which io-guard deliberately leaves unpatched (existence only, no content).
+ */
+function canonicalize(target: string): string {
+    let cur = path.resolve(target);
+    const tail: string[] = [];
+    for (let i = 0; i < 4096; i++) {           // hard cap; real path depth is far below this
+        try {
+            const rp = (fs.realpathSync && fs.realpathSync.native) ? fs.realpathSync.native : fs.realpathSync;
+            const real = rp(cur);
+            return tail.length ? path.join(real, ...tail) : real;
+        } catch { /* does not exist yet — step up to the parent */ }
+        const parent = path.dirname(cur);
+        if (parent === cur) break;             // filesystem root
+        tail.unshift(path.basename(cur));
+        cur = parent;
+    }
+    return path.resolve(target);
+}
+
+// The uploads directory is OPERATOR-CONFIGURABLE (config.uploads.dir), and index.ts mounts /uploads on
+// THAT value — so a deployment that moves it would have a served root this list does not name. Read it
+// from the module cache only (never a fresh require(): this runs from inside fs ops that can fire while
+// config is still loading), cached once available. The ROOT_DIR default above covers the normal layout
+// meanwhile.
+let _cfgUploadsRoot: string | null = null;
+function configuredUploadsRoot(): string | null {
+    if (_cfgUploadsRoot) return _cfgUploadsRoot;
+    try {
+        const resolved = require.resolve('../config/app');
+        const cached = require.cache[resolved];
+        if (!cached || cached.loaded !== true) return null;
+        const c: any = cached.exports;
+        const dir = c && c.uploads && c.uploads.dir;
+        if (typeof dir === 'string' && dir) _cfgUploadsRoot = path.resolve(dir);
+    } catch { /* config not resolvable — the declared roots still apply */ }
+    return _cfgUploadsRoot;
+}
+
+/** Which publicly-served root (if any) contains `resolved`? The CLASS predicate. */
+function servedRootOf(resolved: string): string | null {
+    for (const root of SERVED_ROOTS) if (under(resolved, root)) return root;
+    for (const root of cwdServedRoots()) if (under(resolved, root)) return root;  // the cwd-anchored twins
+    const cfg = configuredUploadsRoot();
+    if (cfg && under(resolved, cfg)) return cfg;
+    return null;
+}
+
+// === THE PUBLICLY-SERVED PLUGIN SURFACE (single source of truth; index.ts reads it) ===
+//
+// (#3) `app.use('/plugins', express.static(plugins/))` published the ENTIRE plugin tree, while a
+// plugin may write into its own dir with NO permission grant at all (`ownDir` below is unconditional,
+// and secure-require only demands filesystem:write for paths OUTSIDE it). Together those two facts
+// annulled the whole network-containment model — the `network` permission, the egress allowlist's
+// loopback/RFC1918/metadata blocks, bwrap's --unshare-net: the plugin wrote a file and the attacker
+// fetched it, unauthenticated, from the site itself. Nobody was validating the READ channel the
+// server itself opened. It also leaked with no malicious plugin at all: mail-server's data/ dir
+// (attachments, bayes.json) was reachable on a clean install.
+//
+// So the surface is now an ALLOWLIST, and it is declared HERE rather than in index.ts because the
+// same list has to answer two questions that must never disagree:
+//   · index.ts: "may this path be served over HTTP?"  → isPluginServedRelPath()
+//   · isPathSafe() below: "may the plugin WRITE this path?" → NO, for everything on this surface.
+// Serving an allowlist while leaving it writable would just reopen the channel through the door next
+// to it, so the two rules are derived from one declaration.
+const PLUGIN_PUBLIC_DIR = 'public';
+// Fixed, host-known files the admin shell requests by construction (frontend/src/app/admin/plugin/
+// [slug]/page.tsx fetches manifest.json + client/admin/admin.css; pluginBundleLoader links
+// dist/component.bundle.css). EXACT paths, never directories — no prefix, no traversal.
+const PLUGIN_PUBLIC_FILES = ['manifest.json', 'client/admin/admin.css', 'dist/component.bundle.css'];
+// (#3, verification) THE OTHER SINK THAT SERVES A PLUGIN'S FILES: routes/plugin-bundles.ts answers
+// GET /api/v1/plugins/:slug/bundle{,/css,/manifest} — UNAUTHENTICATED — out of plugins/<slug>/dist/.
+// Listing only `dist/component.bundle.css` as unwritable closed one file of that directory and left
+// its siblings (admin/hooks .js/.css, manifest.build.json) writable-and-published: the identical
+// write→HTTP-read channel through the door next to it. The rule is therefore stated over the
+// DIRECTORY: dist/ is build output, published in full, and READ-ONLY to the plugin — exactly like
+// public/. The named files below stay as the list the bundle routes resolve against, so "what the
+// route may serve" and "what the plugin may not write" remain one declaration.
+const PLUGIN_BUNDLE_DIR = 'dist';
+const PLUGIN_BUNDLE_TYPES = ['admin', 'component', 'hooks'];
+const PLUGIN_BUNDLE_FILES = new Set<string>([
+    ...PLUGIN_BUNDLE_TYPES.map(t => `${PLUGIN_BUNDLE_DIR}/${t}.bundle.js`),
+    ...PLUGIN_BUNDLE_TYPES.map(t => `${PLUGIN_BUNDLE_DIR}/${t}.bundle.css`),
+    `${PLUGIN_BUNDLE_DIR}/manifest.build.json`,
+]);
+// Every subtree of a plugin dir the host publishes. Write-denied in full (wider than what is servable
+// today on purpose: a narrower rule lets a plugin stage bytes and wait for the allowlist to grow).
+const PLUGIN_PUBLISHED_SUBDIRS = [PLUGIN_PUBLIC_DIR, PLUGIN_BUNDLE_DIR];
+// Extensions servable out of plugins/<slug>/public/. Deliberately EXCLUDES everything that runs as a
+// document in this origin (.html/.htm/.svg/.xml — the XSS variant above) and everything that leaks
+// source or data (.map/.json/.txt/.db). .js/.css ARE here: they are the two kinds the structured
+// enqueue bridge (core/plugin-assets.ts) exists to emit, and public/ is read-only to the plugin, so
+// what is served is what the admin installed and the AST scanner saw.
+const PLUGIN_PUBLIC_EXT = new Set([
+    '.css', '.js', '.mjs',
+    '.png', '.jpg', '.jpeg', '.gif', '.webp', '.avif', '.ico',
+    '.woff', '.woff2', '.ttf', '.otf',
+    '.mp4', '.webm', '.mp3', '.ogg', '.wav', '.pdf',
+]);
+
+/**
+ * Is `rel` — a '/'-separated path RELATIVE to plugins/<folder>/ — part of the surface the host
+ * publishes over HTTP? Everything else (data/, source, tests, .map, node_modules, anything a plugin
+ * dropped at runtime) is a 404. FAIL CLOSED: a shape this cannot describe is not served.
+ */
+function isPluginServedRelPath(rel: unknown): boolean {
+    if (typeof rel !== 'string' || rel.length === 0 || rel.includes('\0')) return false;
+    const clean = rel.replace(/\\/g, '/').replace(/^\/+/, '');
+    if (!clean) return false;
+    const segs = clean.split('/');
+    // Reject empty ('a//b'), relative ('.', '..') and dotfile segments before anything else — the
+    // form gate, not a search for forbidden substrings.
+    if (segs.some(s => !s || s === '.' || s === '..' || s.startsWith('.'))) return false;
+    if (PLUGIN_PUBLIC_FILES.indexOf(clean) !== -1) return true;
+    if (segs.length < 2 || segs[0] !== PLUGIN_PUBLIC_DIR) return false;
+    return PLUGIN_PUBLIC_EXT.has(path.extname(clean).toLowerCase());
+}
+
+/**
+ * Is `rel` one of the compiled bundles routes/plugin-bundles.ts is allowed to serve out of
+ * plugins/<folder>/dist/? EXACT names only — the route interpolates a caller-supplied `type`, so the
+ * answer must never be computed from a prefix + a suffix. Same fail-closed form gate as above.
+ */
+function isPluginBundleRelPath(rel: unknown): boolean {
+    if (typeof rel !== 'string' || rel.length === 0 || rel.includes('\0')) return false;
+    const clean = rel.replace(/\\/g, '/').replace(/^\/+/, '');
+    return PLUGIN_BUNDLE_FILES.has(clean);
+}
+
+// === THE PUBLICLY-SERVED THEME SURFACE (the /themes twin of the declaration above) ===
+//
+// (#3, verification) /themes was left as `express.static(themes/)` over the WHOLE tree while every
+// plugin could write into it — so `GET /themes/default/functions.js` handed out the theme's SERVER
+// code and `themes/<x>/leak.txt` was the same unauthenticated exfiltration channel /plugins had.
+// A theme is a TOKEN CONTRACT: what a browser legitimately fetches from it is stylesheets, the JSON
+// compositions (theme.json, chrome/*.json, templates/*.json), fonts and images. Nothing else — no
+// .js (a theme ships no browser JS by contract), no .html partial, no .md, no .map, no source.
+// Stated as an extension allowlist over the tree because a theme's assets are referenced from its
+// own style.css (theme-compile only proves the url() starts with /themes/<slug>/), so pinning a
+// subtree would break themes that place images at the root; the extension list is what actually
+// separates "an asset" from "code and sources".
+const THEME_PUBLIC_EXT = new Set([
+    '.css', '.json',
+    '.png', '.jpg', '.jpeg', '.gif', '.webp', '.avif', '.ico', '.svg',
+    '.woff', '.woff2', '.ttf', '.otf', '.eot',
+    '.mp4', '.webm', '.mp3', '.ogg', '.wav', '.pdf',
+]);
+
+/** Is `rel` — '/'-separated, RELATIVE to themes/<slug>/ — part of what the host publishes? */
+function isThemeServedRelPath(rel: unknown): boolean {
+    if (typeof rel !== 'string' || rel.length === 0 || rel.includes('\0')) return false;
+    const clean = rel.replace(/\\/g, '/').replace(/^\/+/, '');
+    if (!clean) return false;
+    const segs = clean.split('/');
+    if (segs.some(s => !s || s === '.' || s === '..' || s.startsWith('.'))) return false;
+    return THEME_PUBLIC_EXT.has(path.extname(clean).toLowerCase());
+}
+
+/**
+ * Is `resolved` inside the part of a THEME's own dir the host publishes? Mirror of
+ * isPluginPublishedPath: whatever /themes can serve, the theme itself may not write.
+ */
+function isThemePublishedPath(ownDir: string, resolved: string): boolean {
+    if (!under(resolved, ownDir)) return false;
+    return THEME_PUBLIC_EXT.has(path.extname(foldPath(resolved)).toLowerCase());
+}
+
+/**
+ * Is `resolved` (absolute) inside the part of `ownDir` the host publishes over HTTP? Used ONLY to
+ * DENY writes, so it is deliberately WIDER than isPluginServedRelPath: the whole public/ subtree is
+ * off limits, not just the extensions that happen to be servable today. A narrower rule would let a
+ * plugin stage bytes at public/x.unknown and wait for the extension list to grow.
+ */
+function isPluginPublishedPath(ownDir: string, resolved: string): boolean {
+    // Comparison runs through foldPath(), which is CASE-INSENSITIVE off Linux (Windows/macOS fold
+    // case, so 'PUBLIC/x.css' IS the file served at '/public/x.css') and additionally strips Win32's
+    // trailing dots/spaces per segment ('public./x.css' IS 'public\x.css' to the kernel). An
+    // exact-string check denied the write that matters and allowed its twin.
+    for (const sub of PLUGIN_PUBLISHED_SUBDIRS) {
+        if (under(resolved, path.join(ownDir, sub))) return true;
+    }
+    const r = foldPath(resolved);
+    return PLUGIN_PUBLIC_FILES.some(f => r === foldPath(path.join(ownDir, ...f.split('/'))));
+}
+
+// ── EFFECTIVE FILESYSTEM CAPABILITY, READ AT THE CALL ───────────────────────────────────────────────
+//
+// A plugin's manifest DECLARES what it asks for; the operator GRANTS. `plugin-context.hasPermission`
+// already folds both into one boolean, but it collapses the two NOs into one: "never asked" and
+// "asked and was refused" both come back false. Those must be told apart, because only the second is a
+// REVOCATION — the first is a plugin that simply never wanted the capability, and denying its own
+// private directory on that basis would break every zero-permission plugin while protecting nothing.
+//
+// The manifest is cached per slug for the life of the process, which is sound here rather than merely
+// convenient: isPathSafe() itself refuses every write whose basename is `manifest.json` (see above), so
+// a plugin cannot rewrite its own declaration at runtime. The GRANT is deliberately NOT cached — it is
+// read live from plugin-permissions on every call, which is what makes flipping the switch in
+// /admin/plugins take effect immediately instead of at the next activation.
+const _manifestPermCache = new Map<string, any[]>();
+
+/** The `permissions` array declared by a plugin/theme slug's manifest, or [] if there is none. */
+function declaredPermissionsOf(pluginSlug: string): any[] {
+    const cached = _manifestPermCache.get(pluginSlug);
+    if (cached) return cached;
+    const manifestPath = pluginSlug.startsWith('theme:')
+        ? path.join(ROOT_DIR, 'themes', pluginSlug.slice('theme:'.length), 'manifest.json')
+        : path.join(ROOT_DIR, 'plugins', pluginSlug, 'manifest.json');
+    let perms: any[] = [];
+    try {
+        // ORIGINALS.readFileSync, never the patched fs: this runs INSIDE isPathSafe, and going through
+        // the patched surface would re-enter the guard for every guarded call.
+        const raw = ORIGINALS.readFileSync(manifestPath, 'utf8');
+        const parsed = JSON.parse(String(raw));
+        if (parsed && Array.isArray(parsed.permissions)) perms = parsed.permissions;
+    } catch { /* no manifest / unparseable ⇒ nothing declared */ }
+    _manifestPermCache.set(pluginSlug, perms);
+    return perms;
+}
+
+// ── WHERE THE GRANT IS READ, AND WHO WRITES IT: HOST vs ISOLATED CHILD ──────────────────────────────
+//
+// `plugin-permissions` keeps the granted-token set in a process-local Map. That Map has exactly one
+// population path — loadGrants()/setGrants()/backfillActive()/_setGrantsInMemory() — and ALL of them run
+// on the HOST, because they read or write the `plugin_grants` option and the child has no database.
+//
+// The child NEVER writes that Map, so every reader inside the child was reading an empty one. That is
+// how "the grant is read LIVE at every call" became "the grant is unreadable, therefore refused": for a
+// plugin that DECLARES filesystem — the only kind this gate bites — isGranted() answered false in the
+// child, so its OWN data directory was denied even when the operator had granted the capability. Since
+// in-process plugins were retired (core/plugins.ts requires `isolated: true`), the child is where every
+// real plugin runs, so the gate was a permanent denial in production and a permanent allow in the tests,
+// which all run on the host.
+//
+// The fix follows the channel that already exists for the NETWORK grant: the host RESOLVES the answer at
+// spawn and PUSHES it into the child's cfg (core/plugin-isolate.ts builds `childCfg`), and the child
+// reads that pushed value instead of a Map nobody there can fill.
+//
+//   WRITER (host)  core/plugin-isolate.ts  → childCfg.fsRead / childCfg.fsWrite, resolved with the very
+//                                            same plugin-permissions.isGranted() this file calls, so the
+//                                            two processes cannot disagree on what a token MEANS (the
+//                                            `filesystem:admin` implication is interpreted once, there).
+//   READER (child) ISOLATE_FS_GRANT below   → consulted by fsCapabilityRevoked()/fsCapabilityAllowed(),
+//                                            which are in turn the ONLY filesystem-capability questions
+//                                            asked inside the child (io-guard.isPathSafe and
+//                                            secure-require.guardFsCall — no other capability is
+//                                            enforced child-side; every other one is checked on the host
+//                                            when the bridge call lands there).
+//
+// STALENESS, stated rather than assumed: the pushed value is a SPAWN-TIME snapshot, so it is only as
+// live as the isolate. Every writer of the grant store either precedes the spawn or forces a respawn —
+// loadGrants()/backfillActive() run at boot before isolates start; grant-on-activate seeds the mirror
+// and then activation spawns; and POST /plugins/:slug/permissions calls reloadIsolatedPlugin() after
+// setGrants() precisely so a revocation takes effect now. That is the same guarantee the network grant
+// has had, and it is the reason a revoke is not left inert.
+const ISOLATE_FS_GRANT: { slug: string; read: boolean; write: boolean } | null = (() => {
+    const g: any = (typeof globalThis !== 'undefined') ? globalThis : {};
+    // HOST: the in-memory grant map is authoritative and live. Read the marker off `globalThis` (per
+    // spec unreassignable) for the same reason plugin-context does: `global = {}` must not flip this.
+    if (!g.__WORDJS_ISOLATED__) return null;
+    // A LATER load of this module must NOT get to answer the question again. "Taken at bootstrap, before
+    // plugin code runs" is only true of the FIRST load: plugin code can evict this module from
+    // require.cache, rewrite process.argv[2], and re-require it — and the fresh instance would read the
+    // rewritten argv. That is a self-grant primitive, and it was demonstrated (a re-required io-guard
+    // answered fsCapabilityGranted(write) = true for a plugin the operator had refused). Today an
+    // unrelated trap in secure-require happens to abort that re-require, but a defense that only works
+    // because a neighbouring module throws first is not a defense.
+    //
+    // So the first load LOCKS the answer on globalThis — non-writable, non-configurable, exactly as
+    // plugin-worker.js locks __WORDJS_PLUGIN_NETWORK__ — and every later load reads the LOCK instead of
+    // the argv. The descriptor is checked, not just the value: only a property that is already
+    // non-writable AND non-configurable is trusted, so a value planted by other means is ignored (and
+    // nothing can plant one first — the sandbox bootstrap loads this module before any plugin code).
+    const d = Object.getOwnPropertyDescriptor(g, '__WORDJS_PLUGIN_FS_GRANT__');
+    if (d && d.value && typeof d.value === 'object' && d.writable === false && d.configurable === false) {
+        return d.value;
+    }
+    // CHILD, first load: the cfg blob the host handed us. child_process fork → argv[2]; the legacy
+    // worker_threads transport → workerData.
+    let cfg: any = {};
+    try {
+        const wt = require('worker_threads');
+        cfg = (wt && wt.parentPort) ? (wt.workerData || {}) : JSON.parse(process.argv[2] || '{}');
+    } catch { cfg = {}; } // unparseable cfg ⇒ no grant ⇒ fail closed
+    const snapshot = Object.freeze({
+        slug: typeof cfg.slug === 'string' ? cfg.slug : '',
+        read: cfg.fsRead === true,
+        write: cfg.fsWrite === true,
+    });
+    try {
+        Object.defineProperty(g, '__WORDJS_PLUGIN_FS_GRANT__',
+            { value: snapshot, writable: false, configurable: false, enumerable: false });
+    } catch { /* already defined by something we do not trust ⇒ keep OUR bootstrap answer */ }
+    return snapshot;
+})();
+
+/**
+ * Did the operator GRANT `filesystem:<access>` to this slug? One question, two authorities, chosen by
+ * which process is asking: the live grant map on the host, the host-pushed snapshot inside an isolate.
+ * Fails CLOSED everywhere — an unreadable grant store, an unparseable cfg, or a slug that is not the one
+ * this isolate was spawned for all answer "not granted".
+ */
+function fsCapabilityGranted(pluginSlug: string, access: 'read' | 'write'): boolean {
+    if (ISOLATE_FS_GRANT) {
+        // The child runs exactly ONE plugin, so a question about any other slug cannot be answered from
+        // this snapshot (a theme rendered inside a plugin's isolate, say) — refuse rather than lend it
+        // the host plugin's grant.
+        if (!pluginSlug || pluginSlug !== ISOLATE_FS_GRANT.slug) return false;
+        return access === 'write' ? ISOLATE_FS_GRANT.write : ISOLATE_FS_GRANT.read;
+    }
+    try { return require('./plugin-permissions').isGranted(pluginSlug, 'filesystem', access); } catch { return false; }
+}
+
+/** Did this plugin DECLARE `filesystem:<access>` (directly or via `filesystem:admin`)? */
+function fsCapabilityDeclared(pluginSlug: string, access: 'read' | 'write'): boolean {
+    return declaredPermissionsOf(pluginSlug).some(
+        (p: any) => p && p.scope === 'filesystem' && (p.access === access || p.access === 'admin'));
+}
+
+/**
+ * The OUTSIDE-the-own-dir gate: declared AND granted, the full Android-model answer. secure-require's
+ * proxies used plugin-context.hasPermission() here, which asks plugin-permissions directly and therefore
+ * inherited the same empty-Map blindness in the child (a granted plugin could not write data/ or logs/
+ * from an isolate). Routing both halves of the filesystem decision through this file keeps ONE answer to
+ * "did the admin say yes", in both processes.
+ */
+function fsCapabilityAllowed(pluginSlug: string, access: 'read' | 'write'): boolean {
+    if (!pluginSlug) return true; // core code, no plugin context
+    return fsCapabilityDeclared(pluginSlug, access) && fsCapabilityGranted(pluginSlug, access);
+}
+
+/**
+ * Did this plugin DECLARE `filesystem:<access>` (or `filesystem:admin`) and NOT receive it from the
+ * administrator? True means the operator answered "no" to a capability the plugin explicitly asked for.
+ *
+ * Fails CLOSED on an unreadable grant store: if we cannot prove the capability was granted, a declared
+ * capability counts as refused.
+ */
+function fsCapabilityRevoked(pluginSlug: string, access: 'read' | 'write'): boolean {
+    if (!pluginSlug) return false;
+    // THEMES ARE OUT OF SCOPE HERE, AND THIS IS A LIMITATION, NOT A DESIGN CHOICE TO BE PROUD OF:
+    // plugin-permissions.setGrants only accepts a slug matching PLUGIN_SLUG, which a `theme:<slug>`
+    // identifier cannot match, so there is no way for an operator to GRANT a theme anything. Applying
+    // "declared and not granted ⇒ denied" to themes would therefore turn any theme that declares
+    // filesystem into a permanent, unliftable denial rather than an operator decision. For themes the
+    // AST scan (which does read their whole tree, hidden dirs included) remains the only gate — say so
+    // rather than let the exported name imply a coverage that is not there.
+    if (pluginSlug.startsWith('theme:')) return false;
+    if (!fsCapabilityDeclared(pluginSlug, access)) return false; // never asked ⇒ nothing to revoke
+    return !fsCapabilityGranted(pluginSlug, access);
+}
+
+/**
+ * Is this read the MODULE LOADER's, rather than the plugin's? Node's CJS/ESM resolver reads the entry
+ * file, `package.json` and anything under `node_modules/` through this same patched fs BEFORE a single
+ * line of plugin code has run. Applying the revocation to those does not deny the plugin a capability:
+ * it makes the module UNLOADABLE (a raw EACCES out of defaultLoadImpl / readPackageScope), so revoking
+ * `filesystem:read` stopped the isolate BOOTING instead of stopping it reading. Demonstrated, not
+ * theorised — it is how the isolate test failed before this existed.
+ *
+ * What it exempts is exactly the plugin's own vetted CODE and its resolution metadata: files it shipped
+ * and cannot fabricate at runtime (io-guard refuses every write whose extension is executable, and
+ * manifest/package writes are refused or revocable), and which it could equally have inlined into its
+ * source. Data files in the own dir — the bytes a read revocation is actually about — are untouched by
+ * this and stay refused.
+ *
+ * READS ONLY, and it lives in a function because BOTH copies of the capability gate (isPathSafe here and
+ * secure-require.guardFsCall) must apply the SAME one, or a require() resolves on one fs surface and
+ * EACCESes on the other.
+ */
+function isModuleLoaderRead(targetPath: unknown, isWrite: boolean): boolean {
+    if (isWrite) return false;
+    let resolved: string;
+    try { resolved = path.resolve(String(targetPath)); } catch { return false; }
+    const base = path.basename(resolved);
+    if (base === 'package.json') return true;
+    if (resolved.split(path.sep).includes('node_modules')) return true;
+    return EXECUTABLE_CODE_EXT.test(base);
+}
+
+/** Test/host hook: drop the cached manifest declaration for a slug (install/update rewrites it). */
+function forgetDeclaredPermissions(pluginSlug?: string): void {
+    if (pluginSlug) _manifestPermCache.delete(pluginSlug); else _manifestPermCache.clear();
+}
 
 /**
  * Check if a path is safe to access
  */
-function isPathSafe(targetPath: string, isWrite = false) {
-    const pluginSlug = getEffectivePlugin();
+// `knownSlug` lets a CALLER that has already resolved the effective plugin pass it in. That resolution is
+// NOT cheap when the ALS context is empty — the 100% case for host code — because getEffectivePlugin()
+// then falls back to a stack walk (Error.stackTraceLimit = 200 + a realpath per candidate frame, ~20-40 µs).
+// The fs patches below therefore resolve it ONCE per call and hand it down; nobody should call
+// getEffectivePlugin() twice on one filesystem operation. Pass `null` to mean "no plugin, do not resolve".
+function isPathSafe(targetPath: string, isWrite = false, knownSlug?: string | null) {
+    const pluginSlug = knownSlug !== undefined ? knownSlug : getEffectivePlugin();
     if (!pluginSlug) return true; // Core code is trusted
 
     // No plugin is exempt: EVERY plugin is uniformly confined by io-guard (no trust tier). Plugins
@@ -228,14 +713,21 @@ function isPathSafe(targetPath: string, isWrite = false) {
         path.join(ROOT_DIR, 'src') // Allow plugins to require core modules (careful)
     ];
 
-    // Safe Zones for Writing (Stricter)
+    // Safe Zones for Writing (Stricter) — DERIVED, not hand-listed. `uploads` and `themes` used to be
+    // in here verbatim, which handed every plugin (zero permissions) a write into two directories the
+    // server publishes raw: the same unauthenticated exfiltration channel #3 closed at /plugins,
+    // through the door next to it. Filtering the candidates through servedRootOf() states the rule as
+    // a CLASS — a zone that is published is not a write zone, and a future static mount added to
+    // SERVED_ROOTS removes it from here automatically instead of quietly re-opening the channel.
+    // (A plugin that must publish media goes through the Media model, which registers a row, an owner
+    // and a UUID name; not raw fs into a served directory.)
     const SAFE_WRITE_DIRS = [
         path.join(ROOT_DIR, 'uploads'),
         path.join(ROOT_DIR, 'data'),
         path.join(ROOT_DIR, 'logs'),
         path.join(ROOT_DIR, 'os-tmp'),
         path.join(ROOT_DIR, 'themes')
-    ];
+    ].filter(dir => servedRootOf(dir) === null);
 
     // A plugin may always read+write within its OWN dir (plugins/<slug> or themes/<slug>) — that's its
     // private storage (data files, caches, attachments). It's still subject to the file-name blocks
@@ -243,6 +735,82 @@ function isPathSafe(targetPath: string, isWrite = false) {
     const ownDir = pluginSlug.startsWith('theme:')
         ? path.join(ROOT_DIR, 'themes', pluginSlug.slice('theme:'.length))
         : path.join(ROOT_DIR, 'plugins', pluginSlug);
+
+    // ── THE REVOCATION IS ENFORCED HERE, AT THE CALL, NOT BY A STATIC SCANNER ────────────────────────
+    //
+    // The own dir used to be the ONE region of the filesystem with no capability gate at all: the grant
+    // check in secure-require reads `!isPathWithinPluginDir(...) && !hasPermission(...)`, so a write
+    // inside the plugin's own directory was authorized by geography alone. That made the AST scanner in
+    // core/plugins.ts the ONLY thing standing between a revoked `filesystem:write` and a real write —
+    // and an AST scanner answers "does this code reach fs?" by enumerating SPELLINGS, so every audit
+    // round found new ones (class fields, default parameters, `this.x = require('fs')`, a getter, a
+    // returned module…). Enumeration cannot win that race.
+    //
+    // So the decision moved to the only place that cannot be out-spelled: the moment of the call. By the
+    // time control reaches here the module value has already been obtained, however it was spelled — the
+    // syntax that carried it is gone and irrelevant.
+    //
+    // THE RULE, stated so it can be checked rather than inferred:
+    //   · A capability the plugin NEVER DECLARED is not revoked — it was never asked for. Its own
+    //     directory stays private storage with no grant (the Android private-storage model, and what
+    //     every zero-permission plugin has always had). Widening this would break every such plugin
+    //     without closing anything: private storage publishes no bytes (the published subtree is
+    //     read-only above, executable extensions are refused, and the quota still meters it).
+    //   · A capability the plugin DECLARED and the administrator DID NOT GRANT is DENIED — everywhere,
+    //     including the own directory. That is what the switch in /admin/plugins now means. On the host
+    //     it takes effect on the next call (the in-memory grant store is read live); inside an isolate
+    //     the answer is the value the host pushed at spawn, and POST /plugins/:slug/permissions respawns
+    //     the isolate after every grant change so the switch is never left inert. See ISOLATE_FS_GRANT.
+    //   · ONE carve-out, and it is about WHO IS ASKING, not about relaxing the rule: the reads the MODULE
+    //     LOADER performs to bring the plugin's own vetted code into memory (entry file, package.json,
+    //     node_modules) are exempt — see isModuleLoaderRead. Refusing those never stopped a plugin
+    //     reading anything; it stopped the isolate BOOTING, with an EACCES thrown out of Node's loader
+    //     before any plugin code existed. Data files in the own dir stay refused, which is what a read
+    //     revocation is actually about.
+    // Outside the own dir the grant was, and remains, required outright (secure-require guardFsCall).
+    if (!isModuleLoaderRead(resolved, isWrite) && under(resolved, ownDir) && fsCapabilityRevoked(pluginSlug, isWrite ? 'write' : 'read')) {
+        throttledWarn(`${pluginSlug}:fs-revoked`,
+            `[Security Block] Plugin '${pluginSlug}' declared filesystem:${isWrite ? 'write' : 'read'} but the administrator has not granted it — refusing: ${resolved}`);
+        return false;
+    }
+
+    // SECURITY (#3): the plugin's own dir is writable with NO grant, and part of it is PUBLISHED over
+    // HTTP by index.ts. Writable ∩ published = an unauthenticated exfiltration channel that no network
+    // control can see (the plugin never opens a socket; the SERVER hands the bytes out). Serving an
+    // allowlist alone would not have closed it — a plugin would simply overwrite an allowlisted file,
+    // e.g. its own public/banner.css, with the stolen bytes. So the published surface is READ-ONLY to
+    // the plugin, and both rules are derived from the one declaration above.
+    //
+    // STATED AS A CLASS (verification of #3): the first version named /plugins and left /uploads and
+    // /themes — same writability, same server, same anonymous reader — wide open. The rule below is
+    // therefore "inside ANY publicly-served root, the only writes allowed are the ones inside this
+    // plugin's own dir that the host does NOT publish", so every mount in SERVED_ROOTS is covered by
+    // construction and a new mount is covered by adding it to that list.
+    //
+    // AND IT COMPARES THE VALUE THE SYSCALL USES. canonicalize() realpaths the nearest existing
+    // ancestor, which is what defeats (a) a symlink/junction the plugin created inside its own dir
+    // ('<own>/self' → '<own>', so '<own>/self/public/leak.css' lands in public/ while resolving
+    // lexically outside it), (b) Win32's trailing-dot/space stripping ('public./leak.css'), and
+    // (c) 8.3 short names. Both the lexical and the canonical form are checked, so neither a
+    // realpath failure nor a link can produce an ALLOW the other form would have denied.
+    const isThemeCtx = pluginSlug.startsWith('theme:');
+    // Canonicalize only for writes somewhere under the install root — every served root lives there,
+    // so this cannot skip a published path, and it keeps the extra realpath off writes to os-tmp and
+    // the like. The membership test itself is asked of BOTH forms: a link whose lexical path is
+    // outside every served root but whose real path is inside one must not slip through the gate.
+    const canon = (isWrite && under(resolved, ROOT_DIR)) ? canonicalize(resolved) : resolved;
+    if (isWrite && (servedRootOf(resolved) !== null || servedRootOf(canon) !== null)) {
+        const ownReal = canonicalize(ownDir);
+        const withinOwn = under(resolved, ownDir) && under(canon, ownReal);
+        const publishedInOwn = isThemeCtx
+            ? (isThemePublishedPath(ownDir, resolved) || isThemePublishedPath(ownReal, canon))
+            : (isPluginPublishedPath(ownDir, resolved) || isPluginPublishedPath(ownReal, canon));
+        if (!withinOwn || publishedInOwn) {
+            throttledWarn(`${pluginSlug}:published-write`, `[Security Block] Plugin '${pluginSlug}' tried to write into a PUBLICLY SERVED path: ${resolved}`);
+            return false;
+        }
+    }
+
     const dirsToCheck = (isWrite ? SAFE_WRITE_DIRS : SAFE_READ_DIRS).concat([ownDir]);
     // Exact-match or trailing-separator prefix so safe dir 'foo' does not also whitelist
     // a sibling 'foo-bar' that merely shares a string prefix.
@@ -275,11 +843,17 @@ function isPathSafe(targetPath: string, isWrite = false) {
     // secure-require wraps timers with creation-time context, so a console.log intercepted by
     // Next's log capture inside a plugin scope schedules the flusher "as" that plugin. The write
     // is Next's own, not the plugin's; denying it only breaks Next's logging and floods the
-    // console with EACCES. Allow WRITES to *.log files under frontend/.next only — never code
-    // (EXECUTABLE_CODE_EXT can't match *.log), log-injection at worst.
+    // console with EACCES.
+    //
+    // SCOPED TO THE DIRECTORY THE JUSTIFICATION NAMES, not to a file EXTENSION under the whole build
+    // tree. The first version allowed any '*.log' anywhere under .next — and .next/static is PUBLISHED
+    // by Next at /_next/static, so a plugin with zero permissions could write
+    // frontend/.next/static/leak.log and have the server hand it to an anonymous GET. An extension is
+    // never a containment boundary: state the carve-out as the subtree that needs it (and it is checked
+    // against servedRootOf too, so declaring a new Next mount above closes this automatically).
     if (!isAllowed && isWrite) {
-        const nextDir = path.resolve(ROOT_DIR, '../frontend/.next');
-        if (resolved.startsWith(nextDir + path.sep) && /\.log$/i.test(resolved)) {
+        const nextDevLogs = path.resolve(ROOT_DIR, '../frontend/.next/dev/logs');
+        if (under(resolved, nextDevLogs) && /\.log$/i.test(resolved) && servedRootOf(resolved) === null) {
             isAllowed = true;
         }
     }
@@ -434,6 +1008,7 @@ function patch(methodName: string, isSync = false) {
         'writeFile', 'writeFileSync',
         'unlink', 'unlinkSync',
         'rm', 'rmSync',
+        'rmdir', 'rmdirSync',
         'rename', 'renameSync',
         'mkdir', 'mkdirSync',
         'symlink', 'symlinkSync',
@@ -443,6 +1018,13 @@ function patch(methodName: string, isSync = false) {
     ].includes(methodName);
 
     fs[methodName] = function (...args: any[]) {
+        // ONE resolution of the effective plugin per filesystem call, taken first: with an empty ALS
+        // context getEffectivePlugin() walks the stack (see isPathSafe), and this wrapper used to pay for
+        // it once inside isPathSafe and again for the quota. Host code (no plugin) leaves immediately and
+        // pays nothing — the guard has no opinion on core code.
+        const cslug = getEffectivePlugin();
+        if (!cslug) return original.apply(this, args);
+
         // Different methods have path(s) at different positions, with different read/write semantics.
         // pathsToCheck is a list of [path, isWriteForThisPath] pairs.
         let pathsToCheck: [any, boolean][] = [[args[0], isWrite]];
@@ -467,7 +1049,7 @@ function patch(methodName: string, isSync = false) {
         for (const [p, w] of pathsToCheck) {
             if (!p) continue;
             // Validate
-            if (!isPathSafe(p, w)) {
+            if (!isPathSafe(p, w, cslug)) {
                 const error: any = new Error(`EACCES: Permission denied, plugin cannot access: ${p}`);
                 error.code = 'EACCES';
                 if (isSync) throw error;
@@ -481,8 +1063,7 @@ function patch(methodName: string, isSync = false) {
         // omits. Meter by the target length against the same rolling grow quota (metered only under plugin
         // context; core/host is unmetered).
         if (methodName === 'truncate' || methodName === 'truncateSync') {
-            const cslug = getEffectivePlugin();
-            if (cslug) {
+            {
                 try { enforceGrowQuota(cslug, Math.max(0, Number(args[1]) || 0)); }
                 catch (error: any) {
                     if (isSync) throw error;
@@ -496,8 +1077,7 @@ function patch(methodName: string, isSync = false) {
         // the SOURCE file's size against the same rolling grow quota so a distinct-dest copy loop can't fill
         // the disk unmetered. (Metered only under plugin context; core/host is unmetered.)
         if (methodName === 'copyFile' || methodName === 'copyFileSync' || methodName === 'cp' || methodName === 'cpSync') {
-            const cslug = getEffectivePlugin();
-            if (cslug) {
+            {
                 try {
                     let sz = 0; try { sz = fs.statSync(args[0]).size; } catch { sz = 0; }
                     enforceGrowQuota(cslug, sz);
@@ -517,8 +1097,7 @@ function patch(methodName: string, isSync = false) {
         // tree is metered per new dir, not once. (Metered only under a plugin context; core/host is unmetered.
         // Runs only after isPathSafe() passed above, so mkdir's normal path-safety checks stay intact.)
         if (methodName === 'mkdir' || methodName === 'mkdirSync') {
-            const cslug = getEffectivePlugin();
-            if (cslug) {
+            {
                 try {
                     const opts = (args[1] && typeof args[1] === 'object') ? args[1] : null;
                     enforceGrowQuota(cslug, 4096 * mkdirCreateCount(args[0], !!(opts && opts.recursive)));
@@ -532,7 +1111,7 @@ function patch(methodName: string, isSync = false) {
         }
 
         // Per-plugin write quota (metered only under a plugin context; core/host is unmetered).
-        const quotaSlug = QUOTA_METHODS.has(methodName) ? getEffectivePlugin() : null;
+        const quotaSlug = QUOTA_METHODS.has(methodName) ? cslug : null;
         if (quotaSlug) {
             if (methodName === 'createWriteStream') {
                 return wrapQuotaStream(quotaSlug, original.apply(this, args));
@@ -572,6 +1151,11 @@ function patch(methodName: string, isSync = false) {
 patch('writeFile'); patch('writeFileSync', true);
 patch('unlink'); patch('unlinkSync', true);
 patch('rm'); patch('rmSync', true);
+// rmdir/chown were in the isWrite list but never patched (no ORIGINALS entry → patch() returned early),
+// so both reached the filesystem unguarded. Same class as the fs.promises gap below: a method named in
+// the policy but absent from the enforcement.
+patch('rmdir'); patch('rmdirSync', true);
+patch('chown'); patch('chownSync', true);
 patch('rename'); patch('renameSync', true);
 patch('mkdir'); patch('mkdirSync', true);
 patch('symlink'); patch('symlinkSync', true);
@@ -595,11 +1179,132 @@ patch('open'); patch('openSync', true);
 patch('opendir'); patch('opendirSync', true);
 patch('readlink'); patch('readlinkSync', true);
 
+// === fs.promises — THE SAME POLICY, NOT A SECOND ONE ===
+//
+// (#3, verification) io-guard patched only the callback/sync API. `fs.promises.*` stayed pristine, and
+// that was not academic: the host-side bridge `wordjs.fs.write` ends in `fs.promises.writeFile`, so a
+// plugin holding filesystem:write wrote STRAIGHT INTO its published surface (public/x.js, then
+// assets.enqueueScript → same-origin JavaScript on every public page) while the guard was inspecting an
+// API nothing on that path used. Two APIs with two policies is exactly the "the guard validates
+// something other than what is used" shape this repo keeps shipping; there is now ONE policy.
+//
+// `require('fs/promises')` returns THIS SAME object (asserted by the tests), so patching here covers
+// both specifiers. Methods and read/write semantics mirror patch() above one for one. NOTE: FileHandle
+// methods obtained from open() are not wrapped — the path gate runs on the open() itself (flag-aware),
+// and secure-require's proxy meters plugin-side handles.
+const PROMISE_ORIGINALS: Record<string, any> = {};
+function patchPromise(methodName: string): void {
+    const P: any = (fs as any).promises;
+    const original = P && P[methodName];
+    if (typeof original !== 'function') return;
+    PROMISE_ORIGINALS[methodName] = original;
+
+    const isWrite = [
+        'writeFile', 'appendFile', 'unlink', 'rm', 'rmdir', 'rename', 'mkdir',
+        'symlink', 'truncate', 'chmod', 'lchmod', 'chown', 'lchown',
+    ].includes(methodName);
+
+    P[methodName] = function (...args: any[]) {
+        // ONE resolution per call, taken FIRST — identical to the sync patch above and for the same
+        // reason: with an empty ALS context getEffectivePlugin() walks the stack (~20-40 us), and every
+        // fs.promises operation OF THE HOST used to pay for two of them (one inside isPathSafe, one for
+        // the quota) merely to conclude "not a plugin". Monolith mode runs Next.js in this process, so
+        // that was a per-request tax on the modern fs API. Host code now leaves on the first line.
+        const cslug = getEffectivePlugin();
+        if (!cslug) return original.apply(this, args);
+
+        let pathsToCheck: [any, boolean][] = [[args[0], isWrite]];
+        if (methodName.startsWith('copy') || methodName.startsWith('cp') || methodName.startsWith('link')) {
+            pathsToCheck = [[args[0], false], [args[1], true]];
+        } else if (methodName.startsWith('rename') || methodName.startsWith('symlink')) {
+            pathsToCheck = [[args[0], true], [args[1], true]];
+        } else if (methodName === 'open') {
+            pathsToCheck = [[args[0], openFlagsAreWrite(args[1])]];
+        }
+        for (const [p, w] of pathsToCheck) {
+            if (!p) continue;
+            if (!isPathSafe(p, w, cslug)) {
+                const error: any = new Error(`EACCES: Permission denied, plugin cannot access: ${p}`);
+                error.code = 'EACCES';
+                return Promise.reject(error);
+            }
+        }
+        // Byte/inode accounting against the SAME rolling window the sync/callback API charges, so the
+        // two APIs share one budget instead of each having half of it. THIS IS THE ONLY PLACE fs.promises
+        // writes are metered: secure-require's plugin-facing proxy calls straight into these patched
+        // methods, so metering there as well charged every plugin write TWICE (half the real quota) —
+        // see the note in secure-require.createSecureFsPromises.
+        {
+            try {
+                if (methodName === 'writeFile' || methodName === 'appendFile') {
+                    const floor = methodName === 'writeFile' ? 4096 : 0;
+                    enforceGrowQuota(cslug, Math.max(byteLenOf(args[1]), floor));
+                } else if (methodName === 'truncate') {
+                    enforceGrowQuota(cslug, Math.max(0, Number(args[1]) || 0));
+                } else if (methodName === 'copyFile' || methodName === 'cp') {
+                    let sz = 0; try { sz = fs.statSync(args[0]).size; } catch { sz = 0; }
+                    enforceGrowQuota(cslug, sz);
+                } else if (methodName === 'mkdir') {
+                    const opts = (args[1] && typeof args[1] === 'object') ? args[1] : null;
+                    enforceGrowQuota(cslug, 4096 * mkdirCreateCount(args[0], !!(opts && opts.recursive)));
+                }
+            } catch (error: any) {
+                return Promise.reject(error);
+            }
+        }
+        return original.apply(this, args);
+    };
+}
+
+for (const m of [
+    // Write ops
+    'writeFile', 'appendFile', 'unlink', 'rm', 'rmdir', 'rename', 'mkdir', 'symlink',
+    'truncate', 'chmod', 'lchmod', 'chown', 'lchown', 'copyFile', 'cp', 'link',
+    // Read ops (stat/lstat/access/realpath stay unpatched, exactly as in the sync half: they are used
+    // during require() resolution and by this module's own metering).
+    'readFile', 'readdir', 'opendir', 'readlink', 'open',
+]) patchPromise(m);
+
 module.exports = {
     isPathSafe,
+    // The RUNTIME authority for a revoked filesystem capability, exported so secure-require's fs and
+    // fs.promises proxies ask the SAME question this guard asks (one definition of "the admin said no"),
+    // and so a test can drive it directly. forgetDeclaredPermissions() exists because the manifest cache
+    // outlives an install/update that rewrites the declaration.
+    fsCapabilityRevoked,
+    // The OUTSIDE-own-dir half of the same decision (declared AND granted), and the raw grant lookup.
+    // secure-require consumes fsCapabilityAllowed instead of plugin-context.hasPermission so that BOTH
+    // halves of the filesystem gate read the grant through the one function that knows where the answer
+    // lives in each process (live map on the host, host-pushed cfg inside an isolate).
+    fsCapabilityAllowed,
+    fsCapabilityGranted,
+    // The loader-vs-plugin carve-out, exported so secure-require's copy of the capability gate applies
+    // the IDENTICAL one — otherwise a require() resolves through one fs surface and EACCESes on the other.
+    isModuleLoaderRead,
+    declaredPermissionsOf,
+    forgetDeclaredPermissions,
     // Exported so the fs.promises proxy (secure-require) meters against the SAME per-plugin budget as the
     // callback/sync fs methods — otherwise a plugin's fs.promises writes bypass the disk quota entirely.
     enforceSingleWrite,
     enforceGrowQuota,
-    byteLenOf
+    byteLenOf,
+    // (#3) The published-surface declaration. index.ts's /plugins handler serves EXACTLY what
+    // isPluginServedRelPath() accepts, and isPathSafe() above denies the plugin writing it. Exported
+    // from here (not duplicated in index.ts) so "what is public" and "what is read-only" cannot drift.
+    isPluginServedRelPath,
+    PLUGIN_PUBLIC_DIR,
+    PLUGIN_PUBLIC_EXT,
+    // The bundle sink's half of the same declaration: routes/plugin-bundles.ts serves EXACTLY these
+    // names out of plugins/<folder>/dist/, and isPathSafe() denies the plugin writing any of them.
+    isPluginBundleRelPath,
+    PLUGIN_BUNDLE_DIR,
+    PLUGIN_BUNDLE_TYPES,
+    // The /themes twin: index.ts's /themes handler serves EXACTLY what isThemeServedRelPath accepts,
+    // and a theme may not write anything that predicate would publish.
+    isThemeServedRelPath,
+    THEME_PUBLIC_EXT,
+    // The publicly-served roots themselves — exported so a test can assert that no write zone is
+    // inside one (the property that makes #3 a closed class rather than a fixed mount).
+    SERVED_ROOTS,
+    servedRootOf,
 };

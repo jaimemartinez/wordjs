@@ -4,7 +4,7 @@
  * the editor canvas (via versoConfig) and the public ContentRenderer.
  */
 import React from "react";
-import { bc, blockVars, unit } from "@/components/blocks/blockVars";
+import { bc, blockVars, safeCss, unit } from "@/components/blocks/blockVars";
 
 export default function SearchBarBlock({ placeholder, buttonText, searchPage, align, width, inputBg, inputBorderColor, inputRadius, buttonBg, buttonColor, buttonRadius, css }: any) {
     const [query, setQuery] = React.useState("");
@@ -41,7 +41,7 @@ export default function SearchBarBlock({ placeholder, buttonText, searchPage, al
                     'button-color': buttonColor,
                     'button-radius': unit(buttonRadius),
                 }),
-                ...css,
+                ...safeCss(css),
             }}
         >
             <form className={bc('search')} onSubmit={handleSubmit}>

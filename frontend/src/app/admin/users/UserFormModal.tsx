@@ -5,6 +5,7 @@ import { usersApi, User } from "@/lib/api";
 import ModernSelect from "@/components/ModernSelect";
 import { PluginHook, pluginHooks } from "@/lib/plugin-hooks";
 import { useModal } from "@/contexts/ModalContext";
+import UserMfaReset from "./UserMfaReset";
 
 interface UserFormModalProps {
     user: User | "new" | null;
@@ -168,6 +169,12 @@ export default function UserFormModal({ user, onClose, onSuccess }: UserFormModa
                             />
                         </div>
                     </form>
+
+                    {/* Outside the <form>: this acts on the SAVED account immediately, it is not part of
+                        the pending edit that "Save User" submits. */}
+                    {!isNew && userId != null && (
+                        <UserMfaReset userId={userId} username={(user as User).username} targetRole={(user as User).role} />
+                    )}
                 </div>
 
                 <div className="p-6 border-t border-gray-100 bg-gray-50/30 flex justify-end gap-3">

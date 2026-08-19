@@ -389,7 +389,20 @@ async function importSite(data: any, options: Record<string, any> = {}) {
     if (data.content?.posts) {
         for (const post of data.content.posts) {
             try {
-                const existing = await Post.findBySlug(post.slug);
+                // The type is part of the IDENTITY, so it must be part of the LOOKUP — the same type the
+                // create branch below writes. Without it, findBySlug matched any post_type (Post.ts only
+                // adds `AND post_type = ?` when it receives one), so a bundle holding both a post and a
+                // page named 'about' — a legal combination — made the pages loop below find the post this
+                // loop had just created and overwrite it, reporting `pages.updated++`. That is the
+                // restoreBackup path (clearDatabase + importSite), so such a site did not round-trip.
+                const existing = await Post.findBySlug(post.slug, 'post');
+                if (existing && existing.postType !== 'post') {
+                    // Belt and braces: refuse rather than write through a record of another type. An
+                    // import that says "I updated 1 post" having clobbered an attachment is worse than
+                    // one that declines.
+                    results.errors.push(`Post ${post.title}: slug '${post.slug}' already belongs to a '${existing.postType}' — refusing to overwrite`);
+                    continue;
+                }
                 if (existing && !updateExisting) {
                     idMap.posts[post.id] = existing.id;
                     results.posts.skipped++;
@@ -425,7 +438,14 @@ async function importSite(data: any, options: Record<string, any> = {}) {
     if (data.content?.pages) {
         for (const page of data.content.pages) {
             try {
-                const existing = await Post.findBySlug(page.slug);
+                // Same as the posts loop above: look the record up by the identity the create branch
+                // writes (slug + type), never by slug alone. core/wxr-import.ts:325 is the sibling that
+                // always did this correctly.
+                const existing = await Post.findBySlug(page.slug, 'page');
+                if (existing && existing.postType !== 'page') {
+                    results.errors.push(`Page ${page.title}: slug '${page.slug}' already belongs to a '${existing.postType}' — refusing to overwrite`);
+                    continue;
+                }
                 if (existing && !updateExisting) {
                     idMap.pages[page.id] = existing.id;
                     results.pages.skipped++;
@@ -583,12 +603,21 @@ async function importFromFile(filepath: any, options = {}) {
 /**
  * Post meta that must NOT travel in an export.
  *
- * Kept in lockstep with the SKIP_META set the WXR importer applies on read (core/wxr-import.ts):
- * these are volatile editor bookkeeping (who holds the lock, when), meaningless in another install and
- * a needless leak of an editor's user id. Everything else — crucially `_puck_data`, the page tree —
- * ships verbatim.
+ * IN LOCKSTEP WITH THE READ SIDE BY CONSTRUCTION, not by hand. This set used to be the literal
+ * `{_edit_lock, _edit_last}` and the WXR importer kept its own copy of the same two names, with a
+ * comment in each promising they matched. When the importer moved to core/protected-meta (the list of
+ * keys only backend code may write) the promise quietly broke: an export kept emitting
+ * `_wp_attached_file`, `_wp_attachment_metadata` and `_wp_trash_meta_status`, which the importer at
+ * the other end now refuses — so the file advertised state that could never be restored, and made
+ * every export a carrier for the exact bytes core/protected-meta exists to keep out of post_meta.
+ * Deriving the set removes the possibility of drift instead of documenting it.
+ *
+ * These are all SERVER-OWNED, install-local values: volatile editor bookkeeping (who holds the lock,
+ * when — also a needless leak of an editor's user id), the attachment's on-disk path, and the
+ * trash-restore status. Everything else — crucially `_puck_data`, the page tree — ships verbatim.
  */
-const NON_PORTABLE_META = new Set(['_edit_lock', '_edit_last']);
+const { PROTECTED_POST_META } = require('./protected-meta');
+const NON_PORTABLE_META: Set<string> = new Set(PROTECTED_POST_META);
 
 /**
  * CDATA payload that cannot break out of its own section.

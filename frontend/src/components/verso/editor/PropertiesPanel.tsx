@@ -1,25 +1,30 @@
 "use client";
 /**
- * Verso — panel derecho de propiedades (F3, checklist W21): misma piel que el PropertiesPanel del
- * PuckEditor legacy, ya retirado (header de identidad chip 32px + nombre 12px bold + ID mono 10px; 3 pestañas
- * Contenido/Estilo/Avanzado; overlay "Panel bloqueado" durante drag; footer "Restablecer
- * estilos"), sobre el motor Verso:
+ * Verso — panel derecho de propiedades.
+ *
+ * REDISEÑO (Stitch "Architectural Precision", el mismo sistema del que salió el editor — proyecto
+ * `15016963210436703665`, pantalla "Panel de Propiedades Verso"): el panel pasa de PESTAÑAS a
+ * SECCIONES PLEGABLES (acordeón), que es el patrón canónico del inspector en ese sistema. Todo lo
+ * visible a la vez, cada sección se colapsa; cabecera con chip de identidad, y pie de "Restablecer".
+ * Solo cambia la CHROME del panel — el reparto de campos, la escritura y los anclajes de e2e no.
  *
  *  - Campos: VersoFieldControl por entrada, valores del nodo vivo (suscripción por store),
  *    escritura vía transact.setProps con coalesceKey por campo (tecleo = una entrada de historia).
  *  - Sin selección: los campos ROOT (rootFields prop — rootFieldsPage/rootFieldsPost, la asimetría
- *    del CMS) contra doc.root.props vía setRootProps — la vista "Ajustes de página" (W41).
- *  - Pestañas: partición EXPLÍCITA por clave (panelTabs.ts) — equivalente documentado del filtrado
- *    CSS :has(.wjs-f-*) del editor actual (mismas claves, mismo resultado visual); pestañas sin
- *    campos se deshabilitan y la activa cae a Contenido al cambiar la selección (misma regla).
+ *    del CMS) contra doc.root.props vía setRootProps — la vista "Ajustes de página".
+ *  - Secciones: MISMA partición explícita por clave (panelTabs.ts) que antes alimentaba las pestañas;
+ *    una sección vacía no se pinta (la de Avanzado siempre existe con un bloque, porque el panel de
+ *    interacciones vive ahí). El estado de plegado es por sección y persiste entre selecciones.
  *  - "Restablecer estilos": vuelve look/anim/hide a los defaultProps del tipo, vía transact
- *    (undoable), contenido intacto — la semántica exacta del reset actual.
+ *    (undoable), contenido intacto.
  *
- * MOVIMIENTO: las interacciones (`ix`) y la animación de entrada (`anim`) YA NO se montan aquí —
- * viven en el DOCK inferior de movimiento (IxDock), con el ancho que su línea de tiempo necesita.
- * El reparto de panelTabs (DOCK_FIELD_KEYS) los retira de las pestañas: un solo dueño por prop.
+ * INTERACCIONES (F9-D): el panel de interacciones se monta en AVANZADO, junto a `anim` — es su
+ * hermano mayor (`anim` es la entrada de siempre; `ix` es la timeline). Va aquí y NO como un campo
+ * inyectado por `withSharedVersoFields` a propósito: ese seam está sujeto a un gate anti-drift que
+ * compara clave a clave los `fields` de Verso con los de `versoConfig` (verso-coreBlocks.test.ts), y
+ * `ix` no existe —ni va a existir— en el editor viejo, al que Verso sustituye.
  */
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 import MSym from "@/components/editor/MSym";
 import { useI18n } from "@/contexts/I18nContext";
 import { trStr } from "@/lib/editorI18n";
@@ -38,11 +43,18 @@ export interface VersoPropertiesPanelProps {
     registry: BlockRegistry;
     /** Campos ROOT del tipo de registro (rootFieldsPage / rootFieldsPost) — vista sin selección. */
     rootFields: Record<string, VersoField>;
-    /** Picker de los campos `external` (W22): VersoEditor inyecta MediaPickerModal. */
+    /** Picker de los campos `external`: VersoEditor inyecta MediaPickerModal. */
     renderExternalPicker?: RenderExternalPicker;
     onClose: () => void;
     mobileOpen?: boolean;
 }
+
+/** Las tres secciones del inspector, en orden. Icono Material Symbol por sección. */
+const SECTIONS: { key: PanelTab; icon: string; label: string }[] = [
+    { key: "content", icon: "edit_note", label: "Contenido" },
+    { key: "style", icon: "palette", label: "Estilo" },
+    { key: "advanced", icon: "tune", label: "Avanzado" },
+];
 
 export default function PropertiesPanel({ handle, registry, rootFields, renderExternalPicker, onClose, mobileOpen = false }: VersoPropertiesPanelProps) {
     const { t, language } = useI18n();
@@ -61,17 +73,17 @@ export default function PropertiesPanel({ handle, registry, rootFields, renderEx
     const fields: Record<string, VersoField> = def?.fields ?? rootFields;
     const parts = useMemo(() => partitionFieldEntries(fields), [fields]);
     // Las interacciones y la animación de entrada viven en el DOCK inferior de movimiento
-    // (IxDock + DOCK_FIELD_KEYS): el inspector ya no fuerza Avanzado — pestaña vacía, pestaña fuera.
+    // (IxDock + DOCK_FIELD_KEYS): el inspector ya no fuerza Avanzado — sección vacía, sección fuera.
     const avail = useMemo(() => tabAvailability(fields), [fields]);
 
-    const [tab, setTab] = useState<PanelTab>("content");
-    useEffect(() => {
-        // Paridad con el panel actual: si la selección cambia a un bloque sin la pestaña activa,
-        // la pestaña CAE (persistentemente) a Contenido — no un derive de render, que "recordaría"
-        // la pestaña stale al volver a un bloque que sí la tiene.
-        // eslint-disable-next-line react-hooks/set-state-in-effect -- corrección puntual post-selección, converge en un render
-        if ((tab === "style" && !avail.style) || (tab === "advanced" && !avail.advanced)) setTab("content");
-    }, [avail, tab]);
+    // Plegado por sección (no por nodo): persiste al cambiar de selección, como en Figma/Framer.
+    // Las tres nacen abiertas — el inspector muestra todo de un vistazo y se colapsa a voluntad.
+    const [collapsed, setCollapsed] = useState<Record<PanelTab, boolean>>({
+        content: false,
+        style: false,
+        advanced: false,
+    });
+    const toggle = (k: PanelTab) => setCollapsed((c) => ({ ...c, [k]: !c[k] }));
 
     const values: Record<string, unknown> = node ? node.props : ((state.doc.root.props as Record<string, unknown>) ?? {});
 
@@ -100,31 +112,28 @@ export default function PropertiesPanel({ handle, registry, rootFields, renderEx
         );
     };
 
-    const TABS = [
-        { id: "content" as const, label: trStr("Contenido", language), enabled: true },
-        { id: "style" as const, label: trStr("Estilo", language), enabled: avail.style },
-        { id: "advanced" as const, label: trStr("Avanzado", language), enabled: avail.advanced },
-    ];
+    /** ¿Esta sección tiene algo que mostrar? Solo si el reparto le da campos. */
+    const hasSection = (k: PanelTab) => parts[k].length > 0;
 
     return (
         <aside
             // Modo del panel: "block" (hay selección) o "root" (ajustes de la
             // página/entrada). Ancla DETERMINISTA para los e2e — sin ella un spec
             // solo puede heurizar por texto y, con el panel a medio conmutar,
-            // escribe el título de la página en el campo del bloque (cazado en CI,
-            // donde el arranque es más lento que en local).
+            // escribe el título de la página en el campo del bloque.
             data-verso-panel={node ? "block" : "root"}
             data-verso-panel-node={node?.id ?? undefined}
             className={`flex-col bg-[var(--ed-surface-container-lowest)] border-l border-[var(--ed-outline-variant)] ${mobileOpen ? "flex fixed inset-x-0 top-12 bottom-14 z-40" : "hidden"} md:flex md:static md:inset-auto md:w-[320px] md:shrink-0 md:z-30`}
         >
-            <div className="shrink-0 p-3 flex items-center gap-2.5 bg-[var(--ed-surface-container-low)] border-b border-[var(--ed-outline-variant)]">
-                <div className="w-8 h-8 shrink-0 rounded bg-[var(--ed-primary-container)] text-[var(--ed-on-primary-container)] flex items-center justify-center">
+            {/* Cabecera de identidad: chip 32px + nombre + ID mono + colapsar. */}
+            <header className="shrink-0 h-[60px] px-3 flex items-center gap-2.5 bg-[var(--ed-surface-container-lowest)] border-b border-[var(--ed-outline-variant)]">
+                <div className="w-8 h-8 shrink-0 rounded-lg bg-[var(--ed-primary-container)] text-[var(--ed-on-primary-container)] flex items-center justify-center">
                     <MSym name={msIcon} size={20} />
                 </div>
                 <div className="min-w-0 flex-1">
-                    <h3 className="text-[12px] font-bold text-[var(--ed-on-surface)] leading-4 truncate">{label}</h3>
+                    <h3 className="text-[12px] font-semibold tracking-[0.02em] text-[var(--ed-on-surface)] leading-4 truncate">{label}</h3>
                     <p
-                        className="text-[10px] text-[var(--ed-on-surface-variant)] truncate"
+                        className="text-[10px] leading-3 text-[var(--ed-outline)] truncate"
                         style={{ fontFamily: "var(--ed-font-family-monospaced)" }}
                     >
                         {blockId ? `ID: ${blockId}` : t('editor.properties')}
@@ -134,47 +143,59 @@ export default function PropertiesPanel({ handle, registry, rootFields, renderEx
                     type="button"
                     onClick={onClose}
                     title={t('editor.hideProperties')}
-                    className="w-6 h-6 shrink-0 rounded flex items-center justify-center text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container-high)] transition-colors"
+                    className="w-6 h-6 shrink-0 rounded-lg flex items-center justify-center text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container)] transition-colors"
                 >
-                    <MSym name="chevron_right" size={16} />
+                    <MSym name="chevron_right" size={18} />
                 </button>
-            </div>
-
-            {/* Tabs — el reparto de 3 vías del diseño, aquí por partición explícita (panelTabs.ts). */}
-            <div className="flex shrink-0 border-b border-[var(--ed-outline-variant)]" role="tablist">
-                {TABS.map((x) => (
-                    <button
-                        key={x.id}
-                        type="button"
-                        role="tab"
-                        aria-selected={tab === x.id}
-                        disabled={!x.enabled}
-                        onClick={() => setTab(x.id)}
-                        className={`flex-1 py-2.5 text-[11px] font-medium transition-colors border-b-2 ${tab === x.id
-                            ? 'text-[var(--ed-primary)] border-[var(--ed-primary)] bg-[var(--ed-surface-container-low)]'
-                            : x.enabled
-                                ? 'text-[var(--ed-on-surface-variant)] border-transparent hover:bg-[var(--ed-surface-container)]'
-                                : 'text-[var(--ed-outline-variant)] border-transparent cursor-not-allowed'}`}
-                    >
-                        {x.label}
-                    </button>
-                ))}
-            </div>
+            </header>
 
             <div className="relative flex-1 min-h-0">
-                <div data-ptab={tab} className="absolute inset-0 overflow-y-auto custom-scrollbar p-3">
-                    {parts[tab].map(([key, field]) => (
-                        <VersoFieldControl
-                            key={`${blockId ?? "root"}:${key}`}
-                            field={field}
-                            name={key}
-                            label={field.label ? trStr(field.label, language) : undefined}
-                            value={values[key]}
-                            onChange={(v) => onFieldChange(key, v)}
-                            renderExternalPicker={renderExternalPicker}
-                        />
-                    ))}
-                </div>
+                {/* Cuerpo: secciones plegables (el reparto de 3 vías, aquí como acordeón). */}
+                <main className="absolute inset-0 overflow-y-auto custom-scrollbar flex flex-col">
+                    {SECTIONS.filter((s) => hasSection(s.key)).map((s, i, arr) => {
+                        const open = !collapsed[s.key];
+                        const isLast = i === arr.length - 1;
+                        return (
+                            <section
+                                key={s.key}
+                                data-verso-section={s.key}
+                                className={isLast ? "" : "border-b border-[var(--ed-outline-variant)]"}
+                            >
+                                <button
+                                    type="button"
+                                    onClick={() => toggle(s.key)}
+                                    aria-expanded={open}
+                                    className="w-full px-3 py-2.5 flex items-center justify-between group"
+                                >
+                                    <span className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.03em] text-[var(--ed-on-surface)]">
+                                        <MSym name={s.icon} size={16} className="text-[var(--ed-on-surface-variant)]" />
+                                        {trStr(s.label, language)}
+                                    </span>
+                                    <MSym
+                                        name={open ? "expand_less" : "expand_more"}
+                                        size={16}
+                                        className="text-[var(--ed-outline)] group-hover:text-[var(--ed-on-surface)] transition-colors"
+                                    />
+                                </button>
+                                {open && (
+                                    <div className="px-3 pb-3 flex flex-col gap-3">
+                                        {parts[s.key].map(([key, field]) => (
+                                            <VersoFieldControl
+                                                key={`${blockId ?? "root"}:${key}`}
+                                                field={field}
+                                                name={key}
+                                                label={field.label ? trStr(field.label, language) : undefined}
+                                                value={values[key]}
+                                                onChange={(v) => onFieldChange(key, v)}
+                                                renderExternalPicker={renderExternalPicker}
+                                            />
+                                        ))}
+                                    </div>
+                                )}
+                            </section>
+                        );
+                    })}
+                </main>
                 {/* Estado de drag — los campos no pueden aplicar a un bloque en el aire. */}
                 {isDragging && (
                     <div className="absolute inset-0 z-10 bg-[var(--ed-surface-container-lowest)]/90 flex flex-col items-center justify-center text-center p-6 pointer-events-none select-none">
@@ -189,18 +210,18 @@ export default function PropertiesPanel({ handle, registry, rootFields, renderEx
                 )}
             </div>
 
-            {/* Footer — reset de estilos del bloque a sus propios defaults (undoable). */}
+            {/* Pie — reset de estilos del bloque a sus propios defaults (undoable). */}
             {blockId && (avail.style || avail.advanced) && (
-                <div className="shrink-0 p-2.5 border-t border-[var(--ed-outline-variant)] bg-[var(--ed-surface-container-lowest)]">
+                <footer className="shrink-0 p-3 border-t border-[var(--ed-outline-variant)] bg-[var(--ed-surface-container-lowest)]">
                     <button
                         type="button"
                         onClick={resetStyles}
-                        className="w-full py-2 rounded-md border border-[var(--ed-outline-variant)] text-[11px] font-bold uppercase tracking-wide text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container)] hover:text-[var(--ed-error)] transition-colors flex items-center justify-center gap-1.5"
+                        className="w-full h-[34px] rounded-lg border border-[var(--ed-outline-variant)] text-[11px] font-bold uppercase tracking-wide text-[var(--ed-on-surface-variant)] hover:border-[var(--ed-error)] hover:text-[var(--ed-error)] transition-colors flex items-center justify-center gap-1.5"
                     >
                         <MSym name="refresh" size={14} />
                         {trStr("Restablecer estilos", language)}
                     </button>
-                </div>
+                </footer>
             )}
         </aside>
     );

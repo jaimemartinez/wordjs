@@ -13,7 +13,7 @@ import type { VersoData } from "@/lib/verso/types";
 import { unhydratedSaveBlocked, seedLegacyVersoData, applyLegacyHtmlFallback, resolveWjsTemplateForSave, isWithinPostMountGrace, EDITOR_DATA_META_KEY } from "@/lib/editorGuards";
 // La forma persistida `{ content, root }` — el mismo tipo que exponía el fork, ahora propio.
 import type { VersoData as Data } from "@/lib/verso/types";
-import { buildStatusPatch, dbDateToLocalInput, defaultScheduleInput } from "@/lib/editorSchedule";
+import { buildStatusPatch, dbDateToLocalInput, defaultScheduleInput, isFutureInput } from "@/lib/editorSchedule";
 // Campos ROOT de REGISTRO (imagen destacada / extracto / categoría): el editor los compone sobre los
 // del registro de bloques — ver la cabecera de editorRootFields.ts.
 import {
@@ -28,13 +28,18 @@ import {
     seoMetaForSave,
     type TagSelection,
 } from "@/lib/editorRootFields";
+// El productor ÚNICO del estado de categorías del editor (opciones del select = lista contra la que
+// resuelve el guardado). Vive fuera del componente para que un test pueda ejercerlo de verdad.
+import { buildCategoryEditorState } from "./categoryEditorState";
 import { useUnsavedChanges } from "@/contexts/UnsavedChangesContext";
 import { useModal } from "@/contexts/ModalContext";
 import { useI18n } from "@/contexts/I18nContext";
 import { trStr } from "@/lib/editorI18n";
 
 // Paginación de la carga de etiquetas: el backend tapa `per_page` a 100, y el tope de páginas evita
-// que un sitio con miles de etiquetas dispare decenas de peticiones al abrir el editor.
+// que un sitio con miles de etiquetas dispare decenas de peticiones al abrir el editor. Las
+// categorías tienen exactamente el mismo tope y se recorren igual, pero el bucle vive en
+// `categoriesApi.listAll` porque lo comparten tres pantallas.
 const TAG_PAGE_SIZE = 100;
 const TAG_MAX_PAGES = 10;
 
@@ -56,8 +61,14 @@ export default function PostEditorPage() {
     const [versoData, setVersoData] = useState<Data>({ content: [], root: {} });
     const versoDataRef = useRef<Data>({ content: [], root: {} });
     const [status, setStatus] = useState("draft");
-    // Programación: valor datetime-local del instante elegido (solo significativo con status 'future').
+    // Fecha del registro (`post_date`) como valor datetime-local. Se siembra SIEMPRE, no sólo en
+    // 'future': un post que se programó y luego volvió a borrador conserva la fecha futura en la
+    // columna, y esconderla dejaba al autor sin ver por qué "Publicar" le devolvía "Programado".
     const [scheduleDate, setScheduleDate] = useState("");
+    // ¿La tocó el AUTOR en esta sesión? La siembra escribe el state directamente, así que sólo el
+    // onChange del control pone esto a true. Sin esta distinción la fecha viajaría en cada guardado
+    // (reescribiendo post_date sin que nadie lo pidiera) o no viajaría nunca (control inerte).
+    const dateEditedRef = useRef(false);
     // Último estado CONFIRMADO por el servidor. Distingue "publicar ya" sobre un post programado (hay
     // que mandar date=now, o el modelo re-evaluaría la fecha futura ALMACENADA y re-programaría) de un
     // publish normal, que no debe tocar post_date.
@@ -72,6 +83,12 @@ export default function PostEditorPage() {
     // ella para poder SINTETIZAR la opción de un valor que no case con ninguna categoría viva (el
     // NOMBRE que guardaba el control viejo) en vez de enseñar el campo vacío.
     const [rootCategory, setRootCategory] = useState("");
+    // Las categorías DEL REGISTRO abierto, TAL CUAL las manda la API (gemelo de recordTags): la lista
+    // del sitio viene paginada, así que sin esto una categoría del post que caiga fuera de las páginas
+    // cargadas no tendría opción en el select y el panel la enseñaría como si el post no tuviera
+    // categoría. Se guarda el valor CRUDO y se normaliza en `buildCategoryEditorState`, que es el
+    // único sitio donde se construyen las opciones (ver ./categoryEditorState).
+    const [recordCategorySource, setRecordCategorySource] = useState<unknown>(null);
     // Etiquetas EXISTENTES del sitio (las opciones del control) y las del registro abierto (para que
     // ninguna etiqueta suya se quede sin opción si cae fuera de las páginas cargadas).
     const [allTags, setAllTags] = useState<Tag[]>([]);
@@ -159,7 +176,9 @@ export default function PostEditorPage() {
             contentRef.current = post.content;
             setStatus(post.status);
             lastServerStatusRef.current = post.status;
-            if (post.status === "future") setScheduleDate(dbDateToLocalInput(post.dateGmt, post.date));
+            // La fecha del registro, SIEMPRE (no sólo programando) — ver el state de arriba.
+            setScheduleDate(dbDateToLocalInput(post.dateGmt, post.date));
+            dateEditedRef.current = false;
             setCommentStatus(post.commentStatus || "open");
             // The saved template assignment. META is the source of truth (it may have been set via the
             // API, or before this field existed), so it is injected into root.props below rather than
@@ -191,6 +210,7 @@ export default function PostEditorPage() {
             seededCategoryIdsRef.current = taxonomy.categoryIds;
             seededTagsRef.current = taxonomy.tags;
             setRecordTags(taxonomy.tagRefs);
+            setRecordCategorySource(post.categories);
             setRootCategory(taxonomy.category);
 
             // Load Puck data from meta if available
@@ -243,9 +263,13 @@ export default function PostEditorPage() {
         }
     };
 
+    // Las categorías del sitio, que son las OPCIONES del select. `listAll` recorre el pager acotado:
+    // `GET /categories` tapa `per_page` a 100 y ordena por nombre, así que la lectura sin paginar de
+    // antes sólo veía las 100 primeras — en un sitio importado eso significaba no poder asignar la
+    // mayoría de categorías, y enseñar la del propio post como si no existiera.
     const loadCategories = async () => {
         try {
-            const data = await categoriesApi.list();
+            const { data } = await categoriesApi.listAll();
             setCategories(data);
         } catch (error) {
             console.error("Failed to load categories:", error);
@@ -275,6 +299,16 @@ export default function PostEditorPage() {
         }
     };
 
+    // Las categorías ELEGIBLES = las del sitio ∪ las del registro. Una sola unión para el select y
+    // para el guardado: si el guardado resolviera contra una lista más corta que la que se enseña,
+    // una categoría visible en el panel sería "irresoluble" al guardar (y no se podría cambiar). Las
+    // dos salidas vienen de UN productor (./categoryEditorState) para que no puedan divergir — antes
+    // eran dos líneas sueltas y borrar cualquiera de ellas dejaba la suite en verde.
+    const { recordCategories, categoryOptions } = useMemo(
+        () => buildCategoryEditorState(recordCategorySource, categories),
+        [recordCategorySource, categories],
+    );
+
     const { alert } = useModal();
 
     // Once a NEW post is first saved, remember its id — before this, every save created ANOTHER
@@ -289,10 +323,16 @@ export default function PostEditorPage() {
     const handleStatusChange = (s: string) => {
         setStatus(s);
         setIsDirty(true);
-        if (s === "future" && !scheduleDate) setScheduleDate(defaultScheduleInput());
+        // Al PROGRAMAR hace falta un instante FUTURO. Antes bastaba con que el campo no estuviese
+        // vacío, pero ahora siempre lleva la fecha del registro, que en una entrada publicada es
+        // pasada: mandarla como programación la publicaría al instante (resolveScheduledStatus).
+        // (No marca `dateEditedRef`: la rama 'future' de buildStatusPatch manda la fecha por sí sola,
+        // y así volver a "Borrador" sin guardar no deja una fecha por defecto viajando en el payload.)
+        if (s === "future" && !isFutureInput(scheduleDate)) setScheduleDate(defaultScheduleInput());
     };
     const handleScheduleDateChange = (v: string) => {
         setScheduleDate(v);
+        dateEditedRef.current = true; // único productor de "el autor tocó la fecha"
         setIsDirty(true);
     };
 
@@ -331,7 +371,9 @@ export default function PostEditorPage() {
 
             // Estado + fecha: 'future' viaja como publish+date (el backend lo almacena como 'future'
             // y arma el cron del flip); null = programar sin fecha válida → bloquear el guardado.
-            const statusPatch = buildStatusPatch(status, scheduleDate, lastServerStatusRef.current);
+            const statusPatch = buildStatusPatch(status, scheduleDate, lastServerStatusRef.current, new Date(), {
+                dateEdited: dateEditedRef.current,
+            });
             if (!statusPatch) {
                 if (!isAutosave) await alert(trStr("Elige fecha y hora para programar la publicación.", language));
                 setSaving(false);
@@ -351,7 +393,7 @@ export default function PostEditorPage() {
             const categoriesPatch = resolveCategoriesForSave({
                 current: rootProps.category,
                 seeded: seededCategoryIdsRef.current,
-                categories,
+                categories: categoryOptions, // la MISMA unión que alimenta el select
             });
             const tagsPatch = resolveTagsForSave({
                 current: rootProps.tags,
@@ -405,7 +447,15 @@ export default function PostEditorPage() {
             if (saved?.status) {
                 lastServerStatusRef.current = saved.status;
                 setStatus(saved.status);
-                if (saved.status === "future") setScheduleDate(dbDateToLocalInput(saved.dateGmt, saved.date));
+            }
+            // La fecha que la BD confirma pasa a ser la que se enseña, y deja de contar como "editada"
+            // (si no, cada autosave posterior seguiría reescribiendo post_date con el mismo valor).
+            // Sólo si la respuesta TRAE fecha: una respuesta sin ella vaciaría el campo y volvería a
+            // esconderlo, que es exactamente el fallo que este cambio quita.
+            const confirmedDate = saved ? dbDateToLocalInput(saved.dateGmt, saved.date) : "";
+            if (confirmedDate) {
+                setScheduleDate(confirmedDate);
+                dateEditedRef.current = false;
             }
             // Lo que ya viajó pasa a ser la base: sin esto cada autosave posterior reenviaría el
             // mismo extracto y las mismas categorías eternamente. Solo tras un guardado CONFIRMADO.
@@ -433,10 +483,11 @@ export default function PostEditorPage() {
         () => withRecordRootFields(rootFieldsPost, {
             categories,
             currentCategory: rootCategory,
+            recordCategories,
             tags: allTags,
             recordTags,
         }),
-        [categories, rootCategory, allTags, recordTags],
+        [categories, rootCategory, recordCategories, allTags, recordTags],
     );
 
     if (isLoading) {

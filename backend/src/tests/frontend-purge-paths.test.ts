@@ -103,7 +103,10 @@ describe('publicPathsForPost — one path per route that actually serves the pos
         });
 
         // configManager resolves its config path from the cwd at load time — chdir before requiring.
+        // The certificate paths are anchored to the INSTALLATION, not to the cwd (frontend-purge's
+        // BACKEND_ROOT), so a staged installation in a temp directory must say where it is.
         process.chdir(dir);
+        process.env.WORDJS_BACKEND_ROOT = dir;
         ({ publicPathsForPost, purgeForPost } = require('../core/frontend-purge'));
     });
 

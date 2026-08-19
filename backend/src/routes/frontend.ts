@@ -60,7 +60,17 @@ router.get(['/', '/:slug', '/category/:slug', '/tag/:slug'], async (req: any, re
         }
         // 3. Handle Single Post/Page
         else {
-            const post = await Post.findBySlug(slug);
+            // A SLUG IS UNIQUE PER TYPE, NOT GLOBALLY — the READ twin of the importer defect (#18), and
+            // the same one GET /posts/slug/:slug carried. `findBySlug(slug)` with no type is
+            // `WHERE post_name = ?` with nothing ordering the result, so a site holding a post `about`
+            // and a page `about` (a legal pair) served whichever row came back first.
+            //
+            // Two types are named here because two are all this renderer can render (the template pick
+            // below is exactly page-or-single), in a FIXED precedence so the URL resolves the same way
+            // every time. Naming them also stops an INTERNAL row from reaching the theme: a
+            // nav_menu_item is a `posts` row with post_status 'publish', so the untyped lookup could
+            // hand one to the renderer and the publish check below would wave it through.
+            const post = (await Post.findBySlug(slug, 'post')) || (await Post.findBySlug(slug, 'page'));
 
             if (!post || post.post_status !== 'publish') {
                 // Don't render non-published posts publicly (or unknown slugs);

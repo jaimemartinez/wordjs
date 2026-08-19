@@ -97,9 +97,18 @@ const MAX_OPS_PER_FLUSH = 400;
  * Rechazos de sala que SÍ tienen sentido reintentar. Tratarlos todos como definitivos dejaba al
  * editor mudo tras un parpadeo de red — replicando en local sin que nadie lo recibiera — hasta
  * recargar la página, y sin gastar ni uno de los reintentos con backoff.
+ *
+ * ESTA LISTA YA NO ES LA AUTORIDAD, Y ESO ES EL ARREGLO DE LA CLASE. Mantener aquí una copia de los
+ * códigos que acuña el servidor es un contrato con dos copias: cuando el servidor añadió
+ * `read-budget` —un rechazo que por construcción se cura solo, porque el cubo se recarga— esta lista
+ * no se tocó y la sesión colaborativa moría hasta recargar la página. Ahora la retryabilidad la
+ * publica el servidor en el propio evento (`retryable`), que es la misma medicina que se le dio a la
+ * espera (`rateRetryMs`). Esto queda como RESERVA para un servidor anterior al cambio, y por eso
+ * incluye `read-budget`: un código que se cura esperando nunca puede caer en la rama terminal.
  */
 const RETRYABLE_REFUSALS = new Set([
   "site-taken", "too-many-tabs", "too-many-connections", "server-full", "server-error",
+  "read-budget",
 ]);
 
 /**
@@ -526,14 +535,22 @@ export class VersoCollabSession {
    * terminales dejaba al editor replicando en local, sin recibir nada y sin decir nada, hasta que
    * el usuario recargara la página.
    */
-  private onServerError(msg: { code?: string; message?: string }): void {
+  private onServerError(msg: { code?: string; message?: string; retryable?: unknown; retryAfterMs?: unknown }): void {
     const code = String(msg?.code || "");
     this.stream?.close();
     this.stream = null;
     this.setStatus("offline");
 
-    if (RETRYABLE_REFUSALS.has(code) && this.retries < (this.opts.maxRetries ?? DEFAULTS.maxRetries)) {
-      const delay = this.reconnectDelay();
+    // QUIÉN DECIDE SI ESTO SE REINTENTA: el servidor, que es quien acuña los códigos y quien sabe si
+    // el recurso agotado se recupera solo. La lista local solo se consulta si el servidor no lo dice
+    // (uno anterior al cambio) — ver `RETRYABLE_REFUSALS`.
+    const reintentable = typeof msg?.retryable === "boolean" ? msg.retryable : RETRYABLE_REFUSALS.has(code);
+
+    if (reintentable && this.retries < (this.opts.maxRetries ?? DEFAULTS.maxRetries)) {
+      // Y CUÁNTO SE ESPERA lo dice también el servidor cuando lo sabe: el backoff exponencial del
+      // cliente sirve para una red caída, pero no para un presupuesto que se recarga a un ritmo
+      // conocido. Se toma el mayor de los dos, acotado por el techo del cliente.
+      const delay = Math.max(this.reconnectDelay(), this.esperaDelServidor(msg?.retryAfterMs));
       this.retries++;
       this.emitNotice({
         code: "transport-error",
@@ -983,6 +1000,15 @@ export class VersoCollabSession {
     try {
       const res = await this.post("resync", () => ({ siteId: this.siteId, epoch: this.epoch, vv: this.denseVersionVector() }));
       if (res.status === 429) {
+        const cuerpo = res.body as { code?: string; retryAfterMs?: unknown } | null;
+        // UN FRENO DE LECTURA FRENA LA LECTURA, NO LA ESCRITURA. El presupuesto por usuario
+        // (`collab_read_budget`) puede pedir hasta un minuto, y `gate.rechazado` es el freno GLOBAL:
+        // aplicarlo aquí congelaría también el envío de ops de alguien que solo estaba tecleando —
+        // justo lo que el cubo aparte del servidor existe para no hacer. Se aparta SOLO el `resync`.
+        if (String(cuerpo?.code || "") === "collab_read_budget") {
+          this.schedule("resync", this.esperaDelServidor(cuerpo?.retryAfterMs));
+          return;
+        }
         // El `resync` tragaba el 429 sin mirarlo: no aplicaba la espera Y perdía el hueco. Era el
         // tercer camino de subida y el único que no participaba del freno; con el hueco sin cerrar
         // y sin reintento, un cliente se quedaba divergiendo en silencio.
@@ -1054,6 +1080,18 @@ export class VersoCollabSession {
    */
   private reconnectDelay(): number {
     return Math.min(this.gate.espera() * 2 ** this.retries, this.gate.techo);
+  }
+
+  /**
+   * Una espera QUE DICE EL SERVIDOR, acotada por el techo de este cliente. No hay ningún número
+   * escrito a mano: si el servidor no dice nada, la unidad es la misma ventana que publica en el
+   * `welcome`. El techo protege de un servidor mal configurado —o de una respuesta manipulada por un
+   * intermediario— que pidiera una espera absurda; si de verdad hacía falta más, el reintento vuelve
+   * a rebotar y el backoff se encarga.
+   */
+  private esperaDelServidor(ms: unknown): number {
+    const n = Number(ms);
+    return Math.min(Number.isFinite(n) && n > 0 ? n : this.gate.espera(), this.gate.techo);
   }
 
   private setStatus(status: CollabStatus): void {

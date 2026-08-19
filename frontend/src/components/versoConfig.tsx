@@ -38,25 +38,36 @@ export const CategoryField = ({ value, onChange }: { value: string; onChange: (v
     const [categories, setCategories] = useState<Category[]>([]);
     const [loading, setLoading] = useState(true);
 
+    // `listAll` walks the pager: `GET /categories` caps `per_page` at 100 and orders by name, so the
+    // old unpaged read showed the first 100 and nothing else — on an imported site most categories
+    // were simply unreachable from this control.
     useEffect(() => {
-        categoriesApi.list().then((cats) => {
-            setCategories(cats);
+        categoriesApi.listAll().then(({ data }) => {
+            setCategories(data);
             setLoading(false);
         }).catch(() => setLoading(false));
     }, []);
 
+    // EL VALOR ES EL ID DEL TÉRMINO, no el nombre. `Post.setTerms` resuelve por `term_id`, así que un
+    // nombre guardado sólo se podía convertir en término adivinando (y dejaba de casar en cuanto
+    // alguien renombraba la categoría). Un valor guardado que no case con ninguna opción —el nombre
+    // que guardaba este control antes, o un id de una categoría que no se llegó a cargar— se
+    // sintetiza como opción VISIBLE en vez de desaparecer del select y parecer "sin categoría".
+    const current = String(value ?? "").trim();
+    const options: Array<{ value: string; label: string }> = [
+        { value: "", label: "Select Category" },
+        ...categories.map((cat) => ({ value: String(cat.id), label: cat.name })),
+    ];
+    if (current && !options.some((o) => o.value === current)) {
+        options.push({ value: current, label: /^\d+$/.test(current) ? `#${current}` : current });
+    }
+
     return (
         <ModernSelect
-            value={value || ""}
+            value={current}
             onChange={(e) => onChange(e.target.value)}
             disabled={loading}
-            options={[
-                { value: "", label: "Select Category" },
-                ...categories.map((cat) => ({
-                    value: cat.name,
-                    label: cat.name
-                }))
-            ]}
+            options={options}
             className="!py-2 !px-3 font-normal"
         />
     );

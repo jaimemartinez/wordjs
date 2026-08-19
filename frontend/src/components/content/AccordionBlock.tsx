@@ -4,7 +4,7 @@
  * public ContentRenderer.
  */
 import React from "react";
-import { bc, blockVars, cx, unit } from "@/components/blocks/blockVars";
+import { bc, blockVars, cx, safeCss, unit } from "@/components/blocks/blockVars";
 
 export default function AccordionBlock({ items, bg, borderColor, radius, pad, headerBg, headerColor, activeColor, panelBg, panelColor, css }: any) {
     const [openIndex, setOpenIndex] = React.useState<number | null>(0);
@@ -26,7 +26,7 @@ export default function AccordionBlock({ items, bg, borderColor, radius, pad, he
                     'panel-bg': panelBg,
                     'panel-color': panelColor,
                 }),
-                ...css,
+                ...safeCss(css),
             }}
         >
             {items?.map((item: any, index: number) => {

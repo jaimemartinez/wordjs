@@ -16,7 +16,9 @@ const { authenticate } = require('../middleware/auth');
 const { asyncHandler } = require('../middleware/errorHandler');
 // Same capability-family resolver routes/posts.ts uses for its PUT/DELETE gate — imported (not
 // re-implemented) so the restore/delete authorization here cannot drift from the post-edit gate.
-const { capsFor, capsForType } = require('../core/post-capabilities');
+// RESTORE goes one step further and calls the shared gate ITSELF (`canEditPostRecord`) rather than
+// re-deriving it from the family, because "restore" IS an edit of the parent post.
+const { capsFor, capsForType, canEditPostRecord, isRestExposedPostType } = require('../core/post-capabilities');
 
 /**
  * Resolve the parent post id for a revision and check whether the current user may act on it.
@@ -41,16 +43,27 @@ async function authorizeForPost(req: any, postId: any, { action = 'read' } = {})
     if (!post) {
         return { error: { code: 'rest_post_invalid_id', status: 404 } };
     }
+    // `revision` and `nav_menu_item` are rows in `posts` marked INTERNAL (showInRest: false) and carry
+    // no capability_type, so the family resolver drops them into the plain `post` family. Revision
+    // history belongs to a REST-exposed post; nobody restores a menu item's history through here.
+    if (!isRestExposedPostType(post.type || post.postType || 'post')) {
+        return { error: { code: 'rest_forbidden', status: 403 } };
+    }
     // Fall back to capsFor('post') for a post whose registered type was since removed (capsForType null).
     const caps = capsForType(post.type || post.postType || 'post') || capsFor('post');
     const isOwner = post.authorId === req.user.id;
-    if (action === 'edit' || action === 'delete') {
-        // restore → edit family (mirrors PUT); delete → delete family (mirrors DELETE).
-        const ownCap = action === 'delete' ? caps.del : caps.edit;
-        const othersCap = action === 'delete' ? caps.deleteOthers : caps.editOthers;
-        const publishedCap = action === 'delete' ? caps.deletePublished : caps.editPublished;
-        let allowed = isOwner ? req.user.can(ownCap) : req.user.can(othersCap);
-        if (post.postStatus === 'publish' && !req.user.can(publishedCap)) allowed = false;
+    if (action === 'edit') {
+        // Restore rewrites the parent's live body: it is THE post edit, so it asks the one function
+        // that defines it instead of re-deriving type + ownership + published from the family here.
+        // Two spellings of one policy is how presence.ts ended up authorizing on the global capability.
+        if (!canEditPostRecord(req.user, post)) {
+            return { error: { code: 'rest_forbidden', status: 403 } };
+        }
+    } else if (action === 'delete') {
+        // Delete purges history — the DELETE family, which `canEditPostRecord` deliberately does not
+        // cover (a role may edit without being allowed to destroy). Mirrors DELETE /posts/:id.
+        let allowed = isOwner ? req.user.can(caps.del) : req.user.can(caps.deleteOthers);
+        if (post.postStatus === 'publish' && !req.user.can(caps.deletePublished)) allowed = false;
         if (!allowed) {
             return { error: { code: 'rest_forbidden', status: 403 } };
         }

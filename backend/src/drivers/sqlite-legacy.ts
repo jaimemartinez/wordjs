@@ -139,9 +139,20 @@ class DatabaseWrapper {
             exec: async (sql: string) => { this.exec(sql); }
         };
 
-        // Snapshot the last committed in-memory image so ROLLBACK can restore it deterministically
-        // (rather than relying on sql.js ROLLBACK + a late re-dump of possibly-mid-state memory).
-        const snapshot = this.sqlDb.export();
+        // NO PRE-EMPTIVE SNAPSHOT. This used to `export()` the WHOLE database — a full copy of every
+        // byte, in WASM memory — before every BEGIN, as the material for a deterministic rollback.
+        // That was affordable while only setTerms()/linkTranslations() opened transactions; it stopped
+        // being affordable the moment ordinary writes (every publish, every trash, every scheduled
+        // flip — models/Post.ts) started opening one, because it turned a single-row UPDATE into a
+        // full database copy on a site whose database can be hundreds of MB.
+        //
+        // It was also redundant twice over. sql.js IS SQLite: its ROLLBACK is the real thing and
+        // restores the in-memory image itself. And because `inTransaction` suppresses the per-write
+        // save(), the FILE ON DISK still holds the last committed image for the whole transaction —
+        // so the pre-BEGIN state is already durably available if ROLLBACK itself ever fails. The
+        // recovery below reads it from there, and only in that path, so the cost is paid only when it
+        // is actually needed. Net effect: a small transaction now costs exactly what the bare write it
+        // replaced cost — one export+write, after COMMIT.
         inTransaction = true; // suppress per-write save() for the duration of the unit of work
         this.sqlDb.run('BEGIN');
         try {
@@ -151,25 +162,32 @@ class DatabaseWrapper {
             save(); // single durable flush of the COMMITTED state to disk
             return result;
         } catch (err) {
+            let rolledBack = true;
             try {
                 this.sqlDb.run('ROLLBACK');
             } catch (rbErr: any) {
+                rolledBack = false;
                 console.error('❌ SQLite (legacy) ROLLBACK failed:', rbErr && rbErr.message);
             }
-            // Restore the exact pre-transaction committed image into the live handle, replacing any
-            // mid-transaction in-memory state, then re-sync disk to it. Closing the old handle frees
-            // the WASM memory it held.
-            try {
-                const restored = new SQL.Database(snapshot);
-                restored.run('PRAGMA foreign_keys = ON;');
-                try { this.sqlDb.close(); } catch { /* ignore */ }
-                this.sqlDb = restored;
-                dbInstance = restored;
-            } catch (restoreErr: any) {
-                console.error('❌ SQLite (legacy) snapshot restore failed:', restoreErr && restoreErr.message);
+            if (!rolledBack) {
+                // ROLLBACK could not undo it, so the live handle may hold partially-applied state.
+                // Reload the last COMMITTED image — the on-disk file, untouched since before BEGIN
+                // (per-write save() was suppressed) — and replace the handle. Closing the old one
+                // frees the WASM memory it held.
+                try {
+                    const committed = activeDbPath && fs.existsSync(activeDbPath) ? fs.readFileSync(activeDbPath) : null;
+                    const restored = committed ? new SQL.Database(committed) : new SQL.Database();
+                    restored.run('PRAGMA foreign_keys = ON;');
+                    try { this.sqlDb.close(); } catch { /* ignore */ }
+                    this.sqlDb = restored;
+                    dbInstance = restored;
+                } catch (restoreErr: any) {
+                    console.error('❌ SQLite (legacy) committed-image restore failed:', restoreErr && restoreErr.message);
+                }
             }
             inTransaction = false;
-            save(); // disk now reflects the reverted (last committed) state
+            // No save() here: the on-disk file was never written during the transaction, so it ALREADY
+            // is the last committed state — writing it back would be another full export for nothing.
             throw err;
         }
     }

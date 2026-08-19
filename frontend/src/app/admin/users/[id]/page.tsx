@@ -2,18 +2,25 @@
 
 import { useEffect, useState } from "react";
 import { useRouter, useParams } from "next/navigation";
-import { usersApi } from "@/lib/api";
+import { usersApi, selfEditNeedsCurrentPassword, withSudoProof, isBadCurrentPassword } from "@/lib/api";
+import { useAuth } from "@/contexts/AuthContext";
 import ModernSelect from "@/components/ModernSelect";
 import { PluginHook, pluginHooks } from "@/lib/plugin-hooks";
 import { useModal } from "@/contexts/ModalContext";
 import { useI18n } from "@/contexts/I18nContext";
+import UserMfaReset from "../UserMfaReset";
 
 export default function UserEditorPage() {
     const { t } = useI18n();
     const router = useRouter();
     const params = useParams();
+    const { user: currentUser } = useAuth();
     const isNew = params.id === "new";
     const userId = isNew ? null : Number(params.id);
+    // Editing YOUR OWN record goes down the self-service path on the backend, where the password and both
+    // recovery addresses are sudo-gated. Editing SOMEONE ELSE is gated on capabilities instead and needs
+    // no password — so the field must appear for the own-record case only.
+    const isOwn = !isNew && currentUser != null && Number(currentUser.id) === userId;
 
     const [formData, setFormData] = useState<{
         username: string; email: string; displayName: string; role: string;
@@ -29,6 +36,9 @@ export default function UserEditorPage() {
         // `user_form_before_email` toggle and submitted with the form. See UserFormModal for the full note.
         professionalMailbox: undefined,
     });
+    // What the record held when it was loaded — the comparison base for "did a gated field really change".
+    const [loaded, setLoaded] = useState<{ email: string; personalEmail: string }>({ email: "", personalEmail: "" });
+    const [currentPassword, setCurrentPassword] = useState("");
     const [saving, setSaving] = useState(false);
     const [, setHookTick] = useState(0);
 
@@ -52,10 +62,19 @@ export default function UserEditorPage() {
                 personalEmail: user.personalEmail || "",
                 professionalMailbox: !!user.professionalMailbox,
             });
+            setLoaded({ email: user.email || "", personalEmail: user.personalEmail || "" });
         } catch (error) {
             console.error("Failed to load user:", error);
         }
     };
+
+    // ONE source for "does this save need the password?", shared with the account page and the user
+    // modal (selfEditNeedsCurrentPassword in lib/api). Never for another user's record.
+    const needsCurrentPassword = isOwn && selfEditNeedsCurrentPassword(loaded, {
+        email: formData.email,
+        personalEmail: formData.personalEmail,
+        password: formData.password,
+    });
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -63,24 +82,26 @@ export default function UserEditorPage() {
 
         try {
             if (userId) {
-                // Update
-                // Note: API might require password for updates based on implementation?
-                // Usually update endpoint allows partial.
-                // Our usersApi.create uses POST /users.
-                // We need to check if we have update method in api.ts for users.
-                // Checking api.ts... usersApi has list, get, create, delete. NO UPDATE!
-                // I need to add update to usersApi first!
-                // For now assuming it exists or I will add it.
-                // Let's assume I will add usersApi.update right after this.
-                await usersApi.update(userId, formData);
+                // Editing SOMEONE ELSE keeps the exact body it always sent (`loaded` and `formData`
+                // then differ only for that user's fields, and isOwn already gated the predicate).
+                await usersApi.update(userId, isOwn
+                    ? withSudoProof(loaded, formData, currentPassword)
+                    : formData);
+                setCurrentPassword("");
+                setLoaded({ email: formData.email, personalEmail: formData.personalEmail });
             } else {
-                // Create
                 await usersApi.create(formData);
             }
             router.push("/admin/users");
         } catch (error) {
             console.error("Failed to save user:", error);
-            await alert(t('user.edit.saveError'));
+            // Show WHAT went wrong. Swallowing the backend code behind one generic string is how a 403
+            // "current password is incorrect" reached the operator as "could not save the user", with no
+            // hint that a field was missing.
+            const message = (error as { message?: string })?.message;
+            await alert(isBadCurrentPassword(error)
+                ? (message || t('user.edit.saveError'))
+                : (message ? `${t('user.edit.saveError')}: ${message}` : t('user.edit.saveError')));
         } finally {
             setSaving(false);
         }
@@ -177,6 +198,21 @@ export default function UserEditorPage() {
                             required={isNew}
                         />
                     </div>
+                    {/* Only for your OWN record, and only once a sudo-gated field actually changed —
+                        the backend asks for the password exactly then. */}
+                    {needsCurrentPassword && (
+                        <div data-testid="self-current-password">
+                            <label className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">{t('account.currentPassword')}</label>
+                            <input
+                                type="password"
+                                value={currentPassword}
+                                onChange={(e) => setCurrentPassword(e.target.value)}
+                                autoComplete="current-password"
+                                required
+                                className="w-full px-4 py-4 bg-gray-50/50 border-2 border-gray-100 rounded-2xl focus:ring-4 focus:ring-blue-100 focus:border-blue-500 focus:bg-white transition-all outline-none font-medium"
+                            />
+                        </div>
+                    )}
                 </div>
 
                 <div className="mt-8 flex justify-end gap-4">
@@ -196,6 +232,18 @@ export default function UserEditorPage() {
                     </button>
                 </div>
             </form>
+
+            {/* Outside the <form>: it acts on the SAVED account right away and is not part of what
+                "Save" submits. The same panel is on the users-list modal — both editors must offer the
+                escape hatch, or the capability exists only on whichever one you happened to open. */}
+            {!isNew && userId != null && (
+                <UserMfaReset
+                    userId={userId}
+                    username={formData.username}
+                    targetRole={formData.role}
+                    className="bg-white rounded-[40px] border-2 border-gray-50 shadow-xl shadow-gray-100/50 p-8 mt-6 max-w-2xl"
+                />
+            )}
         </div>
     );
 }

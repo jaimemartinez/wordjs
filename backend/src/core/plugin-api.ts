@@ -238,12 +238,16 @@ function assertSqlAllowed(sql: string, allowedVerbs: string[], tablePrefix?: str
     if (raw.includes('/*!')) {
         throw new Error(`🛡️ Plugin DB access denied: MySQL executable comments (/*! ... */) are not permitted.`);
     }
-    // Backslash-escape divergence (adversarial re-verify): MySQL/MariaDB (unless NO_BACKSLASH_ESCAPES is set)
-    // treat `\'` as an ESCAPED quote, while this lexer + SQLite/Postgres treat `\` literally. A `'\''`
-    // sentinel therefore pairs the quotes differently in the guard vs MySQL, letting a `UNION`/stacked
-    // statement hide INSIDE what the guard scans as a string literal. Plugins pass literal data via BOUND
-    // params (?), never inline, so a backslash in untrusted SQL is never legitimate — deny it. This closes
-    // the whole class on every engine (belt-and-suspenders with NO_BACKSLASH_ESCAPES on the MySQL pool).
+    // Backslash-escape divergence (adversarial re-verify): MySQL/MariaDB treat `\'` as an ESCAPED quote,
+    // while this lexer + SQLite/Postgres treat `\` literally. A `'\''` sentinel therefore pairs the quotes
+    // differently in the guard vs MySQL, letting a `UNION`/stacked statement hide INSIDE what the guard
+    // scans as a string literal. Plugins pass literal data via BOUND params (?), never inline, so a
+    // backslash in untrusted SQL is never legitimate — deny it. This closes the whole class on EVERY
+    // engine with no per-engine reconciliation, which is the point: this text guard no longer leans on any
+    // session flag. It used to cite NO_BACKSLASH_ESCAPES as reinforcement; no pool sets that mode any more
+    // (drivers/mysql.ts SESSION_SQL_MODE — it was itself a data-corruption + injection bug), and a plugin's
+    // params now travel as server-side prepared statements via pool.execute() (runAsUser), so they are
+    // never interpolated into SQL text at all. Below that layer the guard stands on its own.
     if (raw.includes('\\')) {
         throw new Error(`🛡️ Plugin DB access denied: backslashes are not permitted in plugin SQL; pass literal data via bound parameters (?).`);
     }
@@ -431,6 +435,25 @@ function resolvePluginPath(slug: string, relPath: string, mustExist: boolean, al
     }
     if (mustExist && !fs.existsSync(real)) throw new Error(`File not found: ${relPath}`);
     return real;
+}
+
+/**
+ * Run io-guard's own predicate on the EXACT path the bridge is about to hand to the filesystem, under
+ * the calling plugin's context (the bridge may be reached without an ALS frame — an in-process plugin
+ * calling wordjs.fs.write directly — and `isPathSafe` decides from the effective plugin, so pin it).
+ *
+ * (#3) This exists because the bridge had a SECOND, weaker notion of containment: resolvePluginPath
+ * proves "inside the plugin dir" and nothing else, while every other rule (published surface,
+ * executable extensions, secret-named files, DB files) lives in isPathSafe. Two policies for one
+ * boundary is how the published surface stayed writable through wordjs.fs.write.
+ */
+function assertIoGuard(slug: string, absPath: string, isWrite: boolean): void {
+    const { isPathSafe } = require('./io-guard');
+    const { runWithContext } = require('./plugin-context');
+    const ok = runWithContext(slug, () => isPathSafe(absPath, isWrite));
+    if (!ok) {
+        throw new Error(`🛡️ Plugin path denied: '${absPath}' is not a path this plugin may ${isWrite ? 'write' : 'read'}.`);
+    }
 }
 
 /**
@@ -783,7 +806,12 @@ function createPluginApi(slug: string) {
                 verifyPermission('filesystem', 'read');
                 // Every plugin reads only inside its OWN dir — never the shared uploads dir (no trusted
                 // bypass). Raw fs to a SAFE zone is governed separately by io-guard.
-                return fs.promises.readFile(resolvePluginPath(slug, relPath, true, false), encoding);
+                const src = resolvePluginPath(slug, relPath, true, false);
+                // (#3) …and the SAME io-guard policy applies to the bridge. resolvePluginPath only
+                // proves "inside the plugin dir"; the file-name blocks (manifest/DB/secret-named) live
+                // in isPathSafe, and this bridge must not be the one door that skips them.
+                assertIoGuard(slug, src, false);
+                return fs.promises.readFile(src, encoding);
             },
             async write(relPath: string, data: any) {
                 verifyPermission('filesystem', 'write');
@@ -791,6 +819,14 @@ function createPluginApi(slug: string) {
                 // (where an .html/.svg could be served to other users). No trusted bypass.
                 const target = resolvePluginPath(slug, relPath, false, false);
                 if (path.basename(target).toLowerCase() === 'manifest.json') throw new Error('🛡️ manifest.json is immutable.');
+                // (#3) THE BRIDGE MUST NOT HAVE ITS OWN NOTION OF CONTAINMENT. resolvePluginPath only
+                // proves "inside the plugin dir" — it knows nothing about the PUBLISHED surface, about
+                // executable extensions, or about secret-named files. This call used to end in
+                // fs.promises.writeFile, which io-guard did not patch, so `public/x.js` (served, and
+                // enqueueable as a <script src> on every public page) was writable through here while
+                // the identical raw-fs write was denied. fs.promises is patched now; asserting the
+                // policy HERE too means the bridge is checked on the very path it passes to the sink.
+                assertIoGuard(slug, target, true);
                 // (#6) Bound disk use so a write-permitted plugin can't fill the host disk: reject an
                 // oversized single write, and keep the plugin's OWN-dir footprint under a quota so repeated
                 // small writes can't either. (Trusted writes to shared uploads keep only the per-write cap.)
