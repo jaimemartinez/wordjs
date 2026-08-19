@@ -396,6 +396,51 @@ const config: AppConfig = {
         // (Consumed in core/plugin-isolate.ts, whose local default is likewise on; normalizing with `!== false`
         // makes the two agree — an unset config previously collapsed the isolate's default-on back to off.)
         blockCodeGen: fileConfig.sandbox?.blockCodeGen !== false,
+
+        // ── PER-PLATFORM KERNEL CONFINEMENT (the Windows and macOS peers of the bwrap layer) ─────────
+        // Everything above that confines a plugin at the KERNEL level is Linux-only, so on Windows and
+        // macOS a bypass of a JS guard used to be the whole user account. These two knobs turn on the
+        // layer each OS actually has. Both are PROBE-GATED exactly like useKernelHardening: a real child
+        // is launched through the real profile and the layer activates only if that child was ACTUALLY
+        // refused the network and an out-of-zone read (with a positive control, so a totally broken
+        // profile cannot pass). Any failure falls back to the launch that was there before — see
+        // core/plugin-isolate.ts, core/sandbox-windows.ts, core/sandbox-macos.ts.
+        //
+        // WHY THESE TWO ARE OPT-IN WHILE useKernelHardening / unshareNetwork / usePermissionModel ARE
+        // OPT-OUT. Those three are default-ON because probing them changes NOTHING on the host: a process
+        // is spawned and thrown away. These two are not in that class, and defaulting them ON would mean
+        // doing something to the operator's machine that they never asked for:
+        //   · Windows — validating AppContainer REGISTERS an AppContainer profile under the user account
+        //     and adds DACL entries (`S-1-15-2-…` ACEs) to the app root and the Node runtime directory.
+        //     That is persistent state on someone else's machine, created on first plugin load, silently.
+        //   · macOS — the Seatbelt profile has never been parsed by a real Sandbox kext (it was written on
+        //     a Windows host; see the UNCERTIFIED header of core/sandbox-macos.ts). A green probe proves
+        //     `node -e` boots under it, NOT that a real plugin does — so a default-ON flip could break
+        //     plugin loading on every Mac, and that flip must follow a MEASUREMENT, not a comment.
+        // Flip either default only once a real host of that OS reports 'active' AND real plugins load
+        // under it. The live per-platform state is on admin GET /health/details under `sandbox.kernel`.
+        //
+        // Windows: run each isolated plugin (without the `network` grant) in an AppContainer with ZERO
+        // capabilities — no `internetClient`, so the KERNEL refuses every outbound socket (the Win32
+        // analogue of bwrap --unshare-net), and the child reaches only objects whose ACL names its package
+        // SID. Applied to the COMPILED production child only: the container requires --preserve-symlinks,
+        // which changes module identity, and ts-node is the consumer most sensitive to that.
+        useAppContainer: fileConfig.sandbox?.useAppContainer === true,
+        // The AppContainer profile name registered for this install. Only worth changing when two WordJS
+        // installs share one Windows account and must not share one container identity.
+        appContainerName: typeof fileConfig.sandbox?.appContainerName === 'string' && fileConfig.sandbox.appContainerName
+            ? String(fileConfig.sandbox.appContainerName)
+            : undefined,
+        // macOS: run each isolated plugin (without the `network` grant) under a deny-by-default Seatbelt
+        // profile via /usr/bin/sandbox-exec — writes confined to exactly the io-guard zones, exec confined
+        // to the Node binary, `(deny network*)`. UNCERTIFIED: see the paragraph above before enabling.
+        useSeatbelt: fileConfig.sandbox?.useSeatbelt === true,
+        // Task/process cap for a plugin's own subtree — the fork-bomb bound. On Linux this is the cgroup
+        // TasksMax already applied by the systemd scope; on Windows it is the Job Object
+        // JOB_OBJECT_LIMIT_ACTIVE_PROCESS applied to the AppContainer child. ONE knob, both kernels, so an
+        // operator sets a number rather than learning two vocabularies. Generous by design — no legitimate
+        // plugin approaches it. 0 or a negative value means "use the built-in default" (512), never "no cap".
+        pidsMax: Number(fileConfig.sandbox?.pidsMax) > 0 ? Number(fileConfig.sandbox.pidsMax) : 512,
     }
 };
 

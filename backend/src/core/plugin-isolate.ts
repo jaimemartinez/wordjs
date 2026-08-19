@@ -980,6 +980,259 @@ function probeKernelHardening(): Promise<boolean> {
     return hardenProbe;
 }
 
+// ── CROSS-PLATFORM KERNEL CONFINEMENT — the Windows and macOS PEERS of the bwrap layer ────────────
+//
+// Everything above this point that confines a plugin at the KERNEL level is Linux-only: bwrap, seccomp,
+// namespaces, uid-drop, cgroups. The block below it (Node's permission model) is a CAPABILITY floor,
+// not a kernel one. So on Windows and macOS an isolated plugin had process separation + the permission
+// model + the JS guards, and NOTHING the kernel enforced about the filesystem or the network: any bypass
+// of a JS guard was the whole user account, and outbound traffic was governed by the in-process egress
+// guard alone. Two sibling modules now supply the missing layer, and THIS section is the only place that
+// decides whether either of them is actually used:
+//
+//   · core/sandbox-windows.ts — an AppContainer with ZERO capabilities (CreateProcessW +
+//     PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES, CapabilityCount = 0, so not even `internetClient`).
+//     A lowbox token with no network capability cannot open a socket at all — the Win32 analogue of
+//     --unshare-net — and the child reaches only objects whose DACL names its package SID, which is the
+//     analogue of the `--ro-bind / /` + writable-binds profile.
+//   · core/sandbox-macos.ts — a deny-by-default Seatbelt profile through /usr/bin/sandbox-exec: writes
+//     confined to exactly the io-guard zones, and `(deny network*)` for a plugin with no network grant.
+//
+// THE DISCIPLINE IS UNCHANGED, and it is why this section is small. Neither layer is believed because of
+// `process.platform`, because a binary exists, or because an API returned success. Each module owns a
+// probe that spawns a REAL child through the REAL launch shape and reports 'active' ONLY when that child
+// was ACTUALLY refused what it must be refused — each with a POSITIVE CONTROL, so a profile so broken
+// that everything fails cannot masquerade as confinement, and each accepting ONLY a permission error on
+// the network leg, so an offline host cannot masquerade as a confined one. Anything short of that is
+// 'degraded', and 'degraded' takes the fallback: the launch this module performed before these layers
+// existed, byte for byte.
+//
+// WHY THE LEGACY FIELDS ARE NOT REPURPOSED. `sandboxHardeningState` and `sandboxNetnsState` mean bwrap
+// and `bwrap --unshare-net` SPECIFICALLY — that is what their opt-out flags name, what their remediation
+// advice tells an operator to install, and what the admin settings payload has reported since it existed.
+// Widening them to mean "whatever this platform's kernel layer happens to be" would silently change the
+// meaning of values operators already read, and would make `sandbox_hardening_state: 'active'` on a Mac
+// mean something different from the same string on Linux. They therefore keep their exact meaning
+// (including 'unsupported' off Linux), and the platform layer gets its own separately-named state below.
+// The ONE place the two are unified is the requireHardening fail-closed gate in startIsolate, because
+// that gate asks a question neither field alone can answer: "is this host's kernel confinement ACTIVE?"
+
+type ConfinementState = 'unknown' | 'unsupported' | 'disabled' | 'active' | 'degraded';
+type ConfinementMechanism = 'bwrap' | 'appcontainer' | 'seatbelt' | 'none';
+
+// The mechanism that EXISTS for a platform, independent of whether it is enabled or works on this host.
+//
+// This mapping is the whole reason an operator can now act on the health output. Before it, a Windows or
+// macOS host reported 'unsupported' — the same word a genuinely feature-less platform would use — so
+// "this OS has no such layer, stop looking" and "the layer exists here and its probe failed, go find out
+// why" were indistinguishable, and they demand opposite actions. Mechanism answers the first question,
+// state answers the second, and neither is derivable from the other.
+const KERNEL_MECHANISM_BY_PLATFORM: Record<string, ConfinementMechanism> = {
+    linux: 'bwrap',
+    win32: 'appcontainer',
+    darwin: 'seatbelt',
+};
+// How the SAME mechanism denies the network, named separately because it is a separately-probed property
+// on Linux (a host can allow unprivileged userns and still restrict CLONE_NEWNET) even though on Windows
+// and macOS it is one token / one profile and therefore one verdict.
+const NETWORK_MECHANISM_BY_PLATFORM: Record<string, string> = {
+    linux: 'bwrap --unshare-net (empty network namespace)',
+    win32: 'AppContainer zero-capability token (no internetClient)',
+    darwin: 'Seatbelt (deny network*)',
+};
+function platformKernelMechanism(platform: string = process.platform): ConfinementMechanism {
+    return KERNEL_MECHANISM_BY_PLATFORM[platform] || 'none';
+}
+
+// State of THIS platform's kernel confinement layer, in the same vocabulary as sandboxHardeningState:
+//   'unsupported' = no such mechanism on this platform (or its binary is absent) ·
+//   'disabled'    = the mechanism exists but the operator has not enabled it (or it does not apply to
+//                   this build — see the ts-node carve-out below) ·
+//   'active'      = a real child was really refused, with the positive control passing ·
+//   'degraded'    = ENABLED, but the probe could not certify it here. The "looks secure but isn't" state,
+//                   deliberately a distinct value so it can never hide inside 'unsupported'.
+let sandboxPlatformState: ConfinementState = 'unknown';
+let sandboxPlatformNetworkState: ConfinementState = 'unknown';
+// One human-readable sentence saying what the state MEANS and, when there is one, what to do about it.
+// It is the difference between a health page an operator can act on and one they have to interpret.
+let sandboxPlatformNote = 'the platform confinement probe has not run yet (it fires on the first isolated plugin load)';
+function getSandboxPlatformState() { return sandboxPlatformState; }
+function getSandboxPlatformNetworkState() { return sandboxPlatformNetworkState; }
+/** The whole per-platform picture in one object, for admin GET /health/details. */
+function getSandboxPlatformConfinement() {
+    const mechanism = platformKernelMechanism();
+    return {
+        platform: process.platform,
+        mechanism,
+        state: sandboxPlatformState,
+        network: { mechanism: NETWORK_MECHANISM_BY_PLATFORM[process.platform] || 'none', state: sandboxPlatformNetworkState },
+        // Stated explicitly because it is NOT the same on every platform and a reader would otherwise
+        // assume parity: on Linux bwrap wraps EVERY isolated child (a network-granted one simply keeps the
+        // shared netns), while the two new layers are applied only to plugins WITHOUT the network grant —
+        // a zero-capability AppContainer cannot hold a socket at all, and the network-granted Seatbelt
+        // profile is a shape no probe has ever certified. See platformLaunchDecision().
+        appliesTo: mechanism === 'bwrap' ? 'every isolated plugin' : (mechanism === 'none' ? 'nothing' : 'isolated plugins WITHOUT the network grant'),
+        note: sandboxPlatformNote,
+    };
+}
+
+/**
+ * Does THIS launch go through the platform's kernel confinement, or take the pre-existing fallback?
+ *
+ * PURE ON PURPOSE. The fallback is the property most likely to break and the one that hurts real users
+ * when it does — a host whose probe fails must still load plugins, still serve their routes, and still be
+ * confined by the floors that were already there. A pure decision function is the only way to pin that
+ * behaviour from a test on ANY host, including the (many) hosts where these layers can never be active.
+ *
+ * Every `use: false` answer carries its reason, because "the sandbox quietly did nothing" and "the
+ * sandbox deliberately did nothing here, for this stated reason" look identical in a log otherwise.
+ */
+function platformLaunchDecision(o: { platform: string; state: ConfinementState; netGranted: boolean; tsNode: boolean }): { mechanism: ConfinementMechanism; use: boolean; reason: string } {
+    const mechanism = platformKernelMechanism(o.platform);
+    if (mechanism === 'none') {
+        return { mechanism, use: false, reason: 'no kernel confinement mechanism exists for this platform' };
+    }
+    if (mechanism === 'bwrap') {
+        // The Linux launch is decided entirely by `hardened` / `bwrapPre` further down and is NOT routed
+        // through here. Returning false is not a downgrade — it is this function saying "not mine".
+        return { mechanism, use: false, reason: 'the Linux launch is built by the bwrap path, which this decision never touches' };
+    }
+    if (o.state !== 'active') {
+        return { mechanism, use: false, reason: `the ${mechanism} probe did not certify this host (state '${o.state}')` };
+    }
+    if (o.netGranted) {
+        // A plugin an admin granted `network` cannot go in a zero-capability AppContainer at all (the
+        // kernel would refuse its sockets, which is the point of the container), and the macOS profile
+        // shape that permits outbound traffic is one NO probe has ever exercised. Both are therefore left
+        // on the existing launch, bounded by the in-process egress guard — the same posture Linux takes
+        // when it withholds --unshare-net from a network-granted plugin.
+        return { mechanism, use: false, reason: 'the plugin holds the `network` grant; egress stays bounded by the in-process egress guard, as on Linux' };
+    }
+    if (mechanism === 'appcontainer' && o.tsNode) {
+        // Measured by the module author: an AppContainer child needs BOTH --preserve-symlinks-main and
+        // --preserve-symlinks, because Node's realpath resolution lstats every ancestor up to the drive
+        // root and the container cannot. --preserve-symlinks CHANGES MODULE IDENTITY, and the consumer
+        // most sensitive to that is ts-node resolving the whole .ts core inside the child. Same carve-out,
+        // and the same reasoning, as the permission model and blockCodeGen: the COMPILED production child
+        // is the one that has to be tight. probePlatformConfinement() reports 'disabled' under ts-node for
+        // exactly this reason, so the health surface never claims a confinement this branch declines.
+        return { mechanism, use: false, reason: 'running under ts-node; the AppContainer launch is applied to the compiled production child only' };
+    }
+    return { mechanism, use: true, reason: `${mechanism} confinement certified on this host by its probe` };
+}
+
+let platformConfinementProbe: Promise<ConfinementState> | undefined;
+/**
+ * Resolve (once, memoized like every other probe here) what this platform's kernel layer actually gives
+ * this host. Never throws: a missing or broken sibling module degrades the layer, it does not fail a load.
+ */
+function probePlatformConfinement(): Promise<ConfinementState> {
+    if (platformConfinementProbe) return platformConfinementProbe;
+    platformConfinementProbe = (async () => {
+        const mech = platformKernelMechanism();
+        if (mech === 'none') {
+            sandboxPlatformState = 'unsupported';
+            sandboxPlatformNetworkState = 'unsupported';
+            sandboxPlatformNote = `no kernel confinement mechanism exists for platform '${logSafe(process.platform)}' — isolated plugins rely on process separation, Node's permission model and the JS guards`;
+            return sandboxPlatformState;
+        }
+        if (mech === 'bwrap') {
+            // Linux delegates ENTIRELY to the existing probe. This branch adds no spawn, no argv and no
+            // decision of its own — it copies the two states the bwrap probe already computed, so the
+            // Linux path cannot be changed by anything in this section.
+            await probeKernelHardening();
+            sandboxPlatformState = sandboxHardeningState;
+            sandboxPlatformNetworkState = sandboxNetnsState;
+            sandboxPlatformNote = sandboxPlatformState === 'active'
+                ? 'bubblewrap confinement certified on this host'
+                : (sandboxPlatformState === 'degraded'
+                    ? 'sandbox.useKernelHardening is ON but the bwrap probe FAILED here — install bubblewrap and enable unprivileged user namespaces, or set sandbox.requireHardening=true to fail closed'
+                    : 'bubblewrap confinement is not enabled (sandbox.useKernelHardening=false)');
+            return sandboxPlatformState;
+        }
+        if (mech === 'appcontainer') {
+            // The ts-node carve-out is applied BEFORE the probe, not after, and that ordering is the point:
+            // probeAppContainer() MUTATES the operator's machine (it registers an AppContainer profile and
+            // adds DACL entries). Running it to certify a layer this build will then decline to use would
+            // be a host mutation with no purpose, and reporting its 'active' verdict would be a claim the
+            // launch does not honour.
+            if (__filename.endsWith('.ts')) {
+                sandboxPlatformState = 'disabled';
+                sandboxPlatformNetworkState = 'disabled';
+                sandboxPlatformNote = 'AppContainer confinement is not applied under ts-node (module identity changes with --preserve-symlinks, which the container requires) — it applies to the compiled production child';
+                return sandboxPlatformState;
+            }
+            try {
+                sandboxPlatformState = await require('./sandbox-windows').probeAppContainer();
+            } catch (e: any) {
+                sandboxPlatformState = 'degraded';
+                console.warn(`[Sandbox] the Windows AppContainer module could not be loaded (${logSafe(e && e.message)}) — isolated plugins keep the standard Windows launch.`);
+            }
+            sandboxPlatformNetworkState = sandboxPlatformState;
+            sandboxPlatformNote =
+                sandboxPlatformState === 'active' ? 'AppContainer confinement certified on this host: a real contained child was refused an outbound socket (EACCES) and an out-of-zone read (EPERM) while the plugin IPC bridge stayed alive'
+                : sandboxPlatformState === 'degraded' ? 'sandbox.useAppContainer is ON but the probe could NOT demonstrate confinement here — isolated plugins run WITHOUT the Windows kernel layer (see the [Sandbox] warning in the log for which check failed)'
+                : 'AppContainer confinement is available on this platform but not enabled (sandbox.useAppContainer=true turns it on; enabling it registers an AppContainer profile and adds ACL entries to this machine)';
+            return sandboxPlatformState;
+        }
+        // macOS / Seatbelt.
+        try {
+            sandboxPlatformState = await require('./sandbox-macos').probeSeatbelt();
+        } catch (e: any) {
+            sandboxPlatformState = 'degraded';
+            console.warn(`[Sandbox] the macOS Seatbelt module could not be loaded (${logSafe(e && e.message)}) — isolated plugins keep the standard macOS launch.`);
+        }
+        sandboxPlatformNetworkState = sandboxPlatformState;
+        sandboxPlatformNote =
+            sandboxPlatformState === 'active' ? 'Seatbelt confinement certified on this host: a real child under the real profile was refused an out-of-zone read and a raw-IP connect, while a granted write still worked and the plugin IPC bridge stayed alive'
+            : sandboxPlatformState === 'degraded' ? 'sandbox.useSeatbelt is ON but the probe could NOT demonstrate confinement here — isolated plugins run WITHOUT the macOS kernel layer (see the [Sandbox] warning in the log for which check failed)'
+            : sandboxPlatformState === 'unsupported' ? '/usr/bin/sandbox-exec is absent on this host, so Seatbelt confinement cannot be applied'
+            : 'Seatbelt confinement is available on this platform but not enabled (sandbox.useSeatbelt=true turns it on; the profile is UNCERTIFIED — no Apple hardware has yet reported it active)';
+        return sandboxPlatformState;
+    })();
+    return platformConfinementProbe;
+}
+
+/**
+ * DACL entries this process has already granted to the AppContainer SID, keyed `<mode>:<dir>`.
+ *
+ * Granting is idempotent and cheap to REPEAT, but each repetition is a `powershell.exe` + `icacls` spawn
+ * on the critical path of a plugin load, and the app-root grant is identical for every plugin. Cached
+ * only on SUCCESS: a grant that failed (a Node runtime under Program Files needs elevation) must be
+ * retried on the next load rather than remembered as done, or one transient failure would silently
+ * disable that zone for the whole life of the process.
+ */
+const appContainerGrantedZones = new Set<string>();
+
+/**
+ * Start one isolated plugin child inside the Windows AppContainer, having first granted the io-guard
+ * write zones to its SID. THROWS on any failure so the caller can fall back to the standard launch —
+ * this function never returns a half-confined child.
+ *
+ * The resource caps (memory / active-process / CPU) are deliberately NOT passed: sandbox-windows resolves
+ * them from the same `sandbox.*` knobs the Linux cgroup path uses, so an operator sets one number and both
+ * operating systems obey it, and there is no second place for the defaults to drift.
+ */
+async function launchAppContainerChild(slug: string, appRoot: string, io: { args: string[]; env: Record<string, string>; stdio: any }): Promise<{ child: any; containedPid: number | null }> {
+    const win = require('./sandbox-windows');
+    const sid = win.getAppContainerSid();
+    // The probe sets the SID before it can report 'active', so a missing one here means the module state
+    // and this launch disagree — refuse rather than launch a child with no container.
+    if (!sid) throw new Error('the AppContainer probe reported ACTIVE but no package SID is available');
+    const zones = win.appContainerZones(appRoot, slug);
+    const grant = async (dirs: string[], mode: 'rx' | 'full') => {
+        const need = dirs.filter((d) => !appContainerGrantedZones.has(`${mode}:${d}`));
+        if (!need.length) return;
+        const ok = await win.grantAppContainerAccess(sid, need, mode);
+        if (ok) for (const d of need) appContainerGrantedZones.add(`${mode}:${d}`);
+    };
+    await grant(zones.readExec, 'rx');
+    await grant(zones.write, 'full');
+    const r = await win.launchInAppContainer({ sid, exe: process.execPath, args: io.args, cwd: appRoot, env: io.env, stdio: io.stdio });
+    if (!r || !r.child) throw new Error('the AppContainer relay produced no child process');
+    return { child: r.child, containedPid: r.containedPid ?? null };
+}
+
 // Per-plugin permission grant check (Android-style, default-deny). No plugin bypasses the sandbox:
 // host-level capabilities (mail provider, notify transport, raw-HTML hooks are denied to all) are
 // gated on an explicit admin grant for the requested scope:access. See core/plugin-permissions.
@@ -992,6 +1245,22 @@ function isGrantedFor(slug: string, scope: string, access: string): boolean {
 // opens ONLY the network gates (net/tls/dns/http/... + fetch/WebSocket), never child_process/fs/vm.
 function isNetworkGrantedFor(slug: string): boolean {
     try { return require('./plugin-permissions').isNetworkGranted(slug); } catch { return false; }
+}
+
+// FILESYSTEM CAPABILITY, resolved host-side at spawn for the SAME reason as the network grant, and it is
+// the same failure if it is not pushed: the child has no database, never calls loadGrants(), and so its
+// plugin-permissions map is permanently EMPTY. io-guard's runtime capability gate asks isGranted() —
+// which in the child therefore always answered "no" — and denied the plugin's OWN data directory even
+// when the operator had granted filesystem, breaking every isolate plugin that declares the capability
+// (mail-server's Bayes classifier, encryption key and attachments among them).
+//
+// Resolving it HERE, with the same isGranted() the host gate uses, keeps ONE interpreter of what a grant
+// token means (including `filesystem:admin` implying read+write): the child receives two booleans, never
+// tokens it would have to re-interpret. Reader side: core/io-guard.ts ISOLATE_FS_GRANT.
+// Re-resolved on every spawn, and POST /plugins/:slug/permissions respawns after changing grants, so a
+// revoke takes effect immediately rather than at the next boot.
+function fsGrantsFor(slug: string): { read: boolean; write: boolean } {
+    return { read: isGrantedFor(slug, 'filesystem', 'read'), write: isGrantedFor(slug, 'filesystem', 'write') };
 }
 
 // The admin-set per-plugin egress allowlist (bare hosts / IP literals), resolved host-side at spawn and
@@ -1119,13 +1388,30 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
     const cgroupOk = await probeCgroupCap();
     const capKb = cgroupOk ? null : await probeOsMemoryCap();
     const hardened = await probeKernelHardening(); // opt-in bwrap confinement (Linux); false ⇒ no-op
+    // THIS platform's kernel confinement layer — bwrap on Linux (the very probe just awaited), an
+    // AppContainer on Windows, a Seatbelt profile on macOS. Awaited here so `sandboxPlatformState` is
+    // settled before the launch decision below reads it synchronously.
+    await probePlatformConfinement();
     // FAIL-CLOSED: if the operator requires the OS backstop, REFUSE to launch when it isn't actually ACTIVE
-    // (non-Linux, disabled, or the probe failed) instead of silently degrading to JS-guards-only isolation.
-    if (!hardened) {
+    // (no such mechanism here, disabled, or the probe failed) instead of silently degrading to
+    // JS-guards-only isolation.
+    //
+    // The gate now asks about the PLATFORM layer rather than about bwrap specifically, which is the one
+    // question `sandboxHardeningState` alone could not answer on a Mac or a Windows box. On Linux the two
+    // are the same value by construction (probePlatformConfinement copies it), so this is byte-identical
+    // there; elsewhere it can only ever ALLOW a launch it previously refused, and only when a probe
+    // actually demonstrated confinement on this host. It never permits a launch that was refused before
+    // for a reason that still holds.
+    if (sandboxPlatformState !== 'active') {
         let requireHardening = false;
         try { requireHardening = !!require('../config/app').sandbox?.requireHardening; } catch { /* */ }
         if (requireHardening) {
-            throw new Error(`[Sandbox] refusing to launch isolated plugin '${slug}': sandbox.requireHardening is ON but kernel hardening is '${sandboxHardeningState}' (not ACTIVE). Install bubblewrap + enable unprivileged user namespaces on this host, or set sandbox.requireHardening=false to allow the degraded (JS-guards-only) launch.`);
+            const mech = platformKernelMechanism();
+            const fix = mech === 'bwrap' ? 'Install bubblewrap + enable unprivileged user namespaces on this host'
+                : mech === 'appcontainer' ? 'Enable sandbox.useAppContainer on this Windows host (and check the [Sandbox] AppContainer warning in the log for the check that failed)'
+                : mech === 'seatbelt' ? 'Enable sandbox.useSeatbelt on this macOS host (and check the [Sandbox] Seatbelt warning in the log for the check that failed)'
+                : `No kernel confinement mechanism exists for platform '${logSafe(process.platform)}'`;
+            throw new Error(`[Sandbox] refusing to launch isolated plugin '${slug}': sandbox.requireHardening is ON but this host's kernel confinement (${mech}) is '${sandboxPlatformState}' (not ACTIVE). ${fix}, or set sandbox.requireHardening=false to allow the degraded (JS-guards-only) launch.`);
         }
     }
     const jobCapOk = await probeJobObjectCap();     // preventive memory cap on Windows (Job Object); false elsewhere
@@ -1133,112 +1419,210 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
     // it is the layer that gives Windows and macOS an OS-enforced boundary at all. null ⇒ unavailable
     // on this Node (or opted out) and the launch below is byte-identical to before.
     const permFlag = await probePermissionModel();
-    return new Promise((resolve, reject) => {
-        // In dev we run via ts-node and the worker must too (core is .ts); compiled, no flag needed.
-        // Pass ONLY the ts-node register flag — forwarding all of process.execArgv trips Worker's
-        // execArgv allowlist.
-        const execArgv = __filename.endsWith('.ts') ? ['-r', 'ts-node/register'] : [];
-        // DEFAULT-ON V8 hard block on runtime code generation (eval / new Function(string)) in the plugin
-        // worker. The AST scanner catches eval/Function statically at install, but it does NOT scan the
-        // plugin's dist/ (browser-bundle dir) — a plugin that require()s ./dist/x.js (now blocked at the
-        // worker require boundary, but belt-and-suspenders) could ship an eval-constructed, un-vetted
-        // payload there. Blocking codegen at the ENGINE level closes that class regardless of where the
-        // code lives. On by default; an operator can opt OUT with config.sandbox.blockCodeGen === false
-        // (e.g. for a trusted plugin whose deps genuinely need Function()). NEVER under ts-node (dev needs
-        // codegen to compile TS).
-        let blockCodeGen = true;
-        try { const s = require('../config/app').sandbox; if (s && s.blockCodeGen === false) blockCodeGen = false; } catch { /* config unavailable → keep default-on */ }
-        if (!__filename.endsWith('.ts') && blockCodeGen) execArgv.push('--disallow-code-generation-from-strings');
-        // Pass an explicit, secret-free env ALLOWLIST instead of inheriting the full host environment:
-        // the worker reaches config/secrets only via the RPC bridge, so app secrets in env
-        // (JWT_SECRET, DB creds, STRIPE_KEY, …) must never enter the worker's process.env. This is
-        // default-deny, unlike the in-worker name-pattern denylist (getProtectedEnv).
-        const SAFE_ENV_KEYS = ['NODE_ENV', 'TZ', 'LANG', 'LC_ALL', 'PATH', 'SystemRoot', 'windir', 'TEMP', 'TMP', 'TMPDIR', 'HOMEDRIVE', 'HOMEPATH', 'PATHEXT', 'NUMBER_OF_PROCESSORS', 'OS', 'COMSPEC'];
-        const workerEnv: Record<string, string> = {};
-        for (const k of SAFE_ENV_KEYS) { if (process.env[k] !== undefined) workerEnv[k] = process.env[k] as string; }
-        // OS-ISOLATION: run the untrusted plugin in a SEPARATE OS PROCESS, not a worker_thread. A worker
-        // shares the host process's heap+rss, so an off-heap (Buffer) OOM or a hard V8 crash in the worker
-        // takes down the HOST; a child has its OWN process + heap, so a crash, OOM, or heap escape is
-        // contained to the child and the host always survives. The network grant is resolved HERE at
-        // spawn (re-resolved on reload) so the child's network policy matches the current admin grant;
-        // config travels in argv[2] (no secrets); env is the same secret-free allowlist.
-        const netGranted = isNetworkGrantedFor(slug);
-        // allowedHosts only matters for a network-granted plugin (a non-network plugin has no egress at all);
-        // pushed into cfg so the child installs it as its egress-guard allowlist. Empty ⇒ allow-all-public.
-        // Egress fail-CLOSED (audit F-06): if the egress policy could not be loaded (DB/options failure), a
-        // network-granted plugin must NOT fall back to allow-all-public — signal deny-all so the child reaches
-        // ZERO public hosts (private/loopback stay blocked) until the policy reloads. A successfully-loaded but
-        // empty policy keeps the intended allow-all-public behavior (no regression).
-        const egressDenyAll = netGranted && !egressPolicyLoaded();
-        const childCfg = JSON.stringify({ slug, entryFile, coreDir: __dirname, network: netGranted, allowedHosts: (netGranted && !egressDenyAll) ? getEgressAllowlistFor(slug) : [], egressDenyAll });
-        const HEAP_FLAG = '--max-old-space-size=256'; // caps the JS HEAP; cgroup/rlimit/poll cap TOTAL memory
-        // RSS_BUDGET_BYTES (resident budget — cgroup memory.max AND the /proc poll AND the Job-Object cap) is
-        // module-scoped now, shared with cgroupResourceProps() so the probe and this launch never disagree.
-        // structured-clone IPC (serialization 'advanced') preserves Buffer/Date/Map; the JSON default
-        // (and a raw JSON channel) would lose them — match the worker_threads postMessage fidelity.
-        // PIPE the child's stdout/stderr (was 'inherit') so a plugin console.log flood can't stream
-        // straight to the operator's (possibly unbounded) log sink → disk-fill. attachLogLimiter forwards
-        // them slug-tagged through a per-plugin rate/volume cap. stdin is IGNORED (=/dev/null): plugins
-        // never read the operator's stdin/tty, so don't hand it to them. fd3 = ipc.
-        const IPC_STDIO: any = ['ignore', 'pipe', 'pipe', 'ipc'];
-        // Kernel hardening (DEFAULT-ON, opt-out via config.sandbox.useKernelHardening=false): when active
-        // (Linux + probe passed), launch node THROUGH bwrap so the child runs unprivileged (nobody) with
-        // dropped caps / no-new-privs / PID-IPC-UTS + user namespaces / read-only fs + a seccomp denylist.
-        // Only the plugin's own dir + the io-guard write-zones are bound writable (sandboxWritable below);
-        // the rest of backend/ is read-only. Composes with the memory-cap wrapper below; the IPC fd survives
-        // (probe-verified). When off (or the probe fails),
-        // bwrapPre is empty and every launch path is byte-identical to the plain fork (zero regression).
-        const APP_ROOT = path.resolve(__dirname, '..', '..');
-        // Under bwrap, bind WRITABLE only the zones io-guard already permits a plugin to write: its OWN dir
-        // (plugins/<slug>, or themes/<name> for a theme) + uploads/data/logs/os-tmp/themes. Everything else in
-        // APP_ROOT (src, node_modules, sibling plugins/<other>) stays READ-ONLY at the kernel level too — so a
-        // plugin that somehow escapes the JS io-guard STILL cannot persist a payload into core source, a shared
-        // dependency, or another plugin. Mirrors core/io-guard.ts SAFE_WRITE_DIRS + ownDir; --bind-try skips any
-        // zone missing on this install. (node_modules/src stay readable via the --ro-bind so require() works.)
-        const sandboxWritable = [
-            slug.startsWith('theme:') ? path.join(APP_ROOT, 'themes', slug.slice('theme:'.length)) : path.join(APP_ROOT, 'plugins', slug),
-            path.join(APP_ROOT, 'uploads'), path.join(APP_ROOT, 'data'), path.join(APP_ROOT, 'logs'),
-            path.join(APP_ROOT, 'os-tmp'), path.join(APP_ROOT, 'themes'),
-        ];
-        // Hand the SAME policy to Node's permission model that bwrap gets, so the confinement no longer
-        // depends on the operating system: read is scoped to the app root (the child must still resolve
-        // its worker, node_modules and the plugin's own code), and write is scoped to exactly the zones
-        // io-guard already permits — so this is behaviour-neutral for a well-behaved plugin and a hard
-        // wall for one that is not. child_process / worker_threads / native addons / WASI are simply not
-        // granted, which denies them in C++ rather than through a JS proxy that has to be kept in sync.
-        //
-        // NOT under ts-node: dev compiles TypeScript in-process and needs broader access than a
-        // production child does. Same carve-out as blockCodeGen above, and for the same reason — the
-        // production path is the one that has to be tight.
-        if (permFlag && !__filename.endsWith('.ts')) {
-            execArgv.push(permFlag, `--allow-fs-read=${APP_ROOT}`);
-            for (const dir of sandboxWritable) execArgv.push(`--allow-fs-write=${dir}`);
-            // NOTE: Node's permission model has NO `--allow-net` flag (never has — the tokens are
-            // fs-read/fs-write/child-process/worker/wasi/addons). Passing it aborted the child on startup
-            // with `bad option: --allow-net` (exit 9), so a network-GRANTED isolated plugin could not
-            // activate in production at all. The JS egress guard is — and always was — the sole authority
-            // on where a plugin's traffic may go; a network plugin simply does not get --unshare-net
-            // (handled where bwrap args are built) and stays bounded by that guard. `netGranted` is
-            // consumed there, not here — there is nothing valid to add to execArgv for it.
+    // -- LAUNCH INPUTS ----------------------------------------------------------------------------
+    // Everything from here down to `childStdio` used to be the first half of the Promise executor
+    // below, and it is moved out UNCHANGED: it is pure, synchronous argv / env / stdio construction
+    // that never referenced `resolve` or `reject`. It was moved for exactly one reason -- one launch
+    // path (the Windows AppContainer relay) cannot be started synchronously, and it needs precisely
+    // these values. Building them here lets that one path be AWAITED before the executor begins,
+    // instead of duplicating the construction or deferring the spawn. No behaviour on any platform
+    // changes: the same values are computed in the same order and consumed by the same branches.
+    // In dev we run via ts-node and the worker must too (core is .ts); compiled, no flag needed.
+    // Pass ONLY the ts-node register flag — forwarding all of process.execArgv trips Worker's
+    // execArgv allowlist.
+    const execArgv = __filename.endsWith('.ts') ? ['-r', 'ts-node/register'] : [];
+    // DEFAULT-ON V8 hard block on runtime code generation (eval / new Function(string)) in the plugin
+    // worker. The AST scanner catches eval/Function statically at install, but it does NOT scan the
+    // plugin's dist/ (browser-bundle dir) — a plugin that require()s ./dist/x.js (now blocked at the
+    // worker require boundary, but belt-and-suspenders) could ship an eval-constructed, un-vetted
+    // payload there. Blocking codegen at the ENGINE level closes that class regardless of where the
+    // code lives. On by default; an operator can opt OUT with config.sandbox.blockCodeGen === false
+    // (e.g. for a trusted plugin whose deps genuinely need Function()). NEVER under ts-node (dev needs
+    // codegen to compile TS).
+    let blockCodeGen = true;
+    try { const s = require('../config/app').sandbox; if (s && s.blockCodeGen === false) blockCodeGen = false; } catch { /* config unavailable → keep default-on */ }
+    if (!__filename.endsWith('.ts') && blockCodeGen) execArgv.push('--disallow-code-generation-from-strings');
+    // Pass an explicit, secret-free env ALLOWLIST instead of inheriting the full host environment:
+    // the worker reaches config/secrets only via the RPC bridge, so app secrets in env
+    // (JWT_SECRET, DB creds, STRIPE_KEY, …) must never enter the worker's process.env. This is
+    // default-deny, unlike the in-worker name-pattern denylist (getProtectedEnv).
+    const SAFE_ENV_KEYS = ['NODE_ENV', 'TZ', 'LANG', 'LC_ALL', 'PATH', 'SystemRoot', 'windir', 'TEMP', 'TMP', 'TMPDIR', 'HOMEDRIVE', 'HOMEPATH', 'PATHEXT', 'NUMBER_OF_PROCESSORS', 'OS', 'COMSPEC'];
+    const workerEnv: Record<string, string> = {};
+    for (const k of SAFE_ENV_KEYS) { if (process.env[k] !== undefined) workerEnv[k] = process.env[k] as string; }
+    // OS-ISOLATION: run the untrusted plugin in a SEPARATE OS PROCESS, not a worker_thread. A worker
+    // shares the host process's heap+rss, so an off-heap (Buffer) OOM or a hard V8 crash in the worker
+    // takes down the HOST; a child has its OWN process + heap, so a crash, OOM, or heap escape is
+    // contained to the child and the host always survives. The network grant is resolved HERE at
+    // spawn (re-resolved on reload) so the child's network policy matches the current admin grant;
+    // config travels in argv[2] (no secrets); env is the same secret-free allowlist.
+    const netGranted = isNetworkGrantedFor(slug);
+    // allowedHosts only matters for a network-granted plugin (a non-network plugin has no egress at all);
+    // pushed into cfg so the child installs it as its egress-guard allowlist. Empty ⇒ allow-all-public.
+    // Egress fail-CLOSED (audit F-06): if the egress policy could not be loaded (DB/options failure), a
+    // network-granted plugin must NOT fall back to allow-all-public — signal deny-all so the child reaches
+    // ZERO public hosts (private/loopback stay blocked) until the policy reloads. A successfully-loaded but
+    // empty policy keeps the intended allow-all-public behavior (no regression).
+    const egressDenyAll = netGranted && !egressPolicyLoaded();
+    // The filesystem grant travels the same way and for the same reason (see fsGrantsFor): the child
+    // cannot look it up, so the host answers for it. io-guard reads fsRead/fsWrite out of this blob.
+    const fsGrant = fsGrantsFor(slug);
+    const childCfg = JSON.stringify({ slug, entryFile, coreDir: __dirname, network: netGranted, allowedHosts: (netGranted && !egressDenyAll) ? getEgressAllowlistFor(slug) : [], egressDenyAll, fsRead: fsGrant.read, fsWrite: fsGrant.write });
+    const HEAP_FLAG = '--max-old-space-size=256'; // caps the JS HEAP; cgroup/rlimit/poll cap TOTAL memory
+    // RSS_BUDGET_BYTES (resident budget — cgroup memory.max AND the /proc poll AND the Job-Object cap) is
+    // module-scoped now, shared with cgroupResourceProps() so the probe and this launch never disagree.
+    // structured-clone IPC (serialization 'advanced') preserves Buffer/Date/Map; the JSON default
+    // (and a raw JSON channel) would lose them — match the worker_threads postMessage fidelity.
+    // PIPE the child's stdout/stderr (was 'inherit') so a plugin console.log flood can't stream
+    // straight to the operator's (possibly unbounded) log sink → disk-fill. attachLogLimiter forwards
+    // them slug-tagged through a per-plugin rate/volume cap. stdin is IGNORED (=/dev/null): plugins
+    // never read the operator's stdin/tty, so don't hand it to them. fd3 = ipc.
+    const IPC_STDIO: any = ['ignore', 'pipe', 'pipe', 'ipc'];
+    // Kernel hardening (DEFAULT-ON, opt-out via config.sandbox.useKernelHardening=false): when active
+    // (Linux + probe passed), launch node THROUGH bwrap so the child runs unprivileged (nobody) with
+    // dropped caps / no-new-privs / PID-IPC-UTS + user namespaces / read-only fs + a seccomp denylist.
+    // Only the plugin's own dir + the io-guard write-zones are bound writable (sandboxWritable below);
+    // the rest of backend/ is read-only. Composes with the memory-cap wrapper below; the IPC fd survives
+    // (probe-verified). When off (or the probe fails),
+    // bwrapPre is empty and every launch path is byte-identical to the plain fork (zero regression).
+    const APP_ROOT = path.resolve(__dirname, '..', '..');
+    // Under bwrap, bind WRITABLE only the zones io-guard already permits a plugin to write: its OWN dir
+    // (plugins/<slug>, or themes/<name> for a theme) + uploads/data/logs/os-tmp/themes. Everything else in
+    // APP_ROOT (src, node_modules, sibling plugins/<other>) stays READ-ONLY at the kernel level too — so a
+    // plugin that somehow escapes the JS io-guard STILL cannot persist a payload into core source, a shared
+    // dependency, or another plugin. Mirrors core/io-guard.ts SAFE_WRITE_DIRS + ownDir; --bind-try skips any
+    // zone missing on this install. (node_modules/src stay readable via the --ro-bind so require() works.)
+    const sandboxWritable = [
+        slug.startsWith('theme:') ? path.join(APP_ROOT, 'themes', slug.slice('theme:'.length)) : path.join(APP_ROOT, 'plugins', slug),
+        path.join(APP_ROOT, 'uploads'), path.join(APP_ROOT, 'data'), path.join(APP_ROOT, 'logs'),
+        path.join(APP_ROOT, 'os-tmp'), path.join(APP_ROOT, 'themes'),
+    ];
+    // Hand the SAME policy to Node's permission model that bwrap gets, so the confinement no longer
+    // depends on the operating system: read is scoped to the app root (the child must still resolve
+    // its worker, node_modules and the plugin's own code), and write is scoped to exactly the zones
+    // io-guard already permits — so this is behaviour-neutral for a well-behaved plugin and a hard
+    // wall for one that is not. child_process / worker_threads / native addons / WASI are simply not
+    // granted, which denies them in C++ rather than through a JS proxy that has to be kept in sync.
+    //
+    // NOT under ts-node: dev compiles TypeScript in-process and needs broader access than a
+    // production child does. Same carve-out as blockCodeGen above, and for the same reason — the
+    // production path is the one that has to be tight.
+    if (permFlag && !__filename.endsWith('.ts')) {
+        execArgv.push(permFlag, `--allow-fs-read=${APP_ROOT}`);
+        for (const dir of sandboxWritable) execArgv.push(`--allow-fs-write=${dir}`);
+        // NOTE: Node's permission model has NO `--allow-net` flag (never has — the tokens are
+        // fs-read/fs-write/child-process/worker/wasi/addons). Passing it aborted the child on startup
+        // with `bad option: --allow-net` (exit 9), so a network-GRANTED isolated plugin could not
+        // activate in production at all. The JS egress guard is — and always was — the sole authority
+        // on where a plugin's traffic may go; a network plugin simply does not get --unshare-net
+        // (handled where bwrap args are built) and stays bounded by that guard. `netGranted` is
+        // consumed there, not here — there is nothing valid to add to execArgv for it.
+    }
+    // seccomp denylist fd: opened per spawn, placed at child fd 4, referenced by `--seccomp 4`. If the
+    // BPF isn't available (unsupported arch / write failed) hardening proceeds without seccomp; closed
+    // after the child is spawned (the child kept its own dup).
+    let bpfFd = -1;
+    if (hardened) { const p = getSeccompBpfPath(); if (p) { try { bpfFd = require('fs').openSync(p, 'r'); } catch { bpfFd = -1; } } }
+    const seccompArgs = bpfFd >= 0 ? ['--seccomp', '4'] : [];
+    // A NON-network plugin (its fetch/WS/EventSource + raw sockets are ALREADY JS-neutered in the worker)
+    // additionally gets an empty network namespace (--unshare-net) as a KERNEL backstop — but only when
+    // this host proved it works (netnsHardeningSupported, set by the second probe leg) so a net-denied
+    // argv never ships un-probe-validated. Network-GRANTED plugins keep the shared netns (denyNetwork
+    // stays false) so their outbound sockets work, bounded by the JS egress-guard. Synchronous by design:
+    // this executes inside the non-async Promise executor, so it reads the memoized probe flag, not await.
+    const denyNetwork = hardened && netnsHardeningSupported && !netGranted;
+    const bwrapPre = hardened ? ['bwrap', ...seccompArgs, ...bwrapProfile(sandboxWritable, denyNetwork), '--'] : [];
+    const childStdio: any = bpfFd >= 0 ? [...IPC_STDIO, bpfFd] : IPC_STDIO;
+    // -- PLATFORM KERNEL CONFINEMENT (Windows / macOS) --------------------------------------------
+    // The Linux launch is decided entirely by `hardened` / `bwrapPre` above and is not touched here.
+    // This is where a Windows or macOS child either goes through its platform's kernel layer, or takes
+    // EXACTLY the launch it took before those layers existed.
+    //
+    // `use === false` is the load-bearing case and it is deliberately the cheap one: nothing is added to
+    // argv, nothing extra is spawned, and every branch in the executor below runs byte-identically to
+    // today. A layer whose probe did not certify this host must cost the plugin nothing at all.
+    const platformLaunch = platformLaunchDecision({
+        platform: process.platform,
+        state: sandboxPlatformState,
+        netGranted,
+        tsNode: __filename.endsWith('.ts'),
+    });
+    // macOS: the profile is built HERE — synchronously, mutating nothing — so that both Seatbelt-aware
+    // spawn branches below share ONE profile string. Two builders would be two chances for the kernel's
+    // write set and the JS guard's write set to drift, and it is always the looser one that matters.
+    let seatbeltPre: string[] = [];
+    if (platformLaunch.use && platformLaunch.mechanism === 'seatbelt') {
+        try {
+            const mac = require('./sandbox-macos');
+            // denyNetwork is unconditionally true here: platformLaunchDecision has already refused this
+            // path for a network-granted plugin, so the only profile this module ever emits is the one
+            // shape probeSeatbelt() actually certified.
+            const profile = mac.buildSeatbeltProfile({ writableDirs: sandboxWritable, denyNetwork: true, appRoot: APP_ROOT });
+            // seatbeltArgs() returns ARGUMENTS, not a command line — exactly like bwrapProfile() — so the
+            // caller decides where they sit. `[sandbox-exec, '-p', <profile>]` composes in front of the
+            // node argv the same way `bwrapPre` does, INCLUDING inside the `sh -c 'ulimit …; exec "$@"'`
+            // memory-cap wrapper: two execs in a row, and fd 3 (NODE_CHANNEL_FD) survives both, because
+            // neither is a fork and neither touches the descriptor table. Each leg is separately
+            // probe-verified with its own IPC round-trip — the shell leg by probeOsMemoryCap, the
+            // sandbox-exec leg by probeSeatbelt — which is the only reason this composition is asserted
+            // rather than assumed.
+            seatbeltPre = [mac.SEATBELT_BIN, ...mac.seatbeltArgs(profile, [])];
+        } catch (e: any) {
+            // A layer whose profile cannot be built is not a layer. Fall back to the standard launch and
+            // SAY so: a silent half-application is the failure this file spends its comments avoiding.
+            seatbeltPre = [];
+            console.warn(`[Sandbox] macOS Seatbelt is ACTIVE but the profile could not be built for '${logSafe(slug)}' (${logSafe(e && e.message)}) — falling back to the standard launch for this plugin.`);
         }
-        // seccomp denylist fd: opened per spawn, placed at child fd 4, referenced by `--seccomp 4`. If the
-        // BPF isn't available (unsupported arch / write failed) hardening proceeds without seccomp; closed
-        // after the child is spawned (the child kept its own dup).
-        let bpfFd = -1;
-        if (hardened) { const p = getSeccompBpfPath(); if (p) { try { bpfFd = require('fs').openSync(p, 'r'); } catch { bpfFd = -1; } } }
-        const seccompArgs = bpfFd >= 0 ? ['--seccomp', '4'] : [];
-        // A NON-network plugin (its fetch/WS/EventSource + raw sockets are ALREADY JS-neutered in the worker)
-        // additionally gets an empty network namespace (--unshare-net) as a KERNEL backstop — but only when
-        // this host proved it works (netnsHardeningSupported, set by the second probe leg) so a net-denied
-        // argv never ships un-probe-validated. Network-GRANTED plugins keep the shared netns (denyNetwork
-        // stays false) so their outbound sockets work, bounded by the JS egress-guard. Synchronous by design:
-        // this executes inside the non-async Promise executor, so it reads the memoized probe flag, not await.
-        const denyNetwork = hardened && netnsHardeningSupported && !netGranted;
-        const bwrapPre = hardened ? ['bwrap', ...seccompArgs, ...bwrapProfile(sandboxWritable, denyNetwork), '--'] : [];
-        const childStdio: any = bpfFd >= 0 ? [...IPC_STDIO, bpfFd] : IPC_STDIO;
+    }
+    // Windows: the ONE launch in this module that cannot start synchronously. The contained child is
+    // created by a PowerShell relay (CreateProcessW + SECURITY_CAPABILITIES), and its pid only exists once
+    // that relay has returned — which is why the argv/env construction above was moved out of the executor.
+    // Awaited HERE so the executor below still receives a ready ChildProcess and stays synchronous.
+    // NOTE ON THE seccomp fd: this await sits between opening `bpfFd` and closing it after the spawn. That
+    // is safe by construction and not by luck — `hardened` (and therefore `bpfFd >= 0`) is only ever true
+    // on Linux, and this branch only ever runs on win32, so the two can never overlap.
+    let acLaunch: { child: any; containedPid: number | null } | null = null;
+    if (platformLaunch.use && platformLaunch.mechanism === 'appcontainer') {
+        try {
+            acLaunch = await launchAppContainerChild(slug, APP_ROOT, {
+                args: [...execArgv, HEAP_FLAG, WORKER_FILE, childCfg],
+                env: workerEnv,
+                stdio: childStdio,
+            });
+        } catch (e: any) {
+            acLaunch = null;
+            console.warn(`[Sandbox] AppContainer launch failed for '${logSafe(slug)}' (${logSafe(e && e.message)}) — falling back to the standard Windows launch (process separation + the Node permission model + the JS guards).`);
+        }
+        // NOTE ON WHAT IS *NOT* RETRIED. This catch covers a failure to CREATE the contained child at all
+        // (no SID, the relay produced nothing). If the relay starts and the contained node then dies —
+        // exit 121, a missing grant, a plugin whose dependencies do not survive --preserve-symlinks — that
+        // is an ordinary failed load and it fails LOUDLY, through failLoad, with the relay's WJSAC line
+        // forwarded to the operator's log by attachLogLimiter. It is deliberately NOT retried unconfined:
+        // "widen the sandbox until the plugin starts" is how a confinement layer stops meaning anything,
+        // and the probe already proved this exact launch shape works on this host. The cost of that
+        // strictness — that enabling this layer can turn a working plugin into a failing load — is the
+        // main reason sandbox.useAppContainer is opt-in rather than default-on.
+    }
+    return new Promise((resolve, reject) => {
         let child: any;
         let cgroupUnit: string | null = null;
-        if (cgroupOk) {
+        // The pid of the process that is ACTUALLY the plugin, when it is not `child.pid`. On the
+        // AppContainer path `child` is the PowerShell RELAY and node runs inside the container — the same
+        // shape the cgroup path already has, where `child.pid` is systemd-run. Null everywhere else.
+        const containedPid: number | null = acLaunch ? acLaunch.containedPid : null;
+        if (acLaunch) {
+            // WINDOWS AppContainer: the child was created above (the relay is asynchronous) and it is
+            // already wired to a fork-style IPC channel at 'advanced' fidelity — the plugin-worker
+            // protocol crosses it UNCHANGED, which is the single measured fact this whole layer rests on.
+            // Nothing else in this executor needs to know: `child` behaves like any other ChildProcess.
+            //
+            // TEARDOWN is by kernel refcount, not by pid: the relay holds the only handle to a Job Object
+            // carrying JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, so killing the relay kills the contained node —
+            // the Win32 equivalent of bwrap's --die-with-parent. `terminate()` and killOverBudget() below
+            // therefore keep working with no change, and there is no orphan class to sweep (the Linux
+            // procSubtreePids backstop exists because bwrap's PDEATHSIG is installed late and not
+            // retroactively; the job limit here is set BEFORE the child's first instruction runs).
+            child = acLaunch.child;
+        } else if (cgroupOk) {
             // PREVENTIVE cgroup v2 caps: run the child in a transient --user scope with MemoryMax (the kernel
             // OOM-kills it by construction at the resident budget — no poll race; blast radius = the child)
             // and, when configured, CPUQuota (the anti-DoS core cap). cgroupResourceProps() is the SAME set
@@ -1259,7 +1643,14 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
             // (NODE_CHANNEL_FD + serialization mode are injected into the child env by the 'ipc' stdio and
             // survive the exec). argv after the shell name = [node, …execArgv, HEAP_FLAG, WORKER, cfg];
             // `exec "$@"` runs it, so cfg lands at process.argv[2] exactly like fork(WORKER,[cfg]).
-            const nodeArgv = [...bwrapPre, process.execPath, ...execArgv, HEAP_FLAG, WORKER_FILE, childCfg];
+            // `seatbeltPre` is empty on every platform but macOS-with-a-certified-profile, and `bwrapPre`
+            // is empty on every platform but Linux, so exactly one of them can ever be non-empty and the
+            // Linux argv is byte-identical to before. On macOS the result is
+            //   sh -c 'ulimit …; exec "$@"' wjs-sandbox /usr/bin/sandbox-exec -p <profile> node …
+            // i.e. the shell sets RLIMIT_AS and execs sandbox-exec, which applies the profile to itself and
+            // execs node. Two execs, no fork, no change to the descriptor table — so fd 3 (the IPC
+            // socketpair) reaches node exactly as it does through the shell alone.
+            const nodeArgv = [...bwrapPre, ...seatbeltPre, process.execPath, ...execArgv, HEAP_FLAG, WORKER_FILE, childCfg];
             // Also cap file descriptors (RLIMIT_NOFILE, per-process) alongside the RLIMIT_AS memory backstop,
             // so a plugin can't exhaust the host fd table. Best-effort (2>/dev/null); exec runs regardless.
             child = spawn('sh', ['-c', `ulimit -v ${capKb} 2>/dev/null; ulimit -n ${FD_CAP} 2>/dev/null; exec "$@"`, 'wjs-sandbox', ...nodeArgv], {
@@ -1273,6 +1664,17 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
             // still gets the unprivileged-uid / dropped-caps / no-new-privs / namespace confinement. The
             // resident RSS poll below sums the bwrap subtree so the memory cap keeps biting.
             child = spawn('bwrap', [...seccompArgs, ...bwrapProfile(sandboxWritable, denyNetwork), '--', process.execPath, ...execArgv, HEAP_FLAG, WORKER_FILE, childCfg], {
+                stdio: childStdio,
+                serialization: 'advanced',
+                env: workerEnv,
+            });
+        } else if (seatbeltPre.length) {
+            // macOS with a CERTIFIED Seatbelt profile but no RLIMIT_AS wrapper on this host: launch node
+            // THROUGH sandbox-exec directly, the same way the branch above launches it through bwrap.
+            // sandbox-exec applies the profile to its own process and then execve()s node, so the
+            // fork-style IPC fd survives — the property probeSeatbelt() exists to prove, and refuses to
+            // report 'active' without.
+            child = spawn(seatbeltPre[0], [...seatbeltPre.slice(1), process.execPath, ...execArgv, HEAP_FLAG, WORKER_FILE, childCfg], {
                 stdio: childStdio,
                 serialization: 'advanced',
                 env: workerEnv,
@@ -1300,8 +1702,16 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
         // best-effort: the ~1–2 s assign latency is covered by the RSS poll exactly as before, and any
         // failure just leaves that poll as the only cap (zero regression). Only meaningful on win32
         // (jobCapOk is false elsewhere). The poll stays as a backstop for the brief assign window.
+        //
+        // NOT ON THE AppContainer PATH (`!acLaunch`), and this exclusion is load-bearing in BOTH
+        // directions. `child.pid` there is powershell.exe, so capping it would (a) put a 768 MB commit
+        // limit on the RELAY, which is not the thing that can balloon, and (b) leave the actual plugin
+        // process uncapped while the log said a cap had been applied — a cap that reports success and
+        // binds nothing. The contained child already carries the same ProcessMemoryLimit (plus the
+        // ActiveProcessLimit fork-bomb cap and the CPU rate cap), applied by the relay BEFORE the child's
+        // first instruction runs, which is strictly earlier than this post-spawn assignment could manage.
         let jobCapApplied = false; // set only when the kernel Job Object cap is CONFIRMED on this child
-        if (jobCapOk && process.platform === 'win32' && child.pid) {
+        if (jobCapOk && process.platform === 'win32' && child.pid && !acLaunch) {
             assignProcessToJobObject(child.pid, RSS_BUDGET_BYTES)
                 .then((ok) => { jobCapApplied = ok; })
                 .catch(() => { /* poll remains the cap */ });
@@ -1357,10 +1767,29 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
         // Skipped in cgroup mode (the kernel memory.max IS the cap, and child.pid there is systemd-run,
         // not the node child). RSS_BUDGET_BYTES is defined above (shared with cgroup memory.max).
         let rssPoll: any = null;
+        // WHICH PID THE RESIDENT POLL MUST READ.
+        //
+        // Everywhere except the AppContainer path this is `child.pid`, unchanged. THERE, `child.pid` is
+        // the PowerShell relay: polling it would measure a ~60 MB supervisor that never crosses the
+        // budget, so the resident cap would stop biting and NOTHING would say so — a cap that silently
+        // stops enforcing is worse than one that was never there, because the health surface still shows
+        // green. Read the CONTAINED pid instead.
+        //
+        // When the relay never reported one, do not poll AT ALL rather than poll the wrong process, and
+        // say so out loud. That is not a gap: the relay assigns the contained child a Job Object carrying
+        // the same ProcessMemoryLimit before its first instruction runs, so the resident cap there is
+        // PREVENTIVE and kernel-enforced — exactly the trade the cgroup path already makes when it skips
+        // this poll because `child.pid` is systemd-run.
+        const pollPid: number | null = acLaunch ? containedPid : (child.pid || null);
+        if (acLaunch && !containedPid) {
+            console.warn(`[Isolate ${logSafe(slug)}] the AppContainer relay reported no contained pid — the reactive RSS poll is SKIPPED for this child; its resident cap is the relay's kernel Job Object alone.`);
+        }
         const killOverBudget = (rssBytes: number) => {
             getHealth(slug).rssBytes = rssBytes; // single choke point for RSS across all platforms → health surface
             if (rssBytes > RSS_BUDGET_BYTES) {
                 console.error(`[Isolate ${logSafe(slug)}] killed: child rss over budget (${logSafe(rssBytes)} bytes).`);
+                // `child` is the relay on the AppContainer path, and killing it is still the correct and
+                // complete action: KILL_ON_JOB_CLOSE takes the contained node down with it.
                 try { child.kill('SIGKILL'); } catch { /* gone */ }
             }
         };
@@ -1386,14 +1815,17 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
                 try { killOverBudget(hardened ? subtreeRss(child.pid) : rssBytesOf(child.pid)); } catch { /* child gone / statm unavailable */ }
             }, 250);
             if (rssPoll.unref) rssPoll.unref();
-        } else if ((process.platform === 'win32' || process.platform === 'darwin') && child.pid) {
+        } else if ((process.platform === 'win32' || process.platform === 'darwin') && pollPid) {
             // No /proc: ask the OS for the child's rss on the HOST loop (tasklist on Windows, ps on
             // macOS). Heavier (spawns a query), so poll less often and never overlap queries. Best-effort
             // — an unparsed result just skips that tick (falls back to process separation), never throws.
+            // `pollPid` is `child.pid` on every path but the AppContainer one, where it is the CONTAINED
+            // pid (see its declaration above): a Seatbelt child is exec'd in place, so there is no
+            // indirection to unwind there and `pollPid === child.pid`.
             let busy = false;
             let tick = 0;
             rssPoll = setInterval(() => {
-                if (busy || !child.pid) return;
+                if (busy || !pollPid) return;
                 // Once the kernel Job Object cap is confirmed (win32), enforcement is preventive and
                 // this poll is telemetry only — spawn the query 1 tick in 10 instead of every tick
                 // (with 5 plugins the per-second tasklist spawns cost ~25% of a core at idle). Until
@@ -1403,8 +1835,8 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
                 let proc: any;
                 try {
                     proc = (process.platform === 'win32')
-                        ? spawn('tasklist', ['/FI', `PID eq ${child.pid}`, '/NH', '/FO', 'CSV'], { windowsHide: true })
-                        : spawn('ps', ['-o', 'rss=', '-p', String(child.pid)]);
+                        ? spawn('tasklist', ['/FI', `PID eq ${pollPid}`, '/NH', '/FO', 'CSV'], { windowsHide: true })
+                        : spawn('ps', ['-o', 'rss=', '-p', String(pollPid)]);
                 } catch { busy = false; return; }
                 let out = '';
                 try { proc.stdout.on('data', (d: any) => { out += d.toString(); }); } catch { /* */ }
@@ -2081,7 +2513,12 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
         }
         isolates.set(slug, { worker, teardown, entryFile });
         const h = getHealth(slug);
-        h.state = 'running'; h.pid = (child && child.pid) || null; h.startedAt = Date.now();
+        // Report the pid of the process that IS the plugin. On the AppContainer path `child.pid` is the
+        // PowerShell relay, and an operator reading the admin plugin list would otherwise be shown a pid
+        // that Task Manager labels "powershell.exe" — and would find nothing when they went looking for
+        // their plugin. This is the same pid the resident poll reads (see `pollPid`), so the health row
+        // and the memory telemetry always describe the same process.
+        h.state = 'running'; h.pid = containedPid || (child && child.pid) || null; h.startedAt = Date.now();
         // A clean MANUAL (re)start (activate / grants-reload / dev-reload / admin restart) resets the
         // crash accounting; a supervised auto-restart keeps counting toward the crash-loop cap.
         if (!opts.supervised) { h.crashWindow = []; h.restarts = 0; stopping.delete(slug); }
@@ -2164,11 +2601,25 @@ module.exports = {
     getIsolateStatus, getAllIsolateStatuses,
     assignProcessToJobObject, probeJobObjectCap, getSandboxHardeningState, getSandboxNetnsState,
     getPermissionModelState, probePermissionModel, probeKernelHardening,
+    // THIS platform's kernel confinement layer (bwrap / AppContainer / Seatbelt / none). Reported
+    // SEPARATELY from the two bwrap-specific fields above, which keep their exact historical meaning —
+    // see the section comment above platformLaunchDecision for why widening them would have been a lie
+    // to every operator already reading `sandbox_hardening_state`.
+    probePlatformConfinement, getSandboxPlatformState, getSandboxPlatformNetworkState,
+    getSandboxPlatformConfinement, platformKernelMechanism,
+    // Derived: TRUE only in the dangerous "the operator turned this layer ON and it is not there" state.
+    // 'unsupported' (no such mechanism) and 'disabled' (not asked for) are chosen postures, not failures.
+    isSandboxPlatformConfinementDegraded: () => sandboxPlatformState === 'degraded',
     // Derived admin-facing flag: TRUE only in the dangerous "looks secure but isn't" state — kernel
     // hardening was ENABLED but the bwrap probe FAILED, so isolated plugins run WITHOUT the OS backstop.
     // 'unsupported' (non-Linux) and 'disabled' (opt-out) are known/chosen postures, not degradation.
     isSandboxHardeningDegraded: () => sandboxHardeningState === 'degraded',
     __bwrapProfile: bwrapProfile,
+    // The FALLBACK is the property most likely to break and the one that would hurt real users, so the
+    // decision that produces it is exported as a pure function and pinned by
+    // backend/src/tests/sandbox-platform-fallback.test.ts on every host, including the ones where these
+    // layers can never be active.
+    __platformLaunchDecision: platformLaunchDecision,
     // Diagnostic: is this slug marked as an INTENTIONAL stop, i.e. is there a pending child exit that
     // must not be supervised as a crash? The mark is consumed by that exit, so a mark with no child
     // behind it is a leak — it never goes away and it silences the supervisor for the NEXT child.
