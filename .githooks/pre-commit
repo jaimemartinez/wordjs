@@ -1,0 +1,20 @@
+#!/bin/sh
+# Reject a commit that would record a live session token.
+#
+# The rules in .gitignore stop the artefacts we have already met (cj.txt, *.cookies, /.debug-dumps/).
+# They cannot stop the next cookie jar someone names jar.txt — this checks CONTENT, so the name is
+# irrelevant, and it also catches `git add -f` on an ignored file. See .githooks/secret-scan.mjs for
+# the patterns and for why a bare `wordjs_token` grep would reject every authentication commit.
+. "$(dirname "$0")/_local.sh"
+run_local_hook pre-commit "$@" || exit $?
+
+# Fail CLOSED: a gate that waves the commit through when it cannot run is not a gate. Every developer
+# of this repo has node; if yours is missing, `git commit --no-verify` is the deliberate way past.
+if ! command -v node >/dev/null 2>&1; then
+  echo "pre-commit: node is not on PATH, so the session-token scan could not run — refusing." >&2
+  echo "pre-commit: install node, or bypass deliberately with: git commit --no-verify" >&2
+  exit 1
+fi
+
+node "$(dirname "$0")/secret-scan.mjs" --staged || exit 1
+exit 0

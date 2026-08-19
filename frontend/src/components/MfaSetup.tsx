@@ -16,8 +16,14 @@ import SecretRevealModal from "@/components/SecretRevealModal";
 export default function MfaSetup({ onEnabled }: { onEnabled?: () => void } = {}) {
     const { addToast } = useToast();
     const { t } = useI18n();
+    // t() returns the KEY itself when a catalogue has no entry, so a brand-new key would render as
+    // "mfa.currentPassword" on screen. The re-auth strings are not in lib/i18n.ts yet, so fall back to
+    // English copy until all three catalogues carry them (they must land together — the i18n parity test
+    // fails a key added to one language only).
+    const tf = (key: string, fallback: string) => { const s = t(key); return s === key ? fallback : s; };
     const uid = useId();
     const enrollCodeId = `${uid}-enroll-code`;
+    const enrollPasswordId = `${uid}-enroll-password`;
     const manualKeyId = `${uid}-manual-key`;
     const manageCodeId = `${uid}-manage-code`;
     const [status, setStatus] = useState<MfaStatus | null>(null);
@@ -25,6 +31,10 @@ export default function MfaSetup({ onEnabled }: { onEnabled?: () => void } = {})
     const [busy, setBusy] = useState(false);
     // enrollment in progress: { secret, qr data-url }
     const [enroll, setEnroll] = useState<{ secret: string; qr: string } | null>(null);
+    // The account password, proving this is the owner and not whoever holds the session. Held only for
+    // the length of one enrolment because BOTH halves demand it (/setup mints the secret, /enable locks
+    // the account); wiped the moment enrolment finishes, is cancelled, or the password is rejected.
+    const [enrollPassword, setEnrollPassword] = useState("");
     const [code, setCode] = useState("");
     // one code field reused by the enabled-state actions (disable / regenerate)
     const [manageCode, setManageCode] = useState("");
@@ -41,16 +51,29 @@ export default function MfaSetup({ onEnabled }: { onEnabled?: () => void } = {})
     };
     useEffect(() => { loadStatus(); }, []);
 
-    const startEnroll = async () => {
+    /**
+     * The password is proved FIRST, as the submit of the "off" panel — /auth/mfa/setup is the call that
+     * discloses the TOTP secret, so asking afterwards (with the QR already on screen) would prove nothing:
+     * whoever held the session would already have everything they need to enrol their own authenticator.
+     */
+    const startEnroll = async (e: React.FormEvent) => {
+        e.preventDefault();
         setBusy(true);
         try {
-            const { otpauthUri, secret } = await mfaApi.setup();
+            const { otpauthUri, secret } = await mfaApi.setup(enrollPassword);
             const qr = qrcode(0, "M");
             qr.addData(otpauthUri);
             qr.make();
             setEnroll({ secret, qr: qr.createDataURL(5, 4) });
             setCode("");
-        } catch (e: any) { addToast(e?.message || t("mfa.setupFailed"), "error"); }
+        } catch (err: any) {
+            // `err`, not `e`: the form event is still in scope here, and a shadowed name is how a catch
+            // block ends up reading a property off the event instead of the failure.
+            // A rejected password leaves nothing to keep: clear it so a retry re-types it rather than
+            // silently re-sending a wrong one (every attempt counts against the account's lockout bucket).
+            setEnrollPassword("");
+            addToast(err?.message || t("mfa.setupFailed"), "error");
+        }
         finally { setBusy(false); }
     };
 
@@ -58,14 +81,25 @@ export default function MfaSetup({ onEnabled }: { onEnabled?: () => void } = {})
         e.preventDefault();
         setBusy(true);
         try {
-            const res = await mfaApi.enable(code.trim());
+            const res = await mfaApi.enable(code.trim(), enrollPassword);
             setBackupReveal(res.backupCodes.join("\n"));
             setEnrolledPendingClose(true); // fire onEnabled when the user closes the backup-codes modal
             setEnroll(null);
             setCode("");
+            setEnrollPassword("");
             addToast(t("mfa.enabledToast"), "success");
             await loadStatus();
-        } catch (e: any) { addToast(e?.message || t("mfa.invalidCodeClock"), "error"); }
+        } catch (err: any) {
+            // The password can be refused at this second door too (it changed in another tab, or the
+            // sudo window was throttled). Send the user back to the password step — /setup will mint a
+            // fresh secret — instead of leaving a QR on screen that can no longer be activated.
+            if (err?.code === "rest_bad_current_password") {
+                setEnroll(null);
+                setCode("");
+                setEnrollPassword("");
+            }
+            addToast(err?.message || t("mfa.invalidCodeClock"), "error");
+        }
         finally { setBusy(false); }
     };
 
@@ -129,7 +163,7 @@ export default function MfaSetup({ onEnabled }: { onEnabled?: () => void } = {})
                     </div>
                     <div className="flex gap-3">
                         <Button type="submit" icon="fa-check" loading={busy}>{t("mfa.verifyEnable")}</Button>
-                        <Button type="button" variant="secondary" onClick={() => { setEnroll(null); setCode(""); }}>{t("common.cancel")}</Button>
+                        <Button type="button" variant="secondary" onClick={() => { setEnroll(null); setCode(""); setEnrollPassword(""); }}>{t("common.cancel")}</Button>
                     </div>
                 </form>
             ) : status?.enabled ? (
@@ -148,11 +182,28 @@ export default function MfaSetup({ onEnabled }: { onEnabled?: () => void } = {})
                     </div>
                 </div>
             ) : (
-                // ── off: offer to enable ──
-                <div className="mt-6">
-                    <p className="text-sm text-gray-500 mb-4">{t("mfa.offDescription")}</p>
-                    <Button icon="fa-plus" onClick={startEnroll} loading={busy}>{t("mfa.enable")}</Button>
-                </div>
+                // ── off: prove the account password, and only then mint + show the secret ──
+                <form onSubmit={startEnroll} className="mt-6 space-y-4">
+                    <p className="text-sm text-gray-500">{t("mfa.offDescription")}</p>
+                    <div>
+                        <label htmlFor={enrollPasswordId} className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-1">
+                            {tf("mfa.currentPassword", "Your current password")}
+                        </label>
+                        <input
+                            id={enrollPasswordId}
+                            type="password"
+                            value={enrollPassword}
+                            onChange={(e) => setEnrollPassword(e.target.value)}
+                            autoComplete="current-password"
+                            required
+                            className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-4 focus:ring-blue-100 focus:border-blue-500 outline-none"
+                        />
+                        <p className="text-[11px] text-gray-400 mt-2 leading-relaxed">
+                            {tf("mfa.currentPassword.help", "Turning two-factor on locks this account to one device, so it takes more than being signed in: re-enter your password.")}
+                        </p>
+                    </div>
+                    <Button type="submit" icon="fa-plus" loading={busy} disabled={!enrollPassword}>{t("mfa.enable")}</Button>
+                </form>
             )}
 
             <SecretRevealModal

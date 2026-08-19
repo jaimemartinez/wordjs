@@ -509,7 +509,10 @@ async function installPluginFromZip(zipPathIn: string, originalName: string, exp
             if (manifest.isolated !== true) throw new Error('Plugin must declare "isolated": true (all WordJS plugins run sandboxed).');
             const permProblems = validateManifestPermissions(manifest.permissions);
             if (permProblems.length) throw new Error(`Invalid permissions:\n- ${permProblems.join('\n- ')}`);
-            // Static AST scan (also re-runs at activation for defense in depth).
+            // Static AST scan in DECLARATION mode (the default) — deliberately NOT grant mode. Nothing is
+            // granted at install time; this pass is what produces the requested-permission list the admin
+            // approves from. The grant-aware pass runs at ACTIVATION (core/plugins.ts), which is where a
+            // capability the admin denied must actually block the code.
             validatePluginPermissions(pluginSlug, installedDir, manifest);
         } catch (valErr: any) {
             // Failed validation → undo the extract. If we ADOPTED residual data, restore the residual
@@ -1032,25 +1035,62 @@ router.post('/:slug/permissions', authenticate, isAdmin, asyncHandler(async (req
     if (body.network) tokens.push('network');
     await setGrants(slug, tokens);
 
+    // A REVOKE has to take effect NOW, not at the next boot. Some capabilities the AST scan gates have no
+    // per-call runtime gate to fall back on — filesystem writes inside the plugin's own directory are the
+    // motivating case (audit #3) — so a running isolate whose code needs a capability the admin just
+    // denied would keep exercising it until someone restarted the site. Re-run the grant-aware scan
+    // against the code on disk; if it no longer passes, deactivate instead of reloading. Fail closed and
+    // SAY SO in the response, so the admin sees the consequence of the switch they flipped.
+    let deactivated = false;
+    let deactivationReason: string | null = null;
+    if (await isPluginActive(slug)) {
+        try {
+            const manifestPath = pluginFile(slug, 'manifest.json');
+            if (!manifestPath) throw new Error('unresolvable plugin path');
+            const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+            validatePluginPermissions(slug, path.dirname(manifestPath), manifest, { mode: 'grant' });
+        } catch (valErr: any) {
+            if (valErr && valErr.code === 'PLUGIN_VALIDATION_FAILED') {
+                deactivationReason = (valErr.missingPermissions || []).join('; ') || valErr.message;
+                try { await deactivatePlugin(slug); deactivated = true; }
+                catch (e: any) { console.warn("[Permissions] deactivation of '%s' after revoke failed:", logSafe(slug), e && e.message); }
+            } else {
+                // A read/parse problem is not evidence of a violation — leave the plugin running and log.
+                console.warn("[Permissions] post-grant re-validation of '%s' could not run:", logSafe(slug), valErr && valErr.message);
+            }
+        }
+    }
+
     // Re-spawn the isolate so the NETWORK grant (passed in cfg → __WORDJS_PLUGIN_NETWORK__) takes effect.
     // Bridge-scope grants are read live per call on the host, but reloading keeps everything consistent.
     // Best-effort: the grant is already persisted, so a reload hiccup must not fail the change.
+    // Gate on the REASON, not on `deactivated`: if the scan condemned the plugin but the deactivation
+    // itself failed, restarting the isolate would put the condemned code straight back to work.
     let reloaded = false;
-    try {
-        const { reloadIsolatedPlugin, isIsolated } = require('../core/plugin-isolate');
-        if (isIsolated(slug)) { await reloadIsolatedPlugin(slug); reloaded = true; }
-    } catch (e: any) {
-        console.warn("[Permissions] reload of '%s' after grant change failed:", logSafe(slug), e && e.message);
+    if (!deactivationReason) {
+        try {
+            const { reloadIsolatedPlugin, isIsolated } = require('../core/plugin-isolate');
+            if (isIsolated(slug)) { await reloadIsolatedPlugin(slug); reloaded = true; }
+        } catch (e: any) {
+            console.warn("[Permissions] reload of '%s' after grant change failed:", logSafe(slug), e && e.message);
+        }
     }
 
     const granted = getGrants(slug);
+    const tail = deactivationReason
+        ? (deactivated
+            ? ` Plugin DEACTIVATED — its code requires a capability you denied: ${deactivationReason}`
+            : ` Its code requires a capability you denied (${deactivationReason}) and the automatic deactivation FAILED — deactivate it manually.`)
+        : (reloaded ? ' Isolate reloaded — changes are in effect.' : ' Reactivate the plugin to fully apply.');
     res.json({
         success: true,
         slug,
         granted,
         network: granted.includes('network'),
         reloaded,
-        message: `Permissions updated for '${slug}' (${granted.length} granted).${reloaded ? ' Isolate reloaded — changes are in effect.' : ' Reactivate the plugin to fully apply.'}`,
+        deactivated,
+        deactivationReason,
+        message: `Permissions updated for '${slug}' (${granted.length} granted).${tail}`,
     });
 }));
 
@@ -1377,7 +1417,9 @@ router.post('/:slug/deactivate', authenticate, isAdmin, asyncHandler(async (req:
  *       200:
  *         description: Plugin deleted
  *       403:
- *         description: Invalid password
+ *         description: Invalid password (rest_bad_current_password — the shared sudo re-auth)
+ *       429:
+ *         description: Too many simultaneous verifications for this account from this address
  */
 router.delete('/:slug', authenticate, isAdmin, asyncHandler(async (req: any, res: Response) => {
     const slug = req.params.slug;
@@ -1388,37 +1430,34 @@ router.delete('/:slug', authenticate, isAdmin, asyncHandler(async (req: any, res
     }
     const { password, dropData } = req.body;
     const { isPluginActive, deactivatePlugin, PLUGINS_DIR, uninstallPluginData } = require('../core/plugins');
-    const User = require('../models/User');
 
     if (!password) {
         return res.status(400).json({ message: 'Password is required' });
     }
 
-    // 0. Verify password — gated by the SAME shared per-account lockout as /auth/login, so a hijacked admin
-    // session can't brute-force the password unthrottled (only the loose apiLimiter applies) (audit #26 —
-    // unthrottled password oracle). req.user is populated by authenticate middleware. This path is
-    // authenticated/session-scoped, so RECORDING failures here throttles the oracle without the
-    // unauthenticated-lockout-DoS of #25.
-    const auth = require('./auth');
-    const lockId = await auth.resolveLockIdentifier(req.user.userLogin);
-    if (await auth.isLoginLocked(lockId)) {
-        return res.status(429).json({ message: 'Too many failed attempts. Try again later.' });
-    }
-    // Concurrency backstop (audit AUTH-A3 class): isLoginLocked is check-then-arm and bcrypt yields, so a
-    // hijacked session firing parallel guesses would clear the lock before it arms. Cap concurrent in-flight
-    // password checks for this account; release the slot in finally.
-    if (!(await auth.beginLoginAttempt(lockId))) {
-        return res.status(429).json({ message: 'Too many simultaneous attempts. Try again in a moment.' });
-    }
-    try {
-        await User.authenticate(req.user.userLogin, password);
-        await auth.clearLoginFails(lockId);
-    } catch (error) {
-        await auth.recordLoginFail(lockId);
-        return res.status(403).json({ message: 'Invalid password' });
-    } finally {
-        await auth.endLoginAttempt(lockId);
-    }
+    // 0. Verify the password — through THE shared sudo door (routes/users.ts requireSudoPassword), never
+    // through the login lockout.
+    //
+    // THE INVARIANT THIS BROKE: no mutation that a mere cookie can drive may leave the account in a state
+    // its owner cannot undo. This door used to verify against `auth.resolveLockIdentifier(req.user.userLogin)`
+    // — the RAW /auth/login bucket, with no purpose prefix — and call `auth.recordLoginFail(lockId)` on
+    // every miss. So a hijacked admin session, from a single address and without ever knowing the password,
+    // could fire a dozen DELETE /plugins/<any slug> (the password check precedes the existence check, so the
+    // slug need not even exist) and arm the OWNER'S login lockout: the owner then gets 429
+    // rest_account_locked from /auth/login with the CORRECT password, renewable every 15 minutes, with no
+    // recovery action available to them. It was strictly worse than the hostage wave 4 removed, because the
+    // door it jammed was the front door.
+    //
+    // Two separate rules, both restated here so the next reader does not have to rediscover them:
+    //   · KEY SPACE — an authenticated purpose gets its OWN bucket, keyed by the numeric session identity.
+    //     `requireSudoPassword` keys by `Number(req.user.id)` over module-private maps and the `wjsudo:*`
+    //     Redis space, disjoint from `wjlock:*`. Nothing derived from a body, a query or a header enters
+    //     the key. NEVER call recordLoginFail/resolveLockIdentifier on `req.user.*` outside routes/auth.ts.
+    //   · SHAPE — the refusal is a BOUNDED, escalating delay paid before the check, not a lockout: the
+    //     correct password always gets in and clears the counter. A re-authentication gate that refuses the
+    //     right credential is the hostage, whoever is holding it.
+    const { requireSudoPassword } = require('./users');
+    if (await requireSudoPassword(req, res, password)) return;
 
     // 1. Check if active (Async)
     if (await isPluginActive(slug)) {

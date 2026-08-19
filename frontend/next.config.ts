@@ -1,5 +1,9 @@
 import type { NextConfig } from "next";
 
+// THE hosts a video embed may come from — the SAME module `src/lib/sanitize.ts` reads, so the CSP and
+// the sanitizer can no longer disagree. See embed-hosts.js for what the hand-written list broke.
+const { ALLOWED_EMBED_HOSTS } = require('./embed-hosts.js') as { ALLOWED_EMBED_HOSTS: string[] };
+
 // Real app version exposed to the client (editor chrome, about panels). Read from the ROOT
 // package.json — release bumps touch that one; frontend/package.json is pinned at 0.1.0 and never
 // versioned. fs+JSON.parse (not a JSON import) so it compiles cleanly under next.config.ts.
@@ -48,7 +52,12 @@ const nextConfig: NextConfig = {
     //     per-request nonce migration is out of scope. (So script-src isn't an XSS backstop today — the
     //     server-side sanitizer in lib/sanitize.ts is the real XSS defense.)
     // worker-src blob: — libs that spawn workers from a blob URL. font-src allows the Google Fonts CDN.
-    // frame-src allows the sanitizer's permitted youtube/vimeo embeds (else legitimate VideoEmbed breaks).
+    // frame-src is DERIVED from ALLOWED_EMBED_HOSTS (embed-hosts.js) — the list the VideoEmbed block
+    // actually resolves URLs against. It used to be written out by hand, next to a comment claiming it
+    // covered "the sanitizer's permitted embeds" while naming a DIFFERENT list: youtube-nocookie.com
+    // was accepted by the block and blocked by this header, so a privacy-enhanced YouTube embed became
+    // an empty hole with no "Unsupported video URL" marker. Deriving it means a new provider can only
+    // be added in one place. Test: src/lib/__tests__/embedHostsCsp.test.ts.
     // Resource directives (script/style/font/img) allow https: — the app loads its OWN theme assets
     // (fonts under /uploads/fonts, theme CSS/JS, images) and, crucially, the Puck editor renders the
     // theme inside an `about:srcdoc` iframe where the CSP keyword 'self' does NOT resolve to the page
@@ -64,7 +73,7 @@ const nextConfig: NextConfig = {
       "img-src 'self' data: blob: https:",
       "font-src 'self' data: https:",
       "connect-src 'self' https: http: ws: wss:",
-      "frame-src 'self' https://www.youtube.com https://player.vimeo.com",
+      ["frame-src 'self'", ...ALLOWED_EMBED_HOSTS.map((h) => `https://${h}`)].join(' '),
       "frame-ancestors 'self'",
       "object-src 'none'",
       "base-uri 'self'",

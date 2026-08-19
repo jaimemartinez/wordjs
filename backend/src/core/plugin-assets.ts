@@ -26,10 +26,28 @@ const asHost = <T>(fn: () => Promise<T>): Promise<T> => runWithContext(null, fn)
 
 // Turn a plugin-relative asset path into its public /plugins/<slug>/ URL, rejecting anything that is
 // not a plain relative path inside the plugin dir (no scheme/URL, no protocol-relative, no '..').
+//
+// (#3) The path must ALSO land on the surface the host actually publishes — plugins/<slug>/public/
+// with a servable extension (core/io-guard.isPluginServedRelPath, the one declaration index.ts's
+// /plugins handler serves from). Before this, `src` could name ANY file in the plugin dir; since a
+// plugin may write its own dir with no grant, enqueuing e.g. 'cache/out.css' and then overwriting
+// that file at runtime was a write→HTTP-read exfiltration channel that the network permission, the
+// egress allowlist and bwrap's --unshare-net all fail to see. public/ is denied to the plugin's own
+// writes by io-guard, so confining the registry to it is what makes the enqueue bridge safe. Every
+// shipped plugin already enqueues from public/ (marketplace: cookie-consent, image-lightbox,
+// notification-bar, popup-builder, analytics-tag), so this is the shape the real producer emits.
 function pluginPublicUrl(slug: string, relPath: any): string {
     const clean = String(relPath || '').replace(/\\/g, '/').replace(/^\/+/, '');
     if (!clean || /^[a-z][a-z0-9+.-]*:/i.test(clean) || clean.startsWith('//') || clean.split('/').includes('..')) {
         throw new Error(`Invalid asset src "${relPath}" — must be a relative path inside your plugin (no URLs, no '..').`);
+    }
+    const { isPluginServedRelPath, PLUGIN_PUBLIC_DIR, PLUGIN_PUBLIC_EXT } = require('./io-guard');
+    if (!isPluginServedRelPath(clean) || clean.split('/')[0] !== PLUGIN_PUBLIC_DIR) {
+        throw new Error(
+            `Invalid asset src "${relPath}" — enqueued assets must live in your plugin's "${PLUGIN_PUBLIC_DIR}/" `
+            + `directory and use one of: ${Array.from(PLUGIN_PUBLIC_EXT).join(', ')}. `
+            + `Nothing outside that directory is served over HTTP.`
+        );
     }
     const { PLUGINS_DIR } = require('./plugins');
     const base = path.resolve(PLUGINS_DIR, slug);
@@ -73,10 +91,18 @@ async function getActiveAssets(): Promise<{ scripts: any[]; styles: any[] }> {
     const store = (await asHost(() => getOption(OPT, {}))) || {};
     const { getActivePlugins } = require('./plugins');
     const active = new Set(await getActivePlugins());
+    const { isPluginServedRelPath } = require('./io-guard');
     const scripts: any[] = [], styles: any[] = [];
     for (const [slug, list] of Object.entries(store)) {
         if (!active.has(slug) || !Array.isArray(list)) continue;
         for (const e of list as any[]) {
+            // (#3) Re-check the STORED url against the published surface on the way out, not only on
+            // the way in: entries registered before the public/ rule existed (or by any other writer
+            // of this option) would otherwise still be emitted as <script src>/<link href> pointing at
+            // a path the /plugins handler now 404s — a broken page instead of an honest omission.
+            const prefix = `/plugins/${slug}/`;
+            if (typeof e.src !== 'string' || !e.src.startsWith(prefix)) continue;
+            if (!isPluginServedRelPath(e.src.slice(prefix.length))) continue;
             if (e.kind === 'style') styles.push({ handle: `${slug}:${e.handle}`, src: e.src, media: e.media || 'all' });
             else scripts.push({ handle: `${slug}:${e.handle}`, src: e.src, inFooter: !!e.inFooter, strategy: e.strategy || '' });
         }

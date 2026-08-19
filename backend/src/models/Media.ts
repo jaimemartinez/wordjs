@@ -8,6 +8,9 @@ const Post = require('./Post');
 const config = require('../config/app');
 const path = require('path');
 const fs = require('fs');
+// The ONE place a stored name becomes a path. This file used to build its unlink() targets with
+// path.join() on a value read straight out of post_meta — see Media._deletableFiles below.
+const { resolveWithin } = require('../core/safe-path');
 
 class Media {
     /**
@@ -175,33 +178,75 @@ class Media {
     }
 
     /**
+     * Resolve the absolute files a delete may unlink, PROVING every one of them lives under the
+     * uploads directory. Returns [] when nothing may be touched.
+     *
+     * WHAT THE OLD CODE DID WRONG. Media.delete() built its targets as
+     * `path.join(config.uploads.dir, media.mediaDetails.file)` and then
+     * `path.join(path.dirname(thatPath), size.file)`. `mediaDetails.file` is the `_wp_attached_file`
+     * post_meta value — and post_meta is writable through the generic post-meta routes by anyone who
+     * may edit the attachment, i.e. the uploader themselves. `path.join()` HAPPILY normalizes `..`, so
+     * a stored `../data/wordjs.db` produced a real path outside uploads and fs.unlinkSync() deleted it;
+     * the fs.existsSync() guard in front turned the route into a file-existence oracle instead of an
+     * error. The size loop was strictly worse: it based itself on path.dirname(mainPath), so ONE
+     * poisoned main value moved the base for EVERY size entry — N arbitrary deletions per request.
+     *
+     * WHY THIS SHAPE IS CORRECT. Segments are validated as FORM (isPlainSegment, inside resolveWithin)
+     * and containment is proved on the RESOLVED value against path.resolve(uploads.dir) — the two
+     * halves core/safe-path exists to keep together, and which themes/certs/plugins already use. Every
+     * size resolves against the uploads root plus the main file's ALREADY-PROVEN directory segments,
+     * never against a dirname derived from an unvalidated string, so a size can no longer inherit an
+     * escape. Failure is closed: if the main name does not resolve we return [] and delete NOTHING
+     * (the DB row still goes, so a poisoned value cannot make an attachment undeletable); a single bad
+     * size entry drops only itself, because each surviving path carries its own containment proof.
+     */
+    static _deletableFiles(storedFile: unknown, sizes: any): string[] {
+        if (typeof storedFile !== 'string' || storedFile.length === 0) return [];
+        const uploadDir = path.resolve(config.uploads.dir);
+
+        // Split on BOTH separators, not just '/': a legacy row written on Win32 can carry backslashes,
+        // and splitting on them is safe precisely because each resulting segment must still pass
+        // isPlainSegment (so `a\..\b` becomes ['a','..','b'] and is refused on the '..').
+        const segments = storedFile.split(/[/\\]+/).filter((s: string) => s.length > 0);
+        const mainPath = segments.length > 0 ? resolveWithin(uploadDir, ...segments) : null;
+        if (!mainPath) {
+            console.warn(`Media.delete: refusing to unlink an attachment path that escapes the uploads directory: ${JSON.stringify(storedFile)}`);
+            return [];
+        }
+
+        const targets = [mainPath];
+        // The main file's directory, as VALIDATED segments (e.g. ['2026','08']) — not as a dirname
+        // string, which is how the escape used to propagate.
+        const dirSegments = segments.slice(0, -1);
+        for (const size of Object.values(sizes || {})) {
+            const file = (size as any)?.file;
+            if (typeof file !== 'string' || file.length === 0) continue;
+            const sizeSegments = file.split(/[/\\]+/).filter((s: string) => s.length > 0);
+            const sizePath = sizeSegments.length > 0
+                ? resolveWithin(uploadDir, ...dirSegments, ...sizeSegments)
+                : null;
+            if (!sizePath) {
+                console.warn(`Media.delete: refusing to unlink a size path that escapes the uploads directory: ${JSON.stringify(file)}`);
+                continue;
+            }
+            targets.push(sizePath);
+        }
+        return targets;
+    }
+
+    /**
      * Delete media
      */
     static async delete(id: number, deleteFile = true) {
         const media = await Media.findById(id);
         if (!media) return false;
 
-        // Delete the actual file and its sizes
+        // Delete the actual file and its sizes — every target proven to live under uploads/ first.
         if (deleteFile && media.mediaDetails.file) {
-            const uploadDir = config.uploads.dir;
-            const mainPath = path.join(uploadDir, media.mediaDetails.file);
-            const parentDir = path.dirname(mainPath);
-
-            // 1. Delete main file
-            if (fs.existsSync(mainPath)) {
-                fs.unlinkSync(mainPath);
-            }
-
-            // 2. Delete all sizes
-            if (media.mediaDetails.sizes) {
-                Object.values(media.mediaDetails.sizes).forEach((size: any) => {
-                    if (size.file) {
-                        const sizePath = path.join(parentDir, size.file);
-                        if (fs.existsSync(sizePath)) {
-                            fs.unlinkSync(sizePath);
-                        }
-                    }
-                });
+            for (const target of Media._deletableFiles(media.mediaDetails.file, media.mediaDetails.sizes)) {
+                if (fs.existsSync(target)) {
+                    fs.unlinkSync(target);
+                }
             }
         }
 

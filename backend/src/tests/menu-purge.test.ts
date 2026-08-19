@@ -91,6 +91,9 @@ describe('menu mutations purge the menus tag (instant-purge contract)', () => {
             revalidateSecret: 'lab-secret',
         }));
         process.chdir(dir);
+        // frontend-purge resolves certificates against the INSTALLATION (BACKEND_ROOT), not the cwd:
+        // this temp tree IS the installation for this test.
+        process.env.WORDJS_BACKEND_ROOT = dir;
 
         const config = require('../config/app');
         config.dbPath = path.join(dir, 'menu-purge.db');

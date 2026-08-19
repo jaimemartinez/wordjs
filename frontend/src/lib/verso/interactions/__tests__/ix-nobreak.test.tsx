@@ -94,7 +94,7 @@ describe("no-ruptura: animClasses", () => {
 describe("no-ruptura: appearanceToStyle", () => {
   it("los 13 casos de la matriz son byte-idénticos, ORDEN DE CLAVES incluido", () => {
     const ser = JSON.stringify(LOOKS.map((l) => [l, appearanceToStyle(l)]));
-    expect(fnv1a32(ser).toString(36)).toBe("16lvgor");
+    expect(fnv1a32(ser).toString(36)).toBe("1rpgx7b");
   });
 
   it("los casos que documentan el contrato, literales", () => {
@@ -148,7 +148,7 @@ describe("no-ruptura: markup de SharedBlockShell sin `ix`", () => {
     [
       "overlay (capa de atenuación + contexto de apilado)",
       { look: { bg: "image", bgImage: "/x.png", overlay: 0.5, radius: 10 } },
-      '<div style="background-image:url(/x.png);background-size:cover;background-position:center;background-repeat:no-repeat;border-radius:10px;position:relative;overflow:hidden"><div style="position:absolute;inset:0;border-radius:inherit;pointer-events:none;background:#000;opacity:0.5" aria-hidden="true"></div><div style="position:relative"><p>X</p></div></div>',
+      '<div style="background-image:url(&quot;/x.png&quot;);background-size:cover;background-position:center;background-repeat:no-repeat;border-radius:10px;position:relative;overflow:hidden"><div style="position:absolute;inset:0;border-radius:inherit;pointer-events:none;background:#000;opacity:0.5" aria-hidden="true"></div><div style="position:relative"><p>X</p></div></div>',
     ],
   ];
 

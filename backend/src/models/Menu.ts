@@ -283,8 +283,19 @@ MenuItem.create = async function (data) {
     if (ttRow) {
         await dbAsync.run('INSERT INTO term_relationships (object_id, term_taxonomy_id, term_order) VALUES (?, ?, ?)', [itemId, ttRow.term_taxonomy_id, order]);
 
-        // Update count
-        await dbAsync.run('UPDATE term_taxonomy SET count = count + 1 WHERE term_taxonomy_id = ?', [ttRow.term_taxonomy_id]);
+        // ONE MAINTAINER for term_taxonomy.count (audit #16, nav_menu twin).
+        //
+        // This used to be `SET count = count + 1`, the only incremental writer left on that column —
+        // and it had no counterpart: MenuItem.delete drops the term_relationships row and never
+        // decremented, so every removed menu item inflated the counter permanently, exactly the drift
+        // #16 describes for categories and tags. Post.updateTermCounts DERIVES the number from the
+        // relationships that actually exist, so it cannot drift and cannot disagree with the filter
+        // that reads it (Term.findAll's `hide_empty` → `tt.count > 0`).
+        //
+        // nav_menu does NOT need to differ: menu items are rows in `posts` inserted `post_status =
+        // 'publish'` (see the INSERT above), which is precisely what that recount counts.
+        const Post = require('./Post');
+        await Post.updateTermCounts('nav_menu', [ttRow.term_taxonomy_id]);
     }
 
     return await MenuItem.findById(itemId);
@@ -399,6 +410,11 @@ MenuItem.update = async function (id, data) {
 };
 
 MenuItem.delete = async function (id) {
+    const Post = require('./Post');
+    // Read the counters this delete is about to invalidate BEFORE the relationships go: they are the
+    // only record of which term_taxonomy rows this item belonged to. Same order Post.delete uses.
+    const affected = await Post._termTaxonomiesForPost(id);
+
     // Delete meta
     await dbAsync.run('DELETE FROM post_meta WHERE post_id = ?', [id]);
 
@@ -407,6 +423,11 @@ MenuItem.delete = async function (id) {
 
     // Delete post
     await dbAsync.run("DELETE FROM posts WHERE id = ? AND post_type = 'nav_menu_item'", [id]);
+
+    // The half that never existed: creating an item bumped `count`, deleting one left it bumped, so a
+    // menu that had ever lost an item reported more items than it has — for ever, with no repair pass.
+    // Derived recount, same maintainer as the create path (audit #16, nav_menu twin).
+    await Post._recountTermTaxonomies(affected);
 
     return true;
 };

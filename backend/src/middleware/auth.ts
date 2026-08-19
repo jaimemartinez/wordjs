@@ -3,7 +3,7 @@
  * JWT-based authentication
  */
 
-import type { Response, NextFunction } from 'express';
+import type { Response, NextFunction, CookieOptions } from 'express';
 
 const jwt = require('jsonwebtoken');
 const config = require('../config/app');
@@ -22,11 +22,29 @@ const API_PREFIX = String(config.api?.prefix || '/api/v1').replace(/\/+$/, '');
  * scopes satisfy it (fail-closed for resource-scoped tokens). Only a clean `slug` immediately followed by
  * '/' or end matches, so `..`/encoded-path oddities never masquerade as a real resource.
  */
+/**
+ * The request path as EXPRESS SEES IT, lowercased, query stripped, repeated separators collapsed.
+ *
+ * The collapse is the load-bearing part. Express mounts this middleware with the regexp
+ * `/^\/api\/v1\/?(?=\/|$)/i`, whose optional slash swallows a redundant separator: `POST /api/v1//setup/install`
+ * is ROUTED to `/setup/install` (verified against the real router), while a naive `slice(prefix.length)`
+ * derives `'//setup/install'` — so every guard built on it (the CSRF setup exemption, the MFA enrollment
+ * allowlist, the API-token resource scope) compares a string the router never used. That is the exact
+ * "the guard inspects a DIFFERENT value than the one that reaches the sink" shape this file already paid
+ * for once. ONE normalizer, so the three call sites below cannot drift apart again.
+ */
+function normalizedRequestPath(req: any): string {
+    return String(req.originalUrl || req.url || '')
+        .split('?')[0]
+        .toLowerCase()
+        .replace(/\/{2,}/g, '/');
+}
+
 function apiResourceOf(req: any): string {
     // Lowercased so it matches Express's case-insensitive routing key (a `posts:write` token must work on
     // `/api/v1/Posts` exactly as on `/posts`). This never widens access: the extracted slug must still equal
     // the resource Express actually routes to, so it can't masquerade as a different resource's handler.
-    const path = String(req.originalUrl || req.url || '').split('?')[0].toLowerCase();
+    const path = normalizedRequestPath(req);
     const prefix = API_PREFIX.toLowerCase();
     const rest = path.startsWith(prefix) ? path.slice(prefix.length) : path;
     const m = /^\/([a-z][a-z0-9-]*)(?:\/|$)/.exec(rest);
@@ -35,7 +53,7 @@ function apiResourceOf(req: any): string {
 
 // The request sub-path after the API prefix (lowercased, trailing slash trimmed) — e.g. '/auth/mfa/enable'.
 function pathAfterApiPrefix(req: any): string {
-    const path = String(req.originalUrl || req.url || '').split('?')[0].toLowerCase();
+    const path = normalizedRequestPath(req);
     const prefix = API_PREFIX.toLowerCase();
     const rest = path.startsWith(prefix) ? path.slice(prefix.length) : path;
     return rest.replace(/\/+$/, '') || '/';
@@ -52,6 +70,11 @@ const MFA_ENFORCE_EXEMPT = new Set([
 function isMfaEnforceExempt(req: any): boolean {
     return MFA_ENFORCE_EXEMPT.has(pathAfterApiPrefix(req));
 }
+
+// The ONLY state-changing endpoints that legitimately predate any origin, session or user: the wizard's
+// pre-install doors. `isInstalled()` closes both of them once the site exists, so this set is empty of
+// authority on a live site. Deliberately NOT the whole '/setup/' subtree — see csrfProtection below.
+const CSRF_EXEMPT_PATHS = new Set(['/setup/install', '/setup/test-db']);
 
 /**
  * Global gate for the admin-enforced MFA-by-role policy. Mounted at the API prefix, it runs BEFORE the
@@ -84,13 +107,14 @@ async function mfaComplianceGate(req: any, res: Response, next: NextFunction) {
         if (bearer.startsWith(ApiToken.PREFIX)) return next(); // headless API token — exempt (see note below)
         token = bearer; // a session JWT over the Bearer transport — subject to enforcement
     }
-    if (!token && req.cookies && req.cookies.wordjs_token) token = req.cookies.wordjs_token;
+    if (!token) token = sessionCookie(req);
     // Also cover the `?token=` transport that authenticateAllowQuery honors (e.g. the plugin-bundle download),
     // so an enforced user can't slip a session JWT past the gate via the query string. A wjt_ token there is
     // exempt exactly like on the Bearer path.
-    if (!token && req.query && typeof req.query.token === 'string' && req.query.token) {
-        if (req.query.token.startsWith(ApiToken.PREFIX)) return next();
-        token = req.query.token;
+    const qToken = token ? null : queryToken(req);
+    if (qToken) {
+        if (qToken.startsWith(ApiToken.PREFIX)) return next();
+        token = qToken;
     }
     if (!token) return next(); // no session — nothing to enforce (the route's own auth still applies)
 
@@ -228,7 +252,7 @@ async function verifyApiTokenAndAttachUser(token: string, req: any, res: Respons
         }
         req.user = user;
         req.userId = user.id;
-        req.apiToken = { id: record.id, scopes: record.scopes, name: record.name };
+        markHeadless(req, record);
         ApiToken.touch(record.id);
         next();
     } catch (error) {
@@ -238,6 +262,121 @@ async function verifyApiTokenAndAttachUser(token: string, req: any, res: Respons
             data: { status: 401 }
         });
     }
+}
+
+// ─── Headless (API-token) requests: the one mark, and the two gates that read it ───────────────────
+
+/**
+ * Stamp a request as HEADLESS — authenticated by a `wjt_` machine token rather than by an interactive
+ * login. Called from EVERY place that resolves such a token (the strict path above and optionalAuth
+ * below) so the mark can never be set on one surface and forgotten on the other. `req.apiToken` carries
+ * the token's identity/scopes; `req.isHeadless` is the boolean the gates below assert on, so those read
+ * as the invariant they enforce instead of as an incidental field check.
+ */
+function markHeadless(req: any, record: { id: number; scopes: string[]; name: string }): void {
+    req.apiToken = { id: record.id, scopes: record.scopes, name: record.name };
+    req.isHeadless = true;
+}
+
+function isHeadless(req: any): boolean {
+    return !!(req && (req.isHeadless || req.apiToken));
+}
+
+const SESSION_COOKIE = 'wordjs_token';
+
+// ─── COOKIES ARE AN UNTRUSTED CHANNEL THAT ALSO HAS A TYPE ────────────────────────────────────────
+/**
+ * `cookieParser()` applies JSONCookies UNCONDITIONALLY (cookie-parser/index.js: every value that starts
+ * with `j:` is JSON.parse'd), so a cookie is NOT necessarily a string once it reaches a route:
+ * `Cookie: wordjs_token=j:[1]` lands in `req.cookies.wordjs_token` as an ARRAY. Every reader below then
+ * ran `token.startsWith(...)` on it. Because `authenticate`/`optionalAuth`/`authenticateAllowQuery` are
+ * async and Express 4 does not await a middleware's promise, the TypeError never reaches the error
+ * handler: no next(), no response, the socket simply hangs until the client gives up. Anonymous, free,
+ * remote, and it applies to EVERY route carrying one of these middlewares.
+ *
+ * Two changes, because they close different halves and neither subsumes the other:
+ *
+ *  1. `sanitizeCookies` (mounted in index.ts immediately after cookieParser) — the CHOKEPOINT. RFC 6265
+ *     defines a cookie as a name→string pair, so anything cookie-parser turned into a non-string is not
+ *     a cookie value and is dropped before any router, guard or plugin can read it. This is what makes
+ *     the class closed rather than the five call sites: a reader that does not exist yet, in a file
+ *     nobody has written, cannot receive a non-string cookie.
+ *  2. `sessionCookie` — ONE reader for the session cookie, used by all four readers in this file and by
+ *     routes/auth.ts, so the guarantee does not silently depend on mount order. Test harnesses and
+ *     core/plugin-isolate mount routers WITHOUT index.ts's middleware chain; a value-level check that
+ *     travels with the reader still holds there.
+ */
+function sanitizeCookies(req: any, _res: Response, next: NextFunction): void {
+    for (const bag of [req.cookies, req.signedCookies]) {
+        if (!bag || typeof bag !== 'object') continue;
+        for (const name of Object.keys(bag)) {
+            if (typeof bag[name] !== 'string') delete bag[name];
+        }
+    }
+    next();
+}
+
+/** The session cookie as a STRING, or null. The only place this file reads `req.cookies`. */
+function sessionCookie(req: any): string | null {
+    const v = req && req.cookies ? req.cookies[SESSION_COOKIE] : undefined;
+    return typeof v === 'string' && v ? v : null;
+}
+
+/**
+ * The `?token=` transport, same treatment: `?token[]=x` makes `req.query.token` an Array and the same
+ * `.startsWith` blows up in authenticateAllowQuery. Express's query parser is the other producer of
+ * non-string request values, so it needs the same boundary check as the cookie bag.
+ */
+function queryToken(req: any): string | null {
+    const v = req && req.query ? req.query.token : undefined;
+    return typeof v === 'string' && v ? v : null;
+}
+
+/**
+ * THE ONE DOOR that mints the interactive session cookie.
+ *
+ * Before this, POST /auth/refresh carried only `authenticate`, which accepts a `wjt_` API token exactly
+ * as happily as a session JWT, and then set a 7-day `wordjs_token` cookie. That traded a leaked headless
+ * token for a full interactive session: the resulting cookie carries no `req.apiToken`, so `sessionOnly`
+ * — the guard that keeps tokens away from /auth/tokens and /auth/mfa/* — no longer saw a token at all,
+ * and revoking the leaked token did not cut the derived session off. Listing route-by-route what a token
+ * may not touch is the wrong shape: the list is open-ended and a single omission is a full bypass. So the
+ * rule is INVERTED here — a headless request may never cause a session cookie to be emitted, whatever
+ * route asked for it, and a new cookie-issuing route inherits the refusal by construction.
+ *
+ * Returns true when it REFUSED and already sent the response (the caller must return immediately), false
+ * when the cookie was set and the caller should continue — the same "true means handled" convention as
+ * requireSelfPasswordReauth in routes/users.ts.
+ */
+function issueSessionCookie(req: any, res: Response, token: string, options: CookieOptions): boolean {
+    if (isHeadless(req)) {
+        res.status(403).json({
+            code: 'rest_session_from_token_forbidden',
+            message: 'An API token cannot be exchanged for an interactive session. Sign in with your credentials.',
+            data: { status: 403 }
+        });
+        return true;
+    }
+    res.cookie(SESSION_COOKIE, token, options);
+    return false;
+}
+
+/**
+ * Route guard: this endpoint must be driven by an interactive session (JWT/cookie), never by an API
+ * token. Token management must not self-perpetuate (a single leaked write token could otherwise mint
+ * fresh tokens or revoke others), and the second factor must not be enrollable/disable-able by a
+ * credential the account owner cannot see. Lives here — next to the headless mark it reads — so
+ * routes/auth.ts, routes/users.ts and routes/webhooks.ts all consume ONE implementation.
+ */
+function sessionOnly(req: any, res: Response, next: NextFunction) {
+    if (isHeadless(req)) {
+        return res.status(403).json({
+            code: 'rest_token_management_forbidden',
+            message: 'API tokens cannot manage tokens, two-factor enrollment, or account security. Sign in interactively.',
+            data: { status: 403 }
+        });
+    }
+    next();
 }
 
 /**
@@ -253,9 +392,9 @@ async function authenticate(req: any, res: Response, next: NextFunction) {
         token = authHeader.substring(7);
     }
 
-    // Priority 2: HttpOnly cookie (for browser clients)
-    if (!token && req.cookies && req.cookies.wordjs_token) {
-        token = req.cookies.wordjs_token;
+    // Priority 2: HttpOnly cookie (for browser clients) — always a string or null, see sessionCookie.
+    if (!token) {
+        token = sessionCookie(req);
     }
 
     if (!token) {
@@ -289,12 +428,12 @@ async function authenticateAllowQuery(req: any, res: Response, next: NextFunctio
 
     if (authHeader && authHeader.startsWith('Bearer ')) {
         token = authHeader.substring(7);
-    } else if (req.cookies && req.cookies.wordjs_token) {
-        token = req.cookies.wordjs_token;
-    } else if (req.query && req.query.token) {
+    } else if (sessionCookie(req)) {
+        token = sessionCookie(req);
+    } else if (queryToken(req)) {
         // Last-resort fallback (documented leak above). Kept for legacy EventSource/download clients
         // that can supply neither header nor cookie.
-        token = req.query.token;
+        token = queryToken(req);
     }
 
     if (!token) {
@@ -320,8 +459,8 @@ async function optionalAuth(req: any, res: Response, next: NextFunction) {
 
     if (authHeader && authHeader.startsWith('Bearer ')) {
         token = authHeader.substring(7);
-    } else if (req.cookies && req.cookies.wordjs_token) {
-        token = req.cookies.wordjs_token;
+    } else {
+        token = sessionCookie(req);
     }
 
     if (!token) {
@@ -340,7 +479,7 @@ async function optionalAuth(req: any, res: Response, next: NextFunction) {
             if (user && ApiToken.scopeAllows(record.scopes, req.method, apiResourceOf(req))) {
                 req.user = user;
                 req.userId = user.id;
-                req.apiToken = { id: record.id, scopes: record.scopes, name: record.name };
+                markHeadless(req, record);
                 ApiToken.touch(record.id);
             } else {
                 req.user = null;
@@ -407,8 +546,28 @@ function csrfProtection(req: any, res: Response, next: NextFunction) {
         return next();
     }
 
-    // Skip CSRF check for setup endpoints (before origin is configured)
-    if (req.path.startsWith('/api/v1/setup')) {
+    // Skip the CSRF check for the setup endpoints (they run before any origin — or any user — exists).
+    //
+    // This used to compare `req.path` against the FULL '/api/v1/setup' prefix, which can NEVER match:
+    // csrfProtection is mounted WITH the prefix (`app.use(config.api.prefix, csrfProtection)` in
+    // index.ts), and Express strips the mount path from req.url before the middleware runs — inside here
+    // req.path is '/setup/install', never '/api/v1/setup/install'. The declared, documented exemption was
+    // dead code, and an installer following the docs got a misleading 403 on a site with no users. (The
+    // install guard in index.ts uses the same idiom correctly only because it is mounted at the ROOT;
+    // the two were copied without noticing that the mount differs.) Derive the sub-path from
+    // req.originalUrl — the full, un-rewritten URL — exactly as apiResourceOf/pathAfterApiPrefix above
+    // already do, so the exemption is correct at any mount point.
+    //
+    // ENUMERATED, not a subtree. Reviving the exemption as `startsWith('/setup/')` handed it to
+    // POST /setup/migrate too — the ONE route of that subtree that stays alive AFTER installation
+    // (routes/setup.ts early-returns 400 'Not installed' on the others). While the exemption was dead
+    // code /migrate was de-facto same-origin protected; a subtree exemption silently removed that, so any
+    // visitor's browser could be made to drive its (throttled, but real) admin-password oracle from the
+    // VICTIM's IP, sidestepping the attacker-IP authLimiter. /migrate authenticates raw credentials in the
+    // body and needs no ambient cookie, so it has no reason to skip the check. The endpoints that DO need
+    // it are the pre-install ones, which run before any origin — or any user — exists.
+    const subPath = pathAfterApiPrefix(req);
+    if (CSRF_EXEMPT_PATHS.has(subPath)) {
         return next();
     }
 
@@ -498,5 +657,14 @@ module.exports = {
     generateToken,
     verifyToken,
     csrfProtection,
-    mfaComplianceGate
+    mfaComplianceGate,
+    // Headless (API-token) boundary — one mark, one cookie door, one session-only guard.
+    isHeadless,
+    issueSessionCookie,
+    sessionOnly,
+    SESSION_COOKIE,
+    // Request-value boundary — cookies and query params are not necessarily strings.
+    sanitizeCookies,
+    sessionCookie,
+    queryToken
 };

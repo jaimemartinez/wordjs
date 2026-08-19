@@ -7,7 +7,10 @@ import type { Response, CookieOptions } from 'express';
 const express = require('express');
 const router = express.Router();
 const User = require('../models/User');
-const { authenticate, generateToken, verifyToken } = require('../middleware/auth');
+// issueSessionCookie is the ONE door that mints the interactive session cookie: it refuses a request
+// that arrived on a `wjt_` API token, so a leaked headless token can never be traded for a 7-day session
+// (see middleware/auth.ts). sessionOnly lives there too, next to the headless mark it reads.
+const { authenticate, generateToken, verifyToken, issueSessionCookie, sessionOnly, sessionCookie } = require('../middleware/auth');
 const { isAdmin, can } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
 const { getOption } = require('../core/options');
@@ -54,6 +57,83 @@ const _inflightRedisKey = (key: string) => `wjlock:inflight:${key}`;
 // per-account lockout counter can't be DOUBLED by alternating the two forms — both authenticate the same
 // account yet keyed two distinct buckets before (audit LOW). Falls back to the raw identifier when no
 // account matches (a nonexistent-user probe is still rate-limited under its own key).
+// ─── ONE STORE, PURPOSE-OWNED SUB-NAMESPACES ──────────────────────────────────────────────────────
+/**
+ * A PREFIX INSIDE A STRING IS NOT A NAMESPACE. Every throttle bucket in this store used to be spelled
+ * `'<purpose>:' + identifier`, and exactly one of them — the interactive-login bucket — takes its subject
+ * from the request body: `resolveLockIdentifier` hands the SUBMITTED identifier back verbatim when it
+ * matches no account (deliberately, so a nonexistent-user probe is still counted). That one fail-open
+ * subject made the WHOLE store writable from an anonymous POST /auth/login: twelve attempts with
+ * `{username: 'mfa:owner'}`, spread over enough source addresses to outlast loginThrottle, armed the very
+ * bucket that /auth/mfa/{enable,disable,backup-codes} read, and the owner — correct password, correct
+ * TOTP — was answered 429 on all three. Locking someone out of their own 2FA without being able to log in.
+ *
+ * The fix is not a cleverer prefix. It is that the login bucket is now ONE PURPOSE AMONG SEVERAL rather
+ * than the whole key space: every key is `<purpose>:<subject>` where the purpose is a literal from
+ * LOCK_PURPOSES chosen by the CALL SITE and never by the caller. An attacker still chooses the subject of
+ * the login bucket (pre-authentication, a submitted username is all there is), but no subject can move
+ * the key out of `login:`, so no other purpose is reachable from it — by construction, for purposes that
+ * do not exist yet.
+ *
+ * Adding a door, in order of preference:
+ *   1. Do NOT use this store. Give the purpose its own key space keyed by the authenticated numeric id
+ *      (routes/users.ts's `wjsudo:*` is the model, and it is the only shape that is safe by default).
+ *   2. If it must share the store, add a purpose to LOCK_PURPOSES and go through lockBucket().
+ * backend/src/tests/anonymous-entry-channels.test.ts derives the call sites from this file's SOURCE and
+ * fails on a key that was not built by lockBucket().
+ *
+ * ─── A PURPOSE IS ALSO A READ/WRITE CONTRACT, NOT ONLY A KEY SPACE ────────────────────────────────
+ * The first version of this namespacing separated the SUBJECTS and stopped there, and that was only half
+ * the job. `mfa:<id>` stayed ONE purpose shared by four doors: the second factor of the interactive login
+ * (which CHECKS the lock and refuses) and the three enrolment/management doors (which had their lock
+ * check replaced by a bounded wait — but kept ARMING it). One reader, four writers, and three of those
+ * writers needed nothing but the session cookie. Twelve wrong codes at POST /auth/mfa/disable therefore
+ * locked the owner out of POST /auth/mfa — renewably, and with no recovery path (backup codes are checked
+ * INSIDE verifyLoginCode, i.e. after the lock; reset-password clears no mfa_* key). A redesign that moves
+ * the READ off a bucket and leaves the WRITE on it does not remove the weapon, it hands it to whoever can
+ * reach the remaining writer.
+ *
+ * So each purpose now declares which half of the pair it supports:
+ *   · LOCKING purposes are checked with isLoginLocked and refuse (429). Every door that can ARM one is a
+ *     door that is itself refused by it — arming is self-inflicted, never inflicted on a neighbour.
+ *   · every other purpose is COUNT-ONLY: recordLoginFail increments its counter and NEVER arms a lock,
+ *     and isLoginLocked over it is false by construction. Its failures buy an escalating, bounded WAIT
+ *     (payFailureDelay) — the shape routes/users.ts's sudo gate states, which can never take a hostage.
+ * `CHANNEL 3 — every locking purpose is armed only by the doors it refuses` derives both sides of that
+ * pair from the source and fails when a writer appears outside the reader's own handler.
+ */
+const LOCK_PURPOSES = ['login', 'mfa', 'mfa_manage', 'migrate'] as const;
+type LockPurpose = (typeof LOCK_PURPOSES)[number];
+/**
+ * The purposes whose buckets a door READS with isLoginLocked in order to refuse. Everything not listed
+ * here is count-only. Kept as data (and exported) so the gate can compare it against the readers it finds
+ * in the source instead of restating it.
+ */
+const LOCKING_PURPOSES: readonly LockPurpose[] = ['login', 'mfa'];
+function lockBucket(purpose: LockPurpose, subject: string | number): string {
+    return `${purpose}:${subject}`;
+}
+/** The purpose a key was built under, or '' for a key that did not come from lockBucket(). */
+function purposeOf(key: string): string {
+    const i = String(key).indexOf(':');
+    return i < 0 ? '' : String(key).slice(0, i);
+}
+const isLockingKey = (key: string) => (LOCKING_PURPOSES as readonly string[]).includes(purposeOf(_loginKey(key)));
+
+/**
+ * The IN-FLIGHT cap and the FAILURE COUNTER are deliberately different keys on the doors that pay a wait.
+ *
+ * The counter must stay per-ACCOUNT — that is the throttle, and a distributed attacker must not get a
+ * fresh ladder per source address. The concurrency slot must NOT, because the wait is now paid inside it
+ * (see payFailureDelay): an account-wide slot held for seconds is a refusal anyone who can reach the door
+ * can inflict on the owner, which is the hostage in a different costume. routes/users.ts's sudo gate keys
+ * its slot `${userId}|${ip}` for exactly this reason; this mirrors it, through lockBucket so the key stays
+ * inside its purpose.
+ */
+function inflightBucket(purpose: LockPurpose, subject: string | number, req: any): string {
+    return lockBucket(purpose, `${subject}|${clientIp(req)}`);
+}
+
 async function resolveLockIdentifier(identifier: any) {
     try {
         const User = require('../models/User');
@@ -81,6 +161,11 @@ function _isLoginLockedMem(key: string) {
 
 async function isLoginLocked(u: any) {
     const key = _loginKey(u);
+    // A count-only purpose HAS no lock: nothing arms one (see recordLoginFail), so reading one here would
+    // be a reader pointing at nothing. Answering false rather than throwing keeps a mistaken call site
+    // fail-OPEN — the direction that can only lose throttling, never take a hostage — and the derived gate
+    // in anonymous-entry-channels.test.ts is what turns such a call site red instead.
+    if (!isLockingKey(key)) return false;
     const client = _lockStore();
     if (client) {
         try {
@@ -95,6 +180,11 @@ async function isLoginLocked(u: any) {
 
 async function recordLoginFail(u: any) {
     const key = _loginKey(u);
+    // ARMING IS THE HALF THAT WAS LEFT BEHIND. On a count-only purpose this records the failure (so
+    // payFailureDelay keeps escalating) and stops there: no lockedUntil, no `wjlock:locked:` key. A door
+    // that only ever waits therefore cannot manufacture a refusal for anybody — not for itself, and above
+    // all not for a neighbouring door that still reads a lock.
+    const arms = isLockingKey(key);
     const now = Date.now();
     const client = _lockStore();
     if (client) {
@@ -104,7 +194,7 @@ async function recordLoginFail(u: any) {
             const count = await client.incr(failKey);
             // (Re)set the sliding-window expiry on the counter each failure.
             await client.expire(failKey, lockTtlSec);
-            if (count >= LOGIN_MAX_FAILS) {
+            if (arms && count >= LOGIN_MAX_FAILS) {
                 await client.set(_lockedRedisKey(key), '1', 'PX', LOGIN_LOCK_MS);
             }
             return;
@@ -115,8 +205,63 @@ async function recordLoginFail(u: any) {
     let e = _loginFails.get(key);
     if (!e || (now - e.firstFailAt) > LOGIN_LOCK_MS) e = { count: 0, firstFailAt: now, lockedUntil: 0 };
     e.count++;
-    if (e.count >= LOGIN_MAX_FAILS) e.lockedUntil = now + LOGIN_LOCK_MS;
+    if (arms && e.count >= LOGIN_MAX_FAILS) e.lockedUntil = now + LOGIN_LOCK_MS;
     _loginFails.set(key, e);
+    _sweepLoginFails();
+}
+
+/**
+ * Bound `_loginFails`. Its keys are chosen by an anonymous caller (the login bucket's subject is the
+ * submitted identifier, on purpose), and nothing ever removed an entry that was never read again — so a
+ * spray of never-repeated usernames grew the map monotonically for the life of the process. Sweep lazily
+ * and only when the map is already large, so the common path stays O(1); entries are dropped by their OWN
+ * window, exactly as _loginFailCountMem would have dropped them on a read that never comes.
+ */
+const LOGIN_FAILS_SOFT_CAP = 5000;
+function _sweepLoginFails(): void {
+    if (_loginFails.size <= LOGIN_FAILS_SOFT_CAP) return;
+    const now = Date.now();
+    for (const [k, e] of _loginFails) {
+        if ((now - e.firstFailAt) > LOGIN_LOCK_MS && !(e.lockedUntil > now)) _loginFails.delete(k);
+    }
+}
+
+function _loginFailCountMem(key: string): number {
+    const e = _loginFails.get(key);
+    if (!e) return 0;
+    if ((Date.now() - e.firstFailAt) > LOGIN_LOCK_MS) { _loginFails.delete(key); return 0; }
+    return e.count;
+}
+
+/** Failures recorded for a bucket inside its window. Read-only view; same store precedence as the rest. */
+async function loginFailCount(u: any): Promise<number> {
+    const key = _loginKey(u);
+    const client = _lockStore();
+    if (client) {
+        try { return Number(await client.get(_failsRedisKey(key))) || 0; } catch { /* hiccup → mem view */ }
+    }
+    return _loginFailCountMem(key);
+}
+
+/**
+ * Pay for the failures already on a bucket with a bounded, escalating WAIT instead of refusing.
+ *
+ * A LOCK on a door whose only key is a correct second factor is a hostage: the owner cannot clear it and
+ * has no recovery path, so "too many attempts" answers the right code exactly as it answers the wrong
+ * one. That is the class routes/users.ts's sudo gate exists to state, and these doors are its neighbours.
+ * The ladder is `sudoDelayMs` ITSELF (required lazily, as requireSudoPassword already is) rather than a
+ * second copy of the same constants, so the two cannot drift apart.
+ *
+ * CALL IT INSIDE THE SLOT, NEVER BEFORE IT. routes/users.ts:634 states the rule and obeys it; the first
+ * copy of this helper did not, and the difference is the whole point of the primitive: paid outside the
+ * slot, 24 concurrent guesses all sleep in PARALLEL and finish in one delay's time (measured: 8.1 s for a
+ * ladder that should have cost 64 s), so the wait bounds latency instead of throughput and buys nothing.
+ * Paid inside it, at most MAX_LOGIN_INFLIGHT guesses are asleep at once, which is also the only thing
+ * that bounds how many sleeping requests can pile up holding a socket and a timer.
+ */
+async function payFailureDelay(bucket: string): Promise<void> {
+    const ms = require('./users').sudoDelayMs(await loginFailCount(bucket));
+    if (ms > 0) await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function clearLoginFails(u: any) {
@@ -168,7 +313,11 @@ async function endLoginAttempt(u: any): Promise<void> {
         } catch { /* Redis hiccup → mem */ }
     }
     const e = _inflightMem.get(key);
-    if (e) { e.n = Math.max(0, e.n - 1); _inflightMem.set(key, e); }
+    if (!e) return;
+    e.n = Math.max(0, e.n - 1);
+    // DELETE at zero rather than rewrite (routes/users.ts's sudoEndAttempt is the model). Rewriting left
+    // one entry per key ever seen, and these keys are attacker-chosen, so the map only ever grew.
+    if (e.n === 0) _inflightMem.delete(key); else _inflightMem.set(key, e);
 }
 
 // Cookie configuration for secure HttpOnly tokens
@@ -315,7 +464,7 @@ router.post('/register', asyncHandler(async (req: any, res: Response) => {
         }
 
         const token = generateToken(user);
-        res.cookie('wordjs_token', token, COOKIE_OPTIONS);
+        if (issueSessionCookie(req, res, token, COOKIE_OPTIONS)) return;
 
         res.status(201).json({ user: user.toJSON() });
     } catch (error) {
@@ -372,7 +521,9 @@ router.post('/login', asyncHandler(async (req: any, res: Response) => {
         });
     }
 
-    const lockId = await resolveLockIdentifier(username);
+    // lockBucket, not the bare identifier: this is the ONE bucket whose subject the caller chooses, so it
+    // must be confined to its own purpose or it IS the whole store (see the note above lockBucket).
+    const lockId = lockBucket('login', await resolveLockIdentifier(username));
     // Honest client IP: the TCP peer unless a proxy is genuinely trusted (core/client-ip). Keying the
     // per-(IP+account) throttle on req.ip let a monolith client rotate X-Forwarded-For to mint a fresh
     // bucket every attempt and evade this lockout entirely (audit 2026-08-08 P1).
@@ -437,7 +588,7 @@ router.post('/login', asyncHandler(async (req: any, res: Response) => {
         }
 
         const token = generateToken(user);
-        res.cookie('wordjs_token', token, COOKIE_OPTIONS);
+        if (issueSessionCookie(req, res, token, COOKIE_OPTIONS)) return;
         res.json({ user: user.toJSON(), mfa: await mfa.evaluate(user) });
     } catch (error) {
         await recordLoginFail(lockId);
@@ -478,12 +629,18 @@ router.post('/validate', authenticate, (req: any, res: Response) => {
 /**
  * POST /auth/refresh
  * Refresh token
+ *
+ * `authenticate` accepts a `wjt_` API token as readily as a session JWT, so this route used to convert a
+ * leaked machine token into a 7-day interactive session cookie — a session that no longer carried
+ * req.apiToken and therefore walked straight past `sessionOnly` on /auth/tokens and /auth/mfa/*, and that
+ * revoking the token did not cut off. issueSessionCookie refuses the exchange (403) for any headless
+ * request; a genuine cookie/JWT session refreshes exactly as before.
  */
 router.post('/refresh', authenticate, (req: any, res: Response) => {
     const token = generateToken(req.user);
 
     // Update HttpOnly cookie
-    res.cookie('wordjs_token', token, COOKIE_OPTIONS);
+    if (issueSessionCookie(req, res, token, COOKIE_OPTIONS)) return;
 
     res.json({
         user: req.user.toJSON()
@@ -500,7 +657,9 @@ router.post('/logout', asyncHandler(async (req: any, res: Response) => {
     try {
         const ah = req.headers.authorization;
         let token = (ah && ah.startsWith('Bearer ')) ? ah.substring(7) : null;
-        if (!token && req.cookies && req.cookies.wordjs_token) token = req.cookies.wordjs_token;
+        // sessionCookie(), not req.cookies directly: cookie-parser JSON-decodes any `j:`-prefixed value,
+        // so the raw bag can hand back an Array/Object and verifyToken would throw on it.
+        if (!token) token = sessionCookie(req);
         if (token) {
             const decoded = verifyToken(token);
             if (decoded && decoded.userId) {
@@ -708,17 +867,9 @@ router.post('/verify-email', asyncHandler(async (req: any, res: Response) => {
 // could mint fresh tokens (persistence) or revoke others. `sessionOnly` enforces that.
 const ApiToken = require('../models/ApiToken');
 const MAX_ACTIVE_TOKENS_PER_USER = 100;
-
-function sessionOnly(req: any, res: Response, next: any) {
-    if (req.apiToken) {
-        return res.status(403).json({
-            code: 'rest_token_management_forbidden',
-            message: 'API tokens cannot manage API tokens. Sign in interactively to create or revoke tokens.',
-            data: { status: 403 }
-        });
-    }
-    next();
-}
+// `sessionOnly` now comes from middleware/auth.ts (imported at the top of this file). It used to be a
+// second, local copy of the same `req.apiToken` check — the very shape that let /auth/refresh drift away
+// from the boundary it belongs to. One implementation, consumed by every surface that needs it.
 
 /**
  * GET /auth/tokens
@@ -844,7 +995,16 @@ router.post('/mfa', asyncHandler(async (req: any, res: Response) => {
     // Throttle code guesses under a SEPARATE 'mfa:' lockout bucket. Crucially this is NOT the password
     // bucket (user.userLogin) that /login clears on a correct password — otherwise an attacker who knows
     // the password could reset the throttle and brute-force the 6-digit code.
-    const lockKey = 'mfa:' + user.userLogin;
+    // Keyed by the numeric id resolved from the SIGNED challenge, in the 'mfa' purpose. `'mfa:' + login`
+    // put this bucket in the login store's flat space, where an anonymous /auth/login could arm it.
+    // This door KEEPS its lock, unlike the three enrolment doors below: it is pre-authentication and the
+    // thing it throttles is a 6-digit code, so a hard stop is the point. Arming it still requires a valid
+    // challenge — i.e. the password — which is the same bar as the login lock it sits beside.
+    // AND IT IS THE ONLY WRITER. That is the half the first redesign lost: the three doors below moved to
+    // 'mfa_manage' precisely so that no door a mere session cookie can reach is able to arm the bucket
+    // this one refuses on. Reader and writer of `mfa:<id>` are both this handler; the gate derives that
+    // pair from the source rather than trusting this comment.
+    const lockKey = lockBucket('mfa', user.id);
     if (await isLoginLocked(lockKey)) {
         return res.status(429).json({ code: 'rest_account_locked', message: 'Account temporarily locked due to too many failed attempts. Try again later.', data: { status: 429 } });
     }
@@ -863,7 +1023,7 @@ router.post('/mfa', asyncHandler(async (req: any, res: Response) => {
         }
         await clearLoginFails(lockKey);
         const token = generateToken(user);
-        res.cookie('wordjs_token', token, COOKIE_OPTIONS);
+        if (issueSessionCookie(req, res, token, COOKIE_OPTIONS)) return;
         res.json({ user: user.toJSON(), mfa: await mfa.evaluate(user) });
     } finally {
         await endLoginAttempt(lockKey);
@@ -875,8 +1035,26 @@ router.get('/mfa/status', authenticate, asyncHandler(async (req: any, res: Respo
     res.json({ enabled: await mfa.isEnabled(req.user.id), backupCodesRemaining: await mfa.backupCount(req.user.id) });
 }));
 
+// SUDO RE-AUTH for enrollment. The MFA routes were asymmetric: turning 2FA OFF, regenerating backup
+// codes and changing the password all demand extra proof, while turning it ON demanded nothing beyond
+// the ambient cookie. A hijacked session (same-origin XSS calling fetch with credentials — the cookie is
+// httpOnly, it is never "stolen" — or an unlocked laptop) could therefore enroll the ATTACKER's
+// authenticator and lock the owner out for good: forgot-password/reset-password change the password but
+// clear no mfa_* key, so the victim can never pass the second factor again. The throttle did not help
+// either — the attacker gets the code right first time, because /mfa/setup handed them the secret.
+// The invariant this encodes: no operation that depends on a cookie alone may produce a state its owner
+// cannot undo. Same helper as the two self-service password doors in routes/users.ts, so the sudo rule
+// (per-account lockout bucket + in-flight cap) cannot drift between them. Required lazily, mirroring how
+// routes/users.ts requires this module, so the two routers never form a load-time cycle.
+function requireSudoPassword(req: any, res: Response): Promise<boolean> {
+    return require('./users').requireSudoPassword(req, res, (req.body || {}).currentPassword);
+}
+
 /** POST /auth/mfa/setup — begin enrollment: returns a new secret + otpauth URI (for the QR). */
 router.post('/mfa/setup', authenticate, sessionOnly, asyncHandler(async (req: any, res: Response) => {
+    // Before the pending secret is minted or disclosed: /mfa/setup is what hands the caller the TOTP
+    // secret, so it is the first door that must prove the password, not just the second one.
+    if (await requireSudoPassword(req, res)) return;
     if (await mfa.isEnabled(req.user.id)) {
         return res.status(400).json({ code: 'rest_mfa_already_enabled', message: 'MFA is already enabled. Disable it first to re-enroll.', data: { status: 400 } });
     }
@@ -886,11 +1064,24 @@ router.post('/mfa/setup', authenticate, sessionOnly, asyncHandler(async (req: an
 
 /** POST /auth/mfa/enable — verify a code against the pending secret, activate, return backup codes once. */
 router.post('/mfa/enable', authenticate, sessionOnly, asyncHandler(async (req: any, res: Response) => {
-    const lk = 'mfa:' + req.user.userLogin;
-    if (await isLoginLocked(lk)) return res.status(429).json({ code: 'rest_account_locked', message: 'Too many attempts. Try again later.', data: { status: 429 } });
+    // Both halves of enrollment are gated, not just /setup: a pending secret may already exist (minted
+    // before this guard shipped, or by the legitimate owner who then walked away), and activating it is
+    // the step that actually locks the account. Checked BEFORE the 'mfa:' bucket is entered so a wrong
+    // password never holds one of its in-flight slots.
+    if (await requireSudoPassword(req, res)) return;
+    // 'mfa_manage', NOT 'mfa'. The three enrolment/management doors had their lock CHECK replaced by a
+    // wait but kept writing the 'mfa' bucket — the one POST /auth/mfa still reads and refuses on. A door
+    // that needs only the session cookie could therefore lock the owner out of their own second factor,
+    // permanently. This purpose is count-only (see LOCKING_PURPOSES): its failures buy the wait below and
+    // arm nothing, here or anywhere else.
+    const lk = lockBucket('mfa_manage', req.user.id);
+    const slot = inflightBucket('mfa_manage', req.user.id, req);
     // Concurrency backstop (AUTH-A3 class): completeEnroll yields the event loop, so cap parallel guesses.
-    if (!(await beginLoginAttempt(lk))) return res.status(429).json({ code: 'rest_login_throttled', message: 'Too many simultaneous attempts. Try again in a moment.', data: { status: 429 } });
+    // TAKE THE SLOT FIRST, then pay inside it — outside, the waits run in parallel and bound latency
+    // instead of throughput (see payFailureDelay).
+    if (!(await beginLoginAttempt(slot))) return res.status(429).json({ code: 'rest_login_throttled', message: 'Too many simultaneous attempts. Try again in a moment.', data: { status: 429 } });
     try {
+        await payFailureDelay(lk);
         const result = await mfa.completeEnroll(req.user.id, (req.body || {}).code);
         if (!result.ok) {
             await recordLoginFail(lk);
@@ -899,18 +1090,23 @@ router.post('/mfa/enable', authenticate, sessionOnly, asyncHandler(async (req: a
         await clearLoginFails(lk);
         res.json({ enabled: true, backupCodes: result.backupCodes, message: 'Save these backup codes now — they will not be shown again.' });
     } finally {
-        await endLoginAttempt(lk);
+        await endLoginAttempt(slot);
     }
 }));
 
 /** POST /auth/mfa/disable — turn MFA off (requires a current TOTP or backup code). */
 router.post('/mfa/disable', authenticate, sessionOnly, asyncHandler(async (req: any, res: Response) => {
     if (!(await mfa.isEnabled(req.user.id))) return res.json({ disabled: true });
-    const lk = 'mfa:' + req.user.userLogin;
-    if (await isLoginLocked(lk)) return res.status(429).json({ code: 'rest_account_locked', message: 'Too many attempts. Try again later.', data: { status: 429 } });
+    // 'mfa_manage' (count-only), never 'mfa'. This door needs `authenticate` + `sessionOnly` and NOT the
+    // sudo password, so it is the cheapest door in the file to reach with a hijacked session — and while
+    // it wrote the 'mfa' bucket, twelve wrong codes here answered the owner's CORRECT code at POST
+    // /auth/mfa with 429, renewably and with no recovery path.
+    const lk = lockBucket('mfa_manage', req.user.id);
+    const slot = inflightBucket('mfa_manage', req.user.id, req);
     // Concurrency backstop (AUTH-A3 class): a hijacked session must not brute-force the code to turn MFA OFF.
-    if (!(await beginLoginAttempt(lk))) return res.status(429).json({ code: 'rest_login_throttled', message: 'Too many simultaneous attempts. Try again in a moment.', data: { status: 429 } });
+    if (!(await beginLoginAttempt(slot))) return res.status(429).json({ code: 'rest_login_throttled', message: 'Too many simultaneous attempts. Try again in a moment.', data: { status: 429 } });
     try {
+        await payFailureDelay(lk); // bounded wait INSIDE the slot, never a refusal — see payFailureDelay
         if (!(await mfa.verifyLoginCode(req.user.id, (req.body || {}).code))) {
             await recordLoginFail(lk);
             return res.status(400).json({ code: 'rest_mfa_invalid', message: 'Invalid authentication code.', data: { status: 400 } });
@@ -919,7 +1115,7 @@ router.post('/mfa/disable', authenticate, sessionOnly, asyncHandler(async (req: 
         await mfa.disable(req.user.id);
         res.json({ disabled: true });
     } finally {
-        await endLoginAttempt(lk);
+        await endLoginAttempt(slot);
     }
 }));
 
@@ -928,12 +1124,14 @@ router.post('/mfa/backup-codes', authenticate, sessionOnly, asyncHandler(async (
     if (!(await mfa.isEnabled(req.user.id))) {
         return res.status(400).json({ code: 'rest_mfa_not_enabled', message: 'MFA is not enabled.', data: { status: 400 } });
     }
-    const lk = 'mfa:' + req.user.userLogin;
-    if (await isLoginLocked(lk)) return res.status(429).json({ code: 'rest_account_locked', message: 'Too many attempts. Try again later.', data: { status: 429 } });
+    // 'mfa_manage' (count-only), never 'mfa' — see POST /auth/mfa/disable above.
+    const lk = lockBucket('mfa_manage', req.user.id);
+    const slot = inflightBucket('mfa_manage', req.user.id, req);
     // Concurrency backstop (AUTH-A3 class): a hijacked session must not brute-force the code to regenerate
     // backup codes (which would grant persistent 2FA access).
-    if (!(await beginLoginAttempt(lk))) return res.status(429).json({ code: 'rest_login_throttled', message: 'Too many simultaneous attempts. Try again in a moment.', data: { status: 429 } });
+    if (!(await beginLoginAttempt(slot))) return res.status(429).json({ code: 'rest_login_throttled', message: 'Too many simultaneous attempts. Try again in a moment.', data: { status: 429 } });
     try {
+        await payFailureDelay(lk); // bounded wait INSIDE the slot, never a refusal — see payFailureDelay
         if (!(await mfa.verifyLoginCode(req.user.id, (req.body || {}).code))) {
             await recordLoginFail(lk);
             return res.status(400).json({ code: 'rest_mfa_invalid', message: 'Invalid authentication code.', data: { status: 400 } });
@@ -941,7 +1139,7 @@ router.post('/mfa/backup-codes', authenticate, sessionOnly, asyncHandler(async (
         await clearLoginFails(lk);
         res.json({ backupCodes: await mfa.regenerateBackupCodes(req.user.id), message: 'Save these backup codes now — they replace your previous set.' });
     } finally {
-        await endLoginAttempt(lk);
+        await endLoginAttempt(slot);
     }
 }));
 
@@ -982,3 +1180,18 @@ module.exports.resolveLockIdentifier = resolveLockIdentifier;
 // cap on that endpoint exactly as it did on /login before MAX_LOGIN_INFLIGHT (audit AUTH-A3, class fix).
 module.exports.beginLoginAttempt = beginLoginAttempt;
 module.exports.endLoginAttempt = endLoginAttempt;
+// The cap itself, so the gate that proves the wait bounds THROUGHPUT (and not merely latency) derives the
+// number it asserts instead of restating it.
+module.exports.MAX_LOGIN_INFLIGHT = MAX_LOGIN_INFLIGHT;
+// The namespacing primitive and its closed purpose set — exported so a door in another module can join
+// the store correctly instead of inventing a prefix, and so the gate test can derive the purpose set
+// (rather than restate it) when it proves no purpose is reachable from another's subject.
+module.exports.lockBucket = lockBucket;
+module.exports.LOCK_PURPOSES = LOCK_PURPOSES;
+// Which purposes have a lock at all. Exported so the gate can compare this declaration against the
+// isLoginLocked readers it finds in the source, instead of restating either half.
+module.exports.LOCKING_PURPOSES = LOCKING_PURPOSES;
+module.exports.loginFailCount = loginFailCount;
+// The bounded wait itself, so a credential door in another module (POST /setup/migrate) throttles with the
+// SAME primitive instead of the check-then-refuse that made it a hostage. See payFailureDelay.
+module.exports.payFailureDelay = payFailureDelay;

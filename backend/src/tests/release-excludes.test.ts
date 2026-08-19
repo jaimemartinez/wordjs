@@ -15,11 +15,40 @@
 const { test, describe } = require('node:test');
 const assert = require('node:assert');
 const path = require('path');
+const fs = require('fs');
+const { spawnSync } = require('child_process');
 
 const { shouldIgnore, IGNORE_PATTERNS, ROOT_DIR } = require('../../../scripts/make-release.js');
 
 /** A path as the packager sees it: absolute, under the repo root. */
 const p = (rel: string) => path.join(ROOT_DIR, ...rel.split('/'));
+
+/**
+ * The packager's structural rule ("untracked ⇒ does not ship") IS git: `make-release.js` asks
+ * `git ls-files` and, when git cannot answer, says so out loud and falls back to the name list only.
+ * A test of that rule therefore needs the same thing the packager needs. This probe is the packager's
+ * own, so the test skips exactly where the rule is genuinely inexpressible — an archive/tarball
+ * extraction — and nowhere else.
+ */
+function packagerCanConsultGit(): boolean {
+    const r = spawnSync('git', ['ls-files', '-z', '--', '.'], { cwd: ROOT_DIR });
+    return r.status === 0 && !!r.stdout && r.stdout.length > 0;
+}
+
+/**
+ * A skip is honest only where the rule cannot run. In CI the repo is checked out WITH git, so a
+ * missing work tree there means the checkout is broken and the answer is red — not a "skipped" line
+ * that the summary rolls up into a green run. The same shape guards the hygiene gates.
+ */
+function runnableOrSkip(t: any, ok: boolean, reason: string): boolean {
+    if (ok) return true;
+    assert.ok(
+        !process.env.CI,
+        `${reason} — but CI checks the repo out WITH git: this gate must not self-skip here`,
+    );
+    t.skip(reason);
+    return false;
+}
 
 describe('release packager — agent/assistant directories never ship', () => {
     test('.claude and its contents are excluded, at any depth', () => {
@@ -59,9 +88,27 @@ describe('release packager — agent/assistant directories never ship', () => {
      * lista de NOMBRES siempre va un paso por detrás — se le escapó `.claude/`, y en cuanto se
      * añadió, se le escaparon `.mcp.json` y los ficheros de trabajo sueltos de la raíz.
      */
-    test('lo que git no conoce no viaja, aunque nadie lo haya puesto en la lista', () => {
+    test('lo que git no conoce no viaja, aunque nadie lo haya puesto en la lista', (t: any) => {
+        // El paquete se construye SIEMPRE desde un árbol de trabajo con git; una extracción de
+        // `git archive` no lo es, y allí la regla no existe — el propio empaquetador lo anuncia y
+        // degrada a la lista de nombres. Se salta con motivo, y en CI se prohíbe saltarla.
+        if (!runnableOrSkip(t, packagerCanConsultGit(), 'no hay work tree de git (extracción archive/tarball): el empaquetador degrada a la lista de nombres y la regla estructural no puede evaluarse')) return;
+
         for (const rel of ['.mcp.json', 'emitted.json', 'page172.json', 'mirror-puck.json', 'temp_manifest.json']) {
             assert.strictEqual(shouldIgnore(p(rel)), true, `no trackeado, debería excluirse: ${rel}`);
+        }
+
+        // EL CONTROL: "excluir todo lo que no esté en la lista blanca" pasaría las cinco líneas de
+        // arriba. Un fichero que git SÍ trackea tiene que seguir viajando, y se elige leyendo el
+        // índice — no un nombre escrito a mano que mañana se renombra y deja el control inerte.
+        const tracked = spawnSync('git', ['ls-files', '-z', '--', 'documentation'], { cwd: ROOT_DIR })
+            .stdout.toString('utf8')
+            .split('\0')
+            .filter(Boolean)
+            .filter((f: string) => f.endsWith('.md') && fs.existsSync(p(f)));
+        assert.ok(tracked.length > 0, 'el índice no devolvió ningún .md de documentation/: el control no está mirando nada');
+        for (const rel of tracked.slice(0, 5)) {
+            assert.strictEqual(shouldIgnore(p(rel)), false, `trackeado, debería viajar: ${rel}`);
         }
     });
 

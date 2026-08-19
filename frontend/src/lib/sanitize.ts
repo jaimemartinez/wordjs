@@ -9,6 +9,17 @@
  */
 
 import DOMPurify from 'dompurify';
+// THE hosts a video embed may come from. Declared in a plain-JS module at the frontend root because
+// `next.config.ts` has to read the SAME list to build the CSP `frame-src` — see that file, and see
+// embed-hosts.js's header for why the list could not stay here.
+import { ALLOWED_IFRAME_HOSTS as EMBED_IFRAME_HOSTS, ALLOWED_EMBED_HOSTS as EMBED_ALL_HOSTS } from '../../embed-hosts.js';
+// The value criterion for a CSS declaration, shared with the OBJECT style channel (props.css /
+// props.look / blockVars). One pattern, two channels — see safeStyle.ts.
+// `safeClassAttribute` is the same arrangement for the attribute NEXT DOOR: `class` reaches the page
+// through this sanitizer (rich text, HTML embeds, widgets, expanded shortcodes, comments) exactly as
+// it reaches it through a block prop, and one criterion answers for both. See safeStyle.ts's
+// "THE SAME ATTRIBUTE, THE OTHER SINK" header for why bounding only the prop channel was not enough.
+import { UNSAFE_STYLE_VALUE, safeClassAttribute } from '@/components/blocks/safeStyle';
 
 // Load sanitize-html at SSR RUNTIME. This file is "use client", but sanitizeHTML() also runs during
 // SERVER rendering of client components. A plain `require('sanitize-html')` here is rewritten by
@@ -33,10 +44,11 @@ function loadSanitizeHtml(): any {
     return (_sanitizeHtmlLib = require('sanitize-html'));
 }
 
-// Allowlist of iframe embed hosts (mirrors the backend posts.ts sanitize()). Arbitrary iframe src is
-// NOT permitted — only these hosts — and every surviving iframe is forced to carry a sandbox attribute.
-// CSP `frame-src 'self'` (next.config.ts) is the backstop if anything slips past this list.
-export const ALLOWED_IFRAME_HOSTS = ['www.youtube.com', 'player.vimeo.com'];
+// Allowlist of iframe embed hosts (mirrored by the backend's sanitize-meta.ts). Arbitrary iframe src
+// is NOT permitted — only these hosts — and every surviving iframe is forced to carry a sandbox
+// attribute. The CSP `frame-src` (next.config.ts) is the backstop if anything slips past this list,
+// and it is DERIVED from the very same module so the two can no longer drift apart.
+export const ALLOWED_IFRAME_HOSTS: readonly string[] = EMBED_IFRAME_HOSTS;
 const IFRAME_SANDBOX = 'allow-scripts allow-same-origin allow-presentation';
 
 export function isAllowedIframeSrc(src: string | null | undefined): boolean {
@@ -64,7 +76,7 @@ const YT_NOCOOKIE_HOSTS = new Set(['youtube-nocookie.com', 'www.youtube-nocookie
 const YT_SHORT_HOSTS = new Set(['youtu.be', 'www.youtu.be']);
 const VIMEO_PAGE_HOSTS = new Set(['vimeo.com', 'www.vimeo.com']);
 const VIMEO_PLAYER_HOST = 'player.vimeo.com';
-export const ALLOWED_EMBED_HOSTS: readonly string[] = [...ALLOWED_IFRAME_HOSTS, 'www.youtube-nocookie.com'];
+export const ALLOWED_EMBED_HOSTS: readonly string[] = EMBED_ALL_HOSTS;
 // Path shapes that carry the id, and the id shapes themselves. Anything else → no embed.
 const YT_ID_PATH = new Set(['embed', 'shorts', 'v', 'live']);
 const YT_VIDEO_ID = /^[A-Za-z0-9_-]{1,64}$/;
@@ -159,8 +171,11 @@ const ALLOWED_STYLE_PROPS = new Set([
     'color', 'background-color', 'font-size', 'font-family', 'font-weight',
     'font-style', 'text-decoration', 'text-align', 'line-height', 'text-transform',
 ]);
-// Reject any declaration whose value could smuggle a fetch/script/CSS-injection.
-const UNSAFE_STYLE_VALUE = /url\(|expression|javascript:|@import|[<>{}\\]/i;
+// The value criterion itself now lives in components/blocks/safeStyle.ts (imported above): the OBJECT
+// style channel — props.css / props.look / blockVars — needs the identical rule, and this file used to
+// be the only place that had one. The pattern moved, it did not change shape: it still rejects `url(`,
+// `expression`, `javascript:`, `@…` and `<>{}\`, and it now also names `;` explicitly (a no-op on this
+// path, which splits declarations on `;` before testing, and the whole point on the object path).
 function filterInlineStyle(style: string | null | undefined): string {
     if (!style) return '';
     return style
@@ -260,6 +275,18 @@ const SERVER_SANITIZE_OPTIONS = {
     // allowed, so allowVulnerableTags is gone — sanitize-html no longer needs the unsafe-tag opt-in.
     allowedIframeHostnames: ALLOWED_IFRAME_HOSTS,
     transformTags: {
+        // THE CLASS CHANNEL. `'*'` is not "the fallback transform": sanitize-html runs the per-tag
+        // transform AND then this one (index.js — `transformTagsMap[name]` then `transformTagsAll`),
+        // so `a` and `iframe` below are covered too. Every surviving element's class attribute is
+        // filtered token by token by the shared criterion; an attribute with nothing left is removed.
+        '*': (tagName: string, attribs: Record<string, string>) => {
+            if (typeof attribs.class === 'string') {
+                const kept = safeClassAttribute(attribs.class);
+                if (kept) attribs.class = kept;
+                else delete attribs.class;
+            }
+            return { tagName, attribs };
+        },
         // Force a sandbox on every surviving (allowlisted) iframe — defense in depth.
         iframe: (tagName: string, attribs: Record<string, string>) => ({
             tagName,
@@ -304,6 +331,14 @@ function ensureDomPurifyHooks(): void {
             const safe = filterInlineStyle(node.getAttribute('style'));
             if (safe) node.setAttribute('style', safe);
             else node.removeAttribute('style');
+        }
+        // THE CLASS CHANNEL, client path — the exact counterpart of the `'*'` transformTag in
+        // SERVER_SANITIZE_OPTIONS, calling the SAME predicate. `style` was bounded here and `class`
+        // was not, which is the whole reason a `position` utility could still land on the element.
+        if (node.getAttribute && node.getAttribute('class')) {
+            const kept = safeClassAttribute(node.getAttribute('class'));
+            if (kept) node.setAttribute('class', kept);
+            else node.removeAttribute('class');
         }
     });
     _hooksRegistered = true;

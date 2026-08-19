@@ -30,6 +30,12 @@ const { helmetOptions } = require('./security-headers');
 const clusterCa = require('./cluster-ca');
 const purge = require('./purge');
 const identity = require('./identity');
+// The routing decision (which registered node serves a request) and the role→routes map it shares
+// with /register. Extracted so both are reachable from a test — see src/routing.js.
+const routing = require('./routing');
+// What a registration may write into the registry — above all the group LABEL the routing owner check
+// later trusts, which must come from the authenticated identity and never from the request body.
+const registration = require('./registration');
 
 // mTLS cluster-cert directory. SEPARATE mode: `scripts/cluster.js init` writes the gateway's certs to
 // gateway/certs. LOCAL split (one machine, `npm start`): the install generates the cluster certs into
@@ -246,7 +252,10 @@ if (cluster.isPrimary) {
                 Object.entries(data).forEach(([key, value]) => {
                     const metrics = new Map();
                     if (value.metrics) Object.entries(value.metrics).forEach(([url, m]) => metrics.set(url, m));
-                    registry.set(key, { name: value.name, targets: new Set(value.targets), index: 0, metrics });
+                    // The persisted `name` is NOT trusted: a file written by a pre-fix gateway carries
+                    // whatever label the peer sent, and that label is what the proxy's owner check
+                    // reads. Re-derive it from the route (registration.groupOwner) instead.
+                    registry.set(key, { name: registration.groupOwner(key), targets: new Set(value.targets), index: 0, metrics });
                     // Re-seed target ownership so a restored /api→backend target still can't be evicted by
                     // another identity after a primary restart.
                     if (value.owners) Object.entries(value.owners).forEach(([url, cn]) => targetOwner.set(url, cn));
@@ -259,15 +268,33 @@ if (cluster.isPrimary) {
 
     loadRegistry();
 
-    const broadcastRegistry = () => {
+    const registrySnapshot = () => {
         const data = {};
         registry.forEach((v, k) => {
             const metricsObj = {};
             if (v.metrics) v.metrics.forEach((m, url) => { metricsObj[url] = m; });
             data[k] = { name: v.name, targets: Array.from(v.targets), metrics: metricsObj };
         });
-        for (const id in cluster.workers) cluster.workers[id].send({ type: 'REGISTRY_UPDATE', registry: data });
+        return data;
     };
+
+    const sendRegistryTo = (worker) => {
+        try { worker.send({ type: 'REGISTRY_UPDATE', registry: registrySnapshot() }); }
+        catch (e) { logger.warn(`[Gateway] could not push the registry to worker ${worker.process && worker.process.pid}: ${e.message}`); }
+    };
+
+    const broadcastRegistry = () => {
+        for (const id in cluster.workers) sendRegistryTo(cluster.workers[id]);
+    };
+
+    // PUSH THE PRIMARY'S VIEW AT EVERY WORKER THE MOMENT IT COMES ONLINE — including the ones the
+    // `exit` handler above respawns. Without it the file is a PARALLEL SOURCE OF TRUTH with no expiry:
+    // broadcastRegistry only ran from handleRegistration and from the health sweep when `changed`, and
+    // `changed` only flips on a status TRANSITION — while loadRegistry restores the stored metrics, so
+    // a healthy cluster produces no transition and never broadcasts. A worker could therefore route on
+    // gateway-registry.json alone until some peer happened to re-register, which in separate mode
+    // means "until a machine somebody else owns reboots".
+    cluster.on('online', (worker) => sendRegistryTo(worker));
 
     // Prepare mTLS Agent for Health Checks
     const MTLS_CA = path.join(CERTS_DIR, 'cluster-ca.crt');
@@ -310,7 +337,7 @@ if (cluster.isPrimary) {
         // Probe a single (route, url) target. Updates group.metrics in place and flips the shared
         // `changed` flag on ANY status transition (Healthy<->Failing) or on eviction, so workers are
         // re-broadcast promptly and stop selecting a target that just started failing.
-        const checkOne = async (route, group, url) => {
+        const checkOne = async (group, url) => {
             if (!group.metrics) group.metrics = new Map();
             const prevStatus = group.metrics.get(url)?.status;
             const result = await probeUrl(url);
@@ -335,9 +362,17 @@ if (cluster.isPrimary) {
                     logger.error(`[Gateway] Service ${group.name} at ${url} EXPIRED. Removing.`);
                     group.targets.delete(url);
                     if (group.metrics) group.metrics.delete(url);
-                    // Mirror handleRegistration cleanup: drop the route if it has no targets left,
-                    // otherwise getTarget would compute final[index % 0] === final[NaN] === undefined.
-                    if (group.targets.size === 0) registry.delete(route);
+                    // The ROUTE STAYS, empty (audit #22). It used to be deleted here "mirroring
+                    // handleRegistration", and deleting it is what turned a transient outage into a
+                    // routing change: with no '/api' entry, longest-prefix fell through to the
+                    // frontend's '/' catch-all and every /api/* request — POST /auth/login with the
+                    // password in the body, session cookies, Authorization headers, uploads — was
+                    // proxied to the frontend node for the ~90 s the backend took to come back.
+                    // An eviction is a health statement about a TARGET, not a withdrawal of the
+                    // node's claim to the route; only a re-registration (handleRegistration, an
+                    // authenticated and owner-checked act) may change who owns what. resolveTarget's
+                    // `final.length === 0` guard answers null for the empty group, so the caller
+                    // degrades to the loopback bootstrap or a 502 — never to somebody else's node.
                     changed = true;
                 }
             }
@@ -346,8 +381,8 @@ if (cluster.isPrimary) {
         // Run all probes CONCURRENTLY so the sweep takes ~one timeout instead of the sum of them.
         // metrics are per-group, so every (route, url) pair must be checked — but a given URL is only
         // probed over the network once per sweep: checkOne reuses the in-flight axios promise per URL.
-        const probes = [...registry.entries()].flatMap(([route, group]) =>
-            Array.from(group.targets).map(url => checkOne(route, group, url))
+        const probes = [...registry.entries()].flatMap(([, group]) =>
+            Array.from(group.targets).map(url => checkOne(group, url))
         );
         await Promise.all(probes);
 
@@ -355,20 +390,13 @@ if (cluster.isPrimary) {
     }, 30000);
 
     const handleRegistration = (service, cn) => {
-        registry.forEach((group, route) => {
-            if (group.targets.has(service.url)) {
-                group.targets.delete(service.url);
-                if (group.targets.size === 0) registry.delete(route);
-            }
-        });
-        service.routes.forEach(route => {
-            if (!registry.has(route)) registry.set(route, { name: service.name, targets: new Set(), index: 0, metrics: new Map() });
-            registry.get(route).targets.add(service.url);
-        });
-        if (cn) targetOwner.set(service.url, cn);
+        // The registry write itself lives in src/registration.js so a test can drive it. What matters
+        // here: the group's `name` — the label routing.resolveTarget authorizes with — is derived from
+        // the prefix's owner and the AUTHENTICATED cn, never from `service.name`, which a peer sends.
+        registration.applyRegistration(registry, targetOwner, service, cn);
         saveRegistry();
         broadcastRegistry();
-        logger.info(`[Gateway] Service registered: ${service.name} -> ${service.url}`);
+        logger.info(`[Gateway] Service registered: ${logSafe(cn || '(unauthenticated)')} -> ${logSafe(service.url)}`);
     };
 
     /**
@@ -461,11 +489,10 @@ if (cluster.isPrimary) {
                 // longest-prefix match then routes 100% of login/reset traffic to it (credential capture).
                 // These sets mirror exactly what the backend (index.ts) and frontend (instrumentation.ts)
                 // legitimately declare, so authorized registration is unaffected; anything else is refused.
-                // null-proto so a CN like '__proto__' / 'constructor' can't make the lookup a truthy inherited value.
-                const ROLE_ROUTES = Object.assign(Object.create(null), {
-                    backend: new Set(['/api', '/uploads', '/themes', '/plugins', '/public', '/.well-known', '/healthz', '/readyz', '/metrics']),
-                    frontend: new Set(['/', '/admin', '/login', '/install', '/migration', '/portal', '/_next']),
-                });
+                // They now live in src/routing.js because the PROXY enforces the same map at request time
+                // (audit #22: the guard protected the registration while the routing granted what the
+                // registration denied). One definition, both gates.
+                const ROLE_ROUTES = routing.ROLE_ROUTES;
                 // Does the peer's certificate cover `host` (a SAN entry, its CN, or loopback)? Binds a registered
                 // target to the identity the peer actually proved so it can't point a route at an external box.
                 // Loopback is always allowed (a local target can't be an external MITM; same-host cross-service
@@ -497,8 +524,14 @@ if (cluster.isPrimary) {
                     }
                     // The target URL must be well-formed and its HOST covered by the peer's certificate, so a peer
                     // can't register a target pointing at an attacker box or another host's address.
+                    // ONE value from here on: `targetUrl` is what is validated, what ownership is looked
+                    // up by, and what is written into the registry. A raw `req.body.url` that is not a
+                    // string would otherwise be checked as an object (unowned) and stored as its
+                    // stringification (somebody else's target) — the guard inspecting a different value
+                    // than the sink receives.
+                    const targetUrl = String((req.body && req.body.url) ?? '');
                     let host;
-                    try { host = new URL(String(req.body && req.body.url)).hostname; } catch { host = null; }
+                    try { host = new URL(targetUrl).hostname; } catch { host = null; }
                     if (!host || !certCoversHost(cert, host)) {
                         logger.warn(`[Gateway] [Internal] REGISTER DENIED: identity '${logSafe(cn)}' target host '${logSafe(host || '(invalid url)')}' not covered by its certificate`);
                         return res.status(403).json({ error: 'Target URL host is invalid or not covered by your certificate identity.' });
@@ -506,12 +539,15 @@ if (cluster.isPrimary) {
                     // Ownership: a peer may only (re)register a target url that is unowned or already its own — it
                     // can NEVER touch (and thus evict) another identity's target (e.g. the backend's /api, which
                     // otherwise let a frontend evict it and capture /api/v1/auth via the `/` catch-all).
-                    const owner = targetOwner.get(req.body.url);
+                    const owner = targetOwner.get(targetUrl);
                     if (owner && owner !== cn) {
-                        logger.warn(`[Gateway] [Internal] REGISTER DENIED: identity '${logSafe(cn)}' may not register target '${logSafe(req.body.url)}' owned by '${logSafe(owner)}'`);
+                        logger.warn(`[Gateway] [Internal] REGISTER DENIED: identity '${logSafe(cn)}' may not register target '${logSafe(targetUrl)}' owned by '${logSafe(owner)}'`);
                         return res.status(403).json({ error: 'That target is registered by another identity.' });
                     }
-                    handleRegistration(req.body, cn);
+                    // Only the VALIDATED values travel on: the routes that passed ROLE_ROUTES and the
+                    // url whose host the certificate covers. `req.body.name` is dropped entirely — the
+                    // group's label is derived from the route and the authenticated CN.
+                    handleRegistration({ url: targetUrl, routes: declared }, cn);
                     res.json({ success: true });
                 });
 
@@ -854,11 +890,20 @@ if (cluster.isPrimary) {
     const app = express();
     let workerRegistry = new Map();
 
+    // THE WORKER IS THE PROCESS THAT ROUTES, so it is the process whose registry view must be DERIVED
+    // — and it has TWO sources: the file it reads at boot (below) and the primary's broadcast. Both go
+    // through the SAME normalizer, routing.hydrateRegistry, which re-derives the group label from the
+    // prefix instead of spreading whatever `name` the source carried. The `{ ...v }` these two call
+    // sites used to share is exactly how the #22 fix stopped one process short: the primary's loader
+    // re-derived the label, the worker copied the file's, and the worker is the one resolveTarget runs
+    // in — the value that was checked and the value that was used were different objects. A THIRD
+    // source added later must call hydrateRegistry too; gateway/test/worker-registry.test.js reads
+    // this file and fails if any registry Map in the worker is built any other way.
     const loadWorkerRegistry = () => {
         try {
             if (fs.existsSync(REGISTRY_FILE)) {
                 const data = JSON.parse(fs.readFileSync(REGISTRY_FILE, 'utf8'));
-                workerRegistry = new Map(Object.entries(data).map(([k, v]) => [k, { ...v, targets: new Set(v.targets), index: workerRegistry.get(k)?.index ?? 0 }]));
+                workerRegistry = routing.hydrateRegistry(data, workerRegistry);
             }
         } catch (e) {
             console.error('[Gateway Worker] Failed to load worker registry:', e.message);
@@ -867,7 +912,7 @@ if (cluster.isPrimary) {
 
     process.on('message', (message) => {
         if (message.type === 'REGISTRY_UPDATE') {
-            workerRegistry = new Map(Object.entries(message.registry).map(([k, v]) => [k, { ...v, targets: new Set(v.targets), index: workerRegistry.get(k)?.index ?? 0 }]));
+            workerRegistry = routing.hydrateRegistry(message.registry, workerRegistry);
         }
     });
 
@@ -935,21 +980,10 @@ if (cluster.isPrimary) {
         res.send('<h1>Gateway Active</h1>');
     });
 
-    const getTarget = (url) => {
-        const entries = Array.from(workerRegistry.entries()).sort((a, b) => b[0].length - a[0].length);
-        for (const [prefix, group] of entries) {
-            if (url.startsWith(prefix)) {
-                const targets = Array.from(group.targets);
-                const healthy = targets.filter(t => !group.metrics || group.metrics[t]?.status !== 'Failing');
-                const final = healthy.length > 0 ? healthy : targets;
-                // Guard: an empty group (e.g. after health eviction) would yield final[NaN] === undefined.
-                if (final.length === 0) return null;
-                const target = final[group.index % final.length];
-                group.index++; return target;
-            }
-        }
-        return null;
-    };
+    // Longest-prefix selection, OWNER-AWARE, in src/routing.js (audit #22). The inline version this
+    // replaced routed by prefix length alone, so an evicted '/api' let the frontend's '/' catch-all
+    // inherit the entire API surface — credentials included — for as long as the backend was down.
+    const getTarget = (url) => routing.resolveTarget(workerRegistry, url);
 
     /**
      * Pre-install bootstrap route to the services on THIS machine.
@@ -964,7 +998,6 @@ if (cluster.isPrimary) {
      * dedicated separate-mode gateway whose peers live on other machines — an unknown path still 404s
      * as before; this never becomes a blanket "proxy everything to localhost".
      */
-    const BACKEND_PREFIXES = ['/api', '/uploads', '/themes', '/plugins', '/.well-known', '/healthz', '/readyz', '/metrics'];
     const BOOTSTRAP_PORT = { backend: config.backendPort || 4000, frontend: config.frontendPort || 3001 };
     // Each peer picks HTTPS-with-mTLS or plain HTTP ONCE, at its own startup, from whether its identity
     // is on disk. In split mode all three start together, so the same look taken HERE, at gateway
@@ -992,8 +1025,12 @@ if (cluster.isPrimary) {
         }
         return false;
     };
+    // Which local service owns this path — the SAME classification the proxy uses (routing.js), not a
+    // second hand-kept prefix list. The old copy dropped '/public' (so the UI framework stylesheet
+    // bootstrapped to Next and 404'd) and did not know '/api/revalidate' is a Next route, which is the
+    // dispatcher-drift class the audit found in all three dispatchers at once.
     const bootstrapTarget = (url) => {
-        const service = BACKEND_PREFIXES.some((p) => url.startsWith(p)) ? 'backend' : 'frontend';
+        const service = routing.requiredRoleForPath(url) === 'backend' ? 'backend' : 'frontend';
         for (const group of workerRegistry.values()) {
             if (group.name === service && group.targets && group.targets.size > 0) return null;
         }

@@ -414,6 +414,26 @@ router.get('/all', authenticate, isAdmin, asyncHandler(async (req: Request, res:
 }));
 
 /**
+ * /notices/* — admin notices, kept reachable at the legacy path.
+ *
+ * LITERAL PREFIX — mounted before the `/:key` wildcard, the same remedy routes/webhooks.ts applies
+ * deliberately ("literal prefix — declared before the /:id routes"). The handlers used to sit 145
+ * lines BELOW `router.get('/:key')`, and Express matches in registration order: every GET
+ * /settings/notices was answered by the wildcard with key='notices', which is not in PUBLIC_SETTINGS
+ * and — because the wildcard never consults the session — replied 403 rest_forbidden even to an
+ * administrator. The notices CrashGuard writes when it auto-disables a plugin were therefore
+ * unreadable, and since the list could not be fetched the ids for DELETE /notices/:id were
+ * unknowable, so the autoloaded `admin_notices` option grew without ever being pruned. (DELETE was
+ * never shadowed: there is no DELETE /:key.)
+ *
+ * Notices are NOT a setting — they now have their own router at /api/v1/notices, which is where the
+ * admin screen calls. This mount DELEGATES to that one module rather than keeping a second copy, so
+ * the old path keeps working (nothing that already integrated against it breaks) and the two can
+ * never drift apart. `router.use` also means the wildcard below can no longer see /notices at all.
+ */
+router.use('/notices', require('./notices'));
+
+/**
  * @swagger
  * /settings/{key}:
  *   get:
@@ -570,34 +590,6 @@ router.put('/:key', authenticate, isAdmin, asyncHandler(async (req: Request, res
         key,
         value: await getOption(key)
     });
-}));
-
-/**
- * GET /notices
- * Get admin notices (admin only)
- */
-router.get('/notices', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
-    const notices = await getOption('admin_notices', []);
-    res.json(notices);
-}));
-
-/**
- * DELETE /notices/:id
- * Dismiss a notice
- */
-router.delete('/notices/:id', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
-    const { id } = req.params;
-    let notices = await getOption('admin_notices', []);
-
-    // Filter out the dismissed notice
-    const initialLength = notices.length;
-    notices = notices.filter((n: any) => n.id !== id);
-
-    if (notices.length !== initialLength) {
-        await updateOption('admin_notices', notices);
-    }
-
-    res.json({ success: true, remaining: notices.length });
 }));
 
 module.exports = router;

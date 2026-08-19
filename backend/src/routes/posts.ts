@@ -11,7 +11,7 @@ const Post = require('../models/Post');
 const { authenticate, optionalAuth } = require('../middleware/auth');
 const { can, ownerOrCan } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
-const { saveRevision } = require('../core/revisions');
+const { saveRevision, isRevisionableMeta } = require('../core/revisions');
 const sanitizeHtml = require('sanitize-html');
 
 // The Puck/meta sanitizer (sanitize, sanitizePuckTree, sanitizeMetaValue, PUCK_*_FIELDS) lives in a
@@ -26,19 +26,235 @@ const { sanitize, sanitizeMetaValue } = require('../core/sanitize-meta');
 // restore/delete — the two write surfaces previously drifted (revisions used a weaker, post-only,
 // publish-blind gate). capsForType returns null for an unregistered type (the CREATE path rejects it);
 // callers editing an existing post fall back to capsFor('post').
-const { capsFor, capsForType } = require('../core/post-capabilities');
+// canEditPostRecord is the SHARED edit gate (type family + ownership + edit_published_<type>s) that
+// PUT /:id used to keep inline; it now also gates POST /:id/meta, which enforced only the first two.
+// isRestExposedPostType answers "may the GENERIC /posts surface touch this type at all" — see below.
+const { capsFor, capsForType, canEditPostRecord, isRestExposedPostType } = require('../core/post-capabilities');
+
+// Meta keys the generic writers must refuse: the attachment's on-disk path (`_wp_attached_file`,
+// which Media.delete turns into an unlink target) and the other server-owned bookkeeping keys.
+// metaKeyProblem is the FORM gate every meta writer in this file shares (type, emptiness, the
+// prototype-manipulating names, the column's length bound) — see core/protected-meta.
+const { isProtectedPostMeta, metaKeyProblem } = require('../core/protected-meta');
+
+// The slug PRODUCER. A slug arriving in a request body is a segment of the site's public URL space, so
+// it is produced here rather than accepted here — the same function PUT already applied through
+// Post.update, so both writers of post_name emit the same representation.
+const { sanitizeTitle } = require('../core/formatting');
 
 // MULTILINGUAL: validate a BCP-47 language tag at the route boundary (the model canonicalizes; the
 // route rejects an unparseable non-empty value with a 400 instead of silently clearing it).
 const { parseLanguageTag } = require('../core/language-tag');
 
 /**
- * Type-aware EDIT gate for one post (mirrors PUT /:id, without the publish restriction — the
- * multilingual endpoints edit metadata, not content/status). Returns true when the caller may edit p.
+ * THE DOWNGRADED EDIT GATE — type family + ownership, WITHOUT edit_published_<type>s.
+ *
+ * It exists for exactly ONE thing: the explicit allowlist of NON-CONTENT meta keys below. Everything
+ * else in this file uses canEditPostRecord, the three-part rule. The multilingual endpoints used to
+ * use this one on the theory that a language is "metadata, not content" — it is not: post_language
+ * decides which listing and which hreflang set a PUBLISHED entry appears in, so a contributor whose
+ * draft an editor published could still move the live page between language editions with plain
+ * edit_posts while PUT /posts/:id answered 403. That was finding #7's asymmetry moved to another
+ * route, not fixed, so those three routes now use canEditPostRecord like everything else.
+ *
+ * Anything reached through this function must be justified in NON_CONTENT_META_KEYS.
  */
-function canEditPost(user: any, p: any): boolean {
+function canEditPostIgnoringPublished(user: any, p: any): boolean {
     const caps = capsForType(p.type || p.postType || 'post') || capsFor('post');
     return p.authorId === user.id ? user.can(caps.edit) : user.can(caps.editOthers);
+}
+
+/**
+ * NON-CONTENT meta keys: writable with the DOWNGRADED gate above, even on a published post.
+ *
+ * This is the explicit allowlist the audit asked for, and it is the exact OPPOSITE of
+ * core/protected-meta: that file lists keys NOBODY may write through the generic surface, this one
+ * lists keys whose write is not a content change and therefore must not demand edit_published.
+ *
+ *  · `_wjs_review_comments` — the editorial review THREAD (frontend/src/components/editor/
+ *    ReviewComments.tsx is its only writer). Applying the published-post rule to it made a contributor
+ *    unable to answer a reviewer on their own entry the moment an editor published it, which is
+ *    precisely when the conversation matters. It renders nowhere on the public site, so a write to it
+ *    cannot alter what the site serves.
+ *
+ * A key belongs here only if writing it changes NOTHING a visitor can see. `_puck_data`,
+ * `_wjs_template`, `_thumbnail_id` and the SEO keys are public output and must never be listed.
+ */
+const NON_CONTENT_META_KEYS: Set<string> = new Set([
+    '_wjs_review_comments',
+]);
+
+/**
+ * Is this post type INTERNAL — registered, but marked `showInRest: false`?
+ *
+ * "Unregistered" and "internal" are NOT the same answer, and conflating them was a regression:
+ * isRestExposedPostType() says false to both, so a post whose custom type an admin later removed
+ * (DELETE /types/:name is one click) became unreachable through EVERY route in this file — 404 on
+ * read, 404 on update, 404 on delete, 400 on the list — with no way left to read, migrate or delete
+ * the orphaned content, not even for an administrator. The explicit `|| capsFor('post')` fallback
+ * that routes/posts.ts and routes/revisions.ts keep for "a post whose registered type was since
+ * removed" became dead code the day that happened.
+ *
+ * The security argument only ever concerned INTERNAL types: nav_menu_item and revision are registered
+ * (core/post-types registers them at boot, before any request), carry no capability_type, and so fall
+ * into the plain `post` family — which is how an editor rewrote `_menu_item_url`. Those stay refused.
+ * An unknown type falls back to the `post` family exactly as it did before the remediation, which is
+ * a capability the caller must still hold.
+ */
+const ALWAYS_INTERNAL_POST_TYPES: Set<string> = new Set(['nav_menu_item', 'revision']);
+
+function isInternalPostType(type: unknown): boolean {
+    const name = String(type || 'post');
+    // FAIL CLOSED ON THE CORE INTERNALS, whatever the registry currently says. initPostTypes() is where
+    // `nav_menu_item` and `revision` get registered, and it is ASYNC (it awaits getOption for the custom
+    // types), so between "the server accepts requests" and "initPostTypes resolved" getPostType() answers
+    // null for both — a window in which asking the registry alone would let a menu item through. Those two
+    // names are also the ones core/post-types refuses to unregister, so hard-coding them here states a
+    // fact rather than duplicating a policy.
+    if (ALWAYS_INTERNAL_POST_TYPES.has(name)) return true;
+    const { getPostType } = require('../core/post-types');
+    const pt = getPostType(name);
+    return !!(pt && pt.showInRest === false);
+}
+
+/**
+ * Is this loaded post INVISIBLE to the generic /posts routes?
+ *
+ * A `nav_menu_item` and a `revision` are rows in `posts`; they have their own APIs (menus.ts is
+ * admin-only, revisions.ts carries the restore/delete gate) and are registered `showInRest: false`.
+ * Reaching them through /posts routed them into the plain `post` capability family — which is how an
+ * EDITOR could rewrite `_menu_item_url` on every menu item (persistent phishing from the site's own
+ * origin) with nothing but edit_others_posts. Every route that loads a post by id/slug answers 404 for
+ * these, exactly as it does for a post that does not exist: an internal type is not "a post you lack
+ * permission for", it is not addressable here at all.
+ *
+ * An EXISTING post of an UNREGISTERED type stays addressable — see isInternalPostType. Hiding it was
+ * a regression, not a hardening: creation still rejects an unregistered type (that check is
+ * capsForType() returning null, on the CREATE path only).
+ */
+function isHiddenFromRest(post: any): boolean {
+    return isInternalPostType(post.type || post.postType || 'post');
+}
+
+/**
+ * Parse a caller-supplied non-negative integer, or null.
+ *
+ * THE POINT IS THAT THE RETURNED VALUE IS WHAT GETS WRITTEN. `parseInt` is a PREFIX parser: it reads
+ * `"0.000007e6"` as 0 and `"7e3"` as 7, while SQLite's INTEGER affinity reads the SAME strings as
+ * 7 and 7000. Validating one representation and storing the other is how an authorization check on
+ * `parent` was passed with 0 ("no parent, nothing to authorize") and a post_parent of someone else's
+ * page was stored anyway — a 403 turned into a 201. So this returns a NUMBER, callers hand that
+ * number to the model, and the value the gate inspected is byte-identical to the value in the column.
+ *
+ * Only plain decimal digits are accepted: no sign, no exponent, no decimal point, no hex. A caller
+ * that means 7 can always write 7.
+ */
+function toNonNegativeInt(raw: unknown): number | null {
+    const n = toInt(raw);
+    return n !== null && n >= 0 ? n : null;
+}
+
+/**
+ * The signed twin, for ordering columns that carry no authorization of their own.
+ *
+ * `menu_order` is legitimately NEGATIVE in WordPress (a "pin above everything" order), so it must not
+ * inherit `parent`'s non-negative rule; what it DOES share is that the parsed number — not the raw
+ * body field — is what reaches the column, so '' becomes 0 here instead of an empty string that MySQL
+ * under STRICT_TRANS_TABLES rejects with ERROR 1366.
+ */
+function toInt(raw: unknown): number | null {
+    if (typeof raw === 'number') return Number.isSafeInteger(raw) ? raw : null;
+    if (typeof raw !== 'string') return null;
+    const s = raw.trim();
+    const digits = s.startsWith('-') ? s.slice(1) : s;
+    if (digits.length === 0 || digits.length > 15) return null;
+    for (const ch of digits) {
+        if (ch < '0' || ch > '9') return null;
+    }
+    const n = Number(s);
+    return Number.isSafeInteger(n) ? n : null;
+}
+
+/** The 404 body every route in this file uses for "no such post". */
+const NOT_FOUND = { code: 'rest_post_invalid_id', message: 'Invalid post ID.', data: { status: 404 } };
+
+/* ── THE STRING-FIELD BOUNDARY ────────────────────────────────────────────────────────────────────
+ *
+ * THE CLASS, in one sentence: every request field this file compares against a string literal, a Set
+ * or an allowlist while ASSUMING it is a string can arrive as an Array, an object, a number or a
+ * boolean — the comparison then fails silently (`['publish'] === 'publish'` is false, `Set.has([...])`
+ * is false) while the SINK turns it back into the very string the guard decided it was not looking at,
+ * because better-sqlite3 binds a one-element array AS that string and mysql2 formats it through
+ * arrayToList.
+ *
+ * WHY THIS IS A TABLE AND NOT N GUARDS. The previous three waves closed this one field at a time —
+ * `key`, then `type`, then `parent` — and each time the NEXT field over was still open. The field
+ * that was left open last time is the one that decides PUBLIC VISIBILITY: a contributor sending
+ * `status: ['publish']` was downgraded by nothing, stored as `publish`, and answered 201, with the
+ * entry live on the anonymous site and the term counts bumped. So the type is asserted ONCE, for
+ * every named field, before any comparison in the route body runs.
+ *
+ * HOW TO EXTEND IT: add the field NAME to the table below. Never add a `typeof x === 'string'` next to
+ * a single use — that is how the class survived three waves. `backend/src/tests/request-field-types.
+ * test.ts` drives every name in these tables through every non-string shape AND re-derives the
+ * destructured field list from this file's source, so a body field that is in neither table fails
+ * loudly instead of being silently unguarded.
+ */
+
+/** Body fields of POST /posts and PUT /posts/:id that are STRINGS (or absent). */
+const POST_BODY_STRING_FIELDS: readonly string[] = Object.freeze([
+    'title', 'content', 'excerpt', 'status', 'type', 'slug', 'comment_status', 'date', 'language',
+]);
+
+/**
+ * Body fields of the same two routes that are DELIBERATELY not strings, listed so the completeness
+ * test can tell "checked elsewhere" from "forgotten":
+ *   · parent / menu_order — numbers, normalized by toNonNegativeInt/toInt (which reject an Array,
+ *     an object and a boolean by construction: they accept a number or a digits-only string).
+ *   · categories / tags   — arrays; used only through `Array.isArray(...)`.
+ *   · meta                — an object; its KEYS go through core/protected-meta.metaKeyProblem.
+ *   · autosave            — a boolean, compared with `=== true` (anything else is "not an autosave").
+ *   · translationId       — POST /posts/:id/translations only; parseInt + `!otherId` rejects the rest.
+ *   · key / value         — POST /posts/:id/meta; `key` goes through metaKeyProblem, `value` may be
+ *                           any JSON shape (sanitizeMetaValue walks it).
+ */
+const POST_BODY_NON_STRING_FIELDS: readonly string[] = Object.freeze([
+    'parent', 'menu_order', 'categories', 'tags', 'meta', 'autosave', 'translationId', 'key', 'value',
+]);
+
+/**
+ * Query parameters this file READS. Everything in a URL query is a string; an Array or an object here
+ * is Express's qs parser reflecting `?status[]=publish`, i.e. a caller reaching for exactly this class.
+ * (`categories`/`tags` are destructured by the list handler but never used, so they are not read and
+ * not listed — adding them would 400 a request that is legal today.)
+ */
+const LIST_QUERY_STRING_FIELDS: readonly string[] = Object.freeze([
+    'page', 'per_page', 'status', 'type', 'search', 'orderby', 'order', 'author',
+]);
+
+/**
+ * The FIRST field in `fields` that is present on `source` and is not a string, or null.
+ *
+ * null/undefined count as ABSENT, not as a violation: several of these fields use null as "clear this
+ * value" and the handlers below already distinguish absent from empty.
+ */
+function firstNonStringField(source: any, fields: readonly string[]): string | null {
+    if (!source || typeof source !== 'object') return null;
+    for (const field of fields) {
+        const value = source[field];
+        if (value === undefined || value === null) continue;
+        if (typeof value !== 'string') return field;
+    }
+    return null;
+}
+
+/** The 400 for a field that arrived with the wrong TYPE. */
+function invalidParamType(res: Response, field: string) {
+    return res.status(400).json({
+        code: 'rest_invalid_param',
+        message: `Invalid parameter '${field}': expected a string.`,
+        data: { status: 400, params: { [field]: 'Expected a string.' } },
+    });
 }
 
 /**
@@ -99,6 +315,12 @@ function canEditPost(user: any, p: any): boolean {
  *                 $ref: '#/components/schemas/Post'
  */
 router.get('/', optionalAuth, asyncHandler(async (req: any, res: Response) => {
+    // THE WHOLE STRING CLASS, ONCE — see LIST_QUERY_STRING_FIELDS. `?status[]=publish` reached every
+    // comparison below as an Array (so `status === 'any'` and `status !== 'publish'` both answered the
+    // wrong thing) and then reached the model, where the driver flattened it back into the string.
+    const badQuery = firstNonStringField(req.query, LIST_QUERY_STRING_FIELDS);
+    if (badQuery) return invalidParamType(res, badQuery);
+
     const {
         page = 1,
         per_page = 10,
@@ -112,17 +334,48 @@ router.get('/', optionalAuth, asyncHandler(async (req: any, res: Response) => {
         tags
     } = req.query;
 
+    // The LIST is the discovery half of the same surface: leaving it open let a caller enumerate every
+    // nav_menu_item id (and then write its meta) without ever touching the menus API. Reject an
+    // internal type here for the same reason the per-post routes 404 on it.
+    //
+    // THE TYPE IS RESOLVED ONCE AND THE RESOLVED VALUE IS WHAT THE QUERY GETS. The guard used to
+    // inspect `type` through isRestExposedPostType, which normalizes with `String(type || 'post')` —
+    // so `?type=` (empty) was CHECKED as 'post' and PASSED, while the raw `''` went on to
+    // Post.findAllWithRelations/Post.count, which treat an empty value as "no type filter at all".
+    // An ANONYMOUS `GET /posts?type=` therefore returned every nav_menu_item row with its
+    // `_menu_item_url` meta — the exact enumeration this guard was added to stop, through the guard.
+    // Same for `?type[]=post`: an Array stringifies to 'post' for the check and reaches the model as
+    // an array. Resolving here means the checked value and the queried value are the same object.
+    //
+    // It rejects INTERNAL types, not unregistered ones — same rule as isHiddenFromRest, so listing and
+    // reading agree about what exists. A type whose registration an admin removed must stay listable
+    // or its content cannot be found, let alone migrated.
+    const resolvedType = (type === undefined || type === null || type === '') ? 'post' : type;
+    if (typeof resolvedType !== 'string' || isInternalPostType(resolvedType)) {
+        return res.status(400).json({
+            code: 'rest_invalid_post_type',
+            message: `Invalid post type '${String(resolvedType)}'.`,
+            data: { status: 400 }
+        });
+    }
+
     const limit = Math.min(parseInt(per_page, 10) || 10, 100);
     const offset = (Math.max(parseInt(page, 10) || 1, 1) - 1) * limit;
 
-    // Map orderby to database column
-    const orderByMap: Record<string, string> = {
+    // Map orderby to database column.
+    //
+    // PROTOTYPE-FREE, and looked up with hasOwnProperty — the OTHER half of the "a key is not just a
+    // string" class (see RESERVED_META_KEYS in core/protected-meta). On a plain object literal,
+    // `orderByMap['constructor']` answers with a FUNCTION rather than undefined, so `|| 'post_date'`
+    // never fires and a caller chooses what reaches the model's ORDER BY. The model's own allowlist
+    // contains the damage today; a lookup that cannot return an inherited member removes the question.
+    const orderByMap: Record<string, string> = Object.assign(Object.create(null), {
         date: 'post_date',
         modified: 'post_modified',
         title: 'post_title',
         id: 'id',
         menu_order: 'menu_order'
-    };
+    });
 
     // Determine which statuses to show
     let includeStatuses: string[] | null = null;
@@ -156,7 +409,8 @@ router.get('/', optionalAuth, asyncHandler(async (req: any, res: Response) => {
 
     // Use findAllWithRelations to batch-load post meta (avoids N+1 in the list path).
     const posts = await Post.findAllWithRelations({
-        type,
+        // resolvedType, NOT the raw query value — see the guard above.
+        type: resolvedType,
         status: includeStatuses ? null : effectiveStatus,
         includeStatuses,
         author: authorFilter,
@@ -169,7 +423,7 @@ router.get('/', optionalAuth, asyncHandler(async (req: any, res: Response) => {
     });
 
     const total = await Post.count({
-        type,
+        type: resolvedType,
         status: includeStatuses ? null : effectiveStatus,
         includeStatuses,
         author: authorFilter,
@@ -185,28 +439,77 @@ router.get('/', optionalAuth, asyncHandler(async (req: any, res: Response) => {
 
 /**
  * GET /posts/slug/:slug
- * Get single post by slug
+ * Get single post by slug. Optional ?type= narrows the lookup to ONE post type.
  */
 router.get('/slug/:slug', optionalAuth, asyncHandler(async (req: any, res: Response) => {
-    const post = await Post.findBySlug(req.params.slug);
-
-    if (!post) {
-        return res.status(404).json({
-            code: 'rest_post_invalid_slug',
-            message: 'Invalid post slug.',
-            data: { status: 404 }
+    // A SLUG IS UNIQUE PER TYPE, NOT GLOBALLY. generateUniqueSlug de-duplicates within one post_type,
+    // so a post `about` and a page `about` is a legal, ordinary pair — and this route asked
+    // Post.findBySlug(slug) with NO type, whose SQL is `WHERE post_name = ?` with no LIMIT ordering.
+    // The public site therefore served whichever row the engine happened to return first: the same URL
+    // could render the post today and the page after a VACUUM or an index change. This is the READ twin
+    // of the importer defect (#18) — the same "look it up by an identity narrower than the one you
+    // write with" shape, fixed there and left standing here.
+    //
+    // ?type= lets a caller that KNOWS what it wants say so (the /pages/<slug> route wants the page, not
+    // whatever else shares the slug); it is validated against the same INTERNAL-type rule as the list,
+    // so an internal type cannot be addressed by slug either.
+    // The declared type must be a STRING before it is either checked or used: `?type[]=post` reaches
+    // isRestExposedPostType as an Array that stringifies to 'post' and reaches Post.findBySlug as an
+    // Array — the same guard/sink mismatch the LIST had.
+    // AND THE RULE IS THE SAME ONE THE LIST USES. This guard asked isRestExposedPostType, which
+    // answers false to an UNREGISTERED type as well as an internal one — so after a `DELETE
+    // /types/book` the list still returned the rows (`isInternalPostType`) while this route answered
+    // 400, two guards contradicting each other about the same invariant, and the 400 landed on exactly
+    // the tool an admin would use to migrate the orphaned content. Internal is refused; unregistered
+    // is addressable and simply resolves to nothing if no row matches.
+    const requestedType = req.query.type;
+    if (requestedType !== undefined && requestedType !== '' && (typeof requestedType !== 'string' || isInternalPostType(requestedType))) {
+        return res.status(400).json({
+            code: 'rest_invalid_post_type',
+            message: `Invalid post type '${String(requestedType)}'.`,
+            data: { status: 400 }
         });
     }
 
-    // Check if user can view non-published posts
-    if (post.postStatus !== 'publish') {
-        if (!req.user || (post.authorId !== req.user.id && !req.user.can('edit_others_posts'))) {
-            return res.status(404).json({
-                code: 'rest_post_invalid_id', // standardized error code
-                message: 'Invalid post ID.',
-                data: { status: 404 }
-            });
-        }
+    /**
+     * IDENTITY IS RESOLVED AMONG THE CANDIDATES THIS CALLER MAY SEE — not first, and filtered after.
+     *
+     * THE CLASS: a lookup that picks ONE row by an identity narrower than the one that is then
+     * authorized. The fixed precedence (post → page → untyped) made the choice deterministic, which
+     * was the point, but it chose before asking whether the chosen row is VISIBLE: since slugs are
+     * unique PER TYPE, anyone who saved a draft named `about` took the published PAGE `about` off the
+     * public site — this route found the draft, the visibility gate below refused it, and the page was
+     * never consulted. A 404 on a live URL, caused by an ordinary editorial action, with no warning.
+     *
+     * So the precedence now runs over candidates and stops at the first one the caller may READ. The
+     * anonymous answer is still deterministic (only published rows qualify) and an editor still sees
+     * their draft first, because for them the draft IS visible.
+     */
+    const isVisible = (p: any) => !isHiddenFromRest(p)
+        && (p.postStatus === 'publish'
+            || !!(req.user && (p.authorId === req.user.id || req.user.can('edit_others_posts'))));
+
+    const lookups: Array<string | undefined> = requestedType
+        ? [requestedType as string]
+        : ['post', 'page', undefined];
+
+    let post: any = null;
+    let hiddenCandidate: any = null;
+    for (const t of lookups) {
+        const candidate = t === undefined
+            ? await Post.findBySlug(req.params.slug)
+            : await Post.findBySlug(req.params.slug, t);
+        if (!candidate) continue;
+        if (isVisible(candidate)) { post = candidate; break; }
+        if (!hiddenCandidate) hiddenCandidate = candidate;
+    }
+
+    if (!post) {
+        // Nothing visible. "Exists but you may not read it" and "does not exist" answer the same 404 —
+        // the codes below only preserve the two bodies this route has always returned.
+        return res.status(404).json(hiddenCandidate && !isHiddenFromRest(hiddenCandidate)
+            ? { code: 'rest_post_invalid_id', message: 'Invalid post ID.', data: { status: 404 } }
+            : { code: 'rest_post_invalid_slug', message: 'Invalid post slug.', data: { status: 404 } });
     }
 
     res.json(await post.toJSON());
@@ -219,12 +522,8 @@ router.get('/slug/:slug', optionalAuth, asyncHandler(async (req: any, res: Respo
 router.get('/:id', optionalAuth, asyncHandler(async (req: any, res: Response) => {
     const post = await Post.findById(parseInt(req.params.id, 10));
 
-    if (!post) {
-        return res.status(404).json({
-            code: 'rest_post_invalid_id',
-            message: 'Invalid post ID.',
-            data: { status: 404 }
-        });
+    if (!post || isHiddenFromRest(post)) {
+        return res.status(404).json(NOT_FOUND);
     }
 
     // Check if user can view non-published posts
@@ -277,7 +576,13 @@ router.get('/:id', optionalAuth, asyncHandler(async (req: any, res: Response) =>
  *         description: Forbidden
  */
 router.post('/', authenticate, asyncHandler(async (req: any, res: Response) => {
-    // ...
+    // THE WHOLE STRING CLASS, ONCE, BEFORE ANY COMPARISON — see POST_BODY_STRING_FIELDS. `status:
+    // ['publish']` from a contributor used to clear the publish gate (an Array is not 'publish') and
+    // then land in post_status as `publish`, because the driver flattens it: 201, live on the public
+    // site. Same shape for `slug`, `comment_status`, `type`, `date` and `language`.
+    const badField = firstNonStringField(req.body, POST_BODY_STRING_FIELDS);
+    if (badField) return invalidParamType(res, badField);
+
     const {
         title,
         content,
@@ -306,21 +611,92 @@ router.post('/', authenticate, asyncHandler(async (req: any, res: Response) => {
     // Type-aware capability gate: an unknown type is rejected, and the caller must hold the EDIT cap for
     // THIS type's family (a post-only author cannot create a page). The old route gate was can('edit_posts')
     // regardless of type, and the publish check below only tested publish_posts (audit HIGH).
-    const caps = capsForType(type);
-    if (!caps) {
-        return res.status(400).json({ code: 'rest_invalid_post_type', message: `Invalid post type '${type}'.`, data: { status: 400 } });
+    //
+    // AN INTERNAL TYPE IS REJECTED THE SAME WAY AN UNKNOWN ONE IS. The old check only asked "is it
+    // registered", and `revision` IS registered — with no capability_type, so it fell into the plain
+    // `post` family and a CONTRIBUTOR could mint revision rows. That is not a cosmetic forgery: a
+    // fabricated revision carries `now` as post_modified while genuine ones copy the parent's, so ten
+    // of them pointing at someone else's page make the next ordinary save prune the entire real
+    // history (limitRevisions deletes oldest-first) and leave only the attacker's.
+    //
+    // AND THE RESOLVED TYPE IS THE ONE STORED. capsForType/isRestExposedPostType both normalize with
+    // `String(type || 'post')`, so `type: ''` was CHECKED as 'post' and passed — and then reached
+    // Post.create as `''`, creating a row with an EMPTY post_type that no typed query can ever find
+    // again. `type: ['post']` was the array twin. Resolve once, reject a non-string, store the resolved
+    // value.
+    const createType = (type === undefined || type === null || type === '') ? 'post' : type;
+    const caps = typeof createType === 'string' ? capsForType(createType) : null;
+    if (!caps || !isRestExposedPostType(createType)) {
+        return res.status(400).json({ code: 'rest_invalid_post_type', message: `Invalid post type '${String(createType)}'.`, data: { status: 400 } });
     }
     if (!req.user.can(caps.edit)) {
-        return res.status(403).json({ code: 'rest_cannot_create', message: `You are not allowed to create content of type '${type}'.`, data: { status: 403 } });
+        return res.status(403).json({ code: 'rest_cannot_create', message: `You are not allowed to create content of type '${createType}'.`, data: { status: 403 } });
+    }
+
+    // `parent` was passed to Post.create() verbatim: a post could be attached to ANY row by id, with no
+    // check that the caller may touch that row. Parenthood is a write on the parent (it changes what
+    // the parent's children query returns), so it takes the parent's own edit gate.
+    //
+    // AND THE AUTHORIZED VALUE IS THE ONE THAT IS WRITTEN. The first version of this gate ran
+    // `parseInt(parent, 10)` and then handed the RAW `parent` to Post.create — two representations of
+    // one field. `parseInt("0.000007e6")` is 0, so `parentId > 0` was false and the parent was never
+    // checked at all, while SQLite's INTEGER affinity read the very same string as 7 and stored a
+    // post_parent of someone else's published page: a 403 became a 201. `"7e3"` was the other half —
+    // authorized against post 7, stored as 7000. toNonNegativeInt refuses both (digits only) and, when
+    // it accepts, returns the NUMBER that goes into the column, so gate and sink cannot disagree.
+    // It also removes MySQL's STRICT_TRANS_TABLES failure: the '' the route itself declares legal
+    // ("<option value=''>None</option>") is normalized to 0 here instead of reaching post_parent as an
+    // empty string and raising ERROR 1366.
+    const hasParent = parent !== undefined && parent !== null && parent !== '';
+    const parentId = hasParent ? toNonNegativeInt(parent) : 0;
+    if (parentId === null) {
+        return res.status(400).json({ code: 'rest_invalid_post_parent', message: 'Invalid post parent.', data: { status: 400 } });
+    }
+    if (parentId > 0) {
+        const parentPost = await Post.findById(parentId);
+        if (!parentPost || isHiddenFromRest(parentPost)) {
+            return res.status(400).json({ code: 'rest_invalid_post_parent', message: 'Invalid post parent.', data: { status: 400 } });
+        }
+        if (!canEditPostRecord(req.user, parentPost)) {
+            return res.status(403).json({ code: 'rest_forbidden', message: 'You cannot attach content to that parent.', data: { status: 403 } });
+        }
+    }
+
+    // THE SLUG IS PRODUCED, NOT ACCEPTED. Post.create used to take the body's `slug` VERBATIM
+    // (`slug || sanitizeTitle(title)`) while PUT ran the same field through sanitizeTitle inside
+    // Post.update: two writers of post_name, two representations, and the create side stored
+    // `Not A Slug/../%00` and 300-character values unchanged — the latter an ERROR 1406 (a 500) on
+    // MySQL, where post_name is narrowed to VARCHAR(255) for its index. One producer for both.
+    // The LENGTH bound itself lives one level down, in Post.generateUniqueSlug, because a caller that
+    // legitimately keeps a foreign slug verbatim (the WXR importer) must still be bounded.
+    const requestedSlug = typeof slug === 'string' && slug.trim() !== ''
+        ? (sanitizeTitle(slug) || undefined)
+        : undefined;
+
+    // menu_order is the same numeric column shape: absent keeps the model default, '' means 0, and a
+    // non-numeric value is a 400 rather than a driver-dependent surprise.
+    const menuOrderValue = menu_order === undefined || menu_order === null || menu_order === ''
+        ? 0
+        : toInt(menu_order);
+    if (menuOrderValue === null) {
+        return res.status(400).json({ code: 'rest_invalid_param', message: 'Invalid menu_order.', data: { status: 400 } });
     }
 
     // Check if user can publish THIS type; if not, downgrade to pending (needs review). 'future' IS
     // deferred publishing (the model stores a future-dated 'publish' as 'future' and auto-flips it
     // live), so it must clear the same bar — otherwise scheduling would be a side door around the gate.
+    const mayPublish = req.user.can(caps.publish);
     let postStatus = status;
-    if ((status === 'publish' || status === 'future') && !req.user.can(caps.publish)) {
+    if ((status === 'publish' || status === 'future') && !mayPublish) {
         postStatus = 'pending';
     }
+
+    // THE DATE IS THE OTHER HALF OF THE SAME GATE — see the identical block in PUT /:id.
+    // Downgrading only the STATUS still let the caller write post_date/post_date_gmt, and an explicit
+    // date is the ONLY thing that schedules: the model resolves a future date into 'future' by itself.
+    // A caller who may not publish may not choose WHEN the post goes live either, so the date is
+    // dropped rather than forwarded (absent → the model stamps "now", the same as any plain draft).
+    const requestedDate = mayPublish ? date : undefined;
 
     const post = await Post.create({
         authorId: req.user.id,
@@ -330,12 +706,17 @@ router.post('/', authenticate, asyncHandler(async (req: any, res: Response) => {
         // sanitize-html devuelve '' para undefined/null, que es justo el defecto de Post.create.
         excerpt: sanitizeHtml(excerpt),
         status: postStatus,
-        type,
-        slug,
-        parent,
-        menuOrder: menu_order,
+        type: createType,
+        // The PRODUCED slug (see above), never the raw body field.
+        slug: requestedSlug,
+        // The value the gate above authorized, as a NUMBER — never the raw body field. See the
+        // toNonNegativeInt comment: the two used to differ, and the difference was the bypass.
+        parent: parentId,
+        // Same normalization, same reason (minus the authorization): `menu_order: ""` reached
+        // menu_order as an empty string and MySQL under STRICT_TRANS_TABLES rejects it with a 500.
+        menuOrder: menuOrderValue,
         commentStatus: comment_status,
-        date,
+        date: requestedDate,
         // MULTILINGUAL (opt-in): the model canonicalizes a BCP-47 tag, or stores NULL. Absent → NULL.
         language
     });
@@ -351,8 +732,19 @@ router.post('/', authenticate, asyncHandler(async (req: any, res: Response) => {
     }
 
     // Set meta
-    if (meta && typeof meta === 'object') {
+    // A BAG IS A PLAIN OBJECT. `typeof [] === 'object'`, so an ARRAY body reached Object.entries and
+    // wrote meta keys '0', '1', … — the same "the shape was assumed" class as the string fields above,
+    // one container up.
+    if (meta && typeof meta === 'object' && !Array.isArray(meta)) {
         for (const [key, value] of Object.entries(meta)) {
+            // SECURITY: server-owned keys are SKIPPED, never written — same shape models/User.ts uses for
+            // user_meta. `_wp_attached_file` names the file Media.delete() unlinks, so a route that
+            // forwards req.body.meta into a per-key writer is an arbitrary-file-delete primitive.
+            // metaKeyProblem is the FORM half of the same filter (`__proto__` & friends, empty keys,
+            // the column's length bound) — the single-key route below rejects; the bag skips, because
+            // a bag is a batch and one bad name must not lose the rest of the save.
+            if (metaKeyProblem(key) !== null) continue;
+            if (isProtectedPostMeta(key)) continue;
             // SECURITY: sanitize HTML/URL-bearing meta (e.g. _puck_data) so a malicious block can't
             // store XSS that the public site later renders.
             await Post.updateMeta(post.id, key, sanitizeMetaValue(key, value));
@@ -400,26 +792,25 @@ router.post('/', authenticate, asyncHandler(async (req: any, res: Response) => {
  *         description: Post not found
  */
 router.put('/:id', authenticate, asyncHandler(async (req: any, res: Response) => {
+    // The TWIN of the check in POST / — the same table, the same reason, and the field that mattered
+    // (`status`) was reachable through both. Closing one and leaving the other is how this class has
+    // survived every wave so far.
+    const badField = firstNonStringField(req.body, POST_BODY_STRING_FIELDS);
+    if (badField) return invalidParamType(res, badField);
+
     const postId = parseInt(req.params.id, 10);
     const post = await Post.findById(postId);
 
-    if (!post) {
-        return res.status(404).json({
-            code: 'rest_post_invalid_id',
-            message: 'Invalid post ID.',
-            data: { status: 404 }
-        });
+    if (!post || isHiddenFromRest(post)) {
+        return res.status(404).json(NOT_FOUND);
     }
 
     // Type-aware permissions: post.type picks the capability family (a post-only author must not edit a
     // page). Editing an ALREADY-PUBLISHED post additionally requires edit_published_<type>s — a contributor
     // could otherwise rewrite or unpublish their own editor-published post via plain edit_posts (audit LOW).
+    // The three-part rule now lives in core/post-capabilities so the meta route enforces the SAME one.
     const pcaps = capsForType(post.type || post.postType || 'post') || capsFor('post');
-    const isOwn = post.authorId === req.user.id;
-    let canEdit = isOwn ? req.user.can(pcaps.edit) : req.user.can(pcaps.editOthers);
-    if (post.postStatus === 'publish' && !req.user.can(pcaps.editPublished)) canEdit = false;
-
-    if (!canEdit) {
+    if (!canEditPostRecord(req.user, post)) {
         return res.status(403).json({
             code: 'rest_forbidden',
             message: 'You cannot edit this post.',
@@ -444,10 +835,87 @@ router.put('/:id', authenticate, asyncHandler(async (req: any, res: Response) =>
         language
     } = req.body;
 
+    // Re-parenting takes the PARENT's edit gate too, exactly as creation does — the twin surface of the
+    // same write. Without it, `parent` is a way to graft a post under a record you cannot touch.
+    //
+    // Normalized ONCE, and the normalized number is what Post.update receives — see the identical
+    // block in POST / for why validating parseInt() while writing the raw string was the bypass.
+    // ABSENT is not the same as EMPTY here: `parent` omitted must leave post_parent alone (undefined),
+    // while an explicit '' / null is the editor saying "no parent" and writes 0.
+    const parentProvided = parent !== undefined;
+    const hasParent = parent !== undefined && parent !== null && parent !== '';
+    const newParentId = hasParent ? toNonNegativeInt(parent) : 0;
+    if (newParentId === null) {
+        return res.status(400).json({ code: 'rest_invalid_post_parent', message: 'Invalid post parent.', data: { status: 400 } });
+    }
+    if (newParentId > 0 && newParentId !== (post.postParent || 0)) {
+        const parentPost = await Post.findById(newParentId);
+        if (!parentPost || isHiddenFromRest(parentPost) || parentPost.id === postId) {
+            return res.status(400).json({ code: 'rest_invalid_post_parent', message: 'Invalid post parent.', data: { status: 400 } });
+        }
+        if (!canEditPostRecord(req.user, parentPost)) {
+            return res.status(403).json({ code: 'rest_forbidden', message: 'You cannot attach content to that parent.', data: { status: 403 } });
+        }
+    }
+
+    // menu_order: same shape, same normalization as POST / (absent → untouched, '' → 0).
+    const menuOrderProvided = menu_order !== undefined;
+    const newMenuOrder = menu_order === undefined || menu_order === null || menu_order === ''
+        ? 0
+        : toInt(menu_order);
+    if (newMenuOrder === null) {
+        return res.status(400).json({ code: 'rest_invalid_param', message: 'Invalid menu_order.', data: { status: 400 } });
+    }
+
     // Check if user can publish THIS type ('future' = deferred publish, same bar — see POST /).
+    const mayPublish = req.user.can(pcaps.publish);
     let postStatus = status;
-    if ((status === 'publish' || status === 'future') && !req.user.can(pcaps.publish)) {
+    if ((status === 'publish' || status === 'future') && !mayPublish) {
         postStatus = post.postStatus === 'publish' ? 'publish' : 'pending';
+    }
+
+    // THE DATE IS A PUBLISHING CAPABILITY WITH NO GATE OF ITS OWN, so it takes this one.
+    //
+    // The block above downgraded the STATUS and then forwarded `date` untouched, and an explicit date
+    // is the ONE thing that schedules — Post.update writes post_date/post_date_gmt from it and lets
+    // resolveScheduledStatus turn the result into 'future'. Two consequences, both reachable without
+    // the publish capability:
+    //   • a contributor stamps post_date_gmt in 2099 on their own draft, so the entry an editor later
+    //     approves is dated (and ordered, and fed to feeds/sitemaps) at a moment nobody chose;
+    //   • worse, `date` alone needs NO status at all: Post.update re-evaluates the CURRENT status
+    //     against the new date, so a future date on a PUBLISHED post silently flips it to 'future' —
+    //     unpublishing live content with nothing but an edit capability.
+    // Hence the test is the CAPABILITY, not the shape of the request: no publish cap → no date. Absent
+    // is not empty here (Post.update only touches the date columns when the key arrives non-empty), so
+    // dropping it leaves the stored date exactly as it was.
+    const requestedDate = mayPublish ? date : undefined;
+
+    // SNAPSHOT BEFORE THE WRITE — the same instant POST /posts/:id/meta snapshots at.
+    //
+    // The two write surfaces disagreed: the meta route captured the state being DESTROYED while this
+    // one captured the state that REPLACED it, so one revision list mixed "before" and "after"
+    // snapshots depending on which route a save happened to use, and "restore the latest revision"
+    // meant two different things. One semantics, chosen for the property finding #7 asked for: every
+    // destructive write leaves a recovery point FOR WHAT IT DESTROYED, including the first edit to a
+    // post that has no revision history yet (an imported or seeded post — where an after-snapshot
+    // recovers nothing at all). AWAITED, not fire-and-forget: a snapshot racing the UPDATE it is
+    // supposed to precede would silently become an after-snapshot again.
+    // Editor autosaves still skip it so a background save every few seconds doesn't churn through the
+    // revision cap (default 10) and wipe the user's meaningful history.
+    // AND IT FAILS CLOSED, like the meta route: if the recovery point cannot be created, the
+    // destructive write does not happen. Logging and writing anyway is the failure mode the snapshot
+    // exists to prevent, performed silently.
+    if (autosave !== true) {
+        try {
+            await saveRevision(postId);
+        } catch (err) {
+            console.error('Failed to save revision before update:', err);
+            return res.status(500).json({
+                code: 'rest_revision_failed',
+                message: 'Could not snapshot the current version; the write was not applied.',
+                data: { status: 500 }
+            });
+        }
     }
 
     const updated = await Post.update(postId, {
@@ -461,10 +929,11 @@ router.put('/:id', authenticate, asyncHandler(async (req: any, res: Response) =>
         excerpt: excerpt === undefined || excerpt === null ? undefined : sanitizeHtml(String(excerpt)),
         status: postStatus,
         slug,
-        parent,
-        menuOrder: menu_order,
+        // The authorized NUMBER, and only when the caller actually sent the key.
+        parent: parentProvided ? newParentId : undefined,
+        menuOrder: menuOrderProvided ? newMenuOrder : undefined,
         commentStatus: comment_status,
-        date,
+        date: requestedDate,
         // MULTILINGUAL: only touched when the key is present (undefined → column left as-is).
         language
     });
@@ -480,19 +949,21 @@ router.put('/:id', authenticate, asyncHandler(async (req: any, res: Response) =>
     }
 
     // Update meta
-    if (meta && typeof meta === 'object') {
+    // A BAG IS A PLAIN OBJECT. `typeof [] === 'object'`, so an ARRAY body reached Object.entries and
+    // wrote meta keys '0', '1', … — the same "the shape was assumed" class as the string fields above,
+    // one container up.
+    if (meta && typeof meta === 'object' && !Array.isArray(meta)) {
         for (const [key, value] of Object.entries(meta)) {
+            // SECURITY: server-owned keys are SKIPPED — the twin of the same filter in POST / above.
+            // Closing only one of the two bags would leave the arbitrary-file-delete source open.
+            if (metaKeyProblem(key) !== null) continue;
+            if (isProtectedPostMeta(key)) continue;
             // SECURITY: sanitize HTML/URL-bearing meta (e.g. _puck_data) on write — see sanitizeMetaValue.
             await Post.updateMeta(postId, key, sanitizeMetaValue(key, value));
         }
     }
 
-    // Save revision after ALL updates (including meta) are done. Editor autosaves skip this so a
-    // background save every few seconds doesn't churn through the revision cap (default 10) and
-    // wipe the user's meaningful history — explicit saves still snapshot as before.
-    if (autosave !== true) {
-        saveRevision(postId).catch((err: any) => console.error('Failed to save revision:', err));
-    }
+    // (The revision snapshot is taken BEFORE the write — see the block above Post.update.)
 
     const fresh = await Post.findById(postId);
     if (!fresh) {
@@ -536,12 +1007,10 @@ router.delete('/:id', authenticate, asyncHandler(async (req: any, res: Response)
     const postId = parseInt(req.params.id, 10);
     const post = await Post.findById(postId);
 
-    if (!post) {
-        return res.status(404).json({
-            code: 'rest_post_invalid_id',
-            message: 'Invalid post ID.',
-            data: { status: 404 }
-        });
+    // Internal types 404 here too — `?force=true` on a nav_menu_item really removed it from the site's
+    // navigation, and DELETE is the one verb where "it only trashed it" was never a mitigation.
+    if (!post || isHiddenFromRest(post)) {
+        return res.status(404).json(NOT_FOUND);
     }
 
     // Type-aware permissions: post.type picks the capability family, and deleting an already-published
@@ -587,22 +1056,62 @@ router.post('/:id/meta', authenticate, asyncHandler(async (req: any, res: Respon
     const postId = parseInt(req.params.id, 10);
     const post = await Post.findById(postId);
 
-    if (!post) {
-        return res.status(404).json({
-            code: 'rest_post_invalid_id',
-            message: 'Invalid post ID.',
-            data: { status: 404 }
+    // Internal types are not addressable here. THIS is where an editor rewrote `_menu_item_url` on a
+    // nav_menu_item — author_id 0 never matches the caller, so the gate below took the editOthers
+    // branch, which an editor holds — and pointed the header of every page at a phishing domain.
+    if (!post || isHiddenFromRest(post)) {
+        return res.status(404).json(NOT_FOUND);
+    }
+
+    // SECURITY: Ownership check (prevents IDOR). This route was gated by authenticate only, letting any
+    // logged-in user write arbitrary meta on ANY post.
+    //
+    const { key, value } = req.body || {};
+
+    // THE KEY MUST BE A STRING, and the type check comes BEFORE any value check.
+    //
+    // `if (!key)` accepted an Array. Every guard downstream is a string comparison —
+    // isProtectedPostMeta (typeof check), sanitizeMetaValue (`key === '_puck_data'`),
+    // isRevisionableMeta (typeof check) — so `{"key":["_wp_attached_file"]}` answered "not protected,
+    // not revisionable, nothing to sanitize" to all three. The DRIVERS, however, flatten a
+    // single-element array parameter: better-sqlite3 binds it as the string and mysql2 formats it
+    // through arrayToList, so the UPDATE landed on the REAL `_wp_attached_file` row. One value for the
+    // guards, another for the sink. Three bypasses, one cause, one fix: refuse the type here.
+    //
+    // AND THE TYPE WAS ONLY THE FIRST MEMBER OF THAT CLASS. `'__proto__'` IS a string, so it passed —
+    // and `Post.getAllMeta` builds its map by ASSIGNING the key into an object literal, where that
+    // name creates no property at all: it replaces the map's prototype with an attacker-chosen object,
+    // so every key with no row of its own (Media reads `allMeta['_wp_attached_file']` exactly that way)
+    // resolves through the prototype chain while the API response looks clean. The whole FORM rule —
+    // type, emptiness, the reserved names, the column's 255-character bound — now lives in ONE place
+    // (core/protected-meta.metaKeyProblem) that all three meta writers call.
+    const keyProblem = metaKeyProblem(key);
+    if (keyProblem !== null) {
+        const message = keyProblem === 'reserved'
+            ? 'Meta key is reserved.'
+            : keyProblem === 'too_long'
+                ? 'Meta key is too long.'
+                : 'Meta key is required and must be a string.';
+        return res.status(400).json({
+            code: keyProblem === 'type' || keyProblem === 'empty' ? 'rest_missing_param' : 'rest_invalid_param',
+            message,
+            data: { status: 400 }
         });
     }
 
-    // SECURITY: Ownership check (prevents IDOR). This route was gated by authenticate only,
-    // letting any logged-in user write arbitrary meta on ANY post. Mirror the PUT /posts/:id type-aware gate.
-    const mcaps = capsForType(post.type || post.postType || 'post') || capsFor('post');
-    const canEdit = post.authorId === req.user.id
-        ? req.user.can(mcaps.edit)
-        : req.user.can(mcaps.editOthers);
-
-    if (!canEdit) {
+    // IT USES THE SAME GATE AS PUT /posts/:id, not a copy of two thirds of it. The inline check here
+    // rebuilt the type + ownership halves and OMITTED edit_published_<type>s — while `_puck_data`,
+    // written through this exact route, IS the public body of the page. A contributor whose draft an
+    // editor published got 403 from PUT and 200 from here, and replaced the approved page wholesale.
+    // Three surfaces (PUT, revisions restore, collab) enforced all three parts; only this one did not.
+    //
+    // THE ONE DOCUMENTED EXCEPTION is NON_CONTENT_META_KEYS. Applying the published-post rule to EVERY
+    // key was itself a regression: the only real client of this route writes `_wjs_review_comments`,
+    // the editorial review thread, and a contributor could no longer answer a reviewer on their own
+    // entry once it was published. The allowlist is explicit and narrow — a key is on it only when
+    // writing it changes nothing a visitor can see — so the downgrade is a decision, not a hole.
+    const gate = NON_CONTENT_META_KEYS.has(key) ? canEditPostIgnoringPublished : canEditPostRecord;
+    if (!gate(req.user, post)) {
         return res.status(403).json({
             code: 'rest_forbidden',
             message: 'You cannot edit this post.',
@@ -610,18 +1119,44 @@ router.post('/:id/meta', authenticate, asyncHandler(async (req: any, res: Respon
         });
     }
 
-    const { key, value } = req.body;
-
-    if (!key) {
-        return res.status(400).json({
-            code: 'rest_missing_param',
-            message: 'Meta key is required.',
-            data: { status: 400 }
+    // SECURITY: server-owned keys are refused OUTRIGHT on this surface (unlike the `meta` bag, where a
+    // skip mirrors models/User.ts): a single-key write is an explicit statement of intent, so answering
+    // 200 to a request that wrote nothing would be a lie. `_wp_attached_file` is the file path
+    // Media.delete() unlinks — writing it here was the arbitrary-file-delete source.
+    if (isProtectedPostMeta(key)) {
+        return res.status(403).json({
+            code: 'rest_protected_meta',
+            message: `The meta key '${key}' is managed by the server and cannot be set.`,
+            data: { status: 403 }
         });
     }
 
     // SECURITY: sanitize HTML/URL-bearing meta (e.g. _puck_data) on write — see sanitizeMetaValue.
     const safeValue = sanitizeMetaValue(key, value);
+
+    // A CONTENT write must leave a recovery point. This route never called saveRevision, so replacing
+    // `_puck_data` through it destroyed the previous page tree with nothing to roll back to — while the
+    // very same bytes sent through PUT /posts/:id snapshot first. The revisionable set is the one
+    // core/revisions actually captures, so "worth a snapshot" and "in the snapshot" are one decision.
+    // Snapshot BEFORE the write, and await it: the value being overwritten is what we are preserving.
+    // PUT /posts/:id now snapshots at the same instant, so a revision means ONE thing on both surfaces.
+    //
+    // AND IT FAILS CLOSED. Logging the error and writing anyway destroyed the previous tree with no
+    // recovery point — the failure mode this whole block exists to prevent, silently. If the safety net
+    // cannot be created, the destructive write does not happen.
+    if (isRevisionableMeta(key)) {
+        try {
+            await saveRevision(postId);
+        } catch (err) {
+            console.error('Failed to save revision before meta write:', err);
+            return res.status(500).json({
+                code: 'rest_revision_failed',
+                message: 'Could not snapshot the current version; the write was not applied.',
+                data: { status: 500 }
+            });
+        }
+    }
+
     await Post.updateMeta(postId, key, safeValue);
 
     res.json({
@@ -639,12 +1174,10 @@ router.get('/:id/meta', optionalAuth, asyncHandler(async (req: any, res: Respons
     const postId = parseInt(req.params.id, 10);
     const post = await Post.findById(postId);
 
-    if (!post) {
-        return res.status(404).json({
-            code: 'rest_post_invalid_id',
-            message: 'Invalid post ID.',
-            data: { status: 404 }
-        });
+    // The READ twin of the write gate above: a nav_menu_item is published, so without this any
+    // anonymous caller could dump its meta and enumerate the ids the write surface used to accept.
+    if (!post || isHiddenFromRest(post)) {
+        return res.status(404).json(NOT_FOUND);
     }
 
     // SECURITY (IDOR): mirror the single-post read gate. Without this, anyone could read the full meta
@@ -674,10 +1207,11 @@ router.get('/:id/meta', optionalAuth, asyncHandler(async (req: any, res: Respons
 router.put('/:id/language', authenticate, asyncHandler(async (req: any, res: Response) => {
     const postId = parseInt(req.params.id, 10);
     const post = await Post.findById(postId);
-    if (!post) {
-        return res.status(404).json({ code: 'rest_post_invalid_id', message: 'Invalid post ID.', data: { status: 404 } });
+    // Internal types are not addressable through the generic /posts surface (see isHiddenFromRest).
+    if (!post || isHiddenFromRest(post)) {
+        return res.status(404).json(NOT_FOUND);
     }
-    if (!canEditPost(req.user, post)) {
+    if (!canEditPostRecord(req.user, post)) {
         return res.status(403).json({ code: 'rest_forbidden', message: 'You cannot edit this post.', data: { status: 403 } });
     }
 
@@ -700,8 +1234,9 @@ router.put('/:id/language', authenticate, asyncHandler(async (req: any, res: Res
 router.get('/:id/translations', optionalAuth, asyncHandler(async (req: any, res: Response) => {
     const postId = parseInt(req.params.id, 10);
     const post = await Post.findById(postId);
-    if (!post) {
-        return res.status(404).json({ code: 'rest_post_invalid_id', message: 'Invalid post ID.', data: { status: 404 } });
+    // Internal types are not addressable through the generic /posts surface (see isHiddenFromRest).
+    if (!post || isHiddenFromRest(post)) {
+        return res.status(404).json(NOT_FOUND);
     }
     // Mirror the single-post read gate for a non-published post.
     if (post.postStatus !== 'publish') {
@@ -726,10 +1261,10 @@ router.post('/:id/translations', authenticate, asyncHandler(async (req: any, res
         return res.status(400).json({ code: 'rest_invalid_param', message: 'A distinct translationId is required.', data: { status: 400 } });
     }
     const [post, other] = await Promise.all([Post.findById(postId), Post.findById(otherId)]);
-    if (!post || !other) {
-        return res.status(404).json({ code: 'rest_post_invalid_id', message: 'Invalid post ID.', data: { status: 404 } });
+    if (!post || !other || isHiddenFromRest(post) || isHiddenFromRest(other)) {
+        return res.status(404).json(NOT_FOUND);
     }
-    if (!canEditPost(req.user, post) || !canEditPost(req.user, other)) {
+    if (!canEditPostRecord(req.user, post) || !canEditPostRecord(req.user, other)) {
         return res.status(403).json({ code: 'rest_forbidden', message: 'You cannot edit both posts.', data: { status: 403 } });
     }
 
@@ -748,10 +1283,11 @@ router.post('/:id/translations', authenticate, asyncHandler(async (req: any, res
 router.delete('/:id/translations', authenticate, asyncHandler(async (req: any, res: Response) => {
     const postId = parseInt(req.params.id, 10);
     const post = await Post.findById(postId);
-    if (!post) {
-        return res.status(404).json({ code: 'rest_post_invalid_id', message: 'Invalid post ID.', data: { status: 404 } });
+    // Internal types are not addressable through the generic /posts surface (see isHiddenFromRest).
+    if (!post || isHiddenFromRest(post)) {
+        return res.status(404).json(NOT_FOUND);
     }
-    if (!canEditPost(req.user, post)) {
+    if (!canEditPostRecord(req.user, post)) {
         return res.status(403).json({ code: 'rest_forbidden', message: 'You cannot edit this post.', data: { status: 403 } });
     }
     await Post.unlinkTranslation(postId);

@@ -381,11 +381,13 @@ style-src 'self' 'unsafe-inline' https:;
 img-src 'self' data: blob: https:;
 font-src 'self' data: https:;
 connect-src 'self' https: http: ws: wss:;
-frame-src 'self' https://www.youtube.com https://player.vimeo.com;
+frame-src 'self' https://www.youtube.com https://player.vimeo.com https://www.youtube-nocookie.com;
 frame-ancestors 'self';
 object-src 'none';
 base-uri 'self';
 ```
+
+> **`frame-src` is derived, not hand-written.** The embed hosts come from `frontend/embed-hosts.js` (`ALLOWED_EMBED_HOSTS`), the same module `src/lib/sanitize.ts` reads, and `next.config.ts` maps that list into the directive. It used to be typed out by hand beside a comment claiming it matched the sanitizer — it did not: `www.youtube-nocookie.com` (what YouTube hands you when you tick *Enable privacy-enhanced mode* under Share → Embed) was accepted by `resolveVideoEmbedUrl` and **blocked by the CSP**, so the VideoEmbed block resolved the URL, rendered a real `<iframe>`, and the browser refused the frame — an empty hole with no "Unsupported video URL" marker, because nothing in the code thought anything had gone wrong. The same header is served on `/admin`, so the author saw the hole the instant they pasted the URL. To add a provider, edit `embed-hosts.js` and nothing else; `src/lib/__tests__/embedHostsCsp.test.ts` fails if the two ever disagree. (`embed-hosts.js` is plain `.js` because `next.config.ts` is executed by Next with Node resolving its imports at runtime — it cannot read a `.ts` module.)
 
 Companion headers: `X-Frame-Options: SAMEORIGIN`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`.
 

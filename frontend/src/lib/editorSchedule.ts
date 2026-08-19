@@ -48,6 +48,35 @@ export function localInputToIso(value: string): string | null {
     return Number.isNaN(d.getTime()) ? null : d.toISOString();
 }
 
+/** Is this datetime-local value an instant still ahead of us? ('' and junk are NOT.) */
+export function isFutureInput(value: string, now: Date = new Date()): boolean {
+    const iso = localInputToIso(value);
+    return iso !== null && Date.parse(iso) > now.getTime();
+}
+
+/**
+ * Should the editor chrome show the post-date control?
+ *
+ * WHY THIS IS NOT `status === 'future'` ANY MORE. The stored `post_date` outlives the schedule: a
+ * post scheduled for December and then switched back to Draft keeps December in `post_date_gmt`
+ * (nothing in a plain save rewrites it), and the editor USED to hide the date for every status but
+ * 'future' — so the author could not see the date that was about to bite them, and the next
+ * "Publish" looked like it did nothing. The rule now is "show whatever date the record has": the
+ * control appears as soon as the host has a date to put in it, and for a brand-new post (no date
+ * yet) it still only appears once the author picks "Scheduled".
+ *
+ * `canSchedule` mirrors the existing gate on the status option: hosts that do not know how to build
+ * the payload (they pass no `onScheduleDateChange`) get no control at all.
+ */
+export function shouldShowPostDateField(args: {
+    canSchedule: boolean;
+    status: string;
+    scheduleDate: string;
+}): boolean {
+    if (!args.canSchedule) return false;
+    return args.status === SCHEDULED_STATUS || args.scheduleDate !== "";
+}
+
 /**
  * The status/date part of a save payload.
  *
@@ -58,20 +87,32 @@ export function localInputToIso(value: string): string | null {
  *    publishing now.
  *  - anything else passes through with NO date (a plain save must never rewrite post_date; and the
  *    backend already cancels the pending event when a post leaves 'future', so "unschedule to
- *    draft" needs nothing extra here).
+ *    draft" needs nothing extra here) — UNLESS the author actually typed in the date control, see
+ *    `dateEdited` below.
+ *
+ * `dateEdited` is "the human moved the date control in this session" (the control's onChange is its
+ * only producer — seeding writes the state directly). It exists because the date is now VISIBLE for
+ * every status: a control the author can edit and whose value is then dropped on the floor would be
+ * the same class of lying UI this change is removing. An explicit date is an explicit instruction,
+ * so it travels; the backend still decides the resulting status (a future date on 'publish' comes
+ * back as 'future', which the host reflects in the selector after the save).
  */
 export function buildStatusPatch(
     uiStatus: string,
     scheduleInput: string,
     lastServerStatus: string,
-    now: Date = new Date()
+    now: Date = new Date(),
+    opts: { dateEdited?: boolean } = {}
 ): { status: string; date?: string } | null {
     if (uiStatus === SCHEDULED_STATUS) {
         const iso = localInputToIso(scheduleInput);
         return iso ? { status: "publish", date: iso } : null;
     }
+    const editedIso = opts.dateEdited ? localInputToIso(scheduleInput) : null;
     if (uiStatus === "publish" && lastServerStatus === SCHEDULED_STATUS) {
-        return { status: "publish", date: now.toISOString() };
+        // Leaving a schedule: "now" unless the author gave an explicit date, which wins.
+        return { status: "publish", date: editedIso ?? now.toISOString() };
     }
+    if (editedIso) return { status: uiStatus, date: editedIso };
     return { status: uiStatus };
 }

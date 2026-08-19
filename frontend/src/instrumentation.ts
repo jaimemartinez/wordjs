@@ -1,4 +1,62 @@
 
+/**
+ * The cluster mTLS options for the leg that REGISTERS this node with the gateway.
+ *
+ * `rejectUnauthorized` is TRUE, and that is the whole point of this function existing: it used to be
+ * `false` with a "dev override" comment, so this node handed its `x-gateway-secret` — and the routes
+ * it is willing to serve — to whatever answered on `gatewayHost:gatewayInternalPort`, accepting ANY
+ * certificate. The three files were already loaded; the peer was simply never verified. A process
+ * that port-steals the internal port, or anything on the path in a multi-machine cluster, collected
+ * the cluster secret and could answer as the gateway.
+ *
+ * NO `checkServerIdentity` override here, deliberately — ordinary hostname verification is the
+ * stronger check and it is what the rest of the cluster already does on this exact leg:
+ *   - `lib/revalidateSecret.ts` (`clusterSecretRequestOptions`) dials the SAME host and the SAME
+ *     internal port from THIS process, seconds later — `recoverPurgeSecret()` below fires it as soon
+ *     as registration succeeds — with `rejectUnauthorized: true` and no override.
+ *   - the backend's gateway leg (`core/frontend-purge.ts` → `gatewayPurgeOptions`) does the same, and
+ *     says in as many words why it passes no CN allowlist: it dials the gateway by the very host its
+ *     certificate is issued for.
+ * Every issuer of the gateway-internal cert puts `localhost` + `127.0.0.1` in the SANs on top of the
+ * advertise host (`gateway/src/cluster-ca.js` → `signPublicKey`, `backend/src/core/certManager.ts` →
+ * `generateServiceCert`), so the default `gatewayHost` verifies too. A CN allowlist is only needed
+ * where the dialled name cannot appear in a SAN — the backend's DIRECT purge leg to localhost — and
+ * inventing a second, weaker policy for this leg would just re-open what it closes.
+ *
+ * `fsMod` is injected because this module is loaded in every Next runtime: `fs` may only be imported
+ * inside the `NEXT_RUNTIME === 'nodejs'` branch (see below), and a test needs to drive it anyway.
+ * Returns `{}` when this node has no cluster identity — the caller reads that as "no mTLS" and falls
+ * back to plain HTTP on the public port, exactly as before.
+ */
+export function gatewayClientOptions(
+    fsMod: { existsSync: (p: string) => boolean; readFileSync: (p: string) => any },
+    paths: { ca: string; key: string; cert: string },
+): Record<string, any> {
+    if (!(fsMod.existsSync(paths.ca) && fsMod.existsSync(paths.key) && fsMod.existsSync(paths.cert))) return {};
+    return {
+        ca: fsMod.readFileSync(paths.ca),
+        key: fsMod.readFileSync(paths.key),
+        cert: fsMod.readFileSync(paths.cert),
+        rejectUnauthorized: true,
+    };
+}
+
+/**
+ * Is this registration failure PERMANENT misconfiguration rather than "the gateway is still booting"?
+ *
+ * The retry loop below swallows every error and retries forever in silence, which is right for a
+ * gateway that has not come up yet and wrong for a handshake the peer will refuse identically for
+ * ever. Same distinction, same reasoning as `core/frontend-purge.ts` → `isHandshakeFailure`:
+ * ECONNRESET counts here, because a peer refusing our certificate usually surfaces as a bare socket
+ * hang up rather than a TLS alert.
+ */
+export function isRegisterHandshakeFailure(e: any): boolean {
+    const code = String((e && e.code) || '');
+    if (/^(ERR_TLS|ERR_SSL|EPROTO|ECONNRESET|DEPTH_ZERO|UNABLE_TO_|SELF_SIGNED|CERT_)/.test(code)) return true;
+    return /alert|handshake|certificate|self.signed|unable to verify|wrong version number/i
+        .test(String((e && e.message) || ''));
+}
+
 export async function register() {
     // Monolith mode: frontend and backend share one process/port and there is no gateway to
     // register with. Without this guard the no-cert fallback targets gatewayPort's default
@@ -73,21 +131,15 @@ export async function register() {
             }
 
             // mTLS Certs Load
-            let clientOpts: any = {};
             const certDir = fs.existsSync(path.resolve(process.cwd(), 'certs')) ? path.resolve(process.cwd(), 'certs') : path.resolve(process.cwd(), '../backend/certs');
 
             const caPath = path.join(certDir, 'cluster-ca.crt');
             const keyPath = path.join(certDir, 'frontend.key');
             const crtPath = path.join(certDir, 'frontend.crt');
 
-            if (fs.existsSync(caPath) && fs.existsSync(keyPath) && fs.existsSync(crtPath)) {
-                clientOpts = {
-                    ca: fs.readFileSync(caPath),
-                    key: fs.readFileSync(keyPath),
-                    cert: fs.readFileSync(crtPath),
-                    rejectUnauthorized: false // Dev override, though mTLS certs are self-signed by cluster CA
-                };
-            }
+            // Built by gatewayClientOptions (above) so the verification decision lives in ONE place
+            // that a test can drive, instead of in a literal nobody re-reads.
+            const clientOpts: Record<string, any> = gatewayClientOptions(fs, { ca: caPath, key: keyPath, cert: crtPath });
 
             const data = JSON.stringify({
                 name: 'frontend',
@@ -97,6 +149,7 @@ export async function register() {
 
             // exponential backoff: quick retries while the gateway is coming up, 5s steady-state
             let attemptN = 0;
+            let handshakeReported = false;
             const retry = () => {
                 attemptN++;
                 setTimeout(attempt, Math.min(5000, [250, 1000, 2000][attemptN - 1] ?? 5000));
@@ -131,7 +184,21 @@ export async function register() {
                     }
                 });
 
-                gatewayReq.on('error', () => {
+                gatewayReq.on('error', (e: any) => {
+                    // A refused handshake is configuration, not weather: it will fail identically for
+                    // ever, so retrying it in total silence (the old behaviour) hides a node that never
+                    // registers. Said ONCE per process, at error level, naming what to check.
+                    // `useMtls` guards it: without cluster certs this leg is plain HTTP, where an
+                    // ECONNRESET means the gateway is down, not that a certificate was refused.
+                    if (useMtls && !handshakeReported && isRegisterHandshakeFailure(e)) {
+                        handshakeReported = true;
+                        console.error(
+                            `[Frontend Instrumentation] TLS handshake with the gateway at ${gatewayHost}:${targetPort} ` +
+                            `failed (${(e && e.code) || ''} ${e && e.message}). This node will NEVER register until it is ` +
+                            'fixed: check that certs/cluster-ca.crt is the gateway\'s CA and that gatewayHost matches a ' +
+                            'SAN of the gateway-internal certificate.'
+                        );
+                    }
                     retry();
                 });
 

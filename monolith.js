@@ -36,11 +36,6 @@ const FRONTEND = path.join(ROOT, 'frontend');
 const GATEWAY = path.join(ROOT, 'gateway');
 
 const dev = (process.argv[2] || '').toLowerCase() === 'dev';
-process.env.NODE_ENV = dev ? 'development' : 'production';
-
-// Tell the backend NOT to self-listen/self-register, and the frontend to use monolith wiring.
-process.env.WORDJS_EMBEDDED = '1';
-process.env.WORDJS_MODE = 'mono';
 
 const readJson = (p) => { try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return {}; } };
 const appConfig = readJson(path.join(BACKEND, 'wordjs-config.json'));
@@ -53,31 +48,43 @@ const PUBLIC_PORT = Number(process.env.PORT) || appConfig.gatewayPort || gwConfi
 // validation on another port) without fighting over the fixed backend loopback.
 const LOOPBACK_PORT = Number(process.env.WORDJS_LOOPBACK_PORT) || appConfig.port || 4000;
 
-process.env.WORDJS_MONO_ORIGIN = `http://127.0.0.1:${LOOPBACK_PORT}`;
-process.env.PORT = String(PUBLIC_PORT);
-
-// Backend resolves config/uploads/themes/plugins/data/certs relative to cwd, exactly like
-// `cd backend && npm start` does in split mode.
-process.chdir(BACKEND);
-
-const helmet = require('helmet');
-const compression = require('compression');
+/**
+ * Process-wide wiring the embedded backend and Next both read. Applied by the entrypoint only:
+ * requiring this file for `isBackendPath` (the dispatcher-parity test does exactly that) must not
+ * chdir the caller's process or pin its NODE_ENV.
+ */
+function applyMonolithEnvironment() {
+    process.env.NODE_ENV = dev ? 'development' : 'production';
+    // Tell the backend NOT to self-listen/self-register, and the frontend to use monolith wiring.
+    process.env.WORDJS_EMBEDDED = '1';
+    process.env.WORDJS_MODE = 'mono';
+    process.env.WORDJS_MONO_ORIGIN = `http://127.0.0.1:${LOOPBACK_PORT}`;
+    process.env.PORT = String(PUBLIC_PORT);
+    // Backend resolves config/uploads/themes/plugins/data/certs relative to cwd, exactly like
+    // `cd backend && npm start` does in split mode.
+    process.chdir(BACKEND);
+}
 
 // Requests with these path prefixes go to the backend Express app; everything else goes to Next.
 // (/healthz is answered directly in dispatch() for liveness; /readyz goes to the backend's deep check.)
 // '/public' = backend static assets (wordjs-ui.css framework, shared css/js) — without it the UI
 // framework stylesheet 404s in monolith mode (in split mode the gateway routes /public).
 const BACKEND_PREFIXES = ['/api', '/public', '/uploads', '/themes', '/plugins', '/.well-known', '/health', '/readyz', '/metrics'];
+// The /api paths the App Router owns. This used to be the literal `/api/revalidate` written out here,
+// and the literal is exactly the problem: the same exception had to exist in frontend/backend-proxy-
+// target.js (the split-replica dispatcher) and in the gateway's, and it existed in NEITHER, so the
+// on-demand purge worked in monolith mode and silently 404'd in the other two. One list, three
+// dispatchers — gateway/test/dispatcher-parity.test.js walks all three and demands one verdict.
+const { isNextOwnedApiPath } = require('./frontend/backend-proxy-target.js');
 const isBackendPath = (url) => {
     const u = (url || '/').split('?')[0];
-    // /api/revalidate is a NEXT route (the on-demand cache-purge receiver, authenticated by shared
-    // secret) — the one /api path that must NOT be dispatched to the backend.
-    if (u === '/api/revalidate') return false;
+    if (isNextOwnedApiPath(u)) return false;
     return BACKEND_PREFIXES.some((p) => u === p || u.startsWith(p + '/'));
 };
 
-// Skip compression for SSE streams (parity with the gateway's shouldCompress).
-const shouldCompress = (req, res) => {
+// Skip compression for SSE streams (parity with the gateway's shouldCompress). `compression` is
+// required inside main() (see applyMonolithEnvironment), so it is passed in rather than closed over.
+const shouldCompress = (compression) => (req, res) => {
     if (res.getHeader('Content-Type') === 'text/event-stream') return false;
     return compression.filter(req, res);
 };
@@ -145,6 +152,12 @@ async function resolveSSL() {
 }
 
 async function main() {
+    // 0) The process-wide wiring (env + cwd) the steps below depend on. Same order as before: it ran
+    //    at module load when this file could only ever be the entrypoint.
+    applyMonolithEnvironment();
+    const helmet = require('helmet');
+    const compression = require('compression');
+
     // 1) Next.js FIRST. Next installs a require-hook that overrides Module._resolveFilename/_load and
     //    does NOT know ts-node's `.ts` extension. If ts-node is registered before Next, Next's hook
     //    clobbers it and the backend's runtime `require('../core/x')` of a .ts file fails with
@@ -185,7 +198,7 @@ async function main() {
     // run fine on the bare Node request without touching req.query, so the backend's own Express
     // parses a clean request.
     const helmetMw = helmet({ contentSecurityPolicy: false });
-    const compressionMw = compression({ filter: shouldCompress });
+    const compressionMw = compression({ filter: shouldCompress(compression) });
     const dispatch = (req, res) => {
         // Hardening (audit F-09): answer TRACE/TRACK with 405 instead of letting Next handle it as a page
         // (a Cross-Site-Tracing primitive; no WordJS route needs it). Gateway parity — see gateway/src/index.js.
@@ -269,4 +282,10 @@ async function main() {
     }
 }
 
-main().catch((e) => { console.error('❌ Monolith failed to start:', e); process.exit(1); });
+// Entrypoint only. Required as a module (dispatcher-parity test), this file boots nothing and exports
+// the REAL predicate the dispatcher uses — a test that re-implemented it would prove nothing.
+if (require.main === module) {
+    main().catch((e) => { console.error('❌ Monolith failed to start:', e); process.exit(1); });
+}
+
+module.exports = { BACKEND_PREFIXES, isBackendPath, main };

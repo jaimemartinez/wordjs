@@ -643,11 +643,64 @@ test('the corporate-mailbox rule has exactly ONE definition in the plugin', () =
     // The historical inline copies compared the user's own email domain to siteDomain by hand.
     const inline = SOURCE.match(/userEmail[^\n]*split\('@'\)\[1\][^\n]*siteDomain/g) || [];
     assert.deepEqual(inline, [], 'the mailbox rule must not be re-inlined — call hasCorporateMailbox()');
-    // Inbound delivery and sendMail's internal-delivery branch both resolve a `candidate` user, and both
-    // must ask for the ADDRESS (grant + on-domain), not merely the grant.
-    assert.equal(
-        (SOURCE.match(/mailboxAddressOf\(candidate, mailDomain\)/g) || []).length, 2,
-        'both delivery paths (inbound onData + sendMail internal delivery) must go through mailboxAddressOf()'
+    // Inbound delivery and sendMail's internal-delivery branch both resolve a recipient to a candidate
+    // account, and both must ask for the ADDRESS (grant + on-domain), not merely the grant.
+    //
+    // THE ASSERTION IS INVERTED, and this is the third spelling of it. Version 1 counted occurrences of
+    // one literal, which made the suite depend on what the delivery locals were NAMED. Version 2
+    // DISCOVERED delivery paths by the `findByEmail || findByLogin` pair — an improvement on the guard
+    // half (it demanded the assignment be inside the if) and a hole on the discovery half: it recognized
+    // ONE SYNTACTIC SHAPE and nothing else, so a future `const u = await User.findByEmail(addr); if (u)
+    // localUser = u;` was simply not seen, passed in silence, and `>= 2` meant a third path could be
+    // added without anyone noticing. A test that enumerates the forms the code already handles is
+    // documentation, not a gate.
+    //
+    // So: enumerate EVERY account lookup in the plugin and make each one justify itself. A lookup is
+    // either (a) a DELIVERY path, which must assign its candidate as the local inbox owner only inside
+    // an `if (mailboxAddressOf(<local>, <domain>))` guard, or (b) explicitly marked
+    // `// NOT-A-DELIVERY-PATH: <reason>` in the source immediately above it. A new lookup with neither
+    // fails HERE, by default — which is the property the previous versions did not have.
+    const SRC_LINES = SOURCE.split('\n');
+    const lookupLines = SRC_LINES
+        .map((text, i) => ({ text, i }))
+        .filter(l => /User\.(?:findByEmail|findByLogin)\s*\(/.test(l.text) && !/^\s*(?:\/\/|\*)/.test(l.text));
+    assert.ok(lookupLines.length >= 6,
+        `expected the plugin to still resolve accounts somewhere; found ${lookupLines.length}`);
+    const deliverySites: string[] = [];
+    const exempted: string[] = [];
+    for (const { text: line, i } of lookupLines) {
+        // The exemption must sit in the comment block DIRECTLY above the statement — walk up while the
+        // lines are comments, stop at the first blank line or statement — so it cannot be inherited
+        // from an unrelated paragraph further up the file.
+        let exempt = false;
+        for (let j = i - 1; j >= 0; j--) {
+            const t = SRC_LINES[j].trim();
+            if (t === '' || !t.startsWith('//')) break;
+            if (t.includes('NOT-A-DELIVERY-PATH:')) { exempt = true; break; }
+        }
+        if (exempt) { exempted.push(line.trim()); continue; }
+        // A delivery path: it must name a local and gate the assignment on mailboxAddressOf().
+        const local = (line.match(/(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=/) || [])[1];
+        assert.ok(
+            local,
+            `this account lookup is neither marked NOT-A-DELIVERY-PATH nor assigned to a local the guard ` +
+            `can be checked against:\n    ${line.trim()}`
+        );
+        const after = SRC_LINES.slice(i, i + 20).join('\n');
+        assert.match(
+            after,
+            new RegExp(`if\\s*\\(\\s*mailboxAddressOf\\(\\s*${local}\\s*,\\s*\\w+\\s*\\)\\s*\\)\\s*\\{\\s*[A-Za-z_$][\\w$]*\\s*=\\s*${local}\\s*;`),
+            `a delivery path resolves '${local}' from an inbound recipient and must assign it as the local ` +
+            `inbox owner ONLY inside an if (mailboxAddressOf(${local}, <mailDomain>)) guard — the grant ` +
+            `alone, or the address alone, is the inbox-hijack this predicate exists to close. If this ` +
+            `lookup does NOT map a recipient onto an inbox, mark it '// NOT-A-DELIVERY-PATH: <why>'.`
+        );
+        deliverySites.push(local);
+    }
+    assert.ok(
+        deliverySites.length >= 2,
+        `both delivery paths (inbound onData + sendMail internal delivery) must resolve a recipient ` +
+        `account; found ${deliverySites.length} such site(s). Exempted: ${exempted.length}`
     );
     // And the mail domain itself has ONE expression — every other site calls it.
     assert.equal(

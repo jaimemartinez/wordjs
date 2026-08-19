@@ -3,10 +3,10 @@
  * Equivalent to wp-includes/class-wp-post.php and wp-includes/post.php
  */
 
-const { db, dbAsync } = require('../config/database');
+const { db, dbAsync, getDbType } = require('../config/database');
 const { doAction, applyFilters } = require('../core/hooks');
 const { doShortcode, doShortcodeAsync, stripShortcodes } = require('../core/shortcodes');
-const { sanitizeTitle, sanitizeContent, generateExcerpt, currentTimeGMT, currentTime, formatDate } = require('../core/formatting');
+const { sanitizeTitle, sanitizeContent, generateExcerpt, currentTimeGMT, currentTime, formatDate, boundSlug } = require('../core/formatting');
 const config = require('../config/app');
 const cache = require('../core/cache');
 const { saveRevision } = require('../core/revisions');
@@ -14,6 +14,60 @@ const { randomUUID } = require('crypto');
 // parseLanguageTag validates + canonicalizes a BCP-47 tag, returning null for anything that is not a
 // language tag (a post's language must never silently become 'en' — null means "no language set").
 const { parseLanguageTag } = require('../core/language-tag');
+
+/**
+ * Marks a post whose stored post_date is a leftover from a schedule that was CANCELLED — i.e. a
+ * future date nobody is asking for any more. Written by Post.update when a 'future' post leaves that
+ * status with no new date; cleared by the next explicit date or by the publish that consumes it.
+ *
+ * It exists because the alternative is guessing: at the moment "Publish" arrives with no date, a
+ * leftover December date and a December date the author deliberately typed on a draft look exactly
+ * the same, and the two need opposite treatment (publish now vs schedule). Protected (`_` prefix),
+ * one row, only on a transition that already writes several.
+ */
+const UNSCHEDULED_DATE_META = '_wjs_unscheduled_date';
+
+/**
+ * THE SINK'S OWN TYPE CHECK — the last member of the "guard and sink disagree" class.
+ *
+ * Every route in front of this model normalizes its string fields at the boundary, and that is where
+ * a caller gets a 400. This function is the statement that the COLUMN's contract does not depend on a
+ * caller having done so: an Array reaching a bound parameter is flattened back into a string by
+ * better-sqlite3 and by mysql2, so a non-string here means the value that was authorized and the value
+ * that is stored are two different things. That is a programming error at the call site, not a request
+ * to be repaired quietly, so it THROWS — loudly, in development, in the caller's own stack — instead
+ * of coercing and writing something nobody checked.
+ *
+ * null/undefined/'' are ABSENT and take the documented default; that is a real, ordinary shape (the
+ * editor sends `parent: ''` for "no parent") and has never been the bug.
+ */
+/**
+ * Put one row into a meta map WITHOUT letting the row's key choose what the map inherits.
+ *
+ * THE CLASS: every object this codebase builds by ASSIGNING a key that came from data. `meta[k] = v`
+ * with `k === '__proto__'` defines NO property — it swaps the object's PROTOTYPE — so a single row
+ * makes every key that has no row of its own resolve to attacker-chosen data through the prototype
+ * chain (models/Media.ts reads `allMeta['_wp_attached_file']` precisely that way), while
+ * `Object.keys()` and `JSON.stringify()` show a clean map: invisible to any check made through the
+ * API response. `constructor` and `prototype` are the same defect one name over.
+ *
+ * The WRITE side refuses those names now (core/protected-meta.metaKeyProblem), but a row can predate
+ * that rule or arrive through an import, so the READER must be safe on its own: defineProperty always
+ * creates an OWN, enumerable, plain data property, whatever the name is. The map keeps Object.prototype
+ * so every existing consumer (spread, JSON.stringify, `.hasOwnProperty`) behaves exactly as before —
+ * which Object.create(null) would have quietly changed.
+ */
+function defineMetaEntry(target: Record<string, any>, key: string, value: any): void {
+    Object.defineProperty(target, key, { value, writable: true, enumerable: true, configurable: true });
+}
+
+function scalarString(value: unknown, field: string, fallback: string): string {
+    if (value === undefined || value === null || value === '') return fallback;
+    if (typeof value !== 'string') {
+        throw new TypeError(`Post.${field} must be a string, got ${Array.isArray(value) ? 'array' : typeof value}`);
+    }
+    return value;
+}
 
 class Post {
     id?: number;
@@ -322,11 +376,28 @@ class Post {
         const postLanguage = language != null && language !== '' ? parseLanguageTag(language) : null;
         const postTranslationGroup = typeof translationGroup === 'string' && translationGroup ? translationGroup : null;
 
-        // Generate slug from title if not provided
-        let postName = slug || sanitizeTitle(title);
+        // THE COLUMNS' TYPES ARE THE MODEL'S BUSINESS — see scalarString above. Every one of these is
+        // compared against a string literal by SOME caller before it gets here (the publish gate reads
+        // `status`, the capability gate reads `type`), and the driver would flatten an Array back into
+        // the string those comparisons decided they were not looking at. The routes answer 400 for the
+        // request; this answers "not a legal call" for everything else, so the column's contract does
+        // not depend on which door the write came through.
+        const postType = scalarString(type, 'type', 'post');
+        const requestedStatus = scalarString(status, 'status', 'draft');
+        const postCommentStatus = scalarString(commentStatus, 'commentStatus', 'open');
+        const postPingStatus = scalarString(pingStatus, 'pingStatus', 'open');
+        const postPassword = scalarString(password, 'password', '');
+        const postMimeType = scalarString(mimeType, 'mimeType', '');
+
+        // Generate slug from title if not provided. The caller's slug is kept VERBATIM here on
+        // purpose — the WXR importer must preserve a foreign permalink, including a percent-encoded
+        // non-latin one — and is BOUNDED inside generateUniqueSlug, which is the one point every
+        // writer of post_name passes through. Requests get the stricter treatment one level up, where
+        // routes/posts.ts runs the body's slug through sanitizeTitle before calling this.
+        let postName = scalarString(slug, 'slug', '') || sanitizeTitle(title);
 
         // Ensure unique slug
-        postName = await Post.generateUniqueSlug(postName, type);
+        postName = await Post.generateUniqueSlug(postName, postType);
 
         // Sanitize content
         const sanitizedContent = sanitizeContent(content);
@@ -340,14 +411,14 @@ class Post {
         const scheduledPublish = require('../core/scheduled-publish');
         let postDate = now;
         let postDateGmt = nowGmt;
-        let effectiveStatus = status;
+        let effectiveStatus = requestedStatus;
         let scheduledWhenMs: number | null = null;
         if (date !== undefined && date !== null && date !== '') {
             const d = new Date(date);
             if (!Number.isNaN(d.getTime())) {
                 postDate = formatDate(d);
                 postDateGmt = d.toISOString().slice(0, 19).replace('T', ' ');
-                effectiveStatus = scheduledPublish.resolveScheduledStatus(status, d.getTime());
+                effectiveStatus = scheduledPublish.resolveScheduledStatus(requestedStatus, d.getTime());
                 if (effectiveStatus === 'future') scheduledWhenMs = d.getTime();
             }
         }
@@ -372,17 +443,17 @@ class Post {
             title,
             excerpt,
             effectiveStatus,
-            commentStatus,
-            pingStatus,
-            password,
+            postCommentStatus,
+            postPingStatus,
+            postPassword,
             postName,
             now,
             nowGmt,
             parent,
             guid,
             menuOrder,
-            type,
-            mimeType,
+            postType,
+            postMimeType,
             postLanguage,
             postTranslationGroup
         ]);
@@ -400,7 +471,7 @@ class Post {
         // A 404 for this slug may be negative-cached (findBySlug) — the new post must resolve on
         // the very next read, not when the sentinel expires.
         if (postName) {
-            await cache.del(`post:slug:${type}:${postName}`);
+            await cache.del(`post:slug:${postType}:${postName}`);
             await cache.del(`post:slug:any:${postName}`);
         }
 
@@ -413,9 +484,26 @@ class Post {
 
     /**
      * Generate unique slug
+     *
+     * THE BOUND LIVES HERE, AT THE WRITE, not only in the producer.
+     *
+     * THE CLASS: a rule enforced in the function that USUALLY makes the value, while the column can be
+     * reached by a caller that makes it some other way. `sanitizeTitle` bounds the slug it derives from
+     * a title, so a 300-character TITLE was fine — but `Post.create({slug})` took the caller's slug
+     * verbatim and wrote 300 characters into `posts.post_name`, which drivers/mysql-text-rule narrows
+     * to VARCHAR(255) the moment idx_posts_name is created: ERROR 1406 under STRICT_TRANS_TABLES, i.e.
+     * an unmapped 500 on MySQL and nothing at all on SQLite, which is why the suite stayed green.
+     *
+     * Every writer of post_name goes through this function (create, update, and the importer through
+     * create), and it is also where the `-2`, `-3`, … suffix is appended — so this is the only place
+     * that can promise the FINAL value fits. Bounding here, rather than at each caller, is what makes
+     * "the checked representation and the written representation are the same" true by construction.
      */
     static async generateUniqueSlug(slug: string, postType: string, excludeId: any = null) {
-        let uniqueSlug = slug;
+        // The BASE is bounded once, and every disambiguated variant is built from the bounded base —
+        // not from the caller's original string, or the suffix would push the value back over.
+        const base = boundSlug(slug);
+        let uniqueSlug = base;
         let counter = 1;
 
         while (true) {
@@ -431,7 +519,7 @@ class Post {
             if (!existing) break;
 
             counter++;
-            uniqueSlug = `${slug}-${counter}`;
+            uniqueSlug = `${base}-${counter}`;
         }
 
         return uniqueSlug;
@@ -961,6 +1049,16 @@ class Post {
         const post = await Post.findById(id);
         if (!post) throw new Error('Post not found');
 
+        // THE SAME SINK-SIDE TYPE CONTRACT AS Post.create — see scalarString. `status` is the field
+        // that decides public visibility and it is compared against literals in three places between
+        // here and the route; an Array reaching a bound parameter would be flattened back into the
+        // string those comparisons rejected. Absent stays absent (undefined), because "key not sent"
+        // means "leave the column alone" everywhere in this method.
+        if (data.status !== undefined) scalarString(data.status, 'status', 'draft');
+        if (data.slug !== undefined) scalarString(data.slug, 'slug', '');
+        if (data.commentStatus !== undefined) scalarString(data.commentStatus, 'commentStatus', 'open');
+        if (data.language !== undefined && data.language !== null) scalarString(data.language, 'language', '');
+
         const updates: string[] = [];
         const values: any[] = [];
 
@@ -970,14 +1068,59 @@ class Post {
         // marks a post leaving 'future' so its pending event is cleared (no orphan events).
         const scheduledPublish = require('../core/scheduled-publish');
         let whenMs: number | null = null;
+        /** Did the CALLER name a date (as opposed to one this method stamped)? */
+        let explicitDate = false;
         if (data.date !== undefined && data.date !== null && data.date !== '') {
             const d = new Date(data.date);
             if (!Number.isNaN(d.getTime())) {
                 whenMs = d.getTime();
+                explicitDate = true;
                 updates.push('post_date = ?', 'post_date_gmt = ?');
                 values.push(formatDate(d), d.toISOString().slice(0, 19).replace('T', ' '));
             }
         }
+
+        // A bare "Publish" must never be turned into a SCHEDULE by a date nobody asked for.
+        //
+        // The block above only touches the date columns when `data.date` arrives, so a post that had
+        // once been scheduled for December kept that post_date_gmt through un-scheduling (the editor
+        // sends {status:'draft'} with NO date). The next plain {status:'publish'} then re-evaluated
+        // against that ORPHAN stored date a few lines below and resolveScheduledStatus turned it into
+        // 'future' again: the author pressed Publish and the post did not publish.
+        //
+        // Fix in the shape of wp_publish_post(): a publish with no explicit date whose STORED date
+        // would schedule it is stamped with the current time instead. The "would schedule it" test
+        // goes through resolveScheduledStatus itself, so this branch and the resolution below cannot
+        // disagree about what counts as future (same whole-second comparison, same injectable clock).
+        // Deliberately narrow:
+        //   - only when `data.status === 'publish'` was explicitly requested — a date-only edit or a
+        //     bare re-save keeps re-evaluating as before;
+        //   - never for a post already in 'future', so re-saving a scheduled post does not publish it
+        //     early (that is what the cron flip event is for);
+        //   - never when the stored date is in the PAST, so untrash() (which publishes with no date)
+        //     restores a post at its original publication date instead of moving it to now;
+        //   - and ONLY for a date that is genuinely ORPHANED (see UNSCHEDULED_DATE_META below).
+        //
+        // That last condition is the adversarial re-verify of the fix: two very different situations
+        // arrive here byte-for-byte identical — a leftover date from a schedule the author CANCELLED,
+        // and a future date the author TYPED on a draft and has not published yet. Stamping "now" is
+        // right for the first and destroys the second's data with no warning and no undo. So the model
+        // stops guessing and reads the mark it wrote at the only moment the two can be told apart: the
+        // un-scheduling itself. No mark ⇒ the date is the author's ⇒ a publish over a future date
+        // SCHEDULES, which is both WordPress's behaviour and what the person asked for.
+        let stampedOrphanDate = false;
+        if (whenMs === null && data.status === 'publish' && post.postStatus !== 'future') {
+            const storedMs = scheduledPublish.parseDbDateMs(post.postDateGmt, true);
+            if (scheduledPublish.resolveScheduledStatus('publish', storedMs) === 'future'
+                && await Post.getMeta(id, UNSCHEDULED_DATE_META)) {
+                const nowDate = new Date(scheduledPublish.nowMs());
+                whenMs = nowDate.getTime();
+                stampedOrphanDate = true;
+                updates.push('post_date = ?', 'post_date_gmt = ?');
+                values.push(formatDate(nowDate), nowDate.toISOString().slice(0, 19).replace('T', ' '));
+            }
+        }
+
         // The status we intend the post to end up in: an explicit request wins; a date-only edit
         // re-evaluates the CURRENT status against the new date (publish→future or future→publish); a
         // bare re-save of a still-'future' post re-evaluates too (so a passed date self-heals to publish).
@@ -1060,9 +1203,32 @@ class Post {
         updates.push('post_modified = ?', 'post_modified_gmt = ?');
         values.push(currentTime(), currentTimeGMT());
 
+        // term_taxonomy.count materialises "how many PUBLISHED posts are attached to this term", so
+        // every crossing of the publish/non-publish boundary changes it. Before, the ONLY writer was
+        // setTerms(), which a status-only save never calls: "Move to trash" and "Publish" send
+        // {status} with no `categories` key, so the number stayed frozen — a trashed post kept
+        // inflating its category for ever, and a draft published without re-sending its terms stayed
+        // at 0, which makes hide_empty HIDE a category that has content. Recount here so the
+        // maintenance is a consequence of the TRANSITION instead of a side effect of the caller
+        // happening to re-send the terms.
+        const crossesPublishBoundary =
+            effectiveStatus !== undefined && (effectiveStatus === 'publish') !== (post.postStatus === 'publish');
+
         if (updates.length > 0) {
             values.push(id);
-            await dbAsync.run(`UPDATE posts SET ${updates.join(', ')} WHERE id = ?`, values);
+            const sql = `UPDATE posts SET ${updates.join(', ')} WHERE id = ?`;
+            if (crossesPublishBoundary && typeof dbAsync.transaction === 'function') {
+                // The row write and the recount must not be observable apart — a reader in between
+                // would see the new status with the old count. One transaction, the same shape
+                // setTerms() already uses; the fallback keeps working on a driver without it.
+                await dbAsync.transaction(async (q: any) => {
+                    await q.run(sql, values);
+                    await Post._recountTermsForPost(id, q);
+                });
+            } else {
+                await dbAsync.run(sql, values);
+                if (crossesPublishBoundary) await Post._recountTermsForPost(id, dbAsync);
+            }
         }
 
         // (Re)arm or cancel the flip event now that the row reflects the target state.
@@ -1070,6 +1236,16 @@ class Post {
             await scheduledPublish.scheduleFuturePublish(id, scheduledWhenMs);
         } else if (cancelSchedule) {
             await scheduledPublish.cancelFuturePublish(id);
+        }
+
+        // The ORPHAN-DATE MARK (see the stamping branch above). Written exactly when a scheduled post
+        // is un-scheduled without a new date — the moment a future post_date stops being anybody's
+        // intention — and cleared as soon as it stops being true: any explicit date is a fresh
+        // statement of intent, and a publish that consumed the mark has no further use for it.
+        if (explicitDate || stampedOrphanDate || effectiveStatus === 'future') {
+            await Post.deleteMeta(id, UNSCHEDULED_DATE_META);
+        } else if (post.postStatus === 'future' && effectiveStatus !== undefined && effectiveStatus !== 'future') {
+            await Post.updateMeta(id, UNSCHEDULED_DATE_META, '1');
         }
 
         // Invalidate Cache
@@ -1224,14 +1400,42 @@ class Post {
         if (!post) return false;
 
         if (forceDelete) {
-            // Delete meta
-            await dbAsync.run('DELETE FROM post_meta WHERE post_id = ?', [id]);
+            const writes = async (q: any) => {
+                // Read the term_taxonomy rows this post belongs to BEFORE its relationships are
+                // deleted — afterwards nothing records which counters this delete invalidated, which
+                // is exactly why the raw DELETE used to leave `count = 1` behind with zero
+                // relationship rows.
+                //
+                // INSIDE the transaction, with the transaction's own connection `q`. It used to run
+                // on the loose connection before BEGIN, so a relationship attached in between (a
+                // concurrent setTerms, the importer) was deleted by this transaction while its
+                // term_taxonomy_id was missing from the list being recounted — an inflated count, for
+                // ever. Post.update already reads and recounts inside its own transaction; this is
+                // the same rule, applied to its twin.
+                const affectedTerms = await Post._termTaxonomiesForPost(id, q);
 
-            // Delete term relationships
-            await dbAsync.run('DELETE FROM term_relationships WHERE object_id = ?', [id]);
+                // Delete meta
+                await q.run('DELETE FROM post_meta WHERE post_id = ?', [id]);
 
-            // Delete post
-            const result = await dbAsync.run('DELETE FROM posts WHERE id = ?', [id]);
+                // Delete term relationships
+                await q.run('DELETE FROM term_relationships WHERE object_id = ?', [id]);
+
+                // Delete post
+                const res = await q.run('DELETE FROM posts WHERE id = ?', [id]);
+
+                // Recount AFTER the rows are gone, inside the same transaction, so no reader ever
+                // sees the post deleted while its terms still claim it.
+                await Post._recountTermTaxonomies(affectedTerms, q);
+                return res;
+            };
+
+            // These three writes ran auto-committed and independently before: a failure between them
+            // left orphan meta or relationships pointing at a post that no longer exists. One
+            // transaction — the same helper setTerms()/linkTranslations() already use a few lines
+            // away — makes the delete and its counter maintenance all-or-nothing.
+            const result = typeof dbAsync.transaction === 'function'
+                ? await dbAsync.transaction(writes)
+                : await writes(dbAsync);
 
             // Invalidate Cache
             await cache.del(`post:id:${id}`);
@@ -1367,11 +1571,13 @@ class Post {
 
         const meta: Record<string, any> = {};
         for (const row of rows) {
+            let value: any;
             try {
-                meta[row.meta_key] = JSON.parse(row.meta_value);
+                value = JSON.parse(row.meta_value);
             } catch {
-                meta[row.meta_key] = row.meta_value;
+                value = row.meta_value;
             }
+            defineMetaEntry(meta, row.meta_key, value);
         }
         return meta;
     }
@@ -1399,11 +1605,15 @@ class Post {
         for (const row of rows) {
             const bucket = result[row.post_id];
             if (!bucket) continue;
+            let value: any;
             try {
-                bucket[row.meta_key] = JSON.parse(row.meta_value);
+                value = JSON.parse(row.meta_value);
             } catch {
-                bucket[row.meta_key] = row.meta_value;
+                value = row.meta_value;
             }
+            // Same reader rule as getAllMeta — this is the BATCH twin, and models/Media.ts reads its
+            // `_wp_attached_file` out of exactly these buckets.
+            defineMetaEntry(bucket, row.meta_key, value);
         }
         return result;
     }
@@ -1544,42 +1754,51 @@ class Post {
     static async setTerms(postId: any, termIds: any, taxonomy: string, append = false) {
         const ids = (Array.isArray(termIds) ? termIds : []).filter((t: any) => t !== undefined && t !== null);
 
-        // Resolve every requested term in ONE query (was one per term).
-        let rows: any[] = [];
-        if (ids.length) {
-            const ph = ids.map(() => '?').join(',');
-            rows = await dbAsync.all(
-                `SELECT term_taxonomy_id, term_id FROM term_taxonomy WHERE taxonomy = ? AND term_id IN (${ph})`,
-                [taxonomy, ...ids]
-            );
-        }
-        const ttIds: any[] = rows.map((r: any) => r.term_taxonomy_id);
-
-        // Which relationships already exist (only matters when appending — a non-append call deletes
-        // them first, so every insert below is new).
-        let existing = new Set<any>();
-        if (append && ttIds.length) {
-            const ph = ttIds.map(() => '?').join(',');
-            const have = await dbAsync.all(
-                `SELECT term_taxonomy_id FROM term_relationships WHERE object_id = ? AND term_taxonomy_id IN (${ph})`,
-                [postId, ...ttIds]
-            );
-            existing = new Set(have.map((r: any) => r.term_taxonomy_id));
-        }
-
-        // The rows whose count this call can change: the ones being attached, PLUS (on a replace)
-        // whatever the post was in before — otherwise a term the post just LEFT keeps a stale count.
-        const affected = new Set<any>(ttIds);
-        if (!append) {
-            const prev = await dbAsync.all(`
-                SELECT tr.term_taxonomy_id FROM term_relationships tr
-                JOIN term_taxonomy tt ON tt.term_taxonomy_id = tr.term_taxonomy_id
-                WHERE tr.object_id = ? AND tt.taxonomy = ?
-            `, [postId, taxonomy]);
-            for (const r of prev) affected.add(r.term_taxonomy_id);
-        }
-
+        // EVERY read this write depends on happens INSIDE the transaction, on its connection.
+        //
+        // They used to run on the loose connection first, which made the same window Post.delete had:
+        // a relationship attached between "which counters does this call change?" and the DELETE below
+        // was removed by the DELETE (it takes the whole taxonomy) while its term_taxonomy_id was
+        // missing from the recount list — a count inflated for ever, the exact #16 symptom. The
+        // resolve and the already-attached probe move with it for the same reason: a term deleted, or
+        // a relationship inserted, in that window would otherwise produce a dangling row or a
+        // duplicate.
         const writes = async (q: any) => {
+            // Resolve every requested term in ONE query (was one per term).
+            let rows: any[] = [];
+            if (ids.length) {
+                const ph = ids.map(() => '?').join(',');
+                rows = await q.all(
+                    `SELECT term_taxonomy_id, term_id FROM term_taxonomy WHERE taxonomy = ? AND term_id IN (${ph})`,
+                    [taxonomy, ...ids]
+                );
+            }
+            const ttIds: any[] = rows.map((r: any) => r.term_taxonomy_id);
+
+            // Which relationships already exist (only matters when appending — a non-append call
+            // deletes them first, so every insert below is new).
+            let existing = new Set<any>();
+            if (append && ttIds.length) {
+                const ph = ttIds.map(() => '?').join(',');
+                const have = await q.all(
+                    `SELECT term_taxonomy_id FROM term_relationships WHERE object_id = ? AND term_taxonomy_id IN (${ph})`,
+                    [postId, ...ttIds]
+                );
+                existing = new Set(have.map((r: any) => r.term_taxonomy_id));
+            }
+
+            // The rows whose count this call can change: the ones being attached, PLUS (on a replace)
+            // whatever the post was in before — otherwise a term the post just LEFT keeps a stale count.
+            const affected = new Set<any>(ttIds);
+            if (!append) {
+                const prev = await q.all(`
+                    SELECT tr.term_taxonomy_id FROM term_relationships tr
+                    JOIN term_taxonomy tt ON tt.term_taxonomy_id = tr.term_taxonomy_id
+                    WHERE tr.object_id = ? AND tt.taxonomy = ?
+                `, [postId, taxonomy]);
+                for (const r of prev) affected.add(r.term_taxonomy_id);
+            }
+
             if (!append) {
                 await q.run(`
                     DELETE FROM term_relationships
@@ -1606,6 +1825,43 @@ class Post {
     }
 
     /**
+     * The term_taxonomy rows one post is attached to, across EVERY taxonomy it participates in.
+     *
+     * A delete must call this BEFORE dropping the relationships (they are the only record of which
+     * counters the delete invalidates); a status change can call it either side of the write, since
+     * the relationships survive it.
+     */
+    static async _termTaxonomiesForPost(postId: any, q: any = dbAsync): Promise<Array<{ term_taxonomy_id: any; taxonomy: string }>> {
+        return await q.all(`
+            SELECT tr.term_taxonomy_id, tt.taxonomy
+            FROM term_relationships tr
+            JOIN term_taxonomy tt ON tt.term_taxonomy_id = tr.term_taxonomy_id
+            WHERE tr.object_id = ?
+        `, [postId]);
+    }
+
+    /**
+     * Recompute the counters for an ALREADY-READ set of term_taxonomy rows — one scoped
+     * updateTermCounts() per taxonomy, because the recount is keyed by (taxonomy, ids).
+     * `q` lets the caller run it inside its own transaction.
+     */
+    static async _recountTermTaxonomies(rows: Array<{ term_taxonomy_id: any; taxonomy: string }>, q: any = dbAsync) {
+        if (!rows || !rows.length) return;
+        const byTaxonomy: Record<string, any[]> = {};
+        for (const row of rows) {
+            (byTaxonomy[row.taxonomy] = byTaxonomy[row.taxonomy] || []).push(row.term_taxonomy_id);
+        }
+        for (const [taxonomy, ttIds] of Object.entries(byTaxonomy)) {
+            await Post.updateTermCounts(taxonomy, ttIds, q);
+        }
+    }
+
+    /** Read + recount in one step, for writes whose relationships survive them (status changes). */
+    static async _recountTermsForPost(postId: any, q: any = dbAsync) {
+        await Post._recountTermTaxonomies(await Post._termTaxonomiesForPost(postId, q), q);
+    }
+
+    /**
      * Recompute term counts.
      *
      * `termTaxonomyIds` scopes the update to the rows a save actually touched — recounting an entire
@@ -1616,6 +1872,7 @@ class Post {
     static async updateTermCounts(taxonomy: string, termTaxonomyIds?: any[], q: any = dbAsync) {
         const scoped = Array.isArray(termTaxonomyIds) && termTaxonomyIds.length;
         if (scoped) {
+            await Post._lockTermTaxonomies(taxonomy, termTaxonomyIds!, q);
             const ph = termTaxonomyIds!.map(() => '?').join(',');
             await q.run(`
       UPDATE term_taxonomy
@@ -1630,6 +1887,7 @@ class Post {
             return;
         }
 
+        await Post._lockTermTaxonomies(taxonomy, null, q);
         await q.run(`
       UPDATE term_taxonomy
       SET count = (
@@ -1640,6 +1898,54 @@ class Post {
       )
       WHERE taxonomy = ?
     `, [taxonomy]);
+    }
+
+    /**
+     * Take the row locks the derived recount needs, on the engines that have them.
+     *
+     * WHY (adversarial re-verify of #16). `SET count = (SELECT COUNT(*) …)` is correct only if the
+     * subquery sees every committed transition. On PostgreSQL under READ COMMITTED — the default, and
+     * the driver does not raise it — the SET subquery is evaluated against the snapshot the statement
+     * took when it STARTED. Two concurrent publishes of two posts in the same category: the second
+     * blocks on the row lock, and when it wakes EvalPlanQual re-checks the target row against the new
+     * version but the subquery keeps its original snapshot, which does not contain the rival's
+     * committed `post_status` change. The counter settles on 1 instead of 2 — permanently, because
+     * nothing ever repairs it. Locking the row FIRST means the UPDATE statement (and therefore its
+     * subquery) starts AFTER the rival committed, so the count it derives is the current one.
+     *
+     * SQLite needs nothing: every write is serialized (the async driver funnels transactions through
+     * one promise chain and the engine itself takes a global write lock), which is also why the test
+     * suite could never see this. It has no FOR UPDATE either, so asking for one there is a syntax
+     * error, not a no-op — hence the engine check.
+     *
+     * ORDER BY term_taxonomy_id is not decoration: two transactions locking the same set in different
+     * orders deadlock, and a stable order across every caller is what prevents it.
+     *
+     * Only meaningful inside a transaction (a bare autocommit SELECT releases the lock immediately),
+     * which is how every writer of this column calls it; a caller without one is no worse off than
+     * before.
+     */
+    static async _lockTermTaxonomies(taxonomy: string, termTaxonomyIds: any[] | null, q: any) {
+        // A failure here (a deadlock the engine broke, a lost connection) is NOT swallowed: it must
+        // roll the caller's transaction back so the write is retried, instead of being masked into a
+        // recount that silently derives from a stale snapshot.
+        const { isPostgres, isMySQL } = getDbType();
+        if (!isPostgres && !isMySQL) return;
+        if (termTaxonomyIds && termTaxonomyIds.length) {
+            const ph = termTaxonomyIds.map(() => '?').join(',');
+            await q.all(
+                `SELECT term_taxonomy_id FROM term_taxonomy
+                 WHERE taxonomy = ? AND term_taxonomy_id IN (${ph})
+                 ORDER BY term_taxonomy_id FOR UPDATE`,
+                [taxonomy, ...termTaxonomyIds]
+            );
+        } else {
+            await q.all(
+                `SELECT term_taxonomy_id FROM term_taxonomy WHERE taxonomy = ?
+                 ORDER BY term_taxonomy_id FOR UPDATE`,
+                [taxonomy]
+            );
+        }
     }
 }
 

@@ -127,3 +127,34 @@ logs/
 
 # Internal audit write-ups stay OUT of the public repo until their findings are remediated
 /AUDITORIA_*.md
+
+# ---------------------------------------------------------------------------
+# Debug artefacts. These are written by hand or by scripts/stitch-*.mjs during
+# investigation and MUST NOT be tracked: cj.txt is a curl cookie jar that holds
+# a LIVE wordjs_token whenever it is regenerated, and the page/mirror dumps are
+# whole-page payloads. release-excludes.test.ts already names three of them, but
+# it only filters `git ls-files` output — that protection INVERTS the moment they
+# become tracked, at which point they would ship inside the release ZIP.
+#
+# `/.debug-dumps/` is the rule that covers the CLASS, and it only works because the
+# PRODUCERS agree with it: scripts/stitch-dump-path.mjs `dumpPath()` resolves every
+# dump into that directory, including an operator-typed `--out probe.json` (which is
+# how page172.json / put208.json / mirror2.json were born uncovered). The literal
+# names below stay for the files already on disk from before that change.
+#
+# Names are not a gate, though: the next cookie jar can be called anything. The gate
+# is `.githooks/pre-commit` (`npm run hooks:install`), which scans staged CONTENT for
+# session tokens, pinned by backend/src/tests/repo-hygiene-secrets.test.ts.
+# ---------------------------------------------------------------------------
+cj.txt
+*.cookies
+cookies*.txt
+cookie-jar*.txt
+/.debug-dumps/
+/emitted.json
+/fidelity-diff.json
+/mirror*.json
+/page[0-9]*.json
+/put[0-9]*.json
+.stitch-cache/
+backend/plugins/stitch-themes/

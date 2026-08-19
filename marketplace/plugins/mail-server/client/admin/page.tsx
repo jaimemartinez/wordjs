@@ -721,10 +721,20 @@ export default function MailServerAdmin() {
     const emptyTrash = async () => {
         if (!await confirm('Are you sure you want to permanently delete all items in Trash?', 'Empty Trash', true)) return;
         try {
-            await api('/plugin/mail-server/trash/empty', { method: 'DELETE' });
-            setEmails([]);
+            // Report what the server ACTUALLY destroyed, and re-read the folder instead of blanking
+            // the list. Messages predating the mailbox upgrade that several accounts are parties to
+            // are deliberately NOT destroyed (destroying them would delete the other party's copy),
+            // so "Trash emptied" over a list we just cleared client-side would be a UI-level lie —
+            // the user reloads and the mail is back.
+            const res = await api('/plugin/mail-server/trash/empty', { method: 'DELETE' }) as any;
             setSelectedEmail(null);
-            setMessage({ type: 'success', text: 'Trash emptied' });
+            await loadData(searchQuery, true);
+            loadStats();
+            const deleted = typeof res?.deleted === 'number' ? res.deleted : null;
+            setMessage({
+                type: 'success',
+                text: deleted === null ? 'Trash emptied' : `Trash emptied (${deleted} message${deleted === 1 ? '' : 's'} deleted)`
+            });
         } catch (error: any) {
             setMessage({ type: 'error', text: error.message || 'Failed' });
         }
@@ -752,8 +762,12 @@ export default function MailServerAdmin() {
             if (selectedEmail?.id === id) setSelectedEmail(null);
             loadStats();
             setMessage({ type: 'success', text: isPermanent ? 'Deleted permanently' : 'Moved to trash' });
-        } catch (error) {
+        } catch (error: any) {
+            // A permanent delete can now be REFUSED (a pre-upgrade message several accounts are
+            // parties to must not be destroyed out from under the others). Swallowing that into a
+            // console line left the user staring at a row that did not disappear with no explanation.
             console.error("Delete failed:", error);
+            setMessage({ type: 'error', text: error?.message || 'Delete failed' });
         }
     };
 

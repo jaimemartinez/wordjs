@@ -375,9 +375,24 @@ class User {
             // ACTIVE CORPORATE MAILBOX grant (mass-assigning it through a route that forwards req.body.meta
             // would restore exactly the self-grant this whole change removes). Skip them here so a future
             // route forwarding req.body.meta into update() can't escalate or tamper with auth state.
+            //
+            // The same reasoning covers three FAMILIES of keys, matched by prefix rather than spelled out
+            // one by one — a list of names protects the keys that existed the day it was written, and the
+            // next member of the family arrives unprotected:
+            //   • `mfa_*` — the TOTP secret, the pending enrollment secret, the backup-code hashes, the
+            //     enabled flag and the anti-replay step counter. Reaching those through the generic bag
+            //     would enroll or disable a second factor without any of the proof /auth/mfa/* demands
+            //     (and rewinding mfa_totp_last_step would re-enable a already-used TOTP step).
+            //   • `password_reset_*` / `email_verification_*` — single-use credential material. Writing a
+            //     hash of a token you chose is a password reset for that account.
+            // No route forwards req.body.meta into update() today; that is precisely why the guard must be
+            // here, before one does.
             const PROTECTED_META = new Set(['role', 'token_valid_after', MAILBOX_META_KEY]);
+            const PROTECTED_META_PREFIXES = ['mfa_', 'password_reset_', 'email_verification_'];
+            const isProtectedMeta = (k: string) =>
+                PROTECTED_META.has(k) || PROTECTED_META_PREFIXES.some((p) => k.startsWith(p));
             for (const [key, value] of Object.entries(data.meta)) {
-                if (PROTECTED_META.has(key)) continue;
+                if (isProtectedMeta(key)) continue;
                 await User.updateMeta(id, key, value);
             }
         }

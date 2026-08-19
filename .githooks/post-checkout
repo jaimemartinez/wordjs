@@ -1,0 +1,5 @@
+#!/bin/sh
+# Delegation only: keeps the machine-local post-checkout running.
+. "$(dirname "$0")/_local.sh"
+run_local_hook post-checkout "$@"
+exit 0

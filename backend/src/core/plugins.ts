@@ -358,6 +358,66 @@ const PLUGINS_DIR_REAL = path.resolve('./plugins');
 const acorn = require('acorn');
 const walk = require('acorn-walk');
 
+// ── THE RESIDUE PASS' EXEMPTION TABLES ──────────────────────────────────────────────────────────────
+//
+// The residue pass is the only fail-closed part of the AST scan: an fs value sitting anywhere the
+// resolver did not consume is CHARGED the permission. Every entry below is therefore a WEAKENING of the
+// only honest thing this scanner does, and the two of them are the complete list of them.
+//
+// They used to be an inline array of PARENT NODE TYPES, and that shape is what let the class stay open:
+// 'PropertyDefinition', 'MethodDefinition' and 'AssignmentPattern' were listed as "not a use of the
+// value", which is true of a class field's NAME and false of its INITIALIZER — so `class B { fsx =
+// require('fs') }` and `function f(m = require('fs'))` were exempted from the very pass that exists to
+// catch what the resolver missed. A type is not a position. Each entry is now a PREDICATE over
+// (parent, node), so an exemption can only cover the syntactic slot whose justification it states.
+//
+// Exported so a gate can enumerate the exemptions from the code itself and demand a fail-closed probe
+// for each: adding a weakening here without proving it cannot hide an fs value turns that test red.
+
+/** parentType -> "in THIS slot the node is a name being introduced, never the value being used". */
+const RESIDUE_NOT_A_USE: Record<string, (parent: any, node: any) => boolean> = {
+    // Declaration / assignment TARGETS.
+    VariableDeclarator: (p, n) => p.id === n,
+    AssignmentExpression: (p, n) => p.left === n,
+    AssignmentPattern: (p, n) => p.left === n,          // `function f(fs = 1)` — the name, NOT the default
+    // Property NAMES (`o.fs`, `{ fs: 1 }`, `class C { fs = 1 }`, `class C { fs() {} }`).
+    MemberExpression: (p, n) => p.property === n,
+    Property: (p, n) => p.key === n,
+    PropertyDefinition: (p, n) => p.key === n,           // the field NAME; its value is charged
+    MethodDefinition: (p, n) => p.key === n,             // the method NAME; its body is walked normally
+    // Binding patterns: every identifier inside one is a name being introduced.
+    ObjectPattern: () => true,
+    ArrayPattern: () => true,
+    RestElement: () => true,
+    ImportSpecifier: () => true,
+    ImportDefaultSpecifier: () => true,
+    ImportNamespaceSpecifier: () => true,
+    // Function/class NAMES and PARAMETERS — but never a body or a default value.
+    FunctionDeclaration: (p, n) => p.id === n || (p.params || []).includes(n),
+    FunctionExpression: (p, n) => p.id === n || (p.params || []).includes(n),
+    ArrowFunctionExpression: (p, n) => (p.params || []).includes(n),
+    ClassDeclaration: (p, n) => p.id === n,
+    ClassExpression: (p, n) => p.id === n,
+    CatchClause: (p, n) => p.param === n,
+    // Labels are a namespace of their own.
+    LabeledStatement: (p, n) => p.label === n,
+    BreakStatement: (p, n) => p.label === n,
+    ContinueStatement: (p, n) => p.label === n,
+};
+
+/** parentType -> "the ENCLOSING expression is itself evaluated by the resolver, so judging the node
+ *  here would double-charge the same flow". These are not blind spots; they are the same value seen
+ *  one node earlier. */
+const RESIDUE_JUDGED_ELSEWHERE: Record<string, (parent: any, node: any) => boolean> = {
+    MemberExpression: (p, n) => p.object === n && !p.computed,   // `fs.writeFileSync` — the member is judged
+    CallExpression: (p, n) => p.callee === n,                    // `g()` — the call is judged
+    AwaitExpression: () => true,
+    ExpressionStatement: () => true,
+    ConditionalExpression: () => true,
+    LogicalExpression: () => true,
+    SequenceExpression: () => true,
+};
+
 /**
  * Static Analysis 2.0: AST-based scan
  * Detects API calls even if split, renamed, or accessed via global.
@@ -402,13 +462,121 @@ function validateManifestPermissions(permissions: any): string[] {
     return problems;
 }
 
-function validatePluginPermissions(slug: string, pluginPath: string, manifest: any) {
+/**
+ * ═══ WHAT THIS SCANNER IS, AND — MORE IMPORTANTLY — WHAT IT IS NOT ══════════════════════════════════
+ *
+ * It is a BEST-EFFORT, INSTALL-TIME WARNING. It reads a plugin's source and reports which capabilities
+ * the code appears to need, so the approval screen can tell an operator what they are being asked to
+ * grant. That is a genuinely useful thing and it is all this is.
+ *
+ * IT IS NOT THE GATE. No denial depends on it any more, and no claim of coverage should be read into a
+ * green run of it. The reason is structural, not a matter of effort: "does this code reach fs?" is a
+ * DATA-FLOW question, and this file answers it by walking an AST and recognising the SHAPES in which a
+ * value can be declared and carried. Three audit rounds in a row found new shapes — a class field, a
+ * static field, a private field, a default parameter, `this.x = require('fs')`, an object getter, a
+ * module returned from a helper — and each round the fix was another shape. That race cannot be won by
+ * enumeration: the population is "every JavaScript expression that can hold a value", and it grows with
+ * the language.
+ *
+ * KNOWN, DELIBERATE BLIND SPOTS (stated here so nobody has to rediscover them):
+ *   · The FILE SET is not the plugin's whole tree. getFiles() below skips node_modules, hidden dirs and,
+ *     for plugins, client/ frontend/ dist/ (browser bundles), and it only reads .js/.ts/.cjs/.mjs — so a
+ *     payload in dist/p.js, in .h/p.js, or in an extensionless file is never even opened, while Node can
+ *     still require() all three.
+ *   · Anything that leaves the file (a re-export, a value handed to a helper) is followed only as far as
+ *     the residue pass can charge it, and cross-file flow is not followed at all.
+ *   · Reflection — a computed member, a Proxy, `Function('return require')`, a string built at runtime —
+ *     is by construction outside what any AST walk can decide.
+ *
+ * WHERE THE ACTUAL DENIAL LIVES: at the moment of the call, in core/io-guard.ts (fsCapabilityRevoked +
+ * isPathSafe) and core/secure-require.ts (guardFsCall). By then the module object has been obtained and
+ * the syntax that carried it no longer exists, so no spelling can matter. A capability the plugin
+ * DECLARED and the administrator DID NOT GRANT is refused there, on every path including the plugin's
+ * own directory, and the refusal takes effect on the next call because the grant store is read live.
+ *
+ * What this scanner still buys, honestly:
+ *   · the approval screen's capability list (declaration mode), so an operator is not asked to approve
+ *     a blank cheque;
+ *   · a loud, early failure for the shapes it DOES follow, at install and at activation, which is
+ *     cheaper for an honest plugin author than a runtime EACCES;
+ *   · a fail-CLOSED residue pass: an fs value the resolver cannot follow to a call site is CHARGED the
+ *     permission rather than ignored, so an unrecognised shape over-reports instead of under-reporting.
+ * It buys no containment. Treat a clean scan as "nothing obvious was found", never as "this plugin
+ * cannot reach fs".
+ *
+ * The two modes of the AST scan, and WHY they must differ (audit #3 — "declaration ≠ authorization").
+ *
+ *  · 'declaration' (default) — the INSTALL-time pass. No grant record exists yet at install: the whole
+ *    point of that pass is to produce the requested-permission list the admin sees on the approval
+ *    screen before granting anything. Reading the grants there would reject every plugin that asks for
+ *    a capability, and the operator would never get the chance to say yes. It is also the mode for
+ *    THEMES (theme-engine.ts), which have no grant records at all.
+ *
+ *  · 'grant' — the ACTIVATION/LOAD pass (activate, cross-node load, boot load). Here the admin HAS had
+ *    the chance to decide, so a declared-but-DENIED capability must fail the scan. Before this, the
+ *    predicate read manifest.permissions only, so declaring `filesystem:write` passed the scanner even
+ *    when the admin had explicitly revoked it in /admin/plugins: the toggle persisted, reloaded the
+ *    isolate… and authorized nothing. Grant mode is strictly NARROWER than declaration mode (declared
+ *    AND granted), so it can never let through code that install-time validation would have rejected.
+ */
+type PermissionScanMode = 'declaration' | 'grant';
+
+function validatePluginPermissions(
+    slug: string,
+    pluginPath: string,
+    manifest: any,
+    options: { mode?: PermissionScanMode } = {},
+) {
+    // io-guard caches each slug's DECLARED permissions for the life of the process (a plugin cannot
+    // rewrite its own manifest at runtime — isPathSafe refuses that write). But an INSTALL or UPDATE
+    // rewrites it from outside the sandbox, and this function is called at exactly those moments (install,
+    // activation, boot load, and the revocation path in routes/plugins.ts). Dropping the entry here is
+    // what keeps the runtime gate reading the declaration that is on disk now, rather than the one that
+    // was there when this process first touched the plugin.
+    try { require('./io-guard').forgetDeclaredPermissions(slug); } catch { /* io-guard optional at boot */ }
+
     const permissions = manifest.permissions || [];
     const missingPermissions = new Set();
     const dangerousCalls = new Set();
+    const mode: PermissionScanMode = options.mode === 'grant' ? 'grant' : 'declaration';
 
-    const hasDeclared = (scope: any, access: any) => {
+    const declares = (scope: any, access: any) => {
         return permissions.some((p: any) => p.scope === scope && (p.access === access || p.access === 'admin'));
+    };
+
+    /**
+     * Did the OPERATOR grant this capability? Delegated to plugin-permissions.isGranted so there is ONE
+     * definition of what a grant token means (in particular `scope:admin` implies only read+write, never
+     * the high-power verbs). `network` is scope-only — its token is the bare literal, never
+     * `network:<access>` — so it routes to isNetworkGranted instead. Required lazily: this module is on
+     * the boot path and plugin-permissions pulls in options/plugin-context.
+     */
+    const isGrantedByAdmin = (scope: any, access: any) => {
+        try {
+            const perms = require('./plugin-permissions');
+            if (scope === 'network') return perms.isNetworkGranted(slug);
+            return perms.isGranted(slug, scope, access);
+        } catch {
+            return false; // fail CLOSED: no readable grant store ⇒ no authorization
+        }
+    };
+
+    // The predicate the scan actually consults. In grant mode it is the AND of the two halves, so the
+    // manifest still bounds what a grant can authorize (granting an undeclared scope stays inert, exactly
+    // as plugin-context.hasPermission already behaves at runtime).
+    const hasDeclared = (scope: any, access: any) => {
+        if (!declares(scope, access)) return false;
+        return mode === 'declaration' || isGrantedByAdmin(scope, access);
+    };
+
+    // Distinguishes the two failure shapes in the operator-facing message: "you forgot to declare it" is
+    // fixed by editing manifest.json; "you declared it and the admin denied it" is fixed in /admin/plugins.
+    // Same `missingPermissions` bucket either way — both are FIXABLE, unlike dangerousCalls.
+    const noteMissing = (label: string, scope: any, access: any) => {
+        if (!declares(scope, access)) { missingPermissions.add(label); return; } // unchanged legacy wording
+        const token = scope === 'network' ? 'network' : `${scope}:${access}`;
+        const hint = label.includes(`(${token})`) ? '' : ` (${token})`; // some labels already name the token
+        missingPermissions.add(`${label}${hint} — declared but NOT granted by the administrator; enable it in /admin/plugins`);
     };
 
     // Sensitive Node builtins. Reached via require(), dynamic import(), or static import — all three
@@ -451,7 +619,11 @@ function validatePluginPermissions(slug: string, pluginPath: string, manifest: a
         if (!SENSITIVE_MODULES.includes(moduleName)) return;
         if (moduleName === 'dns' || moduleName === 'net') {
             if (!hasDeclared('network', 'admin') && !hasDeclared('email', 'admin')) {
-                missingPermissions.add(`Network/System access (${kindLabel}('${moduleName}'))`);
+                // Either declaration satisfies this gate, so report against whichever one the manifest
+                // actually asked for — otherwise a plugin that declared email:admin and was denied it
+                // would be told it never declared anything, and the admin would edit the wrong thing.
+                noteMissing(`Network/System access (${kindLabel}('${moduleName}'))`,
+                    declares('network', 'admin') ? 'network' : 'email', 'admin');
             }
         } else if (moduleName !== 'fs') {
             dangerousCalls.add(`${kindLabel}('${moduleName}')`);
@@ -502,6 +674,55 @@ function validatePluginPermissions(slug: string, pluginPath: string, manifest: a
         'getOption': { scope: 'settings', access: 'read', label: 'Settings read' }
     };
 
+    // === WHICH EXPRESSIONS ARE THE FILESYSTEM MODULE? (a DATA-FLOW question, not a spelling one) ===
+    //
+    // THE CLASS — and it has now bitten three times: "does this code reach fs?" is a data-flow question,
+    // and every previous version of this gate answered it by ENUMERATING DECLARATION SHAPES. First the
+    // callee object had to be LITERALLY NAMED `fs`; then the two shapes the audit wrote out verbatim were
+    // added (`const q = require('fs'); q.writeFileSync(…)` and `const { writeFileSync } = require('fs')`);
+    // then `require('fs').x()` and `fs.promises`. Each round the NEXT spelling in the same family walked
+    // past with zero permissions declared, zero granted and a clean scan: a captured method
+    // (`const w = require('fs').writeFileSync`), an alias of an alias, a method off an alias, an
+    // assignment instead of a declaration, a function that RETURNS the module, a property of an object
+    // literal. Enumerating forms can only ever close the forms enumerated — and this scan is not advisory:
+    // routes/plugins.ts leans on it to REVOKE filesystem:write, so a form it cannot see used to make the
+    // admin's toggle inert. Own-dir writes DO have a per-call runtime gate now (io-guard's
+    // fsCapabilityRevoked, enforced in the isolate as well as on the host), which is what actually closed
+    // that class; this scan is the belt that refuses to ACTIVATE code needing a denied capability, so the
+    // operator learns at the switch instead of through a runtime error.
+    //
+    // So resolve the VALUE instead. Below is a small local abstract interpretation, per file:
+    //   · SOURCES  — require('fs'|'node:fs'|'fs/promises'|…), import … from 'fs', (await) import('fs')
+    //                — produce the value `ns` (the module namespace);
+    //   · MEMBERS  — a non-computed read off `ns` produces `m:<name>` (and `ns` again for `.promises`);
+    //   · FLOW     — the value propagates through declarations, assignments, destructuring (incl. nested),
+    //                object-literal properties, aliases-of-aliases and function RETURN values, iterated to
+    //                a FIXPOINT so a call above its own declaration still resolves.
+    // The call gate then asks what the callee EVALUATES to, once, instead of matching N shapes.
+    //
+    // No such analysis is complete, so the leftovers FAIL CLOSED: any fs value that escapes into a
+    // position this resolver does not follow (passed as an argument, exported, stored behind a computed
+    // member, returned from an untracked function…) demands the permission on the spot — see the residue
+    // pass below. EXTEND THE RESOLVER; never add a sibling shape-matcher next to it.
+    const FS_MODULE_NAMES = new Set(['fs', 'node:fs', 'fs/promises', 'node:fs/promises']);
+    const isFsRequireCall = (n: any): boolean =>
+        !!n && n.type === 'CallExpression' && n.callee && n.callee.type === 'Identifier'
+        && n.callee.name === 'require' && n.arguments.length > 0
+        && n.arguments[0].type === 'Literal' && FS_MODULE_NAMES.has(String(n.arguments[0].value));
+    const isFsImportExpr = (n: any): boolean =>
+        !!n && n.type === 'ImportExpression' && n.source && n.source.type === 'Literal'
+        && FS_MODULE_NAMES.has(String(n.source.value));
+    // Read-only fs methods — the SAME list the member-call gate has always used (unchanged on
+    // purpose: this change is about which CALLS are seen, never about relaxing what they require).
+    // Everything else is treated as a write, so an unknown name fails closed.
+    const FS_READ_METHODS = new Set(['readFileSync', 'readFile', 'createReadStream', 'existsSync', 'statSync']);
+    const noteFsCall = (methodName: string, how?: string) => {
+        const isRead = FS_READ_METHODS.has(methodName);
+        if (!hasDeclared('filesystem', isRead ? 'read' : 'write')) {
+            noteMissing(`Filesystem ${isRead ? 'Read' : 'Write'} (${how || `fs.${methodName || 'unknown'}`})`, 'filesystem', isRead ? 'read' : 'write');
+        }
+    };
+
     for (const file of files) {
         const content = fs.readFileSync(file, 'utf8');
         let ast;
@@ -513,6 +734,280 @@ function validatePluginPermissions(slug: string, pluginPath: string, manifest: a
             console.warn(`[Security] Could not parse ${logSafe(file)} for AST analysis — treating as a violation (fail-closed).`);
             dangerousCalls.add(`Unparseable source file (${path.basename(file)})`);
             continue;
+        }
+
+        // === THE PER-FILE VALUE ENVIRONMENT (see "WHICH EXPRESSIONS ARE THE FILESYSTEM MODULE?") ======
+        //
+        // fsEnv maps a KEY — an identifier name (`q`) or a dotted member path (`o.f`, `exports.fs`) — to
+        // the abstract value it holds: 'ns' (the fs namespace) or 'm:<method>' (one bound method).
+        // 'fs' is seeded so the historical spelling behaves exactly as it always did.
+        const fsEnv = new Map<string, string>([['fs', 'ns']]);
+        const fsFnReturns = new Map<string, string>();   // function key -> the fs value it RETURNS
+        const apiEnv = new Map<string, string>();        // local name -> apiAccess method it is an alias of
+        const resolvedUse = new Set<any>();              // AST nodes consumed by a form the resolver follows
+        let envChanged = true;   // read by the fixpoint loop below (first round always runs)
+        // Every bind* returns WHETHER IT ACTUALLY BOUND. That boolean is the safety net of the whole
+        // analysis: markUse() means "the resolver is now tracking this value, so the residue pass need
+        // not charge it", and calling it after a bind that silently did nothing DISARMS the fail-closed
+        // pass in precisely the case where the resolver failed. `this.fsx = require('fs')` was the
+        // demonstration — pathKey() had no key for a ThisExpression and bindPattern() cannot bind a
+        // MemberExpression, so nothing was tracked, yet the require was marked consumed and scanned
+        // clean. Nothing may be marked as consumed unless a bind returned true.
+        const bind = (key: string | null | undefined, val: string | null | undefined): boolean => {
+            if (!key || !val) return false;
+            if (fsEnv.get(key) !== val) { fsEnv.set(key, val); envChanged = true; }
+            return true;
+        };
+        const bindFn = (key: string | null | undefined, val: string | null | undefined): boolean => {
+            if (!key || !val) return false;
+            if (fsFnReturns.get(key) !== val) { fsFnReturns.set(key, val); envChanged = true; }
+            return true;
+        };
+        const bindApi = (key: string | null | undefined, val: string | null | undefined): boolean => {
+            if (!key || !val) return false;
+            if (apiEnv.get(key) !== val) { apiEnv.set(key, val); envChanged = true; }
+            return true;
+        };
+        const markUse = (n: any) => { if (n && !resolvedUse.has(n)) { resolvedUse.add(n); envChanged = true; } };
+        /** Dotted key for an identifier or a chain of non-computed members; null if any hop is dynamic. */
+        const pathKey = (n: any): string | null => {
+            if (!n) return null;
+            if (n.type === 'Identifier') return n.name;
+            // `this` gets a key so `this.fsx = require('fs')` in a constructor binds and
+            // `this.fsx.writeFileSync(...)` in a method resolves to a WRITE instead of falling to the
+            // residue pass as an anonymous escape. The key is file-scoped, not per-class: two classes in
+            // one file with the same field name share it. That is deliberately imprecise in the SAFE
+            // direction — it can only make more expressions resolve to an fs value, never fewer.
+            if (n.type === 'ThisExpression') return 'this';
+            if (n.type === 'MemberExpression' && !n.computed && n.property && n.property.type === 'Identifier') {
+                const base = pathKey(n.object);
+                return base ? `${base}.${n.property.name}` : null;
+            }
+            return null;
+        };
+        /** What fs value does this EXPRESSION evaluate to? 'ns' | 'm:<method>' | null. */
+        const evalFs = (n: any, depth = 0): string | null => {
+            if (!n || depth > 16) return null;
+            switch (n.type) {
+                case 'Identifier':
+                    return fsEnv.get(n.name) || null;
+                case 'MemberExpression': {
+                    if (n.computed) return null;   // dynamic member — flagged separately as obfuscation
+                    const obj = evalFs(n.object, depth + 1);
+                    const prop = n.property && n.property.type === 'Identifier' ? n.property.name : null;
+                    if (obj === 'ns' && prop) return prop === 'promises' ? 'ns' : `m:${prop}`;
+                    const key = pathKey(n);
+                    return (key && fsEnv.get(key)) || null;
+                }
+                case 'CallExpression': {
+                    if (isFsRequireCall(n)) return 'ns';                       // require('fs')
+                    const k = pathKey(n.callee);                               // g() / o.g() returning fs
+                    return (k && fsFnReturns.get(k)) || null;
+                }
+                case 'ImportExpression':
+                    return isFsImportExpr(n) ? 'ns' : null;
+                case 'AwaitExpression':
+                    return evalFs(n.argument, depth + 1);                      // await import('fs') / await g()
+                case 'ConditionalExpression':
+                    return evalFs(n.consequent, depth + 1) || evalFs(n.alternate, depth + 1);
+                case 'LogicalExpression':
+                    return evalFs(n.left, depth + 1) || evalFs(n.right, depth + 1);
+                case 'SequenceExpression':
+                    return evalFs(n.expressions[n.expressions.length - 1], depth + 1);
+                case 'ParenthesizedExpression':
+                case 'TSAsExpression':
+                case 'TSNonNullExpression':
+                    return evalFs((n as any).expression, depth + 1);
+                default:
+                    return null;
+            }
+        };
+        /** Bind a declaration target (identifier or destructuring pattern) to a resolved fs value. */
+        // Returns TRUE only if at least one name was actually bound (see the note on bind()). A pattern
+        // the resolver does not model — a MemberExpression target, an ArrayPattern, a nested shape past
+        // the depth cap — returns false, and the caller must then leave the value for the residue pass.
+        const bindPattern = (id: any, val: string, depth = 0): boolean => {
+            if (!id || depth > 4) return false;
+            if (id.type === 'Identifier') return bind(id.name, val);
+            if (id.type === 'AssignmentPattern') return bindPattern(id.left, val, depth + 1);
+            if (id.type !== 'ObjectPattern' || val !== 'ns') return false;
+            let bound = false;
+            for (const p of id.properties || []) {
+                if (p.type === 'RestElement') { bound = bindPattern(p.argument, 'ns', depth + 1) || bound; continue; }
+                if (p.type !== 'Property' || p.computed) continue;
+                const imported = p.key.type === 'Identifier' ? p.key.name
+                    : (p.key.type === 'Literal' ? String(p.key.value) : '');
+                if (!imported) continue;
+                const childVal = (imported === 'promises' || imported === 'default') ? 'ns' : `m:${imported}`;
+                bound = bindPattern(p.value, childVal, depth + 1) || bound;   // incl. `const { promises: { writeFile } } = fs`
+            }
+            return bound;
+        };
+        /**
+         * The fs value a function body RETURNS (arrow-expression body or any `return` inside it).
+         *
+         * The return expressions are COLLECTED into `sites` rather than marked as consumed here: whether
+         * they may be marked depends on whether the CALLER managed to bind the function under a key the
+         * resolver can look up again. A getter bound into a map nobody consults, or a function whose key
+         * came out null, must leave its `require('fs')` for the residue pass — marking it there was how
+         * `const h = { get f() { return require('fs'); } }` scanned clean.
+         */
+        const returnValueOf = (fnNode: any, sites?: any[]): string | null => {
+            if (!fnNode || !fnNode.body) return null;
+            if (fnNode.type === 'ArrowFunctionExpression' && fnNode.body.type !== 'BlockStatement') {
+                const v = evalFs(fnNode.body);
+                if (v && sites) sites.push(fnNode.body);
+                return v;
+            }
+            let found: string | null = null;
+            try {
+                walk.simple(fnNode.body, {
+                    ReturnStatement(r: any) {
+                        const v = evalFs(r.argument);
+                        if (v) { found = found || v; if (sites) sites.push(r.argument); }
+                    },
+                });
+            } catch { /* body shape we can't walk — the residue pass still fails closed */ }
+            return found;
+        };
+        /** Bind a function-shaped initializer under `key`, marking its return sites only if it bound. */
+        const bindFnFrom = (key: string | null, fnNode: any): boolean => {
+            const sites: any[] = [];
+            const bound = bindFn(key, returnValueOf(fnNode, sites));
+            if (bound) sites.forEach(markUse);
+            return bound;
+        };
+        /** Record fs values held by an object literal's properties: `const o = { f: require('fs') }`. */
+        const recordObjectLiteral = (baseKey: string | null, obj: any, depth = 0) => {
+            if (!baseKey || !obj || obj.type !== 'ObjectExpression' || depth > 4) return;
+            for (const p of obj.properties || []) {
+                if (p.type !== 'Property' || p.computed) continue;
+                const k = p.key.type === 'Identifier' ? p.key.name
+                    : (p.key.type === 'Literal' ? String(p.key.value) : '');
+                if (!k) continue;
+                const childKey = `${baseKey}.${k}`;
+                const v = evalFs(p.value);
+                if (v) { if (bind(childKey, v)) markUse(p.value); continue; }
+                if (p.value && p.value.type === 'ObjectExpression') { recordObjectLiteral(childKey, p.value, depth + 1); continue; }
+                if (p.value && (p.value.type === 'FunctionExpression' || p.value.type === 'ArrowFunctionExpression')) {
+                    // A GETTER is not a function you call — READING the property IS the value. Binding it
+                    // into fsFnReturns (which evalFs only consults for a CallExpression) left `holder.f`
+                    // resolving to null at the use site while its inner require was marked consumed, so
+                    // `{ get f() { return require('fs'); } }` reached fs with a clean scan. The equivalent
+                    // Object.defineProperty getter was blocked all along — the difference was pure syntax.
+                    const sites: any[] = [];
+                    const rv = returnValueOf(p.value, sites);
+                    const bound = p.kind === 'get' ? bind(childKey, rv) : bindFn(childKey, rv);
+                    if (bound) sites.forEach(markUse);
+                }
+            }
+        };
+        // Re-EXPORTING the module (or one of its methods) hands it to ANOTHER FILE, and this resolver is
+        // per-file: `module.exports = require('fs')` in a.js + `require('./a').writeFileSync(...)` in b.js
+        // would otherwise be two clean scans that add up to an ungranted write. Exported keys are bound
+        // (so calls in THIS file still resolve) but never marked as a resolved use, so the residue pass
+        // below charges the permission at the export site — the fail-closed answer to a flow that leaves
+        // the file. Covers CJS here; the ESM `export` forms are handled in the residue pass.
+        const isExportKey = (key: string | null | undefined): boolean =>
+            !!key && (key === 'exports' || key.startsWith('exports.')
+                || key === 'module.exports' || key.startsWith('module.exports.'));
+        /**
+         * Keys whose value the resolver binds for LOCAL readability but must never treat as consumed.
+         * `exports.*`/`module.exports.*` leave the file. `this.*` leaves the SCOPE: an instance property
+         * is readable from anywhere the instance travels (`new Box().fsx`, a getter, another module that
+         * received the object), and this resolver is per-file with no notion of which class `this` is.
+         * Binding them makes an in-file use resolve to the right verb; not marking them keeps the residue
+         * pass charging the permission, which is the honest answer for a flow we cannot follow to its end.
+         */
+        const isEscapingKey = (key: string | null | undefined): boolean =>
+            isExportKey(key) || key === 'this' || (!!key && key.startsWith('this.'));
+
+        // Names that are aliases of a permission-gated API method (`const d = wordjs.dbAsync; d(sql)`).
+        // Same class, same resolver: apiAccess is matched on the CALLED NAME, so a captured method used to
+        // slip past exactly like the fs ones did.
+        const apiNameOf = (n: any): string | null => {
+            if (!n) return null;
+            if (n.type === 'Identifier') return apiEnv.get(n.name) || (Object.prototype.hasOwnProperty.call(apiAccess, n.name) ? n.name : null);
+            if (n.type === 'MemberExpression' && !n.computed && n.property && n.property.type === 'Identifier') {
+                return Object.prototype.hasOwnProperty.call(apiAccess, n.property.name) ? n.property.name : null;
+            }
+            return null;
+        };
+
+        // BINDING PASS (per file), run BEFORE the main walk so a call that appears above its own
+        // declaration is still resolved, and ITERATED TO A FIXPOINT so aliases-of-aliases and
+        // functions declared after their use converge instead of depending on source order.
+        const collect = () => walk.simple(ast, {
+            VariableDeclarator(node: any) {
+                const init = node.init;
+                if (!init) return;
+                const val = evalFs(init);
+                if (val) {
+                    const bound = bindPattern(node.id, val);
+                    if (bound && !isExportKey(node.id && node.id.type === 'Identifier' ? node.id.name : null)) markUse(init);
+                    return;
+                }
+                const key = node.id && node.id.type === 'Identifier' ? node.id.name : null;
+                if (!key) return;
+                if (init.type === 'ObjectExpression') { recordObjectLiteral(key, init); return; }
+                if (init.type === 'FunctionExpression' || init.type === 'ArrowFunctionExpression') { bindFnFrom(key, init); return; }
+                if (init.type === 'Identifier' && fsFnReturns.has(init.name)) { bindFn(key, fsFnReturns.get(init.name)); return; }
+                bindApi(key, apiNameOf(init));
+            },
+            AssignmentExpression(node: any) {
+                if (node.operator !== '=') return;
+                const key = pathKey(node.left);
+                const val = evalFs(node.right);
+                if (val) {
+                    // `q = require('fs')`, `o.f = require('fs')`, `this.f = require('fs')`,
+                    // `({ writeFileSync } = require('fs'))`. markUse is conditional on the bind having
+                    // HAPPENED — a target the resolver cannot key (a computed member, an array pattern)
+                    // must fall through to the residue pass, not be silently declared "handled".
+                    const bound = key ? bind(key, val) : bindPattern(node.left, val);
+                    if (bound && !isEscapingKey(key)) markUse(node.right);   // exporting / `this` is an escape (see above)
+                    return;
+                }
+                if (!key) return;
+                if (node.right.type === 'ObjectExpression') { recordObjectLiteral(key, node.right); return; }
+                if (node.right.type === 'FunctionExpression' || node.right.type === 'ArrowFunctionExpression') { bindFnFrom(key, node.right); return; }
+                if (node.right.type === 'Identifier' && fsFnReturns.has(node.right.name)) { bindFn(key, fsFnReturns.get(node.right.name)); return; }
+                bindApi(key, apiNameOf(node.right));
+            },
+            FunctionDeclaration(node: any) {
+                if (node.id && node.id.type === 'Identifier') bindFnFrom(node.id.name, node);
+            },
+            // A CLASS FIELD is an assignment with different punctuation: `class B { fsx = require('fs') }`.
+            // It was in neither the binding pass nor (as a parent type) chargeable by the residue pass, so
+            // it was the single cheapest way to hold the fs module invisibly. Binding `this.<field>` lets a
+            // use INSIDE the class resolve to the right verb (write vs read) so the operator gets a useful
+            // label — but the value is deliberately NEVER marked as consumed here, because a field can
+            // equally be read from OUTSIDE (`new B().fsx`, a `static` read as `B.fsx`, a private `#fsx`),
+            // and this per-file resolver has no key for any of those. Binding without marking means the
+            // residue pass still charges the permission: better attribution, no loss of fail-closed.
+            PropertyDefinition(node: any) {
+                if (!node.value || node.static) return;
+                const val = evalFs(node.value);
+                const kName = node.key && node.key.type === 'Identifier' && !node.computed ? node.key.name : null;
+                if (!val || !kName) return;
+                bind(`this.${kName}`, val);
+            },
+            ImportDeclaration(node: any) {
+                if (!node.source || node.source.type !== 'Literal') return;
+                if (!FS_MODULE_NAMES.has(String(node.source.value))) return;
+                for (const s of node.specifiers || []) {
+                    if (s.type === 'ImportDefaultSpecifier' || s.type === 'ImportNamespaceSpecifier') {
+                        bind(s.local.name, 'ns');                      // import fsx, * as fsy from 'fs'
+                    } else if (s.type === 'ImportSpecifier') {
+                        const imported = s.imported && s.imported.type === 'Identifier'
+                            ? s.imported.name : String(s.imported && s.imported.value);
+                        if (imported) bind(s.local.name, (imported === 'promises' || imported === 'default') ? 'ns' : `m:${imported}`);
+                    }
+                }
+            },
+        });
+        for (let round = 0; round < 8 && envChanged; round++) {   // monotone (maps only grow) ⇒ terminates
+            envChanged = false;
+            collect();
         }
 
         walk.ancestor(ast, {
@@ -557,22 +1052,29 @@ function validatePluginPermissions(slug: string, pluginPath: string, manifest: a
                         dangerousCalls.add(`Computed/Dynamic Call (obfuscation risk)`);
                     }
 
-                    // Special handling for fs
-                    if (node.callee.object.type === 'Identifier' && node.callee.object.name === 'fs') {
-                        const isRead = ['readFileSync', 'readFile', 'createReadStream', 'existsSync', 'statSync'].includes(name);
-                        const scope = 'filesystem';
-                        const access = isRead ? 'read' : 'write';
-                        if (!hasDeclared(scope, access)) {
-                            missingPermissions.add(`Filesystem ${isRead ? 'Read' : 'Write'} (fs.${name || 'unknown'})`);
-                        }
-                    }
                 }
 
-                // SAFE LOOKUP: Prevent prototype-based false positives (like toString)
-                if (name && Object.prototype.hasOwnProperty.call(apiAccess, name)) {
-                    const { scope, access, label } = (apiAccess as any)[name];
+                // === THE FS GATE: ONE question, asked of the VALUE the callee evaluates to ===
+                // There is deliberately no list of call shapes here any more. `fs.x()`, `q.x()`,
+                // `require('fs').x()`, `p.x()` (p = fs.promises), a bare `writeFileSync()` destructured out
+                // of it, a captured `w = require('fs').writeFileSync`, an alias of an alias, `o.f.x()`,
+                // `g().x()` where g returns the module — every one of them is the SAME fact to the
+                // resolver above, and a new spelling is covered without touching this line.
+                const calleeVal = evalFs(node.callee);
+                if (calleeVal) {
+                    markUse(node.callee);
+                    if (calleeVal.startsWith('m:')) noteFsCall(calleeVal.slice(2));
+                    // Calling the namespace ITSELF (`require('fs')(…)`) is not a known read → fails closed.
+                    else noteFsCall('', 'the fs module value is called directly');
+                }
+
+                // SAFE LOOKUP: Prevent prototype-based false positives (like toString). Asked of the
+                // BINDING too (`const d = wordjs.dbAsync; d(sql)`), same class as the fs gate above.
+                const apiName = (name && Object.prototype.hasOwnProperty.call(apiAccess, name)) ? name : apiNameOf(node.callee);
+                if (apiName && Object.prototype.hasOwnProperty.call(apiAccess, apiName)) {
+                    const { scope, access, label } = (apiAccess as any)[apiName];
                     if (!hasDeclared(scope, access)) {
-                        missingPermissions.add(`${label} (${scope}:${access})`);
+                        noteMissing(`${label} (${scope}:${access})`, scope, access);
                     }
                 }
 
@@ -702,6 +1204,61 @@ function validatePluginPermissions(slug: string, pluginPath: string, manifest: a
                 }
             }
         });
+
+        // === RESIDUE PASS: WHAT THE RESOLVER COULD NOT FOLLOW FAILS CLOSED =========================
+        //
+        // The resolver above is deliberately small, so it is INCOMPLETE — and an incomplete analysis that
+        // stays silent about its own blind spots is exactly how the previous three versions of this gate
+        // shipped a bypass. So the leftovers are charged instead of ignored: if an fs value (the module,
+        // or one of its methods) appears anywhere that is NOT one of the positions the resolver follows —
+        // handed to a function (`helper(fs)`), exported, stored behind a computed member, returned from a
+        // shape we did not bind — then the plugin must hold the permission for it, because from here on we
+        // cannot say what it does with it. A method whose name is a known read costs `filesystem:read`;
+        // anything else (the namespace, an unknown method) costs `filesystem:write`.
+        //
+        // Extending the resolver REMOVES entries from here; it never needs a new check of its own.
+        walk.ancestor(ast, {
+            Identifier: checkFsEscape,
+            MemberExpression: checkFsEscape,
+            CallExpression: checkFsEscape,
+            ImportExpression: checkFsEscape,
+            AwaitExpression: checkFsEscape,
+            // The ESM twins of `module.exports = require('fs')` — same escape, different syntax.
+            ExportNamedDeclaration(node: any) {
+                for (const sp of node.specifiers || []) noteEscape(evalFs(sp.local));
+                const decl = node.declaration;
+                if (decl && decl.type === 'VariableDeclaration') {
+                    for (const d of decl.declarations || []) noteEscape(evalFs(d.id));
+                }
+            },
+            ExportDefaultDeclaration(node: any) { noteEscape(evalFs(node.declaration)); },
+            ExportAllDeclaration(node: any) {
+                if (node.source && node.source.type === 'Literal' && FS_MODULE_NAMES.has(String(node.source.value))) {
+                    noteFsCall('', 're-exporting the fs module escapes static analysis here');
+                }
+            },
+        });
+        function noteEscape(val: string | null) {
+            if (!val) return;
+            noteFsCall(val.startsWith('m:') ? val.slice(2) : '',
+                val.startsWith('m:')
+                    ? `fs.${val.slice(2)} — the bound method escapes static analysis here`
+                    : 'the fs module value escapes static analysis here');
+        }
+        function checkFsEscape(node: any, ancestors: any[]) {
+            const val = evalFs(node);
+            if (!val) return;
+            if (resolvedUse.has(node)) return;                       // consumed by a binding we resolved
+            const parent = ancestors.length >= 2 ? ancestors[ancestors.length - 2] : null;
+            if (!parent) return;
+            // (a) NOT a use of the value at all — a declaration target, a property NAME, a parameter name.
+            const notAUse = RESIDUE_NOT_A_USE[parent.type];
+            if (notAUse && notAUse(parent, node)) return;
+            // (b) a position the gates above already judged: the enclosing member/call is evaluated itself.
+            const judged = RESIDUE_JUDGED_ELSEWHERE[parent.type];
+            if (judged && judged(parent, node)) return;
+            noteEscape(val);
+        }
     }
 
     const errors: string[] = [];
@@ -869,15 +1426,39 @@ async function isPluginActive(slug: string) {
  * activate/deactivate/CrashGuard each did `read → mutate array → updateOption(whole array)`, a
  * non-atomic read-modify-write of the WHOLE list. Two concurrent admin actions (or an activation
  * racing CrashGuard's boot-time disable) both read the same base array and both overwrite it, so one
- * change is silently LOST. We serialize ONLY the option read+write under the existing distributed
- * lock ('wordjs:active-plugins'). On Postgres/multi-node this is a real cross-node mutex; on SQLite
- * acquireBlocking is a no-op-held (single host) and the now-atomic updateOption UPSERT keeps it
- * correct. The lock is scoped to JUST the read+write (NOT worker start/stop) to avoid any deadlock or
- * holding the lease across slow plugin I/O.
+ * change is silently LOST. We serialize ONLY the option read+write (NOT worker start/stop) to avoid any
+ * deadlock or holding a lease across slow plugin I/O, at TWO levels — both are needed:
+ *
+ *  · ACROSS nodes: the distributed lock 'wordjs:active-plugins'. Real on Postgres/multi-node.
+ *  · WITHIN this process: `_activePluginsChain`. The dist-lock is a deliberate NO-OP on SQLite (single
+ *    host, so there is no cross-process contention to resolve), and the earlier comment here claimed
+ *    "the now-atomic updateOption UPSERT keeps it correct" — it does not. The UPSERT is atomic for the
+ *    WRITE of the array; the cycle is read → mutate → write with an `await` at every step, and Node is
+ *    single-THREADED but not atomic ACROSS awaits. Two concurrent requests in one process (activate +
+ *    deactivate, or an activation racing CrashGuard's boot-time disable) both read the same base array
+ *    and the second write clobbers the first — exactly the lost update the dist-lock was added to stop,
+ *    on the deployment shape most installs actually run. The promise chain closes it; it also makes the
+ *    Postgres path re-entrancy-safe, since dist-lock leases are keyed per PROCESS (HOLDER), so two
+ *    in-process callers could otherwise both "hold" the same lease.
  *
  * `mutator(active)` returns the new array (or undefined to leave it unchanged).
  */
+let _activePluginsChain: Promise<any> = Promise.resolve();
 async function withActivePluginsLock(mutator: (active: string[]) => string[] | undefined | Promise<string[] | undefined>) {
+    const prev = _activePluginsChain;
+    let release!: () => void;
+    _activePluginsChain = new Promise<void>((r) => { release = r; });
+    // A prior failed mutation must not wedge the queue for everyone behind it.
+    await prev.catch(() => { /* ignore the predecessor's outcome, only its completion */ });
+    try {
+        return await _withActivePluginsDistLock(mutator);
+    } finally {
+        release();
+    }
+}
+
+/** The cross-node half. Only ever called from inside the in-process chain above. */
+async function _withActivePluginsDistLock(mutator: (active: string[]) => string[] | undefined | Promise<string[] | undefined>) {
     const { acquireBlocking } = require('./dist-lock');
     const lock = await acquireBlocking('wordjs:active-plugins', { ttlMs: 15000, timeoutMs: 15000 });
     if (!lock.held) {
@@ -971,8 +1552,10 @@ async function _activatePluginUnlocked(slug: string) {
         try {
             const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
 
-            // 0. Static Permission Verification
-            validatePluginPermissions(slug, plugin.path, manifest);
+            // 0. Static Permission Verification. GRANT mode: the admin has already seen the requested
+            // permissions (install-time validation fed that screen), so from here a capability that was
+            // declared but DENIED must block activation — otherwise the per-permission switch is inert.
+            validatePluginPermissions(slug, plugin.path, manifest, { mode: 'grant' });
 
             // 1a. Check if this is a bundled plugin
             const isBundled = isBundledPlugin(plugin.path, manifest);
@@ -1127,7 +1710,10 @@ async function loadOnePlugin(slug: string) {
     if (fs.existsSync(manifestPath)) { try { manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')); } catch { /* */ } }
     if (!manifest || !manifest.isolated) return false;
     try {
-        validatePluginPermissions(slug, plugin.path, manifest); // re-validate locally (code-poisoning guard)
+        // Re-validate locally (code-poisoning guard). GRANT mode: grants are replicated through the same
+        // `plugin_grants` option this node already loaded, so a capability the admin revoked on ANOTHER
+        // node must not be authorized here just because the manifest still declares it.
+        validatePluginPermissions(slug, plugin.path, manifest, { mode: 'grant' });
         await installPluginDependencies(slug, manifest, plugin.path); // shared node_modules; idempotent
         try { unloadIsolatedPlugin(slug); } catch { /* not loaded here yet */ }
         await loadIsolatedPlugin(slug, mainFile);
@@ -1222,8 +1808,12 @@ async function loadActivePlugins() {
             try {
                 manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
 
-                // CRITICAL: Re-validate permissions on every boot to prevent code poisoning
-                validatePluginPermissions(slug, plugin.path, manifest);
+                // CRITICAL: Re-validate permissions on every boot to prevent code poisoning. GRANT mode
+                // is safe here because index.ts loads plugin_grants (and backfills already-active
+                // plugins with their declared set) BEFORE calling loadActivePlugins — so an install
+                // predating the grant store still boots, while a revoked capability stays revoked
+                // across restarts instead of quietly coming back.
+                validatePluginPermissions(slug, plugin.path, manifest, { mode: 'grant' });
 
                 await installPluginDependencies(slug, manifest, plugin.path);
             } catch (e) {
@@ -1372,6 +1962,10 @@ module.exports = {
     getAllPlugins,
     createSamplePlugin,
     validatePluginPermissions,
+    // The residue pass' exemption tables — every weakening of the only fail-closed part of the scan.
+    // Exported so a gate can enumerate them from the code instead of restating them in a test.
+    RESIDUE_NOT_A_USE,
+    RESIDUE_JUDGED_ELSEWHERE,
     validateManifestPermissions,
     KNOWN_PERMISSIONS,
     fixMiddlewareOrder,

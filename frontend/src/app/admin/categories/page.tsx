@@ -10,6 +10,12 @@ export default function CategoriesPage() {
     const { t } = useI18n();
     const { confirm } = useModal();
     const [categories, setCategories] = useState<Category[]>([]);
+    // Lo que la BD dice que hay, tal cual lo manda X-WP-Total, y si la lectura acotada se quedó
+    // corta. El subtítulo contaba `categories.length`, que con la lectura sin paginar de antes era
+    // SIEMPRE 100 como mucho: a partir de la 101 no se podía ni ver ni borrar una categoría, y la
+    // cabecera afirmaba que no existían.
+    const [total, setTotal] = useState(0);
+    const [truncated, setTruncated] = useState(false);
     const [loading, setLoading] = useState(true);
     const [newCategory, setNewCategory] = useState("");
 
@@ -19,8 +25,10 @@ export default function CategoriesPage() {
 
     const loadCategories = async () => {
         try {
-            const data = await categoriesApi.list();
-            setCategories(data);
+            const res = await categoriesApi.listAll();
+            setCategories(res.data);
+            setTotal(res.total);
+            setTruncated(res.truncated);
         } catch (error) {
             console.error("Failed to load categories:", error);
         } finally {
@@ -54,7 +62,12 @@ export default function CategoriesPage() {
         <div className="p-8 md:p-12 h-full overflow-auto bg-gray-50/50 min-h-full animate-in fade-in duration-500">
             <PageHeader
                 title={t('categories.title') || "Categories"}
-                subtitle={`${categories.length} ${t('categories.count') || 'categories'}`}
+                subtitle={
+                    // El total es el de la BD; si la lectura acotada no las trajo todas se DICE,
+                    // en vez de dejar creer que la tabla de abajo es la taxonomía entera.
+                    `${Math.max(total, categories.length)} ${t('categories.count') || 'categories'}` +
+                    (truncated ? ` · ${categories.length} ${t('loaded') || 'loaded'}` : '')
+                }
             />
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">

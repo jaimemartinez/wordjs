@@ -6,7 +6,10 @@
  * check permissions at RUNTIME, making the security system immune to code obfuscation.
  */
 
-const { getEffectivePlugin, hasPermission } = require('./plugin-context');
+// hasPermission is deliberately NOT imported: the filesystem gate now asks io-guard for BOTH halves
+// (see guardFsCall), because plugin-context reads the grant map directly and that map is only ever
+// populated on the host — inside an isolate it is empty, and "unreadable" is not "refused".
+const { getEffectivePlugin } = require('./plugin-context');
 const originalFs = require('fs');
 const originalChildProcess = require('child_process');
 // Real os captured at LOAD time (before the require hook installs), so the os scrub below can read the
@@ -96,7 +99,7 @@ function guardFsCall(pluginSlug: string, prop: string, args: any[]): void {
             args[1] = safe;
         }
     }
-    const { isPathSafe } = require('./io-guard');
+    const { isPathSafe, fsCapabilityRevoked, fsCapabilityAllowed, isModuleLoaderRead } = require('./io-guard');
     // [path, isWriteForThatPath] pairs: two-path ops read arg0 + write arg1; everything else is arg0.
     const pairs: [any, boolean][] = FS_TWO_PATH.has(p)
         ? [[args[0], false], [args[1], true]]
@@ -109,11 +112,51 @@ function guardFsCall(pluginSlug: string, prop: string, args: any[]): void {
             // path check — deny it. A plugin must go through a path-checked open()/read()/write().
             throw createSecurityError(pluginSlug, `fs.${String(prop)}`, 'fd-based / pathless file access is not permitted for plugins');
         }
-        if (!isPathSafe(targetPath, isWrite)) {
+        // Hand io-guard the slug we already resolved: resolving it again there costs a full stack walk
+        // when the ALS context is empty (see isPathSafe's `knownSlug`).
+        if (!isPathSafe(targetPath, isWrite, pluginSlug)) {
             throw createSecurityError(pluginSlug, `fs.${String(prop)}`, targetPath);
         }
-        if (!isPathWithinPluginDir(pluginSlug, targetPath) && !hasPermission('filesystem', isWrite ? 'write' : 'read')) {
-            throw createSecurityError(pluginSlug, `fs.${String(prop)}`, targetPath);
+        // ── THE CAPABILITY DECISION, TAKEN AT THE CALL ──────────────────────────────────────────────
+        //
+        // This is the enforcement point that cannot be out-spelled. Whatever syntax carried the module
+        // value here — a plain `const fs = require('fs')`, a class field, a default parameter,
+        // `this.x = require('fs')`, a getter, a module returned from a helper, a file the AST scanner
+        // never even opened because it lives under dist/ — by now the value has been obtained and the
+        // spelling is gone. Only the effective permission and the path are left, and both are known.
+        //
+        // Two halves, and they answer two different questions:
+        //   (1) OUTSIDE the plugin's own directory the grant is required outright (fsCapabilityAllowed =
+        //       declared AND granted). Unchanged.
+        //   (2) INSIDE it, private storage stays free for a plugin that never asked for the
+        //       capability — but a capability the plugin DECLARED and the administrator REFUSED is
+        //       denied here too. Until this line existed, the own directory was authorized by
+        //       geography alone and core/plugins.ts' AST scanner was the only thing between a revoked
+        //       `filesystem:write` and a real write, which is why revoking it kept turning out to be
+        //       inert: every round the scanner learned a spelling and the next one walked past.
+        //
+        // BOTH questions are asked of io-guard, so the raw-fs surface (io-guard's own patches) and this
+        // proxy cannot drift on what "the admin said yes/no" means; isPathSafe above already applied the
+        // own-dir half, and repeating it here is deliberate — this proxy is the plugin-facing door and
+        // must not depend on another module's internal ordering to fail closed.
+        //
+        // The outside-the-dir half used plugin-context.hasPermission(), which reads the grant map
+        // DIRECTLY. That map is only ever populated on the HOST (loadGrants needs the DB), so inside an
+        // isolate — where every plugin actually runs — it answered "not granted" for a granted plugin and
+        // this branch denied writes to data/ and logs/ that the operator had allowed. fsCapabilityAllowed
+        // asks the same declared-AND-granted question but knows the answer lives in the host-pushed cfg
+        // when we are in a child. Same semantics on the host, correct semantics in the isolate.
+        if (!isPathWithinPluginDir(pluginSlug, targetPath)) {
+            if (!fsCapabilityAllowed(pluginSlug, isWrite ? 'write' : 'read')) {
+                throw createSecurityError(pluginSlug, `fs.${String(prop)}`, targetPath);
+            }
+        } else if (!isModuleLoaderRead(targetPath, isWrite) && fsCapabilityRevoked(pluginSlug, isWrite ? 'write' : 'read')) {
+            // The carve-out is io-guard's, applied verbatim: the module loader's reads of the plugin's own
+            // code are not the plugin exercising a capability, and refusing them stops the isolate booting
+            // rather than stopping it reading. Both copies of this gate must exempt exactly the same set,
+            // or a require() resolves through one fs surface and EACCESes on the other.
+            throw createSecurityError(pluginSlug, `fs.${String(prop)}`,
+                `filesystem:${isWrite ? 'write' : 'read'} is declared but NOT granted by the administrator — ${targetPath}`);
         }
     }
 }
@@ -229,7 +272,12 @@ function createSecureFs() {
             if (FS_LINK_DENIED.includes(prop) || FS_READ_METHODS.includes(prop) || FS_WRITE_METHODS.includes(prop)) {
                 return function (...args: any[]) {
                     guardFsCall(pluginSlug, prop, args);
-                    return originalMethod.apply(target, args);
+                    // Resolve the method AT CALL TIME, not when the property was read: guardFsCall's
+                    // `require('./io-guard')` may have installed the fs patches in between, and the
+                    // captured pre-patch function would skip io-guard's path check and disk metering
+                    // entirely (io-guard is the single accounting for both fs surfaces).
+                    const live = target[prop];
+                    return (typeof live === 'function' ? live : originalMethod).apply(target, args);
                 };
             }
 
@@ -983,46 +1031,26 @@ function installSecureRequire() {
 /**
  * Create secure version of fs/promises
  */
-// Per-plugin disk write quota for the fs.promises path. io-guard's patch() only wraps the callback/sync
-// fs methods, so fs.promises.writeFile/appendFile (and FileHandle.write) would otherwise bypass the disk
-// quota and re-open the raw-fs disk-fill DoS. Meter them against io-guard's SAME per-plugin budget.
-function meterPromiseWrite(slug: string, prop: string, args: any[]): void {
-    let io: any;
-    try { io = require('./io-guard'); } catch { return; }
-    if (!io || typeof io.enforceGrowQuota !== 'function') return;
-    // fs.promises.writeFile/appendFile (unlike the callback API) accept an AsyncIterable | Iterable | Stream
-    // and stream ALL of it to disk — byteLenOf can't measure that, so it would go UNMETERED and re-open the
-    // disk-fill DoS (#14/#24). Require measurable data (string / Buffer / TypedArray / DataView) from plugins.
-    if (prop === 'writeFile' || prop === 'appendFile') {
-        const d = args[1];
-        if (d != null && typeof d !== 'string' && !Buffer.isBuffer(d) && !ArrayBuffer.isView(d)) {
-            throw createSecurityError(slug, `fs.promises.${prop}`, 'streaming/iterable write data is not permitted in the sandbox (use a string or Buffer)');
-        }
-    }
-    if (prop === 'mkdir') {
-        // Directory creation consumes inodes/dir-entries; meter it so a `fs.promises.mkdir` flood can't
-        // inode-exhaust the shared volume (the io-guard callback path is metered separately — this closes
-        // the fs.promises hole). One FS-block floor per call bounds the flood at the same rate as the
-        // distinct-filename writeFile floor; the per-call charge is what stops the loop.
-        io.enforceGrowQuota(slug, 4096);
-        return;
-    }
-    if (prop === 'appendFile') { io.enforceGrowQuota(slug, io.byteLenOf(args[1])); return; }
-    if (prop === 'truncate') { io.enforceGrowQuota(slug, Math.max(0, Number(args[1]) || 0)); return; } // truncate(path,len): len allocates (#24)
-    if (prop === 'copyFile' || prop === 'cp') {
-        // copyFile/cp DUPLICATE a file (a genuine byte-writer the fix must meter) → charge the SOURCE size
-        // to the rolling grow quota (#14). Use the RAW fs to stat so it isn't re-gated as a plugin read.
-        let sz = 0; try { sz = originalFs.statSync(args[0]).size; } catch { /* src unstattable */ }
-        io.enforceGrowQuota(slug, sz);
-        return;
-    }
-    if (prop === 'writeFile') {
-        // EVERY writeFile accumulates against the rolling grow-quota (which itself enforces the per-call
-        // single cap first), so a distinct-filename flood via fs.promises can't fill the disk either —
-        // matching io-guard's callback-path fix. Append ({flag:'a'} or numeric O_APPEND) is the same
-        // growth path; overwrite-writes to distinct names must accumulate too (#14). Floor at one FS block
-        // so a 0-byte distinct-filename flood (inode/dir-entry exhaustion) still accrues quota.
-        io.enforceGrowQuota(slug, Math.max(io.byteLenOf(args[1]), 4096));
+// ONE ACCOUNTING PER WRITE — the quota lives in io-guard, NOT here.
+//
+// REGRESSION THIS CLOSES: this proxy wraps `originalFs.promises`, which is the very object io-guard
+// patches in place, so the guarded method the proxy invokes ALREADY meters the write. Metering here as
+// well charged every plugin fs.promises write TWICE against the 512MB/60s rolling window (and mkdir at
+// 4096 + 4096xcomponents), so a plugin hit EDQUOT at half its real budget. Two layers that no longer knew
+// about each other — the same class the fs.promises patch was introduced to remove. io-guard's patch is
+// the single policy for fs.promises path checks and byte/inode accounting; what stays here is what
+// io-guard CANNOT do: the link/fd denials, the own-dir-or-grant gate, FileHandle wrapping, and this one:
+//
+// fs.promises.writeFile/appendFile (unlike the callback API) accept an AsyncIterable | Iterable | Stream
+// and stream ALL of it to disk. byteLenOf cannot measure that, so io-guard would charge ~0 for an
+// unbounded write — the disk-fill DoS (#14/#24) through the one door the meter cannot see. Plugins must
+// therefore hand over MEASURABLE data (string / Buffer / TypedArray / DataView); the deny runs before the
+// call reaches the metered method.
+function denyUnmeasurablePromiseWrite(slug: string, prop: string, args: any[]): void {
+    if (prop !== 'writeFile' && prop !== 'appendFile') return;
+    const d = args[1];
+    if (d != null && typeof d !== 'string' && !Buffer.isBuffer(d) && !ArrayBuffer.isView(d)) {
+        throw createSecurityError(slug, `fs.promises.${prop}`, 'streaming/iterable write data is not permitted in the sandbox (use a string or Buffer)');
     }
 }
 // A FileHandle (from fs.promises.open) exposes write/writeFile/appendFile that also skip io-guard — meter
@@ -1111,8 +1139,13 @@ function createSecureFsPromises() {
                     guardFsCall(pluginSlug, String(prop), args);
                     // Meter disk writes (own-dir writes bypass the callback-fs io-guard patch). Throws past
                     // the budget. 'open' writes no data here — its FileHandle is metered via wrapFileHandle.
-                    if (isWrite && prop !== 'open' && prop !== 'openSync') meterPromiseWrite(pluginSlug, String(prop), args);
-                    const r = await originalMethod.apply(target, args);
+                    if (isWrite && prop !== 'open' && prop !== 'openSync') denyUnmeasurablePromiseWrite(pluginSlug, String(prop), args);
+                    // Read the method OFF THE TARGET AT CALL TIME, not the one captured when the property
+                    // was read: guardFsCall's `require('./io-guard')` may have installed the patch in
+                    // between, and calling the pre-patch function would skip the quota entirely (the
+                    // accounting now lives there and only there).
+                    const live = target[prop];
+                    const r = await (typeof live === 'function' ? live : originalMethod).apply(target, args);
                     return prop === 'open' ? wrapFileHandle(pluginSlug, r) : r;
                 };
             }
@@ -1165,5 +1198,14 @@ module.exports = {
     // Export for testing
     secureFs,
     secureChildProcess,
-    createSecureOs
+    createSecureOs,
+    // The fs classification the runtime gate actually uses. Exported so a gate can DERIVE its population
+    // from the code instead of restating it: every name in these arrays is a path-taking fs entry point
+    // that guardFsCall confines, and anything on `fs` that is in none of them is refused by the
+    // deny-by-default arm of the proxy. Add a name here and the derived test covers it without editing
+    // the test; classify a name wrongly and the test says so.
+    FS_READ_METHODS,
+    FS_WRITE_METHODS,
+    FS_LINK_DENIED,
+    guardFsCall,
 };

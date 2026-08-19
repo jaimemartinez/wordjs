@@ -3,6 +3,9 @@ const fs = require('fs');
 const config = require('../../config/app');
 const configManager = require('../../core/configManager');
 const dbManager = require('../../config/database');
+// THE one TEXT→MySQL-type rule, shared with drivers/mysql.ts. Dependency-free on purpose (it does not
+// pull in mysql2), so requiring it here keeps migration.js loadable on an install that has no MySQL.
+const { rewriteTextForMysql } = require('../../drivers/mysql-text-rule');
 
 let globalStatus = { step: 'idle', progress: 0, currentTable: '', totalTables: 0, warnings: [] };
 let targetEncoding = 'UTF8';
@@ -86,8 +89,9 @@ async function listSourceTables(readAll, sourceDriverName) {
 // (MySQL: AUTOINCREMENT→AUTO_INCREMENT, TEXT→VARCHAR/LONGTEXT; Postgres: INTEGER PRIMARY KEY
 // AUTOINCREMENT→SERIAL PRIMARY KEY, DATETIME→TIMESTAMP, BLOB→BYTEA) and SQLite IS the source dialect.
 // Only a source with NO raw CREATE (a Postgres/MySQL source, whose getTableSchema returns sql:null)
-// falls back to the normalized column list mapped to the target's types. MySQL TEXT → LONGTEXT so
-// plugin content is never silently capped at VARCHAR(255).
+// falls back to the normalized column list mapped to the target's types. On MySQL the TEXT decision
+// comes from ONE shared rule (drivers/mysql-text-rule.ts): LONGTEXT unless the column takes part in a
+// key, so plugin content is never silently capped at VARCHAR(255) and a key column stays indexable.
 // Build a QUOTED column list for a SQLite table from PRAGMA table_info. Used as the fallback recreate
 // path when no raw CREATE is available (e.g. a sqlite-legacy source that has no getTableSchema). Names
 // are quoted (reserved-word / hyphenated columns are safe); types stay generic and buildTargetCreate
@@ -119,12 +123,17 @@ function buildTargetCreate(table, schema, targetKind) {
             `CREATE TABLE IF NOT EXISTS ${qt}`
         );
         if (targetKind === 'mysql') {
-            // MySQL is the one dialect where a bare-statement TEXT→LONGTEXT rewrite must happen HERE (not
-            // only in the driver): plugin content must not be capped at VARCHAR(255) — but NOT when the
-            // column is an inline PRIMARY KEY / UNIQUE: MySQL rejects a TEXT/BLOB key without a prefix
-            // length, so a `id TEXT PRIMARY KEY` (e.g. schema_migrations) must stay TEXT → the driver maps
-            // it to a bounded VARCHAR(255) key. The negative lookahead leaves those key columns alone.
-            sql = sql.replace(/\bTEXT\b(?!\s+(?:PRIMARY|UNIQUE))/gi, 'LONGTEXT');
+            // MySQL is the one dialect where a bare-statement TEXT rewrite also happens HERE (not only in
+            // the driver): plugin content must not be capped at VARCHAR(255). This used to be a private
+            // regex with a negative lookahead — `\bTEXT\b(?!\s+(?:PRIMARY|UNIQUE))` — and that copy was
+            // strictly WEAKER than the driver's rule: its lookahead only saw a key word IMMEDIATELY after
+            // the type, so `uuid TEXT NOT NULL UNIQUE` (core notifications) and any column named by a
+            // TABLE-LEVEL `UNIQUE (…)` / `KEY (…)` became LONGTEXT and MySQL killed the CREATE with
+            // errno 1170 ("BLOB/TEXT column used in key specification without a key length"). One rule,
+            // one implementation: drivers/mysql-text-rule.ts. Applying it here AND at the driver's exec
+            // boundary is deliberate defence in depth — the rule is idempotent (`\bTEXT\b` matches
+            // neither LONGTEXT nor VARCHAR(255)), so the second pass is a no-op.
+            sql = rewriteTextForMysql(sql);
         }
         return sql;
     }
@@ -139,10 +148,15 @@ function buildTargetCreate(table, schema, targetKind) {
     // EVERY target, Postgres included.
     const mapType = (def) => {
         if (targetKind === 'postgres') return def.replace(/\bDATETIME\b/g, 'TIMESTAMP').replace(/\bBLOB\b/g, 'BYTEA');
-        if (targetKind === 'mysql') return def.replace(/\bTEXT\b/g, 'LONGTEXT');
-        return def;
+        return def; // MySQL's TEXT decision is made on the assembled statement below, by the shared rule.
     };
-    return `CREATE TABLE IF NOT EXISTS ${qt} (\n  ${cols.map(mapType).join(',\n  ')}\n)`;
+    const created = `CREATE TABLE IF NOT EXISTS ${qt} (\n  ${cols.map(mapType).join(',\n  ')}\n)`;
+    // Same ONE rule as the raw-CREATE path above, applied to the statement we just assembled, so this
+    // fallback can never drift from it (an unconditional `TEXT → LONGTEXT` here was the third copy of a
+    // decision that only ever needs one). These columns carry no key information at all — getTableSchema()
+    // .columns does not expose PRIMARY KEY — so the rule sees no key parts and correctly leaves every TEXT
+    // uncapped; a later `CREATE INDEX` over one of them is widened by the driver (ensureIndexableKeyParts).
+    return targetKind === 'mysql' ? rewriteTextForMysql(created) : created;
 }
 
 // Recreate a non-core table's schema on the target BEFORE the data copy. DDL runs OUTSIDE the copy
@@ -219,10 +233,21 @@ async function copyAllTables(ctx) {
     if (isAsyncTarget) {
         return await targetModule.transaction(async (tx) => {
             // FK/replication toggles run on the PINNED connection (previously issued on throwaway pooled
-            // connections, so they never applied to the writes). We deliberately DO NOT force STRICT
-            // sql_mode: the live MySQL session runs relaxed (mysql.ts) so SQLite's loose values insert
-            // the same way they do at runtime; plugin TEXT is protected from truncation by recreating it
-            // as LONGTEXT (buildTargetCreate), not by weaponizing STRICT (which would abort valid data).
+            // connections, so they never applied to the writes).
+            //
+            // THE COPY RUNS UNDER STRICT sql_mode, and nothing here relaxes it. That is deliberate, and
+            // it is the opposite of what this comment used to claim ("the live MySQL session runs
+            // relaxed so SQLite's loose values insert the same way they do at runtime") — the session
+            // mode is now ANSI_QUOTES,STRICT_TRANS_TABLES,NO_ENGINE_SUBSTITUTION for every connection
+            // the driver opens (SESSION_SQL_MODE, drivers/mysql.ts), so the copy sees exactly what the
+            // live site will see. What a value that does not fit does now: MySQL raises the error, this
+            // transaction rolls back, runMigration rethrows and the caller does NOT switch config — the
+            // engine change fails and the ORIGINAL database is left untouched. That is the intended
+            // outcome. A migration that silently truncated a row on the way in would hand the operator
+            // a target that passes the row-COUNT guard while holding mutilated content, and the switch
+            // would be irreversible. The width itself is not the failure mode: plugin/content TEXT is
+            // recreated as LONGTEXT by the shared rule (buildTargetCreate → rewriteTextForMysql), so
+            // only a value that genuinely cannot fit a key column's VARCHAR(255) can abort the copy.
             if (isMysqlTarget) {
                 await tx.exec('SET FOREIGN_KEY_CHECKS = 0');
             } else {

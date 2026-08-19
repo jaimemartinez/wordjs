@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/contexts/ToastContext";
 import { useI18n } from "@/contexts/I18nContext";
-import { usersApi } from "@/lib/api";
+import { usersApi, selfEditNeedsCurrentPassword, withSudoProof, isBadCurrentPassword } from "@/lib/api";
 import MfaSetup from "@/components/MfaSetup";
 
 // Self-service account page — reachable by EVERY logged-in user (cap 'read'), including subscribers
@@ -19,6 +19,15 @@ export default function AccountPage() {
 
     const [displayName, setDisplayName] = useState("");
     const [personalEmail, setPersonalEmail] = useState("");
+    // The recovery address is sudo-gated on the backend, so this form needs its OWN password field —
+    // the one below belongs to the change-password form and never travels with a profile save. Without
+    // it, writing a recovery address (which for most accounts is EMPTY, so the first write is already a
+    // change) was refused 403 and the address was simply unreachable from the product.
+    const [profilePassword, setProfilePassword] = useState("");
+    // What the account HELD when the form was seeded — the comparison base for "did a gated field really
+    // change". Seeded by the same effect as the inputs, so the two can never disagree for a render (a
+    // freshly-mounted form must never look like an edit).
+    const [loaded, setLoaded] = useState<{ personalEmail: string }>({ personalEmail: "" });
     const [savingProfile, setSavingProfile] = useState(false);
 
     const [currentPassword, setCurrentPassword] = useState("");
@@ -30,17 +39,28 @@ export default function AccountPage() {
         if (user) {
             setDisplayName(user.displayName || "");
             setPersonalEmail(user.personalEmail || "");
+            setLoaded({ personalEmail: user.personalEmail || "" });
         }
     }, [user]);
+
+    // ONE source for "does this save need the password?" — shared with the user editor and the user
+    // modal (see selfEditNeedsCurrentPassword in lib/api). Renaming yourself still needs nothing.
+    const profileNeedsPassword = selfEditNeedsCurrentPassword(loaded, { personalEmail });
 
     const saveProfile = async (e: React.FormEvent) => {
         e.preventDefault();
         setSavingProfile(true);
         try {
-            await usersApi.updateMe({ displayName, personalEmail });
+            await usersApi.updateMe(withSudoProof(loaded, { displayName, personalEmail }, profilePassword));
+            setLoaded({ personalEmail });
+            setProfilePassword("");
             addToast(t('account.profileUpdated'), "success");
         } catch (err: any) {
-            addToast(err?.message || t('account.profileError'), "error");
+            // A sudo refusal is about the PASSWORD, not about the profile: saying "could not update
+            // profile" while the real cause is the password field is how this screen looked broken.
+            addToast(isBadCurrentPassword(err)
+                ? (err?.message || t('account.currentPassword'))
+                : (err?.message || t('account.profileError')), "error");
         } finally {
             setSavingProfile(false);
         }
@@ -123,6 +143,15 @@ export default function AccountPage() {
                                     <input type="email" value={personalEmail} onChange={(e) => setPersonalEmail(e.target.value)} placeholder="name@gmail.com" className={inputCls} />
                                     <p className="text-[11px] text-gray-400 mt-2 leading-relaxed">{t('account.personalEmail.help')}</p>
                                 </div>
+                                {/* Appears only once the recovery address actually differs from the stored
+                                    one — the backend asks for sudo exactly then, and asking earlier would
+                                    demand a password to rename yourself. */}
+                                {profileNeedsPassword && (
+                                    <div data-testid="profile-current-password">
+                                        <label className={labelCls}>{t('account.currentPassword')}</label>
+                                        <input type="password" value={profilePassword} onChange={(e) => setProfilePassword(e.target.value)} autoComplete="current-password" required className={inputCls} />
+                                    </div>
+                                )}
                                 <div className="flex justify-end">
                                     <button type="submit" disabled={savingProfile} className={btnCls}>{savingProfile ? t('account.saving') : t('account.saveProfile')}</button>
                                 </div>

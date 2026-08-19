@@ -32,4 +32,50 @@ function capsForType(type: string) {
     return capsFor(pt.capability_type || 'post');
 }
 
-module.exports = { capsFor, capsForType };
+/**
+ * THE EDIT GATE for one existing post record — the single definition of "may this user rewrite this
+ * post's content", shared instead of copied.
+ *
+ * The three parts are not separable: the post's TYPE picks the capability family (a post-only author
+ * must not edit a PAGE), OWNERSHIP picks edit vs edit_others, and a post that is already PUBLISHED
+ * additionally demands edit_published_<type>s — otherwise a contributor whose draft an editor published
+ * can still rewrite the live page with plain edit_posts.
+ *
+ * WHY IT MOVED HERE. PUT /posts/:id, routes/revisions.ts and routes/collab.ts each enforced all three;
+ * POST /posts/:id/meta enforced only the first two, and `_puck_data` — the public body of the page — is
+ * writable through it. Three surfaces against one is not a policy, it is a copy that drifted, which is
+ * the argument this module exists on. Callers pass the Post INSTANCE (post.type/postType,
+ * post.authorId, post.postStatus) and the authenticated user.
+ */
+function canEditPostRecord(user: any, post: any): boolean {
+    if (!user || !post) return false;
+    const caps = capsForType(post.type || post.postType || 'post') || capsFor('post');
+    const isOwn = post.authorId === user.id;
+    let allowed = isOwn ? user.can(caps.edit) : user.can(caps.editOthers);
+    // An already-published post needs the publish-aware capability on top; a bare edit cap is not
+    // permission to rewrite what the site is currently serving.
+    if (post.postStatus === 'publish' && !user.can(caps.editPublished)) allowed = false;
+    return allowed;
+}
+
+/**
+ * Is `type` a post type the GENERIC /posts routes may act on at all?
+ *
+ * `showInRest: false` is how the registry marks a type as INTERNAL: nav_menu_item and revision are
+ * rows in `posts` that belong to their own APIs (menus.ts is admin-only; revisions.ts carries the
+ * restore/delete gate), and they carry no capability_type, so capsForType() lands them in the plain
+ * `post` family. That is how an editor could rewrite a menu item's `_menu_item_url` — and thus every
+ * page's navigation — through POST /posts/:id/meta, and how a contributor could mint `revision` rows
+ * with an arbitrary `parent`. The fix is not to invent capability families for internal types (the
+ * `|| capsFor('post')` fallback would swallow them anyway) but to make the generic surface refuse to
+ * SEE them: unknown type and internal type are the same answer.
+ *
+ * An unregistered type answers false too — a caller must never fall back to "treat it as a post".
+ */
+function isRestExposedPostType(type: string): boolean {
+    const { getPostType } = require('./post-types');
+    const pt = getPostType(String(type || 'post'));
+    return !!(pt && pt.showInRest);
+}
+
+module.exports = { capsFor, capsForType, canEditPostRecord, isRestExposedPostType };

@@ -7,6 +7,9 @@
  * NO "use client", no hooks, no React runtime — types only.
  */
 import type { CSSProperties } from "react";
+// The ONE style criterion (see safeStyle.ts). Pure and dependency-free, so importing it here does not
+// break this module's "no hooks, no React runtime — types only" contract.
+import { safeStyleObject, safeCssUrl, safeClassToken, SHELL_CSS_PROPS } from "./safeStyle";
 
 // ── Visibility (VisibilityField) ──────────────────────────────────────────
 export type Hide = { mobile?: boolean; tablet?: boolean; desktop?: boolean };
@@ -52,12 +55,24 @@ export type AnimSpec = {
  * per-var style channel for this field — so each step class pins `--wjs-scroll-amt` in
  * wordjs-ui.css and the keyframes calc() from it.
  */
+/**
+ * The shell is the OTHER producer of class names out of author text: `anim.type`, `anim.scroll` and
+ * `a.hover` come from _puck_data, where the declared TypeScript union is a hope, not a check (an API
+ * or WXR write never sees it). Same chokepoint as the blocks' own modifiers — a rejected value drops
+ * the MODIFIER and keeps the base class, so the element degrades to "no effect" instead of carrying
+ * whatever the value spelled.
+ */
+const modifier = (prefix: string, raw: unknown): string[] => {
+    const token = safeClassToken(prefix, raw);
+    return token === null ? [] : [token];
+};
+
 export const animClasses = (anim?: AnimSpec): string => {
     const cls: string[] = [];
-    if (anim?.type) cls.push("wjs-anim", `wjs-anim-${anim.type}`);
+    if (anim?.type) cls.push("wjs-anim", ...modifier("wjs-anim-", anim.type));
     if (anim?.scroll) {
         const amt = Math.min(100, Math.max(10, Math.round((Number(anim.scrollAmount ?? 30) || 0) / 10) * 10));
-        cls.push("wjs-scroll", `wjs-scroll-${anim.scroll}`, `wjs-scroll-amt-${amt}`);
+        cls.push("wjs-scroll", ...modifier("wjs-scroll-", anim.scroll), ...modifier("wjs-scroll-amt-", amt));
     }
     return cls.join(" ");
 };
@@ -290,12 +305,24 @@ export function appearanceToStyle(look?: Appearance): {
         s.backgroundImage = `linear-gradient(${a.gradAngle ?? 135}deg, ${stops})`;
         if (a.gradAnimate) cls.push("wjs-grad-animate");
     } else if (a.bg === "image" && isSet(a.bgImage)) {
-        s.backgroundImage = `url(${a.bgImage})`;
-        s.backgroundSize = a.bgSize || "cover";
-        s.backgroundPosition = a.bgPos || "center";
-        s.backgroundRepeat = "no-repeat";
-        // Parallax-ish: cheap, GPU-friendly, and ignored on touch platforms by design.
-        if (a.bgFixed) s.backgroundAttachment = "fixed";
+        // The one place in this function where a url() is the POINT, so it is the one place the value
+        // has to be a URL and not just injection-free text. `url(${a.bgImage})` interpolated the
+        // author's string bare: `x.png) ;position:fixed;background:url(y` escaped the token and the
+        // declaration. safeCssUrl requires an origin (http/https, or a path on this site — never
+        // `//host`, `/\host`, `data:` …) and refuses anything that could close the token; the result
+        // is then QUOTED instead of interpolated naked.
+        // A rejected URL means there is no image, so the image's companion declarations
+        // (size/position/repeat/attachment) have nothing to act on either — emitting them alone would
+        // make hasBox true and wrap the block in an empty box.
+        const bgUrl = safeCssUrl(a.bgImage);
+        if (bgUrl !== null) {
+            s.backgroundImage = `url("${bgUrl}")`;
+            s.backgroundSize = a.bgSize || "cover";
+            s.backgroundPosition = a.bgPos || "center";
+            s.backgroundRepeat = "no-repeat";
+            // Parallax-ish: cheap, GPU-friendly, and ignored on touch platforms by design.
+            if (a.bgFixed) s.backgroundAttachment = "fixed";
+        }
     } else if (a.bg === "glass") {
         s.background = a.glassTint || "rgb(255 255 255 / .08)";
         s["--wjs-glass-blur"] = `${a.glassBlur ?? 12}px`;
@@ -356,7 +383,7 @@ export function appearanceToStyle(look?: Appearance): {
 
     // ── Movimiento ──────────────────────────────────────────────────────
     if (isSet(a.hover)) {
-        cls.push("wjs-fx", `wjs-hover-${a.hover}`);
+        cls.push("wjs-fx", ...modifier("wjs-hover-", a.hover));
         s["--wjs-hover-amt"] = `${a.hoverAmount ?? 6}`;
         s["--wjs-hover-speed"] = `${a.hoverSpeed ?? 300}ms`;
         s["--wjs-hover-color"] = a.hoverColor || "var(--wjs-color-primary, #2563eb)";
@@ -391,10 +418,25 @@ export function appearanceToStyle(look?: Appearance): {
               }
             : null;
 
-    const hasBox = Object.keys(s).length > 0 || cls.length > 0;
-    if (overlay) s.position = s.position || "relative";
+    // EMISSION-POINT FILTER (defence in depth, the way safeNavHref is applied twice). Everything
+    // above interpolates AUTHOR text into declarations — bgColor, gradFrom/Via/To, glassTint,
+    // borderColor/Style, shadowColor, color, fontWeight, fontFamily, align, transform, overlayColor —
+    // and React does NOT escape `;` inside a style value, so any one of them could append
+    // `position:fixed;inset:0;…` and turn the block into a full-screen overlay. The stored tree is
+    // already cleaned at the write boundary (backend/src/core/sanitize-meta.ts), so this pass is a
+    // no-op for every page saved through it; it exists for the pages saved BEFORE the guard and for
+    // any write path that ever forgets to call it. Declarations are dropped, never blanked, and key
+    // order (= CSS declaration order) is preserved.
+    const safe = safeStyleObject(s, SHELL_CSS_PROPS);
+    const hasBox = Object.keys(safe).length > 0 || cls.length > 0;
+    if (overlay) safe.position = safe.position || "relative";
     // A radius only clips if the box actually hides the overflow.
-    if (isSet(a.radius) && (a.bg === "image" || a.bg === "gradient" || overlay)) s.overflow = "hidden";
+    if (isSet(a.radius) && (a.bg === "image" || a.bg === "gradient" || overlay)) safe.overflow = "hidden";
 
-    return { style: s, className: cls.join(" "), hasBox, overlay };
+    return {
+        style: safe as CSSProperties,
+        className: cls.join(" "),
+        hasBox,
+        overlay: overlay ? (safeStyleObject(overlay, SHELL_CSS_PROPS) as CSSProperties) : null,
+    };
 }

@@ -254,12 +254,67 @@ function proxyToBackend(req, res, target, options) {
 const PROXIED_PREFIXES = ['/api/', '/uploads/', '/themes/', '/plugins/', '/public/', '/.well-known/'];
 
 /**
+ * THE `/api` PATHS THAT ARE **NEXT'S**, NOT THE BACKEND'S — the exception list, kept in the SAME
+ * module as the prefixes above because the two are one decision and splitting them is what broke.
+ *
+ * `/api/` is the backend's namespace with exactly one hole in it: the App Router also serves route
+ * handlers under `frontend/src/app/api/**`, and a prefix match sends those to the backend, which does
+ * not mount them → 404.
+ *
+ * That is not hypothetical. `monolith.js` knew about `/api/revalidate` and exempted it inline; THIS
+ * module — the one that governs the runtime proxy in the horizontally-scaled deployment
+ * `WORDJS_BACKEND_URL` exists for — did not. So on every replica, `core/frontend-purge.ts` POSTed the
+ * on-demand cache purge at `/api/revalidate`, the frontend's own server forwarded it to the backend,
+ * and the backend 404'd it: `revalidateTag`/`revalidatePath` never ran and every publish stayed
+ * invisible until the ISR window expired. (The BUILD-time rewrite never had this bug — Next resolves
+ * a returned array as `afterFiles`, so the real route handler wins — which is precisely why the
+ * runtime proxy, which runs BEFORE Next, had to be taught the same thing.)
+ *
+ * DERIVED FROM THE REAL ROUTE MAP, not from memory: the two entries below are the `route.ts` files
+ * under `frontend/src/app/api/**`, and `src/lib/__tests__/backendProxyTarget.test.ts` walks that tree
+ * and fails when a route exists that is not classified here. A new Next API route must therefore be
+ * placed in one of these two buckets on purpose.
+ *
+ *  - `/api/revalidate` → NEXT. Only Next can invalidate its own caches; the backend has no such route.
+ *  - `/api/internal/gateway-update` → the BACKEND's, and now unambiguously so. It used to exist
+ *    TWICE: `backend/src/index.ts` mounts a real, shared-secret-gated `/api/internal` router (covered
+ *    by authz-idor.test.ts) AND `frontend/src/app/api/internal/gateway-update/route.ts` served the same
+ *    path from Next. Every dispatcher sends the path to the backend, so the Next handler was
+ *    unreachable code — nothing in the repo, the gateway included, ever POSTed at it — that wrote
+ *    `gatewayPort` into wordjs-config.json without validating its type. It has been DELETED (audit
+ *    #28 leftover) rather than exempted: exempting it would have taken a live endpoint away from the
+ *    backend, and renaming it would have kept a second, weaker copy of a control-plane write.
+ */
+const NEXT_OWNED_API_PATHS = ['/api/revalidate'];
+/**
+ * Paths under `/api/` that a Next route handler must NOT claim, because a real backend mount already
+ * answers them. A tombstone, not a to-do: the Next twin at `/api/internal/gateway-update` is gone, and
+ * this entry is what keeps the three dispatchers agreeing that the path is the backend's — and what
+ * makes anyone who re-creates a route handler there meet the collision (gateway/test/
+ * dispatcher-parity.test.js drives this list) instead of shipping dead code a second time.
+ */
+const CONTESTED_API_PATHS = ['/api/internal/gateway-update'];
+
+/**
+ * True when the App Router owns this path, so no dispatcher may forward it to the backend. Segment
+ * boundary, like isProxiedPath: `/api/revalidateXYZ` is not `/api/revalidate`.
+ */
+function isNextOwnedApiPath(pathname) {
+    const p = String(pathname || '');
+    return NEXT_OWNED_API_PATHS.some((route) => p === route || p.startsWith(route + '/'));
+}
+
+/**
  * True when this request is one the backend owns. Matched at a SEGMENT boundary, never as a string
  * prefix: a page whose slug happens to start with `uploads` belongs to the frontend. The bare form
  * (`/api`, `/themes`) counts as the backend's too.
+ *
+ * The Next-owned exception is consulted FIRST: it is a hole punched in `/api/`, so a later prefix
+ * match must not be able to close it again.
  */
 function isProxiedPath(pathname) {
     const p = String(pathname || '');
+    if (isNextOwnedApiPath(p)) return false;
     return PROXIED_PREFIXES.some((prefix) => p === prefix.slice(0, -1) || p.startsWith(prefix));
 }
 
@@ -276,6 +331,9 @@ module.exports = {
     backendUrlFromEnv,
     upstreamPath,
     PROXIED_PREFIXES,
+    NEXT_OWNED_API_PATHS,
+    CONTESTED_API_PATHS,
+    isNextOwnedApiPath,
     isProxiedPath,
     rewriteSources,
     proxyToBackend,

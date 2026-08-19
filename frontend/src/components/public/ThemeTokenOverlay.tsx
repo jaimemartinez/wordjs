@@ -4,6 +4,8 @@
 // at equal specificity with no flash-of-unstyled-content and no hydration mismatch (deterministic from
 // server data). Empty/absent overrides render nothing — zero visual change for any theme.
 //
+import { safeCustomPropValue } from "@/components/blocks/safeStyle";
+
 // SECURITY: this emits CSS into the page, so it is strictly sanitized — only keys matching `--wjs-…`
 // and values made of safe CSS characters (no `;{}:<>` that could break out of the declaration block)
 // are emitted; everything else is dropped. The charset alone is NOT enough: `url(//attacker.example/x)`
@@ -12,6 +14,21 @@
 // charset, reject any value containing `//`, matching `url(` (any spacing/case), or containing a
 // backslash (CSS escapes could smuggle either form past a character filter).
 // Mirror: keep isForbiddenTokenValue byte-identical with admin/themes/customize/page.tsx (pinned by test).
+//
+// THE CHARSET IS NOT THE WHOLE CRITERION, and this was the second emitter of a `--wjs-*` value that
+// did not know it. `safeStyle.ts` declares safeCustomPropValue "the ONLY way a --* value may be
+// emitted, from any channel", and it is a criterion about the PAIR (name, value): a name the
+// stylesheet expands into `transform:` gets a parsed, magnitude-bounded grammar, because the
+// declaration a value lands in is chosen by the SHEET, not by whoever typed the value. The filter
+// below only ever looked at the value's CHARACTERS, so --wjs-button-hover-transform=scale(20),
+// --wjs-card-hover-transform=translateY(-4000px), --wjs-pricing-highlight-scale=200 and
+// --wjs-xl=99999px all passed it — and because these land in `:root`, ONE mod applies to every block
+// on every page: strictly wider than the per-block channel that was already closed.
+//
+// Writing a mod is admin-only (PUT /settings, POST /themes/mods/import), so this is not privilege
+// escalation; it is the same sink reached with a different criterion, which is how the class reopens.
+// The charset pass is KEPT (it refuses `//` and any `url(` outright, which safeCssValue permits on
+// image-bearing names) and safeCustomPropValue runs after it: two filters, the narrower one last.
 const KEY_RE = /^--wjs-[a-z0-9-]+$/;
 const VALUE_RE = /^[#a-zA-Z0-9 ,.%()/_'"-]+$/;
 function isForbiddenTokenValue(value: string): boolean {
@@ -29,7 +46,9 @@ export default function ThemeTokenOverlay({ mods }: { mods?: string | Record<str
 
     const decls = Object.entries(obj)
         .filter(([k, v]) => KEY_RE.test(k) && typeof v === "string" && v.length > 0 && v.length <= 120 && VALUE_RE.test(v) && !isForbiddenTokenValue(v))
-        .map(([k, v]) => `${k}:${v as string}`)
+        .map(([k, v]) => [k, safeCustomPropValue(k, v as string)] as const)
+        .filter((pair): pair is readonly [string, string | number] => pair[1] !== null)
+        .map(([k, v]) => `${k}:${v}`)
         .join(";");
     if (!decls) return null;
 

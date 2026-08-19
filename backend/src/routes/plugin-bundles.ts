@@ -16,7 +16,31 @@ const PLUGINS_DIR = path.resolve(__dirname, '../../plugins');
 // unvalidated value (e.g. '../../..') is a path-traversal primitive even with the fixed '.bundle.js'
 // suffix. Only these three bundles are produced by the build pipeline and requested by the frontend
 // (pluginBundleLoader: 'admin' | 'component' | 'hooks').
-const ALLOWED_BUNDLE_TYPES = new Set(['admin', 'component', 'hooks']);
+//
+// (#3, verification) THESE ROUTES ARE THE OTHER PUBLIC SINK FOR A PLUGIN'S FILES. They are mounted
+// under /api/v1/plugins (routes/plugins.ts) WITHOUT `authenticate`, and they hand out files from
+// plugins/<folder>/dist/ — a directory the plugin itself could write, since the first remediation
+// only declared `dist/component.bundle.css` off-limits. That is the exact write→unauthenticated-read
+// channel #3 is about, one door along. The declaration now lives in core/io-guard (dist/ is published
+// in full ⇒ read-only to the plugin) and this file RESOLVES AGAINST IT instead of building the path
+// by hand, so "what may be served" and "what may not be written" cannot drift apart again.
+const {
+    isPluginBundleRelPath,
+    PLUGIN_BUNDLE_DIR,
+    PLUGIN_BUNDLE_TYPES,
+} = require('../core/io-guard');
+const ALLOWED_BUNDLE_TYPES = new Set(PLUGIN_BUNDLE_TYPES);
+
+/**
+ * Resolve one of the published bundle files for `folder`, proving BOTH halves on the values actually
+ * used: the relative name must be on io-guard's bundle allowlist, and the joined path must stay
+ * inside PLUGINS_DIR. Returns null if either proof fails.
+ */
+function resolveBundleFile(folder: string, relName: string): string | null {
+    const rel = `${PLUGIN_BUNDLE_DIR}/${relName}`;
+    if (!isPluginBundleRelPath(rel)) return null;
+    return safeJoin(PLUGINS_DIR, folder, ...rel.split('/'));
+}
 
 /**
  * Resolve a request slug to the plugin's on-disk FOLDER.
@@ -59,7 +83,7 @@ function resolvePluginDir(slug: string): string | null {
 }
 
 function bundlePathFor(folder: string, bundleType: string): string | null {
-    return safeJoin(PLUGINS_DIR, folder, 'dist', `${bundleType}.bundle.js`);
+    return resolveBundleFile(folder, `${bundleType}.bundle.js`);
 }
 
 /**
@@ -125,8 +149,11 @@ router.get('/:slug/bundle/manifest', async (req: Request, res: Response) => {
         return res.status(400).json({ error: 'Invalid plugin slug' });
     }
 
-    const folder = resolvePluginDir(slug) || slug;
-    const manifestPath = safeJoin(PLUGINS_DIR, folder, 'dist', 'manifest.build.json');
+    // A slug that resolves to no installed folder is a 404 — never fall back to the RAW slug as a
+    // directory name (that reintroduced request-controlled text into the path after the folder
+    // mapping had already refused it).
+    const folder = resolvePluginDir(slug);
+    const manifestPath = folder ? resolveBundleFile(folder, 'manifest.build.json') : null;
 
     if (!manifestPath || !fs.existsSync(manifestPath)) {
         return res.status(404).json({ error: 'Build manifest not found' });
@@ -158,9 +185,13 @@ router.get('/:slug/bundle/css', async (req: Request, res: Response) => {
         return res.status(400).json({ error: 'Invalid bundle type' });
     }
 
-    const cssPath = path.join(PLUGINS_DIR, slug, 'dist', `${bundleType}.bundle.css`);
+    // Same folder mapping + containment proof as the JS bundle. This route used to join the RAW slug
+    // with path.join and no containment check at all — the one call site of this shape that the
+    // hardening pass missed.
+    const folder = resolvePluginDir(slug);
+    const cssPath = folder ? resolveBundleFile(folder, `${bundleType}.bundle.css`) : null;
 
-    if (!fs.existsSync(cssPath)) {
+    if (!cssPath || !fs.existsSync(cssPath)) {
         // No CSS is fine, return empty
         res.setHeader('Content-Type', 'text/css');
         return res.send('');

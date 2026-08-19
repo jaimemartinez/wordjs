@@ -131,10 +131,38 @@ export default function RevisionsSidebar({ postId, isOpen, onClose, onRestore }:
         }
     };
 
+    /**
+     * WHAT THE DIALOG HAS TO SAY, and why it is this long.
+     *
+     * A restore is not "put the old text back". `restoreRevision` (backend/src/core/revisions.ts)
+     * rolls back the post row AND the VERSIONED meta — `_puck_data`, `_wjs_template`, `_thumbnail_id`
+     * and the four SEO keys — and the roll-back is exact in both directions: a key the live post has
+     * but the snapshot does not is CLEARED. So restoring a version older than the featured image, the
+     * theme template or the SEO fields deletes them. The dialog used to say only "your current
+     * unsaved changes will be lost", which described none of that; a UI that understates what a
+     * button destroys is the same defect class as one that claims to save something it drops.
+     *
+     * What it must NOT claim: that everything else goes too. The scoped delete is the other half of
+     * that fix — the editorial review thread (`_wjs_review_comments`), plugin meta and the trash
+     * status stay exactly as they are, and saying so removes the reason to be afraid of the button.
+     *
+     * `frontend/src/components/__tests__/revisionRestoreDisclosure.test.ts` reads the key list out of
+     * the real backend module, so a key added to a revision fails the build until this text names it.
+     * Argument order is (message, title, isDanger) — see ModalContext.
+     */
     const handleRestoreClick = async (revision: Revision) => {
+        const when = new Date(revision.modified).toLocaleString();
         const ok = await confirm(
-            "Restore Revision",
-            `Are you sure you want to restore the version from ${new Date(revision.modified).toLocaleString()}? Your current unsaved changes will be lost.`
+            `Restoring the version from ${when} rolls the post back to it: title, body, excerpt, ` +
+                `page layout, theme template, featured image and the SEO fields (SEO title, SEO ` +
+                `description, social image, noindex).\n\n` +
+                `Whatever you changed in those since that version is lost — and anything ADDED after ` +
+                `it is removed: if the featured image, the theme template or an SEO field was set ` +
+                `later, restoring clears it. Your current unsaved changes are lost too.\n\n` +
+                `Everything else is untouched: comments, the editorial review thread, tags and ` +
+                `categories, and data stored by plugins.`,
+            "Restore this version?",
+            true,
         );
         if (ok) {
             onRestore(revision);

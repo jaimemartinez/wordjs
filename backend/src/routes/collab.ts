@@ -38,7 +38,7 @@ const router = express.Router();
 const jwt = require('jsonwebtoken');
 const { authenticate } = require('../middleware/auth');
 const { asyncHandler } = require('../middleware/errorHandler');
-const { capsFor, capsForType } = require('../core/post-capabilities');
+const { canEditPostRecord, isRestExposedPostType } = require('../core/post-capabilities');
 const config = require('../config/app');
 const Post = require('../models/Post');
 const collab = require('../core/collab-rooms');
@@ -85,20 +85,21 @@ function sameOrigin(req: any): boolean {
 type Gate = { ok: true; post: any } | { ok: false; status: number; code: string; message: string };
 
 /**
- * El gate de edición del post, calcado de `routes/posts.ts` (update). Se copia la forma, no se
- * inventa: si esas tres líneas cambian allí, tienen que cambiar aquí, y por eso comparten
- * `capsForType` en vez de tener cada una su tabla de permisos.
+ * El gate de edición del post. YA NO SE COPIA: es literalmente el de `PUT /posts/:id`, porque las
+ * tres líneas (familia por tipo + propio/ajeno + publicado) viven una sola vez en
+ * `core/post-capabilities.canEditPostRecord`. Tenerlas escritas aquí era la forma en la que
+ * `POST /presence/:postId` acabó autorizando por la capacidad GLOBAL mientras este canal
+ * autorizaba por el post: dos superficies, una política, una de ellas equivocada.
+ *
+ * `isRestExposedPostType` además: `revision` y `nav_menu_item` son filas de `posts` sin
+ * `capability_type`, así que la familia las deja caer en la de `post`. Pertenecen a sus propias
+ * APIs y no hay sesión de editor que colaborar sobre ellas.
  */
 async function gate(req: any, postId: number): Promise<Gate> {
     const post = await Post.findById(postId);
     if (!post) return { ok: false, status: 404, code: 'rest_post_invalid', message: 'Post not found.' };
 
-    const caps = capsForType(post.type || post.postType || 'post') || capsFor('post');
-    const isOwn = post.authorId === req.user.id;
-    let canEdit = isOwn ? req.user.can(caps.edit) : req.user.can(caps.editOthers);
-    if (post.postStatus === 'publish' && !req.user.can(caps.editPublished)) canEdit = false;
-
-    if (!canEdit) {
+    if (!isRestExposedPostType(post.type || post.postType || 'post') || !canEditPostRecord(req.user, post)) {
         return { ok: false, status: 403, code: 'rest_forbidden', message: 'You cannot edit this post.' };
     }
     return { ok: true, post };
@@ -325,7 +326,19 @@ router.get('/:postId/stream', authenticate, asyncHandler(async (req: any, res: R
         // y se cierra: un status HTTP ya no es posible y un cierre mudo dejaría al cliente
         // reintentando en bucle sin saber por qué. La sala NO cierra la respuesta en su camino de
         // error justamente para que este mensaje pueda salir (ver `leave(conn, {closeSocket:false})`).
-        sseWrite(res, `event: error\ndata: ${JSON.stringify({ code: joined.refusal, message: 'No se pudo abrir la sesión colaborativa.' })}\n\n`);
+        //
+        // EL RECHAZO DICE SI SE PUEDE REINTENTAR Y CUÁNDO, y las dos cosas las decide QUIEN LAS SABE.
+        // Antes solo viajaba el código y el cliente lo clasificaba con una lista blanca escrita a
+        // mano: añadir una variante en el servidor (`read-budget`) la dejaba caer en su rama
+        // terminal, así que lo que aquí se diseñó como una ESPERA mataba la sesión del usuario hasta
+        // recargar la página. La retryabilidad sale ahora de `REFUSAL_RETRYABLE` (que el compilador
+        // obliga a completar para cada variante) y el plazo, del cubo que de verdad bloquea.
+        sseWrite(res, `event: error\ndata: ${JSON.stringify({
+            code: joined.refusal,
+            retryable: collab.refusalIsRetryable(joined.refusal),
+            retryAfterMs: joined.retryAfterMs,
+            message: 'No se pudo abrir la sesión colaborativa.',
+        })}\n\n`);
         if (!(res as any).writableEnded) res.end();
         return;
     }

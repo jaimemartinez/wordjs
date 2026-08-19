@@ -1,0 +1,6 @@
+#!/bin/sh
+# Delegation only: keeps the machine-local pre-push (the theme-tokens.json / assetVersion drift gate)
+# alive now that core.hooksPath points here instead of .git/hooks.
+. "$(dirname "$0")/_local.sh"
+run_local_hook pre-push "$@" || exit $?
+exit 0

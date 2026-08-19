@@ -209,6 +209,11 @@ export function resolveCategoriesForSave(args: {
     current: unknown;
     /** Ids del registro, o la lista `[{id,…}]` tal cual la manda la API. El primero es el que se enseña. */
     seeded: unknown;
+    /**
+     * Las categorías contra las que resolver. Debe ser la MISMA unión que alimenta el select
+     * (`mergeCategoryOptions`): con sólo la página cargada, la categoría propia de un post que caiga
+     * fuera se trataría como irresoluble y el autor no podría cambiarla.
+     */
     categories: readonly Category[];
 }): number[] | undefined {
     const seededIds = normalizeTermIds(args.seeded);
@@ -290,18 +295,51 @@ const excerptField: VersoField = {
     placeholder: "Resumen breve (listados y descripción SEO)",
 };
 
+/**
+ * Las categorías ELEGIBLES: la UNIÓN de las cargadas del sitio y las del PROPIO registro.
+ *
+ * Misma defensa que el control de etiquetas (ver `tagsField`): `GET /categories` viene paginado y
+ * tapado a 100 por página, así que una categoría del post que caiga fuera de lo cargado no tendría
+ * opción y el select la enseñaría como si no existiera. Las del registro se añaden con `count: 0`
+ * porque el recuento del término no viaja dentro del post y aquí no se usa para nada.
+ */
+export function mergeCategoryOptions(
+    available: readonly Category[],
+    recordCategories: readonly PostTermRef[] = [],
+): Category[] {
+    const byId = new Map<number, Category>();
+    for (const c of available) {
+        if (Number.isInteger(c.id) && c.id > 0) byId.set(c.id, c);
+    }
+    for (const ref of recordCategories) {
+        if (!Number.isInteger(ref.id) || ref.id <= 0 || byId.has(ref.id)) continue;
+        byId.set(ref.id, { id: ref.id, name: ref.name || `#${ref.id}`, slug: ref.slug || "", count: 0 });
+    }
+    return [...byId.values()];
+}
+
 /** Select de categorías con el ID como valor — que es lo que `Post.setTerms` espera. */
-export function categoryField(categories: readonly Category[], currentValue?: unknown): VersoField {
+export function categoryField(
+    categories: readonly Category[],
+    currentValue?: unknown,
+    recordCategories: readonly PostTermRef[] = [],
+): VersoField {
     const options: Array<{ label: string; value: string }> = [
         { label: "Sin categoría", value: "" },
-        ...categories.map((c) => ({ label: c.name, value: String(c.id) })),
+        ...mergeCategoryOptions(categories, recordCategories).map((c) => ({ label: c.name, value: String(c.id) })),
     ];
     // Un valor guardado que no case con ninguna opción (el NOMBRE que guardaba el control viejo, o
     // una categoría borrada) se sintetiza como opción visible en vez de desaparecer del select —
     // mismo criterio que TemplateField con una plantilla que el tema ya no trae.
+    //
+    // LA ETIQUETA NO AFIRMA NADA. Antes decía "«150» (sin asignar)", y eso era MENTIRA en el caso
+    // más común: el término existe y sólo se había quedado fuera de la página cargada. Un autor que
+    // se lo creía y elegía "Sin categoría" borraba de verdad la categoría primaria del post
+    // (`setTerms` REEMPLAZA). Un id sin resolver se enseña como `#150`, igual que en `tagsField`; un
+    // valor legacy no numérico se enseña TAL CUAL. Ni una cosa ni otra dicen si está asignado.
     const current = typeof currentValue === "number" ? String(currentValue) : String(currentValue ?? "").trim();
     if (current && !options.some((o) => o.value === current)) {
-        options.push({ label: `${current} (sin asignar)`, value: current });
+        options.push({ label: /^\d+$/.test(current) ? `#${current}` : current, value: current });
     }
     return { type: "select", label: "Categoría", options };
 }
@@ -354,6 +392,11 @@ export function withRecordRootFields(
     opts: {
         categories?: readonly Category[];
         currentCategory?: unknown;
+        /**
+         * Las categorías del registro abierto, para que ninguna se quede sin opción en el select —
+         * la lista del sitio viene paginada. Gemelo exacto de `recordTags`.
+         */
+        recordCategories?: readonly PostTermRef[];
         seo?: boolean;
         /** Etiquetas existentes del sitio. Sin ellas no se compone el campo (páginas no lo llevan). */
         tags?: readonly Tag[];
@@ -370,7 +413,7 @@ export function withRecordRootFields(
     };
     for (const [key, field] of Object.entries(base)) {
         if (key === "category" && opts.categories) {
-            out.category = categoryField(opts.categories, opts.currentCategory);
+            out.category = categoryField(opts.categories, opts.currentCategory, opts.recordCategories);
         } else if (key !== "featuredImage" && key !== "excerpt" && key !== "tags") {
             out[key] = field;
         }

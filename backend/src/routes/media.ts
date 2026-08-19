@@ -161,12 +161,16 @@ router.get('/', optionalAuth, asyncHandler(async (req: any, res: any) => {
     const limit = Math.min(parseInt(per_page, 10) || 20, 100);
     const offset = (Math.max(parseInt(page, 10) || 1, 1) - 1) * limit;
 
-    const orderByMap: Record<string, string> = {
+    // Same pair of request-value defects as routes/comments.ts (see the note there):
+    //  · Object.create(null) so `?orderby=constructor` finds no inherited key and `|| 'post_date'` fires.
+    //  · String() before .toLowerCase(), so `?order[]=asc` is a normal query and not a 500 for an
+    //    anonymous caller — the shape routes/categories.ts and routes/tags.ts already use.
+    const orderByMap: Record<string, string> = Object.assign(Object.create(null), {
         date: 'post_date',
         modified: 'post_modified',
         title: 'post_title',
         id: 'id'
-    };
+    });
 
     // `mime_type` se desestructuraba desde SIEMPRE y no se pasaba a ninguna consulta: el filtro estaba
     // INERTE (la biblioteca devolvía todo, pidieras lo que pidieras). Va a las DOS consultas — filtrar
@@ -177,9 +181,9 @@ router.get('/', optionalAuth, asyncHandler(async (req: any, res: any) => {
         mimeType: mime_type,
         limit,
         offset,
-        orderBy: orderByMap[orderby] || 'post_date',
+        orderBy: orderByMap[String(orderby)] || 'post_date',
         // SECURITY: Whitelist order direction
-        order: ['asc', 'desc'].includes(order.toLowerCase()) ? order.toUpperCase() : 'DESC'
+        order: ['asc', 'desc'].includes(String(order).toLowerCase()) ? String(order).toUpperCase() : 'DESC'
     });
 
     // SECURITY (Finding #9, BOLA / metadata leak): the media LIST must apply the SAME

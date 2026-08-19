@@ -184,15 +184,35 @@ test('recreateTableOnTarget maps plugin TEXT → LONGTEXT for MySQL (no silent V
     assert.ok(!/\bTEXT\b/.test(sql), 'no bare TEXT type left to be capped at VARCHAR(255)');
 });
 
-test('recreateTableOnTarget keeps a TEXT PRIMARY KEY as TEXT for MySQL (a LONGTEXT/TEXT key needs a length)', async () => {
+test('recreateTableOnTarget bounds a TEXT key column for MySQL and leaves every other TEXT uncapped', async () => {
     const execed: string[] = [];
     await migration.recreateTableOnTarget('schema_migrations', {
         schemaByTable: { schema_migrations: { sql: 'CREATE TABLE schema_migrations (id TEXT PRIMARY KEY, note TEXT)', columns: [] } },
         sourceIsSqlite: true, targetKind: 'mysql', readAll: async () => [], targetExec: async (s: string) => { execed.push(s); },
     });
     const sql = execed.join('\n');
-    assert.ok(/id\s+TEXT\s+PRIMARY\s+KEY/i.test(sql), 'a TEXT PRIMARY KEY column stays TEXT (driver maps it to a bounded VARCHAR key)');
+    // The INVARIANT is "a key part is bounded, everything else is not" — not which layer spells it out.
+    // This used to assert the key column came out as a bare `TEXT` for the driver to translate later;
+    // that pinned an intermediate representation, so when the TEXT rule moved into one shared module
+    // (drivers/mysql-text-rule.ts) the test failed while the emitted DDL got strictly better.
+    assert.ok(/id\s+VARCHAR\(255\)\s+PRIMARY\s+KEY/i.test(sql), 'a TEXT PRIMARY KEY is emitted bounded (MySQL refuses a TEXT key without a prefix length)');
+    assert.ok(!/\bid\s+(LONG)?TEXT\b/i.test(sql), 'the key column is never left as TEXT/LONGTEXT');
     assert.ok(/note\s+LONGTEXT/i.test(sql), 'a non-key TEXT column still becomes LONGTEXT (no truncation)');
+});
+
+test('recreateTableOnTarget bounds a TEXT column named by an inline UNIQUE (the case the old lookahead missed)', async () => {
+    // `uuid TEXT NOT NULL UNIQUE` is the core notifications schema. The previous rewrite in migration.js
+    // used `\bTEXT\b(?!\s+(?:PRIMARY|UNIQUE))`, whose lookahead only sees a key that IMMEDIATELY follows
+    // the type — so NOT NULL in between hid the UNIQUE, the column came out LONGTEXT, and MySQL killed
+    // the CREATE with errno 1170. The shared rule inspects the whole column definition instead.
+    const execed: string[] = [];
+    await migration.recreateTableOnTarget('wjp_notes', {
+        schemaByTable: { wjp_notes: { sql: 'CREATE TABLE wjp_notes (id INTEGER, uuid TEXT NOT NULL UNIQUE, body TEXT)', columns: [] } },
+        sourceIsSqlite: true, targetKind: 'mysql', readAll: async () => [], targetExec: async (s: string) => { execed.push(s); },
+    });
+    const sql = execed.join('\n');
+    assert.ok(/uuid\s+VARCHAR\(255\)\s+NOT\s+NULL\s+UNIQUE/i.test(sql), 'a TEXT column named by an inline UNIQUE is bounded');
+    assert.ok(/body\s+LONGTEXT/i.test(sql), 'the non-key TEXT column beside it is still uncapped');
 });
 
 test('recreateTableOnTarget uses the captured raw sqlite_master CREATE (full fidelity) for a SQLite source', async () => {

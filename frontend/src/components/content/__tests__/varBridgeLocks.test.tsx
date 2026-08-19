@@ -159,7 +159,10 @@ describe('PostsGrid thumbnail — image travels as --wjs-posts-thumb-image', () 
 
     it('emits the custom property, never a literal inline background-image', () => {
         expect(thumbs.length).toBe(2);
-        expect(thumbs[0]).toMatch(/--wjs-posts-thumb-image:\s*url\(https:\/\/cdn\.example\/a\.jpg\)/);
+        // QUOTED on purpose: the URL now goes through blockVars/safeCssUrl instead of being
+        // interpolated bare, so a stored value carrying `);…` cannot close the url() and append
+        // declarations of its own. renderToStaticMarkup escapes the quotes into &quot;.
+        expect(thumbs[0]).toMatch(/--wjs-posts-thumb-image:\s*url\(&quot;https:\/\/cdn\.example\/a\.jpg&quot;\)/);
         expect(thumbs[0]).not.toMatch(/background-image/); // the re-lock mutation
         expect(thumbs[1]).not.toMatch(/style=/); // no image → nothing inline at all
     });

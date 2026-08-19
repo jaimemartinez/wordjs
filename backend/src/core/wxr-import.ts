@@ -31,6 +31,34 @@ const Term = require('../models/Term');
 const Comment = require('../models/Comment');
 const { dbAsync } = require('../config/database');
 const { sanitizeMetaValue } = require('./sanitize-meta');
+// ONE list of server-owned meta keys for every writer — the importer used to keep a two-key subset of
+// its own (see the postmeta loop below for what that cost). metaKeyProblem is the FORM rule (type,
+// emptiness, the prototype-manipulating names, the column's length bound) the routes apply too.
+const { isProtectedPostMeta, metaKeyProblem } = require('./protected-meta');
+// isPlainSegment is the FORM gate a path segment must pass before it can become a path — the same one
+// core/safe-path applies at the sink. The importer uses it to validate an attachment's stored path by
+// SHAPE, which is what lets it keep writing the key at all (see ATTACHMENT_OWNED_META).
+const { isPlainSegment } = require('./safe-path');
+
+/**
+ * Is this post type INTERNAL — registered, but marked `showInRest: false` (nav_menu_item, revision)?
+ *
+ * Deliberately NOT `!isRestExposedPostType(type)`: that also answers true for an UNREGISTERED type,
+ * and a WXR full of a custom type this install has never heard of is the normal case for a migration.
+ * Same distinction routes/posts.ts makes for existing content — the two must agree, and the shared
+ * home for this predicate is core/post-capabilities (see the handoff note).
+ */
+const ALWAYS_INTERNAL_POST_TYPES: Set<string> = new Set(['nav_menu_item', 'revision']);
+
+function isInternalPostType(type: unknown): boolean {
+    const name = String(type || 'post');
+    // Fail closed on the core internals whatever the registry says: initPostTypes() registers those two
+    // ASYNCHRONOUSLY, and a CLI import can run before (or without) it. Same floor as routes/posts.ts.
+    if (ALWAYS_INTERNAL_POST_TYPES.has(name)) return true;
+    const { getPostType } = require('./post-types');
+    const pt = getPostType(name);
+    return !!(pt && pt.showInRest === false);
+}
 
 /**
  * Sanitize an imported postmeta value through the SAME sanitizer the posts routes use, so a crafted
@@ -40,6 +68,89 @@ const { sanitizeMetaValue } = require('./sanitize-meta');
  * JSON (or sanitizing yields nothing usable), fall back to the raw string so import stays non-fatal and
  * non-_puck_data meta is preserved verbatim (sanitizeMetaValue is a no-op for other keys anyway).
  */
+/* ── ATTACHMENT META: A CORE-OWNED WRITE, NOT A REQUEST ───────────────────────────────────────────
+ *
+ * THE REGRESSION THIS BLOCK UNDOES. Swapping the importer's local `{_edit_lock, _edit_last}` skip-list
+ * for `isProtectedPostMeta()` also banned `_wp_attached_file` — and the importer CREATES attachment
+ * rows without downloading anything, so that key is the ONLY record of where the file lives. Every
+ * WordPress migration since then reported `attachments: {created: N}` and produced N media items whose
+ * sourceUrl is `/uploads/` and whose `mediaDetails.file` is empty: the documented migration (copy
+ * wp-content/uploads, import the WXR) silently lost every image, with the summary saying it worked.
+ *
+ * THE DISTINCTION THAT WAS MISSING, and the one to keep. "Protected" describes the SURFACE, not the
+ * bytes: it means "an untrusted CALLER may not name this key on a route". Media.create() writes
+ * `_wp_attached_file` on every upload; an importer is core code doing the same job. What the importer
+ * owes is not abstinence from the key but validation of the VALUE — because the value here does come
+ * from a third party's XML, and Media.delete() turns it into an unlink() target.
+ *
+ * So the value is checked as a SHAPE, with the SAME predicate the sink uses (core/safe-path's
+ * isPlainSegment, which Media._deletableFiles applies segment by segment): a relative path of plain
+ * segments, no `..`, no separator tricks, no drive letter, no NTFS stream, no NUL. A value that does
+ * not resolve is DROPPED — never stored, never repaired — so the row simply has no path, exactly as it
+ * did while the key was banned outright. Everything that passes would have resolved inside uploads/
+ * anyway, which is precisely the set a migration needs.
+ */
+
+/** The longest attachment path the importer will accept (post_meta.meta_value is TEXT; be modest). */
+const MAX_ATTACHED_FILE_LENGTH = 255;
+/** A sane ceiling on directory depth — WordPress writes `YYYY/MM/name.ext`. */
+const MAX_ATTACHED_FILE_DEPTH = 6;
+
+/**
+ * Normalize an imported `_wp_attached_file` value, or null when its SHAPE is not resolvable.
+ * Returns the path with forward slashes, which is what Media.formatAttachment expects.
+ */
+function safeAttachedFile(raw: string): string | null {
+    if (typeof raw !== 'string') return null;
+    const value = raw.trim();
+    if (value.length === 0 || value.length > MAX_ATTACHED_FILE_LENGTH) return null;
+    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(value)) return null; // an absolute URL is not a stored path
+    // AN ABSOLUTE PATH IS REFUSED, NOT MADE RELATIVE. Splitting on separators and dropping the empty
+    // leading segment would silently turn `/etc/passwd` into `etc/passwd` — a value that then passes
+    // every remaining check. Repairing an input is how a checked representation and a stored one come
+    // apart; the only safe answer to "this is not the shape" is to drop it.
+    if (/^[/\\]/.test(value)) return null;
+    const segments = value.split(/[/\\]+/).filter((s: string) => s.length > 0);
+    if (segments.length === 0 || segments.length > MAX_ATTACHED_FILE_DEPTH) return null;
+    if (!segments.every((s: string) => isPlainSegment(s))) return null;
+    return segments.join('/');
+}
+
+/**
+ * Normalize an imported `_wp_attachment_metadata` value, or null when it is not usable.
+ *
+ * WXR carries this key PHP-serialized in the general case, which we cannot (and need not) read: those
+ * values are dropped, exactly as they were while the key was banned. A JSON object — what WordJS's own
+ * exporter emits, so a WordJS→WordJS round trip keeps its thumbnails — is accepted only when every
+ * file name inside it passes the same shape gate as the main path, because `sizes[*].file` is the
+ * OTHER unlink target Media._deletableFiles builds.
+ */
+function safeAttachmentMetadata(raw: string): string | null {
+    let parsed: any;
+    try { parsed = JSON.parse(raw); } catch { return null; }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    if (parsed.file !== undefined && (typeof parsed.file !== 'string' || !safeAttachedFile(parsed.file))) return null;
+    const sizes = parsed.sizes;
+    if (sizes !== undefined) {
+        if (!sizes || typeof sizes !== 'object' || Array.isArray(sizes)) return null;
+        for (const size of Object.values(sizes)) {
+            const file = (size as any)?.file;
+            if (file === undefined) continue;
+            if (typeof file !== 'string' || !safeAttachedFile(file)) return null;
+        }
+    }
+    try { return JSON.stringify(parsed); } catch { return null; }
+}
+
+/**
+ * The protected keys the importer MAY write, and how each one's value is validated.
+ * Anything not listed here keeps the untrusted-request policy (isProtectedPostMeta refuses it).
+ */
+const ATTACHMENT_OWNED_META: Record<string, (raw: string) => string | null> = {
+    _wp_attached_file: safeAttachedFile,
+    _wp_attachment_metadata: safeAttachmentMetadata,
+};
+
 function sanitizeImportedMeta(key: string, rawValue: string): string {
     if (key !== '_puck_data') return rawValue;
     let parsed: any;
@@ -315,7 +426,23 @@ async function importWxr(xml: string, options: ImportOptions): Promise<ImportSum
         const status = text(item['wp:status']) || 'draft';
         const oldId = text(item['wp:post_id']);
 
-        if (type === 'nav_menu_item') { summary.navItems.skipped++; continue; }
+        // AN INTERNAL POST TYPE IS NOT IMPORTABLE. The invariant "a showInRest:false type is never
+        // created from outside" was put on the ROUTE (POST /posts) and the importer is the other door:
+        // `wp:post_type` came straight out of a third party's XML and only `nav_menu_item` was filtered,
+        // so `revision` walked in. With `wp:status = inherit` those rows pass getRevisions/
+        // countRevisions' own filter, and pass D resolves `wp:post_parent` against posts that ALREADY
+        // exist — so a crafted WXR hangs fabricated history off a real page and makes the next ordinary
+        // save prune the genuine history (limitRevisions deletes oldest-first). The import is admin-only,
+        // so this is an invariant restored, not an escalation closed.
+        //
+        // UNREGISTERED is not INTERNAL: a WXR carrying a custom type this install does not know must
+        // still import (that is most of what a migration IS), exactly as routes/posts.ts distinguishes
+        // the two for existing content.
+        if (isInternalPostType(type)) {
+            if (type === 'nav_menu_item') summary.navItems.skipped++;
+            else bumpSkip(summary, type);
+            continue;
+        }
         if (status === 'trash') { bumpSkip(summary, type); continue; }
         if (type === 'attachment' && !importAttachments) { summary.attachments.skipped++; continue; }
 
@@ -368,11 +495,40 @@ async function importWxr(xml: string, options: ImportOptions): Promise<ImportSum
             const wpParent = text(item['wp:post_parent']);
             if (wpParent && wpParent !== '0') deferredParent.set(post.id, wpParent);
 
-            // Post meta (skip volatile editor locks; keep everything else for fidelity).
-            const SKIP_META = new Set(['_edit_lock', '_edit_last']);
+            // Post meta: refuse the SERVER-OWNED keys, keep everything else for fidelity.
+            //
+            // The local SKIP_META set here was `{_edit_lock, _edit_last}` — a strict SUBSET of
+            // core/protected-meta, and the two never learned about each other. So the importer wrote
+            // `_wp_attached_file`, `_wp_attachment_metadata` and `_wp_trash_meta_status` verbatim from a
+            // third party's XML, while the module that owns that list states that no generic path can.
+            // It matters most for `_wp_attached_file`: the importer creates attachment ROWS and never
+            // downloads a file, so the value is pure attacker-chosen text that Media.delete() later
+            // turns into an unlink target (core/safe-path contains it — but the source is supposed to be
+            // closed too, and this was the one door left open). One list, consulted by every writer.
+            //
+            // WITH ONE EXPLICIT EXCEPTION, restored after that list cost every migration its media:
+            // an ATTACHMENT's own path keys are a CORE-OWNED write, validated by SHAPE instead of
+            // refused by NAME. See ATTACHMENT_OWNED_META for the full reasoning; the short version is
+            // that "protected" describes the untrusted SURFACE, not the bytes, and the importer is the
+            // same kind of writer Media.create() is.
             for (const pm of toArray(item['wp:postmeta'])) {
                 const key = text(pm['wp:meta_key']).trim();
-                if (!key || SKIP_META.has(key)) continue;
+                // The FORM rule the routes apply too: a key that is empty, over the column's bound, or
+                // one of the prototype-manipulating names (`__proto__` poisons the map getAllMeta
+                // returns) is not a key, whichever door it came through.
+                if (metaKeyProblem(key) !== null) continue;
+
+                const coreOwned = type === 'attachment'
+                    ? Object.prototype.hasOwnProperty.call(ATTACHMENT_OWNED_META, key) && ATTACHMENT_OWNED_META[key]
+                    : null;
+                if (coreOwned) {
+                    const safe = coreOwned(text(pm['wp:meta_value']));
+                    if (!safe) continue; // unresolvable shape → no path at all, never a repaired one
+                    try { await Post.updateMeta(post.id, key, safe); } catch { /* non-fatal */ }
+                    continue;
+                }
+
+                if (isProtectedPostMeta(key)) continue;
                 try { await Post.updateMeta(post.id, key, sanitizeImportedMeta(key, text(pm['wp:meta_value']))); }
                 catch { /* non-fatal */ }
             }

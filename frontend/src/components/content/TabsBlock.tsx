@@ -4,7 +4,7 @@
  * public ContentRenderer.
  */
 import React from "react";
-import { bc, blockVars, cx, unit } from "@/components/blocks/blockVars";
+import { bc, blockVars, cx, safeCss, unit } from "@/components/blocks/blockVars";
 
 export default function TabsBlock({ tabs, color, activeColor, borderColor, borderWidth, tabPad, panelBg, panelPad, panelRadius, css }: any) {
     const [activeTab, setActiveTab] = React.useState(0);
@@ -22,7 +22,7 @@ export default function TabsBlock({ tabs, color, activeColor, borderColor, borde
                     'panel-pad': unit(panelPad),
                     'panel-radius': unit(panelRadius),
                 }),
-                ...css,
+                ...safeCss(css),
             }}
         >
             <div className={bc('tabs__list')} role="tablist">

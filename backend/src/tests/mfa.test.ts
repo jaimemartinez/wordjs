@@ -63,11 +63,14 @@ after(async () => {
 
 // Enroll the seeded user and return { secret, backupCodes }.
 async function enroll() {
-    const setup = await request(app).post(`${B}/auth/mfa/setup`).set('Authorization', bearer(jwtFor(uid, 'mfauser')));
+    // Enrollment now demands the account password (a hijacked cookie must not be able to bind its own
+    // authenticator and lock the owner out irreversibly — see routes/auth.ts requireSelfPasswordReauth).
+    const setup = await request(app).post(`${B}/auth/mfa/setup`).set('Authorization', bearer(jwtFor(uid, 'mfauser')))
+        .send({ currentPassword: PASSWORD });
     assert.strictEqual(setup.status, 200);
     const secret = setup.body.secret;
     const enable = await request(app).post(`${B}/auth/mfa/enable`).set('Authorization', bearer(jwtFor(uid, 'mfauser')))
-        .send({ code: totp.totp(secret) });
+        .send({ currentPassword: PASSWORD, code: totp.totp(secret) });
     assert.strictEqual(enable.status, 200, JSON.stringify(enable.body));
     return { secret, backupCodes: enable.body.backupCodes as string[] };
 }
@@ -85,15 +88,18 @@ test('TOTP core matches an RFC 6238 vector', () => {
 });
 
 test('enroll returns a secret + otpauth URI; enable activates + returns backup codes', async () => {
-    const setup = await request(app).post(`${B}/auth/mfa/setup`).set('Authorization', bearer(jwtFor(uid, 'mfauser')));
+    // Enrollment now demands the account password (a hijacked cookie must not be able to bind its own
+    // authenticator and lock the owner out irreversibly — see routes/auth.ts requireSelfPasswordReauth).
+    const setup = await request(app).post(`${B}/auth/mfa/setup`).set('Authorization', bearer(jwtFor(uid, 'mfauser')))
+        .send({ currentPassword: PASSWORD });
     assert.strictEqual(setup.status, 200);
     assert.match(setup.body.otpauthUri, /^otpauth:\/\/totp\//);
     assert.ok(setup.body.secret && setup.body.secret.length >= 16);
     // a bad code does not activate
-    const bad = await request(app).post(`${B}/auth/mfa/enable`).set('Authorization', bearer(jwtFor(uid, 'mfauser'))).send({ code: '000000' });
+    const bad = await request(app).post(`${B}/auth/mfa/enable`).set('Authorization', bearer(jwtFor(uid, 'mfauser'))).send({ currentPassword: PASSWORD, code: '000000' });
     assert.strictEqual(bad.status, 400);
     // the right code activates + yields backup codes
-    const good = await request(app).post(`${B}/auth/mfa/enable`).set('Authorization', bearer(jwtFor(uid, 'mfauser'))).send({ code: totp.totp(setup.body.secret) });
+    const good = await request(app).post(`${B}/auth/mfa/enable`).set('Authorization', bearer(jwtFor(uid, 'mfauser'))).send({ currentPassword: PASSWORD, code: totp.totp(setup.body.secret) });
     assert.strictEqual(good.status, 200);
     assert.ok(Array.isArray(good.body.backupCodes) && good.body.backupCodes.length === 10);
     const status = await request(app).get(`${B}/auth/mfa/status`).set('Authorization', bearer(jwtFor(uid, 'mfauser')));

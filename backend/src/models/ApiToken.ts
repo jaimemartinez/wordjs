@@ -210,25 +210,90 @@ class ApiToken {
         }));
     }
 
-    /** Revoke a token the user owns. Returns true if a matching, still-active token was revoked. */
-    static async revoke(id: number, userId: number): Promise<boolean> {
+    /**
+     * Stamp the user's JWT security epoch — every session token issued at or before this second stops
+     * authenticating (middleware/auth.ts compares `decoded.iat <= token_valid_after`). Best-effort by
+     * design: the token rows are already revoked by the time this runs, which is the primary guarantee.
+     *
+     * ONE implementation, used by every "cut this user's sessions off" path — the two revocation doors
+     * below and the standalone POST /users/me/sessions/revoke — so they cannot drift apart the way they
+     * did before. Public for that last caller: revoking a leaked token and ending the sessions it may
+     * have minted are two different operations, and the second one had no door of its own.
+     */
+    static async stampSecurityEpoch(userId: number): Promise<void> {
+        try {
+            // `require` is deferred to call time: User already requires this module lazily for the
+            // password-change path, and a top-level require in both directions would resolve one of them
+            // half-initialized.
+            await require('./User').updateMeta(userId, 'token_valid_after', String(Math.floor(Date.now() / 1000)));
+        } catch { /* best-effort: the token rows are already revoked, which is the primary guarantee */ }
+    }
+
+    /**
+     * Revoke a token the user owns. Returns true if a matching, still-active token was revoked.
+     *
+     * `compromised` is the difference between the two things this one call used to conflate:
+     *
+     *  - DEFAULT (false) — routine rotation. Retiring one machine token is hygiene, not an incident, and
+     *    stamping the epoch would sign the owner out of every browser they are logged into. Mirror image
+     *    of the rule User.update states for the other direction ("done on password change/reset, NOT on
+     *    logout: logging out of a browser must not kill a user's headless CI tokens").
+     *  - compromised: true — "this token leaked". Then the epoch MUST be stamped. `issueSessionCookie`
+     *    refuses to mint a session for a headless request, so no NEW session can descend from a token —
+     *    but that reasoning covers the future, not the installed base: a site upgraded into that fix still
+     *    carries 7-day cookies minted from a token BEFORE it, and revoking the token did not touch them.
+     *    An operator doing exactly what the docs say ("revoke the leaked token") was left with a live
+     *    session and no way to see it. The caller declares which of the two it is; the default stays safe
+     *    for CI rotation, and users.ts exposes POST /users/me/sessions/revoke as the standalone cut-off.
+     *
+     * REACHABILITY — READ THIS BEFORE TRUSTING THE PARAGRAPH ABOVE.
+     * The `compromised` branch has NO PRODUCER. The only caller in the whole backend is
+     * routes/auth.ts's `DELETE /auth/tokens/:id`, which calls `revoke(id, req.user.id)` with no options,
+     * and no route accepts a field that would set it. Today the branch is reachable only by calling this
+     * model by hand — which is exactly what the test that claims to cover it does.
+     *
+     * THE CLASS, so it is not repeated: a security fix may add an OPTION, a ROUTE or a FLAG and stop
+     * before wiring it to something a user can actually reach; the suite then passes because the test
+     * drives the model/route directly instead of the producer. An option nobody can set and a route no
+     * screen can call are the same defect wearing different clothes. Whenever a capability is added,
+     * the gate is "which real caller emits it, and does the test go through THAT caller".
+     * The sibling half of this pair was in the same state and IS now wired: POST /users/me/sessions/revoke
+     * had no client at all until `usersApi.revokeSessions` (frontend/src/lib/api.ts).
+     * Still missing, and handed off because it lives outside this file: `DELETE /auth/tokens/:id` must
+     * read a `compromised` flag from the request and pass it here, and the admin tokens screen must offer
+     * "this token leaked" next to "revoke". Until then, do not cite this option as a shipped capability.
+     */
+    static async revoke(id: number, userId: number, options?: { compromised?: boolean }): Promise<boolean> {
         const result = await dbAsync.run(
             'UPDATE api_tokens SET revoked = 1 WHERE id = ? AND user_id = ? AND revoked = 0',
             [id, userId]
         );
-        return !!(result && (result.changes > 0 || result.rowCount > 0));
+        const revoked = !!(result && (result.changes > 0 || result.rowCount > 0));
+        if (revoked && options && options.compromised === true) {
+            await ApiToken.stampSecurityEpoch(userId);
+        }
+        return revoked;
     }
 
     /**
      * Revoke ALL of a user's still-active tokens at once. Called on password change/reset so that
      * compromise recovery actually invalidates every credential (the JWT `token_valid_after` epoch does
      * not reach the API-token path). Returns the number of tokens revoked.
+     *
+     * REVOCATION MUST BE TOTAL HERE. Every caller of this method is performing compromise recovery ("cut
+     * off everything this user's credentials could reach"), so it also stamps the JWT security epoch —
+     * otherwise an interactive session DERIVED from one of these tokens (POST /auth/refresh used to trade
+     * a `wjt_` token for a 7-day session cookie; middleware/auth.ts:issueSessionCookie now refuses that,
+     * but sessions minted before the upgrade still exist) would outlive the revocation that was supposed
+     * to end it. revoke() above does the same ONLY when the caller declares `compromised` — see the note
+     * there for why routine rotation must not sign the owner out of their browsers.
      */
     static async revokeAllForUser(userId: number): Promise<number> {
         const result = await dbAsync.run(
             'UPDATE api_tokens SET revoked = 1 WHERE user_id = ? AND revoked = 0',
             [userId]
         );
+        await ApiToken.stampSecurityEpoch(userId);
         return (result && (result.changes ?? result.rowCount)) || 0;
     }
 

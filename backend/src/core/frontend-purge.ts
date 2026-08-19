@@ -23,9 +23,13 @@
  *    into every node's config (so the frontend can verify a purge from its own disk).
  *  - The purge endpoint can only INVALIDATE caches (forcing a re-render) — it can never inject
  *    content — so the blast radius of a leaked secret is extra renders, not integrity loss.
- *  - HTTPS frontends (split/separate) are verified against the cluster CA with the same
- *    CN allowlist model the gateway uses. No rejectUnauthorized:false anywhere. The gateway leg uses
- *    this node's CN=backend client certificate — the gateway authorizes the purge by that identity.
+ *  - Both TLS legs go through ONE builder (clusterTlsOptions): the cluster CA, this node's CN=backend
+ *    key+cert, and rejectUnauthorized:true — never false, anywhere. The direct leg additionally
+ *    allowlists the peer CN (it dials the frontend as localhost, which no SAN covers); the gateway leg
+ *    keeps hostname verification. The client certificate is not optional decoration on either: the
+ *    frontend listens with requestCert+rejectUnauthorized from its first boot after installation, and
+ *    a leg without it dies in the handshake — which is precisely how this transport spent months
+ *    delivering nothing (audit #27).
  *  - Purging is fire-and-forget and debounced (1.5s): a WXR import touching 500 posts produces one
  *    coalesced purge, not 500 — and a frontend that is down just means TTL freshness, never errors
  *    in the write path.
@@ -45,6 +49,49 @@ let pendingTags = new Set<string>();
 let pendingPaths = new Set<string>();
 let flushTimer: any = null;
 let lastFailureLog = 0;
+/**
+ * Permanent misconfigurations currently in force, keyed by WHAT is broken (transport + peer + kind of
+ * fault) rather than by the message text.
+ *
+ * Two reasons for the key. First, this state is what /health/details reports, and a state that is
+ * only ever added to lies as soon as the operator fixes the problem: the TLS options are rebuilt on
+ * every purge, so repairing the certificates or re-enrolling the node makes purging work again while
+ * the panel kept saying BROKEN — with a note explaining that it would not recover on its own — until
+ * someone restarted the process. A key that a SUCCESS can clear is what makes the field a signal
+ * instead of a scar. Second, the old key was the full message including `e.code` and `e.message`, so
+ * a peer producing varying text turned "once per process" into a drip and the set grew without bound.
+ */
+const permanentFailures = new Map<string, { message: string; at: number }>();
+
+/**
+ * How long a recorded permanent fault stays asserted WITHOUT being re-observed.
+ *
+ * A fault here is a statement about the last delivery attempt, and every attempt re-evaluates it
+ * (the TLS options are rebuilt per purge, and a peer that answers clears its keys). Round 1 closed
+ * "the panel never recovers by success"; this closes the other half — the panel must not keep
+ * asserting a fault it has had no chance to re-confirm. On a low-traffic site the next purge can be
+ * days away, so without an expiry a single ambiguous ECONNRESET (a frontend rolling restart happening
+ * to coincide with a publish — and publishing is exactly what triggers a purge) pinned /health/details
+ * to BROKEN, with a note insisting it would not recover on its own, until someone published again.
+ */
+const PERMANENT_TTL_MS = 30 * 60 * 1000;
+
+/** Where this installation lives on disk — NOT the process's cwd.
+ *
+ *  The certificates are written by core/certManager, which resolves them as
+ *  `path.resolve(__dirname, '../../certs')`; config/app.ts derives its root the same way. Reading them
+ *  back relative to the cwd only agrees with that while the backend is started from `backend/`, which
+ *  is a convention nothing enforces: a systemd unit with WorkingDirectory at the repo root, a
+ *  container with another layout or a supervisor running `node backend/server.js` all break it — and
+ *  they break it SILENTLY (frontendServesTls() answers "no certificates", the purge goes out in the
+ *  clear against a TLS socket, and the failure does not always look like a handshake). Anchor to the
+ *  installation instead, and the answer stops depending on how the process was launched.
+ *
+ *  WORDJS_BACKEND_ROOT overrides it for a test that stages a whole installation in a temp directory
+ *  (and for an unusual deployment that really does split the tree). */
+const BACKEND_ROOT = process.env.WORDJS_BACKEND_ROOT
+    ? path.resolve(String(process.env.WORDJS_BACKEND_ROOT))
+    : path.resolve(__dirname, '..', '..');
 
 /** The shared secret, generating + persisting it on first use. Null until the site is installed. */
 function ensureSecret(): string | null {
@@ -60,6 +107,15 @@ type PurgeTransport =
     | { mode: 'gateway'; host: string; port: number };
 
 /**
+ * Is the direct target the monolith's OWN in-process Next server (rather than a co-located frontend
+ * process)? One predicate, because two places need the same answer: purgeTransport picks the origin
+ * from it, and deliverDirect must NOT second-guess the scheme of a listener this very process owns.
+ */
+function isMonolithTarget(env: any = process.env): boolean {
+    return env.WORDJS_MODE === 'mono' && !!env.PORT;
+}
+
+/**
  * Where does a purge from THIS node go?
  *
  * Exported for tests — the caller supplies the config, the environment and the certificate-existence
@@ -72,7 +128,7 @@ function purgeTransport(
 ): PurgeTransport {
     // Monolith serves Next itself on its public port (monolith.js exports it as PORT) — the
     // config's frontendUrl is the SPLIT-mode frontend (3001) and would be a dead target here.
-    if (env.WORDJS_MODE === 'mono' && env.PORT) {
+    if (isMonolithTarget(env)) {
         return { mode: 'direct', origin: `http://127.0.0.1:${env.PORT}` };
     }
     const c = cfg || {};
@@ -80,7 +136,13 @@ function purgeTransport(
     // enrollment, not single-host defaults, is authoritative (routes/setup.ts isEnrolledConfig). Here it
     // means: the frontend is on ANOTHER machine, so this node must not try to guess its address. The
     // gateway holds the registry; ask it.
-    if (c.advertiseHost && c.mtls && c.mtls.cert && c.gatewayHost && certExists(path.resolve(c.mtls.cert))) {
+    // The certificate existence check goes through the SAME resolver as every other read of this
+    // config key (clusterCertPaths → BACKEND_ROOT). It used to be `path.resolve(c.mtls.cert)`, i.e.
+    // the cwd — the very defect wave 3 fixed one function below, in the same file: launched from
+    // anywhere but `backend/` an enrolled node decided it was NOT enrolled and sent its purges at
+    // `frontendUrl` (the gateway's public origin, whose /api routes straight back here) instead of
+    // asking the gateway to fan them out. Purging was dead and nothing said so.
+    if (c.advertiseHost && c.mtls && c.mtls.cert && c.gatewayHost && certExists(clusterCertPaths(c).cert)) {
         return { mode: 'gateway', host: String(c.gatewayHost), port: Number(c.gatewayInternalPort) || 3100 };
     }
     return { mode: 'direct', origin: String(c.frontendUrl || 'http://localhost:3000').replace(/\/+$/, '') };
@@ -96,34 +158,262 @@ function warnOnce(message: string) {
 }
 
 /**
+ * A purge that fails for a PERMANENT reason — a TLS handshake the peer will refuse identically
+ * forever, unreadable cluster material — is not the same event as "the frontend happens to be down",
+ * and it must not share the once-an-hour channel with it.
+ *
+ * That sharing is what hid audit #27 for so long: the direct transport attached neither `key` nor
+ * `cert`, so every purge in split mode died in the handshake — and the single line saying so could be
+ * swallowed by any unrelated warning that had already used the hour's budget. Here each distinct
+ * misconfiguration is reported ONCE per process, at error level, naming the fix.
+ */
+function failPermanent(key: string, message: string) {
+    const known = permanentFailures.get(key);
+    // Re-observing the SAME fault refreshes its clock (it is still true) without repeating the line.
+    permanentFailures.set(key, { message, at: Date.now() });
+    if (known) return;
+    console.error(`[Purge] MISCONFIGURED — on-demand purging is DEAD until this is fixed: ${message}`);
+}
+
+/**
+ * That fault is gone: the very thing that could not work just worked.
+ *
+ * Called when the cluster material reads back cleanly and when a peer actually ANSWERS a purge — a
+ * reply means the handshake completed, which is exactly what the recorded fault said was impossible.
+ * Without this the health field never returns to OK and the operator learns to ignore it.
+ */
+function clearPermanent(key: string) {
+    if (permanentFailures.delete(key)) {
+        console.log(`[Purge] recovered — the reported fault is gone (${key}); on-demand purging works again.`);
+    }
+}
+
+/** What has permanently broken purging in this process. Exported for /health surfaces and tests. */
+function purgeFailureState(): string[] {
+    const cutoff = Date.now() - PERMANENT_TTL_MS;
+    for (const [key, fault] of permanentFailures) {
+        if (fault.at < cutoff) {
+            permanentFailures.delete(key);
+            console.log(`[Purge] retiring an unconfirmed fault (${key}): it has not been observed for ` +
+                `${Math.round(PERMANENT_TTL_MS / 60000)} min. The next purge re-reports it if it is still true.`);
+        }
+    }
+    return [...permanentFailures.values()].map((f) => f.message);
+}
+
+/** Where this node's cluster mTLS material lives: the enrolled/installed paths, or the defaults the
+ *  installer writes (routes/setup.ts writes exactly these into `mtls` for a non-enrolled install). */
+function clusterCertPaths(cfg: any): { ca: string; key: string; cert: string } {
+    const m = (cfg && cfg.mtls) || {};
+    // Relative paths are relative to the INSTALLATION (BACKEND_ROOT), which is where certManager
+    // writes them, not to whatever directory the process happens to have been started in. An absolute
+    // configured path still wins — path.resolve returns it untouched.
+    return {
+        ca: path.resolve(BACKEND_ROOT, String(m.ca || 'certs/cluster-ca.crt')),
+        key: path.resolve(BACKEND_ROOT, String(m.key || 'certs/backend.key')),
+        cert: path.resolve(BACKEND_ROOT, String(m.cert || 'certs/backend.crt')),
+    };
+}
+
+/**
+ * THE cluster TLS options — ca + key + cert, in ONE place, for every leg that talks TLS inside the
+ * cluster.
+ *
+ * This function exists because the two transports built them separately and one of them built them
+ * HALF-WAY: the gateway leg passed ca+key+cert, while the direct leg loaded the CA and defined
+ * checkServerIdentity and attached NEITHER key NOR cert. The frontend starts with
+ * `requestCert: true, rejectUnauthorized: true` as soon as the certificates the installer itself
+ * generates exist — i.e. on every boot after installation (frontend/server.js) — so it demanded a
+ * client certificate, got none, and aborted the handshake. On-demand purging was dead in split mode:
+ * every publish, edit and settings change stayed invisible until the ISR window expired.
+ *
+ * A half-built version can no longer exist: either all three files are readable and you get complete
+ * options, or you get null and the caller must say so out loud.
+ *
+ * @param allowedCns when given, the peer is authorized by its certificate CN instead of by hostname.
+ *        The direct leg needs this (it addresses the frontend as localhost/127.0.0.1, which no SAN
+ *        covers); the gateway leg deliberately does NOT pass it, because it dials the gateway by the
+ *        very host its certificate is issued for and default verification is the stronger check.
+ */
+function clusterTlsOptions(cfg: any, allowedCns?: string[]): any | null {
+    const paths = clusterCertPaths(cfg);
+    try {
+        const options: any = {
+            ca: fs.readFileSync(paths.ca),
+            key: fs.readFileSync(paths.key),
+            cert: fs.readFileSync(paths.cert),
+            rejectUnauthorized: true,
+        };
+        if (allowedCns) {
+            options.checkServerIdentity = (_h: string, peer: any) => {
+                const cn = peer && peer.subject && peer.subject.CN;
+                return allowedCns.includes(cn) ? undefined
+                    : new Error(`purge: unexpected upstream CN '${cn}'`);
+            };
+        }
+        // The material reads: whatever was wrong with it is not wrong any more.
+        clearPermanent(FAULT_MATERIAL);
+        return options;
+    } catch (e: any) {
+        failPermanent(
+            FAULT_MATERIAL,
+            `cluster mTLS material unreadable (${e && e.message}) — expected ${paths.ca}, ${paths.key} and ` +
+            `${paths.cert}. Re-run the installer or re-enroll this node.`
+        );
+        return null;
+    }
+}
+
+/**
+ * Does the co-located frontend actually speak TLS?
+ *
+ * Derived from the REAL listener, not from the stored `frontendUrl`. frontend/server.js decides
+ * exactly like this — its own certs directory if `frontend.crt` is there, otherwise the backend's —
+ * and serves HTTPS when all three files exist. The stored URL is a separate, older decision and the
+ * two disagree routinely: with the gateway configured `ssl: false` the installer leaves
+ * `frontendUrl` as `http://localhost:3001` while the frontend is already enforcing mTLS, so the purge
+ * went out in the clear against a TLS socket and died just as thoroughly as the missing-cert case.
+ *
+ * Paths are anchored to BACKEND_ROOT — the installation, derived from this file's own location —
+ * rather than to the process's cwd. Resolving them against the cwd made the answer depend on how the
+ * service was launched: from anywhere but `backend/` this returned false without a word, and a purge
+ * then went out in the clear at a TLS socket, which is the variant of #27 this predicate exists to
+ * close.
+ */
+function frontendServesTls(certExists: (p: string) => boolean = fs.existsSync): boolean {
+    const frontendCerts = path.resolve(BACKEND_ROOT, '..', 'frontend', 'certs');
+    const backendCerts = path.resolve(BACKEND_ROOT, 'certs');
+    const dir = certExists(path.join(frontendCerts, 'frontend.crt')) ? frontendCerts : backendCerts;
+    return ['cluster-ca.crt', 'frontend.key', 'frontend.crt']
+        .every((f) => certExists(path.join(dir, f)));
+}
+
+/** The two things that can be permanently wrong, as stable keys (see permanentFailures). The peer
+ *  key carries host:port so a cluster with several peers reports each one, and so a repaired peer
+ *  clears exactly its own entry. */
+const FAULT_MATERIAL = 'cluster-mtls-material';
+const faultPeer = (kind: string, hostname: any, port: any) => `${kind}:${hostname}:${port}`;
+
+/**
+ * Did this request die in the TLS handshake? Then it is configuration, not weather.
+ *
+ * ECONNRESET counts on a TLS leg: when a peer with `requestCert: true, rejectUnauthorized: true`
+ * refuses our (missing or untrusted) client certificate, Node most often surfaces it as a bare
+ * "socket hang up" rather than an alert — that is the exact signature of the bug this file was
+ * fixed for, and treating it as a transient outage is how it stayed invisible.
+ */
+function isHandshakeFailure(e: any, overTls: boolean, handshakeCompleted: boolean = false): boolean {
+    if (!overTls) return false;
+    // THE VERIFIED ATTRIBUTE BEATS THE AMBIGUOUS LABEL. `ECONNRESET` on a TLS leg is both signatures
+    // at once: a peer refusing our (missing/untrusted) client certificate, AND a peer that was
+    // restarting — a rolling deploy, a `next build` rotating the process, a proxy dropping an idle
+    // socket. The error code cannot tell them apart, but the SOCKET can: if `secureConnect` already
+    // fired, the TLS session was established and negotiation succeeded, so whatever killed the
+    // connection afterwards is weather and belongs on the once-an-hour channel — never on the health
+    // field that tells the operator their configuration is broken.
+    if (handshakeCompleted) return false;
+    const code = String((e && e.code) || '');
+    if (/^(ERR_TLS|ERR_SSL|EPROTO|ECONNRESET|DEPTH_ZERO|UNABLE_TO_|SELF_SIGNED|CERT_)/.test(code)) return true;
+    return /alert|handshake|certificate|self.signed|unable to verify|wrong version number|ssl|tls/i
+        .test(String((e && e.message) || ''));
+}
+
+/**
+ * The MIRROR failure: we spoke cleartext HTTP and the peer answered TLS.
+ *
+ * That is the other half of #27 variant 2 — `frontendUrl` says http:// while the frontend enforces
+ * mTLS — and it does NOT look like a handshake error, because on our side nothing negotiates: the
+ * client parses the server's TLS record as an HTTP response and gives up with an HPE_* parse error
+ * (or an ERR_HTTP one). Left on the once-an-hour channel it reads as "the frontend is flaky", which
+ * is how this bug lived for months. A peer that answers with a protocol we did not speak is a
+ * configuration fault, and it is reported as one.
+ */
+function isCleartextAgainstTls(e: any, overTls: boolean): boolean {
+    if (overTls) return false;
+    const code = String((e && e.code) || '');
+    if (/^(HPE_|ERR_HTTP_)/.test(code)) return true;
+    return /parse error|invalid constant|invalid header/i.test(String((e && e.message) || ''));
+}
+
+/**
  * Fire one purge request. Never throws, never rejects: the write path must not depend on it.
  * The (small) response body is collected — the gateway answers with a per-node delivery report and
  * silently discarding it would hide a cluster that accepted the purge but could not deliver it.
  */
 function send(options: any, body: string, onDone: (res: any, text: string) => void) {
     try {
-        const mod = options.protocol === 'http:' ? require('http') : require('https');
+        const overTls = options.protocol !== 'http:';
+        const mod = overTls ? require('https') : require('http');
+        // Did TLS actually come up on this request? (See isHandshakeFailure.) A reused keep-alive
+        // socket is already authorized when it is assigned, so read that too — otherwise a reset on a
+        // pooled connection would look like a failed handshake that never happened on it.
+        let handshakeCompleted = false;
         const req = mod.request(options, (res: any) => {
+            // The peer ANSWERED: the transport works, whatever it was reported to be. Both faults a
+            // delivery can have are about not being able to talk to this peer at all, so a reply
+            // retires them — this is what makes the health field recover without a restart.
+            clearPermanent(faultPeer('tls', options.hostname, options.port));
+            clearPermanent(faultPeer('cleartext', options.hostname, options.port));
             let text = '';
             res.setEncoding('utf8');
             res.on('data', (c: string) => { if (text.length < 4096) text += c; });
             res.on('end', () => onDone(res, text));
         });
+        req.on('socket', (socket: any) => {
+            if (!overTls) return;
+            if (socket.encrypted && socket.authorized) handshakeCompleted = true;
+            else socket.on('secureConnect', () => { handshakeCompleted = true; });
+        });
         req.on('timeout', () => req.destroy());
-        req.on('error', (e: any) => warnOnce(`delivery failed: ${e && e.message}`));
+        req.on('error', (e: any) => {
+            // A refused/aborted handshake is permanent misconfiguration and gets the loud channel;
+            // ECONNREFUSED/ETIMEDOUT/ENOTFOUND are "the peer is down or moved" and stay on the
+            // once-an-hour one.
+            if (isHandshakeFailure(e, overTls, handshakeCompleted)) {
+                failPermanent(
+                    faultPeer('tls', options.hostname, options.port),
+                    `TLS handshake with ${options.hostname}:${options.port} failed (${(e && e.code) || ''} ${e && e.message}). ` +
+                    'The peer enforces mTLS; this node must present its cluster certificate. Check the mtls paths in wordjs-config.json.'
+                );
+                return;
+            }
+            if (isCleartextAgainstTls(e, overTls)) {
+                failPermanent(
+                    faultPeer('cleartext', options.hostname, options.port),
+                    `${options.hostname}:${options.port} answered something that is not HTTP (${(e && e.code) || ''} ${e && e.message}) ` +
+                    'to a cleartext purge — the peer is almost certainly serving TLS. Point frontendUrl at https://, ' +
+                    'or make this node\'s certificates visible so the transport can detect it.'
+                );
+                return;
+            }
+            warnOnce(`delivery failed: ${e && e.message}`);
+        });
         req.write(body);
         req.end();
     } catch { /* never let a purge failure touch the write path */ }
 }
 
-/** DIRECT delivery to a co-located frontend (monolith / single-host split). Unchanged behaviour. */
-function deliverDirect(origin: string, body: string, secret: string) {
+/**
+ * DIRECT delivery to a co-located frontend (monolith / single-host split).
+ *
+ * @param cfg     the site config, for the cluster mTLS material
+ * @param isMono  true when the target is this very process's Next server: then the origin's scheme is
+ *                a fact about a listener we own, and nothing about the frontend's certs applies.
+ */
+function deliverDirect(origin: string, body: string, secret: string, cfg: any, isMono: boolean) {
     let url: URL;
     try { url = new URL(origin + '/api/revalidate'); } catch { return; }
 
-    const isHttps = url.protocol === 'https:';
+    // The stored frontendUrl says what the installer BELIEVED; frontendServesTls() says what the
+    // frontend process actually did with the certificates on disk. Either saying "TLS" is enough —
+    // never a downgrade — because both failure modes are total: with the gateway configured
+    // `ssl: false` the installer leaves frontendUrl on http:// while the frontend is already
+    // enforcing mTLS, and a purge posted in the clear at a TLS socket dies just as completely as one
+    // that speaks TLS without a client certificate. The monolith is exempt: that origin is a listener
+    // THIS process owns, so its scheme is a fact, not a belief.
+    const isHttps = isMono ? url.protocol === 'https:' : (url.protocol === 'https:' || frontendServesTls());
     const options: any = {
-        protocol: url.protocol,
+        protocol: isHttps ? 'https:' : 'http:',
         method: 'POST',
         hostname: url.hostname,
         port: url.port || (isHttps ? 443 : 80),
@@ -136,19 +426,12 @@ function deliverDirect(origin: string, body: string, secret: string) {
         },
     };
     if (isHttps) {
-        // Split/separate frontends serve the cluster-CA cert with a service CN (not an IP SAN) —
-        // verify the chain against that CA and allowlist the CN, exactly like the gateway does.
-        try {
-            const caPath = path.resolve('certs', 'cluster-ca.crt');
-            if (fs.existsSync(caPath)) {
-                options.ca = fs.readFileSync(caPath);
-                options.checkServerIdentity = (_h: string, cert: any) => {
-                    const cn = cert && cert.subject && cert.subject.CN;
-                    return ['frontend', 'gateway'].includes(cn) ? undefined
-                        : new Error(`purge: unexpected upstream CN '${cn}'`);
-                };
-            }
-        } catch { /* CA unavailable — default verification applies */ }
+        // The frontend serves the cluster-CA cert with a service CN (not an IP SAN) AND demands a
+        // client certificate back (requestCert + rejectUnauthorized). Same builder as the gateway leg,
+        // so this side can never again be assembled half-way.
+        const tls = clusterTlsOptions(cfg, ['frontend', 'gateway']);
+        if (!tls) return; // failPermanent already said what is missing; sending in the clear is futile
+        Object.assign(options, tls);
     }
     send(options, body, (res: any, _text: string) => {
         if (res.statusCode !== 200) warnOnce(`frontend /api/revalidate answered ${res.statusCode}`);
@@ -163,26 +446,24 @@ function deliverDirect(origin: string, body: string, secret: string) {
  * the caller can degrade to TTL instead of throwing. Exported for tests.
  */
 function gatewayPurgeOptions(cfg: any, target: { host: string; port: number }, byteLength: number): any {
-    try {
-        return {
-            protocol: 'https:',
-            method: 'POST',
-            hostname: target.host,
-            port: target.port,
-            path: '/purge',
-            timeout: PURGE_TIMEOUT_MS,
-            ca: fs.readFileSync(path.resolve(cfg.mtls.ca)),
-            key: fs.readFileSync(path.resolve(cfg.mtls.key)),
-            cert: fs.readFileSync(path.resolve(cfg.mtls.cert)),
-            rejectUnauthorized: true,
-            headers: {
-                'Content-Type': 'application/json',
-                'Content-Length': byteLength,
-            },
-        };
-    } catch {
-        return null;
-    }
+    // Same builder as the direct leg (clusterTlsOptions) — no CN allowlist here on purpose: this leg
+    // dials the gateway by the very host its certificate is issued for, so Node's default hostname
+    // verification is the stronger check.
+    const tls = clusterTlsOptions(cfg);
+    if (!tls) return null;
+    return {
+        protocol: 'https:',
+        method: 'POST',
+        hostname: target.host,
+        port: target.port,
+        path: '/purge',
+        timeout: PURGE_TIMEOUT_MS,
+        ...tls,
+        headers: {
+            'Content-Type': 'application/json',
+            'Content-Length': byteLength,
+        },
+    };
 }
 
 /** VIA THE GATEWAY: it owns the registry of frontend nodes and the shared secret, so it delivers. */
@@ -229,7 +510,7 @@ function flush() {
     }
     const secret = ensureSecret();
     if (!secret) return;
-    deliverDirect(target.origin, body, secret);
+    deliverDirect(target.origin, body, secret, cfg, isMonolithTarget());
 }
 
 /** Queue tags/paths for the next debounced flush. */
@@ -336,4 +617,15 @@ function initFrontendPurge() {
     });
 }
 
-module.exports = { initFrontendPurge, purgeFrontend, purgeForPost, publicPathsForPost, purgeTransport, gatewayPurgeOptions };
+module.exports = {
+    initFrontendPurge, purgeFrontend, purgeForPost, publicPathsForPost, purgeTransport, gatewayPurgeOptions,
+    // Exported for tests and for a future /health/details counter: a purge channel that is permanently
+    // broken must be observable, not inferable from a log line an hour old.
+    clusterTlsOptions, frontendServesTls, purgeFailureState,
+    // The installation root every certificate path is resolved against, and the resolver itself:
+    // exported so a test can prove they do not depend on the process's cwd.
+    clusterCertPaths, BACKEND_ROOT,
+    // The two halves of "is this configuration or weather?" — the decision that routes a failure to
+    // the health field instead of to a log line nobody reads.
+    isHandshakeFailure, isCleartextAgainstTls,
+};
