@@ -26,6 +26,193 @@ permissions:
 # 3 minutes; 15 is five times that — generous on a loaded runner, decisive against a hang.
 
 jobs:
+  gates-travel:
+    # A GATE THAT DOES NOT TRAVEL IS NOT A GATE.
+    #
+    # Round 4 of the adversarial review found that frontend/src/components/content/__tests__/
+    # blockStyleInjection.test.tsx — six gates presented as the product of a redesign, 691 assertions,
+    # green on the author's machine — was UNTRACKED. It did not exist in any checkout but his. The audit
+    # that followed found the same thing about ~70 other test files and about a whole workflow
+    # (.github/workflows/sandbox-parity.yml). None of it was reachable by CI, and nothing in CI could say
+    # so, because a file that is not committed simply is not there: `git diff --exit-code` on it is
+    # vacuously green, `vitest run` never sees it, and every report of "N tests passing" is a property of
+    # one laptop.
+    #
+    # This job is the half that CAN travel, because it lives in a file that is committed. It asks two
+    # questions that a checkout is able to answer:
+    #   1. Is every file on the REQUIRED_GATES manifest below present and tracked? A gate the team relies
+    #      on must fail the build while it is missing — that is the only signal that outlives a handoff
+    #      note saying "remember to commit these".
+    #   2. Is every tracked test file actually RUN by one of the suites this workflow invokes? The sibling
+    #      disease: a test that is committed, reviewed, and executed by nobody. `node --test
+    #      'src/tests/*.test.ts'` does not recurse, so one subdirectory is enough to make a file invisible
+    #      while it looks committed and fine.
+    # Neither question needs npm, a database or a build — the job is seconds long and gates nothing else.
+    name: Gates that travel (every gate is committed and run)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Every required gate file is present and tracked
+        # The manifest is deliberately EXPLICIT. A derived check cannot work here: in a CI checkout an
+        # untracked file does not exist at all, so "enumerate the test files you can see and check they
+        # are tracked" is vacuous by construction — it is exactly the trap the marketplace/dist gate fell
+        # into. Naming the files is what gives the check teeth: the build is red until they are committed.
+        #
+        # Rows are gate files and the sources those gates import (a committed test that imports an
+        # uncommitted module fails CI on the import, which reports as a broken suite rather than as a
+        # missing gate). Delete a row only when the gate itself is deleted — never to make the job green.
+        run: |
+          set -u
+          missing=""
+          while IFS= read -r f; do
+            case "$f" in ''|'#'*) continue ;; esac
+            git ls-files --error-unmatch "$f" >/dev/null 2>&1 || missing="$missing $f"
+          done <<'GATES'
+          # ── backend gates (node --test src/tests/*.test.ts) ────────────────────────────────────────
+          backend/src/tests/account-security-value-gates.test.ts
+          backend/src/tests/analytics-retention-couplings.test.ts
+          backend/src/tests/analytics-track-bounds.test.ts
+          backend/src/tests/anonymous-entry-channels.test.ts
+          backend/src/tests/audit-collab-g1.test.ts
+          backend/src/tests/audit-collab-x5.test.ts
+          backend/src/tests/audit-posts-media-revisions.test.ts
+          backend/src/tests/auth-headless-session.test.ts
+          backend/src/tests/backup-restore-reporting.test.ts
+          backend/src/tests/backup-restore-traversal.test.ts
+          backend/src/tests/class-attribute-channel.test.ts
+          backend/src/tests/cluster-cert-path-anchor.test.ts
+          backend/src/tests/collab-rejection-sites.test.ts
+          backend/src/tests/dist-mysql-driver-freshness.test.ts
+          backend/src/tests/frontend-purge-root-anchor.test.ts
+          backend/src/tests/health-purge-observability.test.ts
+          backend/src/tests/import-post-page-slug-identity.test.ts
+          backend/src/tests/install-root-paths.test.ts
+          backend/src/tests/mail-server-ownership-class.test.ts
+          backend/src/tests/mail-server-ownership-sql.test.ts
+          backend/src/tests/mail-server-shared-rows.test.ts
+          backend/src/tests/mail-server-ownership.test.ts
+          backend/src/tests/menu-term-counts.test.ts
+          backend/src/tests/migration-mysql-text-rule.test.ts
+          backend/src/tests/mysql-ddl-parsing-classes.test.ts
+          backend/src/tests/mysql-driver-dialect.test.ts
+          backend/src/tests/mysql-statement-form-classes.test.ts
+          backend/src/tests/notices-router.test.ts
+          backend/src/tests/plugin-grant-scan.test.ts
+          backend/src/tests/post-term-count-transitions.test.ts
+          backend/src/tests/post-terms-serialization.test.ts
+          backend/src/tests/posts-date-and-slug-identity.test.ts
+          backend/src/tests/public-surface-hardening.test.ts
+          backend/src/tests/puck-style-injection.test.ts
+          backend/src/tests/repo-hygiene-secrets.test.ts
+          backend/src/tests/request-field-types.test.ts
+          backend/src/tests/sandbox-fs-guard-classes.test.ts
+          backend/src/tests/sandbox-macos-profile.test.ts
+          backend/src/tests/sandbox-platform-fallback.test.ts
+          backend/src/tests/sandbox-windows-appcontainer.test.ts
+          backend/src/tests/sanitize-meta-prototype-keys.test.ts
+          backend/src/tests/settings-notices-route.test.ts
+          backend/src/tests/slug-length-bound.test.ts
+          backend/src/tests/sqlite-legacy-transaction-cost.test.ts
+          backend/src/tests/sudo-gate-classes.test.ts
+          backend/src/tests/term-count-locking.test.ts
+          backend/src/tests/term-slug-bounds.test.ts
+          backend/src/tests/verify-posts-remediation.test.ts
+          # ── backend sources those gates import ────────────────────────────────────────────────────
+          backend/src/core/analytics-retention.ts
+          backend/src/core/protected-meta.ts
+          backend/src/core/sandbox-macos.ts
+          backend/src/core/sandbox-windows.ts
+          backend/src/drivers/mysql-text-rule.ts
+          backend/src/routes/notices.ts
+          backend/scripts/verify-sandbox-parity.mjs
+          # ── frontend gates (vitest run: src/**/*.test.ts(x)) ──────────────────────────────────────
+          frontend/src/__tests__/instrumentationGatewayTls.test.ts
+          frontend/src/app/admin/notices/__tests__/noticesLogic.test.ts
+          frontend/src/components/__tests__/revisionRestoreDisclosure.test.ts
+          frontend/src/components/blocks/__tests__/authorCssVars.test.tsx
+          frontend/src/components/blocks/__tests__/classAttributeChannel.test.tsx
+          frontend/src/components/content/__tests__/blockCssEmission.test.tsx
+          frontend/src/components/content/__tests__/blockStyleInjection.test.tsx
+          frontend/src/components/verso/editor/__tests__/propertiesPanel.test.tsx
+          frontend/src/contexts/ThemeLayoutContext.test.ts
+          frontend/src/lib/__tests__/categorySelectorPagination.test.ts
+          frontend/src/lib/__tests__/editorPostDate.test.ts
+          frontend/src/lib/__tests__/embedHostsCsp.test.ts
+          frontend/src/lib/__tests__/mfaApi.test.ts
+          frontend/src/lib/__tests__/postEditorCategoryState.test.ts
+          frontend/src/lib/__tests__/resolvedPostCategoryFilter.test.ts
+          frontend/src/lib/__tests__/sudoProof.test.ts
+          frontend/src/lib/__tests__/themeComponentRecipes.test.ts
+          frontend/src/lib/themeActivationEvents.test.ts
+          frontend/src/lib/verso/collab/__tests__/collab-refusals.test.ts
+          # ── frontend sources those gates import ───────────────────────────────────────────────────
+          frontend/embed-hosts.js
+          frontend/src/app/admin/notices/noticesLogic.ts
+          frontend/src/app/admin/notices/page.tsx
+          frontend/src/app/admin/posts/[id]/categoryEditorState.ts
+          frontend/src/app/admin/users/UserMfaReset.tsx
+          frontend/src/components/blocks/safeStyle.ts
+          frontend/src/contexts/ThemeLayoutContext.tsx
+          frontend/src/lib/themeActivationEvents.ts
+          frontend/src/lib/themeComponentRecipes.ts
+          # ── gateway gates (node --test test/*.test.js) ────────────────────────────────────────────
+          gateway/src/registration.js
+          gateway/src/routing.js
+          gateway/test/dispatcher-parity.test.js
+          gateway/test/registration.test.js
+          gateway/test/worker-registry.test.js
+          # ── a workflow is a gate too: this one runs nowhere while it is untracked ─────────────────
+          .github/workflows/sandbox-parity.yml
+          GATES
+          if [ -n "$missing" ]; then
+            for f in $missing; do
+              echo "::error file=$f::this gate is NOT TRACKED by git — it runs on its author's machine and nowhere else"
+            done
+            echo "::error::REQUIRED_GATES: the files above are missing from the repository. Commit them (git add -f <path>) or delete the row that names them; a gate that does not travel is not a gate."
+            exit 1
+          fi
+          echo "all required gate files are present and tracked"
+
+      - name: Every tracked test file is actually run by a suite
+        # Each pattern is one of the commands this workflow invokes. A test file that matches none of them
+        # is committed but executed by nobody — the same "green while verifying nothing" outcome as an
+        # untracked one, reached from the other direction. Note the anchors: `node --test
+        # 'src/tests/*.test.ts'` does NOT recurse, so a file one directory deeper is silently not run.
+        run: |
+          set -u
+          orphans=""
+          for f in $(git ls-files | grep -Ei '\.(test|spec)\.[jt]sx?$'); do
+            case "$f" in
+              # backend/package.json → "test": node --test src/tests/*.test.ts  (flat, no recursion)
+              backend/src/tests/*.test.ts)              echo "$f" | grep -Eq '^backend/src/tests/[^/]+\.test\.ts$' || orphans="$orphans $f" ;;
+              # backend/package.json → "test:integration": src/tests-integration/*.test.ts
+              backend/src/tests-integration/*.test.ts)  echo "$f" | grep -Eq '^backend/src/tests-integration/[^/]+\.test\.ts$' || orphans="$orphans $f" ;;
+              # frontend/vitest.config.mts → include: src/**/*.test.ts, src/**/*.test.tsx
+              frontend/src/*.test.ts|frontend/src/*.test.tsx) ;;
+              # frontend/playwright.config.ts → testDir ./e2e, testMatch /verso\/.*\.spec\.ts/
+              frontend/e2e/verso/*.spec.ts)             echo "$f" | grep -Eq '^frontend/e2e/verso/[^/]+\.spec\.ts$' || orphans="$orphans $f" ;;
+              # gateway/package.json → "test": node --test test/*.test.js  (flat, no recursion)
+              gateway/test/*.test.js)                   echo "$f" | grep -Eq '^gateway/test/[^/]+\.test\.js$' || orphans="$orphans $f" ;;
+              # KNOWN AND NOT RUN IN CI, stated rather than tolerated in silence. Both are plugin-local
+              # suites with no runner: backend/plugins/hello-world is the sample plugin's own test, and
+              # marketplace/plugins/mail-server ships its unit test inside the package. Give either one a
+              # CI step and delete its row; add a new row only WITH the reason.
+              backend/plugins/hello-world/tests/hello-world.test.js) ;;
+              marketplace/plugins/mail-server/lib/sanitize-email-html.test.js) ;;
+              *) orphans="$orphans $f" ;;
+            esac
+          done
+          if [ -n "$orphans" ]; then
+            for f in $orphans; do
+              echo "::error file=$f::this test file is committed but no CI suite runs it"
+            done
+            echo "::error::A committed test nobody executes is as green as an uncommitted one. Move it where a runner globs it, add the runner to this workflow, or classify it above WITH a reason."
+            exit 1
+          fi
+          echo "every tracked test file is claimed by a suite this workflow runs"
+
   backend:
     name: Backend (typecheck + test)
     runs-on: ubuntu-latest

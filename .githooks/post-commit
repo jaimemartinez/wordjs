@@ -1,0 +1,5 @@
+#!/bin/sh
+# Delegation only: keeps the machine-local post-commit (graphify's graph refresh) running.
+. "$(dirname "$0")/_local.sh"
+run_local_hook post-commit "$@"
+exit 0

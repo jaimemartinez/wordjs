@@ -11,8 +11,8 @@ infrastructure. This guide covers what's required and how the pieces coordinate.
 > filesystem — SQLite stays on the single backend node and the frontend reaches its uploads through the
 > gateway. That is **SEPARATE mode**; use the join-token walkthrough in
 > **[separate-mode.md](separate-mode.md)** and stop there. **This** guide is for the next step:
-> scaling **one role to N replicas** (e.g. 3 backends), which is what forces the shared Postgres +
-> Redis + filesystem below.
+> scaling **one role to N replicas** (e.g. 3 backends), which is what forces the shared network
+> database (Postgres or MySQL) + Redis + filesystem below.
 
 ## Topology
 
@@ -41,7 +41,7 @@ diverge. (A single-replica-per-role split across machines needs none of them —
 
 | Requirement | Why | How |
 |---|---|---|
-| **External PostgreSQL** | SQLite is a single-host file; every node must share one database. | Set `dbDriver: "postgres"` + `db: { host, port, user, password, name }` in `wordjs-config.json` and point every node at the SAME server. |
+| **A shared network database** | SQLite is a single-host file; every node must share one database. | Set `dbDriver: "postgres"` (recommended) **or** `"mysql"` + `db: { host, port, user, password, name }` in `wordjs-config.json` and point every node at the SAME server. Both engines carry a real distributed lease lock — see below. |
 | **Shared Redis** | Cross-node cache coherence, shared rate limiting, and realtime (SSE) fan-out. | Set `redis: { "enabled": true, host, port, password }` identically on every node, all pointing at ONE Redis. (`db` selects the Redis database index; it defaults to `0`.) |
 | **Shared filesystem** | Uploads, themes, plugins, backups, ACME challenge files and certs are written to local disk. | Mount shared storage (NFS / EFS / SMB) at the backend's `uploads/`, `themes/`, `plugins/`, `backups/`, `public/` and `ssl/` directories on every node (see below). |
 
@@ -157,9 +157,9 @@ Two knock-on settings when a frontend is reached directly rather than through th
 ### Real-time collaboration across replicas
 
 Collaborative editing (CRDT over SSE + POST) is cluster-aware: ops are persisted in the shared
-Postgres and fanned out between nodes over Redis, so two authors editing the same page through two
-different backends converge. Both requirements above apply — it is the shared **Postgres** that makes
-the ops durable and the shared **Redis** that makes the other node hear about them. With Redis down,
+network database and fanned out between nodes over Redis, so two authors editing the same page through
+two different backends converge. Both requirements above apply — it is the shared **database** that
+makes the ops durable and the shared **Redis** that makes the other node hear about them. With Redis down,
 cross-node fan-out degrades **visibly** (the editors are told) and nothing is written silently into a
 void; when Redis returns, the bus reconnects and fan-out resumes without restarting the nodes.
 
@@ -202,6 +202,30 @@ deadlocks the cluster.
 > master switch (the `redis_cache_enabled` option). Turning the object cache off disables the Redis
 > *caching* tier only — coherence, plugin propagation, SSE fan-out and the shared rate-limit store
 > keep working, because a cluster must stay coherent whether or not it is caching.
+
+### Which databases the lease lock actually covers
+
+`backend/src/core/dist-lock.ts` classifies the active driver into **three** answers, not two:
+
+| Driver | Behaviour |
+|---|---|
+| `postgres`, `mysql` (incl. MariaDB) | A **real** lease: a `wordjs_locks` row claimed by an atomic compare-and-set, expiry computed **server-side** so every node reads one clock. Only the clock expression differs between the two engines. |
+| `sqlite` | No-op that grants — a single file on a single host has no cross-process contention, so single-node behaviour is unchanged. |
+| anything else | **Fails closed.** `acquireBlocking` returns `{ held: false }` and `runAsLeader` skips, both with a warning naming the lock. |
+
+This distinction is the point. The lock originally gated on "is this Postgres?" and answered *granted*
+to everything else, on the reasoning that non-Postgres meant SQLite and therefore a single host. Once a
+MySQL driver existed that reasoning was answering the **wrong question**: "not Postgres" was being read
+as "no lock needed" when the truth was "the lock is not implemented here". On `dbDriver: "mysql"` with
+two replicas, the silent grant meant both nodes ran migrations and seeding simultaneously, cron fired on
+every node (duplicate backups, N concurrent Let's Encrypt orders — enough to get the domain
+rate-limited), and every `active_plugins` read-modify-write could lose an update. Nothing logged.
+
+An engine with no implementation now refuses rather than lies: a boot that cannot take `wordjs:boot`
+stops instead of double-seeding, and cron simply does not run. **A refusal is recoverable; a false grant
+corrupts the database.** Note that the driver family is read from the driver name — not from
+`getDbType().isSQLite`, which is defined as `!isPostgres` and is therefore *true* for MySQL. Asking that
+flag is exactly how "not Postgres" became "single host" in the first place.
 
 ## TLS / ACME (one gateway)
 

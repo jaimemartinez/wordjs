@@ -73,7 +73,7 @@ Two enforcement gates live on the host (`backend/src/core/plugin-isolate.ts`):
 | `adminMenu.add(item)` | `adminMenu.add` | Add a Sidebar item (capped per plugin). |
 | `cron.schedule(ts, recurring, hook, args)` | `cron.schedule` | Schedule a recurring/one-shot hook fire. |
 | `crypto.randomToken(bytes=16)` / `crypto.randomInt(min, max)` | `crypto.randomToken` / `crypto.randomInt` | CSPRNG helpers (no data access, no permission gate) — use instead of `Math.random` for tokens/access codes. **Async** in an isolated plugin (RPC to host), so `await` them. |
-| `assets.enqueueScript(spec)` / `assets.enqueueStyle(spec)` | `assets.enqueueScript` / `assets.enqueueStyle` | `assets:write` grant. Enqueue a `<script>`/`<style>` from **inside your own plugin dir** onto public pages; the host emits a **sanitized** tag served from `/plugins/<slug>/`. |
+| `assets.enqueueScript(spec)` / `assets.enqueueStyle(spec)` | `assets.enqueueScript` / `assets.enqueueStyle` | `assets:write` grant. Enqueue a `<script>`/`<style>` onto public pages; the host emits a **sanitized** tag. `src` must resolve **inside your plugin's `public/` directory** with a servable extension — that directory is the only part of the plugin tree published at `/plugins/<slug>/`, and it is **read-only to the plugin** (`documentation/plugins.md` §11a). Any other `src` throws. |
 | `slug` | (local) | The plugin's slug string. |
 
 ### Registration methods (dedicated IPC kinds — NOT in the call allowlist)

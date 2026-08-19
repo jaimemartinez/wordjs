@@ -108,12 +108,14 @@ Los plugins usan sintaxis SQLite estándar, y el core la traduce automáticament
 | ----------- | ----------------------------------- | -------------------- | -------------------------------------- |
 | `INT_PK`    | `INTEGER PRIMARY KEY AUTOINCREMENT` | `SERIAL PRIMARY KEY` | `INTEGER AUTO_INCREMENT PRIMARY KEY`   |
 | `INT`       | `INTEGER`                           | `INTEGER`            | `INTEGER`                              |
-| `TEXT`      | `TEXT`                              | `TEXT`               | `VARCHAR(255)` (o `LONGTEXT` en columnas de contenido largo) |
+| `TEXT`      | `TEXT`                              | `TEXT`               | `LONGTEXT` (o `VARCHAR(255)` **solo** si el DDL hace la columna parte de una clave) |
 | `REAL`      | `REAL`                              | `REAL`               | `REAL`                                 |
 | `DATETIME`  | `DATETIME`                          | `TIMESTAMP`          | `DATETIME`                             |
 | `TIMESTAMP` | `DATETIME`                          | `TIMESTAMP`          | `DATETIME`                             |
 
-> El driver **MySQL** (`backend/src/drivers/mysql.ts`, `mysql2`, MySQL 8.0+/MariaDB) traduce el dialecto SQLite en el borde del driver (`translateSql`): `INTEGER PRIMARY KEY AUTOINCREMENT`/`SERIAL` → `INTEGER AUTO_INCREMENT PRIMARY KEY`, `TEXT` → `VARCHAR(255)` (o `LONGTEXT` en columnas de contenido largo conocidas, porque MySQL no admite default literal en `TEXT`), `INSERT OR IGNORE`/`ON CONFLICT` → `INSERT IGNORE`/`ON DUPLICATE KEY UPDATE`, y `RETURNING` → `insertId`. El plugin no escribe nada distinto: sigue usando sintaxis SQLite.
+> El driver **MySQL** (`backend/src/drivers/mysql.ts`, `mysql2`, MySQL 8.0+/MariaDB) traduce el dialecto SQLite en el borde del driver (`translateSql`): `INTEGER PRIMARY KEY AUTOINCREMENT`/`SERIAL` → `INTEGER AUTO_INCREMENT PRIMARY KEY`, `TEXT` → `LONGTEXT`, `INSERT OR IGNORE`/`ON CONFLICT` → `INSERT IGNORE`/`ON DUPLICATE KEY UPDATE`, y `RETURNING` → `insertId`. El plugin no escribe nada distinto: sigue usando sintaxis SQLite.
+
+> **El tipo de una columna `TEXT` ya no depende de su NOMBRE** (`backend/src/drivers/mysql-text-rule.ts`). Antes el defecto era `VARCHAR(255)` salvo que el nombre de la columna figurase en una lista fija de ~20 columnas del núcleo. Esa lista no puede conocer las columnas de un plugin ni las de un bundle importado, así que **toda** columna `TEXT` de plugin (un cuerpo de correo, la descripción de una subasta, el payload de un formulario) se creaba de 255 caracteres; y como la sesión además renunciaba a `STRICT_TRANS_TABLES`, un valor demasiado largo se **truncaba con un aviso en vez de rechazarse** — `POST /api/v1/import` mutilaba el contenido mientras contaba las filas como importadas. Ahora la regla se deriva del propio `CREATE TABLE`: `TEXT` → `LONGTEXT` salvo que la columna forme parte de una clave (`PRIMARY KEY`/`UNIQUE` en línea, o un `PRIMARY KEY (…)`/`UNIQUE (…)`/`KEY (…)`/`INDEX (…)`/`FOREIGN KEY (…)` que la nombre), en cuyo caso es `VARCHAR(255)` porque MySQL no indexa un `TEXT` sin longitud de prefijo. `STRICT_TRANS_TABLES` vuelve a estar activo: lo que no cabe es un **error**, no una pérdida silenciosa.
 
 ### Ejemplo de Uso
 

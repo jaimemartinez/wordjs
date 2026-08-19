@@ -496,6 +496,7 @@ For a full list of security rules, see the **[Security Guide](security.md)**.
 | `client/admin/page.tsx` | The UI shown when clicking the sidebar link.    |
 | `client/hooks.tsx`      | **Global Hooks**. Runs on app load (if active). |
 | `client/verso/`         | Visual blocks for the Page Builder.             |
+| `public/`               | **The only part of your plugin the web server publishes.** Put every browser-fetched asset here. Read-only to your own code at runtime — see §11a. |
 
 ---
 
@@ -594,7 +595,7 @@ Every call is permission-checked on the host against your manifest.
 | `wordjs.hooks.addAction/addFilter(hook, cb, priority)` · `doAction(hook, ...args)` | — | Callback runs in the child process; host installs an RPC shim. Raw-HTML hooks (`wordjs_head`/`wordjs_footer`) are denied to every plugin. `doAction` fires only your OWN registered callbacks — never core's or another plugin's. |
 | `wordjs.http.route(method, path, [opts,] handler)` | — | Mounted at `/api/v1/plugin/<slug>/path` (always namespaced — no absolute mode). `opts`: `{ auth, admin }` (host runs the real auth middleware), `{ multipart: 'field' }`. Handler gets a mock `(req,res)` over RPC. |
 | `wordjs.shortcodes.add(tag, handler)` | — | Handler may be async; expanded via `doShortcodeAsync`. |
-| `wordjs.fs.read(relPath, enc)` / `write(relPath, data)` | `filesystem:read` / `write` | Confined to your **own** plugin dir only (realpath-checked) — never the shared `uploads/` dir. `manifest.json` is immutable. |
+| `wordjs.fs.read(relPath, enc)` / `write(relPath, data)` | `filesystem:read` / `write` | Confined to your **own** plugin dir only (realpath-checked) — never the shared `uploads/` dir. `manifest.json` is immutable, and so is everything under `public/` (§11a). |
 | `wordjs.mail(msg)` | `email:admin` | Sends via the active mail provider. (Distinct from `email:provider`, which only `wordjs.provideMail` needs.) |
 | `wordjs.provideMail(handler)` | `email:provider` | Become the host-wide mail sender (sandboxed; needs the `email:provider` grant). |
 | `wordjs.notify(n)` | `notifications:send` | Push an admin notification. |
@@ -602,7 +603,44 @@ Every call is permission-checked on the host against your manifest.
 | `wordjs.adminMenu.add(item)` | — | Declarative sidebar item. |
 | `wordjs.cron.schedule(ts, recurrence, hook, args)` | — | Host fires the hook back into the child process — only **your** callbacks, never core's. `recurrence` is a registered schedule name (`'hourly'`, `'twicedaily'`, `'daily'`, `'weekly'`, `'off'`); pass `false` for a one-off event at `ts`. An unregistered name is stored with a 0 interval, so it never repeats. |
 | `wordjs.crypto.randomToken(bytes=16)` / `randomInt(min, max)` | — | CSPRNG (no data access, no permission gate). Use instead of `Math.random` for tokens/access codes. **Async** in an isolated plugin (RPC to host) — `await` it. |
-| `wordjs.assets.enqueueScript(spec)` / `enqueueStyle(spec)` | `assets:write` | Load a `<script>`/`<style>` from **inside your plugin dir** onto public pages. `spec = { handle, src (relative path), inFooter?, strategy?:'async'\|'defer', media? }`. The host validates the file exists + can't escape and emits a **sanitized** tag served from `/plugins/<slug>/` — you never control raw markup (the raw-HTML head/footer hooks stay denied). |
+| `wordjs.assets.enqueueScript(spec)` / `enqueueStyle(spec)` | `assets:write` | Load a `<script>`/`<style>` onto public pages. `spec = { handle, src, inFooter?, strategy?:'async'\|'defer', media? }`. **`src` must be a relative path inside your plugin's `public/` directory** with a servable extension — see §11a; anything else throws. The host verifies the file exists + can't escape and emits a **sanitized** tag served from `/plugins/<slug>/public/…` — you never control raw markup (the raw-HTML head/footer hooks stay denied). |
+
+---
+
+## 11a. What of your plugin is served over HTTP ⚠️ *contract change*
+
+**This changed. Read it before shipping an asset.** WordJS no longer publishes your plugin folder as a
+static tree. `/plugins/<slug>/…` now serves an **allowlist**:
+
+*   `public/**` with a servable extension — `.css`, `.js`, `.mjs`, images (`.png .jpg .jpeg .gif .webp
+    .avif .ico`), fonts (`.woff .woff2 .ttf .otf`), media (`.mp4 .webm .mp3 .ogg .wav`) and `.pdf`;
+*   plus exactly three fixed paths the admin shell fetches by construction: `manifest.json`,
+    `client/admin/admin.css`, `dist/component.bundle.css`.
+
+**Everything else is a `404`** — your `index.js`, `lib/`, `data/`, `node_modules/`, `.map` files, any
+`.json` outside the manifest, and anything your code writes at runtime. Deliberately **not** servable:
+`.html`, `.svg`, `.xml` (they execute as documents in the site's origin) and `.json`/`.txt`/`.db`
+(source and data leaks).
+
+**And `public/` is read-only to your plugin.** `wordjs.fs.write` and a raw `fs` write both refuse any
+path under it, and `.html` cannot be created anywhere at all.
+
+**Why, plainly.** Your plugin's own directory is writable **without any grant** — that is deliberate, it
+is your scratch space. Previously the *entire* directory was also readable over HTTP by anyone, so those
+two facts combined into an exfiltration channel that annulled the whole containment model: write
+`leak.txt`, then `GET https://site/plugins/<slug>/leak.txt` unauthenticated. The `network` permission,
+the egress guard's loopback/RFC1918/metadata blocks and bwrap's `--unshare-net` all police the *socket* —
+none of them can see a read channel the server itself publishes. It leaked with no malicious plugin
+either: mail-server's `data/` (attachments, Bayes corpus) was reachable on a clean install. Making
+`public/` unwritable is what stops the same channel reopening one directory over.
+
+**What you must do:** ship browser assets under `public/` as committed build output, and enqueue them
+with `wordjs.assets.enqueueScript`/`enqueueStyle`, whose `src` is now validated against exactly this
+surface. (The §4 builder's `dist/` output is unaffected: the admin and Verso **JS** bundles are fetched
+through the API route `/api/v1/plugins/<slug>/bundle`, not statically, and `dist/component.bundle.css` is
+one of the three fixed allowlisted paths.) If you were generating an asset at runtime, move
+that data into your own `wjp_<slug>_` table or the options API and render it through a route
+(`wordjs.http.route`) instead. Every shipped marketplace plugin already enqueues from `public/`.
 
 ---
 

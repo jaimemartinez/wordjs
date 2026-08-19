@@ -29,7 +29,7 @@ WordJS loads a database **driver** behind a common interface (`backend/src/drive
 *   **Default:** `sqlite-native` (file-based SQLite via `better-sqlite3`), ideal for "Zero Config". File: `backend/data/wordjs-native.db`.
 *   **Automatic fallback:** `sqlite-legacy` (pure-JS WASM `sql.js`, file `backend/data/wordjs.db`) — used only when a SQLite driver fails to load (e.g. the native binary is missing). It reads the same SQLite file format.
 *   **PostgreSQL:** `postgres` driver (the `pg` client), connecting to an external Postgres server (`db: { host, port, user, password, name, ssl }`).
-*   **MySQL / MariaDB:** `mysql` driver (the `mysql2` client, MySQL 8.0+/MariaDB; `dbDriver: "mariadb"` is accepted as an alias). It ships a **SQLite→MySQL dialect-translation layer** so the same schema/queries the SQLite path uses run unchanged: `TEXT` defaults become `VARCHAR`/`LONGTEXT` with expression-default handling, `AUTOINCREMENT`→`AUTO_INCREMENT`, `INSERT OR IGNORE`/`ON CONFLICT`→`INSERT IGNORE`/`ON DUPLICATE KEY UPDATE`, `RETURNING`→`insertId`, and `ANSI_QUOTES` for `"identifier"` quoting. Connect with `db: { host, port (default 3306), user, password, name }`.
+*   **MySQL / MariaDB:** `mysql` driver (the `mysql2` client, MySQL 8.0+/MariaDB; `dbDriver: "mariadb"` is accepted as an alias). It ships a **SQLite→MySQL dialect-translation layer** so the same schema/queries the SQLite path uses run unchanged: `TEXT` becomes `LONGTEXT` (or `VARCHAR(255)` when the DDL makes the column part of a key) with expression-default handling, `AUTOINCREMENT`→`AUTO_INCREMENT`, `INSERT OR IGNORE`/`ON CONFLICT`→`INSERT IGNORE`/`ON DUPLICATE KEY UPDATE`, `RETURNING`→`insertId`, and a session `sql_mode` of `ANSI_QUOTES,STRICT_TRANS_TABLES,NO_ENGINE_SUBSTITUTION` (identifier quoting; an overlong value errors rather than truncating). Connect with `db: { host, port (default 3306), user, password, name }`.
 *   **Adding a driver:** implement `DatabaseDriverInterface` and add a block to the conformance suite (`backend/src/tests/driver-conformance.test.ts`).
 *   **Engine detection:** `getDbType()` (`backend/src/config/database.ts`) reports the active engine via `isPostgres`/`isMySQL`/`isSQLite` for the code paths that must branch on dialect.
 *   **Querying:** Uses `better-sqlite3`-style prepared statements (`db.prepare(...)`) on the sync path (SQLite only); Postgres and MySQL are **async-only** drivers (the sync `db.get()` throws — use `dbAsync`).
@@ -87,7 +87,7 @@ All state-changing requests (`POST`/`PUT`/`PATCH`/`DELETE`) under the API prefix
 *   The `Origin` (or, as a fallback, `Referer`) must match the configured site URL / frontend URL or the request host — an **exact** origin comparison, never a prefix match.
 *   Behind the gateway it honors `X-Forwarded-Host` (the gateway pins it to the real client host) when computing the expected origin.
 *   When **both** `Origin` and `Referer` are absent the request is **rejected** (`403 rest_csrf_invalid`, fail-closed) **unless** it carries a real `Authorization: Bearer <token>` (a genuine server-to-server caller that can't be CSRF'd via an ambient cookie). Cookie-only header-less requests are blocked.
-*   `/api/v1/setup/*` is exempt (it runs before an origin is configured).
+*   `/api/v1/setup/*` is exempt (it runs before an origin is configured). The exemption is matched on the sub-path derived from `req.originalUrl`, **not** on `req.path`: `csrfProtection` is mounted *with* the API prefix, and Express strips a mount path from `req.url` before the middleware runs, so a comparison against the full `/api/v1/setup` could never be true. Until that was corrected the documented exemption was dead code and a headless installer following this page got a misleading `403 rest_csrf_invalid` on a site with no users. It matches the **segment** (`/setup` or `/setup/…`), not a prefix, so `/setupsomething` is not exempt.
 
 ---
 
@@ -182,7 +182,7 @@ All errors should follow the structure defined in `backend/src/middleware/errorH
 | `POST` | `/register`                 | No   | Self-registration; `403 rest_cannot_register` unless the `users_can_register` option is enabled |
 | `GET`  | `/me`                       | Yes  | Current authenticated user                                         |
 | `POST` | `/validate`                 | Yes  | Validate the current token                                         |
-| `POST` | `/refresh`                  | Yes  | Re-issue the JWT/cookie                                            |
+| `POST` | `/refresh`                  | Session | Re-issue the JWT/cookie. A `Bearer wjt_…` caller is refused (`403 rest_session_from_token_forbidden`) — a headless token can never be exchanged for a session cookie |
 | `POST` | `/logout`                   | No   | Clear the cookie and bump `token_valid_after` (revokes all tokens) |
 | `GET`  | `/password-reset-available` | No   | Public probe: whether self-service password reset can work (mail configured + reachable recovery address model) |
 | `POST` | `/forgot-password`          | No   | Body `{ login }` (username or email). **Always returns 200** (anti-enumeration); emails a single-use reset link (30-min TTL; only the SHA-256 of the token is stored). Rate-limited by the auth limiter |
@@ -192,14 +192,16 @@ All errors should follow the structure defined in `backend/src/middleware/errorH
 | `DELETE` | `/tokens/:id`             | Session + `manage_api_tokens` | Revoke one of the caller's tokens (`404` if not the caller's or already gone) |
 | `POST` | `/mfa`                      | No   | Complete a login that requires a second factor. Body `{ mfaToken, code }` (TOTP or backup code); issues the session cookie on success (own `mfa:` lockout bucket) |
 | `GET`  | `/mfa/status`               | Yes  | Whether MFA is enabled for the caller + remaining backup-code count |
-| `POST` | `/mfa/setup`                | Session | Begin TOTP enrollment: returns a new `secret` + `otpauthUri` (for the QR) |
-| `POST` | `/mfa/enable`               | Session | Verify a code against the pending secret, activate MFA, and return backup codes **once** |
+| `POST` | `/mfa/setup`                | Session | Begin TOTP enrollment: returns a new `secret` + `otpauthUri` (for the QR). Body **must** carry `currentPassword` (`403 rest_bad_current_password`) |
+| `POST` | `/mfa/enable`               | Session | Verify a code against the pending secret, activate MFA, and return backup codes **once**. Body **must** carry `currentPassword` (`403 rest_bad_current_password`) |
 | `POST` | `/mfa/disable`              | Session | Disable MFA (requires a current TOTP/backup code) |
 | `POST` | `/mfa/backup-codes`         | Session | Regenerate backup codes (requires a current code); returned **once** |
 | `GET`  | `/mfa/policy`               | Admin (session) | Read the admin-enforced MFA-by-role policy |
 | `PUT`  | `/mfa/policy`               | Admin (session) | Set which roles require MFA + the grace period. Body `{ requiredRoles, graceDays }` |
 
 > **Session-only management:** rows marked **Session** require an *interactive* session — an `Authorization: Bearer wjt_…` API token is rejected (`403 rest_token_management_forbidden`), so a leaked token can never mint further tokens, enrol/disable MFA, regenerate backup codes, or change the MFA policy. `POST /mfa` itself is public: it is the second half of login, gated by the short-lived challenge token `POST /auth/login` issues after the password check.
+
+> **Enrolment needs the password, not just the cookie.** `POST /mfa/setup` and `POST /mfa/enable` each re-check `currentPassword` through the same sudo helper as the self-service password doors (per-account lockout bucket + in-flight cap, so it is not an unthrottled password oracle). Enrolment used to be reachable on the ambient session cookie alone, which made it a one-way door: whoever held a session for a moment could bind **their** authenticator and the owner could never get back in — `forgot-password`/`reset-password` change the password but clear no `mfa_*` key. Turning 2FA **off** already demanded a current code; turning it **on** now demands the password. Admin escape hatch: `POST /users/:id/mfa/reset` (§6.2.2).
 
 ### 6.2 Content & Taxonomy
 | Method   | Endpoint            | Auth  | Description                                      |
@@ -210,7 +212,7 @@ All errors should follow the structure defined in `backend/src/middleware/errorH
 | `POST`   | `/posts`            | `edit_posts`       | Create a new post/page                          |
 | `PUT`    | `/posts/:id`        | `edit_posts`†      | Update a post (own, or `edit_others_posts`)     |
 | `DELETE` | `/posts/:id`        | `edit_posts`†      | Trash/delete a post (own, or `delete_others_posts`) |
-| `GET`/`POST` | `/posts/:id/meta` | Opt. / Auth | Read / set post meta (per-post access checks in the handler) |
+| `GET`/`POST` | `/posts/:id/meta` | Opt. / Auth | Read / set post meta (per-post access checks in the handler). **Server-owned keys are refused** — see the note below |
 | `GET`    | `/categories`, `/categories/:id` | Opt. | List / get categories                 |
 | `POST`/`PUT`/`DELETE` | `/categories(/:id)` | `manage_categories` | Create / update / delete a category |
 | `GET`    | `/tags`, `/tags/:id` | Opt. | List / get tags                                   |
@@ -226,9 +228,15 @@ All errors should follow the structure defined in `backend/src/middleware/errorH
 
 > † `edit_posts` is held by authors/editors/admins; `PUT`/`DELETE` additionally require **ownership** of the post **or** `edit_others_posts` / `delete_others_posts` (see the access notes below).
 
+> **One edit gate, four surfaces.** `canEditPostRecord(user, post)` (`backend/src/core/post-capabilities.ts`) is the single implementation of "may this user edit this record": type-aware capability family → ownership (`edit_<type>s` vs `edit_others_<type>s`) → **plus `edit_published_<type>s` when the post is already published**, because a bare edit capability is not permission to rewrite what the site is currently serving. `PUT /posts/:id`, `POST /posts/:id/meta`, `POST /revisions/:id/restore` and the collaboration/presence gates all call it. Three of those four applied the published check and the meta route did not, which let a **contributor** replace the body of their own already-published post — `_puck_data` *is* the public body — through `POST /posts/<id>/meta` after `PUT /posts/:id` had answered `403`. A gate that is copied is a gate that drifts; this one is shared. `POST /posts/:id/meta` also **snapshots a revision before the write** when the key is revisionable (`core/revisions.REVISIONABLE_POST_META`), so a content write through this route leaves the same recovery point the identical bytes would leave through `PUT`.
+
 > **Pagination:** `GET /posts` returns `X-WP-Total` and `X-WP-TotalPages` response headers. These now reflect the **filtered** list: `Post.count()` shares a `buildWhere()` with `findAll` (and defaults `status` to `publish`), so the totals match the rows actually returned.
 
 > **Status filtering (access control, no BOLA):** listing non-published statuses is authorization-scoped (`backend/src/routes/posts.ts`). Anonymous callers always see **only `publish`** regardless of the requested `status`. A logged-in **non-privileged** user requesting `status=any` or a specific non-publish status (`draft`/`pending`/`private`) only sees **their own** such posts (the author filter is forced to their id). Only users with `edit_others_posts` or `read_private_posts` see other authors' unpublished content. This mirrors the per-post `GET /posts/:id` gate and closes the list-path BOLA.
+
+> **`/posts/*` only reaches REST-exposed types.** Every route in `backend/src/routes/posts.ts` now checks `showInRest` on the post type: a load by id or slug answers **`404 rest_post_invalid_id`** for an internal type — the same answer as a post that does not exist, because an internal type is not "a post you lack permission for", it is not addressable here at all — and `GET /posts?type=…`, `POST /posts` and the slug lookup's `?type=` answer **`400 rest_invalid_post_type`**. `nav_menu_item`, `revision` and `attachment` are therefore reachable only through their own APIs (`/menus/*`, `/revisions/*`, `/media/*`), which carry the correct gate. Previously they fell through to the plain `post` capability family, so `edit_others_posts` alone let an **editor** rewrite `_menu_item_url` on every menu item (persistent phishing from the site's own origin), and `edit_posts` alone let a **contributor** mint `revision` rows against someone else's page — ten of which make the next ordinary save prune the entire genuine history, since `limitRevisions` deletes oldest-first and fabricated rows carry `now` as `post_modified` while real ones copy the parent's. The **list** is gated for the same reason as the item routes: leaving it open let a caller enumerate every `nav_menu_item` id and then write its meta without ever touching the menus API.
+
+> **Server-owned post meta (protected keys).** Post meta is *not* a free-form key/value store on the write surfaces. `backend/src/core/protected-meta.ts` declares the keys only backend code may write — `_wp_attached_file`, `_wp_attachment_metadata`, `_wp_trash_meta_status`, `_wp_trash_meta_time`, `_edit_lock`, `_edit_last` — and **both** generic writers consult it: `POST /posts/:id/meta` answers `403 rest_protected_meta` (a single-key write is an explicit statement of intent, so answering `200` after writing nothing would be a lie), while the `meta` bag of `POST /posts` and `PUT /posts/:id` **skips** those keys and applies the rest. The reason is `_wp_attached_file`: it is the server's record of where an upload sits on disk and is exactly what `Media.delete()` turns into an `unlink()` target, so an author who could rewrite it on their own attachment held an arbitrary-file-delete primitive. Author-written keys that merely *look* internal — `_puck_data`, `_wjs_template`, `_thumbnail_id`, the SEO keys — are deliberately **not** on the list (the editor writes them through this same bag on every save); they are protected by the capability gate and `sanitize-meta.ts`, not by a key ban.
 
 > **Comments (`POST /comments`):** when a comment supplies a `parent`, the parent must exist **and** belong to the same post, else `400 rest_comment_invalid_parent` (top-level comments are unaffected). A guest's `author_url` (on create and edit) is restricted to `http(s)` only, so `javascript:`/`data:` can't become a clickable author link.
 
@@ -247,7 +255,10 @@ Base path: `/api/v1/users` (`backend/src/routes/users.ts`). `PUT /me` is declare
 | `GET`    | `/:id`      | Yes          | Get a user (self, or `list_users` for others)                     |
 | `POST`   | `/`         | Admin        | Create a user (`username`, `email`, `password`, optional `role`)  |
 | `PUT`    | `/:id`      | Yes†         | Update a user — layered authorization, see the note above         |
+| `POST`   | `/:id/mfa/reset` | Session + `edit_users` | Clear another user's two-factor enrolment (every `mfa_*` key), so a locked-out account can log in with its password and re-enrol. Audited as `user.mfa_reset` |
 | `DELETE` | `/:id`      | Admin        | Delete a user                                                     |
+
+> **`POST /:id/mfa/reset` — why it is shaped like this.** It is the way **out** of a 2FA lockout: before it existed, an account someone else had enrolled could only be recovered by deleting and recreating it. Its gates mirror the sibling MFA routes: `sessionOnly` (a leaked `wjt_` token must never strip a second factor), the same `targetIsPrivileged` rule as `PUT /:id` (an `edit_users` delegate cannot disarm an administrator's 2FA and then attack their password), and **never self** — `400 rest_cannot_reset_own_mfa`, because an admin turning off their **own** 2FA must still go through `POST /auth/mfa/disable` with a current code. A sole administrator who loses their authenticator therefore still needs a second admin.
 
 ### 6.3 System & Extensions
 | Method | Endpoint                  | Auth  | Description                           |
@@ -257,6 +268,8 @@ Base path: `/api/v1/users` (`backend/src/routes/users.ts`). `PUT /me` is declare
 | `GET`  | `/settings/:key`          | No    | Get a single (public) setting         |
 | `PUT`  | `/settings`               | Admin | Update site settings                  |
 | `PUT`  | `/settings/:key`          | Admin | Update a single setting               |
+| `GET`  | `/notices`                | Admin | List persistent admin notices (e.g. a plugin CrashGuard auto-disabled). Rendered at `/admin/notices` |
+| `DELETE` | `/notices/:id`          | Admin | Dismiss one notice                    |
 | `GET`  | `/plugins`                  | Admin | List all installed plugins (annotated with requested/granted permissions + live isolate runtime state) |
 | `GET`  | `/plugins/registry`         | No    | Manifest registry of **active** plugins (feeds the public frontend) |
 | `GET`  | `/plugins/active`           | No    | Array of active plugin slugs                        |
@@ -292,6 +305,8 @@ Base path: `/api/v1/users` (`backend/src/routes/users.ts`). `PUT /me` is declare
 | `GET`  | `/export/wxr`               | Admin | Export as WordPress WXR (XML)                       |
 | `POST` | `/import`                   | Admin | Import a site from JSON (file upload or `data`)     |
 
+> **Notices moved out of `/settings` (and why).** `/api/v1/notices` is the canonical path; `/api/v1/settings/notices` still resolves because the settings router **delegates to the same module** (one implementation, no drift). It had to move: `GET /settings/:key` is a wildcard registered before the old handler, Express matches in registration order, and the wildcard never consults the session — so every `GET /settings/notices` was answered as `key='notices'`, which is not in `PUBLIC_SETTINGS`, and returned `403 rest_forbidden` **to administrators**. The list was unfetchable, therefore the ids for `DELETE` were unknowable, therefore the autoloaded `admin_notices` option grew forever. A literal prefix must be mounted **before** a `/:param` sibling — the same remedy `routes/webhooks.ts` already applies.
+
 > **Note:** A full **system-state backup** (code + assets + DB dump as a ZIP) is a separate engine under `/api/v1/backups/*` and `backend/src/core/backup.ts`, distinct from the logical `/export` above. All backup routes are admin-only (`backend/src/routes/backups.ts`): `GET /backups` (list), `POST /backups` (create), `GET /backups/:filename/download`, `POST /backups/:filename/restore`, `DELETE /backups/:filename`.
 
 > **Install token (pre-install setup):** `POST /setup/install` and `POST /setup/test-db` run before the instance is configured (unauthenticated, CSRF-exempt), so they are gated by a **one-time install token** (`backend/src/core/install-token.ts`) — supply it via the `x-install-token` header or an `installToken` body field (constant-time compared; `403` on mismatch). The token is printed to the server console at boot, mirrored to a `0600` file in the data dir, and overridable via the `WORDJS_INSTALL_TOKEN` env var (≥ 16 chars). Both endpoints also early-return `400` once the site is installed, and the on-disk token mirror is cleared after a successful install. `GET /setup/status` is **not** token-gated; `POST /setup/migrate` instead requires admin username/password.
@@ -319,8 +334,13 @@ Base path: `/api/v1/marketplace` (`backend/src/routes/marketplace.ts`). Plugins 
 ### 6.4 Analytics System 📊
 | Method | Endpoint           | Auth  | Description                        |
 | :----- | :----------------- | :---- | :--------------------------------- |
-| `POST` | `/analytics/track` | No    | Log a page view or event           |
+| `POST` | `/analytics/track` | No    | Log a page view or event. Own per-IP limiter (**60/min**), hard input bounds, and a retention prune — see below |
 | `GET`  | `/analytics/stats` | Admin | Get aggregated stats for dashboard (`?period=weekly` \| `monthly`, default `weekly`) |
+
+> **`POST /analytics/track` writes a permanent row for an anonymous caller**, so it carries the same three-part posture as every other public write surface, not just the generic ceilings:
+> *   **Its own per-IP bucket** (60/min, mounted on the exact route in `backend/src/index.ts`). Previously its only limits were `express.json`'s 10 MB body cap and the global `apiLimiter` (1000/15 min), which bound *traffic*, not stored bytes — roughly 40 GB/hour of undeletable rows from a single IP, and in monolith mode a full disk takes down backend, frontend and database together.
+> *   **Hard input bounds checked before any DB work** (`backend/src/routes/analytics.ts`): the event type is an **allowlist** rather than a length check; `resource` ≤ 255 chars; `metadata` must be a flat object of ≤ 20 string/number/boolean values, key ≤ 60 chars, value ≤ 200 chars, ≤ 2 KB serialized. Violations answer a real `400 rest_invalid_param`.
+> *   **Retention** (`backend/src/core/analytics-retention.ts`): a daily cron prunes rows older than the `analytics_retention_days` option (**default 90**; `0` disables pruning). The delete is driven by `created_at`, which `idx_analytics_date` already indexes, and is batched (5000 rows × 20 passes per run) so a long-neglected table drains over several days instead of one write transaction that blocks every writer.
 
 
 ### 6.5 Certificate Management (SSL) 🔒
@@ -359,6 +379,10 @@ Base path: `/api/v1/revisions`. All routes require `authenticate`. Access is gat
 | `POST`   | `/:id/restore`              | owner+edit / edit_others | Restore a revision              |
 | `DELETE` | `/:id`                      | owner+edit / edit_others | Delete a revision               |
 | `GET`    | `/compare/:id1/:id2`        | owner / edit_others | Diff two revisions (both must be readable) |
+
+> **A restore is a post write, and now says so.** `core/revisions.restoreRevision` used to write raw SQL inside a transaction and stop — no cache invalidation, no `post_updated`. That was not mere staleness but **incoherence**: `Post.toJSON()` reads the row from cache and the meta from the database, so the response to the restore itself mixed the pre-restore `title`/`content` with the post-restore `_puck_data`, and the request had just seeded that cache entry one call earlier even if it was cold. The public page never revalidated (`core/frontend-purge` hangs off `post_updated`) and the `post.updated` webhook never fired. Worst case was real data loss: the author reopened the editor, was served the **old** cached body, fixed a typo and saved the restore away. After the commit it now runs the same invalidation helpers as `Post.update` and dispatches `post_updated`, so a restore is indistinguishable from any other write to every downstream listener.
+
+> **A restore only moves the keys a revision has an opinion about.** The meta half used to be `DELETE FROM post_meta WHERE post_id = ?` plus a re-insert, which erased every key created after the snapshot — the whole editorial review thread (`_wjs_review_comments`), plugin meta, and `_wp_trash_meta_status` (losing that one makes `Post.untrash` fall back to the literal `'draft'`, so a **published** post comes back as a draft). The delete is now scoped to `REVISIONABLE_POST_META` — `_puck_data`, `_wjs_template`, `_thumbnail_id`, `seo_title`, `seo_description`, `og_image`, `noindex` — the identical constant `saveRevision` captures, so the snapshot and the restore cannot describe different sets. Values are stored and re-inserted as the **raw** `meta_value` bytes rather than round-tripped through `JSON.parse`/`String` (that trip was lossy: `"1.50"` came back `"1.5"`).
 
 ### 6.8 Prometheus Metrics 📈
 A Prometheus scrape endpoint is served at the **root path** `GET /metrics` (`backend/src/core/metrics.ts`). It exposes the default Node/process metrics (`wordjs_`-prefixed: CPU, RSS/heap, event-loop lag, GC, handles) plus a `wordjs_sse_clients` gauge (active SSE clients on this node) and a `wordjs_ready` gauge.
