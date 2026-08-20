@@ -247,8 +247,10 @@ describe('probe', () => {
         assert.doesNotThrow(() => new Function(__probeSrc));
         assert.ok(!__probeSrc.includes('process.execve'),
             'a refused execve aborts Node 22 on macOS before the probe can report the denial');
-        assert.ok(__probeSrc.includes('spawnSync(process.execPath'),
-            'the removed one-shot executable must be tested through a reportable child-process result');
+        assert.ok(!__probeSrc.includes('spawnSync'),
+            'synchronous spawning uses internal IPC that aborts under a deny-by-default Seatbelt profile');
+        assert.ok(__probeSrc.includes('runSpawn(process.execPath'),
+            'the removed one-shot executable must be tested through an asynchronous error event');
     });
 
     test('reports unsupported off macOS, and never claims active', { skip: process.platform === 'darwin' ? 'this assertion is about the non-macOS path' : false }, async () => {

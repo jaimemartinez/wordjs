@@ -784,17 +784,12 @@ const PROBE_SRC = [
     'try{fs.writeFileSync(target,"wjs");out.wrote=fs.readFileSync(target,"utf8")==="wjs";}catch(e){out.wrote=false;out.writeCode=(e&&e.code)||"THROW";}',
     'try{fs.readFileSync("/etc/passwd");out.readCode="OPEN";}catch(e){out.readCode=(e&&e.code)||"THROW";}',
     'try{fs.readdirSync(os.homedir());out.homeCode="OPEN";}catch(e){out.homeCode=(e&&e.code)||"THROW";}',
-    'try{var r=cp.spawnSync("/bin/echo",["wjs"]);out.execCode=r&&r.error?((r.error.code)||"THROW"):(r&&r.status===0?"OK":"FAIL");}catch(e){out.execCode=(e&&e.code)||"THROW";}',
-    `function finish(){if(process.env.WJS_PROBE_SELF_EXEC==="1"){try{var x=cp.spawnSync(process.execPath,["-e","process.exit(0)"]);out.selfExecCode=x&&x.error?((x.error.code)||"THROW"):(x&&x.status===0?"OPEN":"FAIL");}catch(e){out.selfExecCode=(e&&e.code)||"THROW";}}else{out.selfExecCode="UNAVAILABLE";}try{process.send(out,function(){process.exit(0);});}catch(e){process.exit(5);}}`,
+    'function runSpawn(cmd,args,key,ok,next){var settled=false;var child=null;var done=function(v){if(settled){return;}settled=true;out[key]=v;try{if(child){child.kill();}}catch(e){}next();};try{child=cp.spawn(cmd,args);child.on("error",function(e){done((e&&e.code)||"THROW");});child.on("exit",function(code){done(code===0?ok:"FAIL");});}catch(e){done((e&&e.code)||"THROW");}}',
+    'function finish(){try{process.send(out,function(){process.exit(0);});}catch(e){process.exit(5);}}',
     'setTimeout(function(){process.exit(4);},12000);',
     'if(!process.send){process.exit(3);}',
-    '{',
-    'var done=false;var s=null;',
-    'var settle=function(c){if(done){return;}done=true;out.netCode=c;try{if(s){s.destroy();}}catch(e){}finish();};',
-    'try{s=net.connect(443,"1.1.1.1");s.on("error",function(e){settle((e&&e.code)||"THROW");});',
-    's.on("connect",function(){settle("CONNECTED");});}catch(e){settle((e&&e.code)||"THROW");}',
-    'setTimeout(function(){settle("TIMEOUT");},4000);',
-    '}',
+    'function tryNetwork(){var done=false;var s=null;var settle=function(c){if(done){return;}done=true;out.netCode=c;try{if(s){s.destroy();}}catch(e){}finish();};try{s=net.connect(443,"1.1.1.1");s.on("error",function(e){settle((e&&e.code)||"THROW");});s.on("connect",function(){settle("CONNECTED");});}catch(e){settle((e&&e.code)||"THROW");}setTimeout(function(){settle("TIMEOUT");},4000);}',
+    'runSpawn("/bin/echo",["wjs"],"execCode","OK",function(){if(process.env.WJS_PROBE_SELF_EXEC==="1"){runSpawn(process.execPath,["-e","process.exit(0)"],"selfExecCode","OPEN",tryNetwork);}else{out.selfExecCode="UNAVAILABLE";tryNetwork();}});',
 ].join('');
 
 /**
