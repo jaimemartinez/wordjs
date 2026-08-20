@@ -40,8 +40,8 @@
  * CHILD PROCESSES (contained). Seatbelt policies are inherited by descendants, which is the same process-
  * tree model bwrap provides. `process-fork` and `process-exec` are therefore allowed, but writable zones
  * remain non-mappable (W^X), and every descendant stays inside the same deny-by-default domain. The real
- * probe creates a descendant and certifies that it is
- * still denied `/etc/passwd`; merely proving that a spawn failed would not prove inheritance.
+ * probe creates a descendant and certifies that it is still denied a host-created canary outside every
+ * granted zone; merely proving that a spawn failed would not prove inheritance.
  *
  * HOST MEMORY (closed as far as SBPL can express it; one measured residual). macOS has no /proc, so the
  * Linux `/proc/<pid>/environ` read has two analogues: `task_for_pid()` (gated by `mach-priv-task-port`,
@@ -386,6 +386,10 @@ function buildSeatbeltProfile(opts: SeatbeltProfileOptions): string {
     for (const [p, why] of OS_EXEC_ROOTS) L.push(`(allow file-read* (subpath ${lit(p)}))${pad(p)} ;; ${why}`);
     for (const [p, why] of OS_DATA_ROOTS) L.push(`(allow file-read* (subpath ${lit(p)}))${pad(p)} ;; ${why}`);
     L.push('(allow file-read* (literal "/private/etc/localtime") (literal "/etc/localtime")) ;; TZ symlink/target, both spellings');
+    // CoreFoundation/libinfo falls back here while resolving the current account during startup. Modern
+    // macOS stores password hashes in the protected directory service, not this public account-name file;
+    // Chromium carries the same literal grant. Never widen this to /private/etc.
+    L.push('(allow file-read-data (literal "/private/etc/passwd")) ;; getpwuid fallback; public account metadata, no password hashes');
     L.push('');
     for (const p of runtimePrefixes) {
         L.push(`(allow file-read* (subpath ${lit(p)})) ;; the Node runtime prefix (nvm/asdf/Homebrew keep the runtime dylibs here)`);
@@ -457,7 +461,7 @@ function buildSeatbeltProfile(opts: SeatbeltProfileOptions): string {
     // THE CHILD-PROCESS PARITY ROW. bwrap contains a process tree rather than forbidding descendants.
     // Seatbelt likewise propagates its policy to forked/executed children, so process-fork is part of the
     // baseline used by production browser and agent profiles. The kernel probe below proves propagation by
-    // spawning a trusted Node descendant that must still be unable to read /etc/passwd.
+    // spawning a Node descendant that must still be unable to read the probe's outside-zone canary.
     //
     // This matches the process-tree semantics of bwrap and the base Seatbelt policies used by Chromium and
     // Codex: descendants may exec, and inherit every file/network/process restriction. W^X is the native-code
@@ -713,20 +717,21 @@ function getSeatbeltState() { return seatbeltState; }
  *
  * THE SAME PROGRAM RUNS TWICE: once under the profile, once UNCONFINED as the control. That is what makes
  * the result a MEASUREMENT rather than an assertion — "the read failed" only means confinement if the same
- * read succeeded without it. An offline Mac, a missing /etc/passwd or a broken Node all make the confined
+ * read succeeded without it. An offline Mac, a missing canary or a broken Node all make the confined
  * run fail too, and every one of them would otherwise certify a sandbox that is not there.
  *
  * argv[1] = a file path INSIDE the granted writable zone (positive control)
  * argv[2] = '1' when the profile denies network, '0' otherwise
+ * argv[3] = a host-created canary path OUTSIDE every granted zone
  *
  * Reported facts:
  *   wrote      — a write+read inside the granted zone SUCCEEDED. THE POSITIVE CONTROL. Without it, a
  *                profile that refuses literally everything (a syntax error, missing application roots) would
  *                satisfy every "was it refused?" check and be reported as confinement.
- *   readCode   — reading /etc/passwd, which is OUTSIDE every zone this profile grants.
+ *   readCode   — reading a host-created canary file outside every zone this profile grants.
  *   homeCode   — reading the HOME DIRECTORY, which is the parity row Windows already closes. A directory
  *                read is used rather than a named file so the probe never depends on a file existing.
- *   descendantReadCode — an exact trusted Node descendant attempts to read /etc/passwd. The unconfined
+ *   descendantReadCode — a Node descendant attempts to read the same outside-zone canary. The unconfined
  *                control must report OPEN while both Seatbelt policy shapes must report EPERM/EACCES. This
  *                proves process creation works AND that the descendant inherited confinement.
  *   netCode    — an outbound connect to a RAW IP (1.1.1.1:443 — no DNS, so a denied DNS lookup cannot be
@@ -736,13 +741,13 @@ function getSeatbeltState() { return seatbeltState; }
 const PROBE_SRC = [
     'var fs=require("fs");var net=require("net");var os=require("os");var cp=require("child_process");',
     'var out={stage:"RESULT",wrote:false,readCode:"NONE",homeCode:"NONE",descendantReadCode:"NONE",netCode:"SKIP"};',
-    'var target=process.argv[1];var denyNet=process.argv[2]==="1";',
+    'var target=process.argv[1];var denyNet=process.argv[2]==="1";var forbidden=process.argv[3];',
     'function reportFinal(){try{process.send(out,function(){process.exit(0);});}catch(e){process.exit(5);}}',
-    'function attemptSpawn(){out.stage="SPAWN";out.descendantReadCode="ATTEMPTED";try{process.once("message",function(m){if(!m||m.wordjsProbeSpawn!==true){process.exit(6);return;}var settled=false;var child=null;var done=function(v){if(settled){return;}settled=true;out.descendantReadCode=v;try{if(child){child.kill();}}catch(e){}reportFinal();};try{var childSrc="var fs=require(\\"fs\\");try{fs.readFileSync(\\"/etc/passwd\\");process.exit(10);}catch(e){process.exit(e&&e.code===\\"EPERM\\"?20:e&&e.code===\\"EACCES\\"?21:22);}";child=cp.spawn(process.env.WORDJS_SEATBELT_PROBE_NODE,["-e",childSrc],{stdio:"ignore"});child.on("error",function(e){done((e&&e.code)||"THROW");});child.on("close",function(code,signal){done(code===10?"OPEN":code===20?"EPERM":code===21?"EACCES":(signal||"FAIL"));});}catch(e){done((e&&e.code)||"THROW");}});process.send(out);}catch(e){process.exit(5);}}',
+    'function attemptSpawn(){out.stage="SPAWN";out.descendantReadCode="ATTEMPTED";try{process.once("message",function(m){if(!m||m.wordjsProbeSpawn!==true){process.exit(6);return;}var settled=false;var child=null;var done=function(v){if(settled){return;}settled=true;out.descendantReadCode=v;try{if(child){child.kill();}}catch(e){}reportFinal();};try{var childSrc="var fs=require(\\"fs\\");try{fs.readFileSync(process.env.WORDJS_SEATBELT_PROBE_FORBIDDEN);process.exit(10);}catch(e){process.exit(e&&e.code===\\"EPERM\\"?20:e&&e.code===\\"EACCES\\"?21:22);}";child=cp.spawn(process.env.WORDJS_SEATBELT_PROBE_NODE,["-e",childSrc],{stdio:"ignore"});child.on("error",function(e){done((e&&e.code)||"THROW");});child.on("close",function(code,signal){done(code===10?"OPEN":code===20?"EPERM":code===21?"EACCES":(signal||"FAIL"));});}catch(e){done((e&&e.code)||"THROW");}});process.send(out);}catch(e){process.exit(5);}}',
     'setTimeout(function(){process.exit(4);},12000);',
     'if(!process.send){process.exit(3);}',
     'function tryNetwork(){var done=false;var s=null;var settle=function(c){if(done){return;}done=true;out.netCode=c;try{if(s){s.destroy();}}catch(e){}attemptSpawn();};try{s=net.connect(443,"1.1.1.1");s.on("error",function(e){settle((e&&e.code)||"THROW");});s.on("connect",function(){settle("CONNECTED");});}catch(e){settle((e&&e.code)||"THROW");}setTimeout(function(){settle("TIMEOUT");},4000);}',
-    'function startProbe(){try{fs.writeFileSync(target,"wjs");out.wrote=fs.readFileSync(target,"utf8")==="wjs";}catch(e){out.wrote=false;out.writeCode=(e&&e.code)||"THROW";}try{fs.readFileSync("/etc/passwd");out.readCode="OPEN";}catch(e){out.readCode=(e&&e.code)||"THROW";}try{fs.readdirSync(os.homedir());out.homeCode="OPEN";}catch(e){out.homeCode=(e&&e.code)||"THROW";}tryNetwork();}',
+    'function startProbe(){try{fs.writeFileSync(target,"wjs");out.wrote=fs.readFileSync(target,"utf8")==="wjs";}catch(e){out.wrote=false;out.writeCode=(e&&e.code)||"THROW";}try{fs.readFileSync(forbidden);out.readCode="OPEN";}catch(e){out.readCode=(e&&e.code)||"THROW";}try{fs.readdirSync(os.homedir());out.homeCode="OPEN";}catch(e){out.homeCode=(e&&e.code)||"THROW";}tryNetwork();}',
     'process.once("message",function(m){if(!m||m.wordjsProbeBoot!==true){process.exit(7);return;}startProbe();});process.send({stage:"BOOT"});',
 ].join('');
 
@@ -776,7 +781,7 @@ type ProbeMsg = { stage?: string; wrote?: boolean; readCode?: string; homeCode?:
  * control. Resolves null when the child did not complete an IPC round-trip and exit cleanly — which for
  * the control is itself a reason to report 'degraded', because an unmeasurable control certifies nothing.
  */
-function runProbeChild(pre: string[], target: string, denyNet: boolean): Promise<ProbeMsg | null> {
+function runProbeChild(pre: string[], target: string, forbidden: string, denyNet: boolean): Promise<ProbeMsg | null> {
     return new Promise<ProbeMsg | null>((res) => {
         let proc: any = null, msg: ProbeMsg | null = null, done = false, stderr = '', overall: any = null;
         let spawnFailure = '';
@@ -791,14 +796,18 @@ function runProbeChild(pre: string[], target: string, denyNet: boolean): Promise
         // alive past its own IPC teardown.
         overall = setTimeout(() => finish(null), 25000);
         if ((overall as any).unref) (overall as any).unref();
-        const argv = [...pre, process.execPath, '-e', PROBE_SRC, target, denyNet ? '1' : '0'];
+        const argv = [...pre, process.execPath, '-e', PROBE_SRC, target, denyNet ? '1' : '0', forbidden];
         try {
             proc = spawn(argv[0], argv.slice(1),
                 {
                     // Keep fd 3 as IPC. Stderr is captured only for a bounded failure diagnostic.
                     stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
                     serialization: 'advanced', timeout: 22000,
-                    env: { ...process.env, WORDJS_SEATBELT_PROBE_NODE: process.execPath },
+                    env: {
+                        ...process.env,
+                        WORDJS_SEATBELT_PROBE_NODE: process.execPath,
+                        WORDJS_SEATBELT_PROBE_FORBIDDEN: forbidden,
+                    },
                 });
         } catch { clearTimeout(overall); finish(null); return; }
         if (proc.stderr) {
@@ -874,12 +883,27 @@ function probeSeatbelt(): Promise<'active' | 'degraded' | 'unsupported' | 'disab
         // configuration that then fails to start (the #192 lesson). NOTE that on macOS this path is under
         // /var/folders/… (a symlink into /private), which is exactly why spellings() emits both forms.
         const osm = require('os');
-        let dir: string;
-        try { dir = fsm.mkdtempSync(pathm.join(osm.tmpdir(), 'wjs-seatbelt-probe-')); } catch { seatbeltState = 'degraded'; return 'degraded'; }
+        let dir = '', forbiddenDir = '';
+        try {
+            dir = fsm.mkdtempSync(pathm.join(osm.tmpdir(), 'wjs-seatbelt-probe-'));
+            forbiddenDir = fsm.mkdtempSync(pathm.join(osm.tmpdir(), 'wjs-seatbelt-outside-'));
+        } catch {
+            try { if (dir) fsm.rmSync(dir, { recursive: true, force: true }); } catch { /* */ }
+            try { if (forbiddenDir) fsm.rmSync(forbiddenDir, { recursive: true, force: true }); } catch { /* */ }
+            seatbeltState = 'degraded';
+            return 'degraded';
+        }
         const appRoot = pathm.resolve(__dirname, '..', '..');
         const target = pathm.join(dir, 'control.txt');
         const allowedTarget = pathm.join(dir, 'control-network.txt');
         const controlTarget = pathm.join(dir, 'control-unconfined.txt');
+        const forbidden = pathm.join(forbiddenDir, 'canary.txt');
+        try { fsm.writeFileSync(forbidden, 'outside-zone-canary', { mode: 0o600 }); } catch {
+            try { fsm.rmSync(dir, { recursive: true, force: true }); } catch { /* */ }
+            try { fsm.rmSync(forbiddenDir, { recursive: true, force: true }); } catch { /* */ }
+            seatbeltState = 'degraded';
+            return 'degraded';
+        }
         // The probe is inline JavaScript, so it needs no application-code read grant. It deliberately uses
         // the installed runtime directly, exactly like production and the reference Seatbelt profiles.
         const profile = buildSeatbeltProfile({ writableDirs: [dir], readOnlyDirs: [], denyNetwork: true, appRoot, nodePath: process.execPath, logDenials: true });
@@ -893,14 +917,15 @@ function probeSeatbelt(): Promise<'active' | 'degraded' | 'unsupported' | 'disab
         let control: ProbeMsg | null = null;
         let allowed: ProbeMsg | null = null;
         if (selfAudit.length === 0) {
-            confined = await runProbeChild([SEATBELT_BIN, ...seatbeltArgs(profile, [])], target, true);
-            control = await runProbeChild([], controlTarget, true);
+            confined = await runProbeChild([SEATBELT_BIN, ...seatbeltArgs(profile, [])], target, forbidden, true);
+            control = await runProbeChild([], controlTarget, forbidden, true);
             // The network-granted shape must retain every non-network denial and actually permit egress.
-            allowed = await runProbeChild([SEATBELT_BIN, ...seatbeltArgs(allowedProfile, [])], allowedTarget, false);
+            allowed = await runProbeChild([SEATBELT_BIN, ...seatbeltArgs(allowedProfile, [])], allowedTarget, forbidden, false);
         }
         // Always removed, on every exit path — a probe that leaks one temp dir per failed boot is exactly
         // the class of probe-temp leak this module must avoid.
         try { fsm.rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ }
+        try { fsm.rmSync(forbiddenDir, { recursive: true, force: true }); } catch { /* best effort */ }
 
         // Every clause below must hold. Written as separate named checks rather than one boolean so a
         // failure says WHICH property was not proven — a probe that only says "no" teaches nobody anything.
@@ -908,7 +933,7 @@ function probeSeatbelt(): Promise<'active' | 'degraded' | 'unsupported' | 'disab
         const ipcOk = !!confined;                                   // the round-trip completed
         const controlRan = !!control;                               // the reference measurement exists
         // The control must NOT have been refused anything: if the box is offline, Node is broken,
-        // or /etc/passwd is unreadable for an ordinary reason, the confined run's failure proves nothing.
+        // or the canary is unreadable for an ordinary reason, the confined run's failure proves nothing.
         const controlClean = !!control
             && control.wrote === true
             && control.readCode === 'OPEN'

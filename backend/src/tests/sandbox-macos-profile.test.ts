@@ -98,6 +98,8 @@ describe('SBPL profile skeleton', () => {
         assert.ok(p.includes('(sysctl-name "kern.osrelease")'));
         assert.ok(p.includes('(sysctl-name-prefix "hw.optional.")'), 'V8 arm64 CPU feature probes must boot');
         assert.ok(p.includes('(iokit-registry-entry-class "RootDomainUserClient")'));
+        assert.ok(p.includes('(allow file-read-data (literal "/private/etc/passwd"))'));
+        assert.ok(!p.includes('(subpath "/private/etc")'), 'the getpwuid fallback must remain one literal file');
         assert.ok(!/^\(allow sysctl-read\)$/m.test(p), 'blanket sysctl-read exposes KERN_PROCARGS2');
         assert.ok(!/kern\.procargs/i.test(p.replace(/^;;.*$/gm, '')), 'the process-argument MIB must be absent from rules');
         assert.ok(!/sysctl-name-prefix "kern\.proc/i.test(p), 'process-table sysctl prefixes must stay denied');
@@ -270,7 +272,7 @@ describe('probe', () => {
             'synchronous spawning uses internal IPC that aborts under a deny-by-default Seatbelt profile');
         assert.ok(__probeSrc.indexOf('descendantReadCode="ATTEMPTED"') < __probeSrc.indexOf('cp.spawn(process.env.WORDJS_SEATBELT_PROBE_NODE'),
             'the causal marker must be flushed before the trusted descendant is spawned');
-        assert.ok(__probeSrc.includes('fs.readFileSync(\\"/etc/passwd\\")'),
+        assert.ok(__probeSrc.includes('fs.readFileSync(process.env.WORDJS_SEATBELT_PROBE_FORBIDDEN)'),
             'the descendant must test the inherited file boundary, not merely whether spawn succeeds');
         assert.ok(__probeSrc.includes('code===20?"EPERM":code===21?"EACCES"'),
             'the parent probe must distinguish the descendant kernel denial from ordinary child failure');

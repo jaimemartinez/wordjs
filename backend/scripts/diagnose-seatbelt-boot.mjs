@@ -21,6 +21,8 @@ const base = mac.buildSeatbeltProfile({
 const variants = [
   ['base/no-ipc', '', false],
   ['base/ipc', '', true],
+  ['file-read-all/ipc', '(allow file-read-data)', true],
+  ['file-write-all/ipc', '(allow file-write-data)', true],
   ['network/ipc', '(allow network*)', true],
   ['file-data/ipc', '(allow file-read-data file-write-data)', true],
   ['system-socket/ipc', '(allow system-socket)', true],
