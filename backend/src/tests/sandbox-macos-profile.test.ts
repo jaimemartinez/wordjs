@@ -80,6 +80,8 @@ describe('SBPL profile skeleton', () => {
 
     test('the legacy builder fallback grants appRoot read-only', () => {
         const p = build();
+        assert.ok(p.includes('(allow file-read-data (literal "/"))'), 'Node realpath needs only the root directory vnode');
+        assert.ok(!p.includes('(allow file-read-data (subpath "/"))'), 'the root exception must never become recursive');
         assert.ok(p.includes(`(allow file-read* (subpath "${APP_ROOT}"))`), 'the child must be able to read the app root');
         assert.ok(!p.includes(`file-write* (subpath "${APP_ROOT}")`), 'the app root must never be writable as a whole');
     });

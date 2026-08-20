@@ -32,9 +32,10 @@
  * plugin cannot open anything in the operator's home directory, /etc, /Library, another user's files or
  * a sibling install. What it CAN still do is `stat()`: `(allow file-read-metadata)` is granted globally
  * because Node resolves its main module's realpath by lstat'ing every ancestor up to `/`, and require()'s
- * resolver lstats every candidate it probes — denying that kills the child before JavaScript runs. So the
- * honest row is "no read of file CONTENT outside the allowlist", and filesystem SHAPE (names, sizes,
- * mtimes) stays enumerable. Windows' AppContainer hides shape too, because an AppContainer reaches only
+ * resolver lstats every candidate it probes — denying that kills the child before JavaScript runs. Node
+ * also reads the root directory vnode once during realpath, so only `/` itself is enumerable. The honest
+ * row is "no read of file CONTENT outside the allowlist", while metadata plus root entry names remain
+ * visible. Windows' AppContainer hides shape too, because an AppContainer reaches only
  * objects whose ACL names its SID; that is a real asymmetry and it is stated rather than papered over.
  *
  * CHILD PROCESSES (contained). Seatbelt policies are inherited by descendants, which is the same process-
@@ -378,6 +379,7 @@ function buildSeatbeltProfile(opts: SeatbeltProfileOptions): string {
     L.push(';; candidate. Denying this kills the child before JS runs. Discloses SHAPE, never CONTENT --');
     L.push(';; the one row where this profile is weaker than the Windows AppContainer.');
     L.push('(allow file-read-metadata)');
+    L.push('(allow file-read-data (literal "/")) ;; Node realpath reads the root directory vnode; no subdirectory or file content');
     L.push('');
 
     // ── Runtime + dynamic linker ────────────────────────────────────────────────────────────────────
