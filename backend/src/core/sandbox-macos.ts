@@ -771,8 +771,9 @@ function getSeatbeltState() { return seatbeltState; }
  *   readCode   — reading /etc/passwd, which is OUTSIDE every zone this profile grants.
  *   homeCode   — reading the HOME DIRECTORY, which is the parity row Windows already closes. A directory
  *                read is used rather than a named file so the probe never depends on a file existing.
- *   execCode   — spawnSync of a real binary. THE CHILD-PROCESS ROW: a real child must ACTUALLY be refused
- *                before this layer may report itself active.
+ *   execCode   — asynchronous spawn of a real binary. The child first reports ATTEMPTED because Darwin
+ *                may deliver SIGABRT instead of a recoverable error for a Seatbelt process-fork denial.
+ *                The unconfined control must run the same child successfully before that signal counts.
  *   netCode    — an outbound connect to a RAW IP (1.1.1.1:443 — no DNS, so a denied DNS lookup cannot be
  *                mistaken for a denied connect).
  *   sent       — implicit: the message arrived at all, which is the IPC round-trip.
@@ -784,12 +785,13 @@ const PROBE_SRC = [
     'try{fs.writeFileSync(target,"wjs");out.wrote=fs.readFileSync(target,"utf8")==="wjs";}catch(e){out.wrote=false;out.writeCode=(e&&e.code)||"THROW";}',
     'try{fs.readFileSync("/etc/passwd");out.readCode="OPEN";}catch(e){out.readCode=(e&&e.code)||"THROW";}',
     'try{fs.readdirSync(os.homedir());out.homeCode="OPEN";}catch(e){out.homeCode=(e&&e.code)||"THROW";}',
-    'function runSpawn(cmd,args,key,ok,next){var settled=false;var child=null;var done=function(v){if(settled){return;}settled=true;out[key]=v;try{if(child){child.kill();}}catch(e){}next();};try{child=cp.spawn(cmd,args);child.on("error",function(e){done((e&&e.code)||"THROW");});child.on("exit",function(code){done(code===0?ok:"FAIL");});}catch(e){done((e&&e.code)||"THROW");}}',
-    'function finish(){try{process.send(out,function(){process.exit(0);});}catch(e){process.exit(5);}}',
+    'out.selfExecCode=fs.existsSync(process.execPath)?"OPEN":"ENOENT";',
+    'function reportFinal(){try{process.send(out,function(){process.exit(0);});}catch(e){process.exit(5);}}',
+    'function attemptSpawn(){out.execCode="ATTEMPTED";try{process.send(out,function(){var settled=false;var child=null;var done=function(v){if(settled){return;}settled=true;out.execCode=v;try{if(child){child.kill();}}catch(e){}reportFinal();};try{child=cp.spawn("/bin/echo",["wjs"]);child.on("error",function(e){done((e&&e.code)||"THROW");});child.on("exit",function(code){done(code===0?"OK":"FAIL");});}catch(e){done((e&&e.code)||"THROW");}});}catch(e){process.exit(5);}}',
     'setTimeout(function(){process.exit(4);},12000);',
     'if(!process.send){process.exit(3);}',
-    'function tryNetwork(){var done=false;var s=null;var settle=function(c){if(done){return;}done=true;out.netCode=c;try{if(s){s.destroy();}}catch(e){}finish();};try{s=net.connect(443,"1.1.1.1");s.on("error",function(e){settle((e&&e.code)||"THROW");});s.on("connect",function(){settle("CONNECTED");});}catch(e){settle((e&&e.code)||"THROW");}setTimeout(function(){settle("TIMEOUT");},4000);}',
-    'runSpawn("/bin/echo",["wjs"],"execCode","OK",function(){if(process.env.WJS_PROBE_SELF_EXEC==="1"){runSpawn(process.execPath,["-e","process.exit(0)"],"selfExecCode","OPEN",tryNetwork);}else{out.selfExecCode="UNAVAILABLE";tryNetwork();}});',
+    'function tryNetwork(){var done=false;var s=null;var settle=function(c){if(done){return;}done=true;out.netCode=c;try{if(s){s.destroy();}}catch(e){}attemptSpawn();};try{s=net.connect(443,"1.1.1.1");s.on("error",function(e){settle((e&&e.code)||"THROW");});s.on("connect",function(){settle("CONNECTED");});}catch(e){settle((e&&e.code)||"THROW");}setTimeout(function(){settle("TIMEOUT");},4000);}',
+    'tryNetwork();',
 ].join('');
 
 /**
@@ -850,7 +852,6 @@ function runProbeChild(pre: string[], target: string, denyNet: boolean, runtime?
                     env: runtime ? {
                         ...process.env,
                         WORDJS_SEATBELT_BOOTSTRAP: '1', WORDJS_SEATBELT_READY_FD: '4', WORDJS_SEATBELT_RELEASE_FD: '5',
-                        WJS_PROBE_SELF_EXEC: '1',
                     } : process.env,
                 });
         } catch { clearTimeout(overall); finish(null); return; }
@@ -871,12 +872,18 @@ function runProbeChild(pre: string[], target: string, denyNet: boolean, runtime?
         // only actionable detail on the real macOS runner.
         proc.on('close', (code: number, signal: string) => {
             clearTimeout(overall);
+            // On macOS, denying process-fork can make Node abort instead of emitting a recoverable spawn
+            // error. The child flushes ATTEMPTED before making that sole call; the identical unconfined
+            // control must subsequently report OK. Preserve the signal as evidence instead of pretending
+            // it was EPERM.
+            const deniedSpawnAbort = signal === 'SIGABRT' && !!msg && msg.execCode === 'ATTEMPTED';
+            if (deniedSpawnAbort && msg) msg.execCode = 'SIGABRT';
             if (runtime && (code !== 0 || signal || bootstrapFailure || spawnFailure)) {
                 console.warn('[Sandbox] Seatbelt probe child failed: ' + logSafe(JSON.stringify({
                     code, signal: signal || '', bootstrap: bootstrapFailure, spawn: spawnFailure, stderr,
                 })));
             }
-            finish(code === 0 ? msg : null);
+            finish(code === 0 || deniedSpawnAbort ? msg : null);
         });
     });
 }
@@ -976,6 +983,7 @@ function probeSeatbelt(): Promise<'active' | 'degraded' | 'unsupported' | 'disab
         // Every clause below must hold. Written as separate named checks rather than one boolean so a
         // failure says WHICH property was not proven — a probe that only says "no" teaches nobody anything.
         const refused = (v: any) => REFUSAL_CODES.has(String(v));
+        const processRefused = (v: any) => refused(v) || v === 'SIGABRT';
         const ipcOk = !!confined;                                   // the round-trip completed
         const controlRan = !!control;                               // the reference measurement exists
         // The control must NOT have been refused anything: if the box is offline, or /bin/echo is missing,
@@ -992,12 +1000,12 @@ function probeSeatbelt(): Promise<'active' | 'degraded' | 'unsupported' | 'disab
         const controlOk = !!(confined && confined.wrote === true);  // granted write really worked
         const readRefused = !!(confined && refused(confined.readCode));
         const homeRefused = !!(confined && refused(confined.homeCode));
-        const execRefused = !!(confined && refused(confined.execCode));
-        const selfExecRefused = !!(confined && (refused(confined.selfExecCode) || confined.selfExecCode === 'ENOENT' || confined.selfExecCode === 'UNAVAILABLE'));
+        const execRefused = !!(confined && processRefused(confined.execCode));
+        const selfExecRefused = !!(confined && confined.selfExecCode === 'ENOENT');
         const netRefused = !!(confined && refused(confined.netCode));
         const allowedShape = !!allowed && allowed.wrote === true
-            && refused(allowed.readCode) && refused(allowed.homeCode) && refused(allowed.execCode)
-            && (refused(allowed.selfExecCode) || allowed.selfExecCode === 'ENOENT' || allowed.selfExecCode === 'UNAVAILABLE')
+            && refused(allowed.readCode) && refused(allowed.homeCode) && processRefused(allowed.execCode)
+            && allowed.selfExecCode === 'ENOENT'
             && allowed.netCode === 'CONNECTED';
         if (selfAudit.length === 0 && ipcOk && controlRan && controlClean && controlOk
             && readRefused && homeRefused && execRefused && selfExecRefused && netRefused && allowedShape) {

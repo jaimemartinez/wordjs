@@ -249,8 +249,10 @@ describe('probe', () => {
             'a refused execve aborts Node 22 on macOS before the probe can report the denial');
         assert.ok(!__probeSrc.includes('spawnSync'),
             'synchronous spawning uses internal IPC that aborts under a deny-by-default Seatbelt profile');
-        assert.ok(__probeSrc.includes('runSpawn(process.execPath'),
-            'the removed one-shot executable must be tested through an asynchronous error event');
+        assert.ok(__probeSrc.includes('fs.existsSync(process.execPath)'),
+            'the probe must observe that the one-shot executable disappeared before plugin code runs');
+        assert.ok(__probeSrc.indexOf('execCode="ATTEMPTED"') < __probeSrc.indexOf('cp.spawn("/bin/echo"'),
+            'the denial marker must be flushed before macOS can abort the spawning process');
     });
 
     test('reports unsupported off macOS, and never claims active', { skip: process.platform === 'darwin' ? 'this assertion is about the non-macOS path' : false }, async () => {
