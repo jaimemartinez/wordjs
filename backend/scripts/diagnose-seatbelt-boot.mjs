@@ -9,6 +9,8 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const mac = require('../dist/core/sandbox-macos.js');
 const dir = mkdtempSync(join(tmpdir(), 'wjs-seatbelt-diagnostic-'));
+const home = process.env.HOME || '';
+const literal = (value) => JSON.stringify(value);
 const base = mac.buildSeatbeltProfile({
   appRoot: process.cwd(),
   nodePath: process.execPath,
@@ -23,6 +25,15 @@ const variants = [
   ['base/ipc', '', true],
   ['file-read-all/ipc', '(allow file-read-data)', true],
   ['file-write-all/ipc', '(allow file-write-data)', true],
+  ['user-encoding/ipc', `(allow file-read-data (literal ${literal(join(home, '.CFUserTextEncoding'))}))`, true],
+  ['user-global-prefs/ipc', `(allow file-read-data (literal ${literal(join(home, 'Library/Preferences/.GlobalPreferences.plist'))}))`, true],
+  ['library-global-prefs/ipc', '(allow file-read-data (literal "/Library/Preferences/.GlobalPreferences.plist") (literal "/Library/Managed Preferences/.GlobalPreferences.plist"))', true],
+  ['library-apple-frameworks/ipc', '(allow file-read* (subpath "/Library/Apple/System/Library/Frameworks") (subpath "/Library/Apple/System/Library/PrivateFrameworks"))', true],
+  ['private-etc/ipc', '(allow file-read-data (subpath "/private/etc"))', true],
+  ['private-var/ipc', '(allow file-read-data (subpath "/private/var"))', true],
+  ['system/ipc', '(allow file-read-data (subpath "/System"))', true],
+  ['usr/ipc', '(allow file-read-data (subpath "/usr"))', true],
+  ['user-home/ipc', `(allow file-read-data (subpath ${literal(home)}))`, true],
   ['network/ipc', '(allow network*)', true],
   ['file-data/ipc', '(allow file-read-data file-write-data)', true],
   ['system-socket/ipc', '(allow system-socket)', true],
