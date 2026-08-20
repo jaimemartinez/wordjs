@@ -91,6 +91,7 @@ jobs:
           backend/src/tests/f1-content-schema.test.ts
           backend/src/tests/f2-content-contract.test.ts
           backend/src/tests/f3-content-outbox.test.ts
+          backend/src/tests/f4-extensible-revisions.test.ts
           backend/src/tests/health-purge-observability.test.ts
           backend/src/tests/import-post-page-slug-identity.test.ts
           backend/src/tests/install-root-paths.test.ts
@@ -130,6 +131,8 @@ jobs:
           backend/src/core/content-schema.ts
           backend/src/core/content-schemas-builtins.ts
           backend/src/core/protected-meta.ts
+          backend/src/core/revision-constants.ts
+          backend/src/core/revision-snapshots.ts
           backend/src/core/sandbox-macos.ts
           backend/src/core/sandbox-windows.ts
           backend/src/drivers/mysql-text-rule.ts
@@ -140,6 +143,7 @@ jobs:
           backend/scripts/generate-f2-contracts.ts
           backend/scripts/verify-f2-contracts.ts
           backend/scripts/verify-f3-transactional-content.ts
+          backend/scripts/verify-f4-extensible-revisions.ts
           backend/content-schema.v1.json
           backend/src/core/content-contract.ts
           backend/src/core/content-outbox.ts
@@ -150,10 +154,12 @@ jobs:
           documentation/adr/0002-f1-declarative-content-schema.md
           documentation/adr/0003-f2-generated-content-contracts.md
           documentation/adr/0004-f3-transactional-content-outbox.md
+          documentation/adr/0005-f4-versioned-extensible-revisions.md
           # ── frontend gates (vitest run: src/**/*.test.ts(x)) ──────────────────────────────────────
           frontend/src/__tests__/instrumentationGatewayTls.test.ts
           frontend/src/app/admin/notices/__tests__/noticesLogic.test.ts
           frontend/src/components/__tests__/revisionRestoreDisclosure.test.ts
+          frontend/src/lib/revisionRestoreDescription.ts
           frontend/src/components/blocks/__tests__/authorCssVars.test.tsx
           frontend/src/components/blocks/__tests__/classAttributeChannel.test.tsx
           frontend/src/lib/generated/content-client.generated.ts
@@ -308,6 +314,9 @@ jobs:
       - name: F3 transactional content (pinned unit-of-work + durable outbox)
         working-directory: backend
         run: npm run verify:f3
+      - name: F4 extensible revisions (frozen schema/codecs + legacy restore)
+        working-directory: backend
+        run: npm run verify:f4
       - name: License gate (block network-copyleft AGPL/SSPL)
         working-directory: backend
         run: npx --yes license-checker --production --failOn 'AGPL;SSPL'

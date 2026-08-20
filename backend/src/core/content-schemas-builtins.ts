@@ -8,6 +8,7 @@ const {
     relationshipsForLegacy,
     defaultOperationsFor,
 } = require('./content-schema');
+const { LEGACY_REVISIONABLE_META_KEYS } = require('./revision-constants');
 
 interface BuiltinDefinition {
     name: string;
@@ -66,7 +67,8 @@ function declareBuiltin(definition: BuiltinDefinition): ContentTypeSchemaV1 {
             strategy: 'snapshot',
             codecVersion: 1,
             fields: revisionFields,
-            metaKeys: definition.features.includes('revisions') ? ['_puck_data'] : [],
+            // F4 reads this declaration. The old constant remains only for manifest-less snapshots.
+            metaKeys: definition.features.includes('revisions') ? [...LEGACY_REVISIONABLE_META_KEYS] : [],
         },
         presentation: {
             menuIcon: definition.menuIcon,

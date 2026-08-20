@@ -33,6 +33,7 @@
  * point where the value becomes a path, which is where core/safe-path already lives. Keep the two
  * apart explicitly; collapsing them in either direction has now broken something in both directions.
  */
+import { REVISION_SNAPSHOT_META_KEY } from './revision-constants';
 
 /**
  * Meta keys that only backend code may write.
@@ -53,6 +54,9 @@ const PROTECTED_POST_META: Set<string> = new Set([
     '_wp_trash_meta_time',
     '_edit_lock',
     '_edit_last',
+    // F4 snapshot envelopes are executable restore instructions. Allowing a generic meta request to
+    // forge one would turn a later restore into an arbitrary core-column/meta write.
+    REVISION_SNAPSHOT_META_KEY,
 ]);
 
 /**

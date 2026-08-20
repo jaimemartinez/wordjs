@@ -10,7 +10,7 @@ const router = express.Router();
 const Post = require('../models/Post');
 const {
     getRevisions, getRevision, restoreRevision,
-    deleteRevision, countRevisions, compareRevisions
+    getRevisionRestoreIntent, deleteRevision, countRevisions, compareRevisions
 } = require('../core/revisions');
 const { authenticate } = require('../middleware/auth');
 const { asyncHandler } = require('../middleware/errorHandler');
@@ -195,10 +195,46 @@ router.post('/:id/restore', authenticate, asyncHandler(async (req: any, res: Res
         });
     }
 
+    const intent = await getRevisionRestoreIntent(revisionId);
+    if (!intent || !intent.compatible) {
+        return res.status(409).json({
+            code: intent?.descriptor?.errorCode || 'rest_revision_incompatible',
+            message: 'This revision uses an invalid or unsupported snapshot codec and was not restored.',
+            data: { status: 409 }
+        });
+    }
+
+    // F4 can restore workflow/date/parent fields declared by the schema. Those fields keep the same
+    // authorization as PUT /posts/:id; a restore is not a side door around publish or parent gates.
+    const parentPost = auth.post;
+    const caps = capsForType(parentPost.type || parentPost.postType || 'post') || capsFor('post');
+    if ((intent.targetStatus === 'publish' || intent.targetStatus === 'future' || intent.touchesPublicationDate)
+        && !req.user.can(caps.publish)) {
+        return res.status(403).json({ code: 'rest_forbidden', data: { status: 403 } });
+    }
+    if (intent.targetParentId !== undefined && intent.targetParentId !== null
+        && Number(intent.targetParentId) !== Number(parentPost.postParent || 0)) {
+        const targetParentId = Number(intent.targetParentId);
+        if (!Number.isSafeInteger(targetParentId) || targetParentId < 0 || targetParentId === Number(parentPost.id)) {
+            return res.status(409).json({ code: 'rest_revision_invalid_parent', data: { status: 409 } });
+        }
+        if (targetParentId > 0) {
+            const targetParent = await Post.findById(targetParentId);
+            if (!targetParent || !isRestExposedPostType(targetParent.type || targetParent.postType || 'post')
+                || !canEditPostRecord(req.user, targetParent)) {
+                return res.status(403).json({ code: 'rest_forbidden', data: { status: 403 } });
+            }
+        }
+    }
+
     const result = await restoreRevision(revisionId);
 
     if (!result) {
-        return res.status(404).json({ error: 'Revision not found' });
+        return res.status(409).json({
+            code: 'rest_revision_restore_failed',
+            message: 'The revision could not be restored atomically.',
+            data: { status: 409 }
+        });
     }
 
     res.json({ success: true, message: 'Revision restored' });

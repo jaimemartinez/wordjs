@@ -409,6 +409,16 @@ export function normalizeContentTypeSchema(value: unknown): ContentTypeSchemaV1 
     const revisionFields = stringList(own(revisions, 'fields'), 'revisions.fields', 128, safeFieldName);
     for (const field of revisionFields) {
         if (!Object.prototype.hasOwnProperty.call(fields, field)) fail('revisions.fields', `references unknown field ${field}`);
+        // F1 carried both a per-field bit and a duplicated list. F4 makes the field declaration the
+        // authority while treating the historical list as a compatibility alias.
+        fields[field].revisioned = true;
+    }
+    for (const [fieldName, field] of Object.entries(fields)) {
+        if (!field.revisioned) continue;
+        if (field.storage.kind === 'computed') {
+            fail(`fields.${fieldName}.revisioned`, 'computed fields cannot be restored from a snapshot');
+        }
+        if (!revisionFields.includes(fieldName)) revisionFields.push(fieldName);
     }
 
     const presentation = requireRecord(own(schema, 'presentation'), 'presentation');

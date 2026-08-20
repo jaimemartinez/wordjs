@@ -38,6 +38,7 @@
     "generate:f2": "cd backend && npm run generate:f2",
     "verify:f2": "cd backend && npm run verify:f2",
     "verify:f3": "cd backend && npm run verify:f3",
+    "verify:f4": "cd backend && npm run verify:f4",
     "perf:f0": "cd backend && npm run perf:f0",
     "perf:bench": "node scripts/perf-bench.mjs",
     "perf:bench:enforce": "node scripts/perf-bench.mjs --enforce --json"

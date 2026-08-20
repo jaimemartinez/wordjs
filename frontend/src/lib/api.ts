@@ -370,6 +370,27 @@ export interface Revision {
     date: string;
     modified: string;
     meta?: Record<string, any>;
+    restore?: RevisionRestoreDescriptor;
+}
+
+export interface RevisionRestoreField {
+    name: string;
+    description: string;
+    storage: "column" | "meta";
+    present: boolean;
+    willClear: boolean;
+}
+
+export interface RevisionRestoreDescriptor {
+    compatible: boolean;
+    legacy: boolean;
+    schemaVersion: number;
+    codecVersion: number;
+    schemaFingerprint: string | null;
+    inactivePluginPolicy: "snapshot-authoritative";
+    preservesUndeclaredFields: true;
+    fields: RevisionRestoreField[];
+    errorCode?: string;
 }
 
 // F2 client: paths and request DTOs are generated from the F1 content declarations.

@@ -116,9 +116,9 @@ const NON_CONTENT_META_KEYS: Set<string> = new Set([
 ]);
 
 /** Keep WordJS-owned keys driver-independent while preserving plugin keys byte-for-byte. */
-function storageMetaKey(key: string): string {
+function storageMetaKey(key: string, contentType?: string): string {
     const canonical = canonicalMetaKey(key);
-    return isRevisionableMeta(canonical) || NON_CONTENT_META_KEYS.has(canonical) ? canonical : key;
+    return isRevisionableMeta(canonical, contentType) || NON_CONTENT_META_KEYS.has(canonical) ? canonical : key;
 }
 
 /**
@@ -127,7 +127,7 @@ function storageMetaKey(key: string): string {
  * validation of `_puck_data` can reject an adversarial tree, and that rejection must not leave a
  * half-created post or a title update whose accompanying page tree was never stored.
  */
-function sanitizeWritableMetaBag(meta: any): Array<[string, any]> {
+function sanitizeWritableMetaBag(meta: any, contentType?: string): Array<[string, any]> {
     if (!meta || typeof meta !== 'object' || Array.isArray(meta)) return [];
     const entries: Array<[string, any]> = [];
     for (const [key, value] of Object.entries(meta)) {
@@ -135,7 +135,7 @@ function sanitizeWritableMetaBag(meta: any): Array<[string, any]> {
         // Core/versioned keys have ONE spelling on disk on every driver. Without this, SQLite creates
         // `_PUCK_DATA` as a second inert row while MySQL updates `_puck_data` because its collation is
         // case/accent-insensitive — the same request has different meaning by database.
-        const storedKey = storageMetaKey(key);
+        const storedKey = storageMetaKey(key, contentType);
         // Every structured meta value eventually reaches Post.updateMeta → JSON.stringify. Bound the
         // class here, not only `_puck_data`, so another plugin/editor key cannot recreate the overflow.
         if (value && typeof value === 'object') assertMetaValueWithinLimits(value);
@@ -822,7 +822,7 @@ router.post('/', authenticate, asyncHandler(async (req: AuthenticatedRequest<Rec
     // leave behind a post row with only half of the request applied.
     let safeMetaEntries: Array<[string, any]>;
     try {
-        safeMetaEntries = sanitizeWritableMetaBag(meta);
+        safeMetaEntries = sanitizeWritableMetaBag(meta, createType);
     } catch (error) {
         if (rejectOverComplexMeta(res, error)) return;
         throw error;
@@ -1018,7 +1018,7 @@ router.put('/:id', authenticate, asyncHandler(async (req: AuthenticatedRequest<I
     // before Post.update, otherwise rejecting an over-complex page tree would still change the row.
     let safeMetaEntries: Array<[string, any]>;
     try {
-        safeMetaEntries = sanitizeWritableMetaBag(meta);
+        safeMetaEntries = sanitizeWritableMetaBag(meta, post.postType);
     } catch (error) {
         if (rejectOverComplexMeta(res, error)) return;
         throw error;
@@ -1226,7 +1226,7 @@ router.post('/:id/meta', authenticate, asyncHandler(async (req: AuthenticatedReq
     // writing it changes nothing a visitor can see — so the downgrade is a decision, not a hole.
     // Resolve WordJS-owned aliases before the policy decision as well as before SQL. Otherwise an
     // alias of `_wjs_review_comments` updates that row on MySQL but is treated as public content here.
-    const storageKey = storageMetaKey(key as string);
+    const storageKey = storageMetaKey(key as string, post.postType);
     const gate = NON_CONTENT_META_KEYS.has(storageKey) ? canEditPostIgnoringPublished : canEditPostRecord;
     if (!gate(req.user, post)) {
         return res.status(403).json({
@@ -1270,7 +1270,7 @@ router.post('/:id/meta', authenticate, asyncHandler(async (req: AuthenticatedReq
     // cannot be created, the destructive write does not happen.
     try {
         await runContentMutation(async () => {
-            if (isRevisionableMeta(storageKey)) {
+            if (isRevisionableMeta(storageKey, post.postType)) {
                 try { await saveRevision(postId); }
                 catch (error: any) {
                     error.contentRevisionFailure = true;

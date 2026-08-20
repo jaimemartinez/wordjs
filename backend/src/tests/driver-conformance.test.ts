@@ -124,6 +124,109 @@ async function runContract(driver: any, d: any) {
             'ROLLBACK leaves no partial row'
         );
 
+        // --- F4 declarative revision restore -----------------------------------------------------
+        // Execute the exact portable shape used by core/revisions: allowlisted dynamic column UPDATE,
+        // explicit meta-id DELETE, raw INSERT, all on the driver's pinned transaction. This runs on
+        // real PostgreSQL/MySQL in CI, so "transactional on three engines" is executable, not inferred
+        // from the SQLite unit suite.
+        await driver.exec('DROP TABLE IF EXISTS conf_revision_meta');
+        await driver.exec('DROP TABLE IF EXISTS conf_revision_posts');
+        await driver.exec(`CREATE TABLE conf_revision_posts (
+            id ${d.autoPk}, post_title TEXT, post_content TEXT, post_excerpt TEXT, post_status TEXT
+        )`);
+        await driver.exec(`CREATE TABLE conf_revision_meta (
+            meta_id ${d.autoPk}, post_id INTEGER NOT NULL, meta_key TEXT, meta_value TEXT
+        )`);
+        const parent = await driver.run(
+            `INSERT INTO conf_revision_posts (post_title, post_content, post_excerpt, post_status)
+             VALUES (${d.ph(1)}, ${d.ph(2)}, ${d.ph(3)}, ${d.ph(4)})${d.ret}`,
+            ['live title', 'live body', 'live excerpt', 'draft']
+        );
+        await driver.run(
+            `INSERT INTO conf_revision_meta (post_id, meta_key, meta_value)
+             VALUES (${d.ph(1)}, ${d.ph(2)}, ${d.ph(3)})${d.ret}`,
+            [parent.lastID, 'plugin_rating', '9']
+        );
+        await driver.run(
+            `INSERT INTO conf_revision_meta (post_id, meta_key, meta_value)
+             VALUES (${d.ph(1)}, ${d.ph(2)}, ${d.ph(3)})${d.ret}`,
+            [parent.lastID, 'plugin_unrelated', 'keep']
+        );
+
+        await driver.transaction(async (tx: any) => {
+            await tx.run(
+                `UPDATE conf_revision_posts SET post_title = ${d.ph(1)}, post_content = ${d.ph(2)} WHERE id = ${d.ph(3)}`,
+                ['snapshot title', 'snapshot body', parent.lastID]
+            );
+            const owned = await tx.all(
+                `SELECT meta_id FROM conf_revision_meta WHERE post_id = ${d.ph(1)} AND meta_key = ${d.ph(2)}`,
+                [parent.lastID, 'plugin_rating']
+            );
+            const ownedIds = owned.map((row: any) => row.meta_id);
+            if (ownedIds.length > 0) {
+                const ids = ownedIds.map((_: any, index: number) => d.ph(index + 1)).join(',');
+                await tx.run(`DELETE FROM conf_revision_meta WHERE meta_id IN (${ids})`, ownedIds);
+            }
+            await tx.run(
+                `INSERT INTO conf_revision_meta (post_id, meta_key, meta_value)
+                 VALUES (${d.ph(1)}, ${d.ph(2)}, ${d.ph(3)})${d.ret}`,
+                [parent.lastID, 'plugin_rating', '3']
+            );
+        });
+        const restoredRevision = await driver.get(
+            `SELECT post_title, post_content FROM conf_revision_posts WHERE id = ${d.ph(1)}`,
+            [parent.lastID]
+        );
+        assert.deepStrictEqual(
+            { title: restoredRevision.post_title, content: restoredRevision.post_content },
+            { title: 'snapshot title', content: 'snapshot body' },
+            'F4 restore columns commit together'
+        );
+        assert.strictEqual(
+            (await driver.get(
+                `SELECT meta_value FROM conf_revision_meta WHERE post_id = ${d.ph(1)} AND meta_key = ${d.ph(2)}`,
+                [parent.lastID, 'plugin_rating']
+            )).meta_value,
+            '3',
+            'F4 declared plugin meta is restored'
+        );
+        assert.strictEqual(
+            (await driver.get(
+                `SELECT meta_value FROM conf_revision_meta WHERE post_id = ${d.ph(1)} AND meta_key = ${d.ph(2)}`,
+                [parent.lastID, 'plugin_unrelated']
+            )).meta_value,
+            'keep',
+            'F4 undeclared plugin meta survives'
+        );
+        await assert.rejects(
+            driver.transaction(async (tx: any) => {
+                await tx.run(
+                    `UPDATE conf_revision_posts SET post_title = ${d.ph(1)} WHERE id = ${d.ph(2)}`,
+                    ['partial title', parent.lastID]
+                );
+                await tx.run(
+                    `DELETE FROM conf_revision_meta WHERE post_id = ${d.ph(1)} AND meta_key = ${d.ph(2)}`,
+                    [parent.lastID, 'plugin_rating']
+                );
+                throw new Error('EXPECTED_F4_ROLLBACK');
+            }),
+            /EXPECTED_F4_ROLLBACK/
+        );
+        assert.strictEqual(
+            (await driver.get(`SELECT post_title FROM conf_revision_posts WHERE id = ${d.ph(1)}`, [parent.lastID])).post_title,
+            'snapshot title',
+            'F4 injected failure rolls columns back'
+        );
+        assert.ok(
+            await driver.get(
+                `SELECT meta_id FROM conf_revision_meta WHERE post_id = ${d.ph(1)} AND meta_key = ${d.ph(2)}`,
+                [parent.lastID, 'plugin_rating']
+            ),
+            'F4 injected failure rolls metadata back'
+        );
+        await driver.exec('DROP TABLE conf_revision_meta');
+        await driver.exec('DROP TABLE conf_revision_posts');
+
         // The portable SQL forms used by migration 0014 and the lease worker must execute on every
         // real engine, not merely parse in a SQLite-only unit test.
         await driver.exec('DROP TABLE IF EXISTS conf_outbox');

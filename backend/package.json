@@ -18,6 +18,7 @@
     "generate:f2": "node -r ts-node/register scripts/generate-f2-contracts.ts",
     "verify:f2": "npm run generate:f2 && node -r ts-node/register scripts/verify-f2-contracts.ts",
     "verify:f3": "node -r ts-node/register scripts/verify-f3-transactional-content.ts",
+    "verify:f4": "node -r ts-node/register scripts/verify-f4-extensible-revisions.ts",
     "perf:f0": "node -r ts-node/register scripts/f0-content-bench.ts --enforce",
     "lint": "eslint \"src/**/*.ts\"",
     "format": "prettier --write \"src/**/*.ts\""

@@ -542,7 +542,11 @@ describe('restoreRevision clears versioned meta a snapshot does not carry', () =
 
         const revId = await saveRevision(legacy);
         assert.ok(revId, 'precondition: the snapshot exists');
-        const snapRows = await dbAsync.get('SELECT COUNT(*) AS c FROM post_meta WHERE post_id = ?', [revId]);
+        // F4 adds one protected manifest row; "empty" still means no author metadata payload.
+        const snapRows = await dbAsync.get(
+            `SELECT COUNT(*) AS c FROM post_meta WHERE post_id = ? AND meta_key <> '_wjs_revision_snapshot'`,
+            [revId]
+        );
         assert.strictEqual(snapRows.c, 0, 'precondition: this snapshot captured NO versioned meta');
 
         // The author opens Verso and saves: a page tree now exists where the revision has none.

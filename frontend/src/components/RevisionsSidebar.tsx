@@ -6,6 +6,7 @@ import { useModal } from "@/contexts/ModalContext";
 import { useI18n } from "@/contexts/I18nContext";
 import { trStr } from "@/lib/editorI18n";
 import MSym from "@/components/editor/MSym";
+import { buildRevisionRestoreMessage } from "@/lib/revisionRestoreDescription";
 
 interface RevisionsSidebarProps {
     postId: number;
@@ -219,14 +220,7 @@ export default function RevisionsSidebar({ postId, isOpen, onClose, onRestore }:
     const handleRestoreClick = async (revision: Revision) => {
         const when = new Date(revision.modified).toLocaleString();
         const ok = await confirm(
-            `Restoring the version from ${when} rolls the post back to it: title, body, excerpt, ` +
-                `page layout, theme template, featured image and the SEO fields (SEO title, SEO ` +
-                `description, social image, noindex).\n\n` +
-                `Whatever you changed in those since that version is lost — and anything ADDED after ` +
-                `it is removed: if the featured image, the theme template or an SEO field was set ` +
-                `later, restoring clears it. Your current unsaved changes are lost too.\n\n` +
-                `Everything else is untouched: comments, the editorial review thread, tags and ` +
-                `categories, and data stored by plugins.`,
+            buildRevisionRestoreMessage(revision, when),
             "Restore this version?",
             true,
         );
@@ -351,7 +345,7 @@ export default function RevisionsSidebar({ postId, isOpen, onClose, onRestore }:
                                         <p className="text-[11px] text-[var(--ed-outline)] mt-1 tabular-nums" style={{ fontFamily: "var(--ed-font-family-monospaced)" }}>{new Date(rev.modified).toLocaleString()}</p>
                                     </div>
                                     <div className="flex flex-wrap gap-2 mt-4">
-                                        <button type="button" disabled={restoringId !== null} onClick={() => handleRestoreClick(rev)} className="min-h-10 flex-1 px-3 rounded-xl border border-[var(--ed-outline-variant)] bg-[var(--ed-surface-container-lowest)] text-xs font-semibold text-[var(--ed-on-surface)] hover:border-[var(--ed-primary)] hover:text-[var(--ed-primary)] disabled:opacity-50 transition-colors inline-flex items-center justify-center gap-1.5">
+                                        <button type="button" disabled={restoringId !== null || rev.restore?.compatible === false} title={rev.restore?.compatible === false ? tr("Esta revisión usa un formato no compatible") : undefined} onClick={() => handleRestoreClick(rev)} className="min-h-10 flex-1 px-3 rounded-xl border border-[var(--ed-outline-variant)] bg-[var(--ed-surface-container-lowest)] text-xs font-semibold text-[var(--ed-on-surface)] hover:border-[var(--ed-primary)] hover:text-[var(--ed-primary)] disabled:opacity-50 transition-colors inline-flex items-center justify-center gap-1.5">
                                             <MSym name={restoringId === rev.id ? "sync" : "history"} size={16} className={restoringId === rev.id ? "animate-spin" : ""} /> {tr("Restaurar")}
                                         </button>
                                         {index > 0 && (
