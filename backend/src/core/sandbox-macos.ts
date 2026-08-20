@@ -266,6 +266,8 @@ export type SeatbeltProfileOptions = {
     appRoot: string;
     /** Narrow code/dependency roots. When present these replace the legacy whole-appRoot read grant. */
     readOnlyDirs?: string[];
+    /** Exact read-only files needed at boot; unlike readOnlyDirs these are emitted as SBPL literals. */
+    readOnlyFiles?: string[];
     /**
      * The Node binary the child will exec. Defaults to this process's. Seatbelt matches the RESOLVED path,
      * so a symlinked install (Homebrew's /opt/homebrew/bin/node → …/Cellar/node/…/bin/node) needs the
@@ -298,6 +300,8 @@ function buildSeatbeltProfile(opts: SeatbeltProfileOptions): string {
         ? (opts.readOnlyDirs as string[])
         : [opts && opts.appRoot];
     const appRoots = uniq(requestedReadRoots.flatMap((p) => spellings(p).filter((v) => sbplPath(v) !== null)));
+    const requestedReadFiles = Array.isArray(opts && opts.readOnlyFiles) ? (opts.readOnlyFiles as string[]) : [];
+    const appFiles = uniq(requestedReadFiles.flatMap((p) => spellings(p).filter((v) => sbplPath(v) !== null)));
     const requestedZones = Array.isArray(opts && opts.writableDirs) ? (opts.writableDirs as string[]) : [];
     // `spellings()` validates the filesystem shape; `sbplPath()` validates the parser boundary. Keep the
     // result of BOTH checks as the single source of truth for emission, W^X overlap arithmetic and the
@@ -430,9 +434,10 @@ function buildSeatbeltProfile(opts: SeatbeltProfileOptions): string {
     // plugin that defeats the JS io-guard still cannot persist a payload into core source, a shared
     // dependency, or another plugin — the same property the Linux Landlock rules give.
     // WHY no file-map-executable: see the W^X note above. No writable zone may become executable.
-    if (appRoots.length) {
+    if (appRoots.length || appFiles.length) {
         L.push(';; --- application code roots: READ-ONLY, never the whole install root ---');
         for (const p of appRoots) L.push(`(allow file-read* (subpath ${lit(p)}))`);
+        for (const p of appFiles) L.push(`(allow file-read* (literal ${lit(p)}))`);
         L.push('');
     } else {
         // No usable application-code root ⇒ the child cannot load its worker at all. Emitting nothing (rather than

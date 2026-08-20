@@ -302,7 +302,12 @@ $grant->('/dev/null', $FS_READ_FILE | $FS_WRITE_FILE | ($abi >= 5 ? $FS_IOCTL_DE
 # A read root the caller ASKED for is fatal when it will not grant. The OS list above is best-effort
 # because its entries are guesses about a distro layout; this one is not a guess, it is the application.
 for my $r (@read_roots) {
-    $grant->($r, $RO) or fail("cannot grant the read root $r");
+    # A caller may need one configuration FILE (the source-only ts-node worker needs exactly
+    # backend/tsconfig.json) without granting the directory that contains it. Landlock accepts a
+    # regular file as the parent_fd of PATH_BENEATH, but READ_DIR is not a valid right for that inode.
+    # Select the smallest compatible access set after realpath() has fixed the object we are granting.
+    my $read_access = -d $r ? $RO : $FS_READ_FILE;
+    $grant->($r, $read_access) or fail("cannot grant the read root $r");
 }
 for my $r (@exec_roots) {
     $grant->($r, $RX_FILE) or fail("cannot grant the executable root $r");

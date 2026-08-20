@@ -248,7 +248,7 @@ describe('the shim script, read as text — FAIL CLOSED', () => {
     test('every confinement step that can fail is followed by a hard stop', () => {
         const required = [
             /\$rfd\s*=\s*syscall\(\$NR_ll_create[\s\S]{0,300}?fail\("landlock_create_ruleset/,
-            /\$grant->\(\$r, \$RO\) or fail\("cannot grant the read root/,
+            /\$grant->\(\$r, \$read_access\) or fail\("cannot grant the read root/,
             /\$grant->\(\$z, \$ZONE_ACC\) or fail\("cannot grant the writable zone/,
             /PR_SET_NO_NEW_PRIVS[\s\S]{0,80}?or fail\("prctl\(NO_NEW_PRIVS\)/,
             /\$NR_ll_restrict[\s\S]{0,60}?or fail\("landlock_restrict_self/,
@@ -318,8 +318,10 @@ describe('the shim script, read as text — what the child may READ', () => {
 
     test('read roots do not execute, executable roots are separate, and writable zones are W^X', () => {
         assert.ok(/my \$RO = \$FS_READ_FILE \| \$FS_READ_DIR;/.test(SHIM_SRC));
+        assert.ok(/my \$read_access = -d \$r \? \$RO : \$FS_READ_FILE;/.test(SHIM_SRC),
+            'a literal file read root must not inherit the directory-enumeration right');
         assert.ok(/my \$RX_FILE = \$FS_READ_FILE \| \$FS_EXECUTE;/.test(SHIM_SRC));
-        assert.ok(/\$grant->\(\$r, \$RO\) or fail\("cannot grant the read root/.test(SHIM_SRC));
+        assert.ok(/\$grant->\(\$r, \$read_access\) or fail\("cannot grant the read root/.test(SHIM_SRC));
         assert.ok(/\$grant->\(\$r, \$RX_FILE\) or fail\("cannot grant the executable root/.test(SHIM_SRC));
         const zoneExpr = /my \$ZONE_ACC =([\s\S]*?);\nfor my \$z/.exec(SHIM_SRC)?.[1] || '';
         assert.ok(zoneExpr.length > 0 && !zoneExpr.includes('$FS_EXECUTE'),

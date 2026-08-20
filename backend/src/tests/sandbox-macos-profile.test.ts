@@ -94,6 +94,18 @@ describe('SBPL profile skeleton', () => {
         assert.ok(!p.includes(`${APP_ROOT}/wordjs-config.json`));
     });
 
+    test('source workers may read only the literal tsconfig without exposing the backend directory', () => {
+        const tsconfig = `${APP_ROOT}/tsconfig.json`;
+        const p = build({
+            readOnlyDirs: [`${APP_ROOT}/src/core`, `${APP_ROOT}/node_modules`, `${APP_ROOT}/plugins/acme`],
+            readOnlyFiles: [tsconfig],
+        });
+        assert.ok(p.includes(`(allow file-read* (literal "${tsconfig}"))`));
+        assert.ok(!p.includes(`(allow file-read* (subpath "${APP_ROOT}"))`));
+        assert.ok(!p.includes(`${APP_ROOT}/wordjs-config.json`));
+        assert.deepStrictEqual(auditProfile(p), []);
+    });
+
     test('sysctl is an exact-name allowlist with no process argv/environment aperture', () => {
         const p = build({ readOnlyDirs: [`${APP_ROOT}/dist/core`] });
         assert.ok(p.includes('(sysctl-name "hw.ncpu")'));

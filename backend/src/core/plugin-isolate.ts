@@ -1138,6 +1138,10 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
     // The same path declaration feeds every OS sandbox, Node's permission model and io-guard.
     const APP_ROOT = path.resolve(__dirname, '..', '..');
     const nativePaths = sandboxPaths(APP_ROOT, slug, __dirname);
+    // Source-only workers preload ts-node, which searches this exact file before it can compile the
+    // worker. Keep it separate from the directory roots: granting APP_ROOT just to reach tsconfig.json
+    // would expose wordjs-config.json, databases and every sibling plugin to untrusted development code.
+    const tsNodeProject = __filename.endsWith('.ts') ? path.join(APP_ROOT, 'tsconfig.json') : null;
     const storageEnabled = fsGrant.read || fsGrant.write;
     // Private capability storage is created only for a plugin that currently holds that capability.
     // Own-dir private storage remains the compatibility floor for zero-permission plugins.
@@ -1215,10 +1219,10 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
             const zones = sandboxWritable.filter((d: string) => { try { return fsx.statSync(d).isDirectory(); } catch { return false; } });
             // Read roots get the same treatment for the same reason (the shim fails closed on a read root
             // it cannot grant). Both entries below normally exist, so this only bites a broken install —
-        // where a missing required runtime root means the child could not have loaded anyway.
+            // where a missing required runtime root means the child could not have loaded anyway.
             const runtimePrefix = path.dirname(path.dirname(process.execPath));
-            const roots = [...sandboxReadable, ...(runtimePrefix.split(path.sep).filter(Boolean).length >= 2 ? [runtimePrefix] : [])]
-                .filter((d) => { try { return fsx.statSync(d).isDirectory(); } catch { return false; } });
+            const roots = [...sandboxReadable, ...(tsNodeProject ? [tsNodeProject] : []), ...(runtimePrefix.split(path.sep).filter(Boolean).length >= 2 ? [runtimePrefix] : [])]
+                .filter((d) => { try { const st = fsx.statSync(d); return st.isDirectory() || st.isFile(); } catch { return false; } });
             if (!zones.length) {
                 // Every zone gone is not a tighter sandbox, it is an unlaunchable one: the plugin could
                 // not write its own directory. Take the standard launch and say so, rather than emitting
@@ -1272,6 +1276,7 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
             const profile = mac.buildSeatbeltProfile({
                 writableDirs: sandboxWritable,
                 readOnlyDirs: sandboxReadable,
+                readOnlyFiles: tsNodeProject ? [tsNodeProject] : [],
                 denyNetwork: !netGranted,
                 appRoot: APP_ROOT,
                 nodePath: process.execPath,

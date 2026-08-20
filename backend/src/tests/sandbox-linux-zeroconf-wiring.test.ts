@@ -61,6 +61,14 @@ describe('real launch wiring and visibility', () => {
         assert.doesNotMatch(configSource, /useLinuxZeroConf|unshareNetwork/);
     });
 
+    test('ts-node gets one literal project file, never a read grant on the backend root', () => {
+        const isolateSource = fs.readFileSync(path.resolve(__dirname, '../core/plugin-isolate.ts'), 'utf8');
+        assert.match(isolateSource, /tsNodeProject = __filename\.endsWith\('\.ts'\) \? path\.join\(APP_ROOT, 'tsconfig\.json'\) : null/);
+        assert.match(isolateSource, /readOnlyFiles: tsNodeProject \? \[tsNodeProject\] : \[\]/);
+        assert.doesNotMatch(isolateSource, /sandboxReadable[^\n]*APP_ROOT/,
+            'the source-worker fix must not turn the whole backend root into plugin read authority');
+    });
+
     test('the config is zero-configuration and has one explicit Linux opt-out', () => {
         const config = require('../config/app');
         assert.strictEqual(config.sandbox.useKernelHardening, true);

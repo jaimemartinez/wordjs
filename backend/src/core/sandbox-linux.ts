@@ -248,13 +248,16 @@ function getLinuxZeroConfNote(): string { return zeroConfNote; }
  * argv[2] = a path OUTSIDE every granted write zone (the refusal under test)
  * argv[3] = '1' when the network must be denied
  *
- * It reports five facts over the IPC channel and exits 0:
+ * It reports the following facts over the IPC channel and exits 0:
  *   wrote      - a write+read back inside the granted zone SUCCEEDED. THE POSITIVE CONTROL. Without it a
  *                confinement so broken that everything fails would satisfy every "was it refused?" check
  *                and be reported as a working sandbox.
  *   readSystem - /etc/hostname was readable. The SECOND positive control, for the read direction: the
  *                shim grants the OS trees, and a child that cannot read /etc is a child that cannot
  *                resolve anything, i.e. a confinement no plugin could run under.
+ *   exactRead  - one literal caller-granted file was readable. This is the source-worker tsconfig shape.
+ *   siblingCode- a sibling of that literal file stayed unreadable, proving the file grant did not widen
+ *                into authority over its containing directory.
  *   readCode   - the error code from reading OUTSIDE every granted tree. Must be a kernel refusal.
  *   outCode    - the error code from writing OUTSIDE every zone. Must be a kernel refusal.
  *   signalCode - process.kill(self, 0). This harmless syscall succeeds in the control and must be
@@ -267,10 +270,12 @@ function getLinuxZeroConfNote(): string { return zeroConfNote; }
  */
 const PROBE_SRC = [
     'var fs=require("fs");var net=require("net");var cp=require("child_process");',
-    'var out={wrote:false,readSystem:false,readCode:"NONE",outCode:"NONE",signalCode:"NONE",processCode:"NONE",execCode:"NONE",capsCode:"NONE",netCode:"SKIP",unixCode:"SKIP"};',
-    'var inside=process.argv[1];var outside=process.argv[2];var denyNet=process.argv[3]==="1";var unixPath=process.argv[4];',
+    'var out={wrote:false,readSystem:false,exactRead:false,siblingCode:"NONE",readCode:"NONE",outCode:"NONE",signalCode:"NONE",processCode:"NONE",execCode:"NONE",capsCode:"NONE",netCode:"SKIP",unixCode:"SKIP"};',
+    'var inside=process.argv[1];var outside=process.argv[2];var denyNet=process.argv[3]==="1";var unixPath=process.argv[4];var exactFile=process.argv[5];var siblingFile=process.argv[6];',
     'try{fs.writeFileSync(inside,"wjs");out.wrote=fs.readFileSync(inside,"utf8")==="wjs";}catch(e){out.wrote=false;out.writeCode=(e&&e.code)||"THROW";}',
     'try{fs.readFileSync(process.execPath);out.readSystem=true;}catch(e){out.readSystem=false;}',
+    'try{out.exactRead=fs.readFileSync(exactFile,"utf8")==="exact";}catch(e){out.exactRead=false;}',
+    'try{fs.readFileSync(siblingFile);out.siblingCode="OPEN";}catch(e){out.siblingCode=(e&&e.code)||"THROW";}',
     'try{fs.readFileSync(outside);out.readCode="OPEN";}catch(e){out.readCode=(e&&e.code)||"THROW";}',
     'try{fs.writeFileSync(outside,"wjs");out.outCode="OPEN";}catch(e){out.outCode=(e&&e.code)||"THROW";}',
     'try{process.kill(process.ppid,0);out.signalCode="OPEN";}catch(e){out.signalCode=(e&&e.code)||"THROW";}',
@@ -300,7 +305,7 @@ const PROBE_SRC = [
  */
 const REFUSAL_CODES = new Set(['EPERM', 'EACCES']);
 
-type ProbeMsg = { wrote?: boolean; readSystem?: boolean; readCode?: string; outCode?: string; signalCode?: string; processCode?: string; execCode?: string; capsCode?: string; netCode?: string; unixCode?: string };
+type ProbeMsg = { wrote?: boolean; readSystem?: boolean; exactRead?: boolean; siblingCode?: string; readCode?: string; outCode?: string; signalCode?: string; processCode?: string; execCode?: string; capsCode?: string; netCode?: string; unixCode?: string };
 type ProbeRun = { msg: ProbeMsg | null; code: number | null; stderr: string };
 
 /**
@@ -311,11 +316,11 @@ type ProbeRun = { msg: ProbeMsg | null; code: number | null; stderr: string };
  * confined run is not a control - it is a second experiment whose difference from the first is exactly
  * the thing nobody measured.
  */
-function runProbeChild(pre: string[], inside: string, outside: string, denyNet: boolean, unixPath: string, timeoutMs: number): Promise<ProbeRun> {
+function runProbeChild(pre: string[], inside: string, outside: string, denyNet: boolean, unixPath: string, exactFile: string, siblingFile: string, timeoutMs: number): Promise<ProbeRun> {
     return new Promise<ProbeRun>((res) => {
         // ONE argv, built once, with `pre` in front. The control leg passes pre = [] and therefore runs
         // the byte-identical tail; that is what makes it a control rather than a second experiment.
-        const full = [...pre, process.execPath, '-e', PROBE_SRC, inside, outside, denyNet ? '1' : '0', unixPath];
+        const full = [...pre, process.execPath, '-e', PROBE_SRC, inside, outside, denyNet ? '1' : '0', unixPath, exactFile, siblingFile];
         const exe = full[0];
         const args = full.slice(1);
         let proc: any = null, msg: ProbeMsg | null = null, stderr = '', done = false;
@@ -429,7 +434,13 @@ function probeLinuxZeroConf(): Promise<'active' | 'degraded' | 'unsupported' | '
         const inside = pathl.join(zone as string, 'control.txt');
         const outside = pathl.join(probeRoot as string, 'wordjs-config.json');
         const unixPath = pathl.join(probeRoot as string, 'host.sock');
+        const exactDir = pathl.join(probeRoot as string, 'config');
+        const exactFile = pathl.join(exactDir, 'tsconfig.json');
+        const siblingFile = pathl.join(exactDir, 'host-secret.json');
+        fsl.mkdirSync(exactDir, { recursive: true });
         fsl.writeFileSync(outside, 'probe-secret');
+        fsl.writeFileSync(exactFile, 'exact');
+        fsl.writeFileSync(siblingFile, 'sibling-secret');
         // The Node runtime prefix is a read root in its own right and NOT an optional nicety: the shim
         // deliberately does not grant /home, so an nvm/asdf/fnm install (…/versions/node/vX/bin/node)
         // would be unreadable and the child would never boot. `dirname(dirname(execPath))` is that
@@ -446,8 +457,9 @@ function probeLinuxZeroConf(): Promise<'active' | 'degraded' | 'unsupported' | '
             // ── 1. THE UNCONFINED CONTROL, FIRST ────────────────────────────────────────────────────
             // Identical child, identical argv tail, no shim. If THIS is already refused, nothing the
             // confined leg reports can be attributed to the confinement.
-            const control = await runProbeChild([], inside, outside, true, unixPath, 25000);
+            const control = await runProbeChild([], inside, outside, true, unixPath, exactFile, siblingFile, 25000);
             const controlOk = !!(control.msg && control.msg.wrote === true && control.msg.readSystem === true
+                && control.msg.exactRead === true && control.msg.siblingCode === 'OPEN'
                 && control.msg.readCode === 'OPEN' && control.msg.outCode === 'OPEN'
                 && control.msg.signalCode === 'OPEN' && control.msg.processCode === 'OPEN'
                 && control.msg.execCode === 'OPEN' && control.msg.netCode === 'CONNECTED'
@@ -464,11 +476,11 @@ function probeLinuxZeroConf(): Promise<'active' | 'degraded' | 'unsupported' | '
             const pre = [PERL_BIN, ...shimArgs({
                 zone: [zone as string],
                 denyNetwork: true,
-                readRoot: [zone as string, coreRoot as string, ...(nodePrefix.split(pathl.sep).filter(Boolean).length >= 2 ? [nodePrefix] : [])],
+                readRoot: [zone as string, coreRoot as string, exactFile, ...(nodePrefix.split(pathl.sep).filter(Boolean).length >= 2 ? [nodePrefix] : [])],
                 execRoot: [process.execPath, PERL_BIN],
                 nodeArgs: [],
             })];
-            const confined = await runProbeChild(pre, inside, outside, true, unixPath, 25000);
+            const confined = await runProbeChild(pre, inside, outside, true, unixPath, exactFile, siblingFile, 25000);
 
             // The shim's own verdict comes FIRST, because 'this kernel cannot' and 'this kernel could and
             // it failed' are different answers that demand different operator actions, and only the exit
@@ -483,6 +495,8 @@ function probeLinuxZeroConf(): Promise<'active' | 'degraded' | 'unsupported' | '
             const ipcOk = !!confined.msg;
             const positiveWrite = !!(confined.msg && confined.msg.wrote === true);
             const positiveRead = !!(confined.msg && confined.msg.readSystem === true);
+            const exactRead = !!(confined.msg && confined.msg.exactRead === true);
+            const siblingRefused = !!(confined.msg && REFUSAL_CODES.has(String(confined.msg.siblingCode)));
             const readRefused = !!(confined.msg && REFUSAL_CODES.has(String(confined.msg.readCode)));
             const outRefused = !!(confined.msg && REFUSAL_CODES.has(String(confined.msg.outCode)));
             const signalRefused = !!(confined.msg && REFUSAL_CODES.has(String(confined.msg.signalCode)));
@@ -497,11 +511,12 @@ function probeLinuxZeroConf(): Promise<'active' | 'degraded' | 'unsupported' | '
             // removing the whole OS sandbox.
             const allowPre = [PERL_BIN, ...shimArgs({
                 zone: [zone as string], denyNetwork: false,
-                readRoot: [zone as string, coreRoot as string, ...(nodePrefix.split(pathl.sep).filter(Boolean).length >= 2 ? [nodePrefix] : [])],
+                readRoot: [zone as string, coreRoot as string, exactFile, ...(nodePrefix.split(pathl.sep).filter(Boolean).length >= 2 ? [nodePrefix] : [])],
                 execRoot: [process.execPath, PERL_BIN], nodeArgs: [],
             })];
-            const allowed = await runProbeChild(allowPre, inside, outside, false, unixPath, 25000);
+            const allowed = await runProbeChild(allowPre, inside, outside, false, unixPath, exactFile, siblingFile, 25000);
             const allowedOk = !!(allowed.msg && allowed.msg.wrote === true && allowed.msg.readSystem === true
+                && allowed.msg.exactRead === true && REFUSAL_CODES.has(String(allowed.msg.siblingCode))
                 && REFUSAL_CODES.has(String(allowed.msg.readCode))
                 && REFUSAL_CODES.has(String(allowed.msg.outCode))
                 && REFUSAL_CODES.has(String(allowed.msg.signalCode))
@@ -510,7 +525,7 @@ function probeLinuxZeroConf(): Promise<'active' | 'degraded' | 'unsupported' | '
                 && allowed.msg.capsCode === 'ZERO'
                 && REFUSAL_CODES.has(String(allowed.msg.unixCode))
                 && allowed.msg.netCode === 'CONNECTED');
-            if (ipcOk && positiveWrite && positiveRead && readRefused && outRefused && signalRefused
+            if (ipcOk && positiveWrite && positiveRead && exactRead && siblingRefused && readRefused && outRefused && signalRefused
                 && processRefused && execRefused && capsDropped && netRefused && unixRefused && allowedOk) {
                 zeroConfState = 'active';
                 zeroConfNote = 'Landlock + seccomp-bpf certified with no host configuration for both network policies: reads/writes are scoped, process creation and dangerous syscalls are refused, all sockets are denied without a grant, and only IP client sockets are admitted with it';
@@ -521,6 +536,7 @@ function probeLinuxZeroConf(): Promise<'active' | 'degraded' | 'unsupported' | '
             zeroConfNote = 'the Landlock/seccomp shim is available but its probe did NOT certify both network-policy launch shapes';
             console.warn('[Sandbox] Linux zero-config probe did NOT certify confinement on this host - isolated plugins keep the Node permission model and JS guards. '
                 + `ipc=${ipcOk ? 'ok' : 'FAILED'} zoneWrite=${positiveWrite ? 'ok' : 'FAILED'} systemRead=${positiveRead ? 'ok' : 'FAILED'} `
+                + `exactFileRead=${exactRead ? 'ok' : 'FAILED'} siblingFile=${siblingRefused ? 'refused' : logSafe((confined.msg && confined.msg.siblingCode) || 'unknown')} `
                 + `outOfZoneRead=${readRefused ? 'refused' : logSafe((confined.msg && confined.msg.readCode) || 'unknown')} `
                 + `outOfZoneWrite=${outRefused ? 'refused' : logSafe((confined.msg && confined.msg.outCode) || 'unknown')} `
                 + `kill=${signalRefused ? 'refused' : logSafe((confined.msg && confined.msg.signalCode) || 'unknown')} `
