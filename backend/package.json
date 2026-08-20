@@ -64,7 +64,7 @@
     "sql.js": "^1.10.0",
     "swagger-jsdoc": "^6.2.8",
     "swagger-ui-express": "^5.0.1",
-    "uuid": "^11.1.1"
+    "uuid": "^14.0.1"
   },
   "overrides": {
     "nodemailer": "^9.0.1",
