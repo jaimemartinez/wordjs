@@ -830,6 +830,7 @@ type ProbeMsg = { wrote?: boolean; readCode?: string; homeCode?: string; execCod
 function runProbeChild(pre: string[], target: string, denyNet: boolean, runtime?: SeatbeltRuntime): Promise<ProbeMsg | null> {
     return new Promise<ProbeMsg | null>((res) => {
         let proc: any = null, msg: ProbeMsg | null = null, done = false, stderr = '', overall: any = null;
+        let bootstrapFailure = '', spawnFailure = '';
         const finish = (v: ProbeMsg | null) => {
             if (done) return;
             done = true;
@@ -864,15 +865,21 @@ function runProbeChild(pre: string[], target: string, denyNet: boolean, runtime?
             });
         }
         if (runtime) armSeatbeltBootstrap(proc, runtime).catch((error: any) => {
-            console.warn('[Sandbox] Seatbelt probe bootstrap failed: ' + logSafe(JSON.stringify((error && error.message) || error || 'unknown')));
-            finish(null);
+            bootstrapFailure = String((error && error.message) || error || 'unknown');
+            // An early child exit reaches `close` after stderr has drained. Wait for it so CI records the
+            // actual sandbox-exec/dyld error. A live child means the handshake itself timed out: kill it now.
+            if (proc && proc.exitCode === null && proc.signalCode === null) finish(null);
         });
         proc.on('message', (m: any) => { if (m && typeof m === 'object') msg = m as ProbeMsg; });
-        proc.on('error', () => { clearTimeout(overall); finish(null); });   // ENOENT / not executable
-        proc.on('exit', (code: number) => {
+        proc.on('error', (error: any) => { spawnFailure = String((error && error.message) || error || 'spawn error'); });
+        // `close`, unlike `exit`, fires only after stdio closes. Logging at `exit` raced stderr and erased the
+        // only actionable detail on the real macOS runner.
+        proc.on('close', (code: number, signal: string) => {
             clearTimeout(overall);
-            if (runtime && code !== 0 && stderr) {
-                console.warn('[Sandbox] Seatbelt probe child stderr (tail): ' + logSafe(JSON.stringify(stderr)));
+            if (runtime && (code !== 0 || signal || bootstrapFailure || spawnFailure)) {
+                console.warn('[Sandbox] Seatbelt probe child failed: ' + logSafe(JSON.stringify({
+                    code, signal: signal || '', bootstrap: bootstrapFailure, spawn: spawnFailure, stderr,
+                })));
             }
             finish(code === 0 ? msg : null);
         });
@@ -926,12 +933,17 @@ function probeSeatbelt(): Promise<'active' | 'degraded' | 'unsupported' | 'disab
         const controlTarget = pathm.join(dir, 'control-unconfined.txt');
         let deniedRuntime: SeatbeltRuntime | null = null;
         let allowedRuntime: SeatbeltRuntime | null = null;
+        let controlRuntime: SeatbeltRuntime | null = null;
         try {
             deniedRuntime = prepareSeatbeltRuntime(process.execPath);
             allowedRuntime = prepareSeatbeltRuntime(process.execPath);
+            // The negative control must validate the complete launch apparatus too (copied executable,
+            // preload and unlink handshake), not only the probe program under the original Node binary.
+            controlRuntime = prepareSeatbeltRuntime(process.execPath);
         } catch {
             try { disposeSeatbeltRuntime(deniedRuntime); } catch { /* */ }
             try { disposeSeatbeltRuntime(allowedRuntime); } catch { /* */ }
+            try { disposeSeatbeltRuntime(controlRuntime); } catch { /* */ }
             try { fsm.rmSync(dir, { recursive: true, force: true }); } catch { /* */ }
             seatbeltState = 'degraded';
             return 'degraded';
@@ -953,13 +965,15 @@ function probeSeatbelt(): Promise<'active' | 'degraded' | 'unsupported' | 'disab
         let allowed: ProbeMsg | null = null;
         if (selfAudit.length === 0) {
             confined = await runProbeChild([SEATBELT_BIN, ...seatbeltArgs(profile, [])], target, true, deniedRuntime);
-            // The control runs UNCONFINED and is the reference every "refused" below is measured against.
-            control = await runProbeChild([], controlTarget, true);
+            // The control runs UNCONFINED but through the same one-shot runtime and preload handshake. This
+            // separates a broken executable-copy/bootstrap mechanism from a Seatbelt profile denial.
+            control = await runProbeChild([], controlTarget, true, controlRuntime);
             // The network-granted shape must retain every non-network denial and actually permit egress.
             allowed = await runProbeChild([SEATBELT_BIN, ...seatbeltArgs(allowedProfile, [])], allowedTarget, false, allowedRuntime);
         }
         disposeSeatbeltRuntime(deniedRuntime);
         disposeSeatbeltRuntime(allowedRuntime);
+        disposeSeatbeltRuntime(controlRuntime);
         // Always removed, on every exit path — a probe that leaks one temp dir per failed boot is exactly
         // the class of probe-temp leak this module must avoid.
         try { fsm.rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ }
