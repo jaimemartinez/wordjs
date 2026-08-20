@@ -138,6 +138,11 @@ function defaultAppContainerProfileName(): string {
  */
 const RSS_BUDGET_BYTES = 768 * 1024 * 1024;
 const PIDS_MAX = 512;
+// A clean Windows host may make the first Add-Type invocation wait on Defender/JIT compilation for
+// longer than 30 seconds. GitHub's Windows Server 2025 runner reproduced that twice while the same
+// helper completed on the next invocation. This is setup work, cached for the process/install, so give
+// the profile API a realistic cold-start budget without ever treating a timeout as success.
+const PROFILE_API_TIMEOUT_MS = 90000;
 
 /** Windows quoting for one argv element (the CommandLineToArgvW rules: backslashes only double before a quote). */
 function quoteWinArg(arg: string): string {
@@ -247,7 +252,7 @@ function ensureAppContainerProfile(name?: string): Promise<string | null> {
         if (process.platform !== 'win32') return null;
         // The name goes in through the environment, never interpolated into the script text — so a name
         // from config can never become PowerShell source.
-        const r = await runPowerShellWithEnv(buildProfileScript(profile, 'ensure'), { WJS_AC_NAME: profile }, 30000);
+        const r = await runPowerShellWithEnv(buildProfileScript(profile, 'ensure'), { WJS_AC_NAME: profile }, PROFILE_API_TIMEOUT_MS);
         const m = /OK (S-1-15-2-[0-9-]+)/.exec(r.out);
         if (!m) { console.warn(`[Sandbox] AppContainer profile '${logSafe(profile)}' unavailable: ${logSafe(r.out.trim().slice(0, 200))}`); return null; }
         return m[1];
@@ -260,7 +265,7 @@ function ensureAppContainerProfile(name?: string): Promise<string | null> {
 async function deleteAppContainerProfile(name?: string): Promise<boolean> {
     if (process.platform !== 'win32') return false;
     const profile = String(name || sandboxConfig().appContainerName || defaultAppContainerProfileName());
-    const r = await runPowerShellWithEnv(buildProfileScript(profile, 'delete'), { WJS_AC_NAME: profile }, 30000);
+    const r = await runPowerShellWithEnv(buildProfileScript(profile, 'delete'), { WJS_AC_NAME: profile }, PROFILE_API_TIMEOUT_MS);
     if (profileSidCache) profileSidCache.delete(profile);
     return /OK deleted/.test(r.out);
 }
@@ -279,7 +284,11 @@ function runPowerShellWithEnv(script: string, extra: Record<string, string>, tim
         try { ps.stderr.on('data', (d: any) => { out += String(d); }); } catch { /* */ }
         let done = false;
         const finish = (code: number) => { if (done) return; done = true; resolve({ code, out }); };
-        const t = setTimeout(() => { try { ps.kill(); } catch { /* */ } finish(-2); }, timeoutMs);
+        const t = setTimeout(() => {
+            try { ps.kill(); } catch { /* */ }
+            out += `${out && !out.endsWith('\n') ? '\n' : ''}TIMEOUT after ${timeoutMs} ms`;
+            finish(-2);
+        }, timeoutMs);
         if (t.unref) t.unref();
         ps.on('error', () => { clearTimeout(t); finish(-1); });
         ps.on('exit', (code: number) => { clearTimeout(t); finish(code == null ? -1 : code); });
@@ -363,7 +372,7 @@ function buildIcaclsScript(mode: AclMode): string {
 /** Derive the deterministic package SID without registering a new profile. */
 async function deriveAppContainerSid(name: string): Promise<string | null> {
     if (process.platform !== 'win32') return null;
-    const r = await runPowerShellWithEnv(buildProfileScript(name, 'derive'), { WJS_AC_NAME: name }, 30000);
+    const r = await runPowerShellWithEnv(buildProfileScript(name, 'derive'), { WJS_AC_NAME: name }, PROFILE_API_TIMEOUT_MS);
     return /OK (S-1-15-2-[0-9-]+)/.exec(r.out)?.[1] || null;
 }
 
