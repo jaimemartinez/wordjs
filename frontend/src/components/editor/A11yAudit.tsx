@@ -366,9 +366,10 @@ export function A11yPanel({
                 <button
                     type="button"
                     title={trStr("Volver a analizar", language)}
+                    aria-label={trStr("Volver a analizar", language)}
                     disabled={running}
                     onClick={onRefresh}
-                    className={`p-1.5 rounded-md flex items-center justify-center transition-colors ${
+                    className={`verso-icon-button w-11 h-11 rounded-xl flex items-center justify-center transition-colors ${
                         running
                             ? "text-[var(--ed-outline-variant)] cursor-not-allowed"
                             : "text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container)]"
@@ -412,7 +413,7 @@ export function A11yPanel({
                                         type="button"
                                         onClick={() => onSelect(issue.blockId)}
                                         title={trStr("Seleccionar el bloque", language)}
-                                        className="w-full text-left px-2.5 py-1.5 flex flex-col gap-0.5 hover:bg-[var(--ed-surface-container)] transition-colors"
+                                        className="w-full min-h-11 text-left px-2.5 py-2 flex flex-col justify-center gap-0.5 hover:bg-[var(--ed-surface-container)] transition-colors"
                                     >
                                         <span className="text-[11px] text-[var(--ed-on-surface)]">
                                             {trStr(issue.message, language)}

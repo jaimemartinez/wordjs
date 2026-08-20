@@ -143,7 +143,7 @@ export default function PatternsPanel({ handle, registry }: VersoPatternsPanelPr
                     <button
                         type="button"
                         onClick={handleSavePattern}
-                        className="px-3 py-2 rounded-md bg-[var(--ed-primary)] text-white text-[11px] font-bold hover:opacity-90 transition-opacity"
+                        className="px-3 py-2 rounded-lg bg-[var(--ed-primary-solid,var(--ed-primary))] text-[var(--ed-on-primary,#fff)] text-[11px] font-bold hover:bg-[var(--ed-primary-hover)] transition-colors"
                     >
                         {trStr("Guardar", language)}
                     </button>

@@ -190,7 +190,7 @@ export const symbolsApi = {
             status: "publish",
             type: SYMBOL_POST_TYPE,
             meta: symbolMeta(items),
-        } as Partial<Post>);
+        });
         invalidate();
         const sym = toSymbol(post);
         byIdCache.set(sym.id, { at: Date.now(), data: sym });
@@ -203,7 +203,7 @@ export const symbolsApi = {
             ...(name ? { title: name } : {}),
             status: "publish",
             meta: symbolMeta(items),
-        } as Partial<Post>);
+        });
         invalidate(id);
         const sym = toSymbol(post);
         byIdCache.set(id, { at: Date.now(), data: sym });

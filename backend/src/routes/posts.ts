@@ -3,10 +3,31 @@
  * /api/v1/posts/*
  */
 
-import type { Response } from 'express';
+import type { Request, Response } from 'express';
+import type {
+    ContentCreateInput,
+    ContentListQuery,
+    ContentUpdateInput,
+} from '../generated/content-dtos.generated';
 
 const express = require('express');
 const router = express.Router();
+
+interface ContentRouteUser {
+    id: number;
+    can(capability: string): boolean;
+}
+type MaybeAuthenticatedRequest<P = Record<string, string>, B = unknown, Q = Record<string, string | undefined>> =
+    Request<P, unknown, B, Q> & { user?: ContentRouteUser };
+type AuthenticatedRequest<P = Record<string, string>, B = unknown, Q = Record<string, string | undefined>> =
+    Request<P, unknown, B, Q> & { user: ContentRouteUser };
+interface IdParams { id: string }
+interface SlugParams { slug: string }
+interface TypeQuery { type?: string }
+interface ForceQuery { force?: string }
+interface MetaWriteBody { key?: unknown; value?: unknown }
+interface LanguageBody { language?: unknown }
+interface TranslationBody { translationId?: unknown }
 const Post = require('../models/Post');
 const { authenticate, optionalAuth } = require('../middleware/auth');
 const { can, ownerOrCan } = require('../middleware/permissions');
@@ -35,7 +56,11 @@ const { doAction } = require('../core/hooks');
 // canEditPostRecord is the SHARED edit gate (type family + ownership + edit_published_<type>s) that
 // PUT /:id used to keep inline; it now also gates POST /:id/meta, which enforced only the first two.
 // isRestExposedPostType answers "may the GENERIC /posts surface touch this type at all" — see below.
-const { capsFor, capsForType, canEditPostRecord, isRestExposedPostType } = require('../core/post-capabilities');
+const {
+    capsFor, capsForType, canEditPostRecord, canDeletePostRecord,
+    canReadPostRecord, isRestExposedPostType,
+} = require('../core/post-capabilities');
+const { contentContractForType } = require('../core/content-contract');
 
 // Meta keys the generic writers must refuse: the attachment's on-disk path (`_wp_attached_file`,
 // which Media.delete turns into an unlink target) and the other server-owned bookkeeping keys.
@@ -284,10 +309,11 @@ const LIST_QUERY_STRING_FIELDS: readonly string[] = Object.freeze([
  * null/undefined count as ABSENT, not as a violation: several of these fields use null as "clear this
  * value" and the handlers below already distinguish absent from empty.
  */
-function firstNonStringField(source: any, fields: readonly string[]): string | null {
+function firstNonStringField(source: unknown, fields: readonly string[]): string | null {
     if (!source || typeof source !== 'object') return null;
+    const record = source as Record<string, unknown>;
     for (const field of fields) {
-        const value = source[field];
+        const value = record[field];
         if (value === undefined || value === null) continue;
         if (typeof value !== 'string') return field;
     }
@@ -301,6 +327,40 @@ function invalidParamType(res: Response, field: string) {
         message: `Invalid parameter '${field}': expected a string.`,
         data: { status: 400, params: { [field]: 'Expected a string.' } },
     });
+}
+
+/** Stable F2 failure body shared by generated create/update validators. */
+function invalidContentContract(res: Response, issues: Array<{ path: string; code: string; message: string }>) {
+    return res.status(400).json({
+        code: 'rest_content_contract_invalid',
+        message: 'The content request does not match its declared schema.',
+        errors: issues,
+        data: {
+            status: 400,
+            params: Object.fromEntries(issues.map((issue) => [issue.path, issue.message])),
+        },
+    });
+}
+
+async function visibleTranslationRefs(
+    translations: Array<{ id: number }>,
+    user?: ContentRouteUser,
+) {
+    const decisions = await Promise.all(translations.map(async (translation) => {
+        const candidate = await Post.findById(translation.id);
+        return candidate && canReadPostRecord(user, candidate) ? translation : null;
+    }));
+    return decisions.filter((translation) => translation !== null);
+}
+
+/** Prevent private REST types from leaking sibling slugs through Post.toJSON().translations. */
+async function serializeVisibleContent(post: any, user?: ContentRouteUser) {
+    const json = await post.toJSON();
+    const policy = capsForType(post.type || post.postType || 'post') || capsFor('post');
+    if (!policy.publiclyReadable && Array.isArray(json.translations) && json.translations.length) {
+        json.translations = await visibleTranslationRefs(json.translations, user);
+    }
+    return json;
 }
 
 /**
@@ -360,7 +420,7 @@ function invalidParamType(res: Response, field: string) {
  *               items:
  *                 $ref: '#/components/schemas/Post'
  */
-router.get('/', optionalAuth, asyncHandler(async (req: any, res: Response) => {
+router.get('/', optionalAuth, asyncHandler(async (req: MaybeAuthenticatedRequest<Record<string, string>, unknown, ContentListQuery>, res: Response) => {
     // THE WHOLE STRING CLASS, ONCE — see LIST_QUERY_STRING_FIELDS. `?status[]=publish` reached every
     // comparison below as an Array (so `status === 'any'` and `status !== 'publish'` both answered the
     // wrong thing) and then reached the model, where the driver flattened it back into the string.
@@ -405,8 +465,8 @@ router.get('/', optionalAuth, asyncHandler(async (req: any, res: Response) => {
         });
     }
 
-    const limit = Math.min(parseInt(per_page, 10) || 10, 100);
-    const offset = (Math.max(parseInt(page, 10) || 1, 1) - 1) * limit;
+    const limit = Math.min(parseInt(String(per_page), 10) || 10, 100);
+    const offset = (Math.max(parseInt(String(page), 10) || 1, 1) - 1) * limit;
 
     // Map orderby to database column.
     //
@@ -432,8 +492,20 @@ router.get('/', optionalAuth, asyncHandler(async (req: any, res: Response) => {
     // filter to their id whenever non-publish statuses are requested.
     let authorFilter = author ? parseInt(author, 10) : undefined;
     let effectiveStatus = status;
+    const listPolicy = capsForType(resolvedType) || capsFor('post');
+    const canReadAllOfType = !!(req.user
+        && (req.user.can(listPolicy.editOthers) || req.user.can(listPolicy.readPrivate)));
+
+    // showInRest controls addressability; public controls anonymous visibility. A private REST type
+    // remains useful to its owners/editors, but a published row must not become public merely because
+    // the lifecycle column says "publish".
+    if (!listPolicy.publiclyReadable) {
+        authorFilter = req.user
+            ? (canReadAllOfType ? authorFilter : req.user.id)
+            : -1; // User ids are positive; retain normal count/pagination response semantics.
+    }
     if (req.user) {
-        const isPrivileged = req.user.can('edit_others_posts') || req.user.can('read_private_posts');
+        const isPrivileged = canReadAllOfType;
         // Logged in users can see their own drafts
         if (status === 'any') {
             // 'future' (scheduled) is part of the author-facing set: without it a scheduled post
@@ -478,16 +550,16 @@ router.get('/', optionalAuth, asyncHandler(async (req: any, res: Response) => {
     const totalPages = Math.ceil(total / limit);
 
     res.set('X-WP-Total', total);
-    res.set('X-WP-TotalPages', totalPages as any);
+    res.set('X-WP-TotalPages', String(totalPages));
 
-    res.json(await Promise.all(posts.map((post: any) => post.toJSON())));
+    res.json(await Promise.all(posts.map((post: any) => serializeVisibleContent(post, req.user))));
 }));
 
 /**
  * GET /posts/slug/:slug
  * Get single post by slug. Optional ?type= narrows the lookup to ONE post type.
  */
-router.get('/slug/:slug', optionalAuth, asyncHandler(async (req: any, res: Response) => {
+router.get('/slug/:slug', optionalAuth, asyncHandler(async (req: MaybeAuthenticatedRequest<SlugParams, unknown, TypeQuery>, res: Response) => {
     // A SLUG IS UNIQUE PER TYPE, NOT GLOBALLY. generateUniqueSlug de-duplicates within one post_type,
     // so a post `about` and a page `about` is a legal, ordinary pair — and this route asked
     // Post.findBySlug(slug) with NO type, whose SQL is `WHERE post_name = ?` with no LIMIT ordering.
@@ -531,9 +603,7 @@ router.get('/slug/:slug', optionalAuth, asyncHandler(async (req: any, res: Respo
      * anonymous answer is still deterministic (only published rows qualify) and an editor still sees
      * their draft first, because for them the draft IS visible.
      */
-    const isVisible = (p: any) => !isHiddenFromRest(p)
-        && (p.postStatus === 'publish'
-            || !!(req.user && (p.authorId === req.user.id || req.user.can('edit_others_posts'))));
+    const isVisible = (p: any) => !isHiddenFromRest(p) && canReadPostRecord(req.user, p);
 
     const lookups: Array<string | undefined> = requestedType
         ? [requestedType as string]
@@ -558,14 +628,14 @@ router.get('/slug/:slug', optionalAuth, asyncHandler(async (req: any, res: Respo
             : { code: 'rest_post_invalid_slug', message: 'Invalid post slug.', data: { status: 404 } });
     }
 
-    res.json(await post.toJSON());
+    res.json(await serializeVisibleContent(post, req.user));
 }));
 
 /**
  * GET /posts/:id
  * Get single post
  */
-router.get('/:id', optionalAuth, asyncHandler(async (req: any, res: Response) => {
+router.get('/:id', optionalAuth, asyncHandler(async (req: MaybeAuthenticatedRequest<IdParams>, res: Response) => {
     const post = await Post.findById(parseInt(req.params.id, 10));
 
     if (!post || isHiddenFromRest(post)) {
@@ -573,17 +643,15 @@ router.get('/:id', optionalAuth, asyncHandler(async (req: any, res: Response) =>
     }
 
     // Check if user can view non-published posts
-    if (post.postStatus !== 'publish') {
-        if (!req.user || (post.authorId !== req.user.id && !req.user.can('edit_others_posts'))) {
-            return res.status(404).json({
-                code: 'rest_post_invalid_id',
-                message: 'Invalid post ID.',
-                data: { status: 404 }
-            });
-        }
+    if (!canReadPostRecord(req.user, post)) {
+        return res.status(404).json({
+            code: 'rest_post_invalid_id',
+            message: 'Invalid post ID.',
+            data: { status: 404 }
+        });
     }
 
-    res.json(await post.toJSON());
+    res.json(await serializeVisibleContent(post, req.user));
 }));
 
 /**
@@ -621,7 +689,7 @@ router.get('/:id', optionalAuth, asyncHandler(async (req: any, res: Response) =>
  *       403:
  *         description: Forbidden
  */
-router.post('/', authenticate, asyncHandler(async (req: any, res: Response) => {
+router.post('/', authenticate, asyncHandler(async (req: AuthenticatedRequest<Record<string, string>, ContentCreateInput>, res: Response) => {
     // THE WHOLE STRING CLASS, ONCE, BEFORE ANY COMPARISON — see POST_BODY_STRING_FIELDS. `status:
     // ['publish']` from a contributor used to clear the publish gate (an Array is not 'publish') and
     // then land in post_status as `publish`, because the driver flattens it: 201, live on the public
@@ -677,6 +745,12 @@ router.post('/', authenticate, asyncHandler(async (req: any, res: Response) => {
     }
     if (!req.user.can(caps.edit)) {
         return res.status(403).json({ code: 'rest_cannot_create', message: `You are not allowed to create content of type '${createType}'.`, data: { status: 403 } });
+    }
+
+    const createContract = contentContractForType(createType);
+    if (createContract) {
+        const checked = createContract.validateCreate(req.body);
+        if (!checked.ok) return invalidContentContract(res, checked.issues);
     }
 
     // `parent` was passed to Post.create() verbatim: a post could be attached to ANY row by id, with no
@@ -800,7 +874,7 @@ router.post('/', authenticate, asyncHandler(async (req: any, res: Response) => {
     // Save initial revision
     saveRevision(post.id).catch((err: any) => console.error('Failed to save initial revision:', err));
 
-    res.status(201).json(await post.toJSON());
+    res.status(201).json(await serializeVisibleContent(post, req.user));
 }));
 
 /**
@@ -837,7 +911,7 @@ router.post('/', authenticate, asyncHandler(async (req: any, res: Response) => {
  *       404:
  *         description: Post not found
  */
-router.put('/:id', authenticate, asyncHandler(async (req: any, res: Response) => {
+router.put('/:id', authenticate, asyncHandler(async (req: AuthenticatedRequest<IdParams, ContentUpdateInput>, res: Response) => {
     // The TWIN of the check in POST / — the same table, the same reason, and the field that mattered
     // (`status`) was reachable through both. Closing one and leaving the other is how this class has
     // survived every wave so far.
@@ -862,6 +936,14 @@ router.put('/:id', authenticate, asyncHandler(async (req: any, res: Response) =>
             message: 'You cannot edit this post.',
             data: { status: 403 }
         });
+    }
+
+    // Orphaned rows whose custom type was unregistered remain manageable through the historical
+    // fallback. Registered types are checked against their executable F1 contract.
+    const updateContract = contentContractForType(post.type || post.postType || 'post');
+    if (updateContract) {
+        const checked = updateContract.validateUpdate(req.body);
+        if (!checked.ok) return invalidContentContract(res, checked.issues);
     }
 
     const {
@@ -1022,7 +1104,7 @@ router.put('/:id', authenticate, asyncHandler(async (req: any, res: Response) =>
             data: { status: 404 }
         });
     }
-    res.json(await fresh.toJSON());
+    res.json(await serializeVisibleContent(fresh, req.user));
 }));
 
 /**
@@ -1052,7 +1134,7 @@ router.put('/:id', authenticate, asyncHandler(async (req: any, res: Response) =>
  *       404:
  *         description: Post not found
  */
-router.delete('/:id', authenticate, asyncHandler(async (req: any, res: Response) => {
+router.delete('/:id', authenticate, asyncHandler(async (req: AuthenticatedRequest<IdParams, unknown, ForceQuery>, res: Response) => {
     const postId = parseInt(req.params.id, 10);
     const post = await Post.findById(postId);
 
@@ -1064,13 +1146,7 @@ router.delete('/:id', authenticate, asyncHandler(async (req: any, res: Response)
 
     // Type-aware permissions: post.type picks the capability family, and deleting an already-published
     // post additionally requires delete_published_<type>s (mirrors the edit gate).
-    const dcaps = capsForType(post.type || post.postType || 'post') || capsFor('post');
-    let canDelete = post.authorId === req.user.id
-        ? req.user.can(dcaps.del)
-        : req.user.can(dcaps.deleteOthers);
-    if (post.postStatus === 'publish' && !req.user.can(dcaps.deletePublished)) canDelete = false;
-
-    if (!canDelete) {
+    if (!canDeletePostRecord(req.user, post)) {
         return res.status(403).json({
             code: 'rest_forbidden',
             message: 'You cannot delete this post.',
@@ -1082,7 +1158,7 @@ router.delete('/:id', authenticate, asyncHandler(async (req: any, res: Response)
     await Post.delete(postId, force);
 
     if (force) {
-        res.json({ deleted: true, previous: await post.toJSON() });
+        res.json({ deleted: true, previous: await serializeVisibleContent(post, req.user) });
     } else {
         const fresh = await Post.findById(postId);
         if (!fresh) {
@@ -1092,7 +1168,7 @@ router.delete('/:id', authenticate, asyncHandler(async (req: any, res: Response)
                 data: { status: 404 }
             });
         }
-        res.json(await fresh.toJSON());
+        res.json(await serializeVisibleContent(fresh, req.user));
     }
 }));
 
@@ -1101,7 +1177,7 @@ router.delete('/:id', authenticate, asyncHandler(async (req: any, res: Response)
  * POST /posts/:id/meta
  * Update post meta
  */
-router.post('/:id/meta', authenticate, asyncHandler(async (req: any, res: Response) => {
+router.post('/:id/meta', authenticate, asyncHandler(async (req: AuthenticatedRequest<IdParams, MetaWriteBody>, res: Response) => {
     const postId = parseInt(req.params.id, 10);
     const post = await Post.findById(postId);
 
@@ -1161,7 +1237,7 @@ router.post('/:id/meta', authenticate, asyncHandler(async (req: any, res: Respon
     // writing it changes nothing a visitor can see — so the downgrade is a decision, not a hole.
     // Resolve WordJS-owned aliases before the policy decision as well as before SQL. Otherwise an
     // alias of `_wjs_review_comments` updates that row on MySQL but is treated as public content here.
-    const storageKey = storageMetaKey(key);
+    const storageKey = storageMetaKey(key as string);
     const gate = NON_CONTENT_META_KEYS.has(storageKey) ? canEditPostIgnoringPublished : canEditPostRecord;
     if (!gate(req.user, post)) {
         return res.status(403).json({
@@ -1237,7 +1313,7 @@ router.post('/:id/meta', authenticate, asyncHandler(async (req: any, res: Respon
  * GET /posts/:id/meta
  * Get all post meta
  */
-router.get('/:id/meta', optionalAuth, asyncHandler(async (req: any, res: Response) => {
+router.get('/:id/meta', optionalAuth, asyncHandler(async (req: MaybeAuthenticatedRequest<IdParams>, res: Response) => {
     const postId = parseInt(req.params.id, 10);
     const post = await Post.findById(postId);
 
@@ -1250,14 +1326,12 @@ router.get('/:id/meta', optionalAuth, asyncHandler(async (req: any, res: Respons
     // SECURITY (IDOR): mirror the single-post read gate. Without this, anyone could read the full meta
     // map (SEO drafts, internal notes, plugin-stashed data, _wp_trash_meta_status, etc.) of draft/
     // private/pending/trashed posts, or other users' content.
-    if (post.postStatus !== 'publish') {
-        if (!req.user || (post.authorId !== req.user.id && !req.user.can('edit_others_posts'))) {
-            return res.status(404).json({
-                code: 'rest_post_invalid_id',
-                message: 'Invalid post ID.',
-                data: { status: 404 }
-            });
-        }
+    if (!canReadPostRecord(req.user, post)) {
+        return res.status(404).json({
+            code: 'rest_post_invalid_id',
+            message: 'Invalid post ID.',
+            data: { status: 404 }
+        });
     }
 
     res.json(await Post.getAllMeta(postId));
@@ -1271,7 +1345,7 @@ router.get('/:id/meta', optionalAuth, asyncHandler(async (req: any, res: Respons
  * PUT /posts/:id/language
  * Set or clear a post's content language (BCP-47). Body: { language: 'pt-BR' | null | '' }.
  */
-router.put('/:id/language', authenticate, asyncHandler(async (req: any, res: Response) => {
+router.put('/:id/language', authenticate, asyncHandler(async (req: AuthenticatedRequest<IdParams, LanguageBody>, res: Response) => {
     const postId = parseInt(req.params.id, 10);
     const post = await Post.findById(postId);
     // Internal types are not addressable through the generic /posts surface (see isHiddenFromRest).
@@ -1290,7 +1364,7 @@ router.put('/:id/language', authenticate, asyncHandler(async (req: any, res: Res
 
     await Post.setLanguage(postId, language);
     const fresh = await Post.findById(postId);
-    res.json(await fresh.toJSON());
+    res.json(await serializeVisibleContent(fresh, req.user));
 }));
 
 /**
@@ -1298,7 +1372,7 @@ router.put('/:id/language', authenticate, asyncHandler(async (req: any, res: Res
  * List this post's translations in other languages. Anonymous callers see PUBLISHED siblings only;
  * the owner / an editor sees unpublished ones too (management view).
  */
-router.get('/:id/translations', optionalAuth, asyncHandler(async (req: any, res: Response) => {
+router.get('/:id/translations', optionalAuth, asyncHandler(async (req: MaybeAuthenticatedRequest<IdParams>, res: Response) => {
     const postId = parseInt(req.params.id, 10);
     const post = await Post.findById(postId);
     // Internal types are not addressable through the generic /posts surface (see isHiddenFromRest).
@@ -1306,13 +1380,11 @@ router.get('/:id/translations', optionalAuth, asyncHandler(async (req: any, res:
         return res.status(404).json(NOT_FOUND);
     }
     // Mirror the single-post read gate for a non-published post.
-    if (post.postStatus !== 'publish') {
-        if (!req.user || (post.authorId !== req.user.id && !req.user.can('edit_others_posts'))) {
-            return res.status(404).json({ code: 'rest_post_invalid_id', message: 'Invalid post ID.', data: { status: 404 } });
-        }
+    if (!canReadPostRecord(req.user, post)) {
+        return res.status(404).json({ code: 'rest_post_invalid_id', message: 'Invalid post ID.', data: { status: 404 } });
     }
-    const includeUnpublished = !!(req.user && (post.authorId === req.user.id || req.user.can('edit_others_posts')));
-    const translations = await Post.getTranslations(postId, undefined, { includeUnpublished });
+    const candidates = await Post.getTranslations(postId, undefined, { includeUnpublished: true });
+    const translations = await visibleTranslationRefs(candidates, req.user);
     res.json({ language: post.postLanguage || null, group: post.translationGroup || null, translations });
 }));
 
@@ -1321,9 +1393,10 @@ router.get('/:id/translations', optionalAuth, asyncHandler(async (req: any, res:
  * Link this post and another as translations of each other (symmetric, idempotent).
  * Body: { translationId }. The caller must be able to edit BOTH posts.
  */
-router.post('/:id/translations', authenticate, asyncHandler(async (req: any, res: Response) => {
+router.post('/:id/translations', authenticate, asyncHandler(async (req: AuthenticatedRequest<IdParams, TranslationBody>, res: Response) => {
     const postId = parseInt(req.params.id, 10);
-    const otherId = parseInt(req.body?.translationId, 10);
+    const parsedTranslationId = toNonNegativeInt(req.body?.translationId);
+    const otherId = parsedTranslationId && parsedTranslationId > 0 ? parsedTranslationId : 0;
     if (!otherId || otherId === postId) {
         return res.status(400).json({ code: 'rest_invalid_param', message: 'A distinct translationId is required.', data: { status: 400 } });
     }
@@ -1347,7 +1420,7 @@ router.post('/:id/translations', authenticate, asyncHandler(async (req: any, res
  * DELETE /posts/:id/translations
  * Remove this post from its translation set (the rest stay linked).
  */
-router.delete('/:id/translations', authenticate, asyncHandler(async (req: any, res: Response) => {
+router.delete('/:id/translations', authenticate, asyncHandler(async (req: AuthenticatedRequest<IdParams>, res: Response) => {
     const postId = parseInt(req.params.id, 10);
     const post = await Post.findById(postId);
     // Internal types are not addressable through the generic /posts surface (see isHiddenFromRest).

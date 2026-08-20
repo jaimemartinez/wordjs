@@ -360,7 +360,9 @@ const POSITION_BINDING_BASE = [
     "plugin-admin-testimonials", "plugin-admin-tickets", "plugin-admin-tracking",
     "plugin-admin-vendor-marketplace", "plugin-admin-youtube", "position-absolute",
     "position-fixed", "position-sticky", "promo-card-bg", "promo-card-overlay", "ratio", "show",
-    "video-scroll-arrow", "visually-hidden", "wjcc-banner", "wjnb-bar", "wjnb-close", "wjpb-close",
+    "verso-icon-button", "verso-overlay-scrim", "verso-rail-button", "verso-sheet",
+    "verso-sheet-scrim", "verso-skip-link", "video-scroll-arrow", "visually-hidden", "wjcc-banner",
+    "wjnb-bar", "wjnb-close", "wjpb-close",
     "wjpb-overlay", "wjs-block-hero-overlay", "wjs-block-hero__overlay",
     "wjs-block-particle-field", "wjs-block-section__stage", "wjs-block-testimonial__mark",
     "wjs-block-video-embed", "wjs-block-video-embed__chip", "wjs-block-video-embed__cover",
@@ -436,6 +438,10 @@ const boundedLength = (max: Record<string, number>) => (raw: string): string | n
     const cap = max[m[2]];
     if (cap === undefined) return null;
     return `${Math.min(cap, Math.max(-cap, Number(m[1])))}${m[2]}`;
+};
+const boundedNonNegativeLength = (max: Record<string, number>) => (raw: string): string | null => {
+    const value = boundedLength(max)(raw);
+    return value !== null && !value.startsWith("-") ? value : null;
 };
 
 const SPACING_MAX: Record<string, number> = { px: 400, "%": 100, rem: 25, em: 25, vw: 100, vh: 100 };
@@ -526,6 +532,10 @@ export const NARROWED_VAR_VALUE: ReadonlyMap<string, (raw: string) => string | n
     // inside `translateX(calc(-50% - var(…) / 2))` by the audio marquee keyframe.
     ["--wjs-audio-marquee-gap", boundedLength(SPACING_MAX)],
     ["--wjs-xl", boundedLength(SPACING_MAX)],
+    // Toscano uses the token for min-height AND min-width on interactive controls. Unlike ordinary
+    // spacing, a negative/viewport-relative value is meaningless here and a huge value can widen the
+    // whole page, so accept only a bounded physical/font-relative target size.
+    ["--wjs-target-size", boundedNonNegativeLength({ px: 96, rem: 6, em: 6 })],
 ]);
 
 /**

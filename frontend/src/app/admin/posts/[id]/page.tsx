@@ -215,7 +215,7 @@ export default function PostEditorPage() {
 
             // Load Puck data from meta if available
             if (post.meta && post.meta[EDITOR_DATA_META_KEY]) {
-                const stored = post.meta[EDITOR_DATA_META_KEY];
+                const stored = post.meta[EDITOR_DATA_META_KEY] as VersoData;
                 // OJO: `category`/`tags` NO se leen de aquí. Vienen en `seedRoot`, que se aplica
                 // DESPUÉS y por tanto pisa lo que arrastre un `_puck_data` viejo.
                 const withTemplate = {
@@ -228,7 +228,7 @@ export default function PostEditorPage() {
                 setVersoData(withTemplate);
                 versoDataRef.current = withTemplate;
                 legacyHtmlRef.current = null; // real Puck blocks — not a legacy HTML body
-                if (stored.root?.title) {
+                if (typeof stored.root?.title === "string") {
                     setTitle(stored.root.title);
                 }
             } else {

@@ -174,7 +174,9 @@ const VIEWPORT_ORDER: DeviceKind[] = ["desktop", "tablet", "mobile"];
 const selectState = (s: VersoEditorState): VersoEditorState => s;
 const selectSelectedId = (s: VersoEditorState): string | null => s.selection.nodeId;
 
-const isPhone = () => typeof window !== "undefined" && window.innerWidth < 768;
+/** Debajo de escritorio amplio los paneles son sheets: una tableta no puede sostener 3 columnas. */
+const isCompact = () => typeof window !== "undefined" && window.innerWidth < 1280;
+const FOCUSABLE_SELECTOR = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
 
 /** Escape defensivo del id para el selector de atributo (los ids son UUID, pero jamás confiar). */
 const cssAttrEscape = (id: string): string =>
@@ -222,7 +224,7 @@ function VersoGuidesController({
 function HeaderViewportControls({ value, onChange }: { value: DeviceKind; onChange: (v: DeviceKind) => void }) {
     const { language } = useI18n();
     return (
-        <div className="hidden lg:flex items-center bg-[var(--ed-surface-container)] p-0.5 rounded-lg">
+        <div className="hidden xl:flex items-center bg-[var(--ed-surface-container)] p-1 rounded-xl border border-[var(--ed-outline-variant)]">
             {VIEWPORT_ORDER.map((v) => (
                 <button
                     key={v}
@@ -231,9 +233,9 @@ function HeaderViewportControls({ value, onChange }: { value: DeviceKind; onChan
                     aria-label={trStr(VIEWPORT_LABEL[v], language)}
                     aria-pressed={value === v}
                     onClick={() => onChange(v)}
-                    className={`px-2 py-1 rounded-md flex items-center justify-center transition-colors ${
+                    className={`w-8 h-8 rounded-lg flex items-center justify-center transition-[color,background-color,box-shadow] ${
                         value === v
-                            ? "bg-white shadow-sm text-[var(--ed-primary)]"
+                            ? "bg-[var(--ed-surface-container-lowest)] shadow-sm text-[var(--ed-primary)]"
                             : "text-[var(--ed-on-surface-variant)] hover:text-[var(--ed-primary)]"
                     }`}
                 >
@@ -255,7 +257,7 @@ function HistoryControls({ handle }: { handle: EditorHandle }) {
             title={title}
             disabled={!enabled}
             onClick={onClick}
-            className={`p-1.5 rounded-md flex items-center justify-center transition-colors ${
+            className={`verso-icon-button w-9 h-9 rounded-lg flex items-center justify-center transition-colors ${
                 enabled
                     ? "text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container)]"
                     : "text-[var(--ed-outline-variant)] cursor-not-allowed"
@@ -401,6 +403,10 @@ export default function VersoEditor({
             // este guard deseleccionaba (select(null)) en mitad de la sesión.
             if (target?.closest?.("[data-wjs-inline-bubble]")) return;
             if (target?.closest?.("a, button, [type='submit']")) e.preventDefault();
+            // Un click de selección solo ocurre después de terminar el gesto. Si el navegador
+            // perdió pointerup al cruzar iframe/ventana, elimina el preview huérfano para que los
+            // inspectores no permanezcan bloqueados por un arrastre que ya no existe.
+            if (handle.getState().dragPreview) handle.setDragPreview(null);
             // The STORE key, not props.id: they diverge as soon as the doc has been through the
             // CRDT, and `select` drops an id it cannot find — silently (see render/nodeKey.ts).
             handle.select(nodeKeyFromTarget(target));
@@ -469,6 +475,8 @@ export default function VersoEditor({
     const [a11yOpen, setA11yOpen] = useState(false);
     const [a11yIssues, setA11yIssues] = useState<A11yIssue[]>([]);
     const [a11yRunning, setA11yRunning] = useState(false);
+    const a11yPanelRef = useRef<HTMLDivElement | null>(null);
+    const a11yPreviousFocusRef = useRef<HTMLElement | null>(null);
 
     // Contrato duro (W13): mismas claves EXACTAS que el editor actual, cargadas al montar ANTES
     // de persistir (para no pisar el default). localStorage no existe en SSR — no puede ser un
@@ -492,6 +500,51 @@ export default function VersoEditor({
         const timer = setTimeout(() => setToastMsg(null), 4000);
         return () => clearTimeout(timer);
     }, [toastMsg]);
+
+    // El auditor es un diálogo lateral real: conserva/restaura el foco, cierra con Escape y no
+    // deja que Tab se pierda bajo el scrim. Las hojas de navegación compacta cierran con Escape.
+    useEffect(() => {
+        if (!a11yOpen && !mobileSheet) return;
+        if (a11yOpen) {
+            a11yPreviousFocusRef.current = document.activeElement as HTMLElement | null;
+            requestAnimationFrame(() => a11yPanelRef.current?.focus());
+        }
+        const onKeyDown = (event: KeyboardEvent) => {
+            if (event.key === "Escape") {
+                event.preventDefault();
+                if (a11yOpen) setA11yOpen(false);
+                else setMobileSheet(null);
+                return;
+            }
+            if (event.key !== "Tab" || !a11yOpen) return;
+            const panel = a11yPanelRef.current;
+            if (!panel) return;
+            const focusable = Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR))
+                .filter((el) => !el.hasAttribute("disabled") && el.getClientRects().length > 0);
+            if (!focusable.length) {
+                event.preventDefault();
+                panel.focus();
+                return;
+            }
+            const first = focusable[0];
+            const last = focusable[focusable.length - 1];
+            if (event.shiftKey && (document.activeElement === first || !panel.contains(document.activeElement))) {
+                event.preventDefault();
+                last.focus();
+            } else if (!event.shiftKey && (document.activeElement === last || !panel.contains(document.activeElement))) {
+                event.preventDefault();
+                first.focus();
+            }
+        };
+        document.addEventListener("keydown", onKeyDown, true);
+        return () => {
+            document.removeEventListener("keydown", onKeyDown, true);
+            if (a11yOpen) {
+                a11yPreviousFocusRef.current?.focus();
+                a11yPreviousFocusRef.current = null;
+            }
+        };
+    }, [a11yOpen, mobileSheet]);
 
     /* ---------------- guardado: manual + autosave + preview ---------------- */
 
@@ -802,22 +855,37 @@ export default function VersoEditor({
                 toast: setToastMsg,
                 openPageSettings: () => {
                     handle.select(null);
-                    if (isPhone()) setMobileSheet("right");
+                    if (isCompact()) setMobileSheet("right");
                     else setShowProperties(true);
                 },
                 openOutline: () => {
                     setRailView("outline");
-                    if (isPhone()) setMobileSheet("left");
+                    if (isCompact()) setMobileSheet("left");
                     else setShowSidebar(true);
                 },
                 replayAnims: () => {
                     if (frameDoc) replayAnimations(frameDoc);
                 },
                 hasPage: !!pageId,
-                openMedia: () => setMediaOpen(true),
-                openRevisions: () => setShowRevisions(true),
-                openComments: () => setCommentsOpen(true),
+                openMedia: () => {
+                    setShowRevisions(false);
+                    setCommentsOpen(false);
+                    setA11yOpen(false);
+                    setMediaOpen(true);
+                },
+                openRevisions: () => {
+                    setCommentsOpen(false);
+                    setA11yOpen(false);
+                    setShowRevisions(true);
+                },
+                openComments: () => {
+                    setShowRevisions(false);
+                    setA11yOpen(false);
+                    setCommentsOpen(true);
+                },
                 openA11y: () => {
+                    setShowRevisions(false);
+                    setCommentsOpen(false);
                     setA11yOpen(true);
                     runAudit();
                 },
@@ -849,10 +917,14 @@ export default function VersoEditor({
         { id: "outline" as const, icon: "layers", label: trStr("Estructura", language) },
         { id: "patterns" as const, icon: "dashboard_customize", label: trStr("Plantillas", language) },
     ];
+    const modalSurfaceOpen = cmdkOpen || mediaOpen || showRevisions || commentsOpen || a11yOpen;
 
     return (
         <div className="verso-container fixed inset-0 z-50 bg-[var(--ed-surface)]">
-            <div className="flex flex-col h-screen w-full overflow-hidden">
+            <a href="#verso-canvas" className="verso-skip-link">
+                {trStr("Saltar al lienzo", language)}
+            </a>
+            <div className="verso-shell flex flex-col w-full overflow-hidden">
                 {/* Capa global de atajos (capture en window + iframe; re-attach en onFrameReady) */}
                 <EditorHotkeys
                     handle={handle}
@@ -871,26 +943,32 @@ export default function VersoEditor({
                     onInsertBlock={insertType}
                 />
 
-                {/* HEADER — 48px, 3 grupos, hairline inferior (blueprint §a) */}
-                <div className="h-12 shrink-0 z-20 relative flex items-center justify-between gap-3 px-3 bg-[var(--ed-surface)] border-b border-[var(--ed-outline-variant)]">
+                {/* HEADER — jerarquía adaptativa: contexto, herramientas y una única acción primaria. */}
+                <header className="verso-header h-14 xl:h-16 shrink-0 z-50 relative flex items-center justify-between gap-2 xl:gap-4 px-3 xl:px-5">
                     {/* Izquierda: wordmark + breadcrumb */}
-                    <div className="flex items-center gap-3 min-w-0">
+                    <div className="flex items-center gap-2.5 xl:gap-3 min-w-0 flex-1 xl:flex-initial">
                         {onCancel && (
                             <button
                                 type="button"
                                 onClick={onCancel}
                                 title={t("editor.cancel")}
                                 aria-label={t("editor.cancel")}
-                                className="md:hidden w-8 h-8 -ml-1 shrink-0 rounded-md flex items-center justify-center text-[var(--ed-on-surface-variant)] active:bg-[var(--ed-surface-container)]"
+                                className="xl:hidden verso-icon-button w-10 h-10 -ml-1 shrink-0 rounded-xl flex items-center justify-center text-[var(--ed-on-surface-variant)] active:bg-[var(--ed-surface-container)]"
                             >
                                 <MSym name="chevron_left" size={22} />
                             </button>
                         )}
-                        <span className="text-[18px] font-black tracking-tight text-[var(--ed-primary)] select-none shrink-0">
-                            WordJS
-                        </span>
-                        <div className="h-4 w-px bg-[var(--ed-outline-variant)] hidden md:block"></div>
-                        <div className="hidden md:flex items-center gap-1.5 text-[12px] text-[var(--ed-on-surface-variant)] min-w-0">
+                        <div className="verso-wordmark flex items-center gap-2.5 select-none shrink-0">
+                            <span className="verso-wordmark-mark text-[13px] font-extrabold" aria-hidden="true">V</span>
+                            <span className="min-w-0">
+                                <span className="block text-[16px] font-bold leading-4 text-[var(--ed-on-surface)]">Verso</span>
+                                <span className="block xl:hidden max-w-[30vw] truncate text-[10px] leading-4 text-[var(--ed-on-surface-variant)]">
+                                    {trStr("Editando", language)} · {docTitle || trStr("Sin título", language)}
+                                </span>
+                            </span>
+                        </div>
+                        <div className="h-5 w-px bg-[var(--ed-outline-variant)] hidden xl:block"></div>
+                        <div className="hidden xl:flex items-center gap-1.5 text-[12px] text-[var(--ed-on-surface-variant)] min-w-0">
                             {onCancel ? (
                                 <button
                                     type="button"
@@ -911,18 +989,20 @@ export default function VersoEditor({
                     </div>
 
                     {/* Centro: viewports · historia · estado de guardado */}
-                    <div className="flex items-center gap-3 shrink-0">
+                    <div className="hidden lg:flex items-center gap-2 xl:gap-3 shrink-0">
                         <HeaderViewportControls value={viewport} onChange={setViewport} />
-                        <div className="h-4 w-px bg-[var(--ed-outline-variant)] hidden md:block"></div>
+                        <div className="h-5 w-px bg-[var(--ed-outline-variant)] hidden xl:block"></div>
                         <HistoryControls handle={handle} />
                         {onSave && (
-                            <SaveStateChip
-                                saving={saving}
-                                hasChanges={hasChanges}
-                                savedAt={savedAt}
-                                wasAuto={lastSaveWasAuto}
-                                status={status}
-                            />
+                            <div className="hidden xl:block">
+                                <SaveStateChip
+                                    saving={saving}
+                                    hasChanges={hasChanges}
+                                    savedAt={savedAt}
+                                    wasAuto={lastSaveWasAuto}
+                                    status={status}
+                                />
+                            </div>
                         )}
                         {/* Colaboración en vivo (F8.4): estado del canal + avatares + avisos.
                             Con la sala apagada no pinta NADA (el editor se ve igual que siempre). */}
@@ -951,12 +1031,12 @@ export default function VersoEditor({
                     </div>
 
                     {/* Derecha: insertar · replay · guías · propiedades · estado · preview · guardar · avatar */}
-                    <div className="flex items-center gap-2 min-w-0">
+                    <div className="flex items-center justify-end gap-1.5 xl:gap-2 min-w-0 shrink-0">
                         <button
                             type="button"
                             onClick={() => setCmdkOpen(true)}
                             title={trStr("Insertar bloque (Ctrl/⌘ + K)", language)}
-                            className="hidden lg:flex items-center gap-2 h-7 px-2.5 rounded-md border border-[var(--ed-outline-variant)] text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container)] transition-colors"
+                            className="hidden xl:flex items-center gap-2 h-9 px-3 rounded-xl border border-[var(--ed-outline-variant)] bg-[var(--ed-surface-container-lowest)] text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container)] transition-colors"
                         >
                             <MSym name="search" size={14} />
                             <span className="text-[11px]">{trStr("Insertar", language)}</span>
@@ -972,7 +1052,7 @@ export default function VersoEditor({
                                 if (frameDoc) replayAnimations(frameDoc);
                             }}
                             title={trStr("Reproducir las animaciones de entrada", language)}
-                            className="hidden md:flex w-7 h-7 rounded-md items-center justify-center text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container)] transition-colors"
+                            className="hidden xl:flex verso-icon-button w-9 h-9 rounded-lg items-center justify-center text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container)] transition-colors"
                         >
                             <MSym name="play_arrow" size={18} />
                         </button>
@@ -982,7 +1062,7 @@ export default function VersoEditor({
                         <button
                             type="button"
                             onClick={() => setGuidesOn(!guidesOn)}
-                            className={`hidden md:flex w-7 h-7 rounded-md items-center justify-center transition-colors ${guidesOn ? "bg-[var(--ed-surface-container-high)] text-[var(--ed-primary)]" : "text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container)]"}`}
+                            className={`hidden xl:flex verso-icon-button w-9 h-9 rounded-lg items-center justify-center transition-colors ${guidesOn ? "bg-[var(--ed-primary-container)] text-[var(--ed-on-primary-container)]" : "text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container)]"}`}
                             title={trStr("Guías y contornos", language)}
                             aria-pressed={guidesOn}
                         >
@@ -992,14 +1072,14 @@ export default function VersoEditor({
                         <button
                             type="button"
                             onClick={() => setShowProperties(!showProperties)}
-                            className={`hidden md:flex w-7 h-7 rounded-md items-center justify-center transition-colors ${showProperties ? "bg-[var(--ed-surface-container-high)] text-[var(--ed-primary)]" : "text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container)]"}`}
+                            className={`hidden xl:flex verso-icon-button w-9 h-9 rounded-lg items-center justify-center transition-colors ${showProperties ? "bg-[var(--ed-primary-container)] text-[var(--ed-on-primary-container)]" : "text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container)]"}`}
                             title={showProperties ? t("editor.hideProperties") : t("editor.showProperties")}
                         >
                             <MSym name="tune" size={18} />
                         </button>
 
                         {onStatusChange && (
-                            <div className="hidden md:block">
+                            <div className="hidden 2xl:block">
                                 <ModernSelect
                                     value={status}
                                     onChange={(e) => onStatusChange(e.target.value)}
@@ -1014,7 +1094,7 @@ export default function VersoEditor({
                                             : []),
                                     ]}
                                     placeholder={trStr("Select an option", language)}
-                                    className="!py-1 !px-2 !bg-[var(--ed-surface-container)] !border-[var(--ed-outline-variant)] !rounded-md !text-[11px] min-w-[104px]"
+                                    className="!h-9 !py-1 !px-2.5 !bg-[var(--ed-surface-container)] !border-[var(--ed-outline-variant)] !rounded-lg !text-[11px] min-w-[108px]"
                                 />
                             </div>
                         )}
@@ -1036,7 +1116,7 @@ export default function VersoEditor({
                                 aria-label={status === SCHEDULED_STATUS
                                     ? trStr("Fecha y hora de publicación programada", language)
                                     : trStr("Fecha de publicación de la entrada", language)}
-                                className="hidden md:block h-7 px-2 rounded-md border border-[var(--ed-outline-variant)] bg-[var(--ed-surface-container)] text-[11px] text-[var(--ed-on-surface)]"
+                                className="hidden 2xl:block h-9 px-2.5 rounded-lg border border-[var(--ed-outline-variant)] bg-[var(--ed-surface-container)] text-[11px] text-[var(--ed-on-surface)]"
                                 style={{ colorScheme: "light dark" }}
                             />
                         )}
@@ -1047,7 +1127,7 @@ export default function VersoEditor({
                                 onClick={handlePreview}
                                 disabled={saving}
                                 title={trStr("Vista previa en el sitio real (los borradores solo los ves tú)", language)}
-                                className="hidden md:block px-4 py-1.5 rounded-lg text-[12px] font-medium text-[var(--ed-on-surface)] border border-[var(--ed-outline-variant)] hover:bg-[var(--ed-surface-container)] active:scale-95 duration-75 transition disabled:opacity-50"
+                                className="hidden xl:block h-9 px-3.5 rounded-xl text-[12px] font-semibold text-[var(--ed-on-surface)] border border-[var(--ed-outline-variant)] bg-[var(--ed-surface-container-lowest)] hover:bg-[var(--ed-surface-container)] active:scale-[0.98] duration-150 transition disabled:opacity-50"
                             >
                                 {trStr("Vista Previa", language)}
                             </button>
@@ -1058,7 +1138,8 @@ export default function VersoEditor({
                                 type="button"
                                 onClick={handleManualSave}
                                 disabled={saving || (!hasChanges && state.inlineEditingId === null)}
-                                className="px-4 py-1.5 rounded-lg text-[12px] font-medium text-white bg-[var(--ed-primary)] hover:opacity-90 active:scale-95 duration-75 transition disabled:opacity-40 flex items-center gap-2"
+                                aria-busy={saving}
+                                className="verso-primary-button min-w-[84px] h-10 xl:h-9 px-3.5 xl:px-4 rounded-xl text-[12px] font-semibold text-white active:scale-[0.98] duration-150 transition disabled:opacity-40 disabled:shadow-none flex items-center justify-center gap-2"
                             >
                                 {saving && <MSym name="sync" size={12} className="animate-spin" />}
                                 {status === "draft"
@@ -1069,17 +1150,25 @@ export default function VersoEditor({
                             </button>
                         )}
 
-                        <div className="hidden md:flex w-8 h-8 rounded-full bg-[var(--ed-primary-container)] text-[var(--ed-on-primary-container)] items-center justify-center shrink-0 border border-[var(--ed-outline-variant)]">
+                        <div className="hidden 2xl:flex w-9 h-9 rounded-full bg-[var(--ed-primary-container)] text-[var(--ed-on-primary-container)] items-center justify-center shrink-0 border border-[var(--ed-outline-variant)]">
                             <MSym name="person" size={16} fill />
                         </div>
                     </div>
-                </div>
+                </header>
 
                 {/* ÁREA DE CONTENIDO */}
-                <div className="relative flex-1 w-full bg-[var(--ed-surface-container-low)] overflow-hidden flex flex-col min-h-0 md:flex-row pb-14 md:pb-0">
+                <div className="verso-workspace relative flex-1 w-full overflow-hidden flex flex-col min-h-0 xl:flex-row pb-[var(--ed-mobile-nav-height)] xl:pb-0">
+                    {mobileSheet && (
+                        <button
+                            type="button"
+                            className="verso-sheet-scrim xl:hidden"
+                            onClick={() => setMobileSheet(null)}
+                            aria-label={t("common.close")}
+                        />
+                    )}
                     {/* RAIL — 64px (blueprint §a), COMPLETO (ola 4): Bloques/Estructura/Plantillas,
                         Recursos (media), Notas (comentarios), Historial (revisiones), Ajustes. */}
-                    <nav className="hidden md:flex w-16 shrink-0 bg-[var(--ed-surface)] border-r border-[var(--ed-outline-variant)] flex-col items-center py-2 gap-1 z-30">
+                    <nav className="verso-rail hidden xl:flex w-[72px] shrink-0 flex-col items-center py-3 gap-1.5 z-30" aria-label={trStr("Herramientas del editor", language)}>
                         {railItems.map((item) => {
                             const active = showSidebar && railView === item.id;
                             return (
@@ -1095,7 +1184,7 @@ export default function VersoEditor({
                                     }}
                                     title={item.label}
                                     aria-pressed={active}
-                                    className={`w-12 h-12 rounded-lg flex flex-col items-center justify-center gap-1 transition-colors ${active
+                                    className={`verso-rail-button w-12 h-12 rounded-xl flex flex-col items-center justify-center gap-1 transition-colors ${active
                                         ? "bg-[var(--ed-primary-container)] text-[var(--ed-on-primary-container)]"
                                         : "text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container-high)]"}`}
                                 >
@@ -1108,9 +1197,14 @@ export default function VersoEditor({
                         {/* Recursos (W22): abre la biblioteca — elegir inserta un bloque Image. */}
                         <button
                             type="button"
-                            onClick={() => setMediaOpen(true)}
+                            onClick={() => {
+                                setShowRevisions(false);
+                                setCommentsOpen(false);
+                                setA11yOpen(false);
+                                setMediaOpen(true);
+                            }}
                             title={trStr("Biblioteca de medios", language)}
-                            className="w-12 h-12 rounded-lg flex flex-col items-center justify-center gap-1 text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container-high)] transition-colors"
+                            className="verso-rail-button w-12 h-12 rounded-xl flex flex-col items-center justify-center gap-1 text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container-high)] transition-colors"
                         >
                             <MSym name="image" size={20} />
                             <span className="text-[9px] leading-none">{trStr("Recursos", language)}</span>
@@ -1120,10 +1214,14 @@ export default function VersoEditor({
                             {pageId && (
                                 <button
                                     type="button"
-                                    onClick={() => setCommentsOpen(!commentsOpen)}
+                                    onClick={() => {
+                                        setShowRevisions(false);
+                                        setA11yOpen(false);
+                                        setCommentsOpen((open) => !open);
+                                    }}
                                     title={trStr("Comentarios de revisión", language)}
                                     aria-pressed={commentsOpen}
-                                    className={`w-12 h-12 rounded-lg flex flex-col items-center justify-center gap-1 transition-colors ${commentsOpen
+                                    className={`verso-rail-button w-12 h-12 rounded-xl flex flex-col items-center justify-center gap-1 transition-colors ${commentsOpen
                                         ? "bg-[var(--ed-primary-container)] text-[var(--ed-on-primary-container)]"
                                         : "text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container-high)]"}`}
                                 >
@@ -1134,10 +1232,14 @@ export default function VersoEditor({
                             {pageId && (
                                 <button
                                     type="button"
-                                    onClick={() => setShowRevisions(!showRevisions)}
+                                    onClick={() => {
+                                        setCommentsOpen(false);
+                                        setA11yOpen(false);
+                                        setShowRevisions((open) => !open);
+                                    }}
                                     title={t('editor.revisionHistory')}
                                     aria-pressed={showRevisions}
-                                    className={`w-12 h-12 rounded-lg flex flex-col items-center justify-center gap-1 transition-colors ${showRevisions
+                                    className={`verso-rail-button w-12 h-12 rounded-xl flex flex-col items-center justify-center gap-1 transition-colors ${showRevisions
                                         ? "bg-[var(--ed-primary-container)] text-[var(--ed-on-primary-container)]"
                                         : "text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container-high)]"}`}
                                 >
@@ -1153,7 +1255,7 @@ export default function VersoEditor({
                                     setShowProperties(true);
                                 }}
                                 title={trStr("Ajustes de página", language)}
-                                className="w-12 h-12 rounded-lg flex flex-col items-center justify-center gap-1 text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container-high)] transition-colors"
+                                className="verso-rail-button w-12 h-12 rounded-xl flex flex-col items-center justify-center gap-1 text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container-high)] transition-colors"
                             >
                                 <MSym name="settings" size={20} />
                                 <span className="text-[9px] leading-none">{trStr("Ajustes", language)}</span>
@@ -1164,10 +1266,10 @@ export default function VersoEditor({
                     {/* PANEL IZQUIERDO — 280px docked / sheet móvil; `inert` al colapsar */}
                     <div
                         inert={!showSidebar && mobileSheet !== "left"}
-                        className={`flex-col bg-[var(--ed-surface-container-lowest)] border-r border-[var(--ed-outline-variant)] md:transition-[width,opacity] duration-200 ease-in-out ${mobileSheet === "left" ? "flex fixed inset-x-0 top-12 bottom-14 z-40" : "hidden"} md:flex md:static md:inset-auto md:z-30 ${showSidebar ? "md:w-[280px] md:opacity-100" : "md:w-0 md:opacity-0 md:overflow-hidden"}`}
+                        className={`verso-panel verso-sheet verso-sheet-left flex-col border-r border-[var(--ed-outline-variant)] xl:transition-[width,opacity] duration-200 ease-in-out ${mobileSheet === "left" ? "flex" : "hidden"} xl:flex xl:static xl:inset-auto xl:z-30 ${showSidebar ? "xl:w-[296px] xl:opacity-100" : "xl:w-0 xl:opacity-0 xl:overflow-hidden"}`}
                     >
-                        <div className="h-10 shrink-0 px-3 flex items-center justify-between bg-[var(--ed-surface-container-low)] border-b border-[var(--ed-outline-variant)]">
-                            <span className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ed-on-surface-variant)]">
+                        <div className="h-12 shrink-0 px-4 flex items-center justify-between bg-[var(--ed-surface-container-lowest)] border-b border-[var(--ed-outline-variant)]">
+                            <span className="text-[11px] font-bold uppercase tracking-[0.08em] text-[var(--ed-on-surface-variant)]">
                                 {railView === "blocks" ? trStr("Bloques", language)
                                     : railView === "patterns" ? trStr("Plantillas", language)
                                     : t("editor.panel.structure")}
@@ -1175,14 +1277,14 @@ export default function VersoEditor({
                             <button
                                 type="button"
                                 onClick={() => {
-                                    if (isPhone()) setMobileSheet(null);
+                                    if (isCompact()) setMobileSheet(null);
                                     else setShowSidebar(false);
                                 }}
                                 title={t("editor.hideSidebar")}
-                                className="w-6 h-6 rounded flex items-center justify-center text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container-high)] transition-colors"
+                                className="verso-icon-button w-9 h-9 rounded-lg flex items-center justify-center text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container-high)] transition-colors"
                             >
-                                <MSym name="chevron_left" size={16} className="hidden md:block" />
-                                <MSym name="close" size={16} className="md:hidden" />
+                                <MSym name="chevron_left" size={18} className="hidden xl:block" />
+                                <MSym name="close" size={18} className="xl:hidden" />
                             </button>
                         </div>
 
@@ -1210,17 +1312,19 @@ export default function VersoEditor({
                         animación de entrada, con el ancho que el timeline necesita). El área de
                         medida del canvas (`areaRef`) es el hijo flexible: abrir o plegar el dock
                         re-mide y re-escala la tarjeta solo. */}
-                    <div className="flex-1 min-w-0 h-full min-h-0 flex flex-col">
+                    <main
+                        id="verso-canvas"
+                        tabIndex={-1}
+                        inert={mobileSheet !== null || modalSurfaceOpen}
+                        className="flex-1 min-w-0 h-full min-h-0 flex flex-col outline-none"
+                        aria-label={trStr("Lienzo del editor", language)}
+                    >
                     {/* CANVAS — retícula de puntos + tarjeta/bisel a ancho real de dispositivo,
                         escalado a caber (piel exacta del PreviewFrame actual). */}
-                    <div ref={areaRef} className="flex-1 relative overflow-hidden bg-[var(--ed-surface-container-low)] min-h-0">
-                        <div
-                            className="absolute inset-0 pointer-events-none"
-                            style={{ backgroundImage: "radial-gradient(#c8c4d5 0.5px, transparent 0.5px)", backgroundSize: "20px 20px" }}
-                        ></div>
+                    <div ref={areaRef} className="verso-canvas-area flex-1 relative overflow-hidden min-h-0">
                         <div className="absolute inset-0 flex items-start justify-center" style={{ padding: PAD }}>
                             <div
-                                className={`relative z-10 bg-white overflow-hidden shrink-0 ${isNarrow ? "rounded-xl border border-[var(--ed-outline-variant)] shadow-lg" : isDesktop ? "border border-[var(--ed-outline-variant)] shadow-lg" : "rounded-[2rem] ring-[7px] ring-gray-900 shadow-2xl"}`}
+                                className={`verso-device-frame relative z-10 bg-white overflow-hidden shrink-0 ${isNarrow ? "rounded-2xl border border-[var(--ed-outline-variant)]" : isDesktop ? "rounded-lg border border-[var(--ed-outline-variant)]" : "rounded-[2rem] ring-[7px] ring-gray-900"}`}
                                 style={{ width: frameW * scale, height: availH }}
                             >
                                 <div
@@ -1282,16 +1386,16 @@ export default function VersoEditor({
                                     + los 3 patrones rápidos (PATTERNS.slice(0,3), un undo cada uno) */}
                                 {emptyCanvas && (
                                     <div className="absolute inset-0 z-30 flex items-center justify-center p-6 pointer-events-none">
-                                        <div className="text-center max-w-md pointer-events-none bg-white/95 backdrop-blur rounded-2xl border border-[var(--ed-outline-variant)] shadow-xl p-8">
-                                            <div className="w-36 h-36 mx-auto rounded-full bg-[var(--ed-surface-container)] border border-[var(--ed-outline-variant)] flex items-center justify-center mb-6">
-                                                <MSym name="space_dashboard" size={56} className="text-[var(--ed-outline)]" />
+                                        <div className="text-center max-w-md pointer-events-none bg-[var(--ed-surface-container-lowest)]/95 backdrop-blur-xl rounded-[24px] border border-[var(--ed-outline-variant)] shadow-2xl p-6 sm:p-8">
+                                            <div className="w-20 h-20 mx-auto rounded-2xl bg-[var(--ed-primary-container)] border border-[var(--ed-outline-variant)] flex items-center justify-center mb-5 shadow-sm">
+                                                <MSym name="space_dashboard" size={38} className="text-[var(--ed-on-primary-container)]" />
                                             </div>
                                             <h3 className="text-[18px] font-semibold tracking-tight text-[var(--ed-on-surface)] mb-2">{trStr("Comienza tu diseño", language)}</h3>
                                             <p className="text-[14px] text-[var(--ed-on-surface-variant)] mb-6">{trStr("Tu lienzo está listo. Añade el primer bloque para empezar a construir tu visión.", language)}</p>
                                             <button
                                                 type="button"
                                                 onClick={() => setCmdkOpen(true)}
-                                                className="pointer-events-auto inline-flex items-center gap-2 px-6 py-3 rounded-full bg-[var(--ed-primary)] text-white text-[12px] font-semibold hover:shadow-lg transition-all active:scale-95"
+                                                className="verso-primary-button pointer-events-auto inline-flex items-center gap-2 min-h-11 px-5 py-2.5 rounded-xl text-white text-[12px] font-semibold transition-all active:scale-[0.98]"
                                             >
                                                 <MSym name="add_circle" size={20} />
                                                 {trStr("Añadir primer bloque", language)}
@@ -1317,7 +1421,7 @@ export default function VersoEditor({
 
                     {/* DOCK DE MOVIMIENTO — interacciones y animación de entrada, en su panel. */}
                     <IxDock handle={handle} registry={registry} />
-                    </div>
+                    </main>
 
                     {/* PANEL DERECHO — propiedades (docked 320px / sheet móvil). El provider entrega
                         el handle a los controles de campo custom que necesitan leer el nodo
@@ -1330,7 +1434,7 @@ export default function VersoEditor({
                                 rootFields={rootFields}
                                 renderExternalPicker={renderExternalPicker}
                                 onClose={() => {
-                                    if (isPhone()) setMobileSheet(null);
+                                    if (isCompact()) setMobileSheet(null);
                                     else setShowProperties(false);
                                 }}
                                 mobileOpen={mobileSheet === "right"}
@@ -1339,13 +1443,13 @@ export default function VersoEditor({
                     )}
                 </div>
 
-                {/* NAV INFERIOR MÓVIL — 4 pestañas (blueprint §a) */}
-                <div className="md:hidden fixed inset-x-0 bottom-0 h-14 z-40 bg-[var(--ed-surface)] border-t border-[var(--ed-outline-variant)] flex items-stretch">
+                {/* Navegación compacta — móvil y tableta; máximo cuatro destinos de primer nivel. */}
+                <nav className="verso-mobile-nav xl:hidden fixed inset-x-0 bottom-0 z-50 flex items-start" aria-label={trStr("Navegación del editor", language)}>
                     {([
                         { id: "blocks", icon: "add_box", label: trStr("Bloques", language), active: mobileSheet === "left" && railView !== "outline" },
-                        { id: "layers", icon: "layers", label: trStr("Capas", language), active: mobileSheet === "left" && railView === "outline" },
-                        { id: "props", icon: "tune", label: trStr("Propiedades", language), active: mobileSheet === "right" },
-                        { id: "settings", icon: "settings", label: trStr("Ajustes", language), active: false },
+                        { id: "layers", icon: "layers", label: trStr("Estructura", language), active: mobileSheet === "left" && railView === "outline" },
+                        { id: "props", icon: "tune", label: trStr("Propiedades", language), active: mobileSheet === "right" && state.selection.nodeId !== null },
+                        { id: "settings", icon: "settings", label: trStr("Página", language), active: mobileSheet === "right" && state.selection.nodeId === null },
                     ] as const).map((tab) => (
                         <button
                             key={tab.id}
@@ -1367,9 +1471,9 @@ export default function VersoEditor({
                                     setMobileSheet("right");
                                 }
                             }}
-                            className="flex-1 flex flex-col items-center justify-center gap-0.5"
+                            className="verso-mobile-tab flex-1 flex flex-col items-center justify-center gap-0.5 px-1"
                         >
-                            <span className={`w-10 h-6 rounded-md flex items-center justify-center transition-colors ${tab.active ? "bg-[var(--ed-primary)] text-white" : "text-[var(--ed-on-surface-variant)]"}`}>
+                            <span className={`verso-mobile-tab-indicator w-11 h-7 rounded-lg flex items-center justify-center ${tab.active ? "bg-[var(--ed-primary-container)] text-[var(--ed-on-primary-container)]" : "text-[var(--ed-on-surface-variant)]"}`}>
                                 <MSym name={tab.icon} size={18} fill={tab.active} />
                             </span>
                             <span className={`text-[10px] leading-none ${tab.active ? "text-[var(--ed-primary)] font-semibold" : "text-[var(--ed-on-surface-variant)]"}`}>
@@ -1377,7 +1481,7 @@ export default function VersoEditor({
                             </span>
                         </button>
                     ))}
-                </div>
+                </nav>
 
                 {/* FAB MÓVIL — insertar (oculto con sheet abierto) */}
                 {!mobileSheet && (
@@ -1385,7 +1489,8 @@ export default function VersoEditor({
                         type="button"
                         onClick={() => setCmdkOpen(true)}
                         title={trStr("Insertar bloque (Ctrl/⌘ + K)", language)}
-                        className="md:hidden fixed right-4 bottom-[72px] z-40 w-12 h-12 rounded-full bg-[var(--ed-primary)] text-white shadow-xl flex items-center justify-center active:scale-95 transition"
+                        aria-label={trStr("Insertar bloque", language)}
+                        className="verso-primary-button xl:hidden fixed right-4 bottom-[calc(var(--ed-mobile-nav-height)+12px)] z-40 w-12 h-12 rounded-2xl text-white flex items-center justify-center active:scale-[0.98] transition"
                     >
                         <MSym name="add" size={24} />
                     </button>
@@ -1396,16 +1501,25 @@ export default function VersoEditor({
 
                 {/* Drawer de accesibilidad (W20/W25) — misma piel que el legacy (340px, z-90) */}
                 {a11yOpen && (
-                    <div className="fixed top-12 bottom-0 right-0 w-[340px] z-[90] bg-[var(--ed-surface-container-lowest)] border-l border-[var(--ed-outline-variant)] flex flex-col shadow-2xl">
-                        <div className="shrink-0 h-10 px-3 flex items-center justify-between bg-[var(--ed-surface-container-low)] border-b border-[var(--ed-outline-variant)]">
-                            <span className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ed-on-surface-variant)]">
+                    <>
+                    <div className="verso-overlay-scrim" aria-hidden="true" onMouseDown={() => setA11yOpen(false)} />
+                    <div
+                        ref={a11yPanelRef}
+                        tabIndex={-1}
+                        role="dialog"
+                        aria-modal="true"
+                        aria-labelledby="verso-a11y-title"
+                        className="verso-panel verso-drawer fixed top-[var(--ed-header-height)] bottom-[var(--ed-mobile-nav-height)] xl:bottom-0 right-0 w-full sm:w-[380px] border-l border-[var(--ed-outline-variant)] flex flex-col outline-none"
+                    >
+                        <div className="shrink-0 h-12 px-4 flex items-center justify-between bg-[var(--ed-surface-container-lowest)] border-b border-[var(--ed-outline-variant)]">
+                            <span id="verso-a11y-title" className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ed-on-surface-variant)]">
                                 {trStr("Accesibilidad", language)}
                             </span>
                             <button
                                 type="button"
                                 onClick={() => setA11yOpen(false)}
                                 aria-label={t("common.close")}
-                                className="w-6 h-6 rounded flex items-center justify-center text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container-high)] transition-colors"
+                                className="verso-icon-button w-9 h-9 rounded-lg flex items-center justify-center text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container-high)] transition-colors"
                             >
                                 <MSym name="close" size={16} />
                             </button>
@@ -1419,6 +1533,7 @@ export default function VersoEditor({
                             />
                         </div>
                     </div>
+                    </>
                 )}
 
                 {/* Biblioteca de medios (W22, "Recursos"): elegir inserta un bloque Image al final. */}
@@ -1441,7 +1556,7 @@ export default function VersoEditor({
 
                 {/* Drag hint pill (solo durante un drag vivo — W07) */}
                 {isDragging && (
-                    <div className="fixed bottom-20 md:bottom-6 left-1/2 -translate-x-1/2 z-[70] pointer-events-none bg-[var(--ed-inverse-surface)] text-[var(--ed-inverse-on-surface)] px-4 py-2 rounded-full shadow-xl flex items-center gap-2">
+                    <div className="fixed bottom-[calc(var(--ed-mobile-nav-height)+16px)] xl:bottom-6 left-1/2 -translate-x-1/2 z-[70] pointer-events-none bg-[var(--ed-inverse-surface)] text-[var(--ed-inverse-on-surface)] px-4 py-2 rounded-full shadow-xl flex items-center gap-2">
                         <MSym name="info" size={18} />
                         <span className="text-[12px]">{trStr("Arrastra a una zona iluminada para añadir el bloque", language)}</span>
                     </div>
@@ -1450,8 +1565,8 @@ export default function VersoEditor({
                 {/* Toast — pill oscura, 4s, desplazada si el panel derecho está abierto (W11) */}
                 {toastMsg && (
                     <div
-                        className="fixed bottom-16 md:bottom-4 right-4 md:right-[var(--toast-right)] z-[80] bg-[var(--ed-inverse-surface)] text-[var(--ed-inverse-on-surface)] pl-3 pr-2 py-2.5 rounded-lg shadow-xl flex items-center gap-2.5"
-                        style={{ "--toast-right": showProperties ? "336px" : "16px" } as React.CSSProperties}
+                        className="fixed bottom-[calc(var(--ed-mobile-nav-height)+12px)] xl:bottom-4 right-4 xl:right-[var(--toast-right)] z-[80] max-w-[calc(100vw-2rem)] bg-[var(--ed-inverse-surface)] text-[var(--ed-inverse-on-surface)] pl-3 pr-2 py-2.5 rounded-xl shadow-xl flex items-center gap-2.5"
+                        style={{ "--toast-right": showProperties ? "344px" : "16px" } as React.CSSProperties}
                         role="status"
                     >
                         <MSym name="check_circle" size={20} fill className="text-[var(--ed-success)]" />

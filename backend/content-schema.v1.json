@@ -1,0 +1,262 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wordjs.dev/schemas/content-type/v1.json",
+  "title": "WordJS Content Type Schema v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "name",
+    "labels",
+    "description",
+    "visibility",
+    "features",
+    "fields",
+    "relationships",
+    "storage",
+    "permissions",
+    "revisions",
+    "presentation",
+    "extensions"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "name": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,31}$" },
+    "labels": { "$ref": "#/$defs/labels" },
+    "description": { "type": "string", "maxLength": 4096 },
+    "visibility": { "$ref": "#/$defs/visibility" },
+    "features": {
+      "type": "array",
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^[a-z][a-zA-Z0-9_.-]{0,63}$" }
+    },
+    "fields": {
+      "type": "object",
+      "maxProperties": 128,
+      "propertyNames": { "pattern": "^[a-z][a-zA-Z0-9_.-]{0,63}$" },
+      "additionalProperties": { "$ref": "#/$defs/field" }
+    },
+    "relationships": {
+      "type": "array",
+      "maxItems": 64,
+      "items": { "$ref": "#/$defs/relationship" }
+    },
+    "storage": { "$ref": "#/$defs/storage" },
+    "permissions": { "$ref": "#/$defs/permissions" },
+    "revisions": { "$ref": "#/$defs/revisions" },
+    "presentation": { "$ref": "#/$defs/presentation" },
+    "extensions": { "type": "object" }
+  },
+  "$defs": {
+    "labels": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["singular", "plural", "addNew", "edit"],
+      "properties": {
+        "singular": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "plural": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "addNew": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "edit": { "type": "string", "minLength": 1, "maxLength": 512 }
+      }
+    },
+    "visibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["public", "showInMenu", "showInRest", "hasArchive", "hierarchical"],
+      "properties": {
+        "public": { "type": "boolean" },
+        "showInMenu": { "type": "boolean" },
+        "showInRest": { "type": "boolean" },
+        "hasArchive": { "type": "boolean" },
+        "hierarchical": { "type": "boolean" }
+      }
+    },
+    "field": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "storage", "required", "multiple", "revisioned", "description"],
+      "properties": {
+        "type": {
+          "enum": [
+            "string", "text", "rich-text", "integer", "number", "boolean",
+            "datetime", "slug", "email", "url", "json", "media", "reference", "enum"
+          ]
+        },
+        "storage": { "$ref": "#/$defs/fieldStorage" },
+        "required": { "type": "boolean" },
+        "multiple": { "type": "boolean" },
+        "revisioned": { "type": "boolean" },
+        "description": { "type": "string", "minLength": 1, "maxLength": 2048 },
+        "default": true,
+        "enum": { "type": "array", "minItems": 1, "maxItems": 128 }
+      }
+    },
+    "fieldStorage": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "column"],
+          "properties": {
+            "kind": { "const": "column" },
+            "column": { "$ref": "#/$defs/postColumn" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "key"],
+          "properties": {
+            "kind": { "const": "meta" },
+            "key": { "type": "string", "pattern": "^[_a-zA-Z0-9][-_a-zA-Z0-9.:]{0,127}$" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": { "kind": { "const": "computed" } }
+        }
+      ]
+    },
+    "relationship": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "kind", "target", "multiple", "storage"],
+      "properties": {
+        "name": { "type": "string", "pattern": "^[a-z][a-zA-Z0-9_.-]{0,63}$" },
+        "kind": { "enum": ["belongs-to", "has-many", "taxonomy", "many-to-many"] },
+        "target": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,127}$" },
+        "multiple": { "type": "boolean" },
+        "storage": { "$ref": "#/$defs/relationshipStorage" }
+      }
+    },
+    "relationshipStorage": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "column"],
+          "properties": {
+            "kind": { "const": "column" },
+            "column": { "$ref": "#/$defs/postColumn" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "taxonomy"],
+          "properties": {
+            "kind": { "const": "taxonomy" },
+            "taxonomy": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,127}$" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "table", "column"],
+          "properties": {
+            "kind": { "const": "foreign-key" },
+            "table": { "enum": ["comments", "term_relationships", "posts", "users"] },
+            "column": { "type": "string", "minLength": 1, "maxLength": 64 }
+          }
+        }
+      ]
+    },
+    "storage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["engine", "table", "discriminator", "metaTable"],
+      "properties": {
+        "engine": { "const": "posts" },
+        "table": { "const": "posts" },
+        "discriminator": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["column", "value"],
+          "properties": {
+            "column": { "const": "post_type" },
+            "value": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,31}$" }
+          }
+        },
+        "metaTable": { "const": "post_meta" }
+      }
+    },
+    "permissions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["capabilityType", "operations"],
+      "properties": {
+        "capabilityType": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$" },
+        "operations": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "create", "edit", "publish", "delete", "editPublished", "deletePublished",
+            "editOthers", "deleteOthers"
+          ],
+          "properties": {
+            "create": { "$ref": "#/$defs/capability" },
+            "edit": { "$ref": "#/$defs/capability" },
+            "publish": { "$ref": "#/$defs/capability" },
+            "delete": { "$ref": "#/$defs/capability" },
+            "editPublished": { "$ref": "#/$defs/capability" },
+            "deletePublished": { "$ref": "#/$defs/capability" },
+            "editOthers": { "$ref": "#/$defs/capability" },
+            "deleteOthers": { "$ref": "#/$defs/capability" }
+          }
+        }
+      }
+    },
+    "revisions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "strategy", "codecVersion", "fields", "metaKeys"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "strategy": { "const": "snapshot" },
+        "codecVersion": { "type": "integer", "minimum": 1, "maximum": 1000000 },
+        "fields": {
+          "type": "array",
+          "maxItems": 128,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[a-z][a-zA-Z0-9_.-]{0,63}$" }
+        },
+        "metaKeys": {
+          "type": "array",
+          "maxItems": 128,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[_a-zA-Z0-9][-_a-zA-Z0-9.:]{0,127}$" }
+        }
+      }
+    },
+    "presentation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["menuIcon", "menuPosition", "rewrite"],
+      "properties": {
+        "menuIcon": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "menuPosition": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "rewrite": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["slug"],
+          "properties": {
+            "slug": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,127}$" }
+          }
+        }
+      }
+    },
+    "capability": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,127}$" },
+    "postColumn": {
+      "enum": [
+        "ID", "post_author", "post_date", "post_date_gmt", "post_content", "post_title",
+        "post_excerpt", "post_status", "comment_status", "ping_status", "post_password",
+        "post_name", "post_modified", "post_modified_gmt", "post_parent", "guid",
+        "menu_order", "post_type", "post_mime_type", "comment_count", "post_language",
+        "translation_group"
+      ]
+    }
+  }
+}

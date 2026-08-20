@@ -57,6 +57,9 @@ export default function LinkField({ value, onChange, label }: { value: string; o
     const [query, setQuery] = React.useState("");
     const [open, setOpen] = React.useState(false);
     const ref = React.useRef<HTMLDivElement>(null);
+    const buttonRef = React.useRef<HTMLButtonElement>(null);
+    const inputId = React.useId();
+    const popoverId = React.useId();
     const { results, searching } = useContentSearch(query);
 
     React.useEffect(() => {
@@ -64,35 +67,54 @@ export default function LinkField({ value, onChange, label }: { value: string; o
         const onDoc = (e: MouseEvent) => {
             if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
         };
+        const onKey = (e: KeyboardEvent) => {
+            if (e.key !== "Escape") return;
+            e.preventDefault();
+            setOpen(false);
+            buttonRef.current?.focus();
+        };
         document.addEventListener("mousedown", onDoc, true);
-        return () => document.removeEventListener("mousedown", onDoc, true);
+        document.addEventListener("keydown", onKey, true);
+        return () => {
+            document.removeEventListener("mousedown", onDoc, true);
+            document.removeEventListener("keydown", onKey, true);
+        };
     }, [open]);
 
     return (
         <div ref={ref} className="relative">
-            {label && <label className="block text-[11px] font-medium text-[var(--ed-on-surface-variant)] mb-1">{label}</label>}
+            {label && <label htmlFor={inputId} className="block text-[11px] font-medium text-[var(--ed-on-surface-variant)] mb-1">{label}</label>}
             <div className="flex gap-1.5">
                 <input
-                    className="flex-1 min-w-0 px-2 py-1.5 bg-white border border-[var(--ed-outline-variant)] rounded text-[13px] text-[var(--ed-on-surface)] focus:outline-none focus:border-[var(--ed-primary)] focus:ring-1 focus:ring-[var(--ed-primary)]"
+                    id={inputId}
+                    aria-label={label ? undefined : "URL"}
+                    inputMode="url"
+                    className="flex-1 min-w-0 px-2 py-1.5 bg-[var(--ed-surface-container-lowest)] border border-[var(--ed-outline-variant)] rounded text-[13px] text-[var(--ed-on-surface)] focus:outline-none focus:border-[var(--ed-primary)] focus:ring-1 focus:ring-[var(--ed-primary)]"
                     value={value || ""}
                     onChange={(e) => onChange(e.target.value)}
                     placeholder="https://… o /pagina"
                     spellCheck={false}
                 />
                 <button
+                    ref={buttonRef}
                     type="button"
                     title="Buscar contenido del sitio"
+                    aria-label="Buscar contenido del sitio"
+                    aria-expanded={open}
+                    aria-controls={popoverId}
                     onClick={() => setOpen((o) => !o)}
-                    className={`px-2 rounded border inline-flex items-center transition ${open ? "bg-[var(--ed-primary)] border-[var(--ed-primary)] text-white shadow-sm" : "bg-white border-[var(--ed-outline-variant)] text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container)]"}`}
+                    className={`verso-icon-button min-w-10 px-2 rounded border inline-flex items-center justify-center transition-colors ${open ? "bg-[var(--ed-primary-solid)] border-[var(--ed-primary-solid)] text-white shadow-sm" : "bg-[var(--ed-surface-container-lowest)] border-[var(--ed-outline-variant)] text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container)]"}`}
                 >
                     <MSym name="search" size={14} />
                 </button>
             </div>
             {open && (
-                <div className="absolute left-0 right-0 top-full mt-1.5 z-[5000] rounded-lg bg-white shadow-lg border border-[var(--ed-outline-variant)] p-1.5">
+                <div id={popoverId} role="dialog" aria-label="Buscar páginas y entradas" className="absolute left-0 right-0 top-full mt-1.5 z-[var(--ed-z-popover)] rounded-xl bg-[var(--ed-surface-container-lowest)] shadow-lg border border-[var(--ed-outline-variant)] p-1.5">
                     <input
                         autoFocus
-                        className="w-full px-2 py-1.5 mb-1.5 bg-white border border-[var(--ed-outline-variant)] rounded text-[13px] text-[var(--ed-on-surface)] focus:outline-none focus:border-[var(--ed-primary)] focus:ring-1 focus:ring-[var(--ed-primary)]"
+                        type="search"
+                        aria-label="Buscar páginas y entradas"
+                        className="w-full px-2 py-1.5 mb-1.5 bg-[var(--ed-surface-container-low)] border border-[var(--ed-outline-variant)] rounded-lg text-[13px] text-[var(--ed-on-surface)] focus:outline-none focus:border-[var(--ed-primary)] focus:ring-1 focus:ring-[var(--ed-primary)]"
                         value={query}
                         onChange={(e) => setQuery(e.target.value)}
                         placeholder="Buscar páginas y entradas…"

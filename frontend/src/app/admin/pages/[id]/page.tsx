@@ -169,7 +169,7 @@ export default function PageEditorPage() {
 
             // Load Puck data from meta if available
             if (page.meta && page.meta[EDITOR_DATA_META_KEY]) {
-                const stored = page.meta[EDITOR_DATA_META_KEY];
+                const stored = page.meta[EDITOR_DATA_META_KEY] as VersoData;
                 const withTemplate = {
                     ...stored,
                     root: {
@@ -180,7 +180,7 @@ export default function PageEditorPage() {
                 setInitialVersoData(withTemplate);
                 versoDataRef.current = withTemplate;
                 legacyHtmlRef.current = null; // real Puck blocks — not a legacy HTML body
-                if (stored.root?.title) {
+                if (typeof stored.root?.title === "string") {
                     setTitle(stored.root.title);
                 }
             } else {

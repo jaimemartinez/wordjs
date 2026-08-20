@@ -58,6 +58,7 @@
  *     derive that set (Tailwind v4 emits on demand at build time; the compiled bundle is not in git).
  */
 import { describe, expect, it } from 'vitest';
+import ts from 'typescript';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -445,17 +446,34 @@ function classesBoundToPosition(): Set<string> {
     return found;
 }
 
-/** Class tokens this source hands to Tailwind — i.e. exactly what the on-demand bundle contains. */
+/**
+ * Class-like tokens production source hands to Tailwind.
+ *
+ * Some responsive class lists live in constants (OffCanvasClient's size table) and are later selected
+ * into className. A regex that only sees the final JSX attribute misses those strings. Walking every
+ * production string/template literal is a safe over-approximation: false positives merely demand that
+ * the shared sanitizer reject an additional spelling of a position utility, while tests and comments
+ * are excluded so this gate cannot satisfy its own controls.
+ */
 function classTokensInFrontendSource(): Set<string> {
     const tokens = new Set<string>();
     for (const file of sourceFiles(path.join(REPO, 'frontend/src'))) {
-        if (!/\.tsx?$/.test(file)) continue;
+        if (!/\.tsx?$/.test(file) || file.includes(`${path.sep}__tests__${path.sep}`)) continue;
         const src = readFileSync(file, 'utf8');
-        for (const m of src.matchAll(/className\s*=\s*(?:"([^"]*)"|\{`([^`]*)`\}|\{"([^"]*)"\}|\{'([^']*)'\})/g)) {
-            for (const t of (m[1] ?? m[2] ?? m[3] ?? m[4] ?? '').split(/\s+/)) {
-                if (t && !t.includes('$')) tokens.add(t);
+        const source = ts.createSourceFile(file, src, ts.ScriptTarget.Latest, true,
+            file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+        const collect = (value: string) => {
+            for (const token of value.split(/\s+/)) if (token && !token.includes('$')) tokens.add(token);
+        };
+        const visit = (node: ts.Node): void => {
+            if (ts.isStringLiteralLike(node)) collect(node.text);
+            if (ts.isTemplateExpression(node)) {
+                collect(node.head.text);
+                for (const span of node.templateSpans) collect(span.literal.text);
             }
-        }
+            ts.forEachChild(node, visit);
+        };
+        visit(source);
     }
     return tokens;
 }

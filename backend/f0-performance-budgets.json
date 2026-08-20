@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "measurement": {
+    "warmupIterations": 5,
+    "sampleIterations": 30,
+    "percentile": 95,
+    "note": "Budgets are regression ceilings, not marketing benchmarks. Run npm run perf:f0 on an otherwise idle host."
+  },
+  "contentMilliseconds": {
+    "postCreateP95": 20,
+    "postUpdateP95": 30,
+    "metaWriteP95": 10,
+    "revisionSaveP95": 15,
+    "postListP95": 15
+  },
+  "httpSteadyState": {
+    "p95Milliseconds": 750,
+    "minimumRequestsPerSecond": 20,
+    "maximumErrorCount": 0
+  },
+  "versoEditorMilliseconds": {
+    "inputP95": 16,
+    "transactionP95": 30,
+    "timeToInteractive": 2500
+  }
+}

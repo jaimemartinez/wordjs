@@ -27,14 +27,19 @@ export default function OutlineTree({ handle, registry }: { handle: EditorHandle
 
     if (rows.length === 0) {
         return (
-            <p className="px-1 py-2 text-[12px] text-[var(--ed-on-surface-variant)]">
-                {trStr("Tu lienzo está listo. Añade el primer bloque para empezar a construir tu visión.", language)}
-            </p>
+            <div className="px-4 py-8 text-center text-[var(--ed-on-surface-variant)]">
+                <span className="mx-auto mb-3 flex w-12 h-12 items-center justify-center rounded-xl bg-[var(--ed-surface-container)]">
+                    <MSym name="layers" size={24} className="text-[var(--ed-outline)]" />
+                </span>
+                <p className="text-[12px] leading-5">
+                    {trStr("Tu lienzo está listo. Añade el primer bloque para empezar a construir tu visión.", language)}
+                </p>
+            </div>
         );
     }
 
     return (
-        <ul role="tree" aria-label={trStr("Estructura", language)} className="flex flex-col gap-0.5">
+        <ul role="tree" aria-label={trStr("Estructura", language)} className="flex flex-col gap-1">
             {rows.map((row) => {
                 const active = row.id === selectedId;
                 return (
@@ -44,14 +49,14 @@ export default function OutlineTree({ handle, registry }: { handle: EditorHandle
                             onClick={() => handle.select(row.id)}
                             title={row.label}
                             data-wjs-outline-id={row.id}
-                            className={`w-full flex items-center gap-1.5 px-1.5 py-1 rounded text-left text-[13px] border-l-2 transition-colors ${
+                            className={`w-full min-h-10 flex items-center gap-2 px-2 py-1.5 rounded-lg text-left text-[13px] border-l-2 transition-colors ${
                                 active
                                     ? "border-[var(--ed-primary)] bg-[var(--ed-surface-container-low)] text-[var(--ed-primary)] font-semibold"
                                     : "border-transparent text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container)]"
                             }`}
-                            style={{ paddingLeft: 6 + row.depth * 14 }}
+                            style={{ paddingLeft: 10 + row.depth * 16 }}
                         >
-                            <MSym name={row.ms} size={14} className="shrink-0" />
+                            <MSym name={row.ms} size={16} className="shrink-0" />
                             <span className="truncate">{trStr(row.label, language)}</span>
                         </button>
                     </li>

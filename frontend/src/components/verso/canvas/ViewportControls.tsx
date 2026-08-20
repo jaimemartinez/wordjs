@@ -21,7 +21,7 @@ const BTN_CLS =
     "rounded border px-2 py-1 text-xs disabled:opacity-40";
 const BTN_OFF_CLS =
     `${BTN_CLS} border-[var(--ed-outline-variant,#d5d2e0)] text-[var(--ed-on-surface,#1c1b22)] hover:bg-[var(--ed-surface-container,#f0eef6)]`;
-const BTN_ON_CLS = `${BTN_CLS} border-[var(--ed-primary,#2563eb)] bg-[var(--ed-primary,#2563eb)] text-white`;
+const BTN_ON_CLS = `${BTN_CLS} border-[var(--ed-primary-solid,var(--ed-primary,#2563eb))] bg-[var(--ed-primary-solid,var(--ed-primary,#2563eb))] text-[var(--ed-on-primary,#fff)]`;
 
 export interface ViewportControlsProps {
     value: DeviceKind;

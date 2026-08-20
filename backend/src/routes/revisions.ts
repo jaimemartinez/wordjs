@@ -18,7 +18,9 @@ const { asyncHandler } = require('../middleware/errorHandler');
 // re-implemented) so the restore/delete authorization here cannot drift from the post-edit gate.
 // RESTORE goes one step further and calls the shared gate ITSELF (`canEditPostRecord`) rather than
 // re-deriving it from the family, because "restore" IS an edit of the parent post.
-const { capsFor, capsForType, canEditPostRecord, isRestExposedPostType } = require('../core/post-capabilities');
+const {
+    capsFor, capsForType, canEditPostRecord, canDeletePostRecord, isRestExposedPostType,
+} = require('../core/post-capabilities');
 
 /**
  * Resolve the parent post id for a revision and check whether the current user may act on it.
@@ -62,9 +64,7 @@ async function authorizeForPost(req: any, postId: any, { action = 'read' } = {})
     } else if (action === 'delete') {
         // Delete purges history — the DELETE family, which `canEditPostRecord` deliberately does not
         // cover (a role may edit without being allowed to destroy). Mirrors DELETE /posts/:id.
-        let allowed = isOwner ? req.user.can(caps.del) : req.user.can(caps.deleteOthers);
-        if (post.postStatus === 'publish' && !req.user.can(caps.deletePublished)) allowed = false;
-        if (!allowed) {
+        if (!canDeletePostRecord(req.user, post)) {
             return { error: { code: 'rest_forbidden', status: 403 } };
         }
     } else if (!isOwner && !req.user.can(caps.editOthers)) {

@@ -1,9 +1,23 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { useEffect, useRef } from "react";
 import { MediaItem } from "@/lib/api";
 import { useI18n } from "@/contexts/I18nContext";
-import MediaLibrarySelector from "./MediaLibrarySelector";
+import MSym from "./editor/MSym";
+
+// The plugin host exposes this modal from pluginBundleLoader. Keep the media grid in its own client
+// chunk so importing the host surface does not eagerly evaluate next/image on SSR, workers or the
+// Node-only plugin contract tests. The modal itself remains immediately available and the selector is
+// loaded only when an open modal actually renders it.
+const MediaLibrarySelector = dynamic(() => import("./MediaLibrarySelector"), {
+    ssr: false,
+    loading: () => (
+        <div className="flex min-h-48 items-center justify-center text-sm text-[var(--ed-on-surface-variant)]">
+            Loading media…
+        </div>
+    ),
+});
 
 interface MediaPickerModalProps {
     isOpen: boolean;
@@ -69,10 +83,10 @@ export default function MediaPickerModal({ isOpen, onClose, onSelect }: MediaPic
     if (!isOpen) return null;
 
     return (
-        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4">
-            {/* Backdrop — a soft dark blur instead of a flat gray fill, matching the app's other modals. */}
+        <div className="verso-editor-ui verso-dialog-layer fixed inset-0 flex items-center justify-center p-0 sm:p-4">
+            {/* Backdrop isolates the foreground without becoming an extra stop in the tab order. */}
             <div
-                className="absolute inset-0 bg-gray-900/60 backdrop-blur-sm"
+                className="absolute inset-0 bg-black/55 backdrop-blur-sm"
                 aria-hidden="true"
                 onClick={onClose}
             ></div>
@@ -81,21 +95,24 @@ export default function MediaPickerModal({ isOpen, onClose, onSelect }: MediaPic
             <div
                 ref={panelRef}
                 tabIndex={-1}
-                className="relative bg-white rounded-2xl text-left overflow-hidden shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col outline-none"
+                className="verso-dialog-surface relative h-dvh sm:h-auto w-full max-w-5xl max-h-dvh sm:max-h-[90dvh] rounded-none sm:rounded-[20px] text-left overflow-hidden border border-[var(--ed-outline-variant)] flex flex-col outline-none"
                 role="dialog"
                 aria-modal="true"
-                aria-labelledby="modal-headline"
+                aria-labelledby="media-picker-title"
             >
-                <div className="flex justify-between items-center px-6 py-4 border-b border-gray-100">
-                    <h3 className="text-lg font-bold text-gray-900" id="modal-headline">
+                <div className="min-h-16 flex justify-between items-center gap-3 px-4 sm:px-6 py-3 border-b border-[var(--ed-outline-variant)] bg-[var(--ed-surface-container-lowest)]">
+                    <div className="min-w-0">
+                    <h3 className="text-base sm:text-lg font-semibold text-[var(--ed-on-surface)] truncate" id="media-picker-title">
                         {t('media.picker.title')}
                     </h3>
-                    <button onClick={onClose} aria-label={t('common.close')} className="w-9 h-9 rounded-full bg-gray-50 text-gray-400 hover:bg-gray-100 hover:text-gray-900 flex items-center justify-center transition-colors">
-                        <i className="fa-solid fa-xmark"></i>
+                    <p className="text-xs text-[var(--ed-on-surface-variant)]">{t('media.select')}</p>
+                    </div>
+                    <button type="button" onClick={onClose} aria-label={t('common.close')} className="verso-icon-button w-11 h-11 rounded-xl text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container)] flex items-center justify-center transition-colors">
+                        <MSym name="close" size={20} />
                     </button>
                 </div>
 
-                <div className="flex-1 overflow-y-auto px-6 py-4">
+                <div className="flex-1 min-h-0 overflow-hidden p-0 sm:p-4">
                     <MediaLibrarySelector
                         onSelect={(item) => {
                             onSelect(item);
@@ -104,10 +121,10 @@ export default function MediaPickerModal({ isOpen, onClose, onSelect }: MediaPic
                     />
                 </div>
 
-                <div className="px-6 py-3 border-t border-gray-100 flex justify-end">
+                <div className="px-4 sm:px-6 py-3 pb-[max(12px,env(safe-area-inset-bottom))] border-t border-[var(--ed-outline-variant)] bg-[var(--ed-surface-container-low)] flex justify-end">
                     <button
                         type="button"
-                        className="inline-flex justify-center rounded-xl border border-gray-200 px-5 py-2 bg-white text-sm font-semibold text-gray-700 hover:bg-gray-50 transition-colors"
+                        className="min-h-11 inline-flex items-center justify-center rounded-xl border border-[var(--ed-outline-variant)] px-5 bg-[var(--ed-surface-container-lowest)] text-sm font-semibold text-[var(--ed-on-surface)] hover:bg-[var(--ed-surface-container)] transition-colors"
                         onClick={onClose}
                     >
                         {t('common.cancel')}

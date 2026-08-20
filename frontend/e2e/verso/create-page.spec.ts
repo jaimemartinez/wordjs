@@ -36,6 +36,19 @@ test("crear página: 3 bloques por paleta, editar props, guardar, recargar y ver
     const ids = await blockIdsIn(frame.locator("body"));
     expect(ids.length).toBe(3);
     await frame.locator(`[data-wjs-block-id="${ids[0]}"]`).click();
+
+    // Regresión: la ruta nueva monta Movimiento sin selección y, antes del fix, su useState
+    // quedaba cerrado para siempre aunque el store ya tuviera un bloque seleccionado.
+    const motionDock = page.locator(`[data-verso-dock-node="${ids[0]}"]`);
+    await expect(motionDock).toBeVisible();
+    await expect(motionDock.getByRole("button", { name: /plegar el panel de movimiento/i })).toHaveAttribute(
+        "aria-expanded",
+        "true",
+    );
+    await expect(motionDock.locator("[data-verso-dock-body]")).toBeVisible();
+    await expect(motionDock.getByText(/interacción/i).first()).toBeVisible();
+    await expect(motionDock.getByText(/preajuste/i).first()).toBeVisible();
+
     const headingText = `Encabezado E2E ${stamp}`;
     // El campo del bloque: input asociado a <label htmlFor> (VersoFieldControl).
     const titleField = page.getByLabel(/^(title|título)/i).first();

@@ -123,15 +123,15 @@ export default function PropertiesPanel({ handle, registry, rootFields, renderEx
             // escribe el título de la página en el campo del bloque.
             data-verso-panel={node ? "block" : "root"}
             data-verso-panel-node={node?.id ?? undefined}
-            className={`flex-col bg-[var(--ed-surface-container-lowest)] border-l border-[var(--ed-outline-variant)] ${mobileOpen ? "flex fixed inset-x-0 top-12 bottom-14 z-40" : "hidden"} md:flex md:static md:inset-auto md:w-[320px] md:shrink-0 md:z-30`}
+            className={`verso-panel verso-sheet verso-sheet-right flex-col border-l border-[var(--ed-outline-variant)] ${mobileOpen ? "flex" : "hidden"} xl:flex xl:static xl:inset-auto xl:w-[336px] xl:shrink-0 xl:z-30`}
         >
             {/* Cabecera de identidad: chip 32px + nombre + ID mono + colapsar. */}
-            <header className="shrink-0 h-[60px] px-3 flex items-center gap-2.5 bg-[var(--ed-surface-container-lowest)] border-b border-[var(--ed-outline-variant)]">
-                <div className="w-8 h-8 shrink-0 rounded-lg bg-[var(--ed-primary-container)] text-[var(--ed-on-primary-container)] flex items-center justify-center">
+            <header className="shrink-0 h-16 px-4 flex items-center gap-3 bg-[var(--ed-surface-container-lowest)] border-b border-[var(--ed-outline-variant)]">
+                <div className="w-9 h-9 shrink-0 rounded-xl bg-[var(--ed-primary-container)] text-[var(--ed-on-primary-container)] flex items-center justify-center">
                     <MSym name={msIcon} size={20} />
                 </div>
                 <div className="min-w-0 flex-1">
-                    <h3 className="text-[12px] font-semibold tracking-[0.02em] text-[var(--ed-on-surface)] leading-4 truncate">{label}</h3>
+                    <h3 className="text-[13px] font-semibold tracking-[0.01em] text-[var(--ed-on-surface)] leading-5 truncate">{label}</h3>
                     <p
                         className="text-[10px] leading-3 text-[var(--ed-outline)] truncate"
                         style={{ fontFamily: "var(--ed-font-family-monospaced)" }}
@@ -143,9 +143,11 @@ export default function PropertiesPanel({ handle, registry, rootFields, renderEx
                     type="button"
                     onClick={onClose}
                     title={t('editor.hideProperties')}
-                    className="w-6 h-6 shrink-0 rounded-lg flex items-center justify-center text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container)] transition-colors"
+                    aria-label={t('editor.hideProperties')}
+                    className="verso-icon-button w-9 h-9 shrink-0 rounded-lg flex items-center justify-center text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container)] transition-colors"
                 >
-                    <MSym name="chevron_right" size={18} />
+                    <MSym name="chevron_right" size={18} className="hidden xl:block" />
+                    <MSym name="close" size={18} className="xl:hidden" />
                 </button>
             </header>
 
@@ -165,7 +167,7 @@ export default function PropertiesPanel({ handle, registry, rootFields, renderEx
                                     type="button"
                                     onClick={() => toggle(s.key)}
                                     aria-expanded={open}
-                                    className="w-full px-3 py-2.5 flex items-center justify-between group"
+                                    className="w-full min-h-11 px-4 py-3 flex items-center justify-between group hover:bg-[var(--ed-surface-container-low)] transition-colors"
                                 >
                                     <span className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.03em] text-[var(--ed-on-surface)]">
                                         <MSym name={s.icon} size={16} className="text-[var(--ed-on-surface-variant)]" />
@@ -178,7 +180,7 @@ export default function PropertiesPanel({ handle, registry, rootFields, renderEx
                                     />
                                 </button>
                                 {open && (
-                                    <div className="px-3 pb-3 flex flex-col gap-3">
+                                    <div className="px-4 pb-4 flex flex-col gap-4">
                                         {parts[s.key].map(([key, field]) => (
                                             <VersoFieldControl
                                                 key={`${blockId ?? "root"}:${key}`}
@@ -212,11 +214,11 @@ export default function PropertiesPanel({ handle, registry, rootFields, renderEx
 
             {/* Pie — reset de estilos del bloque a sus propios defaults (undoable). */}
             {blockId && (avail.style || avail.advanced) && (
-                <footer className="shrink-0 p-3 border-t border-[var(--ed-outline-variant)] bg-[var(--ed-surface-container-lowest)]">
+                <footer className="shrink-0 p-4 border-t border-[var(--ed-outline-variant)] bg-[var(--ed-surface-container-lowest)]">
                     <button
                         type="button"
                         onClick={resetStyles}
-                        className="w-full h-[34px] rounded-lg border border-[var(--ed-outline-variant)] text-[11px] font-bold uppercase tracking-wide text-[var(--ed-on-surface-variant)] hover:border-[var(--ed-error)] hover:text-[var(--ed-error)] transition-colors flex items-center justify-center gap-1.5"
+                        className="w-full min-h-10 rounded-xl border border-[var(--ed-outline-variant)] text-[11px] font-bold uppercase tracking-wide text-[var(--ed-on-surface-variant)] hover:border-[var(--ed-error)] hover:text-[var(--ed-error)] transition-colors flex items-center justify-center gap-1.5"
                     >
                         <MSym name="refresh" size={14} />
                         {trStr("Restablecer estilos", language)}

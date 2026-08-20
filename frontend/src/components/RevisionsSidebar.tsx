@@ -1,15 +1,33 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { revisionsApi, Revision, User, usersApi } from "@/lib/api";
-import { formatDistanceToNow } from "date-fns";
 import { useModal } from "@/contexts/ModalContext";
+import { useI18n } from "@/contexts/I18nContext";
+import { trStr } from "@/lib/editorI18n";
+import MSym from "@/components/editor/MSym";
 
 interface RevisionsSidebarProps {
     postId: number;
     isOpen: boolean;
     onClose: () => void;
-    onRestore: (revision: Revision) => void;
+    onRestore: (revision: Revision) => void | Promise<void>;
+}
+
+const FOCUSABLE_SELECTOR = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
+
+function formatRelativeDate(value: string, language: string): string {
+    const then = new Date(value).getTime();
+    if (!Number.isFinite(then)) return "";
+    const deltaMs = then - Date.now();
+    const rtf = new Intl.RelativeTimeFormat(language, { numeric: "auto" });
+    const minutes = Math.round(deltaMs / 60_000);
+    if (Math.abs(minutes) < 60) return rtf.format(minutes, "minute");
+    const hours = Math.round(deltaMs / 3_600_000);
+    if (Math.abs(hours) < 24) return rtf.format(hours, "hour");
+    const days = Math.round(deltaMs / 86_400_000);
+    if (Math.abs(days) < 30) return rtf.format(days, "day");
+    return new Date(value).toLocaleDateString(language, { dateStyle: "medium", timeStyle: undefined });
 }
 
 // ---------------------------------------------------------------------------
@@ -65,12 +83,12 @@ function wordDiff(oldHtml: string, newHtml: string): DiffTok[] | null {
 
 function DiffText({ toks }: { toks: DiffTok[] }) {
     return (
-        <p className="text-sm leading-relaxed text-gray-700 whitespace-pre-wrap">
+        <p className="text-sm leading-relaxed text-[var(--ed-on-surface)] whitespace-pre-wrap">
             {toks.map((tok, i) => tok.t === "same"
                 ? <span key={i}>{tok.w} </span>
                 : tok.t === "add"
-                    ? <ins key={i} className="bg-green-100 text-green-800 no-underline rounded px-0.5">{tok.w} </ins>
-                    : <del key={i} className="bg-red-100 text-red-700 rounded px-0.5">{tok.w} </del>)}
+                    ? <ins key={i} className="bg-emerald-100 text-emerald-900 no-underline rounded px-0.5">{tok.w} </ins>
+                    : <del key={i} className="bg-[var(--ed-error-container)] text-[var(--ed-on-error-container)] rounded px-0.5">{tok.w} </del>)}
         </p>
     );
 }
@@ -78,19 +96,66 @@ function DiffText({ toks }: { toks: DiffTok[] }) {
 export default function RevisionsSidebar({ postId, isOpen, onClose, onRestore }: RevisionsSidebarProps) {
     const [revisions, setRevisions] = useState<Revision[]>([]);
     const [loading, setLoading] = useState(false);
+    const [loadError, setLoadError] = useState(false);
+    const [restoringId, setRestoringId] = useState<number | null>(null);
     const [users, setUsers] = useState<Record<number, User>>({});
     const [diffRev, setDiffRev] = useState<Revision | null>(null); // revision being compared with the latest
     const { confirm } = useModal();
+    const { language } = useI18n();
+    const tr = (value: string) => trStr(value, language);
+    const panelRef = useRef<HTMLElement | null>(null);
+    const previousFocusRef = useRef<HTMLElement | null>(null);
 
     useEffect(() => {
         if (isOpen && postId) {
             setDiffRev(null);
             loadRevisions();
         }
+    // `loadRevisions` only reads postId; these dependencies intentionally describe the trigger.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [isOpen, postId]);
+
+    useEffect(() => {
+        if (!isOpen) return;
+        previousFocusRef.current = document.activeElement as HTMLElement | null;
+        panelRef.current?.focus();
+        const onKeyDown = (event: KeyboardEvent) => {
+            if (event.key === "Escape") {
+                event.preventDefault();
+                onClose();
+                return;
+            }
+            if (event.key !== "Tab") return;
+            const panel = panelRef.current;
+            if (!panel) return;
+            const focusable = Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR))
+                .filter((el) => !el.hasAttribute("disabled") && el.getClientRects().length > 0);
+            if (!focusable.length) {
+                event.preventDefault();
+                panel.focus();
+                return;
+            }
+            const first = focusable[0];
+            const last = focusable[focusable.length - 1];
+            if (event.shiftKey && (document.activeElement === first || !panel.contains(document.activeElement))) {
+                event.preventDefault();
+                last.focus();
+            } else if (!event.shiftKey && (document.activeElement === last || !panel.contains(document.activeElement))) {
+                event.preventDefault();
+                first.focus();
+            }
+        };
+        document.addEventListener("keydown", onKeyDown, true);
+        return () => {
+            document.removeEventListener("keydown", onKeyDown, true);
+            previousFocusRef.current?.focus();
+            previousFocusRef.current = null;
+        };
+    }, [isOpen, onClose]);
 
     const loadRevisions = async () => {
         setLoading(true);
+        setLoadError(false);
         try {
             const data = await revisionsApi.list(postId);
             setRevisions(data.revisions);
@@ -126,6 +191,7 @@ export default function RevisionsSidebar({ postId, isOpen, onClose, onRestore }:
             });
         } catch (error) {
             console.error("Failed to load revisions:", error);
+            setLoadError(true);
         } finally {
             setLoading(false);
         }
@@ -165,156 +231,145 @@ export default function RevisionsSidebar({ postId, isOpen, onClose, onRestore }:
             true,
         );
         if (ok) {
-            onRestore(revision);
+            setRestoringId(revision.id);
+            try {
+                await onRestore(revision);
+            } finally {
+                setRestoringId(null);
+            }
         }
     };
 
     return (
-        <div className={`fixed inset-y-0 right-0 w-full max-w-[400px] bg-white shadow-2xl z-[5000] transform transition-transform duration-300 ease-in-out border-l border-gray-100 flex flex-col ${isOpen ? 'translate-x-0' : 'translate-x-full'}`}>
-            {/* Header */}
-            <div className="h-20 flex items-center justify-between px-6 border-b border-gray-50 bg-gray-50/30 shrink-0">
-                <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 bg-amber-50 text-amber-600 rounded-xl flex items-center justify-center shadow-inner">
-                        <i className="fa-solid fa-clock-rotate-left text-lg"></i>
+        <>
+            {isOpen && <div className="verso-overlay-scrim" aria-hidden="true" onMouseDown={onClose} />}
+            <aside
+                ref={panelRef}
+                tabIndex={-1}
+                inert={!isOpen}
+                aria-hidden={!isOpen}
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="revisions-title"
+                className={`verso-drawer fixed inset-y-0 right-0 w-full max-w-[420px] transform transition-transform duration-200 ease-out border-l border-[var(--ed-outline-variant)] flex flex-col outline-none ${isOpen ? "translate-x-0" : "translate-x-full"}`}
+            >
+                <div className="min-h-16 flex items-center justify-between gap-3 px-4 border-b border-[var(--ed-outline-variant)] bg-[var(--ed-surface-container-low)] shrink-0">
+                    <div className="flex items-center gap-3 min-w-0">
+                        <span className="w-10 h-10 bg-[var(--ed-primary-fixed)] text-[var(--ed-primary)] rounded-xl flex items-center justify-center shrink-0">
+                            <MSym name="history" size={20} />
+                        </span>
+                        <div className="min-w-0">
+                            <h3 id="revisions-title" className="text-sm font-semibold text-[var(--ed-on-surface)] truncate">{tr("Historial de revisiones")}</h3>
+                            <p className="text-[11px] text-[var(--ed-on-surface-variant)]">{tr("Control de versiones")}</p>
+                        </div>
                     </div>
-                    <div>
-                        <h3 className="font-black text-gray-900 italic tracking-tight">Revision History</h3>
-                        <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest">Version Control</p>
-                    </div>
-                </div>
-                <button
-                    onClick={onClose}
-                    className="w-10 h-10 rounded-full hover:bg-white hover:shadow-md flex items-center justify-center text-gray-400 hover:text-red-500 transition-all border border-transparent hover:border-gray-100"
-                >
-                    <i className="fa-solid fa-xmark"></i>
-                </button>
-            </div>
-
-            {/* Diff view (selected revision vs latest) */}
-            {diffRev && (
-                <div className="flex-1 overflow-y-auto p-6 custom-scrollbar">
-                    <button
-                        onClick={() => setDiffRev(null)}
-                        className="mb-4 px-3 py-1.5 rounded-lg border border-gray-200 text-xs font-bold text-gray-600 hover:border-blue-400 hover:text-blue-600 transition-all"
-                    >
-                        <i className="fa-solid fa-arrow-left mr-2"></i>All revisions
+                    <button type="button" onClick={onClose} aria-label={tr("Cerrar historial de revisiones")} className="verso-icon-button w-11 h-11 rounded-xl flex items-center justify-center text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container-high)] transition-colors">
+                        <MSym name="close" size={20} />
                     </button>
-                    <div className="mb-4">
-                        <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mb-1">Comparing</p>
-                        <p className="text-xs text-gray-600">
-                            <del className="bg-red-100 text-red-700 rounded px-1 no-underline">{new Date(diffRev.modified).toLocaleString()}</del>
-                            <span className="mx-2 text-gray-300">→</span>
-                            <ins className="bg-green-100 text-green-800 rounded px-1 no-underline">latest</ins>
-                        </p>
-                    </div>
-                    {(() => {
-                        const latest = revisions[0];
-                        if (!latest) return null;
-                        const titleToks = diffRev.title !== latest.title ? wordDiff(diffRev.title, latest.title) : null;
-                        const toks = wordDiff(diffRev.content, latest.content);
-                        return (
-                            <div className="space-y-5">
-                                {titleToks && (
-                                    <div>
-                                        <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mb-2">Title</p>
-                                        <div className="p-4 rounded-xl border border-gray-100 bg-gray-50/50"><DiffText toks={titleToks} /></div>
-                                    </div>
-                                )}
-                                <div>
-                                    <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mb-2">Content</p>
-                                    <div className="p-4 rounded-xl border border-gray-100 bg-gray-50/50">
-                                        {toks
-                                            ? (toks.some((t) => t.t !== "same")
-                                                ? <DiffText toks={toks} />
-                                                : <p className="text-sm text-gray-400 italic">No text changes — the difference may be in images or layout.</p>)
-                                            : <p className="text-sm text-gray-400 italic">Versions differ too much for an inline diff — restore to inspect.</p>}
-                                    </div>
-                                </div>
-                                <button
-                                    onClick={() => handleRestoreClick(diffRev)}
-                                    className="w-full px-4 py-3 bg-white border border-gray-200 rounded-xl text-[10px] font-black uppercase tracking-widest text-gray-600 hover:border-blue-500 hover:text-blue-600 hover:shadow-md transition-all active:scale-95"
-                                >
-                                    <i className="fa-solid fa-clock-rotate-left mr-2"></i>Restore this version
-                                </button>
-                            </div>
-                        );
-                    })()}
                 </div>
-            )}
 
-            {/* List */}
-            <div className={`flex-1 overflow-y-auto p-6 custom-scrollbar ${diffRev ? 'hidden' : ''}`}>
-                {loading ? (
-                    <div className="flex flex-col items-center justify-center h-full gap-4 text-gray-400">
-                        <i className="fa-solid fa-circle-notch fa-spin text-2xl text-blue-500"></i>
-                        <span className="text-xs font-bold uppercase tracking-widest">Loading Revisions...</span>
-                    </div>
-                ) : revisions.length === 0 ? (
-                    <div className="flex flex-col items-center justify-center h-full gap-4 text-gray-300 opacity-50">
-                        <i className="fa-solid fa-ghost text-4xl"></i>
-                        <span className="text-xs font-bold uppercase tracking-widest text-center">No revisions found yet.<br />Save your post to create one.</span>
-                    </div>
-                ) : (
-                    <div className="space-y-4">
-                        {revisions.map((rev, index) => (
-                            <div
-                                key={rev.id || index}
-                                className={`group p-5 rounded-2xl border transition-all relative overflow-hidden ${index === 0 ? 'bg-blue-50/30 border-blue-100' : 'bg-white border-gray-100 hover:border-blue-200 hover:shadow-lg hover:shadow-blue-500/5'}`}
-                            >
-                                {index === 0 && (
-                                    <div className="absolute top-0 right-0 px-3 py-1 bg-blue-500 text-white text-[9px] font-black uppercase tracking-tighter rounded-bl-xl">
-                                        Latest Revision
-                                    </div>
-                                )}
+                <div aria-live="polite" className="sr-only">
+                    {loading ? tr("Cargando revisiones") : restoringId ? tr("Restaurando revisión") : loadError ? tr("No se pudieron cargar las revisiones") : ""}
+                </div>
 
-                                <div className="flex items-start justify-between gap-4">
-                                    <div className="flex-1">
-                                        <div className="flex items-center gap-2 mb-1">
-                                            <div className="w-6 h-6 rounded-full bg-white border border-gray-200 flex items-center justify-center text-[10px] text-gray-600 font-bold shadow-sm">
-                                                {users[rev.authorId]?.displayName?.charAt(0) || <i className="fa-solid fa-user text-[8px]"></i>}
-                                            </div>
-                                            <span className="text-sm font-bold text-gray-900 leading-none">
-                                                {users[rev.authorId]?.displayName || `Author #${rev.authorId}`}
-                                            </span>
+                {diffRev && (
+                    <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain p-4 sm:p-5 custom-scrollbar">
+                        <button type="button" onClick={() => setDiffRev(null)} className="mb-5 min-h-11 inline-flex items-center gap-2 px-3 rounded-xl border border-[var(--ed-outline-variant)] text-xs font-semibold text-[var(--ed-on-surface)] hover:border-[var(--ed-primary)] hover:text-[var(--ed-primary)] transition-colors">
+                            <MSym name="chevron_left" size={18} /> {tr("Todas las revisiones")}
+                        </button>
+                        <div className="mb-5">
+                            <p className="text-[11px] text-[var(--ed-on-surface-variant)] font-semibold uppercase tracking-wider mb-2">{tr("Comparando")}</p>
+                            <p className="text-xs text-[var(--ed-on-surface-variant)] leading-relaxed">
+                                <del className="bg-[var(--ed-error-container)] text-[var(--ed-on-error-container)] rounded px-1 no-underline">{new Date(diffRev.modified).toLocaleString()}</del>
+                                <span className="mx-2" aria-hidden="true">→</span>
+                                <ins className="bg-emerald-100 text-emerald-900 rounded px-1 no-underline">{tr("Última")}</ins>
+                            </p>
+                        </div>
+                        {(() => {
+                            const latest = revisions[0];
+                            if (!latest) return null;
+                            const titleToks = diffRev.title !== latest.title ? wordDiff(diffRev.title, latest.title) : null;
+                            const toks = wordDiff(diffRev.content, latest.content);
+                            return (
+                                <div className="space-y-5">
+                                    {titleToks && (
+                                        <section>
+                                            <h4 className="text-[11px] text-[var(--ed-on-surface-variant)] font-semibold uppercase tracking-wider mb-2">{tr("Título")}</h4>
+                                            <div className="p-4 rounded-xl border border-[var(--ed-outline-variant)] bg-[var(--ed-surface-container-low)]"><DiffText toks={titleToks} /></div>
+                                        </section>
+                                    )}
+                                    <section>
+                                        <h4 className="text-[11px] text-[var(--ed-on-surface-variant)] font-semibold uppercase tracking-wider mb-2">{tr("Contenido")}</h4>
+                                        <div className="p-4 rounded-xl border border-[var(--ed-outline-variant)] bg-[var(--ed-surface-container-low)]">
+                                            {toks
+                                                ? (toks.some((t) => t.t !== "same")
+                                                    ? <DiffText toks={toks} />
+                                                    : <p className="text-sm text-[var(--ed-on-surface-variant)]">{tr("Sin cambios de texto; la diferencia puede estar en las imágenes o el diseño.")}</p>)
+                                                : <p className="text-sm text-[var(--ed-on-surface-variant)]">{tr("Las versiones difieren demasiado para compararlas aquí; restáurala para inspeccionarla.")}</p>}
                                         </div>
-                                        <p className="text-xs text-gray-500 font-medium">
-                                            {formatDistanceToNow(new Date(rev.modified), { addSuffix: true })}
-                                        </p>
-                                        <p className="text-[10px] text-gray-400 mt-1 font-mono">
-                                            {new Date(rev.modified).toLocaleString()}
-                                        </p>
+                                    </section>
+                                    <button type="button" disabled={restoringId !== null} onClick={() => handleRestoreClick(diffRev)} className="w-full min-h-11 px-4 rounded-xl border border-[var(--ed-outline-variant)] text-sm font-semibold text-[var(--ed-on-surface)] hover:border-[var(--ed-primary)] hover:text-[var(--ed-primary)] disabled:opacity-50 transition-colors inline-flex items-center justify-center gap-2">
+                                        <MSym name={restoringId === diffRev.id ? "sync" : "history"} size={18} className={restoringId === diffRev.id ? "animate-spin" : ""} /> {tr("Restaurar esta versión")}
+                                    </button>
+                                </div>
+                            );
+                        })()}
+                    </div>
+                )}
+
+                <div className={`flex-1 min-h-0 overflow-y-auto overscroll-contain p-4 custom-scrollbar ${diffRev ? "hidden" : ""}`}>
+                    {loading ? (
+                        <div role="status" className="grid gap-3" aria-label={tr("Cargando revisiones")}>
+                            {Array.from({ length: 4 }, (_, i) => <div key={i} className="h-32 rounded-2xl bg-[var(--ed-surface-container)] animate-pulse" aria-hidden="true" />)}
+                        </div>
+                    ) : loadError ? (
+                        <div role="alert" className="h-full min-h-64 flex flex-col items-center justify-center gap-3 text-center">
+                            <span className="w-12 h-12 rounded-2xl bg-[var(--ed-error-container)] text-[var(--ed-on-error-container)] flex items-center justify-center"><MSym name="info" size={24} /></span>
+                            <p className="text-sm font-semibold text-[var(--ed-on-surface)]">{tr("No se pudieron cargar las revisiones")}</p>
+                            <p className="max-w-xs text-xs text-[var(--ed-on-surface-variant)]">{tr("Comprueba la conexión y vuelve a intentarlo.")}</p>
+                            <button type="button" onClick={loadRevisions} className="min-h-11 px-4 rounded-xl border border-[var(--ed-outline-variant)] text-sm font-semibold hover:border-[var(--ed-primary)] hover:text-[var(--ed-primary)] transition-colors">{tr("Reintentar")}</button>
+                        </div>
+                    ) : revisions.length === 0 ? (
+                        <div className="h-full min-h-64 flex flex-col items-center justify-center gap-3 text-center">
+                            <span className="w-12 h-12 rounded-2xl bg-[var(--ed-surface-container)] text-[var(--ed-on-surface-variant)] flex items-center justify-center"><MSym name="history" size={24} /></span>
+                            <p className="text-sm font-semibold text-[var(--ed-on-surface)]">{tr("Aún no hay revisiones")}</p>
+                            <p className="max-w-xs text-xs text-[var(--ed-on-surface-variant)]">{tr("Guarda la página para crear su primera versión recuperable.")}</p>
+                        </div>
+                    ) : (
+                        <ol className="space-y-3 list-none m-0 p-0">
+                            {revisions.map((rev, index) => (
+                                <li key={rev.id || index} className={`relative p-4 rounded-2xl border ${index === 0 ? "bg-[var(--ed-primary-fixed)] border-[var(--ed-primary-container)]" : "bg-[var(--ed-surface-container-lowest)] border-[var(--ed-outline-variant)] hover:border-[var(--ed-primary)]"} transition-colors`}>
+                                    {index === 0 && <span className="absolute top-3 right-3 rounded-full bg-[var(--ed-primary-solid)] text-white text-[10px] font-semibold px-2 py-1">{tr("Última")}</span>}
+                                    <div className="pr-14">
+                                        <div className="flex items-center gap-2 mb-2">
+                                            <span className="w-8 h-8 rounded-full bg-[var(--ed-surface-container-lowest)] border border-[var(--ed-outline-variant)] flex items-center justify-center text-[11px] text-[var(--ed-on-surface)] font-semibold">
+                                                {users[rev.authorId]?.displayName?.charAt(0) || <MSym name="person" size={16} />}
+                                            </span>
+                                            <span className="text-sm font-semibold text-[var(--ed-on-surface)] truncate">{users[rev.authorId]?.displayName || `${tr("Autor")} #${rev.authorId}`}</span>
+                                        </div>
+                                        <p className="text-xs text-[var(--ed-on-surface-variant)]">{formatRelativeDate(rev.modified, language)}</p>
+                                        <p className="text-[11px] text-[var(--ed-outline)] mt-1 tabular-nums" style={{ fontFamily: "var(--ed-font-family-monospaced)" }}>{new Date(rev.modified).toLocaleString()}</p>
                                     </div>
-                                    <div className="flex flex-col gap-2 shrink-0">
-                                        <button
-                                            onClick={() => handleRestoreClick(rev)}
-                                            className="px-4 py-2 bg-white border border-gray-200 rounded-xl text-[10px] font-black uppercase tracking-widest text-gray-600 hover:border-blue-500 hover:text-blue-600 hover:shadow-md transition-all active:scale-95"
-                                        >
-                                            Restore
+                                    <div className="flex flex-wrap gap-2 mt-4">
+                                        <button type="button" disabled={restoringId !== null} onClick={() => handleRestoreClick(rev)} className="min-h-10 flex-1 px-3 rounded-xl border border-[var(--ed-outline-variant)] bg-[var(--ed-surface-container-lowest)] text-xs font-semibold text-[var(--ed-on-surface)] hover:border-[var(--ed-primary)] hover:text-[var(--ed-primary)] disabled:opacity-50 transition-colors inline-flex items-center justify-center gap-1.5">
+                                            <MSym name={restoringId === rev.id ? "sync" : "history"} size={16} className={restoringId === rev.id ? "animate-spin" : ""} /> {tr("Restaurar")}
                                         </button>
                                         {index > 0 && (
-                                            <button
-                                                onClick={() => setDiffRev(rev)}
-                                                className="px-4 py-2 bg-white border border-gray-200 rounded-xl text-[10px] font-black uppercase tracking-widest text-gray-600 hover:border-amber-500 hover:text-amber-600 hover:shadow-md transition-all active:scale-95"
-                                                title="Compare with the latest revision"
-                                            >
-                                                <i className="fa-solid fa-code-compare mr-1"></i>Changes
+                                            <button type="button" onClick={() => setDiffRev(rev)} className="min-h-10 flex-1 px-3 rounded-xl border border-[var(--ed-outline-variant)] bg-[var(--ed-surface-container-lowest)] text-xs font-semibold text-[var(--ed-on-surface)] hover:border-[var(--ed-primary)] hover:text-[var(--ed-primary)] transition-colors inline-flex items-center justify-center gap-1.5">
+                                                <MSym name="content_copy" size={16} /> {tr("Cambios")}
                                             </button>
                                         )}
                                     </div>
-                                </div>
-                            </div>
-                        ))}
-                    </div>
-                )}
-            </div>
+                                </li>
+                            ))}
+                        </ol>
+                    )}
+                </div>
 
-            {/* Footer */}
-            <div className="p-6 border-t border-gray-50 bg-gray-50/30">
-                <p className="text-[10px] text-gray-400 text-center font-bold uppercase tracking-widest leading-relaxed">
-                    Restoring a revision will replace your current content.<br />
-                    A new revision will be created for the current state.
-                </p>
-            </div>
-        </div>
+                <div className="px-4 py-3 pb-[max(12px,env(safe-area-inset-bottom))] border-t border-[var(--ed-outline-variant)] bg-[var(--ed-surface-container-low)]">
+                    <p className="text-[11px] text-[var(--ed-on-surface-variant)] text-center leading-relaxed">{tr("Restaurar reemplaza el contenido actual y conserva una revisión de su estado presente.")}</p>
+                </div>
+            </aside>
+        </>
     );
 }

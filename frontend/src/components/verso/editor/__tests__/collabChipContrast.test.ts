@@ -1,10 +1,10 @@
 /**
  * EL CHIP DE ESTADO SE TIENE QUE LEER — contraste calculado, no confiado.
  *
- * El defecto que cierra esto se vio en pantalla antes que en ningún test: el tono `live` pintaba
- * `--ed-primary` (#1f108e) sobre `--ed-primary-container` (#3730a3), dos índigos oscuros. Medido en
- * el navegador: **1,39:1**, cuando AA pide 4,5:1 para texto pequeño. El chip decía "En vivo" y no
- * se veía — el texto se fundía con su propia píldora.
+ * El defecto que cierra esto se vio en pantalla antes que en ningún test: el tono `live` llegó a
+ * pintar dos índigos oscuros con apenas **1,39:1**, cuando AA pide 4,5:1 para texto pequeño. El
+ * sistema visual actual mantiene el texto primario sobre un contenedor claro y este gate verifica
+ * que futuros cambios de paleta no vuelvan a introducir esa regresión.
  *
  * Nadie lo cazó porque la única regla de contraste del proyecto necesita `getComputedStyle` y en
  * node se salta (ver a11y.test.ts). Aquí no hace falta un navegador: los dos extremos del par están
@@ -80,7 +80,8 @@ describe("chip de estado de colaboración: todos los tonos se leen", () => {
 
     it("la lectura de ficheros encuentra lo que dice encontrar (o el gate sería un adorno)", () => {
         expect(Object.keys(tokens).length).toBeGreaterThan(20);
-        expect(tokens["--ed-primary"]).toBe("#1f108e");
+        expect(tokens["--ed-primary"]).toBe("#5146d8");
+        expect(tokens["--ed-primary-container"]).toBe("#e8e7ff");
         expect(Object.keys(tones).sort()).toEqual(["idle", "live", "off", "warn"]);
     });
 
@@ -97,8 +98,9 @@ describe("chip de estado de colaboración: todos los tonos se leen", () => {
         });
     }
 
-    it("y el par que falló de verdad queda escrito: primary sobre primary-container es 1,39:1", () => {
-        // El número exacto que se medía en pantalla, como recordatorio de por qué existe este test.
-        expect(+contrast(tokens["--ed-primary"], tokens["--ed-primary-container"]).toFixed(2)).toBe(1.39);
+    it("el par principal del sistema visual también conserva contraste AA", () => {
+        expect(
+            +contrast(tokens["--ed-primary"], tokens["--ed-primary-container"]).toFixed(2),
+        ).toBeGreaterThanOrEqual(4.5);
     });
 });

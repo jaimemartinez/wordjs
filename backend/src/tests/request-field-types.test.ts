@@ -39,6 +39,7 @@ const roles = require('../core/roles');
 const Post = require('../models/Post');
 const Media = require('../models/Media');
 const postTypes = require('../core/post-types');
+const { getBuiltinContentSchemas } = require('../core/content-schemas-builtins');
 const {
     PROTECTED_POST_META, RESERVED_META_KEYS, MAX_META_KEY_LENGTH,
     isProtectedPostMeta, metaKeyProblem, canonicalMetaKey, IGNORABLE_RANGES,
@@ -267,6 +268,70 @@ after(async () => {
     for (const f of [TMP_DB, `${TMP_DB}-wal`, `${TMP_DB}-shm`]) {
         try { if (fs.existsSync(f)) fs.rmSync(f, { force: true }); } catch { /* */ }
     }
+});
+
+describe('F2 generated runtime validator is on the live content route', () => {
+    test('an undeclared lifecycle enum is a stable 400 and creates no row', async () => {
+        const title = `f2-invalid-status-${STAMP}`;
+        const res = await as('admin', 'post', '/posts').send({ title, type: 'post', status: 'scheduled' });
+        assert.strictEqual(res.status, 400);
+        assert.strictEqual(res.body.code, 'rest_content_contract_invalid');
+        assert.ok(res.body.errors.some((issue: any) => issue.path === 'status' && issue.code === 'enum'));
+        const row = await dbAsync.get('SELECT id FROM posts WHERE post_title = ?', [title]);
+        assert.strictEqual(row, undefined, 'validation must happen before Post.create');
+    });
+
+    test('an update cannot contradict the URL-selected record type', async () => {
+        const post = await Post.create({ authorId: U.admin, title: 'F2 discriminator', type: 'post', status: 'draft' });
+        const res = await as('admin', 'put', `/posts/${post.id}`).send({ type: 'page', title: 'Wrong type' });
+        assert.strictEqual(res.status, 400);
+        assert.strictEqual(res.body.code, 'rest_content_contract_invalid');
+        assert.ok(res.body.errors.some((issue: any) => issue.path === 'type' && issue.code === 'discriminator'));
+        const stored = await dbAsync.get('SELECT post_type, post_title FROM posts WHERE id = ?', [post.id]);
+        assert.deepStrictEqual(stored, { post_type: 'post', post_title: 'F2 discriminator' });
+    });
+
+    test('showInRest:true with public:false stays private in list and item routes', async () => {
+        const schema = JSON.parse(JSON.stringify(
+            getBuiltinContentSchemas().find((candidate: any) => candidate.name === 'post'),
+        ));
+        schema.name = 'f2_private_live';
+        schema.labels = { singular: 'Private', plural: 'Privates', addNew: 'Add Private', edit: 'Edit Private' };
+        schema.visibility.public = false;
+        schema.storage.discriminator.value = schema.name;
+        schema.presentation.rewrite.slug = schema.name;
+        postTypes.registerContentType(schema);
+        try {
+            const post = await Post.create({
+                authorId: U.admin, title: 'F2 private live', type: schema.name, status: 'publish',
+            });
+            const list = await anon('get', `/posts?type=${schema.name}&status=publish`);
+            assert.strictEqual(list.status, 200);
+            assert.deepStrictEqual(list.body, []);
+            assert.strictEqual(list.headers['x-wp-total'], '0');
+            const item = await anon('get', `/posts/${post.id}`);
+            assert.strictEqual(item.status, 404);
+
+            const group = `f2-private-group-${STAMP}`;
+            const mine = await Post.create({
+                authorId: U.contributor, title: 'Mine', type: schema.name, status: 'publish',
+                language: 'en', translationGroup: group,
+            });
+            await Post.create({
+                authorId: U.admin, title: 'Not mine', type: schema.name, status: 'publish',
+                language: 'es', translationGroup: group,
+            });
+            const ownItem = await as('contributor', 'get', `/posts/${mine.id}`);
+            assert.strictEqual(ownItem.status, 200);
+            assert.deepStrictEqual(ownItem.body.translations, [], 'toJSON must not leak a private sibling slug');
+            const translations = await as('contributor', 'get', `/posts/${mine.id}/translations`);
+            assert.strictEqual(translations.status, 200);
+            assert.deepStrictEqual(translations.body.translations, [], 'the dedicated route uses the same read policy');
+        } finally {
+            await dbAsync.run('DELETE FROM posts WHERE post_type = ?', [schema.name]);
+            postTypes.unregisterPostType(schema.name);
+        }
+    });
 });
 
 // ═════════════════════════════════════════════════════════════════════════════════════════════════

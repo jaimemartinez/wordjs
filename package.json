@@ -33,7 +33,13 @@
     "bundle-release": "node scripts/make-release.js",
     "build:marketplace": "node backend/scripts/build-marketplace.js",
     "verify:marketplace": "node backend/scripts/verify-marketplace.js --rebuild",
-    "perf:bench": "node scripts/perf-bench.mjs"
+    "verify:f0": "cd backend && npm run verify:f0",
+    "verify:f1": "cd backend && npm run verify:f1",
+    "generate:f2": "cd backend && npm run generate:f2",
+    "verify:f2": "cd backend && npm run verify:f2",
+    "perf:f0": "cd backend && npm run perf:f0",
+    "perf:bench": "node scripts/perf-bench.mjs",
+    "perf:bench:enforce": "node scripts/perf-bench.mjs --enforce --json"
   },
   "dependencies": {
     "compression": "^1.8.1",

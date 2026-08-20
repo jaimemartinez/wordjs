@@ -13,6 +13,11 @@
     "test": "node --test --test-force-exit --test-concurrency=1 -r ts-node/register src/tests/*.test.ts",
     "test:integration": "node --test --test-force-exit -r ts-node/register src/tests-integration/*.test.ts",
     "test:multinode": "node --test --test-force-exit -r ts-node/register src/tests-integration/multinode-coherence.integration.ts",
+    "verify:f0": "node -r ts-node/register scripts/verify-f0-baseline.ts",
+    "verify:f1": "node -r ts-node/register scripts/verify-f1-content-schema.ts",
+    "generate:f2": "node -r ts-node/register scripts/generate-f2-contracts.ts",
+    "verify:f2": "npm run generate:f2 && node -r ts-node/register scripts/verify-f2-contracts.ts",
+    "perf:f0": "node -r ts-node/register scripts/f0-content-bench.ts --enforce",
     "lint": "eslint \"src/**/*.ts\"",
     "format": "prettier --write \"src/**/*.ts\""
   },

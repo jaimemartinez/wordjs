@@ -133,7 +133,9 @@ const POSITION_BINDING_BASE = [
     'plugin-admin-testimonials', 'plugin-admin-tickets', 'plugin-admin-tracking',
     'plugin-admin-vendor-marketplace', 'plugin-admin-youtube', 'position-absolute',
     'position-fixed', 'position-sticky', 'promo-card-bg', 'promo-card-overlay', 'ratio', 'show',
-    'video-scroll-arrow', 'visually-hidden', 'wjcc-banner', 'wjnb-bar', 'wjnb-close', 'wjpb-close',
+    'verso-icon-button', 'verso-overlay-scrim', 'verso-rail-button', 'verso-sheet',
+    'verso-sheet-scrim', 'verso-skip-link', 'video-scroll-arrow', 'visually-hidden', 'wjcc-banner',
+    'wjnb-bar', 'wjnb-close', 'wjpb-close',
     'wjpb-overlay', 'wjs-block-hero-overlay', 'wjs-block-hero__overlay',
     'wjs-block-particle-field', 'wjs-block-section__stage', 'wjs-block-testimonial__mark',
     'wjs-block-video-embed', 'wjs-block-video-embed__chip', 'wjs-block-video-embed__cover',
@@ -424,6 +426,10 @@ const boundedLength = (max: Record<string, number>) => (raw: string): string | n
     if (cap === undefined) return null;
     return `${Math.min(cap, Math.max(-cap, Number(m[1])))}${m[2]}`;
 };
+const boundedNonNegativeLength = (max: Record<string, number>) => (raw: string): string | null => {
+    const value = boundedLength(max)(raw);
+    return value !== null && !value.startsWith('-') ? value : null;
+};
 
 /** Mirror of NARROWED_VAR_VALUE (safeStyle.ts). Written against the stylesheet, not the call sites. */
 const NARROWED_VAR_VALUE = new Map<string, (raw: string) => string | null>([
@@ -449,6 +455,9 @@ const NARROWED_VAR_VALUE = new Map<string, (raw: string) => string | null>([
     // inside `translateX(calc(-50% - var(...) / 2))` by the audio marquee keyframe.
     ['--wjs-audio-marquee-gap', boundedLength(SPACING_MAX)],
     ['--wjs-xl', boundedLength(SPACING_MAX)],
+    // Used as both min-height and min-width by Toscano's interactive controls. Bound it before a
+    // theme mod can turn one control into page-wide geometry.
+    ['--wjs-target-size', boundedNonNegativeLength({ px: 96, rem: 6, em: 6 })],
 ]);
 
 /** THE ONLY WAY a `--*` value is stored: value criterion, then the narrowed grammar for its name. */

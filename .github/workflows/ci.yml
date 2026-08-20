@@ -86,6 +86,10 @@ jobs:
           backend/src/tests/collab-rejection-sites.test.ts
           backend/src/tests/dist-mysql-driver-freshness.test.ts
           backend/src/tests/frontend-purge-root-anchor.test.ts
+          backend/src/tests/f0-baseline.test.ts
+          backend/src/tests/f0-content-mutation-failures.test.ts
+          backend/src/tests/f1-content-schema.test.ts
+          backend/src/tests/f2-content-contract.test.ts
           backend/src/tests/health-purge-observability.test.ts
           backend/src/tests/import-post-page-slug-identity.test.ts
           backend/src/tests/install-root-paths.test.ts
@@ -122,18 +126,34 @@ jobs:
           backend/src/tests/verify-posts-remediation.test.ts
           # ── backend sources those gates import ────────────────────────────────────────────────────
           backend/src/core/analytics-retention.ts
+          backend/src/core/content-schema.ts
+          backend/src/core/content-schemas-builtins.ts
           backend/src/core/protected-meta.ts
           backend/src/core/sandbox-macos.ts
           backend/src/core/sandbox-windows.ts
           backend/src/drivers/mysql-text-rule.ts
           backend/src/routes/notices.ts
           backend/scripts/verify-sandbox-parity.mjs
+          backend/scripts/verify-f0-baseline.ts
+          backend/scripts/verify-f1-content-schema.ts
+          backend/scripts/generate-f2-contracts.ts
+          backend/scripts/verify-f2-contracts.ts
+          backend/content-schema.v1.json
+          backend/src/core/content-contract.ts
+          backend/src/generated/content-dtos.generated.ts
+          backend/f0-baseline.json
+          backend/f0-performance-budgets.json
+          documentation/adr/0001-f0-foundation-contract.md
+          documentation/adr/0002-f1-declarative-content-schema.md
+          documentation/adr/0003-f2-generated-content-contracts.md
           # ── frontend gates (vitest run: src/**/*.test.ts(x)) ──────────────────────────────────────
           frontend/src/__tests__/instrumentationGatewayTls.test.ts
           frontend/src/app/admin/notices/__tests__/noticesLogic.test.ts
           frontend/src/components/__tests__/revisionRestoreDisclosure.test.ts
           frontend/src/components/blocks/__tests__/authorCssVars.test.tsx
           frontend/src/components/blocks/__tests__/classAttributeChannel.test.tsx
+          frontend/src/lib/generated/content-client.generated.ts
+          frontend/src/lib/generated/__tests__/content-client.generated.test.ts
           frontend/src/components/content/__tests__/blockCssEmission.test.tsx
           frontend/src/components/content/__tests__/blockStyleInjection.test.tsx
           frontend/src/components/verso/editor/__tests__/propertiesPanel.test.tsx
@@ -272,6 +292,15 @@ jobs:
       - name: Build (compile to dist — no ts-node in prod)
         working-directory: backend
         run: npm run build
+      - name: F0 architecture baseline (REST, plugin ABI, typing debt, sandbox and budgets)
+        working-directory: backend
+        run: npm run verify:f0
+      - name: F1 declarative content schema (portable contract + legacy adapter)
+        working-directory: backend
+        run: npm run verify:f1
+      - name: F2 generated content contracts (validators, DTO, OpenAPI, policy and client)
+        working-directory: backend
+        run: npm run verify:f2
       - name: License gate (block network-copyleft AGPL/SSPL)
         working-directory: backend
         run: npx --yes license-checker --production --failOn 'AGPL;SSPL'
@@ -284,6 +313,9 @@ jobs:
         env:
           WORDJS_CI_DB: '1'
         run: npm test
+      - name: F0 content performance budgets
+        working-directory: backend
+        run: npm run perf:f0
       - name: Integration tests (Postgres + Redis)
         # Exercises the multi-node coordination paths (dist-lock lease CAS, Redis pub/sub coherence)
         # and the health/metrics endpoints against the real service containers above. config.db

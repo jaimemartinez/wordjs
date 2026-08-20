@@ -1,8 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import Image from "next/image";
 import { mediaApi, MediaItem, MediaListOptions } from "@/lib/api";
 import { useI18n } from "@/contexts/I18nContext";
+import MSym from "./editor/MSym";
 
 /* -------------------------------------------------------------------------------------------------
  * Shared media-library logic
@@ -155,6 +157,7 @@ export default function MediaLibrarySelector({ onSelect, selectedId }: MediaLibr
     const { t } = useI18n();
     const [media, setMedia] = useState<MediaItem[]>([]);
     const [loading, setLoading] = useState(true);
+    const [loadError, setLoadError] = useState(false);
     const [searchInput, setSearchInput] = useState("");
     const [search, setSearch] = useState("");
     const [page, setPage] = useState(1);
@@ -176,6 +179,7 @@ export default function MediaLibrarySelector({ onSelect, selectedId }: MediaLibr
 
     const loadMedia = useCallback(async () => {
         setLoading(true);
+        setLoadError(false);
         try {
             const res = await mediaApi.listPaged(buildMediaQuery({ page, perPage: SELECTOR_PAGE_SIZE, search }));
             setMedia(res.data);
@@ -188,6 +192,7 @@ export default function MediaLibrarySelector({ onSelect, selectedId }: MediaLibr
             setMedia([]);
             setTotal(0);
             setTotalPages(1);
+            setLoadError(true);
         } finally {
             setLoading(false);
         }
@@ -201,77 +206,101 @@ export default function MediaLibrarySelector({ onSelect, selectedId }: MediaLibr
     const range = pageRange(page, SELECTOR_PAGE_SIZE, total);
 
     return (
-        <div className="flex flex-col h-full bg-white rounded-lg">
+        <div className="flex flex-col h-full min-h-0 bg-[var(--ed-surface-container-lowest)] sm:rounded-xl overflow-hidden">
             {/* Toolbar */}
-            <div className="p-4 border-b flex justify-between items-center gap-3 bg-gray-50 rounded-t-lg">
+            <div className="p-3 sm:p-4 border-b border-[var(--ed-outline-variant)] flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 bg-[var(--ed-surface-container-low)]">
+                <label htmlFor="media-library-search" className="sr-only">{t('media.search')}</label>
                 <input
+                    id="media-library-search"
                     type="text"
+                    inputMode="search"
+                    autoComplete="off"
                     placeholder={t('media.search')}
-                    className="px-3 py-2 border rounded-md text-sm w-full max-w-xs"
+                    className="min-h-11 px-3 border border-[var(--ed-outline-variant)] rounded-xl text-sm w-full sm:max-w-sm bg-[var(--ed-surface-container-lowest)] text-[var(--ed-on-surface)] placeholder:text-[var(--ed-outline)]"
                     value={searchInput}
                     onChange={(e) => setSearchInput(e.target.value)}
                 />
-                <div className="flex items-center gap-3">
+                <div className="flex items-center justify-between sm:justify-end gap-3">
                     {total > 0 && (
-                        <span className="hidden sm:inline text-xs font-semibold text-gray-400 whitespace-nowrap">
+                        <span className="text-xs font-medium text-[var(--ed-on-surface-variant)] whitespace-nowrap" aria-live="polite">
                             {range.from}–{range.to} de {range.total}
                         </span>
                     )}
                     <button
+                        type="button"
                         onClick={() => setRefreshKey((k) => k + 1)}
-                        className="text-gray-500 hover:text-blue-600"
+                        disabled={loading}
+                        className="verso-icon-button w-11 h-11 rounded-xl flex items-center justify-center text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container-high)] hover:text-[var(--ed-primary)] disabled:opacity-40 transition-colors"
                         title={t('common.refresh')}
                         aria-label={t('common.refresh')}
                     >
-                        <i className="fa-solid fa-sync"></i>
+                        <MSym name="refresh" size={20} className={loading ? "animate-spin" : ""} />
                     </button>
                 </div>
             </div>
 
             {/* Grid */}
-            <div className="flex-1 overflow-y-auto p-4 min-h-[300px] max-h-[500px]">
+            <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain p-3 sm:p-4 custom-scrollbar">
                 {loading ? (
-                    <div className="flex justify-center items-center h-40">
-                        <i className="fa-solid fa-circle-notch fa-spin text-4xl text-gray-300"></i>
+                    <div role="status" aria-label={t('common.loading')} className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 sm:gap-4">
+                        {Array.from({ length: 10 }, (_, i) => (
+                            <div key={i} className="aspect-square rounded-xl bg-[var(--ed-surface-container)] animate-pulse" aria-hidden="true" />
+                        ))}
+                    </div>
+                ) : loadError ? (
+                    <div role="alert" className="min-h-64 flex flex-col items-center justify-center gap-3 text-center text-[var(--ed-on-surface-variant)]">
+                        <span className="w-12 h-12 rounded-2xl bg-[var(--ed-error-container)] text-[var(--ed-on-error-container)] flex items-center justify-center"><MSym name="info" size={24} /></span>
+                        <p className="text-sm font-medium text-[var(--ed-on-surface)]">{t('media.load.failed')}</p>
+                        <button type="button" onClick={loadMedia} className="min-h-11 px-4 rounded-xl border border-[var(--ed-outline-variant)] text-sm font-semibold hover:border-[var(--ed-primary)] hover:text-[var(--ed-primary)] transition-colors">
+                            {t('common.refresh')}
+                        </button>
                     </div>
                 ) : media.length === 0 ? (
-                    <div className="text-center text-gray-400 py-10">
-                        <i className="fa-solid fa-images text-4xl mb-2"></i>
-                        <p>{t('media.no.media')}</p>
+                    <div className="min-h-64 flex flex-col items-center justify-center gap-3 text-center text-[var(--ed-on-surface-variant)]">
+                        <span className="w-12 h-12 rounded-2xl bg-[var(--ed-surface-container)] flex items-center justify-center"><MSym name="image" size={24} /></span>
+                        <p className="text-sm">{t('media.no.media')}</p>
                     </div>
                 ) : (
-                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 sm:gap-4">
                         {media.map((item) => (
-                            <div
+                            <button
+                                type="button"
                                 key={item.id}
                                 onClick={() => onSelect(item)}
+                                aria-label={`${t('media.select')}: ${item.title || `#${item.id}`}`}
+                                aria-pressed={selectedId === item.id}
                                 className={`
-                                    group relative aspect-square bg-gray-100 rounded-lg overflow-hidden cursor-pointer border-2 transition-all
-                                    ${selectedId === item.id ? 'border-blue-500 ring-2 ring-blue-200' : 'border-transparent hover:border-gray-300'}
+                                    group relative aspect-square min-h-0 bg-[var(--ed-surface-container)] rounded-xl overflow-hidden cursor-pointer border-2 transition-[border-color,box-shadow]
+                                    ${selectedId === item.id ? 'border-[var(--ed-primary)] ring-2 ring-[var(--ed-primary-fixed)]' : 'border-transparent hover:border-[var(--ed-outline)]'}
                                 `}
                             >
                                 {item.mimeType.startsWith('image/') ? (
-                                    <img
+                                    <Image
                                         src={mediaThumbnailUrl(item)}
-                                        alt={item.title}
+                                        alt=""
+                                        fill
+                                        sizes="(max-width: 639px) 50vw, (max-width: 767px) 33vw, (max-width: 1023px) 25vw, 20vw"
+                                        unoptimized
                                         className="w-full h-full object-cover"
                                     />
                                 ) : (
-                                    <div className="flex items-center justify-center h-full w-full">
-                                        <i className="fa-solid fa-file text-4xl text-gray-400"></i>
+                                    <div aria-hidden="true" className="flex items-center justify-center h-full w-full text-[var(--ed-on-surface-variant)]">
+                                        <span className="px-2 text-sm font-semibold uppercase tracking-wider truncate">
+                                            {item.mimeType.split("/")[1]?.split(/[+.]/)[0]?.slice(0, 8) || "file"}
+                                        </span>
                                     </div>
                                 )}
 
-                                <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                                <div aria-hidden="true" className="absolute inset-0 bg-black/55 opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 transition-opacity flex items-center justify-center">
                                     <span className="text-white font-medium text-sm px-2 py-1 bg-black/50 rounded">{t('media.select')}</span>
                                 </div>
 
                                 {selectedId === item.id && (
-                                    <div className="absolute top-2 right-2 bg-blue-500 text-white w-6 h-6 rounded-full flex items-center justify-center shadow-sm">
-                                        <i className="fa-solid fa-check text-xs"></i>
+                                    <div aria-hidden="true" className="absolute top-2 right-2 bg-[var(--ed-primary-solid)] text-white w-7 h-7 rounded-full flex items-center justify-center shadow-sm">
+                                        <MSym name="check_circle" size={18} fill />
                                     </div>
                                 )}
-                            </div>
+                            </button>
                         ))}
                     </div>
                 )}
@@ -279,25 +308,25 @@ export default function MediaLibrarySelector({ onSelect, selectedId }: MediaLibr
 
             {/* Pager — server-side, so the picker reaches the whole library and not just page 1. */}
             {!loading && totalPages > 1 && (
-                <div className="px-4 py-3 border-t border-gray-100 bg-gray-50/50 rounded-b-lg flex items-center justify-between">
+                <div className="px-3 sm:px-4 py-3 border-t border-[var(--ed-outline-variant)] bg-[var(--ed-surface-container-low)] flex items-center justify-between gap-2">
                     <button
                         type="button"
                         onClick={() => setPage((p) => Math.max(1, p - 1))}
                         disabled={page <= 1}
-                        className="px-4 py-2 rounded-xl border border-gray-200 text-xs font-bold text-gray-600 hover:border-blue-400 hover:text-blue-600 disabled:opacity-40 transition-all"
+                        className="min-h-11 px-3 sm:px-4 rounded-xl border border-[var(--ed-outline-variant)] text-xs font-semibold text-[var(--ed-on-surface)] hover:border-[var(--ed-primary)] hover:text-[var(--ed-primary)] disabled:opacity-40 transition-colors"
                     >
-                        <i className="fa-solid fa-chevron-left mr-2"></i>{t('table.previous')}
+                        <MSym name="chevron_left" size={18} className="align-[-4px]" />{t('table.previous')}
                     </button>
-                    <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">
+                    <span className="text-[11px] font-semibold text-[var(--ed-on-surface-variant)] text-center">
                         {t('table.pageOf').replace('{page}', String(page)).replace('{total}', String(totalPages))}
                     </span>
                     <button
                         type="button"
                         onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
                         disabled={page >= totalPages}
-                        className="px-4 py-2 rounded-xl border border-gray-200 text-xs font-bold text-gray-600 hover:border-blue-400 hover:text-blue-600 disabled:opacity-40 transition-all"
+                        className="min-h-11 px-3 sm:px-4 rounded-xl border border-[var(--ed-outline-variant)] text-xs font-semibold text-[var(--ed-on-surface)] hover:border-[var(--ed-primary)] hover:text-[var(--ed-primary)] disabled:opacity-40 transition-colors"
                     >
-                        {t('table.next')}<i className="fa-solid fa-chevron-right ml-2"></i>
+                        {t('table.next')}<MSym name="chevron_right" size={18} className="align-[-4px]" />
                     </button>
                 </div>
             )}

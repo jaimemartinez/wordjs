@@ -178,11 +178,13 @@ function PaletteDialog({
                 data-idx={idx}
                 onMouseEnter={() => setActive(idx)}
                 onClick={onRun}
-                className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left cursor-pointer transition-colors ${
-                    isActive ? "bg-[var(--ed-surface-container)]" : ""
+                className={`w-full min-h-11 flex items-center gap-3 px-3 py-2.5 rounded-xl text-left cursor-pointer transition-colors ${
+                    isActive ? "bg-[var(--ed-primary-container)]" : "hover:bg-[var(--ed-surface-container-low)]"
                 }`}
             >
-                <MSym name={ms} size={20} className={isActive ? "text-[var(--ed-primary)]" : "text-[var(--ed-on-surface-variant)]"} />
+                <span className={`w-8 h-8 rounded-lg flex items-center justify-center ${isActive ? "bg-[var(--ed-surface-container-lowest)]" : "bg-[var(--ed-surface-container)]"}`}>
+                    <MSym name={ms} size={19} className={isActive ? "text-[var(--ed-primary)]" : "text-[var(--ed-on-surface-variant)]"} />
+                </span>
                 <span className="min-w-0 flex-1 truncate text-[13px] text-[var(--ed-on-surface)]">{label}</span>
                 {isActive && trailing && (
                     <span className="hidden sm:inline shrink-0 text-[10px] text-[var(--ed-outline)]" style={mono}>
@@ -195,12 +197,12 @@ function PaletteDialog({
 
     return createPortal(
         <div
-            className="verso-editor-ui fixed inset-0 z-[9999] flex items-start justify-center pt-[14vh] px-4 bg-[rgba(27,27,34,0.4)] backdrop-blur-sm"
+            className="verso-editor-ui verso-dialog-layer fixed inset-0 flex items-end sm:items-start justify-center sm:pt-[12vh] sm:px-4 bg-[rgba(16,17,24,0.52)] backdrop-blur-sm"
             onMouseDown={onClose}
         >
             <div
                 ref={dialogRef}
-                className="w-full max-w-xl bg-white rounded-xl shadow-2xl border border-[var(--ed-outline-variant)] overflow-hidden flex flex-col max-h-[70vh]"
+                className="w-full max-w-2xl bg-[var(--ed-surface-container-lowest)] rounded-t-[24px] sm:rounded-[20px] shadow-2xl border border-[var(--ed-outline-variant)] overflow-hidden flex flex-col max-h-[82dvh] sm:max-h-[72vh]"
                 onMouseDown={(e) => e.stopPropagation()}
                 onKeyDown={onKeyDown}
                 role="dialog"
@@ -208,7 +210,7 @@ function PaletteDialog({
                 aria-label={trStr("Buscar un bloque para insertar", language)}
             >
                 {/* Search — combobox: el foco vive aquí, la fila activa via aria-activedescendant */}
-                <div className="flex items-center gap-3 px-4 py-3 border-b border-[var(--ed-outline-variant)]">
+                <div className="flex items-center gap-3 px-4 sm:px-5 py-4 border-b border-[var(--ed-outline-variant)]">
                     <MSym name="search" size={18} className="text-[var(--ed-primary)]" />
                     <input
                         ref={inputRef}
@@ -221,7 +223,7 @@ function PaletteDialog({
                         onChange={(e) => { setQuery(e.target.value); setActive(0); }}
                         placeholder={trStr("Buscar un bloque para insertar…", language)}
                         aria-label={trStr("Buscar un bloque para insertar", language)}
-                        className="flex-1 bg-transparent text-[14px] text-[var(--ed-on-surface)] placeholder:text-[var(--ed-outline)] focus:outline-none"
+                        className="min-w-0 flex-1 h-10 bg-transparent text-[15px] text-[var(--ed-on-surface)] placeholder:text-[var(--ed-outline)] focus:outline-none"
                     />
                     <kbd
                         className="hidden sm:inline px-1.5 py-0.5 rounded border border-[var(--ed-outline-variant)] text-[10px] text-[var(--ed-outline)]"
@@ -229,6 +231,15 @@ function PaletteDialog({
                     >
                         ESC
                     </kbd>
+                    <button
+                        type="button"
+                        onClick={onClose}
+                        aria-label={trStr("Cerrar", language)}
+                        title={trStr("Cerrar", language)}
+                        className="verso-icon-button w-10 h-10 rounded-xl flex items-center justify-center text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container)] transition-colors"
+                    >
+                        <MSym name="close" size={19} />
+                    </button>
                 </div>
 
                 {/* Results */}
@@ -237,7 +248,7 @@ function PaletteDialog({
                     id={LISTBOX_ID}
                     role="listbox"
                     aria-label={trStr("Acciones", language)}
-                    className="overflow-y-auto custom-scrollbar p-2 max-h-[400px]"
+                    className="overflow-y-auto custom-scrollbar p-2.5 sm:p-3 max-h-[min(62dvh,480px)]"
                 >
                     {total === 0 ? (
                         <div className="text-center py-12 text-[13px] text-[var(--ed-on-surface-variant)]">
@@ -275,8 +286,9 @@ function PaletteDialog({
                 </div>
 
                 {/* Footer hints */}
-                <div className="flex items-center justify-between px-4 py-2 border-t border-[var(--ed-outline-variant)] bg-[var(--ed-surface-container-low)] text-[10px] text-[var(--ed-on-surface-variant)] select-none">
-                    <span>{trStr("Usa ↑↓ para navegar · ↵ para insertar", language)}</span>
+                <div className="flex items-center justify-between px-4 sm:px-5 py-2.5 border-t border-[var(--ed-outline-variant)] bg-[var(--ed-surface-container-low)] text-[10px] text-[var(--ed-on-surface-variant)] select-none">
+                    <span className="hidden sm:inline">{trStr("Usa ↑↓ para navegar · ↵ para insertar", language)}</span>
+                    <span className="sm:hidden">{trStr("Toca una opción para elegirla", language)}</span>
                     <span>{APP_VERSION ? `WordJS v${APP_VERSION}` : "WordJS"}</span>
                 </div>
             </div>

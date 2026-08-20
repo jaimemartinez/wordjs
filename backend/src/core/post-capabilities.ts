@@ -14,11 +14,8 @@
 // Pure capability-name builder for a capability_type family. NEVER null — used as the guaranteed
 // fallback for an EXISTING post whose registered type may since have been removed.
 function capsFor(c: string) {
-    return {
-        edit: `edit_${c}s`, publish: `publish_${c}s`, del: `delete_${c}s`,
-        editPublished: `edit_published_${c}s`, deletePublished: `delete_published_${c}s`,
-        editOthers: `edit_others_${c}s`, deleteOthers: `delete_others_${c}s`,
-    };
+    const { policyFromCapabilityType } = require('./content-contract');
+    return policyFromCapabilityType(c);
 }
 
 // Resolve the capability family for a post type (post → edit_posts, page → edit_pages, custom →
@@ -26,10 +23,16 @@ function capsFor(c: string) {
 // Returns null for an UNREGISTERED type so the CREATE path can reject it (400). Callers editing an
 // existing post fall back to capsFor('post') instead of relying on this nullable result.
 function capsForType(type: string) {
-    const { getPostType } = require('./post-types');
-    const pt = getPostType(String(type || 'post'));
-    if (!pt) return null;
-    return capsFor(pt.capability_type || 'post');
+    const { getPostType, getContentTypeSchema } = require('./post-types');
+    const name = String(type || 'post');
+    const schema = getContentTypeSchema(name);
+    if (schema) {
+        const { policyFromContentSchema } = require('./content-contract');
+        return policyFromContentSchema(schema);
+    }
+    // Pre-F1 registries created by an older embedder still get the historical projection.
+    const pt = getPostType(name);
+    return pt ? capsFor(pt.capability_type || 'post') : null;
 }
 
 /**
@@ -58,6 +61,32 @@ function canEditPostRecord(user: any, post: any): boolean {
     return allowed;
 }
 
+/** Delete twin of canEditPostRecord, generated from the same declared operation map. */
+function canDeletePostRecord(user: any, post: any): boolean {
+    if (!user || !post) return false;
+    const caps = capsForType(post.type || post.postType || 'post') || capsFor('post');
+    const isOwn = post.authorId === user.id;
+    let allowed = isOwn ? user.can(caps.del) : user.can(caps.deleteOthers);
+    if (post.postStatus === 'publish' && !user.can(caps.deletePublished)) allowed = false;
+    return allowed;
+}
+
+/** Whether a user may see a non-public record of this declared type. */
+function canReadUnpublishedPostRecord(user: any, post: any): boolean {
+    if (!user || !post) return false;
+    if (post.authorId === user.id) return true;
+    const caps = capsForType(post.type || post.postType || 'post') || capsFor('post');
+    return user.can(caps.editOthers) || user.can(caps.readPrivate);
+}
+
+/** Public records are readable by anyone; every other state uses the generated type policy. */
+function canReadPostRecord(user: any, post: any): boolean {
+    if (!post) return false;
+    const caps = capsForType(post.type || post.postType || 'post') || capsFor('post');
+    const published = post.postStatus === 'publish' || post.status === 'publish';
+    return (published && caps.publiclyReadable) || canReadUnpublishedPostRecord(user, post);
+}
+
 /**
  * Is `type` a post type the GENERIC /posts routes may act on at all?
  *
@@ -78,4 +107,7 @@ function isRestExposedPostType(type: string): boolean {
     return !!(pt && pt.showInRest);
 }
 
-module.exports = { capsFor, capsForType, canEditPostRecord, isRestExposedPostType };
+module.exports = {
+    capsFor, capsForType, canEditPostRecord, canDeletePostRecord,
+    canReadPostRecord, canReadUnpublishedPostRecord, isRestExposedPostType,
+};

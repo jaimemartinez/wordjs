@@ -110,7 +110,7 @@ export default function ContentTable({ type, basePath, emptyIcon, emptyTitle, ne
                 type: full.type,
                 status: "draft",
                 ...(full.meta?._puck_data ? { meta: { _puck_data: full.meta._puck_data } } : {}),
-            } as Partial<Post> as any);
+            });
             if (created?.id) window.location.href = `${basePath}/${created.id}`;
             else load();
         } catch (error: any) {

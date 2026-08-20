@@ -5,9 +5,22 @@
 
 const { getOption, updateOption } = require('./options');
 const { doAction } = require('./hooks');
+const {
+    normalizeContentTypeSchema,
+    adaptLegacyPostType,
+    contentSchemaToPostType,
+    cloneContentTypeSchema,
+    fieldsForFeatures,
+} = require('./content-schema');
+const { getBuiltinContentSchemas } = require('./content-schemas-builtins');
+import type { ContentTypeSchemaV1 } from './content-schema';
 
 // Registered post types
 const postTypes = new Map();
+
+// F1 source-of-truth registry. `postTypes` remains the compatibility projection consumed by
+// existing routes, admin menus and plugins; every entry in it has one portable schema here.
+const contentTypeSchemas = new Map<string, ContentTypeSchemaV1>();
 
 // Registered taxonomies (mirrors `postTypes` — an in-memory registry of taxonomy objects).
 const taxonomies = new Map();
@@ -49,106 +62,32 @@ const defaultTaxonomies = {
     }
 };
 
-// Default post types
-const defaultPostTypes = {
-    post: {
-        name: 'post',
-        label: 'Posts',
-        labels: {
-            singular: 'Post',
-            plural: 'Posts',
-            addNew: 'Add New Post',
-            edit: 'Edit Post'
-        },
-        public: true,
-        showInMenu: true,
-        showInRest: true,
-        hasArchive: true,
-        supports: ['title', 'editor', 'author', 'thumbnail', 'excerpt', 'comments', 'revisions'],
-        taxonomies: ['category', 'post_tag'],
-        menuIcon: 'fa-pen-to-square',
-        menuPosition: 5
-    },
-    page: {
-        name: 'page',
-        label: 'Pages',
-        labels: {
-            singular: 'Page',
-            plural: 'Pages',
-            addNew: 'Add New Page',
-            edit: 'Edit Page'
-        },
-        public: true,
-        showInMenu: true,
-        showInRest: true,
-        hasArchive: false,
-        hierarchical: true,
-        // Pages use the page capability family (edit_pages/publish_pages/…) — NOT the post family. Without
-        // this, pages defaulted to capability_type 'post', so an author (edit_posts, no page caps) could
-        // create/publish pages (audit HIGH). The roles already define the page caps for admin/editor.
-        capability_type: 'page',
-        supports: ['title', 'editor', 'author', 'thumbnail', 'excerpt', 'page-attributes', 'revisions'],
-        taxonomies: [],
-        menuIcon: 'fa-file-lines',
-        menuPosition: 10
-    },
-    attachment: {
-        name: 'attachment',
-        label: 'Media',
-        labels: {
-            singular: 'Media',
-            plural: 'Media',
-            addNew: 'Add New Media',
-            edit: 'Edit Media'
-        },
-        public: true,
-        // The canonical Media entry is the Media Library menu (→ /admin/media) registered in
-        // initCoreMenus. Keeping showInMenu here too produced a SECOND "Media" item pointing at
-        // /admin/posts?type=attachment — a confusing duplicate. Attachments are managed in the library.
-        showInMenu: false,
-        showInRest: true,
-        hasArchive: false,
-        supports: ['title', 'author', 'comments'],
-        taxonomies: [],
-        menuIcon: 'fa-images',
-        menuPosition: 15
-    }
-};
+const BUILTIN_POST_TYPE_NAMES = new Set(['post', 'page', 'attachment', 'revision', 'nav_menu_item']);
 
 /**
- * Register a custom post type
- * Equivalent to register_post_type()
+ * Register the F1 portable contract and publish its legacy runtime projection.
  */
-function registerPostType(name: string, args: Record<string, any> = {}) {
-    const postType: Record<string, any> = {
-        name,
-        label: args.label || name,
-        labels: {
-            singular: args.labels?.singular || args.label || name,
-            plural: args.labels?.plural || args.label || name,
-            addNew: args.labels?.addNew || `Add New ${args.label || name}`,
-            edit: args.labels?.edit || `Edit ${args.label || name}`,
-            ...args.labels
-        },
-        description: args.description || '',
-        public: args.public !== false,
-        showInMenu: args.showInMenu !== false,
-        showInRest: args.showInRest !== false,
-        hasArchive: args.hasArchive || false,
-        hierarchical: args.hierarchical || false,
-        supports: args.supports || ['title', 'editor'],
-        taxonomies: args.taxonomies || [],
-        menuIcon: args.menuIcon || 'fa-file',
-        menuPosition: args.menuPosition || 25,
-        rewrite: args.rewrite || { slug: name },
-        capability_type: args.capability_type || 'post',
-        ...args
-    };
+function registerContentType(schemaValue: unknown) {
+    const schema = normalizeContentTypeSchema(schemaValue) as ContentTypeSchemaV1;
+    const postType = contentSchemaToPostType(schema);
+    contentTypeSchemas.set(schema.name, schema);
+    postTypes.set(schema.name, postType);
+    doAction('registered_content_type_schema', schema.name, cloneContentTypeSchema(schema));
+    doAction('registered_post_type', schema.name, postType);
+    return postType;
+}
 
-    postTypes.set(name, postType);
-
-    doAction('registered_post_type', name, postType);
-
+/**
+ * Historical adapter. Unknown keys still live on the runtime object exactly as before, including
+ * non-serialisable values; only their JSON-safe subset is admitted to the portable F1 schema.
+ */
+function registerPostType(name: string, args: Record<string, unknown> = {}) {
+    const { schema, runtimeExtensions } = adaptLegacyPostType(name, args);
+    const postType = contentSchemaToPostType(schema, runtimeExtensions);
+    contentTypeSchemas.set(schema.name, schema);
+    postTypes.set(schema.name, postType);
+    doAction('registered_content_type_schema', schema.name, cloneContentTypeSchema(schema));
+    doAction('registered_post_type', schema.name, postType);
     return postType;
 }
 
@@ -157,10 +96,10 @@ function registerPostType(name: string, args: Record<string, any> = {}) {
  */
 function unregisterPostType(name: string) {
     // Can't unregister built-in types
-    if (['post', 'page', 'attachment', 'revision', 'nav_menu_item'].includes(name)) {
+    if (BUILTIN_POST_TYPE_NAMES.has(name)) {
         return false;
     }
-
+    contentTypeSchemas.delete(name);
     return postTypes.delete(name);
 }
 
@@ -170,6 +109,24 @@ function unregisterPostType(name: string) {
  */
 function getPostType(name: string) {
     return postTypes.get(name) || null;
+}
+
+/** Return a defensive, JSON-serialisable copy of one F1 declaration. */
+function getContentTypeSchema(name: string): ContentTypeSchemaV1 | null {
+    const schema = contentTypeSchemas.get(name);
+    return schema ? cloneContentTypeSchema(schema) : null;
+}
+
+/** List F1 declarations using the same visibility filters as getPostTypes(). */
+function getContentTypeSchemas(args: Record<string, unknown> = {}): ContentTypeSchemaV1[] {
+    return Array.from(contentTypeSchemas.values())
+        .filter((schema) => {
+            if (args.public !== undefined && schema.visibility.public !== args.public) return false;
+            if (args.showInMenu !== undefined && schema.visibility.showInMenu !== args.showInMenu) return false;
+            if (args.showInRest !== undefined && schema.visibility.showInRest !== args.showInRest) return false;
+            return true;
+        })
+        .map((schema) => cloneContentTypeSchema(schema));
 }
 
 /**
@@ -220,6 +177,14 @@ function addPostTypeSupport(name: string, features: string | string[]) {
         }
     });
 
+    const schema = contentTypeSchemas.get(name);
+    if (schema) {
+        schema.features = [...new Set<string>(type.supports as string[])];
+        schema.fields = { ...schema.fields, ...fieldsForFeatures(schema.features) };
+        if (schema.features.includes('revisions')) schema.revisions.enabled = true;
+        contentTypeSchemas.set(name, normalizeContentTypeSchema(schema));
+    }
+
     return true;
 }
 
@@ -233,6 +198,12 @@ function removePostTypeSupport(name: string, feature: string) {
     const index = type.supports.indexOf(feature);
     if (index > -1) {
         type.supports.splice(index, 1);
+        const schema = contentTypeSchemas.get(name);
+        if (schema) {
+            schema.features = [...type.supports];
+            if (feature === 'revisions') schema.revisions.enabled = false;
+            contentTypeSchemas.set(name, normalizeContentTypeSchema(schema));
+        }
         return true;
     }
 
@@ -424,55 +395,110 @@ async function deleteCustomTaxonomy(name: string) {
  * Initialize default and custom post types
  */
 async function initPostTypes() {
-    // Register defaults (sync)
-    Object.values(defaultPostTypes).forEach(type => {
-        registerPostType(type.name, type);
-    });
+    // Core types are declarations now; the old registry is only their compatibility projection.
+    getBuiltinContentSchemas().forEach((schema: ContentTypeSchemaV1) => registerContentType(schema));
 
-    // Register nav_menu_item (internal)
-    registerPostType('nav_menu_item', {
-        label: 'Navigation Menu Items',
-        public: false,
-        showInMenu: false,
-        showInRest: false
-    });
+    // F1 declarations win over their dual-written legacy projection.
+    const storedSchemas = await getOption('custom_content_schemas', {});
+    if (storedSchemas && typeof storedSchemas === 'object' && !Array.isArray(storedSchemas)) {
+        Object.values(storedSchemas).forEach((schema: unknown) => {
+            try {
+                registerContentType(schema);
+            } catch (e: any) {
+                console.warn(`Skipping invalid custom content schema: ${e && e.message ? e.message : e}`);
+            }
+        });
+    }
 
-    // Register revision (internal)
-    registerPostType('revision', {
-        label: 'Revisions',
-        public: false,
-        showInMenu: false,
-        showInRest: false
-    });
-
-    // Load custom post types from options (Async)
+    // Existing installs keep booting: entries that have no F1 declaration are adapted in memory.
     const customTypes = await getOption('custom_post_types', {});
-    if (customTypes && typeof customTypes === 'object') {
+    if (customTypes && typeof customTypes === 'object' && !Array.isArray(customTypes)) {
         Object.values(customTypes).forEach((type: any) => {
-            registerPostType(type.name, type);
+            if (!type || typeof type.name !== 'string' || contentTypeSchemas.has(type.name)) return;
+            try {
+                registerPostType(type.name, type);
+            } catch (e: any) {
+                console.warn(`Skipping invalid legacy custom post type: ${e && e.message ? e.message : e}`);
+            }
         });
     }
 }
 
 /**
- * Save custom post type to persist across restarts
+ * Persist a native F1 declaration. The legacy option is dual-written during the compatibility
+ * window so older WordJS processes sharing the database can still discover the type.
  */
-async function saveCustomPostType(name: string, args: Record<string, any>) {
-    const customTypes = await getOption('custom_post_types', {});
+async function saveContentTypeSchema(schemaValue: unknown) {
+    const schema = normalizeContentTypeSchema(schemaValue) as ContentTypeSchemaV1;
+    if (BUILTIN_POST_TYPE_NAMES.has(schema.name)) {
+        throw new Error(`content schema name: ${schema.name} is a protected built-in type`);
+    }
+    const postType = registerContentType(schema);
+    const storedSchemasRaw = await getOption('custom_content_schemas', {});
+    const storedSchemas: Record<string, unknown> = Object.assign(
+        Object.create(null),
+        storedSchemasRaw && typeof storedSchemasRaw === 'object' && !Array.isArray(storedSchemasRaw) ? storedSchemasRaw : {},
+    );
+    storedSchemas[schema.name] = cloneContentTypeSchema(schema);
+    await updateOption('custom_content_schemas', storedSchemas);
+
+    const customTypesRaw = await getOption('custom_post_types', {});
+    const customTypes: Record<string, unknown> = Object.assign(
+        Object.create(null),
+        customTypesRaw && typeof customTypesRaw === 'object' && !Array.isArray(customTypesRaw) ? customTypesRaw : {},
+    );
+    customTypes[schema.name] = postType;
+    await updateOption('custom_post_types', customTypes);
+    return postType;
+}
+
+/**
+ * Save a historical declaration through the adapter, preserving its runtime extension keys while
+ * also persisting the portable projection introduced by F1.
+ */
+async function saveCustomPostType(name: string, args: Record<string, unknown>) {
+    if (BUILTIN_POST_TYPE_NAMES.has(name)) {
+        throw new Error(`content schema name: ${name} is a protected built-in type`);
+    }
+    const postType = registerPostType(name, args);
+    const customTypesRaw = await getOption('custom_post_types', {});
+    const customTypes: Record<string, unknown> = Object.assign(
+        Object.create(null),
+        customTypesRaw && typeof customTypesRaw === 'object' && !Array.isArray(customTypesRaw) ? customTypesRaw : {},
+    );
     customTypes[name] = { name, ...args };
     await updateOption('custom_post_types', customTypes);
-    return registerPostType(name, args);
+
+    const storedSchemasRaw = await getOption('custom_content_schemas', {});
+    const storedSchemas: Record<string, unknown> = Object.assign(
+        Object.create(null),
+        storedSchemasRaw && typeof storedSchemasRaw === 'object' && !Array.isArray(storedSchemasRaw) ? storedSchemasRaw : {},
+    );
+    storedSchemas[name] = getContentTypeSchema(name);
+    await updateOption('custom_content_schemas', storedSchemas);
+    return postType;
 }
 
 /**
  * Delete a custom post type
  */
 async function deleteCustomPostType(name: string) {
-    const customTypes = await getOption('custom_post_types', {});
-    if (customTypes[name]) {
+    if (BUILTIN_POST_TYPE_NAMES.has(name)) return false;
+    const customTypesRaw = await getOption('custom_post_types', {});
+    const storedSchemasRaw = await getOption('custom_content_schemas', {});
+    const customTypes = customTypesRaw && typeof customTypesRaw === 'object' && !Array.isArray(customTypesRaw)
+        ? customTypesRaw : {};
+    const storedSchemas = storedSchemasRaw && typeof storedSchemasRaw === 'object' && !Array.isArray(storedSchemasRaw)
+        ? storedSchemasRaw : {};
+    const hadLegacy = Object.prototype.hasOwnProperty.call(customTypes, name);
+    const hadSchema = Object.prototype.hasOwnProperty.call(storedSchemas, name);
+    if (hadLegacy || hadSchema) {
         delete customTypes[name];
+        delete storedSchemas[name];
         await updateOption('custom_post_types', customTypes);
-        return unregisterPostType(name);
+        await updateOption('custom_content_schemas', storedSchemas);
+        unregisterPostType(name);
+        return true;
     }
     return false;
 }
@@ -482,15 +508,19 @@ async function deleteCustomPostType(name: string) {
 
 module.exports = {
     initPostTypes,
+    registerContentType,
     registerPostType,
     unregisterPostType,
     getPostType,
     getPostTypes,
+    getContentTypeSchema,
+    getContentTypeSchemas,
     postTypeExists,
     postTypeSupports,
     addPostTypeSupport,
     removePostTypeSupport,
     getPostTypesBy,
+    saveContentTypeSchema,
     saveCustomPostType,
     deleteCustomPostType,
     // Taxonomies (mirror of the post-type registry)

@@ -37,6 +37,7 @@ import { trStr } from "@/lib/editorI18n";
 import MSym from "./MSym";
 
 const META_KEY = "_wjs_review_comments";
+const FOCUSABLE_SELECTOR = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
 
 export interface ReviewComment {
     id: string;
@@ -103,6 +104,8 @@ export default function ReviewComments({ postId, isOpen, onClose }: ReviewCommen
     const [text, setText] = useState("");
     const [liveMsg, setLiveMsg] = useState("");
     const composerRef = useRef<HTMLTextAreaElement | null>(null);
+    const drawerRef = useRef<HTMLElement | null>(null);
+    const previousFocusRef = useRef<HTMLElement | null>(null);
 
     const load = useCallback(async () => {
         if (!postId) return;
@@ -127,14 +130,42 @@ export default function ReviewComments({ postId, isOpen, onClose }: ReviewCommen
         return () => window.clearTimeout(t);
     }, [isOpen, load]);
 
-    // Escape closes the drawer.
+    // Modal drawer semantics: Escape closes, Tab stays inside and focus returns to the trigger.
     useEffect(() => {
         if (!isOpen) return;
+        previousFocusRef.current = document.activeElement as HTMLElement | null;
         const onKey = (e: KeyboardEvent) => {
-            if (e.key === "Escape") onClose();
+            if (e.key === "Escape") {
+                e.preventDefault();
+                onClose();
+                return;
+            }
+            if (e.key !== "Tab") return;
+            const panel = drawerRef.current;
+            if (!panel) return;
+            const focusable = Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR))
+                .filter((el) => !el.hasAttribute("disabled") && el.getClientRects().length > 0);
+            if (!focusable.length) {
+                e.preventDefault();
+                panel.focus();
+                return;
+            }
+            const first = focusable[0];
+            const last = focusable[focusable.length - 1];
+            if (e.shiftKey && (document.activeElement === first || !panel.contains(document.activeElement))) {
+                e.preventDefault();
+                last.focus();
+            } else if (!e.shiftKey && (document.activeElement === last || !panel.contains(document.activeElement))) {
+                e.preventDefault();
+                first.focus();
+            }
         };
-        window.addEventListener("keydown", onKey);
-        return () => window.removeEventListener("keydown", onKey);
+        document.addEventListener("keydown", onKey, true);
+        return () => {
+            document.removeEventListener("keydown", onKey, true);
+            previousFocusRef.current?.focus();
+            previousFocusRef.current = null;
+        };
     }, [isOpen, onClose]);
 
     /** Re-read the latest server-side thread, apply `mutate` on top of it, and write ONLY the
@@ -219,11 +250,17 @@ export default function ReviewComments({ postId, isOpen, onClose }: ReviewCommen
     const openCount = (comments ?? []).filter((c) => !c.resolved).length;
 
     return (
+        <>
+        {isOpen && <div className="verso-overlay-scrim" aria-hidden="true" onMouseDown={onClose} />}
         <aside
-            role="complementary"
-            aria-label={tr("Comentarios de revisión")}
+            ref={drawerRef}
+            tabIndex={-1}
+            inert={!isOpen}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="review-comments-title"
             aria-hidden={!isOpen}
-            className={`fixed inset-y-0 right-0 w-full max-w-[400px] z-[5000] transform transition-transform duration-300 ease-in-out flex flex-col bg-[var(--ed-surface)] border-l border-[var(--ed-outline-variant)] shadow-2xl ${isOpen ? "translate-x-0" : "translate-x-full"}`}
+            className={`verso-drawer fixed inset-y-0 right-0 w-full max-w-[420px] transform transition-transform duration-200 ease-out flex flex-col border-l border-[var(--ed-outline-variant)] outline-none ${isOpen ? "translate-x-0" : "translate-x-full"}`}
         >
             {/* Screen-reader announcements for add/delete/error outcomes. */}
             <div aria-live="polite" className="sr-only">{liveMsg}</div>
@@ -235,7 +272,7 @@ export default function ReviewComments({ postId, isOpen, onClose }: ReviewCommen
                         <MSym name="forum" size={20} />
                     </div>
                     <div className="min-w-0">
-                        <h3 className="text-sm font-semibold text-[var(--ed-on-surface)] leading-tight truncate">
+                        <h3 id="review-comments-title" className="text-sm font-semibold text-[var(--ed-on-surface)] leading-tight truncate">
                             {tr("Comentarios de revisión")}
                         </h3>
                         <p className="text-[11px] text-[var(--ed-on-surface-variant)] leading-tight truncate">
@@ -254,7 +291,7 @@ export default function ReviewComments({ postId, isOpen, onClose }: ReviewCommen
                         onClick={load}
                         title={tr("Actualizar")}
                         aria-label={tr("Actualizar")}
-                        className="w-9 h-9 rounded-full flex items-center justify-center text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container-high)] transition-colors"
+                        className="verso-icon-button w-11 h-11 rounded-xl flex items-center justify-center text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container-high)] transition-colors"
                     >
                         <MSym name="refresh" size={20} className={loading ? "animate-spin" : ""} />
                     </button>
@@ -263,7 +300,7 @@ export default function ReviewComments({ postId, isOpen, onClose }: ReviewCommen
                         onClick={onClose}
                         title={tr("Cerrar")}
                         aria-label={tr("Cerrar")}
-                        className="w-9 h-9 rounded-full flex items-center justify-center text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container-high)] transition-colors"
+                        className="verso-icon-button w-11 h-11 rounded-xl flex items-center justify-center text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container-high)] transition-colors"
                     >
                         <MSym name="close" size={20} />
                     </button>
@@ -385,5 +422,6 @@ export default function ReviewComments({ postId, isOpen, onClose }: ReviewCommen
                 </div>
             </div>
         </aside>
+        </>
     );
 }

@@ -56,4 +56,39 @@ const options = {
 
 const specs = swaggerJsdoc(options);
 
+// F2: request DTOs for the generic content routes are projected from the same F1 declarations used
+// by runtime validation and authorization. The docs module is loaded lazily, after normal server
+// startup has registered custom schemas; isolated spec tests fall back to the pure core declarations.
+const { buildContentOpenApiComponents } = require('../core/content-contract');
+const { getContentTypeSchemas } = require('../core/post-types');
+const { getBuiltinContentSchemas } = require('../core/content-schemas-builtins');
+const registeredSchemas = getContentTypeSchemas({ showInRest: true });
+const contentSchemas = registeredSchemas.length ? registeredSchemas : getBuiltinContentSchemas();
+specs.components = specs.components || {};
+specs.components.schemas = {
+    ...(specs.components.schemas || {}),
+    ...buildContentOpenApiComponents(contentSchemas),
+};
+
+const jsonBody = (schemaName: string) => ({
+    required: true,
+    content: { 'application/json': { schema: { $ref: `#/components/schemas/${schemaName}` } } },
+});
+if (specs.paths?.['/posts']?.post) {
+    specs.paths['/posts'].post.requestBody = jsonBody('ContentCreateInput');
+    specs.paths['/posts'].post.responses = specs.paths['/posts'].post.responses || {};
+    specs.paths['/posts'].post.responses['400'] = {
+        description: 'Content contract validation failed',
+        content: { 'application/json': { schema: { $ref: '#/components/schemas/ContentValidationError' } } },
+    };
+}
+if (specs.paths?.['/posts/{id}']?.put) {
+    specs.paths['/posts/{id}'].put.requestBody = jsonBody('ContentUpdateInput');
+    specs.paths['/posts/{id}'].put.responses = specs.paths['/posts/{id}'].put.responses || {};
+    specs.paths['/posts/{id}'].put.responses['400'] = {
+        description: 'Content contract validation failed',
+        content: { 'application/json': { schema: { $ref: '#/components/schemas/ContentValidationError' } } },
+    };
+}
+
 module.exports = specs;

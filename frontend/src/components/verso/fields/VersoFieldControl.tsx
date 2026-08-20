@@ -199,7 +199,7 @@ function RadioControl(props: ControlProps<RadioVersoField>) {
             key={i}
             className={`flex-1 cursor-pointer rounded px-2 py-1 text-center text-xs ${
               selected === i
-                ? "bg-[var(--ed-primary)] text-white"
+                ? "bg-[var(--ed-primary-solid,var(--ed-primary))] text-[var(--ed-on-primary,#fff)]"
                 : "text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container)]"
             }`}
           >

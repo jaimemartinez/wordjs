@@ -20,7 +20,7 @@
  * SOLO ESCRITORIO/TABLETA (`hidden md:flex`): en móvil el editor trabaja con hojas y el inspector
  * móvil sigue siendo el camino.
  */
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import MSym from "@/components/editor/MSym";
 import { useI18n } from "@/contexts/I18nContext";
 import { trStr } from "@/lib/editorI18n";
@@ -66,17 +66,24 @@ export default function IxDock({ handle, registry }: IxDockProps) {
     const isDragging = state.dragPreview !== null;
     const ixCtx = useSiteIxPresets();
 
-    // Plegado LOCAL del dock (no por bloque): abierto de nacimiento — es el motivo del panel.
-    const [open, setOpen] = useState(true);
+    // Plegado LOCAL del dock: no roba lienzo cuando todavía no hay una selección. La selección
+    // puede llegar DESPUÉS del montaje (la ruta nueva arranca vacía), así que debe sincronizar el
+    // estado: un bloque nuevo abre Movimiento; deseleccionar vuelve a plegarlo. El gesto manual se
+    // conserva mientras no cambie la selección.
+    const [open, setOpen] = useState(() => Boolean(node));
+    useEffect(() => {
+        setOpen(Boolean(selectedId));
+    }, [selectedId]);
 
     return (
         <section
             // Ancla determinista para los e2e, hermana de data-verso-panel.
             data-verso-dock={node ? "block" : "empty"}
+            data-verso-dock-node={node?.id}
             aria-label={trStr("Movimiento del bloque", language)}
             className="hidden md:flex shrink-0 flex-col border-t border-[var(--ed-outline-variant)] bg-[var(--ed-surface-container-lowest)]"
         >
-            <header className="h-9 shrink-0 px-3 flex items-center gap-2 border-b border-[var(--ed-outline-variant)]">
+            <header className="h-10 shrink-0 px-3 flex items-center gap-2 border-b border-[var(--ed-outline-variant)]">
                 <MSym name="animation" size={16} className="text-[var(--ed-on-surface-variant)]" />
                 <h3 className="text-[11px] font-semibold uppercase tracking-[0.03em] text-[var(--ed-on-surface)]">
                     {trStr("Movimiento", language)}
@@ -89,17 +96,35 @@ export default function IxDock({ handle, registry }: IxDockProps) {
                 <span className="flex-1" />
                 <button
                     type="button"
-                    onClick={() => setOpen((o) => !o)}
+                    onClick={() => {
+                        // Si un pointerup/pointercancel se perdió fuera del iframe, puede quedar un
+                        // preview huérfano. Pulsar el propio inspector demuestra que el gesto ya
+                        // terminó; límpialo antes de mostrar los controles, nunca un panel falso
+                        // de “Suelta el bloque”.
+                        if (state.dragPreview) handle.setDragPreview(null);
+                        setOpen((o) => !o);
+                    }}
                     aria-expanded={open}
+                    aria-controls="verso-motion-dock-body"
                     title={trStr(open ? "Plegar el panel de movimiento" : "Desplegar el panel de movimiento", language)}
-                    className="w-6 h-6 rounded flex items-center justify-center text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container)] transition-colors"
+                    className="verso-icon-button !h-9 !w-9"
                 >
                     <MSym name={open ? "expand_more" : "expand_less"} size={16} />
                 </button>
             </header>
 
+            {!open && !node && (
+                <span className="sr-only">
+                    {trStr("Selecciona un bloque para editar su animación de entrada y sus interacciones.", language)}
+                </span>
+            )}
+
             {open && (
-                <div className="relative h-[280px] shrink-0">
+                <div
+                    id="verso-motion-dock-body"
+                    data-verso-dock-body
+                    className="relative h-[220px] shrink-0 xl:h-[280px]"
+                >
                     {!node || !def ? (
                         <div className="absolute inset-0 flex items-center justify-center text-center p-6 select-none">
                             <p className="text-[12px] text-[var(--ed-on-surface-variant)]">
@@ -218,7 +243,7 @@ function DockMotion({
                     {/* «Probar» PRIMARIO — medidas exactas de la referencia: 28px, radio 2px. */}
                     <button
                         type="button"
-                        className="inline-flex h-7 items-center gap-1 rounded-[2px] bg-[var(--ed-primary)] px-3 text-[11px] font-medium text-white hover:bg-[var(--ed-primary-container)] disabled:opacity-40 disabled:pointer-events-none transition-colors"
+                        className="inline-flex h-8 items-center gap-1 rounded-lg bg-[var(--ed-primary-solid,var(--ed-primary))] px-3 text-[11px] font-medium text-[var(--ed-on-primary,#fff)] hover:bg-[var(--ed-primary-hover)] disabled:opacity-40 disabled:pointer-events-none transition-colors"
                         disabled={!st.active}
                         title={trStr("Reproducir la interacción de este bloque en el lienzo", language)}
                         aria-label="Probar la interacción de este bloque"

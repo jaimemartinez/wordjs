@@ -782,7 +782,7 @@ router.get('/mods/export', authenticate, isAdmin, asyncHandler(async (req: Reque
  *         application/json:
  *           schema:
  *             type: object
- *             description: Either a bare { "--wjs-*": "value" } map or the export wrapper { theme, mods }
+ *             description: 'Either a bare { "--wjs-*": "value" } map or the export wrapper { theme, mods }'
  *     responses:
  *       200:
  *         description: "{ applied: true, count } — mods validated and written to active_theme_mods"

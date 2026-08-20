@@ -1,3 +1,14 @@
+import { createContentClient } from './generated/content-client.generated';
+export type {
+    ContentCreateInput,
+    ContentRecord,
+    ContentUpdateInput,
+    CoreContentFieldMap,
+    CoreContentTypeName,
+    Post,
+    PostTermRef,
+} from './generated/content-client.generated';
+
 const getBaseUrl = () => {
     if (typeof window !== 'undefined') {
         // Client-side: Always use relative URL so it works behind Gateway on any port/protocol
@@ -217,50 +228,6 @@ export async function apiGetPaged<T>(endpoint: string): Promise<{ data: T; total
     };
 }
 
-/**
- * Un término tal y como la API lo serializa dentro de un post (backend `Post.toJSON`). `id` es el
- * `term_id`, que es EXACTAMENTE lo que `Post.setTerms` espera de vuelta en `categories`/`tags`.
- */
-export interface PostTermRef {
-    id: number;
-    name: string;
-    slug: string;
-}
-
-// Typed API calls
-export interface Post {
-    id: number;
-    title: string;
-    slug: string;
-    content: string;
-    excerpt: string;
-    status: string;
-    type: string;
-    date: string;
-    /** GMT twin of `date` (backend toJSON emits both). The editor prefers it to prefill the scheduler. */
-    dateGmt?: string;
-    author: { id: number; displayName: string };
-    commentStatus: string;
-    meta?: Record<string, any>;
-    /** Set when the post has a featured image (backend Post.toJSON serializes it with an absolute URL). */
-    featuredMedia?: { id: number; url: string; title?: string };
-    /**
-     * TAXONOMÍA. `Post.toJSON` emite SIEMPRE las dos claves (array vacío = "no tiene ninguno"), pero
-     * siguen declaradas opcionales para no romper los objetos parciales que construyen los tests y los
-     * callers que sintetizan un Post. Un consumidor que reciba la clave ausente debe tratarla como
-     * "no lo sé" y NO mandar la taxonomía de vuelta: `setTerms` REEMPLAZA.
-     */
-    categories?: PostTermRef[];
-    tags?: PostTermRef[];
-    /** MULTILINGUAL (opt-in): the post's own BCP-47 language tag, or null on a monolingual site. */
-    language?: string | null;
-    /**
-     * MULTILINGUAL (opt-in): PUBLISHED translations of this post in other languages. Empty for a post
-     * that is not part of a translation group. Drives the public page's <link rel="alternate" hreflang>.
-     */
-    translations?: Array<{ id: number; language: string; slug: string; type: string; status?: string }>;
-}
-
 export interface Category {
     id: number;
     name: string;
@@ -405,28 +372,14 @@ export interface Revision {
     meta?: Record<string, any>;
 }
 
-// API endpoints
-export const postsApi = {
-    /** Paged list with totals (backend caps per_page at 100; status 'any' is privilege-scoped server-side). */
-    listPaged: (opts: { type?: string; status?: string; page?: number; perPage?: number; search?: string } = {}) => {
-        const params = new URLSearchParams({ type: opts.type || "post" });
-        if (opts.status) params.append("status", opts.status);
-        params.append("page", String(opts.page || 1));
-        params.append("per_page", String(opts.perPage || 20));
-        if (opts.search) params.append("search", opts.search);
-        return apiGetPaged<Post[]>(`/posts?${params.toString()}`);
-    },
-    list: (type = "post", status?: string) => {
-        const params = new URLSearchParams({ type });
-        if (status) params.append("status", status);
-        return apiGet<Post[]>(`/posts?${params.toString()}`);
-    },
-    get: (id: number) => apiGet<Post>(`/posts/${id}`),
-    getBySlug: (slug: string) => apiGet<Post>(`/posts/slug/${slug}`), // New method
-    create: (data: Partial<Post>) => apiPost<Post>("/posts", data),
-    update: (id: number, data: Partial<Post>) => apiPut<Post>(`/posts/${id}`, data),
-    delete: (id: number) => apiDelete(`/posts/${id}`),
-};
+// F2 client: paths and request DTOs are generated from the F1 content declarations.
+export const postsApi = createContentClient({
+    get: apiGet,
+    getPaged: apiGetPaged,
+    post: apiPost,
+    put: apiPut,
+    delete: apiDelete,
+});
 
 // ── Categories (taxonomy `category`) ───────────────────────────────────────────────────────────────
 // WHY THERE IS NO PLAIN `list()` ANY MORE: `GET /categories` is PAGED and hard-caps `per_page` at

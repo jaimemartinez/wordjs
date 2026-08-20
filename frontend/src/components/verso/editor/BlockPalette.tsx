@@ -90,26 +90,27 @@ export default function BlockPalette({ registry, onInsert }: BlockPaletteProps) 
     return (
         <div className="w-full" data-wjs-palette="">
             {/* Sticky header: search + category chips (misma piel que BlockInserter) */}
-            <div className="sticky top-0 z-10 bg-[var(--ed-surface-container-lowest)] px-3 pt-3 pb-2 border-b border-[var(--ed-outline-variant)]">
+            <div className="sticky top-0 z-10 bg-[var(--ed-surface-container-lowest)]/95 backdrop-blur-xl px-4 pt-4 pb-3 border-b border-[var(--ed-outline-variant)]">
                 <div className="relative">
                     <MSym
                         name="search"
                         size={18}
-                        className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--ed-outline)] pointer-events-none"
+                        className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--ed-outline)] pointer-events-none"
                     />
                     <input
                         value={query}
                         onChange={(e) => setQuery(e.target.value)}
                         placeholder={trStr("Buscar bloque…", language)}
                         aria-label={trStr("Buscar bloque", language)}
-                        className="w-full pl-8 pr-8 py-2 rounded-md bg-[var(--ed-surface-container)] border border-transparent text-[13px] text-[var(--ed-on-surface)] placeholder:text-[var(--ed-outline)] focus:outline-none focus:ring-1 focus:ring-[var(--ed-primary)] focus:border-[var(--ed-primary)] transition"
+                        className="w-full h-11 pl-10 pr-10 rounded-xl bg-[var(--ed-surface-container-low)] border border-[var(--ed-outline-variant)] text-[13px] text-[var(--ed-on-surface)] placeholder:text-[var(--ed-outline)] focus:outline-none focus:border-[var(--ed-primary)] transition"
                     />
                     {query && (
                         <button
                             type="button"
                             onClick={() => setQuery("")}
                             title={trStr("Limpiar", language)}
-                            className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center text-[var(--ed-outline)] hover:text-[var(--ed-on-surface)]"
+                            aria-label={trStr("Limpiar búsqueda", language)}
+                            className="verso-icon-button absolute right-1 top-1/2 -translate-y-1/2 w-9 h-9 rounded-lg flex items-center justify-center text-[var(--ed-outline)] hover:text-[var(--ed-on-surface)]"
                         >
                             <MSym name="close" size={16} />
                         </button>
@@ -117,7 +118,7 @@ export default function BlockPalette({ registry, onInsert }: BlockPaletteProps) 
                 </div>
 
                 {allGroups.length > 1 && (
-                    <div className="flex gap-1.5 mt-2 overflow-x-auto scrollbar-hide">
+                    <div className="flex gap-1.5 mt-3 overflow-x-auto scrollbar-hide" aria-label={trStr("Categorías de bloques", language)}>
                         {["", ...allGroups].map((g) => {
                             const active = activeGroup === g;
                             return (
@@ -125,9 +126,10 @@ export default function BlockPalette({ registry, onInsert }: BlockPaletteProps) 
                                     key={g || "__all"}
                                     type="button"
                                     onClick={() => setActiveGroup(g)}
-                                    className={`shrink-0 px-2.5 py-1 rounded-full text-[11px] font-semibold whitespace-nowrap transition-colors ${
+                                    aria-pressed={active}
+                                    className={`shrink-0 min-h-8 px-3 py-1 rounded-lg text-[11px] font-semibold whitespace-nowrap transition-colors ${
                                         active
-                                            ? "bg-[var(--ed-primary)] text-white"
+                                            ? "bg-[var(--ed-primary-solid,var(--ed-primary))] text-[var(--ed-on-primary,#fff)]"
                                             : "bg-[var(--ed-surface-container)] text-[var(--ed-on-surface-variant)] hover:text-[var(--ed-on-surface)]"
                                     }`}
                                 >
@@ -139,11 +141,11 @@ export default function BlockPalette({ registry, onInsert }: BlockPaletteProps) 
                 )}
             </div>
 
-            <div className="px-3 py-3">
-                <div className="space-y-4">
+            <div className="px-4 py-4">
+                <div className="space-y-5">
                     {groups.map((g) => (
                         <div key={g.group}>
-                            <div className="flex items-center gap-1.5 px-0.5 pb-1.5">
+                            <div className="flex items-center gap-1.5 px-0.5 pb-2">
                                 <MSym name={g.ms} size={14} className="text-[var(--ed-outline)]" />
                                 <span className="text-[10px] font-bold uppercase tracking-wider text-[var(--ed-outline)]">
                                     {trStr(g.group, language)}
@@ -151,12 +153,13 @@ export default function BlockPalette({ registry, onInsert }: BlockPaletteProps) 
                                 {/* on-surface-variant, NOT outline: outline es 4.50:1 exacto en blanco — cero margen AA */}
                                 <span className="text-[10px] text-[var(--ed-on-surface-variant)]">{g.items.length}</span>
                             </div>
-                            <div className="grid grid-cols-3 md:grid-cols-2 gap-2">
+                            <div className="grid grid-cols-2 gap-2.5">
                                 {g.items.map((item) => (
                                     <div
                                         key={item.name}
                                         role="button"
                                         tabIndex={0}
+                                        aria-label={`${trStr("Insertar", language)} ${item.label}`}
                                         data-wjs-palette-type={item.name}
                                         title={item.desc ? trStr(item.desc, language) : item.label}
                                         onPointerDown={(e) => {
@@ -176,14 +179,16 @@ export default function BlockPalette({ registry, onInsert }: BlockPaletteProps) 
                                                 onInsert(item.name);
                                             }
                                         }}
-                                        className="group flex flex-col items-center gap-1 p-2 rounded border border-[var(--ed-outline-variant)] bg-[var(--ed-surface-container-lowest)] hover:border-[var(--ed-primary)] transition-colors cursor-grab active:cursor-grabbing"
+                                        className="group min-h-16 flex items-center gap-2.5 p-2.5 rounded-xl border border-[var(--ed-outline-variant)] bg-[var(--ed-surface-container-lowest)] hover:border-[var(--ed-primary)] hover:bg-[var(--ed-surface-container-low)] hover:shadow-sm transition-[border-color,background-color,box-shadow] cursor-grab active:cursor-grabbing"
                                     >
-                                        <MSym
-                                            name={item.ms}
-                                            size={20}
-                                            className="text-[var(--ed-on-surface-variant)] group-hover:text-[var(--ed-primary)] transition-colors"
-                                        />
-                                        <span className="w-full text-[11px] leading-tight text-center text-[var(--ed-on-surface)] truncate">
+                                        <span className="w-8 h-8 shrink-0 rounded-lg bg-[var(--ed-surface-container)] group-hover:bg-[var(--ed-primary-container)] flex items-center justify-center transition-colors">
+                                            <MSym
+                                                name={item.ms}
+                                                size={18}
+                                                className="text-[var(--ed-on-surface-variant)] group-hover:text-[var(--ed-on-primary-container)] transition-colors"
+                                            />
+                                        </span>
+                                        <span className="min-w-0 flex-1 text-[11px] leading-snug text-left font-medium text-[var(--ed-on-surface)] line-clamp-2">
                                             {item.label}
                                         </span>
                                     </div>
