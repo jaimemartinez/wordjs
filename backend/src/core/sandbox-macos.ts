@@ -787,7 +787,7 @@ const PROBE_SRC = [
     'try{fs.readdirSync(os.homedir());out.homeCode="OPEN";}catch(e){out.homeCode=(e&&e.code)||"THROW";}',
     'out.selfExecCode=fs.existsSync(process.execPath)?"OPEN":"ENOENT";',
     'function reportFinal(){try{process.send(out,function(){process.exit(0);});}catch(e){process.exit(5);}}',
-    'function attemptSpawn(){out.execCode="ATTEMPTED";try{process.send(out,function(){var settled=false;var child=null;var done=function(v){if(settled){return;}settled=true;out.execCode=v;try{if(child){child.kill();}}catch(e){}reportFinal();};try{child=cp.spawn("/bin/echo",["wjs"]);child.on("error",function(e){done((e&&e.code)||"THROW");});child.on("exit",function(code){done(code===0?"OK":"FAIL");});}catch(e){done((e&&e.code)||"THROW");}});}catch(e){process.exit(5);}}',
+    'function attemptSpawn(){out.execCode="ATTEMPTED";try{process.once("message",function(m){if(!m||m.wordjsProbeSpawn!==true){process.exit(6);return;}var settled=false;var child=null;var done=function(v){if(settled){return;}settled=true;out.execCode=v;try{if(child){child.kill();}}catch(e){}reportFinal();};try{child=cp.spawn("/bin/echo",["wjs"]);child.on("error",function(e){done((e&&e.code)||"THROW");});child.on("exit",function(code){done(code===0?"OK":"FAIL");});}catch(e){done((e&&e.code)||"THROW");}});process.send(out);}catch(e){process.exit(5);}}',
     'setTimeout(function(){process.exit(4);},12000);',
     'if(!process.send){process.exit(3);}',
     'function tryNetwork(){var done=false;var s=null;var settle=function(c){if(done){return;}done=true;out.netCode=c;try{if(s){s.destroy();}}catch(e){}attemptSpawn();};try{s=net.connect(443,"1.1.1.1");s.on("error",function(e){settle((e&&e.code)||"THROW");});s.on("connect",function(){settle("CONNECTED");});}catch(e){settle((e&&e.code)||"THROW");}setTimeout(function(){settle("TIMEOUT");},4000);}',
@@ -866,7 +866,16 @@ function runProbeChild(pre: string[], target: string, denyNet: boolean, runtime?
             // actual sandbox-exec/dyld error. A live child means the handshake itself timed out: kill it now.
             if (proc && proc.exitCode === null && proc.signalCode === null) finish(null);
         });
-        proc.on('message', (m: any) => { if (m && typeof m === 'object') msg = m as ProbeMsg; });
+        proc.on('message', (m: any) => {
+            if (!m || typeof m !== 'object') return;
+            msg = m as ProbeMsg;
+            // The ACK makes the process-denial observation causal: the child cannot attempt spawn until
+            // this parent has durably observed ATTEMPTED. A later SIGABRT is therefore not a lost-message
+            // race, and the same round trip also certifies production's inherited IPC channel.
+            if (msg.execCode === 'ATTEMPTED') {
+                try { proc.send({ wordjsProbeSpawn: true }); } catch { /* close will fail the probe */ }
+            }
+        });
         proc.on('error', (error: any) => { spawnFailure = String((error && error.message) || error || 'spawn error'); });
         // `close`, unlike `exit`, fires only after stdio closes. Logging at `exit` raced stderr and erased the
         // only actionable detail on the real macOS runner.

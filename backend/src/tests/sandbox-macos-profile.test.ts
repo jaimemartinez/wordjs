@@ -253,6 +253,8 @@ describe('probe', () => {
             'the probe must observe that the one-shot executable disappeared before plugin code runs');
         assert.ok(__probeSrc.indexOf('execCode="ATTEMPTED"') < __probeSrc.indexOf('cp.spawn("/bin/echo"'),
             'the denial marker must be flushed before macOS can abort the spawning process');
+        assert.ok(__probeSrc.includes('m.wordjsProbeSpawn!==true'),
+            'the child must wait for the parent acknowledgement before attempting the denied operation');
     });
 
     test('reports unsupported off macOS, and never claims active', { skip: process.platform === 'darwin' ? 'this assertion is about the non-macOS path' : false }, async () => {
