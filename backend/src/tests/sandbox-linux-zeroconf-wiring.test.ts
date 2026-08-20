@@ -61,10 +61,12 @@ describe('real launch wiring and visibility', () => {
         assert.doesNotMatch(configSource, /useLinuxZeroConf|unshareNetwork/);
     });
 
-    test('ts-node gets one literal project file, never a read grant on the backend root', () => {
+    test('ts-node gets only its two literal project files, never a read grant on the backend root', () => {
         const isolateSource = fs.readFileSync(path.resolve(__dirname, '../core/plugin-isolate.ts'), 'utf8');
-        assert.match(isolateSource, /tsNodeProject = __filename\.endsWith\('\.ts'\) \? path\.join\(APP_ROOT, 'tsconfig\.json'\) : null/);
-        assert.match(isolateSource, /readOnlyFiles: tsNodeProject \? \[tsNodeProject\] : \[\]/);
+        assert.match(isolateSource, /tsNodeProjectFiles = __filename\.endsWith\('\.ts'\)/);
+        assert.match(isolateSource, /\[path\.join\(APP_ROOT, 'tsconfig\.json'\), path\.join\(APP_ROOT, 'package\.json'\)\]/);
+        assert.match(isolateSource, /readOnlyFiles: tsNodeProjectFiles/);
+        assert.match(isolateSource, /\.\.\.tsNodeProjectFiles/);
         assert.doesNotMatch(isolateSource, /sandboxReadable[^\n]*APP_ROOT/,
             'the source-worker fix must not turn the whole backend root into plugin read authority');
     });

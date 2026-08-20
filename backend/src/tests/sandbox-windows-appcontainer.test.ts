@@ -182,26 +182,29 @@ describe('sandbox-windows: generated script hygiene (all platforms)', () => {
     });
 
     test('each SID sees only its code, runtime code and private data/log/tmp storage', () => {
-        const core = path.join('C:\\app', 'dist', 'core');
-        const zones = sw.appContainerZones('C:\\app', 'my-plugin', core);
-        assert.ok(zones.write.includes(path.join('C:\\app', 'plugins', 'my-plugin')));
+        // Use a native absolute path so this pure Windows-policy test also has meaningful expectations
+        // when the common backend suite runs on Linux CI.
+        const appRoot = path.resolve(path.sep, 'app');
+        const core = path.join(appRoot, 'dist', 'core');
+        const zones = sw.appContainerZones(appRoot, 'my-plugin', core);
+        assert.ok(zones.write.includes(path.join(appRoot, 'plugins', 'my-plugin')));
         for (const d of ['data', 'logs', 'os-tmp']) {
-            const prefix = path.join('C:\\app', d, 'plugins');
+            const prefix = path.join(appRoot, d, 'plugins');
             const privateDir = zones.write.find((z: string) => z.startsWith(`${prefix}${path.sep}`));
             assert.ok(privateDir, `${d} must contain one hashed per-plugin directory`);
-            assert.notStrictEqual(privateDir, path.join('C:\\app', d), `${d} root must not be granted`);
+            assert.notStrictEqual(privateDir, path.join(appRoot, d), `${d} root must not be granted`);
         }
         assert.ok(zones.readExec.includes(core));
-        assert.ok(zones.readExec.includes(path.join('C:\\app', 'node_modules')));
-        assert.ok(!zones.readExec.includes(path.resolve('C:\\app')), 'the application root must not be readable');
-        assert.ok(zones.traverse.includes(path.resolve('C:\\app')), 'the root is traversal-only so descendants remain reachable');
+        assert.ok(zones.readExec.includes(path.join(appRoot, 'node_modules')));
+        assert.ok(!zones.readExec.includes(appRoot), 'the application root must not be readable');
+        assert.ok(zones.traverse.includes(appRoot), 'the root is traversal-only so descendants remain reachable');
         for (const broad of ['uploads', 'themes']) {
-            assert.ok(!zones.write.includes(path.join('C:\\app', broad)), `${broad} must not be shared writable storage`);
+            assert.ok(!zones.write.includes(path.join(appRoot, broad)), `${broad} must not be shared writable storage`);
         }
-        const sibling = sw.appContainerZones('C:\\app', 'other-plugin', core);
+        const sibling = sw.appContainerZones(appRoot, 'other-plugin', core);
         assert.ok(!zones.write.some((z: string) => sibling.write.includes(z)), 'plugin-private storage must not overlap');
-        const t = sw.appContainerZones('C:\\app', 'theme:aurora', core);
-        assert.ok(t.write.includes(path.join('C:\\app', 'themes', 'aurora')), 'a theme isolate owns themes/<name>, not plugins/theme:<name>');
+        const t = sw.appContainerZones(appRoot, 'theme:aurora', core);
+        assert.ok(t.write.includes(path.join(appRoot, 'themes', 'aurora')), 'a theme isolate owns themes/<name>, not plugins/theme:<name>');
     });
 
     test('non-Windows callers get a clean refusal, never a half-applied grant', async () => {
