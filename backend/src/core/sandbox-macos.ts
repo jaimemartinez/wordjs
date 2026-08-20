@@ -780,18 +780,15 @@ function getSeatbeltState() { return seatbeltState; }
  */
 const PROBE_SRC = [
     'var fs=require("fs");var net=require("net");var os=require("os");var cp=require("child_process");',
-    'var out={wrote:false,readCode:"NONE",homeCode:"NONE",execCode:"NONE",selfExecCode:"SKIP",netCode:"SKIP"};',
+    'var out={stage:"RESULT",wrote:false,readCode:"NONE",homeCode:"NONE",execCode:"NONE",selfExecCode:"SKIP",netCode:"SKIP"};',
     'var target=process.argv[1];var denyNet=process.argv[2]==="1";',
-    'try{fs.writeFileSync(target,"wjs");out.wrote=fs.readFileSync(target,"utf8")==="wjs";}catch(e){out.wrote=false;out.writeCode=(e&&e.code)||"THROW";}',
-    'try{fs.readFileSync("/etc/passwd");out.readCode="OPEN";}catch(e){out.readCode=(e&&e.code)||"THROW";}',
-    'try{fs.readdirSync(os.homedir());out.homeCode="OPEN";}catch(e){out.homeCode=(e&&e.code)||"THROW";}',
-    'out.selfExecCode=fs.existsSync(process.execPath)?"OPEN":"ENOENT";',
     'function reportFinal(){try{process.send(out,function(){process.exit(0);});}catch(e){process.exit(5);}}',
-    'function attemptSpawn(){out.execCode="ATTEMPTED";try{process.once("message",function(m){if(!m||m.wordjsProbeSpawn!==true){process.exit(6);return;}var settled=false;var child=null;var done=function(v){if(settled){return;}settled=true;out.execCode=v;try{if(child){child.kill();}}catch(e){}reportFinal();};try{child=cp.spawn("/bin/echo",["wjs"]);child.on("error",function(e){done((e&&e.code)||"THROW");});child.on("exit",function(code){done(code===0?"OK":"FAIL");});}catch(e){done((e&&e.code)||"THROW");}});process.send(out);}catch(e){process.exit(5);}}',
+    'function attemptSpawn(){out.stage="SPAWN";out.execCode="ATTEMPTED";try{process.once("message",function(m){if(!m||m.wordjsProbeSpawn!==true){process.exit(6);return;}var settled=false;var child=null;var done=function(v){if(settled){return;}settled=true;out.execCode=v;try{if(child){child.kill();}}catch(e){}reportFinal();};try{child=cp.spawn("/bin/echo",["wjs"]);child.on("error",function(e){done((e&&e.code)||"THROW");});child.on("exit",function(code){done(code===0?"OK":"FAIL");});}catch(e){done((e&&e.code)||"THROW");}});process.send(out);}catch(e){process.exit(5);}}',
     'setTimeout(function(){process.exit(4);},12000);',
     'if(!process.send){process.exit(3);}',
     'function tryNetwork(){var done=false;var s=null;var settle=function(c){if(done){return;}done=true;out.netCode=c;try{if(s){s.destroy();}}catch(e){}attemptSpawn();};try{s=net.connect(443,"1.1.1.1");s.on("error",function(e){settle((e&&e.code)||"THROW");});s.on("connect",function(){settle("CONNECTED");});}catch(e){settle((e&&e.code)||"THROW");}setTimeout(function(){settle("TIMEOUT");},4000);}',
-    'tryNetwork();',
+    'function startProbe(){try{fs.writeFileSync(target,"wjs");out.wrote=fs.readFileSync(target,"utf8")==="wjs";}catch(e){out.wrote=false;out.writeCode=(e&&e.code)||"THROW";}try{fs.readFileSync("/etc/passwd");out.readCode="OPEN";}catch(e){out.readCode=(e&&e.code)||"THROW";}try{fs.readdirSync(os.homedir());out.homeCode="OPEN";}catch(e){out.homeCode=(e&&e.code)||"THROW";}out.selfExecCode=fs.existsSync(process.execPath)?"OPEN":"ENOENT";tryNetwork();}',
+    'process.once("message",function(m){if(!m||m.wordjsProbeBoot!==true){process.exit(7);return;}startProbe();});process.send({stage:"BOOT"});',
 ].join('');
 
 /**
@@ -817,7 +814,7 @@ function logSafe(v: any): string {
     return String(v == null ? '' : v).replace(/\n/g, '').replace(/\r/g, '');
 }
 
-type ProbeMsg = { wrote?: boolean; readCode?: string; homeCode?: string; execCode?: string; selfExecCode?: string; netCode?: string };
+type ProbeMsg = { stage?: string; wrote?: boolean; readCode?: string; homeCode?: string; execCode?: string; selfExecCode?: string; netCode?: string };
 
 /**
  * Run PROBE_SRC once. `pre` is the wrapper argv (`[sandbox-exec, -p, <profile>]`) or [] for the UNCONFINED
@@ -869,6 +866,10 @@ function runProbeChild(pre: string[], target: string, denyNet: boolean, runtime?
         proc.on('message', (m: any) => {
             if (!m || typeof m !== 'object') return;
             msg = m as ProbeMsg;
+            if (msg.stage === 'BOOT') {
+                try { proc.send({ wordjsProbeBoot: true }); } catch { /* close will fail the probe */ }
+                return;
+            }
             // The ACK makes the process-denial observation causal: the child cannot attempt spawn until
             // this parent has durably observed ATTEMPTED. A later SIGABRT is therefore not a lost-message
             // race, and the same round trip also certifies production's inherited IPC channel.
@@ -889,7 +890,8 @@ function runProbeChild(pre: string[], target: string, denyNet: boolean, runtime?
             if (deniedSpawnAbort && msg) msg.execCode = 'SIGABRT';
             if (runtime && (code !== 0 || signal || bootstrapFailure || spawnFailure)) {
                 console.warn('[Sandbox] Seatbelt probe child failed: ' + logSafe(JSON.stringify({
-                    code, signal: signal || '', bootstrap: bootstrapFailure, spawn: spawnFailure, stderr,
+                    code, signal: signal || '', bootstrap: bootstrapFailure, spawn: spawnFailure,
+                    lastMessage: msg || null, stderr,
                 })));
             }
             finish(code === 0 || deniedSpawnAbort ? msg : null);

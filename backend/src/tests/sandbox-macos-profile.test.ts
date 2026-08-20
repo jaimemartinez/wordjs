@@ -255,6 +255,8 @@ describe('probe', () => {
             'the denial marker must be flushed before macOS can abort the spawning process');
         assert.ok(__probeSrc.includes('m.wordjsProbeSpawn!==true'),
             'the child must wait for the parent acknowledgement before attempting the denied operation');
+        assert.ok(__probeSrc.includes('process.send({stage:"BOOT"})'),
+            'the inherited IPC channel must complete a round trip before any resource probe runs');
     });
 
     test('reports unsupported off macOS, and never claims active', { skip: process.platform === 'darwin' ? 'this assertion is about the non-macOS path' : false }, async () => {
