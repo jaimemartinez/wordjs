@@ -250,14 +250,16 @@ test('io-guard blocks plugin reads of the database file under data/ (in the chil
 test('io-guard: DB file blocked in the child, allowed for the host bridge driver', async () => {
     const { isPathSafe } = require('../core/io-guard');
     const root = path.resolve(__dirname, '../../');
-    const dbFile = path.join(root, 'data', 'wordjs.db');
+    const configuredDb = path.resolve(require('../config/app').dbPath);
+    const otherDb = path.join(root, 'data', path.basename(configuredDb) === 'wordjs.db' ? 'wordjs-native.db' : 'wordjs.db');
     const g: any = global; const prev = g.__WORDJS_ISOLATED__;
     try {
         await runWithContext('mail-server', async () => {
             delete g.__WORDJS_ISOLATED__;                                    // HOST (bridge driver context)
-            assert.equal(isPathSafe(dbFile, false), true);                  // host DB driver → allowed
+            assert.equal(isPathSafe(configuredDb, false), true);             // configured host DB → allowed
+            assert.equal(isPathSafe(otherDb, false), false);                 // another DB literal stays denied
             g.__WORDJS_ISOLATED__ = true;                                   // isolated CHILD (plugin code)
-            assert.equal(isPathSafe(dbFile, false), false);                 // plugin reading raw DB → blocked
+            assert.equal(isPathSafe(configuredDb, false), false);            // plugin reading raw DB → blocked
             assert.equal(isPathSafe(path.join(root, '.env'), false), false); // secret file → blocked
         });
     } finally { if (prev === undefined) delete g.__WORDJS_ISOLATED__; else g.__WORDJS_ISOLATED__ = prev; }
