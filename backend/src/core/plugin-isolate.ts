@@ -1179,7 +1179,7 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
         // activate in production at all. The JS egress guard remains the authority on where a
         // network-granted plugin may connect; the native sandbox decides only whether IP sockets exist.
     }
-    let childStdio: any = IPC_STDIO;
+    const childStdio: any = IPC_STDIO;
     // -- LINUX ZERO-CONFIGURATION CONFINEMENT (Landlock + seccomp-bpf) -----------------------------
     // This is a PREFIX, like Seatbelt, so it sits in the same argv slot and
     // composes with everything already there:
@@ -1264,28 +1264,17 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
     // spawn branches below share ONE profile string. Two builders would be two chances for the kernel's
     // write set and the JS guard's write set to drift, and it is always the looser one that matters.
     let seatbeltPre: string[] = [];
-    let seatbeltRuntime: any = null;
-    let nativeNodePath = process.execPath;
-    const preSeatbeltExecArgvLength = execArgv.length;
+    const nativeNodePath = process.execPath;
     if (platformLaunch.use && platformLaunch.mechanism === 'seatbelt') {
         try {
             const mac = require('./sandbox-macos');
-            seatbeltRuntime = mac.prepareSeatbeltRuntime(process.execPath);
-            nativeNodePath = seatbeltRuntime.exe;
-            workerEnv.WORDJS_SEATBELT_BOOTSTRAP = '1';
-            workerEnv.WORDJS_SEATBELT_READY_FD = '4';
-            workerEnv.WORDJS_SEATBELT_RELEASE_FD = '5';
-            execArgv.push('-r', mac.SEATBELT_BOOTSTRAP_FILE);
-            childStdio = [...IPC_STDIO, 'pipe', 'pipe'];
             // The profile always confines filesystem/process operations; the grant changes only network.
             const profile = mac.buildSeatbeltProfile({
                 writableDirs: sandboxWritable,
                 readOnlyDirs: sandboxReadable,
                 denyNetwork: !netGranted,
                 appRoot: APP_ROOT,
-                nodePath: seatbeltRuntime.exe,
-                runtimeRoots: seatbeltRuntime.runtimeRoots,
-                descendantExecPaths: seatbeltRuntime.descendantExecPaths,
+                nodePath: process.execPath,
             });
             const profileProblems = mac.auditProfile(profile);
             if (profileProblems.length > 0) {
@@ -1301,14 +1290,6 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
             // rather than assumed.
             seatbeltPre = [mac.SEATBELT_BIN, ...mac.seatbeltArgs(profile, [])];
         } catch (e: any) {
-            try { require('./sandbox-macos').disposeSeatbeltRuntime(seatbeltRuntime); } catch { /* */ }
-            seatbeltRuntime = null;
-            nativeNodePath = process.execPath;
-            execArgv.splice(preSeatbeltExecArgvLength);
-            delete workerEnv.WORDJS_SEATBELT_BOOTSTRAP;
-            delete workerEnv.WORDJS_SEATBELT_READY_FD;
-            delete workerEnv.WORDJS_SEATBELT_RELEASE_FD;
-            childStdio = IPC_STDIO;
             if (requireNativeSandbox) {
                 throw new Error(`[Sandbox] refusing to launch isolated plugin '${slug}': the certified Seatbelt profile could not be built (${logSafe(e && e.message)}).`, { cause: e });
             }
@@ -1433,12 +1414,6 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
                 env: workerEnv,
                 stdio: childStdio,
                 serialization: 'advanced',
-            });
-        }
-        if (seatbeltRuntime) {
-            require('./sandbox-macos').armSeatbeltBootstrap(child, seatbeltRuntime).catch((error: any) => {
-                console.error(`[Sandbox] Seatbelt one-shot exec bootstrap failed for '${logSafe(slug)}': ${logSafe(error && error.message)}`);
-                try { child.kill('SIGKILL'); } catch { /* */ }
             });
         }
         // Record the pid as OURS-and-alive from the moment it exists (see livePids): the registry entry

@@ -24,7 +24,6 @@ const {
     sbplPath,
     probeSeatbelt,
     SEATBELT_BIN,
-    SEATBELT_BOOTSTRAP_FILE,
     auditProfile,
     __probeSrc,
 } = require('../core/sandbox-macos');
@@ -59,11 +58,11 @@ describe('SBPL profile skeleton', () => {
         assert.strictEqual(nonAscii, null, `generated profile must be ASCII, found ${JSON.stringify(nonAscii)}`);
     });
 
-    test('never grants blanket exec, blanket mach-lookup, or inbound network', () => {
+    test('process descendants inherit confinement without wildcard operations, Mach access, or inbound network', () => {
         const p = build();
+        assert.ok(p.includes('(allow process-exec)'), 'bwrap-equivalent descendants may exec inside the same domain');
         assert.ok(p.includes('(allow process-fork)'), 'descendants must inherit the Seatbelt domain');
-        assert.ok(p.includes('(deny default)'), 'deny-default must close every non-carved-out exec operation');
-        assert.ok(!/\(allow process-exec\*\)/.test(p), 'exec must never be granted unrestricted');
+        assert.ok(!/\(allow process-exec\*\)/.test(p), 'interpreter and related wildcard operations stay denied');
         assert.ok(p.includes('(allow signal (target same-sandbox))'));
         assert.ok(p.includes('(allow process-info* (target same-sandbox))'));
         // A blanket mach-lookup reaches launchd (job submission = escape) and WindowServer.
@@ -71,18 +70,12 @@ describe('SBPL profile skeleton', () => {
         assert.ok(!/network-bind/.test(p), 'a plugin is never granted the ability to listen');
     });
 
-    test('exec is carved out only for the initial and exact trusted descendant Node binaries', () => {
-        const descendant = '/opt/wordjs/node/bin/node';
-        const p = build({ descendantExecPaths: [descendant] });
-        assert.ok(p.includes(`(allow process-exec (literal "${NODE}"))`), 'the Node binary must be exec-able');
-        assert.ok(p.includes(`(allow process-exec (literal "${descendant}"))`), 'the trusted descendant Node must be exec-able');
-        assert.ok(p.includes(`(allow file-read* file-map-executable (literal "${descendant}"))`));
-        assert.ok(!p.includes('(allow process-exec (literal "/bin/sh"))'));
-        assert.ok(!p.includes('(allow process-exec (literal "/bin/echo"))'));
-        assert.ok(!p.includes('(deny process-exec*)'),
-            'a star-set deny cannot be portably narrowed by a filtered process-exec rule');
-        assert.ok(p.indexOf('(deny default)') < p.indexOf('(allow process-exec (literal'),
-            'deny-default must precede the exact carve-out — SBPL resolves to the LAST matching rule');
+    test('the installed Node image is readable and mappable without making writable trees executable', () => {
+        const p = build();
+        assert.ok(p.includes(`(allow file-read* file-map-executable (literal "${NODE}"))`));
+        assert.ok(!p.includes('(allow file-map-executable)'), 'executable mappings must always carry a path filter');
+        assert.ok(p.indexOf('(deny default)') < p.indexOf('(allow process-exec)'),
+            'deny-default must precede the inherited process-tree carve-out');
     });
 
     test('the legacy builder fallback grants appRoot read-only', () => {
@@ -120,24 +113,16 @@ describe('SBPL profile skeleton', () => {
         assert.deepStrictEqual(auditProfile(diagnostic), []);
     });
 
-    test('the initial executable identity is one-shot and deleted before plugin code is released', () => {
+    test('production and the probe launch the installed runtime directly and audit the shipped profile', () => {
         const source = fs.readFileSync(path.resolve(__dirname, '../core/sandbox-macos.ts'), 'utf8');
         const isolateSource = fs.readFileSync(path.resolve(__dirname, '../core/plugin-isolate.ts'), 'utf8');
-        const bootstrap = fs.readFileSync(SEATBELT_BOOTSTRAP_FILE, 'utf8');
-        assert.match(source, /prepareSeatbeltRuntime/);
-        assert.match(source, /const probeCodeRoots = \[pathm\.dirname\(SEATBELT_BOOTSTRAP_FILE\)\]/,
-            'the real Seatbelt probe must be able to read the preload it launches with');
-        assert.strictEqual((source.match(/readOnlyDirs: probeCodeRoots/g) || []).length, 2,
-            'both network-policy probe profiles must carry the preload read root');
-        assert.match(source, /disposeSeatbeltRuntime\(runtime\)[\s\S]*existsSync\(runtime\.exe\)/,
-            'the host must unlink and verify the executable before sending the release marker');
-        assert.match(isolateSource, /descendantExecPaths: seatbeltRuntime\.descendantExecPaths/,
-            'production must restrict descendants to exact spellings of its trusted Node runtime');
+        assert.doesNotMatch(source, /prepareSeatbeltRuntime|armSeatbeltBootstrap|WORDJS_SEATBELT_BOOTSTRAP/);
+        assert.match(isolateSource, /nodePath: process\.execPath/,
+            'production must use the installed runtime directly under Seatbelt');
+        assert.strictEqual((source.match(/readOnlyDirs: \[\]/g) || []).length, 2,
+            'both probe policy shapes must avoid unnecessary application-code read grants');
         assert.match(isolateSource, /auditProfile\(profile\)[\s\S]*profileProblems\.length > 0[\s\S]*throw new Error/,
             'production must fail closed when the independent profile audit reports a violation');
-        assert.match(bootstrap, /writeSync\(readyFd[\s\S]*readSync\(releaseFd/,
-            'the preload must block synchronously before the plugin worker can load');
-        assert.match(bootstrap, /process\.exit\(126\)/, 'a broken handshake must fail closed');
     });
 });
 
@@ -170,12 +155,12 @@ describe('writable zones', () => {
         assert.strictEqual(hits, 1, 'the same zone (with or without a trailing slash) must be emitted once');
     });
 
-    test('a trusted executable under a writable zone is dropped as replaceable', () => {
+    test('a Node image under a writable zone is not mappable as executable', () => {
         const writable = '/srv/wordjs/plugin-data';
         const replaceableNode = `${writable}/node`;
-        const p = build({ writableDirs: [writable], descendantExecPaths: [replaceableNode] });
-        assert.ok(!p.includes(`(allow process-exec (literal "${replaceableNode}"))`));
-        assert.match(p, /trusted executable path\(s\) were DROPPED.*\(W\^X\)/);
+        const p = build({ writableDirs: [writable], nodePath: replaceableNode });
+        assert.ok(!p.includes(`file-map-executable (literal "${replaceableNode}")`));
+        assert.match(p, /Node mapping path\(s\) were DROPPED.*\(W\^X\)/);
         assert.deepStrictEqual(auditProfile(p), []);
     });
 });
@@ -283,8 +268,6 @@ describe('probe', () => {
             'a refused execve aborts Node 22 on macOS before the probe can report the denial');
         assert.ok(!__probeSrc.includes('spawnSync'),
             'synchronous spawning uses internal IPC that aborts under a deny-by-default Seatbelt profile');
-        assert.ok(__probeSrc.includes('fs.existsSync(process.execPath)'),
-            'the probe must observe that the one-shot executable disappeared before plugin code runs');
         assert.ok(__probeSrc.indexOf('descendantReadCode="ATTEMPTED"') < __probeSrc.indexOf('cp.spawn(process.env.WORDJS_SEATBELT_PROBE_NODE'),
             'the causal marker must be flushed before the trusted descendant is spawned');
         assert.ok(__probeSrc.includes('fs.readFileSync(\\"/etc/passwd\\")'),
