@@ -62,7 +62,7 @@ describe('SBPL profile skeleton', () => {
     test('never grants blanket exec, blanket mach-lookup, or inbound network', () => {
         const p = build();
         assert.ok(p.includes('(allow process-fork)'), 'descendants must inherit the Seatbelt domain');
-        assert.ok(/\(deny process-exec\*\)/.test(p), 'exec must be denied before the Node carve-out');
+        assert.ok(p.includes('(deny default)'), 'deny-default must close every non-carved-out exec operation');
         assert.ok(!/\(allow process-exec\*\)/.test(p), 'exec must never be granted unrestricted');
         assert.ok(p.includes('(allow signal (target same-sandbox))'));
         assert.ok(p.includes('(allow process-info* (target same-sandbox))'));
@@ -79,9 +79,10 @@ describe('SBPL profile skeleton', () => {
         assert.ok(p.includes(`(allow file-read* file-map-executable (literal "${descendant}"))`));
         assert.ok(!p.includes('(allow process-exec (literal "/bin/sh"))'));
         assert.ok(!p.includes('(allow process-exec (literal "/bin/echo"))'));
-        // and it must come AFTER the deny, or the deny would win.
-        assert.ok(p.indexOf('(deny process-exec*)') < p.indexOf('(allow process-exec (literal'),
-            'deny must precede the carve-out — SBPL resolves to the LAST matching rule');
+        assert.ok(!p.includes('(deny process-exec*)'),
+            'a star-set deny cannot be portably narrowed by a filtered process-exec rule');
+        assert.ok(p.indexOf('(deny default)') < p.indexOf('(allow process-exec (literal'),
+            'deny-default must precede the exact carve-out — SBPL resolves to the LAST matching rule');
     });
 
     test('the legacy builder fallback grants appRoot read-only', () => {

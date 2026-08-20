@@ -38,8 +38,8 @@
  * objects whose ACL names its SID; that is a real asymmetry and it is stated rather than papered over.
  *
  * CHILD PROCESSES (contained). Seatbelt policies are inherited by descendants, which is the same process-
- * tree model bwrap provides. `process-fork` is therefore allowed, while `process-exec*` stays denied except
- * for literal spellings of the trusted Node runtime. `/bin/sh`, shebang interpreters and payloads planted
+ * tree model bwrap provides. `process-fork` is therefore allowed, while `(deny default)` keeps exec denied
+ * except for literal spellings of the trusted Node runtime. `/bin/sh`, shebang interpreters and payloads planted
  * in writable zones remain non-executable. The real probe creates a descendant and certifies that it is
  * still denied `/etc/passwd`; merely proving that a spawn failed would not prove inheritance.
  *
@@ -533,14 +533,15 @@ function buildSeatbeltProfile(opts: SeatbeltProfileOptions): string {
     // baseline used by production browser and agent profiles. The kernel probe below proves propagation by
     // spawning a trusted Node descendant that must still be unable to read /etc/passwd.
     //
-    // Exec remains narrower than those reference profiles: process-exec* is explicitly denied and only
-    // literal spellings of the trusted Node runtime are carved out. This excludes `/bin/sh`, scripts via
+    // Exec remains narrower than those reference profiles: deny-default closes it and only literal spellings
+    // of the trusted Node runtime are carved out. Do not add a redundant `(deny process-exec*)` here:
+    // Seatbelt expands the star operation as a set, and that broader explicit rule cannot be portably
+    // narrowed by a later filtered `process-exec` rule across Darwin releases. This excludes `/bin/sh`, scripts via
     // `process-exec-interpreter`, every other host binary and anything planted in a writable zone. The
     // ephemeral first image is unlinked before plugin code is released; the original image is retained only
     // so a descendant can run inside the inherited sandbox.
     L.push(';; --- process tree: descendants inherit Seatbelt; exec ONLY exact trusted Node images ---');
     L.push('(allow process-fork)                 ;; descendants remain in the same Seatbelt domain');
-    L.push('(deny process-exec*)');
     for (const n of allowedNodeExecPaths) L.push(`(allow process-exec (literal ${lit(n)}))`);
     for (const n of allowedNodeExecPaths) L.push(`(allow file-read* file-map-executable (literal ${lit(n)})) ;; trusted Node image only`);
     if (droppedNodeExecPaths > 0) {
