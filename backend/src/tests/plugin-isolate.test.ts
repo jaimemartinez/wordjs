@@ -144,6 +144,7 @@ const fsDir = path.join(path.resolve(__dirname, '../../plugins'), FSSLUG);
 const fsEntry = path.join(fsDir, 'index.js');
 const ROOT = path.resolve(__dirname, '../../');
 const sharedProbe = path.join(ROOT, 'os-tmp', 'wjs-fsgate-probe.txt');
+const privateProbeDir = require('../core/sandbox-paths').privateStorageDirs(ROOT, FSSLUG)[2];
 const outsideProbe = path.join(ROOT, 'src', 'wjs-fsgate-probe.txt');
 
 test('an isolate CAN write its own data dir when filesystem is granted — and still cannot write the published surface', async () => {
@@ -173,6 +174,7 @@ test('an isolate CAN write its own data dir when filesystem is granted — and s
         "      ownData: attempt(() => { nfs.mkdirSync(npath.join(own, 'data'), { recursive: true }); nfs.writeFileSync(npath.join(own, 'data', 'probe.txt'), 'x'); }),\n" +
         "      ownRead: attempt(() => nfs.readFileSync(npath.join(own, 'data', 'probe.txt'), 'utf8')),\n" +
         "      published: attempt(() => nfs.writeFileSync(npath.join(own, 'public', 'leak.css'), 'body{}')),\n" +
+        "      privateZone: attempt(() => { nfs.mkdirSync(wordjs.paths.tmp, { recursive: true }); nfs.writeFileSync(npath.join(wordjs.paths.tmp, 'wjs-fsgate-probe.txt'), 'x'); }),\n" +
         "      sharedZone: attempt(() => { nfs.mkdirSync(npath.join(root, 'os-tmp'), { recursive: true }); nfs.writeFileSync(npath.join(root, 'os-tmp', 'wjs-fsgate-probe.txt'), 'x'); }),\n" +
         "      outsideZone: attempt(() => nfs.writeFileSync(npath.join(root, 'src', 'wjs-fsgate-probe.txt'), 'x')),\n" +
         // fs.promises is the SECOND guarded surface, with its own proxy in secure-require. It reads
@@ -201,8 +203,9 @@ test('an isolate CAN write its own data dir when filesystem is granted — and s
         assert.strictEqual(r.body.ownDataPromise.ok, true, `the fs.promises surface must honour the same grant, got: ${r.body.ownDataPromise.err}`);
         // …and the surface the host publishes over HTTP stays READ-ONLY even so (#3).
         assert.ok(refusedBySandbox(r.body.published), `a granted plugin must be REFUSED writing its PUBLISHED public/ dir, got: ${JSON.stringify(r.body.published)}`);
-        // The other reader of the same grant (secure-require's outside-the-own-dir branch) must agree.
-        assert.strictEqual(r.body.sharedZone.ok, true, `granted plugin must write a shared write-zone, got: ${r.body.sharedZone.err}`);
+        // Capability storage is private per plugin; the former shared root stays closed even when granted.
+        assert.strictEqual(r.body.privateZone.ok, true, `granted plugin must write its private tmp zone, got: ${r.body.privateZone.err}`);
+        assert.ok(refusedBySandbox(r.body.sharedZone), `the shared os-tmp root must stay closed, got: ${JSON.stringify(r.body.sharedZone)}`);
         // A grant is not a skeleton key: zones that are not write zones stay closed.
         assert.ok(refusedBySandbox(r.body.outsideZone), `a granted plugin must be REFUSED writing outside every write zone, got: ${JSON.stringify(r.body.outsideZone)}`);
 
@@ -213,13 +216,15 @@ test('an isolate CAN write its own data dir when filesystem is granted — and s
         const r2 = await request(app).get(`/api/v1/plugin/${FSSLUG}/fscheck`);
         assert.strictEqual(r2.status, 200);
         assert.ok(refusedBySandbox(r2.body.ownData), `a DECLARED-but-REVOKED filesystem:write must be REFUSED in the own dir, got: ${JSON.stringify(r2.body.ownData)}`);
-        assert.ok(refusedBySandbox(r2.body.sharedZone), `a revoked filesystem:write must be REFUSED in the shared write zones too, got: ${JSON.stringify(r2.body.sharedZone)}`);
+        assert.ok(refusedBySandbox(r2.body.privateZone), `a revoked filesystem:write must be REFUSED in private capability storage too, got: ${JSON.stringify(r2.body.privateZone)}`);
+        assert.ok(refusedBySandbox(r2.body.sharedZone), `a revoked filesystem:write must remain REFUSED in shared roots, got: ${JSON.stringify(r2.body.sharedZone)}`);
         assert.ok(refusedBySandbox(r2.body.ownDataPromise), `the fs.promises surface must be REFUSED too when revoked, got: ${JSON.stringify(r2.body.ownDataPromise)}`);
     } finally {
         try { unloadIsolatedPlugin(FSSLUG); } catch { /* */ }
         try { perms._setGrantsInMemory(FSSLUG, before); } catch { /* */ }
         try { fs.rmSync(fsDir, { recursive: true, force: true }); } catch { /* */ }
         try { fs.rmSync(sharedProbe, { force: true }); } catch { /* */ }
+        try { fs.rmSync(privateProbeDir, { recursive: true, force: true }); } catch { /* */ }
         try { fs.rmSync(outsideProbe, { force: true }); } catch { /* */ }
     }
 });

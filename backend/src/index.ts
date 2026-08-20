@@ -595,7 +595,7 @@ app.use('/plugins', (req: any, _res: any, next: any) => {
 // (mail-server's attachments + bayes.json were reachable on a CLEAN INSTALL). Combined with the fact
 // that a plugin may write its own directory with NO permission grant, that mount ANNULLED the whole
 // network-containment model: the `network` permission, the egress allowlist's loopback/RFC1918/
-// metadata blocks and bwrap's --unshare-net all police the SOCKET, and none of them can see a plugin
+// metadata blocks and the native kernel socket policy all police the SOCKET, and none can see a plugin
 // writing leak.txt and an attacker fetching https://site/plugins/<slug>/leak.txt. `dotfiles:'deny'`
 // only ever hid names starting with a dot.
 //
@@ -1506,26 +1506,23 @@ async function initialize() {
         // Plugin-sandbox hardening: run the kernel-hardening probe at boot (fire-and-forget) and LOG the
         // resulting state, so the OS-backstop posture is visible even when no isolated plugin has loaded
         // yet — the probe is otherwise lazy (first isolate load). Boot-time twin of the active-theme
-        // warning and of the admin-visible `sandbox_hardening_*` settings flags. 'degraded' (hardening
-        // ENABLED on Linux but bwrap/userns unavailable) is the "looks secure but isn't" state and is
-        // logged as a WARNING; 'unsupported' (Windows/macOS — no bwrap) and 'disabled' (opt-out) are
-        // logged calmly as expected postures, never as a fault, never a crash.
+        // warning and of the admin-visible `sandbox_hardening_*` settings flags.
         try {
             const iso = require('./core/plugin-isolate');
             iso.probeKernelHardening().then(() => {
                 const state = iso.getSandboxHardeningState();
                 if (state === 'degraded') {
                     console.warn('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-                    console.warn('⚠️  Plugin sandbox DEGRADED: kernel hardening is ENABLED but the bwrap probe FAILED');
-                    console.warn('   on this host — isolated plugins run WITHOUT the OS backstop (JS guards only).');
-                    console.warn('   Install bubblewrap + enable unprivileged user namespaces to restore it, or set');
+                    console.warn('⚠️  Plugin sandbox DEGRADED: the native OS confinement probe FAILED');
+                    console.warn('   on this host — isolated plugins run WITHOUT the native OS backstop.');
+                    console.warn('   Inspect GET /health/details for the failed property, or set');
                     console.warn('   sandbox.requireHardening=true to fail closed. Visible to admins on GET /api/v1/settings/all');
                     console.warn('   (sandbox_hardening_degraded) and GET /health/details.');
                     console.warn('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
                 } else if (state === 'active') {
-                    console.log('🛡️  Plugin sandbox: kernel hardening ACTIVE (bwrap + seccomp OS backstop).');
+                    console.log('🛡️  Plugin sandbox: native kernel confinement ACTIVE.');
                 } else if (state === 'unsupported') {
-                    console.log('🛡️  Plugin sandbox: kernel hardening UNAVAILABLE on this platform (non-Linux) — isolated plugins use process separation + JS guards + Node permission model.');
+                    console.log('🛡️  Plugin sandbox: native kernel confinement UNAVAILABLE — isolated plugins use process separation + JS guards + Node permission model.');
                 } else if (state === 'disabled') {
                     console.log('🛡️  Plugin sandbox: kernel hardening DISABLED via config (sandbox.useKernelHardening=false).');
                 }

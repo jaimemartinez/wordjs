@@ -1,65 +1,12 @@
 name: Sandbox parity
 
-# Certifies, ON EACH SUPPORTED OS, that an isolated plugin really is confined at the KERNEL level — not
-# that the platform theoretically supports it, and not that a flag was accepted.
-#
-# WHY A SEPARATE WORKFLOW, AND WHY NOT ubuntu-latest
-# --------------------------------------------------
-# All 8 jobs in ci.yml run on ubuntu-latest, which is correct for everything they test. It is exactly
-# wrong for this one. The confinement layers under test are OS kernel features:
-#
-#   ubuntu-latest   bubblewrap: uid drop, dropped caps, no-new-privs, PID/IPC/UTS namespaces, a read-only
-#                   root, a seccomp-bpf syscall denylist, and an EMPTY network namespace (--unshare-net)
-#                   for a plugin without the `network` grant.
-#   macos-14        Seatbelt (`sandbox-exec`): reads allowed, WRITES confined to the plugin's own zone,
-#                   network denied outright.
-#   windows-latest  AppContainer with ZERO capabilities: no `internetClient`, so the kernel refuses every
-#                   outbound socket, and the child reaches only objects whose ACL names its SID.
-#
-# None of that can be observed from Linux. This repository is public, so GitHub's macOS runners cost
-# nothing — and macos-14 is real Apple silicon, which is the only place the macOS layer can be honestly
-# certified rather than asserted.
-#
-# WHAT MAKES IT A GATE AND NOT A STATUS PAGE
-# ------------------------------------------
-# backend/scripts/verify-sandbox-parity.mjs launches a REAL child under the REAL confinement and reports a
-# layer ACTIVE only when that child is ACTUALLY REFUSED something it must be refused — and only when the
-# SAME child, run WITHOUT the confinement, is NOT refused. It exits non-zero when a layer that should be
-# available on that platform is missing, degraded, or could only be "proven" vacuously. That is the
-# discipline backend/src/core/plugin-isolate.ts holds itself to, and the reason it exists is written down
-# there: reporting confinement that is not present is the "looks secure but isn't" state, which is worse
-# than reporting none.
-#
-# ⚠️  THE macOS AND WINDOWS LEGS ARE NEW AND UNPROVEN UNTIL THEIR FIRST GREEN RUN.  ⚠️
-# The Seatbelt and AppContainer modules land in the same change as this workflow and have never executed
-# on a GitHub runner. The AppContainer leg HAS been measured end-to-end on a real Windows 11 machine
-# (child refused: net=EACCES, home read=EPERM, out-of-zone write=EPERM; in-zone write OK); the Seatbelt
-# leg has not been measured anywhere yet. So the first run of these legs is INFORMATION, and a red one is
-# expected to be read, not silenced. Two specific first-run reds are anticipated and are NOT bugs in the
-# probe:
-#
-#   · "core wiring MISSING" — the probe certified the OS primitive, but nothing in backend/src/core/
-#     reaches for it yet. That is the drift guard doing its job: a certified primitive the product never
-#     invokes is not a confinement layer. It goes green when the platform module lands.
-#   · Windows "launch failed at CreateProcessW (Win32 error 5)" — node.exe itself is not readable by the
-#     AppContainer SID on that runner image. The probe deliberately does NOT widen that ACL for you; it
-#     prints the exact icacls command instead. Fixing it belongs in the core launch path, not here.
-#
-# Resist the reflex to add `continue-on-error` when a leg is red. A gate that cannot fail teaches nothing,
-# and this repository has already shipped one of those (the marketplace/dist diff that could never fail —
-# see the long note in ci.yml). If a leg must be paused, delete it from the matrix in a commit that says
-# why, so its absence is visible.
-
+# Certifies the production launch path on real kernels. Every platform must retain its native sandbox
+# for both network-policy shapes; granting network may change egress and nothing else.
 on:
   push:
   pull_request:
-  # Manual runs matter here more than in most workflows: this is also the tool an operator reaches for
-  # when they want to know whether a specific runner image still confines plugins.
   workflow_dispatch:
 
-# Least privilege for the GITHUB_TOKEN, same reasoning as ci.yml: this workflow only checks the repository
-# out and runs one probe. It publishes nothing, comments nowhere, pushes nothing.
-# (actions/upload-artifact authenticates with the Actions runtime token, not the GITHUB_TOKEN.)
 permissions:
   contents: read
 
@@ -67,20 +14,15 @@ jobs:
   parity:
     name: "${{ matrix.label }}"
     runs-on: ${{ matrix.os }}
-    # GitHub's default job timeout is SIX HOURS — see the long note in ci.yml. Measured: the whole probe
-    # runs in ~2 s warm on Windows 11 (the slowest leg, because it pays two PowerShell Add-Type JITs).
-    # Ten minutes is ~300x that: generous against a cold runner and a loaded macOS queue, decisive against
-    # a hang — and the probe's own child timeouts (6-90 s) bound every spawn inside it anyway.
-    timeout-minutes: 10
+    timeout-minutes: 15
     strategy:
-      # EVERY leg must run. The whole value of this workflow is the CONTRAST between platforms — a red
-      # Windows leg that cancels the macOS leg before it reports destroys exactly the information the run
-      # exists to produce.
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
-            label: "Linux (bwrap + seccomp + netns)"
+            label: "Linux current (Landlock + seccomp)"
+          - os: ubuntu-22.04
+            label: "Linux Ubuntu 22.04 runner (Landlock + seccomp)"
           - os: macos-14
             label: "macOS (Seatbelt)"
           - os: windows-latest
@@ -92,57 +34,32 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: '22'
-          # No `cache:` here on purpose. The probe has ZERO npm dependencies — it is pure node builtins —
-          # and never runs `npm ci`, because it must stay runnable on a bare checkout, before anything is
-          # installed, built or booted. Pointing the cache at a lockfile it does not use would only buy a
-          # restore step that protects nothing.
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
 
-      - name: Install bubblewrap (Linux leg only)
-        if: runner.os == 'Linux'
-        # The Linux floor IS bwrap; without the binary there is nothing to certify and the probe fails
-        # closed rather than reporting a floor that is not there.
-        run: sudo apt-get update && sudo apt-get install -y bubblewrap
+      - name: Install and compile the production sandbox
+        working-directory: backend
+        run: npm ci && npm run build
 
-      - name: Kernel-feature context (Linux leg only)
+      - name: Linux kernel diagnostics
         if: runner.os == 'Linux'
-        # DIAGNOSTIC, not a fix. Ubuntu 24.04 restricts unprivileged user namespaces via AppArmor
-        # (kernel.apparmor_restrict_unprivileged_userns), which is the single most likely reason for a red
-        # Linux leg on a runner image bump. Printing the sysctls makes that failure explicable in one
-        # glance instead of one afternoon.
-        #
-        # It is deliberately NOT flipped to 0 here: doing so would make CI certify a kernel configuration
-        # that operators do not have, which is the same dishonesty this workflow exists to prevent.
-        # `|| true` because these keys do not exist on every kernel and their absence is not a failure.
+        shell: bash
         run: |
-          sysctl kernel.unprivileged_userns_clone || true
-          sysctl kernel.apparmor_restrict_unprivileged_userns || true
-          bwrap --version || true
+          echo "kernel: $(uname -r) arch: $(uname -m) uid: $(id -u)"
+          echo "perl: $(command -v perl || echo MISSING)"
+          perl -e 'my $a = syscall(444, 0, 0, 1); print((defined($a) && $a >= 1) ? "Landlock ABI $a\n" : "Landlock unavailable ($!)\n");'
 
-      - name: Verdict self-test (can this gate go red?)
-        # Runs BEFORE the real probes and touches no host state. It drives the probe's verdict function
-        # with synthetic results and requires it to report MISSING for every way a layer can be absent:
-        # nothing refused, refused-but-the-control-was-refused-too (vacuous), the confined child never
-        # completing, and a layer so tight it would break plugin storage. A gate nobody has ever seen fail
-        # is not known to be a gate.
+      - name: Decision-contract self-test
         run: node backend/scripts/verify-sandbox-parity.mjs --self-test
 
-      - name: Certify the confinement layers on this OS
-        # The probe prints its full reasoning to stdout — every child it launched, what that child was
-        # refused, what the UNCONFINED control got instead, and which layer each of those facts supports —
-        # and appends the whole transcript to this job's summary page. On a red leg, read that first: it
-        # names the missing layer and the measurement that failed, not just a boolean.
+      - name: Certify the native confinement used by WordJS
         run: node backend/scripts/verify-sandbox-parity.mjs --json=sandbox-parity-report.json
 
-      - name: Upload the parity report
-        # `always()`, not `failure()`: the GREEN reports are the baseline a future red is compared against
-        # — "the Windows leg used to refuse EACCES here and now times out" is only a sentence you can write
-        # if the passing runs were kept too. They are a few KB.
+      - name: Upload parity report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: sandbox-parity-${{ matrix.os }}
           path: sandbox-parity-report.json
           retention-days: 14
-          # A leg that dies before writing the report has already failed loudly in the log; an empty-artifact
-          # warning on top of that is noise.
           if-no-files-found: ignore

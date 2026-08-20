@@ -1,9 +1,9 @@
 /**
  * CAPABILITY CONFINEMENT ON EVERY PLATFORM (Node's permission model).
  *
- * Every other OS-level layer in the sandbox is Linux-only — bwrap, seccomp, namespaces, uid-drop,
- * cgroups. On Windows and macOS an isolated plugin had process separation and the JS guards, so any
- * bypass of a JS guard was the entire user account. Node's permission model is enforced in C++ below
+ * Node's permission model is the portable capability floor beneath the JS guards. Landlock+seccomp,
+ * AppContainer+Job Objects and Seatbelt add the native platform boundary, but the common Node layer keeps
+ * the denied runtime surface aligned across operating systems. Node's permission model is enforced in C++ below
  * JavaScript with the same flags everywhere, and there is no API to re-grant from inside the process,
  * so it is the one layer that closes that asymmetry.
  *
@@ -76,8 +76,8 @@ describe('permission model — the policy plugin-isolate actually ships', () => 
         fs.writeFileSync(outside, 'host secret');
     });
 
-    // Mirrors the argv built in plugin-isolate: read scoped to the app root, write scoped to the
-    // plugin's own zones, and no grant at all for the capabilities a plugin must never hold.
+    // Mirrors one argv root built in plugin-isolate: reads/writes scoped to a granted zone, and no grant
+    // at all for the capabilities a plugin must never hold. Production repeats the read flag per narrow root.
     const shipped = () => [flag as string, `--allow-fs-read=${zone}`, `--allow-fs-write=${zone}`];
 
     test('a plugin keeps working: it reads and writes inside its own zone, including nested paths', async () => {

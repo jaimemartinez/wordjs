@@ -91,42 +91,32 @@ defense-in-depth *inside* that process. We still don't oversell — the remainin
   systemd Linux (`sandbox.cpuQuotaPercent` → `CPUQuota` in the same cgroup scope, probe-gated), a
   **default-on preventive Windows Job Object** cap
   (pure-JS PowerShell P/Invoke, probe-gated), a host-side **RSS poll** elsewhere / as a backstop
-  (Linux `/proc`, Windows `tasklist`, macOS `ps` → `SIGKILL`) and a loose `RLIMIT_AS` backstop,
+  (Linux `/proc`, Windows `tasklist`, macOS `ps` → `SIGKILL`) and a loose Linux `RLIMIT_AS` backstop,
   per-child bridge-call rate + message-rate caps, RPC timeouts with wedged-child recycling, bounded
   in-flight calls, inbound/outbound payload caps, fs-write disk quota.
 
 **Residual gaps (state these plainly — they shape the roadmap):**
-- It is now **OS process isolation**, plus an **on-by-default Linux hardening layer** (bubblewrap;
-  `sandbox.useKernelHardening`, default-on / opt-out via `=false`, probe-gated — it falls back to the
-  plain fork where `bwrap` / rootless user-namespaces are unavailable) that runs the child as an
-  **unprivileged uid with all capabilities dropped, `no-new-privs`, PID/IPC/UTS namespaces, and a
-  read-only filesystem, and a `seccomp` syscall denylist** (EPERM on ptrace/mount/kexec/keyctl/
-  userfaultfd/… — syscalls Node/plugins never issue). `fs` / `child_process` inside the child are
-  additionally narrowed by **JS-level proxies** (defense-in-depth). It can no longer reach the host
-  heap or crash the host. What's intentionally NOT added: the **Landlock LSM** — its fs-confinement
-  goal is already met by the read-only mount namespace, and the LSM itself would need a native dep
-  contrary to the no-native-deps design. (The uid-drop trades away privileged-port binding.) A
-  **fail-closed** mode (`sandbox.requireHardening`, opt-in, default off) refuses to launch an isolated
-  plugin unless kernel hardening is actually **active** on the host, and the live hardening state
-  ('unknown' / 'unsupported' / 'disabled' / 'active' / 'degraded') is surfaced on admin
-  `GET /health/details` as `sandbox.hardening`, alongside the separate `netns` and `permission`
-  states. It stays 'unknown' until the first isolated plugin activates — the probe runs lazily.
+- It is **OS process isolation plus an OS-native kernel sandbox on every supported production platform**:
+  Landlock + seccomp on Linux, AppContainer on Windows, and Seatbelt on macOS. All are default-on,
+  probe-gated and wrap network-granted plugins too; granting network changes only egress. Production is
+  fail-closed by default, so a missing or broken native boundary refuses the plugin unless the operator
+  explicitly sets `sandbox.requireHardening:false`. The live native mechanism and its network-policy
+  state are surfaced on admin `GET /health/details`.
 - The per-child memory cap is layered: (a) **preventive** — on systemd Linux each child can run in a
   transient **cgroup v2 scope with `MemoryMax`** (`systemd-run --user --scope`, no root; operator
   opt-in via `sandbox.useCgroupMemoryCap` and additionally probe-gated so it only activates where
   spawn+IPC+teardown verify on that host), so the kernel OOM-kills *only* the offending
   child by construction the instant its resident set exceeds budget; (b) **preventive on Windows** — a
   default-on **Job Object** with `JOB_OBJECT_LIMIT_PROCESS_MEMORY` (the Win32 analog of cgroup
-  `memory.max`), assigned to the forked child via a one-shot PowerShell P/Invoke (**pure-JS, no native
-  dep**) and probe-gated, so the kernel fails any commit past 768 MB; (c) a **reactive RSS poll**
+  `memory.max`), assigned by the AppContainer relay before the suspended child is resumed (**pure-JS,
+  no native dep**) and probe-gated, so the kernel fails any commit past 768 MB; (c) a **reactive RSS poll**
   everywhere else and as a backstop (Linux `/proc`, Windows `tasklist`, macOS `ps`); (d) a loose
   **`RLIMIT_AS`** virtual backstop (V8's ~4 GB cage makes a box-tight virtual cap infeasible, so this
   only bounds pathological allocation). The remaining preventive-cap gap is **non-systemd Linux and
   macOS**; there the reactive poll + process separation apply.
-- **Dropped uid + capability-drop + `no-new-privs` + namespaces + a `seccomp` syscall denylist**
-  now ship as the default-on (opt-out) bubblewrap layer above, so the child's syscall surface is shrunk "by
-  construction". The Landlock LSM is intentionally not added — the read-only mount namespace already
-  provides the filesystem confinement Landlock would, and the LSM needs a native dependency.
+- The syscall/process surface is reduced by the native kernel: Linux always installs a Landlock domain
+  and a seccomp policy that denies process creation, anonymous executable images and namespace/kernel-control paths while retaining thread creation; Windows prohibits child-process creation in the AppContainer token and Job;
+  macOS denies fork/exec through Seatbelt. The mechanisms differ, but the authority contract is common.
 - The model has had several red-team passes (ten rounds) plus the OS-isolation pivot; it has
   **not had an independent third-party audit**.
 
@@ -235,10 +225,10 @@ A managed WordJS where **the sandbox is the headline feature**, not an implement
 - **Operator controls as the value prop:** per-plugin capability grants (default-deny),
   capability visibility, per-plugin resource caps, crash isolation (a runaway plugin can't take
   the site down), and an audit of what every plugin is allowed to do.
-- **This is where the kernel-level hardening lands first.** Per-plugin OS-process isolation
-  ships in OSS; the hosted environment is where we add **seccomp / landlock, cgroup memory
-  caps, and dropped uid** on top of it, so "by construction" capability-minimal isolation
-  becomes a real, sellable tier of the managed product before it's everywhere in OSS.
+- **The kernel-level plugin boundary already ships in OSS.** The hosted environment adds a second,
+  tenant-level container boundary, dedicated service identities and preventive cgroup resource caps;
+  those controls contain a whole tenant even if a plugin crosses its already-present
+  Landlock/AppContainer/Seatbelt boundary.
 
 ---
 
@@ -277,7 +267,7 @@ enlarges the trust surface:
 | Risk / gap | Why it matters | What we do about it |
 |---|---|---|
 | **Ecosystem from zero** | The marketplace pitch needs plugins; the built-in marketplace now ships **31 first-party plugins**, but there are still **no third-party authors**. A safe marketplace without a community is still a thin ecosystem. | First-party seeding is done (31 catalog plugins across commerce / marketing / content / SEO); next: a paid early-developer program; lead with *internal / agency* private marketplaces (don't need scale to be valuable). |
-| **Kernel-surface hardening gap** | Plugins run in a separate OS process (host-crash / heap-escape closed), and an on-by-default Linux layer (bubblewrap) drops uid + caps and adds no-new-privs / namespaces / read-only-fs / a **seccomp syscall denylist**. The child's syscall surface is now shrunk by construction (not just JS guards). A skeptical security buyer will probe this. | Default-on (opt-out) deprivileging + seccomp layer shipped (Linux); a default-on preventive Windows Job Object memory cap shipped (the Win32 cgroup analog); remaining: an independent audit; message §2 honestly; never claim "unbreakable." |
+| **Kernel-surface parity** | Plugins run in separate processes and under Landlock+seccomp, AppContainer, or Seatbelt. All three are default-on, probe-gated, grant-invariant and fail-closed in production. | CI certifies the compiled launch on real Linux/Windows/macOS kernels; remaining: preventive memory parity on macOS and an independent audit. Never claim "unbreakable." |
 | **No independent audit** | Self-asserted security doesn't sell to the exact segment we target. Several internal red-team passes ≠ external sign-off. | Commission a third-party pentest / audit of the sandbox; publish results + a public threat model. Make "independently audited" a marketing milestone. |
 | **AST scanner is pattern-based** | A static scanner can be evaded; it's a filter, not a proof. Over-reliance in the badge claim is a liability. | Position the scanner as *one layer*; the runtime bridge + default-deny capability grants are the real boundary. Keep fail-closed; expand coverage; treat scan-clean as necessary-not-sufficient for the badge. |
 | **License** *(resolved)* | A commercial marketplace + hosted offering needs a license that permits monetization. | **Done:** the project is now consistently **MIT** (no copyleft prod deps; see `THIRD-PARTY-NOTICES.md` + the CI license gate). Optionally revisit a source-available (BSL-style) license later if a hosted clone becomes a threat. |

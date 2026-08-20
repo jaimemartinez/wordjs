@@ -55,8 +55,8 @@ const { setApp } = require('../core/appRegistry');
 const perms = require('../core/plugin-permissions');
 
 const PLUGINS_ROOT = path.resolve(__dirname, '../../plugins');
-const UNGRANTED = '__wjs_escape_ungranted__';
-const GRANTED = '__wjs_escape_granted__';
+const UNGRANTED = 'wjs-escape-ungranted';
+const GRANTED = 'wjs-escape-granted';
 const SIBLING_TABLE = 'wjp_online_store_orders'; // a table owned by a DIFFERENT (absent) plugin's prefix
 const PREFIX = ('wjp_' + GRANTED.replace(/[^A-Za-z0-9]+/g, '_') + '_').toLowerCase();
 

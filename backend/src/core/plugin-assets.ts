@@ -32,7 +32,7 @@ const asHost = <T>(fn: () => Promise<T>): Promise<T> => runWithContext(null, fn)
 // /plugins handler serves from). Before this, `src` could name ANY file in the plugin dir; since a
 // plugin may write its own dir with no grant, enqueuing e.g. 'cache/out.css' and then overwriting
 // that file at runtime was a write→HTTP-read exfiltration channel that the network permission, the
-// egress allowlist and bwrap's --unshare-net all fail to see. public/ is denied to the plugin's own
+// egress allowlist and the kernel socket filter all fail to see. public/ is denied to the plugin's own
 // writes by io-guard, so confining the registry to it is what makes the enqueue bridge safe. Every
 // shipped plugin already enqueues from public/ (marketplace: cookie-consent, image-lightbox,
 // notification-bar, popup-builder, analytics-tag), so this is the shape the real producer emits.

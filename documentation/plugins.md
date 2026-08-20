@@ -398,10 +398,12 @@ the child — the host process always survives.
 
 **Memory is capped in layers:** (a) an **opt-in preventive** cgroup v2 `memory.max` via
 `systemd-run --user --scope` (`config.sandbox.useCgroupMemoryCap = true`, probe-gated, no root, Linux
-only); (b) a **reactive** host-side RSS poll on every platform (Linux `/proc`, Windows `tasklist`, macOS
-`ps`) that `SIGKILL`s a child whose resident set exceeds **768 MB**; (c) a loose `RLIMIT_AS` virtual
-backstop (`config.sandbox.addressSpaceCapMb`, default 16384 MB) plus `--max-old-space-size=256` for the
-JS heap.
+only); (b) a **default-on preventive Windows Job Object** assigned before the child resumes; (c) a
+**reactive** host-side RSS poll on every platform (Linux `/proc`, Windows `tasklist`, macOS `ps`) that
+`SIGKILL`s a child whose resident set exceeds **768 MB**; (d) a loose Linux `RLIMIT_AS` virtual backstop
+(`config.sandbox.addressSpaceCapMb`, default 16384 MB) plus `--max-old-space-size=256` for the JS heap.
+Current macOS does not enforce its `RLIMIT_AS` alias, so WordJS detects and rejects that false cap; its
+remaining layers are the V8 heap ceiling, separate process and reactive RSS poll.
 
 **CPU and kernel tables are capped too.** When the cgroup scope in (a) is on, it also carries
 `MemorySwapMax=0` and `TasksMax=512` — so a fork/thread-bomb exhausts your **own** cgroup, not the host
@@ -438,46 +440,15 @@ native addons, and an ESM resolution hook fails closed for the same builtins. Th
 **not** a safe zone, so you **cannot** read a sibling plugin's files — another plugin's `package.json`,
 `node_modules`, `data/`, or encryption-key files are unreachable (no cross-plugin data/secret exfiltration).
 
-> ⚠️ **Residual risk:** the baseline sandbox is OS-process isolation with userspace guards.
-> **Kernel hardening** ships **default-on** on Linux (`config.sandbox.useKernelHardening`, **opt-out
-> via `config.sandbox.useKernelHardening=false`, probe-gated** — it falls back to the plain isolated
-> fork where `bwrap` / unprivileged user-namespaces are unavailable; a no-op on Windows/macOS): bwrap
-> runs the child as an unprivileged uid (65534) in a rootless **user** namespace with all Linux
-> capabilities dropped, no-new-privs, PID/IPC/UTS namespaces and a read-only root filesystem — only your
-> own plugin dir and the io-guard write zones are bound writable, and `/tmp` is a private tmpfs — plus a
-> **seccomp-bpf syscall denylist** (`ptrace`, `mount`, `pivot_root`, `setns`, `bpf`, `keyctl`,
-> `userfaultfd`, `process_vm_*`, the `io_uring` calls, the new mount API…). The probe boots a child
-> through that full profile, seccomp filter included, before the mode activates.
-> With that active, a plugin **without** the `network` grant is additionally dropped into its own **empty
-> network namespace** (`bwrap --unshare-net`, `config.sandbox.unshareNetwork`, default-on and separately
-> probe-gated), so the JS egress neuter is backed by the kernel; a `network`-granted plugin is never
-> net-unshared (its sockets must work). Its state is reported as `netns` on `GET /health/details`.
-> Landlock is intentionally **not** used (the read-only mount namespace already meets its fs-confinement
-> goal and the LSM would need a native dep, against this sandbox's no-native-deps design). With hardening
-> off, the child is **not** capability-minimal at the syscall level. Set
-> `config.sandbox.requireHardening=true` (opt-in, default off) to **fail closed** — isolated plugins then
-> refuse to launch unless kernel hardening is actually active on the host, rather than silently degrading
-> to the JS-guards-only fork. It gates on the bwrap probe, so it is a **Linux** switch: on Windows/macOS
-> that probe can never pass, and turning it on there refuses **every** plugin. The live hardening state
-> (`active` / `degraded` / `disabled` / `unsupported` / `unknown` — `unknown` until the first isolated
-> plugin activates, since the probe runs lazily) is surfaced
-> on admin `GET /health/details`, where `requireHardening` + `degraded` reports `status: REFUSING`.
-> A *preventive* memory cap on Windows
-> ships as a Job Object (default-on, probe-gated, pure-JS; the reactive RSS poll remains a backstop).
-> The one OS-level confinement that is **not** Linux-only is Node's own **permission model**
-> (`config.sandbox.usePermissionModel`, default-on, probe-gated, compiled builds only — skipped under
-> ts-node): it is enforced in **C++ below JavaScript**, with no API to re-grant from inside the process,
-> so a plugin that defeats a JS guard still meets it. Filesystem reads are scoped to the app root, writes
-> to the zones io-guard permits, and `child_process` / `worker_threads` / native addons / WASI are simply
-> never granted — denied without the runtime having to know their names, which is the property a by-name
-> denylist cannot have. It is probed rather than assumed, because the flag was renamed between Node
-> versions (`--permission` vs `--experimental-permission`) **and a build can accept it without enforcing
-> it**: it activates only once a real child has actually been refused a read. Note it does **not** gate
-> the network — Node's permission model has no `--allow-net` token, so the JS egress guard above remains
-> the sole authority on outbound traffic. It is reported
-> separately as `permission` on `GET /health/details`, because a host can be un-hardened (no bwrap) and
-> still have capability confinement. The
-> outstanding gap is an **independent external security audit** — the sandbox is candidly **self-audited**.
+> ⚠️ **Residual risk and native boundary:** every production plugin is wrapped by a probe-certified
+> native sandbox: Landlock + an always-on seccomp filter on Linux, AppContainer on Windows, and Seatbelt
+> on macOS. These mechanisms remain active for network-granted plugins; the grant changes only the
+> kernel egress rule. `sandbox.requireHardening` is true by default, so a missing mechanism or a failed
+> per-plugin launch refuses the plugin. Only an explicit `requireHardening:false` permits the weaker
+> compatibility fallback. Node's permission model and the JavaScript guards remain defense-in-depth.
+> The honest remaining platform difference is preventive resident-memory enforcement: Windows has a Job
+> Object and systemd Linux can use cgroup v2, while macOS relies on process separation, the V8 heap cap
+> and a reactive RSS poll. The sandbox has not had an independent external audit.
 > See **[Plugin Isolation](plugin-isolation-proposal.md)** — read its status banner for the as-built
 > detail; sections 1–7 of that file are the original design record, kept for the threat model.
 
@@ -629,7 +600,7 @@ path under it, and `.html` cannot be created anywhere at all.
 is your scratch space. Previously the *entire* directory was also readable over HTTP by anyone, so those
 two facts combined into an exfiltration channel that annulled the whole containment model: write
 `leak.txt`, then `GET https://site/plugins/<slug>/leak.txt` unauthenticated. The `network` permission,
-the egress guard's loopback/RFC1918/metadata blocks and bwrap's `--unshare-net` all police the *socket* —
+the egress guard and each platform's native network policy all police the *socket* —
 none of them can see a read channel the server itself publishes. It leaked with no malicious plugin
 either: mail-server's `data/` (attachments, Bayes corpus) was reachable on a clean install. Making
 `public/` unwritable is what stops the same channel reopening one directory over.

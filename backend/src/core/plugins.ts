@@ -1917,7 +1917,7 @@ exports.deactivate = function() {
  * clean path for that). Best-effort: each step is guarded so one failure doesn't abort the rest.
  */
 async function uninstallPluginData(slug: string, { dropTables = false }: { dropTables?: boolean } = {}) {
-    const result: { grantsRemoved: boolean; strikesCleared: boolean; tablesDropped: string[] } = { grantsRemoved: false, strikesCleared: false, tablesDropped: [] };
+    const result: { grantsRemoved: boolean; strikesCleared: boolean; tablesDropped: string[]; appContainerRetired: boolean } = { grantsRemoved: false, strikesCleared: false, tablesDropped: [], appContainerRetired: false };
     try { const { removeGrants } = require('./plugin-permissions'); await removeGrants(slug); result.grantsRemoved = true; }
     catch (e: any) { console.warn(`[uninstall ${logSafe(slug)}] removeGrants failed: ${logSafe(e && e.message)}`); }
     try { const { clearStrikes } = require('./crash-guard'); clearStrikes(slug); result.strikesCleared = true; }
@@ -1945,6 +1945,12 @@ async function uninstallPluginData(slug: string, { dropTables = false }: { dropT
     // Drop the plugin's DB role (Postgres) — AFTER its tables so DROP ROLE has no dependency errors. No-op else.
     try { await require('./plugin-db-isolation').deprovision(slug); }
     catch (e: any) { console.warn(`[uninstall ${logSafe(slug)}] db role drop failed: ${logSafe(e && e.message)}`); }
+    if (process.platform === 'win32') {
+        try {
+            const appRoot = path.resolve(__dirname, '..', '..');
+            result.appContainerRetired = await require('./sandbox-windows').retireAppContainerPlugin(appRoot, slug);
+        } catch (e: any) { console.warn(`[uninstall ${logSafe(slug)}] AppContainer ACL/profile cleanup failed: ${logSafe(e && e.message)}`); }
+    }
     console.log(`[uninstall ${logSafe(slug)}] grants=${logSafe(result.grantsRemoved)} strikes=${logSafe(result.strikesCleared)} tablesDropped=${logSafe(result.tablesDropped.length)}`);
     return result;
 }

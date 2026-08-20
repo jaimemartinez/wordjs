@@ -31,7 +31,7 @@ const { loadIsolatedPlugin, unloadIsolatedPlugin } = require('../core/plugin-iso
 const { setApp } = require('../core/appRegistry');
 
 const PLUGINS_ROOT = path.resolve(__dirname, '../../plugins');
-const SLUG = '__wjs_redos__';
+const SLUG = 'wjs-redos-probe';
 const app = express();
 app.use(express.json());
 

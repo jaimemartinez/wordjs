@@ -175,7 +175,7 @@ const DERIVED_ADMIN_SETTINGS: Map<string, () => Promise<any>> = new Map(Object.e
         try { return require('../core/plugin-isolate').getSandboxHardeningState(); } catch { return 'unknown'; }
     },
     // Derived BOOLEAN (not a string — `Boolean("false")` is true): TRUE only when hardening is 'degraded',
-    // i.e. kernel hardening was enabled but the bwrap probe failed and plugins run without the OS backstop.
+    // i.e. the native sandbox probe failed and plugins run without that OS backstop.
     sandbox_hardening_degraded: async () => {
         try { return require('../core/plugin-isolate').isSandboxHardeningDegraded() === true; } catch { return false; }
     },

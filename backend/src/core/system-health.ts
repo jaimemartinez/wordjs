@@ -62,73 +62,37 @@ class SystemHealth {
         }
     }
 
-    // Surface the TRUE plugin-sandbox hardening state so an admin can see whether isolated plugins actually
-    // get the OS backstop (bwrap+seccomp) or silently run with JS guards only — the audit's "no admin-visible
-    // signal" gap. The state is populated the first time an isolated plugin activates (the probe runs lazily).
-    //
-    // WHAT CHANGED WHEN WINDOWS AND macOS GOT KERNEL LAYERS OF THEIR OWN. `hardening` and `netns` are, and
-    // remain, bwrap-specific: off Linux they say 'unsupported', which is the honest answer to "is bubblewrap
-    // confining this plugin?" but a MISLEADING answer to "is anything confining it at the kernel level?".
-    // Those are different questions, so they now get different fields. `kernel` names the mechanism THIS
-    // platform has (bwrap / appcontainer / seatbelt / none) alongside its real state, which is what lets an
-    // operator distinguish the two situations that used to look identical and that demand opposite actions:
-    //   · mechanism 'none'  + state 'unsupported' → this OS has no such layer; stop looking.
-    //   · mechanism named   + state 'disabled'    → the layer exists here and nobody turned it on.
-    //   · mechanism named   + state 'degraded'    → it was turned ON and it is NOT there. Go fix this.
+    // Surface the native sandbox using one vocabulary on Linux, Windows and macOS.
     static checkSandbox() {
         let hardening = 'unknown';
-        let netns = 'unknown';
         let permission = 'unknown';
         let kernel: any = null;
         try {
             const iso = require('./plugin-isolate');
             hardening = iso.getSandboxHardeningState();
-            if (typeof iso.getSandboxNetnsState === 'function') netns = iso.getSandboxNetnsState();
             if (typeof iso.getPermissionModelState === 'function') permission = iso.getPermissionModelState();
             if (typeof iso.getSandboxPlatformConfinement === 'function') kernel = iso.getSandboxPlatformConfinement();
         } catch { /* isolate module unavailable */ }
         const requireHardening = !!(config.sandbox && config.sandbox.requireHardening);
-        // `status` follows the PLATFORM layer, not bwrap, because it answers "is this host's kernel
-        // confinement in force?" — and on a Mac or a Windows box bwrap can never answer that. On Linux the
-        // two states are the same value by construction, so this is unchanged there. Falls back to the
-        // bwrap state if the isolate module is too old to expose the platform one.
         const effective = (kernel && kernel.state) || hardening;
         const status =
             effective === 'active' ? 'OK' :
-            effective === 'degraded' ? (requireHardening ? 'REFUSING' : 'DEGRADED') :
             effective === 'unknown' ? 'UNKNOWN' :
-            'NOT_HARDENED'; // no mechanism on this platform, or the operator did not enable it
-        // netns is a SEPARATE kernel backstop for NON-network plugins (bwrap --unshare-net): 'active' = they
-        // get an empty net namespace; 'degraded' = base hardening active but this host restricts CLONE_NEWNET
-        // (non-network plugins keep the JS network neuter only). It never gates plugin launch.
-        // `permission` is the only OS-level confinement that is NOT Linux-only, so on Windows/macOS it is
-        // the difference between "process separation plus JS guards" and an actual kernel-enforced boundary.
-        // Report it next to the Linux-only states rather than folding it into `status`: a host can be
-        // NOT_HARDENED (no bwrap) and still have capability confinement, and that distinction is the whole
-        // point of having it.
-        const out: any = { status, hardening, netns, permission, requireHardening };
-        // The per-platform block. `kernel.mechanism` is what this OS HAS; `kernel.state` is what this HOST
-        // got; `kernel.note` says what it means and, when there is one, what to do about it. `appliesTo`
-        // is stated rather than assumed because it is not the same everywhere: bwrap wraps every isolated
-        // child, while AppContainer/Seatbelt are applied only to plugins WITHOUT the `network` grant.
+            requireHardening ? 'REFUSING' :
+            effective === 'degraded' ? 'DEGRADED' :
+            'NOT_HARDENED';
+        const out: any = { status, hardening, permission, requireHardening };
         if (kernel) {
             out.platform = kernel.platform;
             out.kernel = kernel;
-            // TRUE only in the "someone turned it on and it is not there" state — the one that needs a
-            // human. 'unsupported' and 'disabled' are chosen postures and must never trip an alarm.
+            out.network = kernel.network && kernel.network.state;
             out.kernelDegraded = kernel.state === 'degraded';
         }
         if (permission === 'unsupported') out.permissionNote = 'this Node does not enforce a permission model — isolated plugins rely on process separation + the JS guards for capability confinement (upgrade Node to add an OS-enforced floor)';
         else if (permission === 'disabled') out.permissionNote = 'capability confinement is OFF (sandbox.usePermissionModel=false)';
-        if (hardening === 'degraded') out.note = 'kernel hardening is ENABLED but unavailable on this host — isolated plugins run WITHOUT the OS backstop (install bubblewrap + unprivileged userns, or set sandbox.requireHardening=true to fail closed)';
+        if (hardening === 'degraded') out.note = `the native ${kernel && kernel.mechanism || 'sandbox'} probe did not certify this host; isolated plugins run without that OS backstop${requireHardening ? ' and are refused' : ''}`;
         else if (hardening === 'unknown' && (!kernel || kernel.state === 'unknown')) out.note = 'no isolated plugin has activated yet (the confinement probes run on first load)';
-        else if (hardening === 'active' && netns === 'degraded') out.note = 'kernel hardening ACTIVE, but network-namespace isolation (--unshare-net) is unavailable on this host (CLONE_NEWNET restricted or old bwrap) — non-network plugins keep the JS network neuter without the kernel netns backstop';
-        else if (kernel && kernel.mechanism !== 'bwrap' && kernel.mechanism !== 'none') {
-            // Off Linux, `hardening: 'unsupported'` is the literal truth about bubblewrap and would read
-            // as "nothing protects this box". Say plainly which layer this platform actually has and what
-            // its state is, so nobody has to infer it from a field named after a different mechanism.
-            out.note = `bubblewrap is Linux-only (hardening: '${hardening}' is about bwrap, not about this host's confinement). This platform's kernel layer is ${kernel.mechanism} and it is '${kernel.state}': ${kernel.note}`;
-        }
+        else if (kernel) out.note = `${kernel.mechanism} is '${kernel.state}': ${kernel.note}`;
         return out;
     }
 

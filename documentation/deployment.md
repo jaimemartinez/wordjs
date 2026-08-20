@@ -266,29 +266,33 @@ Each isolated child is held to a **768 MB resident budget** plus a 256 MB JS hea
 |---|---|---|---|
 | **Preventive** | cgroup v2 `MemoryMax` via `systemd-run --user --scope` — the kernel OOM-kills only the offending child the instant it exceeds budget | **Linux** (systemd, user scopes) | **OFF** (opt-in) |
 | **Reactive** | host-side RSS poll that `SIGKILL`s a child over budget (`/proc` on Linux, `tasklist` on Windows, `ps` on macOS) | **Linux / Windows / macOS** | ON (used when the cgroup cap is not active) |
-| **Loose backstop** | kernel `RLIMIT_AS` virtual ceiling (`ulimit -v`) + the 256 MB JS-heap flag | **Linux / macOS** (POSIX; not Windows) | ON |
+| **Loose backstop** | kernel `RLIMIT_AS` virtual ceiling (`ulimit -v`) + the 256 MB JS-heap flag | **Linux**; only on another POSIX host if its enforcement probe proves the limit actually bites | ON when probe-certified |
 
 Because each plugin is a **separate process**, an OOM or crash never takes down the host on *any* platform — even with no cap configured.
 
-### `config.sandbox.useKernelHardening` — kernel hardening (Linux, default-on / opt-out)
+### Native plugin sandbox — zero configuration and fail-closed
 
-Beyond the memory caps, a **default-on (opt-out)** layer runs each isolated plugin child through [bubblewrap](https://github.com/containers/bubblewrap) so it executes as an **unprivileged uid (`nobody`) in a rootless user namespace, with all Linux capabilities dropped, `no-new-privs`, PID/IPC/UTS namespaces, and a read-only filesystem** (the app root stays writable so plugin storage — `uploads/`, `data/`, `plugins/<slug>/` — keeps working). It is **ON by default** on Linux (opt out with `sandbox.useKernelHardening: false`), a **no-op on Windows/macOS**, and **probe-validated on the host before activating** — if `bwrap` is missing or rootless user namespaces are unavailable it logs a warning and falls back to the standard isolated launch (**zero regression**). It composes with the memory caps above (the resident RSS poll sums the bwrap subtree so the cap keeps biting). Requires the `bubblewrap` package (`sudo apt-get install -y bubblewrap`); validate it on the host with `node backend/scripts/verify-sandbox-hardening.js`.
+Every isolated plugin is wrapped by the mechanism native to its OS. All three paths are enabled by default, need no daemon or privileged setup, and are activated only after a real control-versus-confined child proves filesystem, process and both network-policy shapes:
 
-On the same bwrap path, a plugin that was **not** granted the `network` capability is additionally dropped into its own **empty network namespace** (`--unshare-net`), so it cannot reach the metadata endpoint, host loopback or the public internet at the *kernel* level rather than only through the in-process JS egress guard. This is default-on and **separately** probe-gated (a host may pass the base hardening probe and fail the netns one, in which case the plugin keeps full bwrap hardening minus the netns backstop); opt out with `sandbox.unshareNetwork: false`. A plugin that **was** granted `network` is never net-unshared — its sockets must work — and stays egress-guarded as before. The state is surfaced on admin `GET /health/details` as `sandbox.netns` (`active` / `degraded` / `disabled` / `unsupported` / `unknown`).
+| OS | Native mechanism | Guarantees retained for every plugin |
+|---|---|---|
+| Linux | Landlock + `no_new_privs` + seccomp-bpf | read/write allowlist, W^X writable zones, cross-process and process-creation restrictions, dangerous-syscall/anonymous-executable/x32-ABI denial; every socket denied without the network grant and only AF_INET/AF_INET6 clients admitted with it |
+| Windows | AppContainer + Job Object | package-SID filesystem boundary, child-process prohibition, memory/process/CPU limits; only `internetClient` is added when network is granted |
+| macOS | deny-by-default Seatbelt | scoped reads/writes, process fork/exec and process-inspection denial; outbound network is allowed only when granted |
 
-```json
-{ "sandbox": { "useKernelHardening": false } }
+A network grant changes only egress. It never removes the filesystem, process or resource sandbox. Linux no longer needs a separately installed launcher, unprivileged user namespaces or sysctl changes; `/usr/bin/perl` applies Landlock/seccomp to itself and then `exec`s Node.
+
+`sandbox.requireHardening` is **true by default**. If the native probe fails, or a certified profile cannot be built/launched for a specific plugin, that plugin is refused. Setting it to `false` is an explicit unsafe compatibility downgrade. The source-only Windows `ts-node` development worker is the single carve-out; compiled production is always subject to this gate.
+
+The live result is exposed by admin `GET /health/details` as `sandbox.kernel` plus `sandbox.network`; `status: REFUSING` means the required native sandbox is unavailable. Re-certify the production implementation on the current OS after `cd backend && npm run build` with:
+
+```bash
+node backend/scripts/verify-sandbox-parity.mjs --json=sandbox-parity-report.json
 ```
 
-Set `sandbox.requireHardening: true` (default off) to **fail closed** — an isolated plugin then **refuses to launch** unless kernel hardening is actually ACTIVE on the host, instead of silently degrading to the JS-guards-only fork. The true hardening state is surfaced on admin `GET /health/details` under `sandbox`: `hardening` carries the raw probe result (`active` / `degraded` / `disabled` / `unsupported` / `unknown`) and `status` the operator-facing verdict (`OK` / `DEGRADED` / `REFUSING` when `requireHardening` is set / `NOT_HARDENED` / `UNKNOWN`). The state is populated **lazily**, the first time an isolated plugin activates, so it reads `unknown` on a site that has not loaded one yet.
+### `config.sandbox.usePermissionModel` — common capability floor (default-on / opt-out)
 
-It also applies a **`seccomp`-bpf syscall denylist** (`ptrace`/`mount`/`kexec`/`*_module`/`bpf`/`keyctl`/`userfaultfd`/`setns`/`process_vm_*`/… → `EPERM`), assembled in pure JS and applied via `bwrap --seccomp`. (The `Landlock` LSM is **not** used — the read-only mount namespace already provides the filesystem confinement it would, and the LSM needs a native dependency.)
-
-> **Trade-off:** dropping capabilities + the unprivileged uid means a plugin **cannot bind a privileged port (`<1024`)** under hardening — e.g. the mail-server, whose inbound listener defaults to port **25**. That is not fatal: it probes the port before binding and falls back to the unprivileged **2525**, recording a *degraded* inbound status. To actually serve port 25, put a redirect/reverse-proxy in front of the fallback port, or leave hardening off for that deployment.
-
-### `config.sandbox.usePermissionModel` — OS-level confinement on **every** platform (default-on / opt-out)
-
-Because bubblewrap is Linux-only, each isolated child is *also* launched under **Node's own permission model** (`--permission`, or `--experimental-permission` on older builds) — enforced in C++ below JavaScript, so it applies on Windows and macOS too. Filesystem reads are scoped to the app root and writes to the same zones the io-guard permits; `child_process`, `worker_threads`, native addons and WASI are never granted. It is default-on and **probe-gated** — the flag name moved between Node versions and a build can accept it without enforcing it, so a probe child must actually be *refused* a read before it activates. Opt out with `sandbox.usePermissionModel: false`; the live state is on admin `GET /health/details` as `sandbox.permission` (with a `sandbox.permissionNote` spelling out the consequence when it is `unsupported` or `disabled`).
+Each compiled child also uses Node's C++ permission model. Reads and writes are scoped to the same zones as the native sandbox, while `child_process`, `worker_threads`, native addons and WASI are never granted. It is probe-gated and defense-in-depth; it is not a replacement for Landlock, AppContainer or Seatbelt and it does not implement network policy.
 
 ### `config.sandbox.useCgroupMemoryCap` — opt-in preventive cgroup cap (Linux)
 
@@ -306,7 +310,7 @@ It is **OFF by default** because auto-detecting usable cgroup/systemd support ac
 
 Setting `sandbox.cpuQuotaPercent` (default `0` = off) adds a **per-plugin CPU quota** — `CPUQuota=N%` of *one* core, so `100` is a full core and `50` is half — inside the **same** systemd scope, so it only takes effect together with `useCgroupMemoryCap` and needs a host whose `cpu` controller is delegated to the user cgroup (true on bare metal and Proxmox LXC, not on ephemeral CI runners). The probe validates the exact memory+CPU scope before activating.
 
-(Add the `sandbox` block to `backend/wordjs-config.json`.) No root is required — `systemd-run --user --scope` runs `node` as a **direct child** of `systemd-run`, inheriting the IPC fd. Even when the flag is set, WordJS runs a **probe first** (validates spawn + IPC round-trip + clean teardown on this host) and only activates the cap if the probe passes; any failure falls back cleanly to the fork + `RLIMIT_AS` + RSS-poll path with **zero regression**.
+(Add the `sandbox` block to `backend/wordjs-config.json`.) No root is required — `systemd-run --user --scope` runs `node` as a **direct child** of `systemd-run`, inheriting the IPC fd. Even when the flag is set, WordJS runs a **probe first** (validates spawn + IPC round-trip + clean teardown on this host) and only activates the cap if the probe passes; any failure falls back cleanly to the Linux `RLIMIT_AS` + RSS-poll path.
 
 **Sanity-check the host before enabling.** A user manager must be running for your account (enable lingering so it survives logout), and a `--user --scope` unit with a memory cap must actually run:
 
@@ -332,9 +336,9 @@ If the flag is set but the probe fails (e.g. "Failed to connect to bus"), the lo
 
 > On **Windows** and **macOS** there is no cgroup option. On **Windows** a preventive cap now ships as a **Job Object** (`ProcessMemoryLimit` = 768 MB, default-on, probe-gated, pure-JS via PowerShell P/Invoke; opt out with `sandbox.useJobObjectMemoryCap=false`), with the reactive RSS poll as a backstop. On **macOS** the reactive RSS poll provides the resident cap, and process separation provides crash containment either way.
 
-### `config.sandbox.addressSpaceCapMb` — RLIMIT_AS override (POSIX)
+### `config.sandbox.addressSpaceCapMb` — RLIMIT_AS override (Linux; probe-certified POSIX only)
 
-On Linux/macOS the child is also launched under a kernel `RLIMIT_AS` (virtual address-space) ceiling — a coarse backstop that holds even if the host event loop is wedged and is the only cap on `/proc`-less platforms. It defaults to **16384 MB** and is deliberately loose: V8 reserves a ~4 GB pointer-compression cage, and in dev the `ts-node` compiler needs several GB of virtual space, so a tighter ceiling crashes legitimate plugin loads. Override it only on a **compiled (non-`ts-node`) production build with ample RAM headroom**:
+On Linux the child is also launched under a kernel `RLIMIT_AS` (virtual address-space) ceiling — a coarse backstop that holds even if the host event loop is wedged. WordJS only activates it after a child proves that the candidate limit boots with the real arguments. It defaults to **16384 MB** and is deliberately loose: V8 reserves a ~4 GB pointer-compression cage, and in dev the `ts-node` compiler needs several GB of virtual space, so a tighter ceiling crashes legitimate plugin loads. Override it only on a **compiled (non-`ts-node`) production build with ample RAM headroom**:
 
 ```json
 {
@@ -344,13 +348,13 @@ On Linux/macOS the child is also launched under a kernel `RLIMIT_AS` (virtual ad
 }
 ```
 
-The value is floored at 6144 MB and validated by a boot probe (using the same `execArgv` the real child uses); if even the floor won't boot on this host, WordJS falls back to a plain fork plus the RSS poll. When the cap is active you'll see:
+The value is floored at 6144 MB and validated by a boot probe (using the same `execArgv` the real child uses); if even the floor will not boot on this host, WordJS falls back to the native sandbox plus the RSS poll. When the cap is active you will see:
 
 ```
 [Sandbox] kernel memory cap active: RLIMIT_AS <N> MB per isolated child.
 ```
 
-> `RLIMIT_AS` is not available on **Windows** (no POSIX `ulimit`); there WordJS relies on process separation + the `tasklist` RSS poll. The precise resident cap is always the RSS poll or the cgroup cap — not `RLIMIT_AS`.
+> `RLIMIT_AS` is not available on **Windows**. Darwin accepts `ulimit -v` but aliases it to an unenforced `RLIMIT_RSS` on current macOS, so WordJS's enforcement probe rejects that false cap instead of claiming it. Windows uses a preventive Job Object plus its RSS poll; macOS uses the V8 heap ceiling, process separation and its reactive RSS poll. The precise Linux resident cap is the RSS poll or cgroup cap — not `RLIMIT_AS`.
 
 ---
 

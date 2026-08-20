@@ -34,7 +34,9 @@ const API = config.api.prefix;
 const PLUGINS_ROOT = path.resolve('./plugins');
 const THEMES_ROOT = path.resolve('./themes');
 const UPLOADS_ROOT = path.resolve(config.uploads.dir);
-const PROBE = '__surface_probe__';
+// Use the same production slug grammar the isolation boundary accepts. Security fixtures must not rely
+// on an internal-only name that an installed plugin can never have.
+const PROBE = 'wjs-surface-probe';
 const probeDir = path.join(PLUGINS_ROOT, PROBE);
 
 const num = (v: any) => Number(v);
@@ -210,10 +212,10 @@ describe('#3 — /plugins publishes an allowlist, not the plugin tree', () => {
             // Named explicitly too, because these two are the ones that were open.
             assert.strictEqual(isPathSafe(path.join(UPLOADS_ROOT, 'leak.txt'), true), false);
             assert.strictEqual(isPathSafe(path.join(THEMES_ROOT, 'default', 'leak.css'), true), false);
-            // …while READING those shared display assets is unchanged.
-            assert.strictEqual(isPathSafe(path.join(THEMES_ROOT, 'default', 'style.css'), false), true);
-            // …and the plugin's private, unpublished zones still work (no over-block).
-            assert.strictEqual(isPathSafe(path.join(path.resolve('./data'), 'plugin-cache.json'), true), true);
+            // Shared theme source and app data are not plugin-private zones. Published theme assets are
+            // available over the application API, not as blanket filesystem authority in the child.
+            assert.strictEqual(isPathSafe(path.join(THEMES_ROOT, 'default', 'style.css'), false), false);
+            assert.strictEqual(isPathSafe(path.join(path.resolve('./data'), 'plugin-cache.json'), true), false);
             assert.strictEqual(isPathSafe(path.join(probeDir, 'data', 'cache.json'), true), true);
         });
         // The property that makes it a class and not four patches: nothing io-guard hands a plugin as

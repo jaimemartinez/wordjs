@@ -332,39 +332,27 @@ const config: AppConfig = {
         db: parseInt(fileConfig.redis?.db || process.env.REDIS_DB || '0', 10),
         prefix: fileConfig.redis?.prefix || 'wordjs:'
     },
-    // Plugin sandbox hardening (see core/plugin-isolate.ts). Isolated plugins already run in a separate
-    // child_process; these fields control the KERNEL-level confinement layered on top. Defaults are
-    // HARDENED where the host supports it — every field is PROBE-VALIDATED at runtime and falls back to
-    // plain process isolation if the kernel feature is missing, so turning them on cannot break a host that
-    // lacks bwrap / unprivileged user-namespaces / cgroup-v2. Operators opt OUT per field via a "sandbox"
-    // block in wordjs-config.json. (Previously these had no config surface at all, so the whole OS-isolation
-    // layer was unreachable/dead-code on every stock install; default-ON activates it where it actually works.)
+    // Native plugin sandbox. Each supported OS enables its own homologous mechanism by default and probes
+    // the real launch before use: Linux Landlock+seccomp, Windows AppContainer, macOS Seatbelt.
     sandbox: {
-        // Linux: run each isolated plugin under bwrap — uid 65534, dropped caps, no-new-privs, PID/IPC/UTS +
-        // user namespaces, read-only root fs, and a seccomp syscall denylist. Probe-gated: bwrap + rootless
-        // userns + the IPC round-trip must all work on THIS host, else it falls back to the standard fork launch.
+        // Linux: Landlock scopes reads/writes and cross-process access; no-new-privs + seccomp always
+        // remove process-creation/anonymous-executable/dangerous syscalls and conditionally all sockets. No namespaces, package install,
+        // daemon or sysctl are required. The network-granted and network-denied shapes are both probed.
         useKernelHardening: fileConfig.sandbox?.useKernelHardening !== false,
-        // Linux: additionally drop a NON-network plugin (no admin `network` grant) into its OWN empty network
-        // namespace via bwrap --unshare-net, so it cannot reach the metadata endpoint / host loopback / the
-        // public internet at the KERNEL level — not merely the in-process JS egress-guard. DEFAULT-ON (opt-out),
-        // Linux + bwrap only, and separately probe-gated (a second --unshare-net IPC round-trip must pass on this
-        // host, else it's skipped and the plugin keeps the JS network neuter). Network-GRANTED plugins are never
-        // net-unshared (their sockets must work). Surfaced on admin GET /health/details as sandboxNetnsState.
-        unshareNetwork: fileConfig.sandbox?.unshareNetwork !== false,
-        // EVERY PLATFORM (this is the only OS-level confinement Windows and macOS get): launch each
-        // isolated plugin under Node's own permission model, which is enforced in C++ below JavaScript.
-        // Filesystem reads are scoped to the app root and writes to the same zones io-guard permits, and
+        // EVERY PLATFORM: launch each isolated plugin under Node's own permission model, enforced in C++
+        // below JavaScript and layered beneath the native OS mechanism.
+        // Filesystem reads are scoped to narrow core/dependency/plugin/private-storage roots, writes use the same zones io-guard permits, and
         // child_process / worker_threads / native addons / WASI are simply never granted. DEFAULT-ON and
         // probe-gated: the flag name moved between Node versions and a build can accept it without
         // enforcing it, so a child must actually be refused a read before it activates. Surfaced on
         // admin GET /health/details as sandboxPermissionState.
         usePermissionModel: fileConfig.sandbox?.usePermissionModel !== false,
-        // FAIL-CLOSED switch (opt-in, default off): when true, an isolated plugin REFUSES to launch unless
-        // kernel hardening is actually ACTIVE on this host — instead of silently degrading to the JS-guards-
-        // only fork where bwrap / unprivileged-userns is missing (the "looks secure but isn't" gap). Off by
-        // default so a stock host still runs plugins; turn it ON for hosts that must never run an untrusted
-        // plugin without the OS backstop. The true hardening state is surfaced on admin GET /health/details.
-        requireHardening: fileConfig.sandbox?.requireHardening === true,
+        // FAIL-CLOSED by default: an isolated plugin REFUSES to launch unless this OS's native sandbox is
+        // certified active. Set false only as an explicit emergency compatibility downgrade; the health
+        // endpoint reports that posture. The ts-node Windows development worker has a narrowly-scoped
+        // source-runtime carve-out because recursively ACL'ing its TypeScript dependency tree is too slow;
+        // compiled production has no carve-out.
+        requireHardening: fileConfig.sandbox?.requireHardening !== false,
         // Linux: PREVENTIVE resident-memory cap via cgroup v2 (systemd-run --user --scope MemoryMax) so the
         // kernel OOM-kills a runaway plugin instead of the reactive /proc poll. OPT-IN (default off): the fixed
         // 768 MB budget is fine for a COMPILED prod worker but too tight for a ts-node dev/test worker (ts-node
@@ -397,49 +385,20 @@ const config: AppConfig = {
         // makes the two agree — an unset config previously collapsed the isolate's default-on back to off.)
         blockCodeGen: fileConfig.sandbox?.blockCodeGen !== false,
 
-        // ── PER-PLATFORM KERNEL CONFINEMENT (the Windows and macOS peers of the bwrap layer) ─────────
-        // Everything above that confines a plugin at the KERNEL level is Linux-only, so on Windows and
-        // macOS a bypass of a JS guard used to be the whole user account. These two knobs turn on the
-        // layer each OS actually has. Both are PROBE-GATED exactly like useKernelHardening: a real child
-        // is launched through the real profile and the layer activates only if that child was ACTUALLY
-        // refused the network and an out-of-zone read (with a positive control, so a totally broken
-        // profile cannot pass). Any failure falls back to the launch that was there before — see
-        // core/plugin-isolate.ts, core/sandbox-windows.ts, core/sandbox-macos.ts.
-        //
-        // WHY THESE TWO ARE OPT-IN WHILE useKernelHardening / unshareNetwork / usePermissionModel ARE
-        // OPT-OUT. Those three are default-ON because probing them changes NOTHING on the host: a process
-        // is spawned and thrown away. These two are not in that class, and defaulting them ON would mean
-        // doing something to the operator's machine that they never asked for:
-        //   · Windows — validating AppContainer REGISTERS an AppContainer profile under the user account
-        //     and adds DACL entries (`S-1-15-2-…` ACEs) to the app root and the Node runtime directory.
-        //     That is persistent state on someone else's machine, created on first plugin load, silently.
-        //   · macOS — the Seatbelt profile has never been parsed by a real Sandbox kext (it was written on
-        //     a Windows host; see the UNCERTIFIED header of core/sandbox-macos.ts). A green probe proves
-        //     `node -e` boots under it, NOT that a real plugin does — so a default-ON flip could break
-        //     plugin loading on every Mac, and that flip must follow a MEASUREMENT, not a comment.
-        // Flip either default only once a real host of that OS reports 'active' AND real plugins load
-        // under it. The live per-platform state is on admin GET /health/details under `sandbox.kernel`.
-        //
-        // Windows: run each isolated plugin (without the `network` grant) in an AppContainer with ZERO
-        // capabilities — no `internetClient`, so the KERNEL refuses every outbound socket (the Win32
-        // analogue of bwrap --unshare-net), and the child reaches only objects whose ACL names its package
-        // SID. Applied to the COMPILED production child only: the container requires --preserve-symlinks,
-        // which changes module identity, and ts-node is the consumer most sensitive to that.
-        useAppContainer: fileConfig.sandbox?.useAppContainer === true,
-        // The AppContainer profile name registered for this install. Only worth changing when two WordJS
-        // installs share one Windows account and must not share one container identity.
+        // Windows: AppContainer is default-on. Setup is automatic under the current user. A network grant
+        // adds only internetClient; package-SID filesystem isolation and the one-process Job stay.
+        useAppContainer: fileConfig.sandbox?.useAppContainer !== false,
+        // Optional AppContainer identity override. Normally leave unset: WordJS derives a stable name from
+        // the install root so multiple installs under one Windows account remain separated zero-config.
         appContainerName: typeof fileConfig.sandbox?.appContainerName === 'string' && fileConfig.sandbox.appContainerName
             ? String(fileConfig.sandbox.appContainerName)
             : undefined,
-        // macOS: run each isolated plugin (without the `network` grant) under a deny-by-default Seatbelt
-        // profile via /usr/bin/sandbox-exec — writes confined to exactly the io-guard zones, exec confined
-        // to the Node binary, `(deny network*)`. UNCERTIFIED: see the paragraph above before enabling.
-        useSeatbelt: fileConfig.sandbox?.useSeatbelt === true,
-        // Task/process cap for a plugin's own subtree — the fork-bomb bound. On Linux this is the cgroup
-        // TasksMax already applied by the systemd scope; on Windows it is the Job Object
-        // JOB_OBJECT_LIMIT_ACTIVE_PROCESS applied to the AppContainer child. ONE knob, both kernels, so an
-        // operator sets a number rather than learning two vocabularies. Generous by design — no legitimate
-        // plugin approaches it. 0 or a negative value means "use the built-in default" (512), never "no cap".
+        // macOS: deny-by-default Seatbelt is default-on. Reads/writes/exec/process inspection remain
+        // confined for every plugin; a network grant changes only `(deny network*)` to outbound allow.
+        useSeatbelt: fileConfig.sandbox?.useSeatbelt !== false,
+        // Task/process cap for optional Linux cgroup scopes and the unsafe non-AppContainer Windows
+        // fallback. A real AppContainer launch is stricter and always uses ActiveProcessLimit=1, because
+        // plugins are never granted subprocess creation. 0/negative means the built-in fallback cap (512).
         pidsMax: Number(fileConfig.sandbox?.pidsMax) > 0 ? Number(fileConfig.sandbox.pidsMax) : 512,
     }
 };

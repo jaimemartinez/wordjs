@@ -71,18 +71,27 @@ describe('sandbox-windows: generated script hygiene (all platforms)', () => {
         // `"*$sid:(OI)(CI)(F)"` looks right and is wrong: PowerShell parses `$sid:` as a scope/drive
         // qualifier (the same syntax as $env:PATH), so the SID never expands, icacls is handed a malformed
         // principal, and the grant silently does nothing. This is the single highest-value assertion here.
-        for (const mode of ['rx', 'full', 'revoke'] as const) {
+        for (const mode of ['traverse', 'rx', 'full', 'revoke'] as const) {
             const s = sw.__buildIcaclsScript(mode);
             assert.ok(s.includes('${sid}'), `${mode}: must use the braced form`);
             assert.ok(!/\$sid:/.test(s), `${mode}: must never use the $sid: form`);
         }
     });
 
-    test('rx and full map to the intended ACE, and revoke removes rather than grants', () => {
-        assert.match(sw.__buildIcaclsScript('rx'), /\/grant .*\(OI\)\(CI\)\(RX\)/);
-        assert.match(sw.__buildIcaclsScript('full'), /\/grant .*\(OI\)\(CI\)\(F\)/);
+    test('traverse is non-recursive; writable files are W^X; revoke removes grants and denies', () => {
+        const traverse = sw.__buildIcaclsScript('traverse');
+        assert.match(traverse, /\/grant:r .*\(RX\)/);
+        assert.ok(!traverse.includes('(OI)(CI)'), 'an ancestor traversal grant must not flow into sibling trees');
+        assert.ok(!traverse.includes("'/T'"), 'traverse must not recurse');
+        assert.match(sw.__buildIcaclsScript('rx'), /\/grant:r .*\(OI\)\(CI\)\(RX\)/);
+        const writable = sw.__buildIcaclsScript('full');
+        assert.match(writable, /\/grant:r .*\(CI\)\(M\).*\(OI\)\(CI\)\(IO\)\(RD,WD,AD,REA,WEA,RA,WA,DE,RC,S\)/);
+        assert.ok(!writable.includes('(F)'), 'writable authority must exclude Full Control');
+        assert.ok(!/WDAC|WO/.test(writable), 'the child must not change the DACL or owner');
+        assert.ok(!/\(OI\)\(CI\)\(IO\)[^\n]*\bX\b/.test(writable), 'files in writable trees must never inherit execute');
         const rev = sw.__buildIcaclsScript('revoke');
         assert.match(rev, /\/remove:g/);
+        assert.match(rev, /\/remove:d/);
         assert.ok(!rev.includes('/grant'), 'revoke must never grant');
     });
 
@@ -119,7 +128,11 @@ describe('sandbox-windows: generated script hygiene (all platforms)', () => {
         assert.ok(s.includes('GetStartupInfoW'), 'must read its own STARTUPINFO to find the handle Node passed');
         assert.ok(s.includes('0x01, 0x01, 0x01, 0x09'), 'fd 3 must be flagged FOPEN|FPIPE (0x09) or the CRT will not expose it');
         assert.ok(s.includes('0x00020009'), 'must set PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES');
-        assert.ok(s.includes('CapCount = 0'), 'the container must have ZERO capabilities -- internetClient would defeat the whole layer');
+        assert.ok(s.includes('caps.CapCount = 0'), 'network-denied shape must begin with zero capabilities');
+        assert.ok(s.includes('S-1-15-3-1'), 'network-granted shape must use only the well-known internetClient SID');
+        assert.ok(s.includes('caps.CapCount = 1'), 'internetClient must be the sole optional capability');
+        assert.ok(s.includes('ATTR_HANDLE_LIST'), 'only the four deliberate stdio/IPC handles may be inherited');
+        assert.ok(s.includes('WJS_AC_ACTIVE_PROCS'), 'the Job Object process ceiling must be wired into every launch');
         assert.ok(s.includes('0x00002000'), 'must set JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE so the contained child dies with the relay');
         assert.ok(s.includes('0x00000004'), 'must CREATE_SUSPENDED so the caps bind before the first instruction runs');
         assert.ok(s.includes('LOCALAPPDATA missing'), 'must explain error 203 rather than leaving the operator to bisect it again');
@@ -136,14 +149,58 @@ describe('sandbox-windows: generated script hygiene (all platforms)', () => {
         assert.ok(!s.includes('0x00002000'), 'the one-shot helper must not set KILL_ON_JOB_CLOSE');
     });
 
-    test('the write zones mirror io-guard SAFE_WRITE_DIRS + the plugin own dir', () => {
-        const zones = sw.appContainerZones('C:\\app', 'my-plugin');
+    test('profile identities are stable per install and distinct per plugin', () => {
+        const a = sw.appContainerProfileNameForRoot('C:\\sites\\one');
+        assert.strictEqual(a, sw.appContainerProfileNameForRoot('C:\\sites\\one'));
+        assert.notStrictEqual(a, sw.appContainerProfileNameForRoot('C:\\sites\\two'));
+        assert.match(a, /^WordJSPluginSandbox\.[a-f0-9]{20}$/);
+        const pluginA = sw.appContainerProfileNameForPlugin('C:\\sites\\one', 'alpha');
+        assert.strictEqual(pluginA, sw.appContainerProfileNameForPlugin('C:\\sites\\one', 'alpha'));
+        assert.notStrictEqual(pluginA, sw.appContainerProfileNameForPlugin('C:\\sites\\one', 'beta'));
+        assert.notStrictEqual(pluginA, sw.appContainerProfileNameForPlugin('C:\\sites\\two', 'alpha'));
+    });
+
+    test('the ACL provisioning cache is scoped to SID, path and access shape', () => {
+        const sid = 'S-1-15-2-1-2-3';
+        const rx = sw.__aclCacheKey(sid, 'C:\\sites\\one', 'rx');
+        assert.match(rx, /^[a-f0-9]{64}$/);
+        assert.strictEqual(rx, sw.__aclCacheKey(sid, 'c:\\SITES\\ONE', 'rx'));
+        assert.notStrictEqual(rx, sw.__aclCacheKey(sid, 'C:\\sites\\two', 'rx'));
+        assert.notStrictEqual(rx, sw.__aclCacheKey(sid, 'C:\\sites\\one', 'full'));
+        assert.notStrictEqual(rx, sw.__aclCacheKey('S-1-15-2-9-8-7', 'C:\\sites\\one', 'rx'));
+        assert.match(sw.__aclCacheRoot(), /WordJS[\\/]sandbox-acl-cache[\\/]v3$/);
+    });
+
+    test('the probe covers both network policies while retaining read and child-process denials', () => {
+        const source = fs.readFileSync(path.resolve(__dirname, '../core/sandbox-windows.ts'), 'utf8');
+        assert.match(source, /allowNetwork:\s*false/);
+        assert.match(source, /allowNetwork:\s*true/);
+        assert.match(source, /verifyProcessLimit:\s*true/);
+        assert.match(sw.__probeChildSource, /WJS_PROCESS_DENIAL/);
+        assert.doesNotMatch(sw.__probeChildSource, /child_process/, 'the relay proves the Job limit before resuming the child; uv_spawn can block after the kernel refusal');
+        assert.match(source, /WJS_AC_ACTIVE_PROCS:\s*'1'/);
+    });
+
+    test('each SID sees only its code, runtime code and private data/log/tmp storage', () => {
+        const core = path.join('C:\\app', 'dist', 'core');
+        const zones = sw.appContainerZones('C:\\app', 'my-plugin', core);
         assert.ok(zones.write.includes(path.join('C:\\app', 'plugins', 'my-plugin')));
-        for (const d of ['uploads', 'data', 'logs', 'os-tmp', 'themes']) {
-            assert.ok(zones.write.includes(path.join('C:\\app', d)), `${d} must be writable`);
+        for (const d of ['data', 'logs', 'os-tmp']) {
+            const prefix = path.join('C:\\app', d, 'plugins');
+            const privateDir = zones.write.find((z: string) => z.startsWith(`${prefix}${path.sep}`));
+            assert.ok(privateDir, `${d} must contain one hashed per-plugin directory`);
+            assert.notStrictEqual(privateDir, path.join('C:\\app', d), `${d} root must not be granted`);
         }
-        assert.ok(zones.readExec.includes('C:\\app'));
-        const t = sw.appContainerZones('C:\\app', 'theme:aurora');
+        assert.ok(zones.readExec.includes(core));
+        assert.ok(zones.readExec.includes(path.join('C:\\app', 'node_modules')));
+        assert.ok(!zones.readExec.includes(path.resolve('C:\\app')), 'the application root must not be readable');
+        assert.ok(zones.traverse.includes(path.resolve('C:\\app')), 'the root is traversal-only so descendants remain reachable');
+        for (const broad of ['uploads', 'themes']) {
+            assert.ok(!zones.write.includes(path.join('C:\\app', broad)), `${broad} must not be shared writable storage`);
+        }
+        const sibling = sw.appContainerZones('C:\\app', 'other-plugin', core);
+        assert.ok(!zones.write.some((z: string) => sibling.write.includes(z)), 'plugin-private storage must not overlap');
+        const t = sw.appContainerZones('C:\\app', 'theme:aurora', core);
         assert.ok(t.write.includes(path.join('C:\\app', 'themes', 'aurora')), 'a theme isolate owns themes/<name>, not plugins/theme:<name>');
     });
 
@@ -174,7 +231,7 @@ describe('sandbox-windows: live AppContainer on this host', { skip: !LIVE ? 'set
         // directory is revoked too: on an elevated host the grant below SUCCEEDS, and a test that adds a
         // permanent ACE to C:\Program Files\nodejs and walks away is exactly the trap this module exists
         // not to set.
-        try { if (sid) await sw.revokeAppContainerAccess(sid, [path.dirname(process.execPath)]); } catch { /* */ }
+        try { if (sid) await sw.revokeAppContainerAccess(sid, [path.dirname(sw.getAppContainerRuntimePath())]); } catch { /* */ }
         try { if (sid && zones.length) await sw.revokeAppContainerAccess(sid, zones); } catch { /* */ }
         for (const z of zones) { try { fs.rmSync(z, { recursive: true, force: true }); } catch { /* */ } }
         try { await sw.deleteAppContainerProfile(PROFILE); } catch { /* */ }
@@ -205,11 +262,14 @@ describe('sandbox-windows: live AppContainer on this host', { skip: !LIVE ? 'set
         assert.ok(!hasAce(), 'a fresh temp dir must not already name the SID');
         assert.strictEqual(await sw.grantAppContainerAccess(sid as string, [zone], 'full'), true);
         assert.ok(hasAce(), 'grant must add an ACE naming the package SID');
+        const cacheMarker = path.join(sw.__aclCacheRoot(), `${sw.__aclCacheKey(sid as string, zone, 'full')}.ok`);
+        assert.ok(fs.existsSync(cacheMarker), 'a successful recursive grant must be cached outside the plugin zones');
         // Idempotent: granting twice is not an error and does not accumulate.
         assert.strictEqual(await sw.grantAppContainerAccess(sid as string, [zone], 'full'), true);
 
         assert.strictEqual(await sw.revokeAppContainerAccess(sid as string, [zone]), true);
         assert.ok(!hasAce(), 'revoke must remove the ACE -- this is the stray-ACE trap the module exists not to leave');
+        assert.ok(!fs.existsSync(cacheMarker), 'revoke must invalidate the persistent grant marker');
         // Revoking again must also be clean, so a partial grant can always be undone.
         assert.strictEqual(await sw.revokeAppContainerAccess(sid as string, [zone]), true);
     });
@@ -220,6 +280,32 @@ describe('sandbox-windows: live AppContainer on this host', { skip: !LIVE ? 'set
         assert.strictEqual(await sw.grantAppContainerAccess(sid as string, [missing], 'rx'), true);
     });
 
+    test('a minimal contained Node reaches JavaScript before the IPC/security probe', async () => {
+        assert.ok(sid);
+        const zone = fs.mkdtempSync(path.join(os.tmpdir(), 'wjs-acboot-'));
+        zones.push(zone);
+        const marker = path.join(zone, 'boot.txt');
+        const runtimeExe = await sw.ensureAppContainerRuntime(sid as string);
+        await sw.grantAppContainerAccess(sid as string, [zone], 'full');
+        const launched = await sw.launchInAppContainer({
+            sid, exe: runtimeExe,
+            args: ['-e', "require('fs').writeFileSync(process.env.WJS_BOOT_MARKER,typeof process.send);process.exit(0)"],
+            cwd: zone,
+            env: { SystemRoot: process.env.SystemRoot as string, windir: process.env.windir as string, PATH: process.env.PATH as string, TEMP: zone, TMP: zone, WJS_BOOT_MARKER: marker },
+        });
+        let relayLog = '';
+        launched.child.stdout?.on('data', (d: any) => { relayLog += String(d); });
+        launched.child.stderr?.on('data', (d: any) => { relayLog += String(d); });
+        await new Promise((resolve) => {
+            let done = false;
+            const finish = () => { if (done) return; done = true; resolve(null); };
+            launched.child.on('exit', finish);
+            setTimeout(finish, 12000);
+        });
+        try { launched.child.kill(); } catch { /* */ }
+        assert.strictEqual(fs.existsSync(marker) ? fs.readFileSync(marker, 'utf8') : '', 'function', `contained Node did not attach the relayed fork channel; relay=${relayLog}`);
+    });
+
     test('the contained child is refused the network AND the out-of-zone read, and still speaks fork IPC', async () => {
         assert.ok(sid);
         const zone = fs.mkdtempSync(path.join(os.tmpdir(), 'wjs-aclive-'));
@@ -227,15 +313,12 @@ describe('sandbox-windows: live AppContainer on this host', { skip: !LIVE ? 'set
         zones.push(zone, outside);
         fs.writeFileSync(path.join(outside, 'canary.txt'), 'canary');
 
-        // NOTE: on a non-elevated account this grant FAILS (C:\Program Files\nodejs is owned by
-        // TrustedInstaller) and the launch below still works, because CreateProcessW opens the image in
-        // the LAUNCHER's context. The assertions after the launch are what decide, not this call.
-        await sw.grantAppContainerAccess(sid as string, [path.dirname(process.execPath)], 'rx');
+        const runtimeExe = await sw.ensureAppContainerRuntime(sid as string);
         await sw.grantAppContainerAccess(sid as string, [zone], 'full');
 
         const launched = await sw.launchInAppContainer({
             sid,
-            exe: process.execPath,
+            exe: runtimeExe,
             args: ['-e', sw.__probeChildSource],
             cwd: zone,
             env: {
@@ -246,8 +329,11 @@ describe('sandbox-windows: live AppContainer on this host', { skip: !LIVE ? 'set
                 WJS_PROBE_OUTSIDE: outside,
             },
             memoryBytes: 256 * 1024 * 1024,
-            activeProcessLimit: 64,
+            verifyProcessLimit: true,
         });
+        let relayLog = '';
+        launched.child.stdout?.on('data', (d: any) => { relayLog += String(d); });
+        launched.child.stderr?.on('data', (d: any) => { relayLog += String(d); });
 
         const verdict: any = await new Promise((resolve) => {
             let got: any = null, done = false;
@@ -258,26 +344,71 @@ describe('sandbox-windows: live AppContainer on this host', { skip: !LIVE ? 'set
         });
         try { if (launched.pidFileDir) fs.rmSync(launched.pidFileDir, { recursive: true, force: true }); } catch { /* */ }
 
-        assert.ok(verdict, 'the contained child must reach the host over the relayed fork channel');
+        assert.ok(verdict, `the contained child must reach the host over the relayed fork channel; exit=${launched.child.exitCode}; relay=${relayLog}`);
         assert.strictEqual(verdict.ipc, true, 'process.send must exist inside the container -- no protocol change was needed');
         // A PERMISSION error, not merely "did not connect": ENOTFOUND/ETIMEDOUT is what an offline box
         // produces, and accepting it would let a machine with no internet look like a confined one.
         assert.ok(['EACCES', 'EPERM'].includes(verdict.connect), `outbound socket must be refused by the kernel, got ${verdict.connect}`);
         assert.ok(['EPERM', 'EACCES'].includes(verdict.read), `out-of-zone read must be refused, got ${verdict.read}`);
+        assert.strictEqual(verdict.exec, 'JOB_OBJECT', 'the relay must prove the one-process Job ceiling before resuming the child');
         assert.strictEqual(verdict.write, 'OK', 'the granted zone must stay writable or no plugin could run');
         assert.ok(launched.containedPid && launched.containedPid > 0, 'the contained pid must be reported (child.pid is the relay)');
         assert.notStrictEqual(launched.containedPid, launched.relayPid, 'contained pid and relay pid are different processes');
+    });
+
+    test('internetClient changes only egress; filesystem and child-process confinement remain', async () => {
+        assert.ok(sid);
+        const zone = fs.mkdtempSync(path.join(os.tmpdir(), 'wjs-acnet-zone-'));
+        const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'wjs-acnet-out-'));
+        zones.push(zone, outside);
+        fs.writeFileSync(path.join(outside, 'canary.txt'), 'canary');
+        const runtimeExe = await sw.ensureAppContainerRuntime(sid as string);
+        await sw.grantAppContainerAccess(sid as string, [zone], 'full');
+
+        const launched = await sw.launchInAppContainer({
+            sid,
+            exe: runtimeExe,
+            args: ['-e', sw.__probeChildSource],
+            cwd: zone,
+            env: {
+                SystemRoot: process.env.SystemRoot as string,
+                windir: process.env.windir as string,
+                PATH: process.env.PATH as string,
+                TEMP: zone, TMP: zone,
+                WJS_PROBE_OUTSIDE: outside,
+            },
+            allowNetwork: true,
+            verifyProcessLimit: true,
+        });
+        let relayLog = '';
+        launched.child.stdout?.on('data', (d: any) => { relayLog += String(d); });
+        launched.child.stderr?.on('data', (d: any) => { relayLog += String(d); });
+        const verdict: any = await new Promise((resolve) => {
+            let got: any = null, done = false;
+            const finish = () => { if (done) return; done = true; try { launched.child.kill(); } catch { /* */ } resolve(got); };
+            launched.child.on('message', (m: any) => { got = m; finish(); });
+            launched.child.on('exit', () => setTimeout(finish, 100));
+            const t = setTimeout(finish, 40000); if ((t as any).unref) (t as any).unref();
+        });
+        try { if (launched.pidFileDir) fs.rmSync(launched.pidFileDir, { recursive: true, force: true }); } catch { /* */ }
+
+        assert.ok(verdict, `network-granted contained child must report over IPC; exit=${launched.child.exitCode}; relay=${relayLog}`);
+        assert.strictEqual(verdict.connect, 'CONNECTED');
+        assert.ok(['EPERM', 'EACCES'].includes(verdict.read));
+        assert.strictEqual(verdict.exec, 'JOB_OBJECT');
+        assert.strictEqual(verdict.write, 'OK');
     });
 
     test('killing the relay kills the contained child (the --die-with-parent equivalent)', async () => {
         assert.ok(sid);
         const zone = fs.mkdtempSync(path.join(os.tmpdir(), 'wjs-ackill-'));
         zones.push(zone);
+        const runtimeExe = await sw.ensureAppContainerRuntime(sid as string);
         await sw.grantAppContainerAccess(sid as string, [zone], 'full');
 
         const launched = await sw.launchInAppContainer({
             sid,
-            exe: process.execPath,
+            exe: runtimeExe,
             args: ['-e', 'if(process.send)process.send("up");setInterval(function(){},1e9)'],
             cwd: zone,
             env: { SystemRoot: process.env.SystemRoot as string, windir: process.env.windir as string, PATH: process.env.PATH as string, TEMP: zone, TMP: zone },

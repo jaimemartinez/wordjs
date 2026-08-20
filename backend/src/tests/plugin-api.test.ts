@@ -237,8 +237,8 @@ test('io-guard blocks plugin reads of the database file under data/ (in the chil
             assert.equal(isPathSafe(path.join(root, 'data', 'wordjs-native.db'), false), false);   // native-driver DB
             assert.equal(isPathSafe(path.join(root, 'data', 'wordjs.db-wal'), false), false);      // WAL sidecar
             assert.equal(isPathSafe(path.join(root, 'data', 'x.sqlite3'), false), false);          // any sqlite file
-            // but a non-DB file under data/ stays readable — we blocked the DB, not the whole zone
-            assert.equal(isPathSafe(path.join(root, 'data', 'plugin-notes.txt'), false), true);
+            // The shared data root itself is no longer readable; plugins receive hashed private storage.
+            assert.equal(isPathSafe(path.join(root, 'data', 'plugin-notes.txt'), false), false);
         });
     } finally { if (prev === undefined) delete g.__WORDJS_ISOLATED__; else g.__WORDJS_ISOLATED__ = prev; }
 });
@@ -246,7 +246,7 @@ test('io-guard blocks plugin reads of the database file under data/ (in the chil
 // No trust tier: io-guard confines plugin CODE (which runs in the isolated child) from reading the raw
 // DB file — but on the HOST the bridge runs callApi in the plugin's context, and the host DB driver
 // must still be allowed to open data/wordjs.db for the plugin's scoped queries. So the DB-file block is
-// child-only; the host driver is allowed (data/ safe zone). Regression for the activation EACCES bug.
+// child-only; the host driver is allowed only for the configured DB literal, not data/ broadly.
 test('io-guard: DB file blocked in the child, allowed for the host bridge driver', async () => {
     const { isPathSafe } = require('../core/io-guard');
     const root = path.resolve(__dirname, '../../');

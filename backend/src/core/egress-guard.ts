@@ -150,7 +150,7 @@ function blockErr(target: string, host?: string): Error {
 // subdomains at a LABEL boundary — may be reached. This is ADDITIVE and runs ALONGSIDE isBlockedIp: it
 // never loosens the private/loopback/metadata block (a listed host resolving to a private IP is still
 // denied), it only narrows which PUBLIC hosts are reachable. NOTE: this is defense-in-depth (it runs in
-// the plugin's own process), not a containment boundary against arbitrary malicious code — see the netns
+// the plugin's own process), not a containment boundary against arbitrary malicious code — see the native
 // follow-up. Enforced at the authoritative connect chokepoints, never by editing isBlockedIp.
 let allowedHosts: string[] | null = null;
 // Fail-CLOSED deny-all (audit F-06): set by the child bootstrap when the host could not load this plugin's
@@ -534,7 +534,7 @@ export function installChildDgramGuard(): void {
         // the real OS egress and sit below the patched prototype (#22). The handle is materialized on
         // bind(), so wrap bind() to validate + lock the handle methods the first time it exists. Best-effort
         // over Node internals; the AUTHORITATIVE UDP containment for a network-granted plugin is the OS
-        // sandbox (bwrap/seccomp) the isolated worker runs under on Linux.
+        // native sandbox (Landlock/seccomp on Linux) the isolated worker runs under.
         const origBind = proto.bind;
         if (typeof origBind === 'function' && !(origBind as any).__wjGuarded) {
             const guardHandleFn = (ho: any, addrIdx: number) => function (this: any, ...ha: any[]) {

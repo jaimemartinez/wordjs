@@ -3,9 +3,8 @@
  *
  * Two properties are pinned:
  *   1. Kernel hardening is ON BY DEFAULT — the config resolves useKernelHardening to true unless an
- *      operator explicitly opts out. (The Linux "probe OK => active / probe fail => degraded" split is
- *      exercised in the LXC by backend/scripts/verify-sandbox-hardening.js and sandbox-fail-closed.test;
- *      it cannot run on a bwrap-less CI/dev box, where the probe correctly resolves 'unsupported'.)
+ *      operator explicitly opts out. (The "probe OK => active / probe fail => degraded" split is
+ *      exercised by the platform probes, sandbox-parity workflow and sandbox-fail-closed.test.)
  *   2. The hardening state is VISIBLE to the admin on the settings payload they read (GET /settings/all),
  *      as a derived boolean `sandbox_hardening_degraded` plus the raw `sandbox_hardening_state` — the
  *      "looks secure but isn't" degraded state can no longer hide. It is DELIBERATELY NOT on the public
@@ -74,6 +73,8 @@ describe('sandbox hardening: default-ON + admin visibility', () => {
         // opt-out contract: only an explicit `false` in wordjs-config.json turns it off.
         assert.strictEqual(config.sandbox.useKernelHardening, true,
             'sandbox.useKernelHardening must default to true (hardening attempted where the host supports it)');
+        assert.strictEqual(config.sandbox.requireHardening, true,
+            'sandbox.requireHardening must default to true so a failed native sandbox cannot launch bare');
     });
 
     it('the probe never crashes and resolves to a valid, host-appropriate state', async () => {
@@ -81,11 +82,9 @@ describe('sandbox hardening: default-ON + admin visibility', () => {
         await iso.probeKernelHardening(); // fire the (normally lazy) probe; it must not throw on any platform
         const state = iso.getSandboxHardeningState();
         assert.ok(VALID_STATES.includes(state), `state must be a known enum, got '${state}'`);
-        if (process.platform !== 'linux') {
-            // Windows/macOS dev: hardening is UNAVAILABLE — a clear, non-crashing 'unsupported', never 'degraded'.
-            assert.strictEqual(state, 'unsupported', `non-Linux must resolve 'unsupported', got '${state}'`);
-            assert.strictEqual(iso.isSandboxHardeningDegraded(), false, 'unsupported is not a degradation');
-        }
+        assert.strictEqual(state, iso.getSandboxPlatformState(),
+            'the legacy hardening field now reports the native mechanism selected for this OS');
+        assert.strictEqual(iso.isSandboxHardeningDegraded(), state === 'degraded');
     });
 
     // ---------------------------------------------------------- 2. admin visibility

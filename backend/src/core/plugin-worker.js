@@ -262,6 +262,13 @@ function registerCallback(hookType, hook, cb, priority) {
 // keeps the callback local and tells the host to install a shim that calls back in.
 const wordjs = {
     slug,
+    // Host-derived, per-plugin capability storage. These paths are immutable and never point at the
+    // shared data/log/os-tmp roots. Raw fs access still requires the corresponding admin grant.
+    paths: Object.freeze({
+        data: String(cfg.storage && cfg.storage.data || ''),
+        logs: String(cfg.storage && cfg.storage.logs || ''),
+        tmp: String(cfg.storage && cfg.storage.tmp || ''),
+    }),
     options: { get: (k, d) => callHost('options.get', [k, d]), set: (k, v) => callHost('options.set', [k, v]) },
     db: {
         // Per-plugin table prefix the plugin must use for its own tables (host enforces it). Mirrors

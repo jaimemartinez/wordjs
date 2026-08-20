@@ -62,34 +62,24 @@ describe('platform launch decision — when the new layer is used, and (mostly) 
         }
     });
 
-    test('a network-GRANTED plugin is never put in the new container, even on a certified host', () => {
-        // A zero-capability AppContainer cannot hold a socket at all, and the macOS profile shape that
-        // permits outbound traffic is one no probe has ever exercised. Both stay on the existing launch,
-        // bounded by the in-process egress guard — the same posture Linux takes when it withholds
-        // --unshare-net from a granted plugin. Getting this wrong does not weaken the sandbox; it breaks
-        // every network plugin on the platform, silently, at load time.
+    test('a network grant changes only egress and never removes the native container', () => {
         for (const platform of ['win32', 'darwin']) {
             const d = decide({ platform, state: 'active', netGranted: true, tsNode: false });
-            assert.strictEqual(d.use, false, `${platform}: a network-granted plugin must keep the standard launch`);
+            assert.strictEqual(d.use, true, `${platform}: a network-granted plugin must remain in its native sandbox`);
             assert.ok(/network/.test(d.reason));
         }
     });
 
-    test('the Windows container is applied to the compiled child only, never under ts-node', () => {
-        // The container requires --preserve-symlinks, which CHANGES MODULE IDENTITY, and ts-node resolving
-        // the whole .ts core inside the child is the consumer most sensitive to that. Same carve-out as the
-        // permission model and blockCodeGen. macOS needs no such flag and therefore gets no such carve-out.
+    test('the Windows container is applied to compiled children; only ts-node development is exempt', () => {
         assert.strictEqual(decide({ platform: 'win32', state: 'active', netGranted: false, tsNode: true }).use, false);
         assert.strictEqual(decide({ platform: 'darwin', state: 'active', netGranted: false, tsNode: true }).use, true);
     });
 
-    test('Linux is not routed through this decision at all, in any state', () => {
-        // The bwrap launch is built by its own path. If this function ever started answering `true` for
-        // Linux it would mean the new code had taken over a launch it must never touch.
+    test('Linux uses the same native-mechanism decision vocabulary', () => {
         for (const state of STATES) {
             const d = decide({ platform: 'linux', state, netGranted: false, tsNode: false });
-            assert.strictEqual(d.use, false, `linux/${state} must not be claimed by the platform decision`);
-            assert.strictEqual(d.mechanism, 'bwrap');
+            assert.strictEqual(d.use, state === 'active');
+            assert.strictEqual(d.mechanism, 'landlock');
         }
     });
 
@@ -110,7 +100,7 @@ describe('platform confinement state — honest about this host', () => {
 
         const report = isolate.getSandboxPlatformConfinement();
         assert.strictEqual(report.state, state, 'the report must agree with the probe');
-        assert.ok(['bwrap', 'appcontainer', 'seatbelt', 'none'].includes(report.mechanism));
+        assert.ok(['landlock', 'appcontainer', 'seatbelt', 'none'].includes(report.mechanism));
         assert.ok(STATES.includes(report.network.state));
         assert.ok(typeof report.note === 'string' && report.note.length > 0,
             'every state must carry a sentence saying what it means — a bare enum is not actionable');
@@ -126,27 +116,20 @@ describe('platform confinement state — honest about this host', () => {
         }
     });
 
-    test("Linux's report is the bwrap state, copied — this section cannot change the Linux path", async () => {
+    test("Linux's common hardening state is the Landlock state", async () => {
         if (process.platform !== 'linux') return;
         await isolate.probeKernelHardening();
         await isolate.probePlatformConfinement();
         assert.strictEqual(isolate.getSandboxPlatformState(), isolate.getSandboxHardeningState());
-        assert.strictEqual(isolate.getSandboxPlatformNetworkState(), isolate.getSandboxNetnsState());
+        assert.strictEqual(isolate.getSandboxPlatformNetworkState(), isolate.getSandboxPlatformState());
     });
 
-    test('off Linux the bwrap fields stay bwrap-specific and are NOT overloaded', async () => {
+    test('off Linux the common hardening state reports the native platform mechanism', async () => {
         if (process.platform === 'linux') return;
-        // Both probes, because they are independent: probePlatformConfinement() delegates to the bwrap
-        // probe only on Linux, so off Linux the bwrap state is still 'unknown' until something asks for
-        // it. That separation is the point — one probe must not be able to write the other's answer.
         await isolate.probeKernelHardening();
         await isolate.probePlatformConfinement();
-        // Widening `sandboxHardeningState` to mean "whatever this platform has" would have silently
-        // changed the meaning of a value operators already read on /settings/all. It must keep saying
-        // exactly what it always said about bubblewrap.
-        assert.strictEqual(isolate.getSandboxHardeningState(), 'unsupported',
-            'the bwrap state must remain bwrap-specific off Linux');
-        assert.strictEqual(isolate.isSandboxHardeningDegraded(), false, 'unsupported is not a degradation');
+        assert.strictEqual(isolate.getSandboxHardeningState(), isolate.getSandboxPlatformState());
+        assert.strictEqual(isolate.isSandboxHardeningDegraded(), isolate.getSandboxPlatformState() === 'degraded');
     });
 
     test('the health surface separates "no such layer" from "the layer failed here"', () => {
@@ -182,7 +165,7 @@ describe('drift guards between plugin-isolate and the platform modules', () => {
 
     test('the macOS profile confines writes to the zones it was handed, and nothing else', () => {
         // The io-guard write zones are declared ONCE in plugin-isolate and passed to three consumers
-        // (bwrap binds, --allow-fs-write, this profile). Assert the profile really is derived from the
+        // (native filesystem policy, --allow-fs-write, this profile). Assert the profile is derived from the
         // argument rather than from a second, drifting list of its own.
         const mac = require('../core/sandbox-macos');
         const profile = mac.buildSeatbeltProfile({
@@ -195,7 +178,7 @@ describe('drift guards between plugin-isolate and the platform modules', () => {
         assert.ok(profile.includes('"/srv/app/uploads"'), 'the granted zone must appear in the profile');
         assert.ok(!profile.includes('"/srv/app/node_modules"'), 'nothing may be writable that was not passed in');
         assert.ok(/deny\s+network/.test(profile), 'a non-network plugin must have its network denied');
-        // seatbeltArgs must produce ARGUMENTS (like bwrapProfile), not a command line, or the composition
+        // seatbeltArgs must produce ARGUMENTS, not a command line, or the composition
         // inside the `sh -c 'ulimit …; exec "$@"'` memory-cap wrapper would not be possible at all.
         const args = mac.seatbeltArgs(profile, ['/usr/bin/node', '-e', '0']);
         assert.deepStrictEqual(args.slice(0, 2), ['-p', profile]);

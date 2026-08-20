@@ -550,7 +550,7 @@ Two different things share the word "health". The **root** probes are for orches
 | `GET`  | `/readyz`               | No    | Readiness (root path). `503` `setup_required` / `starting` / `not_ready` until the instance is installed, `appReady` is set, and the DB answers |
 | `GET`  | `/health`               | No    | Root-path health summary                                                    |
 | `GET`  | `/api/v1/health`        | No    | Database reachability (`{ status: 'ok' \| 'error' }`)                        |
-| `GET`  | `/api/v1/health/details`| Admin | Full system status: `{ database, mtls, filesystem, sandbox, timestamp }`. The `sandbox` object is the live plugin-sandbox state — `{ status, hardening, netns, permission, requireHardening }` (+ a `note`/`permissionNote` when degraded), see `documentation/deployment.md` |
+| `GET`  | `/api/v1/health/details`| Admin | Full system status: `{ database, mtls, filesystem, sandbox, timestamp }`. `sandbox.kernel` reports the native Landlock/AppContainer/Seatbelt state, `sandbox.network` the certified network-policy state, and `permission` the Node capability floor; see `documentation/deployment.md` |
 
 ### 6.18 Hooks Introspection 🪝
 Base path: `/api/v1/hooks` (`backend/src/routes/hooks.ts`). Both routes are `authenticate` + `isAdmin`. This is the **introspection** surface for the action/filter system of §3 — not to be confused with the outgoing `/webhooks` resource of §6.10.

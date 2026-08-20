@@ -15,6 +15,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { sandboxPaths } = require('./sandbox-paths');
 // Use the EFFECTIVE plugin (context OR call stack), not ALS-only, so this global-fs backstop
 // also applies to detached plugin code that reaches the real fs.
 const { getEffectivePlugin } = require('./plugin-context');
@@ -274,7 +275,7 @@ function servedRootOf(resolved: string): string | null {
 // plugin may write into its own dir with NO permission grant at all (`ownDir` below is unconditional,
 // and secure-require only demands filesystem:write for paths OUTSIDE it). Together those two facts
 // annulled the whole network-containment model — the `network` permission, the egress allowlist's
-// loopback/RFC1918/metadata blocks, bwrap's --unshare-net: the plugin wrote a file and the attacker
+// loopback/RFC1918/metadata blocks and the kernel socket filter: the plugin wrote a file and the attacker
 // fetched it, unauthenticated, from the site itself. Nobody was validating the READ channel the
 // server itself opened. It also leaked with no malicious plugin at all: mail-server's data/ dir
 // (attachments, bayes.json) was reachable on a clean install.
@@ -498,7 +499,7 @@ const ISOLATE_FS_GRANT: { slug: string; read: boolean; write: boolean } | null =
     }
     // CHILD, first load: the cfg blob the host handed us. child_process fork → argv[2]; the legacy
     // worker_threads transport → workerData.
-    let cfg: any = {};
+    let cfg: any;
     try {
         const wt = require('worker_threads');
         cfg = (wt && wt.parentPort) ? (wt.workerData || {}) : JSON.parse(process.argv[2] || '{}');
@@ -698,43 +699,17 @@ function isPathSafe(targetPath: string, isWrite = false, knownSlug?: string | nu
         return false;
     }
 
-    // Common Safe Zones for Reading. NOTE: the whole `plugins/` tree is intentionally NOT here — a
-    // plugin reading a SIBLING plugin's files is cross-plugin data/secret exfiltration (e.g. another
-    // plugin's encryption-key file). A plugin reads its OWN dir via the per-plugin `ownDir` allowance
-    // below; require() of its own files + deps still resolve via node_modules/src. themes/ stays (shared
-    // display assets, no secrets).
-    const SAFE_READ_DIRS = [
-        path.join(ROOT_DIR, 'uploads'),
-        path.join(ROOT_DIR, 'data'),
-        path.join(ROOT_DIR, 'themes'),
-        path.join(ROOT_DIR, 'logs'),
-        path.join(ROOT_DIR, 'os-tmp'),
-        path.join(ROOT_DIR, 'node_modules'), // Allow plugins to require dependencies
-        path.join(ROOT_DIR, 'src') // Allow plugins to require core modules (careful)
-    ];
-
-    // Safe Zones for Writing (Stricter) — DERIVED, not hand-listed. `uploads` and `themes` used to be
-    // in here verbatim, which handed every plugin (zero permissions) a write into two directories the
-    // server publishes raw: the same unauthenticated exfiltration channel #3 closed at /plugins,
-    // through the door next to it. Filtering the candidates through servedRootOf() states the rule as
-    // a CLASS — a zone that is published is not a write zone, and a future static mount added to
-    // SERVED_ROOTS removes it from here automatically instead of quietly re-opening the channel.
-    // (A plugin that must publish media goes through the Media model, which registers a row, an owner
-    // and a UUID name; not raw fs into a served directory.)
-    const SAFE_WRITE_DIRS = [
-        path.join(ROOT_DIR, 'uploads'),
-        path.join(ROOT_DIR, 'data'),
-        path.join(ROOT_DIR, 'logs'),
-        path.join(ROOT_DIR, 'os-tmp'),
-        path.join(ROOT_DIR, 'themes')
-    ].filter(dir => servedRootOf(dir) === null);
+    // One filesystem declaration feeds this JS gate and every native sandbox. In particular there is no
+    // broad data/, logs/, themes/ or src/ read: those trees contain the database, sibling state and host
+    // implementation details. Shared mutable storage is namespaced by slug under private directories.
+    const nativePaths = sandboxPaths(ROOT_DIR, pluginSlug, __dirname);
+    const SAFE_READ_DIRS = [...nativePaths.readOnly, ...nativePaths.storage];
+    const SAFE_WRITE_DIRS = [...nativePaths.storage];
 
     // A plugin may always read+write within its OWN dir (plugins/<slug> or themes/<slug>) — that's its
     // private storage (data files, caches, attachments). It's still subject to the file-name blocks
     // above (manifest.json / DB-in-child / secret-named) and to the per-plugin disk quota at the bridge.
-    const ownDir = pluginSlug.startsWith('theme:')
-        ? path.join(ROOT_DIR, 'themes', pluginSlug.slice('theme:'.length))
-        : path.join(ROOT_DIR, 'plugins', pluginSlug);
+    const ownDir = nativePaths.own;
 
     // ── THE REVOCATION IS ENFORCED HERE, AT THE CALL, NOT BY A STATIC SCANNER ────────────────────────
     //
@@ -815,6 +790,22 @@ function isPathSafe(targetPath: string, isWrite = false, knownSlug?: string | nu
     // Exact-match or trailing-separator prefix so safe dir 'foo' does not also whitelist
     // a sibling 'foo-bar' that merely shares a string prefix.
     let isAllowed = dirsToCheck.some(dir => resolved === dir || resolved.startsWith(dir + path.sep));
+
+    // The host DB driver legitimately runs under runWithContext(slug) while serving a scoped bridge
+    // query. It may open ONLY the configured database file and its sidecars — never the former broad
+    // data/ tree. Inside an isolate the earlier DB block always wins.
+    if (!isWrite && !g.__WORDJS_ISOLATED__) {
+        const cfgDbPaths = getConfiguredDbPaths();
+        if (cfgDbPaths.some(db => resolved === db || resolved.startsWith(db + '-'))) isAllowed = true;
+    }
+
+    // The hashed data/log/tmp roots are capability storage, not free private storage. secure-require
+    // already asks this question, but the global fs backstop must enforce it independently too.
+    if (nativePaths.storage.some((dir: string) => under(resolved, dir))
+        && !fsCapabilityAllowed(pluginSlug, isWrite ? 'write' : 'read')) {
+        throttledWarn(`${pluginSlug}:storage-grant`, `[Security Block] Plugin '${pluginSlug}' lacks filesystem:${isWrite ? 'write' : 'read'} for private capability storage: ${resolved}`);
+        return false;
+    }
 
     // Module-resolution metadata is NOT a secret, and Node reads it from ancestors of the plugin entry
     // (incl. the shared plugins/ parent) + dependency trees. Since plugins/ is intentionally NOT a broad

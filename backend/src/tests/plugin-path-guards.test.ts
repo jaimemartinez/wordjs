@@ -28,12 +28,10 @@
  *      still answers 200 — an egress allowlist that reports success and does not exist is fail-OPEN.
  *      `constructor` / `prototype` are legal slugs and shadow inherited names.
  *
- *   4-6. js/insecure-temporary-file — routes/marketplace (the downloaded plugin zip),
- *      core/plugin-isolate (the seccomp BPF filter — the bytes that ARE the sandbox) and
- *      scripts/verso-drills/drill3. All three wrote a PREDICTABLE name into a world-writable shared
- *      temp dir with a plain writeFileSync, which follows a symlink already sitting at the path and
- *      ignores `mode` for an existing file. All three now take a kernel-exclusive 0700 mkdtemp
- *      directory and create the file with `flag: 'wx'`, with cleanup in a finally.
+ *   4-6. js/insecure-temporary-file — routes/marketplace (the downloaded plugin zip), the former
+ *      seccomp BPF artifact, and scripts/verso-drills/drill3. The two remaining files now live under
+ *      kernel-exclusive 0700 mkdtemp directories, use `flag: 'wx'`, and are cleaned in a finally. The
+ *      seccomp program no longer has a filesystem artifact at all: the shim assembles it in memory.
  *
  * CWD-sandbox ordering copied from safe-path.test.ts: PLUGINS_DIR is `path.resolve('./plugins')`,
  * read at module load, so the chdir has to happen before anything under core/ or routes/ is required.
@@ -417,18 +415,25 @@ describe('temp files — kernel-exclusive directory, exclusive create, cleanup i
         assert.match(src, /\}\s*finally\s*\{[\s\S]{0,400}?tmp\.dispose\(\);/, 'the scratch dir is disposed in a finally');
     });
 
-    it('the seccomp filter — the bytes that ARE the sandbox — is written exclusively into a mkdtemp dir', () => {
-        const src = codeOnly(readSrc('core/plugin-isolate.ts'));
-        assert.doesNotMatch(src, /wjs-seccomp-\$\{process\.pid\}/, 'a pid is not a secret');
-        assert.match(src, /mkdtempSync\(pathmod\.join\(osmod\.tmpdir\(\), 'wjs-seccomp-'\)\)/);
-        assert.match(src, /writeFileSync\(p, bpf, \{ mode: 0o600, flag: 'wx' \}\)/);
-        // And the whole directory goes away with the process.
-        assert.match(src, /const cleanup = \(\) => \{ try \{ fsmod\.rmSync\(dir, \{ recursive: true, force: true \}\)/);
+    it('the seccomp filter is assembled in the shim process — no replaceable filter artifact exists', () => {
+        const isolate = codeOnly(readSrc('core/plugin-isolate.ts'));
+        const shim = readSrc('../scripts/landlock-seccomp-shim.pl');
+        assert.doesNotMatch(isolate, /wjs-seccomp-|writeFileSync\(p, bpf/);
+        assert.match(shim, /struct sock_filter/);
+        assert.match(shim, /syscall\(\$NR_seccomp/);
+        // Literal kernel return encodings avoid relying on a C header or generated filter artifact.
+        assert.match(shim, /0x00050001[^\n]*ERRNO\(EPERM\)/);
+        assert.match(shim, /0x0005000d[^\n]*ERRNO\(EACCES\)/);
     });
 
-    it('the netns probe directory is removed in a finally, not only on the happy path', () => {
-        const src = readSrc('core/plugin-isolate.ts');
-        assert.match(src, /finally \{ if \(ndir\) \{ try \{ fsmod\.rmSync\(ndir, \{ recursive: true, force: true \}\)/);
+    it('the embedded native-policy probe remains valid JavaScript', () => {
+        const linux = require('../core/sandbox-linux');
+        assert.doesNotThrow(() => new Function(linux.__probeSrc));
+    });
+
+    it('the native network-policy probe directory is removed in a finally, not only on the happy path', () => {
+        const src = readSrc('core/sandbox-linux.ts');
+        assert.match(src, /finally \{[\s\S]{0,300}?if \(probeRoot\) fsl\.rmSync\(probeRoot, \{ recursive: true, force: true \}\)/);
     });
 
     it('drill3 builds its artifacts in a private run directory and cleans it up', () => {

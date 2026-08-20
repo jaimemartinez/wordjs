@@ -12,6 +12,8 @@
 
 const { fork, spawn } = require('child_process');
 const path = require('path');
+const fs = require('fs');
+const { sandboxPaths } = require('./sandbox-paths');
 const { createPluginApi } = require('./plugin-api');
 const { runWithContext } = require('./plugin-context');
 // The ACTIVE CORPORATE MAILBOX grant, read the one way (core/mailbox.ts) — never re-derived.
@@ -202,8 +204,8 @@ function getLivePids(slug: string): number[] { return Array.from(livePids.get(sl
 //     removed the instant the last one exits — outside sandbox activity, uncaughtException is untouched.
 // CONTAINMENT — this strengthens isolation, it does not weaken it: a malformed frame carries no valid
 // bridge command (it never deserializes into a 'message', so callApi/the allowlist are never reached), and
-// a plugin can no longer crash the host by emitting garbage on its channel. Nothing about seccomp/bwrap/
-// namespaces/the re-exec/the default-deny bridge allowlist changes; the child runs byte-identically.
+// a plugin can no longer crash the host by emitting garbage on its channel. Nothing about the native OS
+// policy/the re-exec/the default-deny bridge allowlist changes; the child runs byte-identically.
 let ipcGuardRefs = 0;
 let ipcGuardInstalled = false;
 let ipcGuardLastWarn = 0;
@@ -408,13 +410,13 @@ async function awaitIsolateSettled(slug: string, timeoutMs = 30000): Promise<boo
 
 // --- KERNEL-ENFORCED memory cap (RLIMIT_AS via `ulimit -v`) ---------------------------------------
 // We prefer a KERNEL cap on the child's address space over a pure userspace poll: it holds even if the
-// host event loop is wedged, it is the only cap on platforms without /proc (e.g. macOS), and it bounds
+// host event loop is wedged, and it bounds
 // off-heap (Buffer/ArrayBuffer) growth the V8 heap flag can't. The wrapper `sh -c 'ulimit -v N; exec
 // node …'` preserves the fork-style IPC channel — the inherited NODE_CHANNEL_FD + its fd survive the
 // shell's `exec`, so the exec'd node attaches IPC exactly as a forked child would. V8's pointer-
 // compression cage reserves a large VIRTUAL range (~4 GB) that RLIMIT_AS counts, so the cap must be
 // GENEROUS — it is a coarse virtual *backstop* (bounds pathological allocation; kernel-enforced even if
-// the host loop is wedged; the only cap on /proc-less platforms), NOT a tight RSS cap. The precise
+// the host loop is wedged), NOT a tight RSS cap. The precise
 // resident cap stays the /proc poll below. We use a GENEROUS fixed ceiling (virtual space is cheap to
 // reserve) validated by a probe that boots node with the REAL execArgv (so the cap reflects the actual
 // child's footprint — cage + ts-node — not a bare `node` that under-counts it and false-kills loads).
@@ -424,13 +426,24 @@ function probeOsMemoryCap(): Promise<number | null> {
     if (osCapProbe) return osCapProbe;
     osCapProbe = (async () => {
         if (process.platform === 'win32') return null; // no POSIX ulimit / RLIMIT_AS
+        if (process.platform === 'darwin') {
+            // Darwin accepts `ulimit -v` but aliases RLIMIT_AS to an unenforced RLIMIT_RSS. A successful
+            // shell command is therefore not evidence of a cap. Measure the bite first and never print
+            // "kernel memory cap active" unless the impossible-limit control proves enforcement.
+            let enforcement = 'unknown';
+            try { enforcement = await require('./sandbox-macos').probeMacosMemoryCapEnforcement(); } catch { /* no claim */ }
+            if (enforcement !== 'enforced') {
+                console.warn(`[Sandbox] preventive RLIMIT memory cap is ${logSafe(enforcement)} on macOS; using the 256 MB V8 heap ceiling plus the host RSS watchdog without claiming a kernel resident cap.`);
+                return null;
+            }
+        }
         // RLIMIT_AS can only be a LOOSE virtual backstop, not a box-tight cap: V8 reserves a ~4 GB
         // pointer-compression cage, and the legit child footprint (in dev, ts-node's compiler + the full
         // core .ts compile) needs many GB of virtual space — a tighter ceiling crashes real plugin loads
         // (verified: a 6 GB cap killed ts-node children mid-load). So this bounds only PATHOLOGICAL
         // allocation; the PRECISE resident cap is the /proc RSS poll below (768 MB, 250 ms), and the
-        // decisive PREVENTIVE resident cap for small-RAM boxes + Windows is a kernel cgroup MemoryMax /
-        // Job Object (roadmap, see POSITIONING.md). Operators on a compiled (non-ts-node) prod build with
+// decisive PREVENTIVE resident cap for small-RAM boxes + Windows is a kernel cgroup MemoryMax /
+// Job Object. Operators on a compiled (non-ts-node) prod build with
         // ample RAM headroom may tighten it via sandbox.addressSpaceCapMb.
         let capMb = 16384;
         try { const s = require('../config/app').sandbox; if (s && s.addressSpaceCapMb) capMb = Math.max(6144, s.addressSpaceCapMb); } catch { /* default */ }
@@ -686,149 +699,12 @@ function probeJobObjectCap(): Promise<boolean> {
     return jobCapProbe;
 }
 
-// --- OPT-IN kernel hardening of the isolated child via bubblewrap (Linux only) --------------------
-// Layers OS-level confinement UNDER the existing OS-process isolation: the child node runs as an
-// UNPRIVILEGED uid (nobody, in a rootless user namespace), with ALL Linux capabilities dropped,
-// no-new-privs (can't regain privilege via a setuid binary), PID/IPC/UTS namespaces (can't see or
-// signal host processes), and the filesystem READ-ONLY except the app root (so plugin storage —
-// uploads/, data/, plugins/<slug>/ — keeps working) plus a private tmpfs /tmp. NETWORK is per-plugin: a
-// NON-network plugin (no admin `network` grant) additionally gets an EMPTY network namespace
-// (--unshare-net, driven by `denyNetwork`) so it can't reach metadata/loopback/the internet at the KERNEL
-// level, not merely the JS egress-guard; a network-GRANTED plugin keeps the shared netns so its sockets
-// work, bounded by egress-guard at the socket layer inside the child. This is defense-in-depth
-// ON TOP OF the JS-level guards (secure-require/io-guard), never a replacement.
-//   OPT-IN (config.sandbox.useKernelHardening) + Linux-only + PROBE-VALIDATED on the host before
-//   activating + clean fallback to the standard launch on any failure ⇒ ZERO regression by construction
-//   (default-off; Windows/macOS/no-bwrap = no-op). It composes with the cgroup/rlimit memory cap: the
-//   fork-style IPC fd + the seccomp fd survive every composition (probe-verified), and the resident RSS
-//   poll sums the bwrap subtree so the memory cap keeps biting. It ALSO applies a seccomp-bpf syscall
-//   DENYLIST (EPERM on ptrace/mount/kexec/*_module/bpf/keyctl/userfaultfd/setns/process_vm_*/pivot_root/
-//   reboot/… — syscalls a Node app/web plugin never issues; see buildSeccompBpf). (Landlock's fs-confinement
-//   goal is already met by the read-only mount namespace; the Landlock LSM itself would need a native dep,
-//   contrary to this sandbox's no-native-deps design, for redundant protection — so it is intentionally not
-//   added.) Requires the `bubblewrap` (bwrap) binary. Validate with backend/scripts/verify-sandbox-hardening.js.
-function bwrapProfile(writableDirs: string | string[], denyNetwork = false): string[] {
-    // Root is read-only; only the explicitly-listed zones are writable. --bind-try skips a zone that
-    // doesn't exist on this install (a missing uploads/data/logs dir must not fail the whole launch).
-    const binds: string[] = [];
-    for (const d of (Array.isArray(writableDirs) ? writableDirs : [writableDirs])) { binds.push('--bind-try', d, d); }
-    return [
-        '--unshare-user', '--unshare-pid', '--unshare-ipc', '--unshare-uts', '--unshare-cgroup-try',
-        // --unshare-net drops the child into a FRESH, empty network namespace (bwrap brings `lo` up itself
-        // via loopback_setup, so no manual bring-up is needed, and the fork-IPC fd is netns-independent so
-        // the RPC bridge is unaffected). Applied ONLY to non-network plugins (denyNetwork), never granted ones.
-        ...(denyNetwork ? ['--unshare-net'] : []),
-        '--uid', '65534', '--gid', '65534',
-        '--ro-bind', '/', '/',
-        '--dev', '/dev', '--proc', '/proc', '--tmpfs', '/tmp',
-        ...binds,
-        '--die-with-parent', '--new-session',
-    ];
-}
-
-// seccomp-bpf syscall denylist, assembled as classic-BPF in PURE JS (no native dep) and handed to
-// `bwrap --seccomp <fd>`. Single-arch (the host's): wrong-arch => KILL the process; a blocked syscall nr
-// => EPERM (not kill — gentle on any false positive); else ALLOW. The denylist is conservative: only
-// syscalls a Node runtime + web plugins never issue but that are escape / kernel-manipulation primitives,
-// so it cannot break a legitimate plugin (and probeKernelHardening boots node UNDER it to prove that on
-// the host). x86_64 + aarch64 only; on other arches getSeccompBpfPath() returns null and hardening still
-// applies WITHOUT seccomp.
-const SECCOMP_ARCHES: Record<string, { audit: number; x32?: boolean; nr: number[] }> = {
-    // nr lists: ptrace, kexec_load, kexec_file_load, init_module, finit_module, delete_module, [create/get_kernel_syms/
-    // query_module, _sysctl, nfsservctl on x64 only], bpf, perf_event_open, userfaultfd, process_vm_readv/writev, kcmp,
-    // add_key, request_key, keyctl, mount, umount2, pivot_root, swapon, swapoff, reboot, setns, open_by_handle_at, name_to_handle_at,
-    // + the UNIFIED modern escape surface (nr 425-433, arch-INDEPENDENT, identical on x64/arm64): io_uring_setup/
-    // enter/register (out-of-band file+network I/O that bypasses the openat/socket/connect syscalls entirely — a
-    // classic sandbox-escape + kernel-attack-surface vector; libuv gracefully falls back to its thread pool when
-    // it EPERMs), and the new mount API open_tree/move_mount/fsopen/fsconfig/fsmount/fspick (alternate mount
-    // primitives that sidestep the already-blocked mount()). None are issued by a web plugin. NOTE: clone3 (435)
-    // is deliberately NOT blocked — glibc's pthread_create uses it, so an EPERM SIGABRTs Node's V8 worker threads
-    // at startup (verified in a Linux container: BASE+clone3 → exit 134); the namespace-creation risk of clone3 is
-    // bounded by no-new-privs + the setns/mount denials already here. probeKernelHardening boots node under this
-    // exact filter (incl. io_uring) to prove it doesn't break the runtime on the host before activating.
-    x64: { audit: 0xC000003E, x32: true, nr: [101, 246, 320, 175, 313, 176, 174, 177, 178, 321, 298, 323, 310, 311, 312, 248, 249, 250, 165, 166, 155, 167, 168, 169, 308, 304, 303, 180, 156, 425, 426, 427, 428, 429, 430, 431, 432, 433] },
-    arm64: { audit: 0xC00000B7, nr: [117, 104, 294, 105, 273, 106, 280, 241, 282, 270, 271, 272, 217, 218, 219, 40, 39, 41, 224, 225, 142, 268, 265, 264, 425, 426, 427, 428, 429, 430, 431, 432, 433] },
-};
-function buildSeccompBpf(archKey: string): Buffer | null {
-    const a = SECCOMP_ARCHES[archKey];
-    if (!a) return null;
-    const LD = 0x20, JEQ = 0x15, JGE = 0x35, RET = 0x06, KILL = 0x80000000, EPERM = 0x00050001, ALLOW = 0x7FFF0000;
-    const X32 = 0x40000000; // x86_64 x32-ABI bit: deny the WHOLE x32 range so a denylisted syscall can't be reached via x32 (legit native syscalls are all below it, so Node is unaffected)
-    const ins = (code: number, jt: number, jf: number, k: number): Buffer => {
-        const b = Buffer.alloc(8); b.writeUInt16LE(code, 0); b.writeUInt8(jt, 2); b.writeUInt8(jf, 3); b.writeUInt32LE(k >>> 0, 4); return b;
-    };
-    const blocked = a.nr.slice().sort((x, y) => x - y);
-    // 0:LD arch 1:JEQ arch(skip KILL) 2:RET KILL 3:LD nr  [x64: JGE x32->ERRNO]  JEQ blocked->ERRNO …  RET ALLOW, RET EPERM
-    const bodyLen = (a.x32 ? 1 : 0) + blocked.length;
-    const ERRNO_IDX = 4 + bodyLen + 1;
-    const out: Buffer[] = [ins(LD, 0, 0, 4), ins(JEQ, 1, 0, a.audit), ins(RET, 0, 0, KILL), ins(LD, 0, 0, 0)];
-    if (a.x32) out.push(ins(JGE, ERRNO_IDX - (out.length + 1), 0, X32)); // nr >= x32 bit -> EPERM (out.length == this instr's index)
-    blocked.forEach((nr) => out.push(ins(JEQ, ERRNO_IDX - (out.length + 1), 0, nr)));
-    out.push(ins(RET, 0, 0, ALLOW)); out.push(ins(RET, 0, 0, EPERM));
-    return Buffer.concat(out);
-}
-// Lazily write the host-arch BPF to a private temp dir once; each child opens its own read fd for --seccomp.
-// Returns the path, or null if the arch is unsupported or the write fails (→ hardening without seccomp).
-//
-// SECURITY — why a mkdtemp directory and not a named file in /tmp. The path used to be
-// `${os.tmpdir()}/wjs-seccomp-${process.pid}.bpf`: fully PREDICTABLE (a pid is 5 digits and observable),
-// in a world-writable shared directory, written with plain writeFileSync. `mode: 0o600` bought nothing —
-// it is ignored for a file that already exists, and 'w' happily follows a symlink someone planted at that
-// name. The payoff for winning that race is not a leak, it is the SANDBOX: these bytes ARE the syscall
-// filter, handed to `bwrap --seccomp <fd>`. Substitute an allow-everything program and every isolated
-// plugin runs with seccomp reported ACTIVE and enforcing nothing — the exact "looks secure but isn't"
-// state sandboxHardeningState exists to make visible.
-//
-// mkdtempSync is the structural fix: the kernel creates the directory exclusively, at 0700, under a name
-// nobody can predict or pre-create; the file inside is then written with `flag: 'wx'` (exclusive create,
-// never follows), so a hostile inode at the target is an error rather than a redirect. The whole
-// directory is removed on process exit.
-let seccompBpfPath: string | null | undefined;
-function getSeccompBpfPath(): string | null {
-    if (seccompBpfPath !== undefined) return seccompBpfPath;
-    const result: string | null = (() => {
-        const fsmod = require('fs'); const osmod = require('os'); const pathmod = require('path');
-        let dir: string | null = null;
-        try {
-            const bpf = buildSeccompBpf(process.arch);
-            if (!bpf) return null;
-            dir = fsmod.mkdtempSync(pathmod.join(osmod.tmpdir(), 'wjs-seccomp-'));
-            const p = pathmod.join(dir as string, 'filter.bpf');
-            fsmod.writeFileSync(p, bpf, { mode: 0o600, flag: 'wx' });
-            const cleanup = () => { try { fsmod.rmSync(dir, { recursive: true, force: true }); } catch { /* */ } };
-            try { process.on('exit', cleanup); } catch { /* */ }
-            return p;
-        } catch {
-            // Fail closed on the ARTIFACT, not on the process: no filter file is left half-written for a
-            // child to open, and the caller falls back to bwrap hardening without seccomp.
-            if (dir) { try { fsmod.rmSync(dir, { recursive: true, force: true }); } catch { /* */ } }
-            return null;
-        }
-    })();
-    seccompBpfPath = result;
-    return result;
-}
-// Cached snapshot of the kernel-hardening outcome for THIS process, so operators + health checks can see
-// whether isolated plugins actually get the OS backstop (vs the silent JS-guards-only fallback):
-//   'unsupported' = non-Linux (kernel features N/A) · 'disabled' = useKernelHardening=false ·
-//   'active' = bwrap+seccomp probe passed · 'degraded' = enabled but the probe FAILED (running WITHOUT the
-//   kernel backstop). 'degraded' is the dangerous "looks secure but isn't" state requireHardening guards.
-let sandboxHardeningState: 'unknown' | 'unsupported' | 'disabled' | 'active' | 'degraded' = 'unknown';
+// Common state vocabulary for the native sandbox selected by each operating system.
+type ConfinementState = 'unknown' | 'unsupported' | 'disabled' | 'active' | 'degraded';
+let sandboxHardeningState: ConfinementState = 'unknown';
 function getSandboxHardeningState() { return sandboxHardeningState; }
-// Whether THIS host can ADDITIONALLY drop a non-network plugin into its own empty network namespace
-// (bwrap --unshare-net), proven by a second probe leg. INDEPENDENT of sandboxHardeningState: a host that
-// allows unprivileged userns but restricts CLONE_NEWNET keeps full bwrap hardening and simply skips this
-// kernel netns backstop (non-network plugins stay confined by the JS network neuter alone).
-//   'unsupported' = non-Linux · 'disabled' = base hardening off OR sandbox.unshareNetwork=false ·
-//   'active' = --unshare-net probe passed · 'degraded' = base hardening active but the netns probe FAILED.
-let netnsHardeningSupported = false;
-let sandboxNetnsState: 'unknown' | 'unsupported' | 'disabled' | 'active' | 'degraded' = 'unknown';
-function getSandboxNetnsState() { return sandboxNetnsState; }
 // --- CROSS-PLATFORM capability confinement (Node's own permission model) -------------------------
-// Everything above this line that confines a plugin at the OS level is LINUX-ONLY: bwrap, seccomp,
-// namespaces, uid-drop, cgroups. On Windows and macOS the child had process separation and the JS
-// guards, and nothing else — so any bypass of a JS guard was the whole user account. That asymmetry is
-// what this closes.
+// Node's permission model is the common capability layer beneath the platform-native sandbox.
 //
 // Node's permission model is enforced in C++, BELOW JavaScript, with the same flags on every platform.
 // It is not a monkey-patch: there is no API to re-grant from inside the process, so a plugin that
@@ -888,347 +764,165 @@ function probePermissionModel(): Promise<string | null> {
     return permissionProbe;
 }
 
-let hardenProbe: Promise<boolean> | undefined;
-function probeKernelHardening(): Promise<boolean> {
-    if (hardenProbe) return hardenProbe;
-    hardenProbe = (async () => {
-        if (process.platform !== 'linux') { sandboxHardeningState = 'unsupported'; sandboxNetnsState = 'unsupported'; return false; } // seccomp/userns/uid-drop are Linux-kernel features
-        // DEFAULT-ON (opt-out via config.sandbox.useKernelHardening=false). Auto-enabling is SAFE precisely
-        // because the probe below actually validates bwrap + unprivileged-userns + the fork-IPC round-trip on
-        // THIS host before activating, and falls back cleanly to the standard fork launch on ANY failure — so a
-        // host where user namespaces are disabled degrades to plain process isolation instead of breaking.
-        let enabled = false;
-        try { const s = require('../config/app').sandbox; enabled = !!(s && s.useKernelHardening); } catch { /* config unavailable → treat as off */ }
-        if (!enabled) { sandboxHardeningState = 'disabled'; sandboxNetnsState = 'disabled'; return false; }
-        // Self-validate on THIS host: a node child launched through the FULL profile must keep its
-        // fork-style IPC channel (serialization 'advanced') — the exact launch this module performs. Only
-        // activate if spawn + IPC round-trip + clean exit all work; otherwise fall back to the standard launch.
-        const fsmod = require('fs'); const osmod = require('os'); const pathmod = require('path');
-        let dir: string | null = null;
-        try { dir = fsmod.mkdtempSync(pathmod.join(osmod.tmpdir(), 'wjs-harden-probe-')); } catch { return false; }
-        const src = "if(!process.send){process.exit(3)}process.send('ok',function(){process.exit(0)});setTimeout(function(){process.exit(4)},8000)";
-        const bpfPath = getSeccompBpfPath(); // validate the FULL launch INCLUDING seccomp, so a host where it fails falls back
-        const ok = await new Promise<boolean>((res) => {
-            let proc: any, got = false, done = false, probeFd = -1;
-            const finish = (v: boolean) => { if (!done) { done = true; try { if (proc) proc.kill('SIGKILL'); } catch { /* */ } try { if (probeFd >= 0) fsmod.closeSync(probeFd); } catch { /* */ } res(v); } };
-            const overall = setTimeout(() => finish(false), 20000);
-            if ((overall as any).unref) (overall as any).unref();
-            const stdio: any[] = ['ignore', 'ignore', 'ignore', 'ipc'];
-            const seccompArgs: string[] = [];
-            if (bpfPath) { try { probeFd = fsmod.openSync(bpfPath, 'r'); stdio.push(probeFd); seccompArgs.push('--seccomp', '4'); } catch { probeFd = -1; } }
-            try {
-                proc = spawn('bwrap', [...seccompArgs, ...bwrapProfile(dir as string), '--', process.execPath, '-e', src],
-                    { stdio, serialization: 'advanced', timeout: 18000 });
-            } catch { clearTimeout(overall); finish(false); return; }
-            proc.on('message', (m: any) => { if (m === 'ok') got = true; });
-            proc.on('error', () => { clearTimeout(overall); finish(false); });
-            proc.on('exit', (code: number) => { clearTimeout(overall); finish(got && code === 0); });
-        });
-        try { if (dir) fsmod.rmSync(dir, { recursive: true, force: true }); } catch { /* */ }
-        sandboxHardeningState = ok ? 'active' : 'degraded';
-        if (ok) console.log('[Sandbox] kernel hardening ACTIVE (bwrap: unprivileged uid + dropped caps + no-new-privs + PID/IPC/UTS namespaces + read-only fs' + (getSeccompBpfPath() ? ' + seccomp syscall denylist' : '') + ' per isolated child).');
-        else {
-            let requireHardening = false;
-            try { requireHardening = !!require('../config/app').sandbox?.requireHardening; } catch { /* */ }
-            console.warn('[Sandbox] ⚠️  DEGRADED: sandbox.useKernelHardening is ON but the bwrap probe FAILED (bwrap missing or unprivileged user namespaces unavailable) — isolated plugins run WITHOUT the OS backstop, confined only by the in-process JS guards. Install bubblewrap + enable unprivileged userns to restore it' + (requireHardening ? ', or plugins will be REFUSED (sandbox.requireHardening is ON).' : ', or set sandbox.requireHardening=true to fail closed.'));
-        }
-        // SECOND (netns) probe leg — only meaningful once base hardening passed. Boots node through the SAME
-        // profile PLUS --unshare-net and requires the identical fork-IPC 'ok' round-trip + clean exit, so a
-        // host only advertises netnsHardeningSupported after proving --unshare-net doesn't break the bridge
-        // ON THIS host. It NEVER mutates `ok`/sandboxHardeningState and NEVER throws — a failure just leaves
-        // non-network plugins on the JS neuter alone (sandboxNetnsState='degraded'). Opt-out: unshareNetwork=false.
-        if (ok) {
-            let netOptOut = false;
-            try { const s = require('../config/app').sandbox; netOptOut = !!(s && s.unshareNetwork === false); } catch { /* */ }
-            if (netOptOut) { sandboxNetnsState = 'disabled'; }
-            else {
-                // mkdtemp gives the probe dir a kernel-exclusive 0700 name; the finally below guarantees it
-                // is removed even when the probe throws (it used to leak one dir per failed boot).
-                let ndir: string | null = null;
-                try {
-                    ndir = fsmod.mkdtempSync(pathmod.join(osmod.tmpdir(), 'wjs-netns-probe-')) as string;
-                    const probeDir: string = ndir;
-                    const nbpf = getSeccompBpfPath();
-                    const netOk = await new Promise<boolean>((res) => {
-                        let proc: any, got = false, done = false, probeFd = -1;
-                        const finish = (v: boolean) => { if (!done) { done = true; try { if (proc) proc.kill('SIGKILL'); } catch { /* */ } try { if (probeFd >= 0) fsmod.closeSync(probeFd); } catch { /* */ } res(v); } };
-                        const overall = setTimeout(() => finish(false), 20000);
-                        if ((overall as any).unref) (overall as any).unref();
-                        const stdio: any[] = ['ignore', 'ignore', 'ignore', 'ipc'];
-                        const seccompArgs: string[] = [];
-                        if (nbpf) { try { probeFd = fsmod.openSync(nbpf, 'r'); stdio.push(probeFd); seccompArgs.push('--seccomp', '4'); } catch { probeFd = -1; } }
-                        try {
-                            proc = spawn('bwrap', [...seccompArgs, ...bwrapProfile(probeDir, true), '--', process.execPath, '-e', src],
-                                { stdio, serialization: 'advanced', timeout: 18000 });
-                        } catch { clearTimeout(overall); finish(false); return; }
-                        proc.on('message', (m: any) => { if (m === 'ok') got = true; });
-                        proc.on('error', () => { clearTimeout(overall); finish(false); });
-                        proc.on('exit', (code: number) => { clearTimeout(overall); finish(got && code === 0); });
-                    });
-                    netnsHardeningSupported = netOk;
-                    sandboxNetnsState = netOk ? 'active' : 'degraded';
-                    if (netOk) console.log('[Sandbox] network-namespace isolation ACTIVE (bwrap --unshare-net: a non-network plugin gets an EMPTY netns — no metadata/host-loopback/public egress at the kernel level, under the JS network neuter).');
-                    else console.warn('[Sandbox] network-namespace isolation UNAVAILABLE (--unshare-net probe failed: CLONE_NEWNET restricted or old bwrap) — non-network plugins keep full bwrap hardening but WITHOUT the kernel netns backstop.');
-                } catch { netnsHardeningSupported = false; sandboxNetnsState = 'degraded'; }
-                finally { if (ndir) { try { fsmod.rmSync(ndir, { recursive: true, force: true }); } catch { /* */ } } }
-            }
-        } else {
-            sandboxNetnsState = 'degraded'; // base hardening failed → no bwrap at all, so no netns either
-        }
-        return ok;
-    })();
-    return hardenProbe;
+/** Backward-compatible entry point: probe the native mechanism for this platform. */
+async function probeKernelHardening(): Promise<boolean> {
+    return (await probePlatformConfinement()) === 'active';
 }
 
-// ── CROSS-PLATFORM KERNEL CONFINEMENT — the Windows and macOS PEERS of the bwrap layer ────────────
-//
-// Everything above this point that confines a plugin at the KERNEL level is Linux-only: bwrap, seccomp,
-// namespaces, uid-drop, cgroups. The block below it (Node's permission model) is a CAPABILITY floor,
-// not a kernel one. So on Windows and macOS an isolated plugin had process separation + the permission
-// model + the JS guards, and NOTHING the kernel enforced about the filesystem or the network: any bypass
-// of a JS guard was the whole user account, and outbound traffic was governed by the in-process egress
-// guard alone. Two sibling modules now supply the missing layer, and THIS section is the only place that
-// decides whether either of them is actually used:
-//
-//   · core/sandbox-windows.ts — an AppContainer with ZERO capabilities (CreateProcessW +
-//     PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES, CapabilityCount = 0, so not even `internetClient`).
-//     A lowbox token with no network capability cannot open a socket at all — the Win32 analogue of
-//     --unshare-net — and the child reaches only objects whose DACL names its package SID, which is the
-//     analogue of the `--ro-bind / /` + writable-binds profile.
-//   · core/sandbox-macos.ts — a deny-by-default Seatbelt profile through /usr/bin/sandbox-exec: writes
-//     confined to exactly the io-guard zones, and `(deny network*)` for a plugin with no network grant.
-//
-// THE DISCIPLINE IS UNCHANGED, and it is why this section is small. Neither layer is believed because of
-// `process.platform`, because a binary exists, or because an API returned success. Each module owns a
-// probe that spawns a REAL child through the REAL launch shape and reports 'active' ONLY when that child
-// was ACTUALLY refused what it must be refused — each with a POSITIVE CONTROL, so a profile so broken
-// that everything fails cannot masquerade as confinement, and each accepting ONLY a permission error on
-// the network leg, so an offline host cannot masquerade as a confined one. Anything short of that is
-// 'degraded', and 'degraded' takes the fallback: the launch this module performed before these layers
-// existed, byte for byte.
-//
-// WHY THE LEGACY FIELDS ARE NOT REPURPOSED. `sandboxHardeningState` and `sandboxNetnsState` mean bwrap
-// and `bwrap --unshare-net` SPECIFICALLY — that is what their opt-out flags name, what their remediation
-// advice tells an operator to install, and what the admin settings payload has reported since it existed.
-// Widening them to mean "whatever this platform's kernel layer happens to be" would silently change the
-// meaning of values operators already read, and would make `sandbox_hardening_state: 'active'` on a Mac
-// mean something different from the same string on Linux. They therefore keep their exact meaning
-// (including 'unsupported' off Linux), and the platform layer gets its own separately-named state below.
-// The ONE place the two are unified is the requireHardening fail-closed gate in startIsolate, because
-// that gate asks a question neither field alone can answer: "is this host's kernel confinement ACTIVE?"
-
-type ConfinementState = 'unknown' | 'unsupported' | 'disabled' | 'active' | 'degraded';
-type ConfinementMechanism = 'bwrap' | 'appcontainer' | 'seatbelt' | 'none';
-
-// The mechanism that EXISTS for a platform, independent of whether it is enabled or works on this host.
-//
-// This mapping is the whole reason an operator can now act on the health output. Before it, a Windows or
-// macOS host reported 'unsupported' — the same word a genuinely feature-less platform would use — so
-// "this OS has no such layer, stop looking" and "the layer exists here and its probe failed, go find out
-// why" were indistinguishable, and they demand opposite actions. Mechanism answers the first question,
-// state answers the second, and neither is derivable from the other.
+// ── CROSS-PLATFORM KERNEL CONFINEMENT ────────────────────────────────────────────────────────────
+// One native mechanism per OS, one contract: it wraps EVERY isolated production plugin. A network grant
+// changes only the egress rule; it never removes that platform's filesystem/process boundary.
+type ConfinementMechanism = 'landlock' | 'appcontainer' | 'seatbelt' | 'none';
 const KERNEL_MECHANISM_BY_PLATFORM: Record<string, ConfinementMechanism> = {
-    linux: 'bwrap',
-    win32: 'appcontainer',
-    darwin: 'seatbelt',
+    linux: 'landlock', win32: 'appcontainer', darwin: 'seatbelt',
 };
-// How the SAME mechanism denies the network, named separately because it is a separately-probed property
-// on Linux (a host can allow unprivileged userns and still restrict CLONE_NEWNET) even though on Windows
-// and macOS it is one token / one profile and therefore one verdict.
 const NETWORK_MECHANISM_BY_PLATFORM: Record<string, string> = {
-    linux: 'bwrap --unshare-net (empty network namespace)',
-    win32: 'AppContainer zero-capability token (no internetClient)',
-    darwin: 'Seatbelt (deny network*)',
+    linux: 'seccomp-bpf all-socket denial without a grant; AF_INET/AF_INET6 clients only with a grant, plus Landlock TCP rules where supported',
+    win32: 'AppContainer without internetClient unless the plugin holds the network grant',
+    darwin: 'Seatbelt deny network* unless the plugin holds the network grant',
 };
 function platformKernelMechanism(platform: string = process.platform): ConfinementMechanism {
     return KERNEL_MECHANISM_BY_PLATFORM[platform] || 'none';
 }
 
-// State of THIS platform's kernel confinement layer, in the same vocabulary as sandboxHardeningState:
-//   'unsupported' = no such mechanism on this platform (or its binary is absent) ·
-//   'disabled'    = the mechanism exists but the operator has not enabled it (or it does not apply to
-//                   this build — see the ts-node carve-out below) ·
-//   'active'      = a real child was really refused, with the positive control passing ·
-//   'degraded'    = ENABLED, but the probe could not certify it here. The "looks secure but isn't" state,
-//                   deliberately a distinct value so it can never hide inside 'unsupported'.
+type LinuxFloorLayer = 'landlock' | 'none';
+const LINUX_FLOOR_LAYERS: readonly LinuxFloorLayer[] = ['landlock', 'none'] as const;
+function linuxFloorDecision(o: { platform: string; hardened?: boolean; zeroConf: ConfinementState; netGranted: boolean }): { layer: LinuxFloorLayer; denyNetwork: boolean; reason: string } {
+    if (o.platform !== 'linux') return { layer: 'none', denyNetwork: false, reason: 'Landlock and seccomp-bpf are Linux kernel features' };
+    if (o.zeroConf !== 'active') return { layer: 'none', denyNetwork: false, reason: `the Landlock/seccomp probe did not certify this host (state '${o.zeroConf}')` };
+    return {
+        layer: 'landlock',
+        denyNetwork: !o.netGranted,
+        reason: o.netGranted
+            ? 'Landlock and the dangerous-syscall filter stay active; the network grant removes only the IP-socket denial'
+            : 'Landlock, the dangerous-syscall filter and the IP-socket denial were certified on this host',
+    };
+}
+
+let linuxZeroConfState: ConfinementState = 'unknown';
+let linuxZeroConfNote = 'the Linux confinement probe has not run yet';
+function getLinuxZeroConfState(): ConfinementState { return linuxZeroConfState; }
 let sandboxPlatformState: ConfinementState = 'unknown';
 let sandboxPlatformNetworkState: ConfinementState = 'unknown';
-// One human-readable sentence saying what the state MEANS and, when there is one, what to do about it.
-// It is the difference between a health page an operator can act on and one they have to interpret.
-let sandboxPlatformNote = 'the platform confinement probe has not run yet (it fires on the first isolated plugin load)';
+let sandboxPlatformNote = 'the platform confinement probe has not run yet';
 function getSandboxPlatformState() { return sandboxPlatformState; }
 function getSandboxPlatformNetworkState() { return sandboxPlatformNetworkState; }
-/** The whole per-platform picture in one object, for admin GET /health/details. */
+function linuxFloorInForce(): 'landlock+seccomp' | 'none' {
+    return process.platform === 'linux' && linuxZeroConfState === 'active' ? 'landlock+seccomp' : 'none';
+}
+
 function getSandboxPlatformConfinement() {
     const mechanism = platformKernelMechanism();
-    return {
+    const out: any = {
         platform: process.platform,
         mechanism,
         state: sandboxPlatformState,
         network: { mechanism: NETWORK_MECHANISM_BY_PLATFORM[process.platform] || 'none', state: sandboxPlatformNetworkState },
-        // Stated explicitly because it is NOT the same on every platform and a reader would otherwise
-        // assume parity: on Linux bwrap wraps EVERY isolated child (a network-granted one simply keeps the
-        // shared netns), while the two new layers are applied only to plugins WITHOUT the network grant —
-        // a zero-capability AppContainer cannot hold a socket at all, and the network-granted Seatbelt
-        // profile is a shape no probe has ever certified. See platformLaunchDecision().
-        appliesTo: mechanism === 'bwrap' ? 'every isolated plugin' : (mechanism === 'none' ? 'nothing' : 'isolated plugins WITHOUT the network grant'),
+        appliesTo: mechanism === 'none' ? 'nothing' : 'every isolated plugin; the network grant changes only egress policy',
         note: sandboxPlatformNote,
     };
+    if (process.platform === 'linux') {
+        out.floor = { inForce: linuxFloorInForce(), layers: { landlock: { state: linuxZeroConfState, note: linuxZeroConfNote } } };
+    }
+    return out;
 }
 
-/**
- * Does THIS launch go through the platform's kernel confinement, or take the pre-existing fallback?
- *
- * PURE ON PURPOSE. The fallback is the property most likely to break and the one that hurts real users
- * when it does — a host whose probe fails must still load plugins, still serve their routes, and still be
- * confined by the floors that were already there. A pure decision function is the only way to pin that
- * behaviour from a test on ANY host, including the (many) hosts where these layers can never be active.
- *
- * Every `use: false` answer carries its reason, because "the sandbox quietly did nothing" and "the
- * sandbox deliberately did nothing here, for this stated reason" look identical in a log otherwise.
- */
 function platformLaunchDecision(o: { platform: string; state: ConfinementState; netGranted: boolean; tsNode: boolean }): { mechanism: ConfinementMechanism; use: boolean; reason: string } {
     const mechanism = platformKernelMechanism(o.platform);
-    if (mechanism === 'none') {
-        return { mechanism, use: false, reason: 'no kernel confinement mechanism exists for this platform' };
-    }
-    if (mechanism === 'bwrap') {
-        // The Linux launch is decided entirely by `hardened` / `bwrapPre` further down and is NOT routed
-        // through here. Returning false is not a downgrade — it is this function saying "not mine".
-        return { mechanism, use: false, reason: 'the Linux launch is built by the bwrap path, which this decision never touches' };
-    }
-    if (o.state !== 'active') {
-        return { mechanism, use: false, reason: `the ${mechanism} probe did not certify this host (state '${o.state}')` };
-    }
-    if (o.netGranted) {
-        // A plugin an admin granted `network` cannot go in a zero-capability AppContainer at all (the
-        // kernel would refuse its sockets, which is the point of the container), and the macOS profile
-        // shape that permits outbound traffic is one NO probe has ever exercised. Both are therefore left
-        // on the existing launch, bounded by the in-process egress guard — the same posture Linux takes
-        // when it withholds --unshare-net from a network-granted plugin.
-        return { mechanism, use: false, reason: 'the plugin holds the `network` grant; egress stays bounded by the in-process egress guard, as on Linux' };
-    }
-    if (mechanism === 'appcontainer' && o.tsNode) {
-        // Measured by the module author: an AppContainer child needs BOTH --preserve-symlinks-main and
-        // --preserve-symlinks, because Node's realpath resolution lstats every ancestor up to the drive
-        // root and the container cannot. --preserve-symlinks CHANGES MODULE IDENTITY, and the consumer
-        // most sensitive to that is ts-node resolving the whole .ts core inside the child. Same carve-out,
-        // and the same reasoning, as the permission model and blockCodeGen: the COMPILED production child
-        // is the one that has to be tight. probePlatformConfinement() reports 'disabled' under ts-node for
-        // exactly this reason, so the health surface never claims a confinement this branch declines.
-        return { mechanism, use: false, reason: 'running under ts-node; the AppContainer launch is applied to the compiled production child only' };
-    }
-    return { mechanism, use: true, reason: `${mechanism} confinement certified on this host by its probe` };
+    if (mechanism === 'none') return { mechanism, use: false, reason: 'no kernel confinement mechanism exists for this platform' };
+    if (o.state !== 'active') return { mechanism, use: false, reason: `the ${mechanism} probe did not certify this host (state '${o.state}')` };
+    if (mechanism === 'appcontainer' && o.tsNode) return { mechanism, use: false, reason: 'AppContainer applies to compiled production; recursively provisioning the ts-node development dependency tree exceeds development test deadlines' };
+    return { mechanism, use: true, reason: `${mechanism} confinement certified; network=${o.netGranted ? 'granted' : 'denied'} changes only the network rule` };
+}
+
+/** Production is fail-closed. The sole exception is the source-only Windows development worker: its
+ * TypeScript dependency tree makes first-run recursive ACL provisioning exceed development test deadlines;
+ * compiled production has a bounded runtime tree and no exception. */
+function nativeSandboxRequired(o: { configured: boolean; platform: string; tsNode: boolean }): boolean {
+    return o.configured && !(o.platform === 'win32' && o.tsNode);
 }
 
 let platformConfinementProbe: Promise<ConfinementState> | undefined;
-/**
- * Resolve (once, memoized like every other probe here) what this platform's kernel layer actually gives
- * this host. Never throws: a missing or broken sibling module degrades the layer, it does not fail a load.
- */
 function probePlatformConfinement(): Promise<ConfinementState> {
     if (platformConfinementProbe) return platformConfinementProbe;
     platformConfinementProbe = (async () => {
         const mech = platformKernelMechanism();
         if (mech === 'none') {
-            sandboxPlatformState = 'unsupported';
+            sandboxPlatformState = sandboxHardeningState = 'unsupported';
             sandboxPlatformNetworkState = 'unsupported';
-            sandboxPlatformNote = `no kernel confinement mechanism exists for platform '${logSafe(process.platform)}' — isolated plugins rely on process separation, Node's permission model and the JS guards`;
+            sandboxPlatformNote = `no native confinement mechanism exists for platform '${logSafe(process.platform)}'`;
             return sandboxPlatformState;
         }
-        if (mech === 'bwrap') {
-            // Linux delegates ENTIRELY to the existing probe. This branch adds no spawn, no argv and no
-            // decision of its own — it copies the two states the bwrap probe already computed, so the
-            // Linux path cannot be changed by anything in this section.
-            await probeKernelHardening();
-            sandboxPlatformState = sandboxHardeningState;
-            sandboxPlatformNetworkState = sandboxNetnsState;
-            sandboxPlatformNote = sandboxPlatformState === 'active'
-                ? 'bubblewrap confinement certified on this host'
-                : (sandboxPlatformState === 'degraded'
-                    ? 'sandbox.useKernelHardening is ON but the bwrap probe FAILED here — install bubblewrap and enable unprivileged user namespaces, or set sandbox.requireHardening=true to fail closed'
-                    : 'bubblewrap confinement is not enabled (sandbox.useKernelHardening=false)');
-            return sandboxPlatformState;
-        }
-        if (mech === 'appcontainer') {
-            // The ts-node carve-out is applied BEFORE the probe, not after, and that ordering is the point:
-            // probeAppContainer() MUTATES the operator's machine (it registers an AppContainer profile and
-            // adds DACL entries). Running it to certify a layer this build will then decline to use would
-            // be a host mutation with no purpose, and reporting its 'active' verdict would be a claim the
-            // launch does not honour.
-            if (__filename.endsWith('.ts')) {
-                sandboxPlatformState = 'disabled';
-                sandboxPlatformNetworkState = 'disabled';
-                sandboxPlatformNote = 'AppContainer confinement is not applied under ts-node (module identity changes with --preserve-symlinks, which the container requires) — it applies to the compiled production child';
-                return sandboxPlatformState;
-            }
+        if (mech === 'landlock') {
             try {
-                sandboxPlatformState = await require('./sandbox-windows').probeAppContainer();
+                const linux = require('./sandbox-linux');
+                linuxZeroConfState = await linux.probeLinuxZeroConf();
+                linuxZeroConfNote = String(linux.getLinuxZeroConfNote());
+                sandboxPlatformState = linuxZeroConfState;
             } catch (e: any) {
-                sandboxPlatformState = 'degraded';
-                console.warn(`[Sandbox] the Windows AppContainer module could not be loaded (${logSafe(e && e.message)}) — isolated plugins keep the standard Windows launch.`);
+                sandboxPlatformState = linuxZeroConfState = 'degraded';
+                linuxZeroConfNote = `the Linux confinement module could not be loaded (${logSafe(e && e.message)})`;
             }
+            sandboxHardeningState = sandboxPlatformState;
             sandboxPlatformNetworkState = sandboxPlatformState;
-            sandboxPlatformNote =
-                sandboxPlatformState === 'active' ? 'AppContainer confinement certified on this host: a real contained child was refused an outbound socket (EACCES) and an out-of-zone read (EPERM) while the plugin IPC bridge stayed alive'
-                : sandboxPlatformState === 'degraded' ? 'sandbox.useAppContainer is ON but the probe could NOT demonstrate confinement here — isolated plugins run WITHOUT the Windows kernel layer (see the [Sandbox] warning in the log for which check failed)'
-                : 'AppContainer confinement is available on this platform but not enabled (sandbox.useAppContainer=true turns it on; enabling it registers an AppContainer profile and adds ACL entries to this machine)';
+            sandboxPlatformNote = linuxZeroConfNote;
             return sandboxPlatformState;
         }
-        // macOS / Seatbelt.
+        if (mech === 'appcontainer' && __filename.endsWith('.ts')) {
+            sandboxPlatformState = sandboxHardeningState = 'disabled';
+            sandboxPlatformNetworkState = 'disabled';
+            sandboxPlatformNote = 'AppContainer applies to compiled production; the source-only ts-node development worker is exempt because first-run recursive ACL provisioning exceeds development test deadlines';
+            return sandboxPlatformState;
+        }
         try {
-            sandboxPlatformState = await require('./sandbox-macos').probeSeatbelt();
+            sandboxPlatformState = mech === 'appcontainer'
+                ? await require('./sandbox-windows').probeAppContainer()
+                : await require('./sandbox-macos').probeSeatbelt();
         } catch (e: any) {
             sandboxPlatformState = 'degraded';
-            console.warn(`[Sandbox] the macOS Seatbelt module could not be loaded (${logSafe(e && e.message)}) — isolated plugins keep the standard macOS launch.`);
+            console.warn(`[Sandbox] ${mech} probe errored (${logSafe(e && e.message)}).`);
         }
+        sandboxHardeningState = sandboxPlatformState;
         sandboxPlatformNetworkState = sandboxPlatformState;
-        sandboxPlatformNote =
-            sandboxPlatformState === 'active' ? 'Seatbelt confinement certified on this host: a real child under the real profile was refused an out-of-zone read and a raw-IP connect, while a granted write still worked and the plugin IPC bridge stayed alive'
-            : sandboxPlatformState === 'degraded' ? 'sandbox.useSeatbelt is ON but the probe could NOT demonstrate confinement here — isolated plugins run WITHOUT the macOS kernel layer (see the [Sandbox] warning in the log for which check failed)'
-            : sandboxPlatformState === 'unsupported' ? '/usr/bin/sandbox-exec is absent on this host, so Seatbelt confinement cannot be applied'
-            : 'Seatbelt confinement is available on this platform but not enabled (sandbox.useSeatbelt=true turns it on; the profile is UNCERTIFIED — no Apple hardware has yet reported it active)';
+        sandboxPlatformNote = sandboxPlatformState === 'active'
+            ? `${mech} certified for filesystem/process confinement and both network-policy shapes`
+            : `${mech} is '${sandboxPlatformState}'; see the sandbox probe warning for the failed property`;
         return sandboxPlatformState;
     })();
     return platformConfinementProbe;
 }
 
 /**
- * DACL entries this process has already granted to the AppContainer SID, keyed `<mode>:<dir>`.
- *
- * Granting is idempotent and cheap to REPEAT, but each repetition is a `powershell.exe` + `icacls` spawn
- * on the critical path of a plugin load, and the app-root grant is identical for every plugin. Cached
- * only on SUCCESS: a grant that failed (a Node runtime under Program Files needs elevation) must be
- * retried on the next load rather than remembered as done, or one transient failure would silently
- * disable that zone for the whole life of the process.
- */
-const appContainerGrantedZones = new Set<string>();
-
-/**
  * Start one isolated plugin child inside the Windows AppContainer, having first granted the io-guard
- * write zones to its SID. THROWS on any failure so the caller can fall back to the standard launch —
- * this function never returns a half-confined child.
+ * write zones to its SID. THROWS on any failure and never returns a half-confined child. The platform
+ * module persistently caches only successful recursive grants and serializes concurrent setup processes,
+ * so this remains zero-config without paying for a full tree walk on every restart.
  *
  * The resource caps (memory / active-process / CPU) are deliberately NOT passed: sandbox-windows resolves
  * them from the same `sandbox.*` knobs the Linux cgroup path uses, so an operator sets one number and both
  * operating systems obey it, and there is no second place for the defaults to drift.
  */
-async function launchAppContainerChild(slug: string, appRoot: string, io: { args: string[]; env: Record<string, string>; stdio: any }): Promise<{ child: any; containedPid: number | null }> {
+async function launchAppContainerChild(slug: string, appRoot: string, io: {
+    args: string[]; env: Record<string, string>; stdio: any; allowNetwork: boolean;
+    zones: { traverse: string[]; readExec: string[]; write: string[] };
+}): Promise<{ child: any; containedPid: number | null }> {
     const win = require('./sandbox-windows');
-    const sid = win.getAppContainerSid();
-    // The probe sets the SID before it can report 'active', so a missing one here means the module state
-    // and this launch disagree — refuse rather than launch a child with no container.
+    // A SID is derived from BOTH the install and the slug. Sharing one package SID across plugins makes
+    // every recursive ACL ever granted to that SID cumulative, which destroys native cross-plugin
+    // separation even though the JavaScript guards still look correct.
+    const profile = win.appContainerProfileNameForPlugin(appRoot, slug);
+    const sid = await win.ensureAppContainerProfile(profile);
     if (!sid) throw new Error('the AppContainer probe reported ACTIVE but no package SID is available');
-    const zones = win.appContainerZones(appRoot, slug);
-    const grant = async (dirs: string[], mode: 'rx' | 'full') => {
-        const need = dirs.filter((d) => !appContainerGrantedZones.has(`${mode}:${d}`));
-        if (!need.length) return;
-        const ok = await win.grantAppContainerAccess(sid, need, mode);
-        if (ok) for (const d of need) appContainerGrantedZones.add(`${mode}:${d}`);
+    const zones = io.zones;
+    const grant = async (dirs: string[], mode: 'traverse' | 'rx' | 'full') => {
+        const ok = await win.grantAppContainerAccess(sid, dirs, mode);
+        if (!ok) throw new Error(`could not grant AppContainer ${mode} access to ${dirs.join(', ')}`);
     };
+    await grant(zones.traverse, 'traverse');
     await grant(zones.readExec, 'rx');
     await grant(zones.write, 'full');
-    const r = await win.launchInAppContainer({ sid, exe: process.execPath, args: io.args, cwd: appRoot, env: io.env, stdio: io.stdio });
+    const runtimeExe = await win.ensureAppContainerRuntime(sid);
+    const r = await win.launchInAppContainer({ sid, exe: runtimeExe, args: io.args, cwd: appRoot, env: io.env, stdio: io.stdio, allowNetwork: io.allowNetwork });
     if (!r || !r.child) throw new Error('the AppContainer relay produced no child process');
     return { child: r.child, containedPid: r.containedPid ?? null };
 }
@@ -1275,28 +969,6 @@ function getEgressAllowlistFor(slug: string): string[] {
 function egressPolicyLoaded(): boolean {
     try { return require('./plugin-permissions').isEgressPolicyLoaded() === true; } catch { return false; }
 }
-// Linux teardown backstop (audit F-05): the DESCENDANTS of rootPid, enumerated by walking
-// /proc/<pid>/task/<pid>/children. On the kernel-hardened-but-non-cgroup launch path, child.pid is the
-// OUTER bwrap and the real node runs as a grandchild; if the outer is killed mid-bootstrap the grandchild
-// can reparent to init before bwrap's (non-retroactive) --die-with-parent PDEATHSIG is installed and
-// survive as an orphan the outer-pid livePids registry reports as gone. Callers must enumerate BEFORE
-// killing the outer — a reparented pid is no longer reachable from our /proc subtree. Pid-reuse-safe: it
-// only ever walks DOWN from a pid we own. Best-effort; never throws. Returns descendants (root excluded).
-function procSubtreePids(rootPid: number): number[] {
-    if (process.platform !== 'linux' || !rootPid) return [];
-    const fsmod = require('fs');
-    const childrenOf = (pid: number): number[] => {
-        try { return String(fsmod.readFileSync(`/proc/${pid}/task/${pid}/children`, 'utf8')).trim().split(/\s+/).filter(Boolean).map(Number); } catch { return []; }
-    };
-    const out: number[] = []; const stack = [rootPid]; const seen = new Set<number>([rootPid]);
-    let guard = 0;
-    while (stack.length && guard++ < 10000) {
-        const pid = stack.pop() as number;
-        for (const k of childrenOf(pid)) { if (k && !seen.has(k)) { seen.add(k); out.push(k); stack.push(k); } }
-    }
-    return out;
-}
-
 // Hooks whose filter return value is emitted as RAW, UNESCAPED HTML into every server-rendered page
 // (theme-engine wraps wordjs_head/wordjs_footer in a Handlebars SafeString). A plugin shimming one of
 // these is a stored-XSS primitive (incl. the admin UI), so it is denied for EVERY plugin — no plugin
@@ -1387,37 +1059,34 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
     // chosen synchronously inside the executor below. cgroup (preventive) is preferred over rlimit (loose).
     const cgroupOk = await probeCgroupCap();
     const capKb = cgroupOk ? null : await probeOsMemoryCap();
-    const hardened = await probeKernelHardening(); // opt-in bwrap confinement (Linux); false ⇒ no-op
-    // THIS platform's kernel confinement layer — bwrap on Linux (the very probe just awaited), an
-    // AppContainer on Windows, a Seatbelt profile on macOS. Awaited here so `sandboxPlatformState` is
-    // settled before the launch decision below reads it synchronously.
+    // Settle this platform's native confinement before argv is built.
     await probePlatformConfinement();
+    let requireHardening = true;
+    try { requireHardening = require('../config/app').sandbox?.requireHardening !== false; } catch { /* fail closed */ }
+    const requireNativeSandbox = nativeSandboxRequired({
+        configured: requireHardening,
+        platform: process.platform,
+        tsNode: __filename.endsWith('.ts'),
+    });
     // FAIL-CLOSED: if the operator requires the OS backstop, REFUSE to launch when it isn't actually ACTIVE
     // (no such mechanism here, disabled, or the probe failed) instead of silently degrading to
     // JS-guards-only isolation.
     //
-    // The gate now asks about the PLATFORM layer rather than about bwrap specifically, which is the one
-    // question `sandboxHardeningState` alone could not answer on a Mac or a Windows box. On Linux the two
-    // are the same value by construction (probePlatformConfinement copies it), so this is byte-identical
-    // there; elsewhere it can only ever ALLOW a launch it previously refused, and only when a probe
-    // actually demonstrated confinement on this host. It never permits a launch that was refused before
-    // for a reason that still holds.
+    // The gate asks about the mechanism native to this platform, using the same state vocabulary on all OSes.
     if (sandboxPlatformState !== 'active') {
-        let requireHardening = false;
-        try { requireHardening = !!require('../config/app').sandbox?.requireHardening; } catch { /* */ }
-        if (requireHardening) {
+        if (requireNativeSandbox) {
             const mech = platformKernelMechanism();
-            const fix = mech === 'bwrap' ? 'Install bubblewrap + enable unprivileged user namespaces on this host'
+            const fix = mech === 'landlock' ? `Use a supported Linux kernel with Landlock and /usr/bin/perl (currently '${logSafe(linuxZeroConfState)}': ${logSafe(linuxZeroConfNote)})`
                 : mech === 'appcontainer' ? 'Enable sandbox.useAppContainer on this Windows host (and check the [Sandbox] AppContainer warning in the log for the check that failed)'
                 : mech === 'seatbelt' ? 'Enable sandbox.useSeatbelt on this macOS host (and check the [Sandbox] Seatbelt warning in the log for the check that failed)'
                 : `No kernel confinement mechanism exists for platform '${logSafe(process.platform)}'`;
-            throw new Error(`[Sandbox] refusing to launch isolated plugin '${slug}': sandbox.requireHardening is ON but this host's kernel confinement (${mech}) is '${sandboxPlatformState}' (not ACTIVE). ${fix}, or set sandbox.requireHardening=false to allow the degraded (JS-guards-only) launch.`);
+            throw new Error(`[Sandbox] refusing to launch isolated plugin '${slug}': sandbox.requireHardening is ON but this host's kernel confinement (${mech}) is '${sandboxPlatformState}' (not ACTIVE). ${fix}, or explicitly set sandbox.requireHardening=false to permit an unsafe compatibility fallback.`);
         }
     }
     const jobCapOk = await probeJobObjectCap();     // preventive memory cap on Windows (Job Object); false elsewhere
-    // Cross-platform capability confinement. Unlike everything above it, this one is NOT Linux-only —
-    // it is the layer that gives Windows and macOS an OS-enforced boundary at all. null ⇒ unavailable
-    // on this Node (or opted out) and the launch below is byte-identical to before.
+    // Cross-platform capability confinement, layered inside Landlock/AppContainer/Seatbelt. null means
+    // unavailable on this Node (or explicitly opted out); the native OS boundary remains independently
+    // mandatory under the default fail-closed policy.
     const permFlag = await probePermissionModel();
     // -- LAUNCH INPUTS ----------------------------------------------------------------------------
     // Everything from here down to `childStdio` used to be the first half of the Promise executor
@@ -1466,7 +1135,21 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
     // The filesystem grant travels the same way and for the same reason (see fsGrantsFor): the child
     // cannot look it up, so the host answers for it. io-guard reads fsRead/fsWrite out of this blob.
     const fsGrant = fsGrantsFor(slug);
-    const childCfg = JSON.stringify({ slug, entryFile, coreDir: __dirname, network: netGranted, allowedHosts: (netGranted && !egressDenyAll) ? getEgressAllowlistFor(slug) : [], egressDenyAll, fsRead: fsGrant.read, fsWrite: fsGrant.write });
+    // The same path declaration feeds every OS sandbox, Node's permission model and io-guard.
+    const APP_ROOT = path.resolve(__dirname, '..', '..');
+    const nativePaths = sandboxPaths(APP_ROOT, slug, __dirname);
+    const storageEnabled = fsGrant.read || fsGrant.write;
+    // Private capability storage is created only for a plugin that currently holds that capability.
+    // Own-dir private storage remains the compatibility floor for zero-permission plugins.
+    if (storageEnabled) for (const dir of nativePaths.storage) fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const sandboxWritable = [nativePaths.own, ...(fsGrant.write ? nativePaths.storage : [])];
+    const sandboxReadable = Array.from(new Set([
+        ...nativePaths.readOnly,
+        ...(storageEnabled ? nativePaths.storage : []),
+        ...sandboxWritable,
+    ]));
+    const storage = Object.freeze({ data: nativePaths.storage[0], logs: nativePaths.storage[1], tmp: nativePaths.storage[2] });
+    const childCfg = JSON.stringify({ slug, entryFile, coreDir: __dirname, network: netGranted, allowedHosts: (netGranted && !egressDenyAll) ? getEgressAllowlistFor(slug) : [], egressDenyAll, fsRead: fsGrant.read, fsWrite: fsGrant.write, storage });
     const HEAP_FLAG = '--max-old-space-size=256'; // caps the JS HEAP; cgroup/rlimit/poll cap TOTAL memory
     // RSS_BUDGET_BYTES (resident budget — cgroup memory.max AND the /proc poll AND the Job-Object cap) is
     // module-scoped now, shared with cgroupResourceProps() so the probe and this launch never disagree.
@@ -1477,28 +1160,8 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
     // them slug-tagged through a per-plugin rate/volume cap. stdin is IGNORED (=/dev/null): plugins
     // never read the operator's stdin/tty, so don't hand it to them. fd3 = ipc.
     const IPC_STDIO: any = ['ignore', 'pipe', 'pipe', 'ipc'];
-    // Kernel hardening (DEFAULT-ON, opt-out via config.sandbox.useKernelHardening=false): when active
-    // (Linux + probe passed), launch node THROUGH bwrap so the child runs unprivileged (nobody) with
-    // dropped caps / no-new-privs / PID-IPC-UTS + user namespaces / read-only fs + a seccomp denylist.
-    // Only the plugin's own dir + the io-guard write-zones are bound writable (sandboxWritable below);
-    // the rest of backend/ is read-only. Composes with the memory-cap wrapper below; the IPC fd survives
-    // (probe-verified). When off (or the probe fails),
-    // bwrapPre is empty and every launch path is byte-identical to the plain fork (zero regression).
-    const APP_ROOT = path.resolve(__dirname, '..', '..');
-    // Under bwrap, bind WRITABLE only the zones io-guard already permits a plugin to write: its OWN dir
-    // (plugins/<slug>, or themes/<name> for a theme) + uploads/data/logs/os-tmp/themes. Everything else in
-    // APP_ROOT (src, node_modules, sibling plugins/<other>) stays READ-ONLY at the kernel level too — so a
-    // plugin that somehow escapes the JS io-guard STILL cannot persist a payload into core source, a shared
-    // dependency, or another plugin. Mirrors core/io-guard.ts SAFE_WRITE_DIRS + ownDir; --bind-try skips any
-    // zone missing on this install. (node_modules/src stay readable via the --ro-bind so require() works.)
-    const sandboxWritable = [
-        slug.startsWith('theme:') ? path.join(APP_ROOT, 'themes', slug.slice('theme:'.length)) : path.join(APP_ROOT, 'plugins', slug),
-        path.join(APP_ROOT, 'uploads'), path.join(APP_ROOT, 'data'), path.join(APP_ROOT, 'logs'),
-        path.join(APP_ROOT, 'os-tmp'), path.join(APP_ROOT, 'themes'),
-    ];
-    // Hand the SAME policy to Node's permission model that bwrap gets, so the confinement no longer
-    // depends on the operating system: read is scoped to the app root (the child must still resolve
-    // its worker, node_modules and the plugin's own code), and write is scoped to exactly the zones
+    // Hand the SAME policy to Node's permission model, so reads are scoped to narrow core, dependency,
+    // plugin and private-storage roots, and writes are scoped to exactly the zones
     // io-guard already permits — so this is behaviour-neutral for a well-behaved plugin and a hard
     // wall for one that is not. child_process / worker_threads / native addons / WASI are simply not
     // granted, which denies them in C++ rather than through a JS proxy that has to be kept in sync.
@@ -1507,33 +1170,84 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
     // production child does. Same carve-out as blockCodeGen above, and for the same reason — the
     // production path is the one that has to be tight.
     if (permFlag && !__filename.endsWith('.ts')) {
-        execArgv.push(permFlag, `--allow-fs-read=${APP_ROOT}`);
+        execArgv.push(permFlag);
+        for (const dir of sandboxReadable) execArgv.push(`--allow-fs-read=${dir}`);
         for (const dir of sandboxWritable) execArgv.push(`--allow-fs-write=${dir}`);
         // NOTE: Node's permission model has NO `--allow-net` flag (never has — the tokens are
         // fs-read/fs-write/child-process/worker/wasi/addons). Passing it aborted the child on startup
         // with `bad option: --allow-net` (exit 9), so a network-GRANTED isolated plugin could not
-        // activate in production at all. The JS egress guard is — and always was — the sole authority
-        // on where a plugin's traffic may go; a network plugin simply does not get --unshare-net
-        // (handled where bwrap args are built) and stays bounded by that guard. `netGranted` is
-        // consumed there, not here — there is nothing valid to add to execArgv for it.
+        // activate in production at all. The JS egress guard remains the authority on where a
+        // network-granted plugin may connect; the native sandbox decides only whether IP sockets exist.
     }
-    // seccomp denylist fd: opened per spawn, placed at child fd 4, referenced by `--seccomp 4`. If the
-    // BPF isn't available (unsupported arch / write failed) hardening proceeds without seccomp; closed
-    // after the child is spawned (the child kept its own dup).
-    let bpfFd = -1;
-    if (hardened) { const p = getSeccompBpfPath(); if (p) { try { bpfFd = require('fs').openSync(p, 'r'); } catch { bpfFd = -1; } } }
-    const seccompArgs = bpfFd >= 0 ? ['--seccomp', '4'] : [];
-    // A NON-network plugin (its fetch/WS/EventSource + raw sockets are ALREADY JS-neutered in the worker)
-    // additionally gets an empty network namespace (--unshare-net) as a KERNEL backstop — but only when
-    // this host proved it works (netnsHardeningSupported, set by the second probe leg) so a net-denied
-    // argv never ships un-probe-validated. Network-GRANTED plugins keep the shared netns (denyNetwork
-    // stays false) so their outbound sockets work, bounded by the JS egress-guard. Synchronous by design:
-    // this executes inside the non-async Promise executor, so it reads the memoized probe flag, not await.
-    const denyNetwork = hardened && netnsHardeningSupported && !netGranted;
-    const bwrapPre = hardened ? ['bwrap', ...seccompArgs, ...bwrapProfile(sandboxWritable, denyNetwork), '--'] : [];
-    const childStdio: any = bpfFd >= 0 ? [...IPC_STDIO, bpfFd] : IPC_STDIO;
+    let childStdio: any = IPC_STDIO;
+    // -- LINUX ZERO-CONFIGURATION CONFINEMENT (Landlock + seccomp-bpf) -----------------------------
+    // This is a PREFIX, like Seatbelt, so it sits in the same argv slot and
+    // composes with everything already there:
+    //   · the memory-cap wrapper — `sh -c 'ulimit -v N; ulimit -n M; exec "$@"' wjs-sandbox <prefix> node …`.
+    //     The shell sets both rlimits and execs perl; perl applies Landlock+seccomp to ITSELF and execs
+    //     node. Rlimits survive execve, so the caps still bite the process that matters.
+    //   · the cgroup scope — the prefix sits inside `systemd-run
+    //     --scope … -- env -u … <prefix> node …`, under the same MemoryMax/CPUQuota.
+    //   · the permission-model flags and --disallow-code-generation-from-strings are part of `execArgv`,
+    //     which travels in `nodeArgs` after the shim's `--`, so they reach node unchanged.
+    //   · the fork-style IPC fd survives, because perl exec()s and never forks or touches the descriptor
+    //     table — and that is the ONE property this module refuses to assume: probeLinuxZeroConf()
+    //     requires a full process.send() round-trip through this exact prefix shape before it may report
+    //     'active', so an fd-3 that did not survive means this branch is never reached at all.
+    // A consequence of the exec: child.pid IS node's pid, so the
+    // resident-RSS poll below reads /proc/<child.pid>/statm directly, with no subtree walk and no
+    // orphan-reparenting window.
+    const linuxFloor = linuxFloorDecision({ platform: process.platform, zeroConf: linuxZeroConfState, netGranted });
+    let zeroConfPre: string[] = [];
+    if (linuxFloor.layer === 'landlock') {
+        try {
+            const lz = require('./sandbox-linux');
+            const fsx = require('fs');
+            // MISSING ZONES ARE SKIPPED, and this is not a nicety — it is a divergence between the two
+            // launches that would otherwise turn a working plugin into a failing load. `sandboxWritable`
+            // names the io-guard zones an install MAY have; a fresh one has no logs/ or os-tmp/ until
+            // something writes there, and a plugin isolate is often the first thing that does. The shim has no
+            // affordance: Landlock has to OPEN each path to grant it, so a missing zone makes it fail
+            // CLOSED with exit 79 and the child never runs at all.
+            //   The probe cannot catch this: it grants a mkdtemp zone, which always exists. So it is
+            // handled here, at the only place that knows the real zones — and it is a FILTER rather than
+            // a create, because this module must not be the thing that decides an io-guard zone exists.
+            const zones = sandboxWritable.filter((d: string) => { try { return fsx.statSync(d).isDirectory(); } catch { return false; } });
+            // Read roots get the same treatment for the same reason (the shim fails closed on a read root
+            // it cannot grant). Both entries below normally exist, so this only bites a broken install —
+        // where a missing required runtime root means the child could not have loaded anyway.
+            const runtimePrefix = path.dirname(path.dirname(process.execPath));
+            const roots = [...sandboxReadable, ...(runtimePrefix.split(path.sep).filter(Boolean).length >= 2 ? [runtimePrefix] : [])]
+                .filter((d) => { try { return fsx.statSync(d).isDirectory(); } catch { return false; } });
+            if (!zones.length) {
+                // Every zone gone is not a tighter sandbox, it is an unlaunchable one: the plugin could
+                // not write its own directory. Take the standard launch and say so, rather than emitting
+                // an argv whose only possible outcome is a failed load.
+                throw new Error('none of the io-guard write zones exist on this install');
+            }
+            zeroConfPre = [lz.PERL_BIN, ...lz.shimArgs({
+                // The io-guard write zones, THE SAME ARRAY --allow-fs-write
+                // scopes, minus the ones that are not on disk. Not re-derived: four independent lists of
+                // "what a plugin may write" drift, and it is always the loosest one that decides.
+                zone: zones,
+                denyNetwork: linuxFloor.denyNetwork,
+                // The Node runtime prefix is REQUIRED, not a nicety: the shim deliberately does not grant
+                // /home, so an nvm/asdf/fnm install (…/versions/node/vX/bin/node) would be unreadable and
+                // the child would never boot. For a /usr/bin/node it lands on /usr, which the shim grants
+                // anyway — harmless where redundant, load-bearing where it is not.
+                readRoot: roots,
+                execRoot: [process.execPath],
+                nodeArgs: [],
+            })];
+        } catch (e: any) {
+            if (requireNativeSandbox) {
+                throw new Error(`[Sandbox] refusing to launch isolated plugin '${slug}': the certified Linux sandbox argv could not be built (${logSafe(e && e.message)}).`, { cause: e });
+            }
+            zeroConfPre = [];
+            console.warn(`[Sandbox] Linux sandbox construction failed for '${logSafe(slug)}' (${logSafe(e && e.message)}); sandbox.requireHardening=false permits the unsafe compatibility fallback.`);
+        }
+    }
     // -- PLATFORM KERNEL CONFINEMENT (Windows / macOS) --------------------------------------------
-    // The Linux launch is decided entirely by `hardened` / `bwrapPre` above and is not touched here.
     // This is where a Windows or macOS child either goes through its platform's kernel layer, or takes
     // EXACTLY the launch it took before those layers existed.
     //
@@ -1550,16 +1264,31 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
     // spawn branches below share ONE profile string. Two builders would be two chances for the kernel's
     // write set and the JS guard's write set to drift, and it is always the looser one that matters.
     let seatbeltPre: string[] = [];
+    let seatbeltRuntime: any = null;
+    let nativeNodePath = process.execPath;
+    const preSeatbeltExecArgvLength = execArgv.length;
     if (platformLaunch.use && platformLaunch.mechanism === 'seatbelt') {
         try {
             const mac = require('./sandbox-macos');
-            // denyNetwork is unconditionally true here: platformLaunchDecision has already refused this
-            // path for a network-granted plugin, so the only profile this module ever emits is the one
-            // shape probeSeatbelt() actually certified.
-            const profile = mac.buildSeatbeltProfile({ writableDirs: sandboxWritable, denyNetwork: true, appRoot: APP_ROOT });
-            // seatbeltArgs() returns ARGUMENTS, not a command line — exactly like bwrapProfile() — so the
+            seatbeltRuntime = mac.prepareSeatbeltRuntime(process.execPath);
+            nativeNodePath = seatbeltRuntime.exe;
+            workerEnv.WORDJS_SEATBELT_BOOTSTRAP = '1';
+            workerEnv.WORDJS_SEATBELT_READY_FD = '4';
+            workerEnv.WORDJS_SEATBELT_RELEASE_FD = '5';
+            execArgv.push('-r', mac.SEATBELT_BOOTSTRAP_FILE);
+            childStdio = [...IPC_STDIO, 'pipe', 'pipe'];
+            // The profile always confines filesystem/process operations; the grant changes only network.
+            const profile = mac.buildSeatbeltProfile({
+                writableDirs: sandboxWritable,
+                readOnlyDirs: sandboxReadable,
+                denyNetwork: !netGranted,
+                appRoot: APP_ROOT,
+                nodePath: seatbeltRuntime.exe,
+                runtimeRoots: seatbeltRuntime.runtimeRoots,
+            });
+            // seatbeltArgs() returns ARGUMENTS, not a command line, so the
             // caller decides where they sit. `[sandbox-exec, '-p', <profile>]` composes in front of the
-            // node argv the same way `bwrapPre` does, INCLUDING inside the `sh -c 'ulimit …; exec "$@"'`
+            // node argv, INCLUDING inside the `sh -c 'ulimit …; exec "$@"'`
             // memory-cap wrapper: two execs in a row, and fd 3 (NODE_CHANNEL_FD) survives both, because
             // neither is a fork and neither touches the descriptor table. Each leg is separately
             // probe-verified with its own IPC round-trip — the shell leg by probeOsMemoryCap, the
@@ -1567,19 +1296,25 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
             // rather than assumed.
             seatbeltPre = [mac.SEATBELT_BIN, ...mac.seatbeltArgs(profile, [])];
         } catch (e: any) {
-            // A layer whose profile cannot be built is not a layer. Fall back to the standard launch and
-            // SAY so: a silent half-application is the failure this file spends its comments avoiding.
+            try { require('./sandbox-macos').disposeSeatbeltRuntime(seatbeltRuntime); } catch { /* */ }
+            seatbeltRuntime = null;
+            nativeNodePath = process.execPath;
+            execArgv.splice(preSeatbeltExecArgvLength);
+            delete workerEnv.WORDJS_SEATBELT_BOOTSTRAP;
+            delete workerEnv.WORDJS_SEATBELT_READY_FD;
+            delete workerEnv.WORDJS_SEATBELT_RELEASE_FD;
+            childStdio = IPC_STDIO;
+            if (requireNativeSandbox) {
+                throw new Error(`[Sandbox] refusing to launch isolated plugin '${slug}': the certified Seatbelt profile could not be built (${logSafe(e && e.message)}).`, { cause: e });
+            }
             seatbeltPre = [];
-            console.warn(`[Sandbox] macOS Seatbelt is ACTIVE but the profile could not be built for '${logSafe(slug)}' (${logSafe(e && e.message)}) — falling back to the standard launch for this plugin.`);
+            console.warn(`[Sandbox] Seatbelt profile construction failed for '${logSafe(slug)}' (${logSafe(e && e.message)}); sandbox.requireHardening=false permits the unsafe compatibility fallback.`);
         }
     }
     // Windows: the ONE launch in this module that cannot start synchronously. The contained child is
     // created by a PowerShell relay (CreateProcessW + SECURITY_CAPABILITIES), and its pid only exists once
     // that relay has returned — which is why the argv/env construction above was moved out of the executor.
     // Awaited HERE so the executor below still receives a ready ChildProcess and stays synchronous.
-    // NOTE ON THE seccomp fd: this await sits between opening `bpfFd` and closing it after the spawn. That
-    // is safe by construction and not by luck — `hardened` (and therefore `bpfFd >= 0`) is only ever true
-    // on Linux, and this branch only ever runs on win32, so the two can never overlap.
     let acLaunch: { child: any; containedPid: number | null } | null = null;
     if (platformLaunch.use && platformLaunch.mechanism === 'appcontainer') {
         try {
@@ -1587,10 +1322,15 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
                 args: [...execArgv, HEAP_FLAG, WORKER_FILE, childCfg],
                 env: workerEnv,
                 stdio: childStdio,
+                allowNetwork: netGranted,
+                zones: { traverse: nativePaths.traverse, readExec: sandboxReadable, write: sandboxWritable },
             });
         } catch (e: any) {
+            if (requireNativeSandbox) {
+                throw new Error(`[Sandbox] refusing to launch isolated plugin '${slug}': the certified AppContainer launch failed (${logSafe(e && e.message)}).`, { cause: e });
+            }
             acLaunch = null;
-            console.warn(`[Sandbox] AppContainer launch failed for '${logSafe(slug)}' (${logSafe(e && e.message)}) — falling back to the standard Windows launch (process separation + the Node permission model + the JS guards).`);
+            console.warn(`[Sandbox] AppContainer launch failed for '${logSafe(slug)}' (${logSafe(e && e.message)}); sandbox.requireHardening=false permits the unsafe compatibility fallback.`);
         }
         // NOTE ON WHAT IS *NOT* RETRIED. This catch covers a failure to CREATE the contained child at all
         // (no SID, the relay produced nothing). If the relay starts and the contained node then dies —
@@ -1599,8 +1339,8 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
         // forwarded to the operator's log by attachLogLimiter. It is deliberately NOT retried unconfined:
         // "widen the sandbox until the plugin starts" is how a confinement layer stops meaning anything,
         // and the probe already proved this exact launch shape works on this host. The cost of that
-        // strictness — that enabling this layer can turn a working plugin into a failing load — is the
-        // main reason sandbox.useAppContainer is opt-in rather than default-on.
+        // strictness is intentional: the default-on production contract refuses a plugin whose native
+        // container cannot be created instead of widening its authority until it starts.
     }
     return new Promise((resolve, reject) => {
         let child: any;
@@ -1617,10 +1357,7 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
             //
             // TEARDOWN is by kernel refcount, not by pid: the relay holds the only handle to a Job Object
             // carrying JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, so killing the relay kills the contained node —
-            // the Win32 equivalent of bwrap's --die-with-parent. `terminate()` and killOverBudget() below
-            // therefore keep working with no change, and there is no orphan class to sweep (the Linux
-            // procSubtreePids backstop exists because bwrap's PDEATHSIG is installed late and not
-            // retroactively; the job limit here is set BEFORE the child's first instruction runs).
+            // This gives deterministic teardown: the job limit is set before the child's first instruction.
             child = acLaunch.child;
         } else if (cgroupOk) {
             // PREVENTIVE cgroup v2 caps: run the child in a transient --user scope with MemoryMax (the kernel
@@ -1636,21 +1373,21 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
             child = spawn('systemd-run', ['--user', '--scope', '--quiet', '--collect', '--unit', cgroupUnit,
                 ...cgroupResourceProps(), '--',
                 ...SCOPE_ENV_STRIP,
-                ...bwrapPre, process.execPath, ...execArgv, HEAP_FLAG, WORKER_FILE, childCfg],
+                ...zeroConfPre, process.execPath, ...execArgv, HEAP_FLAG, WORKER_FILE, childCfg],
                 { stdio: childStdio, serialization: 'advanced', env: cgroupClientEnv(workerEnv) });
         } else if (capKb) {
             // KERNEL-capped path: a shell sets RLIMIT_AS, then `exec`s node KEEPING the inherited IPC fd
             // (NODE_CHANNEL_FD + serialization mode are injected into the child env by the 'ipc' stdio and
             // survive the exec). argv after the shell name = [node, …execArgv, HEAP_FLAG, WORKER, cfg];
             // `exec "$@"` runs it, so cfg lands at process.argv[2] exactly like fork(WORKER,[cfg]).
-            // `seatbeltPre` is empty on every platform but macOS-with-a-certified-profile, and `bwrapPre`
-            // is empty on every platform but Linux, so exactly one of them can ever be non-empty and the
-            // Linux argv is byte-identical to before. On macOS the result is
-            //   sh -c 'ulimit …; exec "$@"' wjs-sandbox /usr/bin/sandbox-exec -p <profile> node …
-            // i.e. the shell sets RLIMIT_AS and execs sandbox-exec, which applies the profile to itself and
-            // execs node. Two execs, no fork, no change to the descriptor table — so fd 3 (the IPC
-            // socketpair) reaches node exactly as it does through the shell alone.
-            const nodeArgv = [...bwrapPre, ...seatbeltPre, process.execPath, ...execArgv, HEAP_FLAG, WORKER_FILE, childCfg];
+            // Each platform contributes at most one native prefix. Current macOS does not reach this
+            // branch because its enforcement probe correctly rejects Darwin's inert RLIMIT_AS alias.
+            // Two prefixes, ONE slot, and at most one is non-empty: Seatbelt on macOS, Landlock on Linux.
+            //   sh -c 'ulimit …; exec "$@"' wjs-sandbox /usr/bin/perl <shim> <zones> 1 -- node …
+            // i.e. the shell sets the rlimits and execs perl, which confines ITSELF and execs node. Three
+            // execs at most, no fork, no change to the descriptor table — so fd 3 (the IPC socketpair)
+            // reaches node exactly as it does through the shell alone.
+            const nodeArgv = [...seatbeltPre, ...zeroConfPre, nativeNodePath, ...execArgv, HEAP_FLAG, WORKER_FILE, childCfg];
             // Also cap file descriptors (RLIMIT_NOFILE, per-process) alongside the RLIMIT_AS memory backstop,
             // so a plugin can't exhaust the host fd table. Best-effort (2>/dev/null); exec runs regardless.
             child = spawn('sh', ['-c', `ulimit -v ${capKb} 2>/dev/null; ulimit -n ${FD_CAP} 2>/dev/null; exec "$@"`, 'wjs-sandbox', ...nodeArgv], {
@@ -1658,23 +1395,27 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
                 serialization: 'advanced',
                 env: workerEnv,
             });
-        } else if (hardened) {
-            // Kernel hardening on but no memory-cap wrapper available here: launch node THROUGH bwrap
-            // (preserves the fork-style IPC fd, probe-verified) instead of a plain fork, so the child
-            // still gets the unprivileged-uid / dropped-caps / no-new-privs / namespace confinement. The
-            // resident RSS poll below sums the bwrap subtree so the memory cap keeps biting.
-            child = spawn('bwrap', [...seccompArgs, ...bwrapProfile(sandboxWritable, denyNetwork), '--', process.execPath, ...execArgv, HEAP_FLAG, WORKER_FILE, childCfg], {
+        } else if (seatbeltPre.length) {
+            // macOS with a CERTIFIED Seatbelt profile but no RLIMIT_AS wrapper on this host: launch node
+            // THROUGH sandbox-exec directly.
+            // sandbox-exec applies the profile to its own process and then execve()s node, so the
+            // fork-style IPC fd survives — the property probeSeatbelt() exists to prove, and refuses to
+            // report 'active' without.
+            child = spawn(seatbeltPre[0], [...seatbeltPre.slice(1), nativeNodePath, ...execArgv, HEAP_FLAG, WORKER_FILE, childCfg], {
                 stdio: childStdio,
                 serialization: 'advanced',
                 env: workerEnv,
             });
-        } else if (seatbeltPre.length) {
-            // macOS with a CERTIFIED Seatbelt profile but no RLIMIT_AS wrapper on this host: launch node
-            // THROUGH sandbox-exec directly, the same way the branch above launches it through bwrap.
-            // sandbox-exec applies the profile to its own process and then execve()s node, so the
-            // fork-style IPC fd survives — the property probeSeatbelt() exists to prove, and refuses to
-            // report 'active' without.
-            child = spawn(seatbeltPre[0], [...seatbeltPre.slice(1), process.execPath, ...execArgv, HEAP_FLAG, WORKER_FILE, childCfg], {
+        } else if (zeroConfPre.length) {
+            // LINUX with the zero-config floor certified but no RLIMIT_AS wrapper on this host (no usable
+            // `sh`, or probeOsMemoryCap failed): launch node THROUGH the shim directly, the same way the
+            // Seatbelt branch above does. perl applies Landlock
+            // and seccomp to its own process and then execve()s node, so the fork-style IPC fd survives —
+            // the property probeLinuxZeroConf() exists to prove and refuses to report 'active' without.
+            //
+            // child.pid is NODE here, not a wrapper, because the exec replaces perl rather than forking.
+            // The reactive RSS poll can therefore read /proc/<child.pid>/statm directly.
+            child = spawn(zeroConfPre[0], [...zeroConfPre.slice(1), process.execPath, ...execArgv, HEAP_FLAG, WORKER_FILE, childCfg], {
                 stdio: childStdio,
                 serialization: 'advanced',
                 env: workerEnv,
@@ -1689,7 +1430,12 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
                 serialization: 'advanced',
             });
         }
-        if (bpfFd >= 0) { try { require('fs').closeSync(bpfFd); } catch { /* parent's dup; the child kept its own */ } }
+        if (seatbeltRuntime) {
+            require('./sandbox-macos').armSeatbeltBootstrap(child, seatbeltRuntime).catch((error: any) => {
+                console.error(`[Sandbox] Seatbelt one-shot exec bootstrap failed for '${logSafe(slug)}': ${logSafe(error && error.message)}`);
+                try { child.kill('SIGKILL'); } catch { /* */ }
+            });
+        }
         // Record the pid as OURS-and-alive from the moment it exists (see livePids): the registry entry
         // below is not evidence of a running process, and every teardown path needs an answer that is.
         const spawnedPid: number | undefined = child.pid;
@@ -1732,29 +1478,10 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
                 try { child.send(m); return true; } catch { return false; }
             },
             terminate: () => {
-                // F-05: on the kernel-hardened, NON-cgroup path child.pid is the OUTER bwrap and node runs as
-                // a grandchild; enumerate the subtree BEFORE the SIGKILL below, because once the outer dies a
-                // grandchild reparented mid-bootstrap is no longer reachable via our /proc children walk.
-                // cgroup mode kills the whole scope (fully covered); plain fork => child.pid IS the process;
-                // non-Linux => no-op — so every path except hardened-Linux-non-cgroup is byte-identical.
-                const hardenedOrphanRisk = !cgroupUnit && hardened && process.platform === 'linux' && !!child.pid;
-                const subtree = hardenedOrphanRisk ? procSubtreePids(child.pid) : [];
                 try { child.kill('SIGKILL'); } catch { /* already gone */ }
                 // cgroup mode: child.pid is systemd-run; also kill the SCOPE so the node grandchild can't
                 // outlive it (scopes are manager-tracked, not tied to systemd-run's lifetime).
                 if (cgroupUnit) { try { spawn('systemctl', ['--user', 'kill', '--signal=SIGKILL', cgroupUnit], { stdio: 'ignore' }); } catch { /* */ } }
-                else if (hardenedOrphanRisk) {
-                    for (const pid of subtree) { try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ } }
-                    // A grandchild bwrap forks in the tiny window after enumeration may be attached only
-                    // briefly; re-sweep the (lingering) subtree a couple of times, unref'd so it never holds
-                    // the loop open. The cgroup path is the complete fix; this narrows the non-cgroup race.
-                    let sweeps = 0;
-                    const t = setInterval(() => {
-                        for (const pid of procSubtreePids(child.pid)) { try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ } }
-                        if (++sweeps >= 3) clearInterval(t);
-                    }, 50);
-                    if (t.unref) t.unref();
-                }
             },
             on: child.on.bind(child),
             _child: child,
@@ -1795,24 +1522,13 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
         };
         if (!cgroupOk && process.platform === 'linux' && child.pid) {
             // Cheapest path: synchronous /proc read on the host loop (field 2 of statm = resident pages).
-            // Under kernel hardening the spawned child is `bwrap` and the real node runs as a DESCENDANT in
-            // its PID namespace, so we sum the rss of the WHOLE bwrap subtree (probe-verified) — otherwise
-            // the poll would read bwrap's ~2 MB rss and the resident cap would stop biting (a regression).
-            // When hardening is off this is byte-identical to before: a single statm read of child.pid.
+            // The Landlock shim execs Node in place, so child.pid is always the process being measured.
             const fsmod = require('fs');
             const rssBytesOf = (pid: number): number => {
                 try { return (parseInt(String(fsmod.readFileSync(`/proc/${pid}/statm`, 'utf8')).split(' ')[1], 10) || 0) * 4096; } catch { return 0; }
             };
-            const childrenOf = (pid: number): number[] => {
-                try { return String(fsmod.readFileSync(`/proc/${pid}/task/${pid}/children`, 'utf8')).trim().split(/\s+/).filter(Boolean).map(Number); } catch { return []; }
-            };
-            const subtreeRss = (root: number): number => {
-                let total = 0; const stack = [root]; const seen = new Set<number>();
-                while (stack.length) { const pid = stack.pop() as number; if (seen.has(pid)) continue; seen.add(pid); total += rssBytesOf(pid); for (const k of childrenOf(pid)) stack.push(k); }
-                return total;
-            };
             rssPoll = setInterval(() => {
-                try { killOverBudget(hardened ? subtreeRss(child.pid) : rssBytesOf(child.pid)); } catch { /* child gone / statm unavailable */ }
+                try { killOverBudget(rssBytesOf(child.pid)); } catch { /* child gone / statm unavailable */ }
             }, 250);
             if (rssPoll.unref) rssPoll.unref();
         } else if ((process.platform === 'win32' || process.platform === 'darwin') && pollPid) {
@@ -2599,27 +2315,33 @@ module.exports = {
     listIsolates,
     getLivePids, awaitIsolateStopped, awaitIsolateSettled,
     getIsolateStatus, getAllIsolateStatuses,
-    assignProcessToJobObject, probeJobObjectCap, getSandboxHardeningState, getSandboxNetnsState,
+    assignProcessToJobObject, probeJobObjectCap, getSandboxHardeningState,
     getPermissionModelState, probePermissionModel, probeKernelHardening,
-    // THIS platform's kernel confinement layer (bwrap / AppContainer / Seatbelt / none). Reported
-    // SEPARATELY from the two bwrap-specific fields above, which keep their exact historical meaning —
-    // see the section comment above platformLaunchDecision for why widening them would have been a lie
-    // to every operator already reading `sandbox_hardening_state`.
+    // This platform's native kernel confinement layer (Landlock / AppContainer / Seatbelt / none).
     probePlatformConfinement, getSandboxPlatformState, getSandboxPlatformNetworkState,
     getSandboxPlatformConfinement, platformKernelMechanism,
+    // Linux-specific diagnostic aliases.
+    getLinuxZeroConfState, linuxFloorInForce,
     // Derived: TRUE only in the dangerous "the operator turned this layer ON and it is not there" state.
     // 'unsupported' (no such mechanism) and 'disabled' (not asked for) are chosen postures, not failures.
     isSandboxPlatformConfinementDegraded: () => sandboxPlatformState === 'degraded',
-    // Derived admin-facing flag: TRUE only in the dangerous "looks secure but isn't" state — kernel
-    // hardening was ENABLED but the bwrap probe FAILED, so isolated plugins run WITHOUT the OS backstop.
+    // Derived admin-facing flag: TRUE only in the dangerous "looks secure but isn't" state.
     // 'unsupported' (non-Linux) and 'disabled' (opt-out) are known/chosen postures, not degradation.
     isSandboxHardeningDegraded: () => sandboxHardeningState === 'degraded',
-    __bwrapProfile: bwrapProfile,
     // The FALLBACK is the property most likely to break and the one that would hurt real users, so the
     // decision that produces it is exported as a pure function and pinned by
     // backend/src/tests/sandbox-platform-fallback.test.ts on every host, including the ones where these
     // layers can never be active.
     __platformLaunchDecision: platformLaunchDecision,
+    __nativeSandboxRequired: nativeSandboxRequired,
+    // The Linux floor choice, exported as a PURE function for the same reason and pinned by
+    // backend/src/tests/sandbox-linux-zeroconf-wiring.test.ts on every host — including Windows and
+    // macOS boxes, where neither Linux floor can ever exist and the fallback is therefore the ONLY
+    // behaviour there is to assert. LINUX_FLOOR_LAYERS is exported WITH it because the test's
+    // exhaustiveness gate reads it: a layer added to that list and to nothing else turns the suite RED
+    // instead of quietly becoming a floor with no argv.
+    __linuxFloorDecision: linuxFloorDecision,
+    __linuxFloorLayers: LINUX_FLOOR_LAYERS,
     // Diagnostic: is this slug marked as an INTENTIONAL stop, i.e. is there a pending child exit that
     // must not be supervised as a crash? The mark is consumed by that exit, so a mark with no child
     // behind it is a leak — it never goes away and it silences the supervisor for the NEXT child.

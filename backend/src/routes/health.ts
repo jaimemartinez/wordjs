@@ -49,32 +49,36 @@ router.get('/', async (req: Request, res: Response) => {
  *       nothing will recover without a configuration fix.
  *
  *
- *       `sandbox.kernel` reports the KERNEL confinement layer of the platform this host is running on,
- *       and it exists because `sandbox.hardening` could not: that field is about bubblewrap
- *       specifically, so off Linux it reads `unsupported` whether or not anything else is confining the
- *       plugin. `kernel.mechanism` is what this OS HAS (`bwrap` on Linux, `appcontainer` on Windows,
- *       `seatbelt` on macOS, `none` elsewhere) and `kernel.state` is what this HOST actually got. The
- *       two together separate situations that demand opposite actions and that a single `unsupported`
- *       used to blur:
+ *       `sandbox.kernel` reports the native confinement layer (`landlock`, `appcontainer`, `seatbelt`,
+ *       or `none`) and the probe result on this host:
  *
  *
  *       * `mechanism: none` + `state: unsupported` — this platform has no such layer; there is nothing
  *         to install or enable.
- *       * `mechanism: appcontainer|seatbelt` + `state: disabled` — the layer exists on this host and
- *         nobody turned it on (`sandbox.useAppContainer` / `sandbox.useSeatbelt`).
+ *       * `state: disabled` — an operator explicitly opted out of the native layer.
  *       * `mechanism: <any>` + `state: degraded` — it WAS turned on and its probe could not demonstrate
  *         confinement here, so plugins run without it. This is the one state that needs a human; it is
  *         also surfaced as the boolean `sandbox.kernelDegraded`.
- *       * `state: active` — a real child, launched through the real profile, was actually refused the
- *         network and an out-of-zone read on THIS host. No layer reports `active` on any weaker
- *         evidence.
+ *       * `state: active` — real children proved filesystem/process confinement and both network-policy
+ *         shapes. No layer reports `active` on weaker evidence.
  *
  *
- *       `kernel.appliesTo` is stated rather than implied because it differs: bwrap wraps every isolated
- *       child, while the AppContainer and Seatbelt layers are applied only to plugins WITHOUT the
- *       `network` grant (a zero-capability container cannot hold a socket, and the network-permitting
- *       Seatbelt profile is a shape no probe has certified). For those plugins, egress remains bounded
- *       by the in-process guard — the same posture Linux takes when it withholds `--unshare-net`.
+ *       `kernel.appliesTo` is every isolated production plugin on every supported OS. A network grant
+ *       changes only egress; that platform's filesystem/process boundary stays active.
+ *
+ *
+ *       `sandbox.kernel.floor` is Linux-only. `landlock+seccomp` needs no user namespace, sysctl or
+ *       separately installed sandbox executable. Landlock scopes reads/writes and cross-process access;
+ *       seccomp removes process-creation/anonymous-executable/dangerous syscalls, denies every new socket
+ *       without a network grant, and admits only AF_INET/AF_INET6 client sockets with one.
+ *
+ *
+ *       * `floor.inForce: landlock+seccomp` — the zero-configuration Linux layer was certified.
+ *       * `floor.inForce: none` — there is genuinely no kernel floor. This is the state that used to be
+ *         reported identically to the one above it, and it is the only one that is a call to action.
+ *
+ *
+ *       `sandbox.useKernelHardening: false` explicitly turns the Linux layer off.
  *     tags: [Health]
  *     security:
  *       - bearerAuth: []
@@ -103,11 +107,11 @@ router.get('/', async (req: Request, res: Response) => {
  *                       example: linux
  *                     hardening:
  *                       type: string
- *                       description: bubblewrap ONLY (Linux); 'unsupported' elsewhere by definition.
+ *                       description: Native sandbox state for this operating system.
  *                       enum: [unknown, unsupported, disabled, active, degraded]
- *                     netns:
+ *                     network:
  *                       type: string
- *                       description: bwrap --unshare-net ONLY (Linux); 'unsupported' elsewhere.
+ *                       description: Native network-policy probe state.
  *                       enum: [unknown, unsupported, disabled, active, degraded]
  *                     permission:
  *                       type: string
@@ -121,7 +125,7 @@ router.get('/', async (req: Request, res: Response) => {
  *                       properties:
  *                         mechanism:
  *                           type: string
- *                           enum: [bwrap, appcontainer, seatbelt, none]
+ *                           enum: [landlock, appcontainer, seatbelt, none]
  *                         state:
  *                           type: string
  *                           enum: [unknown, unsupported, disabled, active, degraded]
@@ -137,6 +141,24 @@ router.get('/', async (req: Request, res: Response) => {
  *                             state:
  *                               type: string
  *                               enum: [unknown, unsupported, disabled, active, degraded]
+ *                         floor:
+ *                           type: object
+ *                           description: LINUX ONLY. Landlock/seccomp floor state.
+ *                           properties:
+ *                             inForce:
+ *                               type: string
+ *                               enum: [landlock+seccomp, none]
+ *                             layers:
+ *                               type: object
+ *                               properties:
+ *                                 landlock:
+ *                                   type: object
+ *                                   properties:
+ *                                     state:
+ *                                       type: string
+ *                                       enum: [unknown, unsupported, disabled, active, degraded]
+ *                                     note:
+ *                                       type: string
  *                 purge:
  *                   type: object
  *                   properties:

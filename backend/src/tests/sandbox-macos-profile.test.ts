@@ -15,6 +15,8 @@
  */
 const { test, describe } = require('node:test');
 const assert = require('node:assert');
+const fs = require('node:fs');
+const path = require('node:path');
 
 const {
     buildSeatbeltProfile,
@@ -22,6 +24,9 @@ const {
     sbplPath,
     probeSeatbelt,
     SEATBELT_BIN,
+    SEATBELT_BOOTSTRAP_FILE,
+    auditProfile,
+    __probeSrc,
 } = require('../core/sandbox-macos');
 
 const APP_ROOT = '/srv/wordjs/backend';
@@ -71,10 +76,39 @@ describe('SBPL profile skeleton', () => {
             'deny must precede the carve-out — SBPL resolves to the LAST matching rule');
     });
 
-    test('the app root is granted READ only, never write', () => {
+    test('the legacy builder fallback grants appRoot read-only', () => {
         const p = build();
         assert.ok(p.includes(`(allow file-read* (subpath "${APP_ROOT}"))`), 'the child must be able to read the app root');
         assert.ok(!p.includes(`file-write* (subpath "${APP_ROOT}")`), 'the app root must never be writable as a whole');
+    });
+
+    test('the production spelling reads only core, dependencies and this plugin — never appRoot', () => {
+        const roots = [`${APP_ROOT}/dist/core`, `${APP_ROOT}/node_modules`, `${APP_ROOT}/plugins/acme`];
+        const p = build({ readOnlyDirs: roots });
+        for (const root of roots) assert.ok(p.includes(`(allow file-read* (subpath "${root}"))`));
+        assert.ok(!p.includes(`(allow file-read* (subpath "${APP_ROOT}"))`), 'config, DB and sibling plugins must stay unreadable');
+        assert.ok(!p.includes(`${APP_ROOT}/wordjs-config.json`));
+    });
+
+    test('sysctl is an exact-name allowlist with no process argv/environment aperture', () => {
+        const p = build({ readOnlyDirs: [`${APP_ROOT}/dist/core`] });
+        assert.ok(p.includes('(sysctl-name "hw.ncpu")'));
+        assert.ok(p.includes('(sysctl-name "kern.osrelease")'));
+        assert.ok(!/^\(allow sysctl-read\)$/m.test(p), 'blanket sysctl-read exposes KERN_PROCARGS2');
+        assert.ok(!/kern\.procargs/i.test(p.replace(/^;;.*$/gm, '')), 'the process-argument MIB must be absent from rules');
+        assert.deepStrictEqual(auditProfile(p), []);
+        assert.ok(auditProfile(`${p}\n(allow sysctl-read)`).some((x: string) => x.includes('blanket')));
+    });
+
+    test('the only executable identity is one-shot and deleted before plugin code is released', () => {
+        const source = fs.readFileSync(path.resolve(__dirname, '../core/sandbox-macos.ts'), 'utf8');
+        const bootstrap = fs.readFileSync(SEATBELT_BOOTSTRAP_FILE, 'utf8');
+        assert.match(source, /prepareSeatbeltRuntime/);
+        assert.match(source, /disposeSeatbeltRuntime\(runtime\)[\s\S]*existsSync\(runtime\.exe\)/,
+            'the host must unlink and verify the executable before sending the release marker');
+        assert.match(bootstrap, /writeSync\(readyFd[\s\S]*readSync\(releaseFd/,
+            'the preload must block synchronously before the plugin worker can load');
+        assert.match(bootstrap, /process\.exit\(126\)/, 'a broken handshake must fail closed');
     });
 });
 
@@ -111,7 +145,7 @@ describe('writable zones', () => {
 describe('network policy', () => {
     test('denyNetwork emits an explicit (deny network*) and no outbound grant', () => {
         const p = build({ denyNetwork: true });
-        assert.ok(/^\(deny network\*\)$/m.test(p), 'the --unshare-net analogue must be stated explicitly');
+        assert.ok(/^\(deny network\*\)$/m.test(p), 'the native network denial must be stated explicitly');
         assert.ok(!/\(allow network-outbound\)/.test(p), 'a net-denied plugin must have no outbound grant');
         assert.ok(!/resolv\.conf/.test(p), 'a net-denied plugin has no reason to read DNS configuration');
     });
@@ -197,7 +231,7 @@ describe('sandbox-exec argv', () => {
         assert.deepStrictEqual(out.slice(2), args, 'argv order is load-bearing — cfg must stay at process.argv[2]');
     });
 
-    test('the binary itself is not part of the argv (the caller prepends it, as with bwrap)', () => {
+    test('the binary itself is not part of the argv (the caller prepends it)', () => {
         const out = seatbeltArgs('/tmp/p.sb', ['/usr/bin/node']);
         assert.ok(!out.includes(SEATBELT_BIN), 'seatbeltArgs returns arguments, not a command line');
         assert.strictEqual(SEATBELT_BIN, '/usr/bin/sandbox-exec', 'absolute literal — never PATH-resolved');
@@ -205,6 +239,10 @@ describe('sandbox-exec argv', () => {
 });
 
 describe('probe', () => {
+    test('the embedded Seatbelt probe remains valid JavaScript', () => {
+        assert.doesNotThrow(() => new Function(__probeSrc));
+    });
+
     test('reports unsupported off macOS, and never claims active', { skip: process.platform === 'darwin' ? 'this assertion is about the non-macOS path' : false }, async () => {
         const state = await probeSeatbelt();
         assert.strictEqual(state, 'unsupported', 'a non-macOS host gets no Seatbelt and must say so');
