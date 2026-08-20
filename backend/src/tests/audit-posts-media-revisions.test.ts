@@ -54,6 +54,7 @@ const Post = require('../models/Post');
 const Media = require('../models/Media');
 const { saveRevision, getRevisions, countRevisions } = require('../core/revisions');
 const { addAction, removeAction } = require('../core/hooks');
+const { MAX_META_VALUE_DEPTH } = require('../core/sanitize-meta');
 
 const express = require('express');
 const cookieParser = require('cookie-parser');
@@ -123,6 +124,12 @@ async function seedAttachment(authorId: number, attachedFile: string, sizes: Rec
 const rawMeta = async (postId: number, key: string): Promise<string | null> => {
     const row = await dbAsync.get('SELECT meta_value FROM post_meta WHERE post_id = ? AND meta_key = ?', [postId, key]);
     return row ? row.meta_value : null;
+};
+
+const overDeepPuckTree = () => {
+    let nested: any = 'leaf';
+    for (let i = 0; i < MAX_META_VALUE_DEPTH + 2; i++) nested = { child: nested };
+    return { content: [], root: { props: { nested } } };
 };
 
 const touch = (p: string, body = 'canary') => { fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, body); };
@@ -288,12 +295,90 @@ describe('#7 POST /posts/:id/meta uses the SAME gate as PUT /posts/:id', () => {
         assert.ok(String(snap).includes('"v1"'), 'the revision must capture the value being overwritten');
     });
 
+    test('a content-meta write fires post_updated only after the new value is readable', async () => {
+        const draft = await seedPost(U.contributor, 'draft');
+        await Post.updateMeta(draft, '_puck_data', { content: [], root: { props: { t: 'v1' } } });
+        let observed: string | null = null;
+        const listener = async (id: number) => {
+            if (id === draft) observed = await rawMeta(id, '_puck_data');
+        };
+        addAction('post_updated', listener);
+        try {
+            const res = await as('contributor', 'post', `/posts/${draft}/meta`)
+                .send({ key: '_puck_data', value: { content: [], root: { props: { t: 'v2' } } } });
+            assert.strictEqual(res.status, 200);
+            assert.ok(String(observed).includes('"v2"'), 'post_updated ran before Post.updateMeta committed');
+        } finally {
+            removeAction('post_updated', listener);
+        }
+    });
+
     test('a NON-content key does not churn the revision history', async () => {
         const draft = await seedPost(U.contributor, 'draft');
         const before = await countRevisions(draft);
         const res = await as('contributor', 'post', `/posts/${draft}/meta`).send({ key: '_wjs_review_comments', value: [] });
         assert.strictEqual(res.status, 200);
         assert.strictEqual(await countRevisions(draft), before, 'only revisionable keys snapshot');
+    });
+});
+
+describe('structured metadata limits reject the whole logical write', () => {
+    test('POST /posts/:id/meta returns 413 without changing meta or creating a revision', async () => {
+        const draft = await seedPost(U.contributor, 'draft');
+        await Post.updateMeta(draft, '_puck_data', { content: [], root: { props: { t: 'keep' } } });
+        const revisionsBefore = await countRevisions(draft);
+
+        const res = await as('contributor', 'post', `/posts/${draft}/meta`)
+            .send({ key: '_puck_data', value: overDeepPuckTree() });
+
+        assert.strictEqual(res.status, 413);
+        assert.strictEqual(res.body.code, 'rest_meta_value_too_complex');
+        assert.ok(String(await rawMeta(draft, '_puck_data')).includes('"keep"'));
+        assert.strictEqual(await countRevisions(draft), revisionsBefore);
+    });
+
+    test('the same bound covers non-Puck/plugin metadata before JSON.stringify', async () => {
+        const draft = await seedPost(U.contributor, 'draft');
+        const res = await as('contributor', 'post', `/posts/${draft}/meta`)
+            .send({ key: '_wjs_review_comments', value: overDeepPuckTree() });
+
+        assert.strictEqual(res.status, 413);
+        assert.strictEqual(res.body.code, 'rest_meta_value_too_complex');
+        assert.strictEqual(await rawMeta(draft, '_wjs_review_comments'), null);
+    });
+
+    test('a JSON-string Puck tree cannot bypass the same 413 boundary', async () => {
+        const draft = await seedPost(U.contributor, 'draft');
+        const res = await as('contributor', 'post', `/posts/${draft}/meta`)
+            .send({ key: '_puck_data', value: JSON.stringify(overDeepPuckTree()) });
+
+        assert.strictEqual(res.status, 413);
+        assert.strictEqual(res.body.code, 'rest_meta_value_too_complex');
+        assert.strictEqual(await rawMeta(draft, '_puck_data'), null);
+    });
+
+    test('PUT rejects metadata before changing the post row or snapshotting it', async () => {
+        const draft = await seedPost(U.contributor, 'draft');
+        const before = await dbAsync.get('SELECT post_title FROM posts WHERE id = ?', [draft]);
+        const revisionsBefore = await countRevisions(draft);
+
+        const res = await as('contributor', 'put', `/posts/${draft}`)
+            .send({ title: 'must not land', meta: { plugin_document: overDeepPuckTree() } });
+
+        assert.strictEqual(res.status, 413);
+        const after = await dbAsync.get('SELECT post_title FROM posts WHERE id = ?', [draft]);
+        assert.strictEqual(after.post_title, before.post_title);
+        assert.strictEqual(await countRevisions(draft), revisionsBefore);
+    });
+
+    test('POST /posts validates metadata before inserting a partially-created post', async () => {
+        const title = `complexity-${Date.now()}-${Math.random()}`;
+        const res = await as('contributor', 'post', '/posts')
+            .send({ title, status: 'draft', meta: { _puck_data: overDeepPuckTree() } });
+
+        assert.strictEqual(res.status, 413);
+        const row = await dbAsync.get('SELECT id FROM posts WHERE post_title = ?', [title]);
+        assert.strictEqual(row, undefined, 'the rejected request left a partial post row');
     });
 });
 

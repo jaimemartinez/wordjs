@@ -42,7 +42,7 @@ const database = require('../config/database');
 const roles = require('../core/roles');
 const Post = require('../models/Post');
 const postTypes = require('../core/post-types');
-const { saveRevision, getRevisions, restoreRevision } = require('../core/revisions');
+const { saveRevision, getRevisions, restoreRevision, isRevisionableMeta } = require('../core/revisions');
 const { isProtectedPostMeta } = require('../core/protected-meta');
 
 const express = require('express');
@@ -206,6 +206,45 @@ describe('core/protected-meta compares independently of the column collation', (
             .send({ key: '_WP_ATTACHED_FILE', value: '../data/wordjs.db' });
         assert.strictEqual(res.status, 403, `expected 403, got ${res.status}`);
         assert.strictEqual(await rawMeta(attId, '_wp_attached_file'), '2026/08/case.png');
+    });
+
+    test('revisionable author meta follows that same collation contract', () => {
+        for (const key of ['_puck_data', '_PUCK_DATA', '_puck_datá', '_puck_data ']) {
+            assert.strictEqual(isRevisionableMeta(key), true, `${key} would overwrite content without a snapshot`);
+        }
+        assert.strictEqual(isRevisionableMeta('_wjs_review_comments'), false);
+    });
+
+    test('the non-content exception follows the same collation contract', async () => {
+        const published = await seedPost(U.contributor, 'publish');
+        const res = await as('contributor', 'post', `/posts/${published}/meta`).send({
+            key: '_WJS_REVIEW_COMMENTS',
+            value: [{ body: 'driver-independent' }],
+        });
+
+        assert.strictEqual(res.status, 200);
+        assert.strictEqual(res.body.key, '_wjs_review_comments');
+        assert.ok(String(await rawMeta(published, '_wjs_review_comments')).includes('driver-independent'));
+        assert.strictEqual(await rawMeta(published, '_WJS_REVIEW_COMMENTS'), null);
+    });
+
+    test('the route stores a collated _puck_data alias canonically, sanitized and revisioned', async () => {
+        const draft = await seedPost(U.authorA, 'draft');
+        const res = await as('authorA', 'post', `/posts/${draft}/meta`).send({
+            key: '_PUCK_DATA',
+            value: {
+                content: [{ type: 'Text', props: { text: '<img src=x onerror=alert(1)><b>ok</b>' } }],
+                root: { props: {} },
+            },
+        });
+
+        assert.strictEqual(res.status, 200);
+        assert.strictEqual(res.body.key, '_puck_data');
+        const stored = String(await rawMeta(draft, '_puck_data'));
+        assert.ok(stored.includes('<b>ok</b>'));
+        assert.ok(!stored.includes('onerror'));
+        assert.strictEqual(await rawMeta(draft, '_PUCK_DATA'), null, 'SQLite got a second driver-specific alias row');
+        assert.strictEqual((await getRevisions(draft, { limit: 5 })).length, 1, 'the alias write skipped its snapshot');
     });
 });
 

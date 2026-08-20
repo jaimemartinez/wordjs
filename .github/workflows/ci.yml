@@ -111,6 +111,7 @@ jobs:
           backend/src/tests/sandbox-macos-profile.test.ts
           backend/src/tests/sandbox-platform-fallback.test.ts
           backend/src/tests/sandbox-windows-appcontainer.test.ts
+          backend/src/tests/sanitize-meta-complexity.test.ts
           backend/src/tests/sanitize-meta-prototype-keys.test.ts
           backend/src/tests/settings-notices-route.test.ts
           backend/src/tests/slug-length-bound.test.ts

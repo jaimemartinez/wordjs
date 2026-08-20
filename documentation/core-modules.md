@@ -285,6 +285,8 @@ The visual editor's page tree (`_puck_data`) is stored verbatim in `post_meta` a
 
 ### Logic
 *   `sanitizeMetaValue(key, value)` targets `_puck_data`. It sanitizes an object tree, and **(XSS-02)** also parses a `_puck_data` sent as a **JSON string** → sanitizes → re-stringifies (it was previously object-only).
+*   `assertMetaValueWithinLimits(value)` bounds every structured post-meta value before recursive sanitization/`JSON.stringify` (128 levels, 100,000 values, no cycles). The three REST write surfaces validate before mutating anything and return `413 rest_meta_value_too_complex` on refusal.
+*   Core metadata names are compared through `protected-meta.canonicalMetaKey`, matching MySQL/MariaDB's case/accent-insensitive, PAD-SPACE collation. A spelling such as `_PUCK_DATA` therefore cannot bypass `_puck_data` sanitization/revisioning or create driver-dependent rows.
 *   `sanitizePuckTree` walks the structure and sanitizes only **string leaves** (preserving JSON shape):
     *   **HTML-bearing fields** (`PUCK_HTML_FIELDS`: `content`/`html`/`text`/`title`/`heading`/`description`/`caption`/`body`) run through the `sanitize-html` body sanitizer.
     *   **Every other** string leaf runs **value-based** through `safePuckUrl`, which strips control-char obfuscation then blanks values starting with `javascript:`/`data:`/`vbscript:`/`file:` while preserving relative paths, fragments, labels, and classes. So a URL prop **not** in any key-name allowlist (CTABanner/PricingTable `buttonLink`, menu targets) cannot carry a script URL **(XSS-01)**.

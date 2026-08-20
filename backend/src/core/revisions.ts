@@ -6,6 +6,7 @@
 const crypto = require('crypto');
 const { dbAsync } = require('../config/database');
 const { diffText, diffStats } = require('./text-diff');
+const { canonicalMetaKey } = require('./protected-meta');
 
 /**
  * THE VERSIONED META KEYS — the exact set a snapshot copies and a restore puts back.
@@ -36,7 +37,7 @@ const REVISIONABLE_SET: Set<string> = new Set(REVISIONABLE_POST_META);
 
 /** Is `key` a meta key a revision captures (and therefore one whose write deserves a snapshot)? */
 function isRevisionableMeta(key: unknown): boolean {
-    return typeof key === 'string' && REVISIONABLE_SET.has(key);
+    return typeof key === 'string' && REVISIONABLE_SET.has(canonicalMetaKey(key));
 }
 
 /**

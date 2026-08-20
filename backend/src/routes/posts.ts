@@ -18,7 +18,13 @@ const sanitizeHtml = require('sanitize-html');
 // shared core module so non-route write paths (e.g. the WXR importer) sanitize meta through the EXACT
 // same code instead of bypassing it. Behavior here is unchanged — these are the same functions that
 // previously lived inline in this file.
-const { sanitize, sanitizeMetaValue } = require('../core/sanitize-meta');
+const {
+    sanitize,
+    sanitizeMetaValue,
+    assertMetaValueWithinLimits,
+    isMetaValueComplexityError,
+} = require('../core/sanitize-meta');
+const { doAction } = require('../core/hooks');
 
 // capsFor / capsForType resolve a post type to its capability family (post → edit_posts, page →
 // edit_pages, custom → edit_<type>s, plus the *_published_* / *_others_* variants). They live in a
@@ -35,7 +41,7 @@ const { capsFor, capsForType, canEditPostRecord, isRestExposedPostType } = requi
 // which Media.delete turns into an unlink target) and the other server-owned bookkeeping keys.
 // metaKeyProblem is the FORM gate every meta writer in this file shares (type, emptiness, the
 // prototype-manipulating names, the column's length bound) — see core/protected-meta.
-const { isProtectedPostMeta, metaKeyProblem } = require('../core/protected-meta');
+const { isProtectedPostMeta, metaKeyProblem, canonicalMetaKey } = require('../core/protected-meta');
 
 // The slug PRODUCER. A slug arriving in a request body is a segment of the site's public URL space, so
 // it is produced here rather than accepted here — the same function PUT already applied through
@@ -83,6 +89,46 @@ function canEditPostIgnoringPublished(user: any, p: any): boolean {
 const NON_CONTENT_META_KEYS: Set<string> = new Set([
     '_wjs_review_comments',
 ]);
+
+/** Keep WordJS-owned keys driver-independent while preserving plugin keys byte-for-byte. */
+function storageMetaKey(key: string): string {
+    const canonical = canonicalMetaKey(key);
+    return isRevisionableMeta(canonical) || NON_CONTENT_META_KEYS.has(canonical) ? canonical : key;
+}
+
+/**
+ * Sanitize a request's writable metadata BEFORE the route mutates a post or creates a revision.
+ * Besides keeping the three write surfaces on one policy, the ordering is important: structural
+ * validation of `_puck_data` can reject an adversarial tree, and that rejection must not leave a
+ * half-created post or a title update whose accompanying page tree was never stored.
+ */
+function sanitizeWritableMetaBag(meta: any): Array<[string, any]> {
+    if (!meta || typeof meta !== 'object' || Array.isArray(meta)) return [];
+    const entries: Array<[string, any]> = [];
+    for (const [key, value] of Object.entries(meta)) {
+        if (metaKeyProblem(key) !== null || isProtectedPostMeta(key)) continue;
+        // Core/versioned keys have ONE spelling on disk on every driver. Without this, SQLite creates
+        // `_PUCK_DATA` as a second inert row while MySQL updates `_puck_data` because its collation is
+        // case/accent-insensitive — the same request has different meaning by database.
+        const storedKey = storageMetaKey(key);
+        // Every structured meta value eventually reaches Post.updateMeta → JSON.stringify. Bound the
+        // class here, not only `_puck_data`, so another plugin/editor key cannot recreate the overflow.
+        if (value && typeof value === 'object') assertMetaValueWithinLimits(value);
+        entries.push([storedKey, sanitizeMetaValue(storedKey, value)]);
+    }
+    return entries;
+}
+
+/** Translate the sanitizer's branded availability bound into a stable REST response. */
+function rejectOverComplexMeta(res: Response, error: any): boolean {
+    if (!isMetaValueComplexityError(error)) return false;
+    res.status(413).json({
+        code: 'rest_meta_value_too_complex',
+        message: error.message,
+        data: { status: 413 }
+    });
+    return true;
+}
 
 /**
  * Is this post type INTERNAL — registered, but marked `showInRest: false`?
@@ -698,6 +744,16 @@ router.post('/', authenticate, asyncHandler(async (req: any, res: Response) => {
     // dropped rather than forwarded (absent → the model stamps "now", the same as any plain draft).
     const requestedDate = mayPublish ? date : undefined;
 
+    // Validate/sanitize the complete bag BEFORE Post.create. A rejected `_puck_data` tree must not
+    // leave behind a post row with only half of the request applied.
+    let safeMetaEntries: Array<[string, any]>;
+    try {
+        safeMetaEntries = sanitizeWritableMetaBag(meta);
+    } catch (error) {
+        if (rejectOverComplexMeta(res, error)) return;
+        throw error;
+    }
+
     const post = await Post.create({
         authorId: req.user.id,
         title: sanitizeHtml(title),
@@ -735,20 +791,10 @@ router.post('/', authenticate, asyncHandler(async (req: any, res: Response) => {
     // A BAG IS A PLAIN OBJECT. `typeof [] === 'object'`, so an ARRAY body reached Object.entries and
     // wrote meta keys '0', '1', … — the same "the shape was assumed" class as the string fields above,
     // one container up.
-    if (meta && typeof meta === 'object' && !Array.isArray(meta)) {
-        for (const [key, value] of Object.entries(meta)) {
-            // SECURITY: server-owned keys are SKIPPED, never written — same shape models/User.ts uses for
-            // user_meta. `_wp_attached_file` names the file Media.delete() unlinks, so a route that
-            // forwards req.body.meta into a per-key writer is an arbitrary-file-delete primitive.
-            // metaKeyProblem is the FORM half of the same filter (`__proto__` & friends, empty keys,
-            // the column's length bound) — the single-key route below rejects; the bag skips, because
-            // a bag is a batch and one bad name must not lose the rest of the save.
-            if (metaKeyProblem(key) !== null) continue;
-            if (isProtectedPostMeta(key)) continue;
-            // SECURITY: sanitize HTML/URL-bearing meta (e.g. _puck_data) so a malicious block can't
-            // store XSS that the public site later renders.
-            await Post.updateMeta(post.id, key, sanitizeMetaValue(key, value));
-        }
+    for (const [key, value] of safeMetaEntries) {
+        // The skip/protection checks and sanitization already ran before Post.create (above), so this
+        // loop cannot turn a validation failure into a partially-created record.
+        await Post.updateMeta(post.id, key, value);
     }
 
     // Save initial revision
@@ -890,6 +936,16 @@ router.put('/:id', authenticate, asyncHandler(async (req: any, res: Response) =>
     // dropping it leaves the stored date exactly as it was.
     const requestedDate = mayPublish ? date : undefined;
 
+    // The metadata belongs to this same logical write. Sanitize it before the recovery snapshot and
+    // before Post.update, otherwise rejecting an over-complex page tree would still change the row.
+    let safeMetaEntries: Array<[string, any]>;
+    try {
+        safeMetaEntries = sanitizeWritableMetaBag(meta);
+    } catch (error) {
+        if (rejectOverComplexMeta(res, error)) return;
+        throw error;
+    }
+
     // SNAPSHOT BEFORE THE WRITE — the same instant POST /posts/:id/meta snapshots at.
     //
     // The two write surfaces disagreed: the meta route captured the state being DESTROYED while this
@@ -952,15 +1008,8 @@ router.put('/:id', authenticate, asyncHandler(async (req: any, res: Response) =>
     // A BAG IS A PLAIN OBJECT. `typeof [] === 'object'`, so an ARRAY body reached Object.entries and
     // wrote meta keys '0', '1', … — the same "the shape was assumed" class as the string fields above,
     // one container up.
-    if (meta && typeof meta === 'object' && !Array.isArray(meta)) {
-        for (const [key, value] of Object.entries(meta)) {
-            // SECURITY: server-owned keys are SKIPPED — the twin of the same filter in POST / above.
-            // Closing only one of the two bags would leave the arbitrary-file-delete source open.
-            if (metaKeyProblem(key) !== null) continue;
-            if (isProtectedPostMeta(key)) continue;
-            // SECURITY: sanitize HTML/URL-bearing meta (e.g. _puck_data) on write — see sanitizeMetaValue.
-            await Post.updateMeta(postId, key, sanitizeMetaValue(key, value));
-        }
+    for (const [key, value] of safeMetaEntries) {
+        await Post.updateMeta(postId, key, value);
     }
 
     // (The revision snapshot is taken BEFORE the write — see the block above Post.update.)
@@ -1110,7 +1159,10 @@ router.post('/:id/meta', authenticate, asyncHandler(async (req: any, res: Respon
     // the editorial review thread, and a contributor could no longer answer a reviewer on their own
     // entry once it was published. The allowlist is explicit and narrow — a key is on it only when
     // writing it changes nothing a visitor can see — so the downgrade is a decision, not a hole.
-    const gate = NON_CONTENT_META_KEYS.has(key) ? canEditPostIgnoringPublished : canEditPostRecord;
+    // Resolve WordJS-owned aliases before the policy decision as well as before SQL. Otherwise an
+    // alias of `_wjs_review_comments` updates that row on MySQL but is treated as public content here.
+    const storageKey = storageMetaKey(key);
+    const gate = NON_CONTENT_META_KEYS.has(storageKey) ? canEditPostIgnoringPublished : canEditPostRecord;
     if (!gate(req.user, post)) {
         return res.status(403).json({
             code: 'rest_forbidden',
@@ -1132,7 +1184,14 @@ router.post('/:id/meta', authenticate, asyncHandler(async (req: any, res: Respon
     }
 
     // SECURITY: sanitize HTML/URL-bearing meta (e.g. _puck_data) on write — see sanitizeMetaValue.
-    const safeValue = sanitizeMetaValue(key, value);
+    let safeValue: any;
+    try {
+        if (value && typeof value === 'object') assertMetaValueWithinLimits(value);
+        safeValue = sanitizeMetaValue(storageKey, value);
+    } catch (error) {
+        if (rejectOverComplexMeta(res, error)) return;
+        throw error;
+    }
 
     // A CONTENT write must leave a recovery point. This route never called saveRevision, so replacing
     // `_puck_data` through it destroyed the previous page tree with nothing to roll back to — while the
@@ -1144,7 +1203,7 @@ router.post('/:id/meta', authenticate, asyncHandler(async (req: any, res: Respon
     // AND IT FAILS CLOSED. Logging the error and writing anyway destroyed the previous tree with no
     // recovery point — the failure mode this whole block exists to prevent, silently. If the safety net
     // cannot be created, the destructive write does not happen.
-    if (isRevisionableMeta(key)) {
+    if (isRevisionableMeta(storageKey)) {
         try {
             await saveRevision(postId);
         } catch (err) {
@@ -1157,10 +1216,18 @@ router.post('/:id/meta', authenticate, asyncHandler(async (req: any, res: Respon
         }
     }
 
-    await Post.updateMeta(postId, key, safeValue);
+    await Post.updateMeta(postId, storageKey, safeValue);
+
+    // Public/content metadata is a post update, regardless of which storage endpoint performed it.
+    // Dispatch AFTER Post.updateMeta so cache purge, webhooks and plugins all observe the new value.
+    // Editorial review comments are the documented non-content exception: they render nowhere on the
+    // public site and should not evict ISR or emit an external post.updated webhook.
+    if (!NON_CONTENT_META_KEYS.has(storageKey)) {
+        await doAction('post_updated', postId, { meta: { [storageKey]: safeValue } }, post.postStatus);
+    }
 
     res.json({
-        key,
+        key: storageKey,
         value: safeValue,
         post_id: postId
     });

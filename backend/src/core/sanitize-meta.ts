@@ -9,6 +9,73 @@
  */
 
 const sanitizeHtml = require('sanitize-html');
+const { canonicalMetaKey } = require('./protected-meta');
+
+/* ── STRUCTURAL BOUNDS ───────────────────────────────────────────────────────────────────────────
+ * express.json accepts up to 10 MB because a large page tree is a legitimate document. Byte size,
+ * however, says nothing about SHAPE: a tiny JSON value can nest thousands of objects. The Puck
+ * sanitizer and Post.updateMeta's JSON.stringify are recursive, so ANY structured metadata key could
+ * previously turn a valid request into `RangeError: Maximum call stack size exceeded`.
+ *
+ * Validate with an EXPLICIT stack before any recursive consumer sees the tree. The node ceiling also
+ * bounds sanitizer work independently of how compactly the JSON was written. Both limits are far above
+ * a realistic Verso/plugin document (ordinary trees stay below depth 20), but finite by construction.
+ */
+const MAX_META_VALUE_DEPTH = 128;
+const MAX_META_VALUE_NODES = 100_000;
+
+class MetaValueComplexityError extends Error {
+    code: string;
+    reason: 'depth' | 'nodes' | 'cycle';
+
+    constructor(reason: 'depth' | 'nodes' | 'cycle') {
+        const detail = reason === 'depth'
+            ? `more than ${MAX_META_VALUE_DEPTH} nested levels`
+            : reason === 'nodes'
+                ? `more than ${MAX_META_VALUE_NODES} values`
+                : 'a cyclic object graph';
+        super(`Metadata value is too complex: ${detail}.`);
+        this.name = 'MetaValueComplexityError';
+        this.code = 'META_VALUE_TOO_COMPLEX';
+        this.reason = reason;
+    }
+}
+
+/**
+ * Bound an untrusted structured metadata value without recursion. Cycles cannot arrive through JSON, but rejecting
+ * them here keeps direct/internal callers from handing JSON.stringify a graph it cannot serialize.
+ */
+function assertMetaValueWithinLimits(root: any): void {
+    let nodes = 1;
+    const activePath = new WeakSet<object>();
+    const stack: Array<{ value: any; depth: number; leaving?: boolean }> = [{ value: root, depth: 0 }];
+
+    while (stack.length > 0) {
+        const { value, depth, leaving } = stack.pop()!;
+        if (!value || typeof value !== 'object') continue;
+        if (leaving) {
+            activePath.delete(value);
+            continue;
+        }
+        if (activePath.has(value)) throw new MetaValueComplexityError('cycle');
+        activePath.add(value);
+        stack.push({ value, depth, leaving: true });
+
+        for (const child of Object.values(value)) {
+            nodes++;
+            if (nodes > MAX_META_VALUE_NODES) throw new MetaValueComplexityError('nodes');
+            if (child && typeof child === 'object') {
+                const childDepth = depth + 1;
+                if (childDepth > MAX_META_VALUE_DEPTH) throw new MetaValueComplexityError('depth');
+                stack.push({ value: child, depth: childDepth });
+            }
+        }
+    }
+}
+
+function isMetaValueComplexityError(error: any): boolean {
+    return Boolean(error && error.code === 'META_VALUE_TOO_COMPLEX');
+}
 
 /* ── THE CLASS CHANNEL ────────────────────────────────────────────────────────────────────────────
  * MIRROR of `frontend/src/components/blocks/safeStyle.ts` (see the STYLE CHANNEL header below for why
@@ -410,13 +477,13 @@ function sanitizeStyleObject(style: any): any {
  * rejected string is blanked to '' — which `isSet()` on the render side already reads as "not set".
  * Numbers, booleans and the nested tb/mo breakpoint objects keep their shape.
  */
-function sanitizeLookSpec(look: any): any {
-    if (Array.isArray(look)) return look.map((item) => sanitizeLookSpec(item));
+function sanitizeLookSpecUnchecked(look: any): any {
+    if (Array.isArray(look)) return look.map((item) => sanitizeLookSpecUnchecked(item));
     if (!look || typeof look !== 'object') return look;
     const out: any = {};
     for (const [k, v] of Object.entries(look)) {
         if (FORBIDDEN_KEY.has(k)) continue; // rebuilt with out[k] = … — see FORBIDDEN_KEY
-        if (v && typeof v === 'object') { out[k] = sanitizeLookSpec(v); continue; }
+        if (v && typeof v === 'object') { out[k] = sanitizeLookSpecUnchecked(v); continue; }
         if (typeof v !== 'string') { out[k] = v; continue; }
         if (LOOK_URL_FIELDS.has(k)) { out[k] = safeCssUrl(v) ?? ''; continue; }
         // Same normalisation as the value rule above (see stripTrailingSemicolons): these strings are
@@ -429,6 +496,11 @@ function sanitizeLookSpec(look: any): any {
     return out;
 }
 
+function sanitizeLookSpec(look: any): any {
+    assertMetaValueWithinLimits(look);
+    return sanitizeLookSpecUnchecked(look);
+}
+
 /**
  * Sanitize untrusted meta on write. The Puck tree (_puck_data) is stored verbatim and trusted at many
  * independent public render sites; a single block that pipes a field into innerHTML without escaping is
@@ -436,9 +508,9 @@ function sanitizeLookSpec(look: any): any {
  * shape): HTML-bearing fields via the post-body sanitizer, URL-bearing fields via an allow-list of
  * schemes. Non-HTML/URL strings are left untouched.
  */
-function sanitizePuckTree(node: any, keyHint: string | null = null): any {
+function sanitizePuckNode(node: any, keyHint: string | null = null): any {
     if (Array.isArray(node)) {
-        return node.map((item) => sanitizePuckTree(item, keyHint));
+        return node.map((item) => sanitizePuckNode(item, keyHint));
     }
     if (node && typeof node === 'object') {
         // THE STYLE CHANNEL, handled BEFORE the generic walk. Recursing into `css`/`look` and running
@@ -448,11 +520,11 @@ function sanitizePuckTree(node: any, keyHint: string | null = null): any {
         // leaves", they are CSS, and they get the CSS criterion. (Emission filters again — see
         // appearanceToStyle/blockVars — but the stored tree must be clean on its own.)
         if (keyHint === 'css' && !Array.isArray(node)) return sanitizeStyleObject(node);
-        if (keyHint === 'look') return sanitizeLookSpec(node);
+        if (keyHint === 'look') return sanitizeLookSpecUnchecked(node);
         const out: any = Array.isArray(node) ? [] : {};
         for (const [k, v] of Object.entries(node)) {
             if (FORBIDDEN_KEY.has(k)) continue; // rebuilt with out[k] = … — see FORBIDDEN_KEY
-            out[k] = sanitizePuckTree(v, k);
+            out[k] = sanitizePuckNode(v, k);
         }
         return out;
     }
@@ -482,18 +554,35 @@ function sanitizePuckTree(node: any, keyHint: string | null = null): any {
     return node;
 }
 
+
+function sanitizePuckTree(node: any, keyHint: string | null = null): any {
+    assertMetaValueWithinLimits(node);
+    return sanitizePuckNode(node, keyHint);
+}
+
 /**
  * Sanitize a single meta value before persisting. Currently targets _puck_data (the serialized Puck
  * page tree) which is rendered as HTML on the public site; structured JSON shape is preserved.
  */
 function sanitizeMetaValue(key: string, value: any) {
-    if (key === '_puck_data' && value) {
+    // Match the database's weakest supported collation, not JavaScript's byte comparison. On
+    // MySQL/MariaDB `_PUCK_DATA`, an accent-decorated spelling or trailing spaces can address the
+    // SAME row as `_puck_data`; judging one representation while SQL writes another bypasses this
+    // sanitizer. canonicalMetaKey is the shared collation contract used by protected-meta too.
+    if (canonicalMetaKey(key) === '_puck_data' && value) {
         if (typeof value === 'object') return sanitizePuckTree(value);
         // XSS-02: _puck_data sent as a JSON STRING (some clients/imports do) bypassed the object-only
         // guard entirely. Parse → sanitize → re-stringify; a non-JSON string isn't a Puck tree so leave it.
         if (typeof value === 'string') {
-            try { return JSON.stringify(sanitizePuckTree(JSON.parse(value))); }
-            catch { return value; }
+            let parsed: any;
+            try { parsed = JSON.parse(value); }
+            catch (error) {
+                if (error instanceof SyntaxError) return value;
+                throw error;
+            }
+            // Do not catch the structural bound: routes translate that branded refusal to 413. Catching
+            // it together with SyntaxError would persist the original hostile JSON string unsanitized.
+            return JSON.stringify(sanitizePuckTree(parsed));
         }
     }
     return value;
@@ -515,4 +604,8 @@ module.exports = {
     // that adding a keyword on one side fails immediately instead of waiting for a test case.
     isSafeClassToken, safeClassAttribute, safeExtraClassList, classAttributeTransform, withClassBound,
     CSS_POSITION_KEYWORDS, POSITION_BINDING_CLASSES, MAX_CLASS_ATTR_TOKEN, MAX_EXTRA_CLASS_TOKENS,
+    // Structural availability bound. Routes use the branded error to reject the whole write before
+    // any post/revision/meta mutation; importers may skip the offending metadata item.
+    assertMetaValueWithinLimits, isMetaValueComplexityError, MetaValueComplexityError,
+    MAX_META_VALUE_DEPTH, MAX_META_VALUE_NODES,
 };
