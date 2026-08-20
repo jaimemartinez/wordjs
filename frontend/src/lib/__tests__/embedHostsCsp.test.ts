@@ -15,6 +15,7 @@
  * wrong — the header string is the thing the browser enforces, so the header string is what is read.
  */
 import { describe, expect, it } from 'vitest';
+import path from 'node:path';
 import nextConfig from '../../../next.config';
 import { ALLOWED_EMBED_HOSTS, ALLOWED_IFRAME_HOSTS, resolveVideoEmbedUrl } from '../sanitize';
 // CommonJS with no `export` statement → tsc sees a script, not a module (backend/tsconfig.json sets
@@ -39,6 +40,25 @@ async function cspDirectives(): Promise<Map<string, string[]>> {
 }
 
 describe('frame-src is derived from ALLOWED_EMBED_HOSTS', () => {
+    it('loads through the real Next TypeScript-config compiler', async () => {
+        // Importing next.config.ts through Vitest does not reproduce how Next executes it: Next 16
+        // transpiles the file into an in-memory next.config.compiled.js. A relative require from that
+        // virtual module failed on clean Node 22 runners even though embed-hosts.js was tracked.
+        const frontendDir = path.resolve(import.meta.dirname, '../../..');
+        const loaderPath = path.join(frontendDir, 'node_modules/next/dist/build/next-config-ts/transpile-config.js');
+        const { transpileConfig } = await import(loaderPath);
+        const loaded = await transpileConfig({
+            nextConfigPath: path.join(frontendDir, 'next.config.ts'),
+            dir: frontendDir,
+        });
+        const config = loaded.default || loaded;
+        expect(config).toBeTruthy();
+        expect(typeof config.headers).toBe('function');
+        expect(typeof config.rewrites).toBe('function');
+        await expect(config.headers()).resolves.toBeTruthy();
+        await expect(config.rewrites()).resolves.toBeTruthy();
+    });
+
     it('permits exactly self plus one https origin per allowed embed host', async () => {
         const frameSrc = (await cspDirectives()).get('frame-src');
         expect(frameSrc).toEqual(["'self'", ...ALLOWED_EMBED_HOSTS.map((h) => `https://${h}`)]);

@@ -411,10 +411,19 @@ jobs:
         with:
           node-version: '22'
           cache: 'npm'
-          cache-dependency-path: frontend/package-lock.json
+          cache-dependency-path: |
+            frontend/package-lock.json
+            backend/package-lock.json
       - name: Install dependencies
         working-directory: frontend
         run: npm ci || npm install
+      - name: Install backend runtime dependency used by cross-boundary security tests
+        # Three frontend security suites deliberately execute backend/src/core/sanitize-meta.ts over
+        # the same hostile corpus as the browser sanitizer. Node resolves that module's dependencies
+        # from backend/node_modules, not from the sibling frontend/node_modules, so a frontend-only
+        # install leaves its declared sanitize-html dependency unavailable on a clean runner.
+        working-directory: backend
+        run: npm ci --omit=dev || npm install --omit=dev
       - name: Audit (block high/critical prod vulns)
         working-directory: frontend
         run: npm audit --omit=dev --audit-level=high

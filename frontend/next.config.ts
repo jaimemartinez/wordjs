@@ -1,8 +1,16 @@
 import type { NextConfig } from "next";
 
+const path = require('path');
+const localConfigModule = (filename: string) => path.resolve(__dirname, filename);
+
 // THE hosts a video embed may come from — the SAME module `src/lib/sanitize.ts` reads, so the CSP and
 // the sanitizer can no longer disagree. See embed-hosts.js for what the hand-written list broke.
-const { ALLOWED_EMBED_HOSTS } = require('./embed-hosts.js') as { ALLOWED_EMBED_HOSTS: string[] };
+//
+// Next 16 transpiles this TypeScript file into an in-memory `next.config.compiled.js`. On Node 22/24,
+// that virtual CommonJS module has no physical parent from which `require('./embed-hosts.js')` can
+// resolve, even though the helper exists beside this source file. Resolve local config helpers against
+// the real frontend directory explicitly; package/builtin requires are unaffected.
+const { ALLOWED_EMBED_HOSTS } = require(localConfigModule('embed-hosts.js')) as { ALLOWED_EMBED_HOSTS: string[] };
 
 // Real app version exposed to the client (editor chrome, about panels). Read from the ROOT
 // package.json — release bumps touch that one; frontend/package.json is pinned at 0.1.0 and never
@@ -112,7 +120,7 @@ const nextConfig: NextConfig = {
     // rewrites into .next/routes-manifest.json at BUILD time and `next start` never re-reads this
     // function, so on the pre-compiled release the runtime proxy in server.js — not this rewrite —
     // is what honours WORDJS_BACKEND_URL. See that module's header.
-    const { resolveBackendProxyTarget, BACKEND_URL_ENV, rewriteSources } = require('./backend-proxy-target.js');
+    const { resolveBackendProxyTarget, BACKEND_URL_ENV, rewriteSources } = require(localConfigModule('backend-proxy-target.js'));
     let gatewayPort: unknown;
     try {
       const fs = require('fs');
