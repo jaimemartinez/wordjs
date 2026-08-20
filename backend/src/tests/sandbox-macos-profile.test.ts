@@ -245,6 +245,10 @@ describe('sandbox-exec argv', () => {
 describe('probe', () => {
     test('the embedded Seatbelt probe remains valid JavaScript', () => {
         assert.doesNotThrow(() => new Function(__probeSrc));
+        assert.ok(!__probeSrc.includes('process.execve'),
+            'a refused execve aborts Node 22 on macOS before the probe can report the denial');
+        assert.ok(__probeSrc.includes('spawnSync(process.execPath'),
+            'the removed one-shot executable must be tested through a reportable child-process result');
     });
 
     test('reports unsupported off macOS, and never claims active', { skip: process.platform === 'darwin' ? 'this assertion is about the non-macOS path' : false }, async () => {

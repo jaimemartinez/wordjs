@@ -785,7 +785,7 @@ const PROBE_SRC = [
     'try{fs.readFileSync("/etc/passwd");out.readCode="OPEN";}catch(e){out.readCode=(e&&e.code)||"THROW";}',
     'try{fs.readdirSync(os.homedir());out.homeCode="OPEN";}catch(e){out.homeCode=(e&&e.code)||"THROW";}',
     'try{var r=cp.spawnSync("/bin/echo",["wjs"]);out.execCode=r&&r.error?((r.error.code)||"THROW"):(r&&r.status===0?"OK":"FAIL");}catch(e){out.execCode=(e&&e.code)||"THROW";}',
-    `function finish(){if(process.env.WJS_PROBE_SELF_EXEC==="1"&&typeof process.execve==="function"){try{process.execve(process.execPath,[process.execPath,"-e","if(process.send)process.send({selfExecCode:'OPEN'})"],process.env);}catch(e){out.selfExecCode=(e&&e.code)||"THROW";}}else{out.selfExecCode="UNAVAILABLE";}try{process.send(out,function(){process.exit(0);});}catch(e){process.exit(5);}}`,
+    `function finish(){if(process.env.WJS_PROBE_SELF_EXEC==="1"){try{var x=cp.spawnSync(process.execPath,["-e","process.exit(0)"]);out.selfExecCode=x&&x.error?((x.error.code)||"THROW"):(x&&x.status===0?"OPEN":"FAIL");}catch(e){out.selfExecCode=(e&&e.code)||"THROW";}}else{out.selfExecCode="UNAVAILABLE";}try{process.send(out,function(){process.exit(0);});}catch(e){process.exit(5);}}`,
     'setTimeout(function(){process.exit(4);},12000);',
     'if(!process.send){process.exit(3);}',
     '{',
@@ -990,6 +990,9 @@ function probeSeatbelt(): Promise<'active' | 'degraded' | 'unsupported' | 'disab
             && control.readCode === 'OPEN'
             && control.homeCode === 'OPEN'
             && control.execCode === 'OK'
+            // The unconfined control traverses the same preload handshake, so ENOENT proves the sole
+            // executable identity was really unlinked before the probe program was released.
+            && control.selfExecCode === 'ENOENT'
             && !refused(control.netCode);
         const controlOk = !!(confined && confined.wrote === true);  // granted write really worked
         const readRefused = !!(confined && refused(confined.readCode));
