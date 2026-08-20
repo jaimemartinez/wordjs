@@ -23,7 +23,9 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { purgeTransport, gatewayPurgeOptions, isHandshakeFailure, isCleartextAgainstTls } = require('../core/frontend-purge');
+const {
+    purgeTransport, gatewayPurgeOptions, isHandshakeFailure, isCleartextAgainstTls, isTlsAgainstCleartext,
+} = require('../core/frontend-purge');
 
 // The shape scripts/node-join.js writes on a SEPARATE-mode node, after the wizard has run.
 const enrolled = {
@@ -190,5 +192,21 @@ describe('permanent vs transient failure classification', () => {
         const parseErr = { code: 'HPE_INVALID_CONSTANT', message: 'Parse Error: Expected HTTP/' };
         assert.strictEqual(isCleartextAgainstTls(parseErr, true), false, 'not a cleartext fault on a TLS leg');
         assert.strictEqual(isHandshakeFailure({ code: 'ECONNRESET', message: 'socket hang up' }, false), false);
+    });
+
+    test('only the exact TLS-to-cleartext signature permits the first-install HTTP retry', () => {
+        const wrongProtocol = { code: 'EPROTO', message: 'ssl3_get_record:wrong version number' };
+        assert.strictEqual(isTlsAgainstCleartext(wrongProtocol, true), true);
+        assert.strictEqual(isTlsAgainstCleartext(wrongProtocol, false), false, 'the request must have used TLS');
+        assert.strictEqual(
+            isTlsAgainstCleartext({ code: 'EPROTO', message: 'certificate verify failed' }, true),
+            false,
+            'certificate failures must never downgrade to HTTP',
+        );
+        assert.strictEqual(
+            isTlsAgainstCleartext({ code: 'ECONNRESET', message: 'socket hang up' }, true),
+            false,
+            'an ambiguous reset must never downgrade to HTTP',
+        );
     });
 });

@@ -192,6 +192,17 @@ describe('direct purge — monolith and single-host split reach the frontend as 
         fs.writeFileSync(path.join(certsDir, 'backend.key'), backendLeaf.key);
         fs.writeFileSync(path.join(certsDir, 'backend.crt'), backendLeaf.cert);
 
+        // FIRST INSTALL, BEFORE ANY RESTART: server.js selected HTTP while these files did not exist;
+        // creating them does not hot-swap its live listener. The purge first infers TLS from disk, sees
+        // OpenSSL's exact wrong-protocol error, and must retry the explicitly configured http:// origin.
+        // This is the state exercised by scripts/smoke-deploy.sh immediately after setup returns 200.
+        assert.strictEqual(frontendServesTls(), true, 'the newly written certs make the next boot TLS');
+        purgeFrontend(['settings'], ['/']);
+        const firstInstallHit = await split.next();
+        assert.strictEqual(firstInstallHit.url, '/api/revalidate');
+        assert.strictEqual(firstInstallHit.secret, 'lab-secret');
+        assert.deepStrictEqual(JSON.parse(firstInstallHit.body), { tags: ['settings'], paths: ['/'] });
+
         // frontend/server.js, reduced to what matters here: TLS + REQUEST A CLIENT CERT + refuse the
         // connection without one. The old direct transport died right here, before any HTTP was spoken.
         const received: any[] = [];
@@ -239,7 +250,7 @@ describe('direct purge — monolith and single-host split reach the frontend as 
         // configManager caches the parsed config for up to 2s and revalidates by mtime.
         await sleep(2200);
 
-        assert.strictEqual(frontendServesTls(), true, 'certs on disk mean the frontend is serving TLS');
+        assert.strictEqual(frontendServesTls(), true, 'certs on disk mean a restarted frontend serves TLS');
 
         purgeFrontend(['posts', 'post:tls'], ['/tls']);
         const hit = await waitForPurge;

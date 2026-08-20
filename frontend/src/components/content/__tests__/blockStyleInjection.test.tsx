@@ -619,7 +619,6 @@ describe('#24 CLASS — every author-controlled variable lands in a declaration 
         { prop: 'outline-offset', why: 'pushes that outline arbitrarily far from the element' },
         { prop: 'order', why: 'reorders flex children — visual position without moving the box' },
         { prop: 'flex', why: 'grow/shrink/basis: resizes the element beyond its own content' },
-        { prop: 'min-width', why: 'can force an element wider than its container (max-width IS reviewed)' },
         { prop: 'column-gap', why: 'spacing between columns; bounded like `gap`, which the author may write' },
         { prop: 'transition', why: 'a timing declaration; the risk is duration/property choice, not geometry' },
         { prop: 'animation', why: 'names a keyframe set — the strongest of these: it can drive anything the keyframes touch' },

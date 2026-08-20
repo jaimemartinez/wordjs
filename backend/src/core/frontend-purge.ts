@@ -336,11 +336,32 @@ function isCleartextAgainstTls(e: any, overTls: boolean): boolean {
 }
 
 /**
+ * The one safe protocol-recovery case for a direct, co-located purge: certificates appeared after
+ * frontend/server.js had already committed to its HTTP fallback listener for this process lifetime.
+ *
+ * Do not broaden this to generic TLS failures. A rejected/untrusted certificate must stay a hard mTLS
+ * failure, never become a cleartext retry. OpenSSL's `wrong version number` means the peer answered
+ * cleartext HTTP to our TLS ClientHello; and deliverDirect only uses this result when frontendUrl itself
+ * explicitly declares http://. The retry therefore follows the configured transport during the narrow
+ * first-install transition, while a configured https:// origin can never downgrade.
+ */
+function isTlsAgainstCleartext(e: any, overTls: boolean): boolean {
+    if (!overTls || String((e && e.code) || '') !== 'EPROTO') return false;
+    return /wrong version number|unknown protocol|packet length too long|http request/i
+        .test(String((e && e.message) || ''));
+}
+
+/**
  * Fire one purge request. Never throws, never rejects: the write path must not depend on it.
  * The (small) response body is collected — the gateway answers with a per-node delivery report and
  * silently discarding it would hide a cluster that accepted the purge but could not deliver it.
  */
-function send(options: any, body: string, onDone: (res: any, text: string) => void) {
+function send(
+    options: any,
+    body: string,
+    onDone: (res: any, text: string) => void,
+    onError?: (error: any) => boolean,
+) {
     try {
         const overTls = options.protocol !== 'http:';
         const mod = overTls ? require('https') : require('http');
@@ -366,6 +387,10 @@ function send(options: any, body: string, onDone: (res: any, text: string) => vo
         });
         req.on('timeout', () => req.destroy());
         req.on('error', (e: any) => {
+            // A caller may recover only a transport-specific error it can prove safe. Returning true
+            // means it took ownership (normally by retrying); every other error keeps the common
+            // permanent-vs-transient classification below.
+            if (onError && onError(e)) return;
             // A refused/aborted handshake is permanent misconfiguration and gets the loud channel;
             // ECONNREFUSED/ETIMEDOUT/ENOTFOUND are "the peer is down or moved" and stay on the
             // once-an-hour one.
@@ -404,19 +429,19 @@ function deliverDirect(origin: string, body: string, secret: string, cfg: any, i
     let url: URL;
     try { url = new URL(origin + '/api/revalidate'); } catch { return; }
 
-    // The stored frontendUrl says what the installer BELIEVED; frontendServesTls() says what the
-    // frontend process actually did with the certificates on disk. Either saying "TLS" is enough —
-    // never a downgrade — because both failure modes are total: with the gateway configured
-    // `ssl: false` the installer leaves frontendUrl on http:// while the frontend is already
-    // enforcing mTLS, and a purge posted in the clear at a TLS socket dies just as completely as one
-    // that speaks TLS without a client certificate. The monolith is exempt: that origin is a listener
-    // THIS process owns, so its scheme is a fact, not a belief.
-    const isHttps = isMono ? url.protocol === 'https:' : (url.protocol === 'https:' || frontendServesTls());
-    const options: any = {
-        protocol: isHttps ? 'https:' : 'http:',
+    // frontendServesTls() describes how the frontend will boot from the material currently on disk.
+    // Usually that is also the live listener. There is one real transition where it is not: during a
+    // first install, server.js already chose HTTP before setup generated the certificates. Prefer mTLS
+    // whenever either source says TLS, then recover below only from OpenSSL's exact "TLS client spoke to
+    // cleartext HTTP" signature and only when the configured origin explicitly says http://.
+    const configuredHttps = url.protocol === 'https:';
+    const inferredHttps = !isMono && !configuredHttps && frontendServesTls();
+    const isHttps = configuredHttps || inferredHttps;
+    const requestOptions = (overTls: boolean): any => ({
+        protocol: overTls ? 'https:' : 'http:',
         method: 'POST',
         hostname: url.hostname,
-        port: url.port || (isHttps ? 443 : 80),
+        port: url.port || (overTls ? 443 : 80),
         path: url.pathname,
         timeout: PURGE_TIMEOUT_MS,
         headers: {
@@ -424,7 +449,8 @@ function deliverDirect(origin: string, body: string, secret: string, cfg: any, i
             'Content-Length': Buffer.byteLength(body),
             'x-revalidate-secret': secret,
         },
-    };
+    });
+    const options = requestOptions(isHttps);
     if (isHttps) {
         // The frontend serves the cluster-CA cert with a service CN (not an IP SAN) AND demands a
         // client certificate back (requestCert + rejectUnauthorized). Same builder as the gateway leg,
@@ -433,9 +459,16 @@ function deliverDirect(origin: string, body: string, secret: string, cfg: any, i
         if (!tls) return; // failPermanent already said what is missing; sending in the clear is futile
         Object.assign(options, tls);
     }
-    send(options, body, (res: any, _text: string) => {
+    const onDone = (res: any, _text: string) => {
         if (res.statusCode !== 200) warnOnce(`frontend /api/revalidate answered ${res.statusCode}`);
-    });
+    };
+    send(options, body, onDone, inferredHttps ? (e: any) => {
+        if (!isTlsAgainstCleartext(e, true)) return false;
+        // No TLS attributes are copied. This is the origin's explicitly configured HTTP transport,
+        // used only until the co-located frontend restarts and consumes its new certificates.
+        send(requestOptions(false), body, onDone);
+        return true;
+    } : undefined);
 }
 
 /**
@@ -627,5 +660,5 @@ module.exports = {
     clusterCertPaths, BACKEND_ROOT,
     // The two halves of "is this configuration or weather?" — the decision that routes a failure to
     // the health field instead of to a log line nobody reads.
-    isHandshakeFailure, isCleartextAgainstTls,
+    isHandshakeFailure, isCleartextAgainstTls, isTlsAgainstCleartext,
 };
