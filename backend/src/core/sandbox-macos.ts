@@ -829,23 +829,27 @@ type ProbeMsg = { wrote?: boolean; readCode?: string; homeCode?: string; execCod
  */
 function runProbeChild(pre: string[], target: string, denyNet: boolean, runtime?: SeatbeltRuntime): Promise<ProbeMsg | null> {
     return new Promise<ProbeMsg | null>((res) => {
-        let proc: any = null, msg: ProbeMsg | null = null, done = false;
+        let proc: any = null, msg: ProbeMsg | null = null, done = false, stderr = '', overall: any = null;
         const finish = (v: ProbeMsg | null) => {
             if (done) return;
             done = true;
+            if (overall) clearTimeout(overall);
             try { if (proc) proc.kill('SIGKILL'); } catch { /* already gone */ }
             res(v);
         };
         // Both racers are always cleaned up — an uncleared timer is what once kept a test subprocess
         // alive past its own IPC teardown.
-        const overall = setTimeout(() => finish(null), 25000);
+        overall = setTimeout(() => finish(null), 25000);
         if ((overall as any).unref) (overall as any).unref();
         const node = runtime ? runtime.exe : process.execPath;
         const argv = [...pre, node, ...(runtime ? ['-r', SEATBELT_BOOTSTRAP_FILE] : []), '-e', PROBE_SRC, target, denyNet ? '1' : '0'];
         try {
             proc = spawn(argv[0], argv.slice(1),
                 {
-                    stdio: runtime ? ['ignore', 'ignore', 'ignore', 'ipc', 'pipe', 'pipe'] : ['ignore', 'ignore', 'ignore', 'ipc'],
+                    // Keep fd 3 as IPC and fds 4/5 as the one-shot executable handshake. Confined stderr
+                    // is captured only for a bounded failure diagnostic; without it a rejected SBPL rule
+                    // and an unreadable preload are indistinguishable from a generic timeout in CI.
+                    stdio: runtime ? ['ignore', 'ignore', 'pipe', 'ipc', 'pipe', 'pipe'] : ['ignore', 'ignore', 'ignore', 'ipc'],
                     serialization: 'advanced', timeout: 22000,
                     env: runtime ? {
                         ...process.env,
@@ -854,10 +858,24 @@ function runProbeChild(pre: string[], target: string, denyNet: boolean, runtime?
                     } : process.env,
                 });
         } catch { clearTimeout(overall); finish(null); return; }
-        if (runtime) armSeatbeltBootstrap(proc, runtime).catch(() => finish(null));
+        if (runtime && proc.stderr) {
+            proc.stderr.on('data', (chunk: any) => {
+                stderr = (stderr + String(chunk)).slice(-1024);
+            });
+        }
+        if (runtime) armSeatbeltBootstrap(proc, runtime).catch((error: any) => {
+            console.warn('[Sandbox] Seatbelt probe bootstrap failed: ' + logSafe(JSON.stringify((error && error.message) || error || 'unknown')));
+            finish(null);
+        });
         proc.on('message', (m: any) => { if (m && typeof m === 'object') msg = m as ProbeMsg; });
         proc.on('error', () => { clearTimeout(overall); finish(null); });   // ENOENT / not executable
-        proc.on('exit', (code: number) => { clearTimeout(overall); finish(code === 0 ? msg : null); });
+        proc.on('exit', (code: number) => {
+            clearTimeout(overall);
+            if (runtime && code !== 0 && stderr) {
+                console.warn('[Sandbox] Seatbelt probe child stderr (tail): ' + logSafe(JSON.stringify(stderr)));
+            }
+            finish(code === 0 ? msg : null);
+        });
     });
 }
 
@@ -918,8 +936,13 @@ function probeSeatbelt(): Promise<'active' | 'degraded' | 'unsupported' | 'disab
             seatbeltState = 'degraded';
             return 'degraded';
         }
-        const profile = buildSeatbeltProfile({ writableDirs: [dir], readOnlyDirs: [], denyNetwork: true, appRoot, nodePath: deniedRuntime.exe, runtimeRoots: deniedRuntime.runtimeRoots });
-        const allowedProfile = buildSeatbeltProfile({ writableDirs: [dir], readOnlyDirs: [], denyNetwork: false, appRoot, nodePath: allowedRuntime.exe, runtimeRoots: allowedRuntime.runtimeRoots });
+        // The confined probe uses the same preload as production. Its directory therefore has to be one of
+        // the narrow read-only code roots; an empty list prevents Node from loading the preload and measures
+        // a broken launcher instead of Seatbelt. Do not grant appRoot: the probe must retain the production
+        // property that only the required core code is readable.
+        const probeCodeRoots = [pathm.dirname(SEATBELT_BOOTSTRAP_FILE)];
+        const profile = buildSeatbeltProfile({ writableDirs: [dir], readOnlyDirs: probeCodeRoots, denyNetwork: true, appRoot, nodePath: deniedRuntime.exe, runtimeRoots: deniedRuntime.runtimeRoots });
+        const allowedProfile = buildSeatbeltProfile({ writableDirs: [dir], readOnlyDirs: probeCodeRoots, denyNetwork: false, appRoot, nodePath: allowedRuntime.exe, runtimeRoots: allowedRuntime.runtimeRoots });
 
         // A profile that fails its own text invariants is never launched. This costs microseconds and it
         // is the only check in this file that runs on the SHIPPED profile on the SHIPPED host.

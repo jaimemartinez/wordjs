@@ -104,6 +104,10 @@ describe('SBPL profile skeleton', () => {
         const source = fs.readFileSync(path.resolve(__dirname, '../core/sandbox-macos.ts'), 'utf8');
         const bootstrap = fs.readFileSync(SEATBELT_BOOTSTRAP_FILE, 'utf8');
         assert.match(source, /prepareSeatbeltRuntime/);
+        assert.match(source, /const probeCodeRoots = \[pathm\.dirname\(SEATBELT_BOOTSTRAP_FILE\)\]/,
+            'the real Seatbelt probe must be able to read the preload it launches with');
+        assert.strictEqual((source.match(/readOnlyDirs: probeCodeRoots/g) || []).length, 2,
+            'both network-policy probe profiles must carry the preload read root');
         assert.match(source, /disposeSeatbeltRuntime\(runtime\)[\s\S]*existsSync\(runtime\.exe\)/,
             'the host must unlink and verify the executable before sending the release marker');
         assert.match(bootstrap, /writeSync\(readyFd[\s\S]*readSync\(releaseFd/,
