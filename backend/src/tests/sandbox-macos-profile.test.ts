@@ -102,10 +102,21 @@ describe('SBPL profile skeleton', () => {
         const p = build({ readOnlyDirs: [`${APP_ROOT}/dist/core`] });
         assert.ok(p.includes('(sysctl-name "hw.ncpu")'));
         assert.ok(p.includes('(sysctl-name "kern.osrelease")'));
+        assert.ok(p.includes('(sysctl-name-prefix "hw.optional.")'), 'V8 arm64 CPU feature probes must boot');
+        assert.ok(p.includes('(iokit-registry-entry-class "RootDomainUserClient")'));
         assert.ok(!/^\(allow sysctl-read\)$/m.test(p), 'blanket sysctl-read exposes KERN_PROCARGS2');
         assert.ok(!/kern\.procargs/i.test(p.replace(/^;;.*$/gm, '')), 'the process-argument MIB must be absent from rules');
+        assert.ok(!/sysctl-name-prefix "kern\.proc/i.test(p), 'process-table sysctl prefixes must stay denied');
         assert.deepStrictEqual(auditProfile(p), []);
         assert.ok(auditProfile(`${p}\n(allow sysctl-read)`).some((x: string) => x.includes('blanket')));
+    });
+
+    test('probe denial logging is opt-in and remains deny-by-default', () => {
+        const production = build();
+        const diagnostic = build({ logDenials: true });
+        assert.ok(!production.includes('WORDJS_SEATBELT_PROBE'));
+        assert.ok(diagnostic.includes('(deny default (with message "WORDJS_SEATBELT_PROBE"))'));
+        assert.deepStrictEqual(auditProfile(diagnostic), []);
     });
 
     test('the initial executable identity is one-shot and deleted before plugin code is released', () => {
@@ -149,7 +160,7 @@ describe('writable zones', () => {
         const p = build({ writableDirs: [] });
         assert.ok(!/file-write\* \(subpath/.test(p), 'no subpath write grants when no zones were passed');
         // /dev/null is the one write grant that is not a zone, and it is a literal, not a subpath.
-        assert.ok(p.includes('(allow file-read* file-write* (literal "/dev/null"))'), '/dev/null stays writable');
+        assert.ok(p.includes('(allow file-read* file-write* file-ioctl (literal "/dev/null"))'), '/dev/null stays writable');
     });
 
     test('duplicate zones collapse', () => {

@@ -339,6 +339,8 @@ export type SeatbeltProfileOptions = {
     runtimeRoots?: string[];
     /** Exact trusted Node path spellings descendants may exec; every other executable remains denied. */
     descendantExecPaths?: string[];
+    /** Probe-only kernel audit tag. Production omits it to avoid denial-log spam. */
+    logDenials?: boolean;
 };
 
 /**
@@ -429,7 +431,9 @@ function buildSeatbeltProfile(opts: SeatbeltProfileOptions): string {
     L.push(';; Evaluation order: the LAST matching rule wins, so (deny default) must stay first, a narrowing');
     L.push(';; deny must precede the allow it carves an exception out of, and a claw-back deny must follow');
     L.push(';; the broad allow it narrows.');
-    L.push('(deny default)');
+    L.push(opts && opts.logDenials
+        ? '(deny default (with message "WORDJS_SEATBELT_PROBE"))'
+        : '(deny default)');
     L.push('');
 
     // ── Metadata reads, unrestricted ────────────────────────────────────────────────────────────────
@@ -482,8 +486,8 @@ function buildSeatbeltProfile(opts: SeatbeltProfileOptions): string {
     // several macOS builds, and a denial there aborts the launch before main(). Nothing else in /dev is
     // granted — no tty, no disks, no /dev/mem.
     L.push(';; --- device nodes actually required to boot ---');
-    L.push('(allow file-read* (literal "/dev/urandom") (literal "/dev/random") (literal "/dev/zero")) ;; crypto.randomBytes + V8 seeding + anon mappings');
-    L.push('(allow file-read* file-write* (literal "/dev/null"))                ;; the sink for closed stdio');
+    L.push('(allow file-read* file-ioctl (literal "/dev/urandom") (literal "/dev/random") (literal "/dev/zero")) ;; crypto.randomBytes + V8 seeding + anon mappings');
+    L.push('(allow file-read* file-write* file-ioctl (literal "/dev/null"))     ;; the sink for closed stdio');
     L.push('(allow file-read* file-write* file-ioctl (literal "/dev/dtracehelper")) ;; dyld opens+ioctls it while loading images');
     L.push('(allow file-read* file-write* (literal "/dev/autofs_nowait"))       ;; dyld touches it to keep autofs from blocking path resolution');
     L.push('');
@@ -572,12 +576,29 @@ function buildSeatbeltProfile(opts: SeatbeltProfileOptions): string {
     L.push(';; --- sysctl: exact boot/runtime facts only; kern.procargs* is absent by construction ---');
     L.push('(allow sysctl-read');
     for (const name of [
-        'hw.activecpu', 'hw.cachelinesize', 'hw.logicalcpu', 'hw.machine', 'hw.memsize', 'hw.model',
-        'hw.ncpu', 'hw.pagesize', 'hw.physicalcpu',
-        'kern.argmax', 'kern.boottime', 'kern.hostname', 'kern.osrelease', 'kern.ostype',
-        'kern.osversion', 'kern.secure_kernel', 'kern.version',
+        // Chromium's CPU/runtime allowlist. V8 queries these before JavaScript (especially on arm64) and
+        // aborts rather than merely degrading when some feature probes are refused.
+        'hw.activecpu', 'hw.busfrequency_compat', 'hw.byteorder', 'hw.cacheconfig',
+        'hw.cachelinesize', 'hw.cachelinesize_compat', 'hw.cpufamily', 'hw.cpufrequency',
+        'hw.cpufrequency_compat', 'hw.cputype', 'hw.l1dcachesize_compat', 'hw.l1icachesize_compat',
+        'hw.l2cachesize_compat', 'hw.l3cachesize_compat', 'hw.logicalcpu', 'hw.logicalcpu_max',
+        'hw.machine', 'hw.memsize', 'hw.model', 'hw.ncpu', 'hw.nperflevels', 'hw.packages',
+        'hw.pagesize', 'hw.pagesize_compat', 'hw.physicalcpu', 'hw.physicalcpu_max',
+        'hw.tbfrequency_compat', 'hw.vectorunit',
+        'kern.argmax', 'kern.boottime', 'kern.hostname', 'kern.hv_vmm_present', 'kern.maxfilesperproc',
+        'kern.osproductversion', 'kern.osrelease', 'kern.ostype', 'kern.osvariant_status',
+        'kern.osversion', 'kern.secure_kernel', 'kern.usrstack64', 'kern.version',
+        'sysctl.proc_cputype',
     ]) L.push(`    (sysctl-name ${JSON.stringify(name)})`);
+    L.push('    (sysctl-name-prefix "hw.optional.")');
+    L.push('    (sysctl-name-prefix "hw.perflevel")');
     L[L.length - 1] += ')';
+    L.push('');
+
+    // CPU/power feature discovery used by libuv/V8. This user client exposes hardware power properties,
+    // not arbitrary device access; both Chromium and Codex carry this exact class in their base profiles.
+    L.push(';; --- IOKit: CPU/power feature discovery only ---');
+    L.push('(allow iokit-open (iokit-registry-entry-class "RootDomainUserClient"))');
     L.push('');
 
     // ── Mach services ───────────────────────────────────────────────────────────────────────────────
@@ -678,7 +699,7 @@ function auditProfile(profile: string): string[] {
     if (/\(allow\s+sysctl-read\s*\)/.test(body)) problems.push('blanket (allow sysctl-read) present: kern.procargs2 exposes another process environment');
     if (/\(allow\s+mach-lookup\s*\)/.test(body)) problems.push('blanket (allow mach-lookup) present: the bootstrap namespace reaches launchd');
     if (/network-bind|network-inbound/.test(body)) problems.push('an inbound network grant is present: a plugin must never listen');
-    if (!/\(deny\s+default\)/.test(body)) problems.push('(deny default) missing: the profile is not deny-by-default');
+    if (!/\(deny\s+default(?:\s|\))/.test(body)) problems.push('(deny default) missing: the profile is not deny-by-default');
 
     // An `(allow …file-read*…)` line that names no (subpath …) / (literal …) filter is a blanket read.
     for (const line of rules) {
@@ -971,8 +992,8 @@ function probeSeatbelt(): Promise<'active' | 'degraded' | 'unsupported' | 'disab
         // a broken launcher instead of Seatbelt. Do not grant appRoot: the probe must retain the production
         // property that only the required core code is readable.
         const probeCodeRoots = [pathm.dirname(SEATBELT_BOOTSTRAP_FILE)];
-        const profile = buildSeatbeltProfile({ writableDirs: [dir], readOnlyDirs: probeCodeRoots, denyNetwork: true, appRoot, nodePath: deniedRuntime.exe, runtimeRoots: deniedRuntime.runtimeRoots, descendantExecPaths: deniedRuntime.descendantExecPaths });
-        const allowedProfile = buildSeatbeltProfile({ writableDirs: [dir], readOnlyDirs: probeCodeRoots, denyNetwork: false, appRoot, nodePath: allowedRuntime.exe, runtimeRoots: allowedRuntime.runtimeRoots, descendantExecPaths: allowedRuntime.descendantExecPaths });
+        const profile = buildSeatbeltProfile({ writableDirs: [dir], readOnlyDirs: probeCodeRoots, denyNetwork: true, appRoot, nodePath: deniedRuntime.exe, runtimeRoots: deniedRuntime.runtimeRoots, descendantExecPaths: deniedRuntime.descendantExecPaths, logDenials: true });
+        const allowedProfile = buildSeatbeltProfile({ writableDirs: [dir], readOnlyDirs: probeCodeRoots, denyNetwork: false, appRoot, nodePath: allowedRuntime.exe, runtimeRoots: allowedRuntime.runtimeRoots, descendantExecPaths: allowedRuntime.descendantExecPaths, logDenials: true });
 
         // A profile that fails its own text invariants is never launched. This costs microseconds and it
         // is the only check in this file that runs on the SHIPPED profile on the SHIPPED host.
