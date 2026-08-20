@@ -1285,7 +1285,12 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
                 appRoot: APP_ROOT,
                 nodePath: seatbeltRuntime.exe,
                 runtimeRoots: seatbeltRuntime.runtimeRoots,
+                descendantExecPaths: seatbeltRuntime.descendantExecPaths,
             });
+            const profileProblems = mac.auditProfile(profile);
+            if (profileProblems.length > 0) {
+                throw new Error(`Seatbelt profile audit failed (${profileProblems.length} invariant violation(s))`);
+            }
             // seatbeltArgs() returns ARGUMENTS, not a command line, so the
             // caller decides where they sit. `[sandbox-exec, '-p', <profile>]` composes in front of the
             // node argv, INCLUDING inside the `sh -c 'ulimit …; exec "$@"'`

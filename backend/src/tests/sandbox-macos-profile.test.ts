@@ -61,16 +61,24 @@ describe('SBPL profile skeleton', () => {
 
     test('never grants blanket exec, blanket mach-lookup, or inbound network', () => {
         const p = build();
+        assert.ok(p.includes('(allow process-fork)'), 'descendants must inherit the Seatbelt domain');
         assert.ok(/\(deny process-exec\*\)/.test(p), 'exec must be denied before the Node carve-out');
         assert.ok(!/\(allow process-exec\*\)/.test(p), 'exec must never be granted unrestricted');
+        assert.ok(p.includes('(allow signal (target same-sandbox))'));
+        assert.ok(p.includes('(allow process-info* (target same-sandbox))'));
         // A blanket mach-lookup reaches launchd (job submission = escape) and WindowServer.
         assert.ok(!/\(allow mach-lookup\)/.test(p), 'mach-lookup must always carry a global-name allowlist');
         assert.ok(!/network-bind/.test(p), 'a plugin is never granted the ability to listen');
     });
 
-    test('exec is carved out for the Node binary only', () => {
-        const p = build();
+    test('exec is carved out only for the initial and exact trusted descendant Node binaries', () => {
+        const descendant = '/opt/wordjs/node/bin/node';
+        const p = build({ descendantExecPaths: [descendant] });
         assert.ok(p.includes(`(allow process-exec (literal "${NODE}"))`), 'the Node binary must be exec-able');
+        assert.ok(p.includes(`(allow process-exec (literal "${descendant}"))`), 'the trusted descendant Node must be exec-able');
+        assert.ok(p.includes(`(allow file-read* file-map-executable (literal "${descendant}"))`));
+        assert.ok(!p.includes('(allow process-exec (literal "/bin/sh"))'));
+        assert.ok(!p.includes('(allow process-exec (literal "/bin/echo"))'));
         // and it must come AFTER the deny, or the deny would win.
         assert.ok(p.indexOf('(deny process-exec*)') < p.indexOf('(allow process-exec (literal'),
             'deny must precede the carve-out — SBPL resolves to the LAST matching rule');
@@ -100,8 +108,9 @@ describe('SBPL profile skeleton', () => {
         assert.ok(auditProfile(`${p}\n(allow sysctl-read)`).some((x: string) => x.includes('blanket')));
     });
 
-    test('the only executable identity is one-shot and deleted before plugin code is released', () => {
+    test('the initial executable identity is one-shot and deleted before plugin code is released', () => {
         const source = fs.readFileSync(path.resolve(__dirname, '../core/sandbox-macos.ts'), 'utf8');
+        const isolateSource = fs.readFileSync(path.resolve(__dirname, '../core/plugin-isolate.ts'), 'utf8');
         const bootstrap = fs.readFileSync(SEATBELT_BOOTSTRAP_FILE, 'utf8');
         assert.match(source, /prepareSeatbeltRuntime/);
         assert.match(source, /const probeCodeRoots = \[pathm\.dirname\(SEATBELT_BOOTSTRAP_FILE\)\]/,
@@ -110,6 +119,10 @@ describe('SBPL profile skeleton', () => {
             'both network-policy probe profiles must carry the preload read root');
         assert.match(source, /disposeSeatbeltRuntime\(runtime\)[\s\S]*existsSync\(runtime\.exe\)/,
             'the host must unlink and verify the executable before sending the release marker');
+        assert.match(isolateSource, /descendantExecPaths: seatbeltRuntime\.descendantExecPaths/,
+            'production must restrict descendants to exact spellings of its trusted Node runtime');
+        assert.match(isolateSource, /auditProfile\(profile\)[\s\S]*profileProblems\.length > 0[\s\S]*throw new Error/,
+            'production must fail closed when the independent profile audit reports a violation');
         assert.match(bootstrap, /writeSync\(readyFd[\s\S]*readSync\(releaseFd/,
             'the preload must block synchronously before the plugin worker can load');
         assert.match(bootstrap, /process\.exit\(126\)/, 'a broken handshake must fail closed');
@@ -143,6 +156,15 @@ describe('writable zones', () => {
         const p = build({ writableDirs: ['/srv/z', '/srv/z', '/srv/z/'] });
         const hits = p.split('(allow file-read* file-write* (subpath "/srv/z"))').length - 1;
         assert.strictEqual(hits, 1, 'the same zone (with or without a trailing slash) must be emitted once');
+    });
+
+    test('a trusted executable under a writable zone is dropped as replaceable', () => {
+        const writable = '/srv/wordjs/plugin-data';
+        const replaceableNode = `${writable}/node`;
+        const p = build({ writableDirs: [writable], descendantExecPaths: [replaceableNode] });
+        assert.ok(!p.includes(`(allow process-exec (literal "${replaceableNode}"))`));
+        assert.match(p, /trusted executable path\(s\) were DROPPED.*\(W\^X\)/);
+        assert.deepStrictEqual(auditProfile(p), []);
     });
 });
 
@@ -251,8 +273,12 @@ describe('probe', () => {
             'synchronous spawning uses internal IPC that aborts under a deny-by-default Seatbelt profile');
         assert.ok(__probeSrc.includes('fs.existsSync(process.execPath)'),
             'the probe must observe that the one-shot executable disappeared before plugin code runs');
-        assert.ok(__probeSrc.indexOf('execCode="ATTEMPTED"') < __probeSrc.indexOf('cp.spawn("/bin/echo"'),
-            'the denial marker must be flushed before macOS can abort the spawning process');
+        assert.ok(__probeSrc.indexOf('descendantReadCode="ATTEMPTED"') < __probeSrc.indexOf('cp.spawn(process.env.WORDJS_SEATBELT_PROBE_NODE'),
+            'the causal marker must be flushed before the trusted descendant is spawned');
+        assert.ok(__probeSrc.includes('fs.readFileSync(\\"/etc/passwd\\")'),
+            'the descendant must test the inherited file boundary, not merely whether spawn succeeds');
+        assert.ok(__probeSrc.includes('code===20?"EPERM":code===21?"EACCES"'),
+            'the parent probe must distinguish the descendant kernel denial from ordinary child failure');
         assert.ok(__probeSrc.includes('m.wordjsProbeSpawn!==true'),
             'the child must wait for the parent acknowledgement before attempting the denied operation');
         assert.ok(__probeSrc.includes('process.send({stage:"BOOT"})'),

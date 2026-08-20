@@ -16,9 +16,9 @@
  *   seccomp denylist (mount/ptrace/kexec/…)   →  `(deny default)` covers every Seatbelt-mediated operation
  *                                               class by construction (allowlist, not denylist — strictly
  *                                               stronger in kind, though it mediates fewer syscalls)
- *   seccomp's process/anonymous-exec denial   →  `(deny process-fork)` + `(deny process-exec*)` with an
- *                                               ephemeral literal Node image unlinked before plugin code
- *                                               is released (see "PROCESS" below)
+ *   bwrap's inherited process containment    →  descendants inherit Seatbelt; fork is allowed but exec
+ *                                               remains limited to the exact trusted Node image(s), with
+ *                                               writable trees excluded from executable mappings
  *   Landlock's PTRACE_MODE_READ domain rule   →  `(deny process-info*)` / `(deny mach-priv-task-port)` +
  *                                               a `kern.procargs` sysctl denial (see "HOST MEMORY" below)
  *   Linux uid/capability identity changes     →  Darwin has no Linux capability sets; `(deny default)`
@@ -37,11 +37,11 @@
  * mtimes) stays enumerable. Windows' AppContainer hides shape too, because an AppContainer reaches only
  * objects whose ACL names its SID; that is a real asymmetry and it is stated rather than papered over.
  *
- * CHILD PROCESSES (closed). `(deny process-fork)` + `(deny process-exec*)`. macOS `posix_spawn` — the
- * primitive behind every `child_process` call — is gated by `process-fork`, so a confined plugin cannot
- * create a process at all. sandbox-exec still needs one initial exec allowance, so production starts a
- * private Node copy whose preload blocks while the host unlinks it. When plugin code begins, the sole
- * allowed executable pathname no longer names a file and its directory was never writable by the child.
+ * CHILD PROCESSES (contained). Seatbelt policies are inherited by descendants, which is the same process-
+ * tree model bwrap provides. `process-fork` is therefore allowed, while `process-exec*` stays denied except
+ * for literal spellings of the trusted Node runtime. `/bin/sh`, shebang interpreters and payloads planted
+ * in writable zones remain non-executable. The real probe creates a descendant and certifies that it is
+ * still denied `/etc/passwd`; merely proving that a spawn failed would not prove inheritance.
  *
  * HOST MEMORY (closed as far as SBPL can express it; one measured residual). macOS has no /proc, so the
  * Linux `/proc/<pid>/environ` read has two analogues: `task_for_pid()` (gated by `mach-priv-task-port`,
@@ -91,7 +91,7 @@ const { spawn } = require('child_process');
 const SEATBELT_BIN = '/usr/bin/sandbox-exec';
 const SEATBELT_BOOTSTRAP_FILE = pathm.join(__dirname, 'sandbox-bootstrap.js');
 
-type SeatbeltRuntime = { dir: string; exe: string; runtimeRoots: string[] };
+type SeatbeltRuntime = { dir: string; exe: string; runtimeRoots: string[]; descendantExecPaths: string[] };
 
 /** Create a private executable identity for one launch; the host unlinks it before plugin code starts. */
 function prepareSeatbeltRuntime(nodePath: string = process.execPath): SeatbeltRuntime {
@@ -103,7 +103,12 @@ function prepareSeatbeltRuntime(nodePath: string = process.execPath): SeatbeltRu
         fsm.copyFileSync(nodePath, exe);
         fsm.chmodSync(exe, 0o500);
         const originals = spellings(nodePath);
-        return { dir, exe, runtimeRoots: uniq(originals.map((p) => ppath.dirname(ppath.dirname(p)))) };
+        return {
+            dir,
+            exe,
+            runtimeRoots: uniq(originals.map((p) => ppath.dirname(ppath.dirname(p)))),
+            descendantExecPaths: originals,
+        };
     } catch (error) {
         try { fsm.rmSync(dir, { recursive: true, force: true }); } catch { /* */ }
         throw error;
@@ -332,6 +337,8 @@ export type SeatbeltProfileOptions = {
     nodePath?: string;
     /** Original runtime prefixes when nodePath is an ephemeral executable copy. */
     runtimeRoots?: string[];
+    /** Exact trusted Node path spellings descendants may exec; every other executable remains denied. */
+    descendantExecPaths?: string[];
 };
 
 /**
@@ -366,6 +373,17 @@ function buildSeatbeltProfile(opts: SeatbeltProfileOptions): string {
     // one caller grant, while a zone with no parser-safe spelling is one rejected grant.
     const droppedZones = zoneSpellings.filter((paths) => paths.length === 0).length;
     const nodePaths = spellings(rawNode);
+    const descendantNodePaths = Array.isArray(opts && opts.descendantExecPaths)
+        ? (opts.descendantExecPaths as string[]).flatMap((p) => spellings(p))
+        : [];
+    const candidateNodeExecPaths = uniq([...nodePaths, ...descendantNodePaths])
+        .filter((p) => sbplPath(p) !== null);
+    // An exact path is not immutable when the plugin may write an ancestor. Never turn a replaceable file
+    // into a trusted executable; dropping the initial image makes launch fail, dropping a descendant merely
+    // removes process creation. Both outcomes are fail-closed.
+    const allowedNodeExecPaths = candidateNodeExecPaths
+        .filter((p) => !zones.some((z) => isWithin(p, z)));
+    const droppedNodeExecPaths = candidateNodeExecPaths.length - allowedNodeExecPaths.length;
 
     // ── The Node runtime prefix ─────────────────────────────────────────────────────────────────────
     // REQUIRED, not a nicety, and the Linux shim learned it first (`readRoot: [APP_ROOT,
@@ -506,30 +524,25 @@ function buildSeatbeltProfile(opts: SeatbeltProfileOptions): string {
     L.push('');
 
     // ── Process operations ──────────────────────────────────────────────────────────────────────────
-    // THE CHILD-PROCESS PARITY ROW. Linux seccomp refuses process-control syscalls; the
-    // Seatbelt equivalent is these two lines, and `process-fork` is the load-bearing one. Every macOS
-    // process creation — posix_spawn (which is what libuv uses for child_process), fork, vfork, system()
-    // — is gated by it, so a confined plugin cannot create a process AT ALL. That is strictly stronger
-    // than denying exec alone, which would still allow a fork bomb.
+    // THE CHILD-PROCESS PARITY ROW. bwrap contains a process tree rather than forbidding descendants.
+    // Seatbelt likewise propagates its policy to forked/executed children, so process-fork is part of the
+    // baseline used by production browser and agent profiles. The kernel probe below proves propagation by
+    // spawning a trusted Node descendant that must still be unable to read /etc/passwd.
     //
-    // Both denials are already implied by (deny default) and are stated anyway: an explicit deny is the
-    // POLICY, and it cannot be silently undone by a later edit that loosens the default.
-    //
-    // THE ONE CARVE-OUT. sandbox-exec applies the profile and then exec()s its target IN THIS PROCESS, so
-    // without `(allow process-exec (literal <node>))` the child never starts. It is a `literal`, not a
-    // subpath; it is `process-exec`, NOT `process-exec*` — so `process-exec-interpreter` (a shebang script
-    // that would run through an interpreter) stays denied even for Node. Production also uses an ephemeral
-    // pathname and unlinks it before plugin code is released, so this rule names no existing file then.
-    // A payload the plugin dropped in its own writable dir is refused by the kernel, on top of the JS
-    // child_process block and Node's permission model.
-    L.push(';; --- process: no fork at all, exec ONLY the Node image (last matching rule wins) ---');
-    L.push(';; posix_spawn/fork/vfork/system() are all gated by process-fork, so a confined plugin cannot');
-    L.push(';; create a process. The exec carve-out exists only because sandbox-exec execs its own target.');
-    L.push('(deny process-fork)');
+    // Exec remains narrower than those reference profiles: process-exec* is explicitly denied and only
+    // literal spellings of the trusted Node runtime are carved out. This excludes `/bin/sh`, scripts via
+    // `process-exec-interpreter`, every other host binary and anything planted in a writable zone. The
+    // ephemeral first image is unlinked before plugin code is released; the original image is retained only
+    // so a descendant can run inside the inherited sandbox.
+    L.push(';; --- process tree: descendants inherit Seatbelt; exec ONLY exact trusted Node images ---');
+    L.push('(allow process-fork)                 ;; descendants remain in the same Seatbelt domain');
     L.push('(deny process-exec*)');
-    for (const n of nodePaths) L.push(`(allow process-exec (literal ${lit(n)}))`);
-    for (const n of nodePaths) L.push(`(allow file-read* file-map-executable (literal ${lit(n)})) ;; the loader reads AND maps the image it is about to exec`);
-    L.push('(allow signal (target self))        ;; Node signals itself (e.g. its own SIGTERM/SIGINT plumbing)');
+    for (const n of allowedNodeExecPaths) L.push(`(allow process-exec (literal ${lit(n)}))`);
+    for (const n of allowedNodeExecPaths) L.push(`(allow file-read* file-map-executable (literal ${lit(n)})) ;; trusted Node image only`);
+    if (droppedNodeExecPaths > 0) {
+        L.push(`;; NOTE: ${droppedNodeExecPaths} trusted executable path(s) were DROPPED because a writable zone could replace them (W^X).`);
+    }
+    L.push('(allow signal (target same-sandbox)) ;; parent/child signalling cannot target the host backend');
     L.push('');
 
     // ── Reading another process ─────────────────────────────────────────────────────────────────────
@@ -541,16 +554,16 @@ function buildSeatbeltProfile(opts: SeatbeltProfileOptions): string {
     // because a deny that is written down survives an edit that a deny-by-omission does not.
     //
     // process-info* is the one that NEEDS the explicit deny rather than merely benefiting from it: an
-    // allow follows it, and without the deny first a reader cannot tell whether `(target self)` is a
+    // allow follows it, and without the deny first a reader cannot tell whether `(target same-sandbox)` is a
     // narrowing of something broad or the whole story.
     L.push(';; --- reading another process: the Landlock PTRACE_MODE_READ analogue ---');
     L.push(';; task_for_pid / task_name_for_pid / proc_pidinfo against the HOST BACKEND would hand a plugin');
-    L.push(';; the process that holds JWT_SECRET and the DB credentials. All denied; self is carved out.');
+    L.push(';; the process that holds JWT_SECRET and the DB credentials. Same-sandbox descendants are carved out.');
     L.push('(deny mach-priv-task-port)          ;; task_for_pid() on another process');
     L.push('(deny mach-priv-host-port)          ;; host_priv: kernel-wide task enumeration');
     L.push('(deny mach-task-name)               ;; task_name_for_pid(), the read-only cousin');
     L.push('(deny process-info*)');
-    L.push('(allow process-info* (target self)) ;; process.memoryUsage()/resourceUsage() read THIS process only');
+    L.push('(allow process-info* (target same-sandbox)) ;; process tree only; the host is outside this domain');
     L.push('');
 
     // ── sysctl ──────────────────────────────────────────────────────────────────────────────────────
@@ -724,8 +737,6 @@ function collectPaths(rules: string[], op: RegExp): string[] {
  *   survives into the exec'd node, which then attaches its IPC channel exactly as a forked child would.
  *   This is the same property the Linux memory-cap wrapper depends on (`sh -c 'ulimit -v N; exec node …'`)
  *   and the same reason `systemd-run --scope` works there.
- *   NOTE that this is also why `(deny process-fork)` above does not break the launch: sandbox-exec EXECS,
- *   it never forks, and the profile is applied before that exec.
  *   If that assumption is false, the bridge is dead and the plugin never reports 'ready'. It is therefore
  *   PRECISELY what probeSeatbelt() validates: the probe child must complete a process.send() round-trip
  *   through this exact argv shape before this layer is allowed to report 'active'.
@@ -771,19 +782,19 @@ function getSeatbeltState() { return seatbeltState; }
  *   readCode   — reading /etc/passwd, which is OUTSIDE every zone this profile grants.
  *   homeCode   — reading the HOME DIRECTORY, which is the parity row Windows already closes. A directory
  *                read is used rather than a named file so the probe never depends on a file existing.
- *   execCode   — asynchronous spawn of a real binary. The child first reports ATTEMPTED because Darwin
- *                may deliver SIGABRT instead of a recoverable error for a Seatbelt process-fork denial.
- *                The unconfined control must run the same child successfully before that signal counts.
+ *   descendantReadCode — an exact trusted Node descendant attempts to read /etc/passwd. The unconfined
+ *                control must report OPEN while both Seatbelt policy shapes must report EPERM/EACCES. This
+ *                proves process creation works AND that the descendant inherited confinement.
  *   netCode    — an outbound connect to a RAW IP (1.1.1.1:443 — no DNS, so a denied DNS lookup cannot be
  *                mistaken for a denied connect).
  *   sent       — implicit: the message arrived at all, which is the IPC round-trip.
  */
 const PROBE_SRC = [
     'var fs=require("fs");var net=require("net");var os=require("os");var cp=require("child_process");',
-    'var out={stage:"RESULT",wrote:false,readCode:"NONE",homeCode:"NONE",execCode:"NONE",selfExecCode:"SKIP",netCode:"SKIP"};',
+    'var out={stage:"RESULT",wrote:false,readCode:"NONE",homeCode:"NONE",descendantReadCode:"NONE",selfExecCode:"SKIP",netCode:"SKIP"};',
     'var target=process.argv[1];var denyNet=process.argv[2]==="1";',
     'function reportFinal(){try{process.send(out,function(){process.exit(0);});}catch(e){process.exit(5);}}',
-    'function attemptSpawn(){out.stage="SPAWN";out.execCode="ATTEMPTED";try{process.once("message",function(m){if(!m||m.wordjsProbeSpawn!==true){process.exit(6);return;}var settled=false;var child=null;var done=function(v){if(settled){return;}settled=true;out.execCode=v;try{if(child){child.kill();}}catch(e){}reportFinal();};try{child=cp.spawn("/bin/echo",["wjs"]);child.on("error",function(e){done((e&&e.code)||"THROW");});child.on("exit",function(code){done(code===0?"OK":"FAIL");});}catch(e){done((e&&e.code)||"THROW");}});process.send(out);}catch(e){process.exit(5);}}',
+    'function attemptSpawn(){out.stage="SPAWN";out.descendantReadCode="ATTEMPTED";try{process.once("message",function(m){if(!m||m.wordjsProbeSpawn!==true){process.exit(6);return;}var settled=false;var child=null;var done=function(v){if(settled){return;}settled=true;out.descendantReadCode=v;try{if(child){child.kill();}}catch(e){}reportFinal();};try{var childSrc="var fs=require(\\"fs\\");try{fs.readFileSync(\\"/etc/passwd\\");process.exit(10);}catch(e){process.exit(e&&e.code===\\"EPERM\\"?20:e&&e.code===\\"EACCES\\"?21:22);}";child=cp.spawn(process.env.WORDJS_SEATBELT_PROBE_NODE,["-e",childSrc],{stdio:"ignore"});child.on("error",function(e){done((e&&e.code)||"THROW");});child.on("close",function(code,signal){done(code===10?"OPEN":code===20?"EPERM":code===21?"EACCES":(signal||"FAIL"));});}catch(e){done((e&&e.code)||"THROW");}});process.send(out);}catch(e){process.exit(5);}}',
     'setTimeout(function(){process.exit(4);},12000);',
     'if(!process.send){process.exit(3);}',
     'function tryNetwork(){var done=false;var s=null;var settle=function(c){if(done){return;}done=true;out.netCode=c;try{if(s){s.destroy();}}catch(e){}attemptSpawn();};try{s=net.connect(443,"1.1.1.1");s.on("error",function(e){settle((e&&e.code)||"THROW");});s.on("connect",function(){settle("CONNECTED");});}catch(e){settle((e&&e.code)||"THROW");}setTimeout(function(){settle("TIMEOUT");},4000);}',
@@ -814,7 +825,7 @@ function logSafe(v: any): string {
     return String(v == null ? '' : v).replace(/\n/g, '').replace(/\r/g, '');
 }
 
-type ProbeMsg = { stage?: string; wrote?: boolean; readCode?: string; homeCode?: string; execCode?: string; selfExecCode?: string; netCode?: string };
+type ProbeMsg = { stage?: string; wrote?: boolean; readCode?: string; homeCode?: string; descendantReadCode?: string; selfExecCode?: string; netCode?: string };
 
 /**
  * Run PROBE_SRC once. `pre` is the wrapper argv (`[sandbox-exec, -p, <profile>]`) or [] for the UNCONFINED
@@ -849,7 +860,8 @@ function runProbeChild(pre: string[], target: string, denyNet: boolean, runtime?
                     env: runtime ? {
                         ...process.env,
                         WORDJS_SEATBELT_BOOTSTRAP: '1', WORDJS_SEATBELT_READY_FD: '4', WORDJS_SEATBELT_RELEASE_FD: '5',
-                    } : process.env,
+                        WORDJS_SEATBELT_PROBE_NODE: process.execPath,
+                    } : { ...process.env, WORDJS_SEATBELT_PROBE_NODE: process.execPath },
                 });
         } catch { clearTimeout(overall); finish(null); return; }
         if (runtime && proc.stderr) {
@@ -870,10 +882,9 @@ function runProbeChild(pre: string[], target: string, denyNet: boolean, runtime?
                 try { proc.send({ wordjsProbeBoot: true }); } catch { /* close will fail the probe */ }
                 return;
             }
-            // The ACK makes the process-denial observation causal: the child cannot attempt spawn until
-            // this parent has durably observed ATTEMPTED. A later SIGABRT is therefore not a lost-message
-            // race, and the same round trip also certifies production's inherited IPC channel.
-            if (msg.execCode === 'ATTEMPTED') {
+            // The ACK makes the inheritance observation causal: the child cannot spawn its descendant until
+            // this parent has durably observed ATTEMPTED. The same round trip certifies production IPC.
+            if (msg.descendantReadCode === 'ATTEMPTED') {
                 try { proc.send({ wordjsProbeSpawn: true }); } catch { /* close will fail the probe */ }
             }
         });
@@ -882,19 +893,13 @@ function runProbeChild(pre: string[], target: string, denyNet: boolean, runtime?
         // only actionable detail on the real macOS runner.
         proc.on('close', (code: number, signal: string) => {
             clearTimeout(overall);
-            // On macOS, denying process-fork can make Node abort instead of emitting a recoverable spawn
-            // error. The child flushes ATTEMPTED before making that sole call; the identical unconfined
-            // control must subsequently report OK. Preserve the signal as evidence instead of pretending
-            // it was EPERM.
-            const deniedSpawnAbort = signal === 'SIGABRT' && !!msg && msg.execCode === 'ATTEMPTED';
-            if (deniedSpawnAbort && msg) msg.execCode = 'SIGABRT';
             if (runtime && (code !== 0 || signal || bootstrapFailure || spawnFailure)) {
                 console.warn('[Sandbox] Seatbelt probe child failed: ' + logSafe(JSON.stringify({
                     code, signal: signal || '', bootstrap: bootstrapFailure, spawn: spawnFailure,
                     lastMessage: msg || null, stderr,
                 })));
             }
-            finish(code === 0 || deniedSpawnAbort ? msg : null);
+            finish(code === 0 ? msg : null);
         });
     });
 }
@@ -904,17 +909,17 @@ let seatbeltProbe: Promise<'active' | 'degraded' | 'unsupported' | 'disabled'> |
  * Spawn a REAL child under the REAL profile, AND an unconfined control running the identical program, and
  * decide what this host actually gets.
  *
- * Memoized like every other probe in this sandbox: it costs two process spawns, its answer cannot change
+ * Memoized like every other probe in this sandbox: its answer cannot change
  * within a process lifetime, and the launch path reads it synchronously.
  *
  * It reports 'active' ONLY when ALL of the following held at once:
  *   · sandbox-exec exists and the confined child launched through it,
  *   · the IPC round-trip completed (so the bridge survives the profile — see seatbeltArgs),
  *   · the POSITIVE CONTROL passed (a granted write really worked, so the profile is not simply broken),
- *   · the UNCONFINED CONTROL was NOT refused any of the four operations (so "refused" means the sandbox,
- *     not an offline box, a missing binary or a broken Node), and
+ *   · the UNCONFINED CONTROL was NOT refused any operation (so "refused" means the sandbox, not an
+ *     offline box, a missing binary or a broken Node), and
  *   · the confined child was REFUSED BY THE KERNEL on every one of: a read outside every granted zone, a
- *     read of the home directory, a real process spawn, and an outbound connect to a raw IP.
+ *     read of the home directory, the same read from a spawned Node descendant, and a raw-IP connect.
  * Any other outcome is 'degraded' — enabled but uncertified — and the caller must fall back to the
  * existing launch. There is no path through this function that reports 'active' on a claim.
  */
@@ -966,8 +971,8 @@ function probeSeatbelt(): Promise<'active' | 'degraded' | 'unsupported' | 'disab
         // a broken launcher instead of Seatbelt. Do not grant appRoot: the probe must retain the production
         // property that only the required core code is readable.
         const probeCodeRoots = [pathm.dirname(SEATBELT_BOOTSTRAP_FILE)];
-        const profile = buildSeatbeltProfile({ writableDirs: [dir], readOnlyDirs: probeCodeRoots, denyNetwork: true, appRoot, nodePath: deniedRuntime.exe, runtimeRoots: deniedRuntime.runtimeRoots });
-        const allowedProfile = buildSeatbeltProfile({ writableDirs: [dir], readOnlyDirs: probeCodeRoots, denyNetwork: false, appRoot, nodePath: allowedRuntime.exe, runtimeRoots: allowedRuntime.runtimeRoots });
+        const profile = buildSeatbeltProfile({ writableDirs: [dir], readOnlyDirs: probeCodeRoots, denyNetwork: true, appRoot, nodePath: deniedRuntime.exe, runtimeRoots: deniedRuntime.runtimeRoots, descendantExecPaths: deniedRuntime.descendantExecPaths });
+        const allowedProfile = buildSeatbeltProfile({ writableDirs: [dir], readOnlyDirs: probeCodeRoots, denyNetwork: false, appRoot, nodePath: allowedRuntime.exe, runtimeRoots: allowedRuntime.runtimeRoots, descendantExecPaths: allowedRuntime.descendantExecPaths });
 
         // A profile that fails its own text invariants is never launched. This costs microseconds and it
         // is the only check in this file that runs on the SHIPPED profile on the SHIPPED host.
@@ -994,34 +999,33 @@ function probeSeatbelt(): Promise<'active' | 'degraded' | 'unsupported' | 'disab
         // Every clause below must hold. Written as separate named checks rather than one boolean so a
         // failure says WHICH property was not proven — a probe that only says "no" teaches nobody anything.
         const refused = (v: any) => REFUSAL_CODES.has(String(v));
-        const processRefused = (v: any) => refused(v) || v === 'SIGABRT';
         const ipcOk = !!confined;                                   // the round-trip completed
         const controlRan = !!control;                               // the reference measurement exists
-        // The control must NOT have been refused anything: if the box is offline, or /bin/echo is missing,
+        // The control must NOT have been refused anything: if the box is offline, Node is broken,
         // or /etc/passwd is unreadable for an ordinary reason, the confined run's failure proves nothing.
         const controlClean = !!control
             && control.wrote === true
             && control.readCode === 'OPEN'
             && control.homeCode === 'OPEN'
-            && control.execCode === 'OK'
-            // The unconfined control traverses the same preload handshake, so ENOENT proves the sole
-            // executable identity was really unlinked before the probe program was released.
+            && control.descendantReadCode === 'OPEN'
+            // The unconfined control traverses the same preload handshake, so ENOENT proves the initial
+            // ephemeral executable identity was really unlinked before the probe program was released.
             && control.selfExecCode === 'ENOENT'
             && !refused(control.netCode);
         const controlOk = !!(confined && confined.wrote === true);  // granted write really worked
         const readRefused = !!(confined && refused(confined.readCode));
         const homeRefused = !!(confined && refused(confined.homeCode));
-        const execRefused = !!(confined && processRefused(confined.execCode));
+        const descendantConfined = !!(confined && refused(confined.descendantReadCode));
         const selfExecRefused = !!(confined && confined.selfExecCode === 'ENOENT');
         const netRefused = !!(confined && refused(confined.netCode));
         const allowedShape = !!allowed && allowed.wrote === true
-            && refused(allowed.readCode) && refused(allowed.homeCode) && processRefused(allowed.execCode)
+            && refused(allowed.readCode) && refused(allowed.homeCode) && refused(allowed.descendantReadCode)
             && allowed.selfExecCode === 'ENOENT'
             && allowed.netCode === 'CONNECTED';
         if (selfAudit.length === 0 && ipcOk && controlRan && controlClean && controlOk
-            && readRefused && homeRefused && execRefused && selfExecRefused && netRefused && allowedShape) {
+            && readRefused && homeRefused && descendantConfined && selfExecRefused && netRefused && allowedShape) {
             seatbeltState = 'active';
-            console.log('[Sandbox] macOS Seatbelt confinement ACTIVE for both network policies: deny-by-default reads, scoped writes, no process creation or cross-process reads; only outbound network changes with the grant.');
+            console.log('[Sandbox] macOS Seatbelt confinement ACTIVE for both network policies: deny-by-default reads, scoped writes, trusted Node descendants inherit confinement; only outbound network changes with the grant.');
             return 'active';
         }
         seatbeltState = 'degraded';
@@ -1031,7 +1035,7 @@ function probeSeatbelt(): Promise<'active' | 'degraded' | 'unsupported' | 'disab
             + `ipc=${ipcOk ? 'ok' : 'FAILED'} writeControl=${controlOk ? 'ok' : 'FAILED'} `
             + `outOfZoneRead=${readRefused ? 'refused' : logSafe((confined && confined.readCode) || 'unknown')} `
             + `homeRead=${homeRefused ? 'refused' : logSafe((confined && confined.homeCode) || 'unknown')} `
-            + `spawn=${execRefused ? 'refused' : logSafe((confined && confined.execCode) || 'unknown')} `
+            + `descendantRead=${descendantConfined ? 'refused' : logSafe((confined && confined.descendantReadCode) || 'unknown')} `
             + `selfExec=${selfExecRefused ? 'refused' : logSafe((confined && confined.selfExecCode) || 'unknown')} `
             + `rawIpConnect=${netRefused ? 'refused' : logSafe((confined && confined.netCode) || 'unknown')} `
             + `networkGrantedShape=${allowedShape ? 'ok' : 'FAILED'}`);
