@@ -55,6 +55,16 @@ jobs:
       - name: Certify the native confinement used by WordJS
         run: node backend/scripts/verify-sandbox-parity.mjs --json=sandbox-parity-report.json
 
+      - name: macOS Seatbelt denial diagnostics
+        if: failure() && runner.os == 'macOS'
+        shell: bash
+        run: |
+          # Child stderr cannot explain a pre-main abort. Seatbelt's own audit stream names the denied
+          # operation; keep the query bounded to this job's last two minutes and sandbox events only.
+          log show --last 2m --style compact \
+            --predicate 'process == "sandboxd" OR eventMessage CONTAINS[c] "Sandbox:"' 2>/dev/null \
+            | tail -n 200 || true
+
       - name: Upload parity report
         if: always()
         uses: actions/upload-artifact@v4
