@@ -685,6 +685,50 @@ const MIGRATIONS: Migration[] = [
             }
             console.log('   ✓ [migration 0013] collab: epoch en el UNIQUE, truncated/base_hash/updated_ms y collab_members');
         }
+    },
+    {
+        // F3 transactional content outbox. The semantic event is inserted in the SAME pinned
+        // transaction as posts/meta/terms/revisions. Delivery is leased and retryable across nodes;
+        // an expired `processing` row is reclaimable after a worker crash.
+        id: '0014_create_content_outbox',
+        up: async (ctx: MigrationCtx) => {
+            const INT_PK = ctx.isPostgres ? 'SERIAL PRIMARY KEY' : 'INTEGER PRIMARY KEY AUTOINCREMENT';
+            const TS = ctx.isPostgres ? 'TIMESTAMP' : 'DATETIME';
+            const isMysql = ctx.driverName === 'mysql' || ctx.driverName === 'mariadb';
+            await ctx.exec(
+                `CREATE TABLE IF NOT EXISTS content_outbox (` +
+                `id ${INT_PK}, ` +
+                `event_id TEXT NOT NULL UNIQUE, ` +
+                `event_type TEXT NOT NULL, ` +
+                `aggregate_id INTEGER NOT NULL, ` +
+                `payload TEXT NOT NULL, ` +
+                `status TEXT NOT NULL DEFAULT 'pending', ` +
+                `attempts INTEGER NOT NULL DEFAULT 0, ` +
+                `available_at INTEGER NOT NULL DEFAULT 0, ` +
+                `claim_token TEXT, ` +
+                `claimed_until INTEGER, ` +
+                `processed_at INTEGER, ` +
+                `last_error TEXT, ` +
+                `created_at ${TS} DEFAULT CURRENT_TIMESTAMP)`
+            );
+            await ctx.exec('CREATE INDEX IF NOT EXISTS idx_content_outbox_due ON content_outbox (status, available_at, claimed_until, id)');
+            await ctx.exec('CREATE INDEX IF NOT EXISTS idx_content_outbox_aggregate ON content_outbox (aggregate_id, id)');
+            await ctx.exec('CREATE INDEX IF NOT EXISTS idx_content_outbox_retention ON content_outbox (status, processed_at, id)');
+
+            // Propagate the immutable source event into webhook fan-out. If a plugin later in the
+            // hook chain fails and the outbox retries, the same webhook delivery is not enqueued a
+            // second time. NULL preserves legacy/comment hook behavior outside the content outbox.
+            try {
+                await ctx.exec(`ALTER TABLE webhook_deliveries ADD COLUMN source_event_id ${isMysql ? 'VARCHAR(255)' : 'TEXT'}`);
+            } catch (error: any) {
+                if (!/duplicate column|already exists/i.test(String(error?.message || ''))) throw error;
+            }
+            await ctx.exec(
+                'CREATE UNIQUE INDEX IF NOT EXISTS idx_wh_delivery_source_event ' +
+                'ON webhook_deliveries (webhook_id, source_event_id, event)'
+            );
+            console.log('   ✓ [migration 0014] durable transactional content outbox ready');
+        }
     }
 ];
 

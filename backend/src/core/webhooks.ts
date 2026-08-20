@@ -215,9 +215,13 @@ function commentPayload(c: any) {
 async function fanout(event: string, data: any): Promise<void> {
     const ids = await Webhook.activeIdsForEvent(event);
     if (!ids.length) return;
-    const body = JSON.stringify({ event, timestamp: nowSec(), data });
+    // A content outbox retry replays hooks at-least-once. Carry its immutable id into the delivery
+    // queue so fan-out is idempotent per endpoint+semantic event; comment/legacy hooks use NULL and
+    // retain their existing behavior.
+    const sourceEventId = require('./content-outbox').currentContentEventId();
+    const body = JSON.stringify({ event, eventId: sourceEventId || undefined, timestamp: nowSec(), data });
     const now = nowSec();
-    for (const id of ids) await WebhookDelivery.enqueue(id, event, body, now);
+    for (const id of ids) await WebhookDelivery.enqueue(id, event, body, now, sourceEventId);
     // Low-latency kick — only when the poller is running (prod). In tests (poller off) delivery is driven
     // explicitly via pump(), keeping the suite deterministic.
     if (_pollTimer) setImmediate(() => { pump().catch(() => {}); });

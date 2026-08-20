@@ -4,9 +4,11 @@
  */
 
 const crypto = require('crypto');
-const { dbAsync } = require('../config/database');
+const database = require('../config/database');
+const { dbAsync } = database;
 const { diffText, diffStats } = require('./text-diff');
 const { canonicalMetaKey } = require('./protected-meta');
+const { runContentMutation, recordContentEvent, isContentMutationActive } = require('./content-outbox');
 
 /**
  * THE VERSIONED META KEYS — the exact set a snapshot copies and a restore puts back.
@@ -77,6 +79,11 @@ function isUniqueViolation(err: any) {
  * Equivalent to wp_save_post_revision()
  */
 async function saveRevision(postId: number) {
+  // A revision is a post row plus zero-or-more meta rows and pruning. Standalone callers get one
+  // pinned transaction; F3 content mutations already own it and transparently join here.
+  if (!database.hasActiveTransaction()) {
+    return await dbAsync.transaction(() => saveRevision(postId));
+  }
   // Get current post data
   const post = await dbAsync.get('SELECT * FROM posts WHERE id = ?', [postId]);
   if (!post) return null;
@@ -209,30 +216,27 @@ async function getAllMeta(postId: number) {
  * Equivalent to wp_restore_post_revision()
  */
 async function restoreRevision(revisionId: number) {
+  if (!isContentMutationActive()) {
+    try { return await runContentMutation(() => restoreRevision(revisionId)); }
+    catch (error) {
+      console.error('Failed to restore revision:', error);
+      return false;
+    }
+  }
   const revision = await getRevision(revisionId);
   if (!revision) return false;
 
-  // Save current state as a new revision first (outside the restore transaction, matching the
-  // original ordering — this is its own multi-statement unit and must persist regardless).
-  //
-  // NEVER let this abort the restore: a failed pre-snapshot used to escape (it sits outside the try
-  // below) and turn the restore into a 500 that restored NOTHING — the author lost both the new
-  // content and the old one they were trying to get back. Losing the safety snapshot is bad; losing
-  // the restore too is worse. Log and continue.
-  try {
-    await saveRevision(revision.postId);
-  } catch (error) {
-    console.error('Failed to snapshot current state before restoring revision:', error);
-  }
+  // Save current state inside the SAME F3 unit. If the safety snapshot or the restore fails, neither
+  // becomes visible; a 200 can never mean "restored without a recovery point".
+  await saveRevision(revision.postId);
 
   // Lazy requires: core/revisions is pulled in by the CLI and by route modules, and models/Post drags
   // in the cache + hook subsystems. Requiring them here keeps module load order unchanged.
   const Post = require('../models/Post');
-  const { doAction } = require('./hooks');
 
   // The PRIOR status, read before the write, so the post_updated listeners can tell a real transition
   // from a re-save (this is exactly what Post.update passes them).
-  const parentRow = await dbAsync.get('SELECT post_status FROM posts WHERE id = ?', [revision.postId]);
+  const parentRow = await dbAsync.get('SELECT post_status, post_type, post_name FROM posts WHERE id = ?', [revision.postId]);
   const priorStatus = parentRow ? parentRow.post_status : undefined;
 
   // The snapshot's VERSIONED meta, RAW. getRevision().meta JSON.parse()s every value for API
@@ -242,13 +246,12 @@ async function restoreRevision(revisionId: number) {
   const rawByPost = await Post.getAllMetaRawForIds([revision.id]);
   const snapshotMeta = (rawByPost[revision.id] || []).filter((r: any) => isRevisionableMeta(r.key));
 
-  try {
-    // Run the restore as ONE atomic unit on a single connection. Previously this issued
+  // Run the restore as ONE atomic unit on the F3 pinned connection. Previously this issued
     // BEGIN/UPDATE/.../COMMIT as separate dbAsync.run() calls; on the pg driver each call grabs a
     // DIFFERENT pooled connection, so the BEGIN/COMMIT did not actually bound the statements (they
     // ran auto-committed on whatever backend the pool handed out). dbAsync.transaction() pins one
     // connection so the UPDATE + meta delete/insert truly commit or roll back together.
-    await dbAsync.transaction(async (tx: any) => {
+  await dbAsync.transaction(async (tx: any) => {
       // Restore the revision content
       await tx.run(`
         UPDATE posts SET
@@ -288,12 +291,7 @@ async function restoreRevision(revisionId: number) {
       for (const row of snapshotMeta) {
         await tx.run('INSERT INTO post_meta (post_id, meta_key, meta_value) VALUES (?, ?, ?)', [revision.postId, row.key, row.value]);
       }
-    });
-  } catch (error) {
-    // transaction() already rolled back on throw; just report.
-    console.error('Failed to restore revision:', error);
-    return false;
-  }
+  });
 
   // A RESTORE IS A POST WRITE, and until now it was the only one that did not say so. This module
   // wrote raw SQL and stopped: no cache invalidation and no `post_updated`. The damage was not mere
@@ -308,12 +306,17 @@ async function restoreRevision(revisionId: number) {
   // restore is indistinguishable from any other write to every downstream listener.
   await Post._invalidatePostCacheById(revision.postId);
   Post._invalidateCounts();
-  await doAction('post_updated', revision.postId, {
-    title: revision.title,
-    content: revision.content,
-    excerpt: revision.excerpt,
-    restoredFromRevisionId: revision.id,
-  }, priorStatus);
+  recordContentEvent('post.updated', Number(revision.postId), {
+    data: {
+      title: revision.title,
+      content: revision.content,
+      excerpt: revision.excerpt,
+      restoredFromRevisionId: revision.id,
+    },
+    previousStatus: priorStatus,
+    previousType: parentRow?.post_type,
+    previousSlug: parentRow?.post_name,
+  });
 
   return true;
 }

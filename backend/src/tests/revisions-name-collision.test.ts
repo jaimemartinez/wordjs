@@ -13,8 +13,8 @@
  *     answered 500 having restored NOTHING — the author lost the new content and the old one.
  *
  * Both halves are locked here: the cause (unique-by-construction name, verified with Date.now frozen,
- * which is the worst case a real clock can produce) and the symptom (a restore survives a saveRevision
- * that fails for ANY reason).
+ * which is the worst case a real clock can produce) and F3's fail-closed symptom (a restore whose
+ * required safety snapshot fails leaves the edited post and its prior revision untouched).
  *
  * IMPORTANT: `config.dbPath` is repointed to a temp file BEFORE requiring `../config/database`.
  */
@@ -127,31 +127,41 @@ describe('post revisions — two snapshots in the same millisecond (H3)', () => 
         assert.strictEqual(await countRevisions(post.id), 3, 'the pre-restore snapshot must have persisted');
     });
 
-    it('a restore still succeeds when the pre-restore snapshot fails for any reason', async () => {
+    it('a restore rolls back when its pre-restore safety snapshot fails', async () => {
         const post = await newPost('restaurar-pese-a-fallo', '<p>original</p>');
         const revisionId = await saveRevision(post.id);
         await Post.update(post.id, { content: '<p>editado</p>' });
 
-        // core/revisions.ts destructured the SAME dbAsync object, so patching .run here is what its
-        // saveRevision will call. Fail every revision INSERT: the restore must still go through.
-        const realRun = dbAsync.run.bind(dbAsync);
+        // F3 routes writes through the transaction's pinned query object. Wrap that real connection
+        // so the injected failure cannot accidentally test the non-transactional proxy instead.
+        const driver = database.getDbAsync();
+        const realTransaction = driver.transaction.bind(driver);
         let blocked = 0;
-        dbAsync.run = async (sql: string, params: any) => {
-            if (/INSERT INTO posts/i.test(sql)) { blocked++; throw new Error('boom: revision insert failed'); }
-            return await realRun(sql, params);
-        };
+        driver.transaction = async (work: any) => realTransaction(async (tx: any) => {
+            const guarded = new Proxy(tx, {
+                get(target, prop) {
+                    if (prop === 'run') return async (sql: string, params: any) => {
+                        if (/INSERT INTO posts/i.test(sql)) { blocked++; throw new Error('boom: revision insert failed'); }
+                        return await target.run(sql, params);
+                    };
+                    const value = target[prop];
+                    return typeof value === 'function' ? value.bind(target) : value;
+                }
+            });
+            return await work(guarded);
+        });
         let ok: boolean;
         try {
             ok = await restoreRevision(revisionId);
         } finally {
-            dbAsync.run = realRun;
+            driver.transaction = realTransaction;
         }
 
-        assert.ok(blocked > 0, 'the fault injection must actually have fired');
-        assert.strictEqual(ok, true, 'a failed pre-snapshot must not abort the restore');
+        assert.ok(blocked > 0, 'the fault injection must actually have fired on the pinned connection');
+        assert.strictEqual(ok, false, 'a restore without its safety snapshot must fail closed');
         const fresh = await dbAsync.get('SELECT post_content FROM posts WHERE id = ?', [post.id]);
-        assert.match(fresh.post_content, /original/, 'the restore must have happened despite the failed snapshot');
+        assert.match(fresh.post_content, /editado/, 'the destructive restore must have rolled back');
         const revs = await getRevisions(post.id);
-        assert.strictEqual(revs.length, 1, 'only the pre-existing revision survives (the new snapshot failed)');
+        assert.strictEqual(revs.length, 1, 'the failed snapshot and restore leave no partial revision');
     });
 });

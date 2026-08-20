@@ -83,3 +83,60 @@ test('sql.js transaction: a ROLLBACK still undoes the write, and serialises the 
         fs.rmSync(dir, { recursive: true, force: true });
     }
 });
+
+test('sql.js transaction: overlapping callers queue; only an actual re-entrant call is rejected', async () => {
+    const { db, dir } = await bootLegacy();
+    try {
+        await Promise.all(Array.from({ length: 5 }, (_, i) => db.transaction(async (tx: any) => {
+            await tx.run('INSERT INTO t (v) VALUES (?)', [`parallel-${i}`]);
+            await new Promise((resolve) => setImmediate(resolve));
+        })));
+        const rows = db.all("SELECT v FROM t WHERE v LIKE 'parallel-%'");
+        assert.strictEqual(rows.length, 5, 'independent async contexts serialize instead of seeing a false nested-transaction error');
+
+        await assert.rejects(
+            db.transaction(async () => db.transaction(async () => {})),
+            /nested transaction\(\) is not supported/,
+            'a transaction called from its own callback still fails fast rather than deadlocking'
+        );
+    } finally {
+        legacy.close();
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+});
+
+test('sql.js transaction: unrelated writes cannot cross an open transaction boundary', async () => {
+    const { db, dir } = await bootLegacy();
+    let entered!: () => void;
+    let release!: () => void;
+    const transactionEntered = new Promise<void>((resolve) => { entered = resolve; });
+    const transactionRelease = new Promise<void>((resolve) => { release = resolve; });
+    try {
+        const failing = db.transaction(async (tx: any) => {
+            await tx.run('INSERT INTO t (v) VALUES (?)', ['doomed']);
+            entered();
+            await transactionRelease;
+            throw new Error('legacy rollback');
+        });
+        await transactionEntered;
+
+        assert.throws(
+            () => db.run('INSERT INTO t (v) VALUES (?)', ['sync-outsider']),
+            /busy with another transaction/,
+            'a synchronous caller fails closed instead of joining an unrelated transaction'
+        );
+        const independent = (async () => {
+            await db.waitForTransaction();
+            return db.run('INSERT INTO t (v) VALUES (?)', ['async-outsider']);
+        })();
+        release();
+        await assert.rejects(failing, /legacy rollback/);
+        await independent;
+
+        const rows = db.all('SELECT v FROM t ORDER BY id');
+        assert.deepStrictEqual(rows.map((r: any) => r.v), ['committed', 'async-outsider']);
+    } finally {
+        legacy.close();
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+});

@@ -83,6 +83,14 @@ class Hooks {
      * Equivalent to do_action()
      */
     async doAction(hook: string, ...args: any[]) {
+        // A hook is externally observable: plugins can write another store, webhooks enqueue work and
+        // the frontend purge performs network I/O. If a caller is inside a pinned DB transaction, run
+        // it only after COMMIT. Durable content hooks take the stronger outbox path and therefore call
+        // this method after their outbox row has itself committed.
+        try {
+            const database = require('../config/database');
+            if (database.afterCommit(() => this.doAction(hook, ...args))) return;
+        } catch { /* database may still be bootstrapping; normal immediate behavior is safe then */ }
         this._emitMonitor('action', hook, args);
         if (!this.actions.has(hook)) return;
         const { runWithContext } = require('./plugin-context');

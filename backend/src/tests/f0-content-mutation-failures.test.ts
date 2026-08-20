@@ -1,10 +1,8 @@
 /**
- * F0 failure characterization for the current multi-stage content routes.
+ * F3 failure injection for the transactional content boundary introduced from the F0 characterization.
  *
- * These assertions record known partial states; they are deliberately NOT the desired F3 contract.
- * F3 must invert them so every injected failure leaves the pre-request state plus one durable outbox
- * event only after commit. Keeping the current behavior explicit prevents an accidental or partial
- * transaction rewrite from looking green.
+ * Every injected failure must leave the pre-request state and no outbox event. Successful mutations
+ * persist the content event in the same transaction and dispatch it only after commit.
  */
 
 const { describe, test, before, after } = require('node:test');
@@ -61,6 +59,10 @@ async function count(sql: string, params: any[]): Promise<number> {
     return Number(row.c);
 }
 
+async function outboxCount(): Promise<number> {
+    return await count('SELECT COUNT(*) AS c FROM content_outbox', []);
+}
+
 async function silenceExpectedError<T>(fn: () => Promise<T>): Promise<T> {
     const original = console.error;
     console.error = () => {};
@@ -89,9 +91,10 @@ after(async () => {
     }
 });
 
-describe('F0 create failure boundaries (known gaps until F3)', () => {
-    test('a term-stage failure returns 500 after the post row has committed', async () => {
+describe('F3 create atomic boundary', () => {
+    test('a term-stage failure rolls back the post and its outbox event', async () => {
         const title = unique('F0 term fault');
+        const beforeOutbox = await outboxCount();
         const realSetTerms = Post.setTerms;
         Post.setTerms = async () => { throw Object.assign(new Error('F0_FAIL_TERMS'), { code: 'f0_injected' }); };
         try {
@@ -101,12 +104,13 @@ describe('F0 create failure boundaries (known gaps until F3)', () => {
             Post.setTerms = realSetTerms;
         }
         const post = await rowByTitle(title);
-        assert.ok(post, 'F0 characterization changed: the post no longer survives a term-stage failure; update this test for F3');
-        assert.strictEqual(await count(`SELECT COUNT(*) AS c FROM posts WHERE post_parent = ? AND post_type = 'revision'`, [post.id]), 0);
+        assert.strictEqual(post, undefined);
+        assert.strictEqual(await outboxCount(), beforeOutbox);
     });
 
-    test('a second meta-stage failure leaves the post and first meta row committed', async () => {
+    test('a second meta-stage failure rolls back the post and every prior meta write', async () => {
         const title = unique('F0 meta fault');
+        const beforeOutbox = await outboxCount();
         const realUpdateMeta = Post.updateMeta;
         let calls = 0;
         Post.updateMeta = async (...args: any[]) => {
@@ -125,14 +129,15 @@ describe('F0 create failure boundaries (known gaps until F3)', () => {
             Post.updateMeta = realUpdateMeta;
         }
         const post = await rowByTitle(title);
-        assert.ok(post);
-        const rows = await dbAsync.all(`SELECT meta_key, meta_value FROM post_meta WHERE post_id = ? AND meta_key LIKE 'f0_%' ORDER BY meta_key`, [post.id]);
-        assert.deepStrictEqual(rows, [{ meta_key: 'f0_first', meta_value: 'committed' }]);
+        assert.strictEqual(post, undefined);
+        assert.strictEqual(await count(`SELECT COUNT(*) AS c FROM post_meta WHERE meta_key LIKE 'f0_%'`, []), 0);
+        assert.strictEqual(await outboxCount(), beforeOutbox);
     });
 
-    test('an initial-revision failure is currently fire-and-forget and the route still returns 201', async () => {
+    test('an initial-revision failure returns 500 and rolls back the whole creation', async () => {
         const title = unique('F0 revision fault');
         const beforeAttempts = revisionAttempts;
+        const beforeOutbox = await outboxCount();
         failRevision = true;
         let response: any;
         try {
@@ -140,19 +145,20 @@ describe('F0 create failure boundaries (known gaps until F3)', () => {
         } finally {
             failRevision = false;
         }
-        assert.strictEqual(response.status, 201);
+        assert.strictEqual(response.status, 500);
         assert.strictEqual(revisionAttempts, beforeAttempts + 1);
         const post = await rowByTitle(title);
-        assert.ok(post);
-        assert.strictEqual(await count(`SELECT COUNT(*) AS c FROM posts WHERE post_parent = ? AND post_type = 'revision'`, [post.id]), 0);
+        assert.strictEqual(post, undefined);
+        assert.strictEqual(await outboxCount(), beforeOutbox);
     });
 });
 
-describe('F0 update failure boundary (known gap until F3)', () => {
-    test('a term-stage failure happens after the post row update and recovery snapshot', async () => {
+describe('F3 update atomic boundary', () => {
+    test('a term-stage failure rolls back the row update, recovery snapshot and outbox event', async () => {
         const originalTitle = unique('F0 update original');
         const changedTitle = unique('F0 update changed');
         const post = await Post.create({ authorId: adminId, title: originalTitle, content: 'old', status: 'draft' });
+        const beforeOutbox = await outboxCount();
         const realSetTerms = Post.setTerms;
         Post.setTerms = async () => { throw Object.assign(new Error('F0_FAIL_UPDATE_TERMS'), { code: 'f0_injected' }); };
         try {
@@ -162,8 +168,8 @@ describe('F0 update failure boundary (known gap until F3)', () => {
             Post.setTerms = realSetTerms;
         }
         const current = await dbAsync.get('SELECT post_title FROM posts WHERE id = ?', [post.id]);
-        assert.strictEqual(current.post_title, changedTitle, 'the row currently commits before the term stage');
-        assert.strictEqual(await count(`SELECT COUNT(*) AS c FROM posts WHERE post_parent = ? AND post_type = 'revision'`, [post.id]), 1,
-            'the pre-write recovery snapshot must remain visible in the characterization');
+        assert.strictEqual(current.post_title, originalTitle);
+        assert.strictEqual(await count(`SELECT COUNT(*) AS c FROM posts WHERE post_parent = ? AND post_type = 'revision'`, [post.id]), 0);
+        assert.strictEqual(await outboxCount(), beforeOutbox);
     });
 });

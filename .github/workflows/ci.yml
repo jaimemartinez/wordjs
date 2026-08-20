@@ -90,6 +90,7 @@ jobs:
           backend/src/tests/f0-content-mutation-failures.test.ts
           backend/src/tests/f1-content-schema.test.ts
           backend/src/tests/f2-content-contract.test.ts
+          backend/src/tests/f3-content-outbox.test.ts
           backend/src/tests/health-purge-observability.test.ts
           backend/src/tests/import-post-page-slug-identity.test.ts
           backend/src/tests/install-root-paths.test.ts
@@ -138,14 +139,17 @@ jobs:
           backend/scripts/verify-f1-content-schema.ts
           backend/scripts/generate-f2-contracts.ts
           backend/scripts/verify-f2-contracts.ts
+          backend/scripts/verify-f3-transactional-content.ts
           backend/content-schema.v1.json
           backend/src/core/content-contract.ts
+          backend/src/core/content-outbox.ts
           backend/src/generated/content-dtos.generated.ts
           backend/f0-baseline.json
           backend/f0-performance-budgets.json
           documentation/adr/0001-f0-foundation-contract.md
           documentation/adr/0002-f1-declarative-content-schema.md
           documentation/adr/0003-f2-generated-content-contracts.md
+          documentation/adr/0004-f3-transactional-content-outbox.md
           # ── frontend gates (vitest run: src/**/*.test.ts(x)) ──────────────────────────────────────
           frontend/src/__tests__/instrumentationGatewayTls.test.ts
           frontend/src/app/admin/notices/__tests__/noticesLogic.test.ts
@@ -301,6 +305,9 @@ jobs:
       - name: F2 generated content contracts (validators, DTO, OpenAPI, policy and client)
         working-directory: backend
         run: npm run verify:f2
+      - name: F3 transactional content (pinned unit-of-work + durable outbox)
+        working-directory: backend
+        run: npm run verify:f3
       - name: License gate (block network-copyleft AGPL/SSPL)
         working-directory: backend
         run: npx --yes license-checker --production --failOn 'AGPL;SSPL'

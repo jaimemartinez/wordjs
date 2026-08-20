@@ -98,6 +98,61 @@ async function runContract(driver: any, d: any) {
         assert.strictEqual(afterPrune.length, 1, 'exactly the un-pruned row must remain');
         assert.strictEqual(afterPrune[0].name, 'alpha', 'the high-n row (alpha) must survive the prune');
 
+        // --- F3 pinned transaction contract -------------------------------------------------------
+        const committed = await driver.transaction(async (tx: any) => {
+            const inserted = await tx.run(
+                `INSERT INTO conf_test (name, n) VALUES (${d.ph(1)}, ${d.ph(2)})${d.ret}`,
+                ['tx-commit', 7]
+            );
+            const visible = await tx.get(`SELECT name FROM conf_test WHERE name = ${d.ph(1)}`, ['tx-commit']);
+            assert.strictEqual(visible.name, 'tx-commit', 'the pinned connection sees its own uncommitted write');
+            return inserted.lastID;
+        });
+        assert.ok(committed, 'transaction returns the callback value');
+        assert.ok(await driver.get(`SELECT name FROM conf_test WHERE name = ${d.ph(1)}`, ['tx-commit']), 'COMMIT persists every write');
+
+        await assert.rejects(
+            driver.transaction(async (tx: any) => {
+                await tx.run(`INSERT INTO conf_test (name, n) VALUES (${d.ph(1)}, ${d.ph(2)})${d.ret}`, ['tx-rollback', 8]);
+                throw new Error('EXPECTED_F3_ROLLBACK');
+            }),
+            /EXPECTED_F3_ROLLBACK/
+        );
+        assert.strictEqual(
+            await driver.get(`SELECT name FROM conf_test WHERE name = ${d.ph(1)}`, ['tx-rollback']),
+            undefined,
+            'ROLLBACK leaves no partial row'
+        );
+
+        // The portable SQL forms used by migration 0014 and the lease worker must execute on every
+        // real engine, not merely parse in a SQLite-only unit test.
+        await driver.exec('DROP TABLE IF EXISTS conf_outbox');
+        await driver.exec(`CREATE TABLE conf_outbox (
+            id ${d.autoPk}, event_id TEXT NOT NULL UNIQUE, event_type TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0,
+            available_at INTEGER NOT NULL DEFAULT 0, claim_token TEXT, claimed_until INTEGER,
+            source_event_id TEXT
+        )`);
+        await driver.exec('CREATE UNIQUE INDEX idx_conf_source_event ON conf_outbox (source_event_id, event_type)');
+        const eventInsert = await driver.run(
+            `INSERT INTO conf_outbox (event_id, event_type, available_at) VALUES (${d.ph(1)}, ${d.ph(2)}, ${d.ph(3)})${d.ret}`,
+            ['evt-1', 'post.updated', 0]
+        );
+        const claimed = await driver.run(
+            `UPDATE conf_outbox SET status = 'processing', attempts = attempts + 1,
+             claim_token = ${d.ph(1)}, claimed_until = ${d.ph(2)}
+             WHERE id = ${d.ph(3)} AND status = 'pending' AND available_at <= ${d.ph(4)}`,
+            ['lease-1', 60, eventInsert.lastID, 0]
+        );
+        assert.strictEqual(claimed.changes, 1, 'the guarded F3 lease claim is atomic and portable');
+        const lostRace = await driver.run(
+            `UPDATE conf_outbox SET claim_token = ${d.ph(1)}
+             WHERE id = ${d.ph(2)} AND status = 'pending' AND available_at <= ${d.ph(3)}`,
+            ['lease-2', eventInsert.lastID, 0]
+        );
+        assert.strictEqual(lostRace.changes, 0, 'a second worker cannot claim the leased event');
+
+        await driver.exec('DROP TABLE conf_outbox');
         await driver.exec('DROP TABLE conf_test');
     } finally {
         try { await driver.close(); } catch { /* */ }

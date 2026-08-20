@@ -30,6 +30,7 @@ const User = require('../models/User');
 const Term = require('../models/Term');
 const Comment = require('../models/Comment');
 const { dbAsync } = require('../config/database');
+const { runContentMutation, recordContentEvent } = require('./content-outbox');
 const { sanitizeMetaValue } = require('./sanitize-meta');
 // ONE list of server-owned meta keys for every writer — the importer used to keep a two-key subset of
 // its own (see the postmeta loop below for what that cost). metaKeyProblem is the FORM rule (type,
@@ -464,21 +465,22 @@ async function importWxr(xml: string, options: ImportOptions): Promise<ImportSum
             const content = maybeAutop(rawContent);
             const excerpt = text(item['excerpt:encoded']);
 
-            const post = await Post.create({
-                authorId,
-                title: text(item.title),
-                content,
-                excerpt,
-                status,
-                type,
-                slug,
-                parent: 0, // resolved in pass D
-                menuOrder: parseInt(text(item['wp:menu_order']) || '0', 10) || 0,
-                commentStatus: text(item['wp:comment_status']) || 'open',
-                pingStatus: text(item['wp:ping_status']) || 'open',
-                password: text(item['wp:post_password']),
-                mimeType: text(item['wp:post_mime_type']),
-            });
+            const post = await runContentMutation(async () => {
+                const createdPost = await Post.create({
+                    authorId,
+                    title: text(item.title),
+                    content,
+                    excerpt,
+                    status,
+                    type,
+                    slug,
+                    parent: 0, // resolved in pass D
+                    menuOrder: parseInt(text(item['wp:menu_order']) || '0', 10) || 0,
+                    commentStatus: text(item['wp:comment_status']) || 'open',
+                    pingStatus: text(item['wp:ping_status']) || 'open',
+                    password: text(item['wp:post_password']),
+                    mimeType: text(item['wp:post_mime_type']),
+                });
 
             // Preserve the original publish/modified dates (Post.create stamps "now").
             const pDate = text(item['wp:post_date']);
@@ -487,13 +489,9 @@ async function importWxr(xml: string, options: ImportOptions): Promise<ImportSum
                 const gmt = isPlaceholderDate(pDateGmt) ? pDate : pDateGmt;
                 await dbAsync.run(
                     `UPDATE posts SET post_date = ?, post_date_gmt = ?, post_modified = ?, post_modified_gmt = ? WHERE id = ?`,
-                    [pDate, gmt, pDate, gmt, post.id]
+                    [pDate, gmt, pDate, gmt, createdPost.id]
                 );
             }
-
-            if (oldId) oldToNewPost.set(oldId, post.id);
-            const wpParent = text(item['wp:post_parent']);
-            if (wpParent && wpParent !== '0') deferredParent.set(post.id, wpParent);
 
             // Post meta: refuse the SERVER-OWNED keys, keep everything else for fidelity.
             //
@@ -524,13 +522,12 @@ async function importWxr(xml: string, options: ImportOptions): Promise<ImportSum
                 if (coreOwned) {
                     const safe = coreOwned(text(pm['wp:meta_value']));
                     if (!safe) continue; // unresolvable shape → no path at all, never a repaired one
-                    try { await Post.updateMeta(post.id, key, safe); } catch { /* non-fatal */ }
+                    await Post.updateMeta(createdPost.id, key, safe);
                     continue;
                 }
 
                 if (isProtectedPostMeta(key)) continue;
-                try { await Post.updateMeta(post.id, key, sanitizeImportedMeta(key, text(pm['wp:meta_value']))); }
-                catch { /* non-fatal */ }
+                await Post.updateMeta(createdPost.id, key, sanitizeImportedMeta(key, text(pm['wp:meta_value'])));
             }
 
             // Terms: attach category + post_tag references that we imported.
@@ -543,8 +540,14 @@ async function importWxr(xml: string, options: ImportOptions): Promise<ImportSum
                 if (domain === 'category' && catBySlug.has(nicename)) catIds.push(catBySlug.get(nicename)!);
                 else if (domain === 'post_tag' && tagBySlug.has(nicename)) tagIds.push(tagBySlug.get(nicename)!);
             }
-            if (catIds.length) await Post.setTerms(post.id, catIds, 'category');
-            if (tagIds.length) await Post.setTerms(post.id, tagIds, 'post_tag');
+            if (catIds.length) await Post.setTerms(createdPost.id, catIds, 'category');
+            if (tagIds.length) await Post.setTerms(createdPost.id, tagIds, 'post_tag');
+                return createdPost;
+            });
+
+            if (oldId) oldToNewPost.set(oldId, post.id);
+            const wpParent = text(item['wp:post_parent']);
+            if (wpParent && wpParent !== '0') deferredParent.set(post.id, wpParent);
 
             // Comments
             if (importComments) {
@@ -592,7 +595,18 @@ async function importWxr(xml: string, options: ImportOptions): Promise<ImportSum
     for (const [newId, wpParent] of deferredParent) {
         const parentNewId = oldToNewPost.get(wpParent);
         if (parentNewId) {
-            try { await dbAsync.run(`UPDATE posts SET post_parent = ? WHERE id = ?`, [parentNewId, newId]); }
+            try {
+                await runContentMutation(async () => {
+                    const prior = await dbAsync.get('SELECT post_status, post_type, post_name FROM posts WHERE id = ?', [newId]);
+                    await dbAsync.run(`UPDATE posts SET post_parent = ? WHERE id = ?`, [parentNewId, newId]);
+                    if (prior) recordContentEvent('post.updated', Number(newId), {
+                        data: { parent: parentNewId },
+                        previousStatus: prior.post_status,
+                        previousType: prior.post_type,
+                        previousSlug: prior.post_name,
+                    });
+                });
+            }
             catch { /* non-fatal */ }
         }
     }

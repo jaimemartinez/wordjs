@@ -45,7 +45,6 @@ const {
     assertMetaValueWithinLimits,
     isMetaValueComplexityError,
 } = require('../core/sanitize-meta');
-const { doAction } = require('../core/hooks');
 
 // capsFor / capsForType resolve a post type to its capability family (post → edit_posts, page →
 // edit_pages, custom → edit_<type>s, plus the *_published_* / *_others_* variants). They live in a
@@ -61,6 +60,7 @@ const {
     canReadPostRecord, isRestExposedPostType,
 } = require('../core/post-capabilities');
 const { contentContractForType } = require('../core/content-contract');
+const { runContentMutation, recordContentEvent } = require('../core/content-outbox');
 
 // Meta keys the generic writers must refuse: the attachment's on-disk path (`_wp_attached_file`,
 // which Media.delete turns into an unlink target) and the other server-owned bookkeeping keys.
@@ -828,51 +828,47 @@ router.post('/', authenticate, asyncHandler(async (req: AuthenticatedRequest<Rec
         throw error;
     }
 
-    const post = await Post.create({
-        authorId: req.user.id,
-        title: sanitizeHtml(title),
-        content: sanitize(content),
-        // En la CREACIÓN no hay valor anterior que preservar, así que "ausente" y "vacío" son lo mismo:
-        // sanitize-html devuelve '' para undefined/null, que es justo el defecto de Post.create.
-        excerpt: sanitizeHtml(excerpt),
-        status: postStatus,
-        type: createType,
-        // The PRODUCED slug (see above), never the raw body field.
-        slug: requestedSlug,
-        // The value the gate above authorized, as a NUMBER — never the raw body field. See the
-        // toNonNegativeInt comment: the two used to differ, and the difference was the bypass.
-        parent: parentId,
-        // Same normalization, same reason (minus the authorization): `menu_order: ""` reached
-        // menu_order as an empty string and MySQL under STRICT_TRANS_TABLES rejects it with a 500.
-        menuOrder: menuOrderValue,
-        commentStatus: comment_status,
-        date: requestedDate,
-        // MULTILINGUAL (opt-in): the model canonicalizes a BCP-47 tag, or stores NULL. Absent → NULL.
-        language
+    const post = await runContentMutation(async () => {
+        const created = await Post.create({
+            authorId: req.user.id,
+            title: sanitizeHtml(title),
+            content: sanitize(content),
+            // En la CREACIÓN no hay valor anterior que preservar, así que "ausente" y "vacío" son lo mismo:
+            // sanitize-html devuelve '' para undefined/null, que es justo el defecto de Post.create.
+            excerpt: sanitizeHtml(excerpt),
+            status: postStatus,
+            type: createType,
+            // The PRODUCED slug (see above), never the raw body field.
+            slug: requestedSlug,
+            // The value the gate above authorized, as a NUMBER — never the raw body field. See the
+            // toNonNegativeInt comment: the two used to differ, and the difference was the bypass.
+            parent: parentId,
+            // Same normalization, same reason (minus the authorization): `menu_order: ""` reached
+            // menu_order as an empty string and MySQL under STRICT_TRANS_TABLES rejects it with a 500.
+            menuOrder: menuOrderValue,
+            commentStatus: comment_status,
+            date: requestedDate,
+            // MULTILINGUAL (opt-in): the model canonicalizes a BCP-47 tag, or stores NULL. Absent → NULL.
+            language
+        });
+
+        if (categories && Array.isArray(categories)) {
+            await Post.setTerms(created.id, categories, 'category');
+        }
+        if (tags && Array.isArray(tags)) {
+            await Post.setTerms(created.id, tags, 'post_tag');
+        }
+        // A BAG IS A PLAIN OBJECT. The sanitizer already rejected/skipped invalid keys before this
+        // transaction, so all metadata joins the same atomic boundary.
+        for (const [key, value] of safeMetaEntries) {
+            await Post.updateMeta(created.id, key, value);
+        }
+
+        // Initial history is required state, not fire-and-forget. A failure rolls back the post,
+        // terms, metadata and its not-yet-visible outbox event together.
+        await saveRevision(created.id);
+        return created;
     });
-
-    // Set categories
-    if (categories && Array.isArray(categories)) {
-        await Post.setTerms(post.id, categories, 'category');
-    }
-
-    // Set tags
-    if (tags && Array.isArray(tags)) {
-        await Post.setTerms(post.id, tags, 'post_tag');
-    }
-
-    // Set meta
-    // A BAG IS A PLAIN OBJECT. `typeof [] === 'object'`, so an ARRAY body reached Object.entries and
-    // wrote meta keys '0', '1', … — the same "the shape was assumed" class as the string fields above,
-    // one container up.
-    for (const [key, value] of safeMetaEntries) {
-        // The skip/protection checks and sanitization already ran before Post.create (above), so this
-        // loop cannot turn a validation failure into a partially-created record.
-        await Post.updateMeta(post.id, key, value);
-    }
-
-    // Save initial revision
-    saveRevision(post.id).catch((err: any) => console.error('Failed to save initial revision:', err));
 
     res.status(201).json(await serializeVisibleContent(post, req.user));
 }));
@@ -1043,55 +1039,48 @@ router.put('/:id', authenticate, asyncHandler(async (req: AuthenticatedRequest<I
     // AND IT FAILS CLOSED, like the meta route: if the recovery point cannot be created, the
     // destructive write does not happen. Logging and writing anyway is the failure mode the snapshot
     // exists to prevent, performed silently.
-    if (autosave !== true) {
-        try {
-            await saveRevision(postId);
-        } catch (err) {
-            console.error('Failed to save revision before update:', err);
-            return res.status(500).json({
-                code: 'rest_revision_failed',
-                message: 'Could not snapshot the current version; the write was not applied.',
-                data: { status: 500 }
+    try {
+        await runContentMutation(async () => {
+            if (autosave !== true) {
+                try { await saveRevision(postId); }
+                catch (error: any) {
+                    error.contentRevisionFailure = true;
+                    throw error;
+                }
+            }
+
+            await Post.update(postId, {
+                title: title ? sanitizeHtml(title) : undefined,
+                content: content ? sanitize(content) : undefined,
+                // AUSENTE ≠ VACÍO. Only an absent key leaves the stored excerpt untouched.
+                excerpt: excerpt === undefined || excerpt === null ? undefined : sanitizeHtml(String(excerpt)),
+                status: postStatus,
+                slug,
+                parent: parentProvided ? newParentId : undefined,
+                menuOrder: menuOrderProvided ? newMenuOrder : undefined,
+                commentStatus: comment_status,
+                date: requestedDate,
+                language
             });
-        }
-    }
 
-    const updated = await Post.update(postId, {
-        title: title ? sanitizeHtml(title) : undefined,
-        content: content ? sanitize(content) : undefined,
-        // AUSENTE ≠ VACÍO. `Post.update` solo toca la columna cuando la clave llega `undefined`-libre,
-        // así que el viejo `excerpt ? … : undefined` colapsaba las dos cosas: mandar '' para BORRAR el
-        // extracto dejaba la columna intacta y el editor parecía haber aceptado el borrado hasta que se
-        // reabría el registro. Ahora sólo la ausencia de la clave deja el valor como está; un '' lo
-        // vacía de verdad, y todo valor no vacío sigue pasando por el saneado.
-        excerpt: excerpt === undefined || excerpt === null ? undefined : sanitizeHtml(String(excerpt)),
-        status: postStatus,
-        slug,
-        // The authorized NUMBER, and only when the caller actually sent the key.
-        parent: parentProvided ? newParentId : undefined,
-        menuOrder: menuOrderProvided ? newMenuOrder : undefined,
-        commentStatus: comment_status,
-        date: requestedDate,
-        // MULTILINGUAL: only touched when the key is present (undefined → column left as-is).
-        language
-    });
-
-    // Update categories
-    if (categories && Array.isArray(categories)) {
-        await Post.setTerms(postId, categories, 'category');
-    }
-
-    // Update tags
-    if (tags && Array.isArray(tags)) {
-        await Post.setTerms(postId, tags, 'post_tag');
-    }
-
-    // Update meta
-    // A BAG IS A PLAIN OBJECT. `typeof [] === 'object'`, so an ARRAY body reached Object.entries and
-    // wrote meta keys '0', '1', … — the same "the shape was assumed" class as the string fields above,
-    // one container up.
-    for (const [key, value] of safeMetaEntries) {
-        await Post.updateMeta(postId, key, value);
+            if (categories && Array.isArray(categories)) {
+                await Post.setTerms(postId, categories, 'category');
+            }
+            if (tags && Array.isArray(tags)) {
+                await Post.setTerms(postId, tags, 'post_tag');
+            }
+            for (const [key, value] of safeMetaEntries) {
+                await Post.updateMeta(postId, key, value);
+            }
+        });
+    } catch (error: any) {
+        if (!error?.contentRevisionFailure) throw error;
+        console.error('Failed to save revision before update:', error);
+        return res.status(500).json({
+            code: 'rest_revision_failed',
+            message: 'Could not snapshot the current version; the write was not applied.',
+            data: { status: 500 }
+        });
     }
 
     // (The revision snapshot is taken BEFORE the write — see the block above Post.update.)
@@ -1279,27 +1268,38 @@ router.post('/:id/meta', authenticate, asyncHandler(async (req: AuthenticatedReq
     // AND IT FAILS CLOSED. Logging the error and writing anyway destroyed the previous tree with no
     // recovery point — the failure mode this whole block exists to prevent, silently. If the safety net
     // cannot be created, the destructive write does not happen.
-    if (isRevisionableMeta(storageKey)) {
-        try {
-            await saveRevision(postId);
-        } catch (err) {
-            console.error('Failed to save revision before meta write:', err);
-            return res.status(500).json({
-                code: 'rest_revision_failed',
-                message: 'Could not snapshot the current version; the write was not applied.',
-                data: { status: 500 }
-            });
-        }
-    }
+    try {
+        await runContentMutation(async () => {
+            if (isRevisionableMeta(storageKey)) {
+                try { await saveRevision(postId); }
+                catch (error: any) {
+                    error.contentRevisionFailure = true;
+                    throw error;
+                }
+            }
 
-    await Post.updateMeta(postId, storageKey, safeValue);
+            await Post.updateMeta(postId, storageKey, safeValue);
 
-    // Public/content metadata is a post update, regardless of which storage endpoint performed it.
-    // Dispatch AFTER Post.updateMeta so cache purge, webhooks and plugins all observe the new value.
-    // Editorial review comments are the documented non-content exception: they render nowhere on the
-    // public site and should not evict ISR or emit an external post.updated webhook.
-    if (!NON_CONTENT_META_KEYS.has(storageKey)) {
-        await doAction('post_updated', postId, { meta: { [storageKey]: safeValue } }, post.postStatus);
+            // Public/content metadata is a post update. The event is written beside the meta and
+            // revision, then dispatched only after the transaction commits. Editorial comments are
+            // the explicit non-content exception and therefore produce no public event.
+            if (!NON_CONTENT_META_KEYS.has(storageKey)) {
+                recordContentEvent('post.updated', postId, {
+                    data: { meta: { [storageKey]: safeValue } },
+                    previousStatus: post.postStatus,
+                    previousType: post.postType,
+                    previousSlug: post.postName,
+                });
+            }
+        });
+    } catch (error: any) {
+        if (!error?.contentRevisionFailure) throw error;
+        console.error('Failed to save revision before meta write:', error);
+        return res.status(500).json({
+            code: 'rest_revision_failed',
+            message: 'Could not snapshot the current version; the write was not applied.',
+            data: { status: 500 }
+        });
     }
 
     res.json({
@@ -1362,7 +1362,9 @@ router.put('/:id/language', authenticate, asyncHandler(async (req: Authenticated
         return res.status(400).json({ code: 'rest_invalid_language', message: 'Invalid BCP-47 language tag.', data: { status: 400 } });
     }
 
-    await Post.setLanguage(postId, language);
+    await runContentMutation(async () => {
+        await Post.setLanguage(postId, language);
+    });
     const fresh = await Post.findById(postId);
     res.json(await serializeVisibleContent(fresh, req.user));
 }));
@@ -1408,7 +1410,10 @@ router.post('/:id/translations', authenticate, asyncHandler(async (req: Authenti
         return res.status(403).json({ code: 'rest_forbidden', message: 'You cannot edit both posts.', data: { status: 403 } });
     }
 
-    const group = await Post.linkTranslations(postId, otherId);
+    let group: string | false = false;
+    await runContentMutation(async () => {
+        group = await Post.linkTranslations(postId, otherId);
+    });
     if (!group) {
         return res.status(400).json({ code: 'rest_link_failed', message: 'Could not link these posts.', data: { status: 400 } });
     }
@@ -1430,7 +1435,9 @@ router.delete('/:id/translations', authenticate, asyncHandler(async (req: Authen
     if (!canEditPostRecord(req.user, post)) {
         return res.status(403).json({ code: 'rest_forbidden', message: 'You cannot edit this post.', data: { status: 403 } });
     }
-    await Post.unlinkTranslation(postId);
+    await runContentMutation(async () => {
+        await Post.unlinkTranslation(postId);
+    });
     res.json({ success: true });
 }));
 

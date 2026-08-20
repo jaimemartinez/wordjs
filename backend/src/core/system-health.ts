@@ -1,6 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-const { db } = require('../config/database');
+const { db, dbAsync } = require('../config/database');
 const config = require('../config/app');
 const forge = require('node-forge');
 
@@ -12,8 +12,46 @@ class SystemHealth {
             filesystem: await this.checkFilesystem(),
             sandbox: this.checkSandbox(),
             purge: this.checkPurge(),
+            contentOutbox: await this.checkContentOutbox(),
             timestamp: new Date().toISOString()
         };
+    }
+
+    /** Durable F3 event delivery must never fail invisibly. */
+    static async checkContentOutbox() {
+        try {
+            const { databaseNowSeconds } = require('./content-outbox');
+            const now = await databaseNowSeconds();
+            const row = await dbAsync.get(
+                `SELECT
+                   SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending,
+                   SUM(CASE WHEN status = 'processing' THEN 1 ELSE 0 END) AS processing,
+                   SUM(CASE WHEN status = 'dead' THEN 1 ELSE 0 END) AS dead,
+                   MIN(CASE
+                       WHEN status = 'pending' THEN available_at
+                       WHEN status = 'processing' THEN claimed_until
+                       ELSE NULL
+                   END) AS oldest_due
+                 FROM content_outbox`
+            );
+            const pending = Number(row?.pending || 0);
+            const processing = Number(row?.processing || 0);
+            const dead = Number(row?.dead || 0);
+            const oldestDue = row?.oldest_due == null ? null : Number(row.oldest_due);
+            const delayedSeconds = oldestDue == null ? 0 : Math.max(0, now - oldestDue);
+            const status = dead > 0 ? 'ERROR' : delayedSeconds > 300 ? 'DEGRADED' : 'OK';
+            return {
+                status,
+                pending,
+                processing,
+                dead,
+                oldestDue,
+                delayedSeconds,
+                ...(dead ? { note: 'One or more committed content events exhausted retries; inspect content_outbox.last_error.' } : {}),
+            };
+        } catch (error: any) {
+            return { status: 'UNKNOWN', pending: 0, processing: 0, dead: 0, note: `content outbox state unavailable: ${error?.message || error}` };
+        }
     }
 
     /**

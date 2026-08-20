@@ -9,6 +9,7 @@ const DatabaseDriverInterface = require('./interface');
 const Database = require('better-sqlite3');
 const path = require('path');
 const config = require('../config/app');
+const { AsyncLocalStorage } = require('async_hooks');
 
 class SqliteNativeAsyncDriver extends DatabaseDriverInterface {
     db: any;
@@ -19,6 +20,8 @@ class SqliteNativeAsyncDriver extends DatabaseDriverInterface {
     // True while a transaction() is between BEGIN and COMMIT/ROLLBACK. Used to detect a RE-ENTRANT
     // transaction() (one called from inside another's callback), which would deadlock _txChain.
     _inTransaction: boolean;
+    _txContext: any;
+    _pendingTransactions: number;
 
     constructor() {
         super();
@@ -26,6 +29,8 @@ class SqliteNativeAsyncDriver extends DatabaseDriverInterface {
         this.dbPath = path.resolve(config.dbPath || './data/wordjs-native.db');
         this._txChain = Promise.resolve();
         this._inTransaction = false;
+        this._txContext = new AsyncLocalStorage();
+        this._pendingTransactions = 0;
     }
 
     async connect() {
@@ -78,6 +83,7 @@ class SqliteNativeAsyncDriver extends DatabaseDriverInterface {
     }
 
     async get(sql: string, params: any[] = []) {
+        await this.waitForTransaction();
         return new Promise((resolve, reject) => {
             try {
                 const stmt = this._prepare(sql);
@@ -90,6 +96,7 @@ class SqliteNativeAsyncDriver extends DatabaseDriverInterface {
     }
 
     async all(sql: string, params: any[] = []) {
+        await this.waitForTransaction();
         return new Promise((resolve, reject) => {
             try {
                 const stmt = this._prepare(sql);
@@ -102,6 +109,7 @@ class SqliteNativeAsyncDriver extends DatabaseDriverInterface {
     }
 
     async run(sql: string, params: any[] = []) {
+        await this.waitForTransaction();
         return new Promise((resolve, reject) => {
             try {
                 const stmt = this._prepare(sql);
@@ -114,6 +122,7 @@ class SqliteNativeAsyncDriver extends DatabaseDriverInterface {
     }
 
     async exec(sql: string) {
+        await this.waitForTransaction();
         return new Promise<void>((resolve, reject) => {
             try {
                 this.db.exec(sql);
@@ -151,15 +160,27 @@ class SqliteNativeAsyncDriver extends DatabaseDriverInterface {
         // → circular wait that permanently wedges _txChain and every future transaction(). SQLite has no
         // nested BEGIN anyway, so fail FAST and synchronously (the throw rejects this call's promise)
         // instead of silently deadlocking. The happy (non-nested) path is unchanged.
-        if (this._inTransaction) {
+        if (this._txContext.getStore()?.active) {
             throw new Error('nested transaction() is not supported');
         }
         // Queue this transaction behind any in-flight one. We chain off a settled-no-matter-what tail
         // (catch swallows the PREVIOUS tx's error for chaining only) so one failed tx never blocks the
         // queue; the caller still receives their own tx's result/error via `run`.
-        const run = this._txChain.then(() => this._runTransaction(fn), () => this._runTransaction(fn));
+        this._pendingTransactions++;
+        const run = this._txChain
+            .then(() => this._runTransaction(fn), () => this._runTransaction(fn))
+            .finally(() => { this._pendingTransactions--; });
         this._txChain = run.catch(() => { });
         return run;
+    }
+
+    /**
+     * A top-level query must not land on the single SQLite connection between another request's BEGIN
+     * and COMMIT. Transaction-owned queries use the dedicated `tx` object and bypass this barrier.
+     */
+    async waitForTransaction() {
+        if (this._txContext.getStore()?.active) return;
+        while (this._pendingTransactions > 0) await this._txChain;
     }
 
     async _runTransaction(fn: any) {
@@ -175,8 +196,9 @@ class SqliteNativeAsyncDriver extends DatabaseDriverInterface {
 
         this.db.exec('BEGIN');
         this._inTransaction = true; // mark open so a re-entrant transaction() fails fast (see transaction())
+        const context = { active: true };
         try {
-            const result = await fn(tx);
+            const result = await this._txContext.run(context, () => fn(tx));
             this.db.exec('COMMIT');
             return result;
         } catch (err) {
@@ -187,6 +209,7 @@ class SqliteNativeAsyncDriver extends DatabaseDriverInterface {
             }
             throw err;
         } finally {
+            context.active = false;
             this._inTransaction = false;
         }
     }

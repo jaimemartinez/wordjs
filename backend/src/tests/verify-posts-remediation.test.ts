@@ -488,14 +488,24 @@ describe('PUT and the meta route snapshot at the SAME instant', () => {
         await Post.update(draft, { title: 'KEEP', content: 'keep body' });
         await Post.updateMeta(draft, '_puck_data', { content: [], root: { props: { t: 'keep' } } });
 
-        // core/revisions destructures the SAME dbAsync object, so patching .run is what its
-        // saveRevision will call. Only the revision INSERT is failed.
-        const realRun = dbAsync.run.bind(dbAsync);
+        // F3 writes through the transaction's pinned query object. Inject the failure there so this
+        // verifies the real atomic path instead of monkey-patching an unused proxy property.
+        const driver = database.getDbAsync();
+        const realTransaction = driver.transaction.bind(driver);
         let blocked = 0;
-        dbAsync.run = async (sql: string, params: any) => {
-            if (/INSERT INTO posts/i.test(sql)) { blocked++; throw new Error('boom: revision insert failed'); }
-            return await realRun(sql, params);
-        };
+        driver.transaction = async (work: any) => realTransaction(async (tx: any) => {
+            const guarded = new Proxy(tx, {
+                get(target, prop) {
+                    if (prop === 'run') return async (sql: string, params: any) => {
+                        if (/INSERT INTO posts/i.test(sql)) { blocked++; throw new Error('boom: revision insert failed'); }
+                        return await target.run(sql, params);
+                    };
+                    const value = target[prop];
+                    return typeof value === 'function' ? value.bind(target) : value;
+                }
+            });
+            return await work(guarded);
+        });
         try {
             const put = await as('editor', 'put', `/posts/${draft}`).send({ title: 'DESTROYED', content: 'gone' });
             assert.strictEqual(put.status, 500, `PUT: expected 500, got ${put.status}`);
@@ -504,7 +514,7 @@ describe('PUT and the meta route snapshot at the SAME instant', () => {
                 .send({ key: '_puck_data', value: { content: [], root: { props: { t: 'gone' } } } });
             assert.strictEqual(meta.status, 500, `meta: expected 500, got ${meta.status}`);
         } finally {
-            dbAsync.run = realRun;
+            driver.transaction = realTransaction;
         }
 
         assert.ok(blocked > 0, 'the fault injection must actually have fired');

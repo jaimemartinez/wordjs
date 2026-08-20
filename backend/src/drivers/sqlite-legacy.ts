@@ -8,6 +8,7 @@ const initSqlJs = require('sql.js');
 const path = require('path');
 const fs = require('fs');
 const config = require('../config/app');
+const { AsyncLocalStorage } = require('async_hooks');
 
 let dbInstance: any = null;
 let SQL: any = null;
@@ -21,6 +22,8 @@ let inTransaction = false;
 // Promise-chain mutex so concurrent transaction() callers run strictly one-at-a-time on the single
 // shared in-memory connection (no interleaved BEGIN/COMMIT, mirrors the native driver's _txChain).
 let txChain: Promise<any> = Promise.resolve();
+const txContext = new AsyncLocalStorage();
+let pendingTransactions = 0;
 
 async function init(options: any = {}) {
     SQL = await initSqlJs();
@@ -77,11 +80,24 @@ class DatabaseWrapper {
         this.sqlDb = sqlDb;
     }
 
+    _assertTransactionAccess() {
+        if (inTransaction && !txContext.getStore()?.active) {
+            throw new Error('SQLite legacy connection is busy with another transaction');
+        }
+    }
+
+    async waitForTransaction() {
+        if (txContext.getStore()?.active) return;
+        while (pendingTransactions > 0) await txChain;
+    }
+
     prepare(sql: string) {
+        this._assertTransactionAccess();
         return new StatementWrapper(this.sqlDb, sql);
     }
 
     exec(sql: string) {
+        this._assertTransactionAccess();
         this.sqlDb.run(sql);
         // Suppress the disk flush while a transaction is open — transaction() saves once after COMMIT.
         if (!inTransaction) save();
@@ -123,10 +139,13 @@ class DatabaseWrapper {
         // → circular wait that permanently wedges txChain and every future transaction(). sql.js has no
         // nested BEGIN anyway, so fail FAST and synchronously instead of silently deadlocking. The module
         // `inTransaction` flag is already true between BEGIN and COMMIT/ROLLBACK (see _runTransaction).
-        if (inTransaction) {
+        if (txContext.getStore()?.active) {
             throw new Error('nested transaction() is not supported');
         }
-        const run = txChain.then(() => this._runTransaction(fn), () => this._runTransaction(fn));
+        pendingTransactions++;
+        const run = txChain
+            .then(() => this._runTransaction(fn), () => this._runTransaction(fn))
+            .finally(() => { pendingTransactions--; });
         txChain = run.catch(() => { });
         return run;
     }
@@ -155,8 +174,9 @@ class DatabaseWrapper {
         // replaced cost — one export+write, after COMMIT.
         inTransaction = true; // suppress per-write save() for the duration of the unit of work
         this.sqlDb.run('BEGIN');
+        const context = { active: true };
         try {
-            const result = await fn(tx);
+            const result = await txContext.run(context, () => fn(tx));
             this.sqlDb.run('COMMIT');
             inTransaction = false;
             save(); // single durable flush of the COMMITTED state to disk
@@ -189,6 +209,8 @@ class DatabaseWrapper {
             // No save() here: the on-disk file was never written during the transaction, so it ALREADY
             // is the last committed state — writing it back would be another full export for nothing.
             throw err;
+        } finally {
+            context.active = false;
         }
     }
 

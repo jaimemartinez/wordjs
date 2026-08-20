@@ -486,7 +486,7 @@ type SqlExecutor = (sql: string, params?: any[]) => Promise<any>;
 const CORE_TABLE_NAMES = new Set([
     'posts', 'post_meta', 'users', 'user_meta', 'comments', 'comment_meta',
     'terms', 'term_taxonomy', 'term_relationships', 'options', 'links', 'notifications',
-    'schema_migrations', 'api_tokens', 'audit_log', 'webhooks', 'webhook_deliveries',
+    'schema_migrations', 'api_tokens', 'audit_log', 'webhooks', 'webhook_deliveries', 'content_outbox',
     'form_submissions', 'collab_docs', 'collab_members', 'collab_ops'
 ]);
 

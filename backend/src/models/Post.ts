@@ -3,8 +3,8 @@
  * Equivalent to wp-includes/class-wp-post.php and wp-includes/post.php
  */
 
-const { db, dbAsync, getDbType } = require('../config/database');
-const { doAction, applyFilters } = require('../core/hooks');
+const database = require('../config/database');
+const { db, dbAsync, getDbType } = database;
 const { doShortcode, doShortcodeAsync, stripShortcodes } = require('../core/shortcodes');
 const { sanitizeTitle, sanitizeContent, generateExcerpt, currentTimeGMT, currentTime, formatDate, boundSlug } = require('../core/formatting');
 const config = require('../config/app');
@@ -14,6 +14,11 @@ const { randomUUID } = require('crypto');
 // parseLanguageTag validates + canonicalizes a BCP-47 tag, returning null for anything that is not a
 // language tag (a post's language must never silently become 'en' — null means "no language set").
 const { parseLanguageTag } = require('../core/language-tag');
+const {
+    runContentMutation,
+    recordContentEvent,
+    isContentMutationActive,
+} = require('../core/content-outbox');
 
 /**
  * Marks a post whose stored post_date is a leftover from a schedule that was CANCELLED — i.e. a
@@ -351,6 +356,10 @@ class Post {
      * Equivalent to wp_insert_post()
      */
     static async create(data: any) {
+        // Every direct model caller gets the same durable boundary as the REST service. When a route,
+        // importer or media operation already owns the boundary this recursive call simply joins it.
+        if (!isContentMutationActive()) return await runContentMutation(() => Post.create(data));
+
         const {
             authorId,
             title,
@@ -475,9 +484,14 @@ class Post {
             await cache.del(`post:slug:any:${postName}`);
         }
 
-        // Fire action hook
+        // The semantic event is durable in the SAME transaction. Its dispatcher invalidates again as
+        // a crash-safe backstop and runs wp_insert_post only after COMMIT.
         Post._invalidateCounts();
-        await doAction('wp_insert_post', postId, data);
+        recordContentEvent('post.created', Number(postId), {
+            data,
+            previousType: postType,
+            previousSlug: postName,
+        });
 
         return await Post.findById(postId);
     }
@@ -1006,7 +1020,10 @@ class Post {
      * be enumerating cache keys built from arbitrary SQL + params.
      */
     static _countGen = 0;
-    static _invalidateCounts() { Post._countGen++; }
+    static _invalidateCounts() {
+        if (database.afterCommit(() => Post._invalidateCounts())) return;
+        Post._countGen++;
+    }
 
     static async count(options: any = {}) {
         // Reuse the exact same WHERE logic as findAll() so the two cannot drift.
@@ -1046,6 +1063,7 @@ class Post {
      * Equivalent to wp_update_post()
      */
     static async update(id: any, data: any) {
+        if (!isContentMutationActive()) return await runContentMutation(() => Post.update(id, data));
         const post = await Post.findById(id);
         if (!post) throw new Error('Post not found');
 
@@ -1259,10 +1277,15 @@ class Post {
             await cache.del(`post:slug:any:${data.slug}`);
         }
 
-        // Fire action hook. Pass the PRIOR status (post was fetched pre-update) so listeners can detect a
-        // real status transition (e.g. draft→publish, →trash) rather than re-firing on every re-save.
+        // Durable semantic event. Pass the PRIOR status so listeners can detect a real transition
+        // (draft→publish, →trash) rather than re-firing on every re-save.
         Post._invalidateCounts();
-        await doAction('post_updated', id, data, post.postStatus);
+        recordContentEvent('post.updated', Number(id), {
+            data,
+            previousStatus: post.postStatus,
+            previousType: post.postType,
+            previousSlug: post.postName,
+        });
 
         return await Post.findById(id);
     }
@@ -1340,6 +1363,7 @@ class Post {
      * uuid is minted. Returns the surviving group id, or null when a post id is invalid/equal.
      */
     static async linkTranslations(idA: any, idB: any): Promise<string | null> {
+        if (!isContentMutationActive()) return await runContentMutation(() => Post.linkTranslations(idA, idB));
         const a2 = Number(idA);
         const b2 = Number(idB);
         if (!a2 || !b2 || a2 === b2) return null;
@@ -1364,6 +1388,14 @@ class Post {
             for (const m of members) affected.add(m.id);
         }
 
+        const affectedIds = [...affected];
+        const affectedRows = affectedIds.length
+            ? await dbAsync.all(
+                `SELECT id, post_status, post_type, post_name FROM posts WHERE id IN (${affectedIds.map(() => '?').join(',')})`,
+                affectedIds
+            )
+            : [];
+
         const writes = async (q: any) => {
             await q.run('UPDATE posts SET translation_group = ? WHERE id = ? OR id = ?', [target, a2, b2]);
             if (mergeGroups.length) {
@@ -1375,6 +1407,14 @@ class Post {
         else await writes(dbAsync);
 
         for (const pid of affected) await Post._invalidatePostCacheById(pid);
+        for (const changed of affectedRows) {
+            recordContentEvent('post.updated', Number(changed.id), {
+                data: { translationGroup: target },
+                previousStatus: changed.post_status,
+                previousType: changed.post_type,
+                previousSlug: changed.post_name,
+            });
+        }
         return target;
     }
 
@@ -1383,11 +1423,18 @@ class Post {
      * linked. Returns false for an unknown id. Idempotent (a post with no group stays NULL).
      */
     static async unlinkTranslation(id: any): Promise<boolean> {
+        if (!isContentMutationActive()) return await runContentMutation(() => Post.unlinkTranslation(id));
         const pid = Number(id);
-        const row = await dbAsync.get('SELECT id FROM posts WHERE id = ?', [pid]);
+        const row = await dbAsync.get('SELECT id, post_status, post_type, post_name FROM posts WHERE id = ?', [pid]);
         if (!row) return false;
         await dbAsync.run('UPDATE posts SET translation_group = NULL WHERE id = ?', [pid]);
         await Post._invalidatePostCacheById(pid);
+        recordContentEvent('post.updated', pid, {
+            data: { translationGroup: null },
+            previousStatus: row.post_status,
+            previousType: row.post_type,
+            previousSlug: row.post_name,
+        });
         return true;
     }
 
@@ -1396,6 +1443,7 @@ class Post {
      * Equivalent to wp_delete_post()
      */
     static async delete(id: any, forceDelete = false) {
+        if (!isContentMutationActive()) return await runContentMutation(() => Post.delete(id, forceDelete));
         const post = await Post.findById(id);
         if (!post) return false;
 
@@ -1447,7 +1495,11 @@ class Post {
             // Pass the prior status so a listener can avoid re-emitting "deleted" when the post was
             // already trashed (the trash transition already signaled it).
             Post._invalidateCounts();
-            await doAction('deleted_post', id, post.postStatus);
+            recordContentEvent('post.deleted', Number(id), {
+                previousStatus: post.postStatus,
+                previousType: post.postType,
+                previousSlug: post.postName,
+            });
 
             return result.changes > 0;
         } else {
@@ -1461,6 +1513,7 @@ class Post {
      * Equivalent to wp_trash_post()
      */
     static async trash(id: any) {
+        if (!isContentMutationActive()) return await runContentMutation(() => Post.trash(id));
         const post = await Post.findById(id);
         if (!post) return false;
 
@@ -1476,6 +1529,7 @@ class Post {
      * Equivalent to wp_untrash_post()
      */
     static async untrash(id: any) {
+        if (!isContentMutationActive()) return await runContentMutation(() => Post.untrash(id));
         const post = await Post.findById(id);
         if (!post || post.postStatus !== 'trash') return false;
 

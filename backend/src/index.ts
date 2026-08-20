@@ -1558,6 +1558,9 @@ async function initialize() {
 
         // Outgoing webhooks: subscribe the dispatcher to content hooks and start the delivery poller.
         require('./core/webhooks').initWebhooks();
+        // F3 content outbox: pending events from this or a crashed peer are leased and delivered only
+        // after their content transaction committed. Start it after hook consumers are registered.
+        require('./core/content-outbox').initContentOutbox();
 
         // Expose Cron API to Plugins via global.wordjs
         global.wordjs = global.wordjs || {};

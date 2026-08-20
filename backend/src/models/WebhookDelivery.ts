@@ -34,13 +34,14 @@ class WebhookDelivery {
     static STATUS = STATUS;
 
     /** Enqueue a delivery, due immediately (next_attempt_at = now). Returns the new delivery id. */
-    static async enqueue(webhookId: number, event: string, payload: string, nowSec: number): Promise<number> {
+    static async enqueue(webhookId: number, event: string, payload: string, nowSec: number, sourceEventId: string | null = null): Promise<number> {
         const result = await dbAsync.run(
-            `INSERT INTO webhook_deliveries (webhook_id, event, payload, status, attempts, next_attempt_at)
-             VALUES (?, ?, ?, 'pending', 0, ?) RETURNING id`,
-            [webhookId, event, payload, nowSec]
+            `INSERT INTO webhook_deliveries (webhook_id, event, payload, status, attempts, next_attempt_at, source_event_id)
+             VALUES (?, ?, ?, 'pending', 0, ?, ?) ON CONFLICT DO NOTHING RETURNING id`,
+            [webhookId, event, payload, nowSec, sourceEventId]
         );
-        return result.lastID;
+        const changed = Number(result.changes ?? result.rowCount ?? 0);
+        return changed > 0 ? Number(result.lastID || 0) : 0;
     }
 
     /** Ids of deliveries due to run now (pending, or a 'delivering' whose lease has expired). */

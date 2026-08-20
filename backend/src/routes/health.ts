@@ -173,6 +173,20 @@ router.get('/', async (req: Request, res: Response) => {
  *                       type: string
  *                     target:
  *                       type: string
+ *                 contentOutbox:
+ *                   type: object
+ *                   properties:
+ *                     status:
+ *                       type: string
+ *                       enum: [OK, DEGRADED, ERROR, UNKNOWN]
+ *                     pending:
+ *                       type: integer
+ *                     processing:
+ *                       type: integer
+ *                     dead:
+ *                       type: integer
+ *                     delayedSeconds:
+ *                       type: integer
  *       403:
  *         description: Forbidden (Non-admin)
  */

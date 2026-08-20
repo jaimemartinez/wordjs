@@ -6,6 +6,8 @@
 const { getOption, updateOption } = require('./options');
 const { doAction, doActionForPlugin, addAction } = require('./hooks');
 const { getCurrentPlugin } = require('./plugin-context');
+const database = require('../config/database');
+const { dbAsync } = database;
 
 // Registered cron jobs
 const cronJobs = new Map();
@@ -41,6 +43,25 @@ function getSchedules() {
 const MAX_CRON_EVENTS_PER_PLUGIN = 200;
 const MAX_CRON_EVENTS_TOTAL = 5000;
 const MAX_CRON_ARGS_BYTES = 4096;
+
+/**
+ * A scheduled-content mutation carries the cron blob in its F3 transaction. On pooled engines the
+ * option row must also be locked: two concurrent publishes otherwise read the same JSON and the last
+ * writer silently drops the other post's event. SQLite serializes writers on its single connection.
+ */
+async function getCronEventsForWrite(): Promise<any> {
+    const type = database.getDbType();
+    if (database.hasActiveTransaction() && (type.isPostgres || type.isMySQL)) {
+        const row = await dbAsync.get(
+            'SELECT option_value FROM options WHERE option_name = ? FOR UPDATE',
+            ['cron']
+        );
+        if (!row) return {};
+        try { return JSON.parse(row.option_value); }
+        catch { return {}; }
+    }
+    return await getOption('cron', {});
+}
 function assertCronCapacity(events: any, pluginSlug: any, args: any) {
     if (JSON.stringify(args || []).length > MAX_CRON_ARGS_BYTES) {
         throw new Error('🛡️ Cron schedule denied: event args are too large.');
@@ -65,7 +86,7 @@ function assertCronCapacity(events: any, pluginSlug: any, args: any) {
  * Equivalent to wp_schedule_event()
  */
 async function scheduleEvent(timestamp: any, recurrence: any, hook: any, args = []) {
-    const events = await getOption('cron', {});
+    const events = await getCronEventsForWrite();
     const pluginSlug = getCurrentPlugin();
     assertCronCapacity(events, pluginSlug, args);
 
@@ -92,7 +113,7 @@ async function scheduleEvent(timestamp: any, recurrence: any, hook: any, args = 
  * Equivalent to wp_schedule_single_event()
  */
 async function scheduleSingleEvent(timestamp: any, hook: any, args = []) {
-    const events = await getOption('cron', {});
+    const events = await getCronEventsForWrite();
     const pluginSlug = getCurrentPlugin();
     assertCronCapacity(events, pluginSlug, args);
 
@@ -117,7 +138,7 @@ async function scheduleSingleEvent(timestamp: any, hook: any, args = []) {
  * Equivalent to wp_unschedule_event()
  */
 async function unscheduleEvent(timestamp: any, hook: any, args = []) {
-    const events = await getOption('cron', {});
+    const events = await getCronEventsForWrite();
     const key = `${hook}_${JSON.stringify(args)}`;
 
     if (events[timestamp] && events[timestamp][key]) {
@@ -139,7 +160,7 @@ async function unscheduleEvent(timestamp: any, hook: any, args = []) {
  * Equivalent to wp_clear_scheduled_hook()
  */
 async function clearScheduledHook(hook: any, args = null) {
-    const events = await getOption('cron', {});
+    const events = await getCronEventsForWrite();
     let cleared = false;
 
     // Iterate efficiently

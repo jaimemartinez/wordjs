@@ -17,6 +17,22 @@
 const Redis = require('ioredis');
 const config = require('../config/app');
 
+/**
+ * Cache state is derived from committed database state. During a pinned transaction every read must
+ * bypass it (an L1 hit can be older than rows already changed by this transaction), and every write /
+ * invalidation must wait for COMMIT. Dynamic require avoids a database→plugin-context→cache cycle at
+ * module initialization.
+ */
+function deferUntilCommit(effect: () => any | Promise<any>): boolean {
+    try { return require('../config/database').afterCommit(effect); }
+    catch { return false; }
+}
+
+function transactionActive(): boolean {
+    try { return require('../config/database').hasActiveTransaction(); }
+    catch { return false; }
+}
+
 let redis: any = null;
 let redisAvailable = false;
 let enabledBySettings = false; // Master switch from DB settings (governs the REDIS tier)
@@ -46,6 +62,7 @@ function l1Set(key: string, serialized: string, ttlSeconds: number) {
  * Update dynamic enablement state (called from options.js)
  */
 function setEnabled(val: any) {
+    if (deferUntilCommit(() => setEnabled(val))) return;
     enabledBySettings = (val === 1 || val === '1' || val === true);
     if (enabledBySettings && !redisAvailable && redis) {
         // If we are enabling but redis isn't "live" yet, it might be due to initial connection delay
@@ -122,6 +139,7 @@ if (config.redis && config.redis.enabled !== false) {
  * Get a value from cache: L1 first (always on), then Redis (which repopulates L1).
  */
 async function get(key: string) {
+    if (transactionActive()) return null;
     const hit = l1Get(key);
     if (hit !== null) {
         try { return JSON.parse(hit); } catch { l1.delete(key); }
@@ -155,6 +173,7 @@ async function set(key: string, value: any, ttl = 3600) {
     } catch (e: any) {
         if (e && /not permitted/.test(String(e.message))) throw e; // re-throw our own denial; ignore require hiccups
     }
+    if (deferUntilCommit(() => set(key, value, ttl))) return true;
     let serialized: string;
     try {
         serialized = JSON.stringify(value);
@@ -182,6 +201,7 @@ async function set(key: string, value: any, ttl = 3600) {
  * Delete a value from cache — L1 (this node), the peers' L1 (broadcast), and Redis.
  */
 async function del(key: string) {
+    if (deferUntilCommit(() => del(key))) return true;
     l1.delete(key);
     if (redisConfigured()) publish('wordjs:cache-del', key).catch(() => { /* degraded — TTL cap bounds it */ });
     if (!redisAvailable || !enabledBySettings) return true;
@@ -197,6 +217,7 @@ async function del(key: string) {
  * Flush all cache (careful!)
  */
 async function flush() {
+    if (deferUntilCommit(() => flush())) return true;
     l1.clear();
     if (redisConfigured()) publish('wordjs:cache-del', '*').catch(() => { /* degraded */ });
     if (!redisAvailable || !enabledBySettings) return true;
@@ -245,6 +266,7 @@ function getClient(): any {
 
 /** Publish a message to a channel. Returns false if Redis isn't available (caller stays in-process). */
 async function publish(channel: string, payload: any): Promise<boolean> {
+    if (deferUntilCommit(() => publish(channel, payload))) return true;
     if (!redis || !redisAvailable) {
         // Only warn when Redis is CONFIGURED (multi-node expected) but currently down: a missed
         // publish means cross-node coherence is degraded (e.g. a role revocation won't reach other

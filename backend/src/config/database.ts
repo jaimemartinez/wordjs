@@ -5,6 +5,7 @@
 
 const config = require('./app');
 const path = require('path');
+const { AsyncLocalStorage } = require('async_hooks');
 
 // 1. Load the Configured Driver
 // 1. Driver State
@@ -13,6 +14,91 @@ const path = require('path');
 let driverName = config.dbDriver || 'sqlite-native';
 let driver: any = null;
 let driverAsync: any = null; // New Async Driver
+
+type TransactionQuery = {
+  get: (...args: any[]) => Promise<any>;
+  all: (...args: any[]) => Promise<any>;
+  run: (...args: any[]) => Promise<any>;
+  exec: (...args: any[]) => Promise<any>;
+};
+
+type TransactionScope = {
+  query: TransactionQuery;
+  afterCommit: Array<() => any | Promise<any>>;
+  active: boolean;
+  rollbackOnly?: any;
+};
+
+// One request may cross dozens of model helpers. Keeping the pinned transaction in async-local
+// state means all dbAsync calls in that request use the SAME connection without threading a `tx`
+// argument through every historical API. A nested dbAsync.transaction joins the current unit rather
+// than issuing a second BEGIN (which SQLite cannot do and pooled drivers would pin independently).
+const transactionScope: {
+  getStore: () => TransactionScope | undefined;
+  run: <T>(store: TransactionScope, callback: () => T) => T;
+} = new AsyncLocalStorage();
+
+function hasActiveTransaction(): boolean {
+  return transactionScope.getStore()?.active === true;
+}
+
+/** Queue an external effect for the instant after COMMIT. Returns false outside a transaction. */
+function afterCommit(callback: () => any | Promise<any>): boolean {
+  const scope = transactionScope.getStore();
+  if (!scope?.active) return false;
+  scope.afterCommit.push(callback);
+  return true;
+}
+
+async function runTransaction<T>(fn: (tx: TransactionQuery) => Promise<T>): Promise<T> {
+  const active = transactionScope.getStore();
+  if (active?.active) {
+    try { return await fn(active.query); }
+    catch (error) {
+      // There are no cross-driver savepoints in the public contract. If a joined nested unit fails,
+      // poison the outer transaction even when an intermediate caller catches the error; committing
+      // the statements that ran before that failure would violate the all-or-nothing promise.
+      if (!active.rollbackOnly) active.rollbackOnly = error;
+      throw error;
+    }
+  }
+
+  const current = getDbAsync();
+  if (!current || typeof current.transaction !== 'function') {
+    throw new Error('The active database driver does not implement transaction()');
+  }
+
+  let committedScope: TransactionScope | null = null;
+  const result = await current.transaction(async (query: TransactionQuery) => {
+    const scope: TransactionScope = { query, afterCommit: [], active: true };
+    committedScope = scope;
+    return await transactionScope.run(scope, async () => {
+      try {
+        const value = await fn(query);
+        if (scope.rollbackOnly) throw scope.rollbackOnly;
+        return value;
+      } finally {
+        // Async resources created inside this callback retain the store after run() returns. Mark it
+        // closed so a detached timer/promise cannot reuse a released pooled connection later.
+        scope.active = false;
+      }
+    });
+  });
+
+  // The database is already committed. External effects are deliberately best-effort here: a cache,
+  // plugin or network failure cannot turn a successful durable mutation into a misleading 500. Core
+  // content events use the durable outbox (not this volatile queue), so they remain retryable.
+  const committedCallbacks = committedScope
+    ? (committedScope as TransactionScope).afterCommit
+    : [];
+  for (const callback of committedCallbacks) {
+    try { await callback(); }
+    catch (error: any) {
+      console.warn(`[database] after-commit effect failed (non-fatal): ${error?.message || error}`);
+    }
+  }
+  return result;
+}
 
 // Helper to load driver dynamically
 async function loadDriver(overrideName: string | null = null) {
@@ -516,9 +602,31 @@ const dbAsyncProxy = new Proxy({}, {
     const db = getDbAsync();
     if (!db) throw new Error('Async Database not initialized');
 
+    if (prop === 'transaction') {
+      return async (fn: (tx: TransactionQuery) => Promise<any>) => {
+        verifyPermission('database', 'write');
+        return await runTransaction(fn);
+      };
+    }
+
+    const scoped = transactionScope.getStore();
+    if (scoped?.active && ['get', 'all', 'run', 'exec'].includes(prop as string)) {
+      const method = scoped.query[prop as keyof TransactionQuery];
+      return async (...args: any[]) => {
+        if (['run', 'exec'].includes(prop as string)) verifyPermission('database', 'write');
+        return await method(...args);
+      };
+    }
+
     // If prop is a function on the driver, wrap it with automatic normalization
     if (typeof db[prop] === 'function') {
       return async (...args: any[]) => {
+        // Both SQLite implementations expose one connection. A query from another async context must
+        // wait for every queued transaction, otherwise it could be committed or rolled back as if it
+        // belonged to that unrelated request. Transaction-owned calls took the scoped branch above.
+        if (['get', 'all', 'run', 'exec'].includes(prop as string) && typeof db.waitForTransaction === 'function') {
+          await db.waitForTransaction();
+        }
         // Double check for write operations. transaction() wraps writes, so it requires write
         // permission too (the tx.run/tx.exec calls inside go straight to the pinned connection and
         // are not re-checked through this proxy — the transaction-level check covers them).
@@ -642,6 +750,10 @@ async function clearDatabase(db: any = null) {
 
   // Tables to clear (Order matters for foreign keys if enforced, though SQLite usually permissive)
   const tables = [
+    // Never let an event or an already-fanned-out webhook from the pre-clear database replay against
+    // newly imported ids. These two deletes are fail-closed below because continuing would emit an
+    // externally visible action for content that no longer exists.
+    'webhook_deliveries', 'content_outbox',
     'term_relationships', 'term_taxonomy', 'terms',
     'comment_meta', 'comments',
     'post_meta', 'posts',
@@ -672,10 +784,13 @@ async function clearDatabase(db: any = null) {
         targetDb.exec(sql); // Sync legacy
       }
     } catch (e) {
-      // Ignore "no such table" errors if schema is broken
-      if (!e.message.includes('no such table')) {
-        console.warn(`⚠️ Failed to clear table ${table}: ${e.message}`);
+      const message = String(e?.message || e || 'unknown database clear failure');
+      const missing = /no such table|does not exist|doesn't exist|undefined table/i.test(message);
+      if (missing) continue;
+      if (table === 'content_outbox' || table === 'webhook_deliveries') {
+        throw new Error(`Refusing to clear content while stale external work remains in ${table}: ${message}`, { cause: e });
       }
+      console.warn(`⚠️ Failed to clear table ${table}: ${message}`);
     }
   }
   console.log('✅ Database cleared.');
@@ -692,6 +807,8 @@ module.exports = {
   clearDatabase, // Exposed
   createPluginTable,
   getDbType,
+  hasActiveTransaction,
+  afterCommit,
   db: dbProxy,
   dbAsync: dbAsyncProxy
 };

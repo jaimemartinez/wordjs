@@ -3,7 +3,8 @@
  * For handling file uploads and media library
  */
 
-const { db, dbAsync } = require('../config/database');
+const database = require('../config/database');
+const { db, dbAsync } = database;
 const Post = require('./Post');
 const config = require('../config/app');
 const path = require('path');
@@ -11,6 +12,7 @@ const fs = require('fs');
 // The ONE place a stored name becomes a path. This file used to build its unlink() targets with
 // path.join() on a value read straight out of post_meta — see Media._deletableFiles below.
 const { resolveWithin } = require('../core/safe-path');
+const { runContentMutation, isContentMutationActive } = require('../core/content-outbox');
 
 class Media {
     /**
@@ -18,6 +20,7 @@ class Media {
      * This creates a post of type 'attachment'
      */
     static async create(data: any) {
+        if (!isContentMutationActive()) return await runContentMutation(() => Media.create(data));
         const {
             authorId,
             title,
@@ -157,6 +160,7 @@ class Media {
      * Update media
      */
     static async update(id: number, data: any) {
+        if (!isContentMutationActive()) return await runContentMutation(() => Media.update(id, data));
         const media = await Media.findById(id);
         if (!media) throw new Error('Media not found');
 
@@ -238,16 +242,20 @@ class Media {
      * Delete media
      */
     static async delete(id: number, deleteFile = true) {
+        if (!isContentMutationActive()) return await runContentMutation(() => Media.delete(id, deleteFile));
         const media = await Media.findById(id);
         if (!media) return false;
 
-        // Delete the actual file and its sizes — every target proven to live under uploads/ first.
+        // Resolve targets while metadata still exists, but unlink only AFTER the database commits.
+        // A rollback must never leave a live attachment row pointing at a file we already removed.
         if (deleteFile && media.mediaDetails.file) {
-            for (const target of Media._deletableFiles(media.mediaDetails.file, media.mediaDetails.sizes)) {
-                if (fs.existsSync(target)) {
-                    fs.unlinkSync(target);
+            const targets = Media._deletableFiles(media.mediaDetails.file, media.mediaDetails.sizes);
+            database.afterCommit(() => {
+                for (const target of targets) {
+                    try { if (fs.existsSync(target)) fs.unlinkSync(target); }
+                    catch (error: any) { console.warn(`Media.delete: post-commit unlink failed for ${target}: ${error?.message || error}`); }
                 }
-            }
+            });
         }
 
         // Delete the post
