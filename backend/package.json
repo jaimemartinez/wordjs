@@ -60,7 +60,7 @@
     "semver": "^7.7.3",
     "sharp": "^0.35.3",
     "slugify": "^1.6.6",
-    "smtp-server": "^3.18.0",
+    "smtp-server": "^3.19.2",
     "sql.js": "^1.10.0",
     "swagger-jsdoc": "^6.2.8",
     "swagger-ui-express": "^5.0.1",
