@@ -144,12 +144,12 @@ async function runContract(driver: any, d: any) {
         );
         await driver.run(
             `INSERT INTO conf_revision_meta (post_id, meta_key, meta_value)
-             VALUES (${d.ph(1)}, ${d.ph(2)}, ${d.ph(3)})${d.ret}`,
+             VALUES (${d.ph(1)}, ${d.ph(2)}, ${d.ph(3)})`,
             [parent.lastID, 'plugin_rating', '9']
         );
         await driver.run(
             `INSERT INTO conf_revision_meta (post_id, meta_key, meta_value)
-             VALUES (${d.ph(1)}, ${d.ph(2)}, ${d.ph(3)})${d.ret}`,
+             VALUES (${d.ph(1)}, ${d.ph(2)}, ${d.ph(3)})`,
             [parent.lastID, 'plugin_unrelated', 'keep']
         );
 
@@ -169,7 +169,7 @@ async function runContract(driver: any, d: any) {
             }
             await tx.run(
                 `INSERT INTO conf_revision_meta (post_id, meta_key, meta_value)
-                 VALUES (${d.ph(1)}, ${d.ph(2)}, ${d.ph(3)})${d.ret}`,
+                 VALUES (${d.ph(1)}, ${d.ph(2)}, ${d.ph(3)})`,
                 [parent.lastID, 'plugin_rating', '3']
             );
         });
