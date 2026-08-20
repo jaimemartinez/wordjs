@@ -55,6 +55,10 @@ jobs:
       - name: Certify the native confinement used by WordJS
         run: node backend/scripts/verify-sandbox-parity.mjs --json=sandbox-parity-report.json
 
+      - name: Differential Seatbelt boot diagnostics
+        if: failure() && runner.os == 'macOS'
+        run: node backend/scripts/diagnose-seatbelt-boot.mjs
+
       - name: macOS Seatbelt denial diagnostics
         if: failure() && runner.os == 'macOS'
         shell: bash
