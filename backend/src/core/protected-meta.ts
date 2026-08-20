@@ -141,7 +141,7 @@ function stripIgnorable(value: string): string {
  * insensitive). A key that COLLIDES with a protected key under any engine's rules is refused under
  * all of them, which makes the answer identical on SQLite (BINARY), Postgres and MySQL.
  */
-function canonicalMetaKey(key: string): string {
+export function canonicalMetaKey(key: string): string {
     return stripIgnorable(stripCombiningMarks(String(key).normalize('NFKD'))).trim().toLowerCase();
 }
 

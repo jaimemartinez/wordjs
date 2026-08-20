@@ -8,8 +8,9 @@
  * former posts.ts implementation.
  */
 
+import { canonicalMetaKey } from './protected-meta';
+
 const sanitizeHtml = require('sanitize-html');
-const { canonicalMetaKey } = require('./protected-meta');
 
 /* ── STRUCTURAL BOUNDS ───────────────────────────────────────────────────────────────────────────
  * express.json accepts up to 10 MB because a large page tree is a legitimate document. Byte size,
