@@ -221,7 +221,14 @@ function deriveEmitters(): Emitter[] {
 const REVIEWED_EMITTERS: Array<{ file: string; marker: string; reason: string }> = [
     {
         file: 'backend/src/routes/media.ts',
-        marker: "req.file.mimetype === 'image/svg+xml'",
+        // RE-PINNED after the request/response boundary was typed (f95f139f). `req.file` is
+        // `Express.Multer.File | undefined` once the handler is typed, so the route now narrows it once
+        // into a local `uploaded` and reads that. The marker moved with it.
+        //
+        // The review below was re-done rather than re-pinned: the sanitizer config at that site still
+        // admits `class` and still keeps `style` OUT of allowedTags, and the file is still written back
+        // and served as its own image/svg+xml document. Both halves of the reason hold unchanged.
+        marker: "uploaded.mimetype === 'image/svg+xml'",
         reason:
             'An UPLOADED SVG, sanitized and written back to disk as its own file. It is served as a ' +
             'separate document (image/svg+xml), so a class inside it can only match rules inside that ' +
