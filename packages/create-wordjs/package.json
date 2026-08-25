@@ -1,6 +1,6 @@
 {
     "name": "create-wordjs",
-    "version": "1.12.13",
+    "version": "2.0.0",
     "description": "Create a WordJS site with one command — the self-hosted CMS where third-party plugins run in an OS-isolated process with per-capability permission grants. SSR/SEO out of the box, SQLite by default, no PHP.",
     "license": "MIT",
     "author": "Jaime Martinez (https://github.com/jaimemartinez)",
@@ -46,6 +46,9 @@
         "access": "public"
     },
     "dependencies": {
-        "adm-zip": "^0.5.16"
+        "adm-zip": "^0.6.0"
+    },
+    "scripts": {
+        "test": "node --test test/**/*.test.js"
     }
 }

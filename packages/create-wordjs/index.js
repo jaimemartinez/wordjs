@@ -181,6 +181,27 @@ async function githubJson(url) {
     try { return JSON.parse(body); } catch { fail('GitHub returned an unparsable response.', 'Try again, or use --zip <path-to-zip>.'); }
 }
 
+// NAME THE ASSET WE WANT; DO NOT TAKE THE FIRST ONE THAT LOOKS RIGHT.
+//
+// The core bundle is not alone on the release: the same release carries all 31 marketplace plugin
+// zips, and `wordjs-*.zip` is a shape, not an identity. A plugin slug beginning with `wordjs-` would
+// sort ahead of the bundle in the assets array and this installer would download a plugin and try to
+// boot it as a site. Nothing today collides, which is exactly when it is cheap to fix.
+//
+// release.yml names the bundle after the tag (`wordjs-v2.0.0.zip`), so ask for that by name and keep
+// the loose match only as a fallback — for older releases, and so a rename in the workflow degrades
+// to the previous behaviour rather than to a hard failure.
+//
+// Exported (below) so it can be exercised directly: it is the one piece of release resolution that is
+// pure, and testing it through the network call would mean testing a copy of it instead.
+function pickBundleAsset(assets, tagName) {
+    const list = Array.isArray(assets) ? assets : [];
+    const wanted = `wordjs-${tagName}.zip`.toLowerCase();
+    return list.find((a) => String(a && a.name || '').toLowerCase() === wanted)
+        || list.find((a) => /^wordjs-.*\.zip$/i.test(a && a.name || ''))
+        || null;
+}
+
 async function resolveReleaseAsset(tag) {
     const url = tag
         ? `https://api.github.com/repos/${REPO}/releases/tags/${encodeURIComponent(tag)}`
@@ -190,7 +211,7 @@ async function resolveReleaseAsset(tag) {
         fail(tag ? `No release found for tag "${tag}".` : `No releases found for ${REPO}.`,
             `See https://github.com/${REPO}/releases for available versions, or pass --zip <path-or-url>.`);
     }
-    const asset = (release.assets || []).find((a) => /^wordjs-.*\.zip$/i.test(a.name || ''));
+    const asset = pickBundleAsset(release.assets, release.tag_name);
     if (!asset) fail(`Release ${release.tag_name} has no wordjs-*.zip asset.`, 'Pass --zip <path-or-url> instead.');
     return { name: asset.name, url: asset.browser_download_url, tag: release.tag_name };
 }
@@ -730,4 +751,9 @@ async function main() {
     child.on('exit', (code) => process.exit(code == null ? 0 : code));
 }
 
-main().catch((e) => fail(e && e.message ? e.message : String(e)));
+// Run only when invoked as the CLI, so the pure helpers above can be required and exercised.
+if (require.main === module) {
+    main().catch((e) => fail(e && e.message ? e.message : String(e)));
+}
+
+module.exports = { pickBundleAsset };

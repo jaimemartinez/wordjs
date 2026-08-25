@@ -105,6 +105,12 @@ export const PERMISSION_META: Record<string, PermissionMeta> = {
         risk: 'low',
         icon: 'fa-bars',
     },
+    'assets:write': {
+        label: 'Add scripts and styles to public pages',
+        description: 'Load a JavaScript or CSS file from its own plugin directory onto your public pages. The script runs in every visitor\'s browser, with access to whatever they can see or type on the page. The host checks the file is inside the plugin\'s directory and emits the tag itself — the plugin cannot inject raw HTML — but the code it points at is the plugin\'s own.',
+        risk: 'high',
+        icon: 'fa-file-code',
+    },
     'network': {
         label: 'Outbound network',
         description: 'Make outbound network calls (fetch / raw sockets). This is an exfiltration risk — data can leave your server. Grant only if you trust this plugin.',

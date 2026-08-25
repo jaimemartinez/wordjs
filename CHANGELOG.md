@@ -4,23 +4,57 @@ All notable changes to WordJS are documented here. This project follows
 [Semantic Versioning](https://semver.org/). Each release is published as a pre-compiled bundle
 on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
-## [Unreleased]
+## [2.0.0] - 2026-08-25
 
-### Fixed
+### Breaking changes
 
-- **Editor: palette cards insert on tap again, reliably.** Block cards inserted via the synthetic
-  `click` event, and when the editor re-rendered between press and release the browser silently
-  suppressed that click — cards "did nothing" with no error. Insertion now runs on pointer-up
-  with the same 5px threshold the drag sensor uses: less than that is a tap (insert), more is a
-  drag (the drop zones take over). Keyboard insertion (Enter/Space) is unchanged.
+Every one of these replaces behaviour that was wrong, but each is observable to an existing caller, so
+the release is a major.
 
-- **Blocks: the particle field is visible the moment you insert it.** Freshly inserted at page
-  root — with no positioned, sized ancestor — the field's background-layer wrapper measured 0px
-  and nothing showed. New insertions now default to an in-flow 420px band via the block's own
-  CSS defaults; to use it as a section's background layer, clear those two entries and it
-  returns to its classic cover-the-parent behavior. Existing pages are untouched.
+- **A scalar query parameter sent twice is refused with `400 rest_invalid_param`.** `?force=true` is the
+  string `true`; `?force=true&force=true` is an array, and the guards that compared it to a string
+  answered false for it. `DELETE /posts/:id` and `DELETE /comments/:id` therefore answered `200` and
+  *trashed* a row the caller had asked to delete permanently; a repeated `hide_empty` silently dropped
+  the filter; a repeated `users` on `/export` produced an archive with no user rows; a repeated `order`
+  on `/users` was a `500`. The value is not resolved to the first or last occurrence: any resolution
+  rule hands the decision to whoever can append to a URL, and on `force` either guess can be steered
+  into a permanent delete. Sending the same scalar twice was never meaningful, so an honest caller sees
+  no change.
+- **A malformed route id answers that router's own 404 instead of serving a row or failing.**
+  `parseInt('1abc', 10)` is `1`, so `GET /api/v1/posts/1abc` used to serve post 1. An id wider than the
+  id columns reached the driver: on PostgreSQL, an anonymous `GET /api/v1/posts/9999999999` answered
+  `500` with SQLSTATE 22003. A route id is now the id or it is nothing, in every router that takes one
+  — fourteen of them. Routers that already refused with `400` keep their `400`; only the predicate is
+  shared.
+- **An unexpected 5xx no longer returns internal error text.** The error handler rendered `err.code` and
+  `err.message` verbatim on every error, so a driver failure handed the caller its SQLSTATE and message.
+  Deliberate API errors — including the `rest_invalid_param` shape above — still render as before.
+- **`req.userId` is gone.** It was stamped on ten authenticated paths and read nowhere, including
+  through the plugin bridge. Nothing in-tree consumed it.
+- **`ownerOrCan()` is gone** from the permissions middleware. It had no call sites, and the call form
+  its own documentation showed would have thrown.
 
 ### Added
+
+- **The F0–F6 content programme.** A declarative content schema (F1) from which the runtime validators,
+  wire DTOs, OpenAPI and the frontend client are generated (F2); transactional content writes with a
+  durable outbox, so a post, its terms, its meta, its revision and its event commit or fail together
+  (F3); versioned, extensible revisions whose snapshots keep their meaning across schema changes (F4);
+  one visual contract shared by backend, frontend and editor (F5); and migration certification (F6).
+  Each phase carries a numbered ADR under `documentation/adr/` and an executable verifier under
+  `backend/scripts/`, so the guarantees are gates rather than prose.
+- **A rollout ramp for content validation** (`off` / `shadow` / `enforce`, per type). `shadow` records
+  what enforcement *would* reject without rejecting it, so a cut-over is decided on evidence; `off` is
+  the emergency downgrade. `contentRolloutReport()` publishes the divergences, which carry field paths,
+  issue codes and the *shape* of the offending value — never the value.
+- **`config.api.rateLimit`** — the per-IP budget for `/api/v1/*`, previously hard-coded. Defaults are
+  unchanged at 1000 requests per 15 minutes and both bounds are clamped, so a typo cannot switch the
+  limiter off.
+- **The JS guard layer is certified on Linux, macOS and Windows.** The kernel floor already was; the
+  layer above it — io-guard, secure-require, the ESM/net guards and the bridge allowlist, exercised by
+  booting real malicious plugins in the real fork — ran only on Linux. It now runs on every runner.
+- **`scripts/record-editor-demo.mjs`** regenerates the README's editor demo, so the picture can be
+  refreshed instead of ageing.
 
 - **Editor: the motion dock wears its Stitch design.** The dock's look now comes from the same
   Stitch project that designed the whole editor ("Architectural Precision"): a solid-indigo play
@@ -181,87 +215,6 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   same files and config and still each talk to their own upstream. Unset means "no opinion"; an
   unusable value is a startup error rather than a silent fallback.
 
-### Fixed
-
-- **Interactions: page-linked scrub now measures the same thing in every browser.** The fallback
-  driver used by browsers without native scroll-driven animations measured the element's journey
-  through the viewport even when the interaction was linked to the page's scroll; it now measures
-  document scroll progress, exactly like the native `scroll()` timeline. The compiler also stopped
-  emitting view-timeline range names for `scroll()` timelines — percentages only, which is the
-  portable meaning.
-
-- **Interactions: the editor canvas can no longer disagree with the published page about which
-  animation a block gets.** The canvas now resolves block classes from the same whole-page
-  compilation the public site uses, closing a corner case where two different interactions sharing
-  a 32-bit hash showed the first one's motion on the second block in the canvas (guarded by a test
-  built on a real hash collision found by brute force).
-
-- **Separate mode (three machines) was unusable, in three ways that only appear when the tiers are
-  actually apart.** The installer recorded the *backend's* address as the public site origin — it read
-  the raw `Host` header, which the gateway rewrites — so every API call afterwards answered 409 asking
-  for a migration. Installing on an already-enrolled node re-minted the cluster CA over the one the
-  gateway issued and left the CA *private key* on the backend, which would have killed the cluster at
-  the next restart. And `/public` was never routed, so 161 KB of block CSS and 73 KB of icons 404'd —
-  that one also affected split mode on a single host.
-
-- **On-demand cache purge now works across machines.** It assumed backend and frontend shared a disk,
-  so in a cluster publishing fell back to timed revalidation. Measured on the three-machine lab:
-  ~25 s → ~0.8 s. A node enrolled before this repairs itself on next start instead of needing a manual
-  re-enrolment.
-
-- **A dead Redis bus was silent, and never came back.** With Redis down, cross-node fan-out reported
-  events as delivered without publishing them, and the client stopped reconnecting for good after
-  three attempts — one blip left cluster collaboration dead until the process was restarted, with
-  nothing in the log.
-
-- **The editor canvas selected by the author's block id**, which stops matching the store's key once a
-  document has been through a collaboration room. The page rendered perfectly and could not be
-  touched: clicking selected nothing, double-click opened no editor, dragging picked up nothing.
-
-- **Presence lied in a cluster**: the roster handed to someone joining was built from one node's
-  connections, so with one author per node the second to arrive was told nobody else was editing.
-
-- **The release packager shipped the developer's local directory.** A bundle built from a working tree
-  carried `.claude/` — 46 MB of a 97 MB artifact, including git worktrees and local tool configuration
-  that can hold credentials. Releases built by CI from a clean checkout were never affected. What
-  belongs in an artifact is now decided by what git tracks, plus an explicit allowlist of build output,
-  rather than by a list of names that is always one tool behind: 12 169 entries → 2 649, 97 MB → 17.7 MB.
-
-- **Cache purge named the wrong paths for pages** (`/<slug>` instead of `/pages/<slug>`, the URL the
-  menu builder links to). It worked only because the tag covered it.
-
-### Security
-
-- **Arbitrary file write via `POST /api/v1/certs/dns-finish`.** The `domain` field from the request
-  body went straight into the path where `privkey.pem` and `fullchain.pem` are written, with
-  `mkdir -p`. Demonstrated end to end before the fix: a traversal value returned `{"success":true}` and
-  wrote both files outside the certificate directory — an arbitrary write as the server user, with the
-  operator's own key material as the payload.
-
-- **Stored open redirect in menus and site chrome.** Link guards decided on the raw string while the
-  browser strips tab, newline and carriage return *before* parsing, and only `//host` was rejected —
-  never `/\host`, which is equally authority-relative. Both spellings navigated off-site from a menu
-  item or a footer social link. Menu URLs are not revalidated at render, so that guard was the only
-  defense.
-
-- **SQL identifier injection reachable from `POST /api/v1/import`.** Column definitions were checked by
-  a denylist applied to a *copy* of the value while the original was interpolated into the DDL; quote,
-  backtick and backslash all passed. Identifiers and column definitions now go through a shape
-  allowlist that rebuilds the value from a constant alphabet.
-
-- **A zip upload could silently overwrite an installed theme**, because the theme's identity came from
-  the multipart filename while extraction was driven by the zip entries — and an entry could write into
-  a *different* theme's directory.
-
-- **A revoked session kept reading live drafts.** The collaboration stream's credential handling had
-  drifted from the shared authenticator: `Authorization: Bearer null` plus a valid session cookie took
-  a branch that never re-verified the token, so the stream survived logout, a password change and JWT
-  expiry — a removed editor kept receiving every keystroke.
-
-- **Hardening against remote property injection** in the collaboration operation validator, and the
-  video block no longer classifies providers by substring (`youtube.com.evil.test/watch?v=…` let an
-  attacker choose both the provider and the id that reached the player).
-
 ### Changed
 
 - **Blocks now carry WordJS's own class, `wjs-block-*`, alongside the historical `wp-block-*` one —
@@ -322,7 +275,173 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   `frontend/src/lib/puckPluginRegistry.ts` → `versoPluginRegistry.ts` (generated per machine and
   gitignored, as before). The `wordjs create plugin` scaffold now emits `client/verso/`.
 
+### Fixed
+
+- **MySQL: no content-driven webhook had ever been delivered.** `WebhookDelivery.enqueue` writes
+  `ON CONFLICT DO NOTHING` with no conflict target — legal in SQLite and PostgreSQL. The MySQL driver
+  translated only the parenthesised form, so the clause survived, the statement was rejected, and the
+  webhook listener swallowed the error as non-fatal. Silent since the outbox shipped, and invisible to a
+  test suite that runs on SQLite.
+- **MySQL: a duplicate username or email answered a driver 500 instead of "already exists".**
+  `isUniqueViolation()` existed twice — `core/revisions.ts` knew all three drivers, `models/User.ts`
+  knew only SQLite and PostgreSQL, and its own doc comment enumerated exactly those two, so it read as
+  complete. There is now one predicate, in `core/db-errors.ts`, and a test that fails if a second
+  appears. On SQLite this also narrows what counts as a collision: a NOT NULL or CHECK failure during
+  user creation used to be reported as "Username or email already exists" and now surfaces as itself.
+- **`npx create-wordjs` could download a plugin and try to boot it as a site.** It took the first
+  release asset matching `wordjs-*.zip`, and the same release carries all 31 marketplace plugin zips —
+  so a plugin slug beginning with `wordjs-` would sort ahead of the bundle. It now asks for the
+  tag-named bundle by name, keeping the loose match as a fallback for earlier releases. The package
+  also gains a test suite and a CI job: it had neither, while being the first command a new user runs
+  and the one thing here published to an immutable registry.
+- **The release now refuses to package a compiled tree that does not match its source.** Production
+  loads `backend/dist/`, and that is what the ZIP and the npm package ship — so a compiled file that is
+  missing, older than its source, or left behind after its source was deleted is a behaviour the
+  artefact has and the tree everyone reads does not. Two audit findings stayed exploitable exactly this
+  way after being fixed. The suite already had a gate for it, but that gate skips on a checkout that
+  never built — which is most CI runs — and the walk it exported for the packaging step had **no
+  caller**: the suite could report the artefact stale while the packaging script zipped it anyway. The
+  walk now lives in `backend/scripts/stale-compiled-files.js` with two callers, and
+  `make-release.js` aborts on any drift. "We remembered to rebuild" is no longer the control.
+- **The accidental `/health/health` route is gone.** A nested duplicate of the frontend health handler,
+  answering a different shape, requested by nothing, and built into the route manifest regardless.
+- **Two marketplace plugins were dead on install.** `contact-forms` and `invoices` declared
+  `DEFAULT '[]'` and `DEFAULT '$'` in their schema; the host SQL guard refuses `[` and `$` anywhere in a
+  plugin statement, so `initSchema()` threw, `init()` failed and the plugin registered nothing.
+- **Five plugin manifests declared fewer permissions than their code uses**, which the default-deny
+  bridge refuses at runtime.
+- **`mail-server` could not be installed.** The install-time scanner flags a bare `exec` call as
+  possible `child_process` use and exempted only a literal `/re/.exec(s)`, not a regex held in a
+  `const` — which is how its HTML sanitiser iterates.
+- **`POST /import` leaked its upload on every malformed file**: the parse threw between reading the
+  multer temp file and unlinking it.
+- **A plugin that dies mid-line no longer dies silently.** The log forwarder emitted only on a newline,
+  so a short unterminated write — what a launcher prints when it refuses — was buffered and lost.
+- **`/api/v1/fonts` and the theme download** did their work inside a node-style callback under
+  `asyncHandler`, so a throw there was an unhandled rejection rather than a 500.
+
+- **Editor: palette cards insert on tap again, reliably.** Block cards inserted via the synthetic
+  `click` event, and when the editor re-rendered between press and release the browser silently
+  suppressed that click — cards "did nothing" with no error. Insertion now runs on pointer-up
+  with the same 5px threshold the drag sensor uses: less than that is a tap (insert), more is a
+  drag (the drop zones take over). Keyboard insertion (Enter/Space) is unchanged.
+
+- **Blocks: the particle field is visible the moment you insert it.** Freshly inserted at page
+  root — with no positioned, sized ancestor — the field's background-layer wrapper measured 0px
+  and nothing showed. New insertions now default to an in-flow 420px band via the block's own
+  CSS defaults; to use it as a section's background layer, clear those two entries and it
+  returns to its classic cover-the-parent behavior. Existing pages are untouched.
+
+- **Interactions: page-linked scrub now measures the same thing in every browser.** The fallback
+  driver used by browsers without native scroll-driven animations measured the element's journey
+  through the viewport even when the interaction was linked to the page's scroll; it now measures
+  document scroll progress, exactly like the native `scroll()` timeline. The compiler also stopped
+  emitting view-timeline range names for `scroll()` timelines — percentages only, which is the
+  portable meaning.
+
+- **Interactions: the editor canvas can no longer disagree with the published page about which
+  animation a block gets.** The canvas now resolves block classes from the same whole-page
+  compilation the public site uses, closing a corner case where two different interactions sharing
+  a 32-bit hash showed the first one's motion on the second block in the canvas (guarded by a test
+  built on a real hash collision found by brute force).
+
+- **Separate mode (three machines) was unusable, in three ways that only appear when the tiers are
+  actually apart.** The installer recorded the *backend's* address as the public site origin — it read
+  the raw `Host` header, which the gateway rewrites — so every API call afterwards answered 409 asking
+  for a migration. Installing on an already-enrolled node re-minted the cluster CA over the one the
+  gateway issued and left the CA *private key* on the backend, which would have killed the cluster at
+  the next restart. And `/public` was never routed, so 161 KB of block CSS and 73 KB of icons 404'd —
+  that one also affected split mode on a single host.
+
+- **On-demand cache purge now works across machines.** It assumed backend and frontend shared a disk,
+  so in a cluster publishing fell back to timed revalidation. Measured on the three-machine lab:
+  ~25 s → ~0.8 s. A node enrolled before this repairs itself on next start instead of needing a manual
+  re-enrolment.
+
+- **A dead Redis bus was silent, and never came back.** With Redis down, cross-node fan-out reported
+  events as delivered without publishing them, and the client stopped reconnecting for good after
+  three attempts — one blip left cluster collaboration dead until the process was restarted, with
+  nothing in the log.
+
+- **The editor canvas selected by the author's block id**, which stops matching the store's key once a
+  document has been through a collaboration room. The page rendered perfectly and could not be
+  touched: clicking selected nothing, double-click opened no editor, dragging picked up nothing.
+
+- **Presence lied in a cluster**: the roster handed to someone joining was built from one node's
+  connections, so with one author per node the second to arrive was told nobody else was editing.
+
+- **The release packager shipped the developer's local directory.** A bundle built from a working tree
+  carried `.claude/` — 46 MB of a 97 MB artifact, including git worktrees and local tool configuration
+  that can hold credentials. Releases built by CI from a clean checkout were never affected. What
+  belongs in an artifact is now decided by what git tracks, plus an explicit allowlist of build output,
+  rather than by a list of names that is always one tool behind: 12 169 entries → 2 649, 97 MB → 17.7 MB.
+
+- **Cache purge named the wrong paths for pages** (`/<slug>` instead of `/pages/<slug>`, the URL the
+  menu builder links to). It worked only because the tag covered it.
+
+### Security
+
+- **`create-wordjs` shipped a HIGH advisory.** The install channel — the first command a new user runs —
+  depended on `adm-zip` below 0.6.0 ("a crafted ZIP triggers a 4GB allocation") while the three audited
+  workspaces were clean, because the audit gate enumerated backend, gateway and frontend and this
+  package is none of them. Upgraded, and the gate now covers it.
+- **An absent `Host` header became a permitted origin.** The CSRF same-origin allow-list was built as
+  `http://${host}`, so with no header it admitted the literal strings `http://undefined` and
+  `https://undefined`. Both the middleware and its byte-identical twin in the collaboration route now
+  fail closed.
+- **The force-delete bypass** described under breaking changes was reachable by anyone who could get a
+  repeated parameter into a URL.
+- **The plugin grant screen understated `assets:write`.** `permissionMeta.ts` claims, above its table,
+  to cover "Every KNOWN_PERMISSIONS token" — and nothing checked. It was missing this one, and the
+  lookup falls back to `{ label: token, risk: 'med' }`, so nothing broke: an admin was shown the raw
+  string `assets:write`, no explanation, behind a MEDIUM badge, for a permission that lets a plugin put
+  a script on public pages — code that runs in every visitor's browser. A missing entry did not look
+  like a bug, it looked like a low-stakes permission. Both directions are now gated, plus a check that
+  write-shaped grants are rated high.
+
+- **Arbitrary file write via `POST /api/v1/certs/dns-finish`.** The `domain` field from the request
+  body went straight into the path where `privkey.pem` and `fullchain.pem` are written, with
+  `mkdir -p`. Demonstrated end to end before the fix: a traversal value returned `{"success":true}` and
+  wrote both files outside the certificate directory — an arbitrary write as the server user, with the
+  operator's own key material as the payload.
+
+- **Stored open redirect in menus and site chrome.** Link guards decided on the raw string while the
+  browser strips tab, newline and carriage return *before* parsing, and only `//host` was rejected —
+  never `/\host`, which is equally authority-relative. Both spellings navigated off-site from a menu
+  item or a footer social link. Menu URLs are not revalidated at render, so that guard was the only
+  defense.
+
+- **SQL identifier injection reachable from `POST /api/v1/import`.** Column definitions were checked by
+  a denylist applied to a *copy* of the value while the original was interpolated into the DDL; quote,
+  backtick and backslash all passed. Identifiers and column definitions now go through a shape
+  allowlist that rebuilds the value from a constant alphabet.
+
+- **A zip upload could silently overwrite an installed theme**, because the theme's identity came from
+  the multipart filename while extraction was driven by the zip entries — and an entry could write into
+  a *different* theme's directory.
+
+- **A revoked session kept reading live drafts.** The collaboration stream's credential handling had
+  drifted from the shared authenticator: `Authorization: Bearer null` plus a valid session cookie took
+  a branch that never re-verified the token, so the stream survived logout, a password change and JWT
+  expiry — a removed editor kept receiving every keystroke.
+
+- **Hardening against remote property injection** in the collaboration operation validator, and the
+  video block no longer classifies providers by substring (`youtube.com.evil.test/watch?v=…` let an
+  attacker choose both the provider and the id that reached the player).
+
 ### Documentation
+
+- **2423 claims were checked against the code; 225 were corrected and 23 deleted.** The README described
+  a Linux sandbox of unprivileged users, dropped capabilities, namespaces and a read-only filesystem —
+  none of which is in the code; the shipped mechanism is Landlock with seccomp-bpf, and Windows and
+  macOS run AppContainer and Seatbelt. Six places advertised "64 first-party themes": the theme
+  catalogue was retired, its built index is empty, and four themes ship bundled instead.
+  `frontend/README.md` still described the editor as Puck-based, citing two paths that no longer exist.
+- **Two documents moved to English**, which is the rule for anything public here.
+  `documentation/plugin-database.md` is linked from the README and is plugin-author documentation; ADR
+  0006 was the only Spanish one among seven. The sixteen `documentation/verso/*` programme notes are
+  still Spanish; nothing links to them, and they are a separate pass.
+- The ADRs were left as written — apart from that translation, they record decisions as they were taken.
 
 - README and `documentation/**` updated to describe Verso and the current block API, including the
   compatibility guarantees above. Several claims that no longer matched the code were corrected rather
@@ -331,7 +450,23 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   call the canvas actually makes. The retired editor's `eval` and `srcdoc` iframe were also two of the
   stated reasons the CSP is widened; that is now flagged as an open cleanup rather than a live
   justification, because the policy itself has **not** been re-narrowed.
-- `docs/media/puck-editor-demo.gif` → `docs/media/verso-editor-demo.gif` (same recording, renamed file).
+- `docs/media/puck-editor-demo.gif` → `docs/media/verso-editor-demo.gif`, and **re-recorded**. The old
+  picture had been taken by hand and had drifted: seventy-seven commits touched `frontend/src` since,
+  four of them changing exactly what the caption promised — what you drag is now the block itself rather
+  than a card with its name, and the drag preview hangs from where you grabbed it. It was a picture of
+  an editor that no longer behaves that way. `scripts/record-editor-demo.mjs` makes the recording
+  repeatable, driving the same palette attributes and the same real pointer drag the e2e specs drive,
+  so it records a path the suite also exercises.
+
+### Notes for upgraders
+
+- **Release tags before this one point at a rewritten history.** No previous tag is an ancestor of the
+  current `main`: the public history was rewritten and the tags were left where they were. `v2.0.0` is
+  the first tag on the current history, and comparisons against an earlier tag will not be meaningful.
+- **Known gap: an isolated plugin does not start on macOS.** Booting one fails during startup, and the
+  cause is not yet known — the Seatbelt profile itself boots cleanly in every variant. Nothing in CI had
+  ever booted a plugin on macOS before this release, so this is newly *observed*, not newly broken. The
+  guard suite gates on Linux and Windows and reports on macOS until it is understood.
 
 ## [1.14.1] - 2026-08-07
 

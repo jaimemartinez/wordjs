@@ -160,6 +160,22 @@ async function run() {
             stdio: 'inherit'
         });
 
+        // 2c. VERIFY THE COMPILE INSTEAD OF ASSUMING IT.
+        //
+        // `npm run build` exiting 0 says the compiler ran, not that dist/ is now a faithful copy of
+        // src/. A partial build, an interrupted one, or a `tsc -p tsconfig.build.json` run by hand
+        // (which does NOT clear dist/) all leave a tree that loads — and production loads dist/, so
+        // every difference is a behaviour the artefact has and the source does not. Two audit findings
+        // stayed exploitable exactly this way after being fixed in src/.
+        //
+        // The same walk backs the suite's release gate (backend/src/tests/dist-mysql-driver-
+        // freshness.test.ts). That gate SKIPS on a checkout that never built, which is most CI runs —
+        // so the artefact needs checking at the moment it is produced, which is here.
+        console.log('\n🔎 Verifying the compiled backend matches its source...');
+        const { assertCompiledTreeIsFresh } = require(path.join(ROOT_DIR, 'backend', 'scripts', 'stale-compiled-files.js'));
+        const freshness = assertCompiledTreeIsFresh();   // throws, aborting the release, on any drift
+        console.log(`   ✅ ${freshness.checked} compiled files present, current and accounted for.`);
+
         // 3. Build Plugins
         console.log('\n🔌 Building Plugin Bundles...');
         execSync('node scripts/build-plugin.js --all', {

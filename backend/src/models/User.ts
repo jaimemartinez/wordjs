@@ -8,27 +8,15 @@ const bcrypt = require('bcryptjs');
 const config = require('../config/app');
 const { sanitizeTitle, currentTimeGMT } = require('../core/formatting');
 const { getRoles } = require('../core/roles');
+// One unique-violation predicate for all three drivers. This file used to carry its own, which knew
+// only SQLite and Postgres — see core/db-errors.ts for what that cost on MySQL.
+const { isUniqueViolation } = require('../core/db-errors');
 // The ACTIVE CORPORATE MAILBOX fact + the one address-shape rule. See core/mailbox.ts.
 const {
     MAILBOX_META_KEY, EMAIL_FORMAT_RE, normalizeAddress, hasProfessionalMailbox, mailboxFlagValue
 } = require('../core/mailbox');
 
 const SALT_ROUNDS = 12;
-
-/**
- * True when a DB error is a UNIQUE-constraint violation, across drivers:
- *   - SQLite (better-sqlite3 / sql.js): code 'SQLITE_CONSTRAINT_UNIQUE' or message
- *     'UNIQUE constraint failed: ...'
- *   - Postgres (pg): SQLSTATE '23505' (unique_violation)
- */
-function isUniqueViolation(err: any): boolean {
-    if (!err) return false;
-    const code = err.code;
-    if (code === '23505') return true; // Postgres unique_violation
-    if (typeof code === 'string' && code.startsWith('SQLITE_CONSTRAINT')) return true;
-    const msg = String(err.message || '');
-    return /UNIQUE constraint failed/i.test(msg) || /duplicate key value/i.test(msg);
-}
 
 /**
  * Validate a role string against the known roles allow-list before it is written to user_meta.

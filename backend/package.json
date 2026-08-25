@@ -1,6 +1,6 @@
 {
   "name": "wordjs",
-  "version": "1.14.1",
+  "version": "2.0.0",
   "description": "WordPress-like CMS built with Node.js and SQLite",
   "main": "src/index.ts",
   "scripts": {

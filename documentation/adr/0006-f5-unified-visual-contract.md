@@ -1,61 +1,62 @@
-# ADR 0006 — F5: contrato visual único y artefactos generados
+# ADR 0006 — F5: one visual contract, and generated artifacts
 
-- Estado: aceptado
-- Fecha: 2026-08-20
-- Fuente canónica: `contracts/visual-contract.v1.json`
+- Status: accepted
+- Date: 2026-08-20
+- Canonical source: `contracts/visual-contract.v1.json`
 
-## Contexto
+## Context
 
-Templates, chrome, temas, el renderer público y Verso repetían manualmente tipos, propiedades,
-slots, límites, nombres de archivo y reglas de sanitización. Una prueba de paridad solo detectaba
-algunas diferencias después de escribir dos copias; no impedía crear una tercera ni garantizaba que
-un cambio alcanzara todos los consumidores.
+Templates, chrome, themes, the public renderer and Verso each restated types, properties, slots,
+limits, file names and sanitisation rules by hand. A parity test caught only some of the differences,
+and only after two copies had been written; it did not stop a third being created, and it did not
+guarantee that a change reached every consumer.
 
-F5 conserva dos programas separados —el backend no se importa desde Next.js— pero elimina las dos
-definiciones. El JSON canónico describe los formatos de template/chrome/tema, el registro core de
-Verso y las políticas visuales de URL, HTML, clases y estilos. `scripts/generate-visual-contract.mjs`
-valida esa definición y produce proyecciones específicas para cada paquete, tipos TypeScript, el
-registro de Verso y documentación para plugins.
+F5 keeps the two programs separate — the backend is not imported from Next.js — while removing the
+two definitions. The canonical JSON describes the template/chrome/theme formats, Verso's core
+registry, and the visual policies for URLs, HTML, classes and styles.
+`scripts/generate-visual-contract.mjs` validates that definition and emits per-package projections,
+TypeScript types, the Verso registry, and plugin documentation.
 
-## Decisión
+## Decision
 
-El backend sigue siendo la autoridad de seguridad: valida antes de persistir y sanea contenido no
-confiable. El frontend usa su proyección para fallar temprano y para renderizar únicamente datos que
-cumplen el mismo contrato. Esa validación de lectura no convierte al navegador en autoridad.
+The backend remains the security authority: it validates before persisting and sanitises untrusted
+content. The frontend uses its projection to fail early and to render only data that satisfies the
+same contract. That read-side validation does not make the browser an authority.
 
-Los artefactos generados se versionan. `npm run verify:f5` ejecuta el generador en modo `--check` y
-falla si falta un archivo o no corresponde a la definición. Los maps de render de core, chrome y
-template son exhaustivos mediante `satisfies Record<GeneratedType, ...>`. El registro de Verso usa el
-orden generado y rechaza implementaciones ausentes, sobrantes, con otra categoría o con slots distintos.
+Generated artifacts are committed. `npm run verify:f5` runs the generator in `--check` mode and fails
+if a file is missing or does not correspond to the definition. The core, chrome and template render
+maps are exhaustive via `satisfies Record<GeneratedType, ...>`. Verso's registry uses the generated
+order and rejects implementations that are missing, extra, differently categorised, or carrying
+different slots.
 
-## Invariantes
+## Invariants
 
-- **F5-INV-01** — `contracts/visual-contract.v1.json` es la única definición manual de límites y allowlists visuales compartidos.
-- **F5-INV-02** — backend y frontend consumen artefactos separados, generados desde la misma versión del contrato.
-- **F5-INV-03** — ningún módulo frontend importa implementación del backend.
-- **F5-INV-04** — el backend valida y sanea antes de persistir; el parser frontend es defensa de lectura, no autoridad.
-- **F5-INV-05** — template y chrome fallan cerrados ante tipos, propiedades, profundidad, cantidad o tamaño fuera de contrato.
-- **F5-INV-06** — las reglas compartidas de URL, HTML, iframe, clase y estilo nacen de la sección `security` canónica.
-- **F5-INV-07** — cada tipo core tiene exactamente una entrada generada de tipo, categoría, renderer y slots.
-- **F5-INV-08** — los renderers core, chrome y template deben cubrir exhaustivamente sus unions generadas.
-- **F5-INV-09** — un artefacto generado ausente o stale rompe CI antes de compilar o probar el producto.
-- **F5-INV-10** — la documentación de plugins se regenera junto con el código y nunca se edita como otra fuente de verdad.
+- **F5-INV-01** — `contracts/visual-contract.v1.json` is the only hand-written definition of shared visual limits and allowlists.
+- **F5-INV-02** — backend and frontend consume separate artifacts, generated from the same contract version.
+- **F5-INV-03** — no frontend module imports backend implementation.
+- **F5-INV-04** — the backend validates and sanitises before persisting; the frontend parser is read-side defence, not authority.
+- **F5-INV-05** — template and chrome fail closed on types, properties, depth, count or size outside the contract.
+- **F5-INV-06** — the shared URL, HTML, iframe, class and style rules originate in the canonical `security` section.
+- **F5-INV-07** — every core type has exactly one generated entry for type, category, renderer and slots.
+- **F5-INV-08** — the core, chrome and template renderers must cover their generated unions exhaustively.
+- **F5-INV-09** — a missing or stale generated artifact breaks CI before the product is built or tested.
+- **F5-INV-10** — plugin documentation is regenerated alongside the code and is never edited as a second source of truth.
 
-## Cómo cambiar el contrato
+## How to change the contract
 
-1. Cambiar `contracts/visual-contract.v1.json` y subir `version` cuando el formato persistido cambie.
-2. Ejecutar `npm run generate:f5` desde la raíz.
-3. Implementar el componente de un tipo nuevo; TypeScript y el registro de Verso indican todas las superficies pendientes.
-4. Ejecutar `npm run verify:f5`, las pruebas de backend y frontend y los builds.
+1. Change `contracts/visual-contract.v1.json`, raising `version` when the persisted format changes.
+2. Run `npm run generate:f5` from the repository root.
+3. Implement the component for any new type; TypeScript and Verso's registry name every surface still outstanding.
+4. Run `npm run verify:f5`, the backend and frontend tests, and the builds.
 
-Para extensiones de plugins, el registro core no es una lista cerrada de plugins: un plugin conserva
-su registro propio. La política de saneamiento del backend sí se aplica a cualquier árbol, incluido
-un bloque de plugin, de modo que ampliar el editor no crea una vía alternativa de HTML/URL/estilo.
+For plugin extensions, the core registry is not a closed list of plugins: a plugin keeps its own
+registry. The backend's sanitisation policy does apply to any tree, a plugin block included, so
+extending the editor does not create an alternative route for HTML, URLs or styles.
 
-## Consecuencias
+## Consequences
 
-Se elimina el drift silencioso y se vuelve mecánico localizar el impacto de un cambio. A cambio, los
-archivos `*.generated.ts` y la documentación generada forman parte del commit, y modificar uno a mano
-no sirve: el gate lo rechazará. Una definición válida tampoco inventa una implementación visual; un
-bloque nuevo todavía requiere su componente, pero no puede integrarse a medias porque los maps
-exhaustivos y el registro fallan hasta que exista.
+Silent drift is eliminated, and locating the blast radius of a change becomes mechanical. In exchange,
+the `*.generated.ts` files and the generated documentation are part of the commit, and editing one by
+hand achieves nothing: the gate rejects it. A valid definition does not invent a visual implementation
+either — a new block still needs its component, but it cannot be half-integrated, because the
+exhaustive maps and the registry fail until it exists.

@@ -73,6 +73,21 @@ jobs:
         working-directory: frontend
         run: npm audit --omit=dev --audit-level=high
 
+      # THE INSTALL CHANNEL WAS THE ONE PACKAGE NOBODY AUDITED.
+      #
+      # This job publishes packages/create-wordjs to npm, and npm is immutable: a bad version can only
+      # be succeeded, never corrected. It is also the first command a new user runs
+      # (`npx create-wordjs`). It was carrying a HIGH advisory — adm-zip <0.6.0, "crafted ZIP triggers a
+      # 4GB allocation" — while the three audited workspaces were clean, because the gate enumerated
+      # backend, gateway and frontend and this package is none of them.
+      #
+      # An audit list that names directories will always miss the next one added. This is the fourth
+      # entry rather than a scan because a scan over every package.json would also walk the marketplace
+      # plugins, which ship their own dependency trees and are audited by the marketplace gate.
+      - name: Audit create-wordjs (block high/critical prod vulns)
+        working-directory: packages/create-wordjs
+        run: npm audit --omit=dev --audit-level=high
+
       - name: Backend type check (strict)
         working-directory: backend
         run: npx tsc --noEmit

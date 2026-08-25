@@ -17,7 +17,6 @@ Not every route under `src/app/` is a page — three are Next **route handlers**
 | :--- | :--- | :--- | :--- |
 | `/api/revalidate` | `POST` | `x-revalidate-secret` | The on-demand cache purge the backend's `core/frontend-purge.ts` calls when content changes. Body `{ tags, paths }` (each list deduped, entries ≤200 chars, capped at 100; `paths` must start with `/`), then `revalidateTag()` / `revalidatePath()`. |
 | `/health` | `GET` | No | Liveness for the gateway's health-checks: `{ status: 'healthy', timestamp }`. |
-| `/health/health` | `GET` | No | Returns `{ status: 'ok', service: 'frontend', timestamp }`. Documented because it **ships**, not because it is wanted: `src/app/health/health/route.ts` is a nested duplicate of the handler above, nothing in the tree requests that path, and it is nonetheless built into the route manifest. Treat it as an unintended surface pending removal, not as an API. |
 
 > `/api/internal/gateway-update` is **not** one of them: the Next twin that used to serve it was deleted, and every dispatcher now sends that path to the backend's own `/api/internal` router. `frontend/backend-proxy-target.js` keeps the path in `CONTESTED_API_PATHS` so a route handler re-created there collides instead of shipping dead code again, and `gateway/test/dispatcher-parity.test.js` walks `frontend/src/app/api/**` and fails on any route handler the module does not classify (and on any `NEXT_OWNED_API_PATHS` entry that has no route handler).
 

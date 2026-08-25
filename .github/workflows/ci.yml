@@ -523,6 +523,40 @@ jobs:
         working-directory: gateway
         run: npm test
 
+  # THE INSTALL CHANNEL, WHICH NOTHING HERE USED TO RUN.
+  #
+  # packages/create-wordjs is the first command a new user runs (`npx create-wordjs my-site`) and it is
+  # published to npm, which is immutable — a bad version can only be succeeded, never corrected. It had
+  # no test script and appeared nowhere in this file, so nothing audited its dependencies (it shipped a
+  # HIGH advisory, adm-zip <0.6.0, while the three audited workspaces were clean) and nothing checked
+  # that it picks the right file out of a release. It is one small package; there is no reason for it to
+  # be the least-verified thing we publish.
+  install-channel:
+    name: Install channel (create-wordjs)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: packages/create-wordjs/package-lock.json
+      - name: Install dependencies
+        working-directory: packages/create-wordjs
+        run: npm ci || npm install
+      - name: Audit (block high/critical prod vulns)
+        working-directory: packages/create-wordjs
+        run: npm audit --omit=dev --audit-level=high
+      - name: Test
+        working-directory: packages/create-wordjs
+        run: npm test
+      # The CLI is a bin script: a syntax error or a stray top-level throw would only surface when a
+      # user ran it. `--help` boots the whole file and exits 0.
+      - name: The CLI still starts
+        working-directory: packages/create-wordjs
+        run: node index.js --help > /dev/null
+
   frontend:
     name: Frontend (lint + build)
     runs-on: ubuntu-latest

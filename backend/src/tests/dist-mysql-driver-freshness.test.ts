@@ -32,16 +32,20 @@
  * They now call `t.skip()`, so the runner reports them under `skipped` and the run's pass count no
  * longer includes a gate that did not execute.
  *
- * TWO THINGS THIS STILL DOES NOT DO, and they are limits, not scope decisions:
- *   · dist/ is gitignored, so on a checkout that has never built there is nothing to compare and
- *     these tests SKIP. Only a run that happens after a build exercises them. The check that would
- *     not have this hole is the packaging step calling staleCompiledFiles() itself.
- *   · `staleCompiledFiles()` is exported for the release packaging and STILL HAS NO CALLER: grepping
- *     the repo for it returns this file and nothing else. Until the script that builds the ZIP/npm
- *     tarball calls it and aborts on a non-empty result, "we remembered to rebuild" is still the
- *     control for anyone who does not run the suite. That wiring lives in scripts/, outside this
- *     file, and is deliberately NOT asserted here — an assertion about a producer that does not
- *     exist would just be another green gate over an open hole.
+ * ── THE WALK NOW HAS THE CALLER IT WAS WRITTEN FOR ───────────────────────────────────────────────
+ * This file used to own the walk AND note, in this header, that it was exported "so the release
+ * packaging can make the same check a hard gate" while having no caller anywhere. So the suite could
+ * report the artefact stale and the packaging script would zip it anyway.
+ *
+ * The walk now lives in `backend/scripts/stale-compiled-files.js` (plain CommonJS, outside src/, so a
+ * build script can require it with no ts-node and no test runner) and has two callers: this suite, for
+ * the developer, and `scripts/make-release.js`, which aborts the release on a non-empty result. The
+ * test below drives that module rather than a copy of it.
+ *
+ * ONE LIMIT REMAINS, and it is a limit, not a scope decision: dist/ is gitignored, so on a checkout
+ * that has never built there is nothing to compare and these tests SKIP. Only a run that happens
+ * after a build exercises them. That hole is why the packaging caller matters — the artefact is
+ * checked at the moment it is produced, not only when someone happens to run the suite after a build.
  */
 
 const { test } = require('node:test');
@@ -67,61 +71,10 @@ function codeOnly(js: string): string {
  * from tsconfig.build.json, with allowJs on (db-admin/*.js, plugin-worker.js are copied through).
  * Declaration files emit nothing, so they are not part of the population.
  */
-const EXCLUDED_SRC_DIRS = new Set([path.join(SRC_ROOT, 'tests')]);
-
-function compiledSources(dir: string = SRC_ROOT, acc: string[] = []): string[] {
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-        const full = path.join(dir, entry.name);
-        if (entry.isDirectory()) {
-            if (EXCLUDED_SRC_DIRS.has(full)) continue;
-            compiledSources(full, acc);
-        } else if (/\.(ts|js)$/.test(entry.name) && !entry.name.endsWith('.d.ts')) {
-            acc.push(full);
-        }
-    }
-    return acc;
-}
-
-/** The dist file a source compiles to. */
-function distFor(srcFile: string): string {
-    return path.join(DIST_ROOT, path.relative(SRC_ROOT, srcFile).replace(/\.ts$/, '.js'));
-}
-
-/**
- * EVERY compiled file that is missing from dist/ or older than its source. Exported so the release
- * packaging can make the same check a hard gate before it publishes an artefact.
- */
-function staleCompiledFiles(): { missing: string[]; stale: string[]; orphaned: string[]; checked: number } {
-    const missing: string[] = [];
-    const stale: string[] = [];
-    const sources = compiledSources();
-    const expected = new Set<string>();
-    for (const src of sources) {
-        const dist = distFor(src);
-        expected.add(path.resolve(dist));
-        if (!fs.existsSync(dist)) { missing.push(path.relative(BACKEND_ROOT, dist)); continue; }
-        if (fs.statSync(dist).mtimeMs < fs.statSync(src).mtimeMs) {
-            stale.push(`${path.relative(BACKEND_ROOT, src)} → ${path.relative(BACKEND_ROOT, dist)}`);
-        }
-    }
-    // …AND THE OTHER DIRECTION. The src→dist walk cannot see a compiled file whose SOURCE WAS DELETED:
-    // `npm run build` clears dist/ in its prebuild, but `tsc -p tsconfig.build.json` run on its own does
-    // not, and loadCore() happily requires whatever is sitting there. A module deleted for a security
-    // reason (a route retired, a driver withdrawn) then keeps shipping, and every check above is green.
-    const orphaned: string[] = [];
-    if (fs.existsSync(DIST_ROOT)) {
-        const walkDist = (dir: string) => {
-            for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-                const full = path.join(dir, entry.name);
-                if (entry.isDirectory()) { walkDist(full); continue; }
-                if (!entry.name.endsWith('.js')) continue;          // .d.ts/.map carry no behaviour
-                if (!expected.has(path.resolve(full))) orphaned.push(path.relative(BACKEND_ROOT, full));
-            }
-        };
-        walkDist(DIST_ROOT);
-    }
-    return { missing, stale, orphaned, checked: sources.length };
-}
+// The walk itself lives in backend/scripts/stale-compiled-files.js so the release packaging can run
+// the SAME check. Requiring it here rather than restating it is the point: a change to the rule
+// changes this test's verdict instead of quietly agreeing with a second copy.
+const { staleCompiledFiles } = require('../../scripts/stale-compiled-files');
 
 test('release gate: the COMPILED mysql driver carries the fixed session mode, not the vulnerable one', (t: any) => {
     if (!fs.existsSync(DIST_MYSQL)) {
@@ -167,4 +120,6 @@ test('release gate: EVERY compiled file is present and no older than its source 
         `${orphaned.length} compiled file(s) in dist/ have NO source. loadCore() prefers dist/, so a module whose source was deleted keeps shipping and keeps being loaded — deleting the source is not the same as withdrawing the code:\n  ${orphaned.join('\n  ')}\nRun \`npm run build\` in backend/ (its prebuild clears dist/); \`tsc -p tsconfig.build.json\` on its own does not.`);
 });
 
+// Re-exported for anything that already imports it from here; the definition lives in
+// backend/scripts/stale-compiled-files.js.
 module.exports = { staleCompiledFiles };

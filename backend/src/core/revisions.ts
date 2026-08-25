@@ -8,6 +8,7 @@ const database = require('../config/database');
 const { dbAsync } = database;
 const { diffText, diffStats } = require('./text-diff');
 const { canonicalMetaKey } = require('./protected-meta');
+const { isUniqueViolation } = require('./db-errors');
 const { runContentMutation, recordContentEvent, isContentMutationActive } = require('./content-outbox');
 const {
   LEGACY_REVISIONABLE_META_KEYS,
@@ -68,17 +69,6 @@ function nextRevisionName(postId: number) {
   revisionNameSeq = (revisionNameSeq + 1) % 1_000_000;
   // ~45 chars: comfortably inside post_name and still greppable/sortable by the old prefix.
   return `${postId}-revision-v${Date.now()}-${revisionNameSeq}-${crypto.randomBytes(4).toString('hex')}`;
-}
-
-/** True for a unique-constraint violation on any supported driver (SQLite / Postgres / MySQL). */
-function isUniqueViolation(err: any) {
-  const code = String(err?.code || '');
-  // Deliberately NOT the generic 'SQLITE_CONSTRAINT': a NOT NULL / CHECK failure is not something a
-  // fresh name would fix, and it must surface instead of being retried.
-  if (code === 'SQLITE_CONSTRAINT_UNIQUE' || code === 'SQLITE_CONSTRAINT_PRIMARYKEY' || code === '23505' || code === 'ER_DUP_ENTRY') return true;
-  if (err?.errno === 1062) return true;
-  const msg = String(err?.message || '');
-  return /UNIQUE constraint|duplicate key|Duplicate entry/i.test(msg);
 }
 
 /**

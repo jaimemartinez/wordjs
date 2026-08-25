@@ -1,15 +1,22 @@
 # Plugin Database Compatibility Guide
 
-**Los plugins de WordJS usan UNA SOLA sintaxis (SQLite-style) para TODAS las interacciones con la base de datos.** El core se encarga automáticamente de la compatibilidad con diferentes drivers (ver [database.md](./database.md) para el modelo de drivers).
+**WordJS plugins use ONE syntax (SQLite-style) for ALL database interaction.** The core handles
+driver compatibility automatically (see [database.md](./database.md) for the driver model).
 
-## Acceso a la BD: el bridge `wordjs` (plugins aislados)
+## Database access: the `wordjs` bridge (isolated plugins)
 
-Los plugins marcados `"isolated": true` corren **aislados** en un **proceso del SO separado** (`child_process.fork` de `backend/src/core/plugin-worker.js`, orquestado por `backend/src/core/plugin-isolate.ts`) — heap, event loop y tope de memoria propios, así que un crash/OOM/escape de heap queda contenido en el hijo y nunca alcanza al host. NO hacen `require()` de módulos del core. Acceden a la base de datos a través del **capability bridge** `wordjs`, que el host les pasa en `init(wordjs)` por RPC sobre el canal IPC y que verifica permisos y restringe argumentos **en el host** (`backend/src/core/plugin-api.ts`), dentro del contexto del plugin (`plugin-context.ts`):
+Plugins marked `"isolated": true` run **isolated** in a **separate OS process** (`child_process.fork`
+of `backend/src/core/plugin-worker.js`, orchestrated by `backend/src/core/plugin-isolate.ts`) — their
+own heap, event loop and memory cap, so a crash, an OOM or a heap escape is contained in the child and
+never reaches the host. They do NOT `require()` core modules. They reach the database through the
+`wordjs` **capability bridge**, which the host hands them in `init(wordjs)` over RPC on the IPC
+channel, and which verifies permissions and constrains arguments **on the host**
+(`backend/src/core/plugin-api.ts`), inside the plugin's context (`plugin-context.ts`):
 
 ```javascript
 module.exports = {
   async init(wordjs) {
-    // Crear una tabla propia (driver-agnóstica)
+    // Create your own table (driver-agnostic)
     await wordjs.db.createTable('my_plugin_data', [
       'id INT_PK',
       'name TEXT NOT NULL',
@@ -17,109 +24,262 @@ module.exports = {
       'created_at DATETIME DEFAULT CURRENT_TIMESTAMP'
     ]);
 
-    // Queries (sintaxis SQLite estándar en cualquier driver)
+    // Queries (standard SQLite syntax on any driver)
     const rows = await wordjs.db.all('SELECT * FROM my_plugin_data WHERE value > ?', [0]);
     const one  = await wordjs.db.get('SELECT * FROM my_plugin_data WHERE id = ?', [1]);
     const res  = await wordjs.db.run('INSERT INTO my_plugin_data (name, value) VALUES (?, ?)', ['a', 1]);
 
-    // ¿Qué dialecto está activo? (raras veces necesario)
+    // Which dialect is active? (rarely needed)
     const { isPostgres } = wordjs.db.getType();
   }
 };
 ```
 
-Métodos del bridge: `wordjs.db.all/get/run`, `wordjs.db.batch(statements)`, `wordjs.db.createTable(name, columns)`, `wordjs.db.getType()`, más la propiedad `wordjs.db.tablePrefix` (el prefijo `wjp_<slug>_` de tus tablas). Cada **método** exige el permiso correspondiente del manifest (`database:read` / `database:write`); `tablePrefix` es una propiedad estática (no exige grant para leerla).
+Bridge methods: `wordjs.db.all/get/run`, `wordjs.db.batch(statements)`,
+`wordjs.db.createTable(name, columns)`, `wordjs.db.getType()`, plus the `wordjs.db.tablePrefix`
+property (your tables' `wjp_<slug>_` prefix). Each **method** requires the corresponding manifest
+permission (`database:read` / `database:write`); `tablePrefix` is a static property and needs no grant
+to read.
 
-`db.batch(statements)` corre **varias sentencias en un solo round-trip** al host: un array **no vacío** de pares `[sql, params]`, **máximo 200**. Es puramente una optimización de transporte — cada sentencia pasa por el **mismo** `verifyPermission` y el **mismo** `assertSqlAllowed` que su equivalente suelta (`select`/`with` como lectura, `insert`/`update`/`delete`/`replace` como escritura), y **todo el lote se valida antes** de ejecutar nada, así que una sentencia ilegal en medio no deja aplicadas las legales que la preceden. **No acepta DDL** (`CREATE`/`ALTER`/`DROP` → usa `db.run` o `db.createTable`, que son los que registran la propiedad de la tabla). **No es atómico**: si una sentencia falla, las anteriores ya se aplicaron.
+`db.batch(statements)` runs **several statements in a single round-trip** to the host: a **non-empty**
+array of `[sql, params]` pairs, **at most 200**. It is purely a transport optimisation — every
+statement goes through the **same** `verifyPermission` and the **same** `assertSqlAllowed` as its
+standalone equivalent (`select`/`with` as a read, `insert`/`update`/`delete`/`replace` as a write), and
+**the whole batch is validated before** anything runs, so an illegal statement in the middle does not
+leave the legal ones before it applied. It **does not accept DDL** (`CREATE`/`ALTER`/`DROP` → use
+`db.run` or `db.createTable`, which are what record table ownership). It is **not atomic**: if a
+statement fails, the ones before it have already been applied.
 
-### Aislamiento de tablas: prefijo por plugin + el core fuera de límites
+### Table isolation: a per-plugin prefix, with the core out of bounds
 
-Cada plugin tiene un **namespace de tablas propio** — el prefijo `wjp_<slug>_` (como `$wpdb->prefix` en WordPress), expuesto en `wordjs.db.tablePrefix` y derivado en `createPluginApi()` (`'wjp_' + slug + '_'`, normalizado a minúsculas/`[A-Za-z0-9]`).
+Every plugin has its **own table namespace** — the `wjp_<slug>_` prefix (like `$wpdb->prefix` in
+WordPress), exposed as `wordjs.db.tablePrefix` and derived in `createPluginApi()`
+(`'wjp_' + slug + '_'`, normalised to lowercase `[A-Za-z0-9]`).
 
-**Todo** plugin está **table-scoped por defecto-deny** — no existe un contraparte "confiable" (la tier *trusted* fue eliminada; `plugin-trust.ts` ya no existe). El host (`assertSqlAllowed` en `plugin-api.ts`) exige que **toda** tabla que la query toque pertenezca al plugin (esté bajo su prefijo), y `assertSqlAllowed(tablePrefix)` se invoca **siempre** en `db.all/get/run` (y por sentencia en `db.batch`), sin ninguna ruta de código que levante el scoping. `createTable` no pasa por `assertSqlAllowed`, pero impone el mismo confinamiento por prefijo con un chequeo directo del nombre de la tabla (debe empezar por `tablePrefix`) y delega en `createPluginTable`, que valida el identificador y rechaza sentencias apiladas. Un token no atribuible o sin prefijo se **rechaza** (fail-closed), no se ignora — así un plugin no puede leer tablas de otro plugin (p.ej. `received_emails` de mail-server) ni del core, incluso una que no esté en la denylist explícita.
+**Every** plugin is **table-scoped by default-deny** — there is no "trusted" counterpart (the *trusted*
+tier was removed; `plugin-trust.ts` no longer exists). The host (`assertSqlAllowed` in
+`plugin-api.ts`) requires that **every** table a query touches belongs to the plugin (sits under its
+prefix), and `assertSqlAllowed(tablePrefix)` is invoked **always** in `db.all/get/run` (and per
+statement in `db.batch`), with no code path that lifts the scoping. `createTable` does not go through
+`assertSqlAllowed`, but it imposes the same prefix confinement with a direct check of the table name
+(it must start with `tablePrefix`) and delegates to `createPluginTable`, which validates the identifier
+and rejects stacked statements. A token that cannot be attributed, or that carries no prefix, is
+**rejected** (fail-closed), not ignored — so a plugin cannot read another plugin's tables (mail-server's
+`received_emails`, say) or the core's, not even one absent from the explicit denylist.
 
-**Por debajo del guard de texto hay una segunda capa: la propia base de datos** (`backend/src/core/plugin-db-isolation.ts`). Las lecturas y el DML de cada plugin corren bajo un **principal de BD propio** con permisos solo sobre su prefijo — un `ROLE` `NOLOGIN` por plugin en Postgres (vía `SET ROLE` sobre un cliente fijado) y un usuario de login por plugin en MySQL/MariaDB (contraseña generada en cada arranque y solo en memoria) —, de modo que el motor deniega el acceso cruzado **aunque `assertSqlAllowed` fuese esquivado**. Degrada con elegancia: bajo SQLite, o si el usuario del pool no puede aprovisionar el principal, no se provisiona nada y queda solo el guard de texto. El **DDL** siempre corre como el usuario admin (un principal restringido no tiene `CREATE`), scopeado al prefijo por el guard de texto, y cada tabla nueva se le concede al principal después.
+**Below the text guard there is a second layer: the database itself**
+(`backend/src/core/plugin-db-isolation.ts`). Each plugin's reads and DML run under its **own database
+principal**, with permissions only over its prefix — a `NOLOGIN` `ROLE` per plugin on PostgreSQL (via
+`SET ROLE` on a pinned client) and a per-plugin login user on MySQL/MariaDB (password generated on each
+boot and held only in memory) — so the engine denies cross access **even if `assertSqlAllowed` were
+bypassed**. It degrades gracefully: under SQLite, or if the pool user cannot provision the principal,
+nothing is provisioned and only the text guard remains. **DDL** always runs as the admin user (a
+restricted principal has no `CREATE`), scoped to the prefix by the text guard, and each new table is
+granted to the principal afterwards.
 
-| Tipo de plugin                  | Acceso a BD                                                                 |
-| :------------------------------ | :------------------------------------------------------------------------- |
-| **Cualquier plugin** (sandboxed) | Solo sus propias tablas `wjp_<slug>_*`. SQL que toque cualquier otra tabla (incluidas las del core `users`, `user_meta`, `options`, `roles`, `sessions`) es **denegado**. No hay tier privilegiada que levante este scoping. |
+| Plugin type                       | Database access                                                             |
+| :-------------------------------- | :-------------------------------------------------------------------------- |
+| **Any plugin** (sandboxed)        | Only its own `wjp_<slug>_*` tables. SQL touching any other table (the core's `users`, `user_meta`, `options`, `roles`, `sessions` included) is **denied**. There is no privileged tier that lifts this scoping. |
 
-#### Usuarios: vía el bridge `wordjs.users`, nunca la tabla del core
+#### Users: through the `wordjs.users` bridge, never the core table
 
-Un plugin **no puede** (ni debe) consultar la tabla `users` del core directamente — `assertSqlAllowed` la rechaza. Para lookups de usuario usa el bridge seguro `wordjs.users` (`findByEmail` / `findByLogin` / `findById` / `search`), que devuelve **solo una proyección** (`id`, `userLogin`/`username`, `userEmail`, `displayName`, `role`, más el booleano `hasProfessionalMailbox`, derivado del grant `user_meta.professional_mailbox` y fail-closed a `false`) y **nunca** `user_pass`, tokens ni el resto del meta. Exige el grant `users:read`. Este es el camino sancionado que reemplazó a un plugin haciendo `SELECT * FROM users` (que filtraba los hashes de contraseña).
+A plugin **cannot** (and should not) query the core `users` table directly — `assertSqlAllowed` rejects
+it. For user lookups, use the safe `wordjs.users` bridge (`findByEmail` / `findByLogin` / `findById` /
+`search`), which returns **only a projection** (`id`, `userLogin`/`username`, `userEmail`,
+`displayName`, `role`, plus the `hasProfessionalMailbox` boolean, derived from the
+`user_meta.professional_mailbox` grant and fail-closed to `false`) and **never** `user_pass`, tokens or
+the rest of the meta. It requires the `users:read` grant. This is the sanctioned path that replaced a
+plugin running `SELECT * FROM users` (which leaked password hashes).
 
-Además del default-deny por prefijo, `assertSqlAllowed` rechaza (defensa en profundidad):
+Beyond the prefix default-deny, `assertSqlAllowed` rejects the following (defence in depth):
 
-- **SQL demasiado largo**: la cadena **cruda** se corta en **20 000 caracteres** — el chequeo va **antes** que nada (ni siquiera el lexer corre sobre una cadena ilimitada), porque el guard corre en el proceso **host** y una entrada sin tope es un DoS del event loop.
-- **Caracteres que hacen divergir el lexado entre motores** — denegados en la cadena cruda, estructuralmente, en vez de intentar reconciliar semánticas por driver:
-  - **`/*! … */`** (comentarios ejecutables de MySQL/MariaDB, con o sin versión: `/*!50000 … */`).
-  - **`\` (barra invertida)**: MySQL la trata como escape de comilla y SQLite/Postgres no, así que un `'\''` empareja las comillas distinto en el guard que en el motor. Los datos literales van siempre por parámetros ligados (`?`).
-  - **`$`**: cierra la clase entera del dollar-quoting de Postgres (`$$ … $$`, `$tag$ … $tag$`, incluidas etiquetas no-ASCII). El guard corre sobre SQL con `?`, antes de la traducción a `$N`, así que un `$` nunca es legítimo.
-  - **`[` / `]`**: en Postgres son subíndice de array cuyo índice es una **expresión completa** (p.ej. una subquery escalar), no un identificador entrecomillado. Para citar un identificador usa `"…"`.
-- **`ATTACH` / `DETACH` / `PRAGMA` / `VACUUM`**: montar archivos del host como BD, leer settings/metadatos, o (`VACUUM INTO '<archivo>'`) escribir una copia entera de la BD en una ruta elegida por el plugin.
-- **Catálogos de esquema**: `sqlite_master`/`sqlite_schema`/`sqlite_temp_master`/`sqlite_temp_schema`/`information_schema`/`pg_catalog` (enumerar/leer el esquema del core).
-- **Funciones SQL de archivo/extensión/programa**: `readfile`/`writefile`/`load_extension`/`fsdir`/`zipfile`/`sqlite3_*`/`lo_import`/`lo_export`/`pg_read_file`/`pg_read_binary_file`/`pg_ls_dir`/`pg_stat_file`/`dblink`/`dblink_exec` — denegadas textualmente: no llevan `FROM` (esquivan la atribución por prefijo) y abrirían un canal de lectura/escritura de archivos o RCE si se cambia de driver o se habilita una extensión.
-- **Familia `*_to_xml` de Postgres** (`query_to_xml`, `query_to_xmlschema`, `query_to_xml_and_xmlschema`, y las variantes `table_`/`schema_`/`database_`/`cursor_`): toman una **query como argumento de tipo string** y la ejecutan. Eso rompe la premisa que sostiene todo el guard — el lexer blanquea los literales precisamente para que su contenido nunca se lea como estructura —, así que `SELECT query_to_xml('select user_pass from users', …)` no produce **ningún** token de tabla y tanto el allowlist por prefijo como la denylist del core pasarían **en vacío**. Denegadas textualmente en todos los drivers.
-- **Sentencias apiladas** (`SELECT 1; DROP TABLE x`) — una sola sentencia por llamada (se tolera un único `;` final).
-- **Verbo no permitido**: la sentencia debe empezar por un verbo del allowlist según el método — `all/get` solo `SELECT`/`WITH`; `run` solo `INSERT/UPDATE/DELETE/CREATE/ALTER/DROP/REPLACE`; `batch` clasifica cada sentencia y usa `SELECT`/`WITH` para lecturas y `INSERT/UPDATE/DELETE/REPLACE` para escrituras (sin DDL).
-- **CTE que modifica datos**: `WITH t AS (INSERT INTO … ) SELECT 1` empieza por `with`, que está en la lista de verbos de **lectura** — pero en Postgres el CTE se ejecuta entero lea o no su salida la query externa. Un `WITH` que contenga `insert`/`update`/`delete`/`replace`/`merge` en la rama de lectura se rechaza: **es una escritura y exige `database:write`**.
-- **Comma-joins** (`FROM a, b`, incluidos los escondidos tras una subquery, un `JOIN … ON` o dentro de paréntesis) — **no** se deniegan como construcción: el walker de tokens los reconoce y **atribuye cada tabla de la lista**, así que las dos (o las N) tienen que llevar tu prefijo `wjp_<slug>_`. La que no lo lleve se rechaza como "not owned".
-- **`USING`** (el `DELETE ... USING <tabla>` de Postgres) y el `STRAIGHT_JOIN` de MySQL: se incluyen en la atribución por prefijo para que una tabla referida ahí no escape el scoping.
-- **`RETURNING`**: canal de exfiltración escalar — denegado; usa un `SELECT` aparte (el `lastID` de inserciones ya está disponible).
-- **`ON CONFLICT ... DO UPDATE SET` (upsert) — permitido, no denegado**: el token-walker trata `SET` como frontera de cláusula (está en el conjunto `ENDERS`), así que el destino del `SET` no se lee como tabla. Tanto `DO NOTHING` como `DO UPDATE` pasan, siempre que **toda** tabla que la sentencia referencie (incluidas las de subqueries) use el prefijo `wjp_<slug>_` del plugin. (`RETURNING` sigue denegado; el patrón **UPDATE-then-INSERT** sigue siendo una alternativa válida pero ya **no** es necesario.)
-- **Tablas del core como denylist explícita** (`PROTECTED_TABLES`: `users`, `user_meta`, `usermeta`, `options`, `user_roles`, `roles`, `sessions`) — redundante con el prefijo, como segunda barrera. El match se ancla a una palabra clave que **introduce** una tabla (`from`/`join`/`into`/`update`/`using`/`table`), para que una **columna** tuya llamada `options` o `status` no sea un falso positivo.
-- **Clase de objeto en DDL (allowlist positiva)**: si la sentencia empieza por `CREATE`/`ALTER`/`DROP`, su objeto solo puede ser **`TABLE`, `INDEX`, `VIEW` o `TRIGGER`** (admitiendo `OR REPLACE`, `TEMP`/`TEMPORARY` y `UNIQUE`). Cualquier otra clase — `SCHEMA`, `DATABASE`, `ROLE`, `FUNCTION`, `EXTENSION`, `SYSTEM`… — se deniega: esas sentencias **no nombran ninguna tabla**, así que el walker no emitía ningún token y la regla por prefijo pasaba **en vacío** (`DROP SCHEMA public CASCADE`, `CREATE ROLE … SUPERUSER` o una función `SECURITY DEFINER` cuyo cuerpo es un literal — invisible al guard por diseño — quedaban permitidas). Nunca se infiere seguridad de la **ausencia** de tokens: solo se admiten las clases que el guard sabe scopear.
-- **`ALTER … RENAME TO <destino>`**: el destino también tiene que llevar tu prefijo. El token **previo** al rename sí lo lleva (el walker lo acepta) y no dice nada de dónde aterriza: `ALTER TABLE wjp_x_notes RENAME TO users` shadowearía una tabla del core.
-- **Tabla de otro plugin aunque el prefijo encaje**: además del `startsWith(tablePrefix)`, el guard consulta el **registro autoritativo de creador** (`TABLE_CREATORS`, persistido en `data/wjp-prefix-registry.json`) — si la tabla tiene creador grabado, solo ese slug puede tocarla — y la **coincidencia de prefijo más larga** entre todos los prefijos reclamados: si un plugin hermano con prefijo más largo es el dueño, se deniega aunque el tuyo también encaje (defensa contra el squat por extensión de prefijo, p.ej. slug `events-ticket` sobre las tablas de `events`).
-- **DDL de índices** (`CREATE [UNIQUE] INDEX … ON <tabla>` / `DROP INDEX <nombre>`): tanto la tabla destino del `ON` **como el nombre del índice** deben empezar por el prefijo `wjp_<slug>_` del plugin; si no, la query se deniega (el matcher genérico de tablas no ve el destino del `ON` ni el nombre del índice, así que se scopean aparte).
-- **DDL de vistas/triggers** (`CREATE [TEMP] VIEW/TRIGGER <nombre>` / `DROP VIEW/TRIGGER <nombre>`): el **nombre del objeto** también debe empezar por el prefijo `wjp_<slug>_` del plugin (el matcher genérico de tablas no lo ve), o la sentencia se deniega — igual que la regla de índices, para que un plugin no squattee ni shadowee un objeto en el namespace compartido.
+- **SQL that is too long**: the **raw** string is cut off at **20,000 characters** — the check runs
+  **before** anything else (the lexer does not even run over an unbounded string), because the guard
+  runs in the **host** process and uncapped input is an event-loop DoS.
+- **Characters that make lexing diverge between engines** — denied on the raw string, structurally,
+  rather than trying to reconcile per-driver semantics:
+  - **`/*! … */`** (MySQL/MariaDB executable comments, versioned or not: `/*!50000 … */`).
+  - **`\` (backslash)**: MySQL treats it as a quote escape and SQLite/PostgreSQL do not, so a `'\''`
+    pairs quotes differently in the guard than in the engine. Literal data always travels as bound
+    parameters (`?`).
+  - **`$`**: closes the whole class of PostgreSQL dollar-quoting (`$$ … $$`, `$tag$ … $tag$`,
+    non-ASCII tags included). The guard runs over SQL with `?`, before translation to `$N`, so a `$` is
+    never legitimate.
+  - **`[` / `]`**: in PostgreSQL these are array subscripts whose index is a **full expression** (a
+    scalar subquery, for instance), not a quoted identifier. To quote an identifier, use `"…"`.
+- **`ATTACH` / `DETACH` / `PRAGMA` / `VACUUM`**: mounting host files as a database, reading
+  settings/metadata, or (`VACUUM INTO '<file>'`) writing an entire copy of the database to a path the
+  plugin chooses.
+- **Schema catalogues**:
+  `sqlite_master`/`sqlite_schema`/`sqlite_temp_master`/`sqlite_temp_schema`/`information_schema`/`pg_catalog`
+  (enumerating or reading the core schema).
+- **File/extension/program SQL functions**:
+  `readfile`/`writefile`/`load_extension`/`fsdir`/`zipfile`/`sqlite3_*`/`lo_import`/`lo_export`/`pg_read_file`/`pg_read_binary_file`/`pg_ls_dir`/`pg_stat_file`/`dblink`/`dblink_exec`
+  — denied textually: they carry no `FROM` (so they dodge prefix attribution) and would open a
+  file read/write channel or RCE if the driver changed or an extension were enabled.
+- **PostgreSQL's `*_to_xml` family** (`query_to_xml`, `query_to_xmlschema`,
+  `query_to_xml_and_xmlschema`, and the `table_`/`schema_`/`database_`/`cursor_` variants): they take a
+  **query as a string argument** and execute it. That breaks the premise the whole guard rests on — the
+  lexer blanks literals precisely so their contents are never read as structure — so
+  `SELECT query_to_xml('select user_pass from users', …)` produces **no** table token at all, and both
+  the prefix allowlist and the core denylist would pass **vacuously**. Denied textually on every driver.
+- **Stacked statements** (`SELECT 1; DROP TABLE x`) — one statement per call (a single trailing `;` is
+  tolerated).
+- **A verb that is not permitted**: the statement must start with a verb from the allowlist for that
+  method — `all/get` only `SELECT`/`WITH`; `run` only `INSERT/UPDATE/DELETE/CREATE/ALTER/DROP/REPLACE`;
+  `batch` classifies each statement and uses `SELECT`/`WITH` for reads and
+  `INSERT/UPDATE/DELETE/REPLACE` for writes (no DDL).
+- **A data-modifying CTE**: `WITH t AS (INSERT INTO … ) SELECT 1` starts with `with`, which is on the
+  **read** verb list — but in PostgreSQL the CTE executes in full whether or not the outer query reads
+  its output. A `WITH` containing `insert`/`update`/`delete`/`replace`/`merge` on the read path is
+  rejected: **it is a write and requires `database:write`**.
+- **Comma joins** (`FROM a, b`, including ones hidden behind a subquery, a `JOIN … ON`, or inside
+  parentheses) — these are **not** denied as a construct: the token walker recognises them and
+  **attributes every table in the list**, so both (or all N) must carry your `wjp_<slug>_` prefix. Any
+  that does not is rejected as "not owned".
+- **`USING`** (PostgreSQL's `DELETE ... USING <table>`) and MySQL's `STRAIGHT_JOIN`: included in prefix
+  attribution so a table referenced there cannot escape the scoping.
+- **`RETURNING`**: a scalar exfiltration channel — denied; use a separate `SELECT` (an insert's
+  `lastID` is already available).
+- **`ON CONFLICT ... DO UPDATE SET` (upsert) — permitted, not denied**: the token walker treats `SET`
+  as a clause boundary (it is in the `ENDERS` set), so the `SET` target is not read as a table. Both
+  `DO NOTHING` and `DO UPDATE` pass, provided **every** table the statement references (subquery tables
+  included) uses the plugin's `wjp_<slug>_` prefix. (`RETURNING` remains denied; the
+  **UPDATE-then-INSERT** pattern is still a valid alternative but is no longer necessary.)
+- **Core tables as an explicit denylist** (`PROTECTED_TABLES`: `users`, `user_meta`, `usermeta`,
+  `options`, `user_roles`, `roles`, `sessions`) — redundant with the prefix, as a second barrier. The
+  match is anchored to a keyword that **introduces** a table (`from`/`join`/`into`/`update`/`using`/`table`),
+  so one of your own **columns** named `options` or `status` is not a false positive.
+- **Object class in DDL (positive allowlist)**: if the statement starts with `CREATE`/`ALTER`/`DROP`,
+  its object may only be **`TABLE`, `INDEX`, `VIEW` or `TRIGGER`** (allowing `OR REPLACE`,
+  `TEMP`/`TEMPORARY` and `UNIQUE`). Any other class — `SCHEMA`, `DATABASE`, `ROLE`, `FUNCTION`,
+  `EXTENSION`, `SYSTEM`… — is denied: those statements **name no table**, so the walker emitted no
+  token and the prefix rule passed **vacuously** (`DROP SCHEMA public CASCADE`,
+  `CREATE ROLE … SUPERUSER`, or a `SECURITY DEFINER` function whose body is a literal — invisible to
+  the guard by design — were all permitted). Safety is never inferred from the **absence** of tokens:
+  only the classes the guard knows how to scope are admitted.
+- **`ALTER … RENAME TO <target>`**: the target must carry your prefix too. The token **before** the
+  rename does carry it (the walker accepts it) and says nothing about where it lands:
+  `ALTER TABLE wjp_x_notes RENAME TO users` would shadow a core table.
+- **Another plugin's table even when the prefix matches**: beyond `startsWith(tablePrefix)`, the guard
+  consults the **authoritative creator registry** (`TABLE_CREATORS`, persisted in
+  `data/wjp-prefix-registry.json`) — if the table has a recorded creator, only that slug may touch it —
+  and the **longest claimed-prefix match** across all claimed prefixes: if a sibling plugin with a
+  longer prefix owns it, access is denied even though yours also matches (defence against prefix-extension
+  squatting, e.g. the slug `events-ticket` over `events`'s tables).
+- **Index DDL** (`CREATE [UNIQUE] INDEX … ON <table>` / `DROP INDEX <name>`): both the `ON` target
+  table **and the index name** must start with the plugin's `wjp_<slug>_` prefix; otherwise the query is
+  denied (the generic table matcher sees neither the `ON` target nor the index name, so they are scoped
+  separately).
+- **View/trigger DDL** (`CREATE [TEMP] VIEW/TRIGGER <name>` / `DROP VIEW/TRIGGER <name>`): the
+  **object name** must start with the plugin's `wjp_<slug>_` prefix too (the generic table matcher does
+  not see it), or the statement is denied — the same rule as for indexes, so a plugin cannot squat or
+  shadow an object in the shared namespace.
 
-Todo esto se decide sobre la salida de **un solo lexer** (`lexSql`), que recorre la cadena **una vez** reconociendo comentarios, literales de string e identificadores entrecomillados **en contexto** — un `/*` dentro de un literal es texto, una `'` dentro de un comentario es comentario —, para que el contenido de ninguno pueda leerse jamás como estructura. Los comentarios SQL (`/* */` y `--`) se blanquean **antes** de evaluar para que no sirvan de espacio en blanco que evada los chequeos (el `--` solo abre comentario si le sigue espacio/fin de línea, la regla más estricta —la de MySQL—, y se cierra tanto en `\n` como en un `\r` suelto, la de Postgres: así el texto que cualquier motor ejecutaría sigue siendo visible para el guard). Los identificadores entrecomillados (`"comillas"`, `` `backticks` ``) se emiten como **un único token opaco marcado como nombre**, así que un alias como `AS "order"` no se confunde con la palabra clave `ORDER` ni inyecta un paréntesis fantasma; los `[corchetes]` no se normalizan: se **deniegan** (ver arriba). `createTable` aplica el mismo principio: un plugin solo puede crear tablas bajo su propio prefijo (no puede crear ni shadowear tablas del core o de otros plugins).
+All of this is decided over the output of **a single lexer** (`lexSql`), which walks the string **once**
+recognising comments, string literals and quoted identifiers **in context** — a `/*` inside a literal is
+text, a `'` inside a comment is a comment — so that the contents of neither can ever be read as
+structure. SQL comments (`/* */` and `--`) are blanked **before** evaluation so they cannot serve as
+whitespace that evades the checks (`--` opens a comment only when followed by whitespace or end of line,
+the stricter rule — MySQL's — and closes on both `\n` and a lone `\r`, PostgreSQL's: so text any engine
+would execute stays visible to the guard). Quoted identifiers (`"quotes"`, `` `backticks` ``) are
+emitted as **a single opaque token marked as a name**, so an alias like `AS "order"` is not confused
+with the `ORDER` keyword and does not inject a phantom parenthesis; `[brackets]` are not normalised —
+they are **denied** (see above). `createTable` applies the same principle: a plugin can only create
+tables under its own prefix (it cannot create or shadow core or other plugins' tables).
 
-#### Ciclo de vida: desinstalar y `dropData`
+#### Lifecycle: uninstalling and `dropData`
 
-Al desinstalar un plugin, `uninstallPluginData(slug, { dropTables })` (`backend/src/core/plugins.ts`) **siempre** limpia sus grants (`removeGrants`), strikes de crash y assets encolados — así un slug re-subido no hereda permisos viejos. Las tablas `wjp_<slug>_*` del plugin se **conservan por defecto** (paridad con WordPress) y solo se **dropean** cuando el admin marca la casilla `dropData` en el borrado (`DELETE`, `routes/plugins.ts` → `dropTables: !!dropData`). El drop se limita a tablas bajo el prefijo `wjp_<slug>_` del plugin: nunca toca tablas del core ni de otro plugin.
+When a plugin is uninstalled, `uninstallPluginData(slug, { dropTables })`
+(`backend/src/core/plugins.ts`) **always** clears its grants (`removeGrants`), crash strikes and queued
+assets — so a re-uploaded slug does not inherit old permissions. The plugin's `wjp_<slug>_*` tables are
+**kept by default** (parity with WordPress) and are only **dropped** when the admin ticks the
+`dropData` box on deletion (`DELETE`, `routes/plugins.ts` → `dropTables: !!dropData`). The drop is
+limited to tables under the plugin's `wjp_<slug>_` prefix: it never touches core or other plugins'
+tables.
 
-El scoping es **incondicional**: no hay forma de que un plugin lo levante. `verifyPermission('database', …)` solo decide si el plugin **puede** acceder a la BD; `assertSqlAllowed(tablePrefix)` siempre impone el confinamiento por prefijo. Un plugin puede pedir `database:admin` (o cualquier scope) en su manifest cuanto quiera — ninguna ruta de código lee ese `access` para saltarse `assertSqlAllowed`, así que sigue table-scoped a su prefijo igualmente.
+The scoping is **unconditional**: there is no way for a plugin to lift it.
+`verifyPermission('database', …)` only decides whether the plugin **may** reach the database;
+`assertSqlAllowed(tablePrefix)` always imposes the prefix confinement. A plugin may ask for
+`database:admin` (or any scope) in its manifest all it likes — no code path reads that `access` to skip
+`assertSqlAllowed`, so it stays table-scoped to its prefix regardless.
 
-Como los plugins ya no pueden leer tablas del core, la info **no secreta** del sitio (`url`/`domain`/`adminEmail`) se obtiene vía el bridge `wordjs.site` (grant `settings:read`). Las opciones secretas o críticas para la seguridad (las que matchean patrones `secret`/`passw…`/`…key…`/`token`/`credential`/`encryption`, más nombres como `wordjs_user_roles`, `active_plugins`, `siteurl`) están bloqueadas para **todo** plugin a través de `wordjs.options` — sin bypass de confianza.
+Because plugins can no longer read core tables, the site's **non-secret** information
+(`url`/`domain`/`adminEmail`) is obtained through the `wordjs.site` bridge (`settings:read` grant).
+Secret or security-critical options (those matching `secret`/`passw…`/`…key…`/`token`/`credential`/`encryption`
+patterns, plus names like `wordjs_user_roles`, `active_plugins`, `siteurl`) are blocked for **every**
+plugin through `wordjs.options` — with no trust bypass.
 
-> **Defensa en profundidad (en el hijo):** el proceso aislado también corre `secure-require.ts` (bloquea `worker_threads`/`vm`/`child_process`/módulos de red, `process.binding`, addons nativos). Si cualquier código de plugin/tema hiciera `require('../config/database')`, `secure-require` no le devuelve el `dbAsync` real sino un `dbAsync` **con scope** (un Proxy `guardedDb`): en `run/get/all/exec/each` corre `guardPluginSql`, que **delega en el mismo `assertSqlAllowed`** del bridge (con `allowedVerbs=[]`, dejando la mezcla de verbos al método que llama, y derivando el prefijo `wjp_<slug>_` del plugin activo con `getEffectivePlugin()`). Es deliberadamente la **misma** implementación y no una copia: la comprobación por regex que había antes aquí divergía del bridge y se esquivaba con `FROM/**/users` o `FROM"users"`, y encima no tenía restricción por prefijo, así que un tema o un plugin in-process podía leer las tablas de cualquier otro. Ahora las dos superficies de BD comparten denials estructurales, denylist de catálogos/funciones de archivo, sentencia única, denylist de tablas del core **y** el allowlist positivo por prefijo. También corre `io-guard.ts`, que confina el `fs` al **propio dir** del plugin: bloquea escrituras a su código y lecturas de `.env`/secretos; el bloqueo de los **archivos de BD** (`data/wordjs.db` + sidecars) actúa dentro del hijo aislado (`__WORDJS_ISOLATED__`), no en el host (donde el driver del bridge abre legítimamente `data/wordjs.db`), de modo que un plugin no puede leer la BD por fuera del bridge tocando el archivo directamente. Además, `io-guard` **deniega leer el dir de un plugin hermano** — su `package.json`, su `node_modules` o cualquier archivo (solo resuelve el propio árbol del plugin + ancestros compartidos), así que un plugin no puede exfiltrar archivos/secretos de otro plugin ni siquiera fuera de la BD (IO-1).
+> **Defence in depth (inside the child):** the isolated process also runs `secure-require.ts` (which
+> blocks `worker_threads`/`vm`/`child_process`/network modules, `process.binding` and native addons). If
+> any plugin or theme code were to `require('../config/database')`, `secure-require` does not hand back
+> the real `dbAsync` but a **scoped** one (a `guardedDb` Proxy): on `run/get/all/exec/each` it runs
+> `guardPluginSql`, which **delegates to the same `assertSqlAllowed`** the bridge uses (with
+> `allowedVerbs=[]`, leaving the verb mix to the calling method, and deriving the active plugin's
+> `wjp_<slug>_` prefix with `getEffectivePlugin()`). It is deliberately the **same** implementation and
+> not a copy: the regex check that used to live here diverged from the bridge and was evaded with
+> `FROM/**/users` or `FROM"users"`, and on top of that it had no prefix restriction, so a theme or an
+> in-process plugin could read anyone's tables. Now both database surfaces share the structural denials,
+> the catalogue/file-function denylist, the single-statement rule, the core-table denylist **and** the
+> positive prefix allowlist. It also runs `io-guard.ts`, which confines `fs` to the plugin's **own**
+> directory: it blocks writes to its code and reads of `.env`/secrets. The block on the **database
+> files** (`data/wordjs.db` + sidecars) acts inside the isolated child (`__WORDJS_ISOLATED__`), not on
+> the host (where the bridge's driver legitimately opens `data/wordjs.db`), so a plugin cannot read the
+> database around the bridge by touching the file directly. `io-guard` also **denies reading a sibling
+> plugin's directory** — its `package.json`, its `node_modules` or any file (it resolves only the
+> plugin's own tree plus shared ancestors), so a plugin cannot exfiltrate another plugin's files or
+> secrets even outside the database (IO-1).
 
-> **Nota histórica:** `db-migration` ya **no** es un plugin (migraba/tocaba tablas del core y gestionaba procesos del servidor). Ahora es infraestructura del core en `backend/src/core/db-admin/`. Ver [database.md §1.4](./database.md).
+> **Historical note:** `db-migration` is **no longer** a plugin (it migrated and touched core tables and
+> managed server processes). It is now core infrastructure in `backend/src/core/db-admin/`. See
+> [database.md §1.4](./database.md).
 
-## Principio: Sintaxis Única Global
+## Principle: one syntax everywhere
 
-**Todos los plugins escriben SQL usando sintaxis SQLite, y el core normaliza automáticamente para PostgreSQL.**
+**Every plugin writes SQL in SQLite syntax, and the core normalises it automatically for PostgreSQL.**
 
-Esto aplica a:
+This applies to:
 - ✅ CREATE TABLE
 - ✅ SELECT queries
 - ✅ INSERT statements
 - ✅ UPDATE statements
 - ✅ DELETE statements
-- ✅ JOINs, subqueries, etc.
+- ✅ JOINs, subqueries, and so on
 
-### Sintaxis Unificada
+### Unified syntax
 
-Los plugins usan sintaxis SQLite estándar, y el core la traduce automáticamente:
+Plugins use standard SQLite syntax, and the core translates it automatically:
 
-| Tipo Plugin | SQLite                              | PostgreSQL           | MySQL / MariaDB                        |
+| Plugin type | SQLite                              | PostgreSQL           | MySQL / MariaDB                        |
 | ----------- | ----------------------------------- | -------------------- | -------------------------------------- |
 | `INT_PK`    | `INTEGER PRIMARY KEY AUTOINCREMENT` | `SERIAL PRIMARY KEY` | `INTEGER AUTO_INCREMENT PRIMARY KEY`   |
 | `INT`       | `INTEGER`                           | `INTEGER`            | `INTEGER`                              |
-| `TEXT`      | `TEXT`                              | `TEXT`               | `LONGTEXT` (o `VARCHAR(255)` **solo** si el DDL hace la columna parte de una clave) |
+| `TEXT`      | `TEXT`                              | `TEXT`               | `LONGTEXT` (or `VARCHAR(255)` **only** if the DDL makes the column part of a key) |
 | `REAL`      | `REAL`                              | `REAL`               | `REAL`                                 |
 | `DATETIME`  | `DATETIME`                          | `TIMESTAMP`          | `DATETIME`                             |
 | `TIMESTAMP` | `DATETIME`                          | `TIMESTAMP`          | `DATETIME`                             |
 
-> El driver **MySQL** (`backend/src/drivers/mysql.ts`, `mysql2`, MySQL 8.0+/MariaDB) traduce el dialecto SQLite en el borde del driver (`translateSql`): `INTEGER PRIMARY KEY AUTOINCREMENT`/`SERIAL` → `INTEGER AUTO_INCREMENT PRIMARY KEY`, `TEXT` → `LONGTEXT`, `INSERT OR IGNORE`/`ON CONFLICT` → `INSERT IGNORE`/`ON DUPLICATE KEY UPDATE`, y `RETURNING` → `insertId`. El plugin no escribe nada distinto: sigue usando sintaxis SQLite.
+> The **MySQL** driver (`backend/src/drivers/mysql.ts`, `mysql2`, MySQL 8.0+/MariaDB) translates the
+> SQLite dialect at the driver edge (`translateSql`): `INTEGER PRIMARY KEY AUTOINCREMENT`/`SERIAL` →
+> `INTEGER AUTO_INCREMENT PRIMARY KEY`, `TEXT` → `LONGTEXT`, `INSERT OR IGNORE`/`ON CONFLICT` →
+> `INSERT IGNORE`/`ON DUPLICATE KEY UPDATE`, and `RETURNING` → `insertId`. The plugin writes nothing
+> different: it keeps using SQLite syntax.
 
-> **El tipo de una columna `TEXT` ya no depende de su NOMBRE** (`backend/src/drivers/mysql-text-rule.ts`). Antes el defecto era `VARCHAR(255)` salvo que el nombre de la columna figurase en una lista fija de ~20 columnas del núcleo. Esa lista no puede conocer las columnas de un plugin ni las de un bundle importado, así que **toda** columna `TEXT` de plugin (un cuerpo de correo, la descripción de una subasta, el payload de un formulario) se creaba de 255 caracteres; y como la sesión además renunciaba a `STRICT_TRANS_TABLES`, un valor demasiado largo se **truncaba con un aviso en vez de rechazarse** — `POST /api/v1/import` mutilaba el contenido mientras contaba las filas como importadas. Ahora la regla se deriva del propio `CREATE TABLE`: `TEXT` → `LONGTEXT` salvo que la columna forme parte de una clave (`PRIMARY KEY`/`UNIQUE` en línea, o un `PRIMARY KEY (…)`/`UNIQUE (…)`/`KEY (…)`/`INDEX (…)`/`FOREIGN KEY (…)` que la nombre), en cuyo caso es `VARCHAR(255)` porque MySQL no indexa un `TEXT` sin longitud de prefijo. `STRICT_TRANS_TABLES` vuelve a estar activo: lo que no cabe es un **error**, no una pérdida silenciosa.
+> **A `TEXT` column's type no longer depends on its NAME**
+> (`backend/src/drivers/mysql-text-rule.ts`). The default used to be `VARCHAR(255)` unless the column
+> name appeared in a fixed list of ~20 core columns. That list cannot know a plugin's columns, nor an
+> imported bundle's, so **every** plugin `TEXT` column (an email body, an auction description, a form
+> payload) was created 255 characters wide; and because the session also gave up
+> `STRICT_TRANS_TABLES`, an over-long value was **truncated with a warning instead of rejected** —
+> `POST /api/v1/import` mutilated content while counting the rows as imported. The rule is now derived
+> from the `CREATE TABLE` itself: `TEXT` → `LONGTEXT` unless the column is part of a key (an inline
+> `PRIMARY KEY`/`UNIQUE`, or a `PRIMARY KEY (…)`/`UNIQUE (…)`/`KEY (…)`/`INDEX (…)`/`FOREIGN KEY (…)`
+> naming it), in which case it is `VARCHAR(255)` because MySQL cannot index a `TEXT` without a prefix
+> length. `STRICT_TRANS_TABLES` is active again: what does not fit is an **error**, not a silent loss.
 
-### Ejemplo de Uso
+### Example
 
-Vía el bridge (camino canónico para plugins aislados):
+Through the bridge (the canonical path for isolated plugins):
 
 ```javascript
 async function initSchema(wordjs) {
@@ -134,46 +294,62 @@ async function initSchema(wordjs) {
 }
 ```
 
-> Una `FOREIGN KEY (...) REFERENCES users(id)` apunta a una tabla del core (`users`) — fuera de alcance para cualquier plugin. Referencia solo a tus propias tablas; para datos de usuario usa el bridge `wordjs.users` (proyección).
+> A `FOREIGN KEY (...) REFERENCES users(id)` points at a core table (`users`) — out of bounds for any
+> plugin. Reference only your own tables; for user data, use the `wordjs.users` bridge (a projection).
 
-### Ventajas
+### Why this way
 
-1. **Una sola sintaxis global**: Los plugins escriben SQLite-style para TODO
-2. **Normalización automática**: el driver de Postgres convierte `?` a `$1, $2` (e inyecta `RETURNING` en INSERTs); el driver WASM legacy quita `RETURNING`; el driver MySQL reescribe el dialecto (`translateSql`) y mapea `RETURNING` a `insertId`. El plugin no nota nada.
-3. **Compatibilidad total**: Funciona con SQLite Native (default), SQLite Legacy (WASM), PostgreSQL y MySQL/MariaDB
-4. **Sin cambios al migrar**: Si cambias de driver, el plugin sigue funcionando sin modificaciones
-5. **Código más limpio**: No necesitas detectar el driver manualmente
-6. **Transparente**: Los plugins no saben qué driver están usando
+1. **One syntax everywhere**: plugins write SQLite-style for EVERYTHING.
+2. **Automatic normalisation**: the PostgreSQL driver converts `?` to `$1, $2` (and injects `RETURNING`
+   into INSERTs); the legacy WASM driver strips `RETURNING`; the MySQL driver rewrites the dialect
+   (`translateSql`) and maps `RETURNING` to `insertId`. The plugin notices none of it.
+3. **Full compatibility**: works with SQLite Native (default), SQLite Legacy (WASM), PostgreSQL and
+   MySQL/MariaDB.
+4. **No changes when migrating**: change driver and the plugin keeps working unmodified.
+5. **Cleaner code**: no need to detect the driver by hand.
+6. **Transparent**: plugins do not know which driver they are on.
 
-## Detectar el dialecto: `wordjs.db.getType()`
+## Detecting the dialect: `wordjs.db.getType()`
 
-Si necesitas información sobre el driver activo (para lógica condicional, rara vez necesaria):
+If you need information about the active driver (for conditional logic, rarely necessary):
 
 ```javascript
 const { isPostgres, isMySQL, isSQLite, driver } = wordjs.db.getType();
 
 if (isPostgres) {
-    // Lógica específica para PostgreSQL (raro, pero posible)
+    // PostgreSQL-specific logic (rare, but possible)
 }
 ```
 
-> `getType()` devuelve `{ isPostgres, isMySQL, isSQLite, driver }` (`driver` es el nombre completo del driver configurado: `'sqlite-native'`, `'sqlite-legacy'`, `'postgres'`, `'mysql'` o `'mariadb'`). Ojo: `isSQLite` es `true` para **todo lo que no sea Postgres**, incluido MySQL (para que las ramas binarias `isPostgres ? pg : sqlite` sigan tomando el camino SQLite, que el driver MySQL traduce) — así que `isSQLite && isMySQL` es un estado normal, y para "SQLite de verdad" la condición es `isSQLite && !isMySQL`.
+> `getType()` returns `{ isPostgres, isMySQL, isSQLite, driver }` (`driver` being the full name of the
+> configured driver: `'sqlite-native'`, `'sqlite-legacy'`, `'postgres'`, `'mysql'` or `'mariadb'`).
+> Careful: `isSQLite` is `true` for **everything that is not PostgreSQL**, MySQL included (so that
+> binary branches like `isPostgres ? pg : sqlite` keep taking the SQLite path, which the MySQL driver
+> translates) — so `isSQLite && isMySQL` is a normal state, and the condition for "really SQLite" is
+> `isSQLite && !isMySQL`.
 
-## Migraciones
+## Migrations
 
-**Un plugin no puede introspeccionar el esquema.** `PRAGMA` e `information_schema` (igual que `sqlite_master`/`pg_catalog`) están **denegados por `assertSqlAllowed` para todos los plugins**, y además los verbos de lectura son solo `select`/`with`, así que un `PRAGMA table_info(...)` ni siquiera pasa el allowlist de verbos. No hay forma de preguntar "¿existe esta columna?" desde el bridge.
+**A plugin cannot introspect the schema.** `PRAGMA` and `information_schema` (like
+`sqlite_master`/`pg_catalog`) are **denied by `assertSqlAllowed` for every plugin**, and the read verbs
+are only `select`/`with`, so a `PRAGMA table_info(...)` does not even clear the verb allowlist. There is
+no way to ask "does this column exist?" from the bridge.
 
-El patrón es hacer las migraciones **idempotentes** en vez de condicionales:
+The pattern is to make migrations **idempotent** rather than conditional:
 
-- **Tablas**: `db.createTable()` emite `CREATE TABLE IF NOT EXISTS`, así que volver a llamarlo en cada `init()` con el juego completo de columnas es seguro.
-- **Columnas nuevas**: `ALTER TABLE <tabla propia> ADD COLUMN …` sí está permitido (`alter` está en los verbos de `db.run`, `TABLE` es una clase de objeto DDL admitida, y la tabla se atribuye por tu prefijo). SQLite no tiene `ADD COLUMN IF NOT EXISTS`, así que la forma idempotente es **tragarse el error de columna duplicada**:
+- **Tables**: `db.createTable()` emits `CREATE TABLE IF NOT EXISTS`, so calling it again on every
+  `init()` with the full column set is safe.
+- **New columns**: `ALTER TABLE <your own table> ADD COLUMN …` is permitted (`alter` is among
+  `db.run`'s verbs, `TABLE` is an admitted DDL object class, and the table is attributed by your
+  prefix). SQLite has no `ADD COLUMN IF NOT EXISTS`, so the idempotent form is to **swallow the
+  duplicate-column error**:
 
 ```javascript
 async function addColumnIfMissing(wordjs, table, col, type) {
-    // Solo un identificador SQL seguro puede ir concatenado en el DDL.
+    // Only a safe SQL identifier may be concatenated into the DDL.
     if (!/^[a-z_][a-z0-9_]{0,62}$/.test(col)) return false;
     try { await wordjs.db.run(`ALTER TABLE ${table} ADD COLUMN ${col} ${type}`); return true; }
-    catch (e) { return false; /* ya existía (o el tipo era inválido) — ignorar es seguro */ }
+    catch (e) { return false; /* it already existed (or the type was invalid) — ignoring is safe */ }
 }
 
 async function migrate(wordjs) {
@@ -182,18 +358,20 @@ async function migrate(wordjs) {
 }
 ```
 
-> Es exactamente lo que hace `conference-manager` (`marketplace/plugins/conference-manager/index.js`), que documenta el mismo motivo en su propio código.
+> This is exactly what `conference-manager` does
+> (`marketplace/plugins/conference-manager/index.js`), which documents the same reason in its own code.
 >
-> Ojo con el `DEFAULT` de un `ADD COLUMN`: solo rellena las filas existentes en el arranque en que la columna se crea por primera vez. Las filas nuevas llegan con el valor que inserte tu `INSERT`.
+> Mind an `ADD COLUMN`'s `DEFAULT`: it only fills existing rows on the boot where the column is first
+> created. New rows arrive with whatever value your `INSERT` supplies.
 
-## Ejemplos Completos
+## Complete examples
 
-### Plugin Completo con Tablas y Queries
+### A full plugin with tables and queries
 
 ```javascript
 module.exports = {
   async init(wordjs) {
-    // Crear tabla con sintaxis unificada
+    // Create a table with the unified syntax
     await wordjs.db.createTable('my_plugin_data', [
       'id INT_PK',
       'name TEXT NOT NULL',
@@ -201,18 +379,18 @@ module.exports = {
       'created_at DATETIME DEFAULT CURRENT_TIMESTAMP'
     ]);
 
-    // Exponer helpers que usan el bridge
+    // Expose helpers that use the bridge
     this.getData = (id) =>
       wordjs.db.get('SELECT * FROM my_plugin_data WHERE id = ?', [id]);
 
-    // Query con LIMIT/OFFSET - funciona igual en todos los drivers
+    // A query with LIMIT/OFFSET — identical on every driver
     this.getAllData = (limit = 10, offset = 0) =>
       wordjs.db.all(
         'SELECT * FROM my_plugin_data ORDER BY created_at DESC LIMIT ? OFFSET ?',
         [limit, offset]
       );
 
-    // INSERT - run() devuelve { lastID, changes } en todos los drivers
+    // INSERT — run() returns { lastID, changes } on every driver
     this.createData = async (name, value) => {
       const res = await wordjs.db.run(
         'INSERT INTO my_plugin_data (name, value) VALUES (?, ?)',
@@ -230,13 +408,29 @@ module.exports = {
 };
 ```
 
-> **API in-process (avanzado / core):** el bridge se apoya en helpers de `backend/src/config/database.ts` (`dbAsync`, `createPluginTable`, `getDbType`). Código del **core** (modelos, `db-admin`) los importa directamente; los plugins aislados **no** — pasan siempre por `wordjs.db.*`.
+> **In-process API (advanced / core):** the bridge rests on helpers in
+> `backend/src/config/database.ts` (`dbAsync`, `createPluginTable`, `getDbType`). **Core** code (models,
+> `db-admin`) imports them directly; isolated plugins do **not** — they always go through
+> `wordjs.db.*`.
 
-## Plugins Actualizados
+## Plugins already on this model
 
-- ✅ `card-gallery` - Persiste sus datos vía el bridge `wordjs.options` (clave/valor), no en tablas SQL
-- ✅ `video-gallery` - Persiste sus datos vía el bridge `wordjs.options` (clave/valor), no en tablas SQL
-- ✅ `mail-server` - Plugin **totalmente untrusted** (sandboxed): usa los grants `database:read` + `database:write` (entre otros que pide su manifest) y guarda sus datos relacionales — incluidas claves DKIM y secretos SMTP del relay — en sus propias tablas `wjp_mail_server_*` (`_received_emails` / `_email_attachments` / `_secrets`), precisamente porque `assertSqlAllowed` deniega cualquier tabla fuera de su prefijo. Los **bytes** de los adjuntos y el corpus Bayes no van a la BD: viven en el propio directorio del plugin vía los grants `filesystem:read`/`write` (la tabla `_email_attachments` solo guarda los metadatos y el `storage_path`)
-- ✅ `youtube-videos` - Guarda la clave de la YouTube Data API en su **propia tabla** `wjp_youtube_videos_*` (no en options, que otros plugins pueden leer); su "upsert" de settings usa el patrón **UPDATE-then-INSERT** (elección del propio plugin; el guard actual ya permite `ON CONFLICT ... DO UPDATE SET` sobre tablas propias)
-- ✅ `conference-manager` - Tablas propias `wjp_conference_manager_*` vía `db.tablePrefix` + `db.createTable`; ojo: el bridge de BD **no expone transacciones** (`db.batch` agrupa el **transporte**, no es una transacción), así que las actualizaciones que dependen de otra fila se hacen con un solo `UPDATE` con subquery
-- ✅ Todos los plugins existentes (incluidos los 31 del marketplace) - Sintaxis SQLite estándar; todos table-scoped a su propio prefijo (sin acceso a tablas del core)
+- ✅ `card-gallery` — persists its data through the `wordjs.options` bridge (key/value), not in SQL tables.
+- ✅ `video-gallery` — persists its data through the `wordjs.options` bridge (key/value), not in SQL tables.
+- ✅ `mail-server` — a **fully untrusted** (sandboxed) plugin: it uses the `database:read` +
+  `database:write` grants (among others its manifest requests) and keeps its relational data — DKIM
+  keys and relay SMTP secrets included — in its own `wjp_mail_server_*` tables (`_received_emails` /
+  `_email_attachments` / `_secrets`), precisely because `assertSqlAllowed` denies any table outside its
+  prefix. Attachment **bytes** and the Bayes corpus do not go in the database: they live in the
+  plugin's own directory via the `filesystem:read`/`write` grants (the `_email_attachments` table holds
+  only the metadata and the `storage_path`).
+- ✅ `youtube-videos` — stores the YouTube Data API key in its **own table** `wjp_youtube_videos_*` (not
+  in options, which other plugins can read); its settings "upsert" uses the **UPDATE-then-INSERT**
+  pattern (the plugin's own choice; today's guard already permits `ON CONFLICT ... DO UPDATE SET` on
+  your own tables).
+- ✅ `conference-manager` — its own `wjp_conference_manager_*` tables via `db.tablePrefix` +
+  `db.createTable`; note that the database bridge **exposes no transactions** (`db.batch` groups the
+  **transport**, it is not a transaction), so updates that depend on another row are done with a single
+  `UPDATE` carrying a subquery.
+- ✅ Every existing plugin (the 31 marketplace ones included) — standard SQLite syntax; all table-scoped
+  to their own prefix (no access to core tables).
