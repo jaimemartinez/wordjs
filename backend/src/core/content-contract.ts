@@ -13,8 +13,22 @@ const {
     normalizeContentTypeSchema,
     defaultOperationsFor,
 } = require('./content-schema');
+import type { ContentComparisonInput, ContentComparisonOutcome } from './content-rollout';
+
+// `require` keeps the load order this module already relies on; the cast restores the generic
+// signature so a mis-shaped comparison input is a compile error rather than an `any` that
+// silently accepts one — the F2 gate already refuses `any` in this layer.
+const { evaluateContentValidation, valueShapeOf } = require('./content-rollout') as {
+    evaluateContentValidation: <R>(input: ContentComparisonInput<R>) => ContentComparisonOutcome<R>;
+    valueShapeOf: (value: unknown) => string;
+};
 
 export type ContentContractOperation = 'create' | 'update';
+
+export interface ContentWriteContext {
+    /** Surface that produced the write, recorded on a divergence. Defaults to the REST route. */
+    route?: string;
+}
 
 export interface ContentValidationIssue {
     path: string;
@@ -46,8 +60,15 @@ export interface CompiledContentContract {
     policy: ContentRoutePolicy;
     createOpenApi: Record<string, unknown>;
     updateOpenApi: Record<string, unknown>;
-    validateCreate<T extends object>(value: unknown): ContentValidationResult<T>;
-    validateUpdate<T extends object>(value: unknown): ContentValidationResult<T>;
+    /**
+     * The verdict the caller must act on. Which validator produced it is the F6 ramp's decision
+     * (core/content-rollout), taken per type at CALL time so moving a type back to shadow takes
+     * effect on the next request instead of on the next deploy.
+     */
+    validateCreate<T extends object>(value: unknown, context?: ContentWriteContext): ContentValidationResult<T>;
+    validateUpdate<T extends object>(value: unknown, context?: ContentWriteContext): ContentValidationResult<T>;
+    /** The generated verdict, always, regardless of rung. For tooling that must not be ramped. */
+    validateGenerated<T extends object>(operation: ContentContractOperation, value: unknown): ContentValidationResult<T>;
 }
 
 export const CONTENT_FIELD_WIRE_NAMES: Readonly<Record<string, string>> = Object.freeze({
@@ -377,15 +398,72 @@ function componentStem(name: string): string {
         }).join('');
 }
 
+/**
+ * Resolve a divergence path (`status`, `meta._thumbnail_id`) to the SHAPE of what was submitted.
+ * Never to the value: the divergence ledger lives in memory on every node for the length of the
+ * cut-over, and a ledger that copies request bodies is a retained log of user content.
+ */
+function shapeResolver(body: unknown): (path: string) => string {
+    return (path: string) => {
+        if (!isPlainRecord(body)) return 'unknown';
+        if (path.startsWith('meta.')) {
+            const meta = own(body, 'meta');
+            return isPlainRecord(meta) ? valueShapeOf(own(meta, path.slice(5))) : 'absent';
+        }
+        return valueShapeOf(own(body, path));
+    };
+}
+
+const issuesOfResult = (result: ContentValidationResult<object>): ContentValidationIssue[] =>
+    result.ok ? [] : result.issues;
+
 export function compileContentContract(schemaValue: unknown): CompiledContentContract {
     const schema = normalizeContentTypeSchema(schemaValue) as ContentTypeSchemaV1;
+
+    /**
+     * The pre-migration baseline: before F2 added `validateCreate`/`validateUpdate` to the write
+     * routes, nothing here rejected anything. So the baseline accepts, and the checks that predate
+     * F2 — authentication, capability gates, sanitisation, the model's own rules — still run, because
+     * they live in the route and the model, not in this contract.
+     *
+     * This used to be `validateContentInput(legacyProjectionOfSchema(schema), ...)`, which is the
+     * generated validator for every type an installation can have (the round trip is the identity for
+     * built-ins and for anything registered through `registerPostType`). That made `off` and `shadow`
+     * reject exactly what `enforce` rejects: no reverse gear, and a `safeToEnforce` verdict computed
+     * by comparing the enforcing validator with itself.
+     *
+     * Returning the input as `value` is safe because no caller reads it on this path: both routes use
+     * the result purely as a gate (`if (!checked.ok) return invalidContentContract(...)`) and then
+     * destructure `req.body` themselves. `validateGenerated` remains available for tooling that must
+     * see the contract's verdict whatever the rung.
+     */
+    const permissiveVerdict = <T extends object>(value: unknown): ContentValidationResult<T> =>
+        ({ ok: true, value: value as T });
+
+    const ramped = <T extends object>(
+        operation: ContentContractOperation,
+        value: unknown,
+        context?: ContentWriteContext,
+    ): ContentValidationResult<T> => evaluateContentValidation<ContentValidationResult<T>>({
+        type: schema.name,
+        operation,
+        route: context && context.route,
+        permissive: () => permissiveVerdict<T>(value),
+        generated: () => validateContentInput<T>(schema, operation, value),
+        accepted: (result) => result.ok,
+        issuesOf: (result) => issuesOfResult(result as ContentValidationResult<object>),
+        shapeAt: shapeResolver(value),
+    }).verdict;
+
     return {
         schema,
         policy: policyFromContentSchema(schema),
         createOpenApi: openApiInputFor(schema, 'create'),
         updateOpenApi: openApiInputFor(schema, 'update'),
-        validateCreate: <T extends object>(value: unknown) => validateContentInput<T>(schema, 'create', value),
-        validateUpdate: <T extends object>(value: unknown) => validateContentInput<T>(schema, 'update', value),
+        validateCreate: <T extends object>(value: unknown, context?: ContentWriteContext) => ramped<T>('create', value, context),
+        validateUpdate: <T extends object>(value: unknown, context?: ContentWriteContext) => ramped<T>('update', value, context),
+        validateGenerated: <T extends object>(operation: ContentContractOperation, value: unknown) =>
+            validateContentInput<T>(schema, operation, value),
     };
 }
 

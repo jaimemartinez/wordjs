@@ -41,6 +41,7 @@
     "verify:f4": "cd backend && npm run verify:f4",
     "generate:f5": "node scripts/generate-visual-contract.mjs",
     "verify:f5": "cd backend && npm run verify:f5",
+    "verify:f6": "cd backend && npm run verify:f6",
     "perf:f0": "cd backend && npm run perf:f0",
     "perf:bench": "node scripts/perf-bench.mjs",
     "perf:bench:enforce": "node scripts/perf-bench.mjs --enforce --json"

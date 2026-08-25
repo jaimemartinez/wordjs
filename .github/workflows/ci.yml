@@ -93,6 +93,11 @@ jobs:
           backend/src/tests/f3-content-outbox.test.ts
           backend/src/tests/f4-extensible-revisions.test.ts
           backend/src/tests/f5-visual-contract.test.ts
+          backend/src/tests/f6-crash-consistency.test.ts
+          backend/src/tests/f6-final-criteria.test.ts
+          backend/src/tests/f6-outbox-idempotence.test.ts
+          backend/src/tests/f6-performance-budget.test.ts
+          backend/src/tests/f6-shadow-rollout.test.ts
           backend/src/tests/health-purge-observability.test.ts
           backend/src/tests/import-post-page-slug-identity.test.ts
           backend/src/tests/install-root-paths.test.ts
@@ -146,6 +151,7 @@ jobs:
           backend/scripts/verify-f3-transactional-content.ts
           backend/scripts/verify-f4-extensible-revisions.ts
           backend/scripts/verify-f5-visual-contract.ts
+          backend/scripts/verify-f6-migration.ts
           scripts/generate-visual-contract.mjs
           backend/content-schema.v1.json
           contracts/visual-contract.v1.json
@@ -161,6 +167,7 @@ jobs:
           documentation/adr/0004-f3-transactional-content-outbox.md
           documentation/adr/0005-f4-versioned-extensible-revisions.md
           documentation/adr/0006-f5-unified-visual-contract.md
+          documentation/adr/0007-f6-migration-certification.md
           documentation/generated/plugin-visual-contract.md
           # ── frontend gates (vitest run: src/**/*.test.ts(x)) ──────────────────────────────────────
           frontend/src/__tests__/instrumentationGatewayTls.test.ts
@@ -205,8 +212,9 @@ jobs:
           gateway/test/dispatcher-parity.test.js
           gateway/test/registration.test.js
           gateway/test/worker-registry.test.js
-          # ── a workflow is a gate too: this one runs nowhere while it is untracked ─────────────────
+          # ── a workflow is a gate too: these run nowhere while they are untracked ──────────────────
           .github/workflows/sandbox-parity.yml
+          .github/workflows/f6-certification.yml
           GATES
           if [ -n "$missing" ]; then
             for f in $missing; do
@@ -254,6 +262,54 @@ jobs:
             exit 1
           fi
           echo "every tracked test file is claimed by a suite this workflow runs"
+
+      - name: Every job in every workflow declares a measured timeout-minutes
+        # THE SIX-HOUR DEFAULT, MADE UNFORGETTABLE.
+        #
+        # The long note at the top of this file explains the incident: two runs sat 40 and 25 minutes
+        # inside a Playwright install while runs pushed after them finished in seven, and nothing was
+        # red — GitHub's default job timeout is SIX HOURS, so a hang is indistinguishable from a slow
+        # run and nobody looks. Every job in the repository was then given a measured `timeout-minutes`.
+        #
+        # That fix was a one-time sweep, and a one-time sweep is exactly the kind of guarantee this
+        # programme keeps having to re-establish: the eleventh job was compliant, the twelfth (written
+        # next month, by anyone) inherits six hours again and no gate notices. F6 adds certification
+        # legs of its own — long ones, against three database engines and a deliberately dead Redis —
+        # which is precisely where a silent hang is most expensive. So the property becomes DERIVED:
+        # every job of every workflow, discovered by reading the files, not by consulting a list.
+        #
+        # ADDING A JOB WITHOUT A TIMEOUT TURNS THIS RED. That is the whole test of whether it is real.
+        # It is a small awk rather than a YAML parser on purpose (no dependency to install for a job
+        # that must stay seconds long): job ids are the only 2-space-indented keys under `jobs:`, and
+        # job properties are the 4-space-indented ones — so `timeout-minutes` is looked for at exactly
+        # the depth GitHub accepts it, and `matrix:`/`steps:` entries deeper in cannot be mistaken for
+        # a job. `on:`'s own `push:`/`pull_request:` keys sit at the same indent, which is why the
+        # scan only starts after the top-level `jobs:` line and stops at the next top-level key.
+        run: |
+          set -u
+          failed=0
+          for workflow in .github/workflows/*.yml .github/workflows/*.yaml; do
+            [ -e "$workflow" ] || continue
+            missing="$(awk '
+              /^jobs:[[:space:]]*(#.*)?$/ { injobs = 1; next }
+              injobs && /^[^[:space:]#]/ { injobs = 0 }
+              injobs && /^  [A-Za-z0-9_-]+:[[:space:]]*(#.*)?$/ {
+                if (job != "" && !seen) print job
+                job = $1; sub(/:$/, "", job); seen = 0; next
+              }
+              injobs && /^    timeout-minutes:/ { seen = 1 }
+              END { if (job != "" && !seen) print job }
+            ' "$workflow")"
+            for job in $missing; do
+              echo "::error file=$workflow::job '$job' has no timeout-minutes — it inherits GitHub's SIX HOUR default, where a hang looks exactly like a slow run"
+              failed=1
+            done
+          done
+          if [ "$failed" = "1" ]; then
+            echo "::error::Give every job a timeout-minutes measured against its observed runtime (the existing jobs use 5–45). A job without one cannot fail fast, and a gate that cannot fail is not a gate."
+            exit 1
+          fi
+          echo "every job in every workflow declares a measured timeout-minutes"
 
   backend:
     name: Backend (typecheck + test)
@@ -331,6 +387,9 @@ jobs:
       - name: F5 unified visual contract (generated parsers, renderers and security policy)
         working-directory: backend
         run: npm run verify:f5
+      - name: F6 migration and certification (shadow rollout, adapters and the F0 budget)
+        working-directory: backend
+        run: npm run verify:f6
       - name: License gate (block network-copyleft AGPL/SSPL)
         working-directory: backend
         run: npx --yes license-checker --production --failOn 'AGPL;SSPL'

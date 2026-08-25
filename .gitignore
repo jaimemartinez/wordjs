@@ -158,3 +158,8 @@ cookie-jar*.txt
 /put[0-9]*.json
 .stitch-cache/
 backend/plugins/stitch-themes/
+
+# Scratch tree built by backend/src/tests/verify-installer.test.ts (relocates config/app.ts to
+# simulate a site root with no wordjs-config.json). Removed on both the passing and failing path;
+# ignored as well so a regression in that cleanup can never put it in a commit.
+backend/tmp-installer-test/

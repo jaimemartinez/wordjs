@@ -21,6 +21,7 @@
     "verify:f4": "node -r ts-node/register scripts/verify-f4-extensible-revisions.ts",
     "generate:f5": "node ../scripts/generate-visual-contract.mjs",
     "verify:f5": "node ../scripts/generate-visual-contract.mjs --check && node -r ts-node/register scripts/verify-f5-visual-contract.ts",
+    "verify:f6": "node -r ts-node/register scripts/verify-f6-migration.ts",
     "perf:f0": "node -r ts-node/register scripts/f0-content-bench.ts --enforce",
     "lint": "eslint \"src/**/*.ts\"",
     "format": "prettier --write \"src/**/*.ts\""

@@ -1,6 +1,13 @@
 const fs = require('fs');
 const path = require('path');
 
+// The rollout block is normalized by the module that OWNS the ramp, not restated here: the mode
+// union, its defaults and its environment levers have exactly one definition. core/content-rollout
+// is dependency-free at module scope, so this require adds no load-order coupling and reads the
+// config back lazily (which is what keeps it loadable inside an isolated plugin worker).
+const { normalizeContentValidationConfig } = require('../core/content-rollout');
+import type { ContentValidationConfig } from '../core/content-rollout';
+
 export interface AppConfig {
     // Server
     port: number;
@@ -106,6 +113,12 @@ export interface AppConfig {
     metrics: {
         token: string;
     };
+
+    // F6 rollout ramp for the generated content validator (core/content-rollout). Always
+    // well-formed — the write path reads it per request and must never branch on undefined.
+    // `mode` is the global rung ('off' | 'shadow' | 'enforce', default 'enforce'); `types` holds a
+    // single content type back or opts one forward without moving the rest.
+    contentValidation: ContentValidationConfig;
 
     // Redis
     redis: {
@@ -323,6 +336,10 @@ const config: AppConfig = {
     metrics: {
         token: fileConfig.metrics?.token || process.env.METRICS_TOKEN || ''
     },
+    // F6 validator rollout ramp. Normalized by core/content-rollout so the file, the environment
+    // levers (WORDJS_CONTENT_VALIDATION*) and the runtime override cannot drift into three
+    // different ideas of what 'shadow' means.
+    contentValidation: normalizeContentValidationConfig(fileConfig.contentValidation),
     // Redis Configuration
     redis: {
         enabled: fileConfig.redis?.enabled !== undefined ? fileConfig.redis.enabled : (process.env.REDIS_ENABLED === 'true'),

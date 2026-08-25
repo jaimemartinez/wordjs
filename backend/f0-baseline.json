@@ -42,10 +42,99 @@
       "semanticSha256": "dd4150cbbf70aa15c90992d91c4954c7d0502e27ca6901eef6c717dcc4f33c8e"
     },
     "verificationSurface": {
-      "backendTestFiles": 195,
+      "backendTestFiles": 200,
       "frontendTestFiles": 170,
       "sandboxWorkflowSemanticSha256": "2acabdebfa082077510507a1e05af0c642a290824f5152ffa6ab1dfff5a5b851",
       "performanceBudgetsSha256": "5cec1eb1dbd3024992597dd6251d0944b09adf0d642880139ae6e478b2b3b347"
+    }
+  },
+  "performanceBudget": {
+    "schemaVersion": 1,
+    "why": "F0 committed absolute millisecond ceilings; F6 has to certify 'no regression beyond the F0 budget' on hosts F0 never ran on. A millisecond is a property of the machine, so the enforced budget here is a RATIO against a reference workload measured in the same process, on the same driver, in the same run. Absolute ceilings survive as a secondary catastrophe check and may never be looser than the F0 file they descend from.",
+    "measuredOn": {
+      "platform": "win32",
+      "arch": "x64",
+      "node": "22.x",
+      "driver": "sqlite-native",
+      "date": "2026-08-24",
+      "runs": 8,
+      "worstObservedRunToRunRatioSpread": 1.73,
+      "sensitivityNote": "Ceilings are 2.0x the worst of the eight calibration runs, so the gate trips somewhere between a 2.0x regression (measured on a bad run) and a 2.8x one (measured on a good run). That is the honest sensitivity: it catches the N+1 query, the lost index, the second sanitisation pass and the synchronous flush, and it does not catch a 20% slowdown. Chasing 20% on a shared runner buys false failures, not information.",
+      "provisionalMargin": "The 2.0x factor is 1.5x for measurement noise TIMES a deliberate allowance for calibrating on one platform only. The denominator is ten autocommit inserts while the numerators are transactions, so the ratio is sensitive to how expensive a per-statement durability flush is on the host filesystem; Windows pays more for that than ext4, which inflates the denominator here and would make a Windows-tight ceiling flap on a Linux runner. This looseness is recorded rather than hidden: once the harness has run on the CI host, record that observation and tighten the ceilings back toward 1.5x."
+    },
+    "methodology": {
+      "warmupIterations": 10,
+      "operationSamples": 60,
+      "referenceSamples": 150,
+      "trimFraction": 0.1,
+      "statistic": "trimmedMean",
+      "planOperations": ["creation", "query", "render", "update"],
+      "ceilingMarginRange": [1.2, 3.0],
+      "note": "observedRatioToReference records the WORST of the calibration runs and every ceiling sits at 2.0x it (see measuredOn.provisionalMargin for why not 1.5x). ceilingMarginRange is the window a ceiling must stay inside relative to its own recorded observation: below 1.2x it flaps on a loaded host and gets disabled within a week, above 3.0x nothing can fail it, which is the same defect as having no threshold. Loosening a ceiling therefore forces re-recording the observation beside it — a visible act in review rather than a one-character edit."
+    },
+    "reference": {
+      "id": "referenceWriteBatch",
+      "workload": "ten single-row INSERTs through the active driver",
+      "why": "Content operations are driver-bound, so a reference that is itself ten durable writes moves with the host and with the driver. Three candidate denominators were measured side by side in the same six runs — a single INSERT+SELECT round trip, fifty SELECT 1 round trips, and this ten-insert batch — and the batch produced the tightest run-to-run ratios (worst spread 1.24x against 1.35x and 1.33x). It is also large enough (~0.37ms) that timer jitter is not a meaningful share of the denominator, which a 6us SELECT 1 could not claim.",
+      "observedMillisecondsTrimmedMean": 0.37,
+      "minimumMillisecondsTrimmedMean": 0.02,
+      "maximumMillisecondsTrimmedMean": 8.0,
+      "boundsNote": "The denominator is load-bearing in both directions. A reference that collapses (writes that stopped being durable) deflates nothing but inflates every ratio into a red run with a confusing message; a reference that inflates deflates every ratio and the gate would pass a real regression. Both bounds are deliberately wide — they exist to catch a change in the driver write path, not to judge the host."
+    },
+    "operations": {
+      "contentCreate": {
+        "planOperation": "creation",
+        "callSite": "Post.create",
+        "observedRatioToReference": 11.114,
+        "maximumRatioToReference": 22.2,
+        "observedMillisecondsP95": 6.95,
+        "maximumMillisecondsP95": 20,
+        "f0BudgetKey": "postCreateP95"
+      },
+      "contentUpdate": {
+        "planOperation": "update",
+        "callSite": "Post.update",
+        "observedRatioToReference": 10.391,
+        "maximumRatioToReference": 20.8,
+        "observedMillisecondsP95": 7.336,
+        "maximumMillisecondsP95": 30,
+        "f0BudgetKey": "postUpdateP95"
+      },
+      "contentQuery": {
+        "planOperation": "query",
+        "callSite": "Post.findAllWithRelations",
+        "observedRatioToReference": 0.861,
+        "maximumRatioToReference": 1.72,
+        "observedMillisecondsP95": 0.608,
+        "maximumMillisecondsP95": 15,
+        "f0BudgetKey": "postListP95"
+      },
+      "contentRender": {
+        "planOperation": "render",
+        "callSite": "Post#toJSON",
+        "observedRatioToReference": 0.088,
+        "maximumRatioToReference": 0.18,
+        "observedMillisecondsP95": 0.066,
+        "maximumMillisecondsP95": 1.5,
+        "f0BudgetKey": null,
+        "note": "The rendering operation the F6 plan names had no ceiling anywhere: f0-performance-budgets.json budgets create, update, meta, revision and list, and nothing renders. f0BudgetKey is null because there is no F0 entry to inherit from, not because the ceiling is optional."
+      }
+    },
+    "httpSteadyState": {
+      "why": "The in-process budget above covers the backend render step. The end-to-end page render is HTTP, so scripts/perf-bench.mjs enforces the same shape there: every target expressed as a ratio to /healthz measured in the same run. /healthz is the right denominator because it is the whole HTTP stack — listener, middleware chain, event loop, JSON encode — doing no application work.",
+      "reference": {
+        "role": "liveness",
+        "path": "/healthz",
+        "note": "Root-level, no database, excluded from the rate limiter."
+      },
+      "roles": {
+        "home": { "path": "/", "planOperation": "render", "required": true, "observedRatioToReference": null, "maximumRatioToReference": null },
+        "post": { "path": "/{slug}", "planOperation": "render", "required": true, "observedRatioToReference": null, "maximumRatioToReference": null },
+        "settings": { "path": "/api/v1/settings", "planOperation": "query", "required": true, "observedRatioToReference": null, "maximumRatioToReference": null },
+        "posts": { "path": "/api/v1/posts?per_page=10", "planOperation": "query", "required": true, "observedRatioToReference": null, "maximumRatioToReference": null }
+      },
+      "calibration": "UNCALIBRATED. These ratios need a production build and a running site, which no CI job and no unit test provides, so no honest observation exists yet. `npm run perf:bench:enforce` therefore FAILS with an instruction to run `node scripts/perf-bench.mjs <baseUrl> --slug <slug> --calibrate` on the host being certified and paste the recorded observations here. That is deliberate: a ratio nobody measured must not report green, and the alternative — skipping the uncalibrated entries — is the failure mode this programme has already had to fix twice.",
+      "absoluteCeilingsFrom": "backend/f0-performance-budgets.json#httpSteadyState"
     }
   }
 }

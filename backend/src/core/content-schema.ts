@@ -5,7 +5,15 @@
  * in-memory registry. It validates the serialisable contract and projects it to
  * the historical registerPostType() shape. F2 can therefore generate DTOs,
  * OpenAPI and clients from the same data without importing runtime state.
+ *
+ * F6 adds one side effect and it is deliberately the smallest possible one: the legacy adapter
+ * marks the type it just adapted in the in-process rollout ledger (core/content-rollout, which
+ * touches no database, no hooks and no registry either). That mark is what lets the write path
+ * know it is validating a type described the lossy way, without post-types.ts having to carry a
+ * flag for it — and it is why `registerPostType` stays exactly as it is: F6 retires nothing.
  */
+
+const { noteLegacyContentAdapter } = require('./content-rollout');
 
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 
@@ -546,11 +554,25 @@ export interface LegacyContentTypeAdaptation {
     runtimeExtensions: UnknownRecord;
 }
 
+export interface LegacyAdaptationOptions {
+    /**
+     * Who is adapting. `'legacy-adapter'` (the default) means a real legacy registration and is
+     * recorded in the rollout ledger. `'contract-comparison'` is F6 re-deriving the lossy view of
+     * an already-declarative schema in order to compare validators; recording that would mark
+     * every declarative type as legacy and make the deprecation notice meaningless.
+     */
+    origin?: 'legacy-adapter' | 'contract-comparison';
+}
+
 /**
  * Convert the permissive historical API to F1. Unknown keys remain on the
  * runtime object by reference. Only their JSON-safe subset enters the schema.
  */
-export function adaptLegacyPostType(nameValue: unknown, argsValue: unknown = {}): LegacyContentTypeAdaptation {
+export function adaptLegacyPostType(
+    nameValue: unknown,
+    argsValue: unknown = {},
+    options: LegacyAdaptationOptions = {},
+): LegacyContentTypeAdaptation {
     const name = safeName(nameValue);
     const args = requireRecord(argsValue, 'legacy options');
     const features = Array.isArray(args.supports)
@@ -608,12 +630,32 @@ export function adaptLegacyPostType(nameValue: unknown, argsValue: unknown = {})
         },
         extensions: serialisableExtensions,
     };
-    return { schema: normalizeContentTypeSchema(schema), runtimeExtensions };
+    const adapted = { schema: normalizeContentTypeSchema(schema), runtimeExtensions };
+    // Registration-time rung 6. Deduplicated inside the ledger, because a plugin that is
+    // activated and deactivated in a loop re-registers its types every cycle.
+    if (options.origin !== 'contract-comparison') noteLegacyContentAdapter(adapted.schema.name);
+    return adapted;
 }
 
 export function legacyPostTypeToContentSchema(name: unknown, args: unknown = {}): ContentTypeSchemaV1 {
     return adaptLegacyPostType(name, args).schema;
 }
+
+/*
+ * `legacyProjectionOfSchema` used to live here. It round-tripped a declarative schema through the
+ * legacy descriptor and back, and F6 used it as the ramp's "old validator".
+ *
+ * It is gone because it computed nothing. The round trip is the IDENTITY for every type an
+ * installation can actually have: the built-ins build their fields with `fieldsForFeatures(features)`
+ * and `adaptLegacyPostType` recomputes exactly that, while `registerPostType` stores the
+ * already-adapted schema, so adapting it a second time changes nothing. Its own doc comment noted
+ * that built-ins "produce no divergence at all" and called that the correct answer — which is how a
+ * ramp whose lower rungs rejected precisely what enforcement rejects passed review.
+ *
+ * The pre-migration baseline is not the legacy descriptor's rules. Before F2 the write routes ran no
+ * contract validation at all, so the baseline is "accept", and it lives at the seam that needs it —
+ * `permissiveVerdict` in core/content-contract.ts — instead of being reconstructed from a schema.
+ */
 
 export function contentSchemaToPostType(schemaValue: unknown, runtimeExtensions: UnknownRecord = {}): UnknownRecord {
     const schema = normalizeContentTypeSchema(schemaValue);

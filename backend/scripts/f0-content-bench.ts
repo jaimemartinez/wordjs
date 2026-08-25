@@ -80,11 +80,31 @@ async function main(): Promise<void> {
 
     if (enforce) {
         const failures: string[] = [];
+
+        // Walk the BUDGET table: every declared ceiling must be measured and respected.
         for (const [name, ceiling] of Object.entries(budgets.contentMilliseconds)) {
             const actual = measured[name];
             if (!Number.isFinite(actual)) failures.push(`${name} was not measured`);
             else if (actual > Number(ceiling)) failures.push(`${name}: ${actual}ms > ${ceiling}ms`);
         }
+
+        // Walk the MEASUREMENTS: every operation this harness times must have a ceiling.
+        //
+        // Without this second direction the loop above is a one-way gate. It catches a REMOVED
+        // measurement — a ceiling with nothing behind it — and is blind to an ADDED one: a new content
+        // operation nobody wrote a budget for gets measured, printed in the report as though it were
+        // covered, and silently unenforced for ever. Rendering is the case that proves this is not
+        // hypothetical: the F6 plan names it as one of the four operations to certify, this file has
+        // never budgeted it, and no run of `--enforce` ever said a word.
+        //
+        // Adding an operation is now deliberately a two-file change. Measuring something and deciding
+        // what counts as too slow are the same decision; splitting them is how the blind spot appeared.
+        for (const name of Object.keys(measured)) {
+            if (!(name in budgets.contentMilliseconds)) {
+                failures.push(`${name} is measured but has no ceiling in f0-performance-budgets.json — add one, because an unbudgeted measurement is never enforced`);
+            }
+        }
+
         if (failures.length) throw new Error(`F0 performance budget exceeded:\n${failures.join('\n')}`);
     }
 }

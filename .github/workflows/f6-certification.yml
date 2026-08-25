@@ -1,0 +1,335 @@
+name: F6 certification
+
+# THE F6 CERTIFICATION MATRIX — the legs that were missing, and only those.
+#
+# WHAT THIS WORKFLOW DELIBERATELY DOES NOT DO. The three-OS confinement leg of the matrix
+# (Linux Landlock+seccomp, Windows AppContainer, macOS Seatbelt, control-vs-confined, and
+# "fail closed when the required boundary is unavailable") is ALREADY certified on real runners by
+# .github/workflows/sandbox-parity.yml. Rebuilding it here would give a second, weaker copy of a gate
+# that already exists and a second place to keep in sync. F6 CONSUMES that workflow; it does not
+# restate it. The same applies to the multi-node coherence leg (ci.yml → `multinode`, two backend
+# processes over one Postgres + Redis) and the compiled-bundle deploy leg (ci.yml → `bundle-boot`).
+#
+# WHAT IS ACTUALLY MISSING, and is therefore what this file exists for:
+#
+#   1. THE PHASE SUITES ON ALL THREE ENGINES. Every phase suite f0…f5 opens with
+#          config.dbPath = TMP_DB; config.dbDriver = 'sqlite-native';
+#      so each phase's guarantee is certified on ONE engine, even though F3's exit criterion is
+#      literally "SQLite, PostgreSQL and MySQL produce the same result". ci.yml provisions postgres:16
+#      and mysql:8 and the driver suites do use them — but for hand-built `conf_*` tables, not for the
+#      phase modules themselves. The two F6 suites close that: they parametrise the phase guarantees
+#      over F6_CERTIFIED_ENGINES and drive the REAL modules and the REAL schema bootstrap on each.
+#
+#   2. OUTBOX DUPLICATES AND RETRIES against the real outbox — an event delivered twice must not
+#      produce the effect twice, and an expired lease must be retried without duplicating.
+#
+#   3. PROCESS FAILURE DURING A TRANSACTION — the crash, not the thrown error. F0 already injects five
+#      thrown failures; SIGKILL runs no catch, no finally and no atexit, so the atomicity has to hold
+#      without one line of WordJS code executing.
+#
+#   4. REDIS CONNECTED **AND** DEGRADED. Both matrix legs below run the identical suite; the degraded
+#      leg keeps `redis.enabled = true` and points the client at a port nothing is listening on, which
+#      is the failure operators actually hit (a Redis that vanished), not the easier "Redis switched
+#      off in config" case.
+#
+# EVERY JOB CARRIES A MEASURED `timeout-minutes`, and the `matrix-integrity` job below REFUSES to pass
+# if a job in this file forgets one. ci.yml's long note explains why: GitHub's default is SIX HOURS,
+# so a hung step does not fail — it looks like a slow run all afternoon. Measurements taken on this
+# tree: the two F6 suites together run in ~14s against SQLite (the crash suite spawns three real child
+# processes, ~4s each); install + the phase suites dominate the rest.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  matrix-integrity:
+    # A CERTIFICATION MATRIX NOBODY CAN QUIETLY SHRINK.
+    #
+    # The failure this job exists to catch is the one this repository has already had to fix twice: a
+    # gate that keeps reporting PASS after the thing it certified stopped being certified. Two shapes
+    # of that are possible here and both are checked:
+    #   · an engine is dropped from (or added to) F6_CERTIFIED_ENGINES in one test file and not the
+    #     other, so half the matrix silently stops running;
+    #   · an engine is named by the tests but has no service container in this workflow, so its leg
+    #     can only ever skip — and WORDJS_CI_DB=1 would then turn every one of its tests red at run
+    #     time, minutes into a job, instead of here in seconds with a readable message.
+    # It is derived, not a hand-written table: the engine list is READ OUT of the test sources. Add a
+    # fourth engine to the array and this job goes red until a service exists for it. Provision a
+    # service the tests never drive and it goes red the other way.
+    name: Matrix integrity (engines and timeouts are declared, not assumed)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: The two F6 suites certify the SAME engine matrix
+        run: |
+          set -u
+          workflow=".github/workflows/f6-certification.yml"
+          files="backend/src/tests/f6-outbox-idempotence.test.ts backend/src/tests/f6-crash-consistency.test.ts"
+
+          engines_of() {
+            sed -n "s/^const F6_CERTIFIED_ENGINES = \[\(.*\)\];[[:space:]]*$/\1/p" "$1" \
+              | tr -d " '\"" | tr ',' '\n' | grep -v '^$' | sort
+          }
+
+          reference=""
+          for f in $files; do
+            if [ ! -f "$f" ]; then
+              echo "::error file=$f::an F6 certification suite is missing — the matrix cannot be read"
+              exit 1
+            fi
+            list="$(engines_of "$f")"
+            if [ -z "$list" ]; then
+              echo "::error file=$f::no F6_CERTIFIED_ENGINES array found. It is the single source of the certification matrix and this gate reads it literally; keep it on one line."
+              exit 1
+            fi
+            if [ -z "$reference" ]; then
+              reference="$list"
+            elif [ "$reference" != "$list" ]; then
+              echo "::error file=$f::the F6 suites disagree about which engines are certified:"
+              echo "$reference" | tr '\n' ' '
+              echo "vs"
+              echo "$list" | tr '\n' ' '
+              echo "::error::Half a matrix that looks whole is exactly the regression F6 exists to prevent. Make both arrays identical."
+              exit 1
+            fi
+          done
+          echo "certified engines: $(echo "$reference" | tr '\n' ' ')"
+
+          # The service names are read BLOCK-AWARE, out of the `services:` mapping only. A plain
+          # 6-space-indent grep also matches `matrix:` under `strategy:` and reported a phantom
+          # service — the small version of the disease this whole workflow is about: a check whose
+          # subject is not quite the thing it claims to check.
+          services_of() {
+            awk '
+              /^    services:[[:space:]]*$/ { inblock = 1; next }
+              inblock && /^    [A-Za-z]/    { inblock = 0 }
+              inblock && /^      [a-z0-9-]+:[[:space:]]*$/ { key = $1; sub(/:$/, "", key); print key }
+            ' "$1" | sort -u
+          }
+          services="$(services_of "$workflow")"
+
+          # Every non-SQLite engine must have a service container in THIS workflow. SQLite needs none —
+          # it is a file, which is precisely why it was the only engine the phase suites ever used.
+          for engine in $reference; do
+            [ "$engine" = "sqlite-native" ] && continue
+            echo "$services" | grep -qx "$engine" || {
+              echo "::error file=$workflow::'$engine' is in F6_CERTIFIED_ENGINES but has no service container here, so its certification leg can only ever skip"
+              exit 1
+            }
+          done
+
+          # And the reverse: a service nothing drives is dead weight that reads like coverage.
+          for service in $services; do
+            [ "$service" = "redis" ] && continue   # redis is a matrix DIMENSION, not a SQL engine
+            echo "$reference" | grep -qx "$service" || {
+              echo "::error file=$workflow::the '$service' service is provisioned but no F6 suite certifies it"
+              exit 1
+            }
+          done
+          echo "every certified engine has a service and every service is certified"
+
+      - name: Every job in this workflow declares a measured timeout-minutes
+        # The local half of the repo-wide gate that lives in ci.yml (`gates-travel`). Kept here as well
+        # because this file is where new certification legs get added, and a leg without a timeout is a
+        # leg that can hang for six hours while looking merely slow.
+        run: |
+          set -u
+          missing="$(awk '
+            /^jobs:[[:space:]]*(#.*)?$/ { injobs = 1; next }
+            injobs && /^[^[:space:]#]/ { injobs = 0 }
+            injobs && /^  [A-Za-z0-9_-]+:[[:space:]]*(#.*)?$/ {
+              if (job != "" && !seen) print job
+              job = $1; sub(/:$/, "", job); seen = 0; next
+            }
+            injobs && /^    timeout-minutes:/ { seen = 1 }
+            END { if (job != "" && !seen) print job }
+          ' .github/workflows/f6-certification.yml)"
+          if [ -n "$missing" ]; then
+            for job in $missing; do
+              echo "::error::job '$job' has no timeout-minutes — GitHub's default is SIX HOURS and a hang would be indistinguishable from a slow run"
+            done
+            exit 1
+          fi
+          echo "every certification leg declares its own timeout"
+
+  phases-on-every-engine:
+    # THE CERTIFICATION RUN ITSELF, once per Redis condition.
+    #
+    # WORDJS_CI_DB=1 is the whole point of the leg: it converts every "no reachable Postgres/MySQL"
+    # graceful skip into a HARD FAILURE. The service containers below are wired precisely so the
+    # engines ARE exercised, so an engine that never came up must fail this job rather than slip
+    # through green with two thirds of the matrix silently absent.
+    name: "Phase suites on 3 engines · Redis ${{ matrix.redis }}"
+    needs: matrix-integrity
+    runs-on: ubuntu-latest
+    # Measured: npm ci ~60s, the F6 suites ~15s against SQLite plus the schema bootstrap on Postgres
+    # and MySQL, the f0–f5 phase suites and the driver suites a few seconds each. 20 minutes is several
+    # times the observed run and decisive against a hang (a dead-Redis leg that retried forever would
+    # otherwise sit here all afternoon).
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - redis: connected
+            redis_enabled: 'true'
+            redis_port: '6379'
+          # DEGRADED, not disabled: redis.enabled stays true, so every code path still believes Redis is
+          # part of the deployment, but nothing is listening on this port. That is the operational
+          # failure — a Redis that went away — and it is strictly harder than turning the feature off.
+          - redis: degraded
+            redis_enabled: 'true'
+            redis_port: '6399'
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: wordjs
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+      mysql:
+        image: mysql:8
+        env:
+          MYSQL_ROOT_PASSWORD: password
+          MYSQL_DATABASE: wordjs
+          MYSQL_ROOT_HOST: '%' # allow root over TCP from the runner host (not just the container)
+        ports:
+          - 3306:3306
+        # Credentialed ping so "healthy" means mysqld accepts a real root TCP login (the driver's path),
+        # not merely that the process is up. Extra retries cover MySQL 8's slower first-boot init.
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot -ppassword" --health-interval 10s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 10s --health-timeout 5s --health-retries 5
+    env:
+      # Hard-fail contract, identical to ci.yml's backend/integration steps.
+      WORDJS_CI_DB: '1'
+      REDIS_ENABLED: ${{ matrix.redis_enabled }}
+      REDIS_HOST: '127.0.0.1'
+      REDIS_PORT: ${{ matrix.redis_port }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: backend
+        run: npm ci || npm install
+
+      - name: The certification suites really can see all three engines
+        # Fails BEFORE the suites run, with a message that names the engine, rather than surfacing as
+        # a wall of assertion failures 90 seconds in. `mysqladmin`/`pg_isready` are present on the
+        # ubuntu-latest image; the service health-checks above already gate on them, so this step is a
+        # readable restatement, not a second source of truth.
+        run: |
+          set -u
+          pg_isready -h 127.0.0.1 -p 5432 -U postgres || { echo "::error::Postgres service unreachable — the F6 matrix cannot certify it"; exit 1; }
+          mysqladmin ping -h 127.0.0.1 -P 3306 -uroot -ppassword || { echo "::error::MySQL service unreachable — the F6 matrix cannot certify it"; exit 1; }
+          echo "redis leg: ${{ matrix.redis }} (REDIS_ENABLED=${{ matrix.redis_enabled }} port ${{ matrix.redis_port }})"
+
+      - name: F6 — outbox duplicates, retries and the degraded cache, on every certified engine
+        working-directory: backend
+        run: node --test --test-force-exit --test-concurrency=1 -r ts-node/register src/tests/f6-outbox-idempotence.test.ts
+
+      - name: F6 — process failure during a transaction, on every certified engine
+        working-directory: backend
+        run: node --test --test-force-exit --test-concurrency=1 -r ts-node/register src/tests/f6-crash-consistency.test.ts
+
+      - name: Phase suites f0–f6 under this Redis condition
+        # These are the SQLite-pinned suites — every DB-touching one of them opens with
+        # `config.dbDriver = 'sqlite-native'` (f0-content-mutation-failures, f1, f3 and f4 do; f0-baseline,
+        # f2 and f5 are static contract gates that touch no database at all). Running them HERE is not
+        # engine coverage — the two F6 suites above are — it is the REDIS dimension: every phase
+        # guarantee must hold with Redis present AND with Redis gone, and ci.yml only ever runs them
+        # with Redis up.
+        #
+        # The F6 suites are GLOBBED and then the two that already ran above are subtracted by name,
+        # rather than the remainder being listed by name. Listing them was a hand-maintained mirror of
+        # the directory: a seventh F6 suite added later would be picked up by ci.yml's flat `npm test`
+        # and by the "every tracked test file is claimed by a suite" gate, so nothing would go red —
+        # and it would silently never run under the Redis dimension, which is the only thing this leg
+        # exists to prove. The subtraction is explicit, and a name that stops existing fails loudly
+        # below instead of quietly subtracting nothing.
+        working-directory: backend
+        run: |
+          set -eu
+          # Already executed above on all three engines under both Redis conditions.
+          already_run="f6-outbox-idempotence.test.ts f6-crash-consistency.test.ts"
+          for name in $already_run; do
+            [ -f "src/tests/$name" ] || { echo "::error::src/tests/$name is subtracted from the F6 glob but no longer exists — the subtraction now removes nothing and that suite may be running twice, or not at all"; exit 1; }
+          done
+
+          f6_suites=""
+          for file in src/tests/f6-*.test.ts; do
+            skip=0
+            for name in $already_run; do
+              [ "$(basename "$file")" = "$name" ] && skip=1
+            done
+            [ "$skip" = "1" ] || f6_suites="$f6_suites $file"
+          done
+          [ -n "$f6_suites" ] || { echo "::error::the F6 glob matched nothing after subtraction — this leg would certify f0-f5 only"; exit 1; }
+          echo "F6 suites under this Redis condition:$f6_suites"
+
+          node --test --test-force-exit --test-concurrency=1 -r ts-node/register \
+            src/tests/f0-*.test.ts \
+            src/tests/f1-*.test.ts \
+            src/tests/f2-*.test.ts \
+            src/tests/f3-*.test.ts \
+            src/tests/f4-*.test.ts \
+            src/tests/f5-*.test.ts \
+            $f6_suites
+
+      - name: Driver and migration parity on the real engines
+        # Already part of ci.yml's full `npm test`, re-run here in isolation so that a three-engine
+        # regression is attributed to the certification matrix rather than buried in a 2000-test run —
+        # and so it is exercised under the DEGRADED Redis leg too, which ci.yml never does.
+        working-directory: backend
+        run: |
+          node --test --test-force-exit --test-concurrency=1 -r ts-node/register \
+            src/tests/driver-conformance.test.ts \
+            src/tests/driver-parity.test.ts \
+            src/tests/migration-parity.test.ts
+
+  sandbox-parity-is-consumed-not-rebuilt:
+    # The OS-confinement leg of the F6 matrix is DONE, on real runners, in another file. This job is a
+    # one-second assertion that the file it delegates to still exists and still certifies all three
+    # platforms — because "we reference sandbox-parity.yml" silently becomes false the day someone
+    # deletes a matrix row, and the F6 certification would then claim an OS leg that nothing runs.
+    name: Sandbox parity is delegated, and the delegate still covers 3 OSes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - name: The delegated workflow exists and still certifies Linux, Windows and macOS
+        run: |
+          set -u
+          delegate=".github/workflows/sandbox-parity.yml"
+          [ -f "$delegate" ] || { echo "::error::$delegate is gone — F6 claims an OS-confinement leg that no workflow runs"; exit 1; }
+          for os in ubuntu macos windows; do
+            grep -Eq "os: ${os}[-a-z0-9.]*" "$delegate" || {
+              echo "::error file=$delegate::no '${os}' runner in the sandbox parity matrix — the F6 three-OS leg is no longer certified"
+              exit 1
+            }
+          done
+          grep -q 'verify-sandbox-parity.mjs --self-test' "$delegate" || {
+            echo "::error file=$delegate::the decision-contract self-test is gone; the parity job can pass without proving its own verdicts"
+            exit 1
+          }
+          echo "sandbox parity delegate intact: 3 OSes + decision-contract self-test"
