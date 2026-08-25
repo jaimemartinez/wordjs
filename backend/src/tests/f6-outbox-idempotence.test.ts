@@ -142,12 +142,24 @@ async function bringUpEngine(engine: string): Promise<string | null> {
 
     // CERT_DB is a module constant, never input — but CREATE DATABASE cannot be parameterised, so it
     // is spelled out literally here rather than interpolated from anything a caller controls.
+    //
+    // DROPPED FIRST, so every engine starts where sqlite already started. The sqlite leg gets a fresh
+    // temp file each run; postgres and mysql were reusing a named database that was created if absent
+    // and never cleaned. So the certification's result depended on how many times it had been run
+    // before: on the second local run the fan-out found the previous run's webhook as well, and
+    // `effectsFor` — which counts by source_event_id across every webhook — returned one row per
+    // accumulated webhook. A fresh CI runner hides this completely, which is exactly why it survived:
+    // the engine everyone runs locally is the one leg that was already isolated.
+    //
+    // Dropping is safe and is the point: this database exists only for this certification, is named by
+    // a module constant, and is recreated on the next line.
     try {
         if (engine === 'postgres') {
-            const present = await driver.get('SELECT 1 AS present FROM pg_database WHERE datname = ?', [CERT_DB]);
-            if (!present) await driver.exec(`CREATE DATABASE ${CERT_DB}`);
+            await driver.exec(`DROP DATABASE IF EXISTS ${CERT_DB}`);
+            await driver.exec(`CREATE DATABASE ${CERT_DB}`);
         } else {
-            await driver.exec(`CREATE DATABASE IF NOT EXISTS \`${CERT_DB}\``);
+            await driver.exec(`DROP DATABASE IF EXISTS \`${CERT_DB}\``);
+            await driver.exec(`CREATE DATABASE \`${CERT_DB}\``);
         }
     } catch (error: any) {
         try { await driver.close(); } catch { /* best effort */ }

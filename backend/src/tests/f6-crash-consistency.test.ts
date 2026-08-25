@@ -119,12 +119,17 @@ async function bringUpEngine(engine: string): Promise<string | null> {
     driver.config = { ...base };
     try { await withTimeout(driver.connect(), 8000); }
     catch (error: any) { return `no reachable ${engine}: ${error && error.message}`; }
+    // Dropped first, for the same reason as in f6-outbox-idempotence: the sqlite leg gets a fresh temp
+    // file every run while postgres and mysql were reusing a named database that was created if absent
+    // and never cleaned, so their results depended on how many times the suite had been run before.
+    // A fresh CI runner hides that, and the one engine everyone runs locally was already isolated.
     try {
         if (engine === 'postgres') {
-            const present = await driver.get('SELECT 1 AS present FROM pg_database WHERE datname = ?', [CERT_DB]);
-            if (!present) await driver.exec(`CREATE DATABASE ${CERT_DB}`);
+            await driver.exec(`DROP DATABASE IF EXISTS ${CERT_DB}`);
+            await driver.exec(`CREATE DATABASE ${CERT_DB}`);
         } else {
-            await driver.exec(`CREATE DATABASE IF NOT EXISTS \`${CERT_DB}\``);
+            await driver.exec(`DROP DATABASE IF EXISTS \`${CERT_DB}\``);
+            await driver.exec(`CREATE DATABASE \`${CERT_DB}\``);
         }
     } catch (error: any) {
         try { await driver.close(); } catch { /* best effort */ }

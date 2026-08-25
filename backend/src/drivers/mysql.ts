@@ -415,12 +415,23 @@ function translateSql(sql: string): string {
     // MySQL has no ON CONFLICT — map DO NOTHING → INSERT IGNORE, and DO UPDATE SET → ON DUPLICATE KEY
     // UPDATE (with `excluded.col` → `VALUES(col)`). Requires a UNIQUE/PRIMARY key on the conflict target,
     // which the schema provides (e.g. the options(option_name) unique index).
+    //
+    // THE CONFLICT TARGET IS OPTIONAL. `ON CONFLICT DO NOTHING` with no `(columns)` is legal in both
+    // SQLite and Postgres — it means "any unique constraint" — and both regexes below used to REQUIRE
+    // the parentheses. The bare form therefore survived translation, while the outer `if` still
+    // matched and rewrote `INSERT INTO` into `INSERT IGNORE INTO`, producing
+    // `INSERT IGNORE INTO … ON CONFLICT DO NOTHING`: doubly wrong, and rejected by MySQL.
+    //
+    // What that cost: WebhookDelivery.enqueue writes exactly that shape, and the webhook listener
+    // catches its own errors as "non-fatal". So on MySQL every webhook delivery driven by a content
+    // mutation was silently never enqueued — no error surfaced, no delivery row written. It took F6's
+    // three-engine certification to notice, because the SQLite suite cannot see it.
     if (codeHas(s, /\bON\s+CONFLICT\b/i)) {
         if (codeHas(s, /\bDO\s+NOTHING\b/i)) {
-            s = replaceAllInCode(s, /\s*\bON\s+CONFLICT\s*\([^)]*\)\s*DO\s+NOTHING\b/gi, '');
+            s = replaceAllInCode(s, /\s*\bON\s+CONFLICT\s*(?:\([^)]*\)\s*)?DO\s+NOTHING\b/gi, '');
             s = replaceInCode(s, /^(\s*)INSERT\s+INTO\b/i, '$1INSERT IGNORE INTO');
         } else {
-            s = replaceAllInCode(s, /\bON\s+CONFLICT\s*\([^)]*\)\s*DO\s+UPDATE\s+SET\b/gi, 'ON DUPLICATE KEY UPDATE');
+            s = replaceAllInCode(s, /\bON\s+CONFLICT\s*(?:\([^)]*\)\s*)?DO\s+UPDATE\s+SET\b/gi, 'ON DUPLICATE KEY UPDATE');
             s = replaceAllInCode(s, /\bexcluded\.(\w+)/gi, 'VALUES($1)');
         }
     }

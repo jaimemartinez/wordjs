@@ -430,3 +430,83 @@ test('every reserved bare column name the driver knows is quoted on all three su
  * question. The only honest mechanisms are an integration run against a real server, or a vendored copy
  * of the two lists with its provenance and date; neither exists here today.
  */
+
+/**
+ * AXIS 3 — THE FORMS THE CALLERS ACTUALLY WRITE.
+ *
+ * AXIS 1 derives its probes from the TRANSLATOR: each regex in `translateSql` is turned back into a
+ * string that matches it. That is a real gate, and it has a blind spot it cannot see by construction —
+ * a regex that is too NARROW for the SQL this repository issues still produces a probe it matches, so
+ * it passes while the real statement goes through untranslated.
+ *
+ * That is not hypothetical. `ON CONFLICT DO NOTHING` with no conflict target is legal SQLite and legal
+ * Postgres, and `WebhookDelivery.enqueue` writes exactly it. Both the DO-NOTHING and the DO-UPDATE
+ * rewrites required the `(columns)` group, so the clause survived — while the enclosing `if` still
+ * matched and rewrote `INSERT INTO` into `INSERT IGNORE INTO`, handing MySQL
+ * `INSERT IGNORE INTO ... ON CONFLICT DO NOTHING`. The webhook listener catches its own errors as
+ * non-fatal, so on MySQL every content-driven webhook delivery was silently never enqueued, and it took
+ * F6's three-engine certification to notice.
+ *
+ * So this axis is derived from the CALLERS instead: every SQL literal in the backend that contains
+ * `ON CONFLICT` or `RETURNING` is translated for real, and neither construct may survive — MySQL has
+ * neither. Adding a caller adds a row here with nothing to remember.
+ */
+const CALLER_ROOT = path.resolve(__dirname, '..');
+
+function backendSqlLiterals(): Array<{ file: string; sql: string }> {
+    const found: Array<{ file: string; sql: string }> = [];
+    const walk = (dir: string) => {
+        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+            const full = path.join(dir, entry.name);
+            if (entry.isDirectory()) {
+                if (entry.name !== 'tests' && entry.name !== 'node_modules') walk(full);
+                continue;
+            }
+            if (!entry.name.endsWith('.ts')) continue;
+            const text = fs.readFileSync(full, 'utf8').split('\r\n').join('\n');
+            // Backtick, single- and double-quoted literals alike; SQL in this codebase uses all three.
+            const literals = text.match(/`[^`]*`|'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"/g) || [];
+            for (const raw of literals) {
+                const sql = raw.slice(1, -1);
+                if (!/\b(?:ON\s+CONFLICT|RETURNING)\b/i.test(sql)) continue;
+                // It must BEGIN as a statement, not merely mention one. Requiring only that the literal
+                // CONTAINS `INSERT|UPDATE|DELETE` swept up a backticked fragment inside a comment
+                // (`` `RETURNING id` ``) and the plugin guard's error message ("RETURNING is not
+                // permitted; use a separate SELECT"), and a gate whose population is noise is a gate
+                // someone deletes the first time it goes red for the wrong reason.
+                if (!/^\s*(?:INSERT|UPDATE|DELETE|WITH)\b/i.test(sql)) continue;
+                found.push({ file: path.relative(CALLER_ROOT, full).split(path.sep).join('/'), sql });
+            }
+        }
+    };
+    walk(CALLER_ROOT);
+    return found;
+}
+
+test('AXIS 3: every ON CONFLICT / RETURNING statement the backend writes is translated for MySQL', () => {
+    const statements = backendSqlLiterals();
+
+    // A scan can pass by finding nothing, including when it is looking at nothing.
+    assert.ok(statements.length >= 4,
+        `only ${statements.length} ON CONFLICT/RETURNING statements found under src/ — the literal scanner stopped seeing the callers, so this gate is measuring nothing`);
+
+    const survivors: string[] = [];
+    for (const entry of statements) {
+        const translated = translateSql(entry.sql);
+        if (/\bON\s+CONFLICT\b/i.test(translated)) survivors.push(`${entry.file}: ON CONFLICT survived translation — MySQL has no ON CONFLICT`);
+        if (/\bRETURNING\b/i.test(translated)) survivors.push(`${entry.file}: RETURNING survived translation — MySQL has no RETURNING`);
+    }
+    assert.deepStrictEqual(survivors, [],
+        `statements this repository issues are handed to MySQL untranslated:\n  ${survivors.join('\n  ')}`);
+
+    // POSITIVE CONTROL. The exact shape that shipped broken, driven through the REAL translator: if the
+    // target-less form ever stops being handled again, this fails even when no caller happens to use it.
+    const control = 'INSERT INTO t (a) VALUES (?) ON CONFLICT DO NOTHING RETURNING id';
+    const translatedControl = translateSql(control);
+    assert.ok(!/\bON\s+CONFLICT\b/i.test(translatedControl),
+        `the target-less ON CONFLICT form is not translated: ${translatedControl}`);
+    assert.ok(!/\bRETURNING\b/i.test(translatedControl),
+        `RETURNING is not stripped from the target-less form: ${translatedControl}`);
+    assert.match(translatedControl, /INSERT\s+IGNORE\s+INTO/i,
+        `a DO NOTHING insert must become INSERT IGNORE on MySQL: ${translatedControl}`);
+});
