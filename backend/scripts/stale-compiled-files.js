@@ -20,6 +20,20 @@
  * fresh checkout — `dist/` gitignored, never built — the tests skip and check nothing at all. Plain
  * CommonJS, outside `src/`, so `scripts/make-release.js` can require it with no ts-node and no test
  * runner. One walk, two callers: the suite for the developer, the packaging step for the artefact.
+ *
+ * ── WHAT THIS PROVES, AND WHAT IT DOES NOT ───────────────────────────────────────────────────────
+ * The staleness half compares MODIFICATION TIMES, not content. That is enough for the failure it
+ * exists to catch — a build that never ran, ran partially, or ran before the last edit — and it would
+ * be an overclaim to call it proof that `dist/x.js` IS the compilation of `src/x.ts`:
+ *   · Same-second granularity. On a filesystem with coarse mtime, a source edited in the same second
+ *     the compiler wrote its output compares as not-older, and reads fresh while being stale. Narrow,
+ *     but it is the false-GREEN direction, which is the one that matters in a release gate.
+ *   · Touching an output makes it look fresh. Nothing here reads the bytes.
+ * The check without those limits records a content hash per source at build time and compares it.
+ * That is a larger change than this one, and the distance between the two is small next to the
+ * distance between this and what the packaging step had before: nothing.
+ *
+ * The other two directions — a MISSING output and an ORPHANED one — are content-independent and exact.
  */
 
 const fs = require('fs');

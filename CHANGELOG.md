@@ -291,9 +291,12 @@ the release is a major.
 - **`npx create-wordjs` could download a plugin and try to boot it as a site.** It took the first
   release asset matching `wordjs-*.zip`, and the same release carries all 31 marketplace plugin zips —
   so a plugin slug beginning with `wordjs-` would sort ahead of the bundle. It now asks for the
-  tag-named bundle by name, keeping the loose match as a fallback for earlier releases. The package
-  also gains a test suite and a CI job: it had neither, while being the first command a new user runs
-  and the one thing here published to an immutable registry.
+  tag-named bundle by name. The loose match survives only as a fallback for earlier releases, and only
+  when it is **unambiguous** — with two or more candidates the installer refuses and names them rather
+  than choosing, because the fallback is the old rule and letting it guess would reinstate the same bug
+  on every path where the tag-named asset is absent. The package also gains a test suite and a CI job:
+  it had neither, while being the first command a new user runs and the one thing here published to an
+  immutable registry.
 - **The release now refuses to package a compiled tree that does not match its source.** Production
   loads `backend/dist/`, and that is what the ZIP and the npm package ship — so a compiled file that is
   missing, older than its source, or left behind after its source was deleted is a behaviour the

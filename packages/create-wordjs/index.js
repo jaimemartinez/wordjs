@@ -188,18 +188,32 @@ async function githubJson(url) {
 // sort ahead of the bundle in the assets array and this installer would download a plugin and try to
 // boot it as a site. Nothing today collides, which is exactly when it is cheap to fix.
 //
-// release.yml names the bundle after the tag (`wordjs-v2.0.0.zip`), so ask for that by name and keep
-// the loose match only as a fallback — for older releases, and so a rename in the workflow degrades
-// to the previous behaviour rather than to a hard failure.
+// release.yml names the bundle after the tag (`wordjs-v2.0.0.zip`), so ask for that by name. The
+// loose match survives only as a fallback — for older releases, and so a rename in the workflow
+// degrades gracefully instead of failing hard.
+//
+// BUT THE FALLBACK IS THE OLD RULE, so it cannot be allowed to guess. Taking the first loose match
+// would reinstate exactly the bug the exact match was added to fix, on every path where the
+// tag-named asset is absent (a workflow_dispatch build, a rename, any earlier release). The loose
+// shape is therefore used ONLY when it is unambiguous: exactly one candidate. Two or more means we
+// would be choosing which file is the site, and choosing wrong installs a plugin as a site — so we
+// refuse and say so, and `--zip` is right there. Fail closed, never guess.
 //
 // Exported (below) so it can be exercised directly: it is the one piece of release resolution that is
 // pure, and testing it through the network call would mean testing a copy of it instead.
 function pickBundleAsset(assets, tagName) {
     const list = Array.isArray(assets) ? assets : [];
     const wanted = `wordjs-${tagName}.zip`.toLowerCase();
-    return list.find((a) => String(a && a.name || '').toLowerCase() === wanted)
-        || list.find((a) => /^wordjs-.*\.zip$/i.test(a && a.name || ''))
-        || null;
+    const exact = list.find((a) => String(a && a.name || '').toLowerCase() === wanted);
+    if (exact) return exact;
+    const loose = looseBundleCandidates(list);
+    return loose.length === 1 ? loose[0] : null;
+}
+
+/** Every asset matching the loose `wordjs-*.zip` shape — used to explain an ambiguous refusal. */
+function looseBundleCandidates(assets) {
+    const list = Array.isArray(assets) ? assets : [];
+    return list.filter((a) => /^wordjs-.*\.zip$/i.test(a && a.name || ''));
 }
 
 async function resolveReleaseAsset(tag) {
@@ -212,7 +226,16 @@ async function resolveReleaseAsset(tag) {
             `See https://github.com/${REPO}/releases for available versions, or pass --zip <path-or-url>.`);
     }
     const asset = pickBundleAsset(release.assets, release.tag_name);
-    if (!asset) fail(`Release ${release.tag_name} has no wordjs-*.zip asset.`, 'Pass --zip <path-or-url> instead.');
+    if (!asset) {
+        // Say WHICH of the two refusals this is: "there is no bundle" and "there are several and I
+        // will not guess" need different answers from whoever is reading.
+        const candidates = looseBundleCandidates(release.assets).map((a) => a.name);
+        if (candidates.length > 1) {
+            fail(`Release ${release.tag_name} has no asset named wordjs-${release.tag_name}.zip, and ${candidates.length} others match wordjs-*.zip: ${candidates.join(', ')}.`,
+                'Refusing to guess which one is the site bundle — pass --zip <path-or-url> with the one you want.');
+        }
+        fail(`Release ${release.tag_name} has no wordjs-*.zip asset.`, 'Pass --zip <path-or-url> instead.');
+    }
     return { name: asset.name, url: asset.browser_download_url, tag: release.tag_name };
 }
 

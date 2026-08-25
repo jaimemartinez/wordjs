@@ -44,6 +44,29 @@ test('falls back to the loose match for releases whose bundle is not tag-named',
     assert.strictEqual(pickBundleAsset(assets, 'v1.14.1').name, 'wordjs-compiled-release.zip');
 });
 
+test('the FALLBACK refuses to guess when more than one asset fits the loose shape', () => {
+    // THE HOLE THE FIRST FIX LEFT OPEN. When the tag-named asset is absent — a workflow_dispatch
+    // build, a rename, any earlier release — the fallback is the old rule, and taking the first match
+    // reinstates exactly the bug: `wordjs-seo-tools-1.0.0.zip` sorts ahead of the real bundle and
+    // gets installed as the site. Ambiguity must fail closed, not resolve to whoever is first.
+    const assets = [
+        { name: 'wordjs-seo-tools-1.0.0.zip' },
+        { name: 'wordjs-compiled-release.zip' },
+    ];
+    assert.strictEqual(pickBundleAsset(assets, 'v1.14.1'), null,
+        'a shadowing plugin asset was chosen because the tag-named bundle was absent');
+});
+
+test('an exact tag-named match still wins even when the loose shape is ambiguous', () => {
+    // Ambiguity below must not cost us the answer we are sure about.
+    const assets = [
+        { name: 'wordjs-seo-tools-1.0.0.zip' },
+        { name: 'wordjs-compiled-release.zip' },
+        { name: 'wordjs-v2.0.0.zip' },
+    ];
+    assert.strictEqual(pickBundleAsset(assets, 'v2.0.0').name, 'wordjs-v2.0.0.zip');
+});
+
 test('asset names are matched case-insensitively', () => {
     const assets = [{ name: 'WordJS-V2.0.0.zip' }];
     assert.strictEqual(pickBundleAsset(assets, 'v2.0.0').name, 'WordJS-V2.0.0.zip');

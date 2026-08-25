@@ -58,25 +58,40 @@ test('exactly one module defines the predicate', () => {
     // THE CLASS FIX. Two copies of a predicate is a divergence problem, not a duplication one: the
     // copy that gets a new driver added is whichever one someone happened to be reading. If this
     // fails, a second definition has reappeared — move it into core/db-errors.ts instead.
-    const root = path.resolve(__dirname, '..');
+    const srcRoot = path.resolve(__dirname, '..');
+    const backendRoot = path.resolve(srcRoot, '..');
     const found: string[] = [];
+    let scanned = 0;
+
+    // A DEFINITION, in any of the forms one can be written. `var` belongs here as much as
+    // `const`/`let`: a gate that names three of four keywords is a gate with a hole the shape of the
+    // fourth. The assignment form catches `isUniqueViolation = function …` and `exports.isUniqueViolation = …`.
+    // A destructuring import (`const { isUniqueViolation } = require(…)`) is deliberately NOT a match:
+    // that is a CONSUMER, which is the whole point.
+    const DEFINES = /\b(?:function|const|let|var)\s+isUniqueViolation\b|\bisUniqueViolation\s*=\s*(?:function\b|\(|async\b)/;
 
     const walk = (dir: string) => {
         for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
             const full = path.join(dir, entry.name);
             if (entry.isDirectory()) {
-                if (entry.name === 'node_modules' || entry.name === 'tests') continue;
+                if (entry.name === 'node_modules' || entry.name === 'tests' || entry.name === 'dist') continue;
                 walk(full);
-            } else if (entry.name.endsWith('.ts')) {
+            } else if (/\.(ts|js)$/.test(entry.name)) {
+                scanned++;
                 const src = fs.readFileSync(full, 'utf8');
-                if (/\b(?:function|const|let)\s+isUniqueViolation\b/.test(src)) {
-                    found.push(path.relative(root, full).replace(/\\/g, '/'));
+                if (DEFINES.test(src)) {
+                    found.push(path.relative(backendRoot, full).replace(/\\/g, '/'));
                 }
             }
         }
     };
-    walk(root);
+    // src/ AND scripts/: a copy in backend/scripts would run in the build and be invisible to a walk
+    // that only looked at src.
+    walk(srcRoot);
+    walk(path.join(backendRoot, 'scripts'));
 
-    assert.deepStrictEqual(found, ['core/db-errors.ts'],
-        `isUniqueViolation must be defined once, in core/db-errors.ts. Found in: ${found.join(', ')}`);
+    assert.ok(scanned > 100, `the walk read only ${scanned} files — it is not seeing the tree, so its verdict means nothing`);
+
+    assert.deepStrictEqual(found, ['src/core/db-errors.ts'],
+        `isUniqueViolation must be defined once, in src/core/db-errors.ts. Found in: ${found.join(', ')}`);
 });

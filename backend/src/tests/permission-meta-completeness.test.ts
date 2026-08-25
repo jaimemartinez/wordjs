@@ -47,7 +47,14 @@ function documentedTokens(): string[] {
     const m = src.match(/export const PERMISSION_META:\s*Record<string,\s*PermissionMeta>\s*=\s*\{([\s\S]*?)\n\};/);
     assert.ok(m, 'could not locate the PERMISSION_META literal in frontend/src/lib/permissionMeta.ts');
     // Top-level keys only: nested `label:` / `risk:` lines are indented further.
-    return [...m![1].matchAll(/^ {4}'([^']+)':\s*\{/gm)].map((x) => x[1]);
+    const tokens = [...m![1].matchAll(/^ {4}'([^']+)':\s*\{/gm)].map((x) => x[1]);
+    // WITHOUT THIS, THE SECOND TEST PASSES BY ANSWERING NOTHING. That test asks "is anything here
+    // absent from KNOWN_PERMISSIONS?" — and an empty list satisfies it. The key regex depends on the
+    // file's four-space indentation, so a reformat would silently empty this and leave a green gate
+    // over an unread table. The population is asserted, not assumed.
+    assert.ok(tokens.length >= 10,
+        `parsed only ${tokens.length} entries from PERMISSION_META — the literal's shape changed and this file is no longer being read`);
+    return tokens;
 }
 
 test('every requestable permission has platform-authored copy', () => {

@@ -245,6 +245,13 @@ jobs:
               frontend/e2e/verso/*.spec.ts)             echo "$f" | grep -Eq '^frontend/e2e/verso/[^/]+\.spec\.ts$' || orphans="$orphans $f" ;;
               # gateway/package.json → "test": node --test test/*.test.js  (flat, no recursion)
               gateway/test/*.test.js)                   echo "$f" | grep -Eq '^gateway/test/[^/]+\.test\.js$' || orphans="$orphans $f" ;;
+              # packages/create-wordjs/package.json → "test": node --test test/*.test.js  (flat, no
+              # recursion), run by the `install-channel` job below. The glob was written as `test/**`
+              # first, which bash-without-globstar does not expand and Node then re-globs — and
+              # `node --test` exits 0 when a pattern matches NOTHING, so that spelling could have
+              # reported a green step over zero tests. Flat glob here, plus a non-zero-count assertion
+              # in the job itself.
+              packages/create-wordjs/test/*.test.js)    echo "$f" | grep -Eq '^packages/create-wordjs/test/[^/]+\.test\.js$' || orphans="$orphans $f" ;;
               # KNOWN AND NOT RUN IN CI, stated rather than tolerated in silence. Both are plugin-local
               # suites with no runner: backend/plugins/hello-world is the sample plugin's own test, and
               # marketplace/plugins/mail-server ships its unit test inside the package. Give either one a
@@ -548,9 +555,23 @@ jobs:
       - name: Audit (block high/critical prod vulns)
         working-directory: packages/create-wordjs
         run: npm audit --omit=dev --audit-level=high
+      # ASSERT THAT IT RAN SOMETHING.
+      #
+      # `node --test <pattern>` exits 0 when the pattern matches NO files. The script's glob is
+      # expanded by the shell, and this runner's shell is not the one it was written on — bash without
+      # globstar, Windows cmd and Node's own glob fallback do not agree on `test/**`. So a pattern that
+      # silently resolves to nothing here would report a green test step having executed zero tests:
+      # green by absence, counted as coverage. That is the defect class this whole package was added to
+      # close, so it does not get to hide inside its own gate.
       - name: Test
         working-directory: packages/create-wordjs
-        run: npm test
+        run: |
+          set -o pipefail
+          npm test 2>&1 | tee test-output.log
+          grep -qE 'tests [1-9]' test-output.log || {
+            echo "::error::create-wordjs reported ZERO tests — the runner matched no files, so this step proved nothing."
+            exit 1
+          }
       # The CLI is a bin script: a syntax error or a stray top-level throw would only surface when a
       # user ran it. `--help` boots the whole file and exits 0.
       - name: The CLI still starts

@@ -49,6 +49,6 @@
         "adm-zip": "^0.6.0"
     },
     "scripts": {
-        "test": "node --test test/**/*.test.js"
+        "test": "node --test test/*.test.js"
     }
 }
