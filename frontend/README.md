@@ -4,11 +4,11 @@ The WordJS frontend package: a [Next.js](https://nextjs.org) (App Router) app th
 
 - **Public site** — server-rendered (SSR/RSC) routes under `src/app/(public)/` (home, posts, pages, search).
 - **Admin dashboard** — management UI under `src/app/admin/`.
-- **Visual editor** — a [Puck](https://puckeditor.com)-based page builder (`src/components/puckConfig.tsx` + `src/components/puck`); plugins can inject custom Puck components.
+- **Visual editor** — **Verso**, WordJS's own page builder, with no third-party editor package behind it (`src/components/verso/` for the editor UI and `src/lib/verso/` for the store/registry/commands; `src/components/versoConfig.tsx` holds the block config and custom field pickers). Plugins can inject custom Verso components.
 
 ## Documentation
 
-The canonical reference for this package is [`../documentation/frontend.md`](../documentation/frontend.md) — it covers the structure, gateway self-registration (`src/instrumentation.ts`), the SSR data layer, Puck, and ports. For running/deploying the whole stack, see [`../documentation/deployment.md`](../documentation/deployment.md).
+The canonical reference for this package is [`../documentation/frontend.md`](../documentation/frontend.md) — it covers the structure, gateway self-registration (`src/instrumentation.ts`), the SSR data layer, Verso, and ports. For running/deploying the whole stack, see [`../documentation/deployment.md`](../documentation/deployment.md).
 
 ## Run model
 

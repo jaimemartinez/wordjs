@@ -122,7 +122,7 @@ WordJS maps WordPress entities onto its own models:
 | `wp:tag` | **Terms** (taxonomy `post_tag`) | |
 | `wp:term` | **Terms** (custom taxonomies) | Best-effort; `category`/`post_tag` here are skipped because they're handled above. |
 | `item` (post/page) | **Posts / Pages** | Plus post meta, category/tag relationships and comments. |
-| `wp:postmeta` | **Post meta** | All custom fields are preserved except the volatile editor locks `_edit_lock` and `_edit_last`. |
+| `wp:postmeta` | **Post meta** | Custom fields are preserved, minus the server-owned keys the shared list in `core/protected-meta.ts` refuses (`_wp_attached_file`, `_wp_attachment_metadata`, `_wp_trash_meta_status`, `_wp_trash_meta_time`, `_edit_lock`, `_edit_last`, and the revision-snapshot envelope) and minus malformed keys (empty, over the column's bound, or a prototype name such as `__proto__`). One deliberate exception: on an **attachment** item the two path keys `_wp_attached_file` / `_wp_attachment_metadata` *are* written, validated by **shape** rather than refused by name — without them a migrated attachment would have no file path at all. |
 | `wp:comment` | **Comments** | Threading is preserved; comment author/email/body are required. |
 
 Additional fidelity details:
@@ -135,7 +135,7 @@ Additional fidelity details:
 ## What is *not* imported
 
 *   **Media files (attachments).** A WXR contains only the **URLs** of your images and uploads, not the binaries. By default attachment items are skipped entirely. Enabling "Create attachment records" only stores the metadata/URL — **no files are downloaded** from your old site. Plan to migrate your `wp-content/uploads` separately.
-*   **Navigation menus** (`nav_menu_item`). WordJS menus differ enough that these are skipped; rebuild menus in the admin.
+*   **Internal post types.** `nav_menu_item` (WordJS menus differ enough — rebuild them in the admin) and `revision`, plus any post type this install has registered with `showInRest: false`. An *unregistered* type is not an internal one and still imports: a WXR carrying a custom type this install has never heard of is most of what a migration is.
 *   **Trashed posts** (`status` = `trash`), and comments that are **pingbacks, trackbacks, trashed/post-trashed**, or missing an author/email/body — these are skipped (and counted under `skipped`). Spam-flagged comments are *not* skipped; they are imported with status `spam`.
 *   **Passwords.** WordPress never exports password hashes. Imported users are created with a **random password** and must use the password-reset flow before they can log in.
 
@@ -147,7 +147,7 @@ The importer is **idempotent**. On a re-run:
 *   **Terms** are matched by slug + taxonomy.
 *   **Posts/pages** are matched by slug + type, and an already-present post is skipped (its id is still remembered so parent/child and comment relationships resolve correctly).
 
-This means you can analyze, do a partial import, fix something, and run again without producing duplicates. The import is deliberately **not** wrapped in a single transaction — a bulk import is treated as an incremental, resumable operation, so a failure partway through leaves the already-imported content in place for the next run to skip over.
+This means you can analyze, do a partial import, fix something, and run again without producing duplicates. The import is deliberately **not** wrapped in a single transaction — a bulk import is treated as an incremental, resumable operation, so a failure partway through leaves the already-imported content in place for the next run to skip over. Each item is still atomic on its own: the post row, its date backfill, its meta and its term links go through `runContentMutation`, so they commit together or not at all. Comments are attached after that commit, and a comment that fails only counts as `skipped`.
 
 ## After importing
 

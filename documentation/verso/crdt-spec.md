@@ -4,6 +4,28 @@
 > elige, justifica y deja los gates escritos. Lo que queda abierto está marcado como
 > **[ABIERTO]** con el criterio exacto que lo cerrará.
 >
+> **QUÉ SE CONSTRUYÓ DESPUÉS (leer antes que la tabla de decisiones).** F8 está implementado
+> (`frontend/src/lib/verso/collab/*` y `crdt/*`, `backend/src/routes/collab.ts` y
+> `backend/src/core/collab-rooms.ts` + `collab-ops.ts`), y dos decisiones de abajo NO son las que
+> shippearon:
+>
+> - **D13/D14 — el transporte.** No hay WebSocket ni dependencia `ws`: SSE + POST, que D14 reservaba
+>   como fallback, es el ÚNICO transporte. Las rutas reales son
+>   `GET /api/v1/collab/:postId/stream` (bajada) más `POST .../ops`, `.../presence`, `.../resync` y
+>   `.../leave`. El cliente usa `EventSource` + `fetch` (`collab/transport.ts`): cero dependencias,
+>   cero bundle, y una URL relativa que funciona igual en monolito, en modo separado y tras el
+>   gateway.
+> - **La bandera.** `COLLAB_DEFAULT_ON` en `frontend/src/lib/verso/collab/flag.ts` vale **`true`**:
+>   nació apagada y se encendió tras cerrar los hallazgos del transporte y pasar el gate multinodo.
+>   Se apaga sin recompilar con `NEXT_PUBLIC_WORDJS_COLLAB=off` o
+>   `localStorage.wordjs_collab="off"`.
+>
+> Verificadas y vigentes: D15 (bus Redis, canal `wordjs:collab`), D16 (cookie + Origin +
+> `capsForType`, sin modo lector), D17 (ingest saneado con `sanitizePuckTree`) y D18 (migración
+> `0012_create_collab` con `collab_docs` + `collab_ops` — más una tabla `collab_members` que esta
+> spec no previó, para liveness visible en el clúster). El resto del documento se conserva como el
+> registro de las decisiones tal como se tomaron.
+>
 > **Fecha**: 2026-08-15 · **Rama**: `feat/verso-editor` · **Fase**: F8 (posterior a F7)
 >
 > **Regla dura del proyecto que gobierna todo el documento**: la implementación es **PROPIA**, pero

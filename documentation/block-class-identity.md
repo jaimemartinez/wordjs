@@ -42,7 +42,6 @@ the alias keeps stored and imported content styled, and a new theme can be writt
 | Legacy `content` HTML fallback | both classes, own first | `frontend/src/lib/verso/contentFallback.ts` |
 | Framework stylesheet | `.wjs-block-x, .wp-block-x` on every rule | `backend/public/css/wordjs-ui.css`, `core.css` |
 | Bundled `default` theme | own class first, alias kept | `backend/themes/default/style.css` (+ the embedded copy in `backend/src/core/themes.ts`) |
-| `toscano` theme | own class first, alias kept | `backend/themes/toscano/style.css` |
 | `circuito` / `gaceta` / `vergel` | **alias only** — compiled output, see below | `backend/themes/*/style.css` `@wjs-generated` block |
 | Token manifest | **alias only** — deliberate, see below | `backend/public/theme-tokens.json` |
 
@@ -78,9 +77,10 @@ committed one, which keeps the CI drift gate, the theme compiler, `theme-doctor`
 theme working untouched.
 
 Because `theme-compile.ts` takes its selectors from that manifest, the `@wjs-generated` block of a
-declarative theme also compiles to `.wp-block-*`. Three of the five bundled themes (`circuito`,
-`gaceta`, `vergel`) have **no hand-written block CSS at all**, so their block rules are alias-only.
-They render identically, because every element carries both classes.
+declarative theme also compiles to `.wp-block-*`. Three of the four bundled themes (`circuito`,
+`gaceta`, `vergel`) have **no hand-written block CSS at all** — their stylesheets contain zero
+`wjs-block-` occurrences — so their block rules are alias-only. They render identically, because
+every element carries both classes.
 
 ## Removal
 
@@ -131,6 +131,7 @@ That trade was accepted deliberately. A contract where `.wjs-block-card` exists 
 `.wjs-block-card__title` does not would be paid every time somebody writes a theme; these bytes are
 paid once and end when the alias does.
 
-The framework stylesheet pays the same window: `wordjs-ui.css` goes from 160 152 to 167 200 bytes
-raw (34.9 KB → 36.1 KB gzip, +3.6 %), `core.css` +113 bytes. Both are separate, cacheable assets and
-do not travel with the HTML.
+The framework stylesheet paid the same window: at the time of the change `wordjs-ui.css` went from
+160 152 to 167 200 bytes raw (34.9 KB → 36.1 KB gzip, +3.6 %), and `core.css` grew 113 bytes. Both
+are separate, cacheable assets and do not travel with the HTML. (Those are the figures measured then;
+the framework has grown since for unrelated reasons and is 184 715 bytes today.)

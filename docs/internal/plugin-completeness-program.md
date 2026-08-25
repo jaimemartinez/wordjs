@@ -10,7 +10,7 @@ bridge, default-deny permissions) and **no core edits** beyond explicitly listed
 
 ## Definition of done (per plugin)
 
-1. **Public experience** — the plugin owns its public pages end-to-end (Puck blocks + its routes),
+1. **Public experience** — the plugin owns its public pages end-to-end (editor blocks + its routes),
    responsive, with its **own visual identity** (scoped CSS, same pattern as the premium admin.css).
 2. **Admin** — full lifecycle management: CRUD, states, search/filters, reports, CSV export.
 3. **Money paths** (where applicable) — real payments (Stripe + manual/transfer), server-side price
@@ -83,6 +83,9 @@ elegant Puck block; simple online ordering with client cart; WhatsApp handoff; o
 - **T3 — utilities (already near-complete)**: faq, social-share, cookie-consent, notification-bar,
   popup-builder, analytics-tag, image-lightbox, breadcrumbs, related-posts, table-of-contents,
   youtube-videos.
+- **Not tiered yet**: `card-gallery`, `photo-carousel`, `video-gallery`. They ship in
+  `marketplace/plugins/` (31 plugins total) but appear in no tier above; the program has not
+  assigned them one.
 
 ## Execution model
 
@@ -92,7 +95,10 @@ tests, tsc, AST scan, catalog rebuild) → ship to catalog. Progress: online-sto
 are done (both v2.0.0); conference-manager is complete at v2.1.0. Next: bookings → event-tickets →
 newsletter → T2 sweep.
 
-Sandbox cookbook every builder must respect: SQL guard (upsert = UPDATE-then-INSERT, never
-`ON CONFLICT`), no transactions on the db bridge, `res.json` (never `res.send(string)`), no
+Sandbox cookbook every builder must respect: SQL guard (`ON CONFLICT … DO UPDATE SET` / `DO NOTHING`
+is PERMITTED — `set` is a clause boundary in the token-walker's `ENDERS`, `backend/src/core/plugin-api.ts:193`
+— so UPDATE-then-INSERT is still valid but no longer required; `RETURNING` **is** denied,
+`plugin-api.ts:352-353`, and every table the statement touches must carry the plugin's `wjp_<slug>_`
+prefix), no transactions on the db bridge (`db.batch` is explicitly NOT atomic and refuses DDL), `res.json` (never `res.send(string)`), no
 `globalThis`, fs writes only under the plugin's `data/`, `network` permission declared for Stripe,
 permission-gated everything (default-deny).

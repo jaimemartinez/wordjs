@@ -1,5 +1,11 @@
 # Auditoría de derivación — Verso vs. el fork `@wordjs/puck`
 
+> **HISTORICAL — the verdict below was acted on.** `frontend/packages/puck` and `NOTICE.md` have
+> both been deleted, which is exactly what this audit concluded could be done. Kept as the record of
+> the derivation analysis that authorised the removal; every path it cites on the fork side, and the
+> retired app-side files (`puckConfig.tsx`, `puck-theme.css`,
+> `scripts/generate-puck-plugin-registry.js`), are gone from the tree.
+
 > F5a. Encargo: para cada subsistema del fork retirable (`frontend/packages/puck`), enumerar el
 > equivalente en Verso y dictaminar, con evidencia de código leído en ambos lados (no solo grep de
 > nombres), si es reescritura limpia o derivación. Veredicto final: si `NOTICE.md` (la nota de

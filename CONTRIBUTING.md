@@ -45,16 +45,22 @@ the [Separate-mode guide](documentation/separate-mode.md).
 
 ## Before you push
 
-CI runs four gates — **Backend (typecheck + test)**, **Frontend (lint + build)**, **Gateway (test)**,
-and **Compiled bundle smoke-boot** (builds the real release ZIP and deploys it in mono, split and
-enrollment mode via `scripts/smoke-deploy.sh`). Run the equivalent locally so review is about the
-change, not a red check:
+`ci.yml` runs seven jobs — **Gates that travel** (every gate file is committed and actually run),
+**Backend (typecheck + test)**, **Multi-node coherence**, **Gateway (test)**, **Frontend (lint +
+build)**, **Verso E2E** (Playwright chromium against an ephemeral HTTP monolith), and **Compiled
+bundle smoke-boot** (builds the real release ZIP and deploys it in mono, split and enrollment mode
+via `scripts/smoke-deploy.sh`). Two more workflows gate the same push: **Sandbox parity** (the
+plugin sandbox on four OS runners) and **F6 certification**. Run the equivalents locally so review
+is about the change, not a red check:
 
 ```bash
 # Backend
 cd backend && npm run typecheck  # tsc --noEmit (strict)
+cd backend && npm run lint       # eslint (a CI gate: errors block, warnings don't)
 cd backend && npm run build      # compile to dist (CI blocks on this too)
+cd backend && npm run verify:f0  # ...through verify:f6 - the phase verifiers, one per ADR
 cd backend && npm test           # node --test over src/tests/*.test.ts
+cd backend && npm run perf:f0    # F0 content performance budgets
 
 # Frontend (CI runs these as separate steps)
 cd frontend && npm run predev    # regenerate plugin registries first — CI does, and tsc fails on stale ones
@@ -71,9 +77,10 @@ CI also runs a few gates that usually don't need a local equivalent: `npm audit`
 high/critical prod vulns in each service), a license check (`license-checker --production`, blocks
 AGPL/SSPL), backend **integration tests** (`npm run test:integration`, against real Postgres + Redis
 service containers), and a **marketplace catalog integrity** check — if you touch anything under
-`marketplace/plugins/` or `marketplace/themes/`, rebuild the catalog with `npm run build:marketplace`
-from the repo root (and re-check it with `npm run verify:marketplace`) so it stays consistent. `marketplace/dist/` is a **gitignored build output** (not committed) that the
-release workflow republishes as GitHub Release assets — don't try to commit it.
+`marketplace/plugins/`, rebuild the catalog with `npm run build:marketplace` from the repo root (and
+re-check it with `npm run verify:marketplace`) so it stays consistent. `marketplace/dist/` is a
+**gitignored build output** (not committed) that the release workflow republishes as GitHub Release
+assets — don't try to commit it.
 
 A green local run isn't a guarantee CI passes (Linux vs. your OS can differ), but it catches the
 common cases.
@@ -88,10 +95,16 @@ A few conventions keep the project coherent and reviewable:
   - **Themes** are a declarative token contract: `theme.json` (generator / seeds / tokens / styles /
     layout) is compiled into the `@wjs-generated` block of the theme's `style.css` by
     `node backend/cli/wordjs.js build theme <slug>` — never hand-edit inside that block. Scaffold one
-    with `node backend/cli/wordjs.js create theme <slug>`, or copy an existing theme (e.g.
-    `marketplace/themes/midnight-luxury/`) for the pattern.
-  - **Plugins** add functionality through their `manifest.json` (routes, hooks, `versoComponents`) —
-    copy a bundled example like `hello-world` or `test-schema`.
+    with `node backend/cli/wordjs.js create theme <slug>`, or copy a bundled theme that declares the
+    whole contract (`backend/themes/circuito/`, `gaceta/` or `vergel/`) for the pattern.
+    `backend/themes/default/` is the theme active right after an install, but it predates the
+    declarative build: its `theme.json` has no token keys and its `style.css` has no generated block.
+  - **Plugins** run in their own OS process and reach core only through the injected `wordjs`
+    bridge. `manifest.json` declares the entry, `"isolated": true`, the requested `permissions`,
+    the admin page and any `frontend.versoComponents`; routes, hooks and admin menu items are
+    registered at runtime from `index.js` (`http.route(...)`, `adminMenu.add(...)`). Scaffold the
+    full pattern with `node backend/cli/wordjs.js create plugin <slug>`, or copy a bundled example
+    like `hello-world` or `test-schema`.
   - If you find yourself editing `backend/src/core/*` to change how one site looks or behaves, that's
     usually a sign it belongs in a theme or plugin instead.
 - **A fix must not regress working behavior.** Include a test or a clear reproduction, and check that

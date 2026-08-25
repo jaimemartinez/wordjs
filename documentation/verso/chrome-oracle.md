@@ -1,5 +1,14 @@
 # Oráculo del editor de Chrome (/admin/chrome) — contrato de paridad para la unificación sobre Verso
 
+> **ESTADO.** §1–§3 (bloques, forma del dato, endpoints, validaciones) siguen siendo el contrato
+> vigente y se han vuelto a verificar contra el código: 9 tipos, presupuestos 64KB / 100 bloques /
+> profundidad 3, `PUT`/`DELETE /api/v1/chrome/:part` con `authenticate + isAdmin`. Lo que ha
+> cambiado es el editor: la unificación terminó y el motor legacy se retiró con el fork, así que
+> `/admin/chrome` monta `ChromeVersoEditor` incondicionalmente — no hay bandera de motor, ni
+> `EngineToggle`, ni rama `<Puck>` en un ternario. §4 describe el editor legacy que servía de
+> oráculo (útil como registro de lo que había que igualar, no como descripción de la pantalla de
+> hoy) y §6 describe el andamiaje de doble motor que ya no existe.
+>
 > Escrito ANTES de tocar código (mandato del checkpoint, 2026-08-15). Fuentes: lectura completa de
 > `frontend/src/app/admin/chrome/page.tsx`, `frontend/src/app/admin/chrome/chromeEditorConfig.tsx`,
 > `frontend/src/lib/chromeData.ts`, `frontend/src/lib/api.ts` (chromeApi), `backend/src/routes/chrome.ts`
@@ -119,9 +128,20 @@
 
 - `frontend/src/lib/__tests__/chromeData.test.ts` — parser/validador/starters/menú tree (NO tocar).
 - Paridad frontend↔backend del validador: harness propio del backend (chrome-validate).
-- El editor de chrome (page.tsx / chromeEditorConfig.tsx) NO tiene tests propios de componente.
+- El editor de chrome (page.tsx / chromeEditorConfig.tsx) NO tenía tests propios de componente
+  cuando se escribió este oráculo. Sí los tiene ahora:
+  `frontend/src/app/admin/chrome/__tests__/chromeVersoAdapter.test.ts` (anti-drift por referencia
+  contra `chromeEditorConfig`, clases del ChromeRow Verso, round-trip de los starters, guardado con
+  el endpoint espiado).
 
 ## 6. Decisiones de la unificación (implementadas en este checkpoint)
+
+> Las dos primeras viñetas son andamiaje de transición y YA NO EXISTEN: al retirar el fork se
+> borraron `editorEngine.ts`, `EngineToggle` y la rama `<Puck>`, y `/admin/chrome` monta
+> `ChromeVersoEditor` sin condición (`frontend/src/app/admin/chrome/page.tsx`). El resto de la
+> sección sigue describiendo el código vigente: `chromeContract.ts`, `chromeVersoAdapter.tsx`, la
+> ausencia deliberada de `withSharedVersoFields`, y los caminos compartidos de
+> carga/guardado/restaurar/dirty.
 
 - Flag idéntico a pages/posts: `resolveEditorEngineFromBrowser()` (query > localStorage > env >
   **legacy DEFAULT ABSOLUTO**), re-resuelto en navegación suave; EngineToggle (solo dev) presente.

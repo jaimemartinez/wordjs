@@ -1,5 +1,14 @@
 # F3 · Checklist de paridad TOTAL de funcionalidades
 
+> **HISTORICAL — the completion log of the F3 parity gate, written wave by wave.** Each item's
+> "legacy" half describes `PuckEditor.tsx` and the surrounding fork, all since deleted; the "Verso"
+> half names files that mostly still exist under `frontend/src/components/verso/`. Two mechanisms it
+> relies on are gone: the engine flag (`frontend/src/lib/editorEngine.ts`, `EngineToggle`, the
+> `?engine=` query and the `<Puck>` legacy branch inside the ternaries) was removed with the fork, so
+> Verso is now unconditional; and the shared libraries it calls `lib/puckPatterns` and `puckI18n` are
+> now `lib/blockPatterns.ts` and `lib/editorI18n.ts`. Kept as the record of the gate, not as a map of
+> the current tree.
+
 > Mandato directo del usuario (2026-08-15): «el editor debe tener todas las funcionalidades que ya tenia nuestro custom puck editor».
 > Regla del gate: CADA item se marca solo con evidencia (test de comportamiento o verificacion en navegador anotada). Un item no replicado a proposito exige decision explicita del usuario, jamas recorte silencioso.
 

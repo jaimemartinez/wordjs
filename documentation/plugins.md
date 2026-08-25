@@ -124,22 +124,21 @@ Create the folder structure `client/admin/` and add `page.tsx`:
 ```tsx
 "use client";
 import { useEffect, useState } from "react";
-import { PageHeader, Card } from "@/components/ui";
+import { api } from "@/lib/api";
+// Host UI components are imported ONE FILE AT A TIME — the `@/components/ui` barrel is not one of
+// the modules exposed to plugin bundles (see §4), so importing it is a build error.
+import { PageHeader } from "@/components/ui/PageHeader";
+import { Card } from "@/components/ui/Card";
 
 export default function HelloWorldAdmin() {
     const [msg, setMsg] = useState("Loading...");
 
     useEffect(() => {
-        const fetchMsg = async () => {
-            const token = localStorage.getItem("wordjs_token");
-            // Plugin routes are namespaced under /api/v1/plugin/<slug>/...
-            const res = await fetch('/api/v1/plugin/hello-world/message', {
-                headers: { 'Authorization': `Bearer ${token}` }
-            });
-            const data = await res.json();
-            setMsg(data.text);
-        };
-        fetchMsg();
+        // The session travels in an HttpOnly cookie — `api()` sends it (credentials: 'include') and
+        // prefixes /api/v1, so pass the namespaced plugin path only.
+        api<{ text: string }>('/plugin/hello-world/message')
+            .then((data) => setMsg(data.text))
+            .catch(() => setMsg("Failed to load"));
     }, []);
 
     return (
@@ -150,7 +149,8 @@ export default function HelloWorldAdmin() {
                 icon="fa-smile"
             />
             
-            <Card title="Server Response" variant="glass">
+            <Card variant="glass">
+                <h2 className="text-lg font-bold mb-4">Server Response</h2>
                 <div className="bg-blue-50 p-6 rounded-2xl border border-blue-100">
                     <p className="text-blue-700 font-bold text-lg">{msg}</p>
                 </div>
@@ -234,7 +234,7 @@ frontend entry:
 ### 🛑 Critical: The React Singleton
 WordJS is highly sophisticated about how it handles React. 
 - **The Core Problem:** If your plugin bundles its own copy of React, Hooks will fail (Singleton violation).
-- **The WordJS Solution:** The build script never lets React into your bundle. `react`, `react-dom`, `react-dom/client` and the JSX runtimes — plus a fixed list of host modules (`HOST_MODULES` in `backend/scripts/build-plugin.js`: `@/lib/api`, `@/lib/i18n`, `@/lib/plugin-hooks`, the Modal/I18n/Toast/Auth contexts, `@/components/MediaPickerModal`, and the `StatCard`/`PageHeader`/`Card`/`ActionCard` UI components) — are **rewritten to the `WordJS.*` runtime globals** that `frontend/src/lib/pluginBundleLoader.ts` populates. They are deliberately **not** left as plain esbuild `external`: a bare `import … from "react"` cannot be resolved by the blob-URL module the loader evaluates. Any other `@/*` and `next/*` import does stay a genuine external.
+- **The WordJS Solution:** The build script never lets React into your bundle. `react`, `react-dom`, `react-dom/client` and the JSX runtimes — plus a fixed list of host modules (`HOST_MODULES` in `backend/scripts/build-plugin.js`: `@/lib/api`, `@/lib/i18n`, `@/lib/plugin-hooks`, `@/lib/sanitize`, the Modal/I18n/Toast/Auth contexts, `@/components/MediaPickerModal`, and the `StatCard`/`PageHeader`/`Card`/`ActionCard` UI components) — are **rewritten to the `WordJS.*` runtime globals** that `frontend/src/lib/pluginBundleLoader.ts` populates. They are deliberately **not** left as plain esbuild `external`: a bare `import … from "react"` cannot be resolved by the blob-URL module the loader evaluates. Any other `@/*` and `next/*` import does stay a genuine external.
 - **Runtime Injection:** WordJS injects its own unified React instance into the plugin bundle at runtime. **Never try to bundle React yourself.**
 
 ---
@@ -308,9 +308,9 @@ Always use the standardized header component.
 ```
 
 ### use `Card` with `rounded-[40px]`
-Avoid raw `div` containers for main content. Use the `Card` component, which handles the complex border-radius (`rounded-[40px]`), shadows, and spacing for you.
+Avoid raw `div` containers for main content. Use the `Card` component, which handles the complex border-radius (`rounded-[40px]`), shadows, and spacing for you. Its `variant` is one of `default`, `glass`, `dark` or `accent` (the last takes a `color`); it has no `title` prop — put the heading in its children.
 ```tsx
-<Card variant="neo">
+<Card variant="glass">
   <MyForm />
 </Card>
 ```
@@ -318,7 +318,10 @@ Avoid raw `div` containers for main content. Use the `Card` component, which han
 ### Clean Layouts
 *   Use `bg-gray-50/50` for page backgrounds.
 *   Use `p-8 md:p-12` for page padding.
-*   Avoid standard HTML inputs; use the `Input` and `ModernSelect` components.
+*   Only four host UI components are exposed to plugin bundles — `PageHeader`, `Card`, `StatCard` and
+    `ActionCard` (the `HOST_MODULES` list in §4). `Input`, `Select` and the rest of `@/components/ui`
+    are host-only; importing one fails the build, so style your own controls with the same Tailwind
+    classes instead.
 
 ---
 
@@ -350,8 +353,10 @@ When you activate a plugin, WordJS runs a **Static Analysis Scan** (`validatePlu
 `node_modules/`, dot-dirs, and the browser-only `client/`, `frontend/` and `dist/` folders — and blocks
 the plugin if it finds:
 *   A call whose callee is named `eval`, `Function`, `exec`, `execSync`, `spawn` or `fork`. The match is
-    on the **name**, so `anything.spawn()` trips it too. The one exemption is a regex literal's
-    `.exec()` (`/re/.exec(s)`), which is `RegExp.prototype.exec`, not `child_process`.
+    on the **name**, so `anything.spawn()` trips it too. The only exemption is `.exec()` on something
+    *provably* a RegExp — a regex literal (`/re/.exec(s)`) or an identifier bound by `const NAME = /re/`
+    — which is `RegExp.prototype.exec`, not `child_process`. A `let`/`var` binding or a computed
+    initialiser stays flagged, because it could hold something else by the time it is called.
 *   Any other way to build code from a string: `new Function(…)`, indirect `(0, eval)(x)`,
     `(()=>{}).constructor('…')`, and `const F = [].constructor.constructor`.
 *   **Reading** a restricted global as an object — `process`, `global`, `globalThis`, `require`,
@@ -373,10 +378,15 @@ the plugin if it finds:
     `require('net')` through on the strength of its `email: admin` entry.
     A non-literal specifier (`require(x)`, `import('child'+'_process')`) is itself flagged as
     obfuscation.
-*   Undeclared capabilities inferred from call sites: `fs.readFileSync`/`fs.writeFile`/… require
+*   Undeclared capabilities inferred from the code: `fs.readFileSync`/`fs.writeFile`/… require
     `filesystem:read`/`write` in your manifest, and `getOption`/`updateOption`/`dbAsync` require the
-    matching `settings`/`database` access. (Plain `require('fs')` is not itself a violation — the fs
-    call sites are what the scan gates.)
+    matching `settings`/`database` access. The fs check resolves the **value** the callee evaluates to,
+    so an alias, a destructured method, `require('fs').x()` and a helper that returns the module are all
+    one fact; and it fails closed — an fs value the resolver cannot follow to a call site (passed to a
+    function, exported, stored on `this`) is **charged** the permission instead of ignored. A
+    read-named method (`readFileSync`, `readFile`, `createReadStream`, `existsSync`, `statSync`) costs
+    `filesystem:read`, anything else `filesystem:write`. A bare `require('fs')` bound to a local you
+    never use is still not a violation.
 
 This static scan is **mandatory** — it runs on **every** plugin at activation and re-runs on each boot,
 fail-closed (an unparseable file blocks the plugin). The separate **engine-level runtime block** of
@@ -473,7 +483,7 @@ For a full list of security rules, see the **[Security Guide](security.md)**.
 
 ## 9. Developer Rules of Gold 🏆
 
-1.  **Auth First:** Never fetch data from the server without headers.
+1.  **Auth First:** Call your routes through `api()` from `@/lib/api` — the session is an HttpOnly cookie, so a raw `fetch` needs `credentials: 'include'` and there is no bearer token in `localStorage` to read.
 2.  **Use the bridge, not `require`:** In `index.js`, accept `init(wordjs)` and call `wordjs.*`. You **cannot** `require('../../src/core/...')`, `express`, or core modules from inside the child process — that path is gone.
 3.  **Declare `"isolated": true`:** It is mandatory; a plugin without it is rejected.
 4.  **Namespaced routes:** Your routes mount under `/api/v1/plugin/<slug>/...` — fetch them at that path.
@@ -566,7 +576,7 @@ Every call is permission-checked on the host against your manifest.
 | `wordjs.hooks.addAction/addFilter(hook, cb, priority)` · `doAction(hook, ...args)` | — | Callback runs in the child process; host installs an RPC shim. Raw-HTML hooks (`wordjs_head`/`wordjs_footer`) are denied to every plugin. `doAction` fires only your OWN registered callbacks — never core's or another plugin's. |
 | `wordjs.http.route(method, path, [opts,] handler)` | — | Mounted at `/api/v1/plugin/<slug>/path` (always namespaced — no absolute mode). `opts`: `{ auth, admin }` (host runs the real auth middleware), `{ multipart: 'field' }`. Handler gets a mock `(req,res)` over RPC. |
 | `wordjs.shortcodes.add(tag, handler)` | — | Handler may be async; expanded via `doShortcodeAsync`. |
-| `wordjs.fs.read(relPath, enc)` / `write(relPath, data)` | `filesystem:read` / `write` | Confined to your **own** plugin dir only (realpath-checked) — never the shared `uploads/` dir. `manifest.json` is immutable, and so is everything under `public/` (§11a). |
+| `wordjs.fs.read(relPath, enc)` / `write(relPath, data)` | `filesystem:read` / `write` | Confined to your **own** plugin dir only (realpath-checked) — never the shared `uploads/` dir. `manifest.json` is immutable, and so is everything under `public/` and `dist/` (§11a). |
 | `wordjs.mail(msg)` | `email:admin` | Sends via the active mail provider. (Distinct from `email:provider`, which only `wordjs.provideMail` needs.) |
 | `wordjs.provideMail(handler)` | `email:provider` | Become the host-wide mail sender (sandboxed; needs the `email:provider` grant). |
 | `wordjs.notify(n)` | `notifications:send` | Push an admin notification. |
@@ -593,8 +603,9 @@ static tree. `/plugins/<slug>/…` now serves an **allowlist**:
 `.html`, `.svg`, `.xml` (they execute as documents in the site's origin) and `.json`/`.txt`/`.db`
 (source and data leaks).
 
-**And `public/` is read-only to your plugin.** `wordjs.fs.write` and a raw `fs` write both refuse any
-path under it, and `.html` cannot be created anywhere at all.
+**And every published subtree is read-only to your plugin — `public/` and `dist/` alike.**
+`wordjs.fs.write` and a raw `fs` write both refuse any path under either (and the three fixed files
+above), and `.html` cannot be created anywhere at all.
 
 **Why, plainly.** Your plugin's own directory is writable **without any grant** — that is deliberate, it
 is your scratch space. Previously the *entire* directory was also readable over HTTP by anyone, so those
@@ -607,9 +618,10 @@ either: mail-server's `data/` (attachments, Bayes corpus) was reachable on a cle
 
 **What you must do:** ship browser assets under `public/` as committed build output, and enqueue them
 with `wordjs.assets.enqueueScript`/`enqueueStyle`, whose `src` is now validated against exactly this
-surface. (The §4 builder's `dist/` output is unaffected: the admin and Verso **JS** bundles are fetched
-through the API route `/api/v1/plugins/<slug>/bundle`, not statically, and `dist/component.bundle.css` is
-one of the three fixed allowlisted paths.) If you were generating an asset at runtime, move
+surface. (The §4 builder's `dist/` output still reaches the browser: the admin and Verso **JS** bundles are
+fetched through the API route `/api/v1/plugins/<slug>/bundle`, not statically, and
+`dist/component.bundle.css` is one of the three fixed allowlisted paths. It is the *builder* that writes
+`dist/`, from outside the sandbox — your plugin's own code cannot.) If you were generating an asset at runtime, move
 that data into your own `wjp_<slug>_` table or the options API and render it through a route
 (`wordjs.http.route`) instead. Every shipped marketplace plugin already enqueues from `public/`.
 
@@ -686,8 +698,9 @@ Plugins can add blocks to the visual page builder (**Verso**). This is how it ac
 >
 > Your render component also still receives the legacy **`puck` prop** —
 > `{ isEditing, metadata, dragRef, renderDropZone }` — with `renderDropZone({ zone })` mapped onto the
-> engine's slots (`frontend/src/lib/verso/pluginBlocks.tsx`). None of the 31 first-party bundles use it,
-> but a third-party bundle compiled against the old contract keeps working without a recompile.
+> engine's slots (`frontend/src/lib/verso/pluginBlocks.tsx`). Of the first-party marketplace blocks only
+> `table-of-contents` reads it, and a third-party bundle compiled against the old contract keeps working
+> without a recompile.
 >
 > The one name that is *not* changing is the post-meta key `_puck_data`, where a page's document is
 > stored. It is not a name in our source — it is a **value already written into the `postmeta` table of

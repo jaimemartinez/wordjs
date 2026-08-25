@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 430" role="img"
-     aria-label="The WordJS theme model: theme.json declares seeds, tokens and styles; the compiler emits a generated CSS block of --wjs-* custom properties; the UI framework consumes those tokens to paint every block. A theme ships no hand-written CSS."
+     aria-label="The WordJS theme model: theme.json declares seeds, tokens and styles; the compiler emits a generated CSS block of --wjs-* custom properties; the UI framework consumes those tokens to paint every block. Raw CSS outside the markers is the rare, justified exception."
      font-family="'Segoe UI', Helvetica, Arial, sans-serif">
   <defs>
     <linearGradient id="tm-bg" x1="0" y1="0" x2="1" y2="1">
@@ -19,7 +19,7 @@
   <rect width="1200" height="430" rx="24" fill="url(#tm-sheen)"/>
 
   <text x="44" y="52" fill="#ffffff" font-size="25" font-weight="700">A theme is its token contract</text>
-  <text x="44" y="80" fill="#c7d2fe" font-size="15">One declarative source. Everything else is generated.</text>
+  <text x="44" y="80" fill="#c7d2fe" font-size="15">One declarative source. The marked block in style.css is compiled from it.</text>
 
   <!-- ── 1. theme.json ─────────────────────────────────────────────── -->
   <g>
@@ -64,7 +64,7 @@
     <rect x="438" y="112" width="304" height="40" rx="16" fill="#312e81"/>
     <rect x="438" y="138" width="304" height="14" fill="#312e81"/>
     <text x="460" y="139" fill="#e0e7ff" font-size="14" font-weight="600" font-family="ui-monospace, Consolas, monospace">style.css</text>
-    <text x="686" y="139" fill="#a5b4fc" font-size="11" text-anchor="end">generated</text>
+    <text x="686" y="139" fill="#a5b4fc" font-size="11" text-anchor="end">generated block</text>
 
     <rect x="458" y="168" width="264" height="176" rx="10" fill="#1e1b4b" stroke="#6d28d9" stroke-width="1.5" stroke-dasharray="5 4">
       <animate attributeName="stroke-opacity" values="0.45;1;0.45" dur="2.6s" repeatCount="indefinite"/>
@@ -121,7 +121,7 @@
   <g>
     <rect x="44" y="382" width="1112" height="30" rx="8" fill="#3b1259" fill-opacity="0.55"/>
     <text x="64" y="402" fill="#f5d0fe" font-size="12.5">
-      A theme ships <tspan font-weight="700">no hand-written CSS</tspan>. Change a value in theme.json, recompile — nothing else edits the stylesheet.
+      Everything <tspan font-weight="700">inside the markers</tspan> is compiled from theme.json — change a value there and recompile. Raw CSS outside the block is the rare, justified exception.
     </text>
   </g>
 </svg>

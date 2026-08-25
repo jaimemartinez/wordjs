@@ -10,21 +10,26 @@ plus its own CSS for whatever the tokens don't parameterize (see *What tokens co
 > against **`.wjs-block-*`**; the alias is kept for one major version so themes and content that
 > predate the change keep working. See **[block-class-identity.md](block-class-identity.md)**.
 
-> **Declarative alternative — and what every first-party marketplace theme uses:** instead of
-> hand-writing the token block, a theme declares `seeds` / `tokens` / `styles` in its `theme.json`
-> and WordJS compiles the `style.css` block (`node backend/cli/wordjs.js build theme <slug>`). All
-> 64 marketplace themes are built this way; only the bundled `default` is authored entirely by
-> hand. (The compiler replaces only the region between the `@wjs-generated` markers and preserves
-> every byte outside them, so a declarative theme *can* still carry hand-written CSS: 54 of the 64
-> are pure generated output and the other 10 use that region only for chrome decoration.)
-> (`archetype` is a fourth declarative key, but it is a validated *label* — it emits no CSS.) The full contract is
+> **Declarative alternative — and what three of the four bundled themes use:** instead of
+> hand-writing the token block, a theme declares `seeds` / `tokens` / `styles` / `animations` in its
+> `theme.json` and WordJS compiles the `style.css` block
+> (`node backend/cli/wordjs.js build theme <slug>`). `circuito`, `gaceta` and `vergel` are built this
+> way; only the bundled `default` is authored entirely by hand. (The compiler replaces only the
+> region between the `@wjs-generated` markers and preserves every byte outside them, so a
+> declarative theme *can* still carry hand-written CSS — of the three that exist, two use it only
+> for `@import url("fonts.css");` and the third adds one rule.) (`archetype` is another declarative
+> key, but it is a validated *label* — it emits no CSS.)
+> The full contract is
 > documented in **[themes.md — Declarative theming (`theme.json`)](themes.md#declarative-theming-themejson)**.
 > The compiler is stricter than plain CSS about what it will emit: token values use a portable
 > charset that has no `+` and no `*` (so `calc()` with addition or multiplication cannot live in a
 > token) and must have every parenthesis and quote **balanced** (an unclosed one would swallow the
-> rest of the stylesheet into the value, so it is refused as `TOKEN_VALUE_INVALID`), and `styles`
-> declaration values cannot contain `var()` (they are matched against the property's grammar,
-> which `var()` defeats). The compiler additionally *warns* (`TOKEN_VALUE_GRAMMAR`) when a token
+> rest of the stylesheet into the value, so it is refused as `TOKEN_VALUE_INVALID`). A `styles`
+> declaration value **may** contain `var()`, and referencing a token is the normal thing to write:
+> css-tree cannot match a value tree containing `var()`, so instead of refusing the declaration the
+> compiler checks that every reference is a real `--wjs-*` token in the manifest and skips the
+> property matcher for that value — stricter than plain CSS, not looser. The compiler additionally
+> *warns* (`TOKEN_VALUE_GRAMMAR`) when a token
 > value matches no grammar of any property the manifest lists as consuming that token — a
 > best-effort check with deliberately partial coverage, described in
 > [themes.md](themes.md#is-the-token-value-valid-for-the-properties-that-read-it). Hand-written CSS
@@ -106,15 +111,15 @@ only if you want a specific on-color.
 
 ### Alias tokens (visual-editor block names) — do not override
 
-The framework `:root` also defines **21 alias tokens** that map the token names referenced by the
+The framework `:root` also defines **22 alias tokens** that map the token names referenced by the
 visual-editor (Verso) block renderer onto the canonical tokens above: `--wjs-h{1..6}-size` →
 `--wjs-h{1..6}`, `--wjs-h{1..6}-weight` → `--wjs-heading-weight`, plus `--wjs-font-family`,
 `--wjs-color-text-heading`, `--wjs-color-text-dim`, `--wjs-color-primary-text` (→
 `--wjs-color-on-primary`), `--wjs-foreground`, `--wjs-bg-surface-hover`, `--wjs-border-radius`,
-`--wjs-space-md`, and `--wjs-space-sm`. Themes must override the **canonical** tokens (e.g.
-`--wjs-h1`, never `--wjs-h1-size`) — custom properties resolve at use time, so the aliases pick up
-the theme's values automatically, while overriding the alias itself detaches it from the canonical
-token. These 21 are flagged `"alias"` in the manifest (see below).
+`--wjs-space-md`, `--wjs-space-sm`, and `--wjs-cta-button-ml`. Themes must override the **canonical**
+tokens (e.g. `--wjs-h1`, never `--wjs-h1-size`) — custom properties resolve at use time, so the
+aliases pick up the theme's values automatically, while overriding the alias itself detaches it from
+the canonical token. These 22 are flagged `"alias"` in the manifest (see below).
 
 ### Spacing & shape
 `--wjs-spacer` (`1rem`, the base unit for every spacing utility), `--wjs-radius-sm`/`--wjs-radius`/
@@ -123,14 +128,14 @@ token. These 21 are flagged `"alias"` in the manifest (see below).
 
 ### Per-block tokens (~600 more — see the manifest)
 
-The tables above are only the **core** tokens. Most of the framework's **754** tokens style
+The tables above are only the **core** tokens. Most of the framework's **778** tokens style
 individual visual-editor blocks (`--wjs-<block>-*`); they are documented exhaustively in the
 machine-readable manifest (next section), not here. Real group sizes, read from the manifest:
-`cta` 55 · `pricing` 49 · `card` 40 · `accordion` 38 · `form` 37 · `hero` 37 · `audio` 34 ·
-`tabs` 29 · `testimonial` 29 · `search` 26 · `button` 25 · `catposts` 24 · `stats` 22 ·
-`posts` 20 · `video` 20 · `heading` 14 · `table` 13 · `icon` 12 · `quote` 12 · `social` 8 ·
+`cta` 57 · `pricing` 53 · `accordion` 40 · `card` 40 · `hero` 38 · `form` 37 · `audio` 36 ·
+`testimonial` 30 · `tabs` 29 · `button` 26 · `search` 26 · `catposts` 24 · `posts` 22 ·
+`stats` 22 · `video` 22 · `heading` 14 · `quote` 13 · `table` 13 · `icon` 12 · `social` 9 ·
 `divider` 6 — plus smaller layout/shape groups (`columns`, `col`, `flex`, `grid`, `section`,
-`image`, `spacer`, …), 73 groups in total (a token's group is the first segment of its name).
+`image`, `spacer`, …), 74 groups in total (a token's group is the first segment of its name).
 
 ### Editor-internal tokens (`--wjs-r-*`) — never set these in a theme
 
@@ -176,38 +181,45 @@ weight, transform, letter-spacing, color, hover color, hover decoration, transit
 A token block like the one above re-skins everything **the framework owns**: the auto-styled HTML
 elements, the components and utilities below, `.wjs-content` long-form rules, and the visual-editor
 `.wjs-block-*` blocks. The public React chrome (header, footer, blog roll) reads the core tokens
-too. Tokens are now the normal way to build a theme — **44 of the 64** marketplace themes are
-tokens-only, their whole `style.css` being a `fonts.css` `@import` plus a compiled `:root` block:
+too. Tokens are the normal way to build a theme, and everything past them is still declared in
+`theme.json` rather than hand-written:
 
 - **Covered by tokens** — everything styled through `wordjs-ui.css`, i.e. content HTML, components,
   utilities and the editor blocks, plus the chrome colors/typography listed above.
-- **Beyond tokens** — 10 more themes add compiled `styles` declarations (element/child/state/
-  breakpoint rules, still generated from `theme.json`), and 10 ship hand-written CSS *outside* the
-  generated block for a distinctive chrome (they target the `.wjs-chrome-*` hook classes). In
-  practice first-party `style.css` files run 269–465 lines with 260–325 `--wjs-*` declarations; the
-  hand-authored bundled **default** declares 75 tokens in a 397-line stylesheet.
+- **Beyond tokens** — compiled `styles` declarations (element/child/state/position/pseudo-element/
+  breakpoint rules) and `animations`, still generated from `theme.json`. All three declarative
+  bundled themes use both: each declares `styles.variations` (circuito 4, gaceta 2, vergel 2),
+  `styles.chromeHeader` and `animations` (4, 1 and 2 respectively). `styles.chromeFooter` is declared
+  by circuito and gaceta but not by vergel. A distinctive chrome is built from those entries now,
+  instead of hand-written CSS below the generated block. In practice their `style.css` files run 96–183 lines with 49–109
+  `--wjs-*` declarations; the hand-authored bundled **default** declares 75 tokens in a 397-line
+  stylesheet.
 
 The complete machine-readable contract is `backend/public/theme-tokens.json` (next section).
 
 ## The machine-readable contract (`theme-tokens.json`)
 
 `backend/public/theme-tokens.json` is the generated, complete token contract — the source of truth
-whenever this document and the CSS disagree. Current counts: **754 tokens**, **1715 `var()` uses**,
-**33 element entries**. For every token it records:
+whenever this document and the CSS disagree. Current counts: **778 tokens**, **1777 `var()` uses**,
+**51 element entries**. For every token it records:
 
 - `group` — first segment of the name (`hero`, `cta`, `color`, `radius`, …);
 - `declaredDefault` — the value declared in the `:root` of `wordjs-ui.css`, or `null` when the
   token is only ever consumed through fallbacks;
 - `fallbacks` — the fallback chains observed in `var()` uses;
 - `consumers` — every `{ selector, property }` pair that reads the token;
-- `flags` — `alias` (the 21 do-not-override remaps), `editor-internal` (the 22 `--wjs-r-*`),
+- `flags` — `alias` (the 22 do-not-override remaps), `editor-internal` (the 22 `--wjs-r-*`),
   `chrome-phantom` (the 4 React-chrome tokens); omitted when empty.
 
-An `elements` registry (33 entries) maps each block class seen in `wordjs-ui.css` — recorded under its
-historical `.wp-block-*` spelling, see [block-class-identity.md](block-class-identity.md) — plus
-chrome entries for `header` (`.wjs-header`), `logo` (`.wjs-header-logo`), `nav`
-(`.wjs-header-nav`) and `footer` — to its platform selector and observed structured child
-selectors.
+An `elements` registry (51 entries) maps each themable surface to its platform selector and observed
+structured child selectors. 29 of them are block classes seen in `wordjs-ui.css`, recorded under
+their historical `.wp-block-*` spelling — see
+[block-class-identity.md](block-class-identity.md). The other 22 are platform surfaces that are not
+blocks: the chrome (`header` → `.wjs-header`, `logo` → `.wjs-header-logo`, `nav` →
+`.wjs-header-nav`, `footer` → `footer`, plus `chromeHeader`, `chromeFooter`, `chromeSearch`,
+`headerNav`), the post and listing surfaces (`singlePost`, `postCard`, `postList`, `postMeta`),
+search (`searchPage`, `searchForm`, `searchResults`, `searchResult`), comments (`comments`,
+`comment`) and four `plugin:faq:*` entries.
 
 The manifest is deterministic (stable key order, no timestamps), so it diffs cleanly. Regenerate it
 after any change to `wordjs-ui.css`:
@@ -286,7 +298,7 @@ paragraph/table spacing) on top of the bare-element styles.
 
 The framework source (with section comments) is `backend/public/css/wordjs-ui.css`; its complete
 token contract is `backend/public/theme-tokens.json` (regenerate with
-`node scripts/generate-token-manifest.js`). The bundled **default** theme
-(`backend/themes/default/style.css`) and the first-party catalog under
-`marketplace/themes/*/style.css` show real token sets for light, dark, mono, glass and brutalist
-looks.
+`node scripts/generate-token-manifest.js`). The four bundled themes under `backend/themes/*/` show
+real token sets: **default** (hand-authored, light, indigo), **circuito** (declarative, dark,
+monospace), **gaceta** (declarative, light, editorial serif) and **vergel** (declarative, light,
+rounded organic).

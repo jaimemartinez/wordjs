@@ -144,6 +144,17 @@
 </style>
 <div class="wrap">
 
+<div style="border:1px solid var(--line);background:var(--surface-2);border-radius:8px;padding:14px 16px;margin:0 0 18px">
+  <p style="margin:0 0 6px"><b>HISTORICAL — this is the F0+F1 decision write-up, not a status page.</b></p>
+  <p style="margin:0">The recommendation below was followed. The fork <code>@wordjs/puck</code> and its
+  <code>NOTICE.md</code> have since been deleted, and Verso is the editor. Two details did not survive
+  contact with the build: Verso was never packaged as <code>@wordjs/verso</code> — it lives in
+  <code>frontend/src/lib/verso/</code> and <code>frontend/src/components/verso/</code> inside the
+  frontend app — and the engine flag that provided the rollback path was removed together with the
+  fork, so there is no longer a legacy engine to fall back to. <code>_puck_data</code> did stay
+  canonical, exactly as decided.</p>
+</div>
+
 <header class="doc">
   <p class="eyebrow">WordJS · Programa del editor · F0 + F1</p>
   <h1>Un editor propio: benchmark, veredicto del panel y arquitectura</h1>

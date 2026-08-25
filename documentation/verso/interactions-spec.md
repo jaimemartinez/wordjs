@@ -1,7 +1,10 @@
 # Spec ejecutable — motor de interacciones de Verso (F9)
 
-**Estado**: spec previa a codificar. Misma técnica que el DnD y el motor inline: **tabular y decidir
-ANTES de escribir código**.
+**Estado**: IMPLEMENTADO. El motor vive en `frontend/src/lib/verso/interactions/`
+(`normalize`/`canonical`/`compile`/`presets`/`inventory` + `runtime/`), con los controles de autor en
+`frontend/src/components/verso/fields/` y la pantalla de presets en
+`frontend/src/app/admin/settings/interactions/`. Lo construido por encima de esta spec, fase a fase,
+está registrado en `interactions-scorecard.md` §3.
 
 **Tesis**: no construimos "un Webflow IX3 con otro nombre". Construimos un **compilador de
 interacciones a CSS nativo** con un runtime mínimo para lo que el CSS no puede expresar. El camino
@@ -17,12 +20,12 @@ toda página con interacciones y necesita un mecanismo explícito anti-FOUC para
 
 | Fichero | Qué aporta al diseño |
 |---|---|
-| `backend/public/css/wordjs-ui.css` L1029–1086 (`ENTRANCE ANIMATIONS`) | 12 entradas `.wjs-anim-<t>[data-wjs-anim="in"]` + `@keyframes`, TODO dentro de `@media (prefers-reduced-motion: no-preference)`. Contrato: `to` siempre neutro. |
-| `backend/public/css/wordjs-ui.css` L2626–2725 (`SCROLL-DRIVEN INTERACTIONS`) | `@supports (animation-timeline: view())`, `animation-range: cover 0% cover 100%`, intensidad como clase discreta `wjs-scroll-amt-10…100`. **Y la verruga documentada**: entrada y scroll pelean por `transform`, "gana el scroll" con reglas 0,3,0. |
-| `frontend/src/components/puck/blockShell.ts` | `AnimSpec`, `animClasses()`, `appearanceToStyle()` — puras, sin `"use client"`, compartidas por editor y público. El sitio donde vive el nuevo tipo. |
+| `backend/public/css/wordjs-ui.css` L1136–1193 (`ENTRANCE ANIMATIONS`) | 12 entradas `.wjs-anim-<t>[data-wjs-anim="in"]` + `@keyframes`, TODO dentro de `@media (prefers-reduced-motion: no-preference)`. Contrato: `to` siempre neutro. |
+| `backend/public/css/wordjs-ui.css` L2818–2974 (`SCROLL-DRIVEN INTERACTIONS`) | `@supports (animation-timeline: view())`, `animation-range: cover 0% cover 100%`, intensidad como clase discreta `wjs-scroll-amt-10…100`. **Y la verruga documentada**: entrada y scroll pelean por `transform`, "gana el scroll" con reglas 0,3,0. |
+| `frontend/src/components/blocks/blockShell.ts` | `AnimSpec`, `animClasses()`, `appearanceToStyle()` — puras, sin `"use client"`, compartidas por editor y público. El sitio donde vive el nuevo tipo. |
 | `frontend/src/components/content/SharedBlockShell.tsx` | Las 4 ramas del wrapper y las **DOS capas anidadas** (entrada ↔ apariencia jamás comparten elemento porque `animation-fill-mode: both` mataría el `:hover`). |
 | `frontend/src/components/content/AnimatedShell.tsx` | La ÚNICA rama hidratada. Clampa `duration` 100–3000 y `delay` 0–3000 en el render. |
-| `frontend/src/components/puck/entranceAnimation.ts` | `IntersectionObserver` con `threshold: 0` (comentario: no "afinar"), `ANIM_REPLAY_EVENT` como evento DOM para cruzar el iframe, limpieza que nunca deja el bloque `armed`-invisible. |
+| `frontend/src/components/blocks/entranceAnimation.ts` | `IntersectionObserver` con `threshold: 0` (comentario: no "afinar"), `ANIM_REPLAY_EVENT` como evento DOM para cruzar el iframe, limpieza que nunca deja el bloque `armed`-invisible. |
 | `frontend/src/lib/verso/types.ts` | El contrato duro: `_puck_data` **byte-exacto**, `keyOrder`, gate `verso-roundtrip.test.ts` sobre el corpus de producción. |
 | `frontend/src/lib/verso/sharedFields.tsx` | `withSharedVersoFields` inyecta `hide`/`anim`/`look` con defaults byte-idénticos; `clampAnimSpec` clampa en la frontera de ESCRITURA además del render. Opt-out: una def que ya declare `fields.hide`. |
 | `frontend/src/components/verso/canvas/FrameController.tsx` L166–208 | `swapThemeCss(url)` escribe un `<link>` **imperativamente en el `head` del iframe**, y el contenido va por `createPortal(children, root)` desde la raíz React del documento PADRE. |

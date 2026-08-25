@@ -74,7 +74,7 @@ So a plugin that turns out to be buggy, greedy, or outright malicious **stays in
 | **License** | MIT | GPLv2 | MIT | MIT (paid tier) | MIT (paid cloud) |
 | **Ecosystem maturity** | ⚠️ young, first-party only | 60k+ plugins | large | large | growing |
 
-The honest row is the last one: WordJS is young, and every plugin and theme in its marketplace today is first-party — there's no third-party author community yet. What it already has is the row at the top.
+The honest row is the last one: WordJS is young, and every plugin and theme it ships today is first-party — there's no third-party author community yet. What it already has is the row at the top.
 
 ---
 
@@ -84,9 +84,9 @@ The honest row is the last one: WordJS is young, and every plugin and theme in i
 <tr><td width="33%" valign="top">
 
 **🎨 Build**
-- Drag-and-drop visual editor (**Verso**, built in-house) with **30 blocks** & edit-in-place text
+- Drag-and-drop visual editor (**Verso**, built in-house) with **39 blocks** & edit-in-place text
 - **Token-driven themes** + a live customizer
-- **64 themes** & **31 plugins**, one-click install
+- **31 plugins** in the marketplace, one-click install; **4 bundled themes**
 - Real **SEO**: server-rendered pages, sitemap, RSS, social cards
 - Media library with automatic **AVIF/WebP** optimization
 
@@ -120,12 +120,12 @@ The honest row is the last one: WordJS is young, and every plugin and theme in i
 - **OS-process plugin sandbox.** Every plugin runs in a **separate operating-system process** (`child_process.fork`) — its own memory and event loop — so a crash, memory blow-up, or exploit is contained **by the kernel** and never takes down the host. Plugins reach the core only through a permission-checked `wordjs` bridge (structured-clone RPC, no live host references, an exact method allow-list).
 - **Install-time code scanner.** Before a plugin can activate, its JavaScript is parsed and walked for dangerous constructs (`eval`, `exec`/`spawn`, dynamic `require`, sensitive modules, forbidden `process` access). It's **fail-closed** (an unparseable file is rejected) and runs on **every** plugin — no exemptions.
 - **Ask-permission model (default-deny).** A plugin's manifest *requests* scoped capabilities (`database`, `filesystem`, `settings`, `users:read`, `email:provider`, `notifications:provider`, `network`, …); an **admin grants each one per plugin**. A call works only if the capability is BOTH declared AND granted. Activation shows the admin exactly what the plugin requests and grants that declared set — only when the plugin has no grant record yet, so a later per-permission revoke survives a re-activation. First-party plugins get no extra privilege — same sandbox, same rules.
-- **Kernel hardening on Linux (default-on).** Each plugin child also runs as an unprivileged user with dropped capabilities, `no-new-privs`, PID/IPC/UTS namespaces, a read-only filesystem, and a `seccomp` syscall denylist. A plugin **without** the `network` grant is dropped into an empty network namespace, so it can't reach the internet or your internal services even at the kernel level. (Probe-gated, with a clean fallback where unavailable; Windows gets a Job Object memory cap; macOS relies on process isolation.)
+- **Native kernel confinement on every supported platform (default-on).** Each plugin child is also wrapped by the operating system's own sandbox: **Landlock + seccomp-bpf** on Linux (with `no-new-privs`), a zero-capability **AppContainer** on Windows, **Seatbelt** on macOS. Filesystem authority is scoped to the plugin's own zones, and a plugin **without** the `network` grant can't reach the network at all — the kernel refuses it below JavaScript, so it can't touch the internet or your internal services. Each mechanism is **probe-gated** (a confined child is spawned beside an unconfined control and must actually be refused what it must be refused), and production is **fail-closed**: if the probe can't certify the host, the isolated plugin doesn't run unless the operator sets `sandbox.requireHardening:false`. The live mechanism and its state are reported on admin `GET /health/details`.
 - **Per-plugin data isolation.** Each plugin gets only its own `wjp_<slug>_` database tables and a secret-scrubbed view of config — core `users`/`options`/`sessions` and secrets are unreachable. On **PostgreSQL/MySQL** the database itself enforces this via a per-plugin low-privilege role/user.
-- **Plugin & theme marketplace.** A curated catalog of **31 first-party plugins** and **64 first-party themes** with one-click, **sha256-verified** installs through the same hardened, sandboxed pipeline as manual uploads. Sources are admin-configurable (point it at any HTTPS catalog); all catalog items are first-party today, with third-party submissions on the roadmap.
+- **Plugin & theme marketplace.** A curated catalog of **31 first-party plugins** with one-click, **sha256-verified** installs through the same hardened, sandboxed pipeline as manual uploads. Themes ride the same mechanism on an independent catalog and their own admin tab, but that catalog was retired and currently builds empty — the themes you get are the four bundled in `backend/themes/`. Sources are admin-configurable (point it at any HTTPS catalog); all catalog items are first-party today, with third-party submissions on the roadmap.
 
 **Authoring & content**
-- **Visual builder** (**Verso**, built in-house — see *The editor* below) — drag-and-drop editing, **in-place rich text** (bold, italic, links with an open-in-new-tab toggle, bullet and numbered lists, clear formatting), a per-block **Appearance** panel (background colour/gradient/image/glass, border, shadow, typography, hover effects, each with tablet/mobile overrides), a searchable block inserter with reusable section patterns, and a **device preview** that sizes the canvas to the real device width (desktop 1280 / tablet 768 / mobile 375), so the site's actual CSS breakpoints fire.
+- **Visual builder** (**Verso**, built in-house — see *The editor* below) — drag-and-drop editing, **in-place rich text** (bold, italic, links with an open-in-new-tab toggle, bullet and numbered lists, clear formatting), a per-block **Appearance** panel (background colour/gradient/image/glass, border, shadow, typography, hover effects — with tablet/mobile overrides on the box and type metrics: padding, margins, max-width, min-height, font-size, line-height, letter-spacing, alignment and radius; colours, backgrounds, shadows and motion are deliberately one look per block), a searchable block inserter with reusable section patterns, and a **device preview** that sizes the canvas to the real device width (desktop 1280 / tablet 768 / mobile 375), so the site's actual CSS breakpoints fire.
 - **Real server-side rendering** — public pages are React Server Components, so crawlers and first paint get the real content, per-page metadata (`generateMetadata`), OpenGraph/Twitter cards, JSON-LD, real `404`s, and a no-JS search form.
 - **SEO basics** — semantic HTML, `sitemap.xml`, `robots.txt`, and an RSS feed.
 - **Themes** — a shared, token-driven CSS framework (`--wjs-*` design tokens) that auto-styles pages, plus a live **customizer** at `/admin/themes/customize`. A theme's optional server-side `functions.js` runs in the **same sandbox** as plugins.
@@ -254,7 +254,7 @@ See the [Separate-mode guide](documentation/separate-mode.md) for the walkthroug
 >
 > WordJS recently completed rounds of **security hardening** (fixing a CSRF bypass, committed secrets, and XSS sinks, among others). The plugin sandbox has had multiple internal red-team passes — but there is **no independent third-party audit yet**. An external audit is strongly recommended before any production or internet-facing deployment, and the residual risks are documented plainly in [SECURITY.md](SECURITY.md) and [POSITIONING.md](POSITIONING.md).
 >
-> The whole ecosystem is **first-party**: the marketplace ships 31 plugins and 64 themes, but there's no third-party author community or public review pipeline yet. **Use it to build, learn, and experiment — do your own review before trusting it with real data or real users.**
+> The whole ecosystem is **first-party**: the marketplace ships 31 plugins (the theme catalog was retired and builds empty; four themes come bundled), and there's no third-party author community or public review pipeline yet. **Use it to build, learn, and experiment — do your own review before trusting it with real data or real users.**
 
 ---
 
@@ -275,7 +275,7 @@ Before exposing WordJS to the internet: have it **independently audited**, **rot
 - **Editor:** Verso — in-house; its editor state, drag-and-drop resolver and rich-text engine carry no third-party dependency · **Styling:** vanilla CSS + Tailwind
 - **Communication:** REST + JWT + scoped API tokens + WebSockets/SSE
 - **Gateway:** Express + Node `cluster`, http-proxy, mTLS internal channel
-- **Sandbox:** `child_process` OS-process isolation + `acorn` code scanning + runtime require proxies + layered memory caps (cgroup / Windows Job Object / RSS-poll)
+- **Sandbox:** `child_process` OS-process isolation + native kernel confinement (Landlock/seccomp-bpf, AppContainer, Seatbelt) + `acorn` code scanning + runtime require proxies + layered memory caps (cgroup / Windows Job Object / RSS-poll)
 - **TLS:** `acme-client` (Let's Encrypt HTTP-01 / DNS-01)
 - **Database:** SQLite (`better-sqlite3` / `sql.js`), PostgreSQL (`pg`), or MySQL/MariaDB (`mysql2`)
 - **Tooling:** ESLint + Prettier, `node:test`, GitHub Actions CI
@@ -315,7 +315,7 @@ CI (`.github/workflows/ci.yml`, Node 22) runs the strict type-check, the compile
 - **🧩 Third-party marketplace** — open the catalog to community authors, where "sandboxed & reviewed" is a verifiable trust badge.
 - **☁️ Media CDN** — S3-compatible object storage.
 - **🌐 Multi-site** — manage multiple domains from one install.
-- **🛡️ More kernel hardening** — building on the default-on Linux sandbox layer.
+- **🛡️ More kernel hardening** — building on the default-on Landlock/AppContainer/Seatbelt layer; preventive memory caps outside systemd Linux and Windows are the open gap.
 
 ---
 

@@ -21,8 +21,10 @@ Each theme is located in `backend/themes/{theme-slug}/`. **`theme.json` is the s
 declares the theme's tokens, and `style.css` is compiled from it (see *Declarative themes* below).
 The stylesheet is generated output. Hand-written CSS is still possible — the compiler only ever
 replaces the region between the `@wjs-generated` markers and preserves every byte outside them
-(`writeCompiled()`) — but it is the exception: 54 of the 64 marketplace themes are pure generated
-output, and the 10 that are not use it only for chrome decoration.
+(`writeCompiled()`) — but it is the exception: of the three declarative themes shipped today,
+`circuito` and `vergel` carry nothing outside the block but `@import url("fonts.css");`, and
+`gaceta` adds exactly one hand-written rule (with a comment explaining why it is not expressible as
+a `styles` entry). None of the three declares a single token outside the generated block.
 
 ```
 themes/
@@ -38,15 +40,17 @@ themes/
 │   │                     # Handlebars index.html/single.html/archive.html — extension picks the system
 │   ├── screenshot.png    # Optional: Theme preview (also .jpg/.webp)
 │   ├── partials/         # Optional: Shared Handlebars partials (header.html, footer.html)
-│   └── .design/          # Marketplace source only: stitch.json, the design system the theme was built
-│                         # from — read by `verify theme` and the catalogue authoring scripts
+│   └── .design/          # Optional: stitch.json, the design system the theme was built from — read by
+│                         # `import stitch` and `verify theme`. No shipped theme carries one today.
 ```
 
-What the 64 catalog themes actually ship: **all 64** carry `style.css`, `theme.json`, `fonts.css`,
-`fonts/` and `.design/stitch.json`; **20** add a `chrome/` directory and a `screenshot.png`, **19**
-a `functions.js`, and **8** still carry `templates/` + `partials/` for the legacy engine. `fonts.css`
-and `fonts/` are not optional in practice — a theme that names a non-system family gets it only if it
-ships the files (see *Self-host the webfonts* below).
+What the four bundled themes actually ship: **all four** carry `style.css` and `theme.json` — the two
+files `verifyDefaultTheme()` treats as a complete theme. The three declarative ones (`circuito`,
+`gaceta`, `vergel`) add `chrome/` and `templates/`; `circuito` and `vergel` also `fonts.css` +
+`fonts/`. Only `default` ships `functions.js`, `partials/` and the legacy Handlebars `templates/`.
+None ships a `screenshot.png` or a `.design/` directory. `fonts.css` and `fonts/` are not optional in
+practice — a theme that names a non-system family gets it only if it ships the files (see *Self-host
+the webfonts* below).
 
 > **One live renderer: Next.js.** The public site is rendered entirely by Next.js
 > (`frontend/src/app/(public)/`) in **both** the split and monolith modes. WordJS still ships a
@@ -86,46 +90,33 @@ ships the files (see *Self-host the webfonts* below).
 
 ## Available Themes
 
-WordJS offers **65 first-party themes**. Only **default** (WordJS) ships bundled in
-`backend/themes/`; the other 64 (`marketplace/themes/`, the exact contents of the marketplace
-catalog index) install on demand through the **theme
-marketplace** (see *Installing a Theme* below). (`backend/themes/herbario` is also committed —
-the reference theme built by `import stitch` / checked by `verify theme`; it is not in the
-marketplace catalog.) A representative selection:
+WordJS ships **four first-party themes**, all of them bundled in `backend/themes/`. There is no
+first-party catalog in the repository any more: the 65-theme marketplace catalogue and the Stitch
+imports were retired (commit `e603fc4f`), so `marketplace/themes/` no longer exists and
+`backend/scripts/build-marketplace.js` — which treats it as an optional directory — emits a themes
+index with `count: 0`. The theme marketplace itself (see *Installing a Theme* below) is untouched and
+still installs from whatever source an admin configures. `default` is the hand-authored fallback; the
+other three are declarative themes that exercise the whole contract — seeds, tokens, `styles`,
+`animations`, a `layout` block, page templates and a named template part each.
 
 | Theme               | Aesthetic          | Key Features                                |
 | ------------------- | ------------------ | ------------------------------------------- |
-| **default** (WordJS)| Clean, Modern      | Indigo→violet gradient, Space Grotesk, deep-indigo footer |
-| **neo-digital**     | Cyberpunk/Terminal | Matrix green `#00ff41` on pure black, Anton display type, square corners, hard offset shadows |
-| **brutalist-paper** | Neo-brutalist      | Sharp corners, bold borders, offset shadows |
-| **soft-glass**      | Soft, Pastel       | Pale-blue canvas, sky→violet, wide diffuse shadows, pill buttons |
-| **swiss-minimal**   | Bauhaus/Flat       | No shadows, high contrast B/W/Red           |
-| **midnight-luxury** | Dark Premium       | Gold `#d4af37` on near-black, Playfair Display headings over Montserrat body |
-| **aurora-gradient** | Dark, Borderless   | Indigo `#818cf8` → mint `#34d399` on deep navy, no borders, pale diffuse glow |
-| **neon-pulse**      | Club-flyer Dark    | Fuchsia `#f0abfc` + cyan on near-black, 2px outlines, hard fuchsia offsets |
-| **carbon-terminal** | OLED Dev/Docs      | OLED-dark, terminal-green accent            |
-| **noir-or**         | Luxury             | Gold accents on deep charcoal               |
-| **pop-studio**      | Bold Creative      | Vibrant pink/cyan, big rounded shapes       |
-| **sage-calm**       | Wellness           | Organic sage greens on soft cream           |
-| **sepia-press**     | Editorial Magazine | Serif headlines on warm paper               |
+| **default** (WordJS)| Clean, Modern      | Indigo `#4f46e5` on near-white, Space Grotesk over Inter, 12px radius. Hand-authored; the only theme with `functions.js`. |
+| **circuito**        | Dark terminal      | Cyan `#22d3ee` + violet on near-black `#070b14`, JetBrains Mono headings, `--wjs-shadow: none` with cyan hover glows, `color-scheme: dark` |
+| **gaceta**          | Editorial broadsheet | Deep red `#b91c1c` on cream `#faf6ef`, Georgia headlines, no shadows, 2px corners. `archetype: "editorial"` |
+| **vergel**          | Organic portfolio  | Sage `#4d7c5f` + blush on pale green-white, Space Grotesk headings, `1.25rem` radius and pill buttons. `archetype: "organic"` |
 
 > **These descriptions are read from each theme's `theme.json`** (`seeds` + `tokens`), not from an
-> intended look. The whole catalogue is now built from per-theme Stitch design systems (the last 44
-> in commit `aac7f49`, the other 20 before it), and that repainted several themes past their old
-> names: `neo-digital` uses no monospace family and no glow (Anton headings over Chivo,
-> `--wjs-shadow: none`, hard `4px 4px 0` offsets); `soft-glass` compiles no `blur()` or
-> `backdrop-filter` anywhere — its "glass" is wide, soft `rgba` shadows on a pale-blue canvas; and
-> `aurora-gradient` emits no gradient at all (`--wjs-hero-gradient: none`, `-from` and `-to` set to
-> the same color) — its aurora is an indigo-to-mint palette with borderless cards and a pale diffuse
-> glow. A slug is the identity an installed site is pinned to, so the names stayed.
+> intended look. A slug is the identity an installed site is pinned to, so a repaint never renames a
+> theme.
 
 > **`--wjs-` variable adoption.** All first-party themes ship the `--wjs-*` token set documented in
-> [`theming.md`](./theming.md) — every marketplace theme now compiles its whole `:root` from
-> `theme.json`, declaring **260** (`artisan-craft`, `apex-enterprise`) to **325** (`sunset-drive`)
-> tokens (`paper-press` 281, `carbon-terminal` 316); the hand-authored bundled `default` declares
-> **75** —
-> including the `--wjs-color-on-*` contrast set. The **default** theme's `:root` is entirely
-> `--wjs-*` (no older bare `--primary`/`--text` aliases remain). Copy any theme as a starting point.
+> [`theming.md`](./theming.md). The three declarative themes compile their whole `:root` from
+> `theme.json` — `circuito` **109** tokens, `gaceta` **97**, `vergel` **49** (of which the
+> `theme.json` `tokens` map itself declares 94, 84 and 34; the rest are derived from the four seeds
+> or resolved out of a `styles` key). The hand-authored bundled `default` declares **75**, including
+> the `--wjs-color-on-*` contrast set. The **default** theme's `:root` is entirely `--wjs-*` (no
+> older bare `--primary`/`--text` aliases remain). Copy any theme as a starting point.
 
 ## The WordJS UI Framework
 
@@ -207,7 +198,10 @@ all of which default to today's look so the existing themes render unchanged:
    `parseThemeMetadata()`/`switchTheme()` surface it into the `active_theme_layout` option (in
    `PUBLIC_SETTINGS`), and the SSR public layout (`app/(public)/layout.tsx`) honors it — `containerWidth`
    caps the main column, `sidebar: true` switches content/archive pages to two columns with `sidebar-1`.
-   Omitting the block (as every first-party theme does today) keeps the current single-column, default-width layout.
+   Omitting the block (as `default` does) keeps the current single-column, default-width layout. The
+   three declarative bundled themes all declare one — `circuito` `{ containerWidth: "1400px",
+   header: { variant: "classic", sticky: true } }`, `gaceta` `{ containerWidth: "1140px", sidebar:
+   false }`, `vergel` `{ containerWidth: "880px", sidebar: false }`.
    The full v2 schema is documented in "Structure config (layout)" below.
 
 ### Structure config (layout)
@@ -417,10 +411,10 @@ nothing when empty, and `switchTheme()` resets it, so changing themes starts fro
 The narrative reference (core tables, alias/editor-internal rules, per-block groups) lives in
 [`theming.md`](./theming.md); the **complete machine-readable contract** is
 `backend/public/theme-tokens.json`, regenerated from `wordjs-ui.css` with
-`node scripts/generate-token-manifest.js`. The manifest currently tracks **754 tokens** and
-**1715 `var()` uses** across 73 name groups — mostly per-block groups such as `cta` (55),
-`pricing` (49), `card` (40), `accordion` (38), `form` (37), `hero` (37), `audio` (34), `tabs` and
-`testimonial` (29 each), `search` (26), `button` (25).
+`node scripts/generate-token-manifest.js`. The manifest currently tracks **778 tokens** and
+**1777 `var()` uses** across 74 name groups — mostly per-block groups such as `cta` (57),
+`pricing` (53), `accordion` and `card` (40 each), `hero` (38), `form` (37), `audio` (36),
+`testimonial` (30), `tabs` (29), `button` and `search` (26 each).
 
 ### Core variables (defaults as declared in `wordjs-ui.css`)
 
@@ -500,12 +494,12 @@ even though a CSS-only audit would report them unused.
 
 ### Two token families a theme must NOT declare
 
-- **The 21 alias tokens** (flagged `alias` in the manifest): `--wjs-h{1..6}-size`,
+- **The 22 alias tokens** (flagged `alias` in the manifest): `--wjs-h{1..6}-size`,
   `--wjs-h{1..6}-weight`, `--wjs-font-family`, `--wjs-foreground`, `--wjs-color-text-heading`,
   `--wjs-color-text-dim`, `--wjs-color-primary-text`, `--wjs-bg-surface-hover`,
-  `--wjs-border-radius`, `--wjs-space-md`, `--wjs-space-sm`. They remap the names used by the
-  visual-editor block renderer onto the canonical tokens — override the **canonical** token
-  (`--wjs-h1`, not `--wjs-h1-size`) and the alias follows automatically.
+  `--wjs-border-radius`, `--wjs-space-md`, `--wjs-space-sm`, `--wjs-cta-button-ml`. They remap the
+  names used by the visual-editor block renderer onto the canonical tokens — override the
+  **canonical** token (`--wjs-h1`, not `--wjs-h1-size`) and the alias follows automatically.
 - **The 22 `--wjs-r-*` tokens** (flagged `editor-internal`): the visual editor's per-instance
   responsive channel (`--wjs-r-<prop>-{tb,mb}`), injected **inline** on each block by the editor.
   Declaring one in a theme `:root` would silently override every block instance on every page.
@@ -562,7 +556,7 @@ At any point, lint your theme against the machine-readable contract with the doc
 node backend/cli/wordjs.js doctor theme my-custom-theme
 ```
 
-It flags unknown token names (with a closest-match suggestion), overrides of the 21 readonly
+It flags unknown token names (with a closest-match suggestion), overrides of the 22 readonly
 aliases, missing `--wjs-color-on-*` contrast pairs, external `@import`s/`url()`s, `:root`
 values that would not be portable to declarative tokens, a `@wjs-generated` block that is
 duplicated or unclosed (`GENERATED_MARKERS`), invalid shipped chrome compositions
@@ -586,8 +580,10 @@ node scripts/vendor-catalog-fonts.mjs <slug>
 
 It reads the families out of the theme's own `--wjs-font-family-*` tokens, downloads the `latin` + `latin-ext` subsets from Google Fonts into `themes/<slug>/fonts/`, writes the `@font-face` rules to `themes/<slug>/fonts.css`, and puts `@import url('fonts.css');` at the top of `style.css` — **above** the `@wjs-generated` marker, in the region `build theme` preserves, so rebuilding never unwires it.
 
-- `--check` exits non-zero for any theme that declares a family it does not ship (CI/doctor use). Run it over the whole catalog by passing no slug.
-- `--root <dir>` points it at a theme tree other than `marketplace/themes` (use `backend/themes` for an installed theme).
+- The argument is `<slug…|--all>` — one or more slugs, or `--all` for every theme under the root.
+- `--check` exits non-zero for any theme that declares a family it does not ship (CI/doctor use).
+- `--root <dir>` points it at a theme tree other than the default `marketplace/themes`. That
+  directory no longer exists in this repository, so in practice pass `--root backend/themes`.
 - Fonts live **inside each theme**, not in a shared store: a catalog theme installs by unpacking its zip, so a theme whose faces lived elsewhere would come up with no type at all when installed by hand or restored from a backup.
 - The sibling script `scripts/vendor-theme-fonts.mjs <slug>` does the same job for a hand-written theme that already has a remote Google Fonts `@import` to rewrite.
 
@@ -711,7 +707,7 @@ closest-match suggestion.
 ```
 
 A flat map. The name must exist in the token manifest (`backend/public/theme-tokens.json`,
-754 tokens) — or be one of the documented `--wjs-footer-*` chrome-bridge tokens, which are valid
+778 tokens) — or be one of the documented `--wjs-footer-*` chrome-bridge tokens, which are valid
 even before the manifest learns them. Editor-internal `--wjs-r-*` tokens are rejected. Values
 follow the portable token rules: non-empty, ≤ 120 chars, charset `#a-zA-Z0-9 ,.%()/_'"-`
 (spaces allowed), no backslash, no `//`, no `url()`, and every parenthesis and quote **balanced**.
@@ -769,33 +765,58 @@ warning is not certified correct** — it is either fine or unjudged. Source:
 ### `styles` — nested element styling
 
 Top-level keys are **themable elements**: every entry of the manifest's `elements` registry
-(33 entries — 29 `.wp-block-*` blocks such as `hero`, `card`, `button`, `posts-grid`, … plus the
-four chrome entries `header`, `logo`, `nav` and `footer`, each with a `selector` and optional
-`children`) plus three globals: `body` (selector `body`), `headings`
-(`h1,h2,h3,h4,h5,h6`) and `links` (`a`). Inside an element you can nest:
+(51 entries — 29 `.wp-block-*` blocks such as `hero`, `card`, `button`, `posts-grid`, … plus 22
+platform surfaces that are not blocks: the chrome (`header`, `logo`, `nav`, `footer`,
+`chromeHeader`, `chromeFooter`, `chromeSearch`, `headerNav`), the post/listing surfaces
+(`singlePost`, `postCard`, `postList`, `postMeta`), search (`searchPage`, `searchForm`,
+`searchResults`, `searchResult`), comments (`comments`, `comment`) and the four `plugin:faq:*`
+entries — each with a `selector` and optional `children`) plus three globals: `body` (selector
+`body`), `headings` (`h1,h2,h3,h4,h5,h6`) and `links` (`a`). Inside an element you can nest:
 
 - **CSS properties** — `"background": "#0f172a"`, `"letter-spacing": "0.08em"`, …
 - **children** — one level, from the element's `children` in the manifest
-  (e.g. `hero` → `title`, `subtitle`, `button`, `actions`, `inner`, `overlay`)
+  (e.g. `hero` → `title`, `subtitle`, `button`, `buttonOutline`, `actions`, `inner`, `overlay`)
 - **states** — `hover`, `focus`, `active`, `disabled` (cannot nest inside another state)
-- **breakpoints** — `mobile`, `tablet`, `desktop` (cannot nest inside states or other
-  breakpoints; states *can* nest inside breakpoints and children)
+- **positions** — `first`, `last` (`:first-child` / `:last-child`; cannot nest inside another
+  position)
+- **pseudo-elements** — `before`, `after`, `placeholder` — always **last** in the selector, so
+  nothing may nest inside one
+- **breakpoints** — the seven keys below (cannot nest inside states or other breakpoints; states
+  *can* nest inside breakpoints and children)
 
-The framework's breakpoints are fixed:
+CSS order is fixed regardless of the order you write them in: position, then state, then the
+pseudo-element (`.x:first-child:hover::before`).
+
+The framework's breakpoints are fixed — four widths and three preference queries:
 
 | Key | Media query |
 | :-- | :-- |
 | `mobile` | `@media (max-width: 767.98px)` |
 | `tablet` | `@media (min-width: 768px) and (max-width: 1023.98px)` |
 | `desktop` | `@media (min-width: 1024px)` |
+| `belowDesktop` | `@media (max-width: 1023.98px)` |
+| `motionOk` | `@media (prefers-reduced-motion: no-preference)` |
+| `reducedMotion` | `@media (prefers-reduced-motion: reduce)` |
+| `dark` | `@media (prefers-color-scheme: dark)` |
+
+`tablet` is a **band**, not "up to tablet" — that is why `belowDesktop` has its own name rather than
+being approximated by it.
 
 #### Token-vs-declaration resolution
 
-For each property at the base level (not inside a state or breakpoint) the compiler builds
-token-name candidates — `--wjs-<element>-<child>-<prop>` then `--wjs-<element>-<prop>` — from the
-key **as written**. If a candidate exists in the manifest, the value is emitted as that **token**
-in `:root` (token value rules above). That is why the short manifest suffixes work as keys:
-`styles.hero.bg` → `--wjs-hero-bg`, `styles.hero.button.bg` → `--wjs-hero-button-bg`.
+For each property at the base level (not inside a state, position, pseudo-element or breakpoint, and
+never inside a variation) the compiler builds **one** token-name candidate from the key **as
+written**: `--wjs-<element>-<child>-<prop>` under a child, `--wjs-<element>-<prop>` otherwise. If it
+exists in the manifest, the value is emitted as that **token** in `:root` (token value rules above).
+That is why the short manifest suffixes work as keys: `styles.hero.bg` → `--wjs-hero-bg`,
+`styles.hero.button.bg` → `--wjs-hero-button-bg`.
+
+**A child never falls back to its parent's token.** It used to, and that was a rule which validated
+and did the opposite of what it said: `styles.accordion.itemOpen.border-color` finds no
+`--wjs-accordion-itemopen-border-color` (child keys are camelCase and token names are kebab, so a
+variant child can never match), fell through to `--wjs-accordion-border-color`, and repainted every
+item from `:root`. A child prop with no child token now becomes a literal declaration on the child's
+own, narrower selector.
 
 Otherwise the key must be a **standard CSS property**, and the pair is emitted as a **declaration**
 on the element's mapped selector, validated with css-tree: the property must be known standard
@@ -803,9 +824,9 @@ CSS, the value must parse *and* match the property's grammar, and the output is 
 from the parsed AST — the raw string from `theme.json` never reaches `style.css`, so
 `red;} body{...}`-style injection cannot survive. `url()` is allowed **only** for the theme's own
 assets (`/themes/<slug>/…`); `@import` and author-written selectors cannot be expressed at all.
-Inside states and breakpoints everything is a declaration — `styles.hero.button.hover.background`
-becomes `.wp-block-hero__button:hover { background: … }` even though a `bg` token exists for the
-base level.
+Inside a state, position, pseudo-element or breakpoint everything is a declaration —
+`styles.hero.button.hover.background` becomes `.wp-block-hero__button:hover { background: … }` even
+though a `bg` token exists for the base level.
 
 > **`var()` *is* accepted in a `styles` declaration value**, and referencing a token is the normal
 > thing for a theme to write: `"styles": { "hero": { "box-shadow": "0 0 0 1px var(--wjs-border-subtle)" } }`
@@ -961,8 +982,11 @@ never be confused with the doctor's own).
 | `TOKEN_VALUE_INVALID` | A token value breaks the portable rules above (charset, length, `//`, `url()`, backslash, unbalanced parenthesis/quote) — including a `styles` key that resolves to a token. |
 | `STYLES_INVALID` / `ELEMENT_UNKNOWN` / `STYLE_UNKNOWN_KEY` / `STYLE_INVALID_VALUE` | The `styles` tree: not an object, an element outside the manifest's registry, a key that is not a child/state/breakpoint here (states cannot nest in states; breakpoints cannot nest in states or breakpoints), or a value that is neither string/number nor object. |
 | `VARIATIONS_INVALID` / `VARIATION_NAME_INVALID` | `styles.variations` is not an object, or a variation name is not a bare class token (`^[a-z][a-z0-9-]{0,39}$`, the same shape a template's `className` accepts). A rejected name emits **nothing** — no selector, no declaration. |
-| `PROPERTY_UNKNOWN` / `VALUE_TOO_LONG` / `VALUE_INVALID` / `URL_FORBIDDEN` | A declaration: non-standard property (or a `--custom` one, which only `tokens` may write), value over 300 chars, value that does not parse or does not match the property grammar (this is where `var()` lands), or a `url()` outside `/themes/<slug>/`. |
+| `PROPERTY_UNKNOWN` / `VALUE_TOO_LONG` / `VALUE_INVALID` / `URL_FORBIDDEN` | A declaration: non-standard property (or a `--custom` one, which only `tokens` may write), value over 300 chars, value that does not parse or does not match the property grammar, or a `url()` outside `/themes/<slug>/`. A `var()` reference to something that is not a `--wjs-*` name also lands in `VALUE_INVALID`; one that *is* `--wjs-*` but absent from the manifest raises `TOKEN_UNKNOWN` with a did-you-mean. |
 | `TOO_MANY_DECLARATIONS` | Over the 2,000-declaration cap; the remaining declarations are dropped. |
+| `ANIMATIONS_INVALID` / `ANIMATIONS_BUDGET` | `animations` is not an object, or declares more than 16. |
+| `ANIMATION_NAME_INVALID` / `ANIMATION_INVALID` / `ANIMATION_BUDGET` / `ANIMATION_FRAME_INVALID` | One animation: a name that is not `[a-z][a-z0-9-]{0,39}`, a non-object or empty frame map, over 12 frames, or a frame key that is not `from`, `to` or a 0–100 percentage. A bad frame withholds the **whole** `@keyframes` — a half-emitted animation snaps instead of easing. |
+| `ANIMATION_UNKNOWN` | An `animation`/`animation-name` value references a `wjs-a-*` ident `animations` never declared (with a did-you-mean). |
 
 **Compiler warnings** — these do **not** block the write:
 
@@ -970,6 +994,8 @@ never be confused with the doctor's own).
 | --- | --- |
 | `TOKEN_VALUE_GRAMMAR` | The value matches no consuming property's grammar (see the section above, including why coverage is partial). |
 | `DERIVED_TOKEN_INVALID` | A token coming back from `deriveTokens()` has an invalid name or value; that one token is skipped. |
+| `ANIMATION_UNUSED` | An animation `animations` declares that no `styles` declaration references — it compiles to dead CSS. |
+| `ANIMATION_UNGUARDED` | An animation referenced outside `motionOk` with no `reducedMotion` override on the same selector. |
 
 **Doctor-only findings** (`doctor theme <slug>` / `GET /api/v1/themes/:slug/doctor`) — everything
 above still shows up here as `DECLARATIVE_*`:
@@ -977,6 +1003,8 @@ above still shows up here as `DECLARATIVE_*`:
 | Level | Code | Meaning |
 | --- | --- | --- |
 | error | `THEME_NOT_FOUND`, `STYLE_UNREADABLE` | No such theme dir (or a bad slug); `style.css` missing/unreadable. |
+| error | `TEMPLATE_INVALID` | A `templates/<name>.json` the theme ships violates the page-template contract, so the file is inert and the page falls back to the default arrangement. One finding per offending path; `detail.rule` carries the contract code. |
+| warning | `TEMPLATE_UNREADABLE` | A `templates/*.json` that cannot be read or is not valid JSON. |
 | error | `CHROME_INVALID` | A composition the theme ships — `chrome/header.json`, `chrome/footer.json`, or any declared template part — violates the chrome contract, so the file is inert (the renderer falls through to the next level, or renders nothing for a part). One finding per offending block path. `detail.rule` carries the contract code — including `CHROME_BLOCK_NOT_IN_PART`, a block that owns document-level state placed in a **template part** rather than the site chrome. |
 | warning | `CHROME_UNREADABLE` | The chrome file cannot be read, or is not valid JSON. |
 | error | `TEMPLATE_PART_INVALID` | `theme.json` `templateParts` breaks its contract (bad name/area, a duplicate, `header`/`footer`, an unknown key, over 16). The declaration fails closed as a whole, so **no** part loads. |
@@ -985,9 +1013,10 @@ above still shows up here as `DECLARATIVE_*`:
 | warning | `TEMPLATE_PART_UNDECLARED` | A `chrome/*.json` that is neither the site header/footer nor declared — nothing can ever reference it. |
 | warning | `THEME_JSON_INVALID` | `theme.json` is not valid JSON — a warning here (not an error) because the site still renders from `parseThemeMetadata()`'s defaults. |
 | warning | `LAYOUT_UNKNOWN_KEY` / `LAYOUT_INVALID_VALUE` | The `layout` block against `backend/public/theme-layouts.schema.json`. |
-| warning | `UNKNOWN_TOKEN` / `ALIAS_OVERRIDE` / `EDITOR_INTERNAL` | A declared `--wjs-*` name that is not in the contract (with a did-you-mean), one of the 21 aliases, one of the 22 `--wjs-r-*`. |
+| warning | `UNKNOWN_TOKEN` / `ALIAS_OVERRIDE` / `EDITOR_INTERNAL` | A declared `--wjs-*` name that is not in the contract (with a did-you-mean), one of the 22 aliases, one of the 22 `--wjs-r-*`. |
 | warning | `MISSING_ON_COLOR` / `LOW_CONTRAST` | A surface color without its `--wjs-color-on-*` pair (a value is suggested by luminance when the color is hex); main text over main background below 3:1. |
 | warning | `EXTERNAL_REF` | `http(s)://` or protocol-relative `//` in an `@import`/`url()`. |
+| warning | `DEAD_RULE` | A compiled declaration a higher-specificity `wordjs-ui.css` rule always beats — it validates, compiles and ships, and the browser never paints it. The canonical case is headings: the compiler emits `.wp-block-heading { font-size: … }` (0,1,0) while ui.css declares `font-size` on `h1.wp-block-heading`…`h6.wp-block-heading` (0,1,1). The message names the winning selector and, where the winner reads one, the token to set instead. |
 | warning | `GENERATED_MARKERS` | Not exactly one matched marker pair — a duplicate block wins the cascade, an unclosed one is never rewritten. Fix by recompiling. |
 | warning | `STALE_GENERATED` | `theme.json` has declarative sections but `style.css` has no generated block at all. |
 | warning | `VARIATION_UNUSED` / `VARIATION_UNDECLARED` | The [`styles.variations`](#stylesvariations--styling-a-class-your-own-template-names) × template pairing: a variation no template names, or a template class nothing styles. The only check that reads `theme.json` and `templates/` together — neither validator can see it alone. |
@@ -1304,32 +1333,33 @@ site without a template.
 
 ## Installing a Theme
 
-Building a theme by hand isn't the only way to add one. The **`default`** theme ships bundled in
-`backend/themes/`; the other 64 first-party themes are
-distributed through the **theme marketplace** and installed on demand. WordJS ships two admin-only
-install paths — both land the theme in the same `backend/themes/{slug}/` layout described above.
+Building a theme by hand isn't the only way to add one. Four first-party themes ship bundled in
+`backend/themes/`; anything else arrives through the **theme marketplace** or a ZIP. WordJS ships two
+admin-only install paths — both land the theme in the same `backend/themes/{slug}/` layout described
+above.
 
 ### From the theme marketplace
 
 In **Admin → Themes** the page has **Installed | Marketplace** tabs; the Marketplace tab lists the
-first-party catalog and installs a theme in one click. The frontend `themesMarketplaceApi`
+configured catalog and installs a theme in one click. The frontend `themesMarketplaceApi`
 (`frontend/src/lib/api.ts`) drives the theme-catalog routes in `backend/src/routes/marketplace.ts` —
 `GET /marketplace/themes/catalog` (browse) and `POST /marketplace/themes/install` (fetch, verify, then
 unpack via `installThemeFromZip()`), both admin-gated. The catalog origin is admin-configurable and
 independent of the plugin marketplace via `GET`/`PUT /marketplace/themes/sources` (backed by the
 `marketplace_theme_sources` option).
 
-> **The first-party catalog is fully declarative.** All **64** marketplace themes ship a
-> `theme.json` with `generator: "wordjs"`, `seeds`, `tokens` and `layout`, and a `style.css`
-> that is a relative `@import url('fonts.css');` followed by the compiled `@wjs-generated` block —
-> 260–325 tokens each. `styles` is the optional fourth key: **20** of the 64 declare it, the other
-> **44** are tokens-only. None of them declares an `archetype`. Ten (`carbon-terminal`, `clay-pop`,
-> `cobalt-corporate`, `mono-lab`, `neo-digital`, `pop-studio`, `sage-calm`, `sorbet-play`,
-> `swiss-minimal`, `verdant-studio` — all of them also `styles` users) add hand-written chrome CSS
-> **below** the generated block, targeting the `.wjs-chrome-*` hook classes. The bundled `default` is the one
-> hand-authored first-party theme. New marketplace themes must follow the declarative
-> `theme.json` contract; hand-authored themes keep working everywhere else, but the doctor flags
-> them with an informational `LEGACY_THEME` finding to encourage migration.
+> **There is no first-party catalog to browse today.** The catalogue that used to fill this tab was
+> retired (`e603fc4f`) and `marketplace/themes/` was removed, so the index
+> `backend/scripts/build-marketplace.js` produces has `count: 0`. The routes, the source list and the
+> install pipeline are unchanged — point `marketplace_theme_sources` at your own origin and the tab
+> lists whatever that catalog holds.
+>
+> **New themes should be declarative.** The three declarative bundled themes are the working
+> reference: a `theme.json` with `generator: "wordjs"`, `seeds`, `tokens`, `layout`, `styles` and
+> `animations`, and a `style.css` that is (for `circuito`/`vergel`) a relative
+> `@import url('fonts.css');` followed by the compiled `@wjs-generated` block. Hand-authored themes
+> keep working everywhere — `default` is one — but the doctor flags them with an informational
+> `LEGACY_THEME` finding to encourage migration.
 
 ### From a ZIP upload
 
@@ -1487,14 +1517,18 @@ header {
 
 ### Containment Rules
 
-All editor blocks have built-in overflow containment (shipped in the framework `backend/public/css/wordjs-ui.css`, which contains wide content — tables/`pre` scroll in their own container, long strings wrap — at every width):
+The framework (`backend/public/css/wordjs-ui.css`) contains wide content at every width, so author
+content never forces body-level horizontal scroll. There is no blanket `[class*="wp-block-"]` rule —
+containment is applied where it is needed, on named surfaces:
 
 ```css
 /* Already defined in wordjs-ui.css */
-[class*="wjs-block-"], [class*="wp-block-"] {
-  overflow: hidden;
-  max-width: 100%;
-}
+.wjs-content table, .puck-content table { display: block; max-width: 100%; overflow-x: auto; }
+.wjs-content pre,   .puck-content pre   { max-width: 100%; overflow-x: auto; }
+.wjs-content, .widget-area { overflow-wrap: break-word; }
+.puck-content, .wjs-block-text, .wp-block-text, .wjs-block-heading, .wp-block-heading,
+.wjs-block-card, .wp-block-card { overflow-wrap: break-word; word-break: break-word; }
+.wjs-block-table, .wp-block-table { width: 100%; overflow-x: auto; }
 ```
 
 ## Dark Mode Considerations

@@ -29,9 +29,21 @@ and several model capabilities (repeat, toggle, ranges) that exist in the data m
 panel controls. The roadmap below closes the breadth gap without surrendering a single
 architectural guarantee.
 
+> That breadth verdict is the Phase-0 reading and the roadmap has since been executed: §3 marks
+> P1–P7 SHIPPED and §3.1 marks P9–P13 SHIPPED. Each of the four gaps named in the paragraph above —
+> properties, easing, the pointer trigger, multi-track editing — was closed by P3, P2, P6 and P5
+> respectively, and repeat/toggle/ranges got their panel controls in P1.
+
 ---
 
 ## 1. Scorecard by capability area
+
+> **The "Verso today" column is the Phase-0 snapshot and several of its cells are now out of date.**
+> §3 below records what the P1–P13 cycles then built; where the two disagree, §3 and the code win.
+> The cells contradicted by `frontend/src/lib/verso/interactions/types.ts` today: scrub smoothing is
+> offered (`scrub.smooth`, P10), the pointer trigger exists (`{on:"pointer", area:"self"|"page"}`,
+> P6), and the custom-event trigger exists (`{on:"event", name}`, P11) — all three are listed below
+> as "Not offered"/"Absent". `click.toggle` and `IxRange` gained their panel controls in P1.
 
 ### 1.1 Triggers
 

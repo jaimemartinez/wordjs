@@ -5,7 +5,7 @@ Paste the two blocks below into Stitch: the **design system** fields first, then
 prompt**. They are generated from the live contract, so what comes back maps onto a theme
 without leftovers — every component listed is one WordJS styles, and nothing else is asked for.
 
-Contract at time of generation: **753 tokens**, **33 styleable elements**, source `backend/public/css/wordjs-ui.css`.
+Contract at time of generation: **778 tokens**, **51 styleable elements**, source `backend/public/css/wordjs-ui.css`.
 
 ## 1. Design system
 
@@ -41,7 +41,7 @@ to outlive its timeout: poll `list_screens` afterwards instead of retrying.
 ### Screen 1 — Chrome and hero
 
 > A landing top: slim header with a wordmark left, a horizontal nav and one small outlined button at the right end; below it a hero band with a display headline, one paragraph and two buttons side by side (one solid, one outlined).
-> Make these parts visible: link, actions, button, inner, overlay, subtitle, title.
+> Make these parts visible: actionButton, text, link, linkOutline, linkPrimary, linkSecondary, actions, button, buttonOutline, inner, overlay, subtitle, title.
 > Show each button and link at rest and hovered. Flat fills, hairline borders, no drop
 > shadows, one accent used sparingly, body copy on the neutral ink colour. No carousels,
 > collages, overlapping cards or diagonal dividers, and no sidebar — the renderer owns the
@@ -50,7 +50,7 @@ to outlive its timeout: poll `list_screens` afterwards instead of retrying.
 ### Screen 2 — Editorial column
 
 > An article page: H1 through H4 in order, body paragraphs with one inline link, and a pull quote with its citation.
-> Make these parts visible: cite, mark.
+> Make these parts visible: h1, h2, h3, h4, h5, h6, bar, body, cite, large, mark.
 > Show each button and link at rest and hovered. Flat fills, hairline borders, no drop
 > shadows, one accent used sparingly, body copy on the neutral ink colour. No carousels,
 > collages, overlapping cards or diagonal dividers, and no sidebar — the renderer owns the
@@ -59,7 +59,7 @@ to outlive its timeout: poll `list_screens` afterwards instead of retrying.
 ### Screen 3 — Cards, pricing and figures
 
 > A plans page: a row of three feature cards (icon, title, description), a pricing row of three tiers with the middle one featured, and a strip of three big figures with captions.
-> Make these parts visible: description, icon, title, items, button, feature, features, name, period, plan, price, item, label, value.
+> Make these parts visible: description, icon, themeAccent, themeDark, themeLight, title, items, button, feature, features, name, period, plan, planHighlighted, price, item, label, value.
 > Show each button and link at rest and hovered. Flat fills, hairline borders, no drop
 > shadows, one accent used sparingly, body copy on the neutral ink colour. No carousels,
 > collages, overlapping cards or diagonal dividers, and no sidebar — the renderer owns the
@@ -68,7 +68,7 @@ to outlive its timeout: poll `list_screens` afterwards instead of retrying.
 ### Screen 4 — Disclosure and forms
 
 > A support page: an FAQ accordion with one item open and one closed, a tab bar with one tab selected, a search field, and a single customer testimonial with author and role.
-> Make these parts visible: header, icon, item, panel, list, tab, button, input, author, avatar, mark, person, quote, role.
+> Make these parts visible: header, icon, iconOpen, item, itemOpen, panel, panel-body, list, tab, tabActive, button, input, author, avatar, avatarInitials, mark, person, quote, role.
 > Show each button and link at rest and hovered. Flat fills, hairline borders, no drop
 > shadows, one accent used sparingly, body copy on the neutral ink colour. No carousels,
 > collages, overlapping cards or diagonal dividers, and no sidebar — the renderer owns the
@@ -77,7 +77,7 @@ to outlive its timeout: poll `list_screens` afterwards instead of retrying.
 ### Screen 5 — Post list and footer
 
 > A blog index: three post cards (placeholder image, date, title, excerpt), a full-width call-to-action band with a headline and one button, and the site footer with a wordmark, three link columns and social icons.
-> Make these parts visible: card, date, empty, excerpt, thumb, title, card-title, heading, item, link, note, button, subtitle.
+> Make these parts visible: card, date, empty, excerpt, thumb, title, card-title, grid, heading, item, link, list, note, button, subtitle, variantDark, variantGradient, variantPrimary.
 > Show each button and link at rest and hovered. Flat fills, hairline borders, no drop
 > shadows, one accent used sparingly, body copy on the neutral ink colour. No carousels,
 > collages, overlapping cards or diagonal dividers, and no sidebar — the renderer owns the
@@ -96,16 +96,24 @@ Do not design new navigation patterns — a theme selects one of these:
 - **header**: `classic`, `centered`, `minimal` (also: sticky, transparent)
 - **footer**: `columns`, `minimal` (also: columns)
 
+<!-- The block list below is HAND-RESTORED, not generated. `chromeBlocks()` in
+     scripts/generate-stitch-brief.js scrapes `backend/src/core/chrome-validate.ts` for
+     /^\s{4}(Chrome[A-Za-z]+):\s*\{/, but the allowlist moved into
+     backend/src/generated/visual-contract.generated.ts (key `blocks`, generated from
+     contracts/visual-contract.v1.json). The regex matches nothing there, so the generator
+     now emits an EMPTY list. Fix the scraper to read the generated contract, then delete
+     this note. The nine names below were read from that contract's `blocks` key. -->
 For a header or footer beyond those variants, the theme ships a COMPOSITION built only from
-these blocks: `ChromeButton`, `ChromeLogo`, `ChromeNav`, `ChromeRow`, `ChromeSearch`, `ChromeSiteTitle`, `ChromeSocials`, `ChromeSpacer`, `ChromeText`. Design accordingly — a header
+these blocks: `ChromeButton`, `ChromeLogo`, `ChromeNav`, `ChromeRow`, `ChromeSearch`,
+`ChromeSiteTitle`, `ChromeSocials`, `ChromeSpacer`, `ChromeText`. Design accordingly — a header
 that cannot be expressed as a row of those blocks cannot be shipped as a theme.
 
 ## 4. What gets read back
 
 The design is mined for these token families (count = how many exist today):
 
-- Global: `color` (32), `font` (5), `radius` (5), `shadow` (6), `border` (3), `space` (2)
-- Per component: `cta` (55), `pricing` (49), `card` (40), `accordion` (38), `form` (37), `hero` (37), `audio` (34), `tabs` (29), `testimonial` (29), `search` (26), `button` (25), `catposts` (24), `r` (22), `stats` (22)
+- Global: `color` (33), `font` (5), `radius` (6), `shadow` (6), `border` (3), `space` (2)
+- Per component: `cta` (57), `pricing` (53), `accordion` (40), `card` (40), `hero` (38), `form` (37), `audio` (36), `testimonial` (30), `tabs` (29), `button` (26), `search` (26), `catposts` (24), `posts` (22), `r` (22)
 
 Anything the design expresses that has no token is either a per-instance choice the page
 author makes in the editor, or it does not survive into the theme.

@@ -11,8 +11,8 @@ The **WordJS Gateway** (`gateway/src/index.js`) is an enterprise-grade entry poi
 *   **🚀 Cluster Mode:** High-availability multiprocess architecture using Node.js `cluster`. The primary spawns one worker per CPU core, capped at **4 in development** (`nodeEnv === 'development'`) and **16 otherwise**; a worker that dies is automatically respawned.
 *   **🛡️ Resiliency (Circuit Breaker):** 
     *   **Health Checks:** The primary polls each registered target's `/health` every **30s** (5s per-probe timeout). Probes run concurrently and a given target URL is fetched only once per sweep even if shared across routes; a 4xx response still counts as "alive".
-    *   **Auto-Eviction:** A target is marked `Failing` on error and ejected after **3 consecutive failures**; if a route's last target is evicted, the route itself is removed (no empty target group). Per-target health status (`Healthy`/`Failing`) is persisted to the registry file and broadcast to workers so they stop selecting failing upstreams.
-*   **🔌 Intelligent Load Balancing:** Round-robin distribution across multiple instances of the same service. A route whose targets all become unhealthy is removed cleanly (no crash on an empty target group), and health metrics are persisted in the registry file so reloaded workers keep avoiding failing upstreams.
+    *   **Auto-Eviction:** A target is marked `Failing` on error and ejected after **3 consecutive failures**; the **route itself stays**, empty. Deleting it is what used to let a restarting backend's `/api` fall through to the frontend's `/` catch-all, so an emptied group now resolves to "no target" (the caller degrades to the loopback bootstrap or a 502) and only a re-registration may change who owns a route. Per-target health status (`Healthy`/`Failing`) is persisted to the registry file and broadcast to workers so they stop selecting failing upstreams.
+*   **🔌 Intelligent Load Balancing:** Round-robin distribution across multiple instances of the same service. A route whose targets all become unhealthy resolves to no target rather than leaking to another role's group, and health metrics are persisted in the registry file so reloaded workers keep avoiding failing upstreams.
 *   **🌪️ Log Rotation:** Structured JSON logging via **Winston** with daily file rotation (`logs/gateway-*.log`).
 *   **🔒 Security & Protection:**
     *   **Helmet:** Secure HTTP headers out of the box.
@@ -56,7 +56,7 @@ Services register themselves dynamically on startup over the **internal mTLS con
 mTLS proves *who* the peer is; four further checks constrain *what* it may claim, and a registration failing any of them is refused (400/403) rather than applied:
 
 *   **At least one route** — a routes-less registration would only ever evict, so it is rejected as an eviction primitive.
-*   **Routes must belong to the CN's role.** `backend` may claim `/api`, `/uploads`, `/themes`, `/plugins`, `/.well-known`, `/healthz`, `/readyz`, `/metrics`; `frontend` may claim `/`, `/admin`, `/login`, `/install`, `/migration`, `/portal`, `/_next`. (Without this a compromised `frontend` could register `/api/v1/auth` and win the longest-prefix match for every login.)
+*   **Routes must belong to the CN's role.** `backend` may claim `/api`, `/uploads`, `/themes`, `/plugins`, `/public`, `/.well-known`, `/healthz`, `/readyz`, `/metrics`; `frontend` may claim `/`, `/admin`, `/login`, `/install`, `/migration`, `/portal`, `/_next`. (Without this a compromised `frontend` could register `/api/v1/auth` and win the longest-prefix match for every login.)
 *   **The target URL's host must be covered by the peer's own certificate** (a SAN entry, its CN, or loopback), so a peer cannot point a route at another box.
 *   **Ownership** — a target URL may only be (re)registered by the identity that first registered it. Owners are persisted in the registry file, so this survives a primary restart.
 
@@ -74,7 +74,7 @@ The gateway consumes the **single-use, role-bound, TTL** token (minted by `node 
 
 ### Pre-install bootstrap route (SPLIT, one host)
 
-On a box that has never been set up there is no cluster identity, so neither service can register and the registry is empty — which would 404 the very install wizard needed to issue those certificates. To break that deadlock, a request whose path matches no registered route falls back to `127.0.0.1` on **this** host: `config.backendPort` (default `4000`) for `/api`, `/uploads`, `/themes`, `/plugins`, `/.well-known`, `/readyz` and `/metrics`, and `config.frontendPort` (default `3001`) for everything else. (`/healthz` never reaches it — the worker answers that one itself.) The fallback engages **only while the service owning that route has never registered**, so on a healthy cluster — including a separate-mode gateway whose peers are on other machines — an unknown path still 404s. Whether each peer is dialled over HTTPS or plain HTTP is decided once at gateway startup from whether its identity cert is on disk, and flipped automatically on the first connection-level protocol mismatch.
+On a box that has never been set up there is no cluster identity, so neither service can register and the registry is empty — which would 404 the very install wizard needed to issue those certificates. To break that deadlock, a request whose path matches no registered route falls back to `127.0.0.1` on **this** host: `config.backendPort` (default `4000`) for the backend's own prefixes (`/api`, `/uploads`, `/themes`, `/plugins`, `/public`, `/.well-known`, `/readyz`, `/metrics`) and `config.frontendPort` (default `3001`) for everything else. It classifies with the same `routing.js` map the proxy uses rather than a second hand-kept list, so `/api/revalidate` — a Next App Router route — still goes to the frontend. (`/healthz` never reaches it — the worker answers that one itself.) The fallback engages **only while the service owning that route has never registered**, so on a healthy cluster — including a separate-mode gateway whose peers are on other machines — an unknown path still 404s. Whether each peer is dialled over HTTPS or plain HTTP is decided once at gateway startup from whether its identity cert is on disk, and flipped automatically on the first connection-level protocol mismatch.
 
 ## Monitoring
 
@@ -91,11 +91,11 @@ The Primary process manages the global registry, health checks, atomic persisten
 
 > **SEPARATE mode:** the gateway is the same process; it just proxies to backend/frontend on **other machines** whose mTLS identities were bootstrapped via join-token enrollment. The gateway is the cluster CA (`node scripts/cluster.js init`) and the single owner of the registry + certs. See **[separate-mode.md](separate-mode.md)** for the end-to-end walkthrough.
 
-> **Known follow-up:** a strict Content-Security-Policy is currently **disabled** in the gateway's Helmet config and is a documented hardening item. Operators must also set a strong `gatewaySecret` and provide real cluster/mTLS certificates before production.
+> **Known follow-up:** the gateway's Helmet config now sets a Content-Security-Policy (`gateway/src/security-headers.js`), but a deliberately permissive one: it mirrors the backend's policy shape, so `script-src` keeps `'unsafe-inline'`/`'unsafe-eval'` and `img-src`/`connect-src` stay open. It also governs only the responses the gateway generates itself (error pages, `/gateway-status`, the pre-install bootstrap) — a proxied upstream writes its headers last, so its own CSP wins. Tightening it is the remaining hardening item. Operators must also set a strong `gatewaySecret` and provide real cluster/mTLS certificates before production.
 
 ## Testing
 
-An integration test lives at `gateway/test/proxy.integration.test.js` (using `node:test`). It covers Host forwarding (`changeOrigin` rewrite + `X-Forwarded-Host` preservation), mTLS accept with the correct CA, MITM reject with a rogue CA, and wrong-CN reject. Run it from the gateway directory:
+`npm test` runs `node --test test/*.test.js` over the whole `gateway/test/` suite. The proxy/mTLS integration test in it is `gateway/test/proxy.integration.test.js` (using `node:test`); it covers Host forwarding (`changeOrigin` rewrite + `X-Forwarded-Host` preservation), mTLS accept with the correct CA, MITM reject with a rogue CA, and wrong-CN reject. Run it from the gateway directory:
 
 ```bash
 cd gateway

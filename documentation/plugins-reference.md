@@ -99,8 +99,8 @@ Manages image carousels for Hero sections or content sliders.
 
 *   **Shortcode:** `[carousel id="123"]` (async — expanded via `doShortcodeAsync`)
 *   **Verso block:** `client/verso/PhotoCarouselVerso.tsx` (registry key `PhotoCarousel`; renders the `HeroCarousel` location component internally)
-*   **Permissions:** `settings` (read/write), `database` (write).
-*   **Sandbox:** isolated (like every plugin). Routes namespaced under `/api/v1/plugin/photo-carousel/*`. Default-deny: an admin grants its declared `settings`/`database` capabilities in `/admin/plugins`.
+*   **Permissions:** `settings` (read/write), `database` (write), `express` (register_route), `admin_menu` (register).
+*   **Sandbox:** isolated (like every plugin). Routes namespaced under `/api/v1/plugin/photo-carousel/*`. Default-deny: an admin grants its declared capabilities in `/admin/plugins`.
 
 ---
 
@@ -113,8 +113,8 @@ anchor id.
 
 *   **Rendering:** via the block itself (no shortcode is registered at runtime — `index.js` calls no `shortcodes.add`). `client/components/PromoCards.tsx` is the separate legacy *location* component declared in `frontend.components[]`; the block does not import it.
 *   **Verso block:** `client/verso/CardGalleryVerso.tsx` (registry key `CardGallery`), self-contained — it embeds its own `.promo-card*` CSS.
-*   **Permissions:** `settings` (read/write), `database` (write).
-*   **Sandbox:** isolated (like every plugin). Routes namespaced under `/api/v1/plugin/card-gallery/*`. Default-deny: an admin grants its declared `settings`/`database` capabilities in `/admin/plugins`.
+*   **Permissions:** `settings` (read/write), `database` (write), `express` (register_route), `admin_menu` (register).
+*   **Sandbox:** isolated (like every plugin). Routes namespaced under `/api/v1/plugin/card-gallery/*`. Default-deny: an admin grants its declared capabilities in `/admin/plugins`.
 
 ---
 
@@ -130,8 +130,8 @@ Manages YouTube video carousels. Galleries and their videos are stored in **opti
 *   **Verso Component:** `VideoGalleryVerso` (registry key `VideoGallery`). Note its manifest sets
     `frontend.versoComponents` to `null`; the block is picked up by the generator's **convention
     fallback** on `client/verso/<Pascal>Verso.tsx`.
-*   **Permissions:** `settings` (read/write), `database` (write).
-*   **Sandbox:** isolated (like every plugin). Routes namespaced under `/api/v1/plugin/video-gallery/*`. Default-deny: an admin grants its declared `settings`/`database` capabilities in `/admin/plugins`.
+*   **Permissions:** `settings` (read/write), `database` (write), `express` (register_route), `admin_menu` (register).
+*   **Sandbox:** isolated (like every plugin). Routes namespaced under `/api/v1/plugin/video-gallery/*`. Default-deny: an admin grants its declared capabilities in `/admin/plugins`.
 
 ---
 
@@ -145,7 +145,7 @@ A complete SMTP server and email manager. Allows sending and receiving emails di
     *   Attachment handling (multipart upload parsed by the host, forwarded to the isolate)
     *   DKIM signing (private key stored in the plugin's own DB/files, not a core secret option)
     *   Registers the host-wide mail sender (`provideMail`) and a notification transport
-*   **Requested capabilities:** `settings` (read/write — non-secret SMTP/display options + the safe `site` bridge), `database` (read/write — its own `wjp_mail_server_*` tables), `email` (admin + provider), `notifications` (send/provider), `filesystem` (read/write), `users` (read — resolves local recipients via the safe users projection, never password hashes), `network` (for SMTP / outbound MX).
+*   **Requested capabilities:** `settings` (read/write — non-secret SMTP/display options + the safe `site` bridge), `database` (read/write — its own `wjp_mail_server_*` tables), `email` (admin + provider), `notifications` (send/provider), `filesystem` (read/write), `users` (read — resolves local recipients via the safe users projection, never password hashes), `network` (for SMTP / outbound MX), `express` (register_route), `admin_menu` (register).
 *   **Egress:** because it holds the `network` grant, its outbound connections are validated at connect
     time against the egress guard — direct-MX delivery is **IP-pinned** into nodemailer and only public
     IPs are reachable (loopback/RFC1918/link-local/metadata blocked). An **operator-configured
@@ -225,7 +225,7 @@ feed (latest 15 videos); add a YouTube Data API v3 key for the full upload histo
 *   **Routes:** `GET /`, `GET /status`, `POST /refresh`, `POST /settings` (namespaced under `/api/v1/plugin/youtube-videos/*`)
 *   **Verso block:** `client/verso/YoutubeVideosVerso.tsx` (registry key `YoutubeVideos`) — carousel with title filter + count limit
 *   **Admin page:** `/admin/plugin/youtube`
-*   **Requested capabilities:** `settings` (read/write — configured channel + cached video list), `database` (read/write — the Data API key lives in the plugin's own `wjp_youtube_videos_*` table, **not** in options, because options are readable by other plugins), `network` (fetch youtube.com RSS / googleapis.com Data API — public egress only, like every `network` grant).
+*   **Requested capabilities:** `settings` (read/write — configured channel + cached video list), `database` (read/write — the Data API key lives in the plugin's own `wjp_youtube_videos_*` table, **not** in options, because options are readable by other plugins), `network` (fetch youtube.com RSS / googleapis.com Data API — public egress only, like every `network` grant), `express` (register_route), `admin_menu` (register).
 *   **Sandbox:** isolated (like every plugin). Default-deny: activation grants its declared capabilities, refinable in `/admin/plugins`.
 
 ---
@@ -275,7 +275,7 @@ Test Schema are bundled with core):
 | `auctions` | Auction listings with bidding, anti-snipe extension, live polling, winner reporting | `database` r/w, routes, admin menu, `email:admin` |
 | `bookings` | Appointment booking: services, weekly availability, race-safe slot reservations, email confirmations, admin agenda | `database` r/w, `settings` r/w, routes, admin menu, `email:admin` |
 | `breadcrumbs` | Breadcrumbs Verso block with optional BreadcrumbList JSON-LD | — (frontend-only) |
-| `card-gallery` | Event/promo cards as an alternating-alignment ("zigzag") stack via the `CardGalleryVerso` block | `settings` r/w, `database` write |
+| `card-gallery` | Event/promo cards as an alternating-alignment ("zigzag") stack via the `CardGalleryVerso` block | `settings` r/w, `database` write, routes, admin menu |
 | `conference-manager` | Conference inscriptions/registration, hotel & room auto-assignment, per-inscription payments, attendee portal, reports + CSV export | `database` r/w, routes, admin menu |
 | `contact-forms` | Form builder with a Verso embed block, submissions inbox, CSV export, email notification | `database` r/w, routes, admin menu, `email:admin` |
 | `cookie-consent` | GDPR cookie banner, anonymous consent logging, version-based re-consent | `database` r/w, `settings` r/w, routes, admin menu, `assets:write` |
@@ -287,21 +287,21 @@ Test Schema are bundled with core):
 | `image-lightbox` | Site-wide click-to-zoom lightbox for content images (captions, keyboard nav) | `settings` r/w, routes, admin menu, `assets:write` |
 | `invoices` | Invoices with statuses, dashboard totals, CSV export, public token URL + print view, email to client | `database` r/w, `settings` r/w, routes, admin menu, `email:admin` |
 | `job-board` | Job listings with anti-spam public application form, applications inbox, filterable Verso block | `database` r/w, `settings` r/w, routes, admin menu, `email:admin` |
-| `mail-server` | Full SMTP server: inbound listener + direct-MX outbound delivery, DKIM signing, host-wide mail sender + email notification transport | `settings` r/w, `database` r/w, `email:admin`+provider, `notifications`, `filesystem` r/w, `users` read, `network` |
+| `mail-server` | Full SMTP server: inbound listener + direct-MX outbound delivery, DKIM signing, host-wide mail sender + email notification transport | `settings` r/w, `database` r/w, `email:admin`+provider, `notifications`, `filesystem` r/w, `users` read, `network`, routes, admin menu |
 | `newsletter` | Subscriptions (double opt-in when mail is configured), subscriber CSV, HTML campaigns with unsubscribe links | `database` r/w, routes, admin menu, `email:admin` |
 | `notification-bar` | Slim site-wide announcement bar with CTA, dismissal versioning, schedule window | `settings` r/w, routes, admin menu, `assets:write` |
 | `online-store` | Product catalog (variants, galleries, categories) + cart + checkout with server-side price validation, coupons, shipping zones and taxes, orders admin with refunds and transactional emails, sales reports + CSV, optional Stripe Checkout | `database` r/w, `settings` r/w, routes, admin menu, `email:admin`, `network` |
-| `photo-carousel` | Image carousels for Hero sections / content sliders via the `PhotoCarouselVerso` block + `[carousel]` shortcode | `settings` r/w, `database` write |
+| `photo-carousel` | Image carousels for Hero sections / content sliders via the `PhotoCarouselVerso` block + `[carousel]` shortcode | `settings` r/w, `database` write, routes, admin menu |
 | `polls` | WP-Polls-style polls with a voting + animated-results Verso block | `database` r/w, routes, admin menu |
 | `popup-builder` | Site-wide popups with triggers (delay/scroll/exit intent), frequency capping, view/click stats | `database` r/w, routes, admin menu, `assets:write` |
 | `related-posts` | Automatic per-post related articles via the core public REST API (YARPP parity) | — (frontend-only) |
 | `restaurant-menu` | Menu sections/dishes with photos, diet tags and EU-14 allergens; priced modifier groups; opening-hours gating; cart with WhatsApp hand-off, cash, or Stripe Checkout; QR table ordering, table reservations, a live kitchen board and sales reports | `database` r/w, `settings` r/w, routes, admin menu, `email:admin`, `notifications:send`, `network` |
-| `social-share` | Share buttons Verso block (Facebook, X, WhatsApp, LinkedIn, Telegram, Email, copy link) — the sharing itself is entirely client-side (share intents via `window.open`, copy via the Clipboard API) | — (declares no permissions; its `init` only registers the sidebar item) |
+| `social-share` | Share buttons Verso block (Facebook, X, WhatsApp, LinkedIn, Telegram, Email, copy link) — the sharing itself is entirely client-side (share intents via `window.open`, copy via the Clipboard API) | admin menu only (its `init` just registers the sidebar item) |
 | `table-of-contents` | Automatic nested TOC from page H2/H3 with anchors, smooth scroll, active highlighting | — (frontend-only) |
 | `testimonials` | Database-backed testimonials with moderation and optional public submission form; carousel/grid Verso block | `database` r/w, `settings` r/w, routes, admin menu |
 | `vendor-marketplace` | Multi-vendor directory: vendor applications, admin approval, self-service listings, per-product inquiries | `database` r/w, routes, admin menu, `email:admin` |
-| `video-gallery` | YouTube video carousels via the `VideoGalleryVerso` block + `[vgallery]` shortcode | `settings` r/w, `database` write |
-| `youtube-videos` | Pulls a YouTube channel's videos (keyless RSS or Data API v3) into a filterable, count-limited Verso carousel block | `settings` r/w, `database` r/w, `network` |
+| `video-gallery` | YouTube video carousels via the `VideoGalleryVerso` block + `[vgallery]` shortcode | `settings` r/w, `database` write, routes, admin menu |
+| `youtube-videos` | Pulls a YouTube channel's videos (keyless RSS or Data API v3) into a filterable, count-limited Verso carousel block | `settings` r/w, `database` r/w, `network`, routes, admin menu |
 
 *(“routes” = `express:register_route`; “admin menu” = `admin_menu:register`. Every capability is
 manifest-requested and admin-granted, default-deny, exactly like the bundled plugins. Note that

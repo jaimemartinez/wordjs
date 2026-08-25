@@ -63,7 +63,7 @@ function attachLogLimiter(slug: string, child: any): void {
         let buf = '';
         let windowStart = Date.now();
         let windowBytes = 0, dropped = 0, notified = false;
-        return (chunk: Buffer) => {
+        const sink: ((chunk: Buffer) => void) & { flush: () => void } = ((chunk: Buffer) => {
             try {
                 const now = Date.now();
                 if (now - windowStart > WINDOW_MS) {
@@ -91,10 +91,40 @@ function attachLogLimiter(slug: string, child: any): void {
                     buf = '';
                 }
             } catch { /* logging must never destabilize the host */ }
+        }) as ((chunk: Buffer) => void) & { flush: () => void };
+        /**
+         * THE LAST WORDS OF A CHILD THAT DIED MID-LINE.
+         *
+         * The sink above emits only on a newline, and force-flushes only past 64KB. So a SHORT,
+         * UNTERMINATED write — which is exactly what a launcher prints when it refuses, and what a
+         * runtime prints when it aborts before its own newline — sat in `buf` and was never seen. The
+         * operator got an exit code and silence.
+         *
+         * That is not hypothetical: an isolated plugin failed to start on macOS with
+         * `exited during startup (code 1)` and no output at all, and this buffer is where the
+         * explanation went. Flushed when the stream ends, which is the last moment it can be.
+         */
+        sink.flush = () => {
+            try {
+                if (!buf) return;
+                out.write(TAG + buf + '\n');
+                buf = '';
+            } catch { /* the child is already gone; losing this is not worth a throw */ }
         };
+        return sink;
     };
-    try { if (child.stdout) child.stdout.on('data', makeSink(process.stdout)); } catch { /* */ }
-    try { if (child.stderr) child.stderr.on('data', makeSink(process.stderr)); } catch { /* */ }
+    const attach = (stream: any, out: NodeJS.WritableStream) => {
+        try {
+            if (!stream) return;
+            const sink = makeSink(out);
+            stream.on('data', sink);
+            // 'close' as well as 'end': a killed child can close its pipe without a clean end.
+            stream.on('end', () => sink.flush());
+            stream.on('close', () => sink.flush());
+        } catch { /* */ }
+    };
+    attach(child.stdout, process.stdout);
+    attach(child.stderr, process.stderr);
 }
 
 // ── Runtime supervisor + per-isolate health ──────────────────────────────────────────────────
@@ -2308,6 +2338,11 @@ module.exports = {
     // This platform's native kernel confinement layer (Landlock / AppContainer / Seatbelt / none).
     probePlatformConfinement, getSandboxPlatformState, getSandboxPlatformNetworkState,
     getSandboxPlatformConfinement, platformKernelMechanism,
+    // Exported for its test only. The forwarding sink is line-buffered, and the bug it hid — a child
+    // that dies mid-line losing its only output — is invisible from outside: you would have to spawn a
+    // real plugin that crashes in exactly that shape to observe it. Reaching it directly is what lets
+    // the test drive the flush with a fake stream.
+    attachLogLimiter,
     // Linux-specific diagnostic aliases.
     getLinuxZeroConfState, linuxFloorInForce,
     // Derived: TRUE only in the dangerous "the operator turned this layer ON and it is not there" state.

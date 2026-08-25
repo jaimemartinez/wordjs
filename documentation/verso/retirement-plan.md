@@ -1,5 +1,18 @@
 # Plan de retirada del fork `@wordjs/puck` y del editor legacy
 
+> **HISTORICAL — this plan was carried out; it is no longer a plan.** Every phase below has
+> landed. Gone from the tree: `frontend/packages/puck` (and its `NOTICE.md`),
+> `frontend/src/lib/editorEngine.ts`, `EngineToggle.tsx`, `PuckEditor.tsx`,
+> `PuckEditorSkeleton.tsx`, `BlockInserter.tsx`, `CommandPalette.tsx`, `InlineTiptap.tsx`, and
+> `@tiptap/*` from `frontend/package.json`. The Phase 0/8 renames landed too: `lib/puckI18n.ts` →
+> `lib/editorI18n.ts`, `lib/puckPatterns.ts` → `lib/blockPatterns.ts`, `lib/puckPluginRegistry.ts`
+> → `lib/versoPluginRegistry.ts`, `components/puckConfig.tsx` → `components/versoConfig.tsx`,
+> `components/puck-theme.css` → `components/editor-theme.css`, `components/puck/` →
+> `components/blocks/`, `scripts/generate-puck-plugin-registry.js` →
+> `scripts/generate-verso-plugin-registry.js`. What did NOT change, deliberately: `_puck_data` is
+> still the persisted post-meta key. Kept as the record of the retirement; the file paths and line
+> numbers below point at a tree that no longer exists.
+
 > F5a. Plan EJECUTABLE para después de F7 (verificación final de Verso). Nada de este documento se
 > ejecuta ahora — es la lista de pasos, en orden seguro, para cuando se decida apagar el editor
 > legacy. Cada paso indica qué desbloquea, cómo verificarlo, y qué NO tocar todavía. Basado en la

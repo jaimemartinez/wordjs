@@ -34,8 +34,9 @@ That single command takes you from nothing to the browser install wizard:
    → https://localhost:3000/install?token=…
    ```
 
-Open the URL, pick your database (SQLite — zero config — or PostgreSQL), create your admin
-account, and you're in.
+Open the URL, pick your database, create your admin account, and you're in. The wizard offers
+**SQLite** (zero config, the default), **PostgreSQL** and **MySQL/MariaDB** — all three are certified
+in CI — plus a pure-JS *SQLite (legacy / WASM)* fallback for hosts where the native binary can't load.
 
 ## Requirements
 
@@ -49,6 +50,9 @@ account, and you're in.
 | `--version <tag>` | Install a specific release (e.g. `--version v1.0.0`) instead of the latest. |
 | `--http` | Serve plain HTTP instead of self-signed HTTPS (sets `WORDJS_HTTP=1`). |
 | `--no-start` | Scaffold and install dependencies only — start the server yourself later. |
+| `--yes`, `-y` | Skip the confirmation prompt (required when `upgrade` runs non-interactively). |
+| `--force` | (`upgrade`) Re-apply even if the site is already on the target version. |
+| `--no-install` | (`upgrade`) Swap the code only; skip `npm run release:install`. |
 | `-h`, `--help` | Show usage. |
 
 Separate-mode options:
@@ -68,8 +72,10 @@ Separate-mode options:
 cd .. && npx create-wordjs@latest upgrade my-site      # or run it from inside: npx create-wordjs@latest upgrade .
 ```
 
-Downloads the newest release and replaces the app code while **preserving your data**: the SQLite
-database, `uploads/`, `wordjs-config.json`, gateway secrets and any user-installed plugins survive.
+Downloads the newest release and replaces the app code while **preserving your data**: the database
+directory (`backend/data`), `backend/uploads/`, `wordjs-config.json`, `.env`, gateway secrets
+(`gateway/gateway-config.json`) and any user-installed plugins survive. It asks for confirmation
+before touching an existing install — on a non-interactive shell it refuses unless you pass `--yes`.
 Restart the server afterwards (schema migrations run automatically on the next start).
 
 ## Separate mode (multi-machine)
@@ -95,9 +101,11 @@ npx create-wordjs@latest join frontend --gateway 10.0.0.1 --token <t> --ca-hash 
 ```
 
 Each `join` downloads the release, enrolls against the gateway (the token authorizes exactly one
-certificate signing; it is burned afterwards), then starts the service, which registers with the
-gateway over mTLS. Browse `https://<gateway>:3000` when all three are up. `join` machines need
-`openssl` on the PATH. Full details, port matrix and the manual (source-checkout) procedure:
+certificate signing; it is burned afterwards, and the ones `gateway` printed also expire after 120
+minutes — mint more on the gateway with `node scripts/cluster.js token <backend|frontend>`, which
+defaults to a 60-minute TTL and takes `--ttl <minutes>`), then starts the service, which registers
+with the gateway over mTLS. Browse `https://<gateway>:3000` when all three are up. `join` machines
+need `openssl` on the PATH. Full details, port matrix and the manual (source-checkout) procedure:
 [documentation/separate-mode.md](https://github.com/jaimemartinez/wordjs/blob/main/documentation/separate-mode.md).
 
 ## Good to know
@@ -118,7 +126,9 @@ gateway over mTLS. Browse `https://<gateway>:3000` when all three are up. `join`
 ## What gets created
 
 A ready-to-run WordJS bundle: backend (pre-compiled to `dist/`), frontend (pre-built `.next`),
-gateway, bundled plugins and themes. Secrets (JWT, DB password, install token) are generated
+gateway, the bundled plugins and the four bundled themes (`circuito`, `default`, `gaceta`,
+`vergel`). Marketplace plugins are **not** in the bundle — they ship as separate release assets and
+are installed from the admin. Secrets (JWT, DB password, install token) are generated
 locally during install — nothing sensitive ships in the bundle. See `INSTALL.md` inside the
 scaffolded directory for the manual steps and `documentation/deployment.md` for production
 deployment.

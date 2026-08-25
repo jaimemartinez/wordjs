@@ -4,7 +4,7 @@ Paste the prompt below into **Google Stitch** to generate a landing page that th
 full-fidelity WordJS theme in one command:
 
 ```bash
-node scripts/stitch-to-wordjs-theme.mjs --theme marketplace/themes/<slug> --html <design>.html
+node scripts/stitch-to-wordjs-theme.mjs --theme backend/themes/<slug> --html <design>.html
 ```
 
 The converter **renders your design in headless Chrome and measures the computed styles** (colors, fonts,

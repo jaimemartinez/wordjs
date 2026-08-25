@@ -64,7 +64,8 @@ Located in `backend/src/middleware/permissions.ts` (and `auth.ts`).
 | `authenticate`    | Verifies JWT and attaches `req.user`.  | `router.get('/', authenticate, ...)`                                     |
 | `can(cap)`        | Requires a specific capability.        | `router.post('/', authenticate, can('edit_posts'), ...)`                 |
 | `isAdmin`         | Strict check for 'administrator' role. | `router.delete('/', authenticate, isAdmin, ...)`                         |
-| `ownerOrCan(cap)` | resource owner OR capability.          | `router.put('/:id', authenticate, ownerOrCan('edit_others_posts'), ...)` |
+| `ownerOrCan(cap, getOwnerId)` | resource owner OR capability. `getOwnerId(req)` resolves the record's owner. Exported for extensions; core content routes gate on `canEditPostRecord` instead (§6.2). | `router.put('/:id', authenticate, ownerOrCan('edit_others_posts', getOwnerId), ...)` |
+| `canAny(caps)` / `canAll(caps)` | Any one of / all of a capability list. | `router.get('/', authenticate, canAny(['edit_posts','list_users']), ...)` |
 
 ### 2.3 Dynamic Roles & Capabilities
 Roles are no longer hardcoded. They are stored in the database (table `options`) under the key `wordjs_user_roles`.
@@ -87,7 +88,7 @@ All state-changing requests (`POST`/`PUT`/`PATCH`/`DELETE`) under the API prefix
 *   The `Origin` (or, as a fallback, `Referer`) must match the configured site URL / frontend URL or the request host — an **exact** origin comparison, never a prefix match.
 *   Behind the gateway it honors `X-Forwarded-Host` (the gateway pins it to the real client host) when computing the expected origin.
 *   When **both** `Origin` and `Referer` are absent the request is **rejected** (`403 rest_csrf_invalid`, fail-closed) **unless** it carries a real `Authorization: Bearer <token>` (a genuine server-to-server caller that can't be CSRF'd via an ambient cookie). Cookie-only header-less requests are blocked.
-*   `/api/v1/setup/*` is exempt (it runs before an origin is configured). The exemption is matched on the sub-path derived from `req.originalUrl`, **not** on `req.path`: `csrfProtection` is mounted *with* the API prefix, and Express strips a mount path from `req.url` before the middleware runs, so a comparison against the full `/api/v1/setup` could never be true. Until that was corrected the documented exemption was dead code and a headless installer following this page got a misleading `403 rest_csrf_invalid` on a site with no users. It matches the **segment** (`/setup` or `/setup/…`), not a prefix, so `/setupsomething` is not exempt.
+*   Exactly two paths are exempt — `/setup/install` and `/setup/test-db` — because they run before an origin (or any user) exists. The exemption is an **enumerated set** (`CSRF_EXEMPT_PATHS` in `backend/src/middleware/auth.ts`), not the `/setup` subtree: `POST /setup/migrate` survives installation and authenticates raw credentials from the body, so it needs no ambient cookie and stays subject to the same-origin check. The match is made on the sub-path derived from `req.originalUrl`, **not** on `req.path`: `csrfProtection` is mounted *with* the API prefix, and Express strips a mount path from `req.url` before the middleware runs, so a comparison against the full `/api/v1/setup/install` could never be true. Until that was corrected the documented exemption was dead code and a headless installer following this page got a misleading `403 rest_csrf_invalid` on a site with no users.
 
 ---
 
@@ -148,6 +149,13 @@ All errors should follow the structure defined in `backend/src/middleware/errorH
 *   `rest_forbidden` (403)
 *   `rest_no_route` (404)
 *   `rest_invalid_param` (400)
+*   `rest_internal_error` (500) — what an error that merely *escaped* renders as. `errorHandler` only echoes a thrower's own `code`/`message` when the error carries an integer `status`, i.e. when this codebase meant a client to read it; anything else (a driver error, most often) gets this generic body plus a `data.errorId` that ties the response to the full server-side log line. Before that, an anonymous request whose `:id` parsed to `NaN` was answered with the raw SQLSTATE and the engine's own wording.
+
+### 5.3 Request Parameter Contracts
+Two rules in `backend/src/core/query-params.ts` decide what a malformed parameter is answered with, before any handler reads its value. Both are stated once and consumed everywhere, so the answer cannot differ per call site.
+
+*   **A scalar query parameter must arrive exactly once, as a string.** Express parses the query with `qs`, so `?force=true&force=true` is the *array* `['true','true']` and `?force[x]=true` is an object — and every guard in this codebase compares a query value to a string. Rather than resolve the repeat to the first or the last (either choice is an HTTP-parameter-pollution primitive: on `DELETE /posts/:id?force=true&force=true` it was the difference between a trash and a permanent delete, answered `200`), the request is refused with **`400 rest_invalid_param`**, with the offending field named in `data.params`. Only the *shape* is refused: `?force=banana` is still simply "not true", and `?page=abc` still falls through to the default. The call sites are, exhaustively: `requireScalarQuery` at the top of `GET /categories`, `GET /tags`, `GET /comments`, `GET /media`, `GET /users`, `GET /types`, `GET /types/schemas`, `GET /taxonomies`, `GET /analytics/stats`, `GET /forms/submissions`, `GET /marketplace/catalog`, `GET /marketplace/themes/catalog`, `GET /export`, `GET /plugins/:slug/bundle` and `GET /plugins/:slug/bundle/css`; `scalarQueryParam` at the read of `?force` on `DELETE /posts/:id` and `DELETE /comments/:id`; and `GET /posts`, which predates the shared helper and still declares its own `LIST_QUERY_STRING_FIELDS` + `firstNonStringField()`/`invalidParamType()` in `routes/posts.ts` — a second implementation of the same refusal, writing the same body, which is why `errorHandler` renders `invalidParams` into `data.params` rather than letting the thrown form differ from the inline one. That list is not maintained by hand and should not be treated as the contract: `backend/src/tests/request-field-types.test.ts` (a CI gate) walks **every** `.ts` file in `routes/` and `middleware/` and fails the build if any value out of `req.query` reaches a string comparison whose shape was not settled first — so a list route added tomorrow either adopts the rule or turns the build red.
+*   **A route parameter that denotes a row id must be a base-10 positive integer the id columns can hold** (1 … 2147483647, at most 10 digits), or the router answers **404 with its own not-found body** — byte for byte what it answers for an id that does not exist, so a malformed id is indistinguishable from an absent one and the pair is not a probe for which ids are well-formed. It is registered with `router.param()` — once per router per parameter name, which today is thirteen registrations across nine routers (`categories`, `comments`, `media`, `posts`, `tags`, `users` on `:id`; `menus` on `:id` and `:itemId`; `revisions` on `:id`, `:id1`, `:id2` and `:postId`; `seo` on `:postId`) — so it runs *before* the route's own middleware — including `authenticate`, which is the order WordPress uses (`(?P<id>[\d]+)` fails to match and the request is a 404 before any permission callback). Two consequences worth stating: `parseInt` used to be lenient, so `/comments/12abc` was an alias for `/comments/12` — every row had a family of spellings, each its own cache key, rate-limit bucket and audit-log line; and an out-of-range but perfectly ordinary integer such as `/categories/9999999999` reached the driver, where Postgres answers `22003 value out of range for type integer` and the caller got a 500. A few routes (`/webhooks/*`, `/collab/:postId/*`, `/presence/:postId`, `DELETE /forms/submissions/:id`, `DELETE /auth/tokens/:id`) keep their own established `400` for an unusable id — that status is part of their published contract — but they now ask the *same* predicate rather than each hand-rolling a weaker one.
 
 ---
 
@@ -165,7 +173,7 @@ All errors should follow the structure defined in `backend/src/middleware/errorH
 - **System**: `/settings`, `/plugins`, `/marketplace` (plugin **and theme** catalogs — see §6.3.1), `/themes`, `/menus` (§6.12), `/fonts` (§6.15), `/health` (§6.17), `/seo` (§6.16), `/hooks` (§6.18), `/notifications` (§6.19), `/webhooks` (outgoing HMAC-signed webhooks — see §6.10), `/system/certs`.
 - **Observability**: `/metrics` (Prometheus, root-path, scrape-token-gated — see §6.8), `/analytics` (see §6.4).
 - **Extensions**: `/widgets` (§6.13), `/types` (Post Types, §6.14), `/revisions`.
-- **Site & editor**: `/chrome` (site-level header/footer compositions — `PUT`/`DELETE /chrome/:part` where `part` is `header` or `footer`, admin-only; reads travel through the public `/settings` payload), `/forms` and `/presence` (§6.20).
+- **Site & editor**: `/chrome` (site-level chrome compositions — `PUT`/`DELETE /chrome/:part` where `part` is `header`, `footer` or `announcement`, admin-only; anything else answers `400`; reads travel through the public `/settings` payload), `/forms` and `/presence` (§6.20).
 - **Internal**: `/api/internal/gateway-update` — gateway-to-backend only, outside the `/api/v1` prefix (§6.21).
 - **Data**: `/export`, `/export/wxr`, `/import`, `/import/wordpress` (WordPress WXR migration — see §6.9), `/backups`, `/db-migration` (engine migration).
 
@@ -179,7 +187,7 @@ All errors should follow the structure defined in `backend/src/middleware/errorH
 | Method | Endpoint                    | Auth | Description                                                        |
 | :----- | :-------------------------- | :--- | :----------------------------------------------------------------- |
 | `POST` | `/login`                    | No   | Log in (`username`/`email` + `password`); sets the HttpOnly cookie |
-| `POST` | `/register`                 | No   | Self-registration; `403 rest_cannot_register` unless the `users_can_register` option is enabled |
+| `POST` | `/register`                 | No   | Self-registration; `403 rest_cannot_register` unless the `users_can_register` option is enabled. When email verification is required the account is created **unverified** and **no** session cookie is issued (`201 { user, verificationRequired: true }`); `POST /auth/login` then answers `403 rest_email_unverified` until `/verify-email` is consumed |
 | `GET`  | `/me`                       | Yes  | Current authenticated user                                         |
 | `POST` | `/validate`                 | Yes  | Validate the current token                                         |
 | `POST` | `/refresh`                  | Session | Re-issue the JWT/cookie. A `Bearer wjt_…` caller is refused (`403 rest_session_from_token_forbidden`) — a headless token can never be exchanged for a session cookie |
@@ -187,6 +195,7 @@ All errors should follow the structure defined in `backend/src/middleware/errorH
 | `GET`  | `/password-reset-available` | No   | Public probe: whether self-service password reset can work (mail configured + reachable recovery address model) |
 | `POST` | `/forgot-password`          | No   | Body `{ login }` (username or email). **Always returns 200** (anti-enumeration); emails a single-use reset link (30-min TTL; only the SHA-256 of the token is stored). Rate-limited by the auth limiter |
 | `POST` | `/reset-password`           | No   | Body `{ uid, token, password }`. Consumes the single-use token (constant-time hash compare) and revokes all existing sessions; `400 rest_invalid_reset` / `rest_weak_password` on failure |
+| `POST` | `/verify-email`             | No   | Body `{ uid, token }`. Consumes the single-use email-verification token minted at registration (24h TTL) and clears `email_verification_pending`, after which login works. One uniform `400 rest_invalid_verification` for a bad, expired or already-consumed token. Rate-limited by the auth limiter |
 | `GET`  | `/tokens`                   | Session + `manage_api_tokens` | List the caller's scoped API tokens (metadata only; secrets are never re-shown) |
 | `POST` | `/tokens`                   | Session + `manage_api_tokens` | Mint a scoped API token. Body `{ name?, scopes?, expiresInDays? }`; the raw `wjt_…` secret is returned **once** (`201`). Unknown scopes → `400 rest_invalid_scope`; over the active-token cap → `400 rest_token_limit` |
 | `DELETE` | `/tokens/:id`             | Session + `manage_api_tokens` | Revoke one of the caller's tokens (`404` if not the caller's or already gone) |
@@ -234,11 +243,11 @@ All errors should follow the structure defined in `backend/src/middleware/errorH
 
 > **Pagination:** `GET /posts` returns `X-WP-Total` and `X-WP-TotalPages` response headers. These now reflect the **filtered** list: `Post.count()` shares a `buildWhere()` with `findAll` (and defaults `status` to `publish`), so the totals match the rows actually returned.
 
-> **Status filtering (access control, no BOLA):** listing non-published statuses is authorization-scoped (`backend/src/routes/posts.ts`). Anonymous callers always see **only `publish`** regardless of the requested `status`. A logged-in **non-privileged** user requesting `status=any` or a specific non-publish status (`draft`/`pending`/`private`) only sees **their own** such posts (the author filter is forced to their id). Only users with `edit_others_posts` or `read_private_posts` see other authors' unpublished content. This mirrors the per-post `GET /posts/:id` gate and closes the list-path BOLA.
+> **Status filtering (access control, no BOLA):** listing non-published statuses is authorization-scoped (`backend/src/routes/posts.ts`). Anonymous callers always see **only `publish`** regardless of the requested `status`. A logged-in **non-privileged** user requesting `status=any` or a specific non-publish status (`draft`/`pending`/`private`/`future`) only sees **their own** such posts (the author filter is forced to their id). `status=any` resolves to `publish`, `draft`, `pending`, `private` and `future` — `future` is part of the author-facing set, or a scheduled post would vanish from the admin list until its publish moment. Only users with the type's `edit_others_posts` / `read_private_posts` equivalents see other authors' unpublished content; for a post type that is not `publiclyReadable` the author filter is forced even for `status=publish`. This mirrors the per-post `GET /posts/:id` gate and closes the list-path BOLA.
 
 > **`/posts/*` only reaches REST-exposed types.** Every route in `backend/src/routes/posts.ts` now checks `showInRest` on the post type: a load by id or slug answers **`404 rest_post_invalid_id`** for an internal type — the same answer as a post that does not exist, because an internal type is not "a post you lack permission for", it is not addressable here at all — and `GET /posts?type=…`, `POST /posts` and the slug lookup's `?type=` answer **`400 rest_invalid_post_type`**. `nav_menu_item`, `revision` and `attachment` are therefore reachable only through their own APIs (`/menus/*`, `/revisions/*`, `/media/*`), which carry the correct gate. Previously they fell through to the plain `post` capability family, so `edit_others_posts` alone let an **editor** rewrite `_menu_item_url` on every menu item (persistent phishing from the site's own origin), and `edit_posts` alone let a **contributor** mint `revision` rows against someone else's page — ten of which make the next ordinary save prune the entire genuine history, since `limitRevisions` deletes oldest-first and fabricated rows carry `now` as `post_modified` while real ones copy the parent's. The **list** is gated for the same reason as the item routes: leaving it open let a caller enumerate every `nav_menu_item` id and then write its meta without ever touching the menus API.
 
-> **Server-owned post meta (protected keys).** Post meta is *not* a free-form key/value store on the write surfaces. `backend/src/core/protected-meta.ts` declares the keys only backend code may write — `_wp_attached_file`, `_wp_attachment_metadata`, `_wp_trash_meta_status`, `_wp_trash_meta_time`, `_edit_lock`, `_edit_last` — and **both** generic writers consult it: `POST /posts/:id/meta` answers `403 rest_protected_meta` (a single-key write is an explicit statement of intent, so answering `200` after writing nothing would be a lie), while the `meta` bag of `POST /posts` and `PUT /posts/:id` **skips** those keys and applies the rest. The reason is `_wp_attached_file`: it is the server's record of where an upload sits on disk and is exactly what `Media.delete()` turns into an `unlink()` target, so an author who could rewrite it on their own attachment held an arbitrary-file-delete primitive. Author-written keys that merely *look* internal — `_puck_data`, `_wjs_template`, `_thumbnail_id`, the SEO keys — are deliberately **not** on the list (the editor writes them through this same bag on every save); they are protected by the capability gate and `sanitize-meta.ts`, not by a key ban.
+> **Server-owned post meta (protected keys).** Post meta is *not* a free-form key/value store on the write surfaces. `backend/src/core/protected-meta.ts` declares the keys only backend code may write — `_wp_attached_file`, `_wp_attachment_metadata`, `_wp_trash_meta_status`, `_wp_trash_meta_time`, `_edit_lock`, `_edit_last`, and `_wjs_revision_snapshot` (the F4 snapshot envelope, whose manifest is an executable restore instruction: a forged one would turn a later restore into an arbitrary core-column/meta write) — and **both** generic writers consult it: `POST /posts/:id/meta` answers `403 rest_protected_meta` (a single-key write is an explicit statement of intent, so answering `200` after writing nothing would be a lie), while the `meta` bag of `POST /posts` and `PUT /posts/:id` **skips** those keys and applies the rest. The reason is `_wp_attached_file`: it is the server's record of where an upload sits on disk and is exactly what `Media.delete()` turns into an `unlink()` target, so an author who could rewrite it on their own attachment held an arbitrary-file-delete primitive. Author-written keys that merely *look* internal — `_puck_data`, `_wjs_template`, `_thumbnail_id`, the SEO keys — are deliberately **not** on the list (the editor writes them through this same bag on every save); they are protected by the capability gate and `sanitize-meta.ts`, not by a key ban.
 
 > **Comments (`POST /comments`):** when a comment supplies a `parent`, the parent must exist **and** belong to the same post, else `400 rest_comment_invalid_parent` (top-level comments are unaffected). A guest's `author_url` (on create and edit) is restricted to `http(s)` only, so `javascript:`/`data:` can't become a clickable author link.
 
@@ -254,6 +263,7 @@ Base path: `/api/v1/users` (`backend/src/routes/users.ts`). `PUT /me` is declare
 | `GET`    | `/`         | `list_users` | List users                                                        |
 | `GET`    | `/me`       | Yes          | Current user's profile                                            |
 | `PUT`    | `/me`       | Yes          | Update own profile (`email`, `displayName`, `url`, `personalEmail` recovery address). **Changing your own password requires `currentPassword`** (`403 rest_bad_current_password`; min 8 chars); a successful change revokes all sessions |
+| `POST`   | `/me/sessions/revoke` | Session | "Sign me out everywhere": stamps the caller's security epoch, killing every JWT/cookie session **including the calling one**, and leaves their API tokens alone. Requires `currentPassword` through the same sudo helper as `PUT /me`. Audited as `user.sessions_revoked`. Declared before `/:id` |
 | `GET`    | `/:id`      | Yes          | Get a user (self, or `list_users` for others)                     |
 | `POST`   | `/`         | Admin        | Create a user (`username`, `email`, `password`, optional `role`)  |
 | `PUT`    | `/:id`      | Yes†         | Update a user — layered authorization, see the note above         |
@@ -341,8 +351,8 @@ Base path: `/api/v1/marketplace` (`backend/src/routes/marketplace.ts`). Plugins 
 
 > **`POST /analytics/track` writes a permanent row for an anonymous caller**, so it carries the same three-part posture as every other public write surface, not just the generic ceilings:
 > *   **Its own per-IP bucket** (60/min, mounted on the exact route in `backend/src/index.ts`). Previously its only limits were `express.json`'s 10 MB body cap and the global `apiLimiter` (1000/15 min), which bound *traffic*, not stored bytes — roughly 40 GB/hour of undeletable rows from a single IP, and in monolith mode a full disk takes down backend, frontend and database together.
-> *   **Hard input bounds checked before any DB work** (`backend/src/routes/analytics.ts`): the event type is an **allowlist** rather than a length check; `resource` ≤ 255 chars; `metadata` must be a flat object of ≤ 20 string/number/boolean values, key ≤ 60 chars, value ≤ 200 chars, ≤ 2 KB serialized. Violations answer a real `400 rest_invalid_param`.
-> *   **Retention** (`backend/src/core/analytics-retention.ts`): a daily cron prunes rows older than the `analytics_retention_days` option (**default 90**; `0` disables pruning). The delete is driven by `created_at`, which `idx_analytics_date` already indexes, and is batched (5000 rows × 20 passes per run) so a long-neglected table drains over several days instead of one write transaction that blocks every writer.
+> *   **Hard input bounds checked before any DB work** (`backend/src/routes/analytics.ts`): the event type is an **allowlist** rather than a length check; `metadata` must be a flat object of ≤ 20 string/number/boolean values, key ≤ 60 chars, value ≤ 200 chars, ≤ 2 KB serialized. Violations answer a real `400 rest_invalid_param`. `resource` is the exception: a non-string is refused, but an over-long one is **truncated** to 255 chars rather than rejected — it does not choose the row's meaning and it is not the volume lever, while one ordinary campaign URL (UTM parameters plus an `fbclid`/`gclid`) sails past 255, and the beacon ignores the response, so refusing it silently deleted exactly the paid traffic.
+> *   **Retention** (`backend/src/core/analytics-retention.ts`): a daily cron prunes rows older than the `analytics_retention_days` option (**default 90**; `0` disables pruning). The delete is driven by `created_at`, which `idx_analytics_date` already indexes, and runs in 5000-row batches so a long-neglected table drains across several passes instead of one write transaction that blocks every writer. A run stops at whichever cap it reaches first: **691,200 rows** — derived from the write side (the analytics limiter's 60 events/min/IP × 24 h × 8 concurrent abusive sources) so the prune can outrun the ingest — or **60 seconds** of wall clock. Stopping at a cap with rows still outside the window is recorded as `behind` in the module's `retentionState()` and warned about in the cron log, rather than passing for a healthy run.
 
 
 ### 6.5 Certificate Management (SSL) 🔒
@@ -522,6 +532,8 @@ Base path: `/api/v1/types` (`backend/src/routes/post-types.ts`). Reads are publi
 | Method   | Endpoint  | Auth  | Description                                                                    |
 | :------- | :-------- | :---- | :----------------------------------------------------------------------------- |
 | `GET`    | `/`       | No    | Registered post types. Returns only types with `showInRest: true`; `?rest=false` inverts the filter and returns only the types **not** exposed in the REST API |
+| `GET`    | `/schemas` | No   | The declarative F1 content schemas, filtered by the same `?rest=` rule as `GET /` |
+| `GET`    | `/:name/schema` | No | The F1 content schema for one type; `404` when the type has none. Declared **before** `/:name` |
 | `GET`    | `/:name`  | No    | One post type                                                                  |
 | `POST`   | `/`       | Admin | Register a **custom** post type. Body `{ name, label?, labels?, supports?, taxonomies?, … }`; `400` without `name`, `409` if it already exists (`supports` defaults to `['title','editor']`) |
 | `DELETE` | `/:name`  | Admin | Delete a custom post type; `400` for one that cannot be deleted (e.g. a built-in) |
@@ -554,7 +566,7 @@ Two different things share the word "health". The **root** probes are for orches
 | `GET`  | `/readyz`               | No    | Readiness (root path). `503` `setup_required` / `starting` / `not_ready` until the instance is installed, `appReady` is set, and the DB answers |
 | `GET`  | `/health`               | No    | Root-path health summary                                                    |
 | `GET`  | `/api/v1/health`        | No    | Database reachability (`{ status: 'ok' \| 'error' }`)                        |
-| `GET`  | `/api/v1/health/details`| Admin | Full system status: `{ database, mtls, filesystem, sandbox, timestamp }`. `sandbox.kernel` reports the native Landlock/AppContainer/Seatbelt state, `sandbox.network` the certified network-policy state, and `permission` the Node capability floor; see `documentation/deployment.md` |
+| `GET`  | `/api/v1/health/details`| Admin | Full system status: `{ database, mtls, filesystem, sandbox, purge, contentOutbox, timestamp }`. `sandbox.kernel` reports the native Landlock/AppContainer/Seatbelt state, `sandbox.network` the certified network-policy state, and `sandbox.permission` the Node capability floor. `purge.broken` lists the permanent failures that have killed on-demand cache invalidation in this process. `contentOutbox` reports the F3 durable event queue (`pending`, `processing`, `dead`, `oldestDue`, `delayedSeconds`) — `ERROR` on any dead row, `DEGRADED` past 300s of delay. See `documentation/deployment.md` |
 
 ### 6.18 Hooks Introspection 🪝
 Base path: `/api/v1/hooks` (`backend/src/routes/hooks.ts`). Both routes are `authenticate` + `isAdmin`. This is the **introspection** surface for the action/filter system of §3 — not to be confused with the outgoing `/webhooks` resource of §6.10.
@@ -586,11 +598,13 @@ Base paths `/api/v1/forms` (`backend/src/routes/forms.ts`) and `/api/v1/presence
 | `GET`    | `/forms/submissions`  | `manage_options` | Paginated submissions (`formName`, `page`, `per_page` — capped at 100)  |
 | `DELETE` | `/forms/submissions/:id` | `manage_options` | Delete one submission                                               |
 | `GET`    | `/forms/names`        | `manage_options` | The distinct form names seen so far (the viewer's filter picker)       |
-| `POST`   | `/presence/:postId`   | `edit_posts`     | Editing-presence heartbeat (or `{ action: "leave" }`); answers with the **other** active editors. In-memory, 25s TTL |
+| `POST`   | `/presence/:postId`   | Per-post edit gate | Editing-presence heartbeat (or `{ action: "leave" }`); answers with the **other** active editors. In-memory, 25s TTL. `400` for a malformed `postId`, `403 rest_forbidden` otherwise — see the note below |
 
 > **Public-endpoint posture (`POST /forms/submit`), in order:** a per-IP rate limit (10/min, mounted in `backend/src/index.ts`); hard input bounds (≤30 fields, keys ≤60, values ≤5000 chars, ≤64KB total) checked **before** the honeypot so a bot sees byte-identical behavior either way; the `_hp` honeypot field, which returns the **exact** success payload while storing nothing; and tag-stripping of stored values so a submission can never carry markup into the admin viewer. Submissions can contain visitor PII, which is why the viewer is `manage_options` rather than an editor-level read.
 
 > **Presence is a soft-lock signal, not co-editing.** State is per-process and in-memory on purpose, so on a multi-node backend each node only sees its own editors — the warning can *miss*, it can never false-positive.
+
+> **Presence authorizes by the post, not by the capability family.** The heartbeat is gated on `authenticate` plus `isRestExposedPostType` + `canEditPostRecord(req.user, post)` (§6.2) — the same per-row gate `PUT /posts/:id` uses — not on the global `edit_posts` capability. A contributor holding `edit_posts` could otherwise sweep post ids to learn who had which private draft open, and inject their own display name into a post they cannot read. "No such post" and "you may not edit it" answer the **same** `403 rest_forbidden`, so the endpoint is not an existence oracle over other authors' drafts. `{ action: "leave" }` is handled **before** the gate: it can only remove the caller's own entry and always answers `{ ok: true, editors: [] }`, so refusing a withdrawal would only strand a stale name in everyone else's chip.
 
 ### 6.21 Internal (gateway-only) 🔒
 Base path `/api/internal` — note this is **outside** the `/api/v1` prefix, so it carries none of the API middleware chain (`backend/src/routes/internal.ts`).
@@ -629,31 +643,6 @@ addAction('my_plugin_daily_task', () => {
 *   `twicedaily`
 *   `daily`
 *   `weekly`
-
----
-
-## 9. Internationalization (i18n) 🌍
-
-WordJS supports native translation via `backend/src/core/i18n.ts`. It uses JSON files located in `backend/languages/`.
-
-### 9.1 Usage
-```javascript
-const { __, _n } = require('../../src/core/i18n');
-
-// Simple string
-const greeting = __('Hello World', 'my-plugin');
-
-// Plurals
-const msg = _n('%d User', '%d Users', count, 'my-plugin').replace('%d', count);
-```
-
-### 9.2 Translation Files
-File format: `domain-locale.json` (e.g., `my-plugin-es_ES.json`).
-```json
-{
-    "Hello World": "Hola Mundo"
-}
-```
 
 ---
 

@@ -248,7 +248,7 @@ On top of per-theme `style.css`, the theme system ships **one shared static styl
 
 - **Driven by `--wjs-*` design tokens.** A theme *declares* them in its `theme.json` (`seeds` / `tokens`); `core/theme-compile.ts` compiles that contract into a marked `/* @wjs-generated:start … */` block inside the theme's `style.css`, where the tokens land verbatim in `:root`. The framework carries safe fallbacks, so a theme re-skins everything just by setting tokens. Per-variant `--wjs-color-on-*` tokens hold the max-contrast (black/white) text computed per theme for each solid color.
 - **Where it loads:** on **public** pages (frontend `ThemeLoader.tsx`) and inside the **editor canvas iframe** (frontend `app/admin/canvas-frame/page.tsx`, for true WYSIWYG) — never the admin chrome. `ThemeLoader.tsx` emits it (React 19 `precedence="wjs-base"`) **before** the theme's own `style.css` (`precedence="wjs-theme"`) so the theme wins at equal specificity. (`core.css` is linked only by the *legacy* Handlebars engine's `wordjs_head` (`core/theme-engine.ts`), and that public path is no longer mounted — Next.js renders the live site.)
-- The `default` theme ships bundled and 64 first-party themes are available through the theme marketplace — each tunes a full `--wjs-*` token set to its palette. Full reference: **[theming.md](theming.md)**.
+- Four themes ship in the repo under `backend/themes/`: `circuito`, `gaceta` and `vergel` each declare a full `--wjs-*` token set as a `theme.json` contract, compiled into the marked block of their `style.css`; `default` predates that contract — its `theme.json` is metadata only, and it writes its `--wjs-*` values by hand in `style.css` with no generated block. Further themes install through the theme marketplace, but no first-party theme *sources* ship in this repo any more — the theme catalogue was retired. Full reference: **[theming.md](theming.md)**.
 
 ---
 
@@ -265,7 +265,7 @@ graph TB
 
     subgraph "Block Registry"
         Registry[lib/verso/registry.ts]
-        Core[coreBlocks.tsx — 30 core blocks]
+        Core[coreBlocks.tsx — 39 core blocks]
         Plugins[pluginBlocks.tsx — plugin blocks]
     end
 
@@ -279,6 +279,8 @@ graph TB
         Media[🎬 Medios]
         Marketing[📢 Marketing]
         Dynamic[🔄 Dinámicos]
+        Nav[🧭 Navegación]
+        Fallback[🧩 Más — fallback group]
     end
 
     subgraph "Output"
@@ -301,6 +303,8 @@ graph TB
     Core --> Media
     Core --> Marketing
     Core --> Dynamic
+    Core --> Nav
+    Plugins --> Fallback
     Canvas --> Store
     Store --> DocData
     DocData --> Render
@@ -413,7 +417,7 @@ Plugins reach a site two ways:
 
 The backend exposes it at **`/api/v1/marketplace`** (`backend/src/routes/marketplace.ts`, admin-only): `GET /catalog` fetches **every** configured source and returns the **merged** catalog (deduped by id, earlier sources winning, each source's errors isolated so one bad URL can't hide the rest) annotated with each entry's installed/active/update state (cached in memory for 5 minutes, keyed by the source set — a **local** source's key additionally carries its index file's `mtime`+`size`, so a `npm run build:marketplace` invalidates it immediately); `POST /install` downloads the zip **server-side from the source the entry was listed under** (https-only, size-capped, strict filename shape), verifies its **sha256** against the catalog entry, and hands it to the **same** `installPluginFromZip()` pipeline as a manual upload (zip-bomb budget, Zip Slip/slug validation, manifest + AST security scan) — the marketplace adds no new install surface beyond the catalog fetch itself. **Sources are admin-configurable** via `GET`/`PUT /api/v1/marketplace/sources`, which read/write the `marketplace_sources` option (a JSON list of https catalogs, max 12; each must be https or `http://localhost`); precedence is that list → the legacy single `marketplace_source` option (back-compat) → the repo-local `marketplace/dist/` → the built-in release-assets default. The admin UI is the **Marketplace tab** of `/admin/plugins` (`frontend/src/app/admin/plugins/MarketplaceTab.tsx`); an installed plugin lands **inactive with default-deny grants**, exactly like any other install.
 
-The **same mechanism also distributes first-party themes.** Theme sources live in `marketplace/themes/`; `build-marketplace.js` packs each into `marketplace/dist/theme-<slug>-<version>.zip` and emits a parallel `marketplace/dist/marketplace-themes-index.json` catalog. The backend serves them via a separate theme catalog on `GET /api/v1/marketplace/themes/catalog` and installs through `POST /api/v1/marketplace/themes/install` (the same hardened `installThemeFromZip()` pipeline, browsed from the Marketplace tab of `/admin/themes`). Theme sources are **independently** admin-configurable via `GET`/`PUT /api/v1/marketplace/themes/sources`, which read/write the `marketplace_theme_sources` option — separate from the plugin source list, so themes can point at a different origin than plugins.
+The **same mechanism also distributes themes.** `build-marketplace.js` reads theme sources from `marketplace/themes/`, packs each into `marketplace/dist/theme-<slug>-<version>.zip` and emits a parallel `marketplace/dist/marketplace-themes-index.json` catalog. That directory is **optional and absent from this repo** — the first-party theme catalogue was retired, so the builder emits an empty themes index and a checkout without it still builds the plugin catalog; the serving/install half below is unchanged and works against any configured source. The backend serves them via a separate theme catalog on `GET /api/v1/marketplace/themes/catalog` and installs through `POST /api/v1/marketplace/themes/install` (the same hardened `installThemeFromZip()` pipeline, browsed from the Marketplace tab of `/admin/themes`). Theme sources are **independently** admin-configurable via `GET`/`PUT /api/v1/marketplace/themes/sources`, which read/write the `marketplace_theme_sources` option — separate from the plugin source list, so themes can point at a different origin than plugins.
 
 ### Isolated sandbox (separate OS process)
 
@@ -609,7 +613,8 @@ wordjs/
 │   │   │   ├── 📁 admin/       # Admin Dashboard
 │   │   │   └── 📁 api/         # API Routes
 │   │   ├── 📁 components/      # React Components
-│   │   │   ├── 📁 verso/       # Verso editor: canvas/, overlay/, dnd/, inline/, editor/, fields/
+│   │   │   ├── 📁 verso/       # Verso editor: canvas/, overlay/, dnd/, inline/, editor/, fields/,
+│   │   │   │                   #   blocks/, render/, lab/
 │   │   │   ├── 📁 blocks/      # Shared block field controls (Appearance/Animation/Visibility/…)
 │   │   │   ├── versoConfig.tsx # Custom field pickers reused by the Verso block registry
 │   │   │   ├── 📁 content/     # Public block rendering: blocks.tsx (shared markup),
@@ -640,9 +645,9 @@ wordjs/
 │   ├── dist/                   # Compiled output (npm run build) — prod entry
 │   ├── tsconfig.json           # strict typecheck config (commonjs)
 │   ├── tsconfig.build.json     # production build config (emits dist/)
-│   ├── 📁 themes/              # Runtime theme dir — `default` ships in the repo; every other
-│   │   ├── 📁 default/         #   theme lands here when installed from the marketplace
-│   │   └── 📁 .../             #   (each: theme.json + the compiled style.css)
+│   ├── 📁 themes/              # Runtime theme dir — `default`, `circuito`, `gaceta` and `vergel`
+│   │   ├── 📁 default/         #   ship in the repo; every other theme lands here when installed
+│   │   └── 📁 .../             #   from the marketplace (each: theme.json + the compiled style.css)
 │   ├── 📁 public/              # Static Assets
 │   │   └── 📁 css/
 │   │       ├── wordjs-ui.css   # Shared token-driven UI framework (--wjs-*)
@@ -651,7 +656,7 @@ wordjs/
 │
 ├── 📁 marketplace/              # Plugin & theme Marketplace (distributed outside the core build)
 │   ├── 📁 plugins/             # First-party plugin sources
-│   ├── 📁 themes/              # First-party theme sources
+│   │                           # (themes/ — theme sources — is optional and absent: catalogue retired)
 │   └── 📁 dist/                # Build output (gitignored): marketplace-index.json + <slug>-<version>.zip
 │                               #   + marketplace-themes-index.json + theme-<slug>-<version>.zip
 │                               #   — published as GitHub Release assets, NOT committed
@@ -705,7 +710,7 @@ The backend is written in **TypeScript** (`backend/src/**/*.ts`). In **productio
 - **In-tree `.js` files compiled via `allowJs`:** `src/core/db-admin/*` (the in-core DB migration/admin runner that used to be the `db-migration` plugin) and `src/core/plugin-worker.js` (the plugin isolate worker) are carried into `dist/` by `allowJs`.
 - **DB drivers:** `src/drivers/` defines a driver interface (`interface.ts`: `connect/get/all/run/exec/transaction/close`, where `transaction(fn)` runs `fn` atomically on a single connection wrapped in BEGIN/COMMIT with ROLLBACK on throw) plus implementations (`sqlite-native`, `sqlite-native-async`, `sqlite-legacy`, `postgres`, and `mysql`). The driver is selected by `config.dbDriver` (`backend/src/config/database.ts`, default `sqlite-native`); `mysql` (aliased `mariadb`) targets MySQL 8.0+/MariaDB via `mysql2` and carries a SQLite→MySQL dialect-translation layer (TEXT→LONGTEXT unless the DDL makes the column part of a key, in which case VARCHAR(255) — `drivers/mysql-text-rule.ts`; expression defaults, AUTO_INCREMENT, `INSERT OR IGNORE`/`ON CONFLICT`→`INSERT IGNORE`/`ON DUPLICATE KEY UPDATE`, `RETURNING`→`insertId`, and one shared session `sql_mode=ANSI_QUOTES,STRICT_TRANS_TABLES,NO_ENGINE_SUBSTITUTION` installed by **both** the main and per-plugin pools). `getDbType()` returns `{ isPostgres, isMySQL, isSQLite, driver }`. Adding a database = implement the interface + add a conformance block (`src/tests/driver-conformance.test.ts`).
 - **Plugins stay JavaScript:** code under `backend/plugins/*` remains `.js` on purpose, because the acorn AST security scanner and dynamic `require` assume `.js`. Plugins are excluded from the build.
-- **Tooling & CI:** ESLint (flat config) + Prettier, a `node:test` suite (`src/tests/*.test.ts`, including supertest API integration tests). CI (`.github/workflows/ci.yml`) runs **strict typecheck → build → license gate (block AGPL/SSPL) → tests** for the backend, gateway tests, and frontend lint + build. Beyond `ci.yml`, a separate `.github/workflows/codeql.yml` runs **CodeQL SAST** (JavaScript/TypeScript) on push/PR to `main` and weekly, and `.github/workflows/release.yml` generates a **CycloneDX SBOM** (`wordjs-sbom.cdx.json`) as a release asset; third-party GitHub Actions are pinned to immutable commit SHAs for supply-chain integrity.
+- **Tooling & CI:** ESLint (flat config) + Prettier, a `node:test` suite (`src/tests/*.test.ts`, including supertest API integration tests). CI (`.github/workflows/ci.yml`) runs the backend as **strict typecheck → lint → build → the F0–F6 phase verifiers (`backend/scripts/verify-f*.ts`) → license gate (block AGPL/SSPL) → tests**, alongside jobs for the committed-gate check, multi-node coherence (two backends on a shared Postgres + Redis), gateway tests, frontend lint + build, a Verso Playwright E2E, and a smoke-boot of the compiled bundle. Beyond `ci.yml`, a separate `.github/workflows/codeql.yml` runs **CodeQL SAST** (JavaScript/TypeScript) on push/PR to `main` and weekly, and `.github/workflows/release.yml` generates a **CycloneDX SBOM** (`wordjs-sbom.cdx.json`) as a release asset; third-party GitHub Actions are pinned to immutable commit SHAs for supply-chain integrity.
 
 ---
 

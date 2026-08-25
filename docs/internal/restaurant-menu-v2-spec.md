@@ -1,5 +1,13 @@
 # restaurant-menu v2 — frozen spec (Plugin Completeness Program cycle)
 
+> **HISTORICAL RECORD — the spec as frozen for the v2 cycle, which SHIPPED.** `restaurant-menu` is
+> at **2.0.0** in `marketplace/plugins/restaurant-menu/manifest.json`, and the manifest carries the
+> `network` (api.stripe.com) and `notifications`/`send` scopes this spec calls for (both verified).
+> Read it as the record of what that cycle committed to, not as a live to-do list. One constraint
+> below has since been relaxed: the SQL guard now PERMITS `ON CONFLICT … DO UPDATE SET`, so the
+> UPDATE-then-INSERT upsert pattern is still valid but no longer required (`RETURNING` remains
+> denied). See `documentation/plugin-database.md`.
+
 Closes every v1→v2 gap in `plugin-completeness-program.md` for `restaurant-menu`, inside the
 sandbox cookbook: **no ALTER** (all new data in additive tables), UPDATE-then-INSERT upserts,
 no db-bridge transactions, `res.json` everywhere, no `globalThis`, all money in integer cents,
@@ -63,7 +71,7 @@ Admin (auth+admin):
 Adds `{scope:"network"}` (api.stripe.com) and `{scope:"notifications", access:"send"}` (kitchen SSE).
 
 ## Client
-- **Puck block**: modifier picker modal (radio/checkbox per group, min/max enforced), es/en toggle
+- **Editor block**: modifier picker modal (radio/checkbox per group, min/max enforced), es/en toggle
   (+ allergen chips), closed banner + weekly hours, table mode via `?rm_table=` (banner, no delivery
   form, pay at table/online), Stripe checkout redirect + `rm_order/rm_session` return confirmation,
   reservation form (optional per-block), ETA on success. All prices re-computed server-side.

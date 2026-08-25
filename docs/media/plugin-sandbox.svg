@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 470" role="img"
-     aria-label="The WordJS plugin sandbox: plugin code runs in a separate OS process, and every capability it wants must cross a default-deny bridge that the administrator has granted. Requests the admin never approved are refused at the host."
+     aria-label="The WordJS plugin sandbox: plugin code runs in a separate OS process, and every capability it wants must cross a default-deny bridge that the administrator has granted. Requests the admin never approved are refused at the host, and below the bridge the kernel confines the process itself — Landlock and seccomp on Linux, an AppContainer on Windows, Seatbelt on macOS."
      font-family="'Segoe UI', Helvetica, Arial, sans-serif">
   <defs>
     <linearGradient id="ps-bg" x1="0" y1="0" x2="1" y2="1">
@@ -32,16 +32,16 @@
     <text x="66" y="143" fill="#f3e8ff" font-size="14" font-weight="600">Plugin process</text>
     <text x="308" y="143" fill="#d8b4fe" font-size="11" text-anchor="end">untrusted</text>
 
-    <text x="66" y="182" fill="#e9d5ff" font-size="12.5">Separate process — not a thread.</text>
+    <text x="66" y="182" fill="#e9d5ff" font-size="12.5">Separate OS process — not a thread.</text>
     <text x="66" y="204" fill="#a78bfa" font-size="11.5">· memory-capped, crash-isolated</text>
-    <text x="66" y="224" fill="#a78bfa" font-size="11.5">· no raw fs, no sockets, no child procs</text>
+    <text x="66" y="224" fill="#a78bfa" font-size="11.5">· no raw fs, no raw sockets, no child procs</text>
     <text x="66" y="244" fill="#a78bfa" font-size="11.5">· its own DB role and table prefix</text>
 
     <rect x="66" y="266" width="242" height="122" rx="10" fill="#1a0b21" stroke="#6b21a8"/>
-    <text x="82" y="290" fill="#c4b5fd" font-size="11.5" font-family="ui-monospace, Consolas, monospace">wordjs.db.query(…)</text>
+    <text x="82" y="290" fill="#c4b5fd" font-size="11.5" font-family="ui-monospace, Consolas, monospace">wordjs.db.all(…)</text>
     <text x="82" y="314" fill="#c4b5fd" font-size="11.5" font-family="ui-monospace, Consolas, monospace">wordjs.http.route(…)</text>
     <text x="82" y="338" fill="#c4b5fd" font-size="11.5" font-family="ui-monospace, Consolas, monospace">wordjs.hooks.addFilter(…)</text>
-    <text x="82" y="366" fill="#7c6bb3" font-size="11" font-family="ui-monospace, Consolas, monospace">require('fs')  ✗ blocked</text>
+    <text x="82" y="366" fill="#7c6bb3" font-size="10.5" font-family="ui-monospace, Consolas, monospace">require('child_process') ✗ blocked</text>
   </g>
 
   <!-- ── the bridge ────────────────────────────────────────────────── -->
@@ -54,11 +54,11 @@
     <rect x="398" y="186" width="144" height="30" rx="7" fill="#052e16" stroke="#16a34a"/>
     <text x="470" y="206" fill="#86efac" font-size="11.5" text-anchor="middle">database : read</text>
     <rect x="398" y="224" width="144" height="30" rx="7" fill="#052e16" stroke="#16a34a"/>
-    <text x="470" y="244" fill="#86efac" font-size="11.5" text-anchor="middle">http : route</text>
+    <text x="470" y="244" fill="#86efac" font-size="11.5" text-anchor="middle">settings : read</text>
 
     <!-- denied -->
     <rect x="398" y="272" width="144" height="30" rx="7" fill="#2b0a0a" stroke="#b91c1c"/>
-    <text x="470" y="292" fill="#fca5a5" font-size="11.5" text-anchor="middle">filesystem</text>
+    <text x="470" y="292" fill="#fca5a5" font-size="11.5" text-anchor="middle">filesystem : write</text>
     <rect x="398" y="310" width="144" height="30" rx="7" fill="#2b0a0a" stroke="#b91c1c"/>
     <text x="470" y="330" fill="#fca5a5" font-size="11.5" text-anchor="middle">network</text>
     <rect x="398" y="348" width="144" height="30" rx="7" fill="#2b0a0a" stroke="#b91c1c"/>
@@ -126,8 +126,7 @@
 
   <g>
     <rect x="44" y="426" width="1112" height="30" rx="8" fill="#3b1259" fill-opacity="0.55"/>
-    <text x="64" y="446" fill="#f5d0fe" font-size="12.5">
-      A capability the administrator never granted is refused at the host — <tspan font-weight="700">the plugin never gets to ask twice</tspan>.
-    </text>
+    <text x="64" y="446" fill="#f5d0fe" font-size="12.5">A capability the administrator never granted is refused at the host.</text>
+    <text x="1136" y="446" fill="#e9b8fb" font-size="11.5" text-anchor="end"><tspan font-weight="700">Kernel confinement:</tspan> Landlock+seccomp (Linux) · AppContainer (Windows) · Seatbelt (macOS)</text>
   </g>
 </svg>

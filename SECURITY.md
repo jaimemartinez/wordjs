@@ -14,9 +14,9 @@ WordJS is built with a "Security First" architecture.
 ### Active Defenses
 - **Rate Limiting**: Per-IP brute-force protection on login and API endpoints (backend).
 - **Per-Account Login Lockout**: A single account is locked for 15 minutes after 10 consecutive failed logins — this throttles a distributed/botnet attack that defeats the per-IP limiter.
-- **Helmet Headers**: HSTS (`max-age=31536000; includeSubDomains`), `X-Content-Type-Options: nosniff`, `X-Frame-Options: SAMEORIGIN`, `Referrer-Policy`, `Cross-Origin-Opener-Policy` — on both the gateway and the backend. Note that the shipped Helmet (`^8`) emits `X-XSS-Protection: 0`, which **disables** the legacy browser XSS auditor rather than enabling it, so it is not an XSS control; the server-side sanitizer is. (The gateway's helmet CSP is off; the **frontend ships a real Content Security Policy** on every route — see Known Limitations.)
+- **Helmet Headers**: HSTS (`max-age=31536000; includeSubDomains`), `X-Content-Type-Options: nosniff`, `X-Frame-Options: SAMEORIGIN`, `Referrer-Policy`, `Cross-Origin-Opener-Policy` — on both the gateway and the backend. Note that the shipped Helmet (`^8`) emits `X-XSS-Protection: 0`, which **disables** the legacy browser XSS auditor rather than enabling it, so it is not an XSS control; the server-side sanitizer is. (The **frontend ships a real Content Security Policy** on every route, and the gateway emits its own Helmet CSP — `gateway/src/security-headers.js` — on the responses it generates itself; see Known Limitations.)
 - **IO Guard**: Recursive filesystem locks to prevent unauthorized plugin access outside their directory.
-- **Allowlisted Plugin Asset Serving**: `/plugins/<slug>/…` publishes only `public/**` with a servable extension plus three fixed host-known files; source, `data/`, `.map` and anything a plugin writes at runtime return `404`. The whole `public/` subtree is simultaneously **unwritable** by the plugin, and both rules are derived from one declaration in `core/io-guard.ts`. Previously the entire plugin tree was served raw while a plugin could write its own directory with no grant — a write-then-fetch exfiltration channel that no socket-level control (the `network` grant, the egress guard or the native network boundary) can see, and one that leaked a stock install's `data/` directories with no malicious plugin at all.
+- **Allowlisted Plugin Asset Serving**: `/plugins/<slug>/…` publishes only `public/**` with a servable extension plus three fixed host-known files; source, `data/`, `.map` and anything a plugin writes at runtime return `404`. The whole `public/` subtree — and `dist/`, the build output the unauthenticated bundle routes serve — is simultaneously **unwritable** by the plugin, and both rules are derived from one declaration in `core/io-guard.ts`. Previously the entire plugin tree was served raw while a plugin could write its own directory with no grant — a write-then-fetch exfiltration channel that no socket-level control (the `network` grant, the egress guard or the native network boundary) can see, and one that leaked a stock install's `data/` directories with no malicious plugin at all.
 - **Zip Slip Protection**: Every entry in an uploaded plugin or theme archive has its resolved path verified to stay inside the target directory before extraction.
 - **Marketplace Install Integrity**: One-click installs from the admin Marketplace tab (`backend/src/routes/marketplace.ts`) fetch catalog zips server-side (https-only, size-capped, strict filename shape), verify them **sha256** against the catalog entry, and hand off to the **same** guarded zip-install pipeline as manual uploads (zip-bomb budget, Zip Slip, slug validation, manifest + AST scan) — the marketplace adds no separate install surface beyond the catalog fetch.
 - **SVG Sanitization**: Strips malicious scripts from vector images.
@@ -52,10 +52,10 @@ WordJS is built with a "Security First" architecture.
 - **Dependency Conflict Check**: Strict SemVer verification to prevent plugin dependency collision.
 - **Safe Dependency Install**: Plugin dependencies are installed with `execFile` and an argument array (no shell string), so manifest dependency names cannot inject shell commands.
 - **License Gate (CI)**: `license-checker --production` fails the build on `AGPL`/`SSPL` dependencies (WordJS is MIT; see `THIRD-PARTY-NOTICES.md`).
-- **Supply-Chain Transparency**: CodeQL static analysis (SAST) runs on every pull request, a per-release **CycloneDX SBOM** is generated and attached to each GitHub Release, third-party GitHub Actions are pinned to immutable commit SHAs, and Dependabot tracks dependency advisories across the workspaces. The backend CI also blocks a build on any **high/critical** production-dependency advisory (`npm audit --omit=dev --audit-level=high`).
+- **Supply-Chain Transparency**: CodeQL static analysis (SAST) runs on every pull request, a per-release **CycloneDX SBOM** is generated and attached to each GitHub Release, third-party GitHub Actions are pinned to immutable commit SHAs (`anchore/sbom-action`, `softprops/action-gh-release`; the GitHub-owned `actions/*` and `github/codeql-action/*` ride major tags), and `.github/dependabot.yml` opens **weekly version-update PRs** across all six npm workspaces (`/`, `/backend`, `/gateway`, `/frontend`, `/setup`, `/packages/create-wordjs`) plus GitHub Actions. What catches an *advisory* is **CI, not Dependabot**: Dependabot alerts and Dependabot security updates are **not enabled** on the repository, so the gate that blocks a build on any **high/critical** production-dependency advisory (`npm audit --omit=dev --audit-level=high`, run in both `ci.yml` and `release.yml`) is the only automatic advisory check in the pipeline.
 
 ### Known Limitations
-- **CSP**: The **frontend** (admin UI + public pages) ships a Content Security Policy on every route via `next.config.ts` (`default-src 'self'`; `script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: https:`; `frame-ancestors 'self'`; `object-src 'none'`; `base-uri 'self'`). `blob:` is required so admin plugin bundles (`import(URL.createObjectURL(blob))`) and their icons render; `'unsafe-inline'`/`'unsafe-eval'` remain for Next.js and bundled libs — the retired Puck editor was one of the original reasons and the policy has not been re-narrowed since (the server-side sanitizer is the XSS control). The **gateway's** helmet CSP is still off (`helmet({ contentSecurityPolicy: false })`); tightening both is a documented follow-up.
+- **CSP**: The **frontend** (admin UI + public pages) ships a Content Security Policy on every route via `next.config.ts` (`default-src 'self'`; `script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: https:`; `frame-ancestors 'self'`; `object-src 'none'`; `base-uri 'self'`). `blob:` is required so admin plugin bundles (`import(URL.createObjectURL(blob))`) and their icons render; `'unsafe-inline'`/`'unsafe-eval'` remain for Next.js and bundled libs — the retired Puck editor was one of the original reasons and the policy has not been re-narrowed since (the server-side sanitizer is the XSS control). The **gateway** now emits a Helmet CSP too (`gateway/src/security-headers.js`), but it deliberately mirrors the backend's loose shape and governs only the responses the gateway generates itself — a proxied response keeps the upstream's own policy. Narrowing `script-src` on the frontend is still a documented follow-up.
 - **CSRF**: Protection is **origin/exact-match** based (Origin/Referer + pinned `X-Forwarded-Host`), not per-request CSRF tokens. Token-based CSRF is future work.
 - **Native sandbox contract (default-ON, fail-closed)**: every isolated plugin is wrapped by the OS-native mechanism, including plugins granted network access. Linux uses Landlock plus `no_new_privs` and an always-on seccomp-bpf dangerous-syscall filter; Windows uses AppContainer plus a one-process Job Object; macOS uses a deny-by-default Seatbelt profile. A network grant changes only egress: seccomp/Landlock IP-socket denial is relaxed on Linux, AppContainer receives only `internetClient` on Windows, and Seatbelt receives outbound-network allows on macOS. Filesystem and process confinement remain.
 - **Probe discipline**: a platform name or successful API call is not evidence. Each mechanism becomes `active` only after a real confined child and an unconfined control prove out-of-zone read/write refusal, process or dangerous-syscall refusal, working IPC/storage, and both network-policy shapes. Compiled production is fail-closed by default (`sandbox.requireHardening !== false`); failure of the host probe or of a per-plugin native launch refuses the plugin. Setting `requireHardening:false` explicitly permits the weaker compatibility fallback.
@@ -69,20 +69,31 @@ WordJS is built with a "Security First" architecture.
 
 ## 🐛 Reporting a Vulnerability
 
-If you discover a security vulnerability within WordJS, please report it via the **GitHub Security Advisories** tab or contact the maintainer directly.
-**Do NOT open a public GitHub issue.**
+If you discover a security vulnerability within WordJS, report it through **GitHub's private vulnerability reporting**, which is enabled on this repository: <https://github.com/jaimemartinez/wordjs/security/advisories/new> (reachable from the repo's **Security** tab). That is the only private channel — the project publishes no security email address.
+
+**Do NOT open a public GitHub issue.** Blank issues are disabled, and the issue chooser (`.github/ISSUE_TEMPLATE/config.yml`) deliberately offers a link to this security policy instead of a bug-report form.
 
 ### Response Time
-Our team is committed to addressing security issues promptly.
+WordJS is primarily solo-maintained (see the posture note above), so these are **targets, not a guaranteed SLA**:
 - **Acknowledge**: 24-48 hours.
-- **Fix**: Critical issues are patched within 72 hours.
+- **Fix**: 72 hours for a critical issue. A fix lands on `main` first and reaches users in the next tagged release (see Supported Versions).
 
 ## 📝 Supported Versions
 
-WordJS is pre-production; only the latest `main` and the current `1.13.x` release line are supported. There is no LTS line yet.
+WordJS is pre-production; only the latest `main` and the current `1.14.x` release line are supported. There is no LTS line yet.
 
 | Version   | Supported | Notes                                              |
 | :-------- | :-------- | :------------------------------------------------- |
 | `main`    | ✅         | Latest development line (the only one patched)     |
-| `1.13.x`  | ✅         | Current release line (latest tag `v1.13.7`)        |
-| < `1.13`  | ⚠️        | Best-effort; upgrade to `1.13.x` or latest `main`  |
+| `1.14.x`  | ✅         | Current release line (latest tag and latest GitHub Release are both `v1.14.1`) |
+| < `1.14`  | ⚠️        | Best-effort; upgrade to `1.14.x` or latest `main`  |
+
+> **There is no maintenance branch and there are no backports.** `1.14.x` is a tag line, not a branch —
+> a fix is committed to `main` and reaches users in the next tag cut from `main`. If you need a fix
+> before that tag exists, run `main`.
+>
+> **Do not read the diff between a release tag and `main` as a commit range.** The public history was
+> rewritten, so no release tag is an ancestor of `main` (`git merge-base --is-ancestor v1.14.1 main`
+> fails; their common ancestor is a January 2026 commit). The tags still point at the pre-rewrite
+> history, and the same release commit exists under two different SHAs. Compare releases by
+> `CHANGELOG.md` and by content, not by `git log v1.14.1..main`.

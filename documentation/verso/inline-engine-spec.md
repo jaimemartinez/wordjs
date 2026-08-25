@@ -1,6 +1,12 @@
 # Spec ejecutable — motor de texto inline PROPIO de Verso (F3.5)
 
-**Estado**: spec previa a codificar (misma técnica que el DnD: tabular ANTES de escribir el motor).
+**Estado**: IMPLEMENTADO. El motor vive en `frontend/src/lib/verso/inline-engine/` (`model`/`parse`/
+`serialize`/`ops`/`guard`) y la capa DOM en `frontend/src/components/verso/inline/`
+(`VersoTextSurface`/`VersoInline`/`VersoBubbleMenu`). Verso no importa `@tiptap/*` y el paquete ya
+no está en `frontend/package.json`. `InlineTiptap.tsx`, citado abajo como el comportamiento legacy a
+igualar, fue borrado con el editor viejo — esta spec sigue siendo el contrato del motor, pero esa
+referencia ya no se puede abrir.
+
 **Decisión ratificada del usuario**: el motor inline de Verso es propio; Tiptap queda SOLO en el
 editor legacy y Verso termina con **cero imports de `@tiptap/*`**. El alcance está ACOTADO al
 contrato real del editor actual: schemas `plain` y `rich` (negrita, cursiva, enlace, listas
@@ -331,7 +337,7 @@ Texto plano multilínea → un párrafo por línea.
 
 ## 10. Fixture ejecutable (`text-cases.json`)
 
-Ruta: `frontend/src/lib/verso/inline-engine/__fixtures__/text-cases.json`. 54 casos.
+Ruta: `frontend/src/lib/verso/inline-engine/__fixtures__/text-cases.json`. 57 casos.
 
 **Forma**: `{ meta, cases: [{ name, schemaKind, initialHtml, op, expectedHtml }] }`.
 

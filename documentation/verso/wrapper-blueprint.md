@@ -1,5 +1,12 @@
 # Blueprint del wrapper actual — piel exacta a replicar en `VersoEditor` (F3)
 
+> **HISTORICAL — this is an inventory of the retired editor's skin, not of the current one.**
+> `PuckEditor.tsx`, `BlockInserter.tsx`, `CommandPalette.tsx` and `puck-theme.css` no longer exist;
+> `puckI18n.ts` is now `lib/editorI18n.ts` and `puck-theme.css` is now `components/editor-theme.css`.
+> The skin described below is the one `VersoEditor` was built to reproduce, so this document remains
+> the record of what that target was — but it describes no file in the tree today. For the current
+> editor read `frontend/src/components/verso/editor/VersoEditor.tsx` and its siblings.
+
 > Objetivo de este documento: que quien construya el wrapper `VersoEditor` (F3) NO necesite volver
 > a abrir `PuckEditor.tsx` para saber cómo se ve el editor de hoy. Todo lo que sigue es inventario,
 > no diseño nuevo — cero código de producción, cero decisiones. Restricción del usuario: *"el editor

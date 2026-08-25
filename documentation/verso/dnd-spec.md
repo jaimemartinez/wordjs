@@ -1,5 +1,13 @@
 # Especificación ejecutable del comportamiento DnD del fork @wordjs/puck
 
+> **STATUS — the fork this specifies is gone; the contract it defines is still live.**
+> `frontend/packages/puck` has been deleted, so every source path in the "ficheros fuente auditados"
+> list below is a dead pointer and the constants are quoted from code that no longer exists. What
+> survives is the point of the document: the 48-case fixture
+> (`frontend/src/lib/verso/__fixtures__/dnd-cases.json`, count verified) and Verso's own resolver
+> (`frontend/src/lib/verso/dnd/resolve.ts`), which names this file as its contract and is tested
+> against that fixture in `frontend/src/lib/verso/__tests__/verso-dnd-resolve.test.ts`.
+
 > F2/VERSO — arnés previo al motor nuevo. Este documento describe el comportamiento OBSERVABLE del
 > clúster de arrastre-y-suelta del fork (`frontend/packages/puck/lib/dnd/*`,
 > `components/DropZone`, `components/DraggableComponent`, `components/DragDropContext`) tal como

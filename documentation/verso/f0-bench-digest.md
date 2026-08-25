@@ -1,5 +1,9 @@
 # F0 · Benchmark de competidores
 
+> **HISTORICAL — F0 competitor benchmark, scored before the editor decision.** The competitor
+> versions and scores are a snapshot from that pass and were not re-verified since. Kept as the
+> record of the benchmark that fed F1; it makes no claim about WordJS code.
+
 | Editor | inline editing | drag drop | responsive editing | collaboration | history versions | accessibility | performance | keyboard shortcuts | data model portability | extensibility api | styling design tokens | animations interactions | templates patterns | ai features | dynamic content cms binding |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | Gutenberg | 4 | 3 | 2 | 3 | 3 | 3 | 2 | 4 | 4 | 4 | 4 | 2 | 4 | 2 | 4 |

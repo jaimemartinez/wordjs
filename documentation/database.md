@@ -68,7 +68,7 @@ A **conformance test** (`backend/src/tests/driver-conformance.test.ts`) runs the
 *   **PostgreSQL** (`postgres.ts`) pins **one** pooled client for the whole unit of work — `BEGIN` → `fn(tx)` → `COMMIT`, `ROLLBACK` on throw, and the client is **always** released in a `finally`. This matters because the per-statement methods each grab a *different* pooled connection, so a multi-statement unit would otherwise not share a transaction.
 *   **MySQL / MariaDB** (`mysql.ts`) pins **one** pooled `mysql2` connection for the unit of work — `BEGIN` → `fn(tx)` → `COMMIT`, `ROLLBACK` on throw, connection released in a `finally` — for the same reason as Postgres (the per-statement methods each grab a different pooled connection).
 *   **SQLite (Native)** (`sqlite-native-async.ts`) wraps `BEGIN`/`COMMIT`/`ROLLBACK` on its single shared `better-sqlite3` handle.
-*   **SQLite (Legacy)** (`sqlite-legacy.ts`) suppresses its per-write disk flush while a transaction is open and saves to disk **once** after `COMMIT`; on `ROLLBACK` it restores the pre-transaction in-memory image (so a failed tx leaves both memory and disk at the prior committed state).
+*   **SQLite (Legacy)** (`sqlite-legacy.ts`) suppresses its per-write disk flush while a transaction is open and saves to disk **once** after `COMMIT`. There is no pre-`BEGIN` snapshot: sql.js *is* SQLite, so its own `ROLLBACK` restores the in-memory image, and because the per-write `save()` stayed suppressed the file on disk still holds the last committed image throughout. Only when `ROLLBACK` itself throws does the driver read that file back into a fresh handle. Either way a failed tx leaves both memory and disk at the prior committed state, without paying a full database copy per transaction.
 
 **SQLite transaction serialization & re-entrancy.** Both SQLite drivers serialize `transaction()` through a per-driver promise-chain mutex (`_txChain` / module-level `txChain`): because the callback is async and may `await` between `BEGIN` and `COMMIT`, two overlapping callers could otherwise interleave their `BEGIN`/`COMMIT` on the single shared connection (SQLite has no nested `BEGIN`). Each call waits for the previous to fully settle before its own `BEGIN` runs. A **re-entrant** `transaction()` — one invoked from inside another's callback — fails fast by throwing `nested transaction() is not supported` rather than deadlocking the queue, and `_inTransaction` is reset in a `finally` on **both** commit and rollback.
 
@@ -78,10 +78,10 @@ A **conformance test** (`backend/src/tests/driver-conformance.test.ts`) runs the
 
 ### 1.3 Automatic Fallback Mechanics
 
-The DB Manager (`loadDriver` in `config/database.ts`) falls back to `sqlite-legacy` **only** when loading any SQLite driver fails *and* the failed name isn't already `sqlite-legacy`:
+The DB Manager (`loadDriver` in `config/database.ts`) falls back to `sqlite-legacy` when loading a driver fails, provided the failed name isn't already `sqlite-legacy` **and** either the name starts with `sqlite` or it came from the config file rather than an explicit override:
 
 *   A failed **SQLite** driver (default path, or any `sqlite*` name) → silently falls back to pure-JS `sqlite-legacy` (same file format).
-*   A failed **non-SQLite** override (e.g. an explicit `postgres`) is **not** silently downgraded to SQLite — the error propagates so a misconfigured Postgres deployment fails loudly instead of quietly running on a local file.
+*   A failed **non-SQLite** name passed as an explicit **override** — `loadDriver('postgres')`, the path re-init, tests and the migration tool take — is **not** downgraded to SQLite; the error propagates. The guard keys on that override, and the boot path passes none, so a `postgres`/`mysql` named only in `wordjs-config.json` whose module fails to load (a missing `pg`/`mysql2`, say) *does* fall back and comes up on an empty local SQLite file.
 
 ### 1.4 Live Data Migration
 
@@ -105,7 +105,7 @@ The backing API is mounted at `/api/v1/db-migration` (guarded by `authenticate` 
 
 ### 1.5 Backups & Retention
 
-Full-site backups (logical DB export + a physical DB snapshot for SQLite + the `uploads/`, `plugins/`, `themes/` content roots) are produced by `backend/src/core/backup.ts` (`createBackup()`) and stored **on-host** under `backend/backups/`. Off-host/S3 destinations remain on the roadmap.
+Full-site backups (logical DB export + a physical DB snapshot for SQLite + the `uploads/`, `plugins/`, `themes/` content roots) are produced by `backend/src/core/backup.ts` (`createBackup()`) and stored **on-host** under `backend/backups/`. An **optional off-host S3 offload** (`backend/src/core/s3-offload.ts`) runs right after: it is config-gated on an `s3` block in `wordjs-config.json` or the `WORDJS_S3_*` / `AWS_*` env vars, and a partial config (a bucket with no keys) counts as *not configured* rather than a half-attempt. The upload is a single SigV4-signed `PUT` over Node's built-in `https` — the AWS SDK is not a dependency — so an S3-compatible endpoint such as MinIO works by setting `s3.endpoint`. A failed upload never fails the backup: the local copy is kept and the outcome is reported in the result's `s3` field.
 
 After every backup, retention pruning runs automatically (`pruneBackups()` in `backend/src/core/backup.ts`): only the newest **N** backups are kept and older ones are deleted, so scheduled/auto backups can no longer fill the disk unbounded. **N** comes from the `backup_retention` option (**default 7**); set it to `0` (or a negative value) to keep all backups and disable pruning.
 
@@ -348,20 +348,34 @@ On boot, the schema (`backend/src/config/database.ts`) creates a set of indexes 
 
 > **Platform tables (migrations `0002`–`0005`).** Later schema migrations create the tables backing the scoped API tokens and outgoing HMAC-signed webhooks: `0002_create_api_tokens` (`api_tokens` + UNIQUE `idx_api_tokens_hash` and `idx_api_tokens_user`), `0003_create_webhooks` (`webhooks` + `idx_webhooks_active` and `idx_webhooks_user`), and `0004_create_webhook_deliveries` (`webhook_deliveries` + `idx_wh_deliveries_due` and `idx_wh_deliveries_webhook`), with `0005_webhook_secret_plaintext` renaming `webhooks.secret_enc` → `secret` (the signing secret is now stored in plaintext — encrypting it under the rotatable app secret dead-lettered every delivery on rotation). Unlike the defensive `0001`, `0002`–`0004` run under the normal **fail-closed** migration policy; `0005` swallows a failed `RENAME COLUMN` as a non-fatal no-op.
 
-> **Migrations `0006`–`0008`.** `0006_professional_mailbox_flag` converts the corporate-mailbox grant from "derived from the account's email domain" into an explicit `user_meta.professional_mailbox` flag, auto-granting it **only** to accounts that could already set it themselves (administrators and holders of `edit_users`) and recording every other on-domain account in the `professional_mailbox_migration_pending` option for the operator to re-enable by hand. Like `0001` it **never throws** (the un-granted state is the deny direction). `0007_create_form_submissions` creates `form_submissions` + `idx_form_submissions_name` for the public form block. `0008_posts_fts5` builds the full-text index — see [§2.10](#210-full-text-search-sqlite-fts5).
+> **Migrations `0006`–`0008`.** `0006_professional_mailbox_flag` converts the corporate-mailbox grant from "derived from the account's email domain" into an explicit `user_meta.professional_mailbox` flag, auto-granting it **only** to accounts that could already set it themselves (administrators and holders of `edit_users`) and recording every other on-domain account in the `professional_mailbox_migration_pending` option for the operator to re-enable by hand. Like `0001` it **never throws** (the un-granted state is the deny direction). `0007_create_form_submissions` creates `form_submissions` + `idx_form_submissions_name` for the public form block. `0008_posts_fts5` builds the SQLite full-text index — see [§2.10](#210-full-text-search).
+
+> **Migrations `0009`–`0014`.** `0009_create_audit_log` creates the append-only `audit_log` (+ `idx_audit_log_actor`) that `core/audit.recordAudit` writes and the admin `GET /audit` reads. `0010_posts_fts_pg_mysql` gives Postgres and MySQL their own inverted index — see [§2.10](#210-full-text-search). `0011_posts_multilingual` adds the two NULLABLE columns `posts.post_language` / `posts.translation_group` (+ `idx_posts_translation_group`); a monolingual site keeps NULL/NULL and is unchanged. `0012_create_collab` creates `collab_docs` + `collab_ops` for real-time editing **session** state (the canonical content stays in `_puck_data`), and `0013_collab_epoch_and_liveness` adds `collab_docs.truncated` / `base_hash` / `updated_ms`, the `collab_members` liveness table, and an epoch-bearing replacement for the dot UNIQUE index. `0014_create_content_outbox` creates the durable `content_outbox` the transactional content path writes its events into, plus `webhook_deliveries.source_event_id` and a UNIQUE index on `(webhook_id, source_event_id, event)` so a retried event is not fanned out twice.
 
 ### Batched Meta Loading (N+1 avoidance)
 
 Post listing (`Post.findAllWithRelations`) **batch-loads** post meta for the whole result set in a single query rather than issuing one query per post, eliminating the previous N+1 pattern on listing pages.
 
-## 2.10 Full-Text Search (SQLite FTS5)
+## 2.10 Full-Text Search
 
-Post search used to be `post_title LIKE '%q%' OR post_content LIKE '%q%'` — a full table scan reading every post body, run twice per request (rows + `COUNT`). Schema migration **`0008_posts_fts5`** replaces that with an FTS5 index on SQLite installs:
+Post search used to be `post_title LIKE '%q%' OR post_content LIKE '%q%'` — a full table scan reading every post body, run twice per request (rows + `COUNT`). Two migrations replace that with a real inverted index on each supported engine: **`0008_posts_fts5`** for SQLite and **`0010_posts_fts_pg_mysql`** for Postgres and MySQL.
+
+`Post` resolves which engine backs *this* install once per process (`_resolveSearchEngine`) and `_searchClauses` returns a filter plus a relevance order for it, so callers never branch on the driver and the more-relevant document comes first everywhere.
+
+### SQLite — FTS5 (`0008_posts_fts5`)
 
 *   **`posts_fts`** is a **virtual table**, created `USING fts5(post_title, post_content, content='posts', content_rowid='id', tokenize='unicode61')`. Because it is an **external-content** table it stores only the inverted terms and reads the columns back from `posts` — post bodies are **not** duplicated on disk.
 *   Three triggers keep it in sync: `posts_fts_ai` (AFTER INSERT), `posts_fts_ad` (AFTER DELETE) and `posts_fts_au` (AFTER UPDATE); the delete/update triggers write the `'delete'` command row carrying the OLD values, which is how an external-content index retracts a document. Existing rows are backfilled once with `INSERT INTO posts_fts(posts_fts) VALUES('rebuild')`.
-*   **Engine-scoped.** The migration returns early on Postgres (`ctx.isPostgres`) and on MySQL (`ctx.driverName === 'mysql'`) — tsvector / `FULLTEXT` are separate work, not this migration. This is what the `driverName` field on the migration context exists for.
-*   **Degrades, never fails.** The `CREATE VIRTUAL TABLE` is wrapped in a `try/catch`, so a SQLite build with FTS5 compiled out logs a warning and leaves the database untouched. At query time `Post` probes `sqlite_master` for `posts_fts`: present → `id IN (SELECT rowid FROM posts_fts WHERE posts_fts MATCH ?)`; absent (or Postgres/MySQL) → the original `LIKE` scan, byte-identical to before.
+*   **Engine-scoped.** The migration returns early on Postgres (`ctx.isPostgres`) and on MySQL (`ctx.driverName === 'mysql'`), which get their own index from `0010`. This is what the `driverName` field on the migration context exists for.
+*   **Degrades, never fails.** The `CREATE VIRTUAL TABLE` is wrapped in a `try/catch`, so a SQLite build with FTS5 compiled out logs a warning and leaves the database untouched. At query time `Post` probes `sqlite_master` for `posts_fts`: present → `id IN (SELECT rowid FROM posts_fts WHERE posts_fts MATCH ?)` ordered by `bm25()` ascending; absent → the original `LIKE` scan, byte-identical to before. User text is never passed to FTS5 raw — each token is stripped of FTS5 syntax and re-quoted as a literal phrase (the last one gets a `*` for type-ahead), and if nothing usable survives the caller falls back to `LIKE`.
+
+### Postgres and MySQL (`0010_posts_fts_pg_mysql`)
+
+Both index the same `post_title` + `post_content` that FTS5 covers, **plus `post_excerpt`**, and both are idempotent on a fresh or an existing database.
+
+*   **Postgres** gets a `STORED` generated column `posts.search_vector` (`to_tsvector('english', title || content || excerpt)`, with the regconfig as a literal so the expression is `IMMUTABLE`) and a **GIN** index `idx_posts_search_vector`. Postgres recomputes the vector on every write, so there is no trigger to maintain. Queries filter on `search_vector @@ plainto_tsquery('english', ?)` and order by `ts_rank(...)` — `plainto_tsquery` parses the input as plain text, so a stray operator is text rather than a syntax error thrown at the visitor.
+*   **MySQL/InnoDB** gets a `FULLTEXT` index `ftidx_posts_search` over the same three columns. There is no `ADD FULLTEXT … IF NOT EXISTS`, so the migration probes `information_schema.statistics` first and skips when the index is already there. Queries use `MATCH(…) AGAINST(? IN NATURAL LANGUAGE MODE)` for both the filter and the order.
+*   **The `LIKE` scan is still the floor**, and it is reached for: `sqlite-legacy` (sql.js has no FTS5), a SQLite build without FTS5, an install whose migration has not run, and — on MySQL only — a query with no token as long as `innodb_ft_min_token_size` (default 3), which `NATURAL LANGUAGE MODE` would match nothing for.
 
 ---
 

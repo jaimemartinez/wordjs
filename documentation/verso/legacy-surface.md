@@ -1,5 +1,15 @@
 # Inventario de superficie legacy — arnés F2
 
+> **HISTORICAL — the surface inventoried here has been removed.** `frontend/packages/puck`,
+> `PuckEditor.tsx`, `BlockInserter.tsx`, `CommandPalette.tsx` and `InlineTiptap.tsx` are gone, and
+> no code in `frontend/src` writes or reads the seven `window.puck*` globals or
+> `__PUCK_INTERNAL_DO_NOT_USE` any more — the only surviving mentions are comments naming what Verso
+> replaced them with. Kept as the record of what the retirement had to reach; every `file:line`
+> below is a dead pointer. Two of its findings are still true and still live: `_puck_data` remains
+> the persisted post-meta key, and §6 still holds — the 31 marketplace plugins' compiled bundles
+> contain no `usePuck`/`useGetPuck`/`puckComponents`/`renderDropZone` and no `window.puck*`
+> reference.
+
 Encargo: inventario exacto (file:line) de toda la superficie que el motor nuevo debe sustituir, o cuya
 retirada en F5 debe verificarse mecánicamente. Ámbito: `frontend/src` (excluye `frontend/packages/puck`,
 el fork vendorizado, salvo mención explícita de contexto) + bundles compilados de

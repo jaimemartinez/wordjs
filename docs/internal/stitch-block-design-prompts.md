@@ -1,4 +1,14 @@
-# Stitch prompts — WordJS Puck block library
+# Stitch prompts — WordJS block library
+
+> **HISTORICAL RECORD — a design exercise run in July 2026, not a description of the system today.**
+> It captures the prompts used to drive Google Stitch and the run state as of 2026-07-25 (batches 1
+> and 2 ran; 3 and 4 were still pending). The block library was called the "Puck block library" at
+> the time; **Puck has since been replaced by the in-house Verso editor** (`frontend/src/components/verso`,
+> `frontend/src/lib/verso`) and `@wordjs/puck` is no longer a dependency. What survived the move and
+> is still current is the output contract this document targets: the `.wp-block-*` class names and
+> the `--wjs-<block>-<prop>` custom properties in `backend/public/css/wordjs-ui.css`. Read the
+> Stitch-driving notes and the prompts as a record; do not treat the run state or the
+> "awaiting the contract" list at the foot as current.
 
 How to use: paste **Prompt A** first (it sets the design system). Then paste **one batch prompt**
 per run from Prompt B. Don't ask for all 28 blocks in a single run — the output collapses into

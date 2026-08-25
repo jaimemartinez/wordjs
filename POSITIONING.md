@@ -19,8 +19,8 @@ product**. We sell *safety of the plugin ecosystem*, not "WordPress, but JavaScr
 
 This section is deliberately honest. The differentiator is real: **every** plugin now runs in a
 **separate OS process** (kernel-enforced isolation), with the JS-level guards retained as
-defense-in-depth *inside* that process. We still don't oversell — the remaining hardening
-(syscall filtering, hard kernel memory caps, dropped privileges) is named below.
+defense-in-depth *inside* that process. We still don't oversell — what is *not* closed (preventive
+memory caps outside systemd Linux and Windows, and the absence of an independent audit) is named below.
 
 **Architecture (implemented, in `main`, not a proposal):**
 - Every plugin must declare `"isolated": true` and runs in its **own OS process**
@@ -120,11 +120,11 @@ defense-in-depth *inside* that process. We still don't oversell — the remainin
 - The model has had several red-team passes (ten rounds) plus the OS-isolation pivot; it has
   **not had an independent third-party audit**.
 
-**Honest one-liner for the sandbox:** *"Every plugin runs in a separate OS process with
-admin-granted, default-deny capabilities and defense-in-depth guards — no plugin bypasses the
-sandbox — materially stronger than any in-process plugin model on the market, with a clear,
-documented path to full kernel-level hardening (seccomp, cgroups, dropped privileges)."* We lead
-with that, not with "unbreakable."
+**Honest one-liner for the sandbox:** *"Every plugin runs in a separate OS process wrapped by its
+platform's own kernel sandbox — Landlock + seccomp on Linux, AppContainer on Windows, Seatbelt on
+macOS — with admin-granted, default-deny capabilities and defense-in-depth guards. No plugin
+bypasses the sandbox. Materially stronger than any in-process plugin model on the market, and not
+yet independently audited."* We lead with that, not with "unbreakable."
 
 ---
 
@@ -172,8 +172,7 @@ The sandbox + AST scanner are the *enabling technology* for a marketplace where 
 install" is a verifiable claim**, not a vibe.
 
 **The marketplace *mechanism* now ships in OSS** (no longer a proposal): a curated catalog of
-**31 first-party plugins** (`marketplace/plugins/`) and **64 first-party themes** (`marketplace/themes/`),
-both built into catalog + zips by
+**31 first-party plugins** (`marketplace/plugins/`), built into catalog + zips by
 `backend/scripts/build-marketplace.js` into `marketplace/dist/` (separate plugin and theme indexes,
 a gitignored build output published
 as GitHub Release assets; installs default to `releases/latest/download` but the sources are
@@ -181,7 +180,10 @@ as GitHub Release assets; installs default to `releases/latest/download` but the
 `marketplace_theme_sources` for themes, any number of HTTPS catalogs merged), a
 Plugins → Marketplace admin tab with one-click installs, **sha256-verified** downloads
 routed through the *same* hardened upload pipeline (zip guards + AST scan;
-`backend/src/routes/marketplace.ts`), and per-capability grant disclosure at install. What
+`backend/src/routes/marketplace.ts`), and per-capability grant disclosure at install. The theme half
+of that mechanism is intact — its own index, its own source option, its own admin tab — but the theme
+catalogue itself was retired, so `marketplace/themes/` no longer exists and the theme index builds
+empty; the four themes WordJS ships are bundled in `backend/themes/`. What
 follows below — the trust badge, the third-party review pipeline, and the revenue model — is the
 commercial layer to build on top of that shipped mechanism.
 
@@ -241,9 +243,18 @@ enlarges the trust surface:
 - **Mail / MTA → optional add-on.** The mail-server runs an inbound SMTP listener (configurable
   `smtp_listen_port`, default 25) + outbound MX delivery on port 25 + DKIM. With the trust tier gone, it ships as a normal sandboxed first-party
   plugin, granted at activation exactly the capabilities it declares (`network` for SMTP/MX, `email:provider`).
-  It should ship as an **optional add-on**, not a core dependency: direct-MX deliverability is
-  an ops liability most users don't want in core, and a high-capability plugin enlarges the
-  capability surface even though it stays sandboxed.
+  **The code is out:** it lives in `marketplace/plugins/mail-server`, not in core — a fresh install has
+  no MTA until an admin installs it. The core keeps only `mail-provider.ts` (is a provider registered?)
+  and `mailbox.ts` (who holds a site mailbox); it cannot send mail on its own. **The dependencies are
+  not:** `nodemailer`, `smtp-server` and `mailparser` are still declared in `backend/package.json`
+  **`dependencies`** — no runtime module under `backend/src/` imports them (only the mail-server plugin
+  and its tests do); they are there so the plugin can resolve them out of `backend/node_modules` (see the
+  comment in `core/plugins.ts`). So every install
+  still downloads and ships the MTA library stack even with no MTA installed. Measured against this
+  section's own bar — "Embedded PostgreSQL → **removed** (done)" means gone, dependency included — this
+  one is a demotion, not yet a cut. That matters because
+  direct-MX deliverability is an ops liability most users don't want in core, and a high-capability
+  plugin enlarges the capability surface even though it stays sandboxed.
 - **ACME / cert-manager → out of core.** TLS issuance is a deployment concern (reverse proxy /
   hosting layer), not CMS core.
 - **Embedded PostgreSQL → removed (done).** Bundling and auto-starting an embedded PG *server
@@ -281,12 +292,12 @@ enlarges the trust surface:
 The sandbox is **genuinely differentiated and genuinely implemented** — isolated OS processes
 for *every* plugin, a permission-checked bridge, admin-granted default-deny capabilities (no
 trust tier, no bypass), a fail-closed AST scanner, and network / secret / core-table lockdown.
-We win by being honest about the remaining kernel-level hardening while building on the
+We win by being honest about what is still unaudited while building on the
 marketplace mechanism that now ships (a curated, sha256-verified catalog of 31 first-party
 plugins installed through the hardened pipeline) and the hosted offering that turn "your plugins
 can't compromise your site" into the product. The work to get there is **a third-party
-ecosystem (review pipeline + badge), an external audit, the kernel-level hardening on
-hosted, and a deliberately shrunken minimal-capability core** (cut MTA / ACME,
+ecosystem (review pipeline + badge), an external audit, tenant-level containment on
+hosted, and a deliberately shrunken minimal-capability core** (cut ACME,
 pick one DB). The license question is resolved (MIT).
 
 ---

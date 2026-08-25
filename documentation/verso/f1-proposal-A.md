@@ -1,5 +1,15 @@
 # Propuesta A completa
 
+> **HISTORICAL — one of the three F1 proposals put to the judging panel, not a description of what
+> was built.** The panel scored B highest (see `f1-verdicts-digest.md`), but the decision write-up
+> `editor-decision-f0f1.html` recommended this proposal with B's and C's verification harness
+> grafted on, and that is what the tree looks like: `frontend/src/lib/verso/*` and
+> `frontend/src/components/verso/*` are fresh modules with their own store, DnD resolver and inline
+> engine, and the fork was deleted rather than absorbed. Two things it assumes are gone: the
+> `editorEngine` flag (Verso is unconditional) and Tiptap, which this proposal kept and which the
+> later F3.5 decision replaced with Verso's own inline engine. `_puck_data` did stay canonical, as
+> proposed.
+
 ## data_model
 
 DECISIÓN: la forma Puck Data persistida SIGUE SIENDO CANÓNICA, byte-exacta — {content:[{type,props:{id,...}}], root:{props}}, slots como arrays dentro de props, item.type = los strings literales del switch de ContentRenderer, props.id estable generado una vez al insertar. NO hay formato nuevo ni conversión: es la única respuesta que hace trivial la restricción de cero pérdida (revisiones, WXR, backups y las páginas de producción abren sin tocar nada) y mantiene ContentRenderer/sanitize-meta/plugins intactos. Cambiar el formato compraría estética a cambio de migrar revisiones+WXR+31 plugins: rechazado. INTERNAMENTE el motor normaliza al cargar: mapa plano id→nodo + referencias (parentId, slotKey, index) derivadas del árbol — esto habilita suscripción por nodo, historia O(cambio) y DnD sin recorrer el árbol; al serializar se reconstruye el árbol EXACTO (round-trip probado con corpus de producción en el gate de F2, deep-equal byte-canónico). Zonas legacy (Data.zones): normalización en memoria al cargar (semántica del paso 2 de migrate.ts) pero FAIL-SOFT en vez del throw actual — un slot inexistente en config preserva los items bajo un prop _orphans con aviso visible, mejora directa sobre el fallo duro del fork; idempotente; se persiste como slots al guardar (comportamiento ya vigente). La clave meta sigue siendo _puck_data (ver migración) referida por una única constante CONTENT_META_KEY.
