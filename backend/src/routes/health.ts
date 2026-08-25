@@ -4,6 +4,8 @@ const router = express.Router();
 const SystemHealth = require('../core/system-health');
 const { authenticate } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/permissions');
+// See middleware/errorHandler: an unrecognised failure's own text never crosses the wire.
+const { publicErrorText } = require('../middleware/errorHandler');
 
 /**
  * Public high-level health check (Gateway use)
@@ -195,7 +197,8 @@ router.get('/details', authenticate, isAdmin, async (req: Request, res: Response
         const fullStatus = await SystemHealth.getFullStatus();
         res.json(fullStatus);
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        console.error('[health] /details failed:', err);
+        res.status(500).json({ error: publicErrorText(err, 'The system health report could not be produced.') });
     }
 });
 

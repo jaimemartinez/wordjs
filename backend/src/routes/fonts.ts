@@ -97,94 +97,106 @@ function uploadFontSingle(req: Request, res: Response, next: NextFunction) {
  * GET /fonts
  * List all installed fonts
  */
-router.get('/', optionalAuth, asyncHandler(async (req: Request, res: Response) => {
+router.get('/', optionalAuth, asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
     // Read the directory
     fs.readdir(fontsDir, (err: any, files: any) => {
-        if (err) {
-            return res.status(500).json({ error: 'Failed to read fonts directory' });
-        }
+        // EVERYTHING below runs in a node-style CALLBACK, not in the async handler. asyncHandler only
+        // does `Promise.resolve(fn(...)).catch(next)`, and that promise resolves the instant fs.readdir is
+        // CALLED — so a throw in here lands on an empty stack as an uncaughtException, never a 500. The
+        // request was then never answered at all, and index.ts's uncaughtException handler kills the
+        // process. It is reachable: statSync below stats names readdir returned, and a font removed in
+        // that window (DELETE /fonts/:filename) makes it throw ENOENT — and this GET is optionalAuth, so
+        // an anonymous request could take the server down. Hand the error to the same next() asyncHandler
+        // would have used.
+        try {
+            if (err) {
+                return res.status(500).json({ error: 'Failed to read fonts directory' });
+            }
 
-        const fonts = files
-            .filter((file: any) => {
-                const ext = path.extname(file).toLowerCase();
-                return ['.ttf', '.otf', '.woff', '.woff2', '.eot'].includes(ext);
-            })
-            .map((file: any) => {
-                const stats = fs.statSync(path.join(fontsDir, file));
+            const fonts = files
+                .filter((file: any) => {
+                    const ext = path.extname(file).toLowerCase();
+                    return ['.ttf', '.otf', '.woff', '.woff2', '.eot'].includes(ext);
+                })
+                .map((file: any) => {
+                    const stats = fs.statSync(path.join(fontsDir, file));
 
-                // Intelligent Parsing
-                const ext = path.extname(file);
-                const nameWithoutExt = path.basename(file, ext);
+                    // Intelligent Parsing
+                    const ext = path.extname(file);
+                    const nameWithoutExt = path.basename(file, ext);
 
-                // Common tokens for variants
-                const variantTokens = [
-                    'thin', 'extralight', 'light', 'regular', 'medium', 'semibold', 'bold', 'extrabold', 'black',
-                    'italic', 'oblique'
-                ];
+                    // Common tokens for variants
+                    const variantTokens = [
+                        'thin', 'extralight', 'light', 'regular', 'medium', 'semibold', 'bold', 'extrabold', 'black',
+                        'italic', 'oblique'
+                    ];
 
-                // Split by common delimiters
-                const parts = nameWithoutExt.split(/[-_ ]+/);
+                    // Split by common delimiters
+                    const parts = nameWithoutExt.split(/[-_ ]+/);
 
-                let familyParts: string[] = [];
-                let variantParts: string[] = [];
+                    let familyParts: string[] = [];
+                    let variantParts: string[] = [];
 
-                parts.forEach((part: string) => {
-                    if (variantTokens.includes(part.toLowerCase())) {
-                        variantParts.push(part);
-                    } else {
-                        familyParts.push(part);
+                    parts.forEach((part: string) => {
+                        if (variantTokens.includes(part.toLowerCase())) {
+                            variantParts.push(part);
+                        } else {
+                            familyParts.push(part);
+                        }
+                    });
+
+                    const familyName = familyParts.join(' ') || nameWithoutExt;
+                    let variant = variantParts.join(' ');
+
+                    // Normalize variant
+                    if (!variant) variant = 'Regular';
+
+                    const isProtected = PROTECTED_FONTS.some(p => file.toLowerCase().includes(p));
+
+                    // Fix: Ensure family consistency for protected fonts
+                    let finalFamily = familyName;
+                    if (isProtected) {
+                        // Map filename parts to clean family names for specific system fonts if needed
+                        const pName = PROTECTED_FONTS.find(p => file.toLowerCase().includes(p));
+                        if (pName) {
+                            // Capitalize first letter
+                            finalFamily = pName.charAt(0).toUpperCase() + pName.slice(1);
+                            // Handle special casing
+                            if (pName === 'opensans') finalFamily = 'Open Sans';
+                            if (pName === 'playfairdisplay') finalFamily = 'Playfair Display';
+                            // Default capitalization works for Lora, Kanit, Roboto, Lato, Poppins, Nunito, Raleway, Montserrat
+                        }
                     }
+
+                    return {
+                        filename: file,
+                        family: finalFamily,
+                        variant: variant,
+                        // Origin-relative (same policy as media sourceUrl): siteUrl embeds the
+                        // upload-era host/IP, so absolute URLs break @font-face on any other origin
+                        // (fonts silently failed to load and text fell back to system serif).
+                        url: `/uploads/fonts/${file}`,
+                        size: stats.size,
+                        modified: stats.mtime,
+                        protected: isProtected
+                    };
                 });
 
-                const familyName = familyParts.join(' ') || nameWithoutExt;
-                let variant = variantParts.join(' ');
+            // Sort: Protected first, then Alphabetical Family, then Variant
+            fonts.sort((a: any, b: any) => {
+                if (a.protected && !b.protected) return -1;
+                if (!a.protected && b.protected) return 1;
 
-                // Normalize variant
-                if (!variant) variant = 'Regular';
+                const familyCompare = a.family.localeCompare(b.family);
+                if (familyCompare !== 0) return familyCompare;
 
-                const isProtected = PROTECTED_FONTS.some(p => file.toLowerCase().includes(p));
-
-                // Fix: Ensure family consistency for protected fonts
-                let finalFamily = familyName;
-                if (isProtected) {
-                    // Map filename parts to clean family names for specific system fonts if needed
-                    const pName = PROTECTED_FONTS.find(p => file.toLowerCase().includes(p));
-                    if (pName) {
-                        // Capitalize first letter
-                        finalFamily = pName.charAt(0).toUpperCase() + pName.slice(1);
-                        // Handle special casing
-                        if (pName === 'opensans') finalFamily = 'Open Sans';
-                        if (pName === 'playfairdisplay') finalFamily = 'Playfair Display';
-                        // Default capitalization works for Lora, Kanit, Roboto, Lato, Poppins, Nunito, Raleway, Montserrat
-                    }
-                }
-
-                return {
-                    filename: file,
-                    family: finalFamily,
-                    variant: variant,
-                    // Origin-relative (same policy as media sourceUrl): siteUrl embeds the
-                    // upload-era host/IP, so absolute URLs break @font-face on any other origin
-                    // (fonts silently failed to load and text fell back to system serif).
-                    url: `/uploads/fonts/${file}`,
-                    size: stats.size,
-                    modified: stats.mtime,
-                    protected: isProtected
-                };
+                return a.variant.localeCompare(b.variant);
             });
 
-        // Sort: Protected first, then Alphabetical Family, then Variant
-        fonts.sort((a: any, b: any) => {
-            if (a.protected && !b.protected) return -1;
-            if (!a.protected && b.protected) return 1;
-
-            const familyCompare = a.family.localeCompare(b.family);
-            if (familyCompare !== 0) return familyCompare;
-
-            return a.variant.localeCompare(b.variant);
-        });
-
-        res.json(fonts);
+            res.json(fonts);
+        } catch (e) {
+            next(e);
+        }
     });
 }));
 

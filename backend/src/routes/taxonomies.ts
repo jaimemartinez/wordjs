@@ -18,6 +18,18 @@ const {
 const { authenticate } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
+// THE SCALAR QUERY RULE — see core/query-params.
+const { requireScalarQuery } = require('../core/query-params');
+
+/**
+ * The two query parameters the list route reads. Same defect and same fix as routes/post-types.ts:
+ * `rest !== 'false'` is a comparison against a string, so `?rest=false&rest=false` arrives as an
+ * Array, compares unequal, and answers with the REST-VISIBLE taxonomies — the opposite set from the
+ * one asked for. `postType` is declared here too because it is read in the same handler; it already
+ * narrows itself with a typeof check, and declaring it makes the two parameters answer a polluted
+ * URL the same way instead of one 400 and one silent pass.
+ */
+const TAXONOMY_LIST_QUERY_FIELDS: readonly string[] = Object.freeze(['rest', 'postType']);
 
 // Taxonomy names are WordPress-style keys: lowercase slug, required to START alphanumeric
 // (which also keeps object-plumbing names like '__proto__' out of the persisted map), capped
@@ -53,6 +65,8 @@ const TAXONOMY_NAME_RE = /^[a-z0-9][a-z0-9_-]{0,31}$/;
  *         description: List of taxonomies
  */
 router.get('/', asyncHandler(async (req: Request, res: Response) => {
+    requireScalarQuery(req.query, TAXONOMY_LIST_QUERY_FIELDS);
+
     const showInRest = req.query.rest !== 'false';
     const filter: Record<string, any> = { showInRest };
     // Optional ?postType=book narrows to the taxonomies attached to one post type

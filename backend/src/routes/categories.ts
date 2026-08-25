@@ -11,8 +11,25 @@ const Term = require('../models/Term');
 const { authenticate, optionalAuth } = require('../middleware/auth');
 const { can } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
+// THE SCALAR QUERY RULE — see core/query-params.
+const { requireScalarQuery, requireRouteId } = require('../core/query-params');
 
 const TAXONOMY = 'category';
+
+// THE ROUTE-ID CONTRACT — see core/query-params. `:id` is a term id, so `/categories/abc` used to
+// reach Term.findById as NaN (Term.findById has no falsy short-circuit) and be bound into
+// `WHERE t.term_id = ?`: a 404 on SQLite, a 500 on Postgres/MySQL, to an ANONYMOUS caller.
+// Declared for the router, not per route, so the three routes below and any added later share it.
+router.param('id', requireRouteId({ code: 'rest_term_invalid', message: 'Invalid category ID.' }));
+
+/**
+ * Every query parameter GET /categories reads, each a scalar in this API's contract. Twin of
+ * TAG_LIST_QUERY_FIELDS in routes/tags.ts — `parent` is the one extra field this taxonomy takes, and
+ * `hide_empty` is the flag a repeat used to switch off silently.
+ */
+const CATEGORY_LIST_QUERY_FIELDS: readonly string[] = Object.freeze([
+    'page', 'per_page', 'search', 'parent', 'hide_empty', 'orderby', 'order',
+]);
 
 /**
  * @swagger
@@ -41,6 +58,10 @@ const TAXONOMY = 'category';
  *         description: List of categories
  */
 router.get('/', optionalAuth, asyncHandler(async (req: Request, res: Response) => {
+    // Refuse a repeated scalar before anything reads it, so every comparison below is a string
+    // comparison and both `hide_empty === 'true'` sites answer the same thing.
+    requireScalarQuery(req.query, CATEGORY_LIST_QUERY_FIELDS);
+
     const {
         page = 1,
         per_page = 100,

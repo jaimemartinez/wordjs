@@ -13,6 +13,8 @@ const User = require('../models/User');
 const { authenticate, generateToken, verifyToken, issueSessionCookie, sessionOnly, sessionCookie } = require('../middleware/auth');
 const { isAdmin, can } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
+// THE ROUTE-ID CONTRACT — see core/query-params: one definition of "a route id" for the whole tree.
+const { routeIdOrNull } = require('../core/query-params');
 const { getOption } = require('../core/options');
 const config = require('../config/app');
 const crypto = require('crypto');
@@ -959,11 +961,14 @@ router.post('/tokens', authenticate, sessionOnly, can('manage_api_tokens'), asyn
  * Revoke one of the current user's tokens. Idempotent-ish: 404 if it isn't the caller's or is already gone.
  */
 router.delete('/tokens/:id', authenticate, sessionOnly, can('manage_api_tokens'), asyncHandler(async (req: Request, res: Response) => {
-    // Express 5 types `req.params[k]` as `string | string[]` (wildcard segments can capture an array).
-    // `parseInt` already applies ToString to its first argument, so spelling that conversion out here is
-    // exactly what the untyped call did — for a plain `:id` string and for an array alike.
-    const id = parseInt(String(req.params.id), 10);
-    if (!Number.isInteger(id) || id <= 0) {
+    // THE ROUTE-ID CONTRACT — see core/query-params. The 400 and its body are this route's published
+    // answer and are unchanged; the PREDICATE is now the single shared one. The local test was
+    // `parseInt` + `Number.isInteger(id) && id > 0`: integrality and positivity, no upper bound and no
+    // shape check, so `/auth/tokens/9999999999` reached `ApiToken.revoke` and became
+    // `22003 value out of range for type integer` — a 500 — on Postgres, and `/auth/tokens/12abc`
+    // revoked token 12.
+    const id = routeIdOrNull(req.params.id);
+    if (id === null) {
         return res.status(400).json({ code: 'rest_invalid_param', message: 'Invalid token id.', data: { status: 400 } });
     }
     const ok = await ApiToken.revoke(id, req.user.id);

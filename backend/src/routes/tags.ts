@@ -11,8 +11,24 @@ const Term = require('../models/Term');
 const { authenticate, optionalAuth } = require('../middleware/auth');
 const { can } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
+// THE SCALAR QUERY RULE — see core/query-params.
+const { requireScalarQuery, requireRouteId } = require('../core/query-params');
 
 const TAXONOMY = 'post_tag';
+
+// THE ROUTE-ID CONTRACT — see core/query-params. The exact twin of routes/categories.ts: the same
+// Term.findById sink on the other taxonomy, so the same non-numeric `:id` was the same 500.
+router.param('id', requireRouteId({ code: 'rest_term_invalid', message: 'Invalid tag ID.' }));
+
+/**
+ * Every query parameter GET /tags reads, each a scalar in this API's contract. `hide_empty` is the
+ * one that mattered: `?hide_empty=true&hide_empty=true` is ['true','true'], which `=== 'true'`
+ * answers false for, so the filter was dropped and empty tags were listed anyway — the caller was
+ * told nothing. Twin of the same table in routes/categories.ts.
+ */
+const TAG_LIST_QUERY_FIELDS: readonly string[] = Object.freeze([
+    'page', 'per_page', 'search', 'hide_empty', 'orderby', 'order',
+]);
 
 /**
  * @swagger
@@ -41,6 +57,10 @@ const TAXONOMY = 'post_tag';
  *         description: List of tags
  */
 router.get('/', optionalAuth, asyncHandler(async (req: Request, res: Response) => {
+    // Refuse a repeated scalar before anything reads it, so every comparison below is a string
+    // comparison and both `hide_empty === 'true'` sites answer the same thing.
+    requireScalarQuery(req.query, TAG_LIST_QUERY_FIELDS);
+
     const {
         page = 1,
         per_page = 100,

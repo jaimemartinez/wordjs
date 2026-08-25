@@ -305,6 +305,71 @@ describe('CSRF Protection (real middleware, mounted at the api prefix)', () => {
         const res = await post(`${PREFIX}/setupsomething`);
         assert.strictEqual(res.status, 403);
     });
+
+    // ---------------------------------------------------------------------------------------------
+    // ABSENT Host header. `req.get('Host')` is `string | undefined`; while the boundary was `any` that
+    // undefined flowed unchecked into the allow-list as `http://${host}` — i.e. the LITERAL origins
+    // 'http://undefined' and 'https://undefined' became same-origin to this site. Anyone able to serve
+    // a page from the (perfectly legal) host label `undefined` — an intranet name, a DNS search suffix,
+    // a hosts entry — could then drive cookie-authenticated state changes.
+    //
+    // Reachability is NOT theoretical, and supertest cannot show it because http.request always writes a
+    // Host. Measured on this Node (v25): HTTP/1.1 without Host is rejected by the parser with 400, but
+    // HTTP/1.0 imposes no Host requirement and Node hands the request to Express with
+    // `req.headers.host === undefined`. So these two tests drive the real mounted middleware over a raw
+    // socket: the control proves the host-less request genuinely REACHES the middleware (otherwise the
+    // exploit test would "pass" on a parser-level 400 and assert nothing), the exploit test pins that an
+    // absent Host produces no allow-list entry at all — fail closed.
+    const net = require('node:net');
+    const CRLF = '\r\n';
+
+    const rawRequest = (port: number, requestLine: string, headers: string[]) =>
+        new Promise<{ status: number; body: string }>((resolve, reject) => {
+            const socket = net.connect(port, '127.0.0.1', () => {
+                socket.write(requestLine + CRLF + headers.concat(['Content-Length: 0', '', '']).join(CRLF));
+            });
+            let raw = '';
+            socket.setTimeout(5000, () => { socket.destroy(); reject(new Error('raw socket timeout')); });
+            socket.on('data', (d: Buffer) => { raw += d.toString(); });
+            socket.on('error', reject);
+            socket.on('close', () => resolve({
+                status: Number((raw.split(CRLF)[0] || '').split(' ')[1]),
+                body: raw.split(CRLF + CRLF).slice(1).join(CRLF + CRLF)
+            }));
+        });
+
+    // HTTP/1.0 keeps no connection alive, so the socket closes on its own after each response.
+    const withServer = async (fn: (port: number) => Promise<void>) => {
+        const server = app.listen(0, '127.0.0.1');
+        await new Promise((r) => server.once('listening', r));
+        try { await fn(server.address().port); }
+        finally { await new Promise((r) => server.close(r)); }
+    };
+
+    it('CONTROL: a host-less HTTP/1.0 request really does reach the mounted middleware', async () => {
+        await withServer(async (port) => {
+            // Safe method: csrfProtection nexts immediately, so a 200 here means Node delivered a request
+            // with NO Host header rather than rejecting it at the parser (as it does for HTTP/1.1).
+            const res = await rawRequest(port, `GET ${PREFIX}/posts HTTP/1.0`, []);
+            assert.strictEqual(res.status, 200, 'host-less HTTP/1.0 must be delivered, not 400ed');
+            assert.match(res.body, /"nexted":true/);
+        });
+    });
+
+    it('an ABSENT Host must not make http(s)://undefined a same-origin allow-list entry', async () => {
+        await withServer(async (port) => {
+            const res = await rawRequest(port, `POST ${PREFIX}/posts HTTP/1.0`, ['Origin: http://undefined']);
+            assert.strictEqual(res.status, 403, 'literal origin http://undefined must never be same-origin');
+            assert.match(res.body, /rest_csrf_invalid/);
+        });
+    });
+
+    it('an ABSENT Host must not allow https://undefined either', async () => {
+        await withServer(async (port) => {
+            const res = await rawRequest(port, `POST ${PREFIX}/posts HTTP/1.0`, ['Origin: https://undefined']);
+            assert.strictEqual(res.status, 403, 'literal origin https://undefined must never be same-origin');
+        });
+    });
 });
 
 describe('JWT revocation (token_valid_after)', () => {

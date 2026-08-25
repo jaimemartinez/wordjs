@@ -3,7 +3,7 @@
  * /api/v1/themes/*
  */
 
-import type { Request, Response } from 'express';
+import type { Request, Response, NextFunction } from 'express';
 // `req.file` is multer's, and its declaration lives in @types/multer's `declare global` block. tsconfig
 // pins `"types": ["node"]`, so no @types package is auto-included: the augmentation only reaches the
 // program when something IMPORTS the module, and every use of multer here goes through `require`. This
@@ -36,7 +36,7 @@ const { compileTheme, writeCompiled } = require('../core/theme-compile');
 const { analyzeTheme } = require('../core/theme-doctor');
 const { authenticate } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/permissions');
-const { asyncHandler } = require('../middleware/errorHandler');
+const { asyncHandler, offStack } = require('../middleware/errorHandler');
 const { recordAudit } = require('../core/audit');
 const { isThemeAssetName, resolveThemeDir, resolveWithin } = require('../core/safe-path');
 
@@ -646,7 +646,7 @@ router.delete('/:slug', authenticate, isAdmin, asyncHandler(async (req: Request,
  *               type: string
  *               format: binary
  */
-router.get('/:slug/download', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+router.get('/:slug/download', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
     // SECURITY: the slug picks BOTH the folder that gets packed and the temp file the zip is written
     // to — and the file this handler then serves and DELETES. The boolean gate that used to stand
     // here is not enough on its own: it proves a property of a path it throws away, while the raw
@@ -658,12 +658,36 @@ router.get('/:slug/download', authenticate, isAdmin, asyncHandler(async (req: Re
     }
     const zipPath = await createThemeZip(req.params.slug);
 
-    res.download(zipPath, `${req.params.slug}.zip`, (err: any) => {
-        // Clean up temp file after download
+    // THIS CALLBACK RUNS ON AN EMPTY STACK. express hands it to `send`'s finish/error listeners, so
+    // asyncHandler — whose promise settled the moment res.download was CALLED — can never see what
+    // happens in here. Unwrapped, it had both halves of that failure open:
+    //
+    //   · `fs.unlinkSync` is not a call that cannot fail. It throws EPERM on Windows for a file
+    //     carrying FILE_ATTRIBUTE_READONLY and EACCES on POSIX when os-tmp/ is not writable by the
+    //     server user, and that throw is an uncaughtException — index.ts turns it into
+    //     process.exit(1). The server died AFTER a download the client had already seen succeed.
+    //   · the `err` was never looked at. Supplying a callback to res.download makes express hand a
+    //     TRANSFER failure HERE instead of to next(), so a download that could not be streamed got no
+    //     response and no close — the socket was simply held until the client gave up. That window is
+    //     one this route opens on itself: createThemeZip writes a DETERMINISTIC os-tmp/<slug>.zip, so
+    //     two concurrent downloads of the same theme share one temp file and the first callback to
+    //     finish deletes it out from under the second.
+    res.download(zipPath, `${req.params.slug}.zip`, (err: any) => offStack(res, next, () => {
+        // Cleanup first: it has to run whether the transfer finished or failed.
         if (fs.existsSync(zipPath)) {
             fs.unlinkSync(zipPath);
         }
-    });
+        // Then answer for the failure. A client that hung up mid-transfer needs nothing (the response
+        // is already committed); anything that failed BEFORE a byte went out is a 500 this API owes
+        // the caller. `send`'s own message names the temp path, so it stays in the log and does not
+        // become the body.
+        if (err && !res.headersSent) {
+            const failure: any = new Error('Failed to send the theme archive.');
+            failure.status = 500;
+            failure.cause = err;
+            throw failure;
+        }
+    }));
 }));
 
 /**

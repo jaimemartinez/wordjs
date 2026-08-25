@@ -21,7 +21,7 @@ const { getAllPlugins, activatePlugin, deactivatePlugin, createSamplePlugin, isP
 const { assertZipWithinBudget } = require('../core/zip-guard');
 const { authenticate, authenticateAllowQuery } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/permissions');
-const { asyncHandler } = require('../middleware/errorHandler');
+const { asyncHandler, publicErrorText } = require('../middleware/errorHandler');
 const { recordAudit } = require('../core/audit');
 const { execFile } = require('child_process');
 const { resolveWithin } = require('../core/safe-path');
@@ -538,7 +538,8 @@ async function installPluginFromZip(zipPathIn: string, originalName: string, exp
     } catch (error: any) {
         // Cleanup temp file on error
         discardZip();
-        return { ok: false, status: 500, body: { error: `Failed to install plugin: ${error.message}` } };
+        console.error('[plugins] install failed:', error);
+        return { ok: false, status: 500, body: { error: publicErrorText(error, 'Failed to install plugin.') } };
     }
 }
 
@@ -737,7 +738,8 @@ async function runPluginUpdate(
     } catch (e: any) {
         if (stashDir) { try { await rollback(); } catch { /* */ } }
         cleanupZip();
-        return { ok: false, status: e.status || 500, body: e.body || { error: `Failed to update plugin '${slug}': ${e && e.message}` } };
+        console.error("[plugins] update of '%s' failed:", logSafe(slug), e);
+        return { ok: false, status: e.status || 500, body: e.body || { error: publicErrorText(e, `Failed to update plugin '${slug}'.`) } };
     } finally {
         try { await lease.release(); } catch { /* */ }
         pluginOpInProgress.delete(slug);
@@ -1350,9 +1352,9 @@ router.post('/:slug/free-port', authenticate, isAdmin, asyncHandler(async (req: 
     } catch (e: any) {
         // `details` is the one structured field the frontend api() helper preserves on thrown errors —
         // carry the machine-readable code + fresh conflict there so the client can re-prompt consent.
-        if (e && e.code === 'CONSENT_REQUIRED') return res.status(409).json({ error: e.message, code: e.code, details: { code: e.code, conflict: e.conflict } });
-        if (e && e.code === 'PORT_NOT_FREEABLE') return res.status(409).json({ error: e.message, code: e.code });
-        if (e && (e.code === 'PORT_STILL_IN_USE' || e.code === 'DISABLE_FAILED')) return res.status(502).json({ error: e.message, code: e.code });
+        if (e && e.code === 'CONSENT_REQUIRED') return res.status(409).json({ error: publicErrorText(e, 'Confirmation required before freeing the port.'), code: e.code, details: { code: e.code, conflict: e.conflict } });
+        if (e && e.code === 'PORT_NOT_FREEABLE') return res.status(409).json({ error: publicErrorText(e, 'The port could not be freed.'), code: e.code });
+        if (e && (e.code === 'PORT_STILL_IN_USE' || e.code === 'DISABLE_FAILED')) return res.status(502).json({ error: publicErrorText(e, 'The port is still in use.'), code: e.code });
         throw e;
     }
 }));

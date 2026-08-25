@@ -4,6 +4,7 @@
  */
 
 import type { Request, Response } from 'express';
+import type { QueryValue } from '../core/query-params';
 import type {
     ContentCreateInput,
     ContentListQuery,
@@ -24,14 +25,23 @@ type AuthenticatedRequest<P = Record<string, string>, B = unknown, Q = Record<st
 interface IdParams { id: string }
 interface SlugParams { slug: string }
 interface TypeQuery { type?: string }
-interface ForceQuery { force?: string }
+// `force` is DELIBERATELY not `string`. It is what Express can actually deliver, because declaring it
+// a string is precisely what hid this route's worst defect: the compiler believed `req.query.force`
+// was a string, so `req.query.force === 'true'` looked like a total comparison, while `?force=true&
+// force=true` arrived as ['true','true'] and answered false — a permanent delete downgraded to a
+// trash, with a 200. The honest type forces the read through scalarQueryParam.
+interface ForceQuery { force?: QueryValue }
 interface MetaWriteBody { key?: unknown; value?: unknown }
 interface LanguageBody { language?: unknown }
 interface TranslationBody { translationId?: unknown }
 const Post = require('../models/Post');
 const { authenticate, optionalAuth } = require('../middleware/auth');
-const { can, ownerOrCan } = require('../middleware/permissions');
+const { can } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
+// THE SCALAR QUERY RULE (core/query-params): a parameter declared scalar arrives once, as a string,
+// or the request is a 400. Same rule firstNonStringField()/invalidParamType() below apply to this
+// file's list and body fields — this is that rule for a single value, reusable by the other routers.
+const { scalarQueryParam, requireRouteId } = require('../core/query-params');
 const { saveRevision, isRevisionableMeta } = require('../core/revisions');
 const sanitizeHtml = require('sanitize-html');
 
@@ -248,6 +258,26 @@ function toInt(raw: unknown): number | null {
 
 /** The 404 body every route in this file uses for "no such post". */
 const NOT_FOUND = { code: 'rest_post_invalid_id', message: 'Invalid post ID.', data: { status: 404 } };
+
+// THE ROUTE-ID CONTRACT — see core/query-params.
+//
+// This router had NO id guard of any kind: nine routes did `parseInt(req.params.id, 10)` and handed
+// the result to `Post.findById`. That left two ways to reach the driver with something that cannot be
+// an id, and both were live on the ANONYMOUS `GET /posts/:id` (it is optionalAuth):
+//
+//   · `/posts/9999999999` — a valid decimal integer, so `if (!id)` waves it through, but wider than
+//     the 32-bit `posts.id` column. Postgres refuses the bind with
+//     `22003 value "9999999999" is out of range for type integer` and the caller gets a 500 with the
+//     driver's own error in it. SQLite and MySQL match nothing, which is why the suites were green.
+//   · `/posts/12abc` — `parseInt` stops at the 'a' and returns 12, so this SERVED POST 12 with a 200.
+//     Every post had an unbounded family of URLs, each one a separate cache key, rate-limit bucket and
+//     audit-log entry for the same row.
+//
+// Declared once here rather than at the nine call sites: express runs it for every route in this
+// router that names `:id`, including routes added later — which is exactly how this class survived
+// the previous round, where the guard went in at the routers somebody happened to be looking at.
+// `:slug` is deliberately NOT declared: a post slug is a string and 'my-2026-recap' is a legitimate one.
+router.param('id', requireRouteId(NOT_FOUND));
 
 /* ── THE STRING-FIELD BOUNDARY ────────────────────────────────────────────────────────────────────
  *
@@ -1143,7 +1173,11 @@ router.delete('/:id', authenticate, asyncHandler(async (req: AuthenticatedReques
         });
     }
 
-    const force = req.query.force === 'true';
+    // `?force=true&force=true` used to answer FALSE here — an Array is not the string 'true' — so the
+    // caller who asked for a permanent delete got a trash and a 200 saying it worked. There is no
+    // value a caller "means" by sending the flag twice, and guessing one would let anyone who can
+    // append to this URL decide between trash and unrecoverable: refuse the request instead.
+    const force = scalarQueryParam(req.query.force, 'force') === 'true';
     await Post.delete(postId, force);
 
     if (force) {

@@ -19,18 +19,12 @@ const WebhookDelivery = require('../models/WebhookDelivery');
 router.use(authenticate);
 router.use(isAdmin);
 
-/**
- * `authenticate` stamps token-authenticated requests with `apiToken` (middleware/auth.ts, markHeadless).
- * That mark is NOT part of the global Request augmentation in src/types/globals.d.ts, so this router
- * names it locally rather than widening the shared type from here — the same way routes/posts.ts names
- * its own `AuthenticatedRequest`. Optional, because a cookie session carries no token.
- */
-interface TokenAwareRequest extends Request {
-    apiToken?: { id: number; scopes: string[]; name: string };
-}
-
 // Block API-token callers from managing webhooks (anti-persistence — mirrors /auth/tokens sessionOnly).
-function sessionOnly(req: TokenAwareRequest, res: Response, next: NextFunction) {
+// `apiToken` is the mark `authenticate` stamps on token-authenticated requests (middleware/auth.ts,
+// markHeadless). It is declared on Request itself in src/types/globals.d.ts, so this gate reads the one
+// shared declaration; the local copy this router used to carry was one of three hand-written
+// declarations of the same runtime field, which TypeScript had no way to compare.
+function sessionOnly(req: Request, res: Response, next: NextFunction) {
     if (req.apiToken) {
         return res.status(403).json({
             code: 'rest_token_management_forbidden',
@@ -41,11 +35,26 @@ function sessionOnly(req: TokenAwareRequest, res: Response, next: NextFunction) 
     next();
 }
 
+const { routeIdOrNull } = require('../core/query-params');
+
 const MAX_WEBHOOKS = 100;
 
+/**
+ * The webhook/delivery id `v` denotes, or null when it denotes none — i.e. a 400 from every caller.
+ *
+ * THE STATUS IS UNCHANGED ON PURPOSE. This router has always answered 400 `rest_invalid_param` for an
+ * id it cannot use, and that is part of its published contract; flipping it to the 404 the taxonomy
+ * routers send would be a breaking change this defect does not justify. What changes is the
+ * PREDICATE, which is now the single shared one from core/query-params.
+ *
+ * The local one was `Number.isInteger(n) && n > 0` over a `parseInt`, which checked integrality and
+ * positivity and nothing else, so it admitted both spellings of "cannot be an id":
+ *   · `9999999999` is an integer greater than zero, and wider than the 32-bit `webhooks.id` column —
+ *     Postgres answers `22003 value out of range for type integer` and the caller gets a 500;
+ *   · `12abc` parses to 12, so every webhook was addressable under an unbounded family of URLs.
+ */
 function parseId(v: any): number | null {
-    const n = parseInt(v, 10);
-    return Number.isInteger(n) && n > 0 ? n : null;
+    return routeIdOrNull(v);
 }
 
 // The event catalog (for building a subscription UI).

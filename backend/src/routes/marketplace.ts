@@ -34,11 +34,26 @@ const config = require('../config/app');
 const egress = require('../core/egress-guard');
 const { authenticate } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/permissions');
-const { asyncHandler } = require('../middleware/errorHandler');
+// publicErrorText: un fallo que nadie ha reconocido (DNS, TLS, socket, driver) se registra entero
+// y al cliente le llega la operación que falló, no el texto del componente que la rompió.
+const { asyncHandler, publicErrorText } = require('../middleware/errorHandler');
 const { getOption, updateOption, deleteOption } = require('../core/options');
 const { getAllPlugins } = require('../core/plugins');
 const { installPluginFromZip, runPluginUpdate, createInstallTmp } = require('./plugins');
 const pluginOrigins = require('../core/plugin-origins');
+
+// THE SCALAR QUERY RULE — see core/query-params.
+const { requireScalarQuery } = require('../core/query-params');
+
+/**
+ * The one parameter the two catalog routes read. `String(req.query.refresh || '') === '1'` looks
+ * defended and is not: String() only stops the TypeError. `?refresh=1&refresh=1` is ['1','1'], which
+ * String() joins into '1,1', which is not '1' — so the admin who asked to bypass the cache was
+ * served the CACHED index, with a 200 and no indication. That is a stale plugin/theme catalog for
+ * anyone who can get an extra `refresh=` appended to the URL, which is the shape this rule exists to
+ * refuse rather than resolve.
+ */
+const CATALOG_QUERY_FIELDS: readonly string[] = Object.freeze(['refresh']);
 
 const INDEX_FILE = 'marketplace-index.json';
 // The THEME catalog rides the SAME sources (an origin hosts both index files side by side).
@@ -261,6 +276,10 @@ async function getCatalog(refresh = false): Promise<{ merged: any[]; sources: an
  *     tags: [Plugins]
  */
 router.get('/catalog', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+    // OUTSIDE the try on purpose: the catch below turns anything thrown in here into a 502 about the
+    // catalog being unreadable, which is not what happened and not what the caller should fix.
+    requireScalarQuery(req.query, CATALOG_QUERY_FIELDS);
+
     try {
         const refresh = String(req.query.refresh || '') === '1';
         const { merged, sources } = await getCatalog(refresh);
@@ -290,7 +309,8 @@ router.get('/catalog', authenticate, isAdmin, asyncHandler(async (req: Request, 
         const first = sources[0] || {};
         res.json({ source: first.url || '', isLocal: !!first.isLocal, sources, count: annotated.length, plugins: annotated });
     } catch (e: any) {
-        res.status(502).json({ error: e.message });
+        console.error('[marketplace] plugin catalog read failed:', e);
+        res.status(502).json({ error: publicErrorText(e, 'No se pudo leer el catálogo de plugins.') });
     }
 }));
 
@@ -313,7 +333,8 @@ const handleMarketplaceApply = asyncHandler(async (req: Request, res: Response) 
         const { merged } = await getCatalog(false);
         entry = merged.find((e: any) => String(e.id) === id);
     } catch (e: any) {
-        return res.status(502).json({ error: e.message });
+        console.error('[marketplace] plugin catalog read failed:', e);
+        return res.status(502).json({ error: publicErrorText(e, 'No se pudo leer el catálogo de plugins.') });
     }
     if (!entry) return res.status(404).json({ error: `El plugin "${id}" no está en el catálogo.` });
 
@@ -343,7 +364,8 @@ const handleMarketplaceApply = asyncHandler(async (req: Request, res: Response) 
             buf = await fetchRemote(`${source}/${file}`, MAX_ZIP_BYTES);
         }
     } catch (e: any) {
-        return res.status(502).json({ error: `No se pudo descargar el plugin: ${e.message}` });
+        console.error('[marketplace] plugin download failed:', e);
+        return res.status(502).json({ error: publicErrorText(e, 'No se pudo descargar el plugin del catálogo.') });
     }
 
     // Integrity is MANDATORY for a REMOTE source: a plugin installs+runs arbitrary server-side code, so a
@@ -541,6 +563,9 @@ async function getThemesCatalog(refresh = false): Promise<{ merged: any[]; sourc
  *     tags: [Themes]
  */
 router.get('/themes/catalog', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+    // Same placement as the plugin catalog above, for the same reason.
+    requireScalarQuery(req.query, CATALOG_QUERY_FIELDS);
+
     try {
         const refresh = String(req.query.refresh || '') === '1';
         const { merged, sources } = await getThemesCatalog(refresh);
@@ -565,7 +590,8 @@ router.get('/themes/catalog', authenticate, isAdmin, asyncHandler(async (req: Re
         const first = sources[0] || {};
         res.json({ source: first.url || '', isLocal: !!first.isLocal, sources, count: annotated.length, themes: annotated });
     } catch (e: any) {
-        res.status(502).json({ error: e.message });
+        console.error('[marketplace] theme catalog read failed:', e);
+        res.status(502).json({ error: publicErrorText(e, 'No se pudo leer el catálogo de temas.') });
     }
 }));
 
@@ -585,7 +611,8 @@ router.post('/themes/install', authenticate, isAdmin, asyncHandler(async (req: R
         const { merged } = await getThemesCatalog(false);
         entry = merged.find((e: any) => String(e.id) === id);
     } catch (e: any) {
-        return res.status(502).json({ error: e.message });
+        console.error('[marketplace] theme catalog read failed:', e);
+        return res.status(502).json({ error: publicErrorText(e, 'No se pudo leer el catálogo de temas.') });
     }
     if (!entry) return res.status(404).json({ error: `El tema "${id}" no está en el catálogo.` });
 
@@ -612,7 +639,8 @@ router.post('/themes/install', authenticate, isAdmin, asyncHandler(async (req: R
             buf = await fetchRemote(`${source}/${file}`, MAX_ZIP_BYTES);
         }
     } catch (e: any) {
-        return res.status(502).json({ error: `No se pudo descargar el tema: ${e.message}` });
+        console.error('[marketplace] theme download failed:', e);
+        return res.status(502).json({ error: publicErrorText(e, 'No se pudo descargar el tema del catálogo.') });
     }
 
     // Integrity is MANDATORY for a REMOTE theme source (same reasoning as the plugin installer: a theme's

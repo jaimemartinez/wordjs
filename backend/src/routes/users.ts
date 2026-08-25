@@ -12,12 +12,30 @@ const User = require('../models/User');
 // account-security operation. It is enforced ONCE, for every route, by refuseHeadlessAccountSecurity
 // below — never route by route, which is how it came to cover 2 routes out of 8.
 const { authenticate, sessionOnly } = require('../middleware/auth');
-const { can, isAdmin, ownerOrCan } = require('../middleware/permissions');
+const { can, isAdmin } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
 const { getRoles } = require('../core/roles');
 // ACTIVE CORPORATE MAILBOX: the admin-owned grant + the one self-service email-write rule.
 const { refuseSelfServiceEmailChange, isValidAddress, mailboxFlagValue, hasProfessionalMailbox } = require('../core/mailbox');
 const { recordAudit } = require('../core/audit');
+// THE SCALAR QUERY RULE — see core/query-params.
+const { requireScalarQuery, requireRouteId, routeIdOrNull } = require('../core/query-params');
+
+// THE ROUTE-ID CONTRACT — see core/query-params. `:id` is a user id: `/users/abc` reached
+// User.findById as NaN and was bound into `WHERE id = ?` — a 500 on Postgres/MySQL on read, edit and
+// delete alike. Declared for the router in the same spirit as refuseHeadlessAccountSecurity below:
+// a route added later inherits the contract instead of having to remember it. `/:id/mfa/reset` keeps
+// its own explicit guard — that guard is now unreachable for a malformed id, which is the point.
+router.param('id', requireRouteId({ code: 'rest_user_invalid_id', message: 'Invalid user ID.' }));
+
+/**
+ * Every query parameter GET /users reads, each a scalar in this API's contract. `order` is the one
+ * that crashed: `?order=asc&order=desc` is an Array, an Array has no `.toLowerCase`, and the
+ * TypeError surfaced as a 500 to any caller who could list users.
+ */
+const USER_LIST_QUERY_FIELDS: readonly string[] = Object.freeze([
+    'page', 'per_page', 'search', 'role', 'orderby', 'order',
+]);
 
 // ─── DOCTRINE, ENFORCED ONCE FOR THE WHOLE ROUTER ──────────────────────────────────────────────────
 //
@@ -167,6 +185,10 @@ router.use(authenticate, refuseHeadlessAccountSecurity);
  *                 $ref: '#/components/schemas/User'
  */
 router.get('/', can('list_users'), asyncHandler(async (req: Request, res: Response) => {
+    // Refuse a repeated scalar before anything reads it — this is what turns the `?order=asc&
+    // order=desc` 500 below into a 400 that names the parameter.
+    requireScalarQuery(req.query, USER_LIST_QUERY_FIELDS);
+
     const {
         page = 1,
         per_page = 10,
@@ -189,10 +211,11 @@ router.get('/', can('list_users'), asyncHandler(async (req: Request, res: Respon
     // through to 'id' — collapsing it to '' reproduces that outcome for every input.
     const requestedOrderBy = typeof orderby === 'string' ? orderby : '';
     const safeOrderBy = allowedOrderBy.includes(requestedOrderBy) ? requestedOrderBy : 'id';
-    // `order` is ASSERTED rather than narrowed, deliberately. A repeated `?order=` parses to an array
-    // whose missing `.toLowerCase` has always thrown and surfaced as a 500; narrowing it to '' would
-    // quietly turn that into a 200 sorted ASC. That is a behaviour change, not a typing one, so the
-    // pre-existing defect is reported rather than fixed under a type-only migration.
+    // `order` is ASSERTED rather than narrowed, and the assertion is now TRUE: requireScalarQuery at
+    // the top of the handler refused every non-string shape before this line could be reached. It used
+    // to be a lie — a repeated `?order=asc&order=desc` parsed to an array whose missing `.toLowerCase`
+    // threw a TypeError and surfaced as a 500. Collapsing the array to '' instead would have answered
+    // 200 sorted ASC for a request that asked for two different sorts; the caller is told instead.
     const requestedOrder = order as string;
     const safeOrder = ['asc', 'desc'].includes(requestedOrder.toLowerCase()) ? requestedOrder.toUpperCase() : 'ASC';
 
@@ -1009,8 +1032,13 @@ router.put('/:id', asyncHandler(async (req: Request, res: Response) => {
  *     inherent to being the only account with the keys.
  */
 router.post('/:id/mfa/reset', can('edit_users'), asyncHandler(async (req: Request, res: Response) => {
-    const userId = parseInt(String(req.params.id), 10);
-    if (!Number.isInteger(userId) || userId <= 0) {
+    // THE ROUTE-ID CONTRACT — see core/query-params. The router-level `router.param('id', ...)` above
+    // already refuses a malformed id with this router's 404, so for a bad id this branch is now
+    // unreachable. It stays, and its predicate becomes the shared one, so that there is exactly ONE
+    // definition of "a route id" in the tree: a local copy that disagreed with the contract is how
+    // this class stayed open the last two rounds. The 400 body is untouched.
+    const userId = routeIdOrNull(req.params.id);
+    if (userId === null) {
         return res.status(400).json({ code: 'rest_invalid_param', message: 'Invalid user ID.', data: { status: 400 } });
     }
     const user = await User.findById(userId);

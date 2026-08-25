@@ -13,6 +13,18 @@ const { generateSitemap, generateRobotsTxt, generateRssFeed } = require('../core
 const { toLanguageTag } = require('../core/language-tag');
 const { authenticate } = require('../middleware/auth');
 const { can } = require('../middleware/permissions');
+const { requireRouteId } = require('../core/query-params');
+
+// THE ROUTE-ID CONTRACT — see core/query-params. `GET /seo/meta/:postId` guarded its id with
+// `if (!postId)`, which catches NaN and 0 and nothing else: `/seo/meta/9999999999` sailed past it into
+// `Post.findById` and became `22003 value out of range for type integer` — a 500 — on Postgres, and
+// `/seo/meta/12abc` returned post 12's SEO metadata under a URL that is not post 12's.
+//
+// The refusal body is passed WHOLE (`{ body }`) instead of as a code/message pair because this route's
+// own not-found answer is `{ error: 'Post not found' }`, with no `code` field at all. Sending the REST
+// triple here would make a malformed id distinguishable from an absent one, which is the exact
+// disclosure the contract exists to close.
+router.param('postId', requireRouteId({ body: { error: 'Post not found' } }));
 
 /**
  * @swagger

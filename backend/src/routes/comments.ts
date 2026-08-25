@@ -13,7 +13,17 @@ const { getOption } = require('../core/options');
 const { authenticate, optionalAuth } = require('../middleware/auth');
 const { can } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
+// THE SCALAR QUERY RULE — see core/query-params. A parameter this router declares scalar arrives
+// once, as a string, or the request is a 400 (the same answer routes/posts.ts already gives).
+const { scalarQueryParam, requireScalarQuery, requireRouteId } = require('../core/query-params');
 const { stripTags, escUrl } = require('../core/formatting');
+
+// THE ROUTE-ID CONTRACT — see core/query-params. `:id` is a comment id: `/comments/abc` reached
+// Comment.findById as NaN (directly on get/put/delete, through Comment.update on approve/spam) and
+// was bound into `WHERE comment_id = ?` — a 500 on Postgres/MySQL, and GET is anonymous. Declared for
+// the whole router so approve/spam, which reach the sink through the model, are covered by the same
+// statement as the routes that call findById themselves.
+router.param('id', requireRouteId({ code: 'rest_comment_invalid_id', message: 'Invalid comment ID.' }));
 
 // Shared, length-capped email validator (the one shape rule) — guards against ReDoS on unbounded input.
 const { isValidAddress } = require('../core/mailbox');
@@ -33,6 +43,17 @@ function safeAuthorUrl(raw: any) {
         return '';
     }
 }
+
+/**
+ * Every query parameter GET /comments reads. Each one is a scalar in this API's contract, so each one
+ * must arrive as a single string — see core/query-params for why a repeat is refused rather than
+ * resolved. Listed as a table, and checked in one place, so that a parameter added to the handler and
+ * not to this list shows up in the diff instead of becoming the next silent branch flip.
+ * (Mirrors LIST_QUERY_STRING_FIELDS in routes/posts.ts, which is the same rule for that router.)
+ */
+const COMMENT_LIST_QUERY_FIELDS: readonly string[] = Object.freeze([
+    'page', 'per_page', 'post', 'status', 'parent', 'search', 'orderby', 'order',
+]);
 
 /**
  * @swagger
@@ -67,6 +88,12 @@ function safeAuthorUrl(raw: any) {
  *         description: List of comments
  */
 router.get('/', optionalAuth, asyncHandler(async (req: Request, res: Response) => {
+    // THE WHOLE SCALAR CLASS, ONCE, BEFORE ANY OF IT IS READ. `?status=1&status=1` used to reach
+    // Comment.findAll as an Array and crash the SQLite driver with "Too many parameter values were
+    // provided" — a 500 — while `?order=asc&order=desc` and `?page=1&page=2` each answered something
+    // the caller never asked for. Refusing here means every comparison below is a string comparison.
+    requireScalarQuery(req.query, COMMENT_LIST_QUERY_FIELDS);
+
     const {
         page = 1,
         per_page = 10,
@@ -87,6 +114,10 @@ router.get('/', optionalAuth, asyncHandler(async (req: Request, res: Response) =
     // Only comment moderators can see non-approved comments AND the private commenter PII (email/IP
     // are gated in toJSON(canModerate) below).
     const canModerate = !!(req.user && req.user.can('moderate_comments'));
+    // Only the NON-moderator branch overwrites this, so a MODERATOR's value flows straight through to
+    // the two `commentStatus === 'any'` reads below and into the model. It is a string here because
+    // requireScalarQuery refused anything else at the top of the handler — not because `status` is
+    // typed one.
     let commentStatus = status;
     if (!canModerate) {
         commentStatus = '1';
@@ -447,7 +478,11 @@ router.delete('/:id', authenticate, can('moderate_comments'), asyncHandler(async
         });
     }
 
-    const force = req.query.force === 'true';
+    // Twin of DELETE /posts/:id: `?force=true&force=true` is an Array, which is not 'true', so the
+    // permanent delete quietly became a trash — and then the re-read below could not find the trashed
+    // row and answered 404 "Invalid comment ID", after the comment had already been moved. One rule:
+    // a repeated scalar is refused, not resolved. See core/query-params.
+    const force = scalarQueryParam(req.query.force, 'force') === 'true';
     await Comment.delete(commentId, force);
 
     if (force) {

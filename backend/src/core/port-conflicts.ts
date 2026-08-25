@@ -178,6 +178,11 @@ async function freeClaimedPort(port: number, deps: Deps = {}): Promise<{ freed: 
         // "Couldn't look" is NOT "free" — a fake alreadyFree success here would silently no-op forever.
         const err: any = new Error(detected.reason || `Could not inspect port ${port}.`);
         err.code = 'PORT_NOT_FREEABLE';
+        // `status` is what marks an error as DELIBERATE for middleware/errorHandler and for
+        // publicErrorText (see the note there): these messages are written for an admin to read,
+        // and routes/plugins already maps each code to exactly this status. Recording it at the
+        // throw keeps that mapping true wherever the error surfaces, including the global handler.
+        err.status = 409;
         throw err;
     }
     if (!detected.inUse) {
@@ -186,6 +191,7 @@ async function freeClaimedPort(port: number, deps: Deps = {}): Promise<{ freed: 
     if (!detected.canFree || !detected.occupant?.service) {
         const err: any = new Error(detected.reason || `Port ${port} cannot be freed automatically.`);
         err.code = 'PORT_NOT_FREEABLE';
+        err.status = 409;
         throw err;
     }
     if (!deps.allowDisable) {
@@ -193,6 +199,7 @@ async function freeClaimedPort(port: number, deps: Deps = {}): Promise<{ freed: 
         // when the request explicitly carries the admin's modal confirmation for THIS action.
         const err: any = new Error(`${detected.occupant.label} is holding port ${port} — confirmation required before disabling it.`);
         err.code = 'CONSENT_REQUIRED';
+        err.status = 409;
         err.conflict = detected;
         throw err;
     }
@@ -203,6 +210,7 @@ async function freeClaimedPort(port: number, deps: Deps = {}): Promise<{ freed: 
     } catch (e: any) {
         const err: any = new Error(`Failed to disable ${label}: ${e && e.message ? e.message : e}`);
         err.code = 'DISABLE_FAILED';
+        err.status = 502;
         throw err;
     }
     console.log(`🔓 [port-conflicts] Disabled ${service} (was holding port ${port}) with admin consent — permanent (systemctl disable --now).`);
@@ -218,6 +226,7 @@ async function freeClaimedPort(port: number, deps: Deps = {}): Promise<{ freed: 
     }
     const err: any = new Error(`Disabled ${label}, but port ${port} is still in use — check the service state manually.`);
     err.code = 'PORT_STILL_IN_USE';
+    err.status = 502;
     throw err;
 }
 

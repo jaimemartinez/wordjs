@@ -26,6 +26,19 @@ const { authenticate } = require('../middleware/auth');
 const { can } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
 const { stripTags } = require('../core/formatting');
+// THE SCALAR QUERY RULE — see core/query-params.
+// routeIdOrNull is THE ROUTE-ID CONTRACT — see core/query-params: one definition of "a route id"
+// for the whole route tree, so this router's 400 cannot drift from what every other router refuses.
+const { requireScalarQuery, routeIdOrNull } = require('../core/query-params');
+
+/**
+ * Every query parameter GET /submissions reads, each a scalar in this API's contract. `page` is the
+ * one that answered wrong in silence: `?page=1&page=2` stringifies to "1,2", parseInt stops at the
+ * comma, and the caller got page 1 with a 200 — the same URL that `GET /posts` already answers 400.
+ */
+const SUBMISSION_LIST_QUERY_FIELDS: readonly string[] = Object.freeze([
+    'formName', 'page', 'per_page',
+]);
 
 const MAX_FORM_NAME = 100;
 const MAX_FIELDS = 30;
@@ -173,6 +186,10 @@ router.post('/submit', asyncHandler(async (req: Request, res: Response) => {
  *         description: List of submissions
  */
 router.get('/submissions', authenticate, can('manage_options'), asyncHandler(async (req: Request, res: Response) => {
+    // Refuse a repeated scalar before anything reads it: a pager that answers a DIFFERENT page than
+    // the one asked for, with a 200, is how a reviewer concludes a submission does not exist.
+    requireScalarQuery(req.query, SUBMISSION_LIST_QUERY_FIELDS);
+
     const { formName, page = 1, per_page = 20 } = req.query;
 
     // `?page=1&page=2` and `?page[x]=1` reach here as an array / an object, not a string, and the
@@ -220,8 +237,13 @@ router.get('/submissions', authenticate, can('manage_options'), asyncHandler(asy
 // route syntax can repeat a parameter, but a plain `:id` segment yields a single string on every
 // express version. Naming the shape keeps `parseInt` reading the value it actually receives.
 router.delete('/submissions/:id', authenticate, can('manage_options'), asyncHandler(async (req: Request<{ id: string }>, res: Response) => {
-    const id = parseInt(req.params.id, 10);
-    if (!Number.isInteger(id) || id <= 0) {
+    // THE ROUTE-ID CONTRACT — see core/query-params. The 400 is this route's published answer and is
+    // unchanged; the PREDICATE is now the single shared one. `Number.isInteger(id) && id > 0` over a
+    // `parseInt` checked integrality and positivity only, so `/forms/submissions/9999999999` reached
+    // `FormSubmission.findById` and became `22003 value out of range for type integer` — a 500 — on
+    // Postgres, and `/forms/submissions/12abc` DELETED submission 12.
+    const id = routeIdOrNull(req.params.id);
+    if (id === null) {
         return badRequest(res, 'Invalid submission ID.');
     }
 

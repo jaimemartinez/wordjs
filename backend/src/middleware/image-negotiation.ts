@@ -17,6 +17,7 @@ import type { Request, Response, NextFunction } from 'express';
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
+const { offStack } = require('./errorHandler');
 let sharp: any = null;
 try { sharp = require('sharp'); } catch { /* sharp unavailable on this host → middleware is a no-op */ }
 
@@ -141,8 +142,12 @@ export function imageNegotiation(uploadsDir: string) {
             }
         })();
         inFlight.set(cachePath, work);
+        // The `pending` branch 35 lines up already wraps its serveDerivative() in a try — this one did
+        // not, and the promise `.then` returns is discarded, so a throw here (res.setHeader raising
+        // ERR_HTTP_HEADERS_SENT once the response has been committed by another layer) was an
+        // unhandledRejection rather than a fall-through to the original image. Same seam, both twins.
         work.then(
-            () => { serveDerivative(); },
+            () => offStack(res, next, () => { serveDerivative(); }),
             () => { if (!res.headersSent) next(); } // transcode failed/limit exceeded → serve the original
         );
     };

@@ -31,6 +31,22 @@ const {
 } = require('../core/io-guard');
 const ALLOWED_BUNDLE_TYPES = new Set(PLUGIN_BUNDLE_TYPES);
 
+const { asyncHandler } = require('../middleware/errorHandler');
+// THE SCALAR QUERY RULE — see core/query-params.
+const { requireScalarQuery } = require('../core/query-params');
+
+/**
+ * The one query parameter the two bundle routes read.
+ *
+ * This site FAILED CLOSED before the rule reached it: `ALLOWED_BUNDLE_TYPES.has(String(bundleType))`
+ * turns ['admin','admin'] into 'admin,admin', misses the allow-list, and answers 400 — so it was not
+ * a security defect, and nothing here is a fix for one. It is declared because the rule must not
+ * differ per call site: the same polluted URL now answers 400 `rest_invalid_param` naming `type`
+ * here, exactly as it does on every other route, instead of a generic "Invalid bundle type" that
+ * describes a mistake the caller did not make.
+ */
+const BUNDLE_QUERY_FIELDS: readonly string[] = Object.freeze(['type']);
+
 /**
  * Resolve one of the published bundle files for `folder`, proving BOTH halves on the values actually
  * used: the relative name must be on io-guard's bundle allowlist, and the joined path must stay
@@ -93,7 +109,12 @@ function bundlePathFor(folder: string, bundleType: string): string | null {
  * The bundle uses external references to React which are
  * provided by the WordJS host at runtime.
  */
-router.get('/:slug/bundle', async (req: Request, res: Response) => {
+// asyncHandler, because requireScalarQuery THROWS and this handler is async: without it Express 4
+// never sees the rejection, the caller waits for a response that is not coming, and the refusal is
+// rendered by nobody. It also stops any other rejection in here from hanging the request.
+router.get('/:slug/bundle', asyncHandler(async (req: Request, res: Response) => {
+    requireScalarQuery(req.query, BUNDLE_QUERY_FIELDS);
+
     const { slug } = req.params as { slug: string };
     const bundleType = req.query.type || 'admin';
 
@@ -135,7 +156,7 @@ router.get('/:slug/bundle', async (req: Request, res: Response) => {
     // Stream the file
     const stream = fs.createReadStream(bundlePath);
     stream.pipe(res);
-});
+}));
 
 /**
  * GET /api/v1/plugins/:slug/bundle/manifest
@@ -172,7 +193,9 @@ router.get('/:slug/bundle/manifest', async (req: Request, res: Response) => {
  * 
  * Returns CSS bundle for a plugin (if exists)
  */
-router.get('/:slug/bundle/css', async (req: Request, res: Response) => {
+router.get('/:slug/bundle/css', asyncHandler(async (req: Request, res: Response) => {
+    requireScalarQuery(req.query, BUNDLE_QUERY_FIELDS);
+
     const { slug } = req.params as { slug: string };
     const bundleType = req.query.type || 'admin';
 
@@ -210,6 +233,6 @@ router.get('/:slug/bundle/css', async (req: Request, res: Response) => {
 
     const stream = fs.createReadStream(cssPath);
     stream.pipe(res);
-});
+}));
 
 module.exports = router;

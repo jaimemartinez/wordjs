@@ -6,17 +6,12 @@
 import type { Request, Response, NextFunction, CookieOptions } from 'express';
 
 /**
- * A request as THIS FILE leaves it. `req.user` is already declared globally (src/types/globals.d.ts);
- * the three fields below are written nowhere else in the tree — `verifyAndAttachUser`, `optionalAuth`
- * and `markHeadless` are their only producers, and the headless gates below are their only readers in
- * this file — so they are declared here, beside the code that owns them, rather than widened onto every
- * Request in the application. Optional because the same handler runs before they are set.
+ * The marks this file stamps on the request — `user`, `apiToken`, `isHeadless` — are declared ONCE, in
+ * src/types/globals.d.ts, so the handlers below take a plain `Request`. They used to be named again
+ * here, and again in routes/webhooks.ts, and again (as `unknown`) in routes/collab.ts: one runtime
+ * field, three parallel declarations that TypeScript never compares, because each is a fresh
+ * intersection over Request rather than a redeclaration of one property.
  */
-type AuthRequest = Request & {
-    userId?: number | null;
-    apiToken?: { id: number; scopes: string[]; name: string };
-    isHeadless?: boolean;
-};
 
 const jwt = require('jsonwebtoken');
 const config = require('../config/app');
@@ -170,7 +165,7 @@ async function mfaComplianceGate(req: Request, res: Response, next: NextFunction
  * Authenticate request with JWT token (Strict: Headers Only)
  */
 // Helper to avoid duplication
-async function verifyAndAttachUser(token: string, req: AuthRequest, res: Response, next: NextFunction) {
+async function verifyAndAttachUser(token: string, req: Request, res: Response, next: NextFunction) {
     try {
         const decoded = jwt.verify(token, config.jwt.secret, { algorithms: ['HS256'] });
 
@@ -207,7 +202,6 @@ async function verifyAndAttachUser(token: string, req: AuthRequest, res: Respons
         }
 
         req.user = user;
-        req.userId = user.id;
         next();
     } catch (error) {
         if (error.name === 'TokenExpiredError') {
@@ -234,7 +228,7 @@ async function verifyAndAttachUser(token: string, req: AuthRequest, res: Respons
  * check (req.user.can / isAdmin) still applies — a token can never exceed the user's own permissions. On
  * top of that we enforce the token's read/write scope here (a read token cannot drive a mutating method).
  */
-async function verifyApiTokenAndAttachUser(token: string, req: AuthRequest, res: Response, next: NextFunction) {
+async function verifyApiTokenAndAttachUser(token: string, req: Request, res: Response, next: NextFunction) {
     try {
         const record = await ApiToken.findByRawToken(token);
         if (!record) {
@@ -264,7 +258,6 @@ async function verifyApiTokenAndAttachUser(token: string, req: AuthRequest, res:
             });
         }
         req.user = user;
-        req.userId = user.id;
         markHeadless(req, record);
         ApiToken.touch(record.id);
         next();
@@ -286,12 +279,12 @@ async function verifyApiTokenAndAttachUser(token: string, req: AuthRequest, res:
  * the token's identity/scopes; `req.isHeadless` is the boolean the gates below assert on, so those read
  * as the invariant they enforce instead of as an incidental field check.
  */
-function markHeadless(req: AuthRequest, record: { id: number; scopes: string[]; name: string }): void {
+function markHeadless(req: Request, record: { id: number; scopes: string[]; name: string }): void {
     req.apiToken = { id: record.id, scopes: record.scopes, name: record.name };
     req.isHeadless = true;
 }
 
-function isHeadless(req: AuthRequest): boolean {
+function isHeadless(req: Request): boolean {
     return !!(req && (req.isHeadless || req.apiToken));
 }
 
@@ -361,7 +354,7 @@ function queryToken(req: Request): string | null {
  * when the cookie was set and the caller should continue — the same "true means handled" convention as
  * requireSelfPasswordReauth in routes/users.ts.
  */
-function issueSessionCookie(req: AuthRequest, res: Response, token: string, options: CookieOptions): boolean {
+function issueSessionCookie(req: Request, res: Response, token: string, options: CookieOptions): boolean {
     if (isHeadless(req)) {
         res.status(403).json({
             code: 'rest_session_from_token_forbidden',
@@ -381,7 +374,7 @@ function issueSessionCookie(req: AuthRequest, res: Response, token: string, opti
  * credential the account owner cannot see. Lives here — next to the headless mark it reads — so
  * routes/auth.ts, routes/users.ts and routes/webhooks.ts all consume ONE implementation.
  */
-function sessionOnly(req: AuthRequest, res: Response, next: NextFunction) {
+function sessionOnly(req: Request, res: Response, next: NextFunction) {
     if (isHeadless(req)) {
         return res.status(403).json({
             code: 'rest_token_management_forbidden',
@@ -395,7 +388,7 @@ function sessionOnly(req: AuthRequest, res: Response, next: NextFunction) {
 /**
  * Authenticate request with JWT token (Strict: Headers Only, with Cookie fallback)
  */
-async function authenticate(req: AuthRequest, res: Response, next: NextFunction) {
+async function authenticate(req: Request, res: Response, next: NextFunction) {
     const authHeader = req.headers.authorization;
     let token;
 
@@ -435,7 +428,7 @@ async function authenticate(req: AuthRequest, res: Response, next: NextFunction)
  * header; only fall back to the query token when neither is present. This route MUST stay read-only —
  * never authorize a state-changing request off a query-string token.
  */
-async function authenticateAllowQuery(req: AuthRequest, res: Response, next: NextFunction) {
+async function authenticateAllowQuery(req: Request, res: Response, next: NextFunction) {
     const authHeader = req.headers.authorization;
     let token;
 
@@ -466,7 +459,7 @@ async function authenticateAllowQuery(req: AuthRequest, res: Response, next: Nex
 /**
  * Optional authentication (doesn't fail if no token)
  */
-async function optionalAuth(req: AuthRequest, res: Response, next: NextFunction) {
+async function optionalAuth(req: Request, res: Response, next: NextFunction) {
     const authHeader = req.headers.authorization;
     let token;
 
@@ -478,7 +471,6 @@ async function optionalAuth(req: AuthRequest, res: Response, next: NextFunction)
 
     if (!token) {
         req.user = null;
-        req.userId = null;
         return next();
     }
 
@@ -491,16 +483,13 @@ async function optionalAuth(req: AuthRequest, res: Response, next: NextFunction)
             const user = record ? await User.findById(record.userId) : null;
             if (user && ApiToken.scopeAllows(record.scopes, req.method, apiResourceOf(req))) {
                 req.user = user;
-                req.userId = user.id;
                 markHeadless(req, record);
                 ApiToken.touch(record.id);
             } else {
                 req.user = null;
-                req.userId = null;
             }
         } catch {
             req.user = null;
-            req.userId = null;
         }
         return next();
     }
@@ -508,21 +497,18 @@ async function optionalAuth(req: AuthRequest, res: Response, next: NextFunction)
     try {
         const decoded = jwt.verify(token, config.jwt.secret, { algorithms: ['HS256'] });
         // Special-purpose tokens (e.g. the MFA challenge) are never a session — treat as anonymous.
-        if (decoded.purpose) { req.user = null; req.userId = null; return next(); }
+        if (decoded.purpose) { req.user = null; return next(); }
         const user = await User.findById(decoded.userId);
         // Honor token revocation here too (see verifyAndAttachUser): treat a revoked token as anonymous.
         // Use <= so a token issued in the same second as logout/password-change is also revoked.
         const validAfter = user ? parseInt(user.meta && user.meta.token_valid_after, 10) : 0;
         if (user && validAfter && decoded.iat && decoded.iat <= validAfter) {
             req.user = null;
-            req.userId = null;
         } else {
             req.user = user;
-            req.userId = user ? user.id : null;
         }
     } catch (e) {
         req.user = null;
-        req.userId = null;
     }
 
     next();
@@ -547,6 +533,49 @@ function generateToken(user: any) {
  */
 function verifyToken(token: string) {
     return jwt.verify(token, config.jwt.secret, { algorithms: ['HS256'] });
+}
+
+/**
+ * THE HOST THIS REQUEST WAS ACTUALLY SENT TO — one derivation, for every gate that asks.
+ *
+ * Behind the gateway (changeOrigin:true) `req.get('Host')` is the INTERNAL upstream address
+ * (127.0.0.1:PORT), so a same-origin check against it could never match a real browser request. The
+ * gateway forwards the browser's own Host as X-Forwarded-Host (xfwd:true) and STRIPS any client-supplied
+ * value, so honor that first and fall back to Host for the direct/monolith case. First hop if a list.
+ *
+ * `undefined` when there is no host to derive — deliberately NOT ''. Callers compare it to
+ * `new URL(origin).host`, and '' equals `new URL('file://').host`, which would be a different hole.
+ */
+function trustedHost(req: Request): string | undefined {
+    const fwdHost = (req.get('X-Forwarded-Host') || '').split(',')[0].trim();
+    return fwdHost || req.get('Host') || undefined;
+}
+
+/**
+ * THE SAME-ORIGIN ALLOW-LIST — one implementation, because two copies of it is what the defect was.
+ *
+ * `csrfProtection` below (state-changing methods, mounted globally at the api prefix) and `sameOrigin()`
+ * in routes/collab.ts (the SSE stream — a GET, which the global gate never runs on) answer the same
+ * question: "is this Origin our own?". They were written twice, line for line. So when the previous round
+ * closed the absent-Host hole here, the copy in collab.ts kept it, and the live-collaboration channel went
+ * on treating a hostile page as same-origin. Sharing the builder is the fix that cannot drift: there is no
+ * longer a second answer to give.
+ *
+ * FAIL CLOSED ON AN ABSENT HOST. `req.get('Host')` is `string | undefined`. Interpolated into the two
+ * template literals below, an absent Host does not yield "no entry" — it yields the LITERAL origins
+ * 'http://undefined' and 'https://undefined', putting them on the allow-list, so a page served from the
+ * (perfectly legal) host label `undefined` was same-origin to this site. It is reachable: Node rejects an
+ * HTTP/1.1 request with no Host at the parser (400), but HTTP/1.0 imposes no Host requirement and Node
+ * delivers such a request with `req.headers.host === undefined` — proven end to end, against both gates,
+ * by the raw-socket tests in tests/absent-host-origin-allowlist.test.ts. No Host means no derivable
+ * same-origin, so it must contribute NO entry at all.
+ */
+function sameOriginAllowList(host: string | undefined): string[] {
+    return [
+        config.site?.url,
+        config.site?.frontendUrl,
+        ...(host ? [`http://${host}`, `https://${host}`] : [])
+    ].filter(Boolean);
 }
 
 /**
@@ -586,12 +615,7 @@ function csrfProtection(req: Request, res: Response, next: NextFunction) {
 
     const origin = req.get('Origin');
     const referer = req.get('Referer');
-    // Behind the gateway (changeOrigin:true) req.get('Host') is the internal upstream address
-    // (127.0.0.1:PORT), so the same-origin check below would never match a real browser request.
-    // The gateway forwards the original client Host as X-Forwarded-Host (xfwd:true) — honor it first,
-    // exactly like the migration guard does. Take the first hop if a list is present.
-    const fwdHost = (req.get('X-Forwarded-Host') || '').split(',')[0].trim();
-    const host = fwdHost || req.get('Host');
+    const host = trustedHost(req);
 
     // If no Origin header, check Referer (some browsers)
     // Annotated because the catch below assigns `null` (an unparseable Referer) while `req.get()` yields
@@ -639,14 +663,9 @@ function csrfProtection(req: Request, res: Response, next: NextFunction) {
         });
     }
 
-    // Allow configured CORS origins. `host` comes from X-Forwarded-Host, which the gateway now pins
-    // to the real client Host (it strips any client-supplied value), so trusting it here is safe.
-    const allowedOrigins = [
-        config.site?.url,
-        config.site?.frontendUrl,
-        `http://${host}`,
-        `https://${host}`
-    ].filter(Boolean);
+    // The configured public origins plus this request's own — see sameOriginAllowList() above for why an
+    // absent Host contributes NOTHING here rather than the word "undefined".
+    const allowedOrigins = sameOriginAllowList(host);
 
     // EXACT origin match — never startsWith (a prefix match lets `https://victim.com.evil.com`
     // satisfy an allowed `https://victim.com`). Compare normalized origins via URL parsing.
@@ -672,6 +691,11 @@ module.exports = {
     generateToken,
     verifyToken,
     csrfProtection,
+    // Same-origin boundary — ONE trusted-host derivation and ONE allow-list, consumed by every gate that
+    // asks the question (csrfProtection here, sameOrigin() in routes/collab.ts). Exported so there is
+    // nothing left to copy.
+    trustedHost,
+    sameOriginAllowList,
     mfaComplianceGate,
     // Headless (API-token) boundary — one mark, one cookie door, one session-only guard.
     isHeadless,

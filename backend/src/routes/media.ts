@@ -67,6 +67,28 @@ type UploadRequest = Request & { file?: StoredFile };
 const { authenticate, optionalAuth } = require('../middleware/auth');
 const { can } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
+// THE SCALAR QUERY RULE — see core/query-params.
+const { requireScalarQuery, requireRouteId } = require('../core/query-params');
+
+// THE ROUTE-ID CONTRACT — see core/query-params. `:id` is an attachment's post id, parsed with a bare
+// `parseInt` at all three sites and handed to `Media.findById` → `Post.findById`, the same sink
+// routes/posts.ts uses. So this router carried the same two defects: `/media/9999999999` is
+// `22003 value out of range for type integer` (a 500) on Postgres, and `/media/12abc` SERVED
+// attachment 12, because parseInt stops at the first character it cannot use. GET is optionalAuth, so
+// the 500 needed no credentials. The body below is the one all three routes already send for an
+// attachment that does not exist, so a malformed id is now indistinguishable from an absent one.
+router.param('id', requireRouteId({ code: 'rest_post_invalid_id', message: 'Invalid media ID.' }));
+
+/**
+ * The six parameters GET /media reads. The library list is the twin of the categories/tags/users
+ * lists, which have refused a repeated scalar since the first round; this one was left behind, and
+ * `String()` hid it: `['asc','desc'].includes(String(order).toLowerCase())` cannot throw, it just
+ * compares 'asc,desc' against the whitelist, misses, and sorts DESC — the caller is told nothing.
+ * `orderByMap[String(orderby)]` misses the same way and silently falls back to post_date.
+ */
+const MEDIA_LIST_QUERY_FIELDS: readonly string[] = Object.freeze([
+    'page', 'per_page', 'search', 'mime_type', 'orderby', 'order',
+]);
 
 // Ensure uploads directory exists
 if (!fs.existsSync(config.uploads.dir)) {
@@ -176,6 +198,10 @@ const upload = multer({
  *                 $ref: '#/components/schemas/Media'
  */
 router.get('/', optionalAuth, asyncHandler(async (req: Request, res: Response) => {
+    // Refuse a repeated scalar before anything reads it, so every comparison below is a string
+    // comparison and the library the caller sees is the one they asked for.
+    requireScalarQuery(req.query, MEDIA_LIST_QUERY_FIELDS);
+
     const {
         page = 1,
         per_page = 20,

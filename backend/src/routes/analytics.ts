@@ -4,6 +4,18 @@ const router = express.Router();
 const analytics = require('../models/Analytics');
 const { authenticate } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/permissions');
+const { asyncHandler } = require('../middleware/errorHandler');
+// THE SCALAR QUERY RULE — see core/query-params.
+const { requireScalarQuery } = require('../core/query-params');
+
+/**
+ * The one parameter GET /stats reads. THE GUARD IS IN ANOTHER FILE, which is why this site outlived
+ * a review of the routes: nothing in here compares `period` to anything. It is handed straight to
+ * models/Analytics.getStats, whose first line is `period === 'weekly' ? 7 : 30` — so
+ * `?period=weekly&period=weekly` is an Array, compares unequal, and the admin reads a 30-day report
+ * labelled as the weekly one. A guard one call away is still this route's guard.
+ */
+const STATS_QUERY_FIELDS: readonly string[] = Object.freeze(['period']);
 
 /**
  * @swagger
@@ -14,7 +26,12 @@ const { isAdmin } = require('../middleware/permissions');
  *     security:
  *       - bearerAuth: []
  */
-router.get('/stats', authenticate, isAdmin, async (req: Request, res: Response) => {
+router.get('/stats', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+    // OUTSIDE the try, and wrapped in asyncHandler: inside, the catch would turn the caller's own
+    // malformed request into a 500 "Failed to fetch analytics", blaming the server for it; without
+    // asyncHandler, Express 4 would never see the throw at all and the request would simply hang.
+    requireScalarQuery(req.query, STATS_QUERY_FIELDS);
+
     try {
         const { period } = req.query; // 'weekly' or 'monthly'
         const data = await analytics.getStats(period || 'weekly');
@@ -23,7 +40,7 @@ router.get('/stats', authenticate, isAdmin, async (req: Request, res: Response) 
         console.error('Analytics Error:', error);
         res.status(500).json({ error: 'Failed to fetch analytics' });
     }
-});
+}));
 
 /**
  * Public Endpoint for tracking (Pixel/Beacon)

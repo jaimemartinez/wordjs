@@ -122,10 +122,18 @@ const QUERY_STRING_FIELDS = readTable('LIST_QUERY_STRING_FIELDS');
 //
 // A read is ACCOUNTED FOR when either
 //   · its name is in one of the three tables (so the boundary normalizer covers it), or
-//   · every one of its read sites NARROWS the value on the spot — `=== 'literal'`, `typeof … ===`,
-//     or parseInt/Number(...). That is a mechanical property of the read, not a name on a list:
-//     `req.query.force === 'true'` answers false for an Array exactly as it does for a wrong string,
-//     which is the fail-safe direction.
+//   · every one of its read sites NARROWS the value on the spot — `typeof … ===`, parseInt/Number(),
+//     or core/query-params' scalarQueryParam(). That is a mechanical property of the read, not a name
+//     on a list.
+//
+// `=== 'literal'` USED TO COUNT AS NARROWING HERE, and that was wrong. The claim was that
+// `req.query.force === 'true'` "answers false for an Array exactly as it does for a wrong string,
+// which is the fail-safe direction" — but false is not the safe answer for `force`: it is the answer
+// that TRASHES a post the caller asked to delete permanently, and returns 200 saying it worked. A
+// comparison that cannot distinguish "you sent the wrong value" from "you sent a value I cannot read"
+// is not a guard, it is a coin flip whose bias happens to point somewhere. Both `force` sites now
+// read through scalarQueryParam, which refuses the shape (400 rest_invalid_param) instead of
+// answering a question it was not asked; the allowance is gone so the next one cannot re-use it.
 // Anything else fails, by name and line.
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 const ts = require('typescript');
@@ -145,18 +153,15 @@ function readIsNarrowed(node: any, sf: any): boolean {
     if (!parent) return false;
     // typeof req.body.x === 'string'
     if (ts.isTypeOfExpression(parent)) return true;
-    // req.query.force === 'true'   (either side)
-    if (ts.isBinaryExpression(parent)) {
-        const op = parent.operatorToken.kind;
-        const isEquality = op === ts.SyntaxKind.EqualsEqualsEqualsToken || op === ts.SyntaxKind.ExclamationEqualsEqualsToken
-            || op === ts.SyntaxKind.EqualsEqualsToken || op === ts.SyntaxKind.ExclamationEqualsToken;
-        if (!isEquality) return false;
-        const other = parent.left === cur ? parent.right : parent.left;
-        return !!other && ts.isStringLiteral(other);
-    }
+    // `req.query.force === 'true'` is NOT narrowing — see the doctrine note above. An equality against
+    // a string literal answers `false` for every non-string shape, which silently picks the other
+    // branch of whatever the comparison decides; on DELETE /posts/:id that branch was "trash" for a
+    // caller who asked for "erase". Wrap the read in scalarQueryParam (below) or table the field.
     // parseInt(req.body.translationId, 10) and friends — a non-string collapses to NaN, never to a value.
+    // scalarQueryParam(req.query.force, 'force') — core/query-params: returns the value only when it
+    // IS a single string and throws a 400 otherwise, so everything downstream of it is a string.
     if (ts.isCallExpression(parent) && parent.arguments.indexOf(cur) === 0) {
-        return ['parseInt', 'parseFloat', 'Number'].includes(parent.expression.getText(sf));
+        return ['parseInt', 'parseFloat', 'Number', 'scalarQueryParam'].includes(parent.expression.getText(sf));
     }
     return false;
 }
@@ -539,6 +544,373 @@ describe('CLASS: every string request field is a string, or the request is a 400
         const ok = await Post.create({ authorId: U.admin, title: 'direct ok', status: 'draft' });
         await assert.rejects(() => Post.update(ok.id, { status: ['publish'] }), /status must be a string/);
         assert.strictEqual(await statusOf(ok.id), 'draft');
+    });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════════════════════════
+// CLASS 1b — THE SAME CLASS, IN EVERY ROUTE FILE. The gate above reads ONE file.
+//
+// That is why this class survived a review that had already fixed it: `const ROUTE_SRC =
+// fs.readFileSync(… 'routes', 'posts.ts')` made the gate a POSTS gate wearing a class gate's name.
+// `req.query.rest !== 'false'` sat in routes/post-types.ts and routes/taxonomies.ts the whole time,
+// six flag comparisons (five `!== 'false'` and one `=== 'true'`) sat in routes/export.ts, and the
+// gate reported nothing missing because it never opened those files.
+//
+// So this half reads EVERY file in routes/ and middleware/ and asks ONE mechanical question:
+//
+//     a value that came out of req.query and reaches a guard that COMPARES IT TO A STRING must have
+//     had its SHAPE settled first.
+//
+// Settled means one of:
+//   · scalarQueryParam(req.query.x, 'x') at the read — core/query-params, 400 rest_invalid_param;
+//   · the enclosing handler declares the field scalar up front, via requireScalarQuery /
+//     firstNonStringField over a resolvable field list;
+//   · a `typeof x === 'string'` check in the SAME guard expression, which short-circuits the
+//     comparison for every non-string shape (routes/posts.ts:594 does this and is not a defect);
+//   · the value is only ever consumed numerically (parseInt / parseFloat / Number), where a
+//     non-string collapses to NaN and the default fires.
+//
+// `String(x)` is deliberately NOT settling, and that is the round-2 finding. It stops the TypeError
+// and nothing else: `String(['1','1'])` is '1,1', so `String(req.query.refresh || '') === '1'`
+// answered FALSE for an admin who asked twice to bypass the catalog cache — the same silent
+// wrong-branch as the bare comparison, one coercion later. String() is treated as TRANSPARENT: the
+// value stays query-shaped all the way to whatever compares it.
+//
+// Scope, stated on purpose: this walk judges values out of req.query that reach a STRING comparison
+// (equality with a string literal, membership in a string collection, a switch over string cases, a
+// computed object key) or that are handed RAW to a callee — the last one because the comparison can
+// live one call away, which is exactly where routes/analytics.ts hid `period === 'weekly'` inside
+// models/Analytics.getStats. req.body is judged by the tables above, for routes/posts.ts, because
+// those tables are that file's declared contract; widening THEM is a different class's job.
+// ═════════════════════════════════════════════════════════════════════════════════════════════════
+const REQUEST_FILES: Array<{ label: string; src: string }> = ['routes', 'middleware'].flatMap((dir) => {
+    const abs = path.join(__dirname, '..', dir);
+    return fs.readdirSync(abs)
+        .filter((f: string) => f.endsWith('.ts'))
+        .map((f: string) => ({ label: `${dir}/${f}`, src: fs.readFileSync(path.join(abs, f), 'utf8') }));
+});
+
+/** Calls after which the value is a number or a proven single string. */
+const SHAPE_SETTLING_CALLS = ['parseInt', 'parseFloat', 'Number', 'scalarQueryParam'];
+
+interface QueryUse { label: string; line: number; field: string; kind: string; source: string }
+
+/**
+ * Every USE of a req.query value, in one file, that needs its shape settled and does not have it.
+ * Reports `file:line field [what the use was]`.
+ */
+function queryGuardViolations(label: string, src: string): { violations: string[]; bagReferences: number } {
+    const sf = ts.createSourceFile(label, src, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+    const lineOf = (n: any) => sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1;
+    let bagReferences = 0;
+
+    // Field lists a handler can declare scalar with: `const X = Object.freeze(['a','b'])`.
+    const tables = new Map<string, string[]>();
+    const tableRe = /const\s+([A-Za-z0-9_]+)\s*:?[^=]*=\s*Object\.freeze\(\[([\s\S]*?)\]\)/g;
+    let tm: RegExpExecArray | null;
+    while ((tm = tableRe.exec(src))) {
+        tables.set(tm[1], (tm[2].match(/'([^']+)'/g) || []).map((s: string) => s.slice(1, -1)));
+    }
+
+    // `req?.query` is the same bag one refactor later, and the textual cross-check below counts the
+    // same spellings, so neither half can go blind while the other stays green.
+    const isQueryBag = (text: string) => /^\(?\s*req\??\.query(\s*\|\|\s*\{\s*\})?\s*\)?$/.test(text.trim());
+
+    /** The innermost function that takes `req` — the handler whose declarations apply. */
+    const handlerOf = (node: any): any => {
+        let cur = node.parent;
+        while (cur) {
+            if ((ts.isArrowFunction(cur) || ts.isFunctionExpression(cur) || ts.isFunctionDeclaration(cur))
+                && cur.parameters.some((p: any) => p.name.getText(sf) === 'req')) return cur;
+            cur = cur.parent;
+        }
+        return null;
+    };
+
+    /** Fields THIS handler refuses a non-string shape for, before reading any of them. */
+    const declaredScalar = (fn: any): Set<string> => {
+        const declared = new Set<string>();
+        if (!fn) return declared;
+        const walk = (n: any): void => {
+            if (ts.isCallExpression(n)) {
+                const callee = n.expression.getText(sf);
+                if ((callee === 'requireScalarQuery' || callee === 'firstNonStringField') && n.arguments.length >= 2) {
+                    const list = n.arguments[1];
+                    if (ts.isIdentifier(list) && tables.has(list.text)) for (const f of tables.get(list.text)!) declared.add(f);
+                    else if (ts.isArrayLiteralExpression(list)) {
+                        for (const el of list.elements) if (ts.isStringLiteral(el)) declared.add(el.text);
+                    } else {
+                        // A field list this gate cannot resolve is not coverage it can claim.
+                        assert.fail(`${label}:${lineOf(n)} declares its scalar fields with `
+                            + `\`${list.getText(sf)}\`, which this gate cannot enumerate — declare a frozen `
+                            + 'table or an array literal so the coverage is checkable.');
+                    }
+                }
+                if (callee === 'scalarQueryParam' && n.arguments.length >= 2 && ts.isStringLiteral(n.arguments[1])) {
+                    declared.add((n.arguments[1] as any).text);
+                }
+            }
+            ts.forEachChild(n, walk);
+        };
+        walk(fn);
+        return declared;
+    };
+
+    /**
+     * `typeof x === 'string'` in the same guard expression settles every use inside it: the
+     * comparison's other branch is unreachable for a non-string. Looked for in the nearest enclosing
+     * condition, which is the scope a short-circuit actually protects.
+     */
+    const narrowedByTypeofGuard = (node: any, readText: string): boolean => {
+        // The scope a typeof check actually protects is the SHORT-CIRCUIT chain it sits in, so climb
+        // exactly that: &&, ||, ! and parentheses, and stop. Anything wider (the whole `if`, the whole
+        // statement) would count a typeof that happens to be nearby but guards nothing.
+        let condition: any = node;
+        while (condition.parent && (
+            (ts.isBinaryExpression(condition.parent)
+                && [ts.SyntaxKind.AmpersandAmpersandToken, ts.SyntaxKind.BarBarToken].includes(condition.parent.operatorToken.kind))
+            || ts.isParenthesizedExpression(condition.parent)
+            || (ts.isPrefixUnaryExpression(condition.parent) && condition.parent.operator === ts.SyntaxKind.ExclamationToken)
+        )) condition = condition.parent;
+        let found = false;
+        const walk = (n: any): void => {
+            if (ts.isTypeOfExpression(n) && n.expression.getText(sf).trim() === readText
+                && n.parent && ts.isBinaryExpression(n.parent)
+                && [ts.SyntaxKind.EqualsEqualsEqualsToken, ts.SyntaxKind.ExclamationEqualsEqualsToken].includes(n.parent.operatorToken.kind)
+                && /'string'|"string"/.test(n.parent.right.getText(sf))) found = true;
+            ts.forEachChild(n, walk);
+        };
+        walk(condition);
+        return found;
+    };
+
+    // Scope-aware, because a name is not a binding: routes/users.ts destructures `role` out of
+    // req.query in the list handler AND out of req.body in PUT /:id, and a file-global name→field map
+    // calls the second one a member of this class. It is not one.
+    const scopes: Array<Map<string, { field: string; settled: boolean; raw: boolean }>> = [new Map()];
+    const lookup = (name: string) => {
+        for (let i = scopes.length - 1; i >= 0; i--) { const hit = scopes[i].get(name); if (hit) return hit; }
+        return null;
+    };
+
+    /** Does this expression carry a req.query value, and in what state? */
+    const queryValueOf = (expr: any): { field: string; settled: boolean; raw: boolean } | null => {
+        let e = expr;
+        while (e && (ts.isParenthesizedExpression(e) || ts.isNonNullExpression(e) || ts.isAsExpression(e))) e = e.expression;
+        if (!e) return null;
+        if (ts.isIdentifier(e)) return lookup(e.text);
+        if (ts.isPropertyAccessExpression(e) || ts.isElementAccessExpression(e)) {
+            if (!isQueryBag(e.expression.getText(sf))) return null;
+            const field = ts.isPropertyAccessExpression(e)
+                ? e.name.text
+                : (e.argumentExpression && ts.isStringLiteral(e.argumentExpression) ? (e.argumentExpression as any).text : null);
+            assert.ok(field, `${label}:${lineOf(e)} reads req.query with a COMPUTED key `
+                + `(\`${e.getText(sf)}\`) — this gate cannot name what that reads, so it cannot claim coverage.`);
+            return { field: field as string, settled: false, raw: true };
+        }
+        if (ts.isBinaryExpression(e)
+            && [ts.SyntaxKind.BarBarToken, ts.SyntaxKind.QuestionQuestionToken].includes(e.operatorToken.kind)) {
+            return queryValueOf(e.left);   // `req.query.x || 'admin'` is still the query value when supplied
+        }
+        if (ts.isCallExpression(e)) {
+            const callee = e.expression.getText(sf);
+            if (SHAPE_SETTLING_CALLS.includes(callee) && e.arguments.length) {
+                const inner = queryValueOf(e.arguments[0]);
+                if (inner) return { field: inner.field, settled: true, raw: false };
+            }
+            // TRANSPARENT: String(x) and x.toLowerCase() change the TYPE, never the fact that two
+            // values arrived where one was declared.
+            if (callee === 'String' && e.arguments.length) {
+                const inner = queryValueOf(e.arguments[0]);
+                if (inner) return { field: inner.field, settled: inner.settled, raw: false };
+            }
+            if (ts.isPropertyAccessExpression(e.expression)) {
+                const inner = queryValueOf(e.expression.expression);
+                if (inner) return { field: inner.field, settled: inner.settled, raw: false };
+            }
+        }
+        return null;
+    };
+
+    const uses: QueryUse[] = [];
+    const record = (node: any, value: any, kind: string, readText: string) => {
+        if (!value || value.settled) return;
+        if (declaredScalar(handlerOf(node)).has(value.field)) return;
+        if (narrowedByTypeofGuard(node, readText)) return;
+        uses.push({ label, line: lineOf(node), field: value.field, kind, source: node.getText(sf).replace(/\s+/g, ' ').slice(0, 80) });
+    };
+
+    const visit = (node: any): void => {
+        const opensScope = ts.isArrowFunction(node) || ts.isFunctionExpression(node)
+            || ts.isFunctionDeclaration(node) || ts.isBlock(node);
+        if (opensScope) scopes.push(new Map());
+
+        if (ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression)
+            && node.expression.text === 'req' && node.name.text === 'query') bagReferences++;
+
+        // Bindings: `const { order } = req.query` and `const x = req.query.x || 'admin'`.
+        if (ts.isVariableDeclaration(node) && node.initializer) {
+            if (isQueryBag(node.initializer.getText(sf)) && ts.isObjectBindingPattern(node.name)) {
+                for (const el of node.name.elements) {
+                    const key = (el.propertyName ? el.propertyName.getText(sf) : el.name.getText(sf)).replace(/^['"]|['"]$/g, '');
+                    if (ts.isIdentifier(el.name)) scopes[scopes.length - 1].set(el.name.text, { field: key, settled: false, raw: true });
+                }
+            } else if (ts.isIdentifier(node.name)) {
+                const carried = queryValueOf(node.initializer);
+                if (carried) scopes[scopes.length - 1].set(node.name.text, carried);
+            }
+        }
+
+        // THE USES. Each one is a guard that answers a question about a STRING.
+        if (ts.isBinaryExpression(node)) {
+            const op = node.operatorToken.kind;
+            if ([ts.SyntaxKind.EqualsEqualsEqualsToken, ts.SyntaxKind.ExclamationEqualsEqualsToken,
+                ts.SyntaxKind.EqualsEqualsToken, ts.SyntaxKind.ExclamationEqualsToken].includes(op)) {
+                for (const [value, literal] of [[node.left, node.right], [node.right, node.left]]) {
+                    // `x === ''` is an emptiness test, not a value test: it answers false for every
+                    // non-string shape and for every non-empty string alike, which is the same
+                    // decision. It is the `!== ''` at routes/posts.ts:594, whose typeof twin does the
+                    // real work; treating it as a use would report a site that already refuses.
+                    if (ts.isStringLiteral(literal) && (literal as any).text !== '') {
+                        record(node, queryValueOf(value), 'compared to a string literal', value.getText(sf).trim());
+                    }
+                }
+            }
+        }
+        if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)
+            && ['includes', 'has', 'indexOf'].includes(node.expression.name.text) && node.arguments.length === 1) {
+            record(node, queryValueOf(node.arguments[0]), 'membership test against a string collection',
+                node.arguments[0].getText(sf).trim());
+        }
+        if (ts.isSwitchStatement(node)) {
+            record(node, queryValueOf(node.expression), 'switch over string cases', node.expression.getText(sf).trim());
+        }
+        if (ts.isElementAccessExpression(node) && node.argumentExpression
+            && !ts.isStringLiteral(node.argumentExpression) && !isQueryBag(node.expression.getText(sf))) {
+            record(node, queryValueOf(node.argumentExpression), 'used as an object key',
+                node.argumentExpression.getText(sf).trim());
+        }
+        if (ts.isCallExpression(node)) {
+            const callee = node.expression.getText(sf);
+            if (!SHAPE_SETTLING_CALLS.includes(callee) && callee !== 'String') {
+                for (const arg of node.arguments) {
+                    const carried = queryValueOf(arg);
+                    // RAW only: a value that already went through String() reaches the callee as a
+                    // string, so whatever the callee compares is judged where that comparison lives.
+                    if (carried && carried.raw) record(node, carried, `handed RAW to ${callee.slice(0, 40)}()`, arg.getText(sf).trim());
+                }
+            }
+        }
+
+        ts.forEachChild(node, visit);
+        if (opensScope) scopes.pop();
+    };
+    visit(sf);
+
+    const seen = new Set<string>();
+    const violations = uses
+        .filter((u) => { const k = `${u.line}:${u.field}:${u.kind}`; if (seen.has(k)) return false; seen.add(k); return true; })
+        .map((u) => `${u.label}:${u.line} ${u.field} [${u.kind}] — ${u.source}`);
+    return { violations, bagReferences };
+}
+
+const allQueryGuardViolations = (files = REQUEST_FILES): string[] =>
+    files.flatMap((f) => queryGuardViolations(f.label, f.src).violations).sort();
+
+describe('CLASS: in EVERY route file, a query value that reaches a string guard is shape-refused first', () => {
+    test('the walk is not blind: it sees every textual req.query in every file', () => {
+        for (const f of REQUEST_FILES) {
+            const code = f.src.replace(/\/\*[\s\S]*?\*\//g, '\n')
+                .split('\n').filter((l: string) => !l.trim().startsWith('//')).join('\n');
+            const textual = (code.match(/\breq\??\.query\b/g) || []).length;
+            const { bagReferences } = queryGuardViolations(f.label, f.src);
+            assert.strictEqual(bagReferences, textual,
+                `${f.label}: the AST walk saw ${bagReferences} req.query references, the code contains ${textual}`);
+        }
+    });
+
+    test('the gate reads every route file, not one', () => {
+        const names = REQUEST_FILES.map((f) => f.label);
+        assert.ok(names.includes('routes/posts.ts'), 'the file the old gate read');
+        for (const missed of ['routes/post-types.ts', 'routes/taxonomies.ts', 'routes/export.ts',
+            'routes/media.ts', 'routes/marketplace.ts', 'routes/analytics.ts', 'routes/plugin-bundles.ts']) {
+            assert.ok(names.includes(missed), `${missed} is a route file this gate must read`);
+        }
+        assert.ok(names.length >= 35, `only ${names.length} files — the directory read is not picking them all up`);
+    });
+
+    test('NO route file compares a query value it has not shape-refused', () => {
+        assert.deepStrictEqual(allQueryGuardViolations(), [],
+            'a repeated query parameter reaches a guard that compares it to a string: the guard answers '
+            + 'the OTHER branch for an Array, silently. Refuse the shape first — requireScalarQuery(req.query, '
+            + '[...]) at the top of the handler, or scalarQueryParam(req.query.x, \'x\') at the read. '
+            + 'See core/query-params for why the answer is a 400 and not a resolved value.');
+    });
+
+    test('THE GATE IS FALSIFIABLE: reverting any fixed site makes it name that site', () => {
+        // A gate that reads every file is still worthless if it cannot fail. Each fixed file is
+        // reverted here by DELETING its refusal — the real source, mutated, driven through the real
+        // derivation — and the gate must name the file that lost it.
+        const reverted = (labelWanted: string) => {
+            const file = REQUEST_FILES.find((f) => f.label === labelWanted);
+            assert.ok(file, `${labelWanted} is not being read at all`);
+            const stripped = file!.src.split('\n')
+                .filter((l: string) => !/requireScalarQuery\(|scalarQueryParam\(/.test(l)).join('\n');
+            // assert.ok, not assert.notStrictEqual: the two operands are whole source files and the
+            // diff would bury the message it is trying to deliver.
+            assert.ok(stripped !== file!.src, `${labelWanted} has no refusal to revert — is it actually fixed?`);
+            return queryGuardViolations(labelWanted, stripped).violations;
+        };
+
+        for (const [label, field] of [
+            ['routes/export.ts', 'users'],
+            ['routes/post-types.ts', 'rest'],
+            ['routes/taxonomies.ts', 'rest'],
+            ['routes/media.ts', 'order'],
+            ['routes/marketplace.ts', 'refresh'],
+            ['routes/categories.ts', 'hide_empty'],
+            ['routes/comments.ts', 'status'],
+        ] as Array<[string, string]>) {
+            const found = reverted(label);
+            assert.ok(found.some((v) => v.startsWith(`${label}:`) && v.includes(` ${field} `)),
+                `MUTATION SURVIVED — ${label} without its refusal must be reported for '${field}', `
+                + `the gate said: ${JSON.stringify(found)}`);
+        }
+
+        // And a brand-new site, in a file that has no query guards at all today, is reported too.
+        const clean = REQUEST_FILES.find((f) => f.label === 'routes/health.ts')!;
+        for (const [shape, mutation] of [
+            ['a bare comparison', 'router.get("/zz", (req: any, res: any) => res.json(req.query.newFlag !== "false"));'],
+            ['a String() comparison', 'router.get("/zz", (req: any, res: any) => res.json(String(req.query.newFlag) === "1"));'],
+            ['a destructured local', 'router.get("/zz", (req: any, res: any) => { const { newFlag } = req.query; return res.json(newFlag === "1"); });'],
+            ['a whitelist membership test', 'router.get("/zz", (req: any, res: any) => res.json(["a","b"].includes(String(req.query.newFlag).toLowerCase())));'],
+            ['a switch', 'router.get("/zz", (req: any, res: any) => { switch (req.query.newFlag) { case "a": return res.json(1); default: return res.json(2); } });'],
+            ['a raw hand-off to a callee that compares it', 'router.get("/zz", (req: any, res: any) => res.json(getStats(req.query.newFlag)));'],
+        ] as Array<[string, string]>) {
+            const found = queryGuardViolations('routes/health.ts', `${clean.src}\n${mutation}\n`).violations;
+            assert.ok(found.some((v) => v.includes(' newFlag ')),
+                `MUTATION SURVIVED — "${shape}" reads newFlag out of req.query and compares it to a string, `
+                + `yet the gate reported: ${JSON.stringify(found)}`);
+        }
+
+        // THE typeof ALLOWANCE IS NOT A LOOPHOLE. It settles a use only inside the short-circuit
+        // chain it guards; a typeof sitting NEARBY guards nothing and must not launder the read.
+        const nearbyTypeof = 'router.get("/zz", (req: any, res: any) => { const v = req.query.newFlag; '
+            + 'const looksOk = typeof v === "string"; return res.json([looksOk, v === "1"]); });';
+        assert.ok(queryGuardViolations('routes/health.ts', `${clean.src}\n${nearbyTypeof}\n`).violations
+            .some((v) => v.includes(' newFlag ')),
+            'a typeof check in a DIFFERENT statement was accepted as narrowing the comparison');
+
+        // …and the real thing still is accepted, so the allowance is not merely dead.
+        const realTypeof = 'router.get("/zz", (req: any, res: any) => { const v = req.query.newFlag; '
+            + 'if (typeof v === "string" && v === "1") return res.json(1); return res.json(0); });';
+        assert.ok(!queryGuardViolations('routes/health.ts', `${clean.src}\n${realTypeof}\n`).violations
+            .some((v) => v.includes(' newFlag ')),
+            'a genuine `typeof x === "string" && x === "1"` was reported — the allowance is broken, '
+            + 'and routes/posts.ts:594 depends on it');
+
+        // CONTROL: the real sources are clean, so the assertions above fail for the reason claimed.
+        assert.deepStrictEqual(allQueryGuardViolations(), []);
     });
 });
 

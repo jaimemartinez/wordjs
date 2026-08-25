@@ -18,6 +18,8 @@ const express = require('express');
 const router = express.Router();
 const { authenticate } = require('../middleware/auth');
 const { asyncHandler } = require('../middleware/errorHandler');
+// THE ROUTE-ID CONTRACT — see core/query-params: one definition of "a route id" for the whole tree.
+const { routeIdOrNull } = require('../core/query-params');
 const Post = require('../models/Post');
 // THE gate, shared — not a second copy. See the SECURITY note on the route below.
 const { canEditPostRecord, isRestExposedPostType } = require('../core/post-capabilities');
@@ -52,13 +54,15 @@ function sweep(room: Map<string, { name: string; ts: number }>) {
 // capability_type, so the family resolver lands them in the plain `post` family. They belong to their
 // own APIs and there is no editor session to have presence in.
 router.post('/:postId', authenticate, asyncHandler(async (req: Request, res: Response) => {
-    // The `String(...)` changes NOTHING the untyped version did: `parseInt` already coerced its
-    // argument, so both a string and the `string[]` that `params` is typed to allow yield exactly the
-    // number they yielded before. It is written out because the type demands it (same idiom as
-    // `parsePostId` in routes/collab.ts) — not because the route now takes something new: under
-    // Express 4 a lone `:postId` always arrives as a string.
-    const postId = parseInt(String(req.params.postId), 10);
-    if (!Number.isFinite(postId) || postId <= 0) {
+    // THE ROUTE-ID CONTRACT — see core/query-params. The 400 and its body are unchanged (they are
+    // this route's published answer); the PREDICATE is now the single shared one. The local test was
+    // `parseInt` + `Number.isFinite(n) && n > 0`, which admitted both spellings of "cannot be an id":
+    // `9999999999` is finite and positive but too wide for the 32-bit `posts.id` column (Postgres:
+    // `22003 value out of range for type integer`, i.e. a 500), and `12abc` parses to 12, so a
+    // presence beacon for post 12 could be sent under a URL that is not post 12's — a separate
+    // rate-limit bucket for the same room.
+    const postId = routeIdOrNull(req.params.postId);
+    if (postId === null) {
         return res.status(400).json({ error: 'invalid post id' });
     }
 

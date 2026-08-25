@@ -5,6 +5,9 @@ const { getConfig, saveConfig, isInstalled } = require('../core/configManager');
 const config = require('../config/app');
 const path = require('path');
 const { verifyInstallToken } = require('../core/install-token');
+// The installer runs before any account exists, so its 500s are the most exposed in the product:
+// whatever broke (a filesystem path, a database DSN, a TLS library) is logged, never answered.
+const { publicErrorText } = require('../middleware/errorHandler');
 
 // Gate for the PRE-INSTALL endpoints (/install, /test-db). These run before the instance is
 // configured, so they are unauthenticated and exempt from CSRF — require the one-time install token
@@ -35,6 +38,26 @@ function requireInstallToken(req: Request, res: Response): boolean {
 function pickInstallHost(forwardedHost: unknown, host: unknown): string {
     return String(forwardedHost || host || '').split(',')[0].trim();
 }
+
+/**
+ * The shape a request-derived host must have before this file will build a site origin out of it.
+ *
+ * Hoisted to module scope, and consumed by BOTH endpoints that write one. It used to be declared inside
+ * the POST /setup/install handler only, so POST /setup/migrate — the one endpoint of this router that
+ * outlives the install, and the only other one that PERSISTS a site origin — derived its host as a bare
+ * `req.get('x-forwarded-host') || req.get('host')`. `req.get()` is `string | undefined`, so an absent Host
+ * (HTTP/1.0 imposes none, and Node delivers such a request with `req.headers.host === undefined`) made
+ * `` `${protocol}://${host}` `` the literal string 'http://undefined', which /migrate then saved as
+ * config.siteUrl and as the `siteurl` option — and config.site.url is an entry of the same-origin
+ * allow-lists in middleware/auth.ts and routes/collab.ts. One host-less migrate installed
+ * 'http://undefined' as a same-origin PERMANENTLY, and re-minted the mTLS SANs around it. Two endpoints,
+ * one question about the same header, and only one of them was answering it.
+ *
+ * NOTE that the pattern ACCEPTS the label 'undefined' — it is a syntactically valid host. That is exactly
+ * why the absent header must arrive here as the empty string (pickInstallHost above) and not as the word:
+ * the guard cannot tell the two apart, so the derivation must never produce the word in the first place.
+ */
+const INSTALL_HOST_PATTERN = /^(?:(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)(?:\.(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?))*|(?:\d{1,3}\.){3}\d{1,3})(?::\d{1,5})?$/;
 
 /**
  * Was this node provisioned by cluster enrollment (scripts/node-join.js) rather than being a fresh
@@ -175,7 +198,8 @@ router.post('/install', async (req: Request, res: Response) => {
     // precedence; otherwise we accept the request host ONLY after validating it against a strict
     // hostname/IP[:port] allow-pattern (defeats header injection / CRLF / bogus SAN poisoning).
     // Install is already gated by the one-time install token; this is defense-in-depth on top of that.
-    const HOST_PATTERN = /^(?:(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)(?:\.(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?))*|(?:\d{1,3}\.){3}\d{1,3})(?::\d{1,5})?$/;
+    // The pattern lives at module scope (INSTALL_HOST_PATTERN) so /setup/migrate validates identically.
+    const HOST_PATTERN = INSTALL_HOST_PATTERN;
 
     let protocol: string;
     let host: string;
@@ -391,7 +415,7 @@ router.post('/install', async (req: Request, res: Response) => {
 
                 } catch (e) {
                     console.error('❌ Setup failed during mTLS generation:', e);
-                    res.status(500).json({ error: 'Setup failed during mTLS generation: ' + e.message });
+                    res.status(500).json({ error: publicErrorText(e, 'Setup failed during mTLS generation.') });
                     return; // Exit if mTLS generation fails
                 }
             }
@@ -543,7 +567,7 @@ router.post('/install', async (req: Request, res: Response) => {
 
         } catch (e) {
             console.error('❌ Setup failed:', e);
-            res.status(500).json({ error: 'Setup failed during operation: ' + e.message });
+            res.status(500).json({ error: publicErrorText(e, 'Setup failed during the install.') });
         }
     } else {
         res.status(500).json({ error: 'Failed to save configuration' });
@@ -646,8 +670,17 @@ router.post('/migrate', async (req: Request, res: Response) => {
 
         // Fix: Trust upstream Gateway protocol
         const protocol = req.get('x-forwarded-proto') || req.protocol;
-        // Host from proxy
-        const host = req.get('x-forwarded-host') || req.get('host');
+        // The host the operator migrated TO — derived and validated EXACTLY as POST /setup/install does,
+        // because what is derived here is persisted as config.siteUrl / the `siteurl` option, and that
+        // value is itself an entry of the same-origin allow-lists (middleware/auth.ts, routes/collab.ts).
+        // A bare `req.get('x-forwarded-host') || req.get('host')` yields `undefined` on a request with no
+        // Host header, and `${protocol}://${undefined}` is the string 'http://undefined' — which this
+        // endpoint then wrote onto those allow-lists permanently. Fail closed: no derivable host, no
+        // migration. See INSTALL_HOST_PATTERN at the top of this file.
+        const host = pickInstallHost(req.get('x-forwarded-host'), req.get('host'));
+        if (!INSTALL_HOST_PATTERN.test(host)) {
+            return res.status(400).json({ error: 'Could not determine a valid site host from this request. Send the migration through the host you are migrating to.' });
+        }
         const newSiteUrl = `${protocol}://${host}`;
 
         // Update config
@@ -743,4 +776,6 @@ router.post('/migrate', async (req: Request, res: Response) => {
 module.exports = router;
 // Pure decision helpers, exported for the install-state tests (the router itself stays the default).
 module.exports.pickInstallHost = pickInstallHost;
+// Exported for tests — the ONE host allow-pattern both /install and /migrate validate against.
+module.exports.INSTALL_HOST_PATTERN = INSTALL_HOST_PATTERN;
 module.exports.isEnrolledConfig = isEnrolledConfig;

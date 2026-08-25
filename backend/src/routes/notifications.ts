@@ -7,6 +7,9 @@ const express = require('express');
 const router = express.Router();
 const notificationService = require('../core/notifications');
 const { authenticate, authenticateAllowQuery } = require('../middleware/auth');
+// These routes are reachable by ANY signed-in user, subscribers included, so a bare `e.message`
+// here published the database driver's text to the least-privileged account in the CMS.
+const { publicErrorText } = require('../middleware/errorHandler');
 
 /**
  * SSE Endpoint for real-time notifications
@@ -70,7 +73,8 @@ router.get('/', authenticate, async (req: Request, res: Response) => {
         const notifications = await notificationService.getNotifications(userId);
         res.json(notifications);
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('[notifications] list failed:', e);
+        res.status(500).json({ error: publicErrorText(e, 'Your notifications could not be loaded.') });
     }
 });
 
@@ -83,7 +87,8 @@ router.post('/:uuid/read', authenticate, async (req: Request, res: Response) => 
         if (!ok) return res.status(404).json({ error: 'Notification not found' });
         res.json({ success: true });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('[notifications] mark-read failed:', e);
+        res.status(500).json({ error: publicErrorText(e, 'The notification could not be marked as read.') });
     }
 });
 
@@ -95,7 +100,8 @@ router.post('/read-all', authenticate, async (req: Request, res: Response) => {
         await notificationService.markAllAsRead(req.user.id);
         res.json({ success: true });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('[notifications] mark-all-read failed:', e);
+        res.status(500).json({ error: publicErrorText(e, 'Your notifications could not be marked as read.') });
     }
 });
 
@@ -108,7 +114,8 @@ router.delete('/:uuid', authenticate, async (req: Request, res: Response) => {
         if (!ok) return res.status(404).json({ error: 'Notification not found' });
         res.json({ success: true });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('[notifications] delete failed:', e);
+        res.status(500).json({ error: publicErrorText(e, 'The notification could not be deleted.') });
     }
 });
 

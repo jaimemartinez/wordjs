@@ -23,6 +23,17 @@ const { asyncHandler } = require('../middleware/errorHandler');
 // debounced anyway).
 const { purgeFrontend } = require('../core/frontend-purge');
 
+// THE ROUTE-ID CONTRACT — see core/query-params. This router carries TWO id parameters and both were
+// bound raw: `:id` reached Menu.findById (`WHERE t.term_id = ?`) and `:itemId` reached
+// MenuItem.findById (`WHERE p.id = ?`), so `/menus/abc` — anonymous on GET — was a 500 on
+// Postgres/MySQL. The two writes that never look the menu up were worse than a 500: `/menus/abc/items`
+// threw out of MenuItem.create's `if (!menuId)` as a bare 500, and `/menus/abc/location` answered 200
+// after writing `{"primary": null}` into the nav_menu_locations option — a silent success that
+// unassigned the location. Both are covered by the same declaration.
+const { requireRouteId } = require('../core/query-params');
+router.param('id', requireRouteId({ code: 'rest_menu_invalid', message: 'Menu not found.' }));
+router.param('itemId', requireRouteId({ code: 'rest_menu_item_invalid', message: 'Menu item not found.' }));
+
 // SECURITY (XSS-03): menu item urls render site-wide as <a href={item.url}> in the public nav, so a
 // `javascript:`/`data:`/`vbscript:` url set by an admin would execute stored XSS in every visitor's
 // browser. Allow only safe link targets: relative paths, fragments, and http(s)/mailto/tel absolute

@@ -36,26 +36,51 @@ const express = require('express');
 const router = express.Router();
 
 const jwt = require('jsonwebtoken');
-const { authenticate } = require('../middleware/auth');
-const { asyncHandler } = require('../middleware/errorHandler');
+const { authenticate, trustedHost, sameOriginAllowList } = require('../middleware/auth');
+const { asyncHandler, offStack } = require('../middleware/errorHandler');
 const { canEditPostRecord, isRestExposedPostType } = require('../core/post-capabilities');
 const config = require('../config/app');
 const Post = require('../models/Post');
 const collab = require('../core/collab-rooms');
+const { routeIdOrNull } = require('../core/query-params');
 
 /* ------------------------------------------------------------------------------------------- */
 /* Gates                                                                                         */
 /* ------------------------------------------------------------------------------------------- */
 
+/**
+ * El id de post que `raw` denota, o null si no denota ninguno (⇒ 400 en todas las rutas de aquí).
+ *
+ * EL ESTADO NO CAMBIA: estas rutas siempre han respondido 400 `rest_invalid_param` y ese 400 es parte
+ * de su contrato. Lo que cambia es el PREDICADO, que pasa a ser el único compartido de
+ * core/query-params. El local era `Number.isFinite(n) && n > 0` sobre un `parseInt`, y era el más
+ * débil de los seis que había en el árbol de rutas:
+ *   · `9999999999` es finito y positivo, pero no cabe en la columna `posts.id` (entero de 32 bits) —
+ *     Postgres responde `22003 value out of range for type integer` y el llamante recibe un 500;
+ *   · `12abc` se parsea como 12, así que `/collab/12abc/ops` escribía en la sala del post 12 bajo una
+ *     URL que no es la del post 12 — un cubo de rate-limit y una entrada de auditoría distintos para
+ *     la MISMA sala, en un canal cuyo control de abuso se apoya precisamente en esos cubos.
+ */
 function parsePostId(raw: any): number | null {
-    const n = parseInt(String(raw), 10);
-    return Number.isFinite(n) && n > 0 ? n : null;
+    return routeIdOrNull(raw);
 }
 
 /**
- * Same-origin para el GET del stream. Réplica de la lógica de `csrfProtection` (que solo corre en
- * métodos que cambian estado): se honra `X-Forwarded-Host` primero porque detrás del gateway el
- * `Host` que ve el backend es la dirección interna del upstream, no la que puso el navegador.
+ * Same-origin para el GET del stream, que el `csrfProtection` global NO cubre (solo corre en métodos
+ * que cambian estado).
+ *
+ * YA NO ES UNA RÉPLICA. La derivación del host de confianza y la lista blanca de orígenes salen de
+ * `middleware/auth.ts` — las MISMAS que usa `csrfProtection`, no una copia con la misma forma. Copiarlas
+ * es exactamente lo que hizo que este fichero se quedara atrás: cuando se cerró aquí el agujero del
+ * `Host` ausente, se cerró en UNA de las dos copias, y `req.get('Host')` (que es `string | undefined`)
+ * seguía interpolándose aquí como `http://${host}` ⇒ los orígenes LITERALES 'http://undefined' y
+ * 'https://undefined' entraban en la lista blanca. Una página servida desde la etiqueta de host
+ * `undefined` —perfectamente legal— era same-origin de este canal, y este canal es un feed EN VIVO del
+ * borrador sin publicar de la víctima. Es alcanzable: HTTP/1.0 no exige `Host` y Node entrega la petición
+ * con `req.headers.host === undefined` (demostrado sobre esta misma ruta, por socket crudo, en
+ * tests/absent-host-origin-allowlist.test.ts).
+ *
+ * Sin `Host` no hay same-origin que derivar ⇒ NO se aporta ninguna entrada. Fallar cerrado.
  */
 function sameOrigin(req: Request): boolean {
     const origin = req.get('Origin');
@@ -72,13 +97,12 @@ function sameOrigin(req: Request): boolean {
     }
     if (!requestOrigin) return false;
 
-    const fwdHost = (req.get('X-Forwarded-Host') || '').split(',')[0].trim();
-    const host = fwdHost || req.get('Host');
+    const host = trustedHost(req);
     try {
         if (new URL(requestOrigin).host === host) return true;
     } catch { return false; }
 
-    const allowed = [config.site?.url, config.site?.frontendUrl, `http://${host}`, `https://${host}`].filter(Boolean);
+    const allowed: string[] = sameOriginAllowList(host);
     return allowed.some((a: string) => { try { return new URL(a).origin === requestOrigin; } catch { return false; } });
 }
 
@@ -91,14 +115,6 @@ type Gate = { ok: true; post: any } | { ok: false; status: number; code: string;
  * que si algún día `user` deja de ser laxo, este camino se entere.
  */
 type Principal = Pick<Request, 'user'>;
-
-/**
- * `authenticate` marca las sesiones de token de máquina (`wjt_`) con `req.apiToken`, pero la
- * ampliación global de `Request` (types/globals.d.ts) solo declara `user` y `pluginSlug`. El campo se
- * nombra AQUÍ, en el único sitio que lo lee, en lugar de ensanchar el parámetro entero: la CLASE de
- * credencial es justamente lo que no puede volver a deducirse de un dato laxo (ver `makeRevalidate`).
- */
-type AuthedRequest = Request & { apiToken?: unknown };
 
 /**
  * El gate de edición del post. YA NO SE COPIA: es literalmente el de `PUT /posts/:id`, porque las
@@ -189,7 +205,7 @@ function sessionToken(req: Request): string {
  * validó de verdad un token de API, y el resto de credenciales de sesión TIENEN que verificar su JWT
  * o se deniegan. Falla cerrado: si la cadena no verifica, no hay "otra rama" a la que caer.
  */
-function makeRevalidate(req: AuthedRequest, postId: number): () => Promise<boolean> {
+function makeRevalidate(req: Request, postId: number): () => Promise<boolean> {
     const rawToken = sessionToken(req);
     // La clase de credencial la fijó `authenticate` al autenticar; aquí no se vuelve a inferir.
     const apiTokenSession = !!req.apiToken;
@@ -307,7 +323,17 @@ router.get('/:postId/stream', authenticate, asyncHandler(async (req: Request, re
     // y su cupo. Escribir en un socket destruido NO lanza, así que nada la recogía.
     let conn: any = null;
     let aborted = false;
-    const onClose = () => { aborted = true; if (conn) void collab.leave(conn); };
+    // `void` NO es contención: descarta el VALOR de la promesa, no su rechazo. `leave()` es `async` y
+    // dentro espera a `releaseMember`, `broadcast` y `touchDoc` — todo BD/Redis — así que un motor
+    // caído justo cuando un editor se desconecta la rechaza, y ese rechazo no lo espera nadie: es un
+    // `unhandledRejection`, que el arranque contesta con `process.exit(1)`. Y ocurre en un listener
+    // de `close`, es decir FUERA de la cadena de promesas del `asyncHandler` — el mismo agujero que
+    // documenta `sseWrite` más arriba, por la otra puerta. `offStack` engancha el rechazo y lo deja
+    // en el log: la respuesta ya está comprometida y no queda estado que enviar.
+    const onClose = () => offStack(res, null, () => {
+        aborted = true;
+        if (conn) return collab.leave(conn);
+    });
     req.on('close', onClose);
     res.on('close', onClose);
 
@@ -315,10 +341,10 @@ router.get('/:postId/stream', authenticate, asyncHandler(async (req: Request, re
     // sobre una respuesta terminada, un socket que se rompe a media escritura) es un `'error'` sin
     // manejador sobre la `ServerResponse` ⇒ `uncaughtException` ⇒ `process.exit(1)`. Con él, lo peor
     // que puede pasar es que se caiga ESTA sesión colaborativa.
-    res.on('error', (e: any) => {
+    res.on('error', (e: any) => offStack(res, null, () => {
         console.warn('[collab] stream roto:', e && e.message);
-        if (conn) void collab.leave(conn);
-    });
+        if (conn) return collab.leave(conn); // mismo rechazo descartado que en `onClose`
+    }));
     req.on('error', () => { /* aborto del cliente: lo recoge `onClose` */ });
 
     res.setHeader('Content-Type', 'text/event-stream');

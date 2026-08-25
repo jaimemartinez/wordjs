@@ -55,6 +55,26 @@ jobs:
       - name: Certify the native confinement used by WordJS
         run: node backend/scripts/verify-sandbox-parity.mjs --json=sandbox-parity-report.json
 
+      # THE JS GUARD LAYER, ON EVERY PLATFORM — the half this matrix was not covering.
+      #
+      # The step above certifies the KERNEL floor: each platform's probe spawns a confined child beside
+      # an unconfined control and reports 'active' only when the confined one was refused what the
+      # control was allowed. That has always run here, on all four runners.
+      #
+      # What did NOT run here is the layer ABOVE it: io-guard, secure-require, the ESM/net guards and the
+      # bridge allowlist, exercised by booting REAL malicious plugins in the real fork and driving each
+      # escape over the real RPC path. That suite lived only in ci.yml, whose every job is ubuntu-latest,
+      # so it had never once executed on macOS or Windows. "Platform-independent JavaScript" is exactly
+      # the assumption this repository keeps falsifying — path separators, line endings, and which
+      # process APIs even exist all differ, and the suite writes files, forks children and resolves paths.
+      #
+      # Nine of its assertions are strict containment (`allTrue`); one tolerates 'absent' for three
+      # process APIs a platform may not implement, and that leniency is hardened to a hard requirement on
+      # Linux inside the suite itself.
+      - name: Certify the JS guard layer with real forked plugins
+        working-directory: backend
+        run: node --test --test-force-exit --test-concurrency=1 -r ts-node/register src/tests/sandbox-escape-e2e.test.ts
+
       - name: Differential Seatbelt boot diagnostics
         if: failure() && runner.os == 'macOS'
         run: node backend/scripts/diagnose-seatbelt-boot.mjs

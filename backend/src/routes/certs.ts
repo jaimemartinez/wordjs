@@ -4,6 +4,10 @@ const router = express.Router();
 const certManager = require('../core/cert-manager');
 const { authenticate } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/permissions');
+// Every catch-all below answers 500 with the caught error. An error nobody recognised is the
+// driver's, not ours, so its words go to the log and the caller gets the operation that failed.
+// The rule itself lives in middleware/errorHandler — one decision, not one per surface.
+const { publicErrorText } = require('../middleware/errorHandler');
 
 // Middleware: Admin Only
 router.use(authenticate);
@@ -22,7 +26,7 @@ router.post('/auto-provision', async (req: Request, res: Response) => {
         res.json(result);
     } catch (e) {
         console.error('Provision Error:', e);
-        res.status(500).json({ error: e.message });
+        res.status(500).json({ error: publicErrorText(e, 'Certificate provisioning failed.') });
     }
 });
 
@@ -39,7 +43,7 @@ router.post('/dns-start', async (req: Request, res: Response) => {
         res.json(data);
     } catch (e) {
         console.error('DNS Start Error:', e);
-        res.status(500).json({ error: e.message });
+        res.status(500).json({ error: publicErrorText(e, 'The DNS challenge could not be started.') });
     }
 });
 
@@ -68,7 +72,7 @@ router.post('/dns-finish', async (req: Request, res: Response) => {
         res.json({ success: true });
     } catch (e) {
         console.error('DNS Finish Error:', e);
-        res.status(500).json({ error: e.message });
+        res.status(500).json({ error: publicErrorText(e, 'The DNS challenge could not be completed.') });
     }
 });
 
@@ -85,7 +89,7 @@ router.post('/upload-custom', async (req: Request, res: Response) => {
         res.json(result);
     } catch (e) {
         console.error('Custom Upload Error:', e);
-        res.status(500).json({ error: e.message });
+        res.status(500).json({ error: publicErrorText(e, 'The certificate could not be installed.') });
     }
 });
 router.get('/config', async (req: Request, res: Response) => {
@@ -93,7 +97,8 @@ router.get('/config', async (req: Request, res: Response) => {
         const config = await certManager.getConfig();
         res.json(config);
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('Gateway Config Read Error:', e);
+        res.status(500).json({ error: publicErrorText(e, 'The gateway configuration could not be read.') });
     }
 });
 
@@ -106,7 +111,8 @@ router.post('/check', async (req: Request, res: Response) => {
         const result = await certManager.ensureGatewayCert();
         res.json(result);
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('Gateway Cert Check Error:', e);
+        res.status(500).json({ error: publicErrorText(e, 'The gateway certificate could not be ensured.') });
     }
 });
 
@@ -126,7 +132,8 @@ router.post('/config', async (req: Request, res: Response) => {
 
         res.json(result);
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('Gateway Config Write Error:', e);
+        res.status(500).json({ error: publicErrorText(e, 'The gateway configuration could not be updated.') });
     }
 });
 
@@ -155,7 +162,8 @@ router.get('/acme-config', async (req: Request, res: Response) => {
             nextRun
         });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('ACME Config Read Error:', e);
+        res.status(500).json({ error: publicErrorText(e, 'The auto-renewal settings could not be read.') });
     }
 });
 
@@ -208,7 +216,8 @@ router.post('/acme-config', async (req: Request, res: Response) => {
 
         res.json({ success: true, acme: newAcme });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('ACME Config Write Error:', e);
+        res.status(500).json({ error: publicErrorText(e, 'The auto-renewal settings could not be saved.') });
     }
 });
 
@@ -221,7 +230,8 @@ router.post('/renew-now', async (req: Request, res: Response) => {
         const result = await certManager.renewIfDue({ force: true });
         res.json(result);
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('Renew Now Error:', e);
+        res.status(500).json({ error: publicErrorText(e, 'The renewal attempt failed.') });
     }
 });
 

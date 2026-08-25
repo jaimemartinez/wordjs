@@ -21,6 +21,45 @@ const { asyncHandler } = require('../middleware/errorHandler');
 const {
     capsFor, capsForType, canEditPostRecord, canDeletePostRecord, isRestExposedPostType,
 } = require('../core/post-capabilities');
+const { requireRouteId, routeIdOrNull } = require('../core/query-params');
+
+// THE ROUTE-ID CONTRACT — see core/query-params.
+//
+// Declared per PARAMETER NAME, because this router's three id parameters do not share a not-found
+// body and the whole point of the contract is that a malformed id is byte-identical to an absent one:
+// `:id` answers `{ error: 'Revision not found' }`, `:id1`/`:id2` answer
+// `{ error: 'One or both revisions not found' }`, and `:postId` answers the `rest_post_invalid_id`
+// body `authorizeForPost` produces. None of them is the REST triple, so all four pass their body whole.
+//
+// `:postId` had NO guard at all — a bare `parseInt(String(req.params.postId), 10)` into
+// `authorizeForPost` → `Post.findById`.
+router.param('id', requireRouteId({ body: { error: 'Revision not found' } }));
+router.param('id1', requireRouteId({ body: { error: 'One or both revisions not found' } }));
+router.param('id2', requireRouteId({ body: { error: 'One or both revisions not found' } }));
+router.param('postId', requireRouteId({ body: { code: 'rest_post_invalid_id', data: { status: 404 } } }));
+
+/**
+ * The revision id `raw` denotes, or null when it denotes none.
+ *
+ * NOW A THIN WRAPPER over the shared `routeIdOrNull`, and that is the fix. This function used to be
+ * `parseInt` with `Number.isNaN` bolted on, which rejected exactly one of the ways a route segment can
+ * fail to be an id and accepted the other two:
+ *
+ *   · `/revisions/9999999999` — not NaN, so it passed, and it is wider than the 32-bit `id` column.
+ *     Postgres answered `22003 value "9999999999" is out of range for type integer`; the caller got a
+ *     500. Same sink as the NaN this guard was written for, one notch along.
+ *   · `/revisions/12abc` — `parseInt` stops at the 'a' and returns 12, so this guard reported "valid
+ *     revision id 12". The comment that used to sit here called that leniency deliberate and shared
+ *     with the rest of the API; it was neither correct nor safe, and the rest of the API no longer
+ *     does it either.
+ *
+ * The router-level `router.param` declarations above now refuse all three spellings before any handler
+ * runs, so this is belt-and-braces — kept because it is the function the handlers call, and it must
+ * not be able to disagree with the contract if a route here is ever mounted somewhere else.
+ */
+function revisionIdOrNull(raw: unknown): number | null {
+    return routeIdOrNull(raw);
+}
 
 /**
  * Resolve the parent post id for a revision and check whether the current user may act on it.
@@ -105,11 +144,20 @@ router.get('/post/:postId', authenticate, asyncHandler(async (req: Request, res:
     // only a string. The explicit String() is the SAME coercion parseInt already applied to the untyped
     // value (parseInt does ToString on its argument), so every input keeps the result it had before:
     // a plain string parses identically, `?limit=5&limit=6` still yields 5 from the joined "5,6", and an
-    // absent or object-shaped value is still NaN and still falls through to the `||` default. The radix
-    // is left off limit/offset exactly as it was — adding one here would be a behaviour change.
-    const postId = parseInt(String(req.params.postId), 10);
-    const limit = parseInt(String(req.query.limit)) || 10;
-    const offset = parseInt(String(req.query.offset)) || 0;
+    // absent or object-shaped value is still NaN and still falls through to the `||` default.
+    //
+    // limit/offset carry radix 10 like every other parseInt here. Without it `parseInt('0x3')` is 3, so
+    // `?limit=0x3` was silently honoured as 3 and `?offset=0x3` as 3 — a hexadecimal spelling of a
+    // parameter Swagger declares `type: integer`, disagreeing with the decimal reading every client (and
+    // its own `offset += limit` arithmetic) applies. Base 10 makes a hex literal parse to 0, which the
+    // `||` default below turns into the documented default; decimal values are unaffected.
+    // The radix was left off "exactly as it was"; that preserved the defect, not the contract.
+    // `:postId` is validated by the router-level route-id contract above, so it is a positive
+    // in-range integer by the time this line runs; the parse can no longer produce NaN or a value the
+    // `posts.id` column cannot hold.
+    const postId = routeIdOrNull(req.params.postId);
+    const limit = parseInt(String(req.query.limit), 10) || 10;
+    const offset = parseInt(String(req.query.offset), 10) || 0;
 
     const auth = await authorizeForPost(req, postId);
     if (auth.error) {
@@ -150,7 +198,12 @@ router.get('/post/:postId', authenticate, asyncHandler(async (req: Request, res:
  *         description: Revision not found
  */
 router.get('/:id', authenticate, asyncHandler(async (req: Request, res: Response) => {
-    const revision = await getRevision(parseInt(String(req.params.id), 10));
+    const revisionId = revisionIdOrNull(req.params.id);
+    if (revisionId === null) {
+        return res.status(404).json({ error: 'Revision not found' });
+    }
+
+    const revision = await getRevision(revisionId);
 
     if (!revision) {
         return res.status(404).json({ error: 'Revision not found' });
@@ -186,7 +239,10 @@ router.get('/:id', authenticate, asyncHandler(async (req: Request, res: Response
  *         description: Revision restored
  */
 router.post('/:id/restore', authenticate, asyncHandler(async (req: Request, res: Response) => {
-    const revisionId = parseInt(String(req.params.id), 10);
+    const revisionId = revisionIdOrNull(req.params.id);
+    if (revisionId === null) {
+        return res.status(404).json({ error: 'Revision not found' });
+    }
 
     const revision = await getRevision(revisionId);
     if (!revision) {
@@ -265,7 +321,10 @@ router.post('/:id/restore', authenticate, asyncHandler(async (req: Request, res:
  *         description: Revision deleted
  */
 router.delete('/:id', authenticate, asyncHandler(async (req: Request, res: Response) => {
-    const revisionId = parseInt(String(req.params.id), 10);
+    const revisionId = revisionIdOrNull(req.params.id);
+    if (revisionId === null) {
+        return res.status(404).json({ error: 'Revision not found' });
+    }
 
     const revision = await getRevision(revisionId);
     if (!revision) {
@@ -309,10 +368,13 @@ router.delete('/:id', authenticate, asyncHandler(async (req: Request, res: Respo
  *         description: Comparison diff
  */
 router.get('/compare/:id1/:id2', authenticate, asyncHandler(async (req: Request, res: Response) => {
-    const comparison = await compareRevisions(
-        parseInt(String(req.params.id1), 10),
-        parseInt(String(req.params.id2), 10)
-    );
+    const id1 = revisionIdOrNull(req.params.id1);
+    const id2 = revisionIdOrNull(req.params.id2);
+    if (id1 === null || id2 === null) {
+        return res.status(404).json({ error: 'One or both revisions not found' });
+    }
+
+    const comparison = await compareRevisions(id1, id2);
 
     if (!comparison) {
         return res.status(404).json({ error: 'One or both revisions not found' });

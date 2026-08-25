@@ -15,8 +15,19 @@ const {
 const { authenticate } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
+// THE SCALAR QUERY RULE — see core/query-params.
+const { requireScalarQuery } = require('../core/query-params');
 
 const CONTENT_TYPE_NAME_RE = /^[a-z][a-z0-9_-]{0,31}$/;
+
+/**
+ * The one query parameter the two list routes read. `rest !== 'false'` is a comparison against a
+ * string, and `?rest=false&rest=false` is the Array ['false','false'], which is `!== 'false'` — so a
+ * repeat did not merely fail to filter, it INVERTED the answer: getPostTypes({showInRest:true})
+ * returns the REST-visible types, the disjoint complement of the internal ones the caller asked for,
+ * with a 200. Refused up front, in both handlers, so the two cannot drift apart.
+ */
+const TYPE_LIST_QUERY_FIELDS: readonly string[] = Object.freeze(['rest']);
 
 function validLegacyList(value: unknown): boolean {
     return value === undefined || (Array.isArray(value) && value.every((entry) => typeof entry === 'string'));
@@ -46,6 +57,8 @@ function validLegacyList(value: unknown): boolean {
  *         description: List of post types
  */
 router.get('/', asyncHandler(async (req: Request, res: Response) => {
+    requireScalarQuery(req.query, TYPE_LIST_QUERY_FIELDS);
+
     const showInRest = req.query.rest !== 'false';
     const types = getPostTypes({ showInRest });
 
@@ -74,6 +87,8 @@ router.get('/', asyncHandler(async (req: Request, res: Response) => {
  *         description: Declarative content schemas
  */
 router.get('/schemas', asyncHandler(async (req: Request, res: Response) => {
+    requireScalarQuery(req.query, TYPE_LIST_QUERY_FIELDS);
+
     const showInRest = req.query.rest !== 'false';
     res.json(getContentTypeSchemas({ showInRest }));
 }));
