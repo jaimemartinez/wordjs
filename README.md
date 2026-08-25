@@ -53,7 +53,7 @@ So a plugin that turns out to be buggy, greedy, or outright malicious **stays in
 
 <div align="center">
 
-![WordJS visual editor — dragging blocks onto the canvas to build a page](docs/media/verso-editor-demo.gif)
+![WordJS visual editor — inserting blocks from the palette, editing a heading directly on the canvas, and dragging a block into place](docs/media/verso-editor-demo.gif)
 
 *Building a page by dragging blocks and editing text right on the canvas — the visual editor ships in the core, not as a paid add-on.*
 
