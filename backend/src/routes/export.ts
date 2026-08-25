@@ -21,6 +21,14 @@ const upload = multer({
 });
 
 /**
+ * multer is pulled in with require() and tsconfig pins `types` to ["node"], so @types/multer's
+ * ambient augmentation of Express.Request is not part of this program and `req.file` is invisible
+ * to the compiler. Describe the one field the import handler reads instead of widening the whole
+ * request back to `any` — the annotation would move, the checking would not.
+ */
+type ImportRequest = Request & { file?: { path: string } };
+
+/**
  * GET /export
  * Export site as JSON
  */
@@ -56,7 +64,7 @@ router.get('/export/wxr', authenticate, isAdmin, asyncHandler(async (req: Reques
  * POST /import
  * Import site from JSON
  */
-router.post('/import', authenticate, isAdmin, upload.single('file'), asyncHandler(async (req: any, res: Response) => {
+router.post('/import', authenticate, isAdmin, upload.single('file'), asyncHandler(async (req: ImportRequest, res: Response) => {
     let data;
 
     if (req.file) {

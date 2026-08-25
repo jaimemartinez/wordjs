@@ -36,8 +36,8 @@ const { listAudit } = require('../core/audit');
  *         description: Forbidden (not an administrator).
  */
 router.get('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
-    const perPage = Math.min(Math.max(parseInt(String((req.query as any).per_page), 10) || 50, 1), 200);
-    const page = Math.max(parseInt(String((req.query as any).page), 10) || 1, 1);
+    const perPage = Math.min(Math.max(parseInt(String(req.query.per_page), 10) || 50, 1), 200);
+    const page = Math.max(parseInt(String(req.query.page), 10) || 1, 1);
     const offset = (page - 1) * perPage;
     const result = await listAudit({ limit: perPage, offset });
     res.set('X-WP-Total', String(result.total));

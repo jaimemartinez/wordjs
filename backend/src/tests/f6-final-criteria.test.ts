@@ -91,7 +91,28 @@ describe('F6 request-boundary typing (F6-INV-01, F6-INV-02, F6-INV-03)', () => {
         const result = gate.verify();
         const slack = result.notes.filter((note: string) => /tighten|raise MIN_/.test(note));
         assert.deepStrictEqual(slack, [], `ratchets have slack:\n${slack.join('\n')}`);
-        assert.ok(gate.RATCHETS.MAX_REQUEST_ANY_OCCURRENCES > 0, 'F6 opens with real debt; a zero here would mean the counter broke');
+        // THE ANTI-VACUITY GUARD, REWRITTEN BECAUSE ITS PREMISE EXPIRED.
+        //
+        // This asserted `MAX_REQUEST_ANY_OCCURRENCES > 0`, on the reasoning that F6 opened with real debt
+        // so a zero was likelier to mean a broken counter than a paid debt. That was true when it was
+        // written and stopped being true when the debt was actually paid: the boundary now holds zero
+        // `req: any`, and the guard failed for the one reason it was never meant to fire — success.
+        //
+        // The INTENT survives: a counter that silently returns 0 must not be indistinguishable from a
+        // clean tree. So the counter is shown a sample that certainly contains the thing it counts, and
+        // is required to find it. That is a positive control, and unlike a threshold it stays honest at
+        // every debt level, including the one we are now at.
+        const probe = 'router.get("/x", (req: any, res: any) => res.json({}));\n'
+            + 'function mw(req: any, _res: any, next: any) { return next(); }\n';
+        const counted = gate.classifyBoundarySource(probe);
+        assert.strictEqual(counted.anyOccurrences, 2,
+            `the \`req: any\` counter no longer counts a source that plainly contains two: ${JSON.stringify(counted)}`);
+        assert.strictEqual(counted.typedHandlers, 0,
+            'the typed-handler counter credited a handler whose request parameter is `any`');
+
+        const typedProbe = 'router.get("/x", (req: Request, res: Response) => res.json({}));\n';
+        assert.deepStrictEqual(gate.classifyBoundarySource(typedProbe), { anyOccurrences: 0, typedHandlers: 1 },
+            'the counter no longer recognises a typed handler, so "zero debt" would be unfalsifiable');
     });
 });
 

@@ -173,9 +173,10 @@ router.get('/feed.xml', async (req: Request, res: Response) => {
  *       200:
  *         description: SEO metadata
  */
-router.get('/meta/:postId', authenticate, can('edit_posts'), async (req: any, res: Response) => {
+router.get('/meta/:postId', authenticate, can('edit_posts'), async (req: Request, res: Response) => {
     try {
-        const postId = parseInt(req.params.postId, 10);
+        // `:postId` is typed `string | string[]`; parseInt ToString()s it either way - same value.
+        const postId = parseInt(String(req.params.postId), 10);
         if (!postId) {
             return res.status(404).json({ error: 'Post not found' });
         }

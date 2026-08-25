@@ -30,7 +30,7 @@
  *     `sanitizePuckTree` de la ruta de escritura antes de persistirse y difundirse.
  */
 
-import type { Response } from 'express';
+import type { Request, Response } from 'express';
 
 const express = require('express');
 const router = express.Router();
@@ -57,7 +57,7 @@ function parsePostId(raw: any): number | null {
  * métodos que cambian estado): se honra `X-Forwarded-Host` primero porque detrás del gateway el
  * `Host` que ve el backend es la dirección interna del upstream, no la que puso el navegador.
  */
-function sameOrigin(req: any): boolean {
+function sameOrigin(req: Request): boolean {
     const origin = req.get('Origin');
     const referer = req.get('Referer');
     let requestOrigin: string | null = origin || null;
@@ -85,6 +85,22 @@ function sameOrigin(req: any): boolean {
 type Gate = { ok: true; post: any } | { ok: false; status: number; code: string; message: string };
 
 /**
+ * Lo ÚNICO que `gate` mira es el principal, y por eso el parámetro es el principal y no la petición:
+ * `makeRevalidate` lo vuelve a evaluar contra un usuario RECIÉN cargado de la BD, cuando ya no hay
+ * ninguna petición viva a la que preguntarle. Sale de la propia `Request` (types/globals.d.ts) para
+ * que si algún día `user` deja de ser laxo, este camino se entere.
+ */
+type Principal = Pick<Request, 'user'>;
+
+/**
+ * `authenticate` marca las sesiones de token de máquina (`wjt_`) con `req.apiToken`, pero la
+ * ampliación global de `Request` (types/globals.d.ts) solo declara `user` y `pluginSlug`. El campo se
+ * nombra AQUÍ, en el único sitio que lo lee, en lugar de ensanchar el parámetro entero: la CLASE de
+ * credencial es justamente lo que no puede volver a deducirse de un dato laxo (ver `makeRevalidate`).
+ */
+type AuthedRequest = Request & { apiToken?: unknown };
+
+/**
  * El gate de edición del post. YA NO SE COPIA: es literalmente el de `PUT /posts/:id`, porque las
  * tres líneas (familia por tipo + propio/ajeno + publicado) viven una sola vez en
  * `core/post-capabilities.canEditPostRecord`. Tenerlas escritas aquí era la forma en la que
@@ -95,7 +111,7 @@ type Gate = { ok: true; post: any } | { ok: false; status: number; code: string;
  * `capability_type`, así que la familia las deja caer en la de `post`. Pertenecen a sus propias
  * APIs y no hay sesión de editor que colaborar sobre ellas.
  */
-async function gate(req: any, postId: number): Promise<Gate> {
+async function gate(req: Principal, postId: number): Promise<Gate> {
     const post = await Post.findById(postId);
     if (!post) return { ok: false, status: 404, code: 'rest_post_invalid', message: 'Post not found.' };
 
@@ -144,7 +160,7 @@ function sseWrite(res: Response, chunk: string): boolean {
  * legítimo cada cuatro ticks. La forma de la regla es lo que evita que la lista se vuelva a quedar
  * corta: no hay lista.
  */
-function sessionToken(req: any): string {
+function sessionToken(req: Request): string {
     const header = String(req.get('Authorization') || '');
     const delHeader = header.startsWith('Bearer ') && header !== 'Bearer null' && header !== 'Bearer undefined'
         ? header.slice(7).trim()
@@ -173,7 +189,7 @@ function sessionToken(req: any): string {
  * validó de verdad un token de API, y el resto de credenciales de sesión TIENEN que verificar su JWT
  * o se deniegan. Falla cerrado: si la cadena no verifica, no hay "otra rama" a la que caer.
  */
-function makeRevalidate(req: any, postId: number): () => Promise<boolean> {
+function makeRevalidate(req: AuthedRequest, postId: number): () => Promise<boolean> {
     const rawToken = sessionToken(req);
     // La clase de credencial la fijó `authenticate` al autenticar; aquí no se vuelve a inferir.
     const apiTokenSession = !!req.apiToken;
@@ -230,7 +246,7 @@ function denyRate(res: Response, status: number, r: { code: string; message?: st
 }
 
 /** Resuelve post + conexión para las rutas de subida. */
-async function connGate(req: any, res: Response): Promise<any | null> {
+async function connGate(req: Request, res: Response): Promise<any | null> {
     const postId = parsePostId(req.params.postId);
     if (postId === null) {
         res.status(400).json({ code: 'rest_invalid_param', message: 'invalid post id', data: { status: 400 } });
@@ -264,7 +280,7 @@ async function connGate(req: any, res: Response): Promise<any | null> {
 /* GET /:postId/stream — canal de BAJADA (SSE)                                                   */
 /* ------------------------------------------------------------------------------------------- */
 
-router.get('/:postId/stream', authenticate, asyncHandler(async (req: any, res: Response) => {
+router.get('/:postId/stream', authenticate, asyncHandler(async (req: Request, res: Response) => {
     const postId = parsePostId(req.params.postId);
     if (postId === null) {
         return res.status(400).json({ code: 'rest_invalid_param', message: 'invalid post id', data: { status: 400 } });
@@ -386,7 +402,7 @@ router.get('/:postId/stream', authenticate, asyncHandler(async (req: any, res: R
 /* POST /:postId/ops — SUBIDA                                                                    */
 /* ------------------------------------------------------------------------------------------- */
 
-router.post('/:postId/ops', authenticate, asyncHandler(async (req: any, res: Response) => {
+router.post('/:postId/ops', authenticate, asyncHandler(async (req: Request, res: Response) => {
     const conn = await connGate(req, res);
     if (!conn) return;
 
@@ -413,7 +429,7 @@ router.post('/:postId/ops', authenticate, asyncHandler(async (req: any, res: Res
 /* POST /:postId/presence                                                                        */
 /* ------------------------------------------------------------------------------------------- */
 
-router.post('/:postId/presence', authenticate, asyncHandler(async (req: any, res: Response) => {
+router.post('/:postId/presence', authenticate, asyncHandler(async (req: Request, res: Response) => {
     const conn = await connGate(req, res);
     if (!conn) return;
 
@@ -428,7 +444,7 @@ router.post('/:postId/presence', authenticate, asyncHandler(async (req: any, res
 /* POST /:postId/resync                                                                          */
 /* ------------------------------------------------------------------------------------------- */
 
-router.post('/:postId/resync', authenticate, asyncHandler(async (req: any, res: Response) => {
+router.post('/:postId/resync', authenticate, asyncHandler(async (req: Request, res: Response) => {
     const conn = await connGate(req, res);
     if (!conn) return;
 
@@ -446,7 +462,7 @@ router.post('/:postId/resync', authenticate, asyncHandler(async (req: any, res: 
 /* POST /:postId/leave                                                                           */
 /* ------------------------------------------------------------------------------------------- */
 
-router.post('/:postId/leave', authenticate, asyncHandler(async (req: any, res: Response) => {
+router.post('/:postId/leave', authenticate, asyncHandler(async (req: Request, res: Response) => {
     const conn = await connGate(req, res);
     if (!conn) return;
     await collab.leave(conn);

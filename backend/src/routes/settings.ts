@@ -529,7 +529,7 @@ router.put('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: Re
     // admin_email / other sensitive config). One row per bulk save.
     const changedKeys = Object.keys(updated);
     if (changedKeys.length) {
-        await recordAudit((req as any).user && (req as any).user.id, 'settings.update', 'settings', '', { keys: changedKeys });
+        await recordAudit(req.user && req.user.id, 'settings.update', 'settings', '', { keys: changedKeys });
     }
 
     res.json(updated);

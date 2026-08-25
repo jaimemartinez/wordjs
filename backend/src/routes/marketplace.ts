@@ -19,6 +19,9 @@
  */
 
 import type { Request, Response } from 'express';
+// The catalog/zip downloader below drives the native http(s) client directly, so ITS callback
+// receives an http.IncomingMessage - not the express Response imported above.
+import type { IncomingMessage } from 'http';
 
 const express = require('express');
 const router = express.Router();
@@ -143,7 +146,7 @@ async function fetchRemote(url: string, maxBytes: number, _hops = 0): Promise<Bu
             headers: { 'user-agent': 'WordJS-Marketplace' },
         };
         if (!devLoopback) opts.lookup = egress.validatingLookup; // pin the validated IP (no DNS rebinding)
-        const req = lib.request(opts, (res: any) => {
+        const req = lib.request(opts, (res: IncomingMessage) => {
             const status = res.statusCode || 0;
             // Follow redirects MANUALLY so the next hop is re-validated BEFORE we connect to it.
             if (status >= 300 && status < 400 && res.headers.location) {
@@ -259,7 +262,7 @@ async function getCatalog(refresh = false): Promise<{ merged: any[]; sources: an
  */
 router.get('/catalog', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     try {
-        const refresh = String((req.query as any).refresh || '') === '1';
+        const refresh = String(req.query.refresh || '') === '1';
         const { merged, sources } = await getCatalog(refresh);
         const installed = await getAllPlugins();
         const bySlug = new Map<string, any>(installed.map((p: any) => [String(p.slug || p.id), p]));
@@ -539,7 +542,7 @@ async function getThemesCatalog(refresh = false): Promise<{ merged: any[]; sourc
  */
 router.get('/themes/catalog', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     try {
-        const refresh = String((req.query as any).refresh || '') === '1';
+        const refresh = String(req.query.refresh || '') === '1';
         const { merged, sources } = await getThemesCatalog(refresh);
         const { getCurrentTheme, THEMES_DIR } = require('../core/themes');
         let activeSlug = '';

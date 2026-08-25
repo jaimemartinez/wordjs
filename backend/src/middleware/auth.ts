@@ -3,7 +3,20 @@
  * JWT-based authentication
  */
 
-import type { Response, NextFunction, CookieOptions } from 'express';
+import type { Request, Response, NextFunction, CookieOptions } from 'express';
+
+/**
+ * A request as THIS FILE leaves it. `req.user` is already declared globally (src/types/globals.d.ts);
+ * the three fields below are written nowhere else in the tree — `verifyAndAttachUser`, `optionalAuth`
+ * and `markHeadless` are their only producers, and the headless gates below are their only readers in
+ * this file — so they are declared here, beside the code that owns them, rather than widened onto every
+ * Request in the application. Optional because the same handler runs before they are set.
+ */
+type AuthRequest = Request & {
+    userId?: number | null;
+    apiToken?: { id: number; scopes: string[]; name: string };
+    isHeadless?: boolean;
+};
 
 const jwt = require('jsonwebtoken');
 const config = require('../config/app');
@@ -33,14 +46,14 @@ const API_PREFIX = String(config.api?.prefix || '/api/v1').replace(/\/+$/, '');
  * "the guard inspects a DIFFERENT value than the one that reaches the sink" shape this file already paid
  * for once. ONE normalizer, so the three call sites below cannot drift apart again.
  */
-function normalizedRequestPath(req: any): string {
+function normalizedRequestPath(req: Request): string {
     return String(req.originalUrl || req.url || '')
         .split('?')[0]
         .toLowerCase()
         .replace(/\/{2,}/g, '/');
 }
 
-function apiResourceOf(req: any): string {
+function apiResourceOf(req: Request): string {
     // Lowercased so it matches Express's case-insensitive routing key (a `posts:write` token must work on
     // `/api/v1/Posts` exactly as on `/posts`). This never widens access: the extracted slug must still equal
     // the resource Express actually routes to, so it can't masquerade as a different resource's handler.
@@ -52,7 +65,7 @@ function apiResourceOf(req: any): string {
 }
 
 // The request sub-path after the API prefix (lowercased, trailing slash trimmed) — e.g. '/auth/mfa/enable'.
-function pathAfterApiPrefix(req: any): string {
+function pathAfterApiPrefix(req: Request): string {
     const path = normalizedRequestPath(req);
     const prefix = API_PREFIX.toLowerCase();
     const rest = path.startsWith(prefix) ? path.slice(prefix.length) : path;
@@ -67,7 +80,7 @@ const MFA_ENFORCE_EXEMPT = new Set([
     '/auth/me', '/auth/logout', '/auth/refresh',
     '/auth/mfa/setup', '/auth/mfa/enable', '/auth/mfa/status', '/auth/mfa/backup-codes', '/auth/mfa/disable',
 ]);
-function isMfaEnforceExempt(req: any): boolean {
+function isMfaEnforceExempt(req: Request): boolean {
     return MFA_ENFORCE_EXEMPT.has(pathAfterApiPrefix(req));
 }
 
@@ -87,7 +100,7 @@ const CSRF_EXEMPT_PATHS = new Set(['/setup/install', '/setup/test-db']);
  * Fails OPEN on an internal error — enforcement is a policy layer on top of auth, and breaking it must not
  * take the whole site down; the underlying session auth is unaffected.
  */
-async function mfaComplianceGate(req: any, res: Response, next: NextFunction) {
+async function mfaComplianceGate(req: Request, res: Response, next: NextFunction) {
     // Reading the policy is site-wide; if it can't be read we can't enforce anything, so fail OPEN here
     // (blocking everyone on a transient option-store blip would be worse than skipping enforcement once).
     let policy: any;
@@ -157,7 +170,7 @@ async function mfaComplianceGate(req: any, res: Response, next: NextFunction) {
  * Authenticate request with JWT token (Strict: Headers Only)
  */
 // Helper to avoid duplication
-async function verifyAndAttachUser(token: string, req: any, res: Response, next: NextFunction) {
+async function verifyAndAttachUser(token: string, req: AuthRequest, res: Response, next: NextFunction) {
     try {
         const decoded = jwt.verify(token, config.jwt.secret, { algorithms: ['HS256'] });
 
@@ -221,7 +234,7 @@ async function verifyAndAttachUser(token: string, req: any, res: Response, next:
  * check (req.user.can / isAdmin) still applies — a token can never exceed the user's own permissions. On
  * top of that we enforce the token's read/write scope here (a read token cannot drive a mutating method).
  */
-async function verifyApiTokenAndAttachUser(token: string, req: any, res: Response, next: NextFunction) {
+async function verifyApiTokenAndAttachUser(token: string, req: AuthRequest, res: Response, next: NextFunction) {
     try {
         const record = await ApiToken.findByRawToken(token);
         if (!record) {
@@ -273,12 +286,12 @@ async function verifyApiTokenAndAttachUser(token: string, req: any, res: Respons
  * the token's identity/scopes; `req.isHeadless` is the boolean the gates below assert on, so those read
  * as the invariant they enforce instead of as an incidental field check.
  */
-function markHeadless(req: any, record: { id: number; scopes: string[]; name: string }): void {
+function markHeadless(req: AuthRequest, record: { id: number; scopes: string[]; name: string }): void {
     req.apiToken = { id: record.id, scopes: record.scopes, name: record.name };
     req.isHeadless = true;
 }
 
-function isHeadless(req: any): boolean {
+function isHeadless(req: AuthRequest): boolean {
     return !!(req && (req.isHeadless || req.apiToken));
 }
 
@@ -306,7 +319,7 @@ const SESSION_COOKIE = 'wordjs_token';
  *     core/plugin-isolate mount routers WITHOUT index.ts's middleware chain; a value-level check that
  *     travels with the reader still holds there.
  */
-function sanitizeCookies(req: any, _res: Response, next: NextFunction): void {
+function sanitizeCookies(req: Request, _res: Response, next: NextFunction): void {
     for (const bag of [req.cookies, req.signedCookies]) {
         if (!bag || typeof bag !== 'object') continue;
         for (const name of Object.keys(bag)) {
@@ -317,7 +330,7 @@ function sanitizeCookies(req: any, _res: Response, next: NextFunction): void {
 }
 
 /** The session cookie as a STRING, or null. The only place this file reads `req.cookies`. */
-function sessionCookie(req: any): string | null {
+function sessionCookie(req: Request): string | null {
     const v = req && req.cookies ? req.cookies[SESSION_COOKIE] : undefined;
     return typeof v === 'string' && v ? v : null;
 }
@@ -327,7 +340,7 @@ function sessionCookie(req: any): string | null {
  * `.startsWith` blows up in authenticateAllowQuery. Express's query parser is the other producer of
  * non-string request values, so it needs the same boundary check as the cookie bag.
  */
-function queryToken(req: any): string | null {
+function queryToken(req: Request): string | null {
     const v = req && req.query ? req.query.token : undefined;
     return typeof v === 'string' && v ? v : null;
 }
@@ -348,7 +361,7 @@ function queryToken(req: any): string | null {
  * when the cookie was set and the caller should continue — the same "true means handled" convention as
  * requireSelfPasswordReauth in routes/users.ts.
  */
-function issueSessionCookie(req: any, res: Response, token: string, options: CookieOptions): boolean {
+function issueSessionCookie(req: AuthRequest, res: Response, token: string, options: CookieOptions): boolean {
     if (isHeadless(req)) {
         res.status(403).json({
             code: 'rest_session_from_token_forbidden',
@@ -368,7 +381,7 @@ function issueSessionCookie(req: any, res: Response, token: string, options: Coo
  * credential the account owner cannot see. Lives here — next to the headless mark it reads — so
  * routes/auth.ts, routes/users.ts and routes/webhooks.ts all consume ONE implementation.
  */
-function sessionOnly(req: any, res: Response, next: NextFunction) {
+function sessionOnly(req: AuthRequest, res: Response, next: NextFunction) {
     if (isHeadless(req)) {
         return res.status(403).json({
             code: 'rest_token_management_forbidden',
@@ -382,7 +395,7 @@ function sessionOnly(req: any, res: Response, next: NextFunction) {
 /**
  * Authenticate request with JWT token (Strict: Headers Only, with Cookie fallback)
  */
-async function authenticate(req: any, res: Response, next: NextFunction) {
+async function authenticate(req: AuthRequest, res: Response, next: NextFunction) {
     const authHeader = req.headers.authorization;
     let token;
 
@@ -422,7 +435,7 @@ async function authenticate(req: any, res: Response, next: NextFunction) {
  * header; only fall back to the query token when neither is present. This route MUST stay read-only —
  * never authorize a state-changing request off a query-string token.
  */
-async function authenticateAllowQuery(req: any, res: Response, next: NextFunction) {
+async function authenticateAllowQuery(req: AuthRequest, res: Response, next: NextFunction) {
     const authHeader = req.headers.authorization;
     let token;
 
@@ -453,7 +466,7 @@ async function authenticateAllowQuery(req: any, res: Response, next: NextFunctio
 /**
  * Optional authentication (doesn't fail if no token)
  */
-async function optionalAuth(req: any, res: Response, next: NextFunction) {
+async function optionalAuth(req: AuthRequest, res: Response, next: NextFunction) {
     const authHeader = req.headers.authorization;
     let token;
 
@@ -540,7 +553,7 @@ function verifyToken(token: string) {
  * CSRF Protection for state-changing requests
  * Validates Origin/Referer headers against allowed origins
  */
-function csrfProtection(req: any, res: Response, next: NextFunction) {
+function csrfProtection(req: Request, res: Response, next: NextFunction) {
     // Only check state-changing methods
     if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
         return next();
@@ -581,7 +594,9 @@ function csrfProtection(req: any, res: Response, next: NextFunction) {
     const host = fwdHost || req.get('Host');
 
     // If no Origin header, check Referer (some browsers)
-    let requestOrigin = origin;
+    // Annotated because the catch below assigns `null` (an unparseable Referer) while `req.get()` yields
+    // `string | undefined`; the three states stay distinct exactly as the untyped code left them.
+    let requestOrigin: string | null | undefined = origin;
     if (!requestOrigin && referer) {
         try {
             requestOrigin = new URL(referer).origin;

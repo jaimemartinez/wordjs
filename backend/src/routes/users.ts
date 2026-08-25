@@ -3,7 +3,7 @@
  * /api/v1/users/*
  */
 
-import type { Response } from 'express';
+import type { Request, Response, NextFunction } from 'express';
 
 const express = require('express');
 const router = express.Router();
@@ -87,7 +87,7 @@ function fieldIsSupplied(field: string, body: any): boolean {
     return v !== null && String(v).trim() !== '';
 }
 
-function isAccountSecurityWrite(req: any): boolean {
+function isAccountSecurityWrite(req: Request): boolean {
     const method = String(req.method || '').toUpperCase();
     if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return false;
     if (method === 'PUT') {
@@ -104,7 +104,7 @@ function isAccountSecurityWrite(req: any): boolean {
 
 // ONE implementation of the refusal (middleware/auth.ts), so the status and the error code cannot drift
 // from the sibling gates on routes/auth.ts.
-function refuseHeadlessAccountSecurity(req: any, res: any, next: any) {
+function refuseHeadlessAccountSecurity(req: Request, res: Response, next: NextFunction) {
     if (!isAccountSecurityWrite(req)) return next();
     return sessionOnly(req, res, next);
 }
@@ -166,7 +166,7 @@ router.use(authenticate, refuseHeadlessAccountSecurity);
  *               items:
  *                 $ref: '#/components/schemas/User'
  */
-router.get('/', can('list_users'), asyncHandler(async (req: any, res: Response) => {
+router.get('/', can('list_users'), asyncHandler(async (req: Request, res: Response) => {
     const {
         page = 1,
         per_page = 10,
@@ -176,13 +176,25 @@ router.get('/', can('list_users'), asyncHandler(async (req: any, res: Response) 
         order = 'asc'
     } = req.query;
 
-    const limit = Math.min(parseInt(per_page, 10) || 10, 100);
-    const offset = (Math.max(parseInt(page, 10) || 1, 1) - 1) * limit;
+    // `parseInt` stringifies its argument before parsing, so `String(...)` here is the coercion the
+    // untyped call already performed implicitly — a repeated `?per_page=5&per_page=7` still parses
+    // "5,7" to 5, and a bracketed one still parses "[object Object]" to NaN and takes the default.
+    const limit = Math.min(parseInt(String(per_page), 10) || 10, 100);
+    const offset = (Math.max(parseInt(String(page), 10) || 1, 1) - 1) * limit;
 
     // SECURITY: Whitelist allowed orderBy columns to prevent SQL injection
     const allowedOrderBy = ['id', 'user_login', 'display_name', 'user_email', 'user_registered'];
-    const safeOrderBy = allowedOrderBy.includes(orderby) ? orderby : 'id';
-    const safeOrder = ['asc', 'desc'].includes(order.toLowerCase()) ? order.toUpperCase() : 'ASC';
+    // A query value is not necessarily a string: `?orderby=a&orderby=b` parses to an array. The
+    // whitelist compares with ===, so a non-string has never matched an entry and has always fallen
+    // through to 'id' — collapsing it to '' reproduces that outcome for every input.
+    const requestedOrderBy = typeof orderby === 'string' ? orderby : '';
+    const safeOrderBy = allowedOrderBy.includes(requestedOrderBy) ? requestedOrderBy : 'id';
+    // `order` is ASSERTED rather than narrowed, deliberately. A repeated `?order=` parses to an array
+    // whose missing `.toLowerCase` has always thrown and surfaced as a 500; narrowing it to '' would
+    // quietly turn that into a 200 sorted ASC. That is a behaviour change, not a typing one, so the
+    // pre-existing defect is reported rather than fixed under a type-only migration.
+    const requestedOrder = order as string;
+    const safeOrder = ['asc', 'desc'].includes(requestedOrder.toLowerCase()) ? requestedOrder.toUpperCase() : 'ASC';
 
     const users = await User.findAll({
         search,
@@ -206,7 +218,7 @@ router.get('/', can('list_users'), asyncHandler(async (req: any, res: Response) 
  * GET /users/me
  * Get current user
  */
-router.get('/me', (req: any, res: Response) => {
+router.get('/me', (req: Request, res: Response) => {
     res.json(req.user.toJSON());
 });
 
@@ -214,8 +226,10 @@ router.get('/me', (req: any, res: Response) => {
  * GET /users/:id
  * Get single user
  */
-router.get('/:id', asyncHandler(async (req: any, res: Response) => {
-    const userId = parseInt(req.params.id, 10);
+router.get('/:id', asyncHandler(async (req: Request, res: Response) => {
+    // `String(...)` is the coercion `parseInt` already applied to this argument implicitly; it is here
+    // only because a route param is typed `string | string[]`, and it parses identically either way.
+    const userId = parseInt(String(req.params.id), 10);
     const user = await User.findById(userId);
 
     if (!user) {
@@ -269,7 +283,7 @@ router.get('/:id', asyncHandler(async (req: any, res: Response) => {
  *       403:
  *         description: Forbidden
  */
-router.post('/', isAdmin, asyncHandler(async (req: any, res: Response) => {
+router.post('/', isAdmin, asyncHandler(async (req: Request, res: Response) => {
     const { username, email, password, displayName, role = 'subscriber', personalEmail } = req.body;
 
     if (!username || !email || !password) {
@@ -388,7 +402,7 @@ router.post('/', isAdmin, asyncHandler(async (req: any, res: Response) => {
 // re-auth itself is no longer chained here — it is decided per TOUCHED FIELD by selfEditNeedsSudo below
 // and applied ONCE, just before the write, by both self-service doors. Returns true if it already sent a
 // response (caller must return), false to proceed.
-function rejectWeakSelfPassword(res: any, password: any): boolean {
+function rejectWeakSelfPassword(res: Response, password: any): boolean {
     if (!password) return false;
     if (String(password).length < 8) {
         res.status(400).json({ code: 'rest_weak_password', message: 'Password must be at least 8 characters.', data: { status: 400 } });
@@ -617,7 +631,7 @@ function sudoEndAttempt(key: string): void {
     if (e.n === 0) _sudoInflight.delete(key); else _sudoInflight.set(key, e);
 }
 
-async function requireSudoPassword(req: any, res: any, currentPassword: any): Promise<boolean> {
+async function requireSudoPassword(req: Request, res: Response, currentPassword: any): Promise<boolean> {
     // The key comes from the RESOLVED session identity only. Nothing here is derived from a request
     // body, a query string or a header, which is what makes the bucket unreachable from outside.
     const userId = Number(req.user && req.user.id);
@@ -665,7 +679,7 @@ function isPrivilegedTarget(user: any): boolean {
     ));
 }
 
-router.put('/me', asyncHandler(async (req: any, res: Response) => {
+router.put('/me', asyncHandler(async (req: Request, res: Response) => {
     const { email, displayName, password, url, personalEmail, currentPassword } = req.body;
 
     if (rejectWeakSelfPassword(res, password)) return;
@@ -751,7 +765,7 @@ router.put('/me', asyncHandler(async (req: any, res: Response) => {
  *
  * Declared before '/:id' so the literal path is never captured by the parameterised route.
  */
-router.post('/me/sessions/revoke', asyncHandler(async (req: any, res: Response) => {
+router.post('/me/sessions/revoke', asyncHandler(async (req: Request, res: Response) => {
     if (await requireSudoPassword(req, res, (req.body || {}).currentPassword)) return;
     // ONE implementation of the epoch stamp, shared with both token-revocation doors.
     await require('../models/ApiToken').stampSecurityEpoch(req.user.id);
@@ -759,8 +773,8 @@ router.post('/me/sessions/revoke', asyncHandler(async (req: any, res: Response) 
     res.json({ signedOut: true });
 }));
 
-router.put('/:id', asyncHandler(async (req: any, res: Response) => {
-    const userId = parseInt(req.params.id, 10);
+router.put('/:id', asyncHandler(async (req: Request, res: Response) => {
+    const userId = parseInt(String(req.params.id), 10);
     const user = await User.findById(userId);
 
     if (!user) {
@@ -994,8 +1008,8 @@ router.put('/:id', asyncHandler(async (req: any, res: Response) => {
  *     administrator who loses their authenticator therefore still needs another admin — that residual is
  *     inherent to being the only account with the keys.
  */
-router.post('/:id/mfa/reset', can('edit_users'), asyncHandler(async (req: any, res: Response) => {
-    const userId = parseInt(req.params.id, 10);
+router.post('/:id/mfa/reset', can('edit_users'), asyncHandler(async (req: Request, res: Response) => {
+    const userId = parseInt(String(req.params.id), 10);
     if (!Number.isInteger(userId) || userId <= 0) {
         return res.status(400).json({ code: 'rest_invalid_param', message: 'Invalid user ID.', data: { status: 400 } });
     }
@@ -1050,8 +1064,8 @@ router.post('/:id/mfa/reset', can('edit_users'), asyncHandler(async (req: any, r
  *       404:
  *         description: User not found
  */
-router.delete('/:id', isAdmin, asyncHandler(async (req: any, res: Response) => {
-    const userId = parseInt(req.params.id, 10);
+router.delete('/:id', isAdmin, asyncHandler(async (req: Request, res: Response) => {
+    const userId = parseInt(String(req.params.id), 10);
     const user = await User.findById(userId);
 
     if (!user) {

@@ -14,12 +14,12 @@
     },
     "typingDebt": {
       "requestAny": {
-        "occurrences": 143,
-        "files": 24
+        "occurrences": 0,
+        "files": 0
       },
       "responseAny": {
-        "occurrences": 27,
-        "files": 11
+        "occurrences": 0,
+        "files": 0
       }
     },
     "pluginBridge": {

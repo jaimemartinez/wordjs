@@ -109,7 +109,7 @@ router.use('/import', require('./import'));
 router.use('/', exportRoutes);
 
 // Pages endpoint (alias for posts with type=page)
-router.get('/pages', (req: any, res: Response, next: NextFunction) => {
+router.get('/pages', (req: Request, res: Response, next: NextFunction) => {
     req.query.type = 'page';
     postsRoutes.handle(req, res, next);
 });
@@ -136,7 +136,7 @@ function buildSwagger(): any[] {
     return swaggerHandlers;
 }
 
-router.use('/docs', authenticate, isAdmin, (req: any, res: any, next: any) => {
+router.use('/docs', authenticate, isAdmin, (req: Request, res: Response, next: NextFunction) => {
     const chain = buildSwagger();
     let i = 0;
     const run = (err?: any): void => {

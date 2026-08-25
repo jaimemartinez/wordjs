@@ -81,7 +81,7 @@ function boundedMetadata(raw: any): Record<string, string | number | boolean> | 
     return out;
 }
 
-router.post('/track', async (req: any, res: Response) => {
+router.post('/track', async (req: Request, res: Response) => {
     const { type, resource, metadata } = req.body || {};
 
     // Bounds are checked BEFORE any DB work and answered with a real 400 — the old handler even

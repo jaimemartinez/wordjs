@@ -51,12 +51,12 @@ router.get('/', optionalAuth, asyncHandler(async (req: Request, res: Response) =
         order = 'asc'
     } = req.query;
 
-    const limit = Math.min(parseInt(per_page as any, 10) || 100, 100);
-    const offset = (Math.max(parseInt(page as any, 10) || 1, 1) - 1) * limit;
+    const limit = Math.min(parseInt(String(per_page), 10) || 100, 100);
+    const offset = (Math.max(parseInt(String(page), 10) || 1, 1) - 1) * limit;
 
     const terms = await Term.findAll({
         taxonomy: TAXONOMY,
-        parent: parent !== undefined ? parseInt(parent as any, 10) : undefined,
+        parent: parent !== undefined ? parseInt(String(parent), 10) : undefined,
         hideEmpty: hide_empty === 'true',
         search,
         limit,
@@ -68,13 +68,13 @@ router.get('/', optionalAuth, asyncHandler(async (req: Request, res: Response) =
     const total = await Term.count({
         taxonomy: TAXONOMY,
         hideEmpty: hide_empty === 'true',
-        parent: parent !== undefined ? parseInt(parent as any, 10) : undefined,
+        parent: parent !== undefined ? parseInt(String(parent), 10) : undefined,
         search
     });
     const totalPages = Math.ceil(total / limit);
 
-    res.set('X-WP-Total', total as any);
-    res.set('X-WP-TotalPages', totalPages as any);
+    res.set('X-WP-Total', String(total));
+    res.set('X-WP-TotalPages', String(totalPages));
 
     res.json(terms.map((term: any) => term.toJSON()));
 }));
@@ -98,7 +98,7 @@ router.get('/', optionalAuth, asyncHandler(async (req: Request, res: Response) =
  *         description: Category not found
  */
 router.get('/:id', optionalAuth, asyncHandler(async (req: Request, res: Response) => {
-    const term = await Term.findById(parseInt(req.params.id as any, 10), TAXONOMY);
+    const term = await Term.findById(parseInt(String(req.params.id), 10), TAXONOMY);
 
     if (!term) {
         return res.status(404).json({
@@ -209,7 +209,7 @@ router.post('/', authenticate, can('manage_categories'), asyncHandler(async (req
  *         description: Category not found
  */
 router.put('/:id', authenticate, can('manage_categories'), asyncHandler(async (req: Request, res: Response) => {
-    const termId = parseInt(req.params.id as any, 10);
+    const termId = parseInt(String(req.params.id), 10);
     const term = await Term.findById(termId, TAXONOMY);
 
     if (!term) {
@@ -253,7 +253,7 @@ router.put('/:id', authenticate, can('manage_categories'), asyncHandler(async (r
  *         description: Category not found
  */
 router.delete('/:id', authenticate, can('manage_categories'), asyncHandler(async (req: Request, res: Response) => {
-    const termId = parseInt(req.params.id as any, 10);
+    const termId = parseInt(String(req.params.id), 10);
     const term = await Term.findById(termId, TAXONOMY);
 
     if (!term) {

@@ -11,7 +11,7 @@ const { verifyInstallToken } = require('../core/install-token');
 // (printed to the server console at boot) to stop a pre-install takeover. Constant-time compared in
 // verifyInstallToken(). Accepts the token via the `x-install-token` header or an `installToken` body
 // field so the installer UX stays simple (operator copies it from the logs).
-function requireInstallToken(req: any, res: any): boolean {
+function requireInstallToken(req: Request, res: Response): boolean {
     const provided = req.get('x-install-token') || (req.body && req.body.installToken);
     if (!verifyInstallToken(provided)) {
         res.status(403).json({ error: 'Invalid or missing install token. Check the server console for the install token.' });
@@ -49,7 +49,7 @@ function isEnrolledConfig(cfg: any, certExists: boolean): boolean {
 }
 
 // Check installation status
-router.get('/status', (req: any, res: Response) => {
+router.get('/status', (req: Request, res: Response) => {
     const installed = isInstalled();
     const currentConfig = getConfig();
 
@@ -85,7 +85,7 @@ router.get('/status', (req: any, res: Response) => {
 // Test a database connection BEFORE committing the install, so the wizard can validate Postgres
 // credentials. Isolated: uses a throwaway pg client and never switches the live driver. Always 200
 // with { ok, message|error } so the wizard can render the result inline.
-router.post('/test-db', async (req: any, res: Response) => {
+router.post('/test-db', async (req: Request, res: Response) => {
     if (isInstalled()) return res.status(400).json({ ok: false, error: 'Already installed' });
     if (!requireInstallToken(req, res)) return;
     const { dbDriver = 'sqlite-native', db: dbConn } = req.body || {};
@@ -141,7 +141,7 @@ router.post('/test-db', async (req: any, res: Response) => {
 });
 
 // Install endpoint
-router.post('/install', async (req: any, res: Response) => {
+router.post('/install', async (req: Request, res: Response) => {
     if (isInstalled()) {
         return res.status(400).json({ error: 'Already installed' });
     }
@@ -551,7 +551,7 @@ router.post('/install', async (req: any, res: Response) => {
 });
 
 // Migration endpoint
-router.post('/migrate', async (req: any, res: Response) => {
+router.post('/migrate', async (req: Request, res: Response) => {
     if (!isInstalled()) {
         return res.status(400).json({ error: 'Not installed' });
     }

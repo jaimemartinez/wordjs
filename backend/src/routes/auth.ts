@@ -3,7 +3,7 @@
  * /api/v1/auth/*
  */
 
-import type { Response, CookieOptions } from 'express';
+import type { Request, Response, CookieOptions } from 'express';
 const express = require('express');
 const router = express.Router();
 const User = require('../models/User');
@@ -130,7 +130,7 @@ const isLockingKey = (key: string) => (LOCKING_PURPOSES as readonly string[]).in
  * its slot `${userId}|${ip}` for exactly this reason; this mirrors it, through lockBucket so the key stays
  * inside its purpose.
  */
-function inflightBucket(purpose: LockPurpose, subject: string | number, req: any): string {
+function inflightBucket(purpose: LockPurpose, subject: string | number, req: Request): string {
     return lockBucket(purpose, `${subject}|${clientIp(req)}`);
 }
 
@@ -367,7 +367,7 @@ const COOKIE_OPTIONS: CookieOptions = {
  *       400:
  *         description: Validation error or user exists
  */
-router.post('/register', asyncHandler(async (req: any, res: Response) => {
+router.post('/register', asyncHandler(async (req: Request, res: Response) => {
     // ... (rest of the function)
     const registrationAllowed = await getOption('users_can_register', 0);
     if (!registrationAllowed || registrationAllowed == '0') {
@@ -510,7 +510,7 @@ router.post('/register', asyncHandler(async (req: any, res: Response) => {
  *       401:
  *         description: Invalid credentials
  */
-router.post('/login', asyncHandler(async (req: any, res: Response) => {
+router.post('/login', asyncHandler(async (req: Request, res: Response) => {
     const { username, password } = req.body;
 
     if (!username || !password) {
@@ -610,7 +610,7 @@ router.post('/login', asyncHandler(async (req: any, res: Response) => {
  * GET /auth/me
  * Get current user
  */
-router.get('/me', authenticate, asyncHandler(async (req: any, res: Response) => {
+router.get('/me', authenticate, asyncHandler(async (req: Request, res: Response) => {
     // mfa is an EXTRA top-level key (the client reads /auth/me as the user object directly — do not re-wrap).
     res.json({ ...req.user.toJSON(), mfa: await mfa.evaluate(req.user) });
 }));
@@ -619,7 +619,7 @@ router.get('/me', authenticate, asyncHandler(async (req: any, res: Response) => 
  * POST /auth/validate
  * Validate token
  */
-router.post('/validate', authenticate, (req: any, res: Response) => {
+router.post('/validate', authenticate, (req: Request, res: Response) => {
     res.json({
         valid: true,
         user: req.user.toJSON()
@@ -636,7 +636,7 @@ router.post('/validate', authenticate, (req: any, res: Response) => {
  * revoking the token did not cut off. issueSessionCookie refuses the exchange (403) for any headless
  * request; a genuine cookie/JWT session refreshes exactly as before.
  */
-router.post('/refresh', authenticate, (req: any, res: Response) => {
+router.post('/refresh', authenticate, (req: Request, res: Response) => {
     const token = generateToken(req.user);
 
     // Update HttpOnly cookie
@@ -651,7 +651,7 @@ router.post('/refresh', authenticate, (req: any, res: Response) => {
  * POST /auth/logout
  * Clear auth cookie
  */
-router.post('/logout', asyncHandler(async (req: any, res: Response) => {
+router.post('/logout', asyncHandler(async (req: Request, res: Response) => {
     // Best-effort revocation: stamp the user's security epoch so the just-cleared token (and any
     // stolen copy of it) can no longer authenticate. Logout still succeeds without a valid token.
     try {
@@ -753,7 +753,7 @@ async function recoveryTarget(user: any): Promise<string> {
  * GET /auth/password-reset-available
  * Public probe so the login page shows "Forgot password?" only when self-service reset can actually work.
  */
-router.get('/password-reset-available', asyncHandler(async (_req: any, res: Response) => {
+router.get('/password-reset-available', asyncHandler(async (_req: Request, res: Response) => {
     res.json({ available: await mailReady() });
 }));
 
@@ -762,7 +762,7 @@ router.get('/password-reset-available', asyncHandler(async (_req: any, res: Resp
  * Body: { login } (username or account email). ALWAYS 200 — never reveals whether the account exists
  * or has a reachable recovery address (anti-enumeration). Rate-limited by authLimiter in index.ts.
  */
-router.post('/forgot-password', asyncHandler(async (req: any, res: Response) => {
+router.post('/forgot-password', asyncHandler(async (req: Request, res: Response) => {
     const login = String((req.body && req.body.login) || '').trim();
     const ok = () => res.json({ ok: true, message: 'If an account with a recovery email exists, a reset link has been sent.' });
     if (!login) return ok();
@@ -804,7 +804,7 @@ router.post('/forgot-password', asyncHandler(async (req: any, res: Response) => 
  * Body: { uid, token, password }. Consumes the single-use token and revokes all existing sessions.
  * Rate-limited by authLimiter in index.ts.
  */
-router.post('/reset-password', asyncHandler(async (req: any, res: Response) => {
+router.post('/reset-password', asyncHandler(async (req: Request, res: Response) => {
     const uid = parseInt((req.body && req.body.uid), 10);
     const token = String((req.body && req.body.token) || '');
     const password = String((req.body && req.body.password) || '');
@@ -838,7 +838,7 @@ router.post('/reset-password', asyncHandler(async (req: any, res: Response) => {
  * flips the account to verified (clears `email_verification_pending`), after which login works. Uniform
  * failure for a bad/expired/consumed token. Rate-limited by authLimiter in index.ts.
  */
-router.post('/verify-email', asyncHandler(async (req: any, res: Response) => {
+router.post('/verify-email', asyncHandler(async (req: Request, res: Response) => {
     const uid = parseInt((req.body && req.body.uid), 10);
     const token = String((req.body && req.body.token) || '');
 
@@ -875,7 +875,7 @@ const MAX_ACTIVE_TOKENS_PER_USER = 100;
  * GET /auth/tokens
  * List the current user's API tokens (metadata only — the secret is never returned after creation).
  */
-router.get('/tokens', authenticate, sessionOnly, can('manage_api_tokens'), asyncHandler(async (req: any, res: Response) => {
+router.get('/tokens', authenticate, sessionOnly, can('manage_api_tokens'), asyncHandler(async (req: Request, res: Response) => {
     const tokens = await ApiToken.listForUser(req.user.id);
     res.json({ tokens });
 }));
@@ -888,7 +888,7 @@ router.get('/tokens', authenticate, sessionOnly, can('manage_api_tokens'), async
  *   'posts:write','media:read' (comma-string or array). write implies read; a token holding only
  *   resource scopes is confined to those resources. Unrecognized scopes are REJECTED (400).
  */
-router.post('/tokens', authenticate, sessionOnly, can('manage_api_tokens'), asyncHandler(async (req: any, res: Response) => {
+router.post('/tokens', authenticate, sessionOnly, can('manage_api_tokens'), asyncHandler(async (req: Request, res: Response) => {
     const { name, scopes, expiresInDays } = req.body || {};
 
     // Soft cap on active (non-revoked, unexpired) tokens to bound abuse / accidental runaway creation.
@@ -958,8 +958,11 @@ router.post('/tokens', authenticate, sessionOnly, can('manage_api_tokens'), asyn
  * DELETE /auth/tokens/:id
  * Revoke one of the current user's tokens. Idempotent-ish: 404 if it isn't the caller's or is already gone.
  */
-router.delete('/tokens/:id', authenticate, sessionOnly, can('manage_api_tokens'), asyncHandler(async (req: any, res: Response) => {
-    const id = parseInt(req.params.id, 10);
+router.delete('/tokens/:id', authenticate, sessionOnly, can('manage_api_tokens'), asyncHandler(async (req: Request, res: Response) => {
+    // Express 5 types `req.params[k]` as `string | string[]` (wildcard segments can capture an array).
+    // `parseInt` already applies ToString to its first argument, so spelling that conversion out here is
+    // exactly what the untyped call did — for a plain `:id` string and for an array alike.
+    const id = parseInt(String(req.params.id), 10);
     if (!Number.isInteger(id) || id <= 0) {
         return res.status(400).json({ code: 'rest_invalid_param', message: 'Invalid token id.', data: { status: 400 } });
     }
@@ -983,7 +986,7 @@ router.delete('/tokens/:id', authenticate, sessionOnly, can('manage_api_tokens')
  * POST /auth/mfa — complete a login that requires a second factor. Body: { mfaToken, code }.
  * The challenge token proves the password step passed; verify a TOTP/backup code, then issue the session.
  */
-router.post('/mfa', asyncHandler(async (req: any, res: Response) => {
+router.post('/mfa', asyncHandler(async (req: Request, res: Response) => {
     const { mfaToken, code } = req.body || {};
     const challenge = mfa.verifyChallenge(mfaToken);
     if (!challenge) {
@@ -1031,7 +1034,7 @@ router.post('/mfa', asyncHandler(async (req: any, res: Response) => {
 }));
 
 /** GET /auth/mfa/status — is MFA on for the current user + how many backup codes remain. */
-router.get('/mfa/status', authenticate, asyncHandler(async (req: any, res: Response) => {
+router.get('/mfa/status', authenticate, asyncHandler(async (req: Request, res: Response) => {
     res.json({ enabled: await mfa.isEnabled(req.user.id), backupCodesRemaining: await mfa.backupCount(req.user.id) });
 }));
 
@@ -1046,12 +1049,12 @@ router.get('/mfa/status', authenticate, asyncHandler(async (req: any, res: Respo
 // cannot undo. Same helper as the two self-service password doors in routes/users.ts, so the sudo rule
 // (per-account lockout bucket + in-flight cap) cannot drift between them. Required lazily, mirroring how
 // routes/users.ts requires this module, so the two routers never form a load-time cycle.
-function requireSudoPassword(req: any, res: Response): Promise<boolean> {
+function requireSudoPassword(req: Request, res: Response): Promise<boolean> {
     return require('./users').requireSudoPassword(req, res, (req.body || {}).currentPassword);
 }
 
 /** POST /auth/mfa/setup — begin enrollment: returns a new secret + otpauth URI (for the QR). */
-router.post('/mfa/setup', authenticate, sessionOnly, asyncHandler(async (req: any, res: Response) => {
+router.post('/mfa/setup', authenticate, sessionOnly, asyncHandler(async (req: Request, res: Response) => {
     // Before the pending secret is minted or disclosed: /mfa/setup is what hands the caller the TOTP
     // secret, so it is the first door that must prove the password, not just the second one.
     if (await requireSudoPassword(req, res)) return;
@@ -1063,7 +1066,7 @@ router.post('/mfa/setup', authenticate, sessionOnly, asyncHandler(async (req: an
 }));
 
 /** POST /auth/mfa/enable — verify a code against the pending secret, activate, return backup codes once. */
-router.post('/mfa/enable', authenticate, sessionOnly, asyncHandler(async (req: any, res: Response) => {
+router.post('/mfa/enable', authenticate, sessionOnly, asyncHandler(async (req: Request, res: Response) => {
     // Both halves of enrollment are gated, not just /setup: a pending secret may already exist (minted
     // before this guard shipped, or by the legitimate owner who then walked away), and activating it is
     // the step that actually locks the account. Checked BEFORE the 'mfa:' bucket is entered so a wrong
@@ -1095,7 +1098,7 @@ router.post('/mfa/enable', authenticate, sessionOnly, asyncHandler(async (req: a
 }));
 
 /** POST /auth/mfa/disable — turn MFA off (requires a current TOTP or backup code). */
-router.post('/mfa/disable', authenticate, sessionOnly, asyncHandler(async (req: any, res: Response) => {
+router.post('/mfa/disable', authenticate, sessionOnly, asyncHandler(async (req: Request, res: Response) => {
     if (!(await mfa.isEnabled(req.user.id))) return res.json({ disabled: true });
     // 'mfa_manage' (count-only), never 'mfa'. This door needs `authenticate` + `sessionOnly` and NOT the
     // sudo password, so it is the cheapest door in the file to reach with a hijacked session — and while
@@ -1120,7 +1123,7 @@ router.post('/mfa/disable', authenticate, sessionOnly, asyncHandler(async (req: 
 }));
 
 /** POST /auth/mfa/backup-codes — regenerate backup codes (requires a current code); returns them once. */
-router.post('/mfa/backup-codes', authenticate, sessionOnly, asyncHandler(async (req: any, res: Response) => {
+router.post('/mfa/backup-codes', authenticate, sessionOnly, asyncHandler(async (req: Request, res: Response) => {
     if (!(await mfa.isEnabled(req.user.id))) {
         return res.status(400).json({ code: 'rest_mfa_not_enabled', message: 'MFA is not enabled.', data: { status: 400 } });
     }
@@ -1150,12 +1153,12 @@ router.post('/mfa/backup-codes', authenticate, sessionOnly, asyncHandler(async (
 // requirement instead of enrolling" bypass.
 
 /** GET /auth/mfa/policy — read the enforcement policy (admin only). */
-router.get('/mfa/policy', authenticate, sessionOnly, isAdmin, asyncHandler(async (_req: any, res: Response) => {
+router.get('/mfa/policy', authenticate, sessionOnly, isAdmin, asyncHandler(async (_req: Request, res: Response) => {
     res.json({ policy: await mfa.getPolicy() });
 }));
 
 /** PUT /auth/mfa/policy — set which roles require MFA + the grace period (admin only). Body: { requiredRoles, graceDays }. */
-router.put('/mfa/policy', authenticate, sessionOnly, isAdmin, asyncHandler(async (req: any, res: Response) => {
+router.put('/mfa/policy', authenticate, sessionOnly, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     const { requiredRoles, graceDays } = req.body || {};
     if (requiredRoles != null && !Array.isArray(requiredRoles)) {
         return res.status(400).json({ code: 'rest_invalid_param', message: 'requiredRoles must be an array of role slugs.', data: { status: 400 } });

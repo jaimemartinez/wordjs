@@ -12,6 +12,8 @@
  * served with `Vary: Accept` (a shared cache MUST key on Accept) + immutable Cache-Control (upload URLs are
  * UUID-unique + never overwritten, so a derivative is permanently stable — a re-upload gets a new URL).
  */
+import type { Request, Response, NextFunction } from 'express';
+
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
@@ -51,7 +53,7 @@ export function imageNegotiation(uploadsDir: string) {
     const root = path.resolve(uploadsDir);
     const cacheRoot = path.join(root, '.derivatives');
 
-    return function imageNegotiationMw(req: any, res: any, next: any): void {
+    return function imageNegotiationMw(req: Request, res: Response, next: NextFunction): void {
         if (!sharp || req.method !== 'GET') return next();
         const ext = path.extname(req.path).toLowerCase();
         if (!RASTER.has(ext)) return next();

@@ -3,6 +3,8 @@
  * /api/v1/comments/*
  */
 
+import type { Request, Response } from 'express';
+
 const express = require('express');
 const router = express.Router();
 const Comment = require('../models/Comment');
@@ -64,7 +66,7 @@ function safeAuthorUrl(raw: any) {
  *       200:
  *         description: List of comments
  */
-router.get('/', optionalAuth, asyncHandler(async (req: any, res: any) => {
+router.get('/', optionalAuth, asyncHandler(async (req: Request, res: Response) => {
     const {
         page = 1,
         per_page = 10,
@@ -76,8 +78,11 @@ router.get('/', optionalAuth, asyncHandler(async (req: any, res: any) => {
         order = 'desc'
     } = req.query;
 
-    const limit = Math.min(parseInt(per_page, 10) || 10, 100);
-    const offset = (Math.max(parseInt(page, 10) || 1, 1) - 1) * limit;
+    // A query value is never plainly a string: `?per_page[]=5` makes it an Array and `?per_page[x]=5`
+    // an object. parseInt already ToString()s its argument, so String() here is that same coercion
+    // written where the compiler can see it - identical result for every shape, junk included.
+    const limit = Math.min(parseInt(String(per_page), 10) || 10, 100);
+    const offset = (Math.max(parseInt(String(page), 10) || 1, 1) - 1) * limit;
 
     // Only comment moderators can see non-approved comments AND the private commenter PII (email/IP
     // are gated in toJSON(canModerate) below).
@@ -101,9 +106,9 @@ router.get('/', optionalAuth, asyncHandler(async (req: any, res: any) => {
     });
 
     const comments = await Comment.findAll({
-        postId: post ? parseInt(post, 10) : undefined,
+        postId: post ? parseInt(String(post), 10) : undefined,
         status: commentStatus === 'any' ? undefined : commentStatus,
-        parent: parent !== undefined ? parseInt(parent, 10) : undefined,
+        parent: parent !== undefined ? parseInt(String(parent), 10) : undefined,
         search,
         limit,
         offset,
@@ -113,15 +118,17 @@ router.get('/', optionalAuth, asyncHandler(async (req: any, res: any) => {
     });
 
     const total = await Comment.count({
-        postId: post ? parseInt(post, 10) : undefined,
+        postId: post ? parseInt(String(post), 10) : undefined,
         status: commentStatus === 'any' ? undefined : commentStatus,
-        parent: parent !== undefined ? parseInt(parent, 10) : undefined,
+        parent: parent !== undefined ? parseInt(String(parent), 10) : undefined,
         search
     });
     const totalPages = Math.ceil(total / limit);
 
-    res.set('X-WP-Total', total);
-    res.set('X-WP-TotalPages', totalPages);
+    // res.set() String()s a non-array value itself before writing the header; doing it here sends the
+    // identical bytes and keeps the call inside the typed `string | string[]` signature.
+    res.set('X-WP-Total', String(total));
+    res.set('X-WP-TotalPages', String(totalPages));
 
     res.json(comments.map((comment: any) => comment.toJSON(canModerate)));
 }));
@@ -144,8 +151,9 @@ router.get('/', optionalAuth, asyncHandler(async (req: any, res: any) => {
  *       404:
  *         description: Comment not found
  */
-router.get('/:id', optionalAuth, asyncHandler(async (req: any, res: any) => {
-    const comment = await Comment.findById(parseInt(req.params.id, 10));
+router.get('/:id', optionalAuth, asyncHandler(async (req: Request, res: Response) => {
+    // `:id` is typed `string | string[]`; parseInt ToString()s it either way, so this is the same value.
+    const comment = await Comment.findById(parseInt(String(req.params.id), 10));
 
     if (!comment) {
         return res.status(404).json({
@@ -201,7 +209,7 @@ router.get('/:id', optionalAuth, asyncHandler(async (req: any, res: any) => {
  *       400:
  *         description: Validation error
  */
-router.post('/', optionalAuth, asyncHandler(async (req: any, res: any) => {
+router.post('/', optionalAuth, asyncHandler(async (req: Request, res: Response) => {
     const {
         post: postId,
         author_name,
@@ -361,8 +369,8 @@ router.post('/', optionalAuth, asyncHandler(async (req: any, res: any) => {
  *       200:
  *         description: Comment updated
  */
-router.put('/:id', authenticate, can('edit_comments'), asyncHandler(async (req: any, res: any) => {
-    const commentId = parseInt(req.params.id, 10);
+router.put('/:id', authenticate, can('edit_comments'), asyncHandler(async (req: Request, res: Response) => {
+    const commentId = parseInt(String(req.params.id), 10);
     const comment = await Comment.findById(commentId);
 
     if (!comment) {
@@ -427,8 +435,8 @@ router.put('/:id', authenticate, can('edit_comments'), asyncHandler(async (req: 
  *       200:
  *         description: Comment deleted
  */
-router.delete('/:id', authenticate, can('moderate_comments'), asyncHandler(async (req: any, res: any) => {
-    const commentId = parseInt(req.params.id, 10);
+router.delete('/:id', authenticate, can('moderate_comments'), asyncHandler(async (req: Request, res: Response) => {
+    const commentId = parseInt(String(req.params.id), 10);
     const comment = await Comment.findById(commentId);
 
     if (!comment) {
@@ -461,8 +469,8 @@ router.delete('/:id', authenticate, can('moderate_comments'), asyncHandler(async
  * POST /comments/:id/approve
  * Approve comment
  */
-router.post('/:id/approve', authenticate, can('moderate_comments'), asyncHandler(async (req: any, res: any) => {
-    const commentId = parseInt(req.params.id, 10);
+router.post('/:id/approve', authenticate, can('moderate_comments'), asyncHandler(async (req: Request, res: Response) => {
+    const commentId = parseInt(String(req.params.id), 10);
     const updated = await Comment.approve(commentId);
 
     if (!updated) {
@@ -480,8 +488,8 @@ router.post('/:id/approve', authenticate, can('moderate_comments'), asyncHandler
  * POST /comments/:id/spam
  * Mark comment as spam
  */
-router.post('/:id/spam', authenticate, can('moderate_comments'), asyncHandler(async (req: any, res: any) => {
-    const commentId = parseInt(req.params.id, 10);
+router.post('/:id/spam', authenticate, can('moderate_comments'), asyncHandler(async (req: Request, res: Response) => {
+    const commentId = parseInt(String(req.params.id), 10);
     const updated = await Comment.spam(commentId);
 
     if (!updated) {

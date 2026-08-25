@@ -4,6 +4,11 @@
  */
 
 import type { Request, Response } from 'express';
+// Type-only, and load-bearing: tsconfig pins `types` to ["node"], so @types/multer only enters the
+// program when something imports it. That package is what declares `Express.Multer.File` and augments
+// Express's Request with `file` — the two names the upload route below needs. `import type` is erased
+// at emit, so multer itself stays the plain runtime require() a line down.
+import type { FileFilterCallback } from 'multer';
 
 const express = require('express');
 const router = express.Router();
@@ -51,7 +56,7 @@ const upload = multer({
         fields: 10,         // Minimal fields needed
         parts: 15           // Limited total parts
     },
-    fileFilter: (req: any, file: any, cb: any) => {
+    fileFilter: (req: Request, file: Express.Multer.File, cb: FileFilterCallback) => {
         if (file.mimetype === 'application/zip' || file.mimetype === 'application/x-zip-compressed' || file.originalname.endsWith('.zip')) {
             cb(null, true);
         } else {
@@ -260,7 +265,7 @@ function resolveSafePluginDir(slug: any): string {
  *       400:
  *         description: Invalid file or zip slip detected
  */
-router.post('/upload', authenticate, isAdmin, upload.single('plugin'), asyncHandler(async (req: any, res: Response) => {
+router.post('/upload', authenticate, isAdmin, upload.single('plugin'), asyncHandler(async (req: Request, res: Response) => {
     if (!req.file) {
         return res.status(400).json({ error: 'No file uploaded' });
     }
@@ -920,7 +925,7 @@ router.get('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: Re
  *     tags: [Plugins]
  *     security: [{ bearerAuth: [] }]
  */
-router.get('/:slug/status', authenticate, isAdmin, asyncHandler(async (req: any, res: Response) => {
+router.get('/:slug/status', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     const slug = safeSlugParam(req.params.slug);
     if (!slug) return res.status(400).json({ error: 'Invalid slug' });
     const { getIsolateStatus } = require('../core/plugin-isolate');
@@ -1007,7 +1012,7 @@ router.post('/:slug/activate', authenticate, isAdmin, asyncHandler(async (req: R
     regenerateRegistry();
 
     // AUDIT: an admin activated a plugin. Slug only — no secret material.
-    await recordAudit((req as any).user && (req as any).user.id, 'plugin.activate', 'plugin', slug, {});
+    await recordAudit(req.user && req.user.id, 'plugin.activate', 'plugin', slug, {});
 
     res.json(result);
 }));
@@ -1219,7 +1224,7 @@ router.post('/:slug/reload', authenticate, isAdmin, asyncHandler(async (req: Req
  *       409:
  *         description: The companion theme is already installed
  */
-router.post('/:slug/install-theme', authenticate, isAdmin, asyncHandler(async (req: any, res: Response) => {
+router.post('/:slug/install-theme', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     // Validate ONCE and use what came back — reading req.params.slug again below would be the same
     // "guard a copy, then re-concatenate the raw value" shape this file just finished removing.
     const slug = safeSlugParam(req.params.slug);
@@ -1293,7 +1298,7 @@ function getClaimedPorts(slug: string): number[] {
  *     security:
  *       - bearerAuth: []
  */
-router.get('/:slug/port-conflicts', authenticate, isAdmin, asyncHandler(async (req: any, res: Response) => {
+router.get('/:slug/port-conflicts', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     const slug = safeSlugParam(req.params.slug);
     if (!slug) {
         return res.status(400).json({ error: 'Invalid plugin slug' });
@@ -1316,7 +1321,7 @@ router.get('/:slug/port-conflicts', authenticate, isAdmin, asyncHandler(async (r
  *     security:
  *       - bearerAuth: []
  */
-router.post('/:slug/free-port', authenticate, isAdmin, asyncHandler(async (req: any, res: Response) => {
+router.post('/:slug/free-port', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     const slug = safeSlugParam(req.params.slug);
     if (!slug) {
         return res.status(400).json({ error: 'Invalid plugin slug' });
@@ -1383,7 +1388,7 @@ router.post('/:slug/deactivate', authenticate, isAdmin, asyncHandler(async (req:
     regenerateRegistry();
 
     // AUDIT: an admin deactivated a plugin. Slug only — no secret material.
-    await recordAudit((req as any).user && (req as any).user.id, 'plugin.deactivate', 'plugin', slug, {});
+    await recordAudit(req.user && req.user.id, 'plugin.deactivate', 'plugin', slug, {});
 
     res.json(result);
 }));
@@ -1421,7 +1426,7 @@ router.post('/:slug/deactivate', authenticate, isAdmin, asyncHandler(async (req:
  *       429:
  *         description: Too many simultaneous verifications for this account from this address
  */
-router.delete('/:slug', authenticate, isAdmin, asyncHandler(async (req: any, res: Response) => {
+router.delete('/:slug', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     const slug = req.params.slug;
     // Reject a traversal slug (%2f-decoded '../…') BEFORE any fs op — path.join(PLUGINS_DIR, '../../data')
     // would otherwise let an admin confused-deputy rmSync an arbitrary host directory.
@@ -1673,7 +1678,7 @@ router.post('/sample', authenticate, isAdmin, asyncHandler(async (req: Request, 
 // now per-CAPABILITY: each item is returned only if the caller holds its capability, exactly like the
 // frontend's can(item.cap) filter. Items that declare NO capability keep the old admin-only default
 // (manage_options), so nothing previously hidden becomes visible unless it opted into a broader cap.
-router.get('/menus', authenticate, asyncHandler(async (req: any, res: Response) => {
+router.get('/menus', authenticate, asyncHandler(async (req: Request, res: Response) => {
     const { getAdminMenuItems } = require('../core/adminMenu');
     const { getActivePlugins } = require('../core/plugins');
     const { applyFiltersSync } = require('../core/hooks');

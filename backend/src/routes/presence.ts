@@ -12,6 +12,8 @@
  * it can never false-positive. (A Redis store is the upgrade path if multi-node editing arrives.)
  */
 
+import type { Request, Response } from 'express';
+
 const express = require('express');
 const router = express.Router();
 const { authenticate } = require('../middleware/auth');
@@ -49,8 +51,13 @@ function sweep(room: Map<string, { name: string; ts: number }>) {
 // `isRestExposedPostType` on top: `revision` and `nav_menu_item` are rows in `posts` that carry no
 // capability_type, so the family resolver lands them in the plain `post` family. They belong to their
 // own APIs and there is no editor session to have presence in.
-router.post('/:postId', authenticate, asyncHandler(async (req: any, res: any) => {
-    const postId = parseInt(req.params.postId, 10);
+router.post('/:postId', authenticate, asyncHandler(async (req: Request, res: Response) => {
+    // The `String(...)` changes NOTHING the untyped version did: `parseInt` already coerced its
+    // argument, so both a string and the `string[]` that `params` is typed to allow yield exactly the
+    // number they yielded before. It is written out because the type demands it (same idiom as
+    // `parsePostId` in routes/collab.ts) — not because the route now takes something new: under
+    // Express 4 a lone `:postId` always arrives as a string.
+    const postId = parseInt(String(req.params.postId), 10);
     if (!Number.isFinite(postId) || postId <= 0) {
         return res.status(400).json({ error: 'invalid post id' });
     }

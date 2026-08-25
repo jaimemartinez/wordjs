@@ -51,11 +51,15 @@ const REPO_ROOT = path.resolve(BACKEND_ROOT, '..');
 // review, not in a commit that is trying to go green.
 
 /** `req: any` occurrences under src/routes + src/middleware, counted exactly as verify-f0 counts them. */
-const MAX_REQUEST_ANY_OCCURRENCES = 143;
+const MAX_REQUEST_ANY_OCCURRENCES = 0;
+/** `(req as any)` casts at the boundary — the escape hatch that satisfies the count above while undoing it. */
+const MAX_REQUEST_AS_ANY_CASTS = 0;
+/** `res: any` — the same debt on the response parameter, which nothing counted until it could absorb the pressure. */
+const MAX_RESPONSE_ANY_OCCURRENCES = 0;
 /** Boundary files that still contain at least one `req: any`. A brand-new untyped route file raises it. */
-const MAX_UNTYPED_BOUNDARY_FILES = 24;
+const MAX_UNTYPED_BOUNDARY_FILES = 0;
 /** Boundary files that are FULLY migrated: at least one typed `req` and not one `req: any` left. */
-const MIN_FULLY_TYPED_BOUNDARY_FILES = 19;
+const MIN_FULLY_TYPED_BOUNDARY_FILES = 43;
 /**
  * Does this workflow actually HAND `needle` to a runner, inside a `run:` step?
  *
@@ -307,6 +311,45 @@ function checkRequestTypingRatchet(): CheckOutcome {
             + 'A new route file must be born typed.');
     } else if (untypedFiles.length < MAX_UNTYPED_BOUNDARY_FILES) {
         notes.push(`${untypedFiles.length} boundary files carry \`req: any\`; tighten MAX_UNTYPED_BOUNDARY_FILES.`);
+    }
+
+    // THE ESCAPE HATCHES, RATCHETED TOO — otherwise paying the debt down is a search-and-replace.
+    //
+    // `anyOccurrences` counts the text `req: any`. Rewriting a handler as `(req: Request)` and then
+    // reaching for `(req as any).whatever` at every use satisfies that counter exactly while changing
+    // nothing about what is known: the annotation moved, the checking did not. `res: any` is the same
+    // debt on the other parameter and was never counted at all, so it could absorb the pressure.
+    //
+    // Both are ceilings that may fall and may not rise, like the two above. They are deliberately NOT
+    // zero: four casts and twenty-seven untyped responses exist today, and a gate that demanded zero on
+    // the day it was written is a gate someone deletes on the day it goes red.
+    // The MEMBER too, not just the parameter. The first version of this matched `req as any` only, and
+    // an adversarial pass immediately found the two shapes it could not see: `(req.query as any).page`
+    // in routes/audit.ts, and routes/categories.ts declaring `req: Request` on all five handlers and
+    // then widening every USE — `parseInt(per_page as any, 10)`. The gate certified that file as FULLY
+    // TYPED. Widening the container is the same act as widening the parameter, one level down.
+    const castRe = /\breq(?:\.[A-Za-z_$][\w$]*)*\s+as\s+any\b|<any>\s*req\b/g;
+    const resAnyRe = /\bres\s*:\s*any\b/g;
+    let casts = 0;
+    let responseAny = 0;
+    for (const entry of files) {
+        const text = read(entry.file);
+        casts += (text.match(castRe) || []).length;
+        responseAny += (text.match(resAnyRe) || []).length;
+    }
+
+    if (casts > MAX_REQUEST_AS_ANY_CASTS) {
+        failures.push(`\`req as any\` rose to ${casts} (ceiling ${MAX_REQUEST_AS_ANY_CASTS}). `
+            + 'Casting the parameter back to any re-opens exactly what typing it closed, and it is invisible to the `req: any` count.');
+    } else if (casts < MAX_REQUEST_AS_ANY_CASTS) {
+        notes.push(`\`req as any\` is down to ${casts}; tighten MAX_REQUEST_AS_ANY_CASTS to ${casts}.`);
+    }
+
+    if (responseAny > MAX_RESPONSE_ANY_OCCURRENCES) {
+        failures.push(`\`res: any\` rose to ${responseAny} (ceiling ${MAX_RESPONSE_ANY_OCCURRENCES}). `
+            + 'The response parameter is the same debt as the request one.');
+    } else if (responseAny < MAX_RESPONSE_ANY_OCCURRENCES) {
+        notes.push(`\`res: any\` is down to ${responseAny}; tighten MAX_RESPONSE_ANY_OCCURRENCES to ${responseAny}.`);
     }
 
     // The F0 baseline records the same number from the same regex. If the two disagree, one of the two

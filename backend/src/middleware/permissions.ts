@@ -3,7 +3,7 @@
  * Capability-based access control
  */
 
-import type { Response, NextFunction } from 'express';
+import type { Request, Response, NextFunction } from 'express';
 
 const config = require('../config/app');
 
@@ -11,7 +11,7 @@ const config = require('../config/app');
  * Check if user has required capability
  */
 function can(capability: string) {
-    return (req: any, res: Response, next: NextFunction) => {
+    return (req: Request, res: Response, next: NextFunction) => {
         if (!req.user) {
             return res.status(401).json({
                 code: 'rest_not_logged_in',
@@ -36,7 +36,7 @@ function can(capability: string) {
  * Check if user has any of the required capabilities
  */
 function canAny(capabilities: string[]) {
-    return (req: any, res: Response, next: NextFunction) => {
+    return (req: Request, res: Response, next: NextFunction) => {
         if (!req.user) {
             return res.status(401).json({
                 code: 'rest_not_logged_in',
@@ -63,7 +63,7 @@ function canAny(capabilities: string[]) {
  * Check if user has all required capabilities
  */
 function canAll(capabilities: string[]) {
-    return (req: any, res: Response, next: NextFunction) => {
+    return (req: Request, res: Response, next: NextFunction) => {
         if (!req.user) {
             return res.status(401).json({
                 code: 'rest_not_logged_in',
@@ -89,7 +89,7 @@ function canAll(capabilities: string[]) {
 /**
  * Check if user is administrator
  */
-function isAdmin(req: any, res: Response, next: NextFunction) {
+function isAdmin(req: Request, res: Response, next: NextFunction) {
     if (!req.user) {
         return res.status(401).json({
             code: 'rest_not_logged_in',
@@ -112,8 +112,10 @@ function isAdmin(req: any, res: Response, next: NextFunction) {
 /**
  * Check if user owns the resource or has capability
  */
-function ownerOrCan(capability: string, getOwnerId: (req: any) => any) {
-    return (req: any, res: Response, next: NextFunction) => {
+// The owner id stays `any`: it is compared with `===` against `req.user.id`, whose type globals.d.ts
+// deliberately leaves loose, and narrowing the return here would assert an id shape no caller proves.
+function ownerOrCan(capability: string, getOwnerId: (req: Request) => any) {
+    return (req: Request, res: Response, next: NextFunction) => {
         if (!req.user) {
             return res.status(401).json({
                 code: 'rest_not_logged_in',

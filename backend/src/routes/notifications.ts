@@ -2,7 +2,7 @@
  * WordJS - Notification Routes
  */
 
-import type { Response } from 'express';
+import type { Request, Response } from 'express';
 const express = require('express');
 const router = express.Router();
 const notificationService = require('../core/notifications');
@@ -11,7 +11,7 @@ const { authenticate, authenticateAllowQuery } = require('../middleware/auth');
 /**
  * SSE Endpoint for real-time notifications
  */
-router.get('/stream', authenticateAllowQuery, (req: any, res: any) => {
+router.get('/stream', authenticateAllowQuery, (req: Request, res: Response) => {
     const startTime = Date.now();
     console.log(`[SSE] 📥 New Stream Request from User ${req.user.id} (IP: ${req.ip})`);
 
@@ -30,9 +30,16 @@ router.get('/stream', authenticateAllowQuery, (req: any, res: any) => {
         return;
     }
 
+    // `writableTimeout` is NOT a property of http.ServerResponse, and nothing in this repo ever assigns
+    // it, so the liveness check below has always collapsed to `res.writable` alone. Typing `res` is what
+    // surfaced that. The read is preserved verbatim through this narrowing rather than deleted, because
+    // dropping a term is a behaviour change and this is a type-only migration — see the latent-bug note
+    // handed back with this change.
+    const sse: Response & { writableTimeout?: unknown } = res;
+
     // Keep connection alive (Ping every 5s to prevent proxy timeouts)
     const keepAlive = setInterval(() => {
-        if (res.writableTimeout || res.writable) {
+        if (sse.writableTimeout || res.writable) {
             try {
                 // console.debug(`[SSE] 💓 Ping User ${req.user.id}`); // Optional: Uncomment for extreme debug
                 res.write(': keepalive\n\n');
@@ -57,7 +64,7 @@ router.get('/stream', authenticateAllowQuery, (req: any, res: any) => {
 /**
  * Get notification list
  */
-router.get('/', authenticate, async (req: any, res: Response) => {
+router.get('/', authenticate, async (req: Request, res: Response) => {
     try {
         const userId = req.user.id;
         const notifications = await notificationService.getNotifications(userId);
@@ -70,7 +77,7 @@ router.get('/', authenticate, async (req: any, res: Response) => {
 /**
  * Mark as read
  */
-router.post('/:uuid/read', authenticate, async (req: any, res: Response) => {
+router.post('/:uuid/read', authenticate, async (req: Request, res: Response) => {
     try {
         const ok = await notificationService.markAsRead(req.params.uuid, req.user.id);
         if (!ok) return res.status(404).json({ error: 'Notification not found' });
@@ -83,7 +90,7 @@ router.post('/:uuid/read', authenticate, async (req: any, res: Response) => {
 /**
  * Mark all as read
  */
-router.post('/read-all', authenticate, async (req: any, res: Response) => {
+router.post('/read-all', authenticate, async (req: Request, res: Response) => {
     try {
         await notificationService.markAllAsRead(req.user.id);
         res.json({ success: true });
@@ -95,7 +102,7 @@ router.post('/read-all', authenticate, async (req: any, res: Response) => {
 /**
  * Delete a notification
  */
-router.delete('/:uuid', authenticate, async (req: any, res: Response) => {
+router.delete('/:uuid', authenticate, async (req: Request, res: Response) => {
     try {
         const ok = await notificationService.deleteNotification(req.params.uuid, req.user.id);
         if (!ok) return res.status(404).json({ error: 'Notification not found' });

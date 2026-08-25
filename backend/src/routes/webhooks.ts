@@ -6,7 +6,7 @@
  * be able to plant an exfiltration endpoint or rotate a secret — token CRUD is blocked the same way.
  */
 
-import type { Response } from 'express';
+import type { NextFunction, Request, Response } from 'express';
 const express = require('express');
 const router = express.Router();
 const { authenticate } = require('../middleware/auth');
@@ -19,8 +19,18 @@ const WebhookDelivery = require('../models/WebhookDelivery');
 router.use(authenticate);
 router.use(isAdmin);
 
+/**
+ * `authenticate` stamps token-authenticated requests with `apiToken` (middleware/auth.ts, markHeadless).
+ * That mark is NOT part of the global Request augmentation in src/types/globals.d.ts, so this router
+ * names it locally rather than widening the shared type from here — the same way routes/posts.ts names
+ * its own `AuthenticatedRequest`. Optional, because a cookie session carries no token.
+ */
+interface TokenAwareRequest extends Request {
+    apiToken?: { id: number; scopes: string[]; name: string };
+}
+
 // Block API-token callers from managing webhooks (anti-persistence — mirrors /auth/tokens sessionOnly).
-function sessionOnly(req: any, res: Response, next: any) {
+function sessionOnly(req: TokenAwareRequest, res: Response, next: NextFunction) {
     if (req.apiToken) {
         return res.status(403).json({
             code: 'rest_token_management_forbidden',
@@ -39,12 +49,12 @@ function parseId(v: any): number | null {
 }
 
 // The event catalog (for building a subscription UI).
-router.get('/events', (_req: any, res: Response) => {
+router.get('/events', (_req: Request, res: Response) => {
     res.json({ events: Webhook.EVENTS });
 });
 
 // Redeliver a specific delivery (literal prefix — declared before the /:id routes).
-router.post('/deliveries/:deliveryId/redeliver', sessionOnly, asyncHandler(async (req: any, res: Response) => {
+router.post('/deliveries/:deliveryId/redeliver', sessionOnly, asyncHandler(async (req: Request, res: Response) => {
     const id = parseId(req.params.deliveryId);
     if (!id) return res.status(400).json({ code: 'rest_invalid_param', message: 'Invalid delivery id.', data: { status: 400 } });
     const ok = await WebhookDelivery.requeue(id, Math.floor(Date.now() / 1000));
@@ -53,12 +63,12 @@ router.post('/deliveries/:deliveryId/redeliver', sessionOnly, asyncHandler(async
 }));
 
 // List all webhooks.
-router.get('/', asyncHandler(async (_req: any, res: Response) => {
+router.get('/', asyncHandler(async (_req: Request, res: Response) => {
     res.json({ webhooks: await Webhook.list() });
 }));
 
 // Create a webhook. Returns the signing secret ONCE.
-router.post('/', sessionOnly, asyncHandler(async (req: any, res: Response) => {
+router.post('/', sessionOnly, asyncHandler(async (req: Request, res: Response) => {
     const { name, url, events, active } = req.body || {};
     if (!url || typeof url !== 'string') {
         return res.status(400).json({ code: 'rest_missing_param', message: 'A webhook url is required.', data: { status: 400 } });
@@ -76,7 +86,7 @@ router.post('/', sessionOnly, asyncHandler(async (req: any, res: Response) => {
 }));
 
 // Recent deliveries for a webhook (audit log).
-router.get('/:id/deliveries', asyncHandler(async (req: any, res: Response) => {
+router.get('/:id/deliveries', asyncHandler(async (req: Request, res: Response) => {
     const id = parseId(req.params.id);
     if (!id) return res.status(400).json({ code: 'rest_invalid_param', message: 'Invalid id.', data: { status: 400 } });
     if (!(await Webhook.findById(id))) return res.status(404).json({ code: 'rest_not_found', message: 'Webhook not found.', data: { status: 404 } });
@@ -84,7 +94,7 @@ router.get('/:id/deliveries', asyncHandler(async (req: any, res: Response) => {
 }));
 
 // Rotate the signing secret. Returns the new secret ONCE.
-router.post('/:id/rotate-secret', sessionOnly, asyncHandler(async (req: any, res: Response) => {
+router.post('/:id/rotate-secret', sessionOnly, asyncHandler(async (req: Request, res: Response) => {
     const id = parseId(req.params.id);
     if (!id) return res.status(400).json({ code: 'rest_invalid_param', message: 'Invalid id.', data: { status: 400 } });
     const rotated = await Webhook.rotateSecret(id);
@@ -93,7 +103,7 @@ router.post('/:id/rotate-secret', sessionOnly, asyncHandler(async (req: any, res
 }));
 
 // Get one webhook.
-router.get('/:id', asyncHandler(async (req: any, res: Response) => {
+router.get('/:id', asyncHandler(async (req: Request, res: Response) => {
     const id = parseId(req.params.id);
     if (!id) return res.status(400).json({ code: 'rest_invalid_param', message: 'Invalid id.', data: { status: 400 } });
     const wh = await Webhook.findById(id);
@@ -102,7 +112,7 @@ router.get('/:id', asyncHandler(async (req: any, res: Response) => {
 }));
 
 // Update a webhook (name/url/events/active).
-router.patch('/:id', sessionOnly, asyncHandler(async (req: any, res: Response) => {
+router.patch('/:id', sessionOnly, asyncHandler(async (req: Request, res: Response) => {
     const id = parseId(req.params.id);
     if (!id) return res.status(400).json({ code: 'rest_invalid_param', message: 'Invalid id.', data: { status: 400 } });
     if (!(await Webhook.findById(id))) return res.status(404).json({ code: 'rest_not_found', message: 'Webhook not found.', data: { status: 404 } });
@@ -116,7 +126,7 @@ router.patch('/:id', sessionOnly, asyncHandler(async (req: any, res: Response) =
 }));
 
 // Delete a webhook.
-router.delete('/:id', sessionOnly, asyncHandler(async (req: any, res: Response) => {
+router.delete('/:id', sessionOnly, asyncHandler(async (req: Request, res: Response) => {
     const id = parseId(req.params.id);
     if (!id) return res.status(400).json({ code: 'rest_invalid_param', message: 'Invalid id.', data: { status: 400 } });
     const ok = await Webhook.delete(id);

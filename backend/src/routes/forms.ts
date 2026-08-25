@@ -18,6 +18,7 @@
  *      through), so a submission can never carry markup into the admin viewer.
  */
 
+import type { Request, Response } from 'express';
 const express = require('express');
 const router = express.Router();
 const FormSubmission = require('../models/FormSubmission');
@@ -37,7 +38,7 @@ const HONEYPOT_FIELD = '_hp';
 // real path literally identical — nothing (id, timing-relevant fields, …) may ever distinguish them.
 const SUBMIT_OK = { success: true };
 
-function badRequest(res: any, message: string) {
+function badRequest(res: Response, message: string) {
     return res.status(400).json({ code: 'rest_invalid_param', message, data: { status: 400 } });
 }
 
@@ -77,7 +78,7 @@ function badRequest(res: any, message: string) {
  *       400:
  *         description: Validation error
  */
-router.post('/submit', asyncHandler(async (req: any, res: any) => {
+router.post('/submit', asyncHandler(async (req: Request, res: Response) => {
     const body = req.body || {};
 
     // ---- formName -------------------------------------------------------------------------------
@@ -171,19 +172,26 @@ router.post('/submit', asyncHandler(async (req: any, res: any) => {
  *       200:
  *         description: List of submissions
  */
-router.get('/submissions', authenticate, can('manage_options'), asyncHandler(async (req: any, res: any) => {
+router.get('/submissions', authenticate, can('manage_options'), asyncHandler(async (req: Request, res: Response) => {
     const { formName, page = 1, per_page = 20 } = req.query;
 
-    const limit = Math.min(parseInt(per_page, 10) || 20, 100);
-    const offset = (Math.max(parseInt(page, 10) || 1, 1) - 1) * limit;
+    // `?page=1&page=2` and `?page[x]=1` reach here as an array / an object, not a string, and the
+    // defaults above are numbers. The explicit `String()` is what `parseInt` already does to its first
+    // argument (ToString), so every one of those inputs still yields exactly the number it yielded
+    // before: ['1','2'] stringifies to "1,2" and parses to 1, an object to "[object Object]" and so to
+    // NaN, which falls through to the `||` default.
+    const limit = Math.min(parseInt(String(per_page), 10) || 20, 100);
+    const offset = (Math.max(parseInt(String(page), 10) || 1, 1) - 1) * limit;
     const filter = formName !== undefined ? { formName: String(formName) } : {};
 
     const submissions = await FormSubmission.findAll({ ...filter, limit, offset });
     const total = await FormSubmission.count(filter);
     const totalPages = Math.ceil(total / limit);
 
-    res.set('X-WP-Total', total);
-    res.set('X-WP-TotalPages', totalPages);
+    // `res.set` stringifies its value itself (express/lib/response.js), so these are the same bytes
+    // on the wire as passing the numbers — the header API just asks for the string it would build.
+    res.set('X-WP-Total', String(total));
+    res.set('X-WP-TotalPages', String(totalPages));
 
     res.json(submissions);
 }));
@@ -208,7 +216,10 @@ router.get('/submissions', authenticate, can('manage_options'), asyncHandler(asy
  *       404:
  *         description: Submission not found
  */
-router.delete('/submissions/:id', authenticate, can('manage_options'), asyncHandler(async (req: any, res: any) => {
+// `Request<{ id: string }>`: the default params dictionary is `string | string[]` because express 5
+// route syntax can repeat a parameter, but a plain `:id` segment yields a single string on every
+// express version. Naming the shape keeps `parseInt` reading the value it actually receives.
+router.delete('/submissions/:id', authenticate, can('manage_options'), asyncHandler(async (req: Request<{ id: string }>, res: Response) => {
     const id = parseInt(req.params.id, 10);
     if (!Number.isInteger(id) || id <= 0) {
         return badRequest(res, 'Invalid submission ID.');
@@ -239,7 +250,7 @@ router.delete('/submissions/:id', authenticate, can('manage_options'), asyncHand
  *       200:
  *         description: Form names and counts
  */
-router.get('/names', authenticate, can('manage_options'), asyncHandler(async (_req: any, res: any) => {
+router.get('/names', authenticate, can('manage_options'), asyncHandler(async (_req: Request, res: Response) => {
     res.json({ names: await FormSubmission.names() });
 }));
 

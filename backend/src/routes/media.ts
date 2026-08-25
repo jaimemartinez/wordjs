@@ -3,6 +3,7 @@
  * /api/v1/media/*
  */
 
+import type { Request, Response } from 'express';
 const express = require('express');
 const router = express.Router();
 const multer = require('multer');
@@ -17,6 +18,32 @@ const config = require('../config/app');
 // oversized image (a "pixel bomb") can't exhaust memory and OOM/CPU-kill the single-process
 // backend during upload processing. ~40 megapixels is far above any legitimate web image.
 const MAX_SHARP_INPUT_PIXELS = 40_000_000;
+
+/**
+ * multer is pulled in with require() and tsconfig pins `types` to ["node"], so @types/multer's
+ * ambient augmentation of Express.Request is not part of this program: neither the storage/filter
+ * callback signatures nor `req.file` are visible to the compiler. These describe exactly the multer
+ * surface this file touches, so the handlers below get real checking instead of the parameter being
+ * annotated `any` (or cast back to it, which is the same thing wearing a type).
+ */
+
+/** What multer hands the diskStorage/fileFilter callbacks, BEFORE the upload reaches disk. */
+interface IncomingFile {
+    fieldname: string;
+    originalname: string;
+    encoding: string;
+    mimetype: string;
+}
+
+/** What multer attaches to `req.file` once the upload has been stored. */
+interface StoredFile extends IncomingFile {
+    size: number;
+    destination: string;
+    filename: string;
+    path: string;
+}
+
+type UploadRequest = Request & { file?: StoredFile };
 
 /**
  * @swagger
@@ -48,7 +75,7 @@ if (!fs.existsSync(config.uploads.dir)) {
 
 // Configure multer storage
 const storage = multer.diskStorage({
-    destination: (req: any, file: any, cb: any) => {
+    destination: (req: Request, file: IncomingFile, cb: (error: Error | null, destination: string) => void) => {
         // Create year/month subdirectory
         const date = new Date();
         const subDir = `${date.getFullYear()}/${String(date.getMonth() + 1).padStart(2, '0')}`;
@@ -60,7 +87,7 @@ const storage = multer.diskStorage({
 
         cb(null, uploadPath);
     },
-    filename: (req: any, file: any, cb: any) => {
+    filename: (req: Request, file: IncomingFile, cb: (error: Error | null, filename: string) => void) => {
         // SECURITY: Derive the STORED extension from the validated MIME->extension allowlist
         // (Media.getExtensionForMime), NOT from the client-supplied originalname. This prevents
         // a malicious filename (e.g. "x.php"/"x.html") from being persisted/served verbatim.
@@ -76,7 +103,7 @@ const storage = multer.diskStorage({
 });
 
 // File filter
-const fileFilter = (req: any, file: any, cb: any) => {
+const fileFilter = (req: Request, file: IncomingFile, cb: (error: Error | null, acceptFile: boolean) => void) => {
     // SECURITY: Block SVG uploads for non-admins (SVGs can contain JavaScript)
     if (file.mimetype === 'image/svg+xml') {
         if (!req.user || req.user.getRole() !== 'administrator') {
@@ -148,7 +175,7 @@ const upload = multer({
  *               items:
  *                 $ref: '#/components/schemas/Media'
  */
-router.get('/', optionalAuth, asyncHandler(async (req: any, res: any) => {
+router.get('/', optionalAuth, asyncHandler(async (req: Request, res: Response) => {
     const {
         page = 1,
         per_page = 20,
@@ -158,8 +185,12 @@ router.get('/', optionalAuth, asyncHandler(async (req: any, res: any) => {
         order = 'desc'
     } = req.query;
 
-    const limit = Math.min(parseInt(per_page, 10) || 20, 100);
-    const offset = (Math.max(parseInt(page, 10) || 1, 1) - 1) * limit;
+    // String() before parseInt() only spells out the coercion parseInt has always performed on these
+    // values: a query parameter is `string | string[] | ParsedQs | ...`, and parseInt's first step is
+    // ToString on whatever it is given. `?per_page[]=5` still parses as 5, `?per_page=a&per_page=b`
+    // still stringifies to 'a,b' and falls back to the default — identical to the untyped path.
+    const limit = Math.min(parseInt(String(per_page), 10) || 20, 100);
+    const offset = (Math.max(parseInt(String(page), 10) || 1, 1) - 1) * limit;
 
     // Same pair of request-value defects as routes/comments.ts (see the note there):
     //  · Object.create(null) so `?orderby=constructor` finds no inherited key and `|| 'post_date'` fires.
@@ -216,8 +247,10 @@ router.get('/', optionalAuth, asyncHandler(async (req: any, res: any) => {
     const total = Math.max(0, (await Media.count({ search, mimeType: mime_type })) - hiddenOnPage);
     const totalPages = Math.ceil(total / limit);
 
-    res.set('X-WP-Total', total);
-    res.set('X-WP-TotalPages', totalPages);
+    // String() is what res.set() already did to these numbers internally; spelling it out satisfies
+    // the typed signature (string | string[]) and emits byte-identical headers.
+    res.set('X-WP-Total', String(total));
+    res.set('X-WP-TotalPages', String(totalPages));
 
     res.json(visibleMedia);
 }));
@@ -226,8 +259,11 @@ router.get('/', optionalAuth, asyncHandler(async (req: any, res: any) => {
  * GET /media/:id
  * Get single media
  */
-router.get('/:id', optionalAuth, asyncHandler(async (req: any, res: any) => {
-    const media = await Media.findById(parseInt(req.params.id, 10));
+router.get('/:id', optionalAuth, asyncHandler(async (req: Request, res: Response) => {
+    // Express 5 types a route param as `string | string[]` (repeatable patterns like `/:id+`); this
+    // route declares a single `/:id`, so the value is always a string at runtime. String() spells out
+    // the ToString parseInt already applied, so the parse is unchanged for every possible input.
+    const media = await Media.findById(parseInt(String(req.params.id), 10));
 
     if (!media) {
         return res.status(404).json({
@@ -288,8 +324,11 @@ router.get('/:id', optionalAuth, asyncHandler(async (req: any, res: any) => {
  *       400:
  *         description: Invalid file
  */
-router.post('/', authenticate, can('upload_files'), upload.single('file'), asyncHandler(async (req: any, res: any) => {
-    if (!req.file) {
+router.post('/', authenticate, can('upload_files'), upload.single('file'), asyncHandler(async (req: UploadRequest, res: Response) => {
+    // Bound once into a const so the "an upload actually arrived" guard below still holds inside the
+    // per-size callbacks further down; narrowing a property access does not survive a closure.
+    const uploaded = req.file;
+    if (!uploaded) {
         return res.status(400).json({
             code: 'rest_upload_no_file',
             message: 'No file was uploaded.',
@@ -305,7 +344,7 @@ router.post('/', authenticate, can('upload_files'), upload.single('file'), async
     // magic-byte result is treated as a forgery attempt (fail-closed) rather than waved through.
     // SVG is text-based XML (no fixed signature) and is handled by the sanitization path below,
     // so it is intentionally excluded from this requirement.
-    const declaredMime = req.file.mimetype || '';
+    const declaredMime = uploaded.mimetype || '';
     const requiresSignature =
         (declaredMime.startsWith('image/') && declaredMime !== 'image/svg+xml') ||
         declaredMime === 'application/pdf';
@@ -328,7 +367,7 @@ router.post('/', authenticate, can('upload_files'), upload.single('file'), async
             0xA6, 0xD9, 0x00, 0xAA, 0x00, 0x62, 0xCE, 0x6C
         ]);
 
-        const fd = fs.openSync(req.file.path, 'r');
+        const fd = fs.openSync(uploaded.path, 'r');
         let head: Buffer;
         try {
             const buf = Buffer.alloc(MAGIC_BYTES);
@@ -359,7 +398,7 @@ router.post('/', authenticate, can('upload_files'), upload.single('file'), async
         if (result) {
             const allowed = Media.isAllowedMimeType(result.mime);
             if (!allowed) {
-                fs.unlinkSync(req.file.path);
+                fs.unlinkSync(uploaded.path);
                 return res.status(400).json({
                     code: 'rest_upload_invalid_file_type',
                     message: `File content (${result.mime}) does not match allowed types.`,
@@ -370,7 +409,7 @@ router.post('/', authenticate, can('upload_files'), upload.single('file'), async
             // agree with the declared MIME (e.g. declared image/png whose bytes are application/pdf
             // would be a mismatch). This blocks polyglot/extension-confusion uploads.
             if (requiresSignature && result.mime !== declaredMime) {
-                fs.unlinkSync(req.file.path);
+                fs.unlinkSync(uploaded.path);
                 return res.status(400).json({
                     code: 'rest_upload_invalid_file_type',
                     message: `File content (${result.mime}) does not match the declared type (${declaredMime}).`,
@@ -380,7 +419,7 @@ router.post('/', authenticate, can('upload_files'), upload.single('file'), async
         } else if (requiresSignature) {
             // FAIL-CLOSED: a type that must have a signature but file-type could not confirm one
             // (e.g. an HTML/text payload renamed to .png/.pdf) is rejected.
-            fs.unlinkSync(req.file.path);
+            fs.unlinkSync(uploaded.path);
             return res.status(400).json({
                 code: 'rest_upload_invalid_file_type',
                 message: `File content could not be verified for declared type ${declaredMime}.`,
@@ -389,8 +428,8 @@ router.post('/', authenticate, can('upload_files'), upload.single('file'), async
         }
 
         // SVG Sanitization (Defense in Depth)
-        if (req.file.mimetype === 'image/svg+xml') {
-            const rawSvg = fs.readFileSync(req.file.path, 'utf8');
+        if (uploaded.mimetype === 'image/svg+xml') {
+            const rawSvg = fs.readFileSync(uploaded.path, 'utf8');
             // Sanitize via an explicit ALLOWLIST. The previous config used allowedAttributes:false
             // (allow ALL attributes) and only stripped <script> + tags whose NAME starts with 'on' —
             // but event handlers like onload/onerror are ATTRIBUTES, never tag names, so they survived
@@ -419,7 +458,7 @@ router.post('/', authenticate, can('upload_files'), upload.single('file'), async
                 allowedSchemesByTag: { image: ['http', 'https', 'data'] },
                 parser: { lowerCaseAttributeNames: false }
             });
-            fs.writeFileSync(req.file.path, cleanSvg);
+            fs.writeFileSync(uploaded.path, cleanSvg);
         }
 
     } catch (err) {
@@ -427,7 +466,7 @@ router.post('/', authenticate, can('upload_files'), upload.single('file'), async
         // FAIL-CLOSED: if the magic-byte/sanitization step threw for a type that MUST carry a
         // verifiable signature, do not let the unverified file through.
         if (requiresSignature) {
-            try { if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path); } catch (_) { /* best effort */ }
+            try { if (fs.existsSync(uploaded.path)) fs.unlinkSync(uploaded.path); } catch (_) { /* best effort */ }
             return res.status(400).json({
                 code: 'rest_upload_invalid_file_type',
                 message: `File content could not be verified for declared type ${declaredMime}.`,
@@ -442,16 +481,16 @@ router.post('/', authenticate, can('upload_files'), upload.single('file'), async
     const { title, description, caption, alt } = req.body;
 
     // Get relative path from uploads dir
-    const relativePath = path.relative(config.uploads.dir, req.file.path).replace(/\\/g, '/');
+    const relativePath = path.relative(config.uploads.dir, uploaded.path).replace(/\\/g, '/');
 
     // Image processing
     let width = 0;
     let height = 0;
     let sizes: Record<string, any> = {};
 
-    if (req.file.mimetype.startsWith('image/') && req.file.mimetype !== 'image/svg+xml') {
+    if (uploaded.mimetype.startsWith('image/') && uploaded.mimetype !== 'image/svg+xml') {
         try {
-            const image = sharp(req.file.path, { limitInputPixels: MAX_SHARP_INPUT_PIXELS });
+            const image = sharp(uploaded.path, { limitInputPixels: MAX_SHARP_INPUT_PIXELS });
             const metadata = await image.metadata();
             // EXIF-oriented intrinsic dimensions: orientations 5–8 are 90°-rotated, so the pixels
             // display transposed. Storing the raw values put a phone photo's width/height backwards.
@@ -481,9 +520,9 @@ router.post('/', authenticate, can('upload_files'), upload.single('file'), async
                 ...LADDER.map((w) => ({ name: `w${w}`, w, h: null, crop: false })),
             ];
 
-            const dir = path.dirname(req.file.path);
-            const ext = path.extname(req.file.path);
-            const baseName = path.basename(req.file.path, ext);
+            const dir = path.dirname(uploaded.path);
+            const ext = path.extname(uploaded.path);
+            const baseName = path.basename(uploaded.path, ext);
 
             // ONE decode for every derivative (clone() shares the decoded pipeline; the old loop
             // re-decoded the file per size), auto-oriented with .rotate() — without it EXIF-rotated
@@ -516,7 +555,7 @@ router.post('/', authenticate, can('upload_files'), upload.single('file'), async
                     file: sizeFilename,
                     width: info.width,
                     height: info.height,
-                    mimeType: req.file.mimetype,
+                    mimeType: uploaded.mimetype,
                     filesize: info.size
                 };
             }));
@@ -527,11 +566,11 @@ router.post('/', authenticate, can('upload_files'), upload.single('file'), async
 
     const media = await Media.create({
         authorId: req.user.id,
-        title: title || req.file.originalname,
+        title: title || uploaded.originalname,
         filename: relativePath,
-        mimeType: req.file.mimetype,
+        mimeType: uploaded.mimetype,
         filePath: relativePath,
-        fileSize: req.file.size,
+        fileSize: uploaded.size,
         width,
         height,
         sizes,
@@ -547,8 +586,8 @@ router.post('/', authenticate, can('upload_files'), upload.single('file'), async
  * PUT /media/:id
  * Update media
  */
-router.put('/:id', authenticate, can('upload_files'), asyncHandler(async (req: any, res: any) => {
-    const mediaId = parseInt(req.params.id, 10);
+router.put('/:id', authenticate, can('upload_files'), asyncHandler(async (req: Request, res: Response) => {
+    const mediaId = parseInt(String(req.params.id), 10);
     const media = await Media.findById(mediaId);
 
     if (!media) {
@@ -590,8 +629,8 @@ router.put('/:id', authenticate, can('upload_files'), asyncHandler(async (req: a
  * DELETE /media/:id
  * Delete media
  */
-router.delete('/:id', authenticate, can('upload_files'), asyncHandler(async (req: any, res: any) => {
-    const mediaId = parseInt(req.params.id, 10);
+router.delete('/:id', authenticate, can('upload_files'), asyncHandler(async (req: Request, res: Response) => {
+    const mediaId = parseInt(String(req.params.id), 10);
     const media = await Media.findById(mediaId);
 
     if (!media) {

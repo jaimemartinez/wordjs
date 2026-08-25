@@ -3,7 +3,7 @@
  * /api/v1/revisions/*
  */
 
-import type { Response } from 'express';
+import type { Request, Response } from 'express';
 
 const express = require('express');
 const router = express.Router();
@@ -37,7 +37,7 @@ const {
  * unpublish their OWN editor-published post via restore, and a role with edit but not delete caps could
  * purge history via delete — the same edit-vs-publish/type privilege separation posts.ts already enforces.
  */
-async function authorizeForPost(req: any, postId: any, { action = 'read' } = {}) {
+async function authorizeForPost(req: Request, postId: number | null | undefined, { action = 'read' } = {}) {
     if (postId == null) {
         return { error: { code: 'rest_post_invalid_id', status: 404 } };
     }
@@ -100,10 +100,16 @@ async function authorizeForPost(req: any, postId: any, { action = 'read' } = {})
  *       200:
  *         description: List of revisions
  */
-router.get('/post/:postId', authenticate, asyncHandler(async (req: any, res: Response) => {
-    const postId = parseInt(req.params.postId, 10);
-    const limit = parseInt(req.query.limit) || 10;
-    const offset = parseInt(req.query.offset) || 0;
+router.get('/post/:postId', authenticate, asyncHandler(async (req: Request, res: Response) => {
+    // `req.params.x` is string | string[] and `req.query.x` widens further still; parseInt() accepts
+    // only a string. The explicit String() is the SAME coercion parseInt already applied to the untyped
+    // value (parseInt does ToString on its argument), so every input keeps the result it had before:
+    // a plain string parses identically, `?limit=5&limit=6` still yields 5 from the joined "5,6", and an
+    // absent or object-shaped value is still NaN and still falls through to the `||` default. The radix
+    // is left off limit/offset exactly as it was — adding one here would be a behaviour change.
+    const postId = parseInt(String(req.params.postId), 10);
+    const limit = parseInt(String(req.query.limit)) || 10;
+    const offset = parseInt(String(req.query.offset)) || 0;
 
     const auth = await authorizeForPost(req, postId);
     if (auth.error) {
@@ -143,8 +149,8 @@ router.get('/post/:postId', authenticate, asyncHandler(async (req: any, res: Res
  *       404:
  *         description: Revision not found
  */
-router.get('/:id', authenticate, asyncHandler(async (req: any, res: Response) => {
-    const revision = await getRevision(parseInt(req.params.id, 10));
+router.get('/:id', authenticate, asyncHandler(async (req: Request, res: Response) => {
+    const revision = await getRevision(parseInt(String(req.params.id), 10));
 
     if (!revision) {
         return res.status(404).json({ error: 'Revision not found' });
@@ -179,8 +185,8 @@ router.get('/:id', authenticate, asyncHandler(async (req: any, res: Response) =>
  *       200:
  *         description: Revision restored
  */
-router.post('/:id/restore', authenticate, asyncHandler(async (req: any, res: Response) => {
-    const revisionId = parseInt(req.params.id, 10);
+router.post('/:id/restore', authenticate, asyncHandler(async (req: Request, res: Response) => {
+    const revisionId = parseInt(String(req.params.id), 10);
 
     const revision = await getRevision(revisionId);
     if (!revision) {
@@ -258,8 +264,8 @@ router.post('/:id/restore', authenticate, asyncHandler(async (req: any, res: Res
  *       200:
  *         description: Revision deleted
  */
-router.delete('/:id', authenticate, asyncHandler(async (req: any, res: Response) => {
-    const revisionId = parseInt(req.params.id, 10);
+router.delete('/:id', authenticate, asyncHandler(async (req: Request, res: Response) => {
+    const revisionId = parseInt(String(req.params.id), 10);
 
     const revision = await getRevision(revisionId);
     if (!revision) {
@@ -302,10 +308,10 @@ router.delete('/:id', authenticate, asyncHandler(async (req: any, res: Response)
  *       200:
  *         description: Comparison diff
  */
-router.get('/compare/:id1/:id2', authenticate, asyncHandler(async (req: any, res: Response) => {
+router.get('/compare/:id1/:id2', authenticate, asyncHandler(async (req: Request, res: Response) => {
     const comparison = await compareRevisions(
-        parseInt(req.params.id1, 10),
-        parseInt(req.params.id2, 10)
+        parseInt(String(req.params.id1), 10),
+        parseInt(String(req.params.id2), 10)
     );
 
     if (!comparison) {

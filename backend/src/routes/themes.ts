@@ -4,6 +4,11 @@
  */
 
 import type { Request, Response } from 'express';
+// `req.file` is multer's, and its declaration lives in @types/multer's `declare global` block. tsconfig
+// pins `"types": ["node"]`, so no @types package is auto-included: the augmentation only reaches the
+// program when something IMPORTS the module, and every use of multer here goes through `require`. This
+// is a type-only import — it is erased, emits nothing, and adds no second require of multer.
+import type {} from 'multer';
 
 const express = require('express');
 const router = express.Router();
@@ -66,7 +71,7 @@ const upload = multer({
         fields: 10,         // Minimal fields needed
         parts: 15           // Limited total parts
     },
-    fileFilter: (req: any, file: any, cb: any) => {
+    fileFilter: (req: Request, file: any, cb: any) => {
         if (file.mimetype === 'application/zip' || file.mimetype === 'application/x-zip-compressed' || file.originalname.endsWith('.zip')) {
             cb(null, true);
         } else {
@@ -171,7 +176,7 @@ function writeJsonAtomic(target: string, text: string): void {
  *       400:
  *         description: Invalid file or zip slip
  */
-router.post('/upload', authenticate, isAdmin, upload.single('theme'), asyncHandler(async (req: any, res: Response) => {
+router.post('/upload', authenticate, isAdmin, upload.single('theme'), asyncHandler(async (req: Request, res: Response) => {
     if (!req.file) {
         return res.status(400).json({ error: 'No file uploaded' });
     }
@@ -344,7 +349,7 @@ router.get('/', asyncHandler(async (req: Request, res: Response) => {
  *       409:
  *         description: Theme already exists
  */
-router.post('/', authenticate, isAdmin, asyncHandler(async (req: any, res: Response) => {
+router.post('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     const body = isPlainObject(req.body) ? req.body : {};
     // SECURITY: Validate slug (same gate as the sibling routes; typeof first — the regex
     // would stringify a missing slug into the literal "undefined", which passes the charset)
@@ -452,7 +457,7 @@ router.post('/', authenticate, isAdmin, asyncHandler(async (req: any, res: Respo
  *       409:
  *         description: Theme was not created by the WordJS writer
  */
-router.put('/:slug', authenticate, isAdmin, asyncHandler(async (req: any, res: Response) => {
+router.put('/:slug', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     // SECURITY: the slug picks the directory this handler WRITES theme.json and style.css into, so it
     // uses the resolved-and-contained path the gate returns rather than re-joining the raw param.
     const themeDir = resolveThemeDirOr400(req.params.slug);
@@ -558,7 +563,7 @@ router.post('/:slug/activate', authenticate, isAdmin, asyncHandler(async (req: R
     // theme-engine.init() is serialized process-wide; guarding the route alone would leave both open.
     const result = await switchTheme(req.params.slug);
     // AUDIT: an admin activated a theme. Slug only — no secret material.
-    await recordAudit((req as any).user && (req as any).user.id, 'theme.activate', 'theme', req.params.slug, {});
+    await recordAudit(req.user && req.user.id, 'theme.activate', 'theme', req.params.slug, {});
     res.json(result);
 }));
 
@@ -787,7 +792,7 @@ router.get('/mods/export', authenticate, isAdmin, asyncHandler(async (req: Reque
  *       400:
  *         description: "Invalid payload — { error, errors: [{ key, code, message }] }, nothing written"
  */
-router.post('/mods/import', authenticate, isAdmin, asyncHandler(async (req: any, res: Response) => {
+router.post('/mods/import', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     // NEVER trust the uploaded JSON. Accept a bare mods map OR the export wrapper, then validate STRICTLY:
     // one bad key/value fails the whole import (reject, never silently strip a subset).
     const { extractImportMods } = require('../core/theme-mods');

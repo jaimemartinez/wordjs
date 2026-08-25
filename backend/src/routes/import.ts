@@ -6,7 +6,10 @@
  * entity counts (analyze) or runs the idempotent import.
  */
 
-import type { Response } from 'express';
+import type { Request, Response } from 'express';
+// multer is loaded with require() below, so nothing in this file pulls its types into the program.
+// This type-only import does, which is also what gives `req.file` its Express.Multer.File type.
+import type { FileFilterCallback } from 'multer';
 const express = require('express');
 const router = express.Router();
 const multer = require('multer');
@@ -32,7 +35,7 @@ const upload = multer({
         fields: 10,
         parts: 15,
     },
-    fileFilter: (req: any, file: any, cb: any) => {
+    fileFilter: (req: Request, file: Express.Multer.File, cb: FileFilterCallback) => {
         const name = (file.originalname || '').toLowerCase();
         const okType = ['text/xml', 'application/xml', 'application/rss+xml', 'application/octet-stream'].includes(file.mimetype);
         if (okType || name.endsWith('.xml') || name.endsWith('.wxr')) {
@@ -55,7 +58,7 @@ function readAndCleanup(filePath: string): string {
  * POST /api/v1/import/wordpress/analyze
  * Dry-run: parse the WXR and return entity counts without writing anything.
  */
-router.post('/wordpress/analyze', authenticate, isAdmin, upload.single('file'), asyncHandler(async (req: any, res: Response) => {
+router.post('/wordpress/analyze', authenticate, isAdmin, upload.single('file'), asyncHandler(async (req: Request, res: Response) => {
     if (!req.file) {
         return res.status(400).json({ code: 'no_file', message: 'No WXR file uploaded (field "file").' });
     }
@@ -78,7 +81,7 @@ router.post('/wordpress/analyze', authenticate, isAdmin, upload.single('file'), 
  * Run the import. Body fields (multipart): defaultAuthorId, importComments ("1"/"0"),
  * importAttachments ("1"/"0").
  */
-router.post('/wordpress', authenticate, isAdmin, upload.single('file'), asyncHandler(async (req: any, res: Response) => {
+router.post('/wordpress', authenticate, isAdmin, upload.single('file'), asyncHandler(async (req: Request, res: Response) => {
     if (!req.file) {
         return res.status(400).json({ code: 'no_file', message: 'No WXR file uploaded (field "file").' });
     }

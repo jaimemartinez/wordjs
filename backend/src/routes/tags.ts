@@ -3,7 +3,7 @@
  * /api/v1/tags/*
  */
 
-import type { Response } from 'express';
+import type { Request, Response } from 'express';
 
 const express = require('express');
 const router = express.Router();
@@ -40,7 +40,7 @@ const TAXONOMY = 'post_tag';
  *       200:
  *         description: List of tags
  */
-router.get('/', optionalAuth, asyncHandler(async (req: any, res: Response) => {
+router.get('/', optionalAuth, asyncHandler(async (req: Request, res: Response) => {
     const {
         page = 1,
         per_page = 100,
@@ -50,8 +50,12 @@ router.get('/', optionalAuth, asyncHandler(async (req: any, res: Response) => {
         order = 'asc'
     } = req.query;
 
-    const limit = Math.min(parseInt(per_page, 10) || 100, 100);
-    const offset = (Math.max(parseInt(page, 10) || 1, 1) - 1) * limit;
+    // A query value is `string | string[] | ParsedQs | ParsedQs[]`, never guaranteed to be a string.
+    // parseInt() begins by applying ToString to its argument, so String(x) here reproduces the old
+    // untyped path EXACTLY for every shape: '3' -> 3, ['3','4'] -> parseInt('3,4') -> 3, an object ->
+    // parseInt('[object Object]') -> NaN -> the `||` default.
+    const limit = Math.min(parseInt(String(per_page), 10) || 100, 100);
+    const offset = (Math.max(parseInt(String(page), 10) || 1, 1) - 1) * limit;
 
     const terms = await Term.findAll({
         taxonomy: TAXONOMY,
@@ -94,8 +98,11 @@ router.get('/', optionalAuth, asyncHandler(async (req: any, res: Response) => {
  *       404:
  *         description: Tag not found
  */
-router.get('/:id', optionalAuth, asyncHandler(async (req: any, res: Response) => {
-    const term = await Term.findById(parseInt(req.params.id, 10), TAXONOMY);
+router.get('/:id', optionalAuth, asyncHandler(async (req: Request, res: Response) => {
+    // `req.params.id` is typed `string | string[]`, so it needs a narrowing before parseInt(). String()
+    // is the one that changes nothing: parseInt() already applies ToString to its argument, so this is
+    // the exact value the previous untyped call parsed, for a string AND for the array shape.
+    const term = await Term.findById(parseInt(String(req.params.id), 10), TAXONOMY);
 
     if (!term) {
         return res.status(404).json({
@@ -136,7 +143,7 @@ router.get('/:id', optionalAuth, asyncHandler(async (req: any, res: Response) =>
  *       400:
  *         description: Validation error
  */
-router.post('/', authenticate, can('manage_categories'), asyncHandler(async (req: any, res: Response) => {
+router.post('/', authenticate, can('manage_categories'), asyncHandler(async (req: Request, res: Response) => {
     const { name, slug, description } = req.body;
 
     if (!name) {
@@ -200,8 +207,8 @@ router.post('/', authenticate, can('manage_categories'), asyncHandler(async (req
  *       404:
  *         description: Tag not found
  */
-router.put('/:id', authenticate, can('manage_categories'), asyncHandler(async (req: any, res: Response) => {
-    const termId = parseInt(req.params.id, 10);
+router.put('/:id', authenticate, can('manage_categories'), asyncHandler(async (req: Request, res: Response) => {
+    const termId = parseInt(String(req.params.id), 10);
     const term = await Term.findById(termId, TAXONOMY);
 
     if (!term) {
@@ -243,8 +250,8 @@ router.put('/:id', authenticate, can('manage_categories'), asyncHandler(async (r
  *       404:
  *         description: Tag not found
  */
-router.delete('/:id', authenticate, can('manage_categories'), asyncHandler(async (req: any, res: Response) => {
-    const termId = parseInt(req.params.id, 10);
+router.delete('/:id', authenticate, can('manage_categories'), asyncHandler(async (req: Request, res: Response) => {
+    const termId = parseInt(String(req.params.id), 10);
     const term = await Term.findById(termId, TAXONOMY);
 
     if (!term) {

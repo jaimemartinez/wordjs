@@ -3,7 +3,12 @@
  * /api/v1/fonts
  */
 
-import type { Request, Response } from 'express';
+import type { Request, Response, NextFunction } from 'express';
+// `req.file` is multer's, and its declaration lives in @types/multer's `declare global` block. tsconfig
+// pins `"types": ["node"]`, so no @types package is auto-included: the augmentation only reaches the
+// program when something IMPORTS the module, and every use of multer here goes through `require`. This
+// is a type-only import — it is erased, emits nothing, and adds no second require of multer.
+import type {} from 'multer';
 
 const express = require('express');
 const router = express.Router();
@@ -40,10 +45,10 @@ if (!fs.existsSync(fontsDir)) {
 
 // Configure multer storage for fonts
 const storage = multer.diskStorage({
-    destination: (req: any, file: any, cb: any) => {
+    destination: (req: Request, file: any, cb: any) => {
         cb(null, fontsDir);
     },
-    filename: (req: any, file: any, cb: any) => {
+    filename: (req: Request, file: any, cb: any) => {
         // Derive a SAFE stored name: sanitized base + random suffix + a font-only extension. The random
         // suffix stops an upload from OVERWRITING an existing/system font (a deterministic name let a
         // malicious admin clobber Roboto etc.), and forcing a font extension (fileFilter already rejects
@@ -60,7 +65,7 @@ const storage = multer.diskStorage({
 // File filter for fonts — extension-only gate (see FONT_EXTS note). AND-ing an unreliable MIME would
 // reject legit fonts that browsers label application/octet-stream; gating on the extension alone still
 // blocks the non-font types (html/svg/png) that made the OR-logic a stored-content risk.
-const fileFilter = (req: any, file: any, cb: any) => {
+const fileFilter = (req: Request, file: any, cb: any) => {
     const ext = path.extname(file.originalname).toLowerCase();
     if (FONT_EXTS.includes(ext)) {
         cb(null, true);
@@ -79,7 +84,7 @@ const upload = multer({
 
 // Wrap multer so a rejected upload (non-font extension via fileFilter, or the size limit) returns a
 // clean 400 instead of bubbling to the generic error handler as a 500.
-function uploadFontSingle(req: any, res: any, next: any) {
+function uploadFontSingle(req: Request, res: Response, next: NextFunction) {
     upload.single('file')(req, res, (err: any) => {
         if (err) {
             return res.status(400).json({ error: err.message || 'Invalid font upload.' });
@@ -187,7 +192,7 @@ router.get('/', optionalAuth, asyncHandler(async (req: Request, res: Response) =
  * POST /fonts
  * Upload a new font
  */
-router.post('/', authenticate, can('manage_options'), uploadFontSingle, asyncHandler(async (req: any, res: Response) => {
+router.post('/', authenticate, can('manage_options'), uploadFontSingle, asyncHandler(async (req: Request, res: Response) => {
     if (!req.file) {
         return res.status(400).json({ error: 'No file uploaded' });
     }
