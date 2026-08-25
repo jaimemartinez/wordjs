@@ -133,7 +133,17 @@
         "settings": { "path": "/api/v1/settings", "planOperation": "query", "required": true, "observedRatioToReference": null, "maximumRatioToReference": null },
         "posts": { "path": "/api/v1/posts?per_page=10", "planOperation": "query", "required": true, "observedRatioToReference": null, "maximumRatioToReference": null }
       },
-      "calibration": "UNCALIBRATED. These ratios need a production build and a running site, which no CI job and no unit test provides, so no honest observation exists yet. `npm run perf:bench:enforce` therefore FAILS with an instruction to run `node scripts/perf-bench.mjs <baseUrl> --slug <slug> --calibrate` on the host being certified and paste the recorded observations here. That is deliberate: a ratio nobody measured must not report green, and the alternative — skipping the uncalibrated entries — is the failure mode this programme has already had to fix twice.",
+      "calibration": "UNCALIBRATED, and the first attempt to calibrate found two reasons it must stay that way until this budget is redesigned. `npm run perf:bench:enforce` therefore still FAILS with an instruction rather than reporting green on evidence that does not support it — a ratio nobody measured must not pass, and skipping the uncalibrated entries is the failure mode this programme has already had to fix twice. See firstCleanObservation for what was measured, and reference.note for the two defects.",
+      "firstCleanObservation": {
+        "measuredOn": { "platform": "win32", "arch": "x64", "date": "2026-08-25", "build": "production monolith", "connections": 8, "durationSecondsPerTarget": 6 },
+        "referenceP95Milliseconds": 1,
+        "p95Milliseconds": { "home": 61, "post": 40, "settings": 230, "posts": 152 },
+        "whyNotRecordedAsCalibration": [
+          "THE DENOMINATOR HAS NO RESOLUTION. /healthz reports p95 = 1ms and autocannon reports latency in whole milliseconds, so every ratio is the target p95 divided by 1 — it EQUALS the absolute p95 and normalises nothing between machines, which is the only reason this budget is expressed as a ratio at all. Quantising a 1ms denominator carries up to a 2x error by itself. The in-process budget above avoided exactly this by choosing a ten-insert batch large enough that timer jitter is not a meaningful share of it (see reference.why); the HTTP reference needs the same treatment.",
+          "ONE RUN IS ALL THE RATE LIMITER ALLOWS. methodology.note requires the WORST of several runs. This run was clean (non2xx = 0); three further runs in the same 15-minute window returned ~20000 non-2xx each, and their API rows measured the limiter rather than the route — settings 'improved' from 230ms to 5ms. Calibrating needs runs spaced past the 1000-request window, or the bench exempted from the limiter."
+        ],
+        "note": "Kept because a measurement that exists beats a blank, and because settings at 230ms p95 / 43 req-per-second is worth looking at on its own terms."
+      },
       "absoluteCeilingsFrom": "backend/f0-performance-budgets.json#httpSteadyState"
     }
   }
