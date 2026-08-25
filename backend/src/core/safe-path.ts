@@ -23,11 +23,11 @@
  * FAIL CLOSED: anything that does not pass returns null. There is no "sanitized" fallback — a name
  * that cannot be a candidate must never be offered as one.
  *
- * Dependency-free (node:path only) on purpose: core/theme-doctor and core/template-validate are
- * loadable by the CLI without booting any subsystem, and requiring this must not change that.
+ * Depends only on node:path and generated contract data, so requiring it still boots no subsystem.
  */
 
 const path = require('path');
+const { THEME_CONTRACT } = require('../generated/visual-contract.generated');
 
 /**
  * A theme directory name. IDENTICAL to the guard core/themes.installThemeFromDir enforces on the way
@@ -35,16 +35,15 @@ const path = require('path');
  * matched this, so this is the widest shape a reader ever needs to accept. Leading char is
  * alphanumeric (no `-`/`_` first: no accidental option-looking names), 64 chars max.
  */
-const THEME_SLUG = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
+const THEME_SLUG = new RegExp(THEME_CONTRACT.slugPattern);
 
 /**
  * A file name a theme ships under chrome/ or templates/, WITHOUT the .json extension. Same source as
- * core/chrome-validate's TEMPLATE_PART_NAME and core/template-validate's PART_NAME (those two
- * re-declare it so each module loads alone; backend/src/tests/safe-path.test.ts asserts all three are
- * character-for-character identical, exactly like template-parts.test.ts already does for the pair).
+ * core/chrome-validate's TEMPLATE_PART_NAME and core/template-validate's PART_NAME. All are now
+ * projected from the same visual contract rather than synchronized by parity tests alone.
  * The name lands in a /themes/<slug>/templates/<name>.json URL, so it is deliberately narrow.
  */
-const THEME_ASSET_NAME = /^[a-z0-9-]{1,40}$/;
+const THEME_ASSET_NAME = new RegExp(THEME_CONTRACT.assetNamePattern);
 
 /** Is `v` a theme directory name the installer could have produced? */
 function isThemeSlug(v: unknown): boolean {

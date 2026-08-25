@@ -4,6 +4,7 @@ import React, { useEffect, useState, useCallback, useRef } from "react";
 import { settingsApi, themesApi, Theme } from "@/lib/api";
 import { useI18n } from "@/contexts/I18nContext";
 import { PageHeader, Button } from "@/components/ui";
+import { sanitizeThemeMods } from "@/lib/themeTokenPolicy";
 
 // The single settings key that stores the live theme overlay. The public site SSR-injects this
 // (active_theme_mods option -> inline :root{}) so saving here re-skins the live site.
@@ -70,25 +71,10 @@ const ALL_TOKENS: TokenDef[] = TOKEN_GROUPS.flatMap((g) => g.tokens);
 
 // Key/value sanitizer — mirror the server's contract: only --wjs-* keys, short values without CSS
 // control characters. Returns a clean object suitable for JSON.stringify into the settings key.
-const TOKEN_KEY_RE = /^--wjs-[a-z0-9-]+$/;
-// SECURITY mirror of ThemeTokenOverlay: `url(//attacker.example/x)` is a protocol-relative URL — no
-// `:` needed — so ban `//`, `url(` (any spacing/case) and backslash escapes outright. Keep this
-// helper byte-identical with components/public/ThemeTokenOverlay.tsx (pinned by test).
-function isForbiddenTokenValue(value: string): boolean {
-    return value.includes("//") || /url\s*\(/i.test(value) || value.includes("\\");
-}
 function sanitizeMods(input: Record<string, string>): Record<string, string> {
-    const out: Record<string, string> = {};
-    for (const [key, raw] of Object.entries(input)) {
-        if (!TOKEN_KEY_RE.test(key)) continue;
-        const value = (raw ?? "").trim();
-        if (!value) continue; // drop empties (= no override for this token)
-        if (value.length > 120) continue;
-        if (/[;{}:<>]/.test(value)) continue;
-        if (isForbiddenTokenValue(value)) continue;
-        out[key] = value;
-    }
-    return out;
+    return sanitizeThemeMods(Object.fromEntries(
+        Object.entries(input).map(([key, value]) => [key, (value ?? "").trim()]),
+    ));
 }
 
 // Is a string a hex color the native color picker can render? (#rgb / #rrggbb)

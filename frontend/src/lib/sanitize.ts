@@ -20,6 +20,12 @@ import { ALLOWED_IFRAME_HOSTS as EMBED_IFRAME_HOSTS, ALLOWED_EMBED_HOSTS as EMBE
 // it reaches it through a block prop, and one criterion answers for both. See safeStyle.ts's
 // "THE SAME ATTRIBUTE, THE OTHER SINK" header for why bounding only the prop channel was not enough.
 import { UNSAFE_STYLE_VALUE, safeClassAttribute } from '@/components/blocks/safeStyle';
+import {
+    HTML_SANITIZATION,
+    URL_SANITIZATION,
+} from '@/generated/visual-contract.generated';
+
+const URL_STRIPPED_CONTROLS = new RegExp(URL_SANITIZATION.stripControlsPattern, 'g');
 
 // Load sanitize-html at SSR RUNTIME. This file is "use client", but sanitizeHTML() also runs during
 // SERVER rendering of client components. A plain `require('sanitize-html')` here is rewritten by
@@ -44,12 +50,12 @@ function loadSanitizeHtml(): any {
     return (_sanitizeHtmlLib = require('sanitize-html'));
 }
 
-// Allowlist of iframe embed hosts (mirrored by the backend's sanitize-meta.ts). Arbitrary iframe src
+// Allowlist of iframe embed hosts (generated with the backend's sanitize-meta.ts). Arbitrary iframe src
 // is NOT permitted — only these hosts — and every surviving iframe is forced to carry a sandbox
 // attribute. The CSP `frame-src` (next.config.ts) is the backstop if anything slips past this list,
 // and it is DERIVED from the very same module so the two can no longer drift apart.
 export const ALLOWED_IFRAME_HOSTS: readonly string[] = EMBED_IFRAME_HOSTS;
-const IFRAME_SANDBOX = 'allow-scripts allow-same-origin allow-presentation';
+const IFRAME_SANDBOX = HTML_SANITIZATION.iframeSandbox;
 
 export function isAllowedIframeSrc(src: string | null | undefined): boolean {
     if (!src) return false;
@@ -71,14 +77,17 @@ export function isAllowedIframeSrc(src: string | null | undefined): boolean {
  * rebuilt from our own constants — an attacker-supplied string never survives into the src.
  * `ALLOWED_EMBED_HOSTS` is ALLOWED_IFRAME_HOSTS plus youtube's cookie-less mirror of the same
  * player, which the block has always honored when the author pasted one. */
-const YT_STANDARD_HOSTS = new Set(['youtube.com', 'www.youtube.com', 'm.youtube.com', 'music.youtube.com']);
-const YT_NOCOOKIE_HOSTS = new Set(['youtube-nocookie.com', 'www.youtube-nocookie.com']);
-const YT_SHORT_HOSTS = new Set(['youtu.be', 'www.youtu.be']);
-const VIMEO_PAGE_HOSTS = new Set(['vimeo.com', 'www.vimeo.com']);
-const VIMEO_PLAYER_HOST = 'player.vimeo.com';
+const VIDEO_PROVIDERS = HTML_SANITIZATION.videoProviders;
+const YOUTUBE_PROVIDER = VIDEO_PROVIDERS.youtube;
+const VIMEO_PROVIDER = VIDEO_PROVIDERS.vimeo;
+const YT_STANDARD_HOSTS = new Set<string>(YOUTUBE_PROVIDER.standardHosts);
+const YT_NOCOOKIE_HOSTS = new Set<string>(YOUTUBE_PROVIDER.noCookieHosts);
+const YT_SHORT_HOSTS = new Set<string>(YOUTUBE_PROVIDER.shortHosts);
+const VIMEO_PAGE_HOSTS = new Set<string>(VIMEO_PROVIDER.pageHosts);
+const VIMEO_PLAYER_HOST = VIMEO_PROVIDER.outputHost;
 export const ALLOWED_EMBED_HOSTS: readonly string[] = EMBED_ALL_HOSTS;
 // Path shapes that carry the id, and the id shapes themselves. Anything else → no embed.
-const YT_ID_PATH = new Set(['embed', 'shorts', 'v', 'live']);
+const YT_ID_PATH = new Set<string>(YOUTUBE_PROVIDER.idPathSegments);
 const YT_VIDEO_ID = /^[A-Za-z0-9_-]{1,64}$/;
 const VIMEO_ID = /^\d{1,20}$/;
 const VIMEO_HASH = /^[A-Za-z0-9]{1,40}$/;
@@ -97,7 +106,7 @@ const VIMEO_HASH = /^[A-Za-z0-9]{1,40}$/;
  */
 export function sameOriginPath(raw: unknown): string | null {
     if (typeof raw !== 'string') return null;
-    const clean = raw.replace(/[\t\n\r]/g, '');
+    const clean = raw.replace(URL_STRIPPED_CONTROLS, '');
     if (!clean.startsWith('/')) return null;
     if (/^\/[/\\]/.test(clean)) return null;
     return clean;
@@ -133,7 +142,7 @@ export function resolveVideoEmbedUrl(raw: unknown): string | null {
             fromEmbed = seg[0] === 'embed';
         }
         if (!YT_VIDEO_ID.test(id)) return null;
-        const out = new URL(`https://${nocookie ? 'www.youtube-nocookie.com' : 'www.youtube.com'}/embed/${id}`);
+        const out = new URL(`https://${nocookie ? YOUTUBE_PROVIDER.noCookieOutputHost : YOUTUBE_PROVIDER.outputHost}/embed/${id}`);
         // An already-embed URL keeps its player params (start=, list=…) — re-encoded through the URL
         // API, so they stay params and cannot grow a second path or host.
         if (fromEmbed && u.search) {
@@ -167,10 +176,7 @@ export function resolveVideoEmbedUrl(raw: unknown): string | null {
 // font family and alignment. Allowing the RAW `style` attribute is an injection vector (url() beacons
 // for exfiltration/tracking, expression(), position/overlay tricks), so instead we permit ONLY a
 // small allowlist of typographic properties, and only with injection-free values.
-const ALLOWED_STYLE_PROPS = new Set([
-    'color', 'background-color', 'font-size', 'font-family', 'font-weight',
-    'font-style', 'text-decoration', 'text-align', 'line-height', 'text-transform',
-]);
+const ALLOWED_STYLE_PROPS = new Set<string>(HTML_SANITIZATION.inlineStyleProperties);
 // The value criterion itself now lives in components/blocks/safeStyle.ts (imported above): the OBJECT
 // style channel — props.css / props.look / blockVars — needs the identical rule, and this file used to
 // be the only place that had one. The pattern moved, it did not change shape: it still rejects `url(`,
@@ -196,81 +202,40 @@ function filterInlineStyle(style: string | null | undefined): string {
 
 // Configure DOMPurify options
 const SANITIZE_OPTIONS = {
-    ALLOWED_TAGS: [
-        // Text formatting
-        'p', 'br', 'b', 'i', 'u', 'strong', 'em', 'mark', 's', 'del', 'ins', 'sub', 'sup',
-        // Headers
-        'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
-        // Lists
-        'ul', 'ol', 'li',
-        // Links and media
-        'a', 'img', 'figure', 'figcaption', 'video', 'audio', 'source', 'iframe',
-        // Structure
-        'div', 'span', 'section', 'article', 'header', 'footer', 'nav', 'aside',
-        // Tables
-        'table', 'thead', 'tbody', 'tfoot', 'tr', 'th', 'td', 'caption',
-        // Forms (read-only rendering)
-        'form', 'input', 'button', 'select', 'option', 'textarea', 'label',
-        // Other
-        // NOTE: <style> is intentionally NOT allowed — it enables CSS injection/exfiltration
-        // (e.g. @import / url() beacons, attribute-selector value exfil) with no script needed.
-        'blockquote', 'pre', 'code', 'hr', 'details', 'summary'
-    ],
-    ALLOWED_ATTR: [
-        // Common
-        // `style` is allowed but scrubbed to a safe typographic allowlist (ALLOWED_STYLE_PROPS) by the
-        // afterSanitizeAttributes hook below — required for the rich-text editor's font-size/color/
-        // highlight/font-family/align, which are inline styles. Raw arbitrary CSS is NOT permitted.
-        'id', 'class', 'title', 'lang', 'dir', 'style',
-        // Links
-        'href', 'target', 'rel',
-        // Media
-        'src', 'alt', 'width', 'height', 'loading', 'controls', 'autoplay', 'muted', 'loop', 'poster',
-        // Tables
-        'colspan', 'rowspan',
-        // Forms
-        'type', 'name', 'value', 'placeholder', 'disabled', 'readonly', 'checked',
-        // Iframes (for video embeds) — src is validated against ALLOWED_IFRAME_HOSTS by a hook below,
-        // and `sandbox` is force-applied so a surviving embed runs with reduced privileges.
-        'frameborder', 'allow', 'allowfullscreen', 'referrerpolicy', 'sandbox',
-        // Data attributes
-        'data-*'
-    ],
+    ALLOWED_TAGS: [...HTML_SANITIZATION.allowedTags],
+    ALLOWED_ATTR: [...HTML_SANITIZATION.allowedAttributes],
     ALLOW_DATA_ATTR: true,
     // Allow YouTube, Vimeo embeds
     ADD_TAGS: ['iframe'],
     ADD_ATTR: ['allow', 'allowfullscreen', 'frameborder', 'scrolling'],
     // Forbid potentially dangerous elements
-    FORBID_TAGS: ['script', 'object', 'embed', 'base', 'meta', 'link'],
-    FORBID_ATTR: ['onerror', 'onload', 'onclick', 'onmouseover', 'onfocus', 'onblur']
+    FORBID_TAGS: [...HTML_SANITIZATION.forbiddenTags],
+    FORBID_ATTR: [...HTML_SANITIZATION.forbiddenAttributes]
 };
 
 // Server-side (SSR) equivalent for sanitize-html (pure JS — DOMPurify needs a DOM). Mirrors the
 // DOMPurify allowlist so the initial server-rendered HTML is sanitized too. on* handlers and
 // <script>/<object>/etc. are absent from the allowlists → dropped. React does not re-diff
 // dangerouslySetInnerHTML on hydration, so a slight server/client sanitizer difference is harmless.
+const INLINE_STYLE_VALUE_PATTERNS = Object.fromEntries(
+    Object.entries(HTML_SANITIZATION.inlineStyleValuePatterns).map(([property, patterns]) => [
+        property,
+        patterns.map((pattern) => new RegExp(pattern)),
+    ]),
+);
 const SERVER_SANITIZE_OPTIONS = {
-    allowedTags: SANITIZE_OPTIONS.ALLOWED_TAGS.filter(t => !SANITIZE_OPTIONS.FORBID_TAGS.includes(t)),
+    allowedTags: SANITIZE_OPTIONS.ALLOWED_TAGS.filter(
+        (tag) => !(SANITIZE_OPTIONS.FORBID_TAGS as readonly string[]).includes(tag),
+    ),
     allowedAttributes: { '*': SANITIZE_OPTIONS.ALLOWED_ATTR },
     // Mirror the client's inline-style allowlist (ALLOWED_STYLE_PROPS): only these typographic
     // properties survive, and only with values matching these patterns — url()/expression()/@import
     // never match, so they're dropped. Keeps SSR output identical in spirit to the client hook.
     allowedStyles: {
-        '*': {
-            'color': [/^#(?:[0-9a-fA-F]{3,8})$/, /^rgb\(/, /^rgba\(/, /^hsl\(/, /^hsla\(/, /^[a-zA-Z]+$/],
-            'background-color': [/^#(?:[0-9a-fA-F]{3,8})$/, /^rgb\(/, /^rgba\(/, /^hsl\(/, /^hsla\(/, /^[a-zA-Z]+$/],
-            'font-size': [/^\d+(?:\.\d+)?(?:px|em|rem|%|pt)$/],
-            'font-family': [/^[\w\s,'"()-]+$/],
-            'font-weight': [/^(?:normal|bold|bolder|lighter|[1-9]00)$/],
-            'font-style': [/^(?:normal|italic|oblique)$/],
-            'text-decoration': [/^(?:none|underline|line-through|overline)(?:\s+\w+)*$/],
-            'text-align': [/^(?:left|right|center|justify)$/],
-            'line-height': [/^[\d.]+(?:px|em|rem|%)?$/],
-            'text-transform': [/^(?:none|uppercase|lowercase|capitalize)$/],
-        },
+        '*': INLINE_STYLE_VALUE_PATTERNS,
     },
-    allowedSchemes: ['http', 'https', 'mailto', 'tel'],
-    allowedSchemesByTag: { img: ['http', 'https', 'data'], source: ['http', 'https', 'data'] },
+    allowedSchemes: [...URL_SANITIZATION.contentSchemes],
+    allowedSchemesByTag: { img: [...URL_SANITIZATION.mediaSchemes], source: [...URL_SANITIZATION.mediaSchemes] },
     // Restrict <iframe> to the embed-host allowlist (arbitrary src is dropped). <style> is no longer
     // allowed, so allowVulnerableTags is gone — sanitize-html no longer needs the unsafe-tag opt-in.
     allowedIframeHostnames: ALLOWED_IFRAME_HOSTS,

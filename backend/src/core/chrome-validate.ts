@@ -3,9 +3,8 @@
  *
  * AUTHORITY for the composable-chrome contract on the backend: every write path
  * (PUT /api/v1/chrome/:part) and the theme doctor validate a composition here before it is
- * stored or shipped. The frontend renderer keeps an independent mirror of this contract
- * (different package, no shared import) with the SAME error codes — keep both in sync when
- * the contract moves.
+ * stored or shipped. Its tables are generated from contracts/visual-contract.v1.json; the frontend
+ * consumes a separate generated copy and never imports backend code.
  *
  * A composition is Puck Data JSON: { root: { props: {} }, content: [ { type, props } ] }.
  * Nesting happens ONLY through ChromeRow's `items` slot, total depth <= 3. The allowlist is
@@ -13,7 +12,7 @@
  * the WHOLE composition (never a partial render). Unknown top-level keys (e.g. an editor's
  * empty `zones`) are ignored — the renderer never reads them.
  *
- * Error codes (stable contract, mirrored by the frontend validator):
+ * Error codes (stable backend contract; the frontend consumes the same generated data):
  *   CHROME_INVALID_JSON     raw string is not parseable JSON / object not JSON-serializable
  *   CHROME_TOO_LARGE        serialized composition exceeds the 64KB budget
  *   CHROME_INVALID_SHAPE    structural violation (root/content/block/props shape)
@@ -40,55 +39,30 @@ interface ChromeValidationResult {
     errors: ChromeValidationError[];
 }
 
-const MAX_BYTES = 64 * 1024;
-const MAX_BLOCKS = 100;
-const MAX_DEPTH = 3;
+const {
+    CHROME_CONTRACT,
+    THEME_CONTRACT,
+    URL_SANITIZATION,
+    VISUAL_CONTRACT_VERSION,
+} = require('../generated/visual-contract.generated');
+
+const MAX_BYTES = CHROME_CONTRACT.limits.maxBytes;
+const MAX_BLOCKS = CHROME_CONTRACT.limits.maxBlocks;
+const MAX_DEPTH = CHROME_CONTRACT.limits.maxDepth;
 
 type PropKind = 'string' | 'boolean' | 'enum' | 'href' | 'slot';
 
 interface PropSpec {
     kind: PropKind;
     required?: boolean;
-    values?: string[]; // enum only
+    values?: readonly string[]; // enum only
 }
 
 // The CLOSED block allowlist. Props not listed here (except the editor's per-instance `id`)
 // are rejected — a new prop is a contract change, not a free-for-all.
-const BLOCKS: Record<string, Record<string, PropSpec>> = {
-    ChromeLogo: {
-        size: { kind: 'enum', values: ['sm', 'md', 'lg'] },
-    },
-    ChromeSiteTitle: {
-        showTagline: { kind: 'boolean' },
-    },
-    ChromeNav: {
-        location: { kind: 'enum', values: ['header', 'footer'], required: true },
-        orientation: { kind: 'enum', values: ['horizontal', 'vertical'], required: true },
-    },
-    ChromeSearch: {
-        placeholder: { kind: 'string' },
-    },
-    ChromeSocials: {
-        source: { kind: 'enum', values: ['settings'], required: true },
-    },
-    ChromeText: {
-        text: { kind: 'string', required: true }, // plain text — the renderer always escapes it
-    },
-    ChromeButton: {
-        label: { kind: 'string', required: true },
-        href: { kind: 'href', required: true },
-        variant: { kind: 'enum', values: ['primary', 'ghost'], required: true },
-    },
-    ChromeSpacer: {
-        size: { kind: 'enum', values: ['sm', 'md', 'lg'], required: true },
-    },
-    ChromeRow: {
-        items: { kind: 'slot', required: true },
-        align: { kind: 'enum', values: ['start', 'center', 'end', 'between'], required: true },
-        gap: { kind: 'enum', values: ['sm', 'md', 'lg'], required: true },
-        wrap: { kind: 'boolean' },
-    },
-};
+const BLOCKS = Object.fromEntries(
+    Object.entries(CHROME_CONTRACT.blocks).map(([type, block]: [string, any]) => [type, block.props]),
+) as Record<string, Record<string, PropSpec>>;
 
 /* ────────────────────────────────────────────────────────────────────────────────────────────────
  * POSITION — the same composition format, two very different render positions.
@@ -121,16 +95,13 @@ const BLOCKS: Record<string, Record<string, PropSpec>> = {
  * masthead inside <main> — an invalid landmark and a duplicated nav" — and a ChromeNav in a part is
  * that same duplicated site nav by another route.
  *
- * The frontend keeps the mirror of this list in lib/chromeData.ts, and a vitest asserts the set
+ * The frontend receives this list in lib/chromeData.ts from the same generated source, and a vitest asserts the set
  * against what the components actually do, so the list cannot quietly drift from the audit above.
  */
-const DOCUMENT_SCOPED_BLOCKS: Record<string, string> = {
-    ChromeNav: 'it mounts the mobile drawer, which owns document.body scroll-lock, a document keydown '
-        + 'listener and a portal into document.body — two instances on one page fight over that single global',
-};
+const DOCUMENT_SCOPED_BLOCKS: Readonly<Record<string, string>> = CHROME_CONTRACT.documentScopedBlocks;
 
 /** The two names the public layout resolves itself into a header/footer landmark. Position 'chrome'. */
-const CHROME_SITE_PARTS = ['header', 'footer'];
+const CHROME_SITE_PARTS: readonly string[] = CHROME_CONTRACT.siteParts;
 
 /**
  * The optional announcement/top bar — a THIRD name the public layout resolves itself, rendered
@@ -140,13 +111,13 @@ const CHROME_SITE_PARTS = ['header', 'footer'];
  * would fight over the very body-scroll-lock global the template-part rule bars. Its own position
  * therefore reuses the document-scoped bar (ChromeNav is refused) while staying a resolved site slot.
  */
-const ANNOUNCEMENT_PART = 'announcement';
+const ANNOUNCEMENT_PART: string = CHROME_CONTRACT.announcementPart;
 
 /**
  * Every name the public layout resolves ITSELF (no theme.json `templateParts` declaration needed).
  * These are the names that are NOT template parts — the reserved set validateTemplateParts refuses.
  */
-const CHROME_LAYOUT_SLOTS = [...CHROME_SITE_PARTS, ANNOUNCEMENT_PART];
+const CHROME_LAYOUT_SLOTS: readonly string[] = [...CHROME_SITE_PARTS, ANNOUNCEMENT_PART];
 
 /**
  * Which position a composition is being validated for. DERIVED from the part name, because the name
@@ -168,7 +139,7 @@ const isPlainObject = (v: any): boolean => typeof v === 'object' && v !== null &
  * navegador BORRA de la cadena ANTES de parsearla (WHATWG URL, "remove all ASCII tab or newline").
  * Espejo de URL_STRIPPED_CONTROLS en frontend/src/lib/chromeData.ts.
  */
-const URL_STRIPPED_CONTROLS = /[\t\n\r]/g;
+const URL_STRIPPED_CONTROLS = new RegExp(URL_SANITIZATION.stripControlsPattern, 'g');
 
 /**
  * Allowlist, not denylist: only '/…' (site-relative — '//' is protocol-RELATIVE, i.e. external,
@@ -411,15 +382,15 @@ function validateChromeData(raw: any, opts: { part?: string } = {}): ChromeValid
  *   PARTS_INVALID_AREA    missing area, or one outside the enum
  *   PARTS_TOO_MANY        more than 16 declared parts
  */
-const TEMPLATE_PART_AREAS = ['header', 'footer', 'sidebar', 'general'];
+const TEMPLATE_PART_AREAS: readonly string[] = THEME_CONTRACT.templateParts.areas;
 /** Identical to the template-name guard in frontend/src/lib/server-api.ts — a name becomes a URL. */
-const TEMPLATE_PART_NAME = /^[a-z0-9-]{1,40}$/;
+const TEMPLATE_PART_NAME = new RegExp(THEME_CONTRACT.assetNamePattern);
 const TEMPLATE_PART_RESERVED = CHROME_LAYOUT_SLOTS.slice();
-const MAX_TEMPLATE_PARTS = 16;
-const TEMPLATE_PART_KEYS = ['name', 'area'];
+const MAX_TEMPLATE_PARTS: number = THEME_CONTRACT.templateParts.maxItems;
+const TEMPLATE_PART_KEYS: readonly string[] = THEME_CONTRACT.templateParts.keys;
 
 /**
- * Validate a theme.json `templateParts` declaration. FAIL-CLOSED as a WHOLE: the renderer's mirror
+ * Validate a theme.json `templateParts` declaration. FAIL-CLOSED as a WHOLE: the generated frontend consumer
  * drops every part when the declaration is invalid, so a single bad entry disables the lot rather
  * than half-loading a theme's parts. Returns { ok, errors, parts } — `parts` is the normalized
  * [{ name, area }] list, empty whenever ok is false.
@@ -469,6 +440,7 @@ function validateTemplateParts(decl: any): { ok: boolean; errors: ChromeValidati
 }
 
 module.exports = {
+    VISUAL_CONTRACT_VERSION,
     validateChromeData,
     CHROME_MAX_BYTES: MAX_BYTES,
     CHROME_MAX_BLOCKS: MAX_BLOCKS,

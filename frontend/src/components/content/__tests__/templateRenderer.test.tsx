@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { TemplateRenderer } from '../TemplateRenderer';
-import { parseTemplate, CONTENT_SLOT } from '@/lib/templateData';
+import { parseTemplate, CONTENT_SLOT, TEMPLATE_TAGS } from '@/lib/templateData';
 
 /**
  * A theme's page template, rendered.
@@ -77,7 +77,7 @@ describe('TemplateRenderer', () => {
     // must actually appear next to the framework's.
 
     it('renders the element the template chose, for every tag and every container', () => {
-        for (const tag of ['article', 'aside', 'div', 'footer', 'header', 'section']) {
+        for (const tag of TEMPLATE_TAGS) {
             const html = render([{ type: 'Section', props: { tag, items: [slot] } }]);
             expect(html.startsWith(`<${tag} class="wjs-block-section wp-block-section"`), `${tag}: ${html.slice(0, 80)}`).toBe(true);
             expect(html).toContain('wjs-block-section__inner wp-block-section__inner'); // the inner wrapper is untouched

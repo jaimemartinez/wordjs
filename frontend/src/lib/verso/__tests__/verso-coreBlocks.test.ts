@@ -32,6 +32,7 @@ import {
 } from "../sharedFields";
 import { createBlockRegistry, makeSlotResolver, type BlockDefinition } from "../registry";
 import { postConfig, pageConfig } from "@/components/versoConfig";
+import { GENERATED_CORE_BLOCK_REGISTRY } from "@/generated/verso-registry.generated";
 
 /* ------------------------------------------------------------------ */
 /* Utilidades de comparación.                                          */
@@ -59,25 +60,20 @@ const wrappedByType = new Map<string, BlockDefinition>(
 const configComponents = (postConfig as { components: Record<string, Record<string, unknown>> }).components;
 
 /* ------------------------------------------------------------------ */
-/* 1. El contrato de tipos: los 35 EXACTOS del switch público.          */
+/* 1. El contrato generado de tipos, categorías y slots.                */
 /* ------------------------------------------------------------------ */
 
 describe("coreBlocks — contrato de tipos", () => {
-  it("los 39 types coinciden con la lista literal del switch de ContentRenderer", () => {
-    // Lista LITERAL (no derivada): es el contrato de serialización de _puck_data.
-    const CONTRACT = [
-      "Heading", "Text", "Image", "Divider", "Button", "Spacer",
-      "Section", "Grid", "FlexRow", "Columns",
-      "Card", "Quote", "Table", "IconList", "SocialLinks", "Stats", "HTMLEmbed",
-      "PricingTable", "Testimonial", "CTABanner", "VideoEmbed", "Hero",
-      "PostsGrid", "CategoryPosts", "AudioPlayer",
-      "Accordion", "Tabs", "SearchBar", "Form", "Symbol",
-      "ParticleField", "NavMenu", "SiteLogo", "BackToTop", "OffCanvas",
-      "Breadcrumbs", "LangSwitcher", "TableOfContents", "MegaMenu",
-    ];
-    expect(CONTRACT).toHaveLength(39);
-    expect([...CORE_BLOCK_TYPES]).toEqual(CONTRACT);
-    expect(coreBlockDefinitions.map((d) => d.type).sort()).toEqual([...CONTRACT].sort());
+  it("cada implementación coincide con el registro generado", () => {
+    expect([...CORE_BLOCK_TYPES]).toEqual(GENERATED_CORE_BLOCK_REGISTRY.map((block) => block.type));
+    expect(coreBlockDefinitions.map((definition) => definition.type).sort())
+      .toEqual(GENERATED_CORE_BLOCK_REGISTRY.map((block) => block.type).sort());
+    for (const block of GENERATED_CORE_BLOCK_REGISTRY) {
+      const definition = coreBlockDefinitions.find((candidate) => candidate.type === block.type);
+      expect(definition?.category, `${block.type}: categoría`).toBe(block.category);
+      expect(Object.entries(definition?.fields ?? {}).filter(([, field]) => field.type === "slot").map(([name]) => name), `${block.type}: slots`)
+        .toEqual(block.slots);
+    }
   });
 
   it("cada type existe también en el registro de bloques de versoConfig.components", () => {

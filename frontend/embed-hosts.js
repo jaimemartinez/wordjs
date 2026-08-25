@@ -19,10 +19,9 @@
  *   · src/lib/sanitize.ts — ALLOWED_IFRAME_HOSTS (what survives HTML sanitizing) and
  *     ALLOWED_EMBED_HOSTS (what the VideoEmbed block may build an iframe src for);
  *   · next.config.ts — the CSP `frame-src` directive, DERIVED from ALLOWED_EMBED_HOSTS.
- *   · backend/src/core/sanitize-meta.ts keeps its own copy (it is a different package and cannot
- *     import this one) — it carries a pointer back here, and a test pins the two together.
+ *   · backend/src/core/sanitize-meta.ts consumes its own generated artifact from the same contract.
  *
- * ADDING A PROVIDER: add the host here and nothing else. The test
+ * ADDING A PROVIDER: change contracts/visual-contract.v1.json and regenerate. The test
  * `src/lib/__tests__/embedHostsCsp.test.ts` fails if `frame-src` and this list ever disagree.
  */
 
@@ -31,7 +30,8 @@
  * sanitize-html/DOMPurify enforce on raw pasted markup.
  * @type {string[]}
  */
-const ALLOWED_IFRAME_HOSTS = ['www.youtube.com', 'player.vimeo.com'];
+const { security } = require('../contracts/visual-contract.v1.json');
+const ALLOWED_IFRAME_HOSTS = [...security.html.iframeHosts];
 
 /**
  * Hosts the VideoEmbed block may CANONICALISE a pasted URL to. ALLOWED_IFRAME_HOSTS plus YouTube's
@@ -39,6 +39,6 @@ const ALLOWED_IFRAME_HOSTS = ['www.youtube.com', 'player.vimeo.com'];
  * one — and which the CSP has to permit for that to be visible.
  * @type {string[]}
  */
-const ALLOWED_EMBED_HOSTS = [...ALLOWED_IFRAME_HOSTS, 'www.youtube-nocookie.com'];
+const ALLOWED_EMBED_HOSTS = [...security.html.iframeHosts];
 
 module.exports = { ALLOWED_IFRAME_HOSTS, ALLOWED_EMBED_HOSTS };

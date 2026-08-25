@@ -36,6 +36,7 @@ const { closestToken } = require('./theme-doctor');
 // a variation and the template class it styles must be able to refer to one another, and two
 // copies of the pattern is exactly how they would stop doing that. See VARIATIONS below.
 const { TEMPLATE_CLASS } = require('./template-validate');
+const { THEME_CONTRACT } = require('../generated/visual-contract.generated');
 // The one place a name becomes a path (allowlist the FORM · resolve canonically · prove containment
 // on the value RETURNED). The compiler reads and WRITES inside a theme directory that a caller names,
 // and the names it reads back out of theme.json belong to an UPLOADED, untrusted theme.
@@ -95,13 +96,15 @@ interface WalkCtx {
 }
 
 // Same slug shape installThemeFromDir/theme-doctor enforce — containment under themesDir.
-const SLUG_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
+const SLUG_RE = new RegExp(THEME_CONTRACT.slugPattern);
 // F1 sanitizer rules for portable token values (mirrors the customizer/doctor charset).
-const TOKEN_VALUE_RE = /^[#a-zA-Z0-9 ,.%()/_'"-]+$/;
-const TOKEN_NAME_RE = /^--wjs-[a-zA-Z0-9_-]+$/;
+const TOKEN_VALUE_RE = new RegExp(THEME_CONTRACT.tokens.valuePattern);
+const TOKEN_NAME_RE = new RegExp(THEME_CONTRACT.tokens.namePattern);
+const TOKEN_FORBIDDEN_FUNCTION = new RegExp(THEME_CONTRACT.tokens.forbiddenFunctionPattern, 'i');
+const TOKEN_FORBIDDEN_SUBSTRINGS: readonly string[] = THEME_CONTRACT.tokens.forbiddenSubstrings;
 const SEED_RE = /^#[0-9a-fA-F]{6}$/;
 const SEED_KEYS = ['primary', 'secondary', 'bg', 'text'];
-const MAX_TOKEN_VALUE = 120;
+const MAX_TOKEN_VALUE: number = THEME_CONTRACT.tokens.maxValueLength;
 const MAX_DECL_VALUE = 300;
 const MAX_DECLARATIONS = 2000;
 const MAX_THEME_JSON = 256 * 1024;
@@ -230,9 +233,9 @@ function tokenValueProblem(raw: any): string | null {
   const value = typeof raw === 'number' ? String(raw) : raw;
   if (typeof value !== 'string' || value.trim().length === 0) return 'must be a non-empty string';
   if (value.length > MAX_TOKEN_VALUE) return `is longer than ${MAX_TOKEN_VALUE} chars`;
-  if (value.includes('\\')) return 'contains a backslash';
-  if (value.includes('//')) return 'contains "//"';
-  if (/url\s*\(/i.test(value)) return 'contains url() (not allowed in token values)';
+  const forbiddenSubstring = TOKEN_FORBIDDEN_SUBSTRINGS.find((substring) => value.includes(substring));
+  if (forbiddenSubstring) return `contains forbidden sequence ${JSON.stringify(forbiddenSubstring)}`;
+  if (TOKEN_FORBIDDEN_FUNCTION.test(value)) return 'contains a forbidden CSS function';
   if (!TOKEN_VALUE_RE.test(value)) return 'contains characters outside the portable token charset';
   // A token value is emitted verbatim into `:root`, so it must be a COMPLETE CSS value on its own.
   // The charset above admits '(' and quotes, and an unbalanced one keeps the CSS parser inside that

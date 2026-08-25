@@ -6,37 +6,41 @@
  * `:root{…}` block by the public renderer (frontend/src/components/public/ThemeTokenOverlay.tsx), so its
  * contract is a SECURITY boundary: an entry that survives here becomes CSS on every public page.
  *
- * This module is the backend MIRROR of that contract. Until OLA 5 there was no server-side gate at all —
+ * This module is the backend authority for that contract. Until OLA 5 there was no server-side gate at all —
  * the customizer saved through the generic settings PUT and the overlay sanitized at render. That is fine
  * for the customizer's own writes (the browser already sanitized, and the render-time filter is the real
  * backstop). It is NOT fine for the mods IMPORT path, which ingests an admin-uploaded file: an import must
  * never trust the uploaded JSON, so it validates every key and value here BEFORE the option is written.
  *
- * KEEP THIS BYTE-FOR-BYTE IN STEP with ThemeTokenOverlay.isForbiddenTokenValue / KEY_RE / VALUE_RE and
- * with admin/themes/customize/page.tsx's sanitizeMods — three copies, one contract, pinned by tests on
- * both sides. A value this module accepts that the overlay would drop is a silent divergence; a value the
- * overlay renders that this module rejects would make a legitimate export fail to round-trip.
+ * Constants are generated from contracts/visual-contract.v1.json. The frontend consumes a separate
+ * generated projection and a shared pure helper, so no backend module crosses the Next.js boundary.
  */
 
+const { THEME_CONTRACT } = require('../generated/visual-contract.generated');
+const TOKEN_POLICY = THEME_CONTRACT.tokens;
+
 // A custom property the overlay will emit: `--wjs-` then lowercase alphanumerics and hyphens only.
-const KEY_RE = /^--wjs-[a-z0-9-]+$/;
+const KEY_RE = new RegExp(TOKEN_POLICY.modNamePattern);
 // The safe CSS-value charset. Deliberately excludes `;{}:<>` (declaration-block break-out) — which also
 // makes the customizer's extra `/[;{}:<>]/` guard redundant, so it is not repeated here.
-const VALUE_RE = /^[#a-zA-Z0-9 ,.%()/_'"-]+$/;
+const VALUE_RE = new RegExp(TOKEN_POLICY.valuePattern);
 // The upper bound on a value's length the overlay enforces before emitting it.
-const MAX_VALUE_LEN = 120;
+const MAX_VALUE_LEN: number = TOKEN_POLICY.maxValueLength;
 // A whole mods object cannot be larger than this once serialized — a defensive cap so a hostile import
 // cannot make the stored option (and thus every public page's inline <style>) unbounded.
-const MAX_MODS_BYTES = 32 * 1024;
+const MAX_MODS_BYTES: number = TOKEN_POLICY.maxModsBytes;
+const FORBIDDEN_FUNCTION = new RegExp(TOKEN_POLICY.forbiddenFunctionPattern, 'i');
 
 /**
  * Protocol-relative URLs (`//attacker.example/x`) need no `:` and fit entirely inside VALUE_RE, so a token
  * value could become an exfiltration beacon the moment a browser resolved it. On top of the charset, reject
  * any value containing `//`, matching `url(` (any spacing/case), or containing a backslash (CSS escapes
- * could smuggle either form past the charset filter). MIRROR of ThemeTokenOverlay.isForbiddenTokenValue.
+ * could smuggle either form past the charset filter). Both packages derive these values from the
+ * generated token policy; only the small executable predicate remains package-local.
  */
 function isForbiddenTokenValue(value: string): boolean {
-    return value.includes('//') || /url\s*\(/i.test(value) || value.includes('\\');
+    return FORBIDDEN_FUNCTION.test(value)
+        || TOKEN_POLICY.forbiddenSubstrings.some((substring: string) => value.includes(substring));
 }
 
 /** True when [key, value] is a mod the overlay would render. The single source of the accept decision. */

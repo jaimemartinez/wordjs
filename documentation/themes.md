@@ -1,5 +1,12 @@
 # WordJS Themes Documentation
 
+> **Contrato F5.** Los tipos, propiedades, slots, límites y políticas de seguridad compartidas por
+> templates, chrome, temas, el renderer y Verso se definen en
+> `contracts/visual-contract.v1.json`. Ejecute `npm run generate:f5`; no copie constantes desde
+> `backend/src/core/template-validate.ts` ni desde `frontend/src/lib/templateData.ts`. El backend
+> continúa siendo la autoridad de seguridad y el frontend consume una proyección generada separada.
+> La referencia generada para plugins está en `documentation/generated/plugin-visual-contract.md`.
+
 WordJS uses a **CSS Variable-based theming system** that allows complete visual customization without code changes.
 
 <div align="center">

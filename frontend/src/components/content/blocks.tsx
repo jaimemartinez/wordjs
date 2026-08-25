@@ -14,6 +14,7 @@
  */
 import React from "react";
 import { bc, blockVars, cx, safeCss, safeClassToken, safeExtraClassList, unit } from "@/components/blocks/blockVars";
+import { HTML_SANITIZATION, TEMPLATE_CONTRACT } from "@/generated/visual-contract.generated";
 import { safeCssValue } from "@/components/blocks/safeStyle";
 import { ixWordSpans } from "@/components/blocks/IxWords";
 import { ixSplitWords, ixTargetsWords, IX_SYS_CTX, type IxCompileCtx } from "@/lib/verso/interactions";
@@ -969,7 +970,7 @@ export function ButtonBlock({ label, href, variant, align, bg, color, radius, pa
  * Adapted from Shopify, where a section's `{% schema %}` may declare `tag` (chosen from a closed list of
  * six) and `class` (APPENDED to the wrapper class the platform emits). A theme's page template can now
  * say the same things (backend/src/core/template-validate.ts is the authority, frontend/src/lib/
- * templateData.ts mirrors it), which is what lets a theme mark one Section as its hero instead of
+ * templateData.ts consumes the same generated set), which lets a theme mark one Section as its hero instead of
  * shipping four identical ones.
  *
  * BOTH CHECKS ARE ENFORCED AGAIN HERE, and that is not belt-and-braces — it is load-bearing. These
@@ -984,7 +985,7 @@ export function ButtonBlock({ label, href, variant, align, bg, color, radius, pa
  * `main` is absent from the set on purpose: the public shell already renders `<main id="main-content">`
  * around all of this, and a nested <main> is an invalid landmark.
  */
-const CONTAINER_TAGS = new Set(['article', 'aside', 'div', 'footer', 'header', 'section']);
+const CONTAINER_TAGS: ReadonlySet<string> = new Set(TEMPLATE_CONTRACT.wrapperTags);
 // `typeof tag === 'string'` BEFORE the Set lookup, not String(tag). Coercing first meant
 // `tag: ["header"]` stringified to "header" and sailed through a guard both validators reject —
 // harmless in itself, since the result is always a member of the closed Set, but this is the
@@ -995,8 +996,8 @@ const containerTag = (tag: any, fallback: 'section' | 'div'): any =>
 
 /**
  * The theme's own hook on a container. The SHAPE bound (at most 3 tokens of `[a-z][a-z0-9-]{0,39}`)
- * still mirrors CLASS_TOKEN/MAX_CLASS_TOKENS in the validators (lib/templateData.ts,
- * backend/src/core/template-validate.ts) — but the shape was the WHOLE criterion, and three
+ * comes from the same CLASS_TOKEN/MAX_CLASS_TOKENS source as both validators — but the shape was the
+ * WHOLE criterion, and three
  * well-formed tokens are `fixed inset-0 z-50`. The decision now lives at the SINK, once, next to the
  * other class criterion: see `safeExtraClassList` in components/blocks/safeStyle.ts.
  */
@@ -1531,7 +1532,7 @@ export function VideoEmbedBlock({ url, poster, aspectRatio, radius, bg, css }: a
         <div className={bc('video-embed')} style={vars}>
             <iframe
                 src={embedUrl}
-                sandbox="allow-scripts allow-same-origin allow-presentation"
+                sandbox={HTML_SANITIZATION.iframeSandbox}
                 allowFullScreen
                 allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
                 referrerPolicy="strict-origin-when-cross-origin"

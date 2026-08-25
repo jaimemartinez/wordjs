@@ -14,6 +14,9 @@
 import { cache } from 'react';
 import type { Metadata } from 'next';
 import type { Post } from './api';
+import { THEME_CONTRACT } from '@/generated/visual-contract.generated';
+
+const THEME_ASSET_NAME = new RegExp(THEME_CONTRACT.assetNamePattern);
 
 // ---------------------------------------------------------------------------
 // The backend base URL — the one value that chooses WHERE every SSR request goes
@@ -411,7 +414,7 @@ export const getMenuByRef = cache((ref: { source?: string; location?: string; me
  * have — no dots, no slashes. A traversal here would be a path-injection into the static tree.
  */
 export const getThemeTemplate = cache(async (slug: string, name: string): Promise<string | null> => {
-    if (!/^[a-z0-9-]{1,40}$/.test(name)) return null;
+    if (!THEME_ASSET_NAME.test(name)) return null;
     const url = backendUrl(resolveStaticBase(), `/themes/${encodeURIComponent(slug)}/templates/${name}.json`);
     if (!url) return null;
     try {
@@ -455,7 +458,7 @@ export const getThemeManifest = cache(async (slug: string): Promise<string | nul
  * reaches the fetch. (Being declared in theme.json is a SEPARATE gate, enforced by the resolver.)
  */
 export const getThemeChrome = cache(async (slug: string, part: string): Promise<string | null> => {
-    if (!/^[a-z0-9-]{1,40}$/.test(part)) return null;
+    if (!THEME_ASSET_NAME.test(part)) return null;
     const url = backendUrl(resolveStaticBase(), `/themes/${encodeURIComponent(slug)}/chrome/${part}.json`);
     if (!url) return null;
     try {

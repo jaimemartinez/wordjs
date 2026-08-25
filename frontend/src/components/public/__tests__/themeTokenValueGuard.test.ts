@@ -1,11 +1,15 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-
-// The theme-token value guard is intentionally duplicated: the SSR overlay is a server component and
-// the admin customizer is a "use client" page, so they can't share a module without new plumbing.
-// These tests (1) pin the two copies byte-identical and (2) exercise the SHIPPED expressions —
-// extracted from source and evaluated, not re-typed here — against accept/reject cases.
+import { THEME_CONTRACT } from '@/generated/visual-contract.generated';
+import {
+  isForbiddenThemeTokenValue,
+  isValidThemeMod,
+  sanitizeThemeMods,
+  THEME_TOKEN_MAX_VALUE_LENGTH,
+  THEME_TOKEN_MOD_NAME,
+  THEME_TOKEN_VALUE,
+} from '@/lib/themeTokenPolicy';
 
 function load(rel: string): string {
   return readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8').replace(/\r\n/g, '\n');
@@ -14,24 +18,6 @@ function load(rel: string): string {
 const overlaySrc = load('../ThemeTokenOverlay.tsx');
 const customizeSrc = load('../../../app/admin/themes/customize/page.tsx');
 
-const GUARD_RE = /function isForbiddenTokenValue\(value: string\): boolean \{\n {4}return (.+);\n\}/;
-
-function extractGuard(src: string, label: string): { text: string; test: (v: string) => boolean } {
-  const m = src.match(GUARD_RE);
-  if (!m) throw new Error(`isForbiddenTokenValue not found in ${label}`);
-  return { text: m[0], test: new Function('value', `return (${m[1]});`) as (v: string) => boolean };
-}
-
-const overlay = extractGuard(overlaySrc, 'ThemeTokenOverlay.tsx');
-const customize = extractGuard(customizeSrc, 'admin/themes/customize/page.tsx');
-
-// The overlay's charset allowlist, likewise pulled from the shipped source.
-const valueReMatch = overlaySrc.match(/const VALUE_RE = (\/.+\/);\n/);
-if (!valueReMatch) throw new Error('VALUE_RE not found in ThemeTokenOverlay.tsx');
-const VALUE_RE = new Function(`return ${valueReMatch[1]};`)() as RegExp;
-
-// Every legitimate shape the customizer produces: hex colors, gradients, font stacks, lengths,
-// shorthand borders, rgba(). All must pass the charset AND clear the guard.
 const LEGIT = [
   '#4f46e5',
   'linear-gradient(120deg, #4f46e5 0%, #a855f7 100%)',
@@ -41,40 +27,55 @@ const LEGIT = [
   'rgba(255, 255, 255, 0.06)',
 ];
 
-// Exfiltration beacons: `url(//host/x)` is a protocol-relative URL — it needs no `:`, so the
-// `;{}:<>` denylist and the charset both let it through. The guard must reject each of these.
 const FORBIDDEN = [
   'url(//x.example/p)',
-  'url (//x)', // whitespace before the paren still parses as url()
-  'URL(//x)', // CSS is case-insensitive
-  "url('x')", // any url() at all, even without //
-  'a//b', // bare protocol-relative smuggle inside a longer value
-  '\\75rl(//x)', // \75 is the CSS escape for "u"
-  '\\2f\\2f', // CSS escapes for "//" — backslash ban closes the encoding hole
+  'url (//x)',
+  'URL(//x)',
+  "url('x')",
+  'a//b',
+  '\\75rl(//x)',
+  '\\2f\\2f',
 ];
 
-describe('theme token value guard — mirror parity', () => {
-  it('isForbiddenTokenValue is byte-identical in ThemeTokenOverlay and the customizer', () => {
-    expect(overlay.text).toBe(customize.text);
+describe('theme token policy — generated single source', () => {
+  it('projects every key/value bound from the generated visual contract', () => {
+    expect(THEME_TOKEN_MOD_NAME.source).toBe(THEME_CONTRACT.tokens.modNamePattern);
+    expect(THEME_TOKEN_VALUE.source).toBe(THEME_CONTRACT.tokens.valuePattern);
+    expect(THEME_TOKEN_MAX_VALUE_LENGTH).toBe(THEME_CONTRACT.tokens.maxValueLength);
+  });
+
+  it('both CSS emitters consume the helper and carry no local policy copy', () => {
+    expect(overlaySrc).toContain('isValidThemeMod');
+    expect(customizeSrc).toContain('sanitizeThemeMods');
+    for (const source of [overlaySrc, customizeSrc]) {
+      expect(source).not.toMatch(/const\s+(?:KEY_RE|VALUE_RE|MAX_VALUE_LEN|FORBIDDEN_FUNCTION)\b/);
+      expect(source).not.toContain('function isForbiddenTokenValue');
+    }
   });
 });
 
-describe('theme token value guard — cases (both shipped copies)', () => {
-  for (const [label, guard] of [
-    ['overlay', overlay.test],
-    ['customizer', customize.test],
-  ] as const) {
-    it(`${label}: legitimate CSS values pass charset + guard`, () => {
-      for (const v of LEGIT) {
-        expect(VALUE_RE.test(v), `charset should accept ${v}`).toBe(true);
-        expect(guard(v), `guard should clear ${v}`).toBe(false);
-      }
-    });
+describe('theme token policy — security cases', () => {
+  it('accepts legitimate CSS values for a valid theme key', () => {
+    for (const value of LEGIT) {
+      expect(THEME_TOKEN_VALUE.test(value), `charset should accept ${value}`).toBe(true);
+      expect(isForbiddenThemeTokenValue(value), `guard should clear ${value}`).toBe(false);
+      expect(isValidThemeMod('--wjs-test-token', value), value).toBe(true);
+    }
+  });
 
-    it(`${label}: url() / protocol-relative / backslash values are rejected`, () => {
-      for (const v of FORBIDDEN) {
-        expect(guard(v), `guard should reject ${v}`).toBe(true);
-      }
-    });
-  }
+  it('rejects url(), protocol-relative and CSS-escape spellings', () => {
+    for (const value of FORBIDDEN) {
+      expect(isForbiddenThemeTokenValue(value), value).toBe(true);
+      expect(isValidThemeMod('--wjs-test-token', value), value).toBe(false);
+    }
+  });
+
+  it('drops bad names, oversized values and non-string values entry by entry', () => {
+    expect(sanitizeThemeMods({
+      '--wjs-good': '#fff',
+      '--WJS-UPPER': '#000',
+      '--wjs-too-long': 'a'.repeat(THEME_TOKEN_MAX_VALUE_LENGTH + 1),
+      '--wjs-object': { color: 'red' },
+    })).toEqual({ '--wjs-good': '#fff' });
+  });
 });

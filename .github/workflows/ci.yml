@@ -92,6 +92,7 @@ jobs:
           backend/src/tests/f2-content-contract.test.ts
           backend/src/tests/f3-content-outbox.test.ts
           backend/src/tests/f4-extensible-revisions.test.ts
+          backend/src/tests/f5-visual-contract.test.ts
           backend/src/tests/health-purge-observability.test.ts
           backend/src/tests/import-post-page-slug-identity.test.ts
           backend/src/tests/install-root-paths.test.ts
@@ -144,10 +145,14 @@ jobs:
           backend/scripts/verify-f2-contracts.ts
           backend/scripts/verify-f3-transactional-content.ts
           backend/scripts/verify-f4-extensible-revisions.ts
+          backend/scripts/verify-f5-visual-contract.ts
+          scripts/generate-visual-contract.mjs
           backend/content-schema.v1.json
+          contracts/visual-contract.v1.json
           backend/src/core/content-contract.ts
           backend/src/core/content-outbox.ts
           backend/src/generated/content-dtos.generated.ts
+          backend/src/generated/visual-contract.generated.ts
           backend/f0-baseline.json
           backend/f0-performance-budgets.json
           documentation/adr/0001-f0-foundation-contract.md
@@ -155,6 +160,8 @@ jobs:
           documentation/adr/0003-f2-generated-content-contracts.md
           documentation/adr/0004-f3-transactional-content-outbox.md
           documentation/adr/0005-f4-versioned-extensible-revisions.md
+          documentation/adr/0006-f5-unified-visual-contract.md
+          documentation/generated/plugin-visual-contract.md
           # ── frontend gates (vitest run: src/**/*.test.ts(x)) ──────────────────────────────────────
           frontend/src/__tests__/instrumentationGatewayTls.test.ts
           frontend/src/app/admin/notices/__tests__/noticesLogic.test.ts
@@ -188,6 +195,10 @@ jobs:
           frontend/src/contexts/ThemeLayoutContext.tsx
           frontend/src/lib/themeActivationEvents.ts
           frontend/src/lib/themeComponentRecipes.ts
+          frontend/src/generated/visual-contract.generated.ts
+          frontend/src/generated/visual-contract.types.generated.ts
+          frontend/src/generated/verso-registry.generated.ts
+          frontend/src/lib/themeTokenPolicy.ts
           # ── gateway gates (node --test test/*.test.js) ────────────────────────────────────────────
           gateway/src/registration.js
           gateway/src/routing.js
@@ -317,6 +328,9 @@ jobs:
       - name: F4 extensible revisions (frozen schema/codecs + legacy restore)
         working-directory: backend
         run: npm run verify:f4
+      - name: F5 unified visual contract (generated parsers, renderers and security policy)
+        working-directory: backend
+        run: npm run verify:f5
       - name: License gate (block network-copyleft AGPL/SSPL)
         working-directory: backend
         run: npx --yes license-checker --production --failOn 'AGPL;SSPL'

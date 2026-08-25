@@ -75,14 +75,20 @@ import BackToTopBlock from "@/components/content/BackToTop";
 import { useEditorIdentity } from "@/lib/useEditorIdentity";
 import type { BlockDefinition, BlockRegistry, VersoField } from "./registry";
 import { withSharedVersoFields } from "./sharedFields";
+import {
+    CORE_BLOCK_SLOTS,
+    CORE_BLOCK_TYPES as GENERATED_CORE_BLOCK_TYPES,
+    GENERATED_CORE_BLOCK_REGISTRY,
+} from "@/generated/verso-registry.generated";
+import type { CoreBlockType as GeneratedCoreBlockType } from "@/generated/visual-contract.types.generated";
 
 /* ------------------------------------------------------------------ */
 /* Contrato de tipos (el switch público) y categorías.                 */
 /* ------------------------------------------------------------------ */
 
 /**
- * Los 35 `item.type` EXACTOS del switch de ContentRenderer.tsx, en su orden. Es el contrato de
- * serialización con el sitio público — el test lo compara contra su propia lista literal.
+ * Los `item.type` EXACTOS del contrato visual generado, en su orden. Es el contrato de
+ * serialización con el sitio público; los maps exhaustivos de render hacen fallar TypeScript si falta uno.
  * (ParticleField, el 31º, es el fondo animado de partículas: una isla de cliente con `<canvas>`.
  *  NavMenu, el 32º, VINCULA al menú del sitio por referencia: guarda solo la referencia y el store
  *  nav_menu sigue siendo la fuente de verdad — cero pérdida de datos.
@@ -94,18 +100,8 @@ import { withSharedVersoFields } from "./sharedFields";
  *  y el panel de cada elemento de nivel superior es un SLOT inline (panel0…panel5 → los 6 primeros
  *  elementos EN ORDEN, el precedente multi-slot de Columns).)
  */
-export const CORE_BLOCK_TYPES = [
-    "Heading", "Text", "Image", "Divider", "Button", "Spacer",
-    "Section", "Grid", "FlexRow", "Columns",
-    "Card", "Quote", "Table", "IconList", "SocialLinks", "Stats", "HTMLEmbed",
-    "PricingTable", "Testimonial", "CTABanner", "VideoEmbed", "Hero",
-    "PostsGrid", "CategoryPosts", "AudioPlayer",
-    "Accordion", "Tabs", "SearchBar", "Form", "Symbol",
-    "ParticleField", "NavMenu", "SiteLogo", "BackToTop", "OffCanvas",
-    "Breadcrumbs", "LangSwitcher", "TableOfContents", "MegaMenu",
-] as const;
-
-export type CoreBlockType = (typeof CORE_BLOCK_TYPES)[number];
+export const CORE_BLOCK_TYPES = GENERATED_CORE_BLOCK_TYPES;
+export type CoreBlockType = GeneratedCoreBlockType;
 
 /** Las 5 categorías actuales de versoConfig (mismas claves, mismos labels vía i18n). */
 export const coreBlockCategories: Record<string, string> = {
@@ -1962,7 +1958,26 @@ export const coreBlockDefinitions: BlockDefinition[] = [
  * `withSharedVersoFields` — el mismo punto de inyección único que withSharedBlockFields hoy.
  */
 export function registerCoreBlocks(registry: BlockRegistry): void {
-    registry.register(coreBlockDefinitions.map(withSharedVersoFields));
+    const definitions = new Map(coreBlockDefinitions.map((definition) => [definition.type, definition]));
+    const ordered = CORE_BLOCK_TYPES.map((type) => {
+        const definition = definitions.get(type);
+        if (!definition) throw new Error(`Missing core block implementation for generated contract type "${type}"`);
+        const actualSlots = Object.entries(definition.fields)
+            .filter(([, field]) => field.type === "slot")
+            .map(([name]) => name);
+        const expectedSlots = CORE_BLOCK_SLOTS[type];
+        if (actualSlots.length !== expectedSlots.length || actualSlots.some((slot, index) => slot !== expectedSlots[index])) {
+            throw new Error(`Core block "${type}" slots drifted from generated visual contract`);
+        }
+        const generated = GENERATED_CORE_BLOCK_REGISTRY.find((block) => block.type === type)!;
+        if (definition.category !== generated.category) {
+            throw new Error(`Core block "${type}" category drifted from generated visual contract`);
+        }
+        definitions.delete(type);
+        return withSharedVersoFields(definition);
+    });
+    if (definitions.size) throw new Error(`Core block implementations are absent from the generated contract: ${[...definitions.keys()].join(", ")}`);
+    registry.register(ordered);
 }
 
 /* ------------------------------------------------------------------ */

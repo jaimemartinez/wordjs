@@ -7,16 +7,15 @@
 // the allowlist, bad prop, unsafe href, budget/depth overflow) invalidates the WHOLE composition —
 // the caller falls to the next precedence level, never a silent partial render.
 
-export type ChromeBlockType =
-    | "ChromeLogo"
-    | "ChromeSiteTitle"
-    | "ChromeNav"
-    | "ChromeSearch"
-    | "ChromeSocials"
-    | "ChromeText"
-    | "ChromeButton"
-    | "ChromeSpacer"
-    | "ChromeRow";
+import {
+    CHROME_CONTRACT,
+    URL_SANITIZATION,
+    VISUAL_CONTRACT_VERSION,
+} from "@/generated/visual-contract.generated";
+import type { ChromeBlockType as GeneratedChromeBlockType } from "@/generated/visual-contract.types.generated";
+
+export { VISUAL_CONTRACT_VERSION };
+export type ChromeBlockType = GeneratedChromeBlockType;
 
 export interface ChromeBlock {
     type: string;
@@ -28,7 +27,7 @@ export interface ChromeData {
     content: ChromeBlock[];
 }
 
-// POSITION — MIRRORS DOCUMENT_SCOPED_BLOCKS / chromePositionFor in backend/src/core/chrome-validate.ts
+// POSITION — its data is generated with DOCUMENT_SCOPED_BLOCKS in backend/src/core/chrome-validate.ts
 // (the authority; read the long comment there for the audit of all nine blocks).
 //
 // "chrome" is chrome/header.json + chrome/footer.json: the layout resolves each ONCE per document.
@@ -40,7 +39,9 @@ export interface ChromeData {
 // keydown listener. Two drawers restore overflow from each other's saved value and the page ends up
 // permanently unscrollable. Barred wholesale, not only for the prop pair that mounts the island —
 // which prop combination reaches the island is an internal of the block, not part of this contract.
-export const CHROME_DOCUMENT_SCOPED_BLOCKS: readonly ChromeBlockType[] = ["ChromeNav"];
+export const CHROME_DOCUMENT_SCOPED_BLOCKS = Object.keys(
+    CHROME_CONTRACT.documentScopedBlocks,
+) as ChromeBlockType[];
 
 // "announcement" is the optional top bar the public layout resolves into a full-bleed band ABOVE the
 // header. It is a single-instance site slot like the header/footer, but it still bars the
@@ -94,14 +95,18 @@ export interface ChromeBindings {
 }
 
 // Budgets from the contract: a composition must stay small enough to parse per-request without a thought.
-export const CHROME_MAX_BYTES = 64 * 1024;
-export const CHROME_MAX_BLOCKS = 100;
-export const CHROME_MAX_DEPTH = 3;
+export const CHROME_MAX_BYTES = CHROME_CONTRACT.limits.maxBytes;
+export const CHROME_MAX_BLOCKS = CHROME_CONTRACT.limits.maxBlocks;
+export const CHROME_MAX_DEPTH = CHROME_CONTRACT.limits.maxDepth;
+const NAVIGATION_SAFE_PREFIX = new RegExp(
+    `^(?:${URL_SANITIZATION.navigationSchemes.join("|")}):\\/\\/`,
+    "i",
+);
 
 // Tabulador, salto de linea y retorno de carro: los tres caracteres que el parser de URL del
 // navegador BORRA de la cadena ANTES de parsearla (WHATWG URL, "remove all ASCII tab or newline").
 // Validar la cadena CRUDA es por tanto validar algo que el navegador nunca llega a ver.
-const URL_STRIPPED_CONTROLS = /[\t\n\r]/g;
+const URL_STRIPPED_CONTROLS = new RegExp(URL_SANITIZATION.stripControlsPattern, "g");
 
 // ChromeButton.href: ruta relativa ("/...") o http(s) absoluta, nada mas. "//host" es
 // protocolo-RELATIVA (navega a un host externo), asi que NO cuenta como relativa; javascript:,
@@ -122,7 +127,7 @@ export function safeChromeHref(raw: unknown): string | undefined {
     // '//evil.example' y navega fuera del sitio. Se rechazan ambas grafias.
     if (/^\/[/\\]/.test(href)) return undefined;
     if (href.startsWith("/")) return href;
-    return /^https?:\/\//i.test(href) ? href : undefined;
+    return NAVIGATION_SAFE_PREFIX.test(href) ? href : undefined;
 }
 
 // Envoltorio fino para los consumidores que solo necesitan el si/no (el spec de props de abajo).
@@ -143,7 +148,7 @@ export function isSafeChromeHref(href: unknown): href is string {
 // item may also be a fragment/query or a mailto:/tel: link, and an invalid value collapses to '#'
 // (an inert href) instead of vanishing — a menu item must keep its label. The WHATWG-stripped
 // controls (tab/LF/CR) are removed FIRST so the validated string is the one the browser will parse.
-const MENU_SAFE_SCHEMES = new Set(["http:", "https:", "mailto:", "tel:"]);
+const MENU_SAFE_SCHEMES = new Set(URL_SANITIZATION.contentSchemes.map((scheme) => `${scheme}:`));
 export function safeMenuHref(raw: unknown): string {
     if (typeof raw !== "string") return "#";
     const value = raw.replace(URL_STRIPPED_CONTROLS, "").trim();
@@ -179,36 +184,34 @@ interface PropCheck {
     expected: string;
 }
 
-const req = (ok: (v: unknown) => boolean, expected: string): PropCheck => ({ required: true, ok, expected });
-const opt = (ok: (v: unknown) => boolean, expected: string): PropCheck => ({ required: false, ok, expected });
 const oneOf = (...values: readonly unknown[]) => (v: unknown) => values.includes(v);
 const isString = (v: unknown) => typeof v === "string";
 const isBoolean = (v: unknown) => typeof v === "boolean";
 
 // The closed allowlist. A `type` not present here invalidates the whole composition (fail-closed).
-const BLOCK_SPECS: Record<ChromeBlockType, Record<string, PropCheck>> = {
-    ChromeLogo: { size: opt(oneOf("sm", "md", "lg"), "'sm'|'md'|'lg'") },
-    ChromeSiteTitle: { showTagline: opt(isBoolean, "boolean") },
-    ChromeNav: {
-        location: req(oneOf("header", "footer"), "'header'|'footer'"),
-        orientation: req(oneOf("horizontal", "vertical"), "'horizontal'|'vertical'"),
-    },
-    ChromeSearch: { placeholder: opt(isString, "string") },
-    ChromeSocials: { source: req(oneOf("settings"), "'settings'") },
-    ChromeText: { text: req(isString, "a plain-text string") },
-    ChromeButton: {
-        label: req(isString, "string"),
-        href: req(isSafeChromeHref, "a relative '/…' path or an http(s):// URL"),
-        variant: req(oneOf("primary", "ghost"), "'primary'|'ghost'"),
-    },
-    ChromeSpacer: { size: req(oneOf("sm", "md", "lg"), "'sm'|'md'|'lg'") },
-    ChromeRow: {
-        items: req(Array.isArray, "an array of blocks"),
-        align: req(oneOf("start", "center", "end", "between"), "'start'|'center'|'end'|'between'"),
-        gap: req(oneOf("sm", "md", "lg"), "'sm'|'md'|'lg'"),
-        wrap: opt(isBoolean, "boolean"),
-    },
-};
+function generatedPropCheck(spec: { kind: string; required?: boolean; values?: readonly string[] }): PropCheck {
+    let ok: (value: unknown) => boolean;
+    let expected: string;
+    switch (spec.kind) {
+        case "string": ok = isString; expected = "string"; break;
+        case "boolean": ok = isBoolean; expected = "boolean"; break;
+        case "enum":
+            ok = oneOf(...(spec.values || []));
+            expected = (spec.values || []).map((value) => JSON.stringify(value)).join("|");
+            break;
+        case "href": ok = isSafeChromeHref; expected = "a relative '/…' path or an http(s):// URL"; break;
+        case "slot": ok = Array.isArray; expected = "an array of blocks"; break;
+        default: ok = () => false; expected = `unsupported generated kind ${spec.kind}`;
+    }
+    return { required: spec.required === true, ok, expected };
+}
+
+const BLOCK_SPECS = Object.fromEntries(
+    Object.entries(CHROME_CONTRACT.blocks).map(([type, block]) => [
+        type,
+        Object.fromEntries(Object.entries(block.props).map(([prop, spec]) => [prop, generatedPropCheck(spec)])),
+    ]),
+) as Record<ChromeBlockType, Record<string, PropCheck>>;
 
 export function parseChromeData(raw: unknown, ctx: ChromeParseContext = {}): ChromeParseResult {
     const where = ctx.source ? `${ctx.source}: ` : "";

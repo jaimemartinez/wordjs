@@ -20,9 +20,9 @@
  * neither. So every prop here is checked against a type or a closed enum, and a template can no more
  * name an element than it can name a selector.
  *
- * Mirrors chrome-validate's shape and discipline on purpose (closed allowlist, fail-closed, whole-tree
- * rejection, byte/block/depth budgets) — two validators with the same instincts are easier to keep
- * honest than one clever one. Dependency-free so the doctor and the CLI can load it anywhere.
+ * The data tables are generated from contracts/visual-contract.v1.json. This module remains the
+ * authoritative executable validator: the frontend gets a separate generated artifact and parser,
+ * never an import across the backend/Next.js boundary.
  *
  * Error codes (stable contract):
  *   TPL_INVALID_JSON      not parseable / not JSON-serializable
@@ -39,9 +39,15 @@
  *   TPL_TOO_DEEP          nested deeper than 4
  */
 
-const MAX_BYTES = 64 * 1024;
-const MAX_BLOCKS = 100;
-const MAX_DEPTH = 4; // one deeper than chrome: a page arranges sections > rows > columns > parts
+const {
+    TEMPLATE_CONTRACT,
+    THEME_CONTRACT,
+    VISUAL_CONTRACT_VERSION,
+} = require('../generated/visual-contract.generated');
+
+const MAX_BYTES = TEMPLATE_CONTRACT.limits.maxBytes;
+const MAX_BLOCKS = TEMPLATE_CONTRACT.limits.maxBlocks;
+const MAX_DEPTH = TEMPLATE_CONTRACT.limits.maxDepth;
 
 interface TemplateError { code: string; path: string; message: string }
 interface TemplateResult { ok: boolean; errors: TemplateError[] }
@@ -56,7 +62,7 @@ interface TemplateResult { ok: boolean; errors: TemplateError[] }
  * The hole the page's own content renders into. Exactly one per template: none and the content
  * silently disappears; two and it renders twice, duplicating every heading and id on the page.
  */
-const CONTENT_SLOT = 'PageContent';
+const CONTENT_SLOT = TEMPLATE_CONTRACT.contentSlot;
 
 /**
  * Props are declared as a TYPE or a closed ENUM — never free-form. `enum` is what makes a structural
@@ -68,14 +74,8 @@ const CONTENT_SLOT = 'PageContent';
  */
 type PropSpec =
     | { kind: 'string' | 'number' | 'boolean' }
-    | { kind: 'enum'; values: string[] }
-    | { kind: 'classlist' }
-    | { kind: 'partname' };
-
-const LEN = { kind: 'string' } as const;
-const NUM = { kind: 'number' } as const;
-const BOOL = { kind: 'boolean' } as const;
-const en = (...values: string[]): PropSpec => ({ kind: 'enum', values });
+    | { kind: 'enum'; values: readonly string[] }
+    | { kind: 'classlist' | 'partname' | 'wrapper-tag' | 'template-part-area' };
 
 /**
  * THE WRAPPER AFFORDANCE, borrowed from Shopify and cut down to this contract's grammar.
@@ -95,7 +95,7 @@ const en = (...values: string[]): PropSpec => ({ kind: 'enum', values });
  * Both props are CONTAINERS-ONLY (Section, Grid, FlexRow, Columns). A Spacer or a Divider has no
  * content to label and no wrapper worth naming, and PageContent is a hole, not an element.
  */
-const TAGS = ['article', 'aside', 'div', 'footer', 'header', 'section'];
+const TAGS: readonly string[] = TEMPLATE_CONTRACT.wrapperTags;
 
 /**
  * A single class name: lower-case, starts with a letter, then letters/digits/hyphens, 40 chars max.
@@ -108,8 +108,8 @@ const TAGS = ['article', 'aside', 'div', 'footer', 'header', 'section'];
  * only (unlike Perl/Python, where it also matches before a trailing newline). The whitespace check in
  * classListOk covers that anyway, belt and braces.
  */
-const CLASS_TOKEN = /^[a-z][a-z0-9-]{0,39}$/;
-const MAX_CLASS_TOKENS = 3;
+const CLASS_TOKEN = new RegExp(TEMPLATE_CONTRACT.classList.tokenPattern);
+const MAX_CLASS_TOKENS = TEMPLATE_CONTRACT.classList.maxTokens;
 
 /**
  * Space-separated, at most MAX_CLASS_TOKENS. Split on a single space rather than /\s+/ on purpose: a
@@ -124,23 +124,15 @@ function classListOk(value: any): boolean {
     return tokens.every((t) => CLASS_TOKEN.test(t));
 }
 
-/** The wrapper props every CONTAINER block carries. Spread into each container's prop table below. */
-const TAG = en(...TAGS);
-const CLASSNAME = { kind: 'classlist' } as const;
-
 /**
- * NAMED TEMPLATE PARTS — the two constants below MIRROR core/chrome-validate.ts, which owns the
- * theme.json `templateParts` declaration. They are re-declared rather than required so this module
- * keeps loading on its own (the doctor stubs either validator independently in its tests);
- * backend/src/tests/template-parts.test.ts asserts the two copies are identical, so they cannot drift.
+ * Named-template-part constraints come from the same generated theme contract as chrome validation.
  *
  * The name is the chrome/<name>.json FILE NAME and lands in a URL, so it is shape-checked exactly like
  * a template name is — that, and the fact that the renderer refuses any name the theme did not
  * declare, is what keeps a prop from ever choosing a path.
  */
-const PART_NAME = /^[a-z0-9-]{1,40}$/;
-const PART_AREAS = ['header', 'footer', 'sidebar', 'general'];
-const PARTNAME = { kind: 'partname' } as const;
+const PART_NAME = new RegExp(THEME_CONTRACT.assetNamePattern);
+const PART_AREAS: readonly string[] = THEME_CONTRACT.templateParts.areas;
 
 /**
  * CLOSED allowlist. A template is STRUCTURE plus the dynamic blocks that derive their content from
@@ -148,48 +140,17 @@ const PARTNAME = { kind: 'partname' } as const;
  *
  * `slot` names the child list a block may nest, or null for a leaf.
  */
-const BLOCKS: Record<string, { props: Record<string, PropSpec>; slot: string | null; required?: string[] }> = {
-    [CONTENT_SLOT]: { props: {}, slot: null },
-
-    // Layout. `tag` + `className` are the container affordance — see TAGS/CLASS_TOKEN above.
-    Section: { props: { background: LEN, padding: LEN, maxWidth: LEN, tag: TAG, className: CLASSNAME }, slot: 'items' },
-    Grid: { props: { columns: NUM, gap: LEN, columnsTablet: NUM, columnsMobile: NUM, tag: TAG, className: CLASSNAME }, slot: 'items' },
-    FlexRow: { props: { gap: LEN, align: en('start', 'center', 'end', 'stretch'), justify: en('start', 'center', 'end', 'between', 'around'), wrap: BOOL, direction: en('row', 'column', 'row-reverse', 'column-reverse'), tag: TAG, className: CLASSNAME }, slot: 'items' },
-    Columns: { props: { columns: NUM, gap: LEN, tag: TAG, className: CLASSNAME }, slot: 'items' },
-    Spacer: { props: { height: LEN }, slot: null },
-    Divider: { props: { color: LEN, width: LEN, length: LEN, gap: LEN }, slot: null },
-
-    // DYNAMIC — the query loop. These derive their content from the SITE, so they may appear only now
-    // that a template has a data path (frontend/src/lib/resolveTemplateBlocks.ts) and the route hands them its own
-    // posts. Every prop below is one the block actually honours; `count` is consumed by the resolver.
-    PostsGrid: { props: { count: NUM, columns: NUM, gap: LEN, bg: LEN, borderColor: LEN, radius: LEN, pad: LEN, thumbHeight: LEN }, slot: null },
-    CategoryPosts: { props: { count: NUM, categorySlug: LEN, layout: en('grid', 'list'), columns: NUM, gap: LEN, bg: LEN, borderColor: LEN, radius: LEN, linkColor: LEN, headingColor: LEN }, slot: null },
-    SearchBar: { props: { placeholder: LEN, buttonText: LEN, align: en('left', 'center', 'right'), width: LEN, inputBg: LEN, inputBorderColor: LEN, inputRadius: LEN, buttonBg: LEN, buttonColor: LEN, buttonRadius: LEN }, slot: null },
-
-    // A NAMED TEMPLATE PART — chrome/<name>.json pulled into the page, the thing that makes the
-    // theme.json `templateParts` declaration worth writing. Both props are REQUIRED: a part with no
-    // name resolves to nothing and a part with no area has no wrapper to render into, and either
-    // would be a block that validates cleanly and does nothing.
-    //
-    // `name` must be DECLARED in theme.json — the validator cannot see theme.json from here (it is
-    // handed one file at a time), so that cross-check is the doctor's (TEMPLATE_PART_UNKNOWN) and the
-    // renderer's, which refuses an undeclared name outright.
-    TemplatePart: { props: { name: PARTNAME, area: en(...PART_AREAS) }, slot: null, required: ['name', 'area'] },
-};
+const BLOCKS = TEMPLATE_CONTRACT.blocks as unknown as Record<
+    string,
+    { props: Record<string, PropSpec>; slot: string | null; required?: readonly string[] }
+>;
 
 /**
  * Real block types a theme-shipped template may NOT use, with the reason. Reported as
  * TPL_FORBIDDEN_TYPE rather than TPL_UNKNOWN_TYPE so a theme author is told "not here" instead of
  * hunting a typo.
  */
-const FORBIDDEN: Record<string, string> = {
-    HTMLEmbed: 'raw HTML in a theme-shipped template is an injection surface — the page body is the place for it',
-    Symbol: 'a Symbol resolves to stored content a theme cannot see at validation time',
-    Form: 'a form needs a per-site configuration a theme cannot carry',
-    Heading: 'a template arranges the page; the page supplies its own headings',
-    Text: 'a template arranges the page; the page supplies its own copy',
-    Image: 'a template must not ship page imagery — use the page content or a token-driven background',
-};
+const FORBIDDEN: Readonly<Record<string, string>> = TEMPLATE_CONTRACT.forbiddenBlocks;
 
 const isPlainObject = (v: any): boolean => typeof v === 'object' && v !== null && !Array.isArray(v);
 
@@ -221,6 +182,18 @@ function checkProps(type: string, props: any, path: string, errors: TemplateErro
         if (ps.kind === 'partname') {
             if (typeof value !== 'string' || !PART_NAME.test(value)) {
                 errors.push({ code: 'TPL_INVALID_PROP', path: `${path}.props.${key}`, message: `must be a template-part name matching ${PART_NAME.source}, declared in theme.json "templateParts"` });
+            }
+            continue;
+        }
+        if (ps.kind === 'wrapper-tag') {
+            if (typeof value !== 'string' || !TAGS.includes(value)) {
+                errors.push({ code: 'TPL_INVALID_PROP', path: `${path}.props.${key}`, message: `must be one of: ${TAGS.join(', ')}` });
+            }
+            continue;
+        }
+        if (ps.kind === 'template-part-area') {
+            if (typeof value !== 'string' || !PART_AREAS.includes(value)) {
+                errors.push({ code: 'TPL_INVALID_PROP', path: `${path}.props.${key}`, message: `must be one of: ${PART_AREAS.join(', ')}` });
             }
             continue;
         }
@@ -399,6 +372,7 @@ function templatePartRefs(input: any): string[] {
 }
 
 module.exports = {
+    VISUAL_CONTRACT_VERSION,
     validateTemplate,
     templatePartRefs,
     collectTemplateClasses,

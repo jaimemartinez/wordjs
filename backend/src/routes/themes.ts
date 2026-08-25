@@ -33,7 +33,7 @@ const { authenticate } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
 const { recordAudit } = require('../core/audit');
-const { resolveThemeDir, resolveWithin } = require('../core/safe-path');
+const { isThemeAssetName, resolveThemeDir, resolveWithin } = require('../core/safe-path');
 
 /**
  * @swagger
@@ -691,8 +691,6 @@ router.get('/:slug/doctor', authenticate, isAdmin, asyncHandler(async (req: Requ
 // and templateData.ts's TEMPLATE_NAME enforce before a name lands in a /themes/<slug>/templates/<name>.json
 // URL. Anything else is dropped from the listing rather than sanitized: a file that cannot be a candidate
 // must never be offered as one.
-const TEMPLATE_FILE_NAME = /^[a-z0-9-]{1,40}$/;
-
 /**
  * @swagger
  * /themes/{slug}/templates:
@@ -734,7 +732,7 @@ router.get('/:slug/templates', authenticate, isAdmin, asyncHandler(async (req: R
             .filter((e: any) => e.isFile() && e.name.endsWith('.json'))
             .map((e: any) => e.name.slice(0, -'.json'.length))
             // The shape gate: a file whose name the hierarchy could never request is not a real template.
-            .filter((name: string) => TEMPLATE_FILE_NAME.test(name))
+            .filter((name: string) => isThemeAssetName(name))
             .sort();
     } catch {
         // No templates/ directory (the common case — most themes ship none) → an empty list, not an error.

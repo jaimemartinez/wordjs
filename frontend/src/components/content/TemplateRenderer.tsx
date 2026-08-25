@@ -13,6 +13,8 @@ import {
 import SearchBarBlock from './SearchBarBlock';
 import ChromeRenderer from '@/components/chrome/ChromeRenderer';
 import type { ChromeBindings, ChromeData } from '@/lib/chromeData';
+import { THEME_CONTRACT } from '@/generated/visual-contract.generated';
+import type { TemplateBlockType } from '@/generated/visual-contract.types.generated';
 
 /**
  * Renders a theme's page template: the arrangement comes from `templates/<name>.json`, and the page's
@@ -50,12 +52,7 @@ type SlotFn = (className?: string) => Rendered;
  * elements here. `main` is absent for the same reason `tag` excludes it — the layout already wraps
  * every template in one.
  */
-const PART_TAGS: Record<string, 'header' | 'footer' | 'aside' | 'div'> = {
-    header: 'header',
-    footer: 'footer',
-    sidebar: 'aside',
-    general: 'div',
-};
+const PART_TAGS: Readonly<Record<string, 'header' | 'footer' | 'aside' | 'div'>> = THEME_CONTRACT.templateParts.areaWrappers;
 
 /** Equal-width distribution for a Columns block — the contract exposes a count, not pixel widths. */
 function distribution(count: number) {
@@ -85,151 +82,75 @@ function renderList(list: TemplateBlock[], content: Rendered, key: string, previ
     return list.map((block, i) => renderBlock(block, content, `${key}-${i}`, preview));
 }
 
-function renderBlock(block: TemplateBlock, content: Rendered, key: string, preview: boolean): Rendered {
-    const p = block.props || {};
-    const items = Array.isArray(p.items) ? (p.items as TemplateBlock[]) : [];
+interface TemplateRenderContext {
+    content: Rendered;
+    items: TemplateBlock[];
+    key: string;
+    p: Record<string, any>;
+    preview: boolean;
+    slot: SlotFn;
+}
 
-    // The slot every container hands to its block: a wrapper div carrying whichever class the block
-    // asks for (Grid and FlexRow put the layout on the slot's own wrapper, not on themselves).
-    const slot: SlotFn = (className) => (
-        <div className={className}>{renderList(items, content, key, preview)}</div>
-    );
+type TemplateBlockRenderer = (context: TemplateRenderContext) => Rendered;
 
-    switch (block.type) {
-        case CONTENT_SLOT:
-            return <React.Fragment key={key}>{content}</React.Fragment>;
-
-        case 'Section':
+const TEMPLATE_RENDERERS = {
+    [CONTENT_SLOT]: ({ content, key }) => <React.Fragment key={key}>{content}</React.Fragment>,
+    Section: ({ key, p, slot }) => <SectionBlock key={key} maxWidth={p.maxWidth} pad={p.padding} bg={p.background} tag={p.tag} className={p.className} slot={slot} />,
+    Grid: ({ key, p, slot }) => <GridBlock key={key} columns={p.columns} gap={p.gap} columnsTablet={p.columnsTablet} columnsMobile={p.columnsMobile} tag={p.tag} className={p.className} slot={slot} />,
+    FlexRow: ({ key, p, slot }) => <FlexRowBlock key={key} gap={p.gap} align={p.align} justify={p.justify} wrap={p.wrap} direction={p.direction} tag={p.tag} className={p.className} slot={slot} />,
+    Columns: ({ content, items, key, p, preview }) => {
+        const dist = distribution(Number(p.columns ?? 2));
+        const buckets: TemplateBlock[][] = Array.from({ length: dist.columnCount }, () => []);
+        items.forEach((child, i) => buckets[i % dist.columnCount].push(child));
+        const slots: SlotFn[] = buckets.map((bucket, i) => () => renderList(bucket, content, `${key}-c${i}`, preview));
+        return <ColumnsBlock key={key} distribution={dist} gap={p.gap} tag={p.tag} className={p.className} slots={slots} />;
+    },
+    Spacer: ({ key, p }) => <SpacerBlock key={key} height={p.height} />,
+    Divider: ({ key, p }) => <DividerBlock key={key} color={p.color} width={p.width} length={p.length} gap={p.gap} />,
+    PostsGrid: ({ key, p, preview }) => <PostsGridBlock key={key} {...p} posts={p.resolvedPosts} isEditing={preview} />,
+    CategoryPosts: ({ key, p, preview }) => <CategoryPostsBlock key={key} {...p} posts={p.resolvedPosts} isEditing={preview} />,
+    SearchBar: ({ key, p }) => <SearchBarBlock key={key} {...p} />,
+    TemplatePart: ({ key, p, preview }) => {
+        const data = (p as { resolvedPart?: ChromeData }).resolvedPart;
+        const bindings = (p as { resolvedBindings?: ChromeBindings }).resolvedBindings;
+        const area = String(p.area ?? 'general');
+        const Wrapper = PART_TAGS[area] || 'div';
+        if (!data || !bindings) {
+            if (!preview) return null;
             return (
-                <SectionBlock
+                <Wrapper
                     key={key}
-                    maxWidth={p.maxWidth}
-                    pad={p.padding}
-                    bg={p.background}
-                    tag={p.tag}
-                    className={p.className}
-                    slot={slot}
-                />
-            );
-
-        case 'Grid':
-            return (
-                <GridBlock
-                    key={key}
-                    columns={p.columns}
-                    gap={p.gap}
-                    columnsTablet={p.columnsTablet}
-                    columnsMobile={p.columnsMobile}
-                    tag={p.tag}
-                    className={p.className}
-                    slot={slot}
-                />
-            );
-
-        case 'FlexRow':
-            return (
-                <FlexRowBlock
-                    key={key}
-                    gap={p.gap}
-                    align={p.align}
-                    justify={p.justify}
-                    wrap={p.wrap}
-                    direction={p.direction}
-                    tag={p.tag}
-                    className={p.className}
-                    slot={slot}
-                />
-            );
-
-        case 'Columns': {
-            // A template's columns are filled ROUND-ROBIN from the child list: `columns: 2` with three
-            // children puts 1 and 3 in the first column. The alternative — one child per column — would
-            // silently drop the rest, and the contract has no per-column child lists to be explicit
-            // with (nesting a Section inside a column is how an author groups content deliberately).
-            const dist = distribution(Number(p.columns ?? 2));
-            const buckets: TemplateBlock[][] = Array.from({ length: dist.columnCount }, () => []);
-            items.forEach((child, i) => buckets[i % dist.columnCount].push(child));
-            const slots: SlotFn[] = buckets.map((bucket, i) => () => renderList(bucket, content, `${key}-c${i}`, preview));
-            return <ColumnsBlock key={key} distribution={dist} gap={p.gap} tag={p.tag} className={p.className} slots={slots} />;
-        }
-
-        case 'Spacer':
-            return <SpacerBlock key={key} height={p.height} />;
-
-        case 'Divider':
-            return <DividerBlock key={key} color={p.color} width={p.width} length={p.length} gap={p.gap} />;
-
-        // ── the query loop ─────────────────────────────────────────────────────────────────────────
-        //
-        // `resolvedPosts` is put on the props by resolveTemplateBlocks BEFORE this renders, and the
-        // `resolvedPosts → posts` mapping is the same one ContentRenderer does for a page — same
-        // component, same prop, so a listing in a template and a listing on a page are one thing.
-        //
-        // An unresolved tree reaches here with resolvedPosts undefined, and the block renders its own
-        // honest empty state rather than inventing titles. That is deliberate: this file must not be
-        // the thing that decides what a listing contains.
-        case 'PostsGrid':
-            return <PostsGridBlock key={key} {...p} posts={(p as any).resolvedPosts} isEditing={preview} />;
-
-        case 'CategoryPosts':
-            return <CategoryPostsBlock key={key} {...p} posts={(p as any).resolvedPosts} isEditing={preview} />;
-
-        case 'SearchBar':
-            return <SearchBarBlock key={key} {...p} />;
-
-        // ── a named template part ──────────────────────────────────────────────────────────────────
-        //
-        // `resolvedPart` is the VALIDATED chrome composition resolveTemplateBlocks fetched, and it is
-        // only ever there when theme.json declared the name — a template cannot supply it (the
-        // validator rejects props a block does not declare, on both sides of the mirror), so an
-        // undeclared or invalid part arrives unresolved and renders NOTHING. That silence is the
-        // fail-closed behaviour; the doctor is where the author is told why.
-        //
-        // `area` is the one thing the block decides for itself, and it is a closed enum, so the
-        // wrapper element comes from a table WordJS owns. ChromeRenderer's `location` only governs
-        // whether ChromeLogo/ChromeSiteTitle emit the MASTHEAD css hooks: those belong to the site
-        // header alone, so every area other than 'header' passes 'footer' — "not the masthead".
-        case 'TemplatePart': {
-            const data = (p as { resolvedPart?: ChromeData }).resolvedPart;
-            const bindings = (p as { resolvedBindings?: ChromeBindings }).resolvedBindings;
-            const area = String(p.area ?? 'general');
-            if (!data || !bindings) {
-                // Public: fail-closed — an undeclared/invalid part renders nothing. Canvas: the part is
-                // never resolved here (chrome resolution is server-only), so show WHERE it sits with a
-                // labelled placeholder rather than a hole, and mark it clearly as a preview.
-                if (!preview) return null;
-                const Wrapper = PART_TAGS[area] || 'div';
-                return (
-                    <Wrapper
-                        key={key}
-                        className={`wjs-template-part wjs-template-part--${area} wjs-canvas-part-placeholder`}
-                        style={{
-                            border: '1px dashed var(--wjs-color-border, #cbd5e1)',
-                            borderRadius: '0.5rem',
-                            padding: '0.75rem 1rem',
-                            margin: '0.5rem 0',
-                            color: 'var(--wjs-color-muted, #64748b)',
-                            fontSize: '0.8125rem',
-                            textAlign: 'center',
-                        }}
-                    >
-                        {`Parte de plantilla: ${String(p.name ?? '')} (${area}) — vista previa`}
-                    </Wrapper>
-                );
-            }
-            const Wrapper = PART_TAGS[area] || 'div';
-            return (
-                <Wrapper key={key} className={`wjs-template-part wjs-template-part--${area}`}>
-                    <ChromeRenderer data={data} bindings={bindings} location={area === 'header' ? 'header' : 'footer'} />
+                    className={`wjs-template-part wjs-template-part--${area} wjs-canvas-part-placeholder`}
+                    style={{
+                        border: '1px dashed var(--wjs-color-border, #cbd5e1)',
+                        borderRadius: '0.5rem',
+                        padding: '0.75rem 1rem',
+                        margin: '0.5rem 0',
+                        color: 'var(--wjs-color-muted, #64748b)',
+                        fontSize: '0.8125rem',
+                        textAlign: 'center',
+                    }}
+                >
+                    {`Parte de plantilla: ${String(p.name ?? '')} (${area}) — vista previa`}
                 </Wrapper>
             );
         }
+        return (
+            <Wrapper key={key} className={`wjs-template-part wjs-template-part--${area}`}>
+                <ChromeRenderer data={data} bindings={bindings} location={area === 'header' ? 'header' : 'footer'} />
+            </Wrapper>
+        );
+    },
+} satisfies Record<TemplateBlockType, TemplateBlockRenderer>;
 
-        default:
-            // Unreachable for a validated tree. Rendering nothing (rather than throwing) keeps a drift
-            // between validator and renderer from taking the whole page down with it.
-            return null;
-    }
+function renderBlock(block: TemplateBlock, content: Rendered, key: string, preview: boolean): Rendered {
+    const p = (block.props || {}) as Record<string, any>;
+    const items = Array.isArray(p.items) ? (p.items as TemplateBlock[]) : [];
+    const slot: SlotFn = (className) => (
+        <div className={className}>{renderList(items, content, key, preview)}</div>
+    );
+    const renderer = TEMPLATE_RENDERERS[block.type as TemplateBlockType];
+    return renderer ? renderer({ content, items, key, p, preview, slot }) : null;
 }
 
 export default TemplateRenderer;

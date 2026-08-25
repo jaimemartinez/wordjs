@@ -5,11 +5,9 @@
  * single `PageContent` hole where the page's own content renders. This is what lets a theme invent a
  * LAYOUT instead of only picking tokens and four switches.
  *
- * AUTHORITY LIVES ON THE BACKEND (backend/src/core/template-validate.ts). This is an independent
- * MIRROR — different package, no shared import — exactly like chromeData.ts mirrors chrome-validate.
- * Two copies is a deliberate trade: the renderer must never render a tree the backend would reject,
- * and it must not need a network round-trip to know that. Keep the allowlist, the enums and the
- * budgets in step when the contract moves.
+ * AUTHORITY LIVES ON THE BACKEND (backend/src/core/template-validate.ts). This safe parser consumes
+ * its own generated artifact from the same versioned source; it never imports backend code and it no
+ * longer maintains a handwritten mirror of security constants.
  *
  * FAIL-CLOSED. Anything unexpected returns null and the page falls back to the default arrangement.
  * A partially-rendered layout is worse than no layout: half a template looks like a broken site, while
@@ -20,24 +18,31 @@
  * produced a stored-XSS critical when a block used an author-controlled prop as its React element type.
  */
 
-export const CONTENT_SLOT = 'PageContent';
+import {
+    CHROME_CONTRACT,
+    TEMPLATE_CONTRACT,
+    THEME_CONTRACT,
+    VISUAL_CONTRACT_VERSION,
+} from "@/generated/visual-contract.generated";
+import type {
+    TemplateBlockType,
+    TemplatePartArea as GeneratedTemplatePartArea,
+} from "@/generated/visual-contract.types.generated";
 
-const MAX_BYTES = 64 * 1024;
-const MAX_BLOCKS = 100;
-const MAX_DEPTH = 4;
+export { VISUAL_CONTRACT_VERSION };
+export const CONTENT_SLOT = TEMPLATE_CONTRACT.contentSlot;
+
+const MAX_BYTES = TEMPLATE_CONTRACT.limits.maxBytes;
+const MAX_BLOCKS = TEMPLATE_CONTRACT.limits.maxBlocks;
+const MAX_DEPTH = TEMPLATE_CONTRACT.limits.maxDepth;
 
 type PropSpec =
     | { kind: 'string' | 'number' | 'boolean' }
-    | { kind: 'enum'; values: string[] }
-    | { kind: 'classlist' }
-    | { kind: 'partname' };
-const S: PropSpec = { kind: 'string' };
-const N: PropSpec = { kind: 'number' };
-const B: PropSpec = { kind: 'boolean' };
-const en = (...values: string[]): PropSpec => ({ kind: 'enum', values });
+    | { kind: 'enum'; values: readonly string[] }
+    | { kind: 'classlist' | 'partname' | 'wrapper-tag' | 'template-part-area' };
 
 /**
- * The container wrapper affordance — MIRRORS TAGS/CLASS_TOKEN in backend/src/core/template-validate.ts.
+ * The container wrapper affordance — generated with backend/src/core/template-validate.ts from one source.
  *
  * Adapted from Shopify, whose section `{% schema %}` may declare `tag` (the wrapper's element name, from
  * a closed list of six) and `class` (APPENDED to the wrapper class Shopify emits). The enum is what makes
@@ -46,12 +51,12 @@ const en = (...values: string[]): PropSpec => ({ kind: 'enum', values });
  * `main` is excluded on purpose — PublicLayoutShell already renders `<main id="main-content">` around
  * every template, and a nested <main> is an invalid landmark.
  */
-export const TEMPLATE_TAGS = ['article', 'aside', 'div', 'footer', 'header', 'section'] as const;
+export const TEMPLATE_TAGS = TEMPLATE_CONTRACT.wrapperTags;
 export type TemplateTag = (typeof TEMPLATE_TAGS)[number];
 
 /** One class name. Narrow on purpose: no space, quote, bracket, dot, colon or slash can appear. */
-export const CLASS_TOKEN = /^[a-z][a-z0-9-]{0,39}$/;
-export const MAX_CLASS_TOKENS = 3;
+export const CLASS_TOKEN = new RegExp(TEMPLATE_CONTRACT.classList.tokenPattern);
+export const MAX_CLASS_TOKENS = TEMPLATE_CONTRACT.classList.maxTokens;
 
 /** Space-separated, at most MAX_CLASS_TOKENS. Split on a single space so tabs/newlines/doubles FAIL. */
 export function classListOk(value: unknown): value is string {
@@ -62,11 +67,8 @@ export function classListOk(value: unknown): value is string {
     return tokens.every((t) => CLASS_TOKEN.test(t));
 }
 
-const TAG: PropSpec = en(...TEMPLATE_TAGS);
-const CLASSNAME: PropSpec = { kind: 'classlist' };
-
 /**
- * NAMED TEMPLATE PARTS — MIRRORS TEMPLATE_PART_AREAS / TEMPLATE_PART_NAME in
+ * NAMED TEMPLATE PARTS — consumes the same generated TEMPLATE_PART_AREAS / TEMPLATE_PART_NAME as
  * backend/src/core/chrome-validate.ts (the authority for the theme.json `templateParts` declaration)
  * and the `TemplatePart` block in backend/src/core/template-validate.ts.
  *
@@ -74,41 +76,29 @@ const CLASSNAME: PropSpec = { kind: 'classlist' };
  * same one server-api.ts's getThemeTemplate/getThemeChrome enforce before fetching. Two independent
  * gates on the same shape: one here, one at the fetch.
  */
-export const TEMPLATE_PART_NAME = /^[a-z0-9-]{1,40}$/;
-export const TEMPLATE_PART_AREAS = ['header', 'footer', 'sidebar', 'general'] as const;
-export type TemplatePartArea = (typeof TEMPLATE_PART_AREAS)[number];
-/** `header`/`footer` are the SITE chrome, resolved by the layout — never a part a page can pull in. */
-const RESERVED_PART_NAMES = ['header', 'footer'];
-const MAX_TEMPLATE_PARTS = 16;
-const PARTNAME: PropSpec = { kind: 'partname' };
+export const TEMPLATE_PART_NAME = new RegExp(THEME_CONTRACT.assetNamePattern);
+export const TEMPLATE_PART_AREAS = THEME_CONTRACT.templateParts.areas;
+export type TemplatePartArea = GeneratedTemplatePartArea;
+/** Layout-owned chrome files are never template parts. */
+const RESERVED_PART_NAMES: readonly string[] = [
+    ...CHROME_CONTRACT.siteParts,
+    CHROME_CONTRACT.announcementPart,
+];
+const MAX_TEMPLATE_PARTS = THEME_CONTRACT.templateParts.maxItems;
 
 /**
- * Closed allowlist — mirrors BLOCKS in backend/src/core/template-validate.ts.
+ * Closed allowlist — generated together with BLOCKS in backend/src/core/template-validate.ts.
  *
  * Every prop here is one the PAGE BLOCK behind it actually honours (see TemplateRenderer, which renders
  * a template through those same components). A prop the block ignores would validate and do nothing,
  * so `minColumnWidth` and Section's `align` are absent rather than accepted-and-dropped.
  */
-const BLOCKS: Record<string, { props: Record<string, PropSpec>; slot: string | null; required?: string[] }> = {
-    [CONTENT_SLOT]: { props: {}, slot: null },
-    Section: { props: { background: S, padding: S, maxWidth: S, tag: TAG, className: CLASSNAME }, slot: 'items' },
-    Grid: { props: { columns: N, gap: S, columnsTablet: N, columnsMobile: N, tag: TAG, className: CLASSNAME }, slot: 'items' },
-    FlexRow: { props: { gap: S, align: en('start', 'center', 'end', 'stretch'), justify: en('start', 'center', 'end', 'between', 'around'), wrap: B, direction: en('row', 'column', 'row-reverse', 'column-reverse'), tag: TAG, className: CLASSNAME }, slot: 'items' },
-    Columns: { props: { columns: N, gap: S, tag: TAG, className: CLASSNAME }, slot: 'items' },
-    Spacer: { props: { height: S }, slot: null },
-    Divider: { props: { color: S, width: S, length: S, gap: S }, slot: null },
-    // DYNAMIC — the query loop. These derive their content from the SITE, so they may appear only now
-    // that a template has a data path (lib/resolveTemplateBlocks.ts) and the route hands them its own
-    // posts. Every prop below is one the block actually honours; `count` is consumed by the resolver.
-    PostsGrid: { props: { count: N, columns: N, gap: S, bg: S, borderColor: S, radius: S, pad: S, thumbHeight: S }, slot: null },
-    CategoryPosts: { props: { count: N, categorySlug: S, layout: en('grid', 'list'), columns: N, gap: S, bg: S, borderColor: S, radius: S, linkColor: S, headingColor: S }, slot: null },
-    SearchBar: { props: { placeholder: S, buttonText: S, align: en('left', 'center', 'right'), width: S, inputBg: S, inputBorderColor: S, inputRadius: S, buttonBg: S, buttonColor: S, buttonRadius: S }, slot: null },
-    // A named template part — chrome/<name>.json pulled into the page. Both props are REQUIRED: with
-    // no name there is nothing to resolve and with no area there is no wrapper to render into.
-    TemplatePart: { props: { name: PARTNAME, area: en(...TEMPLATE_PART_AREAS) }, slot: null, required: ['name', 'area'] },
-};
+const BLOCKS = TEMPLATE_CONTRACT.blocks as unknown as Record<
+    string,
+    { props: Record<string, PropSpec>; slot: string | null; required?: readonly string[] }
+>;
 
-export interface TemplateBlock { type: string; props: Record<string, unknown> }
+export interface TemplateBlock { type: TemplateBlockType; props: Record<string, unknown> }
 export interface TemplateTree { content: TemplateBlock[] }
 
 const isObj = (v: unknown): v is Record<string, unknown> =>
@@ -132,6 +122,14 @@ function propsOk(type: string, props: Record<string, unknown>): boolean {
         }
         if (ps.kind === 'partname') {
             if (typeof value !== 'string' || !TEMPLATE_PART_NAME.test(value)) return false;
+            continue;
+        }
+        if (ps.kind === 'wrapper-tag') {
+            if (typeof value !== 'string' || !(TEMPLATE_TAGS as readonly string[]).includes(value)) return false;
+            continue;
+        }
+        if (ps.kind === 'template-part-area') {
+            if (typeof value !== 'string' || !(TEMPLATE_PART_AREAS as readonly string[]).includes(value)) return false;
             continue;
         }
         if (typeof value !== ps.kind) return false;
@@ -174,7 +172,7 @@ function treeOk(list: unknown, depth: number, state: { blocks: number; slots: nu
 export function parseTemplate(raw: string | null | undefined): TemplateTree | null {
     if (typeof raw !== 'string' || !raw.trim()) return null;
     // Byte budget BEFORE parsing: a 10MB "template" must not be parsed to find out it is too big.
-    if (raw.length > MAX_BYTES) return null;
+    if (new TextEncoder().encode(raw).length > MAX_BYTES) return null;
     let data: unknown;
     try { data = JSON.parse(raw); } catch { return null; }
     if (!isObj(data)) return null;
@@ -205,7 +203,7 @@ export function parseTemplate(raw: string | null | undefined): TemplateTree | nu
  */
 
 /** A template file name. IDENTICAL to the guard in server-api.ts's getThemeTemplate — keep them so. */
-export const TEMPLATE_NAME = /^[a-z0-9-]{1,40}$/;
+export const TEMPLATE_NAME = new RegExp(THEME_CONTRACT.assetNamePattern);
 
 /**
  * What a route IS. Only five of these are reachable today (see the table in documentation/themes.md):
@@ -308,7 +306,8 @@ export function templateCandidates(kind: TemplateKind, query: TemplateQuery = {}
 }
 
 /* ────────────────────────────────────────────────────────────────────────────────────────────────
- * theme.json `templateParts` — the renderer's mirror of core/chrome-validate.ts's validateTemplateParts.
+ * theme.json `templateParts` — the frontend consumer of the generated policy used by
+ * core/chrome-validate.ts's authoritative validateTemplateParts.
  */
 
 /**
@@ -322,7 +321,7 @@ export function templateCandidates(kind: TemplateKind, query: TemplateQuery = {}
  */
 export function parseTemplateParts(raw: string | null | undefined): Map<string, TemplatePartArea> {
     const empty = new Map<string, TemplatePartArea>();
-    if (typeof raw !== 'string' || !raw.trim() || raw.length > MAX_BYTES) return empty;
+    if (typeof raw !== 'string' || !raw.trim() || new TextEncoder().encode(raw).length > MAX_BYTES) return empty;
     let data: unknown;
     try { data = JSON.parse(raw); } catch { return empty; }
     if (!isObj(data)) return empty;

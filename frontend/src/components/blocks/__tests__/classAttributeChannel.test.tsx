@@ -72,6 +72,7 @@ import {
     safeExtraClassList,
 } from '@/components/blocks/safeStyle';
 import { sanitizeHTML } from '@/lib/sanitize';
+import { HTML_SANITIZATION } from '@/generated/visual-contract.generated';
 // The backend modules are CommonJS with no `export` statement, so tsc classifies them as scripts
 // rather than modules. Resolution and execution are fine — the suppression is the price of driving
 // the REAL write-boundary functions instead of a copy of them, the same arrangement
@@ -165,7 +166,7 @@ function sourceFiles(root: string, out: string[] = []): string[] {
     for (const entry of readdirSync(root, { withFileTypes: true })) {
         const abs = path.join(root, entry.name);
         if (entry.isDirectory()) {
-            if (entry.name === 'node_modules' || entry.name === '__tests__' || entry.name === 'tests') continue;
+            if (entry.name === 'node_modules' || entry.name === '__tests__' || entry.name === 'tests' || entry.name === 'generated') continue;
             if (entry.name.startsWith('.')) continue;
             sourceFiles(abs, out);
         } else if (/\.(ts|tsx|js|mjs|cjs)$/.test(entry.name) && !/\.(test|spec)\./.test(entry.name)) {
@@ -177,6 +178,10 @@ function sourceFiles(root: string, out: string[] = []): string[] {
 
 /** Does this source declare a sanitizer configuration in which the `class` attribute survives? */
 function admitsClassAttribute(code: string): boolean {
+    // F5 moved the attribute names into the generated contract. A sanitizer that spreads this field
+    // still admits `class`; the generated module itself is data, not an emitter, and is skipped above.
+    if ((HTML_SANITIZATION.allowedAttributes as readonly string[]).includes('class')
+        && code.includes('HTML_SANITIZATION.allowedAttributes')) return true;
     ATTR_ALLOWLIST_KEYS.lastIndex = 0;
     let m: RegExpExecArray | null;
     while ((m = ATTR_ALLOWLIST_KEYS.exec(code))) {

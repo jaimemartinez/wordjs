@@ -5,12 +5,12 @@ import {
 } from '../templateData';
 
 /**
- * The renderer's mirror of the page-template contract.
+ * The renderer's generated parser view of the page-template contract.
  *
  * The backend validator is the authority; this copy exists so the renderer never renders a tree the
- * backend would reject, without a network round-trip. Two copies of a contract only stay honest if both
- * are tested, so these assert the same properties the backend suite does — and one the backend cannot:
- * that the mirror FAILS CLOSED, returning null rather than a partial tree.
+ * backend would reject, without a network round-trip. Backend and frontend consume separate generated
+ * artifacts from the same definition; these assert the frontend behavior the backend cannot: that the
+ * parser FAILS CLOSED, returning null rather than a partial tree.
  */
 
 const slot = { type: CONTENT_SLOT, props: {} };
@@ -54,7 +54,7 @@ describe('parseTemplate', () => {
 
     // ── the container wrapper: `tag` and `className` ───────────────────────────────────────────────
     //
-    // The backend is the authority for these; the point of repeating them here is that the two must
+    // The backend is the authority for these; the point of exercising them here is that the two must
     // agree EXACTLY. A tree this mirror accepts and the backend rejects means the renderer draws a
     // layout the doctor calls invalid — and a tree the backend accepts and this rejects means a valid
     // theme silently falls back to the default arrangement.

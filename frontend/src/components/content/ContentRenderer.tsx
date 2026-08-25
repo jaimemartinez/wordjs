@@ -53,7 +53,7 @@ import {
     PricingTableBlock, TestimonialBlock, CTABannerBlock, VideoEmbedBlock, HeroBlock,
     PostsGridBlock, CategoryPostsBlock, AudioPlayerBlock, ParticleFieldBlock, NavMenuBlock,
     SiteLogoBlock, OffCanvasBlock, BreadcrumbsBlock, LangSwitcherBlock, TableOfContentsBlock,
-    MegaMenuBlock, MEGA_MENU_PANEL_SLOTS,
+    MegaMenuBlock,
 } from "./blocks";
 import AccordionBlock from "./AccordionBlock";
 import BackToTopBlock from "./BackToTop";
@@ -61,6 +61,8 @@ import TabsBlock from "./TabsBlock";
 import SearchBarBlock from "./SearchBarBlock";
 import PluginBlockIsland from "./PluginBlockIsland";
 import { FormBlockRender } from "@/components/blocks/FormBlock";
+import { CORE_BLOCK_SLOTS, CORE_BLOCK_TYPES } from "@/generated/verso-registry.generated";
+import type { CoreBlockType } from "@/generated/visual-contract.types.generated";
 
 /**
  * Lo que el motor de interacciones necesita saber en CADA punto del recorrido. Viaja por parámetro
@@ -167,87 +169,72 @@ function renderItem(item: any, fallbackKey: string, exclude?: ReadonlySet<string
     );
 }
 
-/** Core-block dispatch. Returns undefined for unknown types (→ PluginBlockIsland). */
+type CoreRenderer = (
+    props: Record<string, any>,
+    item: any,
+    exclude?: ReadonlySet<string>,
+    ix?: IxEnv,
+) => React.ReactNode | undefined;
+
+/**
+ * Implementation bindings for the generated registry. `satisfies Record<CoreBlockType, …>` is the
+ * renderer gate: adding/removing a canonical block makes TypeScript fail until its implementation is
+ * explicit. Slot names come from the generated registry as well.
+ */
+const CORE_RENDERERS = {
+    Heading: (props, _item, _exclude, ix) => <HeadingBlock {...props} ixCtx={ix?.ctx} />,
+    Text: (props) => <TextBlock {...props} />,
+    Image: (props) => <ImageBlock {...props} />,
+    Divider: (props) => <DividerBlock {...props} />,
+    Button: (props) => <ButtonBlock {...props} />,
+    Spacer: (props) => <SpacerBlock {...props} />,
+    Section: (props, _item, exclude, ix) => <SectionBlock {...props} slot={slotOf(props, CORE_BLOCK_SLOTS.Section[0], exclude, ix)} />,
+    Grid: (props, _item, exclude, ix) => <GridBlock {...props} slot={slotOf(props, CORE_BLOCK_SLOTS.Grid[0], exclude, ix)} />,
+    FlexRow: (props, _item, exclude, ix) => <FlexRowBlock {...props} slot={slotOf(props, CORE_BLOCK_SLOTS.FlexRow[0], exclude, ix)} />,
+    Columns: (props, _item, exclude, ix) => <ColumnsBlock {...props} slots={CORE_BLOCK_SLOTS.Columns.map((name) => slotOf(props, name, exclude, ix))} />,
+    Card: (props) => <CardBlock {...props} />,
+    Quote: (props, _item, _exclude, ix) => <QuoteBlock {...props} ixCtx={ix?.ctx} />,
+    Table: (props) => <TableBlock {...props} />,
+    IconList: (props) => <IconListBlock {...props} />,
+    SocialLinks: (props) => <SocialLinksBlock {...props} />,
+    Stats: (props) => <StatsBlock {...props} />,
+    HTMLEmbed: (props) => <HTMLEmbedBlock {...props} />,
+    PricingTable: (props) => <PricingTableBlock {...props} />,
+    Testimonial: (props) => <TestimonialBlock {...props} />,
+    CTABanner: (props) => <CTABannerBlock {...props} />,
+    VideoEmbed: (props) => <VideoEmbedBlock {...props} />,
+    Hero: (props) => <HeroBlock {...props} />,
+    PostsGrid: (props) => <PostsGridBlock {...props} posts={props.resolvedPosts} />,
+    CategoryPosts: (props) => <CategoryPostsBlock {...props} posts={props.resolvedPosts} />,
+    AudioPlayer: (props) => <AudioPlayerBlock {...props} />,
+    Accordion: (props) => <AccordionBlock {...props} />,
+    Tabs: (props) => <TabsBlock {...props} />,
+    SearchBar: (props) => <SearchBarBlock {...props} />,
+    Form: (props) => <FormBlockRender {...(props as any)} />,
+    Symbol: () => undefined,
+    ParticleField: (props) => <ParticleFieldBlock {...props} />,
+    NavMenu: (props) => <NavMenuBlock {...props} menu={props.resolvedMenu} />,
+    SiteLogo: (props) => <SiteLogoBlock {...props} identity={props.resolvedIdentity} />,
+    BackToTop: (props) => <BackToTopBlock {...props} />,
+    OffCanvas: (props, _item, exclude, ix) => <OffCanvasBlock {...props} slot={slotOf(props, CORE_BLOCK_SLOTS.OffCanvas[0], exclude, ix)} />,
+    Breadcrumbs: (props) => <BreadcrumbsBlock {...props} />,
+    LangSwitcher: (props) => <LangSwitcherBlock {...props} />,
+    TableOfContents: (props) => <TableOfContentsBlock {...props} />,
+    MegaMenu: (props, _item, exclude, ix) => (
+        <MegaMenuBlock
+            {...props}
+            menu={props.resolvedMenu}
+            panels={CORE_BLOCK_SLOTS.MegaMenu.map((name) =>
+                Array.isArray(props[name]) && props[name].length > 0 ? slotOf(props, name, exclude, ix) : null,
+            )}
+        />
+    ),
+} satisfies Record<CoreBlockType, CoreRenderer>;
+
+const CORE_RENDERER_TYPES: ReadonlySet<string> = new Set(CORE_BLOCK_TYPES);
+
+/** Core-block dispatch. Returns undefined for plugin/unknown types (→ PluginBlockIsland). */
 function renderCore(type: string, props: Record<string, any>, item: any, exclude?: ReadonlySet<string>, ix?: IxEnv): React.ReactNode | undefined {
-    switch (type) {
-        // `ixCtx` DESPUÉS del spread, nunca antes: es el catálogo de preajustes con el que el
-        // bloque decide si parte su texto en palabras, y un `_puck_data` hostil no puede
-        // sustituirlo colando una clave con ese nombre en sus props.
-        case "Heading": return <HeadingBlock {...props} ixCtx={ix?.ctx} />;
-        case "Text": return <TextBlock {...props} />;
-        case "Image": return <ImageBlock {...props} />;
-        case "Divider": return <DividerBlock {...props} />;
-        case "Button": return <ButtonBlock {...props} />;
-        case "Spacer": return <SpacerBlock {...props} />;
-        case "Section": return <SectionBlock {...props} slot={slotOf(props, "children", exclude, ix)} />;
-        case "Grid": return <GridBlock {...props} slot={slotOf(props, "children", exclude, ix)} />;
-        case "FlexRow": return <FlexRowBlock {...props} slot={slotOf(props, "children", exclude, ix)} />;
-        case "Columns": return (
-            <ColumnsBlock
-                {...props}
-                slots={["col-0", "col-1", "col-2"].map((name) => slotOf(props, name, exclude, ix))}
-            />
-        );
-        case "Card": return <CardBlock {...props} />;
-        case "Quote": return <QuoteBlock {...props} ixCtx={ix?.ctx} />;
-        case "Table": return <TableBlock {...props} />;
-        case "IconList": return <IconListBlock {...props} />;
-        case "SocialLinks": return <SocialLinksBlock {...props} />;
-        case "Stats": return <StatsBlock {...props} />;
-        case "HTMLEmbed": return <HTMLEmbedBlock {...props} />;
-        case "PricingTable": return <PricingTableBlock {...props} />;
-        case "Testimonial": return <TestimonialBlock {...props} />;
-        case "CTABanner": return <CTABannerBlock {...props} />;
-        case "VideoEmbed": return <VideoEmbedBlock {...props} />;
-        case "Hero": return <HeroBlock {...props} />;
-        // Dynamic blocks: resolveDynamicBlocks already injected the real posts server-side — the
-        // hook's public branch returns that injection untouched, so passing it straight through is
-        // the same derivation.
-        case "PostsGrid": return <PostsGridBlock {...props} posts={props.resolvedPosts} />;
-        case "CategoryPosts": return <CategoryPostsBlock {...props} posts={props.resolvedPosts} />;
-        case "AudioPlayer": return <AudioPlayerBlock {...props} />;
-        // Background layer with its own client island (canvas). Code-splits away from pages
-        // that don't use it, exactly like the other islands.
-        case "ParticleField": return <ParticleFieldBlock {...props} />;
-        // Binds to the site menu: resolveDynamicBlocks injected the resolved item array server-side
-        // (resolvedMenu), so the full <nav> + every <a> land in the SSR HTML; only the mobile toggle
-        // is a client island. An empty/missing binding renders nothing on the public page.
-        case "NavMenu": return <NavMenuBlock {...props} menu={props.resolvedMenu} />;
-        // Hybrid: the menu structure is BOUND (resolvedMenu, same injection as NavMenu) while each
-        // top-level item's flyout panel is an inline slot (panel0…panel5 → first 6 items in order,
-        // the Columns multi-slot precedent). An EMPTY panel passes null so the item renders as a
-        // plain link with no flyout markup; panel children render server-side (crawlable).
-        case "MegaMenu": return (
-            <MegaMenuBlock
-                {...props}
-                menu={props.resolvedMenu}
-                panels={MEGA_MENU_PANEL_SLOTS.map((name) =>
-                    Array.isArray(props[name]) && props[name].length > 0 ? slotOf(props, name, exclude, ix) : null,
-                )}
-            />
-        );
-        // Binds to the site identity: resolveDynamicBlocks injected the resolved { blogname, siteLogo }
-        // server-side (resolvedIdentity), so the real logo/title land in the SSR HTML.
-        case "SiteLogo": return <SiteLogoBlock {...props} identity={props.resolvedIdentity} />;
-        // Floating scroll-to-top control: a whole-block client island (no SSR content needed).
-        case "BackToTop": return <BackToTopBlock {...props} />;
-        // Drawer with a CONTENT slot: panel + slotted children render server-side (crawlable); only the
-        // open/close toggle is a client island. Slot resolved exactly like Section's `children`.
-        case "OffCanvas": return <OffCanvasBlock {...props} slot={slotOf(props, "content", exclude, ix)} />;
-        // Per-post site chrome: resolveDynamicBlocks' post-context pass injected resolvedTrail /
-        // resolvedTranslations for THIS page; ToC's resolvedHeadings comes from the cached tree pass.
-        // Each renders its links server-side (crawlable); an empty binding renders nothing on public.
-        case "Breadcrumbs": return <BreadcrumbsBlock {...props} />;
-        case "LangSwitcher": return <LangSwitcherBlock {...props} />;
-        case "TableOfContents": return <TableOfContentsBlock {...props} />;
-        // Interactive islands — their own 'use client' modules, code-split per page.
-        case "Accordion": return <AccordionBlock {...props} />;
-        case "Tabs": return <TabsBlock {...props} />;
-        case "SearchBar": return <SearchBarBlock {...props} />;
-        case "Form": return <FormBlockRender {...(props as any)} />;
-        // Symbol needs the full component map → client machinery.
-        case "Symbol": return undefined;
-        default: return undefined;
-    }
-    void item;
+    if (!CORE_RENDERER_TYPES.has(type)) return undefined;
+    return CORE_RENDERERS[type as CoreBlockType](props, item, exclude, ix);
 }

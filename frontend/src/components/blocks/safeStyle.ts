@@ -1,3 +1,8 @@
+import { STYLE_SECURITY, TEMPLATE_CONTRACT, THEME_CONTRACT, URL_SANITIZATION } from "@/generated/visual-contract.generated";
+
+const URL_STRIPPED_CONTROLS = new RegExp(URL_SANITIZATION.stripControlsPattern, "g");
+const NAVIGATION_PROTOCOLS = new Set(URL_SANITIZATION.navigationSchemes.map((scheme) => `${scheme}:`));
+
 /**
  * THE ONE CRITERION FOR "IS THIS A CSS DECLARATION THE AUTHOR IS ALLOWED TO EMIT".
  *
@@ -40,7 +45,7 @@
  * that fetch into something else: a non-http(s) scheme, an authority-relative spelling, and any
  * character that could close the `url()` token or the declaration around it. If an install wants
  * first-party-only assets, that is a SETTING to add here (and in the write boundary at the same time),
- * not a silent difference between the two copies of this rule.
+ * not a silent difference between the two executable consumers of this generated policy.
  */
 
 /**
@@ -49,21 +54,7 @@
  * actually produce. `position`, `inset`, `zIndex` and friends are absent BECAUSE they are absent
  * there: no control emits them, so a saved page that carries one was not written by the editor.
  */
-export const AUTHOR_CSS_PROPS: ReadonlySet<string> = new Set([
-    // Layout
-    "display", "flexDirection", "justifyContent", "alignItems", "gap", "flexWrap",
-    // Dimensions
-    "width", "height", "minHeight",
-    "padding", "paddingTop", "paddingRight", "paddingBottom", "paddingLeft",
-    "margin", "marginTop", "marginRight", "marginBottom", "marginLeft",
-    // Typography
-    "fontFamily", "color", "fontSize", "fontWeight", "textAlign", "lineHeight",
-    "letterSpacing", "textTransform", "textDecoration",
-    // Decoration
-    "backgroundColor", "backgroundImage", "backgroundSize", "backgroundPosition",
-    "border", "borderWidth", "borderColor", "borderStyle", "borderRadius",
-    "boxShadow", "opacity", "overflow",
-]);
+export const AUTHOR_CSS_PROPS: ReadonlySet<string> = new Set(STYLE_SECURITY.authorProperties);
 
 /**
  * What the SHELL itself builds (`appearanceToStyle` + its overlay). A superset of the author list:
@@ -79,7 +70,11 @@ export const SHELL_CSS_PROPS: ReadonlySet<string> = new Set([
 ]);
 
 /** `--wjs-*` custom properties: the per-block variable contract (see blockVars.ts). */
-const CUSTOM_PROP = /^--wjs-[A-Za-z0-9_-]+$/;
+const CUSTOM_PROP = new RegExp(THEME_CONTRACT.tokens.namePattern);
+
+export function isSafeCustomPropertyName(value: unknown): value is string {
+    return typeof value === "string" && CUSTOM_PROP.test(value);
+}
 
 /**
  * CUSTOM PROPERTIES AN **AUTHOR** MAY NAME. Closed LIST, not a pattern — and that difference is the
@@ -109,10 +104,7 @@ const CUSTOM_PROP = /^--wjs-[A-Za-z0-9_-]+$/;
  * from literals in our own code, so there the NAME is ours and any `--wjs-*` is admitted (see the
  * `customProps` parameter of `safeStyleObject`).
  */
-export const AUTHOR_CSS_VARS: ReadonlySet<string> = new Set([
-    "--wjs-text-color",     // wordjs-ui.css: only `color:`
-    "--wjs-heading-color",  // wordjs-ui.css: only `color:`
-]);
+export const AUTHOR_CSS_VARS: ReadonlySet<string> = new Set(STYLE_SECURITY.authorCustomProperties);
 
 /**
  * ══ THE CLASS ═════════════════════════════════════════════════════════════════════════════════
@@ -151,15 +143,7 @@ export const AUTHOR_CSS_VARS: ReadonlySet<string> = new Set([
  * somewhere that is neither reviewed nor narrowed. A NEW block, a NEW variable or a NEW rule in the
  * stylesheet therefore has to pass through this decision instead of quietly extending the surface.
  */
-export const REVIEWED_VAR_DECLARATIONS: ReadonlySet<string> = new Set([
-    "background",            // colour/gradient: already a value the author may write via backgroundColor
-    "border-top", "border-bottom", "border-inline-start",
-    "border-bottom-color", "border-bottom-width",
-    "font-style",
-    "grid-template-columns", // a track list — geometry INSIDE the block's own box
-    "max-width",
-    "object-fit",
-]);
+export const REVIEWED_VAR_DECLARATIONS: ReadonlySet<string> = new Set(STYLE_SECURITY.reviewedVariableDeclarations);
 
 /**
  * ══ THE SECOND SINK ═══════════════════════════════════════════════════════════════════════════
@@ -193,7 +177,7 @@ export const REVIEWED_VAR_DECLARATIONS: ReadonlySet<string> = new Set([
  */
 const CLASS_TOKEN_PREFIX = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*-$/;
 const CLASS_TOKEN_TAIL = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-export const MAX_CLASS_TOKEN_TAIL = 48;
+export const MAX_CLASS_TOKEN_TAIL = STYLE_SECURITY.maxClassTokenTail;
 
 export function safeClassToken(prefix: string, raw: unknown): string | null {
     // The prefix comes from our own source at every call site. Verified anyway: a prefix that is not
@@ -213,7 +197,7 @@ export function safeClassToken(prefix: string, raw: unknown): string | null {
  * can hang its own rule on a container (`hero-scanline`, `franja-estado`, `celda-ancha`, `glow-panel`
  * ship today). Those names belong to the THEME's stylesheet, so `safeClassToken` does not apply: there
  * is no prefix of ours to demand. The write boundary
- * (`backend/src/core/template-validate.ts`, mirrored in `lib/templateData.ts`) already bounds the
+ * (`backend/src/core/template-validate.ts` and `lib/templateData.ts`, generated from one source) bounds the
  * SHAPE — at most 3 tokens of `[a-z][a-z0-9-]{0,39}` — and that shape is kept here unchanged.
  *
  * SHAPE IS NOT ENOUGH, and this was live: `className = "fixed inset-0 z-50"` is three perfectly
@@ -236,11 +220,9 @@ export function safeClassToken(prefix: string, raw: unknown): string | null {
  * time and the compiled bundle is not in the repo). What the gate does cover is that no NEW class
  * channel appears without a decision: see `blockStyleInjection.test.tsx`.
  */
-export const CSS_POSITION_KEYWORDS: ReadonlySet<string> = new Set([
-    "static", "relative", "absolute", "fixed", "sticky",
-]);
-const EXTRA_CLASS_TOKEN = /^[a-z][a-z0-9-]{0,39}$/;
-export const MAX_EXTRA_CLASS_TOKENS = 3;
+export const CSS_POSITION_KEYWORDS: ReadonlySet<string> = new Set(STYLE_SECURITY.forbiddenPositionKeywords);
+const EXTRA_CLASS_TOKEN = new RegExp(TEMPLATE_CONTRACT.classList.tokenPattern);
+export const MAX_EXTRA_CLASS_TOKENS = TEMPLATE_CONTRACT.classList.maxTokens;
 
 export function safeExtraClassList(value: unknown): string | undefined {
     if (typeof value !== "string" || value === "" || value !== value.trim()) return undefined;
@@ -297,7 +279,7 @@ export function safeExtraClassList(value: unknown): string | undefined {
  * `frontend/src/components/blocks/__tests__/classAttributeChannel.test.tsx`, which DERIVES the emitter
  * population by scanning every sanitizer configuration in both packages rather than listing them.
  */
-export const MAX_CLASS_ATTR_TOKEN = 64;
+export const MAX_CLASS_ATTR_TOKEN = STYLE_SECURITY.maxClassAttributeToken;
 
 /**
  * A UTILITY IS NOT ALWAYS SPELLED AS THE BARE WORD, and refusing only the bare word was not enough.
@@ -344,32 +326,7 @@ const ARBITRARY_POSITION = /\[\s*position\s*:/;
  * installing a theme is an administrator action, while writing a comment is not — and it is the same
  * limitation the Tailwind half already carries. It is not closed here; it is stated.
  */
-const POSITION_BINDING_BASE = [
-    // GENERATED BY DERIVATION, sorted, from `backend/public/css`, `backend/themes`, `frontend/src`
-    // and `marketplace/plugins` (45 stylesheets). Do not curate it by hand: re-run the derivation in
-    // the gate, which fails with the exact names to add.
-    "alert-dismissible", "btn-close", "cf-field-num", "cf-lightbox", "cf-lightbox-count",
-    "cf-lightbox-nav", "cf-overlay", "cf-preview-banner", "cf-preview-close", "cf-switch",
-    "cf-switch-knob", "cf-visually-hidden", "close", "dropdown-menu", "modal", "modal-backdrop",
-    "plugin-admin-announcement", "plugin-admin-auctions", "plugin-admin-bookings",
-    "plugin-admin-contact-forms", "plugin-admin-cookie-consent", "plugin-admin-donations",
-    "plugin-admin-downloads", "plugin-admin-events-calendar", "plugin-admin-faq",
-    "plugin-admin-invoices", "plugin-admin-jobs", "plugin-admin-lightbox",
-    "plugin-admin-newsletter", "plugin-admin-polls", "plugin-admin-popups",
-    "plugin-admin-restaurant", "plugin-admin-share", "plugin-admin-store",
-    "plugin-admin-testimonials", "plugin-admin-tickets", "plugin-admin-tracking",
-    "plugin-admin-vendor-marketplace", "plugin-admin-youtube", "position-absolute",
-    "position-fixed", "position-sticky", "promo-card-bg", "promo-card-overlay", "ratio", "show",
-    "verso-icon-button", "verso-overlay-scrim", "verso-rail-button", "verso-sheet",
-    "verso-sheet-scrim", "verso-skip-link", "video-scroll-arrow", "visually-hidden", "wjcc-banner",
-    "wjnb-bar", "wjnb-close", "wjpb-close",
-    "wjpb-overlay", "wjs-block-hero-overlay", "wjs-block-hero__overlay",
-    "wjs-block-particle-field", "wjs-block-section__stage", "wjs-block-testimonial__mark",
-    "wjs-block-video-embed", "wjs-block-video-embed__chip", "wjs-block-video-embed__cover",
-    "wjs-block-video-embed__placeholder", "wjs-block-video-embed__scrim", "wjs-header-nav",
-    "wjs-ilb-btn", "wjs-ilb-counter", "wjs-ilb-overlay", "wjs-motion-pause__input",
-    "wjs-public-site", "wjs-site-header",
-];
+const POSITION_BINDING_BASE: readonly string[] = STYLE_SECURITY.positionBindingClasses;
 
 /**
  * The historical alias of every block name is DERIVED, not typed: the framework sheet matches either
@@ -379,8 +336,8 @@ const POSITION_BINDING_BASE = [
  * one copy of it. The prefixes cannot be imported from blockVars.ts (it re-exports from here, so the
  * import would be a cycle), which is why they appear as bare strings.
  */
-const OWN_BLOCK_PREFIX = "wjs-block-";
-const LEGACY_BLOCK_PREFIX = "wp-block-";
+const OWN_BLOCK_PREFIX = STYLE_SECURITY.ownBlockPrefix;
+const LEGACY_BLOCK_PREFIX = STYLE_SECURITY.legacyBlockPrefix;
 export const POSITION_BINDING_CLASSES: ReadonlySet<string> = new Set(
     POSITION_BINDING_BASE.flatMap((name) => (
         name.startsWith(OWN_BLOCK_PREFIX)
@@ -422,8 +379,9 @@ const clampedNumber = (min: number, max: number) => (raw: string): string | null
     return String(Math.min(max, Math.max(min, n)));
 };
 
-/** Lengths admitted inside a narrowed `transform`, and the magnitude allowed for each unit. */
-const TRANSLATE_MAX: Record<string, number> = { px: 100, "%": 100, rem: 8, em: 8 };
+const TRANSFORM_POLICY = STYLE_SECURITY.transformPolicy;
+const TRANSLATE_MAX: Readonly<Record<string, number>> = TRANSFORM_POLICY.translateMax;
+const TRANSLATE_UNIT = new RegExp(`^(-?\\d*\\.?\\d+)(${Object.keys(TRANSLATE_MAX).join("|")})$`);
 
 /**
  * A bare LENGTH, clamped per unit: the shape of a spacing token the stylesheet drops inside a
@@ -433,7 +391,8 @@ const TRANSLATE_MAX: Record<string, number> = { px: 100, "%": 100, rem: 8, em: 8
 const boundedLength = (max: Record<string, number>) => (raw: string): string | null => {
     const v = raw.trim().toLowerCase();
     if (/^-?0+(?:\.0+)?$/.test(v)) return "0";
-    const m = /^(-?\d*\.?\d+)(px|rem|em|%|vw|vh)$/.exec(v);
+    const units = Object.keys(max).map((unit) => unit.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+    const m = new RegExp(`^(-?\\d*\\.?\\d+)(${units.join("|")})$`).exec(v);
     if (!m) return null;
     const cap = max[m[2]];
     if (cap === undefined) return null;
@@ -443,10 +402,6 @@ const boundedNonNegativeLength = (max: Record<string, number>) => (raw: string):
     const value = boundedLength(max)(raw);
     return value !== null && !value.startsWith("-") ? value : null;
 };
-
-const SPACING_MAX: Record<string, number> = { px: 400, "%": 100, rem: 25, em: 25, vw: 100, vh: 100 };
-const SCALE_MIN = 0.5;
-const SCALE_MAX = 1.5;
 
 /**
  * A `transform` value, PARSED — not pattern-matched. `none`, or up to four of
@@ -459,18 +414,18 @@ const transformValue = (raw: string): string | null => {
     if (/^none$/i.test(v)) return "none";
     const parts = v.match(/[a-zA-Z]+\([^()]*\)/g);
     // Nothing may live OUTSIDE the function tokens — that is how `2) rotate(45deg` gets in.
-    if (!parts || parts.join(" ") !== v || parts.length > 4) return null;
+    if (!parts || parts.join(" ") !== v || parts.length > TRANSFORM_POLICY.maxFunctions) return null;
     const out: string[] = [];
     for (const part of parts) {
         const m = /^([a-zA-Z]+)\(([^()]*)\)$/.exec(part)!;
         const fn = m[1].toLowerCase();
         const arg = m[2].trim();
         if (fn === "scale" || fn === "scalex" || fn === "scaley") {
-            const n = clampedNumber(SCALE_MIN, SCALE_MAX)(arg);
+            const n = clampedNumber(TRANSFORM_POLICY.scale.min, TRANSFORM_POLICY.scale.max)(arg);
             if (n === null) return null;
             out.push(`${fn === "scale" ? "scale" : fn === "scalex" ? "scaleX" : "scaleY"}(${n})`);
         } else if (fn === "translatex" || fn === "translatey") {
-            const lm = /^(-?\d*\.?\d+)(px|rem|em|%)$/.exec(arg);
+            const lm = TRANSLATE_UNIT.exec(arg);
             if (!lm) return null;
             const cap = TRANSLATE_MAX[lm[2]];
             const n = Math.min(cap, Math.max(-cap, Number(lm[1])));
@@ -506,37 +461,23 @@ const transformValue = (raw: string): string | null => {
  * from every stylesheet in the repo and fails unless it is a subset of the keys below, producer or
  * no producer.
  */
-export const NARROWED_VAR_VALUE: ReadonlyMap<string, (raw: string) => string | null> = new Map<
-    string,
-    (raw: string) => string | null
->([
-    ["--wjs-pricing-highlight-scale", clampedNumber(SCALE_MIN, SCALE_MAX)], // inside scale( … )
-    ["--wjs-scroll-amt", clampedNumber(-200, 200)],                          // inside translateY(calc( … *1px))
-    ["--wjs-card-hover-transform", transformValue],
-    ["--wjs-button-hover-transform", transformValue],
-    ["--wjs-button-active-transform", transformValue],
-    ["--wjs-accordion-icon-open-transform", transformValue],
-    ["--wjs-video-play-glyph-transform", transformValue],
-    ["--wjs-video-play-hover-transform", transformValue],
-    ["--wjs-audio-icon-hover-transform", transformValue],
-    ["--wjs-audio-icon-active-transform", transformValue],
-    ["--wjs-pricing-hover-transform", transformValue],
-    ["--wjs-pricing-highlight-hover-transform", transformValue],
-    ["--wjs-pricing-highlight-mobile-transform", transformValue],
-    ["--wjs-pricing-highlight-mobile-hover-transform", transformValue],
-    ["--wjs-cta-button-hover-transform", transformValue],
-    ["--wjs-posts-hover-transform", transformValue],
-    ["--wjs-hero-button-hover-transform", transformValue],
-    ["--wjs-social-hover-transform", transformValue],
-    // Not transforms themselves: a spacing token and the scale token it falls back to, both read
-    // inside `translateX(calc(-50% - var(…) / 2))` by the audio marquee keyframe.
-    ["--wjs-audio-marquee-gap", boundedLength(SPACING_MAX)],
-    ["--wjs-xl", boundedLength(SPACING_MAX)],
-    // Toscano uses the token for min-height AND min-width on interactive controls. Unlike ordinary
-    // spacing, a negative/viewport-relative value is meaningless here and a huge value can widen the
-    // whole page, so accept only a bounded physical/font-relative target size.
-    ["--wjs-target-size", boundedNonNegativeLength({ px: 96, rem: 6, em: 6 })],
-]);
+type NarrowSpec =
+    | { kind: "number"; min: number; max: number }
+    | { kind: "transform" }
+    | { kind: "length" | "non-negative-length"; max: Record<string, number> };
+
+const narrowerFromSpec = (spec: NarrowSpec): ((raw: string) => string | null) => {
+    if (spec.kind === "number") return clampedNumber(spec.min, spec.max);
+    if (spec.kind === "transform") return transformValue;
+    return spec.kind === "length" ? boundedLength(spec.max) : boundedNonNegativeLength(spec.max);
+};
+
+export const NARROWED_VAR_VALUE: ReadonlyMap<string, (raw: string) => string | null> = new Map(
+    Object.entries(STYLE_SECURITY.narrowedVariables).map(([name, spec]) => [
+        name,
+        narrowerFromSpec(spec as NarrowSpec),
+    ]),
+);
 
 /**
  * ONE custom-property value. THE ONLY WAY a `--*` value may be emitted, from any channel: the value
@@ -557,7 +498,7 @@ export function safeCustomPropValue(name: string, raw: unknown): string | number
  * `url(` is rejected outright, which is the same line the theme-token guard
  * (components/public/ThemeTokenOverlay) and the interaction engine already draw.
  */
-export const URL_BEARING_PROP = /^backgroundImage$|-image$/;
+export const URL_BEARING_PROP = new RegExp(STYLE_SECURITY.urlBearingPropertyPattern);
 
 /**
  * Reject any declaration value that could smuggle a fetch, a script, or a second declaration.
@@ -569,7 +510,7 @@ export const URL_BEARING_PROP = /^backgroundImage$|-image$/;
  * same criterion — one pattern, two channels. (That path splits on `;` before testing, so including
  * `;` here changes nothing for it.)
  */
-export const UNSAFE_STYLE_VALUE = /url\(|image-set\(|expression|javascript:|[;{}<>\\@]/i;
+export const UNSAFE_STYLE_VALUE = new RegExp(STYLE_SECURITY.unsafeValuePattern, "i");
 
 /**
  * A URL that may be interpolated into a `url()` token — or null.
@@ -589,7 +530,7 @@ export const UNSAFE_STYLE_VALUE = /url\(|image-set\(|expression|javascript:|[;{}
  */
 export function safeCssUrl(raw: unknown): string | null {
     if (typeof raw !== "string") return null;
-    const clean = raw.replace(/[\t\n\r]/g, "").trim();
+    const clean = raw.replace(URL_STRIPPED_CONTROLS, "").trim();
     if (!clean) return null;
     if (/["'()\\\s<>;{}]/.test(clean)) return null;
     if (!/^[a-z][a-z0-9+.-]*:/i.test(clean)) {
@@ -597,7 +538,7 @@ export function safeCssUrl(raw: unknown): string | null {
     }
     try {
         const u = new URL(clean);
-        if (u.protocol !== "https:" && u.protocol !== "http:") return null;
+        if (!NAVIGATION_PROTOCOLS.has(u.protocol)) return null;
         return u.toString();
     } catch {
         return null;

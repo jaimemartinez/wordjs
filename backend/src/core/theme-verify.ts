@@ -29,13 +29,11 @@
 
 const fs = require('fs');
 const path = require('path');
+const { THEME_SLUG: SLUG_RE } = require('./safe-path');
 
 // Same cwd conventions as core/themes.ts (the backend always runs from backend/).
 const THEMES_DIR = path.resolve('./themes');
 const MANIFEST_PATH = path.resolve('./public/theme-tokens.json');
-
-// Same slug shape installThemeFromDir/theme-doctor/theme-compile enforce.
-const SLUG_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
 
 type CheckKind = 'color' | 'font' | 'length';
 type UnmappedReason = 'design-missing' | 'no-token' | 'no-rule';

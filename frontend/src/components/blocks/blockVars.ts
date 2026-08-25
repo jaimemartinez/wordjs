@@ -1,5 +1,5 @@
 import React from "react";
-import { safeCustomPropValue, safeStyleObject, AUTHOR_CSS_PROPS } from "./safeStyle";
+import { safeCustomPropValue, safeStyleObject, AUTHOR_CSS_PROPS, isSafeCustomPropertyName } from "./safeStyle";
 
 /**
  * THE OTHER SINK ON THE SAME ELEMENT. Re-exported from here so a block still imports ONE module to
@@ -55,7 +55,7 @@ export function blockVars(
         // The NAME is ours (a literal at every call site); only the value is untrusted. Still checked,
         // because a name outside the contract is not a variable any stylesheet reads anyway.
         const name = `--wjs-${prefix}-${key}`;
-        if (!/^--wjs-[A-Za-z0-9_-]+$/.test(name)) continue;
+        if (!isSafeCustomPropertyName(name)) continue;
         const safe = safeCustomPropValue(name, String(value));
         if (safe === null) continue;
         out[name] = safe;

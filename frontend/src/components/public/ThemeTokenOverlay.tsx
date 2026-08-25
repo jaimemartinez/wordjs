@@ -5,6 +5,7 @@
 // server data). Empty/absent overrides render nothing — zero visual change for any theme.
 //
 import { safeCustomPropValue } from "@/components/blocks/safeStyle";
+import { isValidThemeMod } from "@/lib/themeTokenPolicy";
 
 // SECURITY: this emits CSS into the page, so it is strictly sanitized — only keys matching `--wjs-…`
 // and values made of safe CSS characters (no `;{}:<>` that could break out of the declaration block)
@@ -13,7 +14,7 @@ import { safeCustomPropValue } from "@/components/blocks/safeStyle";
 // token value could become an exfiltration beacon the moment a browser resolves it. On top of the
 // charset, reject any value containing `//`, matching `url(` (any spacing/case), or containing a
 // backslash (CSS escapes could smuggle either form past a character filter).
-// Mirror: keep isForbiddenTokenValue byte-identical with admin/themes/customize/page.tsx (pinned by test).
+// Both emitters consume the generated policy through lib/themeTokenPolicy; no literal copy lives here.
 //
 // THE CHARSET IS NOT THE WHOLE CRITERION, and this was the second emitter of a `--wjs-*` value that
 // did not know it. `safeStyle.ts` declares safeCustomPropValue "the ONLY way a --* value may be
@@ -29,12 +30,6 @@ import { safeCustomPropValue } from "@/components/blocks/safeStyle";
 // escalation; it is the same sink reached with a different criterion, which is how the class reopens.
 // The charset pass is KEPT (it refuses `//` and any `url(` outright, which safeCssValue permits on
 // image-bearing names) and safeCustomPropValue runs after it: two filters, the narrower one last.
-const KEY_RE = /^--wjs-[a-z0-9-]+$/;
-const VALUE_RE = /^[#a-zA-Z0-9 ,.%()/_'"-]+$/;
-function isForbiddenTokenValue(value: string): boolean {
-    return value.includes("//") || /url\s*\(/i.test(value) || value.includes("\\");
-}
-
 export default function ThemeTokenOverlay({ mods }: { mods?: string | Record<string, unknown> | null }) {
     let obj: Record<string, unknown> | null = null;
     if (typeof mods === "string" && mods.trim()) {
@@ -45,7 +40,7 @@ export default function ThemeTokenOverlay({ mods }: { mods?: string | Record<str
     if (!obj) return null;
 
     const decls = Object.entries(obj)
-        .filter(([k, v]) => KEY_RE.test(k) && typeof v === "string" && v.length > 0 && v.length <= 120 && VALUE_RE.test(v) && !isForbiddenTokenValue(v))
+        .filter(([k, v]) => isValidThemeMod(k, v))
         .map(([k, v]) => [k, safeCustomPropValue(k, v as string)] as const)
         .filter((pair): pair is readonly [string, string | number] => pair[1] !== null)
         .map(([k, v]) => `${k}:${v}`)
