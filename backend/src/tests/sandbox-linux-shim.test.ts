@@ -41,7 +41,19 @@ const {
     getLinuxZeroConfState,
 } = require('../core/sandbox-linux');
 
-const SHIM_SRC: string = fs.readFileSync(SHIM_PATH, 'utf8');
+/**
+ * NORMALISED TO \n ON READ, and that is not cosmetic.
+ *
+ * Several assertions below are STRUCTURAL: they pin a statement together with what must follow it, e.g.
+ * `/my \$ZONE_ACC =([\s\S]*?);\nfor my \$z/`. On a checkout whose line endings are CRLF — a Windows
+ * developer, or anything that materialises the tree with `git archive`, since .gitattributes pins
+ * `eol=lf` for scripts/*.sh only and says nothing about backend/scripts/*.pl — those regexes stop
+ * matching, the captured expression comes back EMPTY, and the assertion fails claiming the writable zone
+ * is executable when the shim is byte-for-byte correct. That is exactly what happened: this suite passed
+ * on the developer's LF tree and failed from a clean extraction, and the reported failure named the wrong
+ * defect. verify-f5-visual-contract.ts already reads every file this way for the same reason.
+ */
+const SHIM_SRC: string = fs.readFileSync(SHIM_PATH, 'utf8').replace(/\r\n/g, '\n');
 /**
  * The same script with its FULL-LINE comments removed. Every "this string must NOT appear" assertion
  * runs against THIS, because the header of the shim quotes the very failure modes it now prevents
