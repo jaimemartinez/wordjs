@@ -85,7 +85,7 @@
  *    to its degraded path and no further. That is a limit of the harness, stated rather than hidden.
  */
 
-const { test } = require('node:test');
+const { test, after } = require('node:test');
 const assert = require('node:assert');
 
 const fs = require('fs');
@@ -93,6 +93,52 @@ const os = require('os');
 const path = require('path');
 const vm = require('vm');
 const NodeModule = require('module');
+
+/**
+ * CLOSE WHAT MERELY IMPORTING THIS OPENS.
+ *
+ * `core/cache` subscribes to the peer-invalidation channel AT MODULE LOAD when Redis is configured, so
+ * pulling in core/plugins is enough to leave a live Redis connection behind — no test has to touch the
+ * cache for it to exist. Under `--test-force-exit` node:test then kills this file's child process with
+ * that handle open, and a child killed mid-write leaves a TRUNCATED frame on the advanced-serialization
+ * IPC channel it reports results over. The parent runner's reader throws
+ * `Unable to deserialize cloned data due to invalid or unsupported version.` — an uncaughtException
+ * attributed to this FILE, with no failing assertion in it. plugin-isolate.ts documents that same
+ * framing hazard for plugin channels; this is the node:test channel hitting it for the same reason.
+ *
+ * It only bit on CI's Redis-CONNECTED leg (the degraded leg has no connection to leave open) and never
+ * on Windows, which is exactly the shape of a flake nobody can reproduce where it was reported.
+ *
+ * Required lazily and defensively: this suite must keep working when core/cache was never reachable.
+ */
+after(async () => {
+    for (const handle of bootTimers.splice(0)) {
+        try { clearTimeout(handle); clearInterval(handle); } catch { /* already cleared */ }
+    }
+    try {
+        const cache = require('../core/cache');
+        if (cache && typeof cache.closeAll === 'function') await cache.closeAll();
+    } catch { /* the cache was never loaded; nothing to close */ }
+});
+
+/**
+ * A plugin's init() legitimately starts heartbeats — that is what `exports.deactivate` exists to stop,
+ * and the host calls it on unload. This suite boots 31 of them and never unloads, so every interval any
+ * of them arms stays armed and the file's process cannot exit on its own. `--test-force-exit` then kills
+ * it with those handles open, which is what truncates the IPC frame described above.
+ *
+ * Timers created DURING a boot are recorded and cleared afterwards, so the process ends because it is
+ * finished rather than because it was killed. Only the boot window is wrapped: the globals are restored
+ * in a `finally`, so nothing outside init() is affected and a throwing plugin cannot leave them patched.
+ */
+const bootTimers: any[] = [];
+function captureBootTimers(): () => void {
+    const realSetTimeout = global.setTimeout;
+    const realSetInterval = global.setInterval;
+    (global as any).setTimeout = (...args: any[]) => { const h = (realSetTimeout as any)(...args); bootTimers.push(h); return h; };
+    (global as any).setInterval = (...args: any[]) => { const h = (realSetInterval as any)(...args); bootTimers.push(h); return h; };
+    return () => { (global as any).setTimeout = realSetTimeout; (global as any).setInterval = realSetInterval; };
+}
 
 const { resolveBlockEntry, resolveBlockExports } = require('../../scripts/plugin-block-contract');
 const { validateManifestPermissions, validatePluginPermissions, KNOWN_PERMISSIONS } = require('../core/plugins');
@@ -610,15 +656,20 @@ for (const slug of SLUGS) {
             // Without the deadline this suite would HANG on such a plugin, and a hang in CI is
             // indistinguishable from slowness — the failure mode is worse than the bug.
             let deadline: any;
-            await Promise.race([
-                Promise.resolve(initFn(makeBridge(slug, manifest, rec, tmpDir))),
-                new Promise((_ok, reject) => {
-                    deadline = setTimeout(
-                        () => reject(new Error(`init() did not settle within ${INIT_DEADLINE_MS}ms; the isolate would never report 'ready'`)),
-                        INIT_DEADLINE_MS,
-                    );
-                }),
-            ]).finally(() => clearTimeout(deadline));  // always clear: the loser of a race keeps the loop alive
+            const release = captureBootTimers();
+            try {
+                await Promise.race([
+                    Promise.resolve(initFn(makeBridge(slug, manifest, rec, tmpDir))),
+                    new Promise((_ok, reject) => {
+                        deadline = setTimeout(
+                            () => reject(new Error(`init() did not settle within ${INIT_DEADLINE_MS}ms; the isolate would never report 'ready'`)),
+                            INIT_DEADLINE_MS,
+                        );
+                    }),
+                ]).finally(() => clearTimeout(deadline));  // always clear: the loser of a race keeps the loop alive
+            } finally {
+                release();
+            }
         } catch (e: any) {
             assert.fail(`init() threw on a fresh install: ${e && e.message}`
                 + (rec.denials.length ? `\n  refused capabilities: ${[...new Set(rec.denials)].join(', ')}` : ''));
