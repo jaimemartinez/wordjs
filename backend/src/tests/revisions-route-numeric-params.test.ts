@@ -190,7 +190,7 @@ describe('revisions router: a non-numeric revision id must 404, not reach Postgr
         const { Client } = require('pg');
         const adminCfg = {
             host: process.env.PGHOST || '127.0.0.1',
-            port: Number(process.env.PGPORT || 55432),
+            port: Number(process.env.PGPORT || 5432),
             user: process.env.PGUSER || 'postgres',
             password: process.env.PGPASSWORD || 'password',
             database: 'postgres',
@@ -223,7 +223,7 @@ describe('revisions router: a non-numeric revision id must 404, not reach Postgr
             const { Client } = require('pg');
             const admin = new Client({
                 host: process.env.PGHOST || '127.0.0.1',
-                port: Number(process.env.PGPORT || 55432),
+                port: Number(process.env.PGPORT || 5432),
                 user: process.env.PGUSER || 'postgres',
                 password: process.env.PGPASSWORD || 'password',
                 database: 'postgres',
