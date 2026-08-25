@@ -14,7 +14,8 @@
     "postListP95": 15
   },
   "httpSteadyState": {
-    "p95Milliseconds": 750,
+    "_note": "p97_5Milliseconds, not p95: autocannon 8 exposes p90 and p97_5 and has no latency.p95, so the harness never measured a p95 despite the field being called one. The number is unchanged (750) — it was always being compared against p97.5, which is stricter than the label claimed. Renamed so the ceiling means what it says.",
+    "p97_5Milliseconds": 750,
     "minimumRequestsPerSecond": 20,
     "maximumErrorCount": 0
   },

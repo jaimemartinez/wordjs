@@ -37,7 +37,7 @@
     },
     "shortcodes": [
         {
-            "tag": "videos",
+            "tag": "vgallery",
             "requiredAttrs": []
         }
     ],
@@ -62,6 +62,16 @@
             "scope": "database",
             "access": "write",
             "reason": "Required to manage video gallery content and settings."
+        },
+        {
+            "scope": "express",
+            "access": "register_route",
+            "reason": "Expose the admin CRUD endpoints and the public gallery data the block and the [vgallery] shortcode consume."
+        },
+        {
+            "scope": "admin_menu",
+            "access": "register",
+            "reason": "Add the Video Gallery entry to the admin sidebar."
         }
     ],
     "dependencies": {

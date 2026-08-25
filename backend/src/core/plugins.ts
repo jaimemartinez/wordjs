@@ -934,6 +934,24 @@ function validatePluginPermissions(
             return null;
         };
 
+        // `const NAME = /re/` — the identifiers that PROVABLY hold a RegExp, for the `exec` exemption
+        // below. Only `const` counts, and only a direct regex literal: a `const` binding cannot be
+        // reassigned, so `NAME.exec(x)` is RegExp.prototype.exec and can never become a child_process
+        // handle. `let`/`var`, destructuring and computed initialisers are deliberately not collected —
+        // this must stay a proof, not a guess.
+        const regexConstBindings = new Set<string>();
+        walk.simple(ast, {
+            VariableDeclaration(node: any) {
+                if (node.kind !== 'const') return;
+                for (const declarator of node.declarations || []) {
+                    if (declarator.id && declarator.id.type === 'Identifier'
+                        && declarator.init && declarator.init.type === 'Literal' && declarator.init.regex) {
+                        regexConstBindings.add(declarator.id.name);
+                    }
+                }
+            },
+        });
+
         // BINDING PASS (per file), run BEFORE the main walk so a call that appears above its own
         // declaration is still resolved, and ITERATED TO A FIXPOINT so aliases-of-aliases and
         // functions declared after their use converge instead of depending on source order.
@@ -1079,12 +1097,21 @@ function validatePluginPermissions(
                 }
 
                 // `/re/.exec(s)` is RegExp.prototype.exec (a benign string match), NOT child_process.exec —
-                // the scanner only sees the method name `exec`. Exempt the regex-LITERAL form specifically
-                // (a very common idiom that was falsely blocking legitimate plugins). `someVar.exec()` stays
-                // flagged: we can't statically prove it isn't a child_process handle.
+                // the scanner only sees the method name `exec`. Exempt the regex-LITERAL form, and the one
+                // variable form that is equally PROVABLE: an identifier bound by `const NAME = /re/`, which
+                // cannot be reassigned to a child_process handle.
+                //
+                // That second case is not hypothetical. Driving a sticky or global regex with
+                // `ATTR_RE.exec(input)` in a loop is the standard way to tokenise, and it is what
+                // mail-server's HTML sanitiser does — so this scanner, which runs on upload AND on
+                // activation, refused to install a first-party plugin because its XSS sanitiser iterates a
+                // regex. `let`/`var` and computed initialisers stay flagged: there the binding really could
+                // hold something else by the time it is called.
                 const isRegexLiteralExec = name === 'exec'
                     && node.callee.type === 'MemberExpression'
-                    && node.callee.object && node.callee.object.type === 'Literal' && !!node.callee.object.regex;
+                    && node.callee.object
+                    && ((node.callee.object.type === 'Literal' && !!node.callee.object.regex)
+                        || (node.callee.object.type === 'Identifier' && regexConstBindings.has(node.callee.object.name)));
 
                 if (!isRegexLiteralExec && ['eval', 'Function', 'exec', 'execSync', 'spawn', 'fork'].includes(name)) {
                     dangerousCalls.add(name);

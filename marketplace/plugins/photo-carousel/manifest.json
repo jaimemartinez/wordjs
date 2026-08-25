@@ -68,6 +68,16 @@
             "scope": "database",
             "access": "write",
             "reason": "Required to save carousel configurations and image metadata."
+        },
+        {
+            "scope": "express",
+            "access": "register_route",
+            "reason": "Expose the admin CRUD endpoints and the public carousel data the block and the [carousel] shortcode consume."
+        },
+        {
+            "scope": "admin_menu",
+            "access": "register",
+            "reason": "Add the Photo Carousel entry to the admin sidebar."
         }
     ],
     "dependencies": {

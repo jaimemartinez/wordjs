@@ -49,10 +49,15 @@ exports.init = async function (wordjs) {
 
     // ---- schema (idempotent; full column set up-front — ALTER is denied for plugins) -------------
     async function initSchema() {
+        // `fields` carries NO `DEFAULT '[]'`. The host SQL guard (core/plugin-api.assertSqlAllowed)
+        // refuses square brackets ANYWHERE in a plugin statement — they are array subscripting, whose
+        // index may be a full subquery — so that clause made this db.run throw, initSchema() reject and
+        // init() fail: the isolate reported init-error and the plugin registered nothing at all. Every
+        // INSERT already supplies `fields`, so the default was never reached.
         await db.run(`CREATE TABLE IF NOT EXISTS ${T.forms} (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
-            fields TEXT NOT NULL DEFAULT '[]',
+            fields TEXT NOT NULL,
             success_message TEXT,
             notify_email TEXT,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP

@@ -52,6 +52,16 @@
         {
             "scope": "network",
             "reason": "Fetch the channel's video list from youtube.com (RSS) or googleapis.com (Data API v3)."
+        },
+        {
+            "scope": "express",
+            "access": "register_route",
+            "reason": "Expose the admin settings endpoints and the public video list the block consumes."
+        },
+        {
+            "scope": "admin_menu",
+            "access": "register",
+            "reason": "Add the YouTube Videos entry to the admin sidebar."
         }
     ]
 }

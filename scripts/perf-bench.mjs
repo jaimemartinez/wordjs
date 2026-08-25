@@ -13,9 +13,25 @@
  * millisecond is a property of the machine: the same 750 ms ceiling is unreachable on a laptop and one
  * bad neighbour away from flapping on a shared runner, so it fails in both directions. `/healthz` is the
  * whole HTTP stack — listener, middleware chain, event loop, JSON encode — doing no application work, so
- * `p95(target) / p95(/healthz)` says how much heavier a route is than an empty one, and that number moves
- * with the code instead of with the host. The absolute ceilings in backend/f0-performance-budgets.json
- * are kept as a secondary catastrophe check.
+ * `reqPerSec(/healthz) / reqPerSec(target)` says how much heavier a route is than an empty one, and that number
+ * moves with the code instead of with the host. The absolute ceilings in
+ * backend/f0-performance-budgets.json are kept as a secondary catastrophe check.
+ *
+ * THROUGHPUT, NOT LATENCY, AND THE CHOICE WAS MEASURED. autocannon reports latency in WHOLE
+ * milliseconds and `/healthz` answers in tens of microseconds, so the original p95(target)/p95(/healthz)
+ * had a denominator quantised to 1 and the "ratio" was simply the absolute latency — normalising
+ * nothing, which is the entire reason the budget is a ratio. `latency.mean` does not rescue it either:
+ * the mean is taken over that same quantised histogram, so across five clean runs on one idle host the
+ * reference mean wandered 0.04ms -> 0.15ms (3.75x) and every role's ratio inherited 3.4x-3.9x of noise.
+ *
+ * Requests per second is a COUNT over the run window, so it has resolution. The same five runs gave a
+ * reference spread of 1.20x and role-ratio spreads of 1.14x-1.30x — roughly three times tighter. The
+ * meaning is unchanged: `reqPerSec(/healthz) / reqPerSec(target)` is how many empty responses fit in the
+ * time this route takes, which is what "how much heavier is this route" always meant.
+ *
+ * LATENCY IS STILL REPORTED, as p97.5 under its real name — autocannon 8 exposes p90 and p97_5 and has
+ * no `latency.p95`, so the field this harness used to call `p95Milliseconds` never once held a p95. It
+ * feeds the absolute catastrophe ceiling, not the ratio.
  *
  * The evaluator is exported rather than inlined into the run so that
  * backend/src/tests/f6-performance-budget.test.ts can prove THIS gate turns red — a gate whose failure
@@ -38,7 +54,7 @@ const readJson = (relative) => JSON.parse(fs.readFileSync(path.join(repoRoot, re
  * is a skip: this repository has twice shipped a gate that reported green because the thing it was
  * supposed to check was absent, and the shape of that bug is always a missing member counting as a pass.
  *
- * @param {{reference: {p95Milliseconds: number}|null, results: Array<{role: string, p95Milliseconds: number, requestsPerSecond: number, errors: number, non2xx: number}>}} report
+ * @param {{reference: {requestsPerSecond: number, non2xx: number, errors: number}|null, results: Array<{role: string, requestsPerSecond: number, meanMilliseconds: number, p97_5Milliseconds: number, errors: number, non2xx: number}>}} report
  * @param {{reference: {path: string}, roles: Record<string, {required: boolean, observedRatioToReference: number|null, maximumRatioToReference: number|null}>}} spec
  * @returns {string[]} failures; empty means the run is inside budget
  */
@@ -50,9 +66,21 @@ export function evaluateHttpRun(report, spec) {
         return failures;
     }
 
-    const referenceP95 = report && report.reference ? Number(report.reference.p95Milliseconds) : NaN;
-    if (!Number.isFinite(referenceP95) || referenceP95 <= 0) {
-        failures.push(`no usable reference measurement for ${spec.reference.path} — every ratio below would be unanchored, so the run certifies nothing`);
+    // THROUGHPUT, NOT LATENCY, AND THAT WAS MEASURED RATHER THAN ASSUMED.
+    //
+    // The ratio was p95(target)/p95(/healthz). autocannon reports latency in WHOLE milliseconds and
+    // /healthz answers in tens of microseconds, so the denominator was a quantised 1 and the "ratio"
+    // was just the absolute latency. Switching to latency.mean did not rescue it: the mean is taken
+    // over the same quantised histogram, so across five clean runs on one idle host the reference mean
+    // moved 0.04ms -> 0.15ms, a 3.75x spread, and every role's ratio inherited 3.4x-3.9x of noise.
+    //
+    // Requests per second is a COUNT over six seconds. Same five runs, same host: the reference varied
+    // 1.20x and the role ratios 1.14x-1.30x — about three times tighter. It also says the same thing a
+    // latency ratio was meant to say ("how much heavier is this route than an empty one"), just read as
+    // "how many empty responses fit in the time this route takes".
+    const referenceRps = report && report.reference ? Number(report.reference.requestsPerSecond) : NaN;
+    if (!Number.isFinite(referenceRps) || referenceRps <= 0) {
+        failures.push(`no usable reference measurement for ${spec.reference.path} (requestsPerSecond=${report && report.reference ? report.reference.requestsPerSecond : 'absent'}) — every ratio below would be unanchored, so the run certifies nothing`);
         return failures;
     }
     // A reference that answered 404 or 429 is FAST, which deflates the denominator and turns every ratio
@@ -90,9 +118,14 @@ export function evaluateHttpRun(report, spec) {
             failures.push(`role '${role}': uncalibrated ratio budget — run 'node scripts/perf-bench.mjs <baseUrl> --slug <slug> --calibrate' on this host and record observedRatioToReference / maximumRatioToReference in backend/f0-baseline.json`);
             continue;
         }
-        const ratio = Number(result.p95Milliseconds) / referenceP95;
+        const rps = Number(result.requestsPerSecond);
+        if (!Number.isFinite(rps) || rps <= 0) {
+            failures.push(`role '${role}': no throughput (requestsPerSecond=${result.requestsPerSecond}) — the ratio is anchored on throughput, so a result without one cannot be judged`);
+            continue;
+        }
+        const ratio = referenceRps / rps;
         if (ratio > Number(ceiling)) {
-            failures.push(`role '${role}': ratio ${ratio.toFixed(2)}x reference > ${ceiling}x budget (recorded observation ${observed}x, p95 ${result.p95Milliseconds}ms against ${referenceP95}ms)`);
+            failures.push(`role '${role}': ratio ${ratio.toFixed(2)}x reference > ${ceiling}x budget (recorded observation ${observed}x, ${rps.toFixed(1)} req/s against the reference's ${referenceRps.toFixed(1)} req/s)`);
         }
     }
 
@@ -108,8 +141,11 @@ export function evaluateHttpRun(report, spec) {
 export function evaluateAbsoluteBudgets(results, httpSteadyState) {
     const failures = [];
     for (const result of results) {
-        if (Number(result.p95Milliseconds) > httpSteadyState.p95Milliseconds) {
-            failures.push(`${result.target}: p95 ${result.p95Milliseconds}ms > ${httpSteadyState.p95Milliseconds}ms`);
+        // p97.5, under its real name. The budget key was renamed with it: a ceiling labelled p95 that is
+        // in fact compared against p97.5 is stricter than it says, which is the safe direction to be
+        // wrong in and still no way to leave a number nobody can interpret.
+        if (Number(result.p97_5Milliseconds) > httpSteadyState.p97_5Milliseconds) {
+            failures.push(`${result.target}: p97.5 ${result.p97_5Milliseconds}ms > ${httpSteadyState.p97_5Milliseconds}ms`);
         }
         if (Number(result.requestsPerSecond) < httpSteadyState.minimumRequestsPerSecond) {
             failures.push(`${result.target}: ${Number(result.requestsPerSecond).toFixed(1)} req/s < ${httpSteadyState.minimumRequestsPerSecond} req/s`);
@@ -178,8 +214,23 @@ async function main() {
             url: target.url,
             reference: Boolean(target.reference),
             requestsPerSecond: Number(r.requests.average),
+            // THE RATIO IS BUILT ON THE MEAN, AND THAT IS THE WHOLE POINT.
+            //
+            // autocannon reports percentiles as WHOLE MILLISECONDS. The reference (/healthz) measures
+            // 1ms on a production build, so a ratio of percentile-over-percentile is target-p95 divided
+            // by 1: it EQUALS the absolute latency and normalises nothing between machines, which is the
+            // only reason this budget is expressed as a ratio at all. Quantising a 1ms denominator
+            // carries up to a 2x error before anything else goes wrong. `latency.mean` is a float, so
+            // the denominator keeps its resolution — and it matches how the in-process budget already
+            // anchors its ratios (trimmed mean over trimmed mean), instead of mixing two statistics.
+            meanMilliseconds: Number(r.latency.mean),
             p50Milliseconds: Number(r.latency.p50),
-            p95Milliseconds: Number(r.latency.p95 ?? r.latency.p97_5),
+            // NOT p95: autocannon 8 has no `latency.p95`. Its percentile keys are p90 and p97_5, so the
+            // old `r.latency.p95 ?? r.latency.p97_5` fell through to p97.5 on EVERY run and the field
+            // called "p95Milliseconds" never once held a p95. The value was always stricter than its
+            // name claimed, so nothing passed that should have failed — but a budget whose numbers are
+            // labelled with a percentile they are not is a budget nobody can reason about.
+            p97_5Milliseconds: Number(r.latency.p97_5),
             p99Milliseconds: Number(r.latency.p99),
             errors: Number(r.errors + r.timeouts),
             non2xx: Number(r.non2xx),
@@ -188,16 +239,17 @@ async function main() {
 
     const reference = measured.find((m) => m.reference) || null;
     const results = measured.filter((m) => !m.reference);
-    const ratio = (m) => (reference && reference.p95Milliseconds > 0 ? Number((m.p95Milliseconds / reference.p95Milliseconds).toFixed(2)) : null);
+    const ratio = (m) => (reference && reference.requestsPerSecond > 0 ? Number((reference.requestsPerSecond / m.requestsPerSecond).toFixed(2)) : null);
 
     console.table(measured.map((m) => ({
         role: m.role,
         target: m.target,
         "req/s": fmt(m.requestsPerSecond),
+        "mean ms": m.meanMilliseconds,
         "p50 ms": m.p50Milliseconds,
-        "p95 ms": m.p95Milliseconds,
+        "p97.5 ms": m.p97_5Milliseconds,
         "p99 ms": m.p99Milliseconds,
-        "p95 / reference": m.reference ? "1.00" : ratio(m),
+        "reference / this": m.reference ? "1.00" : ratio(m),
         errors: m.errors,
         non2xx: m.non2xx,
     })));
@@ -207,7 +259,12 @@ async function main() {
     // latency and said nothing. The enforcing path now fails on non-2xx as well.
     if (measured.some((m) => m.non2xx > 0)) {
         console.log("WARNING: non2xx>0 on /api targets means the rate limiter answered 429 — those rows measure the limiter, not the route.");
-        console.log("Measure the real API with fewer connections/duration, or raise the limit in the bench environment.");
+        // Naming the lever matters: a six-second run of the two /api targets exceeds the default budget
+        // (1000 requests / 15 minutes) on its own, so this is the NORMAL outcome on a default host, not
+        // an exotic one. Telling the operator to "raise the limit" without saying how is how a warning
+        // becomes noise someone learns to scroll past.
+        console.log("Start the site being measured with WORDJS_API_RATELIMIT_MAX=1000000 (config.api.rateLimit; the default 1000/15min is unchanged for real deployments),");
+        console.log("or wait out the window and use a shorter --duration. One 6s run of the two /api targets already exceeds the default budget.");
     }
 
     const report = {
@@ -221,11 +278,29 @@ async function main() {
     if (json) console.log(JSON.stringify(report, null, 2));
 
     if (calibrate) {
-        const observations = {};
-        for (const m of results) observations[m.role] = { observedRatioToReference: ratio(m), maximumRatioToReference: ratio(m) === null ? null : Number((ratio(m) * 1.5).toFixed(2)) };
-        console.log("\nCalibration for backend/f0-baseline.json -> performanceBudget.httpSteadyState.roles:");
-        console.log(JSON.stringify(observations, null, 2));
-        console.log("Record the WORST of several runs, not one. The ceilings above are 1.5x this run and must stay inside methodology.ceilingMarginRange.");
+        // A CALIBRATION MINTED FROM A DIRTY RUN IS WORSE THAN NO CALIBRATION.
+        //
+        // `--calibrate` used to print observations from whatever it had just measured, with no check at
+        // all. The enforcing path rejects non-2xx; the calibrating path — the one that WRITES the number
+        // every later run is judged against — did not. On this repository's own API rate limit
+        // (1000 req / 15 min) the second run of the day answers 429 to roughly twenty thousand requests,
+        // and 429s are fast: the settings role "improved" from 230ms to 5ms. Pasting that in would have
+        // baked the rate limiter into the budget and made the gate unfailable for the route it names.
+        const dirty = measured.filter((m) => Number(m.non2xx) > 0 || Number(m.errors) > 0);
+        if (dirty.length) {
+            console.error("\nREFUSING TO CALIBRATE: this run did not measure the routes.");
+            for (const m of dirty) console.error(`  ${m.role}: ${m.non2xx} non-2xx, ${m.errors} errors — ${m.target}`);
+            console.error("429s are FAST, so these numbers would lower the ceiling and make the gate unfailable.");
+            console.error("Wait out the rate-limit window (1000 req / 15 min) or raise the limit for the bench host, then re-run.");
+            process.exitCode = 1;
+        } else {
+            const observations = {};
+            for (const m of results) observations[m.role] = { observedRatioToReference: ratio(m), maximumRatioToReference: ratio(m) === null ? null : Number((ratio(m) * 1.5).toFixed(2)) };
+            console.log("\nCalibration for backend/f0-baseline.json -> performanceBudget.httpSteadyState.roles:");
+            console.log(JSON.stringify(observations, null, 2));
+            console.log("Ratios are throughput-over-throughput: a count over the run window, which has resolution where sub-millisecond latency does not.");
+            console.log("Record the WORST of several runs, not one. The ceilings above are 1.5x this run and must stay inside methodology.ceilingMarginRange.");
+        }
     }
 
     if (enforce) {

@@ -98,19 +98,32 @@ function executedByRunStep(workflow: string, needle: string): boolean {
 }
 
 /**
- * Marketplace plugins named by at least one backend test — the legacy-compatibility coverage floor.
+ * Marketplace plugins with real compatibility coverage — the legacy-compatibility floor.
  *
- * This read 9/22 while the search included comments. Five of those nine were slugs appearing only in
- * prose or in a packaging path, never in a line of test code, so the recorded floor was flattering the
- * state of the world by more than a factor of two. 4/27 is what is actually true today.
+ * THE HISTORY OF THIS NUMBER IS THE POINT OF THE COMMENT.
  *
- * These are ratchet bounds, not a target: the floor may only rise and the ceiling may only fall. The
- * point of writing down the unflattering number is that the next person to add a plugin has to move
- * one of them, in a diff someone reads.
+ * It read 9/22 while the search included comments; five of those nine were slugs appearing only in prose
+ * or in a packaging path. Stripping comments brought it to an honest 4/27 — but honest about the WRONG
+ * QUESTION, because "a test file contains this slug" is not evidence that anything about the plugin is
+ * exercised. `assert.ok(true)` beside the word `online-store` scored exactly as high as loading it.
+ *
+ * Coverage is now measured by RUNNING backend/src/tests/f6-plugin-compatibility.test.ts, which derives
+ * its population from marketplace/plugins/ and gives every plugin a top-level test named for its slug.
+ * A plugin counts as covered when that run reports its test PASSED: the manifest parsed and matched its
+ * directory, the declared frontend entries exist, the shipping install-time validator accepted it, the
+ * entry loaded, `init()` completed against a bridge that refuses undeclared capabilities, and everything
+ * init() registered satisfies the host's own acceptance rules. Nothing here can be satisfied by adding
+ * a string to a file.
+ *
+ * These stay ratchet bounds: the floor may only rise, the ceiling may only fall, and neither can be
+ * satisfied by editing a list in this file.
  */
-const MIN_COVERED_MARKETPLACE_PLUGINS = 4;
-/** Marketplace plugins no backend test mentions. A plugin added without a compatibility test raises it. */
-const MAX_UNCOVERED_MARKETPLACE_PLUGINS = 27;
+const MIN_COVERED_MARKETPLACE_PLUGINS = 31;
+/** Marketplace plugins the compatibility suite does not exercise. Adding a plugin without one raises it. */
+const MAX_UNCOVERED_MARKETPLACE_PLUGINS = 0;
+
+/** The suite whose RUN defines the covered set (relative to backend/). */
+const PLUGIN_COMPATIBILITY_SUITE = path.join('src', 'tests', 'f6-plugin-compatibility.test.ts');
 
 /**
  * Built-in F1 fields whose `kind: 'column'` storage binding does NOT resolve to a real posts column.
@@ -431,13 +444,17 @@ function checkVisualContractHasNoDivergence(): CheckOutcome {
 }
 
 /**
- * Legacy plugins must be covered by compatibility tests.
+ * Legacy plugins must be covered by compatibility tests — and "covered" must mean EXERCISED.
  *
- * The population is every plugin that actually ships in the marketplace, read off disk. "Covered" means
- * a backend test names the plugin's slug — that is what makes a plugin's behaviour a thing CI defends
- * rather than a thing a refactor discovers. Adding a plugin directory without a test raises the
- * uncovered count and turns this red; deleting a plugin's test lowers the covered count and does the
- * same. Neither number can be satisfied by editing a list in this file.
+ * The population is every plugin that actually ships in the marketplace, read off disk. Coverage is
+ * decided by RUNNING backend/src/tests/f6-plugin-compatibility.test.ts under the TAP reporter and
+ * reading which per-plugin tests reported `ok`. That is the whole design: the covered set comes out of
+ * an execution, so it cannot be inflated by adding a slug to a comment, to a fixture name, or to a
+ * skipped test — the three ways the previous mention-counting version could be fooled.
+ *
+ * Adding a plugin directory without adding it to the suite's population is impossible (the suite derives
+ * the population the same way this does), so the way this goes red is the way it should: a plugin that
+ * FAILS its compatibility test stops being counted, and the ratchet floor catches it.
  */
 function checkLegacyPluginCompatibilityCoverage(): CheckOutcome {
     const failures: string[] = [];
@@ -448,31 +465,100 @@ function checkLegacyPluginCompatibilityCoverage(): CheckOutcome {
         .filter((entry) => entry.isDirectory())
         .map((entry) => entry.name)
         .sort();
-    // COMMENTS ARE NOT COVERAGE.
+
+    const suitePath = path.join(BACKEND_ROOT, PLUGIN_COMPATIBILITY_SUITE);
+    if (!fs.existsSync(suitePath)) {
+        return {
+            failures: [`${PLUGIN_COMPATIBILITY_SUITE} is missing, so no plugin has compatibility evidence at all`],
+            notes,
+        };
+    }
+
+    // `--test-force-exit` for the same reason backend's own `npm test` uses it: a plugin's init() may
+    // leave a timer behind, and this gate must not wait on one. The TAP reporter is chosen (rather than
+    // the default spec output) because its `ok N - <name>` lines are a stable machine format.
     //
-    // This searched the raw concatenation of every backend test source, so a slug named in a `//`
-    // line, a doc block or a prose sentence counted exactly as much as a slug the test loads. Both
-    // directions were wrong: adding `// TODO: add compatibility coverage for <slug>` would have marked
-    // an untested plugin covered for ever, and rewording a comment could turn the ratchet red without
-    // any test changing. Stripping comments first does not make this a proof that the plugin is
-    // exercised — it is still a mention — but it is now a mention in CODE.
-    const testSources = walk(path.join(BACKEND_ROOT, 'src', 'tests'), (f) => f.endsWith('.ts'))
-        .map((file) => fs.readFileSync(file, 'utf8'))
-        .join('\n')
-        .replace(/\/\*[\s\S]*?\*\//g, ' ')
-        .replace(/^[ \t]*\/\/.*$/gm, ' ')
-        .replace(/([^:])\/\/.*$/gm, '$1');
-    const covered = slugs.filter((slug) => new RegExp(String.raw`(?<![A-Za-z0-9-])${slug}(?![A-Za-z0-9-])`).test(testSources));
-    const uncovered = slugs.filter((slug) => !covered.includes(slug));
+    // NODE_TEST_* is stripped from the child's environment on purpose. f6-final-criteria.test.ts calls
+    // verify() from INSIDE a test-runner process, so those variables would be inherited and the child
+    // would believe it is a nested test child of that run — the reporter it selects, and therefore the
+    // format parsed below, would depend on who called this gate. Stripping them makes the child's
+    // behaviour identical whether the gate is run from the CLI or from a test.
+    const childEnv: NodeJS.ProcessEnv = { ...process.env };
+    for (const key of Object.keys(childEnv)) if (key.startsWith('NODE_TEST_')) delete childEnv[key];
+    const run = spawnSync(process.execPath, [
+        '--test', '--test-force-exit', '--test-concurrency=1', '--test-reporter=tap',
+        '-r', 'ts-node/register', PLUGIN_COMPATIBILITY_SUITE,
+    ], { cwd: BACKEND_ROOT, encoding: 'utf8', env: childEnv, maxBuffer: 64 * 1024 * 1024 });
+    const output = `${run.stdout || ''}${run.stderr || ''}`;
+
+    // Which per-plugin tests PASSED, read off the run. A `not ok` line is deliberately not counted:
+    // a plugin whose compatibility test fails has no compatibility evidence, whatever the file says.
+    // A SKIPPED TEST IS NOT A PASSING TEST, AND TAP SAYS SO IN THE DIRECTIVE.
+    //
+    // This read `/^ok\s+\d+\s+-\s+(.+?)\s*(?:#.*)?$/`, and that trailing `(?:#.*)?` swallowed the very
+    // thing that distinguishes the two outcomes. node:test emits `ok 1 - contact-forms # SKIP` for a
+    // skipped test and exits 0, so a one-token edit — `test(slug, { skip: true }, ...)` — marked all 31
+    // plugins covered while running none of them. The ratchet would then have been satisfied by exactly
+    // what it was written to replace.
+    //
+    // The directive is now captured and inspected: SKIP and TODO are recorded as neither passed nor
+    // failed, and named, so a suite that stops executing is loud instead of flattering.
+    const passed = new Set<string>();
+    const failed = new Set<string>();
+    const skipped = new Set<string>();
+    for (const line of output.split(/\r?\n/)) {
+        const ok = /^ok\s+\d+\s+-\s+(.+?)(?:\s+#\s*(.*))?$/.exec(line);
+        if (ok) {
+            const directive = (ok[2] || '').trim();
+            if (/^(?:SKIP|TODO)\b/i.test(directive)) skipped.add(ok[1].trim());
+            else passed.add(ok[1].trim());
+            continue;
+        }
+        const notOk = /^not ok\s+\d+\s+-\s+(.+?)(?:\s+#\s*(.*))?$/.exec(line);
+        if (notOk) failed.add(notOk[1].trim());
+    }
+
+    const skippedPlugins = slugs.filter((slug) => skipped.has(slug));
+    if (skippedPlugins.length) {
+        failures.push(`${PLUGIN_COMPATIBILITY_SUITE} SKIPPED ${skippedPlugins.length} plugin test(s) — a skipped test is not `
+            + `compatibility evidence, and node:test still exits 0 for it: ${skippedPlugins.join(', ')}`);
+    }
+
+    const covered = slugs.filter((slug) => passed.has(slug));
+    const uncovered = slugs.filter((slug) => !passed.has(slug));
+
+    if (run.status !== 0) {
+        const named = slugs.filter((slug) => failed.has(slug));
+        failures.push(`${PLUGIN_COMPATIBILITY_SUITE} exits ${run.status}`
+            + (named.length ? `; failing plugins: ${named.join(', ')}` : '')
+            + `. ${(output.trim().split('\n').slice(-4).join(' / ')).slice(0, 400)}`);
+    }
+    // ENUMERATION IS CHECKED AS A PROPERTY, NOT BY THE NAME OF A TEST.
+    //
+    // This used to be `[...passed].some((name) => name.includes('population is non-empty'))` — a
+    // substring match on a test's NAME, which is the exact thing this file's own rules forbid: renaming
+    // that test silently disarms the guard, and the guard could itself be skipped (see the directive
+    // handling above) and still read as present.
+    //
+    // The property is "the run produced a verdict for every plugin that exists on disk". A run that
+    // enumerated nothing reports no slugs at all and fails here; a run that enumerated a stale subset
+    // names exactly which plugins it never mentioned.
+    const unreported = slugs.filter((slug) => !passed.has(slug) && !failed.has(slug) && !skipped.has(slug));
+    if (unreported.length) {
+        failures.push(`${PLUGIN_COMPATIBILITY_SUITE} produced no verdict at all for ${unreported.length} of ${slugs.length} `
+            + `plugin(s) on disk, so its enumeration is not reading marketplace/plugins: ${unreported.slice(0, 8).join(', ')}`
+            + (unreported.length > 8 ? ', …' : ''));
+    }
 
     if (covered.length < MIN_COVERED_MARKETPLACE_PLUGINS) {
-        failures.push(`only ${covered.length} of ${slugs.length} marketplace plugins are named by a backend test `
-            + `(floor ${MIN_COVERED_MARKETPLACE_PLUGINS}); a plugin lost its compatibility coverage. Covered: ${covered.join(', ')}`);
+        failures.push(`only ${covered.length} of ${slugs.length} marketplace plugins pass their compatibility test `
+            + `(floor ${MIN_COVERED_MARKETPLACE_PLUGINS}); a plugin lost its compatibility coverage. `
+            + `Uncovered: ${uncovered.join(', ') || 'none'}`);
     } else if (covered.length > MIN_COVERED_MARKETPLACE_PLUGINS) {
         notes.push(`${covered.length} plugins are covered; raise MIN_COVERED_MARKETPLACE_PLUGINS to ${covered.length}.`);
     }
     if (uncovered.length > MAX_UNCOVERED_MARKETPLACE_PLUGINS) {
-        failures.push(`${uncovered.length} marketplace plugins have no backend test naming them `
+        failures.push(`${uncovered.length} marketplace plugins are not exercised by ${PLUGIN_COMPATIBILITY_SUITE} `
             + `(ceiling ${MAX_UNCOVERED_MARKETPLACE_PLUGINS}). A plugin may not ship without compatibility evidence. `
             + `Uncovered: ${uncovered.join(', ')}`);
     } else if (uncovered.length < MAX_UNCOVERED_MARKETPLACE_PLUGINS) {
@@ -639,52 +725,32 @@ function checkPerformanceBudgetIsComplete(): CheckOutcome {
         }
     }
     for (const section of ['httpSteadyState', 'versoEditorMilliseconds']) {
-        const values = Object.values(budgets[section] || {});
-        if (!values.length) failures.push(`f0-performance-budgets.json has no ${section} ceilings`);
-        if (values.some((value) => !Number.isFinite(Number(value)))) failures.push(`${section} contains a non-numeric ceiling`);
+        // A key starting with `_` is an annotation, not a ceiling — `_note` records why a ceiling carries
+        // the name it does, and Number(prose) is NaN, which would report a broken budget where there is
+        // none. Every key that is NOT an annotation is a ceiling and must be a number: a NaN ceiling is
+        // one nothing can ever exceed, which is a budget that has quietly stopped existing.
+        const ceilingEntries = Object.entries(budgets[section] || {}).filter(([name]) => !name.startsWith('_'));
+        if (!ceilingEntries.length) failures.push(`f0-performance-budgets.json has no ${section} ceilings`);
+        for (const [name, value] of ceilingEntries) {
+            if (!Number.isFinite(Number(value))) {
+                failures.push(`${section}.${name} is not a number, so nothing can exceed it`);
+            }
+        }
     }
 
-    // GIVE `versoEditorMilliseconds` A CONSUMER.
+    // GIVE `versoEditorMilliseconds` A CONSUMER — AND MAKE THE CONSUMER UNABLE TO OUTVOTE IT.
     //
-    // It was a committed budget nobody read. The same three numbers live a second time as literals in
-    // frontend/e2e/verso/perf.spec.ts, and only those literals decide anything — so the committed file
-    // looked like a guarantee while being decorative, and the two copies were free to drift apart with
-    // nothing to notice. The spec is not edited from here (it runs under Playwright against a built
-    // site, which this gate cannot execute and therefore must not silently rewrite); instead the two
-    // copies are PINNED to each other, so changing one without the other is red.
+    // It was a committed budget nobody read: the same three numbers lived a second time as literals in
+    // frontend/e2e/verso/perf.spec.ts, and only those literals decided anything. The first repair PINNED
+    // the two spellings to each other by regex, which proved they were equal but left the hole open one
+    // level down — the spec's env levers. `VERSO_PERF_TTI_MS: 9000` in a job would have been obeyed in
+    // silence while the reviewed file still read 2500.
     //
-    // The env levers are checked in the loosening direction only. ci.yml states the intention to
-    // calibrate them on the real runner, and raising a threshold there would quietly make the
-    // committed budget meaningless — that has to be a visible edit to the budget, not a job variable.
-    const editorBudget = budgets.versoEditorMilliseconds || {};
-    const specPath = 'frontend/e2e/verso/perf.spec.ts';
-    if (!exists(specPath)) {
-        failures.push(`${specPath} is missing, so nothing consumes versoEditorMilliseconds and the committed editor budget enforces nothing`);
-    } else {
-        const spec = read(specPath);
-        const levers: Array<[string, string]> = [
-            ['inputP95', 'VERSO_PERF_INPUT_P95_MS'],
-            ['transactionP95', 'VERSO_PERF_TRANSACT_P95_MS'],
-            ['timeToInteractive', 'VERSO_PERF_TTI_MS'],
-        ];
-        for (const [key, lever] of levers) {
-            const committed = Number(editorBudget[key]);
-            const declared = new RegExp(String.raw`process\.env\.${lever}\s*\?\?\s*(\d+(?:\.\d+)?)`).exec(spec);
-            if (!declared) {
-                failures.push(`${specPath} no longer defaults ${lever} to a literal, so f0-performance-budgets.json#versoEditorMilliseconds.${key} cannot be pinned to what the spec enforces`);
-            } else if (Number(declared[1]) !== committed) {
-                failures.push(`${specPath} enforces ${lever}=${declared[1]}ms while f0-performance-budgets.json commits ${key}=${committed}ms — the budget and the only thing that reads it disagree`);
-            }
-        }
-        const ciWorkflow = exists('.github/workflows/ci.yml') ? read('.github/workflows/ci.yml') : '';
-        for (const [key, lever] of levers) {
-            const committed = Number(editorBudget[key]);
-            const inWorkflow = new RegExp(String.raw`${lever}\s*:\s*['"]?(\d+(?:\.\d+)?)`).exec(ciWorkflow);
-            if (inWorkflow && Number(inWorkflow[1]) > committed) {
-                failures.push(`ci.yml sets ${lever}=${inWorkflow[1]}ms, looser than the committed ${key}=${committed}ms. Raise the budget in f0-performance-budgets.json where it is reviewed, not in a job variable`);
-            }
-        }
-    }
+    // There is one copy now: frontend/e2e/verso/perf-budget.ts reads this JSON and the spec enforces
+    // what it returns, with the levers able to TIGHTEN only. So the property checked below is no longer
+    // "the two spellings agree" (there is only one) but the one that actually protects the budget:
+    // THE SPEC CANNOT ENFORCE A THRESHOLD LOOSER THAN THE COMMITTED ONE.
+    failures.push(...versoEditorBudgetFailures(budgets.versoEditorMilliseconds || {}));
 
     // F6 adds a host-relative budget beside F0's absolute one, and each of its operations may inherit an
     // absolute ceiling from F0 by key. A key that names nothing is an inheritance that silently does not
@@ -716,6 +782,313 @@ function checkPerformanceBudgetIsComplete(): CheckOutcome {
     }
     notes.push(`budgeted measurements: ${ceilings.join(', ')}`);
     return { failures, notes };
+}
+
+/**
+ * F6-C08's editor half: `versoEditorMilliseconds` is the only place those ceilings are written, and
+ * nothing downstream can enforce a looser one.
+ *
+ * Checked in the two directions a budget can be neutered:
+ *
+ *  - THE RESOLVER IS RUN, NOT READ (rule 1). frontend/e2e/verso/perf-budget.ts imports nothing from
+ *    Playwright precisely so this gate can load it and ask it what it does: with an empty environment
+ *    it must return exactly the committed numbers (a default that is not the committed budget means the
+ *    JSON is decorative again); a lever one millisecond LOOSER than the committed ceiling must throw;
+ *    a stricter one must still apply (ci.yml plans to calibrate downward on the real runner, and an
+ *    inert lever would send it back to editing literals); and a non-numeric one must be refused, since
+ *    Number('later') is NaN and a NaN ceiling reports configuration rather than performance.
+ *
+ *  - THE SPEC IS TRACED AS DATA FLOW. Running it needs a browser and a served site, so its half is read
+ *    from the AST — but by following where each ceiling COMES FROM, not by matching a spelling: every
+ *    argument handed to toBeLessThan()/toBeLessThanOrEqual() must trace back to a property of the object
+ *    resolveVersoPerfBudget() returned. A numeric literal there is exactly the regression this replaces.
+ *
+ * Both member lists come from the tree (rule 3): the levers are enumerated from the module and compared
+ * for EQUALITY against the keys in the JSON, and every committed key must be consumed by some assertion.
+ * Add a fourth ceiling to versoEditorMilliseconds and this check goes red until something enforces it.
+ */
+function versoEditorBudgetFailures(editorBudget: Record<string, unknown>): string[] {
+    const failures: string[] = [];
+    const specPath = 'frontend/e2e/verso/perf.spec.ts';
+    const resolverPath = 'frontend/e2e/verso/perf-budget.ts';
+    for (const file of [specPath, resolverPath]) {
+        if (!exists(file)) {
+            return [`${file} is missing, so nothing reads f0-performance-budgets.json#versoEditorMilliseconds `
+                + 'and the committed editor budget enforces nothing'];
+        }
+    }
+
+    // ── the resolver, EXECUTED ───────────────────────────────────────────────────────────────────
+    let resolver: any;
+    try {
+        resolver = require(path.join(REPO_ROOT, resolverPath));   // a .ts module: ts-node compiles it here
+    } catch (error: any) {
+        return [`${resolverPath} could not be loaded (${(error && error.message) || error}), so what the `
+            + 'spec enforces cannot be observed'];
+    }
+    const levers: any[] = Array.isArray(resolver.PERF_LEVERS) ? resolver.PERF_LEVERS : [];
+    if (typeof resolver.resolveVersoPerfBudget !== 'function' || !levers.length) {
+        return [`${resolverPath} must export resolveVersoPerfBudget() and a non-empty PERF_LEVERS table; `
+            + 'without both, this check would pass by having nothing to check'];
+    }
+
+    const committedKeys = Object.keys(editorBudget).filter((key) => !key.startsWith('_')).sort();
+    const leverKeys = levers.map((lever: any) => String(lever.key)).sort();
+    for (const key of committedKeys) {
+        if (!leverKeys.includes(key)) {
+            failures.push(`versoEditorMilliseconds.${key} is committed but ${resolverPath} declares no lever `
+                + 'for it, so nothing resolves it and no spec can enforce it');
+        }
+    }
+    for (const key of leverKeys) {
+        if (!committedKeys.includes(key)) {
+            failures.push(`${resolverPath} declares a lever for '${key}', which `
+                + 'f0-performance-budgets.json#versoEditorMilliseconds does not define — it resolves to NaN');
+        }
+    }
+
+    const resolve = (env: Record<string, string>): { budget?: any; error?: string } => {
+        try {
+            return { budget: resolver.resolveVersoPerfBudget(env) };
+        } catch (error: any) {
+            return { error: (error && error.message) || String(error) };
+        }
+    };
+
+    const defaults = resolve({});
+    if (defaults.error) {
+        failures.push(`with no override at all, resolveVersoPerfBudget() threw on the committed budget `
+            + `itself: ${defaults.error}`);
+    } else {
+        for (const key of committedKeys) {
+            const committed = Number((editorBudget as any)[key]);
+            const resolved = Number(defaults.budget[key]);
+            if (resolved !== committed) {
+                failures.push(`with no override the spec enforces ${key}=${resolved}ms while `
+                    + `f0-performance-budgets.json commits ${committed}ms — the default is not the committed budget`);
+            }
+        }
+    }
+
+    for (const lever of levers) {
+        const key = String(lever.key);
+        const env = String(lever.env);
+        const committed = Number((editorBudget as any)[key]);
+        if (!Number.isFinite(committed) || committed <= 0) continue;   // already reported as a non-numeric ceiling
+
+        const looser = resolve({ [env]: String(committed + 1) });
+        if (!looser.error) {
+            failures.push(`${env}=${committed + 1}ms is looser than the committed ${key}=${committed}ms and was `
+                + `ACCEPTED (the spec would enforce ${Number(looser.budget[key])}ms). A job variable must not be `
+                + 'able to retire the committed budget: raise it in f0-performance-budgets.json, where it is reviewed');
+        }
+
+        const tighter = committed / 2;
+        const tightened = resolve({ [env]: String(tighter) });
+        if (tightened.error) {
+            failures.push(`${env}=${tighter}ms is STRICTER than the committed ${key}=${committed}ms and was `
+                + `refused (${tightened.error}); calibrating downward on a runner is the lever's whole purpose`);
+        } else if (Number(tightened.budget[key]) !== tighter) {
+            failures.push(`${env}=${tighter}ms did not tighten ${key}: the spec would still enforce `
+                + `${Number(tightened.budget[key])}ms, so the lever ci.yml plans to use is inert`);
+        }
+
+        const garbage = resolve({ [env]: 'later' });
+        if (!garbage.error) {
+            failures.push(`${env}='later' was accepted as ${key}=${Number(garbage.budget[key])}; Number('later') `
+                + 'is NaN, and a NaN ceiling makes every run report configuration instead of performance');
+        }
+    }
+
+    // ci.yml is checked as well as the runtime refusal, not instead of it. The refusal is what makes a
+    // loose lever impossible; this makes the mistake visible in review, with a message naming the file to
+    // edit, instead of surfacing as a red E2E job that reads like a performance regression.
+    const ciWorkflow = exists('.github/workflows/ci.yml') ? read('.github/workflows/ci.yml') : '';
+    for (const lever of levers) {
+        const key = String(lever.key);
+        const committed = Number((editorBudget as any)[key]);
+        const inWorkflow = new RegExp(String.raw`${lever.env}\s*:\s*['"]?(\d+(?:\.\d+)?)`).exec(ciWorkflow);
+        if (inWorkflow && Number(inWorkflow[1]) > committed) {
+            failures.push(`ci.yml sets ${lever.env}=${inWorkflow[1]}ms, looser than the committed `
+                + `${key}=${committed}ms. Raise the budget in f0-performance-budgets.json where it is reviewed, `
+                + 'not in a job variable — the spec would refuse to collect with that value anyway');
+        }
+    }
+
+    // ── the spec, as the resolver's CONSUMER ─────────────────────────────────────────────────────
+    const source = ts.createSourceFile(specPath, read(specPath), ts.ScriptTarget.Latest, true);
+    const CEILING_MATCHERS = ['toBeLessThan', 'toBeLessThanOrEqual'];
+    const initializers = new Map<string, any>();     // any `const X = <init>`
+    const budgetObjects = new Set<string>();         // names bound to the object resolveVersoPerfBudget() returned
+    const destructured = new Map<string, string>();  // `const { inputP95: x } = resolveVersoPerfBudget()`
+    const ceilings: any[] = [];
+    let importsResolver = false;
+
+    const isResolverCall = (node: any): boolean => Boolean(node) && ts.isCallExpression(node)
+        && ((ts.isIdentifier(node.expression) && node.expression.text === 'resolveVersoPerfBudget')
+            || (ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === 'resolveVersoPerfBudget'));
+
+    const visit = (node: any): void => {
+        if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)
+            && /(^|[./])perf-budget(\.[jt]s)?$/.test(node.moduleSpecifier.text)) {
+            importsResolver = true;
+        }
+        if (ts.isVariableDeclaration(node) && node.initializer) {
+            if (ts.isIdentifier(node.name)) {
+                // First declaration wins: the walk is in source order, so a later inner binding that
+                // happens to reuse the name cannot mask an outer `const TTI_MS = 2500` from the trace.
+                if (!initializers.has(node.name.text)) initializers.set(node.name.text, node.initializer);
+                if (isResolverCall(node.initializer)) budgetObjects.add(node.name.text);
+            } else if (ts.isObjectBindingPattern(node.name) && isResolverCall(node.initializer)) {
+                for (const element of node.name.elements) {
+                    if (!ts.isIdentifier(element.name)) continue;
+                    const property = element.propertyName && ts.isIdentifier(element.propertyName)
+                        ? element.propertyName.text
+                        : element.name.text;
+                    destructured.set(element.name.text, property);
+                }
+            }
+        }
+        if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)
+            && CEILING_MATCHERS.includes(node.expression.name.text) && node.arguments.length === 1) {
+            ceilings.push(node.arguments[0]);
+        }
+        ts.forEachChild(node, visit);
+    };
+    visit(source);
+
+    /** Where does this ceiling come from: a budget key, a hardcoded number, or somewhere untraceable? */
+    const originOf = (node: any, depth = 0): { key?: string; literal?: number } => {
+        if (!node || depth > 4) return {};
+        if (ts.isNumericLiteral(node)) return { literal: Number(node.text) };
+        if (ts.isIdentifier(node)) {
+            const property = destructured.get(node.text);
+            if (property) return { key: property };
+            return originOf(initializers.get(node.text), depth + 1);
+        }
+        if (ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression)
+            && budgetObjects.has(node.expression.text)) {
+            return { key: node.name.text };
+        }
+        return {};
+    };
+
+    if (!importsResolver) {
+        failures.push(`${specPath} does not import ${resolverPath}; its ceilings would be its own numbers again`);
+    }
+    if (!ceilings.length) {
+        failures.push(`${specPath} hands no ceiling to ${CEILING_MATCHERS.join('()/')}(), so it asserts no `
+            + 'performance budget at all');
+    }
+    const consumed = new Set<string>();
+    for (const ceiling of ceilings) {
+        const spelled = ceiling.getText(source);
+        const origin = originOf(ceiling);
+        if (origin.literal !== undefined) {
+            failures.push(`${specPath} gates on the hardcoded ceiling ${origin.literal} (written as `
+                + `'${spelled}'); the number belongs in f0-performance-budgets.json#versoEditorMilliseconds, `
+                + 'which resolveVersoPerfBudget() reads');
+        } else if (!origin.key) {
+            failures.push(`${specPath} gates on '${spelled}', which cannot be traced back to the budget `
+                + 'resolveVersoPerfBudget() returned — a ceiling nobody can trace is a ceiling nobody reviews');
+        } else if (!committedKeys.includes(origin.key)) {
+            failures.push(`${specPath} gates on budget key '${origin.key}', which `
+                + 'f0-performance-budgets.json#versoEditorMilliseconds does not define');
+        } else {
+            consumed.add(origin.key);
+        }
+    }
+    for (const key of committedKeys) {
+        if (!consumed.has(key)) {
+            failures.push(`versoEditorMilliseconds.${key} is committed but no assertion in ${specPath} gates on `
+                + 'it — a budget line nothing enforces');
+        }
+    }
+
+    const specText = read(specPath);
+
+    // ── The four ways an adversarial pass defeated everything above, each closed here ──────────────
+    //
+    // Tracing an assertion back to the budget proves PROVENANCE. It does not prove the assertion runs,
+    // that the spec is collected at all, that the value was not overwritten between resolution and use,
+    // or that the resolver reads only the levers it declares. Every one of those was demonstrated
+    // green-while-broken before these checks existed.
+
+    // 1. THE SPEC MUST STILL BE COLLECTED. `testMatch` in playwright.config.ts decides which files run;
+    //    narrowing it to exclude perf.spec.ts left every check above satisfied and the spec simply
+    //    absent from the run. The config's own pattern is applied to the spec's path here.
+    const playwrightConfigPath = 'frontend/playwright.config.ts';
+    if (!exists(playwrightConfigPath)) {
+        failures.push(`${playwrightConfigPath} is missing, so nothing decides whether ${specPath} is collected`);
+    } else {
+        // EVERY project's testMatch is considered, not the first one found. The config declares several
+        // projects (a `setup` that matches only global.setup.ts, then the suites), so keying on the first
+        // literal made this gate fail against the setup project's pattern while saying nothing about the
+        // one that actually collects the spec. The property is "SOME project collects it".
+        const configSource = read(playwrightConfigPath);
+        const patterns = [...configSource.matchAll(/testMatch\s*:\s*\/((?:[^/\\\n]|\\.)+)\/([gimsuy]*)/g)];
+        if (!patterns.length) {
+            failures.push(`${playwrightConfigPath} has no literal testMatch regex, so this gate cannot prove ${specPath} is collected`);
+        } else {
+            const collected = patterns.some((pattern) => {
+                try { return new RegExp(pattern[1], pattern[2]).test('e2e/verso/perf.spec.ts'); }
+                catch { return false; }
+            });
+            if (!collected) {
+                failures.push(`no testMatch in ${playwrightConfigPath} selects ${specPath} (patterns: `
+                    + `${patterns.map((pattern) => `/${pattern[1]}/`).join(', ')}), so the editor budget is enforced `
+                    + 'by a file Playwright never runs');
+            }
+        }
+    }
+
+    // 2. THE ASSERTIONS MUST NOT BE SKIPPED. `test.skip()` as the first statement of the body leaves
+    //    every assertion textually present and executes none of them.
+    const skipCall = /\b(?:test|it)\s*\.\s*(?:skip|fixme)\b|\b(?:test|it)\s*\(\s*[^,]*,\s*\{[^}]*\bskip\s*:/.test(specText);
+    if (skipCall) {
+        failures.push(`${specPath} skips one of its own tests (test.skip / fixme / { skip }), so the ceilings it `
+            + 'traces to the committed budget are never actually asserted');
+    }
+
+    // 3. THE RESOLVED BUDGET MUST NOT BE REWRITTEN. `BUDGET.timeToInteractive = 99999` after the call
+    //    keeps provenance intact — the identifier still traces to a resolver result — while the value
+    //    enforced is whatever was assigned.
+    const budgetBinding = /const\s+([A-Za-z_$][\w$]*)\s*=\s*resolveVersoPerfBudget\s*\(/.exec(specText);
+    if (budgetBinding) {
+        const reassigned = new RegExp(String.raw`\b${budgetBinding[1]}\s*(?:\.\s*[\w$]+|\[[^\]]*\])\s*=[^=]`).test(specText);
+        if (reassigned) {
+            failures.push(`${specPath} assigns to a property of '${budgetBinding[1]}' after resolveVersoPerfBudget() `
+                + 'returned it — the ceilings would trace to the committed budget and enforce something else');
+        }
+    }
+
+    // 4. EVERY ENVIRONMENT READ MUST BE A DECLARED LEVER. The lever table is compared to the JSON keys
+    //    above, which says nothing about which variables the resolver actually consults; an undeclared
+    //    `process.env.X` is invisible to both that comparison and the ci.yml loosening check.
+    //    The scan is over NAMES, not over the shape of the read. The resolver takes `env` as a parameter
+    //    defaulting to process.env and indexes it through the lever table, so there are legitimately no
+    //    `process.env.X` dot-accesses to find; keying on that spelling would have made this check pass by
+    //    matching nothing, and would still miss `env['VERSO_PERF_X']`, a template, or a computed name.
+    //    Any VERSO_PERF_* token appearing anywhere in the file must be a declared lever.
+    const resolverSource = read('frontend/e2e/verso/perf-budget.ts');
+    const declaredEnv = new Set(levers.map((lever: any) => String(lever && lever.env)).filter(Boolean));
+    const mentioned = new Set(resolverSource.match(/\bVERSO_PERF_[A-Z0-9_]+\b/g) || []);
+    for (const name of mentioned) {
+        if (!declaredEnv.has(name)) {
+            failures.push(`frontend/e2e/verso/perf-budget.ts names ${name}, which PERF_LEVERS does not declare — `
+                + 'an undeclared lever is checked by neither the lever/budget comparison nor the ci.yml loosening gate');
+        }
+    }
+    //    Positive control: PERF_LEVERS is compared to the JSON keys elsewhere, but if the lever table's
+    //    env names never appeared in the file at all this scan would be looking at nothing.
+    for (const name of declaredEnv) {
+        if (!mentioned.has(name)) {
+            failures.push(`PERF_LEVERS declares ${name} but frontend/e2e/verso/perf-budget.ts never mentions it, so `
+                + 'the scan for undeclared levers is reading a file that does not contain the declared ones either');
+        }
+    }
+
+    return failures;
 }
 
 /**
@@ -892,13 +1265,16 @@ if (require.main === module) {
         result.failures.forEach((failure) => console.log(`  - ${failure}`));
     } else {
         console.log(`F6 verified across ${CHECKS.length} checks: typing ratchet holding, built-in fields complete, `
-            // NOT "legacy plugins covered". F6-C05 is a coverage RATCHET: it asserts that a plugin slug is
-            // NAMED by some backend test, which today holds for a minority of the marketplace. A green line
-            // claiming they are "covered" is the sentence a future reader quotes as proof of compatibility
-            // testing that was never written. The line says what the check proves, and no more — and it
-            // reads the ratchet's own constants, so it can never drift into overstating them again.
-            + `visual contract undivided, plugin coverage ratchet holding (${MIN_COVERED_MARKETPLACE_PLUGINS} of `
-            + `${MIN_COVERED_MARKETPLACE_PLUGINS + MAX_UNCOVERED_MARKETPLACE_PLUGINS} named by a test), `
+            // This line used to say "named by a test", because that was all F6-C05 could prove: a slug
+            // appearing in test source. It now says what the check actually runs — every plugin's manifest,
+            // entry load and init() exercised by f6-plugin-compatibility.test.ts — and it still stops
+            // there. It does NOT claim the plugins' behaviour is tested: no HTTP handler, no database
+            // query and no rendered block is asserted anywhere, and a green line that implied otherwise is
+            // the sentence a future reader would quote as proof of testing nobody wrote. It reads the
+            // ratchet's own constants, so it cannot drift into overstating them.
+            + `visual contract undivided, plugin compatibility ratchet holding (${MIN_COVERED_MARKETPLACE_PLUGINS} of `
+            + `${MIN_COVERED_MARKETPLACE_PLUGINS + MAX_UNCOVERED_MARKETPLACE_PLUGINS} marketplace plugins load and `
+            + 'boot under their own manifest), '
             + 'sandbox fail-closed, every driver certified, '
             + 'every budgeted measurement bounded and every certification leg backed by running evidence.');
     }

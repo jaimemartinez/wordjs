@@ -9,21 +9,32 @@
  *    de Chromium, no eventos JS sintéticos) sobre un campo del panel de
  *    propiedades; el lab mide input-latency (keydown→fin del transact) y el
  *    coste de cada transact, y publica window.__versoPerf (PerfHud).
- *  - GATE: falla si input.p95 >= 16ms, transact.p95 >= 30ms o TTI >= 2500ms.
+ *  - GATE: falla si input.p95, transact.p95 o TTI alcanzan su techo. Los tres
+ *    techos NO se escriben aquí: se leen del presupuesto comprometido
+ *    backend/f0-performance-budgets.json#versoEditorMilliseconds.
  *
  * CALIBRACIÓN (F6b, documentado a propósito): estos números se midieron para
  * el runner de Actions con build de PRODUCCIÓN en mente; el webServer de este
  * programa arranca dev:mono (Next en dev, sin optimizar), así que el número
- * FINAL de CI se calibrará en el runner real. Mientras tanto los umbrales son
- * sobreescribibles por entorno para no bloquear en máquinas lentas:
+ * FINAL de CI se calibrará en el runner real. La calibración se hace SUBIENDO
+ * el presupuesto comprometido (donde se revisa) o APRETANDO por entorno:
  *   VERSO_PERF_INPUT_P95_MS · VERSO_PERF_TRANSACT_P95_MS · VERSO_PERF_TTI_MS
+ * son palancas de una sola dirección — resolveVersoPerfBudget() RECHAZA, en la
+ * recolección, cualquier valor más flojo que el comprometido, para que ninguna
+ * variable de job pueda retirar el presupuesto sin que se vea en un diff.
  */
 import { expect, test } from "@playwright/test";
 import { CANVAS_IFRAME_SELECTOR } from "./helpers";
+import { resolveVersoPerfBudget } from "./perf-budget";
 
-const INPUT_P95_MS = Number(process.env.VERSO_PERF_INPUT_P95_MS ?? 16);
-const TRANSACT_P95_MS = Number(process.env.VERSO_PERF_TRANSACT_P95_MS ?? 30);
-const TTI_MS = Number(process.env.VERSO_PERF_TTI_MS ?? 2500);
+// Origen único: el presupuesto comprometido, apretado (jamás aflojado) por las
+// palancas VERSO_PERF_*_MS. Resolverlo en el ámbito de módulo hace que un
+// override inválido o más flojo reviente la RECOLECCIÓN del spec, en vez de
+// producir una corrida verde bajo un techo que nadie aprobó.
+const BUDGET = resolveVersoPerfBudget();
+const INPUT_P95_MS = BUDGET.inputP95;
+const TRANSACT_P95_MS = BUDGET.transactionP95;
+const TTI_MS = BUDGET.timeToInteractive;
 const KEYSTROKES = 100;
 
 interface PerfStats {

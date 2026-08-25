@@ -609,10 +609,12 @@ jobs:
     # previo `node setup/index.js --install` con la config mínima HTTP — NUNCA
     # tocar los jobs existentes.
     #
-    # PERF (F6b): perf.spec.ts corre con sus presupuestos por defecto
-    # (input p95<16ms · transact p95<30ms · TTI<2500ms) medidos sobre dev-mode; el
-    # número FINAL de CI se calibrará en este runner y, si hace falta, se fijará
-    # vía VERSO_PERF_*_MS en este job (ver el comentario del spec).
+    # PERF (F6b): perf.spec.ts NO escribe sus techos — los lee del presupuesto
+    # comprometido backend/f0-performance-budgets.json#versoEditorMilliseconds, así
+    # que aquí tampoco se repiten. Se midieron sobre dev-mode y el número FINAL de
+    # CI se calibrará en este runner: APRETAR se hace con VERSO_PERF_*_MS en este
+    # job, AFLOJAR solo subiendo el presupuesto comprometido, que es donde se
+    # revisa — una palanca más floja que él hace que el spec ni se recolecte.
     name: Verso E2E (Playwright chromium, monolito efímero HTTP)
     runs-on: ubuntu-latest
     timeout-minutes: 15

@@ -58,6 +58,8 @@ export interface AppConfig {
     // API
     api: {
         prefix: string;
+        /** Global per-IP budget for /api/v1/*. Operator-tunable; consumed by apiLimiter in index.ts. */
+        rateLimit: { max: number; windowMs: number };
     };
 
     // Site
@@ -206,6 +208,25 @@ if (!(globalThis as any).__WORDJS_ISOLATED__) {
     }
 }
 
+/**
+ * An integer from the environment, or the default — never a value outside [min, max].
+ *
+ * Clamping rather than accepting is the point. These knobs tune security controls, and the failure a
+ * free-form env var invites is not a wrong number but a DISABLED control: `max: 0` on a rate limiter
+ * rejects everything, `max: -1` or a NaN from a typo sails through `Number()` into comparisons that are
+ * always false. An out-of-range value is a mistake, so it loses to the default and says so once.
+ */
+function envInt(name: string, fallback: number, min: number, max: number): number {
+    const raw = process.env[name];
+    if (raw === undefined || raw === '') return fallback;
+    const value = Number(raw);
+    if (!Number.isInteger(value) || value < min || value > max) {
+        console.warn(`⚠️  ${name}="${raw}" is not an integer in [${min}, ${max}] — using ${fallback}.`);
+        return fallback;
+    }
+    return value;
+}
+
 // SECURITY: ephemeral fallback secret for when none is configured (see jwt.secret below).
 const EPHEMERAL_JWT_SECRET: string = crypto.randomBytes(32).toString('hex');
 if (!fileConfig.jwtSecret) {
@@ -274,7 +295,20 @@ const config: AppConfig = {
 
     // API Configuration
     api: {
-        prefix: '/api/v1'
+        prefix: '/api/v1',
+        // THE DEFAULTS ARE UNCHANGED. The cap was hard-coded at 1000 requests / 15 minutes in index.ts,
+        // so an operator whose site legitimately exceeds it had no lever short of editing the source —
+        // and neither did the performance bench, whose own failure message tells you to "raise the limit
+        // in the bench environment" without there being any way to do it. This exposes the numbers that
+        // were already there; it does not move them.
+        //
+        // Both are CLAMPED. A free-form env var invites a typo that disables the limiter outright
+        // (`max: 0`, or a window of one millisecond), which would turn a security control off while
+        // looking like configuration. Out-of-range and unparseable values fall back to the default.
+        rateLimit: {
+            max: envInt('WORDJS_API_RATELIMIT_MAX', 1000, 10, 1_000_000),
+            windowMs: envInt('WORDJS_API_RATELIMIT_WINDOW_MS', 15 * 60 * 1000, 1000, 24 * 60 * 60 * 1000),
+        },
     },
 
     // Site Configuration structure expected by core/options.js

@@ -64,6 +64,16 @@
             "scope": "database",
             "access": "write",
             "reason": "Required to save and manage promo cards."
+        },
+        {
+            "scope": "express",
+            "access": "register_route",
+            "reason": "Expose the admin CRUD endpoints and the public gallery list the block consumes."
+        },
+        {
+            "scope": "admin_menu",
+            "access": "register",
+            "reason": "Add the Card Gallery entry to the admin sidebar."
         }
     ],
     "dependencies": {

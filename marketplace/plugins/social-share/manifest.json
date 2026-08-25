@@ -23,5 +23,11 @@
         "href": "/admin/plugin/share",
         "order": 61
     },
-    "permissions": []
+    "permissions": [
+        {
+            "scope": "admin_menu",
+            "access": "register",
+            "reason": "Add the Social Share entry to the admin sidebar."
+        }
+    ]
 }

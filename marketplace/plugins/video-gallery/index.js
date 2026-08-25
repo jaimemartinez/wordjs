@@ -7,9 +7,12 @@
  */
 
 // Plugin metadata
+// Documentation only — nothing in the host reads it (the isolate calls exports.init and nothing else).
+// It is kept in step with manifest.json, which IS what the catalog, the installer and the admin plugin
+// list read: two version numbers that disagree name two different builds of the same package.
 exports.metadata = {
     name: 'Video Gallery',
-    version: '2.0.0', // Major version bump
+    version: '1.0.0',
     description: 'A horizontal scrolling video carousel with YouTube integration and multi-gallery support',
     author: 'WordJS'
 };

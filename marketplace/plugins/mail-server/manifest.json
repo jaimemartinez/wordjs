@@ -5,7 +5,9 @@
     "description": "Full webmail (spam folder, labels, undo send, vacation replies, search operators) on a real MTA with DKIM/SPF/DNS tooling",
     "author": "WordJS",
     "isolated": true,
-    "claimPorts": [25],
+    "claimPorts": [
+        25
+    ],
     "backend": {
         "entry": "index.js"
     },
@@ -81,6 +83,16 @@
         {
             "scope": "network",
             "reason": "Resolve MX records (DNS) and deliver mail directly to remote MTAs / a configured relay (NET/TLS) and run the inbound SMTP listener."
+        },
+        {
+            "scope": "express",
+            "access": "register_route",
+            "reason": "Expose the webmail admin API (mailboxes, messages, attachments, DKIM/DNS tooling) and the endpoints the admin page calls."
+        },
+        {
+            "scope": "admin_menu",
+            "access": "register",
+            "reason": "Add the Email Settings entry to the admin sidebar."
         }
     ],
     "dependencies": {

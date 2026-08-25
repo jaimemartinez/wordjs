@@ -42,10 +42,10 @@
       "semanticSha256": "dd4150cbbf70aa15c90992d91c4954c7d0502e27ca6901eef6c717dcc4f33c8e"
     },
     "verificationSurface": {
-      "backendTestFiles": 200,
+      "backendTestFiles": 201,
       "frontendTestFiles": 170,
       "sandboxWorkflowSemanticSha256": "2acabdebfa082077510507a1e05af0c642a290824f5152ffa6ab1dfff5a5b851",
-      "performanceBudgetsSha256": "5cec1eb1dbd3024992597dd6251d0944b09adf0d642880139ae6e478b2b3b347"
+      "performanceBudgetsSha256": "5a608e783d98267030d14c9ce70edb7cc9f5354cbf006c31353648425d7a7556"
     }
   },
   "performanceBudget": {
@@ -122,27 +122,34 @@
     },
     "httpSteadyState": {
       "why": "The in-process budget above covers the backend render step. The end-to-end page render is HTTP, so scripts/perf-bench.mjs enforces the same shape there: every target expressed as a ratio to /healthz measured in the same run. /healthz is the right denominator because it is the whole HTTP stack — listener, middleware chain, event loop, JSON encode — doing no application work.",
+      "ratioBasis": {
+        "statistic": "requestsPerSecond",
+        "formula": "reqPerSec(/healthz) / reqPerSec(target)",
+        "why": "How many empty responses fit in the time this route takes. It was LATENCY (p95, then the mean) and both were unusable: autocannon reports latency in whole milliseconds while /healthz answers in tens of microseconds, so the denominator was quantised to 1 and the 'ratio' was simply the absolute latency, normalising nothing — which is the only reason to express the budget as a ratio. Measured across five clean runs on one idle host: the reference MEAN wandered 0.04ms to 0.15ms (3.75x spread) and every role's latency ratio inherited 3.4x-3.9x of noise, while the same runs gave a throughput spread of 1.20x and role ratios of 1.14x-1.30x. Throughput is a count over the run window, so it has resolution where sub-millisecond latency does not.",
+        "latencyIsStillReported": "as p97_5Milliseconds, feeding the absolute catastrophe ceiling only. autocannon 8 exposes p90 and p97_5 and has no latency.p95, so the field this harness used to call p95Milliseconds never once held a p95."
+      },
       "reference": {
         "role": "liveness",
         "path": "/healthz",
         "note": "Root-level, no database, excluded from the rate limiter."
       },
       "roles": {
-        "home": { "path": "/", "planOperation": "render", "required": true, "observedRatioToReference": null, "maximumRatioToReference": null },
-        "post": { "path": "/{slug}", "planOperation": "render", "required": true, "observedRatioToReference": null, "maximumRatioToReference": null },
-        "settings": { "path": "/api/v1/settings", "planOperation": "query", "required": true, "observedRatioToReference": null, "maximumRatioToReference": null },
-        "posts": { "path": "/api/v1/posts?per_page=10", "planOperation": "query", "required": true, "observedRatioToReference": null, "maximumRatioToReference": null }
+        "home": { "path": "/", "planOperation": "render", "required": true, "observedRatioToReference": 49.06, "maximumRatioToReference": 98.12 },
+        "post": { "path": "/{slug}", "planOperation": "render", "required": true, "observedRatioToReference": 47.1, "maximumRatioToReference": 94.2 },
+        "settings": { "path": "/api/v1/settings", "planOperation": "query", "required": true, "observedRatioToReference": 306.66, "maximumRatioToReference": 613.32 },
+        "posts": { "path": "/api/v1/posts?per_page=10", "planOperation": "query", "required": true, "observedRatioToReference": 156.11, "maximumRatioToReference": 312.22 }
       },
-      "calibration": "UNCALIBRATED, and the first attempt to calibrate found two reasons it must stay that way until this budget is redesigned. `npm run perf:bench:enforce` therefore still FAILS with an instruction rather than reporting green on evidence that does not support it — a ratio nobody measured must not pass, and skipping the uncalibrated entries is the failure mode this programme has already had to fix twice. See firstCleanObservation for what was measured, and reference.note for the two defects.",
-      "firstCleanObservation": {
-        "measuredOn": { "platform": "win32", "arch": "x64", "date": "2026-08-25", "build": "production monolith", "connections": 8, "durationSecondsPerTarget": 6 },
-        "referenceP95Milliseconds": 1,
-        "p95Milliseconds": { "home": 61, "post": 40, "settings": 230, "posts": 152 },
-        "whyNotRecordedAsCalibration": [
-          "THE DENOMINATOR HAS NO RESOLUTION. /healthz reports p95 = 1ms and autocannon reports latency in whole milliseconds, so every ratio is the target p95 divided by 1 — it EQUALS the absolute p95 and normalises nothing between machines, which is the only reason this budget is expressed as a ratio at all. Quantising a 1ms denominator carries up to a 2x error by itself. The in-process budget above avoided exactly this by choosing a ten-insert batch large enough that timer jitter is not a meaningful share of it (see reference.why); the HTTP reference needs the same treatment.",
-          "ONE RUN IS ALL THE RATE LIMITER ALLOWS. methodology.note requires the WORST of several runs. This run was clean (non2xx = 0); three further runs in the same 15-minute window returned ~20000 non-2xx each, and their API rows measured the limiter rather than the route — settings 'improved' from 230ms to 5ms. Calibrating needs runs spaced past the 1000-request window, or the bench exempted from the limiter."
-        ],
-        "note": "Kept because a measurement that exists beats a blank, and because settings at 230ms p95 / 43 req-per-second is worth looking at on its own terms."
+      "calibration": "CALIBRATED on this host. Six clean runs (non2xx = 0, errors = 0) against a production monolith build, autocannon, 8 connections, 6 seconds per target, a real published post as the /{slug} target. observedRatioToReference records the WORST of the six as methodology.note requires, and every ceiling sits at 2.0x it — the same factor and the same reasoning as the in-process budget, and inside methodology.ceilingMarginRange. Run-to-run spread was 1.14x-1.30x, so a 2.0x ceiling trips somewhere around a 1.6x-2.0x real regression rather than on noise. Re-record on the host being certified rather than loosening these: `node scripts/perf-bench.mjs <baseUrl> --slug <slug> --calibrate`, which now REFUSES to emit numbers from a run that saw non-2xx.",
+      "measuredOn": {
+        "platform": "win32",
+        "arch": "x64",
+        "date": "2026-08-25",
+        "build": "production monolith",
+        "connections": 8,
+        "durationSecondsPerTarget": 6,
+        "runs": 6,
+        "worstObservedRunToRunRatioSpread": 1.3,
+        "rateLimiter": "The API budget is 1000 requests / 15 minutes and a single 6-second run of the two /api targets exceeds it, so the second run of a window measures 429s instead of routes — 429s are FAST, so it would have silently LOWERED the ceilings and made the gate unfailable for those roles. These runs set WORDJS_API_RATELIMIT_MAX high for the bench host (config.api.rateLimit, defaults unchanged at 1000/15min), and --calibrate now refuses a run with any non-2xx rather than trusting the operator to notice."
       },
       "absoluteCeilingsFrom": "backend/f0-performance-budgets.json#httpSteadyState"
     }

@@ -52,6 +52,11 @@ exports.init = async function (wordjs) {
 
     // ---- schema (idempotent; full column set from day 1 — ALTER is unavailable) -----------------
     async function initSchema() {
+        // `currency_symbol` carries NO `DEFAULT '$'`. The host SQL guard
+        // (core/plugin-api.assertSqlAllowed) refuses '$' ANYWHERE in a plugin statement — dollar-quoting
+        // and dollar-numbered parameters — so that clause made this db.run throw, initSchema() reject
+        // and init() fail: the isolate reported init-error and the plugin registered nothing at all.
+        // Every INSERT supplies currency_symbol, and every read already falls back to '$'.
         await db.run(`CREATE TABLE IF NOT EXISTS ${T.invoices} (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             number TEXT NOT NULL,
@@ -66,7 +71,7 @@ exports.init = async function (wordjs) {
             subtotal_cents INTEGER,
             tax_cents INTEGER,
             total_cents INTEGER,
-            currency_symbol TEXT DEFAULT '$',
+            currency_symbol TEXT,
             status TEXT DEFAULT 'draft',
             issued_at TEXT,
             due_at TEXT,

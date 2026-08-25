@@ -203,8 +203,11 @@ const apiRelativePath = (req: any): string => {
 const isCollabPath = (req: any): boolean => /^\/collab(\/|$)/.test(apiRelativePath(req));
 
 const apiLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 1000, // Limit each IP to 1000 requests per 15 mins
+    // Same numbers as before (1000 / 15 min); they now live in config so an operator — or the
+    // performance bench, which cannot measure a route the limiter is answering for — can raise them
+    // without editing this file. config/app clamps both, so a typo cannot switch the limiter off.
+    windowMs: config.api.rateLimit.windowMs,
+    max: config.api.rateLimit.max,
     standardHeaders: true,
     legacyHeaders: false,
     keyGenerator: ipKey,

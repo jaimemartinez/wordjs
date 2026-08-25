@@ -391,13 +391,23 @@ describe('F6 performance budget — the HTTP steady-state gate in scripts/perf-b
         evaluateHttpRun = module.evaluateHttpRun;
     });
 
+    /**
+     * The fixture carries `meanMilliseconds` because the PRODUCER does, and `p97_5Milliseconds` because
+     * autocannon has no p95 — its percentile keys are p90 and p97_5, so the field the harness used to
+     * call `p95Milliseconds` never once held a p95. Ratios are anchored on the mean: percentiles come
+     * back as whole milliseconds and the reference measures ~1ms in production, so a
+     * percentile-over-percentile ratio is the target's latency divided by one and normalises nothing.
+     *
+     * A fixture that describes a shape the producer does not emit is the trap this repository calls
+     * fixture-vs-producer, and the test below the matrix exists to keep these two in step.
+     */
     const green = () => ({
-        reference: { role: 'liveness', p95Milliseconds: 4, requestsPerSecond: 900, errors: 0, non2xx: 0 },
+        reference: { role: 'liveness', meanMilliseconds: 2.5, p97_5Milliseconds: 4, requestsPerSecond: 900, errors: 0, non2xx: 0 },
         results: [
-            { role: 'home', p95Milliseconds: 40, requestsPerSecond: 300, errors: 0, non2xx: 0 },
-            { role: 'post', p95Milliseconds: 44, requestsPerSecond: 280, errors: 0, non2xx: 0 },
-            { role: 'settings', p95Milliseconds: 20, requestsPerSecond: 600, errors: 0, non2xx: 0 },
-            { role: 'posts', p95Milliseconds: 32, requestsPerSecond: 400, errors: 0, non2xx: 0 },
+            { role: 'home', meanMilliseconds: 28, p97_5Milliseconds: 40, requestsPerSecond: 300, errors: 0, non2xx: 0 },
+            { role: 'post', meanMilliseconds: 30, p97_5Milliseconds: 44, requestsPerSecond: 280, errors: 0, non2xx: 0 },
+            { role: 'settings', meanMilliseconds: 14, p97_5Milliseconds: 20, requestsPerSecond: 600, errors: 0, non2xx: 0 },
+            { role: 'posts', meanMilliseconds: 22, p97_5Milliseconds: 32, requestsPerSecond: 400, errors: 0, non2xx: 0 },
         ],
     });
 
@@ -412,10 +422,32 @@ describe('F6 performance budget — the HTTP steady-state gate in scripts/perf-b
     });
 
     test('an uncalibrated ratio fails closed instead of counting as a pass', () => {
-        // Shipped state: no host has recorded HTTP ratios yet. The honest response to "I have no
-        // observation" is a red gate that says how to record one — not a skip that reports green.
-        const failures = evaluateHttpRun(green(), spec());
-        assert.ok(failures.some((f) => f.includes('uncalibrated')), `an uncalibrated HTTP budget passed: ${failures.join(' | ')}`);
+        // This used to assert the SHIPPED state — "no host has recorded HTTP ratios yet" — by handing the
+        // evaluator the committed spec and expecting it to complain. It passed for as long as the budget
+        // stayed uncalibrated and evaporated the moment someone calibrated it, which is the wrong way
+        // round: the invariant is about the EVALUATOR's behaviour on a missing observation, and that
+        // invariant matters more once real numbers exist, not less.
+        //
+        // Both spellings of "no observation" are covered, because `Number(null)` is 0 and 0 is finite —
+        // the coercion bug this check was originally written for.
+        for (const missing of [null, undefined]) {
+            const partial = spec();
+            partial.roles.home.observedRatioToReference = missing;
+            partial.roles.home.maximumRatioToReference = missing;
+            const failures = evaluateHttpRun(green(), partial);
+            assert.ok(failures.some((f) => f.includes('uncalibrated')),
+                `a role with ${String(missing)} ratios passed: ${failures.join(' | ')}`);
+        }
+
+        // And the committed budget must still be judgeable end to end: whatever it holds today, feeding a
+        // conforming run through it may not produce an "uncalibrated" complaint about a recorded number.
+        const shipped = evaluateHttpRun(green(), spec());
+        const spurious = shipped.filter((f) => f.includes('uncalibrated'));
+        const recorded = Object.entries<any>(spec().roles).filter(([, r]) => Number.isFinite(r.observedRatioToReference));
+        if (recorded.length === Object.keys(spec().roles).length) {
+            assert.deepStrictEqual(spurious, [],
+                `every role is calibrated in f0-baseline.json, yet the evaluator called one uncalibrated: ${spurious.join(' | ')}`);
+        }
     });
 
     test('a target with no budgeted role, a missing required role, non-2xx and a missing reference all fail', () => {
@@ -426,7 +458,7 @@ describe('F6 performance budget — the HTTP steady-state gate in scripts/perf-b
         }
 
         const extra = green();
-        extra.results.push({ role: 'admin', p95Milliseconds: 10, requestsPerSecond: 100, errors: 0, non2xx: 0 });
+        extra.results.push({ role: 'admin', meanMilliseconds: 7, p97_5Milliseconds: 10, requestsPerSecond: 100, errors: 0, non2xx: 0 });
         assert.ok(evaluateHttpRun(extra, calibrated).some((f) => f.includes('admin')), 'a measured target with no budget passed');
 
         const missing = green();
@@ -460,9 +492,72 @@ describe('F6 performance budget — the HTTP steady-state gate in scripts/perf-b
             calibrated.roles[role].maximumRatioToReference = 18;
         }
         const slow = green();
-        slow.results[0].p95Milliseconds = 4 * 18 + 1; // 73ms — trivially under any absolute ceiling
+        // The ratio is reference-throughput over target-throughput, so "slow" means FEWER requests per
+        // second. 900/18 = 50 req/s is exactly the ceiling; 45 is over it. Its latency is untouched and
+        // still looks unremarkable, which is the point: the absolute ceiling would not catch this.
+        slow.results[0].requestsPerSecond = 45;
         const failures = evaluateHttpRun(slow, calibrated);
         assert.ok(failures.some((f) => f.includes('home') && f.includes('ratio')),
             'a target 18x heavier than an empty liveness response passed because 73ms "looks fast"');
+    });
+
+    /**
+     * FIXTURE-VS-PRODUCER. Every test above drives the real evaluator with a HAND-WRITTEN report, so all
+     * of them pass for ever if the harness starts emitting a different shape — the evaluator would be
+     * exercised on data no run produces, and the gate would be measuring a fiction.
+     *
+     * That is not theoretical here. The measurement used to emit `p95Milliseconds` built from
+     * `r.latency.p95 ?? r.latency.p97_5`, and autocannon 8 has no `latency.p95` at all: its percentile
+     * keys are p90 and p97_5. So the field never held a p95, and no fixture could reveal it because the
+     * fixtures were written from the field NAME rather than from the producer.
+     *
+     * The producer's own keys are read out of scripts/perf-bench.mjs and the fixture is required to be a
+     * subset of them, so renaming a field on one side without the other is red.
+     */
+    test('the fixture describes the shape the harness actually emits', () => {
+        const source = fs.readFileSync(path.join(REPO_ROOT, 'scripts', 'perf-bench.mjs'), 'utf8').split('\r\n').join('\n');
+        const block = /measured\.push\(\{([\s\S]*?)\n\s*\}\);/.exec(source);
+        if (!block || !block[1].trim()) {
+            throw new Error('cannot find the measurement literal in perf-bench.mjs — this gate is reading nothing');
+        }
+
+        const produced = new Set(
+            (block[1].match(/^\s{8,}([A-Za-z_][A-Za-z0-9_]*)\s*:/gm) || [])
+                .map((line) => line.trim().replace(/\s*:$/, '')),
+        );
+        // Positive control: a scan that finds nothing must not pass by finding nothing.
+        assert.ok(produced.size >= 6, `only ${produced.size} produced fields parsed out of perf-bench.mjs: ${[...produced].join(', ')}`);
+
+        const sample = green();
+        const consumed = new Set([...Object.keys(sample.reference), ...Object.keys(sample.results[0])]);
+        const invented = [...consumed].filter((key) => !produced.has(key));
+        assert.deepStrictEqual(invented, [],
+            `the fixture describes fields the harness never emits (${invented.join(', ')}) — every HTTP test above would then be driving the evaluator with data no run produces. Produced: ${[...produced].sort().join(', ')}`);
+
+        // And the two the evaluator actually reads must be among them, so a producer that drops one is red.
+        for (const required of ['meanMilliseconds', 'p97_5Milliseconds']) {
+            assert.ok(produced.has(required), `perf-bench.mjs no longer emits ${required}, which the evaluator reads`);
+        }
+    });
+
+    test('a report with no throughput is rejected rather than falling back to latency', () => {
+        const calibrated = spec();
+        for (const role of Object.keys(calibrated.roles)) {
+            calibrated.roles[role].observedRatioToReference = 12;
+            calibrated.roles[role].maximumRatioToReference = 18;
+        }
+        // Throughput is what gives the ratio its resolution: it is a count over the run window, while
+        // autocannon's latency comes back quantised to whole milliseconds and /healthz answers in tens
+        // of microseconds. If a future producer stops emitting requestsPerSecond, the gate must say so
+        // rather than quietly re-anchoring on a latency figure whose denominator is noise.
+        const noThroughput = green();
+        delete (noThroughput.reference as any).requestsPerSecond;
+        assert.ok(evaluateHttpRun(noThroughput, calibrated).some((f) => f.includes('unanchored')),
+            'a run with no reference throughput was judged anyway');
+
+        const roleNoThroughput = green();
+        delete (roleNoThroughput.results[0] as any).requestsPerSecond;
+        assert.ok(evaluateHttpRun(roleNoThroughput, calibrated).some((f) => f.includes('home') && f.includes('throughput')),
+            'a role with no throughput was judged anyway');
     });
 });
