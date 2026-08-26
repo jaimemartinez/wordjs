@@ -212,13 +212,36 @@ if (seatbelt) {
 // L5/L6 boot the COMPILED worker with no preload. If they boot where L2 died, the preload is the
 // trigger and production is unaffected; if they die too, getcwd is reached by another path and the
 // problem is the ancestor grant itself.
-const DIST_WORKER = path.join(BACKEND, 'dist', 'core', 'plugin-worker.js');
-const distCfg = cfg.replace(SRC_CORE.replace(/\\/g, '\\\\'), path.join(BACKEND, 'dist', 'core').replace(/\\/g, '\\\\'));
+const DIST_CORE = path.join(BACKEND, 'dist', 'core');
+const DIST_WORKER = path.join(DIST_CORE, 'plugin-worker.js');
+const distCfg = JSON.stringify({ ...JSON.parse(cfg), coreDir: DIST_CORE });
 if (fs.existsSync(DIST_WORKER)) {
     results.push(await boot('L5  compiled worker, NO preload, no confinement', NODE, [DIST_WORKER, distCfg]));
-    if (seatbelt) {
-        results.push(await boot('L6  compiled worker, NO preload, + Seatbelt',
-            seatbelt[0], [...seatbelt.slice(1), NODE, DIST_WORKER, distCfg]));
+    // THE PROFILE MUST BE BUILT FOR THE TREE BEING RUN. The first version of this leg profiled
+    // src/core and then executed dist/core, so it died with
+    // `EPERM: open .../dist/core/plugin-worker.js` — the sandbox correctly refusing a directory nobody
+    // had granted. That said nothing about whether compiled production works; it said the harness
+    // pointed the profile at the wrong tree. A separate profile is built here from the SAME
+    // sandboxPaths call the product makes, with coreDir set to dist.
+    let distSeatbelt = null;
+    try {
+        const req = createRequire(path.join(BACKEND, 'package.json'));
+        const mac = req(path.join(SRC_CORE, 'sandbox-macos.ts'));
+        const paths = req(path.join(SRC_CORE, 'sandbox-paths.ts'));
+        const dnp = paths.sandboxPaths(BACKEND, SLUG, DIST_CORE);
+        const dprofile = mac.buildSeatbeltProfile({
+            writableDirs: dnp.writable, readOnlyDirs: dnp.readOnly, readOnlyFiles: [],
+            denyNetwork: true, appRoot: BACKEND, nodePath: NODE,
+        });
+        const dproblems = mac.auditProfile(dprofile);
+        say(`[profile:dist] ${dproblems.length ? 'audit problems: ' + dproblems.join(' | ') : 'audit clean'}`);
+        distSeatbelt = [mac.SEATBELT_BIN, ...mac.seatbeltArgs(dprofile, [])];
+    } catch (e) {
+        say(`[profile:dist] could not build one: ${String(e && e.message || e)}`);
+    }
+    if (distSeatbelt) {
+        results.push(await boot('L6  compiled worker, NO preload, + Seatbelt (profile built for dist)',
+            distSeatbelt[0], [...distSeatbelt.slice(1), NODE, DIST_WORKER, distCfg]));
     }
 } else {
     say(`L5/L6 skipped: ${DIST_WORKER} does not exist (run \`npm run build\` in backend/)`);
