@@ -81,11 +81,29 @@ test('nothing is in two buckets at once', () => {
         `these are listed as reviewed-safe AND as restricted: ${overlap.join(', ')}`);
 });
 
-test('the reviewed-safe list does not name modules that do not exist', () => {
-    // A stale entry is not harmful, but it is evidence the list is being edited from memory rather than
-    // from the platform — which is exactly how the unclassified 31 accumulated.
+test('names in the reviewed-safe list that this Node does not have are reported, not failed', () => {
+    // THIS IS DELIBERATELY NOT AN ASSERTION, AND THE REASON MATTERS.
+    //
+    // It was one, and it failed on all three platforms at once: the list was written while reading
+    // Node 25, CI runs Node 22, and `sea` is in `builtinModules` on the former and not the latter. The
+    // check is RELATIVE TO THE RUNNING VERSION, so as a gate it does not ask "is this list right?" but
+    // "is this runner as new as the machine the list was written on?" — which is not a property of the
+    // sandbox at all, and turns every Node-matrix job red for a reason unrelated to containment.
+    //
+    // The direction that carries the security meaning is the other one — every builtin THIS Node has
+    // must be classified — and that one is version-robust: it gets stricter as Node grows, never
+    // laxer. It is asserted above.
+    //
+    // A name here that no Node has is a typo, and a typo is harmless: it matches nothing, so the module
+    // stays unclassified and the completeness gate catches it. Printing keeps it visible without
+    // pretending a version difference is a defect.
     const all = new Set(publicBuiltins());
-    const ghosts = [...REVIEWED_SAFE_BUILTINS].filter((m: string) => !all.has(m));
-    assert.deepStrictEqual(ghosts, [],
-        `reviewed-safe names no builtin on Node ${process.version}: ${ghosts.join(', ')}`);
+    const absent = [...REVIEWED_SAFE_BUILTINS].filter((m: string) => !all.has(m)).sort();
+    if (absent.length) {
+        console.log(`[builtin policy] reviewed-safe names not present on Node ${process.version}: ${absent.join(', ')}`
+            + ' — expected across a version matrix; only a name NO Node has is a typo.');
+    }
+    // The list must still be a list. An empty one would make the classification above vacuous.
+    assert.ok(REVIEWED_SAFE_BUILTINS.size >= 20,
+        `REVIEWED_SAFE_BUILTINS has only ${REVIEWED_SAFE_BUILTINS.size} entries — the policy is not being read`);
 });

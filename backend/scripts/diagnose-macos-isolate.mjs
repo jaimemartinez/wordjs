@@ -24,6 +24,7 @@
  */
 
 import { spawn } from 'node:child_process';
+import { createRequire } from 'node:module';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -37,6 +38,26 @@ const WORKER = path.join(SRC_CORE, 'plugin-worker.js');
 const READY_MS = 25000;
 
 function say(s = '') { process.stdout.write(s + '\n'); }
+
+// EVERYTHING BELOW RESOLVES FROM `backend/`, NOT FROM THE CALLER'S CWD.
+//
+// The first run of this script measured nothing but its own launch directory. Invoked as
+// `node backend/scripts/diagnose-macos-isolate.mjs` from the repository root, every layer "DIED" with
+// `Cannot find module 'ts-node/register'` — it lives in backend/node_modules — the Seatbelt profile
+// could not be built for the same reason, and the real-loader control failed compiling app.ts because
+// ts-node never found backend/tsconfig.json. Four red results, none of them about macOS.
+//
+// So the preload is resolved to an ABSOLUTE path and every child is spawned with cwd=backend. A
+// diagnostic that can be broken by where it was started is not evidence.
+const backendRequire = createRequire(path.join(BACKEND, 'package.json'));
+let TSNODE = [];
+let tsNodeNote = '';
+try {
+    TSNODE = ['-r', backendRequire.resolve('ts-node/register')];
+    tsNodeNote = TSNODE[1];
+} catch (e) {
+    tsNodeNote = `NOT RESOLVABLE from ${BACKEND}: ${String(e && e.message || e)}`;
+}
 
 // ── a trivial, honest plugin: it registers nothing and does nothing ────────────────────────────────
 const SLUG = 'wjs-macos-diag';
@@ -65,7 +86,7 @@ function boot(label, cmd, args) {
     return new Promise((resolve) => {
         let child;
         try {
-            child = spawn(cmd, args, { env: SAFE_ENV, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
+            child = spawn(cmd, args, { cwd: BACKEND, env: SAFE_ENV, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
         } catch (e) {
             resolve({ label, spawnError: String(e && e.message || e) });
             return;
@@ -90,7 +111,6 @@ function boot(label, cmd, args) {
 }
 
 const NODE = process.execPath;
-const TSNODE = ['-r', 'ts-node/register'];
 
 const results = [];
 
@@ -98,29 +118,49 @@ say('=== macOS isolate bisect ===');
 say(`node        : ${process.version}`);
 say(`platform    : ${process.platform} ${os.release()}`);
 say(`worker      : ${WORKER}`);
+say(`cwd (spawns): ${BACKEND}`);
+say(`ts-node     : ${tsNodeNote}`);
 say('');
 
 // L0 — no confinement at all. If this fails, nothing above it is the cause.
 results.push(await boot('L0  bare fork (ts-node preload only)', NODE, [...TSNODE, WORKER, cfg]));
 
 // L1 — the memory-cap shell wrapper on its own.
-results.push(await boot("L1  + sh -c 'ulimit -v; exec' wrapper", 'sh',
-    ['-c', 'ulimit -v 1048576 2>/dev/null; exec "$@"', 'wjs-diag', NODE, ...TSNODE, WORKER, cfg]));
+//
+// POSIX only. On Windows this leg reports a false DIED: there is no real argv array, Node builds a
+// command-line STRING, and the backslashes in a Windows path inside the cfg JSON come back out of `sh`
+// as invalid escapes — `SyntaxError: Bad escaped character in JSON`. That is the harness meeting
+// Windows quoting, not the wrapper failing, and a diagnostic that reports it as a layer death is
+// worse than one that skips it. macOS and Linux pass a genuine argv array and are unaffected.
+const POSIX = process.platform !== 'win32';
+if (POSIX) {
+    results.push(await boot("L1  + sh -c 'ulimit -v; exec' wrapper", 'sh',
+        ['-c', 'ulimit -v 1048576 2>/dev/null; exec "$@"', 'wjs-diag', NODE, ...TSNODE, WORKER, cfg]));
+} else {
+    say('L1 skipped: the shell wrapper leg is POSIX-only (Windows argv quoting mangles the cfg JSON).');
+}
 
 // L2 — Seatbelt on its own, with the profile the product would build.
 let seatbelt = null;
 let profileNote = '';
 try {
-    const { createRequire } = await import('node:module');
-    const req = createRequire(import.meta.url);
-    req('ts-node/register');
+    const req = createRequire(path.join(BACKEND, 'package.json'));
+    process.chdir(BACKEND);          // ts-node reads tsconfig.json relative to cwd
+    req(backendRequire.resolve('ts-node/register'));
     const mac = req(path.join(SRC_CORE, 'sandbox-macos.ts'));
     const paths = req(path.join(SRC_CORE, 'sandbox-paths.ts'));
     const APP_ROOT = path.resolve(BACKEND);
     const np = paths.sandboxPaths ? paths.sandboxPaths(APP_ROOT, SLUG, SRC_CORE) : null;
+    // `readOnly`, not `readable`. The first draft used the wrong key; buildSeatbeltProfile then saw
+    // `undefined`, quietly fell back to `[appRoot]`, and would have profiled something the product never
+    // builds. A diagnostic fed the wrong inputs does not report a weaker truth, it reports a different
+    // subject — so the shape is asserted rather than trusted.
+    if (!np || !Array.isArray(np.writable) || !Array.isArray(np.readOnly)) {
+        throw new Error(`sandboxPaths returned ${JSON.stringify(np)} — expected { writable: [], readOnly: [] }`);
+    }
     const profile = mac.buildSeatbeltProfile({
-        writableDirs: np ? np.writable : [PLUG_DIR],
-        readOnlyDirs: np ? np.readable : [APP_ROOT],
+        writableDirs: np.writable,
+        readOnlyDirs: np.readOnly,
         readOnlyFiles: [],
         denyNetwork: true,
         appRoot: APP_ROOT,
@@ -139,17 +179,19 @@ try {
 
 if (seatbelt) {
     results.push(await boot('L2  + Seatbelt only', seatbelt[0], [...seatbelt.slice(1), NODE, ...TSNODE, WORKER, cfg]));
-    results.push(await boot('L3  + Seatbelt AND the shell wrapper', seatbelt[0],
-        [...seatbelt.slice(1), 'sh', '-c', 'ulimit -v 1048576 2>/dev/null; exec "$@"', 'wjs-diag', NODE, ...TSNODE, WORKER, cfg]));
+    if (POSIX) {
+        results.push(await boot('L3  + Seatbelt AND the shell wrapper', seatbelt[0],
+            [...seatbelt.slice(1), 'sh', '-c', 'ulimit -v 1048576 2>/dev/null; exec "$@"', 'wjs-diag', NODE, ...TSNODE, WORKER, cfg]));
+    }
 } else {
     say('L2/L3 skipped: no Seatbelt profile');
 }
 
 // L4 — the product's own path, as the control.
 try {
-    const { createRequire } = await import('node:module');
-    const req = createRequire(import.meta.url);
-    req('ts-node/register');
+    const req = createRequire(path.join(BACKEND, 'package.json'));
+    process.chdir(BACKEND);          // ts-node reads tsconfig.json relative to cwd
+    req(backendRequire.resolve('ts-node/register'));
     const cfgApp = req(path.join(BACKEND, 'src', 'config', 'app.ts'));
     cfgApp.dbPath = path.join(os.tmpdir(), `wjs-macos-diag-${process.pid}.db`);
     cfgApp.dbDriver = 'sqlite-native';
