@@ -101,7 +101,23 @@ function boot(label, cmd, args) {
 
         const timer = setTimeout(() => finish({ exit: 'timeout' }), READY_MS);
         child.on('error', (e) => finish({ exit: 'spawn-error', why: String(e && e.message || e) }));
-        child.on('exit', (code, signal) => finish({ exit: code, signal }));
+
+        // WAIT FOR THE STREAMS, NOT THE PROCESS. 'exit' fires when the child is gone, which can be
+        // BEFORE its stdout/stderr have been drained — so a child that printed its error and died fast
+        // is reported as "said nothing at all". C1 came back with both streams empty and that is very
+        // likely why: the diagnosis was thrown away by the diagnostic. 'close' fires only once every
+        // stdio stream has ended, so the output is complete by then.
+        let closed = 0;
+        let exitInfo = null;
+        const maybeFinish = () => { if (exitInfo && closed >= 2) finish(exitInfo); };
+        child.stdout.on('close', () => { closed++; maybeFinish(); });
+        child.stderr.on('close', () => { closed++; maybeFinish(); });
+        child.on('exit', (code, signal) => {
+            exitInfo = { exit: code, signal };
+            // A hard ceiling so a child that leaves a stream open cannot hang the whole bisect.
+            setTimeout(() => finish(exitInfo), 1500);
+            maybeFinish();
+        });
 
         function finish(o) {
             if (settled) return;
@@ -292,6 +308,31 @@ if (seatbelt && POSIX) {
         } catch (e) {
             results.push({ label, exit: 'harness-error', err: String(e && e.message || e).slice(0, 300), out: '' });
         }
+    }
+
+    // C5 — THE CANONICAL TECHNIQUE, from how other macOS sandboxes solve exactly this.
+    //
+    // Chromium's Seatbelt design and the SBPL references both describe chdir-ing to "/" before
+    // entering the sandbox, precisely so the working directory has no ancestors left to resolve.
+    // getcwd() then returns "/" with nothing to check, and NOTHING in the profile has to be widened.
+    //
+    // C1 tried the cwd half alone and came back with both streams empty — which the harness race fixed
+    // above would have hidden. It was also missing the other half: with cwd="/", ts-node searches for
+    // tsconfig.json from "/" and never finds it. TS_NODE_PROJECT names the file outright, which the
+    // ts-node docs give as the way to skip the search entirely.
+    try {
+        const shimEnv = { ...SAFE_ENV, TS_NODE_PROJECT: path.join(BACKEND, 'tsconfig.json') };
+        const saved = BOOT_CWD.value;
+        BOOT_CWD.value = '/';
+        const savedEnv = { ...SAFE_ENV };
+        Object.assign(SAFE_ENV, shimEnv);
+        results.push(await boot('C5  cwd="/" + TS_NODE_PROJECT (no profile change at all)',
+            seatbelt[0], [...seatbelt.slice(1), NODE, ...TSNODE, WORKER, cfg]));
+        BOOT_CWD.value = saved;
+        for (const k of Object.keys(SAFE_ENV)) delete SAFE_ENV[k];
+        Object.assign(SAFE_ENV, savedEnv);
+    } catch (e) {
+        results.push({ label: 'C5  cwd="/" + TS_NODE_PROJECT', exit: 'harness-error', err: String(e && e.message || e).slice(0, 300), out: '' });
     }
 
     // C4 — no preload at all: a shim that registers ts-node from its own location, then loads the

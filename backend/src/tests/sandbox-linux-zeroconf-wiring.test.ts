@@ -65,10 +65,40 @@ describe('real launch wiring and visibility', () => {
         const isolateSource = fs.readFileSync(path.resolve(__dirname, '../core/plugin-isolate.ts'), 'utf8');
         assert.match(isolateSource, /tsNodeProjectFiles = __filename\.endsWith\('\.ts'\)/);
         assert.match(isolateSource, /\[path\.join\(APP_ROOT, 'tsconfig\.json'\), path\.join\(APP_ROOT, 'package\.json'\)\]/);
-        assert.match(isolateSource, /readOnlyFiles: tsNodeProjectFiles/);
         assert.match(isolateSource, /\.\.\.tsNodeProjectFiles/);
         assert.doesNotMatch(isolateSource, /sandboxReadable[^\n]*APP_ROOT/,
             'the source-worker fix must not turn the whole backend root into plugin read authority');
+    });
+
+    test('the macOS cwd-ancestor grant is scoped, and never reaches the app root', () => {
+        // THIS TEST CAUGHT THE CHANGE THAT MADE IT NECESSARY, which is the only reason it is being
+        // widened rather than deleted. The assertion above used to require `readOnlyFiles:
+        // tsNodeProjectFiles` verbatim; granting macOS the ancestors of APP_ROOT — so ts-node's
+        // getcwd() can resolve, without which an isolated plugin cannot start there at all — turned it
+        // red. That is a boundary moving, and a boundary that moves silently is the thing this file
+        // exists to prevent. So the contract is restated, tighter, rather than loosened.
+        const isolateSource = fs.readFileSync(path.resolve(__dirname, '../core/plugin-isolate.ts'), 'utf8');
+
+        // Source mode AND darwin. Landlock does not gate getcwd, so widening Linux here would be a
+        // second bug; Windows takes neither branch.
+        assert.match(isolateSource, /__filename\.endsWith\('\.ts'\) && process\.platform === 'darwin'/,
+            'the ancestor grant must be scoped to the source-mode macOS worker, and to nothing else');
+
+        // The walk STARTS at the parent. APP_ROOT itself must never be granted: that is where
+        // wordjs-config.json, the databases and every sibling plugin live.
+        assert.match(isolateSource, /for \(let d = path\.dirname\(APP_ROOT\);/,
+            'the ancestor walk must start above APP_ROOT, never at it');
+
+        // It rides readOnlyFiles because that channel emits `(literal <dir>)` — one directory entry,
+        // not a subtree. sandbox-macos-profile.test.ts asserts the emitted form.
+        assert.match(isolateSource, /readOnlyFiles: \[\.\.\.tsNodeProjectFiles, \.\.\.seatbeltCwdAncestors\]/,
+            'the ancestors must travel on the literal-emitting channel');
+
+        // And they must stay OUT of tsNodeProjectFiles, which also feeds the Linux Landlock roots.
+        assert.doesNotMatch(isolateSource, /tsNodeProjectFiles = [^;]*seatbeltCwdAncestors/s,
+            'the ancestors leaked into tsNodeProjectFiles, which would widen the Linux roots too');
+        assert.doesNotMatch(isolateSource, /roots = \[[^\]]*seatbeltCwdAncestors/,
+            'the ancestors reached the Linux Landlock roots');
     });
 
     test('the config is zero-configuration and has one explicit Linux opt-out', () => {
