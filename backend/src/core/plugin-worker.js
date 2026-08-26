@@ -40,6 +40,34 @@ const onMessage = IS_WORKER ? (cb) => parentPort.on('message', cb) : (cb) => pro
 
 const { slug, entryFile, coreDir } = cfg;
 
+// THE ENVIRONMENT ALLOW-LIST IS NOT HONOURED BY THE PLATFORM — FINISH IT HERE.
+//
+// The host spawns this process with an explicit, secret-free env allow-list (SAFE_ENV_KEYS in
+// plugin-isolate.ts) rather than inheriting its own environment. On Linux and macOS that is what the
+// child gets. ON WINDOWS IT IS NOT: libuv's uv_spawn merges a set of "required" variables into every
+// environment block it builds, whatever the caller passed. Measured on this platform, an isolated
+// plugin therefore saw five variables nobody granted it:
+//
+//     LOGONSERVER, SYSTEMDRIVE, USERDOMAIN, USERNAME, USERPROFILE
+//
+// No secret leaks — a marker set only in the host's environment does NOT survive, so the allow-list
+// does hold for everything WordJS or the operator defines. What leaks is the host's identity: the OS
+// account name, its home directory path, the AD domain and the domain controller that authenticated it.
+// That is reconnaissance handed to untrusted third-party code, and it silently falsified the guarantee
+// the host side documents.
+//
+// The spawn cannot be fixed from the host — the injection is below it. The child CAN fix it, because
+// process.env is ours the moment we run and this executes before any plugin code is loaded. The
+// allow-list travels in cfg so there is ONE list; a copy here would agree with itself while the host's
+// drifted.
+if (Array.isArray(cfg.envAllow)) {
+    const allowed = new Set(cfg.envAllow.map((k) => String(k).toLowerCase()));
+    for (const key of Object.keys(process.env)) {
+        if (allowed.has(key.toLowerCase())) continue;
+        try { delete process.env[key]; } catch { /* non-configurable: nothing else to try */ }
+    }
+}
+
 // Network egress policy. The raw socket modules (net/tls/dns/http/https/...) are denied to plugins
 // by secure-require, but the binding-backed globals `fetch`/`WebSocket`/`EventSource` are NOT
 // reachable through the module loader, so a denylist there is useless against them — trap the globals

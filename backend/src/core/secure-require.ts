@@ -445,6 +445,53 @@ const BLOCKED_PLUGIN_MODULES = ['worker_threads', 'vm', 'module', 'inspector', '
 // otherwise. NOT self-declarable.
 const NETWORK_MODULES = new Set(['net', 'tls', 'dgram', 'http', 'https', 'http2', 'dns', 'dns/promises']);
 
+/**
+ * THE OTHER HALF OF A DENY-LIST: everything it does not name.
+ *
+ * The module policy above is a deny-list — `secureModuleFor()` returns `undefined` (i.e. hands back the
+ * REAL builtin, unwrapped) for anything that is not fs / child_process / os / blocked / network. That is
+ * the correct shape for a boundary sitting under a kernel floor, but it has one property that does not
+ * survive time: **a builtin Node adds tomorrow is permitted today**. Node 25 ships 58 builtins; this
+ * file classified 24 of them. The remaining 31 were not decided — they were simply not thought about,
+ * and nothing anywhere would notice the 32nd arriving with the next Node upgrade.
+ *
+ * "Re-audit the blocklist on every Node bump" was the standing instruction. Instructions are not gates.
+ * So the population is now enumerated from `module.builtinModules` and every member must be classified:
+ * blocked, network-gated, interception-wrapped, or listed HERE as reviewed-and-permitted. A new builtin
+ * lands in none of those buckets and turns
+ * `backend/src/tests/sandbox-builtin-classification.test.ts` red.
+ *
+ * Being on this list is a decision, not a default. Each entry is here because it cannot reach outside
+ * the process on its own: pure computation (path, url, querystring, punycode, string_decoder, util,
+ * assert, buffer, zlib, crypto), timers and event plumbing (events, timers, stream, perf_hooks, domain,
+ * async-local plumbing already blocked separately), or a surface whose only capability is a file
+ * descriptor the caller must already hold (tty, readline, console, process, sea, constants, sys).
+ *
+ * THAT LAST GROUP IS WHY THIS LIST NEEDS ITS OWN NOTE. `tty.ReadStream(fd)` and `readline` wrap a
+ * descriptor; `console` writes to a stream it is handed. They confer nothing on their own — a plugin
+ * cannot OPEN a descriptor, because `fs` is intercepted and `net` is grant-gated — but they would become
+ * dangerous the day something else hands out an fd. They are permitted on that basis, and that basis is
+ * the thing to re-check, not the module names.
+ */
+const REVIEWED_SAFE_BUILTINS = new Set([
+    'assert', 'assert/strict', 'buffer', 'console', 'constants', 'crypto', 'domain', 'events',
+    'path', 'path/posix', 'path/win32', 'perf_hooks', 'process', 'punycode', 'querystring',
+    'readline', 'readline/promises', 'sea', 'stream', 'stream/consumers', 'stream/promises',
+    'stream/web', 'string_decoder', 'sys', 'timers', 'timers/promises', 'tty', 'url', 'util',
+    'util/types', 'zlib',
+]);
+
+/** Every module name this policy has an opinion about. Exported for the classification gate. */
+function classifyBuiltin(id: string): 'blocked' | 'network' | 'intercepted' | 'reviewed-safe' | 'unclassified' {
+    const norm = String(id).replace(/^node:/, '');
+    const base = norm.split('/')[0];
+    if (BLOCKED_PLUGIN_MODULES.includes(norm) || BLOCKED_PLUGIN_MODULES.includes(base)) return 'blocked';
+    if (NETWORK_MODULES.has(norm) || NETWORK_MODULES.has(base)) return 'network';
+    if (base === 'fs' || base === 'child_process' || base === 'os') return 'intercepted';
+    if (REVIEWED_SAFE_BUILTINS.has(norm) || REVIEWED_SAFE_BUILTINS.has(base)) return 'reviewed-safe';
+    return 'unclassified';
+}
+
 function createBlockedModuleProxy(pluginSlug: any, norm: any) {
     // Regular (non-arrow) function so it is usable as both a call target and a
     // constructor (new X()) — both paths throw our security error.
@@ -739,12 +786,20 @@ function guardPluginRequirePath(request: any, mod: any): void {
     // A plugin has no legitimate reason to require its browser bundles server-side, so refuse it, mirroring
     // the scanner's skip so the two cannot diverge. (Themes are fully scanned, so they are exempt.)
     if (!isTheme) {
+        // Derived from core/scan-exclusions.ts — the SAME list plugins.ts walks past — rather than
+        // restated. The restatement had drifted twice: it named dist/client/frontend but not HIDDEN
+        // directories (so `require('./.assets/payload.js')` ran unscanned code), and it looked only at
+        // the first directory under the slug while the scanner skips a match at ANY depth (so
+        // `lib/dist/payload.js` was unscanned and requirable). Both were measured by booting a plugin.
+        const { isUnscannedCodePath } = require('./scan-exclusions');
         for (const base of [REAL_PLUGINS_DIR, PLUGINS_DIR]) {
             const p = real.startsWith(base + path.sep) ? real : (resolved.startsWith(base + path.sep) ? resolved : null);
             if (!p) continue;
-            const seg = path.relative(base, p).split(path.sep); // [<slug>, <subdir>, ...]
-            if (seg.length >= 2 && ['dist', 'client', 'frontend'].includes(seg[1].toLowerCase())) {
-                throw createSecurityError(slug, `require('${request}')`, "loading code from a plugin's browser-bundle dir (dist/client/frontend) is not permitted — that code is not security-scanned");
+            const seg = path.relative(base, p).split(path.sep); // [<slug>, <subdir>, …, <file>]
+            if (isUnscannedCodePath(seg.slice(1), false)) {
+                throw createSecurityError(slug, `require('${request}')`,
+                    'loading code from a directory the install-time scanner does not read '
+                    + '(browser bundles: dist/client/frontend, or a hidden directory) is not permitted — that code is never security-scanned');
             }
         }
     }
@@ -1193,6 +1248,12 @@ module.exports = {
     installSecureRequire,
     createSecureFs,
     createSecureChildProcess,
+    // The module policy's own vocabulary, so the classification gate reads the real lists rather than
+    // a copy of them. A copy would agree with itself while the policy drifted.
+    classifyBuiltin,
+    BLOCKED_PLUGIN_MODULES,
+    NETWORK_MODULES,
+    REVIEWED_SAFE_BUILTINS,
     // Isolate-only: scrub the os singleton so import('os') is covered like require('os'). Never on host.
     installOsSandboxScrub,
     // Export for testing

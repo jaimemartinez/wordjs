@@ -100,26 +100,65 @@ class SystemHealth {
         }
     }
 
+    /**
+     * REPORT THE OUTCOME, NOT THE RULE. Pure, so every combination can be exercised.
+     *
+     * This used to be inline and read `… : requireHardening ? 'REFUSING' : …`, which is the POLICY.
+     * Whether a launch is actually refused is a DECISION the launcher takes, and it exempts the
+     * source-only Windows ts-node worker — so on that host this surface reported **REFUSING** while
+     * isolated plugins were starting with no AppContainer at all. A monitoring surface that states
+     * the rule instead of the outcome is worse than silence, because an operator believes it.
+     *
+     * It is a separate pure function for a reason found the hard way: while it was inline, the only
+     * available test was "ask this host", and this host happens to be exempt — so BOTH the `wouldRefuse`
+     * branch and the exempt branch produced a correct answer, each masking the absence of the other.
+     * A drill that removed one and stayed green is what exposed that. Every row of the matrix is now
+     * reachable from a test on any platform.
+     */
+    static sandboxStatusFor(o: { effective: string; posture: any; requireHardening: boolean }): { status: string; hardeningExempt: boolean } {
+        const { effective, posture, requireHardening } = o;
+        if (effective === 'active') return { status: 'OK', hardeningExempt: false };
+        if (effective === 'unknown') return { status: 'UNKNOWN', hardeningExempt: false };
+
+        // The launcher's own answer when we have it; the policy only as a last resort, and then
+        // conservatively (claiming refusal we cannot confirm is the failure mode being removed, so
+        // without a posture we still prefer the policy over nothing — but say so via postureNote).
+        const refusing = posture ? !!posture.wouldRefuse : requireHardening;
+        if (refusing) return { status: 'REFUSING', hardeningExempt: false };
+
+        // Policy demands hardening, the host is not hardened, and plugins start anyway because this
+        // platform/worker is exempt. An operator must never have to infer this one.
+        if (posture && posture.exempt && !posture.confined) {
+            return { status: 'NOT_HARDENED_EXEMPT', hardeningExempt: true };
+        }
+        if (effective === 'degraded') return { status: 'DEGRADED', hardeningExempt: false };
+        return { status: 'NOT_HARDENED', hardeningExempt: false };
+    }
+
     // Surface the native sandbox using one vocabulary on Linux, Windows and macOS.
     static checkSandbox() {
         let hardening = 'unknown';
         let permission = 'unknown';
         let kernel: any = null;
+        let posture: any = null;
         try {
             const iso = require('./plugin-isolate');
             hardening = iso.getSandboxHardeningState();
             if (typeof iso.getPermissionModelState === 'function') permission = iso.getPermissionModelState();
             if (typeof iso.getSandboxPlatformConfinement === 'function') kernel = iso.getSandboxPlatformConfinement();
+            if (typeof iso.isolatedLaunchPosture === 'function') posture = iso.isolatedLaunchPosture();
         } catch { /* isolate module unavailable */ }
-        const requireHardening = !!(config.sandbox && config.sandbox.requireHardening);
+
+        const requireHardening = posture ? posture.requireHardening : !!(config.sandbox && config.sandbox.requireHardening);
         const effective = (kernel && kernel.state) || hardening;
-        const status =
-            effective === 'active' ? 'OK' :
-            effective === 'unknown' ? 'UNKNOWN' :
-            requireHardening ? 'REFUSING' :
-            effective === 'degraded' ? 'DEGRADED' :
-            'NOT_HARDENED';
-        const out: any = { status, hardening, permission, requireHardening };
+        const verdict = SystemHealth.sandboxStatusFor({ effective, posture, requireHardening });
+        const out: any = { status: verdict.status, hardening, permission, requireHardening };
+        if (posture) {
+            out.confined = posture.confined;
+            out.launchesRefused = posture.wouldRefuse;
+            out.postureNote = posture.reason;
+            if (verdict.hardeningExempt) out.hardeningExempt = true;
+        }
         if (kernel) {
             out.platform = kernel.platform;
             out.kernel = kernel;

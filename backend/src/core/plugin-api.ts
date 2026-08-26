@@ -98,10 +98,15 @@ const PROTECTED_OPTION_NAMES = new Set([
     // singular-only list left the real keys writable. Cover both singular and plural, plugins and themes.
     'marketplace_source', 'marketplace_sources', 'marketplace_url', 'marketplace_catalog_url',
     'marketplace_theme_source', 'marketplace_theme_sources', 'marketplace_themes_source', 'marketplace_themes_sources',
-    // 'template'/'stylesheet' select the ACTIVE THEME. A settings:write plugin could otherwise point them
-    // at '../plugins/<own-slug>' and, because theme-engine.init() require()s the selected dir's
-    // functions.js IN-PROCESS on the host, re-introduce in-process execution (DoS / prototype pollution /
-    // mail-provider hijack) that OS isolation exists to prevent (#16). Off-limits to plugins.
+    // 'template'/'stylesheet' select the ACTIVE THEME, and theme-engine.init() loads the selected
+    // directory's functions.js. A settings:write plugin could otherwise point them at
+    // '../plugins/<own-slug>' and get its own code executed under another identity (#16). Off-limits.
+    //
+    // The parenthetical here used to say that functions.js runs "IN-PROCESS on the host". It has not
+    // since 2026-07-18: theme-engine loads it through `loadIsolatedPlugin('theme:<slug>', …)`, the same
+    // fork and the same OS confinement a plugin gets. The option stays protected anyway — choosing which
+    // directory becomes the active theme is choosing which code runs under the `theme:` identity, with
+    // that identity's own grants and its own isolate, and no plugin may make that choice for the site.
     'template', 'stylesheet', 'active_theme_layout', 'active_theme_mods', 'theme_mods'
 ]);
 // Protected for EVERY plugin now (no trusted bypass). Secret/security-critical options are never

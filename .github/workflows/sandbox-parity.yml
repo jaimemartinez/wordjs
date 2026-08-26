@@ -92,6 +92,41 @@ jobs:
         working-directory: backend
         run: node --test --test-force-exit --test-concurrency=1 -r ts-node/register src/tests/sandbox-escape-e2e.test.ts
 
+      # THE SURFACE SWEEPS, ON EVERY PLATFORM THEY CAN RUN ON.
+      #
+      # The suite above drives named escape vectors. These three drive POPULATIONS, which is the half that
+      # does not go stale by addition:
+      #   · sandbox-fs-surface-sweep — enumerates fs / fs.promises / fs-promises AT RUNTIME inside a real
+      #     isolate and calls every function-valued key against a path outside the plugin's zone. On Node
+      #     25 that is 164 entry points. A guard enumerated by hand goes stale the next time Node grows a
+      #     method (`glob` in 22, `openAsBlob` in 19, `mkdtempDisposable` since), silently, in the
+      #     permissive direction.
+      #   · sandbox-reviewed-builtins-escape — attacks the modules the policy classifies as safe, rather
+      #     than trusting the classification, and asserts the child's environment contains ONLY what the
+      #     allow-list grants. That assertion exists because it did not: libuv injects "required"
+      #     variables into every environment block it builds, so on Windows an isolated plugin was
+      #     receiving the host's account name, home path, AD domain and domain controller.
+      #   · scan-exclusion-parity — the install scanner's skipped directories and the runtime's refusal
+      #     must be one set; they had drifted in two ways.
+      #
+      # Platform matters for all three: path separators, which fs methods exist, and how the platform
+      # populates a child's environment all differ, and the environment finding was Windows-only. macOS is
+      # excluded on the same terms as the step above — isolated plugins do not boot there yet — and these
+      # tests skip EXPLICITLY rather than returning, so a run that could not exercise them is not counted
+      # as one that did.
+      - name: Sweep the guarded surfaces (fs population, module policy, scan parity)
+        if: runner.os != 'macOS'
+        working-directory: backend
+        run: node --test --test-force-exit --test-concurrency=1 -r ts-node/register src/tests/sandbox-fs-surface-sweep.test.ts src/tests/sandbox-reviewed-builtins-escape.test.ts src/tests/scan-exclusion-parity.test.ts src/tests/sandbox-builtin-classification.test.ts
+
+      # These two need no isolate, so they run EVERYWHERE — macOS included. One asserts that the health
+      # surface reports what the launcher decides rather than what the policy says (it reported REFUSING
+      # on a host that was starting plugins unconfined); the other that the host process never executes
+      # third-party code, which is the property every kernel floor depends on and none of them provides.
+      - name: Certify the posture and host-execution invariants (all platforms)
+        working-directory: backend
+        run: node --test --test-force-exit --test-concurrency=1 -r ts-node/register src/tests/sandbox-posture-truthfulness.test.ts src/tests/host-executes-no-foreign-code.test.ts
+
       # Not a gate. It exists to produce the evidence the failing run did not: the child's own output,
       # and whatever the isolate logs around the startup exit. Remove this step and restore macOS to the
       # gate above once the cause is known.
@@ -103,12 +138,31 @@ jobs:
           echo "This step does NOT gate. See the comment above the previous step for why macOS is excluded."
           node --test --test-force-exit --test-concurrency=1 -r ts-node/register src/tests/sandbox-escape-e2e.test.ts 2>&1 | tail -n 120
 
+      # WHICH LAYER KILLS IT — the evidence the report above cannot produce.
+      #
+      # A real launch stacks Seatbelt, then the `sh -c 'ulimit …; exec "$@"'` memory cap, then a
+      # ts-node preload, on top of the forked worker. Every one of them can end as "exit 1, no stderr",
+      # which is all we have had. This boots the same worker with the layers added one at a time and
+      # finishes with the product's own loadIsolatedPlugin as a control, so the first layer that flips
+      # BOOTED to DIED names itself.
+      - name: DIAGNOSTIC (macOS, non-gating) — bisect the confinement layers
+        if: always() && runner.os == 'macOS'
+        continue-on-error: true
+        run: node backend/scripts/diagnose-macos-isolate.mjs
+
+      # `if: failure()` NEVER FIRED. The diagnostic step above it carries continue-on-error, so the job
+      # is not in a failed state when these are evaluated — and the last macOS run confirms it: both of
+      # these report "skipped" while the thing they exist to explain had just happened. A diagnostic
+      # that cannot run is worse than none, because its presence reads as coverage. They run on macOS
+      # now, always, and stay non-gating.
       - name: Differential Seatbelt boot diagnostics
-        if: failure() && runner.os == 'macOS'
+        if: always() && runner.os == 'macOS'
+        continue-on-error: true
         run: node backend/scripts/diagnose-seatbelt-boot.mjs
 
       - name: macOS Seatbelt denial diagnostics
-        if: failure() && runner.os == 'macOS'
+        if: always() && runner.os == 'macOS'
+        continue-on-error: true
         shell: bash
         run: |
           # Child stderr cannot explain a pre-main abort. Seatbelt's own audit stream names the denied

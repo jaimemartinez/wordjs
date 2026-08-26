@@ -857,6 +857,58 @@ function getSandboxPlatformConfinement() {
     return out;
 }
 
+/**
+ * THE DECISION THE LAUNCHER ACTUALLY TAKES — ask this, do not re-derive it.
+ *
+ * `sandbox.requireHardening` is the POLICY. Whether a launch is refused is the DECISION, and the two
+ * are not the same: `nativeSandboxRequired()` exempts the source-only Windows development worker, so a
+ * host can have requireHardening ON, kernel confinement NOT active, and still start plugins.
+ *
+ * That gap was not theoretical. `SystemHealth.checkSandbox()` computed its status from the policy —
+ * `requireHardening ? 'REFUSING' : …` — and on Windows-under-ts-node reported **REFUSING** while
+ * isolated plugins were starting with no AppContainer at all. The operator's monitoring said the host
+ * was turning away unconfined launches at the very moment it was performing them. A security surface
+ * that reports the rule instead of the outcome is worse than one that reports nothing, because it is
+ * believed.
+ *
+ * So the outcome is computed in ONE place, here, and every surface reads it.
+ */
+function isolatedLaunchPosture(): {
+    state: ConfinementState;
+    mechanism: ConfinementMechanism;
+    requireHardening: boolean;
+    nativeRequired: boolean;
+    confined: boolean;
+    wouldRefuse: boolean;
+    exempt: boolean;
+    reason: string;
+} {
+    let requireHardening = true;
+    try { requireHardening = require('../config/app').sandbox?.requireHardening !== false; } catch { /* fail closed */ }
+    const tsNode = __filename.endsWith('.ts');
+    const nativeRequired = nativeSandboxRequired({ configured: requireHardening, platform: process.platform, tsNode });
+    const mechanism = platformKernelMechanism();
+    const confined = sandboxPlatformState === 'active';
+    const wouldRefuse = nativeRequired && !confined;
+    const exempt = requireHardening && !nativeRequired;
+    return {
+        state: sandboxPlatformState,
+        mechanism,
+        requireHardening,
+        nativeRequired,
+        confined,
+        wouldRefuse,
+        exempt,
+        reason: confined
+            ? `${mechanism} confinement is active`
+            : wouldRefuse
+                ? `${mechanism} is '${sandboxPlatformState}' and is required — isolated plugins are refused`
+                : exempt
+                    ? `${mechanism} is '${sandboxPlatformState}'; this host is EXEMPT from the requirement (source-only ts-node worker on ${process.platform}), so isolated plugins START WITHOUT the kernel floor`
+                    : `${mechanism} is '${sandboxPlatformState}' and is not required (sandbox.requireHardening is off) — isolated plugins start without the kernel floor`,
+    };
+}
+
 function platformLaunchDecision(o: { platform: string; state: ConfinementState; netGranted: boolean; tsNode: boolean }): { mechanism: ConfinementMechanism; use: boolean; reason: string } {
     const mechanism = platformKernelMechanism(o.platform);
     if (mechanism === 'none') return { mechanism, use: false, reason: 'no kernel confinement mechanism exists for this platform' };
@@ -1186,7 +1238,14 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
         ...sandboxWritable,
     ]));
     const storage = Object.freeze({ data: nativePaths.storage[0], logs: nativePaths.storage[1], tmp: nativePaths.storage[2] });
-    const childCfg = JSON.stringify({ slug, entryFile, coreDir: __dirname, network: netGranted, allowedHosts: (netGranted && !egressDenyAll) ? getEgressAllowlistFor(slug) : [], egressDenyAll, fsRead: fsGrant.read, fsWrite: fsGrant.write, storage });
+    // envAllow travels so the CHILD can finish enforcing this list. Passing an explicit env to spawn is
+    // not sufficient on Windows: libuv merges a set of "required" variables into every environment block
+    // it builds, so an isolated plugin was measurably receiving LOGONSERVER / SYSTEMDRIVE / USERDOMAIN /
+    // USERNAME / USERPROFILE — the host's account, home path, AD domain and domain controller — none of
+    // which this list grants. No secret leaked (a host-only marker does not survive), but the guarantee
+    // written above did not hold, and reconnaissance is what a plugin does before anything else.
+    // The list is SENT rather than restated in the worker: two copies of an allow-list is two policies.
+    const childCfg = JSON.stringify({ slug, entryFile, coreDir: __dirname, network: netGranted, allowedHosts: (netGranted && !egressDenyAll) ? getEgressAllowlistFor(slug) : [], egressDenyAll, fsRead: fsGrant.read, fsWrite: fsGrant.write, storage, envAllow: SAFE_ENV_KEYS });
     const HEAP_FLAG = '--max-old-space-size=256'; // caps the JS HEAP; cgroup/rlimit/poll cap TOTAL memory
     // RSS_BUDGET_BYTES (resident budget — cgroup memory.max AND the /proc poll AND the Job-Object cap) is
     // module-scoped now, shared with cgroupResourceProps() so the probe and this launch never disagree.
@@ -2337,7 +2396,7 @@ module.exports = {
     getPermissionModelState, probePermissionModel, probeKernelHardening,
     // This platform's native kernel confinement layer (Landlock / AppContainer / Seatbelt / none).
     probePlatformConfinement, getSandboxPlatformState, getSandboxPlatformNetworkState,
-    getSandboxPlatformConfinement, platformKernelMechanism,
+    getSandboxPlatformConfinement, platformKernelMechanism, isolatedLaunchPosture,
     // Exported for its test only. The forwarding sink is line-buffered, and the bug it hid — a child
     // that dies mid-line losing its only output — is invisible from outside: you would have to spawn a
     // real plugin that crashes in exactly that shape to observe it. Reaching it directly is what lets

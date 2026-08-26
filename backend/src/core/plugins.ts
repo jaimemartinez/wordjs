@@ -584,8 +584,23 @@ function validatePluginPermissions(
     // runtime (different module loader), so catching it statically is the primary defense; the worker's
     // ESM resolve hook is the runtime backstop.
     const SENSITIVE_MODULES = ['child_process', 'fs', 'fs/promises', 'http', 'https', 'net', 'dgram', 'dns', 'cluster', 'async_hooks', 'vm', 'worker_threads', 'module', 'inspector', 'v8', 'repl', 'sqlite', 'wasi'];
-    // THEMES run functions.js IN-PROCESS on the host, where there is NO ESM import() resolve hook (unlike
-    // the isolated worker), so a theme's import() of anything loads UNSCANNED module code = host RCE (#7/#8).
+    // THEMES ARE SCANNED HARDER THAN PLUGINS — but no longer for the reason this comment used to give.
+    //
+    // It used to read: "THEMES run functions.js IN-PROCESS on the host, where there is NO ESM import()
+    // resolve hook (unlike the isolated worker), so a theme's import() of anything loads UNSCANNED module
+    // code = host RCE". That was true until 2026-07-18 and is now FALSE: theme-engine.ts loads
+    // functions.js through `loadIsolatedPlugin('theme:<slug>', …)` — the same fork, the same OS
+    // confinement and the same worker, which installs the ESM import() guard and dies if it cannot
+    // (plugin-worker.js: "sandbox ESM import() guard unavailable — Node >= 18.19 is required").
+    //
+    // Leaving that wrong was the actual risk. It named this static scan as the ONLY control standing
+    // between a theme and host RCE, so a reader deciding what is safe to relax would have relaxed the
+    // wrong one — and a reader trusting it would not have looked for the runtime hook at all. A comment
+    // about where a trust boundary sits is part of the boundary.
+    //
+    // The stricter theme scan stays, as defence in depth: it is the static half of the same guarantee the
+    // worker enforces at runtime, and a theme is installed from a catalogue with a wider blast radius
+    // than its file count suggests.
     const isThemeScan = /[\\/]themes[\\/]/.test(pluginPath);
     const flagModuleLiteral = (rawValue: any, kindLabel: string) => {
         const raw = String(rawValue);
@@ -648,8 +663,11 @@ function validatePluginPermissions(
                 // bundling falsely trips the scan). For THEMES skip ONLY node_modules — a theme's functions.js
                 // runs in-process and can require() from ANY of its own subdirs incl. hidden ones like
                 // `.assets/payload.js`, so those MUST be scanned too (#8).
-                const skipDir = file.includes('node_modules') ||
-                    (!isThemeScan && (file.startsWith('.') || ['client', 'frontend', 'dist'].includes(file)));
+                // The list lives in core/scan-exclusions.ts, because secure-require must refuse a
+                // runtime require() from exactly the directories this walk skips. It used to be spelled
+                // out in both places, and the two had drifted apart in two ways — see that file.
+                const { isScannerSkippedDir } = require('./scan-exclusions');
+                const skipDir = isScannerSkippedDir(file, isThemeScan);
                 if (!skipDir) {
                     results = results.concat(getFiles(fullPath));
                 }
