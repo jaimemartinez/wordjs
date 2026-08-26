@@ -1227,6 +1227,47 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
     const tsNodeProjectFiles = __filename.endsWith('.ts')
         ? [path.join(APP_ROOT, 'tsconfig.json'), path.join(APP_ROOT, 'package.json')]
         : [];
+    // ── macOS + SOURCE MODE: getcwd() needs the ancestor chain, and Seatbelt withholds it ──────────
+    //
+    // On macOS an isolated plugin could not start AT ALL in source mode, and the cause was measured
+    // rather than guessed (backend/scripts/diagnose-macos-isolate.mjs, run on a real macOS runner):
+    //
+    //     L0 bare fork ......... BOOTED      L2 + Seatbelt ......... DIED
+    //     L1 + ulimit wrapper .. BOOTED      L6 compiled, Seatbelt . BOOTED
+    //
+    //     Error: EPERM: operation not permitted, uv_cwd
+    //         at findAndReadConfig (ts-node/dist/configuration.js)
+    //
+    // ts-node calls process.cwd() to locate tsconfig.json, and macOS resolves a working directory by
+    // READING each of its ancestors. The kernel's audit stream named them: the repository root and its
+    // parent, both above APP_ROOT. Nothing else on the path was denied.
+    //
+    // WHY THE OBVIOUS ALTERNATIVES DO NOT WORK, each tested on that runner rather than reasoned about:
+    //   · `(allow file-read-metadata)` — still EPERM. The kernel wants file-read-DATA on a directory to
+    //     resolve a name through it; metadata is not enough.
+    //   · dropping the `-r` preload — still EPERM, from ts-node's own config search. Removing the
+    //     preload changes which line calls getcwd, not whether it is called.
+    //   · cwd="/" — died with no output at all.
+    //
+    // WHAT THIS GRANTS, AND WHAT IT DOES NOT. Each ancestor is passed as a FILE, so the profile emits
+    // `(allow file-read* (literal <dir>))`: permission to read that one directory entry — i.e. to list
+    // it — and nothing beneath it. APP_ROOT itself is NOT among them, so `backend/` stays unlistable
+    // and wordjs-config.json, the databases and every sibling plugin stay exactly as unreachable as
+    // before. What a plugin gains is the top-level layout of the checkout above the app.
+    //
+    // SCOPED TO SOURCE MODE, DELIBERATELY. L6 proves the compiled worker boots under Seatbelt with no
+    // widening at all, because it never loads ts-node and never calls getcwd. Production therefore pays
+    // nothing for this, and the guarantee it relies on is unchanged. This is the same condition
+    // tsNodeProjectFiles above already carries, for the same reason.
+    //
+    // Kept OUT of tsNodeProjectFiles on purpose: that array also feeds the Linux Landlock roots below,
+    // and Landlock does not gate getcwd. Widening Linux to fix a macOS problem would be a second bug.
+    const seatbeltCwdAncestors: string[] = [];
+    if (__filename.endsWith('.ts') && process.platform === 'darwin') {
+        for (let d = path.dirname(APP_ROOT); d && d !== path.dirname(d); d = path.dirname(d)) {
+            seatbeltCwdAncestors.push(d);
+        }
+    }
     const storageEnabled = fsGrant.read || fsGrant.write;
     // Private capability storage is created only for a plugin that currently holds that capability.
     // Own-dir private storage remains the compatibility floor for zero-permission plugins.
@@ -1368,7 +1409,9 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
             const profile = mac.buildSeatbeltProfile({
                 writableDirs: sandboxWritable,
                 readOnlyDirs: sandboxReadable,
-                readOnlyFiles: tsNodeProjectFiles,
+                // Ancestors ride the readOnlyFiles channel because that is the one that emits
+                // `(literal …)` — a single directory, not a subtree. See seatbeltCwdAncestors above.
+                readOnlyFiles: [...tsNodeProjectFiles, ...seatbeltCwdAncestors],
                 denyNetwork: !netGranted,
                 appRoot: APP_ROOT,
                 nodePath: process.execPath,

@@ -303,3 +303,68 @@ describe('probe', () => {
         assert.strictEqual(state, 'unsupported', 'a non-macOS host gets no Seatbelt and must say so');
     });
 });
+
+/**
+ * THE cwd ANCESTOR GRANT — the fix for "an isolated plugin cannot start on macOS in source mode".
+ *
+ * Measured on a real macOS runner (backend/scripts/diagnose-macos-isolate.mjs): the bare fork boots,
+ * the memory-cap wrapper boots, adding Seatbelt kills it, and the COMPILED worker boots under Seatbelt
+ * untouched. The child's own words:
+ *
+ *     Error: EPERM: operation not permitted, uv_cwd
+ *         at findAndReadConfig (ts-node/dist/configuration.js)
+ *
+ * ts-node calls process.cwd() to find tsconfig.json; macOS resolves a working directory by READING each
+ * of its ancestors; the profile withholds them. `(allow file-read-metadata)` was tried and is not
+ * enough, and dropping the `-r` preload only moves which line calls getcwd.
+ *
+ * The grant is therefore per-directory and read-only. These assertions exist because the difference
+ * between `(literal "/srv/wordjs")` and `(subpath "/srv/wordjs")` is the difference between "a plugin
+ * can see that a backend directory exists" and "a plugin can read the database".
+ */
+describe('Seatbelt: granting the cwd ancestors', () => {
+    const ANCESTORS = ['/srv/wordjs', '/srv'];
+    // The PRODUCT's shape: readOnlyDirs is the narrow set from sandboxPaths (core, node_modules, the
+    // plugin's own tree) — never the app root. build()'s default is `[appRoot]`, which is a convenience
+    // for the other suites here and the opposite of what plugin-isolate passes; asserting against it
+    // would be asserting about a configuration that does not ship.
+    const PRODUCT = {
+        readOnlyDirs: ['/srv/wordjs/backend/src/core', '/srv/wordjs/backend/node_modules'],
+        readOnlyFiles: ['/srv/wordjs/backend/tsconfig.json', '/srv/wordjs/backend/package.json', ...ANCESTORS],
+    };
+
+    test('each ancestor is a LITERAL grant, never a subtree', () => {
+        const profile = build(PRODUCT);
+        for (const dir of ANCESTORS) {
+            assert.match(profile, new RegExp('\\(allow file-read\\*? \\(literal "' + dir + '"\\)\\)'),
+                dir + ' must be granted as a single directory entry');
+            assert.doesNotMatch(profile, new RegExp('\\(subpath "' + dir + '"\\)'),
+                dir + ' was granted as a SUBTREE — that hands over everything beneath it, the app root included');
+        }
+    });
+
+    test('the app root itself is not made readable by the ancestor grant', () => {
+        // The whole point: /srv/wordjs may be listed, /srv/wordjs/backend may not — that is where
+        // wordjs-config.json, the databases and every sibling plugin live.
+        const profile = build(PRODUCT);
+        assert.doesNotMatch(profile, /\(subpath "\/srv\/wordjs\/backend"\)/,
+            'the app root became readable as a SUBTREE — that is the whole thing sandboxPaths withholds');
+        assert.doesNotMatch(profile, /\(literal "\/srv\/wordjs\/backend"\)/,
+            'the app root was granted directly, so backend/ can be listed and wordjs-config.json is visible');
+        // What SHOULD be readable is still readable: the narrow roots the product passes.
+        assert.match(profile, /\(subpath "\/srv\/wordjs\/backend\/src\/core"\)/,
+            'the core directory grant was lost');
+    });
+
+    test('the profile still satisfies its own invariants with the ancestors present', () => {
+        // A fix that works by making the audit weaker is not a fix.
+        assert.deepStrictEqual(auditProfile(build(PRODUCT)), [],
+            'granting the ancestors broke a profile invariant');
+    });
+
+    test('deny-by-default survives', () => {
+        const profile = build(PRODUCT);
+        assert.match(profile, /\(deny default/, 'the profile stopped being deny-by-default');
+        assert.doesNotMatch(profile, /\(allow default\)/, 'an allow-default appeared');
+    });
+});
