@@ -70,35 +70,41 @@ describe('real launch wiring and visibility', () => {
             'the source-worker fix must not turn the whole backend root into plugin read authority');
     });
 
-    test('the macOS cwd-ancestor grant is scoped, and never reaches the app root', () => {
-        // THIS TEST CAUGHT THE CHANGE THAT MADE IT NECESSARY, which is the only reason it is being
-        // widened rather than deleted. The assertion above used to require `readOnlyFiles:
-        // tsNodeProjectFiles` verbatim; granting macOS the ancestors of APP_ROOT — so ts-node's
-        // getcwd() can resolve, without which an isolated plugin cannot start there at all — turned it
-        // red. That is a boundary moving, and a boundary that moves silently is the thing this file
-        // exists to prevent. So the contract is restated, tighter, rather than loosened.
+    test('macOS is fixed by a deterministic cwd, NOT by widening the profile', () => {
+        // THE CHEAPER OF TWO WORKING FIXES, and both were measured on a real macOS runner rather than
+        // reasoned about. An isolated plugin could not start there at all: ts-node calls process.cwd()
+        // to find tsconfig.json, macOS resolves a working directory by READING each of its ancestors,
+        // and the Seatbelt profile withholds them deliberately.
+        //
+        //   C3  grant the ancestors as literals ......... BOOTED — and hands a plugin a listing of
+        //                                                 every directory above the app root
+        //   C5  cwd="/" + TS_NODE_PROJECT ............... BOOTED — and changes no grant whatsoever
+        //
+        // C3 was committed first. C5 is what other macOS sandboxes do (Chromium's Seatbelt design
+        // describes entering the sandbox with the working directory at the root, which has no ancestors
+        // left to resolve), so the grant came back out. This test exists to keep it out.
         const isolateSource = fs.readFileSync(path.resolve(__dirname, '../core/plugin-isolate.ts'), 'utf8');
 
-        // Source mode AND darwin. Landlock does not gate getcwd, so widening Linux here would be a
-        // second bug; Windows takes neither branch.
-        assert.match(isolateSource, /__filename\.endsWith\('\.ts'\) && process\.platform === 'darwin'/,
-            'the ancestor grant must be scoped to the source-mode macOS worker, and to nothing else');
+        assert.doesNotMatch(isolateSource, /seatbeltCwdAncestors/,
+            'the ancestor grant is back; the cheaper fix makes it unnecessary');
+        assert.match(isolateSource, /readOnlyFiles: tsNodeProjectFiles/,
+            'readOnlyFiles must carry the two project files and nothing else');
 
-        // The walk STARTS at the parent. APP_ROOT itself must never be granted: that is where
-        // wordjs-config.json, the databases and every sibling plugin live.
-        assert.match(isolateSource, /for \(let d = path\.dirname\(APP_ROOT\);/,
-            'the ancestor walk must start above APP_ROOT, never at it');
+        // Both halves, because cwd="/" ALONE was candidate C1 and it dies: ts-node then searches for
+        // tsconfig.json from "/" and never finds it.
+        assert.match(isolateSource, /const childCwd = process\.platform === 'darwin' \? path\.parse\(APP_ROOT\)\.root : undefined;/,
+            'the child must get a deterministic working directory on macOS');
+        assert.match(isolateSource, /workerEnv\.TS_NODE_PROJECT = path\.join\(APP_ROOT, 'tsconfig\.json'\)/,
+            'ts-node must be told where its config is, or the cwd change strands it');
+        assert.match(isolateSource, /'COMSPEC', 'TS_NODE_PROJECT'\]/,
+            'TS_NODE_PROJECT must survive the child-side environment prune');
 
-        // It rides readOnlyFiles because that channel emits `(literal <dir>)` — one directory entry,
-        // not a subtree. sandbox-macos-profile.test.ts asserts the emitted form.
-        assert.match(isolateSource, /readOnlyFiles: \[\.\.\.tsNodeProjectFiles, \.\.\.seatbeltCwdAncestors\]/,
-            'the ancestors must travel on the literal-emitting channel');
-
-        // And they must stay OUT of tsNodeProjectFiles, which also feeds the Linux Landlock roots.
-        assert.doesNotMatch(isolateSource, /tsNodeProjectFiles = [^;]*seatbeltCwdAncestors/s,
-            'the ancestors leaked into tsNodeProjectFiles, which would widen the Linux roots too');
-        assert.doesNotMatch(isolateSource, /roots = \[[^\]]*seatbeltCwdAncestors/,
-            'the ancestors reached the Linux Landlock roots');
+        // EVERY spawn branch, not the one that was easiest to find. There are four; the AppContainer
+        // launcher is a typed options object that sets its own working directory and is deliberately
+        // not among them.
+        const withCwd = (isolateSource.match(/cwd: childCwd,/g) || []).length;
+        assert.strictEqual(withCwd, 4,
+            `${withCwd} spawn branches carry the deterministic cwd; all four must`);
     });
 
     test('the config is zero-configuration and has one explicit Linux opt-out', () => {

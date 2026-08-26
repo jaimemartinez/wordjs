@@ -1197,7 +1197,7 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
     // the worker reaches config/secrets only via the RPC bridge, so app secrets in env
     // (JWT_SECRET, DB creds, STRIPE_KEY, …) must never enter the worker's process.env. This is
     // default-deny, unlike the in-worker name-pattern denylist (getProtectedEnv).
-    const SAFE_ENV_KEYS = ['NODE_ENV', 'TZ', 'LANG', 'LC_ALL', 'PATH', 'SystemRoot', 'windir', 'TEMP', 'TMP', 'TMPDIR', 'HOMEDRIVE', 'HOMEPATH', 'PATHEXT', 'NUMBER_OF_PROCESSORS', 'OS', 'COMSPEC'];
+    const SAFE_ENV_KEYS = ['NODE_ENV', 'TZ', 'LANG', 'LC_ALL', 'PATH', 'SystemRoot', 'windir', 'TEMP', 'TMP', 'TMPDIR', 'HOMEDRIVE', 'HOMEPATH', 'PATHEXT', 'NUMBER_OF_PROCESSORS', 'OS', 'COMSPEC', 'TS_NODE_PROJECT'];
     const workerEnv: Record<string, string> = {};
     for (const k of SAFE_ENV_KEYS) { if (process.env[k] !== undefined) workerEnv[k] = process.env[k] as string; }
     // OS-ISOLATION: run the untrusted plugin in a SEPARATE OS PROCESS, not a worker_thread. A worker
@@ -1227,47 +1227,44 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
     const tsNodeProjectFiles = __filename.endsWith('.ts')
         ? [path.join(APP_ROOT, 'tsconfig.json'), path.join(APP_ROOT, 'package.json')]
         : [];
-    // ── macOS + SOURCE MODE: getcwd() needs the ancestor chain, and Seatbelt withholds it ──────────
+    // ── macOS: the child gets a DETERMINISTIC working directory, and ts-node is told where its
+    // ── config is. This is what makes an isolated plugin start on macOS at all. ───────────────────
     //
-    // On macOS an isolated plugin could not start AT ALL in source mode, and the cause was measured
-    // rather than guessed (backend/scripts/diagnose-macos-isolate.mjs, run on a real macOS runner):
+    // Measured on a real macOS runner (backend/scripts/diagnose-macos-isolate.mjs):
     //
-    //     L0 bare fork ......... BOOTED      L2 + Seatbelt ......... DIED
-    //     L1 + ulimit wrapper .. BOOTED      L6 compiled, Seatbelt . BOOTED
+    //     L0 bare fork ......... BOOTED     L2 + Seatbelt ......... DIED
+    //     L1 + ulimit wrapper .. BOOTED     L6 compiled + Seatbelt  BOOTED
     //
     //     Error: EPERM: operation not permitted, uv_cwd
     //         at findAndReadConfig (ts-node/dist/configuration.js)
     //
     // ts-node calls process.cwd() to locate tsconfig.json, and macOS resolves a working directory by
-    // READING each of its ancestors. The kernel's audit stream named them: the repository root and its
-    // parent, both above APP_ROOT. Nothing else on the path was denied.
+    // READING each of its ancestors — which the profile withholds on purpose, because that is where
+    // wordjs-config.json, the databases and every sibling plugin live.
     //
-    // WHY THE OBVIOUS ALTERNATIVES DO NOT WORK, each tested on that runner rather than reasoned about:
-    //   · `(allow file-read-metadata)` — still EPERM. The kernel wants file-read-DATA on a directory to
-    //     resolve a name through it; metadata is not enough.
-    //   · dropping the `-r` preload — still EPERM, from ts-node's own config search. Removing the
-    //     preload changes which line calls getcwd, not whether it is called.
-    //   · cwd="/" — died with no output at all.
+    // The remedy is the one other macOS sandboxes use: enter the sandbox with the working directory at
+    // the filesystem root, which has no ancestors left to resolve, so getcwd() cannot fail. Chromium's
+    // Seatbelt design document describes exactly this. It pairs with TS_NODE_PROJECT below, because a
+    // cwd of "/" leaves ts-node searching for tsconfig.json from "/" and never finding it; the ts-node
+    // docs give that variable as the way to name the file and skip the search.
     //
-    // WHAT THIS GRANTS, AND WHAT IT DOES NOT. Each ancestor is passed as a FILE, so the profile emits
-    // `(allow file-read* (literal <dir>))`: permission to read that one directory entry — i.e. to list
-    // it — and nothing beneath it. APP_ROOT itself is NOT among them, so `backend/` stays unlistable
-    // and wordjs-config.json, the databases and every sibling plugin stay exactly as unreachable as
-    // before. What a plugin gains is the top-level layout of the checkout above the app.
+    // BOTH HALVES ARE REQUIRED, and that was measured too: cwd="/" alone is candidate C1, and it DIES.
     //
-    // SCOPED TO SOURCE MODE, DELIBERATELY. L6 proves the compiled worker boots under Seatbelt with no
-    // widening at all, because it never loads ts-node and never calls getcwd. Production therefore pays
-    // nothing for this, and the guarantee it relies on is unchanged. This is the same condition
-    // tsNodeProjectFiles above already carries, for the same reason.
+    // WHY NOT WIDEN THE PROFILE. Granting the ancestors also works — it was committed first, as
+    // candidate C3, and it boots. It is simply the more expensive answer: it hands a confined plugin a
+    // listing of every directory above the app root. This costs nothing at all, so the grant came out.
     //
-    // Kept OUT of tsNodeProjectFiles on purpose: that array also feeds the Linux Landlock roots below,
-    // and Landlock does not gate getcwd. Widening Linux to fix a macOS problem would be a second bug.
-    const seatbeltCwdAncestors: string[] = [];
-    if (__filename.endsWith('.ts') && process.platform === 'darwin') {
-        for (let d = path.dirname(APP_ROOT); d && d !== path.dirname(d); d = path.dirname(d)) {
-            seatbeltCwdAncestors.push(d);
-        }
-    }
+    // Scoped to darwin because it is a macOS kernel behaviour: Landlock does not gate getcwd, and the
+    // AppContainer path already sets its own working directory. Worth recording and NOT fixed here: on
+    // Linux the child still inherits whatever directory the server was started from, so this class of
+    // failure has always been sensitive to how WordJS was launched.
+    const childCwd = process.platform === 'darwin' ? path.parse(APP_ROOT).root : undefined;
+    // The other half, and it is not optional: with the working directory at the filesystem root,
+    // ts-node has nowhere to search for tsconfig.json, so it is named outright. Source mode only — a
+    // compiled worker never loads ts-node. Listed in SAFE_ENV_KEYS so the child's own environment prune
+    // keeps it, rather than relying on the preload happening to run before that prune.
+    if (__filename.endsWith('.ts')) workerEnv.TS_NODE_PROJECT = path.join(APP_ROOT, 'tsconfig.json');
+
     const storageEnabled = fsGrant.read || fsGrant.write;
     // Private capability storage is created only for a plugin that currently holds that capability.
     // Own-dir private storage remains the compatibility floor for zero-permission plugins.
@@ -1409,9 +1406,7 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
             const profile = mac.buildSeatbeltProfile({
                 writableDirs: sandboxWritable,
                 readOnlyDirs: sandboxReadable,
-                // Ancestors ride the readOnlyFiles channel because that is the one that emits
-                // `(literal …)` — a single directory, not a subtree. See seatbeltCwdAncestors above.
-                readOnlyFiles: [...tsNodeProjectFiles, ...seatbeltCwdAncestors],
+                readOnlyFiles: tsNodeProjectFiles,
                 denyNetwork: !netGranted,
                 appRoot: APP_ROOT,
                 nodePath: process.execPath,
@@ -1446,6 +1441,9 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
         try {
             acLaunch = await launchAppContainerChild(slug, APP_ROOT, {
                 args: [...execArgv, HEAP_FLAG, WORKER_FILE, childCfg],
+                // No cwd here: launchAppContainerChild takes a typed options object and sets the
+                // container's working directory itself. The blanket insertion that gave the four real
+                // spawn branches their cwd reached this one too, and tsc refused it.
                 env: workerEnv,
                 stdio: childStdio,
                 allowNetwork: netGranted,
@@ -1520,6 +1518,7 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
                 stdio: childStdio,
                 serialization: 'advanced',
                 env: workerEnv,
+                cwd: childCwd,
             });
         } else if (seatbeltPre.length) {
             // macOS with a CERTIFIED Seatbelt profile but no RLIMIT_AS wrapper on this host: launch node
@@ -1531,6 +1530,7 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
                 stdio: childStdio,
                 serialization: 'advanced',
                 env: workerEnv,
+                cwd: childCwd,
             });
         } else if (zeroConfPre.length) {
             // LINUX with the zero-config floor certified but no RLIMIT_AS wrapper on this host (no usable
@@ -1545,6 +1545,7 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
                 stdio: childStdio,
                 serialization: 'advanced',
                 env: workerEnv,
+                cwd: childCwd,
             });
         } else {
             // No kernel cap available (Windows, or sh/rlimit absent): plain fork. Process separation still
@@ -1552,6 +1553,7 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
             child = fork(WORKER_FILE, [childCfg], {
                 execArgv: [...execArgv, HEAP_FLAG],
                 env: workerEnv,
+                cwd: childCwd,
                 stdio: childStdio,
                 serialization: 'advanced',
             });
