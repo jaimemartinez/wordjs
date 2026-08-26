@@ -131,3 +131,60 @@ describe('process surface — inventory canary', () => {
         for (const name of DENIED) assertBlocked(name, name === 'binding' || name === '_linkedBinding' ? ['fs'] : []);
     });
 });
+
+/**
+ * THE SANDBOX'S OWN WATCHDOG MUST BE ABLE TO FIRE.
+ *
+ * secure-require replaces `process.exit` with a guard that throws whenever an effective plugin is on
+ * the stack. That is right for plugin code. But plugin-worker.js calls process.exit in its OWN
+ * lifecycle paths — guard-install failure, the ESM-guard abort, and the 512 MB memory watchdog — and
+ * timer callbacks are deliberately re-entered in the plugin's context, so the watchdog's exit ran as
+ * if the PLUGIN had called it and was refused:
+ *
+ *     RUNTIME SECURITY BLOCK: process.exit (host process control is not permitted in the plugin sandbox)
+ *
+ * Seen first on macOS, where a heavy plugin crossed the RSS budget. The child still died, because an
+ * uncaught throw ends it — but with exit code 7 instead of 1, and with a message that reads as the
+ * plugin attacking the sandbox when it was the sandbox's own limit trying to apply. Linux and Windows
+ * never crossed the budget in these suites, so nothing had ever exercised it.
+ *
+ * The worker now binds its own exit before any guard is installed. These assertions keep it that way,
+ * because the failure mode is a safety mechanism that looks present and cannot act.
+ */
+describe('the worker keeps its own way out', () => {
+    const workerSrc = require('node:fs').readFileSync(
+        require('node:path').resolve(__dirname, '../core/plugin-worker.js'), 'utf8');
+
+    test('the exit reference is captured before any guard is installed', () => {
+        const capture = workerSrc.indexOf('const hardExit = process.exit.bind(process);');
+        const install = workerSrc.indexOf('installSecureRequire');
+        assert.ok(capture !== -1, 'the worker no longer captures its own exit');
+        assert.ok(install !== -1, 'installSecureRequire is gone from the worker');
+        assert.ok(capture < install,
+            'the exit is captured AFTER the guards install, so the guard has already replaced it');
+    });
+
+    test('no lifecycle path calls the guarded process.exit', () => {
+        // Comments quote the guarded call by name, so they are stripped before matching — otherwise the
+        // explanation of the bug would read as the bug.
+        const code = workerSrc
+            .replace(/\/\*[\s\S]*?\*\//g, ' ')
+            .split('\n').map((l: string) => l.replace(/(^|[^:'"`])\/\/.*$/, '$1')).join('\n');
+        const direct = [...code.matchAll(/(?<![\w$.])process\.exit\s*\(/g)];
+        // One occurrence is legitimate: the capture itself, `process.exit.bind(process)` — which is not
+        // a call, so it does not match the pattern above.
+        assert.deepStrictEqual(direct.map((m) => m[0]), [],
+            'a worker lifecycle path still calls process.exit directly; the guard will refuse it when a '
+            + 'plugin context is on the stack, turning a clean exit into an uncaught throw');
+        assert.ok(/hardExit\(1\)/.test(code), 'the worker no longer exits through its captured reference');
+    });
+
+    test('the memory watchdog is one of the paths that was fixed', () => {
+        // Named explicitly: this is the path that actually fired, and the one whose failure is silent
+        // until a plugin balloons memory in production.
+        const watchdog = workerSrc.slice(workerSrc.indexOf('exceeded memory budget'));
+        assert.ok(watchdog.length > 0, 'the memory watchdog is gone');
+        assert.match(watchdog.slice(0, 400), /hardExit\(1\)/,
+            'the memory watchdog still terminates through the guarded exit');
+    });
+});

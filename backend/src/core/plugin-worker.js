@@ -40,6 +40,30 @@ const onMessage = IS_WORKER ? (cb) => parentPort.on('message', cb) : (cb) => pro
 
 const { slug, entryFile, coreDir } = cfg;
 
+/**
+ * THE WORKER'S OWN WAY OUT, captured before anything can take it away.
+ *
+ * secure-require replaces `process.exit` with a guard that throws whenever an effective plugin is on
+ * the stack — correct for plugin code, which must never be able to kill the process. But THIS FILE
+ * calls process.exit too, in its own lifecycle paths: guard-install failure, the ESM-guard
+ * unavailability abort, and the 512 MB memory watchdog. Timer callbacks are deliberately re-entered in
+ * the plugin's context (so a plugin cannot strip its sandbox by deferring work to a later tick), so the
+ * watchdog's exit runs as if the PLUGIN had called it, and the guard refuses it.
+ *
+ * Observed on macOS, where a heavy plugin crossed the RSS budget:
+ *
+ *     RUNTIME SECURITY BLOCK: process.exit (host process control is not permitted in the plugin sandbox)
+ *     Error: ... at secure-require.ts:960
+ *
+ * The child still died — an uncaught throw ends it — but with exit code 7 instead of 1, and with a
+ * message that reads as a plugin violating the sandbox when it was the sandbox's own watchdog trying to
+ * enforce a limit. A safety mechanism that cannot fire cleanly, and that blames the thing it was
+ * protecting against, is worse than one that reports honestly.
+ *
+ * Bound here, at the top, before any guard is installed. Plugin code never sees this reference.
+ */
+const hardExit = process.exit.bind(process);
+
 // THE ENVIRONMENT ALLOW-LIST IS NOT HONOURED BY THE PLATFORM — FINISH IT HERE.
 //
 // The host spawns this process with an explicit, secret-free env allow-list (SAFE_ENV_KEYS in
@@ -168,7 +192,7 @@ try {
     // FAIL CLOSED: if the in-isolate guards can't install, do NOT run the plugin with only the heap
     // boundary — a missing guard re-opens fs/child_process/network from inside the worker. Abort.
     try { send({ kind: 'fatal', error: `sandbox guard install failed: ${e && e.message}` }); } catch { /* parent gone */ }
-    process.exit(1);
+    hardExit(1);
 }
 
 // ESM dynamic import() guard. import('child_process') uses the V8/Node ESM loader, which does NOT go
@@ -240,7 +264,7 @@ try {
     }
     if (!esmGuardInstalled) {
         try { send({ kind: 'fatal', error: 'sandbox ESM import() guard unavailable — Node >= 18.19 is required to safely run plugins' }); } catch { /* parent gone */ }
-        process.exit(1);
+        hardExit(1);
     }
 }
 
@@ -255,7 +279,7 @@ try {
             const m = process.memoryUsage();
             if (m.rss > MEM_BUDGET_BYTES || (m.external || 0) > MEM_BUDGET_BYTES) {
                 try { send({ kind: 'fatal', error: `[sandbox] plugin '${slug}' exceeded memory budget (rss=${m.rss}, external=${m.external})` }); } catch { /* parent gone */ }
-                process.exit(1);
+                hardExit(1);
             }
         } catch { /* memoryUsage unavailable — ignore */ }
     }, 2000);
