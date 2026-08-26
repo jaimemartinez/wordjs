@@ -64,6 +64,37 @@ const { slug, entryFile, coreDir } = cfg;
  */
 const hardExit = process.exit.bind(process);
 
+/**
+ * REPORT WHAT ACTUALLY WENT WRONG — the guard was replacing it with a lie.
+ *
+ * With no uncaughtException handler, Node's default path runs `process._fatalException`, and THAT calls
+ * `process.exit()`. secure-require has replaced process.exit with a guard that throws whenever a plugin
+ * context is on the stack — so the guard fires during Node's own crash handling, and the error the
+ * operator sees is:
+ *
+ *     RUNTIME SECURITY BLOCK: process.exit (host process control is not permitted in the plugin sandbox)
+ *         at process._fatalException
+ *
+ * The original exception is gone. Every uncaught error in any plugin, on any platform, was reported as
+ * the plugin attacking the sandbox — and the real cause was never printed. That is how one macOS
+ * fixture stayed unexplained through an entire investigation: the message named the wrong thing with
+ * total confidence, and there was nothing else to read.
+ *
+ * Handling it here means Node's fatal path is never reached, so the guard cannot intercept it. The
+ * stack goes to stderr, which attachLogLimiter already forwards to the operator's log, and the host is
+ * told through the same `fatal` channel the other lifecycle aborts use.
+ *
+ * The guard itself is unchanged: plugin code calling process.exit is still refused.
+ */
+function reportFatalAndExit(what, err) {
+    const detail = (err && err.stack) || String((err && err.message) || err);
+    try { process.stderr.write(`[sandbox] uncaught ${what} in plugin '${slug}':\n${detail}\n`); } catch { /* stderr gone */ }
+    try { send({ kind: 'fatal', error: `[sandbox] uncaught ${what} in plugin '${slug}': ${String((err && err.message) || err)}` }); } catch { /* parent gone */ }
+    hardExit(1);
+}
+process.on('uncaughtException', (e) => reportFatalAndExit('exception', e));
+process.on('unhandledRejection', (e) => reportFatalAndExit('rejection', e));
+
 // THE ENVIRONMENT ALLOW-LIST IS NOT HONOURED BY THE PLATFORM — FINISH IT HERE.
 //
 // The host spawns this process with an explicit, secret-free env allow-list (SAFE_ENV_KEYS in

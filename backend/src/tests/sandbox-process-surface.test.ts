@@ -179,6 +179,26 @@ describe('the worker keeps its own way out', () => {
         assert.ok(/hardExit\(1\)/.test(code), 'the worker no longer exits through its captured reference');
     });
 
+    test('an uncaught plugin error is reported as itself, not as a sandbox violation', () => {
+        // THE ONE THAT HID EVERYTHING ELSE. With no uncaughtException handler, Node's default path runs
+        // process._fatalException, which calls process.exit() — and the guard throws on that, because a
+        // plugin context is still on the stack. The operator then sees
+        //
+        //     RUNTIME SECURITY BLOCK: process.exit ... at process._fatalException
+        //
+        // and the actual exception is gone. Every uncaught error in any plugin on any platform was
+        // reported as the plugin attacking the sandbox. One macOS fixture stayed unexplained through a
+        // whole investigation because of it: the message named the wrong cause with total confidence.
+        assert.match(workerSrc, /process\.on\('uncaughtException'/,
+            'the worker must handle uncaught exceptions itself, or the guard replaces them with a lie');
+        assert.match(workerSrc, /process\.on\('unhandledRejection'/,
+            'an unhandled rejection reaches the same fatal path and needs the same treatment');
+        assert.match(workerSrc, /function reportFatalAndExit[\s\S]{0,600}hardExit\(1\)/,
+            'the handler must terminate through the captured exit, not the guarded one');
+        assert.match(workerSrc, /reportFatalAndExit[\s\S]{0,600}process\.stderr\.write/,
+            'the real stack must reach stderr, which is what the isolate forwards to the operator');
+    });
+
     test('the memory watchdog is one of the paths that was fixed', () => {
         // Named explicitly: this is the path that actually fired, and the one whose failure is silent
         // until a plugin balloons memory in production.
