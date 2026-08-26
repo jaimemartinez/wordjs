@@ -54,6 +54,6 @@
   },
   "devDependencies": {
     "autocannon": "^8.0.0",
-    "puppeteer-core": "^25.5.0"
+    "puppeteer-core": "^25.8.0"
   }
 }
