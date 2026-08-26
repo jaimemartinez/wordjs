@@ -22,6 +22,25 @@ const hooks = require('./hooks');
 const { addShortcode, removeShortcode } = require('./shortcodes');
 
 const WORKER_FILE = path.join(__dirname, 'plugin-worker.js');
+
+/**
+ * The ts-node preload, as an ABSOLUTE path.
+ *
+ * `-r ts-node/register` is a BARE specifier, and Node resolves those for `-r` relative to the CURRENT
+ * WORKING DIRECTORY. That was invisible while the child inherited the host's cwd inside the project;
+ * the moment the child is given a deterministic cwd at the filesystem root — which is what lets
+ * getcwd() succeed under Seatbelt on macOS — there is no node_modules above it and the child dies
+ * before main with:
+ *
+ *     Error: Cannot find module 'ts-node/register'
+ *     Require stack: - internal/preload
+ *
+ * Resolved here, from this module's own scope, so it does not depend on where anything was started.
+ * The path lands inside backend/node_modules, which the sandbox profiles already grant.
+ */
+const TS_NODE_REGISTER = (() => {
+    try { return require.resolve('ts-node/register'); } catch { return 'ts-node/register'; }
+})();
 const isolates = new Map<string, any>();
 
 // Reaper for plugin multipart temp uploads. The per-request cleanup in finalHandler unlinks the file on
@@ -480,7 +499,7 @@ function probeOsMemoryCap(): Promise<number | null> {
         const candidatesMb = [capMb, Math.round(capMb * 1.5), capMb * 2]; // escalate if the floor won't boot here
         // Probe with the SAME execArgv the real child uses (ts-node in dev) so the validated cap reflects
         // the real startup footprint (cage + ts-node compiler), not a bare `node` that under-counts it.
-        const execArgv = __filename.endsWith('.ts') ? ['-r', 'ts-node/register'] : [];
+        const execArgv = __filename.endsWith('.ts') ? ['-r', TS_NODE_REGISTER] : [];
         // The probe child boots node UNDER the candidate RLIMIT_AS through the SAME shell wrapper the real
         // load uses, and sends ONE IPC message. We accept a cap only if node both starts AND its IPC
         // channel survives the shell `exec` (process.send works) — this self-validates the kernel cap +
@@ -1181,7 +1200,7 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
     // In dev we run via ts-node and the worker must too (core is .ts); compiled, no flag needed.
     // Pass ONLY the ts-node register flag — forwarding all of process.execArgv trips Worker's
     // execArgv allowlist.
-    const execArgv = __filename.endsWith('.ts') ? ['-r', 'ts-node/register'] : [];
+    const execArgv = __filename.endsWith('.ts') ? ['-r', TS_NODE_REGISTER] : [];
     // DEFAULT-ON V8 hard block on runtime code generation (eval / new Function(string)) in the plugin
     // worker. The AST scanner catches eval/Function statically at install, but it does NOT scan the
     // plugin's dist/ (browser-bundle dir) — a plugin that require()s ./dist/x.js (now blocked at the

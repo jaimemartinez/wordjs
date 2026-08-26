@@ -99,6 +99,20 @@ describe('real launch wiring and visibility', () => {
         assert.match(isolateSource, /'COMSPEC', 'TS_NODE_PROJECT'\]/,
             'TS_NODE_PROJECT must survive the child-side environment prune');
 
+        // THE THIRD HALF, and it is the one that was missed. `-r ts-node/register` is a BARE specifier,
+        // and Node resolves those for `-r` against the CURRENT WORKING DIRECTORY. Harmless while the
+        // child inherited a cwd inside the project; fatal the moment the cwd becomes "/", because there
+        // is no node_modules above it:
+        //
+        //     Error: Cannot find module 'ts-node/register'   Require stack: - internal/preload
+        //
+        // The candidate leg in the diagnostic had already been given an absolute path — which is exactly
+        // why C5 booted there while the product did not.
+        assert.doesNotMatch(isolateSource, /'-r', 'ts-node\/register'/,
+            'the preload is a bare specifier again; with cwd="/" Node cannot resolve it');
+        assert.match(isolateSource, /require\.resolve\('ts-node\/register'\)/,
+            'the preload must be resolved to an absolute path from this module’s own scope');
+
         // EVERY spawn branch, not the one that was easiest to find. There are four; the AppContainer
         // launcher is a typed options object that sets its own working directory and is deliberately
         // not among them.
