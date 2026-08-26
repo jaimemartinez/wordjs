@@ -437,7 +437,15 @@ const originalRequire = Module.prototype.require;
 // request the host makes — path and headers, i.e. the Authorization bearer of any API the site talks to.
 // Demonstrated, not theoretical. It needs no fs, no socket and no blocked module, so nothing else in the
 // sandbox sees it coming. Plugins observe the system through the hook API, never through Node internals.
-const BLOCKED_PLUGIN_MODULES = ['worker_threads', 'vm', 'module', 'inspector', 'repl', 'test', 'trace_events', 'cluster', 'async_hooks', 'v8', 'sqlite', 'wasi', 'diagnostics_channel'];
+// 'tty' is here because of a MEASURED capability, not a theoretical one. `new tty.WriteStream(fd)`
+// wraps an arbitrary descriptor, and an isolated plugin holds one that matters: fd 3, its IPC
+// channel to the host. On macOS the wrap SUCCEEDS (on Windows libuv refuses with EBADF), and
+// destroying the wrapper CLOSES the channel — a plugin severs its own bridge and every later
+// `process.send` fails with `write EBADF`. That is self-harm rather than an escape, since the
+// channel carries only that plugin's own traffic. It is blocked anyway: the reviewed-safe list
+// admitted tty on the reasoning that a plugin cannot obtain a descriptor, and that reasoning was
+// simply wrong — the sandbox hands it one at birth.
+const BLOCKED_PLUGIN_MODULES = ['worker_threads', 'vm', 'module', 'inspector', 'repl', 'test', 'trace_events', 'cluster', 'async_hooks', 'v8', 'sqlite', 'wasi', 'diagnostics_channel', 'tty'];
 
 // Raw network/socket modules enable data exfiltration + SSRF straight out of an isolated worker
 // (the worker has full Node net access; the isolate boundary is heap-only). Deny them by default and
@@ -467,17 +475,19 @@ const NETWORK_MODULES = new Set(['net', 'tls', 'dgram', 'http', 'https', 'http2'
  * async-local plumbing already blocked separately), or a surface whose only capability is a file
  * descriptor the caller must already hold (tty, readline, console, process, sea, constants, sys).
  *
- * THAT LAST GROUP IS WHY THIS LIST NEEDS ITS OWN NOTE. `tty.ReadStream(fd)` and `readline` wrap a
- * descriptor; `console` writes to a stream it is handed. They confer nothing on their own — a plugin
- * cannot OPEN a descriptor, because `fs` is intercepted and `net` is grant-gated — but they would become
- * dangerous the day something else hands out an fd. They are permitted on that basis, and that basis is
- * the thing to re-check, not the module names.
+ * THAT LAST GROUP IS WHY THIS LIST NEEDS ITS OWN NOTE, and why `tty` is no longer in it. The reasoning
+ * was: `readline` and `console` wrap a descriptor the caller must already hold, and a plugin cannot open
+ * one because `fs` is intercepted and `net` is grant-gated. True for those two — and FALSE for tty, on a
+ * descriptor nobody had counted: fd 3, the IPC channel the sandbox itself hands the child at birth.
+ * `new tty.WriteStream(3)` succeeds on macOS, and destroying it closes the bridge. tty is blocked above.
+ * The lesson is the shape of the mistake, not the module: this list is only as good as the claim that no
+ * descriptor is reachable, and that claim needs re-checking whenever the child is given anything.
  */
 const REVIEWED_SAFE_BUILTINS = new Set([
     'assert', 'assert/strict', 'buffer', 'console', 'constants', 'crypto', 'domain', 'events',
     'path', 'path/posix', 'path/win32', 'perf_hooks', 'process', 'punycode', 'querystring',
     'readline', 'readline/promises', 'sea', 'stream', 'stream/consumers', 'stream/promises',
-    'stream/web', 'string_decoder', 'sys', 'timers', 'timers/promises', 'tty', 'url', 'util',
+    'stream/web', 'string_decoder', 'sys', 'timers', 'timers/promises', 'url', 'util',
     'util/types', 'zlib',
 ]);
 

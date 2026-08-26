@@ -55,21 +55,24 @@ const PROBE_BODY = `
     const grab = (id) => { try { return { mod: require(id) }; } catch (e) { return { err: String(e && e.message || e) }; } };
 
     // ── tty: wrap the IPC descriptor directly ────────────────────────────────────────────────────
+    // NEVER destroy() what this wraps. (No backticks in here — this whole body is a template literal.)
+    // The first version did destroy it, and on macOS the WriteStream(3) construction SUCCEEDS, so the
+    // teardown CLOSED fd 3 — the plugin's own IPC channel. The next addFilter died with write EBADF, and
+    // the guard on process.exit then masked that cause too. Construction alone is the capability being
+    // measured; tearing it down is just self-harm.
     const tty = grab('tty');
     out.ttyRequirable = !tty.err;
     out.ttyReadFd3 = (() => {
-        if (tty.err) return { contained: true, why: 'require(tty) itself threw: ' + tty.err };
+        if (tty.err) return { contained: true, why: 'require(tty) refused: ' + tty.err };
         try {
-            const s = new tty.mod.ReadStream(3);
-            try { s.destroy(); } catch (e) {}
+            new tty.mod.ReadStream(3);
             return { contained: false, why: 'ReadStream(3) constructed — the IPC channel is directly readable' };
         } catch (e) { return { contained: true, why: String(e && e.message || e) }; }
     })();
     out.ttyWriteFd3 = (() => {
-        if (tty.err) return { contained: true, why: 'require(tty) threw' };
+        if (tty.err) return { contained: true, why: 'require(tty) refused: ' + tty.err };
         try {
-            const s = new tty.mod.WriteStream(3);
-            try { s.destroy(); } catch (e) {}
+            new tty.mod.WriteStream(3);
             return { contained: false, why: 'WriteStream(3) constructed — the IPC channel is directly writable' };
         } catch (e) { return { contained: true, why: String(e && e.message || e) }; }
     })();
@@ -135,8 +138,10 @@ describe('reviewed-safe builtins, attacked inside a real isolate', () => {
 
     test('the probe plugin actually booted and reported', (t: any) => {
         if (bootError) {
-            // macOS is the known case: isolated plugins do not start there and the cause is undetermined.
-            // Skip EXPLICITLY — a returned test counts as a pass, and this file exists to prove containment.
+            // Skip EXPLICITLY rather than returning: node:test counts a returned test as a PASS, and a
+            // file that exists to prove containment must never report success for a run that proved
+            // nothing. This skip is what kept the macOS failure visible instead of green — and the
+            // failure turned out to be this very probe closing its own IPC channel.
             t.skip(`the isolated probe did not boot on ${process.platform}: ${bootError}`);
             return;
         }
