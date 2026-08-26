@@ -71,24 +71,27 @@ jobs:
       # Nine of its assertions are strict containment (`allTrue`); one tolerates 'absent' for three
       # process APIs a platform may not implement, and that leniency is hardened to a hard requirement on
       # Linux inside the suite itself.
-      # macOS IS EXCLUDED, AND THAT IS A FINDING, NOT A CONVENIENCE.
       #
-      # The first time this suite ever ran on macOS it failed in its `before` hook with
-      #     Isolated plugin 'wjs-escape-ungranted' exited during startup (code 1)
-      # and all 15 tests were cancelled. Linux and Windows pass. The child emitted no stderr, and the
-      # Seatbelt boot diagnostic that runs on failure shows EVERY profile variant booting cleanly
-      # (base, file-read-all, file-write-all, network, all of them: code 0, boot true) — so Seatbelt
-      # denying something is NOT the explanation, and the cause is undetermined.
+      # macOS RAN AND FAILED HERE, AND NOW IT GATES. The first time this suite ever executed on macOS it
+      # died in its `before` hook — "Isolated plugin exited during startup (code 1)", no stderr — while
+      # every Seatbelt profile variant booted cleanly on its own. Those two facts could not both be the
+      # whole story, so the layers were bisected (backend/scripts/diagnose-macos-isolate.mjs):
       #
-      # This matters beyond the suite: nothing in CI had ever booted an isolated plugin on macOS. The
-      # parity certifier spawns a confined child, but never a real plugin. So "plugins work on macOS"
-      # was, until this run, an untested assumption — and the first test of it failed.
+      #     L0 bare fork ......... BOOTED     L2 + Seatbelt ......... DIED
+      #     L1 + ulimit wrapper .. BOOTED     L6 compiled + Seatbelt  BOOTED
       #
-      # The gate therefore covers Linux and Windows, where it is honest, and macOS runs the same suite
-      # below as a DIAGNOSTIC that reports rather than gates. That split is deliberate: a gate scoped to
-      # where it holds, with the exclusion named, is not the same as a gate quietly widened to pass.
+      #     Error: EPERM: operation not permitted, uv_cwd
+      #         at findAndReadConfig (ts-node/dist/configuration.js)
+      #
+      # ts-node calls process.cwd() to find tsconfig.json; macOS resolves a working directory by READING
+      # each of its ancestors; the profile withholds them deliberately. Source mode only — L6 proves the
+      # compiled worker was always fine, which had never been tested either way.
+      #
+      # Fixed by giving the child a deterministic working directory at the filesystem root (the technique
+      # Chromium's Seatbelt design describes), naming ts-node's config outright, and resolving the
+      # preload absolutely. No grant changed. Three candidates that also "worked" were rejected or
+      # measured dead first; see plugin-isolate.ts.
       - name: Certify the JS guard layer with real forked plugins
-        if: runner.os != 'macOS'
         working-directory: backend
         run: node --test --test-force-exit --test-concurrency=1 -r ts-node/register src/tests/sandbox-escape-e2e.test.ts
 
@@ -110,12 +113,13 @@ jobs:
       #     must be one set; they had drifted in two ways.
       #
       # Platform matters for all three: path separators, which fs methods exist, and how the platform
-      # populates a child's environment all differ, and the environment finding was Windows-only. macOS is
-      # excluded on the same terms as the step above — isolated plugins do not boot there yet — and these
-      # tests skip EXPLICITLY rather than returning, so a run that could not exercise them is not counted
-      # as one that did.
+      # populates a child's environment all differ, and the environment finding was Windows-only — it
+      # would never have surfaced on a Linux-only matrix.
+      #
+      # macOS is included now that isolated plugins start there. These tests still skip EXPLICITLY rather
+      # than returning if an isolate cannot boot, because node:test counts a returned test as a pass and
+      # a run that could not exercise them must not be counted as one that did.
       - name: Sweep the guarded surfaces (fs population, module policy, scan parity)
-        if: runner.os != 'macOS'
         working-directory: backend
         run: node --test --test-force-exit --test-concurrency=1 -r ts-node/register src/tests/sandbox-fs-surface-sweep.test.ts src/tests/sandbox-reviewed-builtins-escape.test.ts src/tests/scan-exclusion-parity.test.ts src/tests/sandbox-builtin-classification.test.ts
 
@@ -127,18 +131,13 @@ jobs:
         working-directory: backend
         run: node --test --test-force-exit --test-concurrency=1 -r ts-node/register src/tests/sandbox-posture-truthfulness.test.ts src/tests/host-executes-no-foreign-code.test.ts
 
-      # Not a gate. It exists to produce the evidence the failing run did not: the child's own output,
-      # and whatever the isolate logs around the startup exit. Remove this step and restore macOS to the
-      # gate above once the cause is known.
-      - name: DIAGNOSTIC (macOS, non-gating) — why an isolated plugin will not start
-        if: runner.os == 'macOS'
-        continue-on-error: true
-        working-directory: backend
-        run: |
-          echo "This step does NOT gate. See the comment above the previous step for why macOS is excluded."
-          node --test --test-force-exit --test-concurrency=1 -r ts-node/register src/tests/sandbox-escape-e2e.test.ts 2>&1 | tail -n 120
-
-      # WHICH LAYER KILLS IT — the evidence the report above cannot produce.
+      # WHICH LAYER WOULD KILL IT — kept AFTER the fix, deliberately.
+      #
+      # This is what found the cause, and it stays because the next regression in this area will present
+      # the same way: "exited during startup (code 1)", nothing on stderr. Its L4 leg runs the product's
+      # own loadIsolatedPlugin beside the reconstruction, and that is what caught the fix being wrong the
+      # first time — the reconstruction booted while the product did not, because the harness already
+      # carried an absolute preload path the product was still missing.
       #
       # A real launch stacks Seatbelt, then the `sh -c 'ulimit …; exec "$@"'` memory cap, then a
       # ts-node preload, on top of the forked worker. Every one of them can end as "exit 1, no stderr",
