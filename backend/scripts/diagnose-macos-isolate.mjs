@@ -187,6 +187,32 @@ if (seatbelt) {
     say('L2/L3 skipped: no Seatbelt profile');
 }
 
+// ── THE QUESTION THE FIRST BISECT RAISED ──────────────────────────────────────────────────────────
+//
+// L2 died in `loadPreloadModules` — Node calling getcwd() to resolve the `-r ts-node/register`
+// preload, and Seatbelt refusing because reading the working directory needs read access to its
+// ANCESTOR chain, which sandboxPaths deliberately does not grant (no APP_ROOT: the config, the
+// database and every sibling plugin live there).
+//
+// If that is the whole story then the failure belongs to SOURCE mode only, because compiled production
+// passes no `-r` at all. That is the difference between "macOS cannot run plugins" and "macOS cannot
+// run plugins from a source checkout", and it is not something to assume in either direction.
+//
+// L5/L6 boot the COMPILED worker with no preload. If they boot where L2 died, the preload is the
+// trigger and production is unaffected; if they die too, getcwd is reached by another path and the
+// problem is the ancestor grant itself.
+const DIST_WORKER = path.join(BACKEND, 'dist', 'core', 'plugin-worker.js');
+const distCfg = cfg.replace(SRC_CORE.replace(/\\/g, '\\\\'), path.join(BACKEND, 'dist', 'core').replace(/\\/g, '\\\\'));
+if (fs.existsSync(DIST_WORKER)) {
+    results.push(await boot('L5  compiled worker, NO preload, no confinement', NODE, [DIST_WORKER, distCfg]));
+    if (seatbelt) {
+        results.push(await boot('L6  compiled worker, NO preload, + Seatbelt',
+            seatbelt[0], [...seatbelt.slice(1), NODE, DIST_WORKER, distCfg]));
+    }
+} else {
+    say(`L5/L6 skipped: ${DIST_WORKER} does not exist (run \`npm run build\` in backend/)`);
+}
+
 // L4 — the product's own path, as the control.
 try {
     const req = createRequire(path.join(BACKEND, 'package.json'));
