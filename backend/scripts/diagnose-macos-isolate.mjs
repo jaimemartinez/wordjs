@@ -184,10 +184,16 @@ try {
     if (!np || !Array.isArray(np.writable) || !Array.isArray(np.readOnly)) {
         throw new Error(`sandboxPaths returned ${JSON.stringify(np)} — expected { writable: [], readOnly: [] }`);
     }
+    // THE PRODUCT'S INPUTS, not a reduced version of them. `readOnlyFiles: []` is what sent both C3 and
+    // C5 into `TS5083: Cannot read file .../tsconfig.json` after they had each already cleared the real
+    // blocker — a second obstacle that exists only in this harness, because plugin-isolate passes
+    // tsNodeProjectFiles here. A diagnostic missing an input the product supplies does not report a
+    // harder truth; it reports a different situation, and twice now that has looked like a failed fix.
+    const tsNodeProjectFiles = [path.join(APP_ROOT, 'tsconfig.json'), path.join(APP_ROOT, 'package.json')];
     const profile = mac.buildSeatbeltProfile({
         writableDirs: np.writable,
         readOnlyDirs: np.readOnly,
-        readOnlyFiles: [],
+        readOnlyFiles: tsNodeProjectFiles,
         denyNetwork: true,
         appRoot: APP_ROOT,
         nodePath: NODE,
