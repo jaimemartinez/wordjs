@@ -36,6 +36,7 @@ const SRC_CORE = path.join(BACKEND, 'src', 'core');
 const WORKER = path.join(SRC_CORE, 'plugin-worker.js');
 
 const READY_MS = 25000;
+const BOOT_CWD = { value: null };   // set to BACKEND below; C1 overrides it
 
 function say(s = '') { process.stdout.write(s + '\n'); }
 
@@ -49,6 +50,8 @@ function say(s = '') { process.stdout.write(s + '\n'); }
 //
 // So the preload is resolved to an ABSOLUTE path and every child is spawned with cwd=backend. A
 // diagnostic that can be broken by where it was started is not evidence.
+BOOT_CWD.value = BACKEND;
+let seatbeltProfileText = '';
 const backendRequire = createRequire(path.join(BACKEND, 'package.json'));
 let TSNODE = [];
 let tsNodeNote = '';
@@ -86,7 +89,7 @@ function boot(label, cmd, args) {
     return new Promise((resolve) => {
         let child;
         try {
-            child = spawn(cmd, args, { cwd: BACKEND, env: SAFE_ENV, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
+            child = spawn(cmd, args, { cwd: BOOT_CWD.value, env: SAFE_ENV, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
         } catch (e) {
             resolve({ label, spawnError: String(e && e.message || e) });
             return;
@@ -108,6 +111,13 @@ function boot(label, cmd, args) {
             resolve({ label, ready, out: out.trim().slice(0, 900), err: err.trim().slice(0, 900), ...o });
         }
     });
+}
+
+/** boot(), with the working directory chosen — C1 needs it. */
+function bootAt(label, cwd, cmd, args) {
+    const saved = BOOT_CWD.value;
+    BOOT_CWD.value = cwd;
+    return boot(label, cmd, args).finally(() => { BOOT_CWD.value = saved; });
 }
 
 const NODE = process.execPath;
@@ -168,6 +178,7 @@ try {
     });
     const problems = mac.auditProfile(profile);
     profileNote = problems.length ? `profile audit problems: ${problems.join(' | ')}` : 'profile audit clean';
+    seatbeltProfileText = profile;
     seatbelt = [mac.SEATBELT_BIN, ...mac.seatbeltArgs(profile, [])];
     say(`[profile] ${profileNote}`);
     say(`[profile] ${profile.split('\n').length} lines, writable=${JSON.stringify(np ? np.writable : [PLUG_DIR])}`);
@@ -211,6 +222,67 @@ if (fs.existsSync(DIST_WORKER)) {
     }
 } else {
     say(`L5/L6 skipped: ${DIST_WORKER} does not exist (run \`npm run build\` in backend/)`);
+}
+
+
+// ══ CANDIDATE FIXES ═══════════════════════════════════════════════════════════════════════════════
+//
+// The mechanic is settled: Node calls getcwd() in loadPreloadModules, and macOS resolves a working
+// directory by reading its ancestor chain, which the profile withholds by design. Four ways out, with
+// very different costs. They are tested TOGETHER, in one run, because guessing one per run is how the
+// last two commits went.
+//
+//   C1  cwd = "/"            — resolving "/" needs no ancestors. Costs nothing in the profile, but
+//                              changes what a relative path inside a plugin means.
+//   C2  file-read-metadata   — grants stat/exists everywhere, never contents or listings. If getcwd is
+//                              satisfied by metadata this is nearly free; the kernel logged a
+//                              file-read-DATA denial, so it probably is not. Worth settling.
+//   C3  literal ancestors    — grants LISTING of exactly the directories above the app root, and
+//                              nothing below them. Surgical, and the most likely to work. It does hand
+//                              a plugin the filenames next to wordjs-config.json, which is precisely
+//                              what sandboxPaths says it withholds on purpose.
+//   C4  no -r preload        — the worker requires ts-node itself, resolving from its OWN directory
+//                              rather than from cwd, so getcwd is never reached. Weakens nothing.
+//                              If this boots, it is the answer.
+if (seatbelt && POSIX) {
+    // C1 — same profile, cwd at the root.
+    results.push(await bootAt('C1  cwd="/" (same profile)', '/', seatbelt[0],
+        [...seatbelt.slice(1), NODE, ...TSNODE, WORKER, cfg]));
+
+    // C2 / C3 — the same profile with one extra grant appended. Appended AFTER the audit on purpose:
+    // this is an experiment, not a proposal, and the audit judges what the product would ship.
+    const ancestors = [];
+    for (let d = path.dirname(BACKEND); d && d !== path.dirname(d); d = path.dirname(d)) ancestors.push(d);
+
+    const variants = [
+        ['C2  + (allow file-read-metadata)', '(allow file-read-metadata)'],
+        ['C3  + literal read on each ancestor',
+            ancestors.map((d) => `(allow file-read* (literal "${d}"))`).join('\n')],
+    ];
+    for (const [label, extra] of variants) {
+        try {
+            const req = createRequire(path.join(BACKEND, 'package.json'));
+            const mac = req(path.join(SRC_CORE, 'sandbox-macos.ts'));
+            const widened = seatbeltProfileText + '\n' + extra + '\n';
+            const args = mac.seatbeltArgs(widened, []);
+            results.push(await boot(label, mac.SEATBELT_BIN, [...args, NODE, ...TSNODE, WORKER, cfg]));
+        } catch (e) {
+            results.push({ label, exit: 'harness-error', err: String(e && e.message || e).slice(0, 300), out: '' });
+        }
+    }
+
+    // C4 — no preload at all: a shim that registers ts-node from its own location, then loads the
+    // worker. argv[2] (the cfg) is untouched, so the worker sees exactly what it always sees.
+    try {
+        const shim = path.join(BACKEND, 'plugins', SLUG, '__no-preload-shim.js');
+        fs.writeFileSync(shim,
+            `require(${JSON.stringify(TSNODE[1] || 'ts-node/register')});\n`
+            + `require(${JSON.stringify(WORKER)});\n`);
+        results.push(await boot('C4  no -r preload (worker registers ts-node itself)',
+            seatbelt[0], [...seatbelt.slice(1), NODE, shim, cfg]));
+    } catch (e) {
+        results.push({ label: 'C4  no -r preload', exit: 'harness-error', err: String(e && e.message || e).slice(0, 300), out: '' });
+    }
 }
 
 // L4 — the product's own path, as the control.
