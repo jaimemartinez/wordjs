@@ -528,37 +528,60 @@ function checkLegacyPluginCompatibilityCoverage(): CheckOutcome {
     // behaviour identical whether the gate is run from the CLI or from a test.
     const childEnv: NodeJS.ProcessEnv = { ...process.env };
     for (const key of Object.keys(childEnv)) if (key.startsWith('NODE_TEST_')) delete childEnv[key];
-    const run = spawnSync(process.execPath, [
-        '--test', '--test-force-exit', '--test-concurrency=1', '--test-reporter=tap',
-        '-r', 'ts-node/register', PLUGIN_COMPATIBILITY_SUITE,
-    ], { cwd: BACKEND_ROOT, encoding: 'utf8', env: childEnv, maxBuffer: 64 * 1024 * 1024 });
-    const output = `${run.stdout || ''}${run.stderr || ''}`;
+    // Run the suite, retrying ONLY when it comes back INCOMPLETE — a non-zero exit whose shortfall is
+    // plugins that produced NO verdict at all, with none that actually failed. That is the signature of
+    // the node:test --test-force-exit deserialize flake (the same runner race backend's own `npm test`
+    // is wrapped for): under force-exit the run's tail subtests are lost over the runner's IPC, so the
+    // plugins that had not reported yet end up unreported rather than failing. The direct run of this
+    // same suite in the F6 phase-suites leg passes; only this nested spawn occasionally loses its tail.
+    // A genuine plugin failure is a `not ok` line and is NEVER retried — it stays a hard failure, so
+    // this can only ever paper over the runner flake, never over lost coverage.
+    const MAX_COMPAT_ATTEMPTS = 3;
+    let run!: ReturnType<typeof spawnSync>;
+    let output = '';
+    let passed = new Set<string>();
+    let failed = new Set<string>();
+    let skipped = new Set<string>();
+    for (let attempt = 1; ; attempt++) {
+        run = spawnSync(process.execPath, [
+            '--test', '--test-force-exit', '--test-concurrency=1', '--test-reporter=tap',
+            '-r', 'ts-node/register', PLUGIN_COMPATIBILITY_SUITE,
+        ], { cwd: BACKEND_ROOT, encoding: 'utf8', env: childEnv, maxBuffer: 64 * 1024 * 1024 });
+        output = `${run.stdout || ''}${run.stderr || ''}`;
 
-    // Which per-plugin tests PASSED, read off the run. A `not ok` line is deliberately not counted:
-    // a plugin whose compatibility test fails has no compatibility evidence, whatever the file says.
-    // A SKIPPED TEST IS NOT A PASSING TEST, AND TAP SAYS SO IN THE DIRECTIVE.
-    //
-    // This read `/^ok\s+\d+\s+-\s+(.+?)\s*(?:#.*)?$/`, and that trailing `(?:#.*)?` swallowed the very
-    // thing that distinguishes the two outcomes. node:test emits `ok 1 - contact-forms # SKIP` for a
-    // skipped test and exits 0, so a one-token edit — `test(slug, { skip: true }, ...)` — marked all 31
-    // plugins covered while running none of them. The ratchet would then have been satisfied by exactly
-    // what it was written to replace.
-    //
-    // The directive is now captured and inspected: SKIP and TODO are recorded as neither passed nor
-    // failed, and named, so a suite that stops executing is loud instead of flattering.
-    const passed = new Set<string>();
-    const failed = new Set<string>();
-    const skipped = new Set<string>();
-    for (const line of output.split(/\r?\n/)) {
-        const ok = /^ok\s+\d+\s+-\s+(.+?)(?:\s+#\s*(.*))?$/.exec(line);
-        if (ok) {
-            const directive = (ok[2] || '').trim();
-            if (/^(?:SKIP|TODO)\b/i.test(directive)) skipped.add(ok[1].trim());
-            else passed.add(ok[1].trim());
-            continue;
+        // Which per-plugin tests PASSED, read off the run. A `not ok` line is deliberately not counted:
+        // a plugin whose compatibility test fails has no compatibility evidence, whatever the file says.
+        // A SKIPPED TEST IS NOT A PASSING TEST, AND TAP SAYS SO IN THE DIRECTIVE.
+        //
+        // This read `/^ok\s+\d+\s+-\s+(.+?)\s*(?:#.*)?$/`, and that trailing `(?:#.*)?` swallowed the very
+        // thing that distinguishes the two outcomes. node:test emits `ok 1 - contact-forms # SKIP` for a
+        // skipped test and exits 0, so a one-token edit — `test(slug, { skip: true }, ...)` — marked all 31
+        // plugins covered while running none of them. The ratchet would then have been satisfied by exactly
+        // what it was written to replace.
+        //
+        // The directive is now captured and inspected: SKIP and TODO are recorded as neither passed nor
+        // failed, and named, so a suite that stops executing is loud instead of flattering.
+        passed = new Set<string>();
+        failed = new Set<string>();
+        skipped = new Set<string>();
+        for (const line of output.split(/\r?\n/)) {
+            const ok = /^ok\s+\d+\s+-\s+(.+?)(?:\s+#\s*(.*))?$/.exec(line);
+            if (ok) {
+                const directive = (ok[2] || '').trim();
+                if (/^(?:SKIP|TODO)\b/i.test(directive)) skipped.add(ok[1].trim());
+                else passed.add(ok[1].trim());
+                continue;
+            }
+            const notOk = /^not ok\s+\d+\s+-\s+(.+?)(?:\s+#\s*(.*))?$/.exec(line);
+            if (notOk) failed.add(notOk[1].trim());
         }
-        const notOk = /^not ok\s+\d+\s+-\s+(.+?)(?:\s+#\s*(.*))?$/.exec(line);
-        if (notOk) failed.add(notOk[1].trim());
+
+        const unreportedNow = slugs.filter((slug) => !passed.has(slug) && !failed.has(slug) && !skipped.has(slug));
+        const incompleteFlake = run.status !== 0 && failed.size === 0 && unreportedNow.length > 0;
+        if (!incompleteFlake || attempt >= MAX_COMPAT_ATTEMPTS) break;
+        notes.push(`[F6-C05] ${PLUGIN_COMPATIBILITY_SUITE} came back incomplete — ${unreportedNow.length} plugin(s) `
+            + `produced no verdict and none failed, the node:test force-exit deserialize flake rather than lost `
+            + `coverage; retrying (attempt ${attempt + 1}/${MAX_COMPAT_ATTEMPTS}).`);
     }
 
     const skippedPlugins = slugs.filter((slug) => skipped.has(slug));
