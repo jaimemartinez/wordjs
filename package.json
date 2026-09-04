@@ -45,7 +45,7 @@
     "perf:f0": "cd backend && npm run perf:f0",
     "perf:bench": "node scripts/perf-bench.mjs",
     "perf:bench:enforce": "node scripts/perf-bench.mjs --enforce --json",
-    "ci:all": "npm ci && cd backend && npm ci && cd ../frontend && npm ci && cd ../gateway && npm ci && cd ../setup && npm ci"
+    "ci:all": "node scripts/ci-install.mjs"
   },
   "dependencies": {
     "compression": "^1.8.1",
