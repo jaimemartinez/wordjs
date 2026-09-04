@@ -612,16 +612,24 @@ jobs:
           cache-dependency-path: |
             frontend/package-lock.json
             backend/package-lock.json
-      - name: Install dependencies
-        working-directory: frontend
-        run: npm ci || npm install
-      - name: Install backend runtime dependency used by cross-boundary security tests
-        # Three frontend security suites deliberately execute backend/src/core/sanitize-meta.ts over
-        # the same hostile corpus as the browser sanitizer. Node resolves that module's dependencies
-        # from backend/node_modules, not from the sibling frontend/node_modules, so a frontend-only
-        # install leaves its declared sanitize-html dependency unavailable on a clean runner.
-        working-directory: backend
-        run: npm ci --omit=dev || npm install --omit=dev
+      - name: Install frontend and backend deps in parallel
+        # Two INDEPENDENT installs that used to run in series. The second exists because three frontend
+        # security suites deliberately execute backend/src/core/sanitize-meta.ts over the same hostile
+        # corpus as the browser sanitizer; node resolves that module's dependencies from
+        # backend/node_modules, not the sibling frontend/node_modules, so a frontend-only install leaves
+        # its declared sanitize-html dependency unavailable on a clean runner. On a cold cache the two
+        # summed to ~14 min and blew the 15-min ceiling before the suite ran — and a cancelled job saves
+        # no cache, so it stayed cold, a deadlock. Run them concurrently: wall time is the LONGER
+        # install, not the sum. `wait <pid>` per child propagates a failed install — a bare `wait`
+        # returns 0 regardless and would report a broken install as success.
+        run: |
+          set -u
+          ( cd frontend && { npm ci || npm install; } ) & fe=$!
+          ( cd backend  && { npm ci --omit=dev || npm install --omit=dev; } ) & be=$!
+          rc=0
+          wait "$fe" || rc=1
+          wait "$be" || rc=1
+          exit "$rc"
       - name: Audit (block high/critical prod vulns)
         working-directory: frontend
         run: node "$GITHUB_WORKSPACE/scripts/ci-audit.mjs"
