@@ -28,6 +28,37 @@ function scan(code: string): boolean {
     }
 }
 
+// Same as scan(), but with the manifest permissions the plugin DECLARES — for the gates whose verdict
+// depends on the declaration (net/dns need `network`), not only on the call.
+function scanWith(code: string, permissions: any[]): boolean {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wjs-scan-'));
+    try {
+        fs.writeFileSync(path.join(dir, 'index.js'), code);
+        validatePluginPermissions('test-scan', dir, { name: 'test-scan', permissions });
+        return true;
+    } finally {
+        try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
+    }
+}
+
+// Docs-vs-code audit (2026-09-04): `network` is SCOPE-ONLY — its token is the bare literal and every
+// real manifest declares it as {"scope":"network"} with no access. `declares()` required an access, so a
+// plugin that HAD declared network was reported as missing it. Pin both directions.
+test('the net/dns gate still fires when the manifest declares nothing', () => {
+    assert.throws(() => scanWith("const net = require('net'); module.exports.init = () => { void net; };", []),
+        /Network\/System access|network/i, 'an undeclared require(\'net\') must be reported as a missing Network permission');
+});
+
+test('a bare {"scope":"network"} declaration satisfies the net/dns gate', () => {
+    // Must not be reported as a MISSING network permission. (Any other verdict the scanner reaches for
+    // this file is not this test's concern — only that the declared network grant is recognised.)
+    let err: any = null;
+    try { scanWith("const net = require('net'); module.exports.init = () => { void net; };", [{ scope: 'network' }]); }
+    catch (e) { err = e; }
+    if (err) assert.doesNotMatch(String(err.message), /Network\/System access/i,
+        `a declared {"scope":"network"} must not be read as undeclared, got: ${err.message}`);
+});
+
 test('scanner blocks dynamic import() of child_process (the import() RCE)', () => {
     assert.throws(() => scan("module.exports.init = async () => { await import('child_process'); };"), /import|child_process/i);
 });

@@ -12,5 +12,5 @@
     "declaration": false
   },
   "include": ["src/**/*"],
-  "exclude": ["node_modules", "plugins", "themes", "dist", "data", "uploads", "src/tests"]
+  "exclude": ["node_modules", "plugins", "themes", "dist", "data", "uploads", "src/tests", "src/tests-integration"]
 }

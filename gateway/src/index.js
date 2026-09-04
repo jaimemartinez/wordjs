@@ -1140,6 +1140,20 @@ if (cluster.isPrimary) {
                     key: workerConfig.ssl.key,
                     cert: workerConfig.ssl.cert
                 };
+            } else if (workerConfig.ssl === true || (workerConfig.ssl && workerConfig.ssl.enabled !== false)) {
+                // SSL is ON but no key/cert was supplied — the documented auto-generated case, and exactly
+                // what `npm run setup` writes ({ ssl: { enabled: true } }). The PRIMARY honoured this by
+                // generating ssl-auto.key/.crt (ensureSSLCerts, awaited before it forks any worker) but never
+                // recorded those paths in the config, so every worker re-read the file, found no key/cert,
+                // and served plain HTTP while the operator's config, the docs and the primary all said HTTPS.
+                // Mirror the primary: serve from the auto-generated pair when it exists.
+                const autoKey = path.resolve(__dirname, '../ssl-auto.key');
+                const autoCert = path.resolve(__dirname, '../ssl-auto.crt');
+                if (fs.existsSync(autoKey) && fs.existsSync(autoCert)) {
+                    workerSslOptions = { key: 'ssl-auto.key', cert: 'ssl-auto.crt' };
+                } else {
+                    logger.warn(`[Gateway] Worker ${process.pid}: ssl is enabled but no key/cert is configured and ssl-auto.* is absent — serving HTTP`);
+                }
             }
         }
     } catch (e) {

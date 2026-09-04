@@ -191,6 +191,14 @@ const UNGRANTED_INIT = `
     out.fs = await blk('node:fs', m => pick(m, 'readFileSync')(q.benign, 'utf8'));  // read a forbidden path
     out.net = await blk('node:net', m => pick(m, 'connect')(1, '127.0.0.1').destroy());
     out.worker_threads = await blk('node:worker_threads', m => { const w = new (pick(m, 'Worker'))('data:text/javascript,0'); w.terminate(); });
+    // The ESM hook must deny the SAME set the require proxy denies, or the twin path is open. tty wraps the
+    // inherited IPC descriptor (fd 3) and destroying it severs the bridge; the "_"-prefixed internals
+    // (_http_client, _tls_wrap, _stream_wrap) expose socket primitives BELOW the connect chokepoint, to a
+    // plugin with no network grant. The import() itself must throw — a plain property read is the exploit
+    // step, so a successful import reads as UNBLOCKED.
+    out.tty = await blk('node:tty', m => new (pick(m, 'WriteStream'))(3));
+    out.underscore = await blk('node:_http_client', m => pick(m, 'ClientRequest'));
+    out.underscore_tls = await blk('_tls_wrap', m => Object.keys(m));
     res.json(out);
   });
 
@@ -470,7 +478,7 @@ describe('sandbox escape — module system (ungranted fixture, real fork)', () =
     });
     test('ESM dynamic import() cannot produce a WORKING exploit (RCE / forbidden read / socket / thread)', async () => {
         const r = await probe(UNGRANTED, 'esm', `?benign=${encodeURIComponent(benignOutOfZone)}`);
-        allTrue(r, ['child_process', 'fs', 'net', 'worker_threads']);
+        allTrue(r, ['child_process', 'fs', 'net', 'worker_threads', 'tty', 'underscore', 'underscore_tls']);
     });
 });
 

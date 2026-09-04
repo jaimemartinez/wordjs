@@ -194,7 +194,11 @@ function collectTableTokens(toks: SqlTok[]): string[] {
     // like JOIN, but lexes as ONE word (the `_` is a word char), so it MUST be an opener or the right-hand
     // table (a core `users` or another plugin's table) is never captured/prefix-checked (adversarial pass 7).
     const OPENERS_FROM = new Set(['from', 'join', 'using', 'straight_join']); // starts/continues a FROM table-list (comma → new table)
-    const OPENERS_ONE = new Set(['into', 'update', 'table']); // single-table target (INSERT INTO / UPDATE / *TABLE)
+    // `references` — a column definition's `REFERENCES users(id)` names a table too: a plugin table with a
+    // foreign key into a core table both constrains that core row (its delete now fails) and probes its
+    // existence. Neither the walker nor the PROTECTED_TABLES regex saw it, so the documented rule
+    // ("out of bounds for any plugin") was not enforced. Treat the token after it as a table.
+    const OPENERS_ONE = new Set(['into', 'update', 'table', 'references']); // single-table target (INSERT INTO / UPDATE / *TABLE / REFERENCES)
     const ENDERS = new Set(['where', 'group', 'having', 'order', 'limit', 'offset', 'window', 'returning', 'values', 'set', 'union', 'intersect', 'except', 'select', 'with']);
     const out: string[] = [];
     const stack: { fromClause: boolean; expectTable: boolean }[] = [];
@@ -343,7 +347,7 @@ function assertSqlAllowed(sql: string, allowedVerbs: string[], tablePrefix?: str
         // Allow the table-introducing keyword to be glued to a preceding `_` (e.g. MySQL `straight_join`),
         // not just a word boundary — otherwise `\bjoin` never matches inside `straight_join users` and the
         // core-table backstop misses it (adversarial pass 7).
-        if (new RegExp(`(?:\\b|_)(?:from|join|into|update|using|table)\\s+["\\[\`]?${t}\\b`).test(lower)) {
+        if (new RegExp(`(?:\\b|_)(?:from|join|into|update|using|table|references)\\s+["\\[\`]?${t}\\b`).test(lower)) {
             throw new Error(`🛡️ Plugin DB access denied: query references core table '${t}', which is off-limits to plugins.`);
         }
     }
@@ -369,8 +373,11 @@ function assertSqlAllowed(sql: string, allowedVerbs: string[], tablePrefix?: str
         // ALLOWED. Infer nothing from the ABSENCE of tokens: require the object class to be one we can
         // actually scope, and deny every other class outright.
         if (/^(?:create|alter|drop)\b/.test(lower)
-            && !/^(?:create|alter|drop)\s+(?:or\s+replace\s+)?(?:temp(?:orary)\s+)?(?:unique\s+)?(?:table|index|view|trigger)\b/.test(lower)) {
-            const obj = (lower.match(/^(?:create|alter|drop)\s+(?:or\s+replace\s+)?(?:temp(?:orary)\s+)?(?:unique\s+)?([a-z_]+)/) || [])[1] || '(unknown)';
+            // `temp(?:orary)?` — the optional group is load-bearing: without the `?` only the spelling
+            // TEMPORARY matched, so `CREATE TEMP TABLE wjp_x_t (…)` was denied as DDL on 'temp' while the
+            // sibling regexes below and the documented allowlist (TEMP/TEMPORARY) accept both spellings.
+            && !/^(?:create|alter|drop)\s+(?:or\s+replace\s+)?(?:temp(?:orary)?\s+)?(?:unique\s+)?(?:table|index|view|trigger)\b/.test(lower)) {
+            const obj = (lower.match(/^(?:create|alter|drop)\s+(?:or\s+replace\s+)?(?:temp(?:orary)?\s+)?(?:unique\s+)?([a-z_]+)/) || [])[1] || '(unknown)';
             throw new Error(`🛡️ Plugin DB access denied: DDL on '${obj}' is not permitted — a plugin may only create/alter/drop its own TABLE, INDEX, VIEW or TRIGGER.`);
         }
         // A rename retargets an owned table to an arbitrary name, so the pre-rename token (which the walker

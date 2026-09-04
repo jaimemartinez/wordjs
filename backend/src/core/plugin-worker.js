@@ -269,7 +269,10 @@ try {
         // node:diagnostics_channel — subscribing to the host's internal channels yields every outbound
         // request it makes, headers included (the Authorization bearer). Keep in sync with
         // BLOCKED_PLUGIN_MODULES.
-        'sqlite', 'wasi', 'diagnostics_channel'
+        'sqlite', 'wasi', 'diagnostics_channel',
+        // node:tty — blocked on the require side (BLOCKED_PLUGIN_MODULES) because `new tty.WriteStream(3)`
+        // wraps the inherited IPC descriptor and destroying it severs the bridge; import() must refuse it too.
+        'tty'
     ]);
     // A network-granted plugin may import() the TCP/HTTP modules (net/tls/http/https/http2) —
     // installChildNetGuard locks net.Socket.prototype.connect, the single chokepoint every TCP path funnels
@@ -291,7 +294,11 @@ try {
                 resolve(specifier, context, nextResolve) {
                     const bare = String(specifier).replace(/^node:/, '');
                     // Match the first path segment too, so submodules (inspector/promises, dns/promises) are caught.
-                    if (esmBlocked.has(bare) || esmBlocked.has(bare.split('/')[0])) {
+                    // A bare `_`-prefixed specifier is one of Node's internal builtins (_http_client, _tls_wrap,
+                    // _stream_wrap, …): socket/stream primitives BELOW the connect chokepoint, denied on the
+                    // require side by secure-require — import() must deny the same set or the twin path is open.
+                    // A relative `./_helper` has bare starting with `./`, so a plugin's own file is unaffected.
+                    if (bare.startsWith('_') || esmBlocked.has(bare) || esmBlocked.has(bare.split('/')[0])) {
                         throw new Error(`[sandbox] import('${specifier}') is blocked for plugin '${slug}'`);
                     }
                     return nextResolve(specifier, context);
@@ -306,7 +313,7 @@ try {
                 'export async function initialize(d){ blocked = new Set(d.blocked); }\n' +
                 'export async function resolve(spec, ctx, next){\n' +
                 '  const bare = String(spec).replace(/^node:/, "");\n' +
-                '  if (blocked.has(bare) || blocked.has(bare.split("/")[0])) throw new Error("[sandbox] import(\'" + spec + "\') is blocked for plugin");\n' +
+                '  if (bare.startsWith("_") || blocked.has(bare) || blocked.has(bare.split("/")[0])) throw new Error("[sandbox] import(\'" + spec + "\') is blocked for plugin");\n' +
                 '  return next(spec, ctx);\n' +
                 '}';
             nodeModule.register(

@@ -43,8 +43,32 @@ const BACKEND_ROOT = path.resolve(__dirname, '..');
 const SRC_ROOT = path.join(BACKEND_ROOT, 'src');
 const DIST_ROOT = path.join(BACKEND_ROOT, 'dist');
 
-/** `include: ["src/**\/*"]` minus `exclude: [… "src/tests"]` from tsconfig.build.json. */
-const EXCLUDED_SRC_DIRS = new Set([path.join(SRC_ROOT, 'tests')]);
+/**
+ * `include: ["src/**\/*"]` minus the `src/…` entries of `exclude` in tsconfig.build.json — READ FROM THAT
+ * FILE, not restated here. This used to be a hand-copied `Set([src/tests])`: the day tsconfig.build.json
+ * also excluded `src/tests-integration` (so compiled integration tests stop shipping in the release ZIP),
+ * this walk kept expecting their outputs and reported the build "incomplete" — two copies of one policy,
+ * drifting the moment one moved. One declaration, two consumers. The literal list survives only as the
+ * fallback for an unreadable config, so a broken tsconfig fails the build loudly rather than this gate.
+ */
+function excludedSrcDirs() {
+    const fallback = ['tests', 'tests-integration'];
+    let dirs = fallback;
+    try {
+        // tsconfig.build.json carries `//` line comments; strip them (no string value contains `//`).
+        const raw = fs.readFileSync(path.join(BACKEND_ROOT, 'tsconfig.build.json'), 'utf8')
+            .replace(/^\s*\/\/.*$/gm, '');
+        const exclude = JSON.parse(raw).exclude;
+        if (Array.isArray(exclude)) {
+            const fromConfig = exclude
+                .filter((e) => typeof e === 'string' && e.startsWith('src/'))
+                .map((e) => e.slice('src/'.length));
+            if (fromConfig.length) dirs = fromConfig;
+        }
+    } catch { /* unreadable config → fallback; the compiler itself will refuse a broken tsconfig */ }
+    return new Set(dirs.map((d) => path.join(SRC_ROOT, d)));
+}
+const EXCLUDED_SRC_DIRS = excludedSrcDirs();
 
 function compiledSources(dir = SRC_ROOT, acc = []) {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {

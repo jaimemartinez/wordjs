@@ -1887,7 +1887,12 @@ async function sendMail(data) {
                     delivered.push({ recipient: extR, via: 'relay', response: info.response });
                 } catch (e) {
                     console.error(`[MailServer] ❌ Relay delivery to ${extR} failed: ${e.message}`);
-                    failed.push({ recipient: extR, error: e.message, permanent: false });
+                    // Classify by SMTP reply code exactly as the direct-to-MX path does: a 5xx is a permanent
+                    // reject (bounce now), anything else — 4xx, network, TLS — is transient and retries on the
+                    // attempt² schedule. This used to be `permanent: false` unconditionally, so a relay 5xx was
+                    // retried MAX_DELIVERY_ATTEMPTS times before bouncing, contradicting the documented policy.
+                    const code = Number(e && e.responseCode) || 0;
+                    failed.push({ recipient: extR, error: e.message, permanent: code >= 500 && code < 600 });
                 }
             }
         } else {

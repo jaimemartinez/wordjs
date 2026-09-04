@@ -19,7 +19,11 @@ const path = require('path');
 const ROOT = path.resolve(__dirname, '..');
 const MANIFEST = path.join(ROOT, 'backend/public/theme-tokens.json');
 const LAYOUTS = path.join(ROOT, 'backend/public/theme-layouts.schema.json');
-const CHROME = path.join(ROOT, 'backend/src/core/chrome-validate.ts');
+// The chrome-block allowlist moved out of chrome-validate.ts into the GENERATED visual contract (F5):
+// its `blocks` map holds the per-block prop contract, keyed `"ChromeLogo": { … }`. Reading the old file
+// yielded an empty list, so the committed brief carried a hand-restored block list under a header that
+// said "GENERATED — do not edit by hand". Read the contract the validator itself is generated from.
+const CHROME = path.join(ROOT, 'backend/src/generated/visual-contract.generated.ts');
 const OUT = path.join(ROOT, 'documentation/stitch-brief.md');
 
 // ONE SCREEN PER GROUP, and each group is small.
@@ -74,8 +78,9 @@ function readJson(file) {
 function chromeBlocks() {
     const src = fs.readFileSync(CHROME, 'utf8');
     const names = new Set();
-    // The allowlist is the key set of the per-block prop contract: `ChromeLogo: { … }`.
-    for (const match of src.matchAll(/^\s{4}(Chrome[A-Za-z]+):\s*\{/gm)) names.add(match[1]);
+    // The allowlist is the key set of the generated per-block prop contract, quoted JSON-style at four
+    // spaces inside `"blocks"`: `    "ChromeLogo": { … }`.
+    for (const match of src.matchAll(/^\s{4}"(Chrome[A-Za-z]+)":\s*\{/gm)) names.add(match[1]);
     return [...names].sort();
 }
 

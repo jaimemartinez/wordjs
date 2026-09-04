@@ -144,6 +144,12 @@ async function loadDriver(overrideName: string | null = null) {
         };
       }
     } catch (e) {
+      // For sqlite-native the ASYNC driver is the one that loads better-sqlite3 at module scope; the sync
+      // driver above requires it lazily inside init(), so its require never fails and the outer catch —
+      // the documented "native binary unavailable → pure-JS sqlite-legacy" fallback — was unreachable: a
+      // host without a working binary got a warning here and then died later in init(). Rethrow for
+      // exactly that case so the recoverable path below runs; other drivers keep the warn-only behaviour.
+      if (name === 'sqlite-native') throw e;
       console.warn(`⚠️  Async driver not found for '${name}': ${e.message}`);
     }
 

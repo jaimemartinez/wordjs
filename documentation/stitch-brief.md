@@ -96,16 +96,8 @@ Do not design new navigation patterns — a theme selects one of these:
 - **header**: `classic`, `centered`, `minimal` (also: sticky, transparent)
 - **footer**: `columns`, `minimal` (also: columns)
 
-<!-- The block list below is HAND-RESTORED, not generated. `chromeBlocks()` in
-     scripts/generate-stitch-brief.js scrapes `backend/src/core/chrome-validate.ts` for
-     /^\s{4}(Chrome[A-Za-z]+):\s*\{/, but the allowlist moved into
-     backend/src/generated/visual-contract.generated.ts (key `blocks`, generated from
-     contracts/visual-contract.v1.json). The regex matches nothing there, so the generator
-     now emits an EMPTY list. Fix the scraper to read the generated contract, then delete
-     this note. The nine names below were read from that contract's `blocks` key. -->
 For a header or footer beyond those variants, the theme ships a COMPOSITION built only from
-these blocks: `ChromeButton`, `ChromeLogo`, `ChromeNav`, `ChromeRow`, `ChromeSearch`,
-`ChromeSiteTitle`, `ChromeSocials`, `ChromeSpacer`, `ChromeText`. Design accordingly — a header
+these blocks: `ChromeButton`, `ChromeLogo`, `ChromeNav`, `ChromeRow`, `ChromeSearch`, `ChromeSiteTitle`, `ChromeSocials`, `ChromeSpacer`, `ChromeText`. Design accordingly — a header
 that cannot be expressed as a row of those blocks cannot be shipped as a theme.
 
 ## 4. What gets read back

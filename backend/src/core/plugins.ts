@@ -544,6 +544,12 @@ function validatePluginPermissions(
     const mode: PermissionScanMode = options.mode === 'grant' ? 'grant' : 'declaration';
 
     const declares = (scope: any, access: any) => {
+        // `network` is SCOPE-ONLY: its grant token is the bare literal `network`, never `network:<access>`,
+        // and every real manifest declares it as `{"scope":"network"}` with no access at all — so it must
+        // match on scope alone, exactly as isGrantedByAdmin below already routes it to isNetworkGranted.
+        // Requiring an access here made a plugin that DID declare network read as undeclared, so the
+        // net/dns gate reported "missing Network access" against a manifest that had asked for it.
+        if (scope === 'network') return permissions.some((p: any) => p && p.scope === 'network');
         return permissions.some((p: any) => p.scope === scope && (p.access === access || p.access === 'admin'));
     };
 

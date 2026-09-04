@@ -147,3 +147,22 @@ test('the pre-existing controls still fail closed', () => {
     assert.strictEqual(allowed("ATTACH DATABASE 'x' AS y", WRITE_VERBS), false);
     assert.strictEqual(allowed('SELECT * FROM wjp_other_notes', READ_VERBS), false);
 });
+
+// Docs-vs-code audit (2026-09-04): two places where the guard deviated from the documented rules.
+test('the DDL object-class allowlist accepts BOTH spellings, TEMP and TEMPORARY', () => {
+    // `(?:temp(?:orary)\s+)?` lacked the inner `?`, so only TEMPORARY matched and `CREATE TEMP TABLE` was
+    // refused as "DDL on 'temp'" — while the sibling regexes and plugin-database.md accept both spellings.
+    assert.strictEqual(allowed('CREATE TEMP TABLE wjp_evil_t (id INT)', WRITE_VERBS), true, 'TEMP must be accepted');
+    assert.strictEqual(allowed('CREATE TEMPORARY TABLE wjp_evil_t (id INT)', WRITE_VERBS), true, 'TEMPORARY must be accepted');
+    assert.strictEqual(allowed('CREATE TEMP VIEW wjp_evil_v AS SELECT id FROM wjp_evil_t', WRITE_VERBS), true, 'TEMP applies to views too');
+});
+
+test('REFERENCES is a table position: a foreign key into a core or foreign table is refused', () => {
+    // Neither the table walker nor the protected-table check treated `REFERENCES` as introducing a table,
+    // so a plugin table could constrain a core row (its delete then fails) and probe its existence —
+    // the documented "out of bounds for any plugin" was not enforced.
+    assert.strictEqual(allowed('CREATE TABLE wjp_evil_t (uid INT REFERENCES users(id))', WRITE_VERBS), false, 'inline FK to a core table');
+    assert.strictEqual(allowed('CREATE TABLE wjp_evil_t (uid INT, FOREIGN KEY (uid) REFERENCES users(id))', WRITE_VERBS), false, 'table-constraint FK to a core table');
+    assert.strictEqual(allowed('CREATE TABLE wjp_evil_t (oid INT REFERENCES wjp_other_t(id))', WRITE_VERBS), false, 'FK into another plugin\'s table (ownership rule)');
+    assert.strictEqual(allowed('CREATE TABLE wjp_evil_t (oid INT REFERENCES wjp_evil_other(id))', WRITE_VERBS), true, 'FK into the plugin\'s OWN table stays allowed');
+});
