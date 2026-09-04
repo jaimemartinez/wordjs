@@ -35,7 +35,11 @@ const path = require('path');
 // touched when running as a child (parentPort is null there).
 const IS_WORKER = !!parentPort;
 const cfg = IS_WORKER ? (workerData || {}) : JSON.parse(process.argv[2] || '{}');
-const send = IS_WORKER ? parentPort.postMessage.bind(parentPort) : (m) => { try { process.send(m); } catch { /* parent gone */ } };
+// THE WORKER'S OWN CHANNEL, captured before secure-require wraps process.send. Plugin code gets a
+// guarded process.send that refuses; the worker keeps the original, so only code in this file can
+// emit control frames (ready / fatal / register). See secure-require PROC_BLOCKED for why.
+const rawSend = (!IS_WORKER && typeof process.send === 'function') ? process.send.bind(process) : null;
+const send = IS_WORKER ? parentPort.postMessage.bind(parentPort) : (m) => { try { rawSend && rawSend(m); } catch { /* parent gone */ } };
 const onMessage = IS_WORKER ? (cb) => parentPort.on('message', cb) : (cb) => process.on('message', cb);
 
 const { slug, entryFile, coreDir } = cfg;

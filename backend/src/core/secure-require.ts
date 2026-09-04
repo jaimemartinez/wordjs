@@ -930,8 +930,15 @@ function installSecureRequire() {
     //       the require denylist, but this is a separate native path that never touches it.
     //     loadEnvFile reads a file in C++ (never reaching io-guard) and merges it into process.env,
     //       mutating the environment the rest of the host trusts.
+    // 'send' and 'disconnect' are the IPC bridge itself. Plugin code that can call process.send can
+    // forge CONTROL frames the host trusts from its child: a `{kind:'ready'}` resolves the load before
+    // init() has finished and defeats the startup deadline outright; a `{kind:'fatal'}` tears the
+    // plugin down with a message the plugin wrote; `disconnect()` severs the bridge. Measured: a forged
+    // ready made the host consult a filter the plugin had not registered yet. The worker captures the
+    // real process.send before this wrapper installs, so its own control frames are unaffected — the
+    // plugin reaches the host only through wordjs.*, which is the whole point of the bridge.
     const PROC_BLOCKED = ['kill', 'abort', 'exit', 'chdir', 'umask', 'setuid', 'setgid', 'seteuid', 'setegid', 'setgroups', 'initgroups', '_kill',
-        'execve', '_debugProcess', '_debugEnd', 'loadEnvFile'];
+        'execve', '_debugProcess', '_debugEnd', 'loadEnvFile', 'send', 'disconnect'];
     for (const m of PROC_BLOCKED) {
         const orig = (process as any)[m];
         if (typeof orig === 'function') {

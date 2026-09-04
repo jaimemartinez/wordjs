@@ -228,6 +228,14 @@ const UNGRANTED_INIT = `
     // Even though plugin code CAN reach the raw IPC channel, the HOST enforces ALLOWED_BRIDGE_METHODS: a
     // raw {kind:'call'} for a real api method that is NOT on the allowlist (provideMail — becoming the mail
     // provider) must be rejected with "not permitted", never executed. Post it directly and read the reply.
+    // process.send is now refused at the source for plugin code (secure-require PROC_BLOCKED): a
+    // forged control frame never leaves the child. That is contained, and strictly stronger than
+    // the host allowlist refusing it. Probe the guard first; fall through to the host path only if
+    // the guard is somehow absent, so that the host allowlist remains the second line.
+    let blockedAtSource = false;
+    try { process.send({ kind: 'call', id: 'wjs-guard-probe', method: 'provideMail', args: [{}] }); }
+    catch (e) { blockedAtSource = /not permitted|SECURITY BLOCK/i.test(String(e && e.message || e)); }
+    if (blockedAtSource) return res.json({ reachable: false, notPermitted: true, blockedAtSource: true });
     const reachable = typeof process.send === 'function' && typeof process.on === 'function';
     if (!reachable) return res.json({ reachable: false, notPermitted: true });
     const reply = await new Promise((resolve) => {

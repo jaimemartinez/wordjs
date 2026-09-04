@@ -199,6 +199,29 @@ describe('the worker keeps its own way out', () => {
             'the real stack must reach stderr, which is what the isolate forwards to the operator');
     });
 
+    test('plugin code cannot forge control frames or sever the bridge', () => {
+        // MEASURED before the fix: a plugin sending `{kind:'ready'}` made the host resolve the load
+        // before init() had finished — it consulted a filter the plugin had not registered yet — which
+        // also means the startup deadline was defeatable by any plugin at will. `{kind:'fatal'}` tore
+        // the plugin down with a message the plugin wrote. process.send is host-process control.
+        const sr = require('node:fs').readFileSync(require('node:path').resolve(__dirname, '../core/secure-require.ts'), 'utf8');
+        for (const m of ['send', 'disconnect']) {
+            assert.match(sr, new RegExp("PROC_BLOCKED = \\[[^\\]]*'" + m + "'"), `process.${m} is no longer refused to plugin code`);
+        }
+        // NOTE: process.channel itself is deliberately NOT trapped. Node reads that property on its own
+        // internal IPC send path, and RPC callbacks run in plugin context, so a getter that threw under
+        // plugin context broke every legitimate bridge call. Measured, then reverted. The teeth are on
+        // send/disconnect above — forging a frame and severing the bridge are the actual capabilities;
+        // reading the handle without them does nothing a plugin can act on.
+
+        // The worker must have captured the real send BEFORE the guard installs, or its own control
+        // frames would be refused too — and the capture is the only reason the guard can be absolute.
+        const capture = workerSrc.indexOf('const rawSend = ');
+        const install = workerSrc.indexOf('installSecureRequire');
+        assert.ok(capture !== -1 && capture < install, 'the worker no longer captures process.send before the guards');
+        assert.match(workerSrc, /rawSend && rawSend\(m\)/, 'the worker send() no longer uses the captured reference');
+    });
+
     test('the memory watchdog is one of the paths that was fixed', () => {
         // Named explicitly: this is the path that actually fired, and the one whose failure is silent
         // until a plugin balloons memory in production.
