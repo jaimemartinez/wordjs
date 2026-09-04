@@ -49,14 +49,18 @@ function run() {
 export function onlyDeserializeFlake(out) {
     if (!out.includes(FLAKE)) return false;                 // this run did not hit the flake at all
     const lines = out.split('\n');
-    const notOk = lines
-        .map((l, i) => ({ l, i }))
-        .filter(({ l }) => /^\s*not ok \d+/.test(l));
-    if (notOk.length === 0) return false;                   // failed but no `not ok` — unknown shape, do not retry
-    // Every `not ok` must be a deserialize-flake failure: the error appears within a few lines below it.
-    for (const { i } of notOk) {
-        const window = lines.slice(i, i + 6).join('\n');
-        if (!window.includes(FLAKE)) return false;          // a real failure sits here — do not retry
+    const notOkIdx = [];
+    lines.forEach((l, i) => { if (/^\s*not ok \d+/.test(l)) notOkIdx.push(i); });
+    if (notOkIdx.length === 0) return false;                // failed but no `not ok` — unknown shape, do not retry
+    // Every `not ok` must be explained by the deserialize flake in ITS OWN block. The block runs from
+    // this `not ok` to the NEXT one (capped at a few lines), so one flaky suite can never lend its
+    // deserialize error to a genuinely-failed suite listed above it — that mix must NOT be retried.
+    for (let k = 0; k < notOkIdx.length; k++) {
+        const start = notOkIdx[k];
+        const nextNotOk = k + 1 < notOkIdx.length ? notOkIdx[k + 1] : lines.length;
+        const end = Math.min(nextNotOk, start + 6);
+        const window = lines.slice(start, end).join('\n');
+        if (!window.includes(FLAKE)) return false;          // a real failure sits in this block — do not retry
     }
     return true;
 }

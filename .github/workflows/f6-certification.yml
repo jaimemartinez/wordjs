@@ -246,11 +246,13 @@ jobs:
 
       - name: F6 — outbox duplicates, retries and the degraded cache, on every certified engine
         working-directory: backend
-        run: node --test --test-force-exit --test-concurrency=1 -r ts-node/register src/tests/f6-outbox-idempotence.test.ts
+        # Wrapped for the node:test --test-force-exit deserialize flake — retried once, and ONLY when
+        # every failure is that runner flake. See scripts/test-with-flake-retry.mjs.
+        run: node "$GITHUB_WORKSPACE/scripts/test-with-flake-retry.mjs" --test-force-exit --test-concurrency=1 -r ts-node/register src/tests/f6-outbox-idempotence.test.ts
 
       - name: F6 — process failure during a transaction, on every certified engine
         working-directory: backend
-        run: node --test --test-force-exit --test-concurrency=1 -r ts-node/register src/tests/f6-crash-consistency.test.ts
+        run: node "$GITHUB_WORKSPACE/scripts/test-with-flake-retry.mjs" --test-force-exit --test-concurrency=1 -r ts-node/register src/tests/f6-crash-consistency.test.ts
 
       - name: Phase suites f0–f6 under this Redis condition
         # These are the SQLite-pinned suites — every DB-touching one of them opens with
@@ -306,7 +308,8 @@ jobs:
         # and so it is exercised under the DEGRADED Redis leg too, which ci.yml never does.
         working-directory: backend
         run: |
-          node --test --test-force-exit --test-concurrency=1 -r ts-node/register \
+          node "$GITHUB_WORKSPACE/scripts/test-with-flake-retry.mjs" \
+            --test-force-exit --test-concurrency=1 -r ts-node/register \
             src/tests/driver-conformance.test.ts \
             src/tests/driver-parity.test.ts \
             src/tests/migration-parity.test.ts
