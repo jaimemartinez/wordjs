@@ -46,8 +46,11 @@ themes/
 
 What the four bundled themes actually ship: **all four** carry `style.css` and `theme.json` — the two
 files `verifyDefaultTheme()` treats as a complete theme. The three declarative ones (`circuito`,
-`gaceta`, `vergel`) add `chrome/` and `templates/`; `circuito` and `vergel` also `fonts.css` +
-`fonts/`. Only `default` ships `functions.js`, `partials/` and the legacy Handlebars `templates/`.
+`gaceta`, `vergel`) add `chrome/` and `templates/`. Three themes — `circuito`, `vergel` and `default`
+— also ship `fonts.css` + `fonts/` (vendored by `scripts/vendor-theme-fonts.mjs`, pulled in by
+`@import url('fonts.css')` at the top of each `style.css`); `gaceta` names only system families
+(Georgia / system-ui) and so carries neither. Only `default` ships `functions.js`, `partials/` and
+the legacy Handlebars `templates/`.
 None ships a `screenshot.png` or a `.design/` directory. `fonts.css` and `fonts/` are not optional in
 practice — a theme that names a non-system family gets it only if it ships the files (see *Self-host
 the webfonts* below).
@@ -1378,7 +1381,9 @@ Any installed theme can be packaged back into a ZIP for backup or transfer via
 
 1. Go to **Admin → Themes**
 2. Click **Activate** on the desired theme
-3. The frontend picks up the new theme on the next load (or when you refocus the public tab)
+3. The public site serves the new theme on the next navigation or full page load: activation purges
+   the `settings` cache tag, so the next server render carries the new slug/version. An already-open
+   public tab keeps the theme it was rendered with until it navigates — nothing re-fetches on tab focus.
 
 Under the hood, activation calls `switchTheme()` in `backend/src/core/themes.ts`, which writes
 the `template` and `stylesheet` options, publishes the new theme's `theme.json` `layout` to the
@@ -1401,12 +1406,18 @@ cascades after it.
 `focus` — an unauthenticated request per visitor per focus, running a themes-dir scan on the server.
 It doesn't any more: switching or editing a theme purges the `settings` tag
 (`backend/src/core/frontend-purge.ts`), so the next navigation serves HTML with the new slug/version.
-An already-open public tab keeps the theme it was rendered with until it navigates. The only client
-resolve left is the editor canvas, which gets no server props and reads `GET /api/v1/themes` **once**
-(`themesApi.list()`, falling back to `default` if the request fails, so the canvas is never left with no
-theme link). When the href does change at runtime the
-loader still removes the previous `<link>` — matched on the exact href, so a version-only change
-evicts it too (React treats `precedence` stylesheets as add-only, so the stale stylesheet would
+An already-open public tab keeps the theme it was rendered with until it navigates. Two client-side
+resolves remain, both confined to editor surfaces and neither run for public visitors. `ThemeLoader`
+itself, when rendered without server props (the Verso editor preview renders `PublicLayoutShell`
+bare), reads `settingsApi.get()` **once** — never on a timer — and takes `template` /
+`active_theme_version` from it. The editor canvas route (`frontend/src/app/admin/canvas-frame/page.tsx`)
+resolves the active theme through `GET /api/v1/themes` (`themesApi.list()`, falling back to `default`
+if that request fails, so the canvas is never left with no theme link) and then re-checks it every
+10 s, swapping the `<link id="wjs-theme-stylesheet">` imperatively — new link inserted after the
+current one, `onload` awaited, old one removed — only when the href actually changes, so a theme
+activated in another tab reaches an already-open canvas without a flash. When the href does change at
+runtime the loader still removes the previous `<link>` — matched on the exact href, so a version-only
+change evicts it too (React treats `precedence` stylesheets as add-only, so the stale stylesheet would
 otherwise stay applied alongside the new one).
 
 The `?v=` query string is the **theme slug**, the theme's **`theme.json` version** and

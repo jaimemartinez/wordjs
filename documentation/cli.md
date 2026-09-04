@@ -17,9 +17,9 @@ Run from `backend/`.
 | `npm run build`     | `tsc -p tsconfig.build.json`                      | Compile TypeScript to `dist/` for production (runs `clean` first).  |
 | `npm run clean`     | removes `dist/`                                   | Wipe the compiled output (also runs automatically before `build`).  |
 | `npm run typecheck` | `tsc --noEmit`                                    | Strict type-check with no emit (also run in CI).                    |
-| `npm test`          | `node --test --test-force-exit --test-concurrency=1 -r ts-node/register src/tests/*.test.ts` | Run the unit test suite (includes the DB **driver conformance** suite). |
-| `npm run test:integration` | `node --test --test-force-exit -r ts-node/register src/tests-integration/*.test.ts` | Multi-node / endpoint integration tests (run in CI against real `postgres:16` + `redis:7`). |
-| `npm run test:multinode` | `node --test --test-force-exit -r ts-node/register src/tests-integration/multinode-coherence.integration.ts` | Two-process coherence leg (its own CI job; needs Postgres + Redis). |
+| `npm test`          | `node ../scripts/test-with-flake-retry.mjs --test-force-exit --test-concurrency=1 -r ts-node/register/transpile-only src/tests/*.test.ts` | Run the unit test suite (includes the DB **driver conformance** suite). The repo-root `scripts/test-with-flake-retry.mjs` wrapper spawns `node --test` with these arguments and re-runs the suite (at most 2 retries) **only** when every `not ok` in the run is the known `--test-force-exit` deserialize flake (`Unable to deserialize cloned data`); any real assertion failure is surfaced on the first attempt and never retried. ts-node runs in `transpile-only` mode here (no type-checking) — type errors are the job of `npm run typecheck`. |
+| `npm run test:integration` | `node ../scripts/test-with-flake-retry.mjs --test-force-exit -r ts-node/register src/tests-integration/*.test.ts` | Multi-node / endpoint integration tests (run in CI against real `postgres:16` + `redis:7`). Same flake-retry wrapper as `npm test`. |
+| `npm run test:multinode` | `node ../scripts/test-with-flake-retry.mjs --test-force-exit -r ts-node/register src/tests-integration/multinode-coherence.integration.ts` | Two-process coherence leg (its own CI job; needs Postgres + Redis). Same flake-retry wrapper as `npm test`. |
 | `npm run verify:f0` … `verify:f6` | `node -r ts-node/register scripts/verify-f*.ts` | One phase verifier per ADR in `documentation/adr/` (F0 baseline … F6 migration certification). All seven run in the backend CI job; the repo root aliases each one. |
 | `npm run generate:f2` | `node -r ts-node/register scripts/generate-f2-contracts.ts` | Regenerate the F2 content contracts (validators, DTO, OpenAPI, policy, client). `verify:f2` runs it first, then checks the result. |
 | `npm run generate:f5` | `node ../scripts/generate-visual-contract.mjs`   | Regenerate the F5 unified visual contract. `verify:f5` re-runs it with `--check` before its own suite. |
@@ -143,7 +143,7 @@ Recompiles an existing theme's `theme.json` (its `seeds` / `archetype` / `tokens
 
 Two behaviors worth knowing:
 
-- **It bumps `theme.json`'s patch version** after a successful write (`1.0.0` → `1.0.1`), because the public stylesheet URL is keyed by that version — otherwise browsers would keep the pre-build CSS for up to an hour. A `theme.json` that is unreadable or whose version is not `x.y.z` only produces a warning; the CSS is still written.
+- **It bumps `theme.json`'s patch version** after a successful write (`1.0.0` → `1.0.1`; a missing `version` is treated as `1.0.0` and becomes `1.0.1`), because the public stylesheet URL is keyed by that version — otherwise browsers would keep the pre-build CSS for up to an hour. The bump never blocks the build: the CSS is written first, so if `theme.json` is unreadable the CLI prints `⚠️  Could not bump theme.json version (…)` and leaves the file alone, and if the version is readable but not three numeric parts (`1.0`, `1.0.0-beta`) the bump is silently skipped — no warning, and the `✅` summary simply omits its `theme.json version → …` line.
 - **It refuses to invent a block.** If `theme.json` has none of the declarative keys *and* `style.css` has no `@wjs-generated` markers, it prints an `ℹ️ … nothing to build` line and exits `0` without touching the theme — so running it on a hand-authored theme is a no-op, not a mutilation.
 
 ### `doctor theme <slug>`
@@ -267,7 +267,7 @@ The database file depends on the active driver (selected by `dbDriver` in `wordj
 | Driver               | File / location                     | Notes                                            |
 | :------------------- | :---------------------------------- | :----------------------------------------------- |
 | `sqlite-native` (default) | `backend/data/wordjs-native.db` | `better-sqlite3`. The DB-manager default.        |
-| `sqlite-legacy` (fallback) | `backend/data/wordjs.db`       | pure-JS WASM `sql.js`; same SQLite file format. Automatic fallback only. |
+| `sqlite-legacy`      | `backend/data/wordjs.db`            | pure-JS WASM `sql.js`; same SQLite file format. Used as the automatic fallback when a SQLite driver fails to load (e.g. the native binary is missing); also selectable explicitly — in the install wizard as "SQLite (legacy / WASM)" and as a DB-Admin migration target — or by setting `dbDriver: "sqlite-legacy"` in `wordjs-config.json`. |
 | `postgres`           | external PostgreSQL server (via the `pg` client) | Set `db: { host, port, user, password, name, ssl }` in `wordjs-config.json`. |
 | `mysql` (or `mariadb`) | external MySQL 8.0+ / MariaDB server (via the `mysql2` client) | Same `db` connection object (set `dbPort: 3306`); the driver translates SQLite-dialect SQL to MySQL at the boundary. |
 

@@ -11,7 +11,7 @@ The Frontend (`frontend/`) is a **Next.js** application serving both the public 
 
 ### The frontend's own route handlers
 
-Not every route under `src/app/` is a page — three are Next **route handlers** the frontend serves itself, without touching the backend API:
+Not every route under `src/app/` is a page — two are Next **route handlers** the frontend serves itself, without touching the backend API:
 
 | Route | Method | Auth | What it does |
 | :--- | :--- | :--- | :--- |

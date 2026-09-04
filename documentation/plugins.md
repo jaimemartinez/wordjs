@@ -573,15 +573,15 @@ Every call is permission-checked on the host against your manifest.
 | `wordjs.users.findByEmail / findByLogin / findById / search(...)` | `users:read` | **Safe projection** only: `{ id, userLogin, username, userEmail, displayName, role, hasProfessionalMailbox }` — never `user_pass` or other credential fields. The sanctioned way to read users without core-table access. (`hasProfessionalMailbox` is the admin-owned corporate-mailbox grant as a boolean — read it, never re-derive it from `userEmail`, which the account itself can write.) |
 | `wordjs.site.url / domain / adminEmail` | `settings:read` | Read-only site identity. |
 | `wordjs.dns.resolveMx / resolveTxt / resolve4 / resolve6 / resolve(...)` | `network` | Host-mediated DNS. The raw resolver (`dns.resolve*`) is denied inside the child, so MX (direct delivery) and TXT (SPF/DKIM/DMARC) lookups go through here. The host strips every A/AAAA answer pointing at a private/internal address, so the address lookups return public IPs only. |
-| `wordjs.hooks.addAction/addFilter(hook, cb, priority)` · `doAction(hook, ...args)` | — | Callback runs in the child process; host installs an RPC shim. Raw-HTML hooks (`wordjs_head`/`wordjs_footer`) are denied to every plugin. `doAction` fires only your OWN registered callbacks — never core's or another plugin's. |
-| `wordjs.http.route(method, path, [opts,] handler)` | — | Mounted at `/api/v1/plugin/<slug>/path` (always namespaced — no absolute mode). `opts`: `{ auth, admin }` (host runs the real auth middleware), `{ multipart: 'field' }`. Handler gets a mock `(req,res)` over RPC. |
+| `wordjs.hooks.addAction/addFilter(hook, cb, priority)` · `doAction(hook, ...args)` | — | Callback runs in the child process; host installs an RPC shim. Raw-HTML output hooks — `wordjs_head`/`wordjs_footer` and their WordPress-compat aliases `wp_head`/`wp_footer` — are denied to every plugin (the registration is dropped with a host-side warning; no trust tier exempts anyone). `doAction` fires only your OWN registered callbacks — never core's or another plugin's. |
+| `wordjs.http.route(method, path, [opts,] handler)` | `express:register_route` | Mounted at `/api/v1/plugin/<slug>/path` (always namespaced — no absolute mode). The host checks the grant on every registration: without a granted `express:register_route` the route is dropped with a host warning (`denied route registration: express:register_route not granted`) and nothing is mounted — `scope: "admin"` does NOT imply it, declare it explicitly. `opts`: `{ auth, admin }` (host runs the real auth middleware), `{ multipart: 'field' }`. Handler gets a mock `(req,res)` over RPC. |
 | `wordjs.shortcodes.add(tag, handler)` | — | Handler may be async; expanded via `doShortcodeAsync`. |
 | `wordjs.fs.read(relPath, enc)` / `write(relPath, data)` | `filesystem:read` / `write` | Confined to your **own** plugin dir only (realpath-checked) — never the shared `uploads/` dir. `manifest.json` is immutable, and so is everything under `public/` and `dist/` (§11a). |
 | `wordjs.mail(msg)` | `email:admin` | Sends via the active mail provider. (Distinct from `email:provider`, which only `wordjs.provideMail` needs.) |
 | `wordjs.provideMail(handler)` | `email:provider` | Become the host-wide mail sender (sandboxed; needs the `email:provider` grant). |
 | `wordjs.notify(n)` | `notifications:send` | Push an admin notification. |
 | `wordjs.notify.registerTransport(name, handler)` | `notifications:provider` | Register a notification transport (sandboxed; needs the `notifications:provider` grant). |
-| `wordjs.adminMenu.add(item)` | — | Declarative sidebar item. |
+| `wordjs.adminMenu.add(item)` | `admin_menu:register` | Declarative sidebar item. Gated host-side like every other bridge call: the manifest must declare `admin_menu:register` **and** the admin must grant it, or the call throws a `Security Block` (`scope: "admin"` does not imply it). `item.href` must be a same-origin relative path (a single leading `/`, no scheme, no `//` — e.g. `/admin/plugin/<slug>`) or the item is dropped with a warning; capped at 50 items per plugin. |
 | `wordjs.cron.schedule(ts, recurrence, hook, args)` | — | Host fires the hook back into the child process — only **your** callbacks, never core's. `recurrence` is a registered schedule name (`'hourly'`, `'twicedaily'`, `'daily'`, `'weekly'`, `'off'`); pass `false` for a one-off event at `ts`. An unregistered name is stored with a 0 interval, so it never repeats. |
 | `wordjs.crypto.randomToken(bytes=16)` / `randomInt(min, max)` | — | CSPRNG (no data access, no permission gate). Use instead of `Math.random` for tokens/access codes. **Async** in an isolated plugin (RPC to host) — `await` it. |
 | `wordjs.assets.enqueueScript(spec)` / `enqueueStyle(spec)` | `assets:write` | Load a `<script>`/`<style>` onto public pages. `spec = { handle, src, inFooter?, strategy?:'async'\|'defer', media? }`. **`src` must be a relative path inside your plugin's `public/` directory** with a servable extension — see §11a; anything else throws. The host verifies the file exists + can't escape and emits a **sanitized** tag served from `/plugins/<slug>/public/…` — you never control raw markup (the raw-HTML head/footer hooks stay denied). |
@@ -650,10 +650,15 @@ and their subdomains.
 
 > `scope: "admin"` on a capability implies only its ordinary `read`+`write` verbs — it never subsumes the
 > high-power verbs (`provider`, `register`, `register_route`), which must be granted explicitly.
-> `express:register_route` and `admin_menu:register` are validated, grantable manifest vocabulary but
-> have no `verifyPermission` gate behind them today: route and sidebar registration are policed by the
-> caps and allowlists in `plugin-isolate.ts` / `adminMenu.ts` instead (which is why they show `—` in the
-> bridge table above).
+> `express:register_route` and `admin_menu:register` are enforced grants, not just manifest vocabulary:
+> the host's `register-route` IPC handler (`backend/src/core/plugin-isolate.ts`) checks
+> `express:register_route` first and, if it is not granted, logs
+> `denied route registration: express:register_route not granted` and mounts nothing — the route-count
+> cap, HTTP-verb allowlist and path validation only run after that check. Likewise
+> `wordjs.adminMenu.add` runs `verifyPermission('admin_menu', 'register')` before `registerAdminMenu`, so
+> an ungranted plugin adds no sidebar item. Both are checked on every (re)spawn, so revoking a grant
+> takes effect at the hot-reload that follows a grant change. The caps and allowlists in
+> `plugin-isolate.ts` / `adminMenu.ts` apply on top of the grant, never instead of it.
 
 There is no first-party pre-seeding: **activation** grants a plugin exactly the capabilities its
 manifest declares (idempotent — only when the plugin has no prior grant record), and that applies
@@ -664,11 +669,12 @@ the same checks.
 Changing a plugin's grants **hot-reloads its child process** so the bridge gates re-evaluate and a
 `network` change takes effect — no server restart. Granting a higher-risk capability is a real security
 decision, and the UI says so: `frontend/src/lib/permissionMeta.ts` classifies `database:write`,
-`settings:write`, `filesystem:write`, `email:admin`, `email:provider`, `notifications:provider` and
-`network` as **high risk**, and both grant screens (the activation dialog and the per-permission
+`settings:write`, `filesystem:write`, `email:admin`, `email:provider`, `notifications:provider`,
+`assets:write` and `network` as **high risk**, and both grant screens (the activation dialog and the per-permission
 toggles) render those rows with a `HIGH RISK` badge, a platform-authored explanation, and — separately
 labelled — the plugin's own stated reason from its manifest. `network` carries the explicit wording
-that data can leave your server. Only grant capabilities to code you have audited.
+that data can leave your server, and `assets:write` spells out that the plugin's script runs in every
+visitor's browser. Only grant capabilities to code you have audited.
 
 > **Removed for good:** there is no shell/`child_process`, native addons, unscoped/core-table DB,
 > secret-named options, absolute routes, raw cookie/header control, raw-HTML hooks, or "trusted" tier —

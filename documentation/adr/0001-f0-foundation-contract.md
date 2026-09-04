@@ -67,7 +67,7 @@ Performance ceilings live in `backend/f0-performance-budgets.json`. They are reg
 
 ## Failure characterization
 
-`f0-content-mutation-failures.test.ts` injects failures at the existing post, term, meta and revision boundaries and records the current partial states. These are characterization tests, not desired behavior. F3 must invert their assertions so every injected failure leaves the pre-mutation database state and no externally published event.
+`f0-content-mutation-failures.test.ts` injects failures at the post, term, meta and revision boundaries of a content create and update. In F0 it was a characterization suite that recorded the partial states those failures left behind. F3 inverted its assertions: every injected failure must now return an error, leave the pre-mutation database state (no post row, no meta, no recovery snapshot) and add no `content_outbox` row. `npm run verify:f3` fails if that inversion is missing (`backend/scripts/verify-f3-transactional-content.ts`), and the F6 certification matrix (`backend/scripts/verify-f6-migration.ts`) cites the file as the evidence for the "process failure during a content mutation" leg. The success path — the event committed in the same transaction and dispatched only after commit — is covered by `f3-content-outbox.test.ts`, not by this file.
 
 ## Performance measurement
 

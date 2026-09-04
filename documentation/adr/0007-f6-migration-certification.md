@@ -16,12 +16,26 @@ generated projections. Every one of them shipped with an ADR, a CI gate and an e
 None of them finished the job, because a contract that only the new code obeys is a second system, not
 a migration. What is left is the part no generator produces:
 
-- 143 `req: any` annotations still sit on the request boundary, across 24 of the 43 files under
-  `src/routes` and `src/middleware`. Nineteen of those files are now fully typed; seven are half
-  migrated, carrying typed handlers next to untyped ones.
+- When F6 opened (2026-08-24), 143 `req: any` annotations sat on the request boundary, across 24 of
+  the 43 files under `src/routes` and `src/middleware`; nineteen files were fully typed and seven were
+  half migrated, carrying typed handlers next to untyped ones. That debt was paid down to zero the next
+  day (`f95f139f`): all 43 boundary files are fully typed, and the gate's ratchets now hold at zero
+  `req: any`, zero `(req as any)` casts, zero `res: any`, zero untyped boundary files and a floor of 43
+  fully typed files. The ratchets stay in place so the debt cannot come back.
 - The built-in content types declare their fields through the F1 feature mapper, but three of those
   declarations bind to a posts column that does not exist (see F6-INV-04).
-- Thirty-one plugins ship in the marketplace and nine of them are named by any backend test.
+- Thirty-one plugins ship in the marketplace. When F6 opened, none of them had executable
+  compatibility evidence: the only available signal was whether a backend test file mentioned a
+  plugin's slug, and even that count was inflated by slugs that appeared only in comments and packaging
+  paths (it read 9 with comments included and 4 without). Coverage is now measured by running
+  `backend/src/tests/f6-plugin-compatibility.test.ts`, which derives its population from
+  `marketplace/plugins/` and gives every plugin a top-level test: the manifest parses and matches its
+  directory, the declared frontend entries exist, the install-time validator accepts it, the entry
+  loads, and `init()` completes against a bridge that refuses undeclared capabilities. All thirty-one
+  pass today (`MIN_COVERED_MARKETPLACE_PLUGINS = 31`, `MAX_UNCOVERED_MARKETPLACE_PLUGINS = 0`), and the
+  gate counts coverage only from that run, so a slug in a comment or a skipped test no longer counts.
+  This proves each plugin loads and boots; it does not test the plugins' behaviour (no HTTP handler,
+  query or rendered block is asserted).
 - The three-OS confinement certification, the three-engine SQL certification, the outbox failure
   injection and the multi-node coherence job all already exist — as separate facts nothing ties
   together, so no single artefact can say whether the certification matrix is intact.
@@ -76,9 +90,15 @@ for the next reader.
 
 A gate that demanded zero `req: any` on the day F6 opened would have been disabled within a day, and a
 disabled gate protects nothing. The gate records where the debt stood when the phase opened and fails
-when it RISES. Three numbers are ratcheted: total `req: any` occurrences, the number of boundary files
-that still contain one, and the number of boundary files that are fully migrated. Together they say the
-thing that matters: the debt may shrink, and a file that has been migrated may not slide back.
+when it RISES. Five numbers are ratcheted: total `req: any` occurrences; `req as any` casts at the
+boundary (the parameter or any member of it, e.g. `(req.query as any)`, and the `<any>req` form);
+`res: any` occurrences; the number of boundary files that still contain a `req: any`; and, as a floor
+rather than a ceiling, the number of boundary files that are fully migrated (at least one typed `req`
+and no `req: any` left). The cast and response counters exist because paying the debt down must not be
+a search-and-replace that moves the `any` instead of removing it: typing the parameter and then widening
+every use satisfies the `req: any` count while changing nothing about what is checked. The gate also
+cross-checks its `req: any` count against the F0 baseline and fails if the two disagree. Together they
+say the thing that matters: the debt may shrink, and a file that has been migrated may not slide back.
 
 ### Certification consumes the proofs that already exist
 
@@ -134,9 +154,20 @@ abolish; treating an F5 failure as out of scope for F6's certification.
 
 ### F6-INV-07 — A legacy plugin without compatibility evidence is not shipped
 
-Every plugin under `marketplace/plugins` is either named by a backend test or counted against the
-uncovered ceiling, and that ceiling may not rise. **Violated by**: adding a plugin directory with no test
-naming it; deleting a plugin's test to make an unrelated change green.
+Every plugin directory under `marketplace/plugins` is exercised by
+`backend/src/tests/f6-plugin-compatibility.test.ts`, which derives its population from that directory
+and gives each plugin a top-level test named for its slug: the manifest parses and matches its
+directory, the declared frontend entries exist, the shipping install-time validator accepts it, the
+entry loads, `init()` completes against a bridge that refuses undeclared capabilities, and everything
+`init()` registered satisfies the host's own acceptance rules. The F6 gate (`F6-C05`) runs that suite
+itself and counts a plugin as covered only when its test **passed** — a failed or skipped test is not
+evidence, and a plugin on disk that received no verdict fails the gate outright. The covered count is a
+floor that may only rise (`MIN_COVERED_MARKETPLACE_PLUGINS`, currently 31) and the uncovered count is a
+ceiling that may only fall (`MAX_UNCOVERED_MARKETPLACE_PLUGINS`, currently 0); neither can be satisfied
+by naming a slug in a test file. **Violated by**: adding a plugin directory the compatibility suite
+cannot load or that fails the host's acceptance rules; skipping or weakening the suite so an unloadable
+plugin still reads as passed; lowering the floor or raising the ceiling to make an unrelated change
+green.
 
 ### F6-INV-08 — The sandbox fails closed on every platform it claims
 
@@ -176,18 +207,33 @@ checked against something the tree computes.
 `--print` reports the measured values without failing, which is how a ratchet is tightened after debt is
 paid. Tightening is an ordinary commit. Loosening one is a decision that belongs in a review.
 
-One piece of wiring is still open. The gate's verdict reaches CI today only through
-`backend/src/tests/f6-final-criteria.test.ts`, which asserts it reports no failures and which the backend
-suite runs. That is enforcement, but it is the weaker form: an F6 file left uncommitted would fail CI as
-a broken suite rather than as a missing gate. `.github/workflows/ci.yml` should also carry an explicit
-`npm run verify:f6` step beside the F0-F5 gate steps, and its "Gates that travel" manifest should list
-`backend/scripts/verify-f6-migration.ts` and `backend/src/tests/f6-final-criteria.test.ts`. The gate
-prints this as a note on every run until the step exists.
+The gate's verdict reaches CI by two independent routes. `.github/workflows/ci.yml` runs an explicit
+`npm run verify:f6` step beside the F0-F5 gate steps, and `backend/src/tests/f6-final-criteria.test.ts`,
+which the backend suite runs, asserts the gate reports no failures. Both
+`backend/scripts/verify-f6-migration.ts` and that test are listed in ci.yml's "Gates that travel"
+manifest, so an uncommitted F6 file fails as a missing gate rather than as a broken suite. The gate
+checks both routes itself: it fails if neither reaches it, and if the explicit step is ever removed it
+prints a note on every run asking for it back.
 
-## How to advance the migration
+## How to keep the migration closed
 
-1. Migrate a file's handlers to typed requests and remove its `req: any` annotations.
-2. Run `npm run verify:f6 -- --print` and read the notes; they name the new values.
-3. Lower `MAX_REQUEST_ANY_OCCURRENCES` and `MAX_UNTYPED_BOUNDARY_FILES`, raise
-   `MIN_FULLY_TYPED_BOUNDARY_FILES`, and update `backend/f0-baseline.json` with `verify:f0 --print`.
-4. Run `npm run verify:f6`, the backend suite and `npm run typecheck`.
+The request-boundary ratchets are fully tightened: `MAX_REQUEST_ANY_OCCURRENCES`,
+`MAX_REQUEST_AS_ANY_CASTS`, `MAX_RESPONSE_ANY_OCCURRENCES` and `MAX_UNTYPED_BOUNDARY_FILES` are all `0`,
+and `MIN_FULLY_TYPED_BOUNDARY_FILES` is `43` — every `.ts` file under `backend/src/routes` and
+`backend/src/middleware`. A file counts as fully typed when it carries at least one typed `req` handler
+and no `req: any`. The plugin ratchets are likewise closed: `MIN_COVERED_MARKETPLACE_PLUGINS` is `31`
+and `MAX_UNCOVERED_MARKETPLACE_PLUGINS` is `0`. There is nothing left to lower; the job now is to keep
+the numbers from moving the wrong way.
+
+1. Write every new route or middleware handler with an explicit request and response type. A
+   `req: any`, `res: any` or `(req as any)` anywhere under the boundary directories turns
+   `npm run verify:f6` red.
+2. When a boundary file is added, run `npm run verify:f6 -- --print`; if the notes report more than 43
+   fully typed files, raise `MIN_FULLY_TYPED_BOUNDARY_FILES` to the reported value and refresh
+   `backend/f0-baseline.json` with `verify:f0 --print`.
+3. When a marketplace plugin is added, `backend/src/tests/f6-plugin-compatibility.test.ts` picks it up
+   from `marketplace/plugins/` automatically; once its test passes, raise
+   `MIN_COVERED_MARKETPLACE_PLUGINS` to the value the `--print` notes report. A plugin whose test fails
+   counts as uncovered and fails the gate.
+4. Run `npm run verify:f6`, the backend suite and `npm run typecheck`. Tightening a ratchet is an
+   ordinary commit; loosening one is a decision that belongs in a review.

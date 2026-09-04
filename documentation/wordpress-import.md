@@ -145,7 +145,9 @@ The importer is **idempotent**. On a re-run:
 
 *   **Users** are matched by login, then email — not re-created.
 *   **Terms** are matched by slug + taxonomy.
-*   **Posts/pages** are matched by slug + type, and an already-present post is skipped (its id is still remembered so parent/child and comment relationships resolve correctly).
+*   **Posts/pages** are matched by slug + type, and an already-present post is skipped **along with its comments** — comments have no dedupe key, so the importer never re-attaches comments to a post it did not create in the same run (doing so would duplicate them). The post's id is still remembered so `wp:post_parent` references pointing at it (hierarchical pages) resolve correctly; threaded-comment parents are resolved only among comments created in the same run.
+
+    One consequence for an interrupted run: a post whose row committed but whose comments had not all been attached yet keeps only the comments that made it in — the next run skips that post and does not retry its remaining comments.
 
 This means you can analyze, do a partial import, fix something, and run again without producing duplicates. The import is deliberately **not** wrapped in a single transaction — a bulk import is treated as an incremental, resumable operation, so a failure partway through leaves the already-imported content in place for the next run to skip over. Each item is still atomic on its own: the post row, its date backfill, its meta and its term links go through `runContentMutation`, so they commit together or not at all. Comments are attached after that commit, and a comment that fails only counts as `skipped`.
 

@@ -75,12 +75,12 @@ Roles are no longer hardcoded. They are stored in the database (table `options`)
 *   **Initialization:** Default roles are seeded during installation but can be modified via the Roles UI.
 *   **Capabilities:** Users' capabilities are resolved at runtime based on their assigned role in the `roles` manager.
 
-Default roles include:
-*   **Administrator:** `*` (All capabilities).
-*   **Editor:** `publish_posts`, `edit_others_posts`, etc.
-*   **Author:** `publish_posts`, `edit_posts`.
-*   **Contributor:** `edit_posts` (cannot publish).
-*   **Subscriber:** `read` only.
+Default roles (the built-in `DEFAULT_ROLES` table in `backend/src/core/roles.ts`, applied and persisted to `wordjs_user_roles` on first boot when the option is empty; an operator-supplied `config.roles` overrides it) are:
+*   **Administrator:** `*` (all capabilities).
+*   **Editor:** `read`, `access_admin_panel`, `upload_files`, the full `edit_*`/`publish_*`/`delete_*` set for posts and pages (own, others' and published), `manage_categories`, `moderate_comments`.
+*   **Author:** `read`, `access_admin_panel`, `upload_files`, `edit_posts`, `edit_published_posts`, `publish_posts`, `delete_posts`, `delete_published_posts`.
+*   **Contributor:** `read`, `access_admin_panel`, `edit_posts`, `delete_posts` (cannot publish).
+*   **Subscriber:** `read` and `access_admin_panel` only.
 
 ### 2.4 CSRF Protection
 All state-changing requests (`POST`/`PUT`/`PATCH`/`DELETE`) under the API prefix pass through `csrfProtection` (`backend/src/middleware/auth.ts`, mounted globally in `backend/src/index.ts`). It requires a same-origin signal:
@@ -123,9 +123,9 @@ Models wrap database operations. Located in `backend/src/models/`.
 *   **Methods:** `User.create()`, `User.authenticate()`, `user.can()`.
 
 ### 4.2 Options API (`core/options.ts`)
-Global key-value store for system settings.
-*   `getOption(key, default)`
-*   `updateOption(key, value)` - Auto-serializes JSON.
+Global key-value store for system settings. All calls are **async** (they return Promises).
+*   `await getOption(key, default)` - Returns the stored value, or `default` (defaults to `null`) when the option does not exist.
+*   `await updateOption(key, value, autoload = 'yes')` - Auto-serializes JSON.
 
 ---
 
@@ -172,8 +172,9 @@ Two rules in `backend/src/core/query-params.ts` decide what a malformed paramete
 - **Users**: `/users`, `/roles` (see §6.11) - Role-Based Access Control.
 - **System**: `/settings`, `/plugins`, `/marketplace` (plugin **and theme** catalogs — see §6.3.1), `/themes`, `/menus` (§6.12), `/fonts` (§6.15), `/health` (§6.17), `/seo` (§6.16), `/hooks` (§6.18), `/notifications` (§6.19), `/webhooks` (outgoing HMAC-signed webhooks — see §6.10), `/system/certs`.
 - **Observability**: `/metrics` (Prometheus, root-path, scrape-token-gated — see §6.8), `/analytics` (see §6.4).
-- **Extensions**: `/widgets` (§6.13), `/types` (Post Types, §6.14), `/revisions`.
+- **Extensions**: `/widgets` (§6.13), `/types` (Post Types, §6.14), `/taxonomies` (registered taxonomies — `GET /taxonomies` and `GET /taxonomies/:name` are public; `POST /taxonomies` and `DELETE /taxonomies/:name` are admin-only), `/revisions`.
 - **Site & editor**: `/chrome` (site-level chrome compositions — `PUT`/`DELETE /chrome/:part` where `part` is `header`, `footer` or `announcement`, admin-only; anything else answers `400`; reads travel through the public `/settings` payload), `/forms` and `/presence` (§6.20).
+- **Collaboration & audit**: `/collab` (Verso real-time co-editing, `backend/src/routes/collab.ts` — `GET /collab/:postId/stream` is the SSE down-channel, `POST /collab/:postId/ops`, `/presence`, `/resync` and `/leave` the up-channel; every route requires `authenticate` plus the shared per-post edit gate `canEditPostRecord` (§6.2); `400 rest_invalid_param` for a malformed `postId`; covered by its own per-IP `collabLimiter` mounted in `backend/src/index.ts`. The routes are always mounted — the on/off switch is client-side: `NEXT_PUBLIC_WORDJS_COLLAB=off` for the deployment or `localStorage.wordjs_collab = "off"` for one browser), `/audit` (`GET /audit`, admin-only, paginated with `page`/`per_page` (1–200, default 50) and `X-WP-Total`/`X-WP-TotalPages` headers — a read-only view of the append-only `audit_log`; there is deliberately no write, update or delete route).
 - **Internal**: `/api/internal/gateway-update` — gateway-to-backend only, outside the `/api/v1` prefix (§6.21).
 - **Data**: `/export`, `/export/wxr`, `/import`, `/import/wordpress` (WordPress WXR migration — see §6.9), `/backups`, `/db-migration` (engine migration).
 
@@ -197,7 +198,7 @@ Two rules in `backend/src/core/query-params.ts` decide what a malformed paramete
 | `POST` | `/reset-password`           | No   | Body `{ uid, token, password }`. Consumes the single-use token (constant-time hash compare) and revokes all existing sessions; `400 rest_invalid_reset` / `rest_weak_password` on failure |
 | `POST` | `/verify-email`             | No   | Body `{ uid, token }`. Consumes the single-use email-verification token minted at registration (24h TTL) and clears `email_verification_pending`, after which login works. One uniform `400 rest_invalid_verification` for a bad, expired or already-consumed token. Rate-limited by the auth limiter |
 | `GET`  | `/tokens`                   | Session + `manage_api_tokens` | List the caller's scoped API tokens (metadata only; secrets are never re-shown) |
-| `POST` | `/tokens`                   | Session + `manage_api_tokens` | Mint a scoped API token. Body `{ name?, scopes?, expiresInDays? }`; the raw `wjt_…` secret is returned **once** (`201`). Unknown scopes → `400 rest_invalid_scope`; over the active-token cap → `400 rest_token_limit` |
+| `POST` | `/tokens`                   | Session + `manage_api_tokens` | Mint a scoped API token. Body `{ name?, scopes?, expiresInDays? }`; the raw `wjt_…` secret is returned **once** (`201`). Refusals, in check order: over the active-token cap → `400 rest_token_limit`; `expiresInDays` present but not a positive number → `400 rest_invalid_param`; unknown scopes → `400 rest_invalid_scope`; caller's role is under the MFA-by-role policy but the caller has not enrolled → `403 rest_mfa_required_for_tokens` (refused even **inside** the grace period, because `Bearer wjt_…` tokens are exempt from the `MfaComplianceGate` and a token minted during grace would sidestep the policy for good) |
 | `DELETE` | `/tokens/:id`             | Session + `manage_api_tokens` | Revoke one of the caller's tokens (`404` if not the caller's or already gone) |
 | `POST` | `/mfa`                      | No   | Complete a login that requires a second factor. Body `{ mfaToken, code }` (TOTP or backup code); issues the session cookie on success (own `mfa:` lockout bucket) |
 | `GET`  | `/mfa/status`               | Yes  | Whether MFA is enabled for the caller + remaining backup-code count |
@@ -218,7 +219,7 @@ Two rules in `backend/src/core/query-params.ts` decide what a malformed paramete
 | `GET`    | `/posts`            | Opt.  | List posts (filters: `type`, `status`, `author`) |
 | `GET`    | `/posts/:id`        | Opt.  | Get post details by ID                           |
 | `GET`    | `/posts/slug/:slug` | Opt.  | Get post details by URL slug                     |
-| `POST`   | `/posts`            | `edit_posts`       | Create a new post/page                          |
+| `POST`   | `/posts`            | `edit_<type>s`     | Create a post/page/custom-type item. The gate is the requested `type`'s **edit** capability from its capability family (`edit_posts`, `edit_pages`, or the custom type's `capability_type` family; default `type` is `post`) — otherwise `403 rest_cannot_create`. An unknown or non-REST-exposed `type` answers `400 rest_invalid_post_type` |
 | `PUT`    | `/posts/:id`        | `edit_posts`†      | Update a post (own, or `edit_others_posts`)     |
 | `DELETE` | `/posts/:id`        | `edit_posts`†      | Trash/delete a post (own, or `delete_others_posts`) |
 | `GET`/`POST` | `/posts/:id/meta` | Opt. / Auth | Read / set post meta (per-post access checks in the handler). **Server-owned keys are refused** — see the note below |
@@ -262,13 +263,15 @@ Base path: `/api/v1/users` (`backend/src/routes/users.ts`). `PUT /me` is declare
 | :------- | :---------- | :----------- | :---------------------------------------------------------------- |
 | `GET`    | `/`         | `list_users` | List users                                                        |
 | `GET`    | `/me`       | Yes          | Current user's profile                                            |
-| `PUT`    | `/me`       | Yes          | Update own profile (`email`, `displayName`, `url`, `personalEmail` recovery address). **Changing your own password requires `currentPassword`** (`403 rest_bad_current_password`; min 8 chars); a successful change revokes all sessions |
+| `PUT`    | `/me`       | Yes (Session when it carries an account-security field) | Update own profile (`email`, `displayName`, `url`, `personalEmail` recovery address). **Changing your own password, or actually changing your `email` or `personalEmail` (both are recovery-bearing addresses — the reset flow prefers `personalEmail` and falls back to `email`), requires `currentPassword`** (`403 rest_bad_current_password`, also returned when `currentPassword` is omitted; password min 8 chars). Re-sending an unchanged address does not trigger the check. A successful password change revokes all sessions; a successful recovery-address change invalidates any pending password-reset link |
 | `POST`   | `/me/sessions/revoke` | Session | "Sign me out everywhere": stamps the caller's security epoch, killing every JWT/cookie session **including the calling one**, and leaves their API tokens alone. Requires `currentPassword` through the same sudo helper as `PUT /me`. Audited as `user.sessions_revoked`. Declared before `/:id` |
 | `GET`    | `/:id`      | Yes          | Get a user (self, or `list_users` for others)                     |
-| `POST`   | `/`         | Admin        | Create a user (`username`, `email`, `password`, optional `role`)  |
-| `PUT`    | `/:id`      | Yes†         | Update a user — layered authorization, see the note above         |
+| `POST`   | `/`         | Admin + Session | Create a user (`username`, `email`, `password`, optional `role`)  |
+| `PUT`    | `/:id`      | Yes† (Session when it carries an account-security field) | Update a user — layered authorization, see the note above         |
 | `POST`   | `/:id/mfa/reset` | Session + `edit_users` | Clear another user's two-factor enrolment (every `mfa_*` key), so a locked-out account can log in with its password and re-enrol. Audited as `user.mfa_reset` |
-| `DELETE` | `/:id`      | Admin        | Delete a user                                                     |
+| `DELETE` | `/:id`      | Admin + Session | Delete a user                                                     |
+
+> **Headless tokens and account security.** `authenticate` and `refuseHeadlessAccountSecurity` are mounted **router-wide** (`backend/src/routes/users.ts`), so the "Session" rule of §6.2.1 applies beyond the two rows that carry only that mark. Every `POST` and `DELETE` under `/users/*` (create a user, delete a user, sign-out-everywhere, MFA reset) is treated as an account-security write unconditionally, and a `PUT /me` or `PUT /:id` is treated as one whenever its body **supplies** an account-security field: `password`, `currentPassword`, `email` or `role` (non-blank), or `personalEmail` or `professionalMailbox` (present at all, even blank or `null`, because their sinks act on presence — a blank `personalEmail` is a write that blanks the recovery address). Such a request made with an `Authorization: Bearer wjt_…` API token is refused with `403 rest_token_management_forbidden`, whatever the token's scopes or its owner's role. Reads (`GET`) and profile-only `PUT`s (e.g. `displayName`, `url`) remain reachable with a suitably scoped token.
 
 > **`POST /:id/mfa/reset` — why it is shaped like this.** It is the way **out** of a 2FA lockout: before it existed, an account someone else had enrolled could only be recovered by deleting and recreating it. Its gates mirror the sibling MFA routes: `sessionOnly` (a leaked `wjt_` token must never strip a second factor), the same `targetIsPrivileged` rule as `PUT /:id` (an `edit_users` delegate cannot disarm an administrator's 2FA and then attack their password), and **never self** — `400 rest_cannot_reset_own_mfa`, because an admin turning off their **own** 2FA must still go through `POST /auth/mfa/disable` with a current code. A sole administrator who loses their authenticator therefore still needs a second admin.
 
@@ -310,6 +313,9 @@ Base path: `/api/v1/users` (`backend/src/routes/users.ts`). `PUT /me` is declare
 | `DELETE` | `/themes/:slug`           | Admin | Delete a theme                                      |
 | `GET`  | `/themes/:slug/download`    | Admin | Download a theme as a ZIP                           |
 | `GET`  | `/themes/:slug/doctor`      | Admin | Token-contract diagnostics for a theme; returns `{ available: false }` (fail-open) when the token manifest is absent |
+| `GET`  | `/themes/:slug/templates`   | Admin | Page templates the theme ships as `templates/*.json`: `{ slug, templates: string[] }` (file names without `.json`, sorted; empty list when the theme has no `templates/` dir). `400 { error }` for an invalid slug. Feeds the editor's `_wjs_template` picker |
+| `GET`  | `/themes/mods/export`       | Admin | Download the **active** theme's customizer mods as a JSON file (`Content-Disposition: attachment; filename="<slug>-customizer-mods.json"`): `{ theme, exportedAt, mods }`, where `mods` is the sanitized `active_theme_mods` map, safe to re-import |
+| `POST` | `/themes/mods/import`       | Admin | Import customizer mods for the active theme. Body is either a bare `{ "--wjs-*": "value" }` map or the export wrapper `{ theme, mods }`. Validated **strictly**: any non-`--wjs-*` key or unacceptable value fails the whole import with `400 { error, errors: [{ key, code, message }] }` and nothing is written; on success writes `active_theme_mods`, purges the public site and returns `200 { applied: true, count }` |
 | `GET`  | `/setup/status`             | No    | Check if site is installed (not token-gated)        |
 | `POST` | `/setup/test-db`            | Token | Validate a DB connection before install (install-token gated) |
 | `POST` | `/setup/install`            | Token | Run the installation wizard (install-token gated)   |
@@ -624,12 +630,16 @@ The secret is compared in **constant time** and a request is refused when no sec
 WordJS includes a robust scheduling system similar to `wp-cron`, located in `backend/src/core/cron.ts`.
 
 ### 8.1 Scheduling Events
-```javascript
-const { scheduleEvent } = require('../../src/core/cron');
 
-// Schedule a recurring event
-if (!nextScheduled('my_plugin_daily_task')) {
-    scheduleEvent(Date.now(), 'daily', 'my_plugin_daily_task');
+All cron functions are **async** (they read/write the `cron` option) — always `await` them. `nextScheduled(hook, args?)` resolves to the next timestamp (ms) or `false` when nothing is scheduled.
+
+```javascript
+const { scheduleEvent, nextScheduled } = require('../../src/core/cron');
+const { addAction } = require('../../src/core/hooks');
+
+// Schedule a recurring event (guarded so it is registered only once)
+if (!(await nextScheduled('my_plugin_daily_task'))) {
+    await scheduleEvent(Date.now(), 'daily', 'my_plugin_daily_task');
 }
 
 // Hook into it
@@ -637,6 +647,8 @@ addAction('my_plugin_daily_task', () => {
     console.log("Running daily maintenance...");
 });
 ```
+
+The same functions are also exposed to core code as `global.wordjs.scheduleEvent`, `scheduleSingleEvent`, `unscheduleEvent` and `nextScheduled` (`backend/src/index.ts`). Inside a **sandboxed** plugin the only cron bridge is `await wordjs.cron.schedule(timestamp, recurrence, hook, args)` (`backend/src/core/plugin-worker.js`) — there is no `nextScheduled` counterpart, so guard against duplicate scheduling yourself (e.g. with a plugin option).
 
 ### 8.2 Available Intervals
 *   `hourly`
@@ -743,38 +755,40 @@ router.get('/my-endpoint', asyncHandler(async (req, res) => {
 Quick copy-paste snippets for common tasks.
 
 ### 14.1 How to... Add a New API Endpoint
-In your plugin's `index.js`:
+Plugins never touch the host Express app: every plugin declares `"isolated": true` and runs in a forked worker (`backend/src/core/plugin-worker.js`), so `require('express')` / `require('../../src/core/appRegistry')` is not part of the contract. Routes are registered through the `wordjs` bridge, which the worker passes to your entry point as the argument of `exports.init(wordjs)`. The host mounts every route under `/api/v1/plugin/<your-slug>/…` — there is no way to choose another prefix — and only if the admin has granted the plugin `express:register_route` (declare it in your manifest's `permissions`); otherwise the registration is refused and logged as `denied route registration: express:register_route not granted`. Route paths may contain only static segments, `:params` and at most two `*` wildcards (max 200 chars); the HTTP verb must be one of `get|post|put|patch|delete|options|head|all`.
+
+In your plugin's `index.js` (runs inside the sandbox):
 ```javascript
-const express = require('express');
-const router = express.Router();
-const { authenticate, isAdmin } = require('../../src/middleware/auth');
+exports.init = (wordjs) => {
+    // Public endpoint → GET /api/v1/plugin/<your-slug>/hello
+    wordjs.http.route('get', '/hello', (req, res) => {
+        res.json({ message: 'Hello World!' });
+    });
 
-// Public Endpoint
-router.get('/hello', (req, res) => {
-    res.json({ message: 'Hello World!' });
-});
-
-// Protected Admin Endpoint
-router.post('/secret', authenticate, isAdmin, (req, res) => {
-    res.json({ secret: 'Only admins see this' });
-});
-
-// Register it
-const { getApp } = require('../../src/core/appRegistry');
-getApp().use('/api/v1/my-plugin', router);
+    // Protected admin endpoint → POST /api/v1/plugin/<your-slug>/secret
+    // { auth: true, admin: true } makes the HOST run the real authenticate / isAdmin
+    // middleware before the request is forwarded to your handler.
+    wordjs.http.route('post', '/secret', { auth: true, admin: true }, (req, res) => {
+        res.json({ secret: 'Only admins see this' });
+    });
+};
 ```
+The handler runs in the worker with a serialized request `{ method, path, query, params, body, user }` and replies with `res.status().json()`, `res.send()` or `res.end()`. Core code (not plugins) still adds routers in `backend/src/routes/index.ts`; there `authenticate` comes from `backend/src/middleware/auth.ts` and `isAdmin` from `backend/src/middleware/permissions.ts` (`auth.ts` does not export it).
 
 ### 14.2 How to... Save/Load Settings
-Use the global Options API.
+Use the global Options API. Both functions are **async** — always `await` them (or chain `.then`); calling them without `await` gives you a Promise, not the value.
 ```javascript
 const { getOption, updateOption } = require('../../src/core/options');
 
 // Save
-updateOption('my_plugin_color', '#ff0000');
+await updateOption('my_plugin_color', '#ff0000');
 
 // Load (with default)
-const color = getOption('my_plugin_color', '#000000');
+const color = await getOption('my_plugin_color', '#000000');
 ```
+> Inside a sandboxed (isolated) plugin, use the bridge instead — it is async too:
+> `await wordjs.options.set('my_plugin_color', '#ff0000')` / `const color = await wordjs.options.get('my_plugin_color', '#000000')`.
+> Both paths require the `settings:read` / `settings:write` grants.
 
 ### 14.3 How to... Hook into Events
 Run code when something happens (e.g., a post is saved).
@@ -791,7 +805,7 @@ addAction('wp_insert_post', (postId, data) => {
 **CRITICAL:** The auth token is an **HttpOnly cookie** (`wordjs_token`) — it is **not** in `localStorage` and cannot be read from JS. Send it by passing `credentials: 'include'` so the browser attaches the cookie.
 ```javascript
 const getData = async () => {
-    const res = await fetch('/api/v1/my-plugin/hello', {
+    const res = await fetch('/api/v1/plugin/<your-slug>/hello', {
         credentials: 'include' // sends the HttpOnly wordjs_token cookie
     });
     const data = await res.json();

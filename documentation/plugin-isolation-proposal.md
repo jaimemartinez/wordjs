@@ -95,12 +95,21 @@
 >   (`net`/`tls`/`dgram`/`http`/`https`/`http2`/`dns`) are denied by secure-require, and the
 >   binding-backed globals `fetch`/`WebSocket`/`EventSource` are trapped as throwing getters in the
 >   sandbox entry (`plugin-worker.js`).
-> - **Grantable capabilities** (admin opt-in, on top of the above): `database`/`settings`/`filesystem`,
->   `users:read` (the safe user projection via `wordjs.users.*` — never `user_pass`), `email:provider`
->   (`provideMail`), `notifications:provider` (`notify.registerTransport`), and **`network`** (opens raw
->   sockets + `fetch`/`WebSocket`, **confined to PUBLIC destinations** — see below). `http.route`
->   `opts.multipart` (host parses the upload, capped at `uploads.maxFileSize`) is available within the
->   namespaced route.
+> - **Grantable capabilities** (admin opt-in, on top of the above; the canonical vocabulary is
+>   `KNOWN_PERMISSIONS` in `src/core/plugins.ts`, and every token must ALSO be declared in the plugin's
+>   manifest — declaration requests, the admin grants): `database`/`settings`/`filesystem` (`read`/`write`),
+>   `users:read` (the safe user projection via `wordjs.users.*` — never `user_pass`), `email:admin`
+>   (`wordjs.mail`), `email:provider` (`provideMail` — become the host-wide mail sender),
+>   `notifications:send` (`wordjs.notify`), `notifications:provider` (`notify.registerTransport`),
+>   `express:register_route` (mount a route under the plugin's namespace — enforced on the
+>   `register-route` IPC kind; without it `wordjs.http.route` is dropped host-side with a warning),
+>   `admin_menu:register` (`wordjs.adminMenu.add`), `assets:write` (`assets.enqueueScript`/`enqueueStyle`
+>   from the plugin's own dir), and **`network`** (opens raw sockets + `fetch`/`WebSocket`, **confined to
+>   PUBLIC destinations** and, when an admin sets one, to the per-plugin egress host allowlist — see
+>   below). A `<scope>:admin` grant implies only that scope's `read`/`write`; the high-power verbs
+>   `provider`, `register` and `register_route` are never implied and must be granted explicitly.
+>   `http.route` `opts.multipart` (host parses the upload, capped at `uploads.maxFileSize`) is available
+>   within the namespaced route.
 > - **`network` is egress-confined, not an open SSRF surface (`src/core/egress-guard.ts`):** when an
 >   admin grants `network`, secure-require hands the plugin the **egress-guarded** `net`/`tls`/`http`/
 >   `https`/`http2`/`dgram` module (`getGuardedModule`, fail-closed if the guard errors) and the worker
@@ -111,8 +120,17 @@
 >   and **fails CLOSED on an unresolvable/garbage host**. Validation happens **at connect time against
 >   the RESOLVED IP** (a validating `lookup` is always injected, anti-DNS-rebinding) — not just on the
 >   hostname string. So a `network` grant is **exfiltration to the public internet**, NOT a reach into
->   loopback / metadata-creds / internal RFC1918 services. (It still does not stop deliberate exfil to an
->   attacker's *public* server — that's the point of the grant; see §7 non-goals.)
+>   loopback / metadata-creds / internal RFC1918 services. By default (no per-plugin egress allowlist
+>   configured) it does not stop deliberate exfil to an attacker's *public* server — that's the point of
+>   the grant; see §7 non-goals. An admin can additionally narrow a network-granted plugin with a
+>   **per-plugin egress host allowlist** (`GET`/`POST /plugins/:slug/egress-hosts`, stored server-side in
+>   the `plugin_egress_hosts` option, re-resolved on every spawn and pushed into the child via
+>   `setAllowedHosts`): a non-empty list flips that plugin to **default-DENY** — only a listed host, or
+>   one of its subdomains at a label boundary, passes `isHostAllowed()` at the same connect/lookup
+>   chokepoints, and it never loosens the private/loopback/metadata block. If the host cannot load the
+>   policy at spawn, egress for a network-granted plugin **fails CLOSED** (`setDenyAllEgress`) rather than
+>   widening to allow-all-public. The allowlist runs inside the plugin's own process, so it is in-process
+>   defense-in-depth, not a containment boundary against arbitrary malicious code.
 > - **Connect-time enforcement is locked (can't be un-patched):** inside the child the guard patches
 >   `net.Socket.prototype.connect` as the **single chokepoint** (`installChildNetGuard`) — covering
 >   `net.connect`/`createConnection`, `new net.Socket()`, the `net.Stream` alias,
@@ -470,8 +488,10 @@ on top of the in-child guards without changing the bridge. Kernel resource limit
 - **Cost (actual):** the bridge API + the `child_process` OS-process isolate runner (+ layered memory
   caps) + porting the bundled plugins + the async-handler / `doShortcodeAsync` convention — all landed.
 - **Non-goals:** a granted capability is a granted capability — if an admin grants `network`, the plugin
-  can reach the network (that's the point); the model contains *ungranted* capability, not the
-  consequences of what was deliberately granted. It does not sandbox the frontend bundle (plugin React
+  can reach the public network (that's the point); the model contains *ungranted* capability, and the
+  opt-in per-plugin egress allowlist (`POST /plugins/:slug/egress-hosts`) only narrows *which public
+  hosts* a granted `network` may reach — it is not a boundary against the consequences of what was
+  deliberately granted. It does not sandbox the frontend bundle (plugin React
   components are build-time assets, bundled and reviewed as before); it does not replace code review of
   first-party plugins (activating them grants their declared caps, so review them as you would any code you ship); and a separate
   OS process gains a native default-on boundary (Landlock + seccomp, AppContainer + Job Object, or

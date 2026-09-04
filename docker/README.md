@@ -42,7 +42,8 @@ installed, so `/readyz` can go green without the interactive wizard.
 | `WORDJS_REDIS_ENABLED` | `false` | `true` turns on cross-node coherence |
 | `WORDJS_REDIS_HOST` / `WORDJS_REDIS_PORT` | `127.0.0.1` / `6379` | shared Redis |
 | `WORDJS_SITE_URL` | `http://localhost:3000` | public origin |
-| `PORT` | `3000` | public HTTP port inside the container |
+| `WORDJS_BACKEND_PORT` | `4000` | written as `port` in the generated config — the loopback port of the monolith's in-process backend (`monolith.js` reads `appConfig.port`); not exposed publicly, the public port is `PORT` |
+| `PORT` | `3000` | public HTTP port inside the container (written as `gatewayPort`) |
 
 ## Stack (`docker-compose.yml`)
 

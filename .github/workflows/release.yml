@@ -215,13 +215,13 @@ jobs:
             npm run start:mono        # one process, one port  (or: npm start for the 3-service split)
             ```
 
-            Finish setup in the browser (install wizard: pick SQLite or PostgreSQL, create your admin).
+            Finish setup in the browser (install wizard: pick SQLite, PostgreSQL or MySQL/MariaDB — with a live connection test for the server-based engines — then create your admin).
             See `INSTALL.md` inside the bundle and `documentation/deployment.md` for details.
 
-            Or skip the manual download entirely:
+            Or skip the manual download entirely (keep the `@latest` — npx may otherwise re-run a stale cached copy of the CLI):
 
             ```
-            npx create-wordjs my-site
+            npx create-wordjs@latest my-site
             ```
 
   # Publishes the `create-wordjs` bootstrapper (packages/create-wordjs) to npm so

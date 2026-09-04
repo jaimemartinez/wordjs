@@ -45,11 +45,13 @@ the [Separate-mode guide](documentation/separate-mode.md).
 
 ## Before you push
 
-`ci.yml` runs seven jobs — **Gates that travel** (every gate file is committed and actually run),
-**Backend (typecheck + test)**, **Multi-node coherence**, **Gateway (test)**, **Frontend (lint +
-build)**, **Verso E2E** (Playwright chromium against an ephemeral HTTP monolith), and **Compiled
-bundle smoke-boot** (builds the real release ZIP and deploys it in mono, split and enrollment mode
-via `scripts/smoke-deploy.sh`). Two more workflows gate the same push: **Sandbox parity** (the
+`ci.yml` runs eight jobs — **Gates that travel** (every gate file is committed and actually run),
+**Backend (typecheck + test)**, **Multi-node coherence**, **Gateway (test)**, **Install channel
+(create-wordjs)** (`npm audit` gate, the package's tests with a zero-tests guard, and a
+`node index.js --help` smoke of the installer CLI), **Frontend (lint + build)**, **Verso E2E**
+(Playwright chromium against an ephemeral HTTP monolith), and **Compiled bundle smoke-boot** (builds
+the real release ZIP and deploys it in mono, split and enrollment mode via
+`scripts/smoke-deploy.sh`). Two more workflows gate the same push: **Sandbox parity** (the
 plugin sandbox on four OS runners) and **F6 certification**. Run the equivalents locally so review
 is about the change, not a red check:
 

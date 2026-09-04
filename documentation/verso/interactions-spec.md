@@ -206,6 +206,12 @@ también bajo el runtime de Firefox) y `persp` (perspectiva 3D, 200–4000, defe
 `rotateX` ya emitía). Las 8 originales van PRIMERO en el orden canónico: un documento anterior a
 P3 emite bytes idénticos a los de siempre — hay un pin de paridad que lo vigila.
 
+**P12 extension.** The closed list now stands at **23** with `draw` (0–100 % of SVG stroke →
+`stroke-dashoffset` = (100 − draw)/100; neutral = 100 = fully drawn). It is dash geometry — paints,
+never relayouts — and only acts on `target: svg` under the block's contract (`.wjs-ixd` +
+`pathLength="1"`, §4.2). It goes LAST in `IX_PROP_KEYS`, after the three colours, so no document
+older than P12 changes a single byte.
+
 ### 3.4 Objetivo
 
 ```ts
@@ -260,9 +266,10 @@ ajustes:      wjs_ix_presets["aparecer-tarjetas"] = { …cuerpo…, rev: 7 }
                                                                       └─ lo único que cambia
 ```
 
-Guardar el preset → `rev++` → purga de la etiqueta `ix-presets` (mismo mecanismo que ya usa
-`settings` en `core/frontend-purge.ts`) → la siguiente navegación de cada página recompila y emite
-CSS con un hash nuevo. **El diff de `_puck_data` es literalmente vacío.** El gate F9-E es
+Saving the preset → `rev++` → the `updated_option` hook in `core/frontend-purge.ts` purges the
+`settings` tag (`wjs_ix_presets` is a member of its `SETTINGS_OPTIONS` set — the same purge every
+public setting uses; there is no dedicated `ix-presets` tag) → the next navigation of each page
+recompiles and emits CSS with a new hash. **El diff de `_puck_data` es literalmente vacío.** El gate F9-E es
 exactamente esto.
 
 **Overrides locales, acotados.** Un bloque con `preset` PUEDE llevar además `trigger`, y dentro de
@@ -369,26 +376,38 @@ Alternativas consideradas y **rechazadas**:
   navegador**.
 - Variables registradas con `@property` compuestas en un solo `transform` — ver §4.4.
 
-### 4.4 `@property`: sí, pero NO en el camino caliente
+### 4.4 `@property`: not used
 
-Es tentador registrar `--wjs-ixv-x`, `--wjs-ixv-scale`… y escribir
-`transform: translate3d(var(--wjs-ixv-x), …)`, dejando que cada pista anime su variable.
-**Rechazado para el camino caliente**: una animación de propiedad personalizada tiene que
-recalcularse en el **hilo principal**, y el `transform` que depende de ella deja de poder subir al
-compositor. Cambiaríamos un problema de composición —ya resuelto en compilación— por una
-regresión de rendimiento en la única parte que el contrato de §7 promete que no la tendrá.
+It is tempting to register `--wjs-ixv-x`, `--wjs-ixv-scale`… and write
+`transform: translate3d(var(--wjs-ixv-x), …)`, letting each track animate its own variable.
+**Rejected for the hot path**: an animated custom property is recalculated on the **main
+thread**, and the `transform` that reads it can no longer be promoted to the compositor. We would
+trade a composition problem — already solved at compile time — for a performance regression in
+the one place §7 promises there will be none.
 
-`@property` se usa **exactamente para dos cosas**:
+In the shipped engine **no `@property` registration exists at all** (there is none in
+`wordjs-ui.css` nor in any compiler output). The originally planned typed static scalar
+`--wjs-ixv-amt` was never emitted: per-block intensity is baked into the compiled unit and enters
+the hash (P7, `IX_AMT_MIN`/`IX_AMT_MAX` in `normalize.ts`). Hover transitions are emitted directly
+on the ix layer's `:hover` state (§4.2) without typed variables. The only inline engine variables
+are the split-text word index and count, `--wjs-ixv-i` and `--wjs-ixv-n` (`IX_WORD_INDEX_VAR` /
+`IX_WORD_COUNT_VAR` in `compile.ts`), consumed through untyped `calc()`.
 
-1. Registrar los escalares **estáticos** que el CSS lee con `calc()` (el papel que hoy hace
-   `--wjs-scroll-amt`): `@property --wjs-ixv-amt { syntax: "<number>"; inherits: false; initial-value: 30 }`.
-   No se animan; se tipan, para que `calc()` sea robusto y la herencia sea explícita.
-2. Transiciones de **hover** de valores que no son de compositor y ya cuestan hilo principal.
+These variables are **engine-owned**, not theme seams. Two naming families exist, and neither may
+appear in `public/theme-tokens.json`:
 
-Estas variables son **propiedad del motor**, no seams de tema: se llaman `--wjs-ixv-*` (nunca
-`--wjs-ix-*`, que es el prefijo de las clases) y se **excluyen explícitamente** del manifiesto
-`public/theme-tokens.json`. Si no se excluyen, `theme-doctor` las listará como tokens skinables y
-las estaremos prometiendo sin querer. **Gate de F9-B.**
+- `--wjs-ixv-*` — per-block scalars that travel inline on the element (today the word-split index
+  `--wjs-ixv-i` and count `--wjs-ixv-n`). These are the ones `@property` would have typed.
+- `--wjs-ix-*` — the three document-level state tokens the compiler *reads* with a fallback and
+  `wordjs-ui.css` *sets* in exactly one place each, deliberately never declared on `:root`:
+  `--wjs-ix-play` (`var(--wjs-ix-play,running)` on every infinite loop; the motion-pause checkbox
+  sets `paused`), `--wjs-ix-dir` (`calc(var(--wjs-ix-dir,1) * …)` on directional values;
+  `[dir="rtl"]` sets `-1`), and the dashed-ident `--wjs-ix-scene` (the `view-timeline-name` a
+  sticky section declares and its descendants use as `animation-timeline`). They share the
+  `wjs-ix-` prefix with the unit classes because they are state of the sheet, not of a block.
+
+If any of them leaked into the manifest, `theme-doctor` would list it as a skinnable token and we
+would be promising it by accident. **F9-B gate.**
 
 ### 4.5 Nombrado determinista
 
@@ -418,8 +437,8 @@ keyframes      @keyframes wjs-ixk-<hash>[-<n>]      (n = índice de pista, solo 
 | Superficie | Canal | Por qué |
 |---|---|---|
 | **Sitio público** | `<style href="wjs-ix-<pageHash>" precedence="wjs-ix">{css}</style>` desde el componente de servidor de la página | React 19 **deduplica por `href`** y **hoistea a `<head>`** como recurso render-blocking: cero FOUC, cero CLS, y una sola etiqueta aunque 40 bloques compartan preset. Se declara **después** de `wjs-base` y `wjs-theme` en `ThemeLoader`, para que el orden de cascada sea framework < tema < interacciones. `href` **sin espacios** (React avisa si los hay). |
-| **Canvas del editor** | `swapIxCss(css)` — hermano de `swapThemeCss(url)` en `VersoCanvasApi`, escribiendo un único `<style id="wjs-ix">` en el `head` del **iframe** | ⚠ **Aquí no sirve el hoisting de React.** El canvas es un iframe y el contenido llega por `createPortal` desde la raíz React del documento **padre** (`FrameController.tsx:208`), así que el hoisting de recursos apunta al `head` del padre y la hoja **nunca llegaría al canvas**. Es exactamente el motivo por el que el `<link>` del tema ya se inyecta a mano ahí. Mismo compilador, mismos bytes; solo cambia el canal, que ya era distinto. |
-| **Estáticos** | `wordjs-ui.css` | Los registros `@property`, el `perspective` de la capa cuando hay `rotateX`, y el bloque `@media (prefers-reduced-motion: reduce) { … animation: none !important }`. Nada generado duplica lo que ya es estático. |
+| **Canvas del editor** | `IxCanvasEngine` (`components/verso/canvas/IxCanvasEngine.tsx`) — a render-less component that reads the frame document from the `FrameController` context (`getFrameDocument()`) and writes the compiled page CSS into a single `<style id="wjs-ix">` (`IX_STYLE_ID`) in the **iframe's** `head` — the sibling channel of `swapThemeCss(url)` in `VersoCanvasApi`, which injects the theme `<link>` the same imperative way | ⚠ **Aquí no sirve el hoisting de React.** El canvas es un iframe y el contenido llega por `createPortal` desde la raíz React del documento **padre** (`FrameController.tsx:208`), así que el hoisting de recursos apunta al `head` del padre y la hoja **nunca llegaría al canvas**. Es exactamente el motivo por el que el `<link>` del tema ya se inyecta a mano ahí. Mismo compilador, mismos bytes; solo cambia el canal, que ya era distinto. |
+| **Estáticos** | `wordjs-ui.css` | The `@media (prefers-reduced-motion: reduce)` kill (`[class*="wjs-ix-"]`, `.wjs-ixw`, `.wjs-ixd` → `animation: none !important; transition: none !important`), the `.wjs-ixw { display: inline-block }` and `.wjs-ixd { stroke-dasharray: 1 }` target contracts, and the `--wjs-ix-play` pause token (`html:has(#wjs-motion-pause:checked)`). No `@property` rules. Nothing generated duplicates what is already static. |
 
 **Descartado — `<style>` por bloque**: N etiquetas idénticas cuando N bloques comparten preset, y
 sin deduplicación posible en el canvas.
@@ -428,8 +447,9 @@ ruta nueva, y un problema de invalidación que la deduplicación por `href` ya r
 **Descartado — variables inline + reglas estáticas** (lo que hace el contrato de bloques hoy): no
 alcanza. Las variables inline pueden parametrizar una animación existente (intensidad, duración),
 pero no pueden **crear** un `@keyframes` con los pasos que el autor definió. Por eso hay compilador
-y no solo tokens. Lo que **sí** se conserva del patrón: los valores escalares por bloque siguen
-viajando inline (`--wjs-ixv-amt`, `--wjs-ixv-i` del split), y las reglas viven en la hoja.
+y no solo tokens. What **is** kept from the pattern: the per-word scalars still travel inline
+(`--wjs-ixv-i` / `--wjs-ixv-n` from the split), and the rules live in the sheet. Per-block
+intensity does not travel inline — it is baked (P7).
 
 > ⚠ **Pendiente de verificar EN NAVEGADOR antes de dar F9-B por hecho**: que `<style precedence>`
 > emitido desde el árbol portaleado no aterriza en el iframe. Es lectura estructural del código, no
@@ -544,11 +564,21 @@ Lo que sí hay:
 
 - Los 12 tipos de entrada y los 4 de scroll existen **también** como presets de sistema
   (`sys:fade-up`…) para bloques nuevos.
-- Un botón **"Convertir a interacción"** por bloque: escribe el `ix` equivalente y limpia `anim`.
-  Manual, por bloque, reversible con deshacer.
-- **Precedencia cuando ambos están puestos: gana `ix`, `anim` se ignora**, y el panel lo dice. Es
-  la misma regla de especificidad que el efecto de scroll ya aplica hoy sobre la entrada; una sola
-  regla, no una tabla de combinaciones.
+- **Not built: a per-block "Convert to interaction" button** (write the equivalent `ix`, clear
+  `anim`, undoable) was part of the design but was never shipped in F9-D — the author panel
+  (`frontend/src/components/verso/fields/InteractionsControl.tsx`) has no such action and
+  `ixPanelModel.ts` has no anim→ix writer. Today an author who wants the new engine on an existing
+  block sets an `ix` (e.g. one of the `sys:*` presets) by hand; `anim` is never rewritten by the
+  product.
+- **When both are set they compose — neither is ignored.** `SharedBlockShell` renders the `ix`
+  layer as a third element nested *inside* the entrance wrapper and *outside* the appearance box
+  (`.wjs-anim` → `.wjs-ix-<hash>` → `.wjs-fx` → content), so an entrance animation and an
+  interaction on the same block coexist and their `transform`s multiply instead of overriding each
+  other (see the header of `lib/verso/interactions/shell.ts` and the nesting test in
+  `interactions/__tests__/ix-nobreak.test.tsx`). For `ix` units this retires the old "when a
+  scroll effect is present, scroll wins" specificity rule that `wordjs-ui.css` still applies
+  between the `anim` entrance and `anim.scroll`; the panel shows no precedence notice because
+  there is no precedence to report.
 
 ---
 
@@ -621,8 +651,9 @@ Ningún gate es "compila" o "los tests pasan". Eso es el suelo.
 
 ### F9-B — Emisión en las tres superficies + presets de sistema
 
-`<style precedence="wjs-ix">` público; `swapIxCss` en `VersoCanvasApi`; `@property --wjs-ixv-*` y
-estáticos en `wordjs-ui.css`; exclusión de `--wjs-ixv-*` del manifiesto de tokens.
+`<style precedence="wjs-ix">` on the public site; `IxCanvasEngine` writing `<style id="wjs-ix">`
+into the iframe head; the static reduced-motion / `.wjs-ixw` / `.wjs-ixd` block in `wordjs-ui.css`
+(no `@property`); exclusion of `--wjs-ixv-*` from the token manifest.
 
 **Gates**
 1. **Paridad de bytes**: la misma página en `/preview` y en la ruta pública emite el **mismo texto
@@ -631,7 +662,8 @@ estáticos en `wordjs-ui.css`; exclusión de `--wjs-ixv-*` del manifiesto de tok
    canvas** y **en la página pública**, comparadas a igual tamaño, en 3 puntos de scroll, con el
    computado leído del DOM. No vale "se parece".
 3. **El hoisting**: verificar en navegador dónde aterriza `<style precedence>` desde el árbol
-   portaleado. Si aterriza en el padre (lo esperado), `swapIxCss` es obligatorio y queda probado.
+   portaleado. Si aterriza en el padre (lo esperado), the `IxCanvasEngine` sheet in the iframe head
+   is mandatory and stands proven.
 4. **Tema**: `theme-doctor` **no** lista ningún `--wjs-ixv-*`. Y un tema activo distinto no altera
    ninguna interacción (frontera: el tema no manda sobre el movimiento).
 5. **Paridad con lo viejo**: `sys:fade-up` produce el mismo recorrido visual que
@@ -660,7 +692,8 @@ Isla de eventos + chunk `ix-scrub` + backend WAAPI.
 
 ### F9-E — Presets de sitio y propagación (el killer feature)
 
-Opción `wjs_ix_presets`, purga por etiqueta `ix-presets`, editor de presets en Ajustes.
+Option `wjs_ix_presets`, purged through the `settings` tag (listed in `SETTINGS_OPTIONS` of
+`backend/src/core/frontend-purge.ts`), preset editor under Settings → Interactions.
 
 **Gate único y decisivo**: un preset usado en **3 páginas**; se edita; entonces
 (a) las 3 páginas públicas muestran la interacción nueva tras una navegación,
@@ -679,7 +712,7 @@ corpus de round-trip verde, marketplace y plugins intactos.
 
 | # | Riesgo | Estado |
 |---|---|---|
-| R1 | `<style precedence>` desde el árbol portaleado no llega al iframe | **Lectura estructural, NO observado.** Gate F9-B.3. El diseño ya asume el peor caso (`swapIxCss`), así que confirmarlo no cuesta trabajo; refutarlo solo simplifica. |
+| R1 | `<style precedence>` desde el árbol portaleado no llega al iframe | **Lectura estructural, NO observado.** Gate F9-B.3. El diseño ya asume el peor caso (`IxCanvasEngine` writes `<style id="wjs-ix">` into the frame head itself), así que confirmarlo no cuesta trabajo; refutarlo solo simplifica. |
 | R2 | Firefox estable sin scroll-driven | **Confirmado** (MDN Experimental features + caniuse). El fallback es camino, no cortesía. Si Firefox lo activa durante F9, el chunk deja de bajar solo — el troceado por `CSS.supports` no necesita cambios. |
 | R3 | Animar variables `@property` mata el compositor | Mitigado por diseño: fuera del camino caliente (§4.4). **Falta medir** el caso hover con `@property` en un perfil real. |
 | R4 | `timeline-scope` (objetivo externo en CSS puro) | Fuera de alcance en F9-A/B por Firefox. Reevaluar en F9-C. |

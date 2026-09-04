@@ -16,8 +16,12 @@ channel, and which verifies permissions and constrains arguments **on the host**
 ```javascript
 module.exports = {
   async init(wordjs) {
+    // Every table MUST live under your wjp_<slug>_ prefix: createTable throws on any other name,
+    // and all/get/run deny SQL that touches a table outside the prefix.
+    const T = wordjs.db.tablePrefix + 'data'; // e.g. 'wjp_my_plugin_data'
+
     // Create your own table (driver-agnostic)
-    await wordjs.db.createTable('my_plugin_data', [
+    await wordjs.db.createTable(T, [
       'id INT_PK',
       'name TEXT NOT NULL',
       'value REAL DEFAULT 0',
@@ -25,12 +29,12 @@ module.exports = {
     ]);
 
     // Queries (standard SQLite syntax on any driver)
-    const rows = await wordjs.db.all('SELECT * FROM my_plugin_data WHERE value > ?', [0]);
-    const one  = await wordjs.db.get('SELECT * FROM my_plugin_data WHERE id = ?', [1]);
-    const res  = await wordjs.db.run('INSERT INTO my_plugin_data (name, value) VALUES (?, ?)', ['a', 1]);
+    const rows = await wordjs.db.all(`SELECT * FROM ${T} WHERE value > ?`, [0]);
+    const one  = await wordjs.db.get(`SELECT * FROM ${T} WHERE id = ?`, [1]);
+    const res  = await wordjs.db.run(`INSERT INTO ${T} (name, value) VALUES (?, ?)`, ['a', 1]);
 
-    // Which dialect is active? (rarely needed)
-    const { isPostgres } = wordjs.db.getType();
+    // Which dialect is active? (rarely needed — an RPC to the host like every other db method, so await it)
+    const { isPostgres } = await wordjs.db.getType();
   }
 };
 ```
@@ -200,9 +204,13 @@ tables.
 
 The scoping is **unconditional**: there is no way for a plugin to lift it.
 `verifyPermission('database', …)` only decides whether the plugin **may** reach the database;
-`assertSqlAllowed(tablePrefix)` always imposes the prefix confinement. A plugin may ask for
-`database:admin` (or any scope) in its manifest all it likes — no code path reads that `access` to skip
-`assertSqlAllowed`, so it stays table-scoped to its prefix regardless.
+`assertSqlAllowed(tablePrefix)` always imposes the prefix confinement. There is no elevated database
+access token: the `database` scope's vocabulary is exactly `read` and `write` (`KNOWN_PERMISSIONS`,
+`core/plugins.ts`), so an uploaded or marketplace-installed manifest that asks for `database:admin` is
+rejected at install time by `validateManifestPermissions` (400, extracted files removed). Even a plugin
+dropped straight into `backend/plugins/` (dev flow, which skips that manifest check) gains nothing from
+such a token — no code path reads the `access` value to skip `assertSqlAllowed`, so it stays
+table-scoped to its prefix regardless.
 
 Because plugins can no longer read core tables, the site's **non-secret** information
 (`url`/`domain`/`adminEmail`) is obtained through the `wordjs.site` bridge (`settings:read` grant).
@@ -283,7 +291,8 @@ Through the bridge (the canonical path for isolated plugins):
 
 ```javascript
 async function initSchema(wordjs) {
-    await wordjs.db.createTable('my_table', [
+    const T = wordjs.db.tablePrefix + 'accounts'; // unprefixed names are rejected by createTable
+    await wordjs.db.createTable(T, [
         'id INT_PK',
         'name TEXT NOT NULL',
         'email TEXT UNIQUE',
@@ -311,18 +320,21 @@ async function initSchema(wordjs) {
 
 ## Detecting the dialect: `wordjs.db.getType()`
 
-If you need information about the active driver (for conditional logic, rarely necessary):
+If you need information about the active driver (for conditional logic, rarely necessary). Like every
+other `wordjs.db` method, `getType()` is an RPC to the host and **returns a Promise** — always `await`
+it (destructuring the bare call yields `undefined` for every flag, so each dialect branch would silently
+take the non-Postgres path):
 
 ```javascript
-const { isPostgres, isMySQL, isSQLite, driver } = wordjs.db.getType();
+const { isPostgres, isMySQL, isSQLite, driver } = await wordjs.db.getType();
 
 if (isPostgres) {
     // PostgreSQL-specific logic (rare, but possible)
 }
 ```
 
-> `getType()` returns `{ isPostgres, isMySQL, isSQLite, driver }` (`driver` being the full name of the
-> configured driver: `'sqlite-native'`, `'sqlite-legacy'`, `'postgres'`, `'mysql'` or `'mariadb'`).
+> `getType()` resolves to `{ isPostgres, isMySQL, isSQLite, driver }` (it needs `database:read`;
+> `driver` being the full name of the configured driver: `'sqlite-native'`, `'sqlite-legacy'`, `'postgres'`, `'mysql'` or `'mariadb'`).
 > Careful: `isSQLite` is `true` for **everything that is not PostgreSQL**, MySQL included (so that
 > binary branches like `isPostgres ? pg : sqlite` keep taking the SQLite path, which the MySQL driver
 > translates) — so `isSQLite && isMySQL` is a normal state, and the condition for "really SQLite" is
@@ -371,8 +383,10 @@ async function migrate(wordjs) {
 ```javascript
 module.exports = {
   async init(wordjs) {
+    const T = wordjs.db.tablePrefix + 'data'; // e.g. 'wjp_my_plugin_data'
+
     // Create a table with the unified syntax
-    await wordjs.db.createTable('my_plugin_data', [
+    await wordjs.db.createTable(T, [
       'id INT_PK',
       'name TEXT NOT NULL',
       'value REAL DEFAULT 0',
@@ -381,29 +395,29 @@ module.exports = {
 
     // Expose helpers that use the bridge
     this.getData = (id) =>
-      wordjs.db.get('SELECT * FROM my_plugin_data WHERE id = ?', [id]);
+      wordjs.db.get(`SELECT * FROM ${T} WHERE id = ?`, [id]);
 
     // A query with LIMIT/OFFSET — identical on every driver
     this.getAllData = (limit = 10, offset = 0) =>
       wordjs.db.all(
-        'SELECT * FROM my_plugin_data ORDER BY created_at DESC LIMIT ? OFFSET ?',
+        `SELECT * FROM ${T} ORDER BY created_at DESC LIMIT ? OFFSET ?`,
         [limit, offset]
       );
 
     // INSERT — run() returns { lastID, changes } on every driver
     this.createData = async (name, value) => {
       const res = await wordjs.db.run(
-        'INSERT INTO my_plugin_data (name, value) VALUES (?, ?)',
+        `INSERT INTO ${T} (name, value) VALUES (?, ?)`,
         [name, value]
       );
       return res.lastID;
     };
 
     this.updateData = (id, name, value) =>
-      wordjs.db.run('UPDATE my_plugin_data SET name = ?, value = ? WHERE id = ?', [name, value, id]);
+      wordjs.db.run(`UPDATE ${T} SET name = ?, value = ? WHERE id = ?`, [name, value, id]);
 
     this.deleteData = (id) =>
-      wordjs.db.run('DELETE FROM my_plugin_data WHERE id = ?', [id]);
+      wordjs.db.run(`DELETE FROM ${T} WHERE id = ?`, [id]);
   }
 };
 ```

@@ -294,11 +294,15 @@ proyecto: no se toca el camino público sin volver a medir.
 29. Actualizar `README.md` con la sección de abajo (borrador ya redactado — aplicar tal cual o
     ajustar tono, pero el contenido factual ya está verificado contra el código de este árbol).
 
-## §5 — Borrador de sección README (NO aplicado — el legacy convive todavía)
+## §5 — README section draft (APPLIED — see `README.md` § "✍️ The editor — Verso")
 
-> Insertar como sección propia del README principal, en la parte de arquitectura/editor. Redactado
-> para pegarse tal cual una vez ejecutadas las fases 1-7 de este plan (referencias en tiempo
-> presente, sin mencionar el flag ni el legacy).
+> This was the draft written for the main README's architecture/editor section. It was applied, in
+> English, once phases 1-7 of this plan had landed (step 29 above); the legacy editor no longer
+> coexists with Verso. The live README text additionally states that the persisted post-meta key is
+> still `_puck_data` (kept on purpose to avoid a data migration) and adds a "Plugin blocks" paragraph
+> on `frontend.versoComponents` / the still-resolved pre-rename `puckComponents` spellings. The
+> Spanish draft below is kept only as the record of what was drafted; `README.md` is the source of
+> truth.
 
 ```markdown
 ## El editor — Verso

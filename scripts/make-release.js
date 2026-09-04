@@ -122,8 +122,9 @@ npm start              # three services: gateway + backend + frontend
 
 ## 3. Finish setup in your browser
 Open the URL printed in the console (default https://localhost:3000). The first run shows the
-**install wizard**: choose your database (SQLite — zero-config — or PostgreSQL with a connection
-test), create your admin account, and you're in.
+**install wizard**: pick your database — **SQLite** (zero-config, the default), **PostgreSQL** or
+**MySQL / MariaDB** (both with a built-in connection test), or the pure-JS *SQLite (legacy / WASM)*
+fallback for hosts where the native binary cannot load — then create your admin account, and you're in.
 
 ## Notes
 - Secrets (JWT, gateway, DB password) are generated locally during install and stored in

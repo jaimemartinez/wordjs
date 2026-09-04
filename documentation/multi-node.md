@@ -54,8 +54,14 @@ working directory):
 - `backend/themes/` — installed themes
 - `backend/plugins/` — installed plugin code
 - `backend/backups/` — backup archives. After every backup only the newest `backup_retention` archives
-  are kept (default 7; set `0` to keep all), so scheduled backups on the shared volume cannot fill the
-  disk. Backups are still on-host — off-host/S3 storage remains on the roadmap.
+  are kept (default 7; set `0` or a negative value to keep all), so scheduled backups on the shared volume
+  cannot fill the disk. Archives are always written on-host first; an **optional off-host S3 offload**
+  (`backend/src/core/s3-offload.ts`) then uploads each archive right after it is created. It is config-gated
+  on an `s3` block in `wordjs-config.json` (`bucket`, `region`, `accessKeyId`, `secretAccessKey`, optional
+  `sessionToken`, `endpoint`, `prefix`) or the `WORDJS_S3_*` / `AWS_*` env vars — a partial config (bucket
+  without keys) counts as not configured — and works with S3-compatible endpoints such as MinIO via
+  `s3.endpoint`. A failed upload never fails the backup: the local copy is kept and the outcome is reported
+  in the result's `s3` field. See [database.md §1.5](database.md#15-backups--retention).
 - `backend/public/` — **including `public/.well-known/acme-challenge/`** so an ACME HTTP-01 token
   written by the renewing node is visible to whichever node answers the validation request
 - `backend/ssl/` and `backend/data/ssl/` — issued certs + the ACME account key

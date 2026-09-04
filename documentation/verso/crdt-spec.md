@@ -1207,11 +1207,28 @@ error se paga en tráfico, nunca en corrección.
 6. **Sin amplificación**: no se puede empujar nada sin un stream abierto y autorizado; hay topes de
    ops/s, bytes/s, tamaño de frame, conexiones por usuario y por (usuario × post).
 
-### C.5 — Lo que queda pendiente de F8.3
+### C.5 — What was still pending when F8.3 shipped (all since closed)
 
-- **Cableado en el editor** (`sendCommand` en el sink de `transact`, `setSelection`, avatares y
-  carets). El hook `useVersoCollab` está listo, tipado y probado; nada de esto toca
-  `components/verso/editor/**`.
-- **Verificación en navegador con dos perfiles** (regla dura del proyecto: «se parece» no es
-  terminado) y el gate multinodo `G-F8.3-d` en Proxmox con 2 backends + Redis.
-- **UX de conflictos (F8.5)**: los avisos ya viajan tipados en `CollabNotice`; falta pintarlos.
+When this addendum was written three items remained open. Every one has since landed; this
+section is kept only as the record of what the gate required.
+
+- **Editor wiring** — done in `components/verso/editor/VersoEditor.tsx`: it calls `useVersoCollab`
+  (`onReady` seeds the room document, `onRemoteDoc` applies foreign ops without a history entry),
+  forwards every effective store command — undo included — to `collab.sendCommand` from the
+  `subscribeCommands` sink, publishes the block/inline selection through `collab.setSelection`,
+  projects other members' selections (with the member's name) onto the canvas via `OverlayLayer`'s
+  `remoteSelections`, and mounts `CollabPresence` (channel status chip + avatar stack). With the
+  flag off none of this renders and the editor behaves exactly as before.
+- **Browser verification with two profiles and the multinode gate `G-F8.3-d`** — both passed, and
+  that is what allowed `COLLAB_DEFAULT_ON` in `collab/flag.ts` to flip to `true`: two real users
+  editing the same paragraph (61 characters, none lost or duplicated, cursors at opposite ends;
+  block insert/duplicate, undo, named remote selection, rejoin after reload, announced network
+  cut), and Postgres + Redis + two backends in the Proxmox lab (60/60/60/60 ops one way,
+  30/30/30/30 the other, unforgeable replica identity across nodes, monotonic epoch). The one
+  scenario NOT driven through the UI is two editors against two *different* backends; its
+  substance is covered by the multinode gate against the real router. See the comment block above
+  `COLLAB_DEFAULT_ON` for the full record.
+- **Conflict UX (F8.5)** — the typed `CollabNotice` values are rendered in `CollabPresence.tsx`
+  (`role="alert"` for action-severity notices, `role="status"` otherwise) with a dismiss button;
+  the editor dismisses by the notice's `at` timestamp so a new notice with the same code
+  reappears.

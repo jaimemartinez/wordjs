@@ -4,7 +4,7 @@ The WordJS frontend package: a [Next.js](https://nextjs.org) (App Router) app th
 
 - **Public site** — server-rendered (SSR/RSC) routes under `src/app/(public)/` (home, posts, pages, search).
 - **Admin dashboard** — management UI under `src/app/admin/`.
-- **Visual editor** — **Verso**, WordJS's own page builder, with no third-party editor package behind it (`src/components/verso/` for the editor UI and `src/lib/verso/` for the store/registry/commands; `src/components/versoConfig.tsx` holds the block config and custom field pickers). Plugins can inject custom Verso components.
+- **Visual editor** — **Verso**, WordJS's own page builder, with no third-party editor package behind it (`src/components/verso/` for the editor UI; `src/lib/verso/` for the store, commands and the block registry — `registry.ts` defines the field contract and `coreBlocks.tsx` declares the core blocks the editor registers; `src/components/versoConfig.tsx` supplies the custom field pickers those blocks reuse (`CategoryField`, `TemplateField`, `ColumnDistributionControl`, `ColumnStyleAccordion`) plus the legacy `postConfig`/`pageConfig` tables kept as the parity reference for `verso-coreBlocks.test.ts`). Plugins can inject custom Verso components.
 
 ## Documentation
 

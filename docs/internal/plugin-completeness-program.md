@@ -96,9 +96,10 @@ are done (both v2.0.0); conference-manager is complete at v2.1.0. Next: bookings
 newsletter → T2 sweep.
 
 Sandbox cookbook every builder must respect: SQL guard (`ON CONFLICT … DO UPDATE SET` / `DO NOTHING`
-is PERMITTED — `set` is a clause boundary in the token-walker's `ENDERS`, `backend/src/core/plugin-api.ts:193`
-— so UPDATE-then-INSERT is still valid but no longer required; `RETURNING` **is** denied,
-`plugin-api.ts:352-353`, and every table the statement touches must carry the plugin's `wjp_<slug>_`
-prefix), no transactions on the db bridge (`db.batch` is explicitly NOT atomic and refuses DDL), `res.json` (never `res.send(string)`), no
+is PERMITTED — `set` is a clause boundary in the token-walker's `ENDERS` set (`collectTableTokens`,
+`backend/src/core/plugin-api.ts:202`) — so UPDATE-then-INSERT is still valid but no longer required;
+`RETURNING` **is** denied for untrusted SQL — `backend/src/core/plugin-api.ts:361-362`, inside the
+`tablePrefix` default-deny block; the guard throws "RETURNING is not permitted; use a separate SELECT" —
+and every table the statement touches must carry the plugin's `wjp_<slug>_` prefix), no transactions on the db bridge (`db.batch` is explicitly NOT atomic and refuses DDL), `res.json` (never `res.send(string)`), no
 `globalThis`, fs writes only under the plugin's `data/`, `network` permission declared for Stripe,
 permission-gated everything (default-deny).

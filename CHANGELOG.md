@@ -4,7 +4,7 @@ All notable changes to WordJS are documented here. This project follows
 [Semantic Versioning](https://semver.org/). Each release is published as a pre-compiled bundle
 on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
-## [2.0.0] - 2026-08-25
+## [2.0.0] - 2026-09-04
 
 ### Breaking changes
 
@@ -31,8 +31,11 @@ the release is a major.
   Deliberate API errors — including the `rest_invalid_param` shape above — still render as before.
 - **`req.userId` is gone.** It was stamped on ten authenticated paths and read nowhere, including
   through the plugin bridge. Nothing in-tree consumed it.
-- **`ownerOrCan()` is gone** from the permissions middleware. It had no call sites, and the call form
-  its own documentation showed would have thrown.
+- **`ownerOrCan()` is no longer imported by core routes.** `routes/posts.ts` and `routes/users.ts`
+  destructured it from the permissions middleware and never called it; those dead imports are removed.
+  The middleware still exports `ownerOrCan(capability, getOwnerId)` for extensions — its documented call
+  form previously omitted `getOwnerId` and would have thrown; the API reference now shows the two-argument
+  form. Core content routes gate on `canEditPostRecord` instead.
 
 ### Added
 
@@ -382,6 +385,40 @@ the release is a major.
 - **Cache purge named the wrong paths for pages** (`/<slug>` instead of `/pages/<slug>`, the URL the
   menu builder links to). It worked only because the tag covered it.
 
+- **The sandbox's own memory watchdog could not act cleanly, and every uncaught plugin error was reported
+  as the plugin attacking the sandbox.** secure-require replaces `process.exit` with a guard that throws
+  whenever a plugin context is on the stack — right for plugin code, but the worker calls `process.exit`
+  in its own lifecycle paths too (guard-install failure, the ESM `import()` guard abort, the 512 MB memory
+  watchdog), and timer callbacks are deliberately re-entered in the plugin's context, so the watchdog's
+  exit was refused as if the plugin had called it. Worse, Node's own fatal path calls `process.exit()`,
+  so the guard fired during crash handling and replaced every uncaught plugin error with a "RUNTIME
+  SECURITY BLOCK: process.exit" message. The worker now binds `process.exit` before any guard installs and
+  reports uncaught errors itself, so the real cause is printed and the limit fires with the right code.
+- **A missing or broken `better-sqlite3` did not fall back to the pure-JS `sqlite-legacy` driver.** The
+  documented fallback caught a failing `require('sqlite-native')`, but that module loads the native
+  binding lazily inside `init()`, so its `require` never fails; the module that requires the binding at
+  load time is the async driver, whose failure was only logged. A host without a working binary got a
+  warning and then died later in `init()`. The fallback now fires for exactly that case.
+- **Gateway workers served plain HTTP when `ssl` was enabled without a key and certificate** — the exact
+  shape `npm run setup` writes. The primary honoured it by generating `ssl-auto.key`/`.crt` but never
+  recorded the paths, and each worker re-read the config, found no key/cert and listened on HTTP while the
+  config, the docs and the primary all said HTTPS. Workers now serve from the auto-generated pair.
+- **The mail server retried a relay `5xx` as if it were transient.** Only the direct-to-MX path classified
+  by SMTP reply code; the relay/smarthost path pushed every failure as retryable, so a permanent reject was
+  attempted again up to the retry limit before it bounced. Both paths now apply the documented policy.
+- **`CREATE TEMP TABLE` was refused by the plugin DDL guard** while `CREATE TEMPORARY TABLE` passed — a
+  missing `?` in one regex, where the sibling patterns and the documented allowlist accept both spellings.
+- **A plugin table could declare `FOREIGN KEY … REFERENCES users(id)`.** The SQL guard's table walker and
+  the protected-table check never treated `REFERENCES` as introducing a table, so a plugin could constrain
+  a core row (its delete then fails) and probe its existence. `REFERENCES` is now a table position: core
+  tables are refused, and another plugin's table is refused by the ownership rule.
+- **Compiled integration tests shipped in the release ZIP.** `tsconfig.build.json` excluded `src/tests`
+  but not `src/tests-integration`, so `dist/tests-integration/*.js` was emitted and packaged. Excluded.
+- **`documentation/stitch-brief.md` said "GENERATED — do not edit by hand" and carried a hand-written
+  block list**, because its generator read the chrome-block allowlist from a file that no longer holds it
+  and emitted an empty list. The generator now reads the generated visual contract, and the file is
+  regenerated and true to its header.
+
 ### Security
 
 - **`create-wordjs` shipped a HIGH advisory.** The install channel — the first command a new user runs —
@@ -432,6 +469,45 @@ the release is a major.
   video block no longer classifies providers by substring (`youtube.com.evil.test/watch?v=…` let an
   attacker choose both the provider and the id that reached the player).
 
+- **Plugin sandbox: an adversarial audit closed a network-grant bypass, two unenforced permissions, a
+  native host-kill and an unbounded reply clone.** Node's underscore-prefixed internal builtins
+  (`_http_client`, `_tls_wrap`, `_stream_wrap`, `_http_agent`, …) were handed to plugins raw — named by
+  neither the network list nor the block list — and they expose HTTP/TLS/socket primitives *below*
+  `net.Socket.prototype.connect`, the egress chokepoint, so a plugin with no `network` grant had outbound
+  reach; every `_`-prefixed builtin is now denied to plugins on the `require` path and the ESM `import()`
+  path alike (`import('tty')` is denied too). `express:register_route` and `admin_menu:register` were
+  admin-grantable permissions that nothing enforced — a plugin mounted host routes and admin-menu items
+  regardless of grant or revoke; both are now checked like `email:provider`. `process.reallyExit`, the
+  native primitive `process.exit` wraps, was not blocked, so an in-process plugin or theme could kill the
+  host; it is. The reply-size guard bounded node count, not bytes, so a giant string, an `ArrayBuffer` or
+  a `Map`/`Set` cloned hundreds of megabytes onto the host heap; it now bounds estimated size.
+- **Plugin sandbox: a plugin could forge the control frames the host trusts.** The host accepted an
+  inbound IPC frame by its `kind` alone, and the child inherits the IPC descriptor (fd 3), reachable
+  through a socket built over the fd, a path-less `fs` write stream or a raw `fs.writeSync(3, …)` — a
+  synthesised `{kind:'ready'}` resolved a plugin's load before `init()` had run. Blocking each write
+  vector is whack-a-mole, so the origin is authenticated instead: every frame carries a per-spawn nonce
+  the worker scrubs from the child's `argv` before plugin code runs, and unstamped frames are dropped.
+  Building a socket over an existing fd is refused as well.
+- **Plugin sandbox: the isolate's environment leaked the operator's identity, and two egress tunnels were
+  missed.** `HOMEDRIVE`/`HOMEPATH` were on the child's environment allow-list, handing every isolate the
+  host account's home path — the recon the `os.homedir()`/`os.userInfo()` scrub exists to hide; dropped.
+  On Windows, libuv additionally merged `LOGONSERVER`/`USERNAME`/`USERPROFILE`/`USERDOMAIN` into every
+  child environment regardless of the allow-list; the worker now prunes its own environment to the list.
+  The egress filter handled IPv4-mapped, NAT64 and 6to4 embedded addresses but not their ISATAP and Teredo
+  twins; both are classified now. The plugin-derived `fatal` message is bounded and stripped of control
+  characters. `tty` is blocked: `new tty.WriteStream(3)` wrapped the IPC descriptor and destroying it
+  severed the bridge.
+- **Plugin sandbox: platform confinement narrowed on all three operating systems, and the static permission
+  scanner reads `network` correctly.** On Linux the cgroup teardown tracked the `systemd-run` wrapper, not
+  the scope, so "stopped" could be reported while the plugin still ran; it now waits for the scope to be
+  gone. On macOS the Node runtime read grant degenerated to all of `/usr/local` for a nodejs.org or
+  Intel-Homebrew install; a shared package prefix is now narrowed to the runtime subdirectories. On
+  Windows the AppContainer `traverse` grant used `(RX)`, which on a directory includes list access, so a
+  plugin could enumerate the application root and the plugin roster; it is now traverse-and-stat only.
+  The static scanner mis-read a bare `{"scope":"network"}` declaration as absent, reporting a missing
+  network permission against manifests that had declared it; `network` is scope-only and now matches on
+  scope alone.
+
 ### Documentation
 
 - **2423 claims were checked against the code; 225 were corrected and 23 deleted.** The README described
@@ -460,18 +536,35 @@ the release is a major.
   an editor that no longer behaves that way. `scripts/record-editor-demo.mjs` makes the recording
   repeatable, driving the same palette attributes and the same real pointer drag the e2e specs drive,
   so it records a path the suite also exercises.
+- **Every documentation file was audited against the code a second time, after the changes above
+  landed.** 128 claims were re-checked, each by an adversarial verifier reading the doc and the code;
+  114 were real incongruences. 105 were the documentation being wrong and are corrected in place —
+  commands that did not exist, permission names and defaults that had drifted, endpoints and status
+  codes, the environment allow-list, the security posture text, third-party notices. The other 9 were the
+  *code* deviating from clearly documented intent; those are fixed in the code and listed above rather
+  than edited out of the docs.
 
 ### Notes for upgraders
 
-- **Release tags before this one point at a rewritten history.** No previous tag is an ancestor of the
-  current `main`: the public history was rewritten and the tags were left where they were. `v2.0.0` is
-  the first tag on the current history, and comparisons against an earlier tag will not be meaningful.
-- **Known gap: an isolated plugin does not start on macOS.** Booting one fails during startup, and the
-  cause is not yet known — the Seatbelt profile itself boots cleanly in every variant. Nothing in CI had
-  ever booted a plugin on macOS before this release, so this is newly *observed*, not newly broken. The
-  guard suite gates on Linux and Windows and reports on macOS until it is understood.
+- **Release tags before this one point at a rewritten history.** No previous tag (`v1.14.1` and earlier)
+  is an ancestor of the current `main`: the public history was rewritten and the existing tags were left
+  where they were, so `v2.0.0` is the first tag on the current history, and comparisons such as
+  `git diff v1.14.1..v2.0.0` or `git merge-base` against an earlier tag will not be meaningful.
+- **`express:register_route` and `admin_menu:register` are now enforced.** A plugin that mounts an HTTP
+  route or adds an admin-menu item must declare the permission in its manifest, and the operator must
+  grant it in `/admin/plugins`; previously both worked regardless of grant or revoke. Every marketplace
+  plugin already declares them. A private plugin that relied on the gap logs a denial, and its route or
+  menu item does not appear until the permission is granted.
+- **An isolated plugin did not start on macOS in source mode — found while preparing this release and
+  fixed the same day, after the release commit.** Nothing in CI had ever booted a plugin on macOS before,
+  so the first run failed during startup with nothing on stderr while every Seatbelt profile variant
+  booted cleanly on its own. Bisecting the launch layers named the cause: ts-node calls `process.cwd()`
+  to find `tsconfig.json`, and macOS resolves a working directory by reading each of its ancestors, which
+  the Seatbelt profile withholds on purpose (`EPERM: uv_cwd`). The compiled worker was never affected.
+  The fix widens no grant: the child starts in `/`, the ts-node preload is resolved to an absolute path
+  and `TS_NODE_PROJECT` is passed explicitly. The guard suite now gates on all three platforms.
 
-## [1.14.1] - 2026-08-07
+## [1.14.1] - 2026-08-11
 
 Ships the dependency fix that v1.14.0 was published without, and closes the pipeline hole that let it
 be published at all. **Anyone on v1.14.0 should upgrade.**

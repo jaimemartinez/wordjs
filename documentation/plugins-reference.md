@@ -44,9 +44,11 @@ Two enforcement gates live on the host (`backend/src/core/plugin-isolate.ts`):
     (`callApi` rejects anything not in the set, default-deny). A malicious child can send any method
     string, so this is the gate that keeps it from walking the host `api` object to arbitrary methods.
 *   **Dedicated registration kinds** — hook/route/shortcode/mail-provider/notify-transport registration
-    flow through their OWN IPC kinds (NOT through `call`), each with its own host-side gate: an explicit
-    capability check for the mail provider and the notification transport, and caps/denylists/path- and
-    verb-allowlists for hooks, routes and shortcodes. They are deliberately absent from
+    flow through their OWN IPC kinds (NOT through `call`), each with its own host-side gate: an explicit,
+    admin-granted capability check for routes (`express:register_route`), the mail provider
+    (`email:provider`) and the notification transport (`notifications:provider`), plus caps/denylists and
+    path-/verb-allowlists for hooks, routes and shortcodes (hooks and shortcodes have no capability of
+    their own — they are policed by caps and denylists only). They are deliberately absent from
     `ALLOWED_BRIDGE_METHODS`.
 
 ### Data / call methods (`kind:'call'`, gated by `ALLOWED_BRIDGE_METHODS`)
@@ -70,7 +72,7 @@ Two enforcement gates live on the host (`backend/src/core/plugin-isolate.ts`):
 | `fs.write(path, data)` | `fs.write` | `filesystem:write` grant. Same confinement, plus a 16 MB per-write cap and a 100 MB per-plugin disk quota; `manifest.json` is immutable. |
 | `mail(msg)` | `mail` | `email:admin` grant. Send through the host-wide mail sender. |
 | `notify(notification)` | `notify` | `notifications:send` grant. Dispatch a core notification. |
-| `adminMenu.add(item)` | `adminMenu.add` | Add a Sidebar item (capped per plugin). |
+| `adminMenu.add(item)` | `adminMenu.add` | `admin_menu:register` grant (an explicit, admin-granted verb — `scope: "admin"` does not imply it). Adds a sidebar item; capped at 50 items per plugin, and `href` must be a same-origin relative admin path (single leading `/`, no scheme, no `//`) or the item is dropped with a warning. |
 | `cron.schedule(ts, recurring, hook, args)` | `cron.schedule` | Schedule a recurring/one-shot hook fire. |
 | `crypto.randomToken(bytes=16)` / `crypto.randomInt(min, max)` | `crypto.randomToken` / `crypto.randomInt` | CSPRNG helpers (no data access, no permission gate) — use instead of `Math.random` for tokens/access codes. **Async** in an isolated plugin (RPC to host), so `await` them. |
 | `assets.enqueueScript(spec)` / `assets.enqueueStyle(spec)` | `assets.enqueueScript` / `assets.enqueueStyle` | `assets:write` grant. Enqueue a `<script>`/`<style>` onto public pages; the host emits a **sanitized** tag. `src` must resolve **inside your plugin's `public/` directory** with a servable extension — that directory is the only part of the plugin tree published at `/plugins/<slug>/`, and it is **read-only to the plugin** (`documentation/plugins.md` §11a). Any other `src` throws. |
@@ -81,7 +83,7 @@ Two enforcement gates live on the host (`backend/src/core/plugin-isolate.ts`):
 | `wordjs` member | IPC kind | Host-side gate (a capability here means manifest-declared AND admin-granted) |
 | --- | --- | --- |
 | `hooks.addAction(hook, cb, priority)` / `hooks.addFilter(...)` | `register` | Raw-HTML hooks (`wordjs_head`/`wordjs_footer`/`wp_head`/`wp_footer`) denied to **every** plugin; capped per-plugin (`MAX_HOOKS`) and per-hook-name (`MAX_PER_HOOK`); each shim runs with a 2 s timeout. |
-| `http.route(method, routePath, opts, handler)` | `register-route` | HTTP verb allowlisted; `opts.auth`/`opts.admin` apply real middleware; `opts.multipart` parsed host-side (10 MB cap). Always namespaced under `/api/v1/plugin/<slug>`, auth/session cookies stripped, Set-Cookie/CSP/HSTS/Location dropped, plugin cookies namespaced + path-confined. (No absolute-path mode.) |
+| `http.route(method, routePath, opts, handler)` | `register-route` | **`express:register_route` grant** — checked first (default-deny; not implied by `admin`); without it the registration is logged and dropped (no route is mounted). Then: per-plugin route cap (`MAX_ROUTES`); HTTP verb allowlisted (`get/post/put/patch/delete/options/head/all`); `routePath` restricted to static segments, `:params` and at most two `*` wildcards (≤ 200 chars, no regex metacharacters, `::` or `..`); `opts.auth`/`opts.admin` apply the real `authenticate`/`isAdmin` middleware; `opts.multipart` parsed host-side by multer (single file, `fileSize` capped at `config.uploads.maxFileSize` — the site's configured `maxFileSize`, 10 MB by default; the temp file is unlinked when the response finishes). Always namespaced under `/api/v1/plugin/<slug>`, auth/session cookies stripped, Set-Cookie/CSP/HSTS/Location dropped, plugin cookies namespaced + path-confined. (No absolute-path mode.) |
 | `shortcodes.add(tag, handler)` | `register-shortcode` | Capped per-plugin; handler resolves HTML over RPC (`doShortcodeAsync`). |
 | `provideMail(handler)` | `register-mail-provider` | `email:provider` grant — becomes the host-wide mail sender (sandboxed). |
 | `notify.registerTransport(name, handler)` | `register-notify-transport` | `notifications:provider` grant — registers a core notification transport (sandboxed). |
@@ -304,7 +306,11 @@ Test Schema are bundled with core):
 | `youtube-videos` | Pulls a YouTube channel's videos (keyless RSS or Data API v3) into a filterable, count-limited Verso carousel block | `settings` r/w, `database` r/w, `network`, routes, admin menu |
 
 *(“routes” = `express:register_route`; “admin menu” = `admin_menu:register`. Every capability is
-manifest-requested and admin-granted, default-deny, exactly like the bundled plugins. Note that
-`express:register_route` and `admin_menu:register` are validated manifest vocabulary but carry no bridge
-gate of their own — route and sidebar registration are policed by their own caps/allowlists in
-`plugin-isolate.ts`, not by a `verifyPermission` check.)*
+manifest-requested and admin-granted, default-deny, exactly like the bundled plugins. Both of these are
+enforced grants, not just validated vocabulary: the host's `register-route` IPC handler in
+`plugin-isolate.ts` refuses to mount a route (logs a warning and drops the message) unless
+`express:register_route` is declared in the manifest and granted by the admin — the route-count cap and
+the HTTP-verb / path-charset allowlists are applied only after that check — and `wordjs.adminMenu.add`
+runs `verifyPermission('admin_menu', 'register')` in `plugin-api.ts`, which throws when the verb is not
+both declared and granted. Isolated plugins reach `adminMenu.add` through the same host bridge, so the
+gate applies to them identically.)*

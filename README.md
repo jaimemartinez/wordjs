@@ -134,7 +134,7 @@ The honest row is the last one: WordJS is young, and every plugin and theme it s
 - **Backups** — full-site export/restore with retention pruning, plus **privacy-first analytics** (no cookies, daily-rotated salted IP hashing) and a **built-in cron**.
 
 **Operations**
-- **Gateway** — a clustered reverse proxy (one worker per CPU, auto-respawn), health-check eviction, an mTLS internal control channel, and SSE-aware proxying. It also acts as the cluster CA for multi-machine deployments.
+- **Gateway** — a clustered reverse proxy (one worker per CPU core, capped at 16 — or 4 in development — with automatic respawn of dead workers), health-check eviction, an mTLS internal control channel, and SSE-aware proxying. It also acts as the cluster CA for multi-machine deployments.
 - **Automatic TLS** — Let's Encrypt via HTTP-01 or DNS-01, manual upload, or a self-signed dev fallback; renewal works in single-process mode too.
 - **Databases** — SQLite (default), PostgreSQL, or MySQL 8+/MariaDB, all behind one interface with a migration system to move between them.
 - **Headless-friendly** — scoped API tokens (`Authorization: Bearer wjt_…`, per-resource scopes), HMAC-signed SSRF-safe webhooks, and token-gated Prometheus metrics.
@@ -202,7 +202,7 @@ npx create-wordjs@latest my-site          # then open the printed wizard URL
 
 # Or, from a source checkout:
 npm run install:all
-npm run dev:mono      # monolith on https://localhost:3000 (self-signed)
+npm run dev:mono      # monolith on http(s)://localhost:3000 — HTTPS once gateway/gateway-config.json enables TLS
 npm run dev           # or the 3-service split
 ```
 
@@ -293,7 +293,7 @@ npm run dev               # split: gateway + backend + frontend
 npm run dev:mono          # or everything in one process, one port
 ```
 
-Public site on port `3000`, admin at `/admin` — `dev:mono` self-signs a localhost certificate (`https://localhost:3000`; `WORDJS_HTTP=1` for plain HTTP), and the split gateway switches to HTTPS once setup writes `ssl.enabled`. First-run setup (database + admin user) runs in the browser wizard, or via `npm run setup`.
+Public site on port `3000`, admin at `/admin`. Both modes read `gateway/gateway-config.json` (not in git; written by `npm run setup`, the `create-wordjs` installer, or the gateway on its first boot). `dev:mono` serves `https://localhost:3000` with a self-signed certificate (`gateway/ssl-auto.*`, shared with the gateway) when that file sets `ssl: true`, `ssl.enabled`, or `sslAuto`, or when `gateway/ssl-auto.{key,crt}` already exist; on a fresh checkout without it the monolith falls back to plain `http://localhost:3000`. `WORDJS_HTTP=1` forces plain HTTP. The split gateway likewise switches to HTTPS once setup writes `ssl.enabled`. First-run setup (database + admin user) runs in the browser install wizard. `npm run setup` (`node setup/index.js --install`) is a separate, optional step for the split cluster: it generates the mTLS cluster PKI and writes the initial `backend/wordjs-config.json` / `gateway/gateway-config.json` (random `gatewaySecret`/`jwtSecret`, ports, `ssl.enabled: true`) — it does not create a database or an admin user.
 
 In production the backend is **compiled** (`tsc` → `dist/`) and run as plain JS. From `backend/`:
 
@@ -304,7 +304,7 @@ In production the backend is **compiled** (`tsc` → `dist/`) and run as plain J
 | `npm test` | Test suite (`node --test`) |
 | `npm run lint` / `format` | ESLint / Prettier |
 
-CI (`.github/workflows/ci.yml`, Node 22) runs the strict type-check, the compiled build, a dependency license gate, unit tests, integration tests against real `postgres:16` + `redis:7` containers, and the frontend lint/type-check/tests/build.
+CI (`.github/workflows/ci.yml`, Node 22) runs the strict type-check, the compiled build, a dependency license gate, the unit suite with `WORDJS_CI_DB=1` so the driver-conformance tests hard-fail (rather than skip) unless they really ran against the `postgres:16` and `mysql:8` service containers, integration tests against real `postgres:16` + `redis:7` containers, a separate two-process multi-node coherence job on shared Postgres + Redis, and the frontend lint/type-check/tests/build.
 
 </details>
 
