@@ -387,30 +387,61 @@ async function deriveAppContainerSid(name: string): Promise<string | null> {
 // a host-only directory so the zero-config setup cost is paid once per SID/path/access shape, not once per
 // server start. This is an optimisation, never an authority decision: AppContainer's kernel token and the
 // object's real DACL remain the enforcement point, and launch/probe still fail closed if either is wrong.
-const ACL_CACHE_VERSION = 'v3';
+//
+// The marker key is sha256 over the SID, the canonical path, the access shape AND THE GRANTED ROOT'S OWN
+// IDENTITY (its NTFS file id and creation time). The identity is what keeps the cache honest across an
+// upgrade. A path-only key outlives the directory it describes: `npm run build` deletes and recreates
+// `backend/dist`, and so does unpacking a new release bundle or re-running `npm ci` over `node_modules`.
+// The recreated tree inherits only its parent's ACEs, so the package-SID ACE that
+// `icacls /grant ...:(OI)(CI)` had added is GONE — yet the old marker still matched, the grant was skipped
+// forever, and every isolated plugin child then died at boot with MODULE_NOT_FOUND pointing at a file that
+// plainly exists. Folding the identity in makes a recreated directory a cache MISS, so the grant is redone.
+//
+// Only the granted ROOT is fingerprinted, and that is enough: `(OI)(CI)` is inheritable, so files created
+// later INSIDE a still-existing root pick the ACE up on their own. It is recreation of the root itself
+// that silently drops the ACE, and the root's identity is exactly what detects that.
+const ACL_CACHE_VERSION = 'v4'; // v3 markers were keyed on the path alone, so every one of them is potentially stale
 function appContainerAclCacheRoot(): string {
     const local = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
     return path.join(local, 'WordJS', 'sandbox-acl-cache', ACL_CACHE_VERSION);
 }
 
-function appContainerAclCacheKey(sid: string, dir: string, mode: Exclude<AclMode, 'revoke'>): string {
-    const canonical = path.resolve(String(dir)).toLowerCase();
+/** null when the directory has no readable identity — an absent or unreadable path is never "already granted". */
+function appContainerAclCacheKey(sid: string, dir: string, mode: Exclude<AclMode, 'revoke'>): string | null {
+    const resolved = path.resolve(String(dir));
+    const canonical = resolved.toLowerCase();
+    let ino: bigint;
+    let birthtimeMs: bigint;
+    try {
+        // bigint stats, because a 64-bit NTFS file id does not fit a JS number: on Windows Node fills `ino`
+        // from the file id and `birthtimeMs` from the creation time, and both move on remove-and-recreate.
+        const st = fs.statSync(resolved, { bigint: true });
+        ino = st.ino;
+        birthtimeMs = st.birthtimeMs;
+    } catch {
+        // Never invent an identity. With none there is no key, so the caller must treat the grant as uncached.
+        return null;
+    }
     return crypto.createHash('sha256')
-        .update(`${sid}\0${canonical}\0${mode}`, 'utf8')
+        .update(`${sid}\0${canonical}\0${mode}\0${ino}\0${birthtimeMs}`, 'utf8')
         .digest('hex');
 }
 
-function aclMarkerPath(sid: string, dir: string, mode: Exclude<AclMode, 'revoke'>): string {
-    return path.join(appContainerAclCacheRoot(), `${appContainerAclCacheKey(sid, dir, mode)}.ok`);
+function aclMarkerPath(sid: string, dir: string, mode: Exclude<AclMode, 'revoke'>): string | null {
+    const key = appContainerAclCacheKey(sid, dir, mode);
+    return key === null ? null : path.join(appContainerAclCacheRoot(), `${key}.ok`);
 }
 
 function aclGrantIsCached(sid: string, dir: string, mode: Exclude<AclMode, 'revoke'>): boolean {
     // Exact shape only. Treating an old full grant as satisfying rx made permission reductions sticky.
-    return fs.existsSync(aclMarkerPath(sid, dir, mode));
+    const marker = aclMarkerPath(sid, dir, mode);
+    return marker !== null && fs.existsSync(marker);
 }
 
 function writeAclMarker(sid: string, dir: string, mode: Exclude<AclMode, 'revoke'>): void {
     const marker = aclMarkerPath(sid, dir, mode);
+    // No identity, no marker. Falling back to a path-only key is the exact bug this version removes.
+    if (marker === null) return;
     fs.mkdirSync(path.dirname(marker), { recursive: true });
     // The marker is written only after icacls reports a completely successful batch. Renaming a complete
     // temporary file prevents a crash during the write from manufacturing a successful-looking marker.
@@ -425,7 +456,12 @@ function writeAclMarker(sid: string, dir: string, mode: Exclude<AclMode, 'revoke
 
 function removeAclMarkers(sid: string, dir: string): void {
     for (const mode of ['traverse', 'rx', 'full'] as const) {
-        try { fs.rmSync(aclMarkerPath(sid, dir, mode), { force: true }); } catch { /* cache is optional */ }
+        // Markers for the directory's CURRENT identity. A directory that is already gone has no current
+        // identity and therefore no reachable marker: anything left in the cache is keyed on an identity
+        // that can never recur, so it is inert rather than stale. Missing is a no-op, never a throw.
+        const marker = aclMarkerPath(sid, dir, mode);
+        if (marker === null) continue;
+        try { fs.rmSync(marker, { force: true }); } catch { /* cache is optional */ }
     }
 }
 
@@ -522,7 +558,10 @@ async function grantAppContainerAccess(sid: string, dirs: string[], mode: AclMod
                 writeAclMarker(sid, dir, mode);
                 // The real ACE was replaced, so an alternate-shape marker is now stale.
                 for (const other of ['traverse', 'rx', 'full'] as const) {
-                    if (other !== mode) try { fs.rmSync(aclMarkerPath(sid, dir, other), { force: true }); } catch { /* cache optional */ }
+                    if (other === mode) continue;
+                    const stale = aclMarkerPath(sid, dir, other);
+                    if (stale === null) continue;
+                    try { fs.rmSync(stale, { force: true }); } catch { /* cache optional */ }
                 }
             }
         }
@@ -1360,6 +1399,7 @@ module.exports = {
     __buildIcaclsScript: buildIcaclsScript,
     __aclCacheKey: appContainerAclCacheKey,
     __aclCacheRoot: appContainerAclCacheRoot,
+    __aclGrantIsCached: aclGrantIsCached,
     __buildCommandLine: buildCommandLine,
     __quoteWinArg: quoteWinArg,
     __probeChildSource: PROBE_CHILD_SOURCE,

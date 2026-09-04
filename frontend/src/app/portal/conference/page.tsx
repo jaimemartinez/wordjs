@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import { ToastProvider, useToast } from "@/contexts/ToastContext";
+import { csrfHeaders } from "@/lib/csrf";
 // Import global API helper specifically suitable for handling custom headers or URLs if needed,
 // but basically we can reuse the generic apiGet/Post if we can override headers or just use fetch for the auth ones.
 // We'll create a simple local fetcher for the portal to manage the custom token auth simpler.
@@ -131,8 +132,15 @@ function LocationPortalContent() {
     // fallback the backend accepts in case the namespaced cookie isn't carried.
     const [token, setToken] = useState<string | null>(null);
     // Authenticated requests forward the token via header when available (cookie is the primary path).
-    const portalAuthHeaders = (extra: Record<string, string> = {}): Record<string, string> =>
-        token ? { ...extra, 'x-portal-token': token } : extra;
+    const portalAuthHeaders = (extra: Record<string, string> = {}): Record<string, string> => ({
+        ...extra,
+        // Not the portal's own credential (that is x-portal-token below): these are same-origin calls
+        // to /api/v1/plugin/*, so a visitor who is ALSO signed in to WordJS sends their session cookie
+        // with them, and the double-submit gate then requires this header (see lib/csrf.ts). Sent on
+        // reads too — the backend only checks mutating methods, so one helper covers both.
+        ...csrfHeaders(),
+        ...(token ? { 'x-portal-token': token } : {}),
+    });
     const [myLocation, setMyLocation] = useState<Location | null>(null);
     const [step, setStep] = useState<'login' | 'dashboard'>('login');
     const [loading, setLoading] = useState(false);
@@ -274,7 +282,7 @@ function LocationPortalContent() {
         try {
             const res = await fetch('/api/v1/plugin/conference-manager/portal/login', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 'Content-Type': 'application/json', ...csrfHeaders() },
                 body: JSON.stringify({ location_id: selectedLocation, code }),
                 credentials: 'include'
             });

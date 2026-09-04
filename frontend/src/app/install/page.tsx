@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { apiPost, apiGet } from "@/lib/api";
+import { parseInstallToken, scrubInstallTokenFromUrl } from "@/lib/installToken";
 import { FaServer, FaUserShield, FaMagic, FaCheckCircle, FaArrowRight, FaArrowLeft, FaDatabase, FaExclamationTriangle } from 'react-icons/fa';
 
 type DbDriver = 'sqlite-native' | 'sqlite-legacy' | 'postgres' | 'mysql';
@@ -68,15 +69,19 @@ export default function InstallPage() {
     useEffect(() => {
         // Compute origin after mount to avoid an SSR/client hydration mismatch.
         setSiteUrl(window.location.origin);
-        // Prefill the install token from the clickable ?token= URL the server console prints
-        // (plain URLSearchParams, NOT useSearchParams — this page is statically prerendered).
-        // Scrub it from the address bar right away so it doesn't linger in history.
+        // Prefill the install token from the clickable `…/install#token=…` URL the server console
+        // prints. The token rides in the FRAGMENT precisely because a fragment is never sent to the
+        // server (no access logs, no Referer); `?token=` is still accepted as a fallback so a
+        // printout from an older build keeps working, and BOTH are scrubbed from the address bar
+        // right away so the bootstrap secret doesn't linger in browser history.
+        // Read straight off window.location, NOT useSearchParams — this page is statically
+        // prerendered, and useSearchParams cannot see a fragment at all (it never reaches the server).
         try {
-            const params = new URLSearchParams(window.location.search);
-            const tok = params.get('token');
+            const tok = parseInstallToken(window.location.hash, window.location.search);
             if (tok) {
-                setInstallToken(tok.trim());
-                window.history.replaceState({}, '', window.location.pathname);
+                setInstallToken(tok);
+                window.history.replaceState({}, '', scrubInstallTokenFromUrl(
+                    window.location.pathname, window.location.search, window.location.hash));
             }
         } catch { /* no URL access — manual paste still works */ }
         apiGet<{ installed: boolean }>('/setup/status')

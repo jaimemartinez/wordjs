@@ -524,11 +524,146 @@ function validateManifestPermissions(permissions: any): string[] {
  */
 type PermissionScanMode = 'declaration' | 'grant';
 
+/**
+ * BOUNDS FOR THE SHIPPED-DEPENDENCY SCAN (node_modules/ inside an uploaded plugin).
+ *
+ * The scan runs at install, at activation and at boot for every active plugin, so it must have a ceiling
+ * that does not depend on what the uploader put in the ZIP: a 60k-file dependency tree would otherwise
+ * turn a boot into a multi-minute AST run, which is a denial of service dressed as a security feature.
+ *
+ * The bounds are therefore small, fixed, and — this is the part that keeps them honest — REPORTED. When
+ * a bound is hit the caller emits a finding instead of a pass, so the ceiling can never quietly become a
+ * way to hide code: a tree engineered to exceed it fails validation rather than skipping the check.
+ *
+ * 1 MB per file skips minified/bundled artifacts. Those are the files whose AST is both enormous and
+ * least readable; a plugin that needs one can ship the unminified source next to it or declare
+ * `"bundled": true` and let the host install its dependencies from the registry instead.
+ */
+const DEP_SCAN_MAX_FILES = 4000;
+const DEP_SCAN_MAX_FILE_BYTES = 1024 * 1024;
+const DEP_SCAN_MAX_DEPTH = 32;
+
+/**
+ * Test-only narrowing of the bounds above. Every field is CLAMPED to the production ceiling
+ * (`Math.min`), so this can only ever make the scan stricter — a caller cannot use it to raise a bound
+ * and scan less carefully than production does. It exists so the "tree too large" branch is testable
+ * without writing 4000 files to disk.
+ */
+type DependencyScanLimits = { maxFiles?: number; maxFileBytes?: number; maxDepth?: number };
+
+type ShippedDependencyScan = {
+    /** Does the plugin ship a node_modules/ directory at all? */
+    present: boolean;
+    /** Files to scan (.js/.cjs/.mjs), already proven to live inside the plugin directory. */
+    files: string[];
+    /** True when the file cap stopped the walk — the tree is bigger than what was read. */
+    capHit: boolean;
+    depthCut: number;
+    skippedTooLarge: number;
+    skippedEscaping: number;
+    unreadable: number;
+    maxFiles: number;
+    maxFileBytes: number;
+    maxDepth: number;
+};
+
+/**
+ * Walk a plugin's SHIPPED node_modules/ depth-first and return the JavaScript files to scan, together
+ * with a truthful account of everything the walk did NOT read.
+ *
+ * Containment is proved with realpath, per entry, before the entry is used: a `node_modules/x` symlink
+ * pointing at `../../../../etc` (or at another plugin's directory, or at the host's own source) must not
+ * pull host code into the plugin's report — and, more importantly, must not let an attacker aim the
+ * scanner at a path it should not read. Anything resolving outside the plugin directory is skipped AND
+ * counted, so it surfaces as a finding rather than as silence. Directory realpaths are memoised so a
+ * symlink loop inside the plugin cannot spin the walk forever.
+ */
+function collectShippedDependencyFiles(pluginPath: string, limits: DependencyScanLimits = {}): ShippedDependencyScan {
+    const clamp = (given: any, ceiling: number) =>
+        (typeof given === 'number' && Number.isFinite(given) && given > 0) ? Math.min(given, ceiling) : ceiling;
+    const maxFiles = clamp(limits.maxFiles, DEP_SCAN_MAX_FILES);
+    const maxFileBytes = clamp(limits.maxFileBytes, DEP_SCAN_MAX_FILE_BYTES);
+    const maxDepth = clamp(limits.maxDepth, DEP_SCAN_MAX_DEPTH);
+
+    const result: ShippedDependencyScan = {
+        present: false, files: [], capHit: false, depthCut: 0,
+        skippedTooLarge: 0, skippedEscaping: 0, unreadable: 0,
+        maxFiles, maxFileBytes, maxDepth,
+    };
+
+    const root = path.join(pluginPath, 'node_modules');
+    try {
+        if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) return result;
+    } catch {
+        return result;                                    // unreadable/absent → nothing shipped
+    }
+    result.present = true;
+
+    let pluginReal: string;
+    try {
+        pluginReal = fs.realpathSync(pluginPath);
+    } catch {
+        // We cannot establish the containment baseline, so we cannot prove ANY path is inside the
+        // plugin. Report the whole tree as unread rather than scanning paths we cannot vouch for.
+        result.unreadable++;
+        return result;
+    }
+    // path.relative is case-insensitive on win32, which is what the filesystem is there.
+    const isInsidePlugin = (p: string) => {
+        const rel = path.relative(pluginReal, p);
+        return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
+    };
+
+    const seenDirs = new Set<string>();
+    const walkDir = (dir: string, depth: number) => {
+        if (result.files.length >= maxFiles) { result.capHit = true; return; }
+        if (depth > maxDepth) { result.depthCut++; return; }
+        let entries: any[];
+        try {
+            entries = fs.readdirSync(dir, { withFileTypes: true });
+        } catch {
+            result.unreadable++;                          // permissions, a broken junction, a race
+            return;
+        }
+        for (const entry of entries) {
+            if (result.files.length >= maxFiles) { result.capHit = true; return; }
+            const full = path.join(dir, entry.name);
+            let real: string;
+            try {
+                real = fs.realpathSync(full);             // resolves EVERY symlink on the way
+            } catch {
+                result.unreadable++;                      // dangling symlink, vanished entry
+                continue;
+            }
+            if (!isInsidePlugin(real)) { result.skippedEscaping++; continue; }
+            let stat: any;
+            try {
+                stat = fs.statSync(real);
+            } catch {
+                result.unreadable++;
+                continue;
+            }
+            if (stat.isDirectory()) {
+                if (seenDirs.has(real)) continue;         // symlink loop / already walked
+                seenDirs.add(real);
+                walkDir(full, depth + 1);                 // recurse on the LOGICAL path (readable labels)
+                continue;
+            }
+            if (!stat.isFile()) continue;                 // sockets, fifos, devices: not code we can parse
+            if (!/\.(js|cjs|mjs)$/i.test(entry.name)) continue;
+            if (stat.size > maxFileBytes) { result.skippedTooLarge++; continue; }
+            result.files.push(full);
+        }
+    };
+    walkDir(root, 0);
+    return result;
+}
+
 function validatePluginPermissions(
     slug: string,
     pluginPath: string,
     manifest: any,
-    options: { mode?: PermissionScanMode } = {},
+    options: { mode?: PermissionScanMode; dependencyScanLimits?: DependencyScanLimits } = {},
 ) {
     // io-guard caches each slug's DECLARED permissions for the life of the process (a plugin cannot
     // rewrite its own manifest at runtime — isPathSafe refuses that write). But an INSTALL or UPDATE
@@ -593,6 +728,10 @@ function validatePluginPermissions(
     // runtime (different module loader), so catching it statically is the primary defense; the worker's
     // ESM resolve hook is the runtime backstop.
     const SENSITIVE_MODULES = ['child_process', 'fs', 'fs/promises', 'http', 'https', 'net', 'dgram', 'dns', 'cluster', 'async_hooks', 'vm', 'worker_threads', 'module', 'inspector', 'v8', 'repl', 'sqlite', 'wasi'];
+    // The `process` properties that hand out a NATIVE binding — C++ land, below every JS-level guard the
+    // sandbox installs. These are the subset the shipped-dependency pass keeps of the (much broader)
+    // process gate applied to a plugin's own code; see that gate for why the rest is dropped there.
+    const NATIVE_BINDING_PROCESS_PROPS = new Set(['binding', '_linkedBinding', 'dlopen', 'getBuiltinModule']);
     // THEMES ARE SCANNED HARDER THAN PLUGINS — but no longer for the reason this comment used to give.
     //
     // It used to read: "THEMES run functions.js IN-PROCESS on the host, where there is NO ESM import()
@@ -611,7 +750,21 @@ function validatePluginPermissions(
     // worker enforces at runtime, and a theme is installed from a catalogue with a wider blast radius
     // than its file count suggests.
     const isThemeScan = /[\\/]themes[\\/]/.test(pluginPath);
-    const flagModuleLiteral = (rawValue: any, kindLabel: string) => {
+    /**
+     * The require()/import() module-literal gate, as a FACTORY over its two sinks.
+     *
+     * It is a factory only so the SHIPPED-DEPENDENCY pass (see scanShippedDependencies below) can run
+     * this exact function against a different sink — one that prefixes every finding with the
+     * `node_modules/<pkg>/…` path it came from — instead of a second copy of the rules drifting out of
+     * step with this one. `isDependency` suppresses the two THEME-only specifier rules, which are about
+     * a theme's own code importing OUT of the scanned tree; inside node_modules a bare specifier is how
+     * packages require each other, and that tree is now scanned.
+     */
+    const makeFlagModuleLiteral = (
+        dangerousCalls: { add: (v: string) => unknown },
+        noteMissing: (label: string, scope: any, access: any) => void,
+        isDependency: boolean,
+    ) => (rawValue: any, kindLabel: string) => {
         const raw = String(rawValue);
         // An import specifier can bypass both this static scan AND the require proxy. The WHATWG URL parser
         // STRIPS ASCII whitespace/control chars before scheme detection, so `da\tta:` ≡ `data:` at runtime —
@@ -622,13 +775,13 @@ function validatePluginPermissions(
             // theme's own AST-scanned tree. A bare package ('evilpkg' from the theme's node_modules), an
             // absolute path, or a URL scheme all load code the scan never saw (#7). require() (CJS) stays
             // governed by secure-require at runtime; only ESM import() lacks a host hook.
-            if (isThemeScan && !/^\.\.?[\\/]/.test(spec) && spec !== '.' && spec !== '..') {
+            if (!isDependency && isThemeScan && !/^\.\.?[\\/]/.test(spec) && spec !== '.' && spec !== '..') {
                 dangerousCalls.add(`import('${spec.slice(0, 40)}') — non-relative import specifier is not permitted in a theme`);
                 return;
             }
             // Even a RELATIVE theme import that points into node_modules (`./node_modules/pwn`) reaches an
             // unscanned tree — reject it (#7). node_modules is not part of a theme's scanned own-code.
-            if (isThemeScan && /(^|[\\/])node_modules([\\/]|$)/i.test(spec)) {
+            if (!isDependency && isThemeScan && /(^|[\\/])node_modules([\\/]|$)/i.test(spec)) {
                 dangerousCalls.add(`import('${spec.slice(0, 40)}') — importing from node_modules is not permitted in a theme`);
                 return;
             }
@@ -641,7 +794,25 @@ function validatePluginPermissions(
         }
         const moduleName = raw.replace(/^node:/, '');
         if (!SENSITIVE_MODULES.includes(moduleName)) return;
-        if (moduleName === 'dns' || moduleName === 'net') {
+        /**
+         * A DEPENDENCY's networking builtins are charged as the NETWORK PERMISSION, not blocked outright.
+         *
+         * For a plugin's OWN code the hard block is the right answer: the author is told to use the host
+         * bridge instead of opening sockets by hand, and they can change their code. A shipped dependency
+         * is code they did not write — and `require('http')` inside it is not an escape at all: at runtime
+         * secure-require classifies every module under `plugins/<slug>/` as plugin code and gates exactly
+         * these modules on the admin's Network grant, per require, at the socket. Blocking them here would
+         * make the static scan STRICTER THAN THE RUNTIME and refuse to install a network-granted plugin
+         * that ships express or nodemailer, for a call the sandbox would have allowed.
+         *
+         * The population is read from secure-require's own NETWORK_MODULES so there is ONE list: if that
+         * policy is ever narrowed, this follows it the same day. Unreadable ⇒ keep the strict verdict.
+         */
+        const isRuntimeNetworkModule = () => {
+            try { return !!require('./secure-require').NETWORK_MODULES?.has(moduleName); }
+            catch { return false; }   // fail CLOSED
+        };
+        if (moduleName === 'dns' || moduleName === 'net' || (isDependency && isRuntimeNetworkModule())) {
             if (!hasDeclared('network', 'admin') && !hasDeclared('email', 'admin')) {
                 // Either declaration satisfies this gate, so report against whichever one the manifest
                 // actually asked for — otherwise a plugin that declared email:admin and was denied it
@@ -653,6 +824,8 @@ function validatePluginPermissions(
             dangerousCalls.add(`${kindLabel}('${moduleName}')`);
         }
     };
+    // The own-source instance: the plugin's own files report into the plugin's own buckets, unprefixed.
+    const flagModuleLiteral = makeFlagModuleLiteral(dangerousCalls as any, noteMissing, false);
 
     // No plugin may skip the AST scan: there is no trust tier, and declaring system:admin grants
     // nothing. EVERY plugin runs the full scan (so its child_process/eval/native use is caught).
@@ -750,7 +923,28 @@ function validatePluginPermissions(
         }
     };
 
-    for (const file of files) {
+    /**
+     * SCAN ONE FILE. This is the body the plugin's own source has always been run through, lifted out of
+     * its `for` loop UNCHANGED so that the shipped-dependency pass below can run the very same rules
+     * instead of a second copy of them drifting away from this one (the whole reason node_modules went
+     * unscanned for so long is that scanning it "properly" looked like writing a parallel detector).
+     *
+     * Everything the body reports through is a PARAMETER, so the caller decides where findings land:
+     *  · own source  — the plugin's own `dangerousCalls` / `missingPermissions`, verbatim, unprefixed;
+     *  · dependency  — a sink that prefixes each finding with `node_modules/<pkg>/…`, plus `dependency`
+     *                  set, which narrows the gates that are pure noise inside third-party code (see
+     *                  each `dependency` check below for the individual WHY). `dependency` is null for
+     *                  own source, so every own-source verdict is bit-for-bit what it was before.
+     */
+    type DependencyScanCtx = { label: string; unscannable: (file: string, why: string) => void };
+    const scanOneFile = (file: string, sinks: {
+        dangerousCalls: { add: (v: string) => unknown };
+        flagModuleLiteral: (rawValue: any, kindLabel: string) => void;
+        noteFsCall: (methodName: string, how?: string) => void;
+        noteMissing: (label: string, scope: any, access: any) => void;
+        dependency: DependencyScanCtx | null;
+    }) => {
+        const { dangerousCalls, flagModuleLiteral, noteFsCall, noteMissing, dependency } = sinks;
         const content = fs.readFileSync(file, 'utf8');
         let ast;
         try {
@@ -759,8 +953,13 @@ function validatePluginPermissions(
             // FAIL-CLOSED: a file that is actually loaded but cannot be parsed is treated as
             // a violation, so an attacker cannot hide a payload behind a deliberate parse-buster.
             console.warn(`[Security] Could not parse ${logSafe(file)} for AST analysis — treating as a violation (fail-closed).`);
+            // A DEPENDENCY file that will not parse is still a violation, but it is reported through the
+            // ONE aggregated "tree could not be scanned in full" finding rather than as N separate lines:
+            // a package shipping a Flow-typed or otherwise exotic .js would otherwise bury the real hits.
+            // Either way the plugin does not install — unscannable is a finding, not a pass.
+            if (dependency) { dependency.unscannable(file, 'could not be parsed'); return; }
             dangerousCalls.add(`Unparseable source file (${path.basename(file)})`);
-            continue;
+            return;
         }
 
         // === THE PER-FILE VALUE ENVIRONMENT (see "WHICH EXPRESSIONS ARE THE FILESYSTEM MODULE?") ======
@@ -1082,7 +1281,12 @@ function validatePluginPermissions(
                         const arg = node.arguments[0];
                         if (arg.type === 'Literal') {
                             flagModuleLiteral(arg.value, 'require');
-                        } else {
+                        } else if (!dependency) {
+                            // Computed require() is an obfuscation signal in code someone wrote FOR this
+                            // plugin. Inside node_modules it is how half of npm loads an optional peer
+                            // (`require(name)`), so flagging it there would block every real tree and
+                            // teach operators to ignore the whole finding class. secure-require resolves
+                            // the runtime require by identity regardless of how the specifier was spelled.
                             dangerousCalls.add(`Dynamic require detected (obfuscation risk)`);
                         }
                     }
@@ -1093,7 +1297,9 @@ function validatePluginPermissions(
                         name = node.callee.property.name;
                     }
 
-                    if (node.callee.computed) {
+                    if (node.callee.computed && !dependency) {
+                        // Same calibration as dynamic require(): `handlers[k]()` is ordinary dispatch in
+                        // third-party code and would fire on nearly every package.
                         dangerousCalls.add(`Computed/Dynamic Call (obfuscation risk)`);
                     }
 
@@ -1140,7 +1346,15 @@ function validatePluginPermissions(
                     && ((node.callee.object.type === 'Literal' && !!node.callee.object.regex)
                         || (node.callee.object.type === 'Identifier' && regexConstBindings.has(node.callee.object.name)));
 
-                if (!isRegexLiteralExec && ['eval', 'Function', 'exec', 'execSync', 'spawn', 'fork'].includes(name)) {
+                // In a DEPENDENCY only the code-generation half of this list is kept. `exec`/`spawn`/`fork`
+                // are matched on the bare METHOD NAME, and inside third-party code that name belongs to
+                // someone else far more often than to child_process (`re.exec(s)` where `re` is a `let`,
+                // `emitter.fork()`, a stream's `spawn`) — while the way a dependency actually REACHES
+                // child_process, requiring or importing it, is caught by flagModuleLiteral above and does
+                // not depend on this list at all. eval/Function have no such collision.
+                const nameIsSink = ['eval', 'Function', 'exec', 'execSync', 'spawn', 'fork'].includes(name)
+                    && (!dependency || name === 'eval' || name === 'Function');
+                if (!isRegexLiteralExec && nameIsSink) {
                     dangerousCalls.add(name);
                 }
 
@@ -1191,11 +1405,19 @@ function validatePluginPermissions(
                     }
 
                     if (node.object.name === 'process') {
-                        // Allow process.env (handled by runtime proxy), block everything else
-                        if (node.property.name !== 'env') {
+                        // Allow process.env (handled by runtime proxy), block everything else.
+                        // In a DEPENDENCY, narrow this to the NATIVE-BINDING escapes (process.binding,
+                        // process._linkedBinding, process.dlopen, process.getBuiltinModule): every other
+                        // property — process.platform, process.cwd(), process.version, process.nextTick —
+                        // appears in almost every npm package and is already virtualised by the sandbox's
+                        // process proxy, so charging it here would block every tree without adding a
+                        // single bit of signal. The escapes above are the ones that reach C++ directly.
+                        if (node.property.name !== 'env'
+                            && (!dependency || NATIVE_BINDING_PROCESS_PROPS.has(node.property.name))) {
                             dangerousCalls.add(`Forbidden 'process' property: ${node.property.name || 'computed'}`);
                         }
-                    } else if (!isAssignment) {
+                    } else if (!isAssignment && !dependency) {
+                        // `global.x` / `module.parent` / `require.resolve` reads are routine in packages.
                         dangerousCalls.add(`Direct '${node.object.name}' access (restricted)`);
                     }
                 }
@@ -1204,7 +1426,7 @@ function validatePluginPermissions(
                 if (node.computed && node.property.type !== 'Literal' && node.property.type !== 'NumberLiteral') {
                     // Only flag if it's a sensitive base or looks suspicious
                     const base = node.object.type === 'Identifier' ? node.object.name : '';
-                    if (sensitiveGlobals.includes(base)) {
+                    if (sensitiveGlobals.includes(base) && !dependency) {
                         dangerousCalls.add(`Obfuscated/Dynamic access to ${base}`);
                     }
                 }
@@ -1224,7 +1446,9 @@ function validatePluginPermissions(
                 const arg = node.source;
                 if (arg && arg.type === 'Literal') {
                     flagModuleLiteral(arg.value, 'import');
-                } else {
+                } else if (!dependency) {
+                    // See dynamic require() above: a computed import() specifier is a signal in the
+                    // plugin's own code and a lazy-loading idiom inside a package.
                     dangerousCalls.add(`Dynamic import() detected (obfuscation risk)`);
                 }
             },
@@ -1240,8 +1464,12 @@ function validatePluginPermissions(
             // from a restricted global identifier. (The runtime wrap of getBuiltinModule is the primary
             // defense; this is the static backstop.)
             VariableDeclarator(node: any) {
-                if (node.init && node.init.type === 'Identifier' &&
-                    ['process', 'global', 'globalThis', 'require', 'module', 'eval', 'Function'].includes(node.init.name)) {
+                // `const _global = global` / `var proc = process` are ordinary environment-shim lines in
+                // packages, so in a DEPENDENCY only the two CODEGEN primitives keep their alias check —
+                // aliasing eval/Function has no benign reading anywhere.
+                const aliasNames = dependency ? ['eval', 'Function']
+                    : ['process', 'global', 'globalThis', 'require', 'module', 'eval', 'Function'];
+                if (node.init && node.init.type === 'Identifier' && aliasNames.includes(node.init.name)) {
                     // `const p = process` / `const e = eval` / `const F = Function` — binding a restricted
                     // global or a codegen primitive to a local dodges the direct name checks above.
                     dangerousCalls.add(`Aliasing restricted global '${node.init.name}' (obfuscation risk)`);
@@ -1312,6 +1540,74 @@ function validatePluginPermissions(
             const judged = RESIDUE_JUDGED_ELSEWHERE[parent.type];
             if (judged && judged(parent, node)) return;
             noteEscape(val);
+        }
+    };
+
+    // The plugin's OWN source: same files, same rules, same buckets as before this function existed.
+    for (const file of files) {
+        scanOneFile(file, { dangerousCalls: dangerousCalls as any, flagModuleLiteral, noteFsCall, noteMissing, dependency: null });
+    }
+
+    // === THE SHIPPED DEPENDENCY TREE (node_modules/) — BOUNDED, AND UNSCANNABLE MEANS BLOCKED ========
+    //
+    // Marketplace plugins ship no node_modules (the host installs their declared dependencies), but an
+    // UPLOADED plugin may ship a whole tree — and until now the scanner walked straight past it, so
+    // `node_modules/left-pad/index.js` was the cheapest place in a package to park a
+    // `require('child_process')` that the operator's install-time review would never see. That gap was
+    // named in documentation/security.md §4 and in core/scan-exclusions.ts; this is it being closed.
+    //
+    // What this is NOT: a supply-chain audit. It is the same install-time smell test the plugin's own
+    // code gets, applied to the code it ships alongside it, with HARD BOUNDS so a package with a
+    // 60k-file tree cannot turn an install (or a boot-time activation) into a minutes-long AST run:
+    //   · at most DEP_SCAN_MAX_FILES files, · nothing larger than DEP_SCAN_MAX_FILE_BYTES (minified
+    //   bundles), · .js/.cjs/.mjs only, · no symlink followed outside the plugin directory (realpath).
+    // Hitting ANY of those bounds is itself reported as a finding: a dependency tree we could not read
+    // in full is exactly the situation where "nothing was found" means nothing at all, so it fails
+    // closed rather than passing quietly.
+    //
+    // Runtime containment (secure-require, io-guard, the worker's ESM hook, blockCodeGen) remains the
+    // control that actually STOPS a dependency — as it always was. This pass buys the operator a look.
+    const deps = collectShippedDependencyFiles(pluginPath, options.dependencyScanLimits);
+    if (deps.present) {
+        const unscannable: string[] = [];
+        for (const depFile of deps.files) {
+            // The dependency-relative path is what makes a finding actionable ("which package?"), so it
+            // prefixes every line this file produces. logSafe because the path comes from an uploaded ZIP.
+            const label = logSafe(path.relative(pluginPath, depFile).split(path.sep).join('/'));
+            const depSink = { add: (v: string) => dangerousCalls.add(`${label}: ${v}`) };
+            const noteUnscannable = (_f: string, why: string) => { unscannable.push(`${label} (${why})`); };
+            try {
+                scanOneFile(depFile, {
+                    dangerousCalls: depSink,
+                    // A dependency's require('net')/require('dns') is a REAL capability the plugin will
+                    // exercise at runtime — the network gate charges the plugin either way — so it stays a
+                    // missing-permission (fixable in manifest.json), not a hard block.
+                    flagModuleLiteral: makeFlagModuleLiteral(depSink, (l, s, a) => noteMissing(`${label}: ${l}`, s, a), true),
+                    // Filesystem and host-API charges are deliberately NOT collected from dependencies.
+                    // io-guard gates every fs call against the PLUGIN's grants at the call itself, so
+                    // nothing is un-gated by staying silent here; whereas charging statically would make
+                    // essentially every dependency demand filesystem:read and bury the real findings. The
+                    // host-API gate matches on a bare NAME (`getOption`), which inside a third-party
+                    // package is a name collision, not a call into WordJS.
+                    noteFsCall: () => { /* see above */ },
+                    noteMissing: () => { /* see above */ },
+                    dependency: { label, unscannable: noteUnscannable },
+                });
+            } catch (e: any) {
+                // A crash in the scan of a dependency file must not read as "clean" (fail closed).
+                unscannable.push(`${label} (scan failed: ${logSafe(e && e.message)})`);
+            }
+        }
+
+        const reasons: string[] = [];
+        if (deps.capHit) reasons.push(`the tree holds more than ${deps.maxFiles} scannable files`);
+        if (deps.depthCut > 0) reasons.push(`${deps.depthCut} director${deps.depthCut === 1 ? 'y' : 'ies'} nested deeper than ${deps.maxDepth} levels`);
+        if (deps.skippedTooLarge > 0) reasons.push(`${deps.skippedTooLarge} file(s) larger than ${deps.maxFileBytes} bytes (likely minified bundles)`);
+        if (deps.skippedEscaping > 0) reasons.push(`${deps.skippedEscaping} path(s) resolving OUTSIDE the plugin directory via symlink`);
+        if (deps.unreadable > 0) reasons.push(`${deps.unreadable} unreadable director${deps.unreadable === 1 ? 'y' : 'ies'}`);
+        if (unscannable.length > 0) reasons.push(`${unscannable.length} file(s) could not be scanned: ${unscannable.slice(0, 5).join(', ')}`);
+        if (reasons.length > 0) {
+            dangerousCalls.add(`node_modules/: the shipped dependency tree could not be scanned in full — ${reasons.join('; ')} (${deps.files.length} file(s) were scanned). An unscannable dependency tree is a finding, not a pass: ship fewer/smaller dependencies, or declare "bundled" and let the host install them.`);
         }
     }
 

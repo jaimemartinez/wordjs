@@ -31,7 +31,7 @@ That single command takes you from nothing to the browser install wizard:
    clickable URL:
 
    ```
-   → https://localhost:3000/install?token=…
+   → https://localhost:3000/install#token=…
    ```
 
 Open the URL, pick your database, create your admin account, and you're in. The wizard offers

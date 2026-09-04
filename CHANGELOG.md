@@ -4,6 +4,62 @@ All notable changes to WordJS are documented here. This project follows
 [Semantic Versioning](https://semver.org/). Each release is published as a pre-compiled bundle
 on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
+## [Unreleased]
+
+### Security
+
+- **Cookie-authenticated writes need a CSRF token.** Every session-cookie request that mutates state
+  must carry an `X-CSRF-Token` header equal to the `wjs_csrf` cookie the server issues at login (the
+  cookie is readable by scripts and otherwise shares the session cookie's attributes). The check is
+  combined with the existing Origin/Host allow-list rather than replacing it, Bearer requests are
+  exempt, a mismatch answers `403 rest_csrf_token`, and the cookie is back-filled on the next
+  authenticated request for sessions that predate this release. The frontend attaches the header
+  through `lib/csrf.ts`; every in-tree mutating fetch path was updated, and the editor presence
+  beacon moved from `sendBeacon` to `fetch` with `keepalive` so it can carry the header.
+  `X-CSRF-Token` is now an allowed CORS request header.
+- **A runaway isolated plugin is killed.** The sandbox's memory poll now also samples CPU time: a
+  child that stays at or above 95% of one core for `sandbox.cpuBurstSeconds` seconds (default 60;
+  `0` disables the check) is sent SIGKILL and its health record says why. Linux reads
+  `/proc/<pid>/stat`, macOS uses `ps`; Windows AppContainer and cgroup-managed children are left to
+  their own limits.
+- **A plugin's shipped `node_modules` are scanned before load.** The pre-load AST scanner used to
+  stop at the plugin's own sources; it now walks the dependency tree the plugin ships, under bounds
+  (4,000 files, 1 MB per file, depth 32). Reaching a bound is itself reported as a finding rather
+  than letting the remainder pass unseen, and a symlink that leaves the plugin directory is refused.
+- **The install token travels in the URL fragment.** The CLI now prints `/install#token=…`, so the
+  token never reaches server logs, reverse proxies or a `Referer` header. The install page reads the
+  fragment first, still accepts the query form for instructions already written down, and scrubs the
+  token from the address bar either way.
+- **`'unsafe-eval'` is gone from the production `script-src`** of both the frontend security header
+  and the gateway. The visual editor that needed it no longer exists and the shipped client chunks
+  contain no `eval`; development builds keep the keyword because React's development build requires
+  it. Tests pin the strict production shape.
+- **Isolated plugin children on Linux start with the working directory at the filesystem root**, as
+  they already did on macOS, so `process.cwd()` no longer discloses the deployment path to a plugin.
+
+### Added
+
+- **A scheduled dependency audit.** `dependency-audit.yml` runs `npm audit` for all six workspaces
+  every day (and on demand through `workflow_dispatch`) and opens an issue when one fails, so an
+  advisory published between releases no longer waits for the next push to be noticed.
+
+### Changed
+
+- `SECURITY.md` and the security, frontend, gateway, deployment, plugins, architecture and CLI
+  documents describe the controls above; the items that used to be listed as known limitations are
+  now documented as controls, with the remaining limitations stated plainly.
+
+### Fixed
+
+- **Windows: isolated plugins no longer stop loading after a rebuild or an upgrade.** The AppContainer
+  grant cache remembered a successful `icacls` grant by SID, path and access shape alone. When
+  `backend/dist` or `node_modules` was deleted and recreated at the same path (a rebuild, `npm ci`,
+  unpacking a new release bundle) the recreated tree had lost the package-SID ACE while the cache still
+  said it was granted, and every isolated plugin child failed at boot with `MODULE_NOT_FOUND` for a file
+  that exists. The cache key now includes the directory's own identity (NTFS file id and creation time),
+  so a recreated directory is a miss and the grant is redone; the cache moved to `v4` so no marker
+  written under the old key is trusted.
+
 ## [2.0.0] - 2026-09-04
 
 ### Breaking changes

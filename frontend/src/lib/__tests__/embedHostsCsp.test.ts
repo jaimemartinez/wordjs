@@ -91,6 +91,38 @@ describe('frame-src is derived from ALLOWED_EMBED_HOSTS', () => {
     });
 });
 
+/**
+ * `'unsafe-eval'` was removed from script-src. It had been there for the Puck visual editor, which is
+ * retired: the real production client build carries no `eval(` and no `new Function(`, and the only two
+ * `Function("` strings in the chunks are core-js's and decimal.js's global-object fallbacks, which
+ * short-circuit on globalThis/self and never run in a browser. The bundled plugin admin bundles are clean
+ * too. This reads the header the browser actually receives, so re-adding the keyword fails the build.
+ */
+describe("script-src is narrowed: no 'unsafe-eval'", () => {
+    it('the removed keyword cannot creep back in', async () => {
+        const scriptSrc = (await cspDirectives()).get('script-src');
+        expect(scriptSrc, 'script-src must be present, not left to default-src').toBeTruthy();
+        expect(scriptSrc).not.toContain("'unsafe-eval'");
+        // Nor may it hide in a sibling script directive, or in worker-src (workers execute script too).
+        for (const name of ['script-src-elem', 'script-src-attr', 'worker-src', 'default-src']) {
+            expect(
+                (await cspDirectives()).get(name) ?? [],
+                `${name} must not allow 'unsafe-eval' either`,
+            ).not.toContain("'unsafe-eval'");
+        }
+    });
+
+    it('and the values that MUST stay are still there', async () => {
+        // Guards against "fixing" the assertion above by gutting the directive.
+        //   blob:           — plugin admin bundles via import(URL.createObjectURL(blob)) (pluginBundleLoader)
+        //   https:          — analytics-tag's third-party tags, incl. an admin-entered Matomo origin
+        //   'unsafe-inline' — the Next.js App Router bootstrap (nonce migration is a documented follow-up)
+        const scriptSrc = (await cspDirectives()).get('script-src')!;
+        expect(scriptSrc).toEqual(["'self'", "'unsafe-inline'", 'blob:', 'https:']);
+        expect((await cspDirectives()).get('worker-src')).toEqual(["'self'", 'blob:']);
+    });
+});
+
 describe('the backend copy of the list does not delete what the frontend accepts', () => {
     it('sanitize() keeps an iframe on every allowed embed host', () => {
         for (const host of ALLOWED_EMBED_HOSTS) {

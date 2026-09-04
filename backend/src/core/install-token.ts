@@ -74,7 +74,12 @@ function generateInstallToken(): string {
     }
 
     // One clickable URL beats hunting a 48-char token in interleaved service logs: the installer
-    // page reads ?token= and prefills it (then scrubs it from the address bar).
+    // page reads the token out of the URL FRAGMENT (#token=) and prefills it (then scrubs it from
+    // the address bar).
+    // SECURITY: the fragment — not a ?token= query string. A query string is sent to the server on
+    // every request, so it lands in access/proxy logs and in the `Referer` of any sub-resource the
+    // page loads; the fragment is never transmitted and is stripped from Referer by the URL spec.
+    // Both still end up in the browser's own history, which is why the page scrubs the address bar.
     // Default dev serves HTTPS on :3000 (gateway sslAuto / monolith resolveSSL), but the config's
     // untouched default says http:// — so only trust siteUrl when the operator actually set it.
     let siteUrl = 'https://localhost:3000';
@@ -86,7 +91,7 @@ function generateInstallToken(): string {
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     console.log('🔑 WordJS is not installed yet — finish setup in your browser:');
     console.log('');
-    console.log(`   → ${siteUrl.replace(/\/$/, '')}/install?token=${tok}`);
+    console.log(`   → ${siteUrl.replace(/\/$/, '')}/install#token=${tok}`);
     console.log('');
     console.log(`   Install token (if you prefer to paste it): ${tok}`);
     console.log(`   (Also written to ${TOKEN_FILE} (0600) for headless installs;`);

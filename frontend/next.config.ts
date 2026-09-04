@@ -50,12 +50,17 @@ const nextConfig: NextConfig = {
     // the app's own same-origin preview, which broke the Customizer (blank/errored iframe). This is
     // the same relaxation WordPress uses for its Customizer preview.
     //
-    // script-src DELIBERATELY keeps 'unsafe-inline' 'unsafe-eval' AND adds blob: — removing them BREAKS
-    // the app (a regression), so they stay:
+    // script-src: 'unsafe-eval' is GONE. It was here for the Puck visual editor, which no longer exists.
+    // Evidence for the removal: the real production client build (.next, 91 chunks) contains zero `eval(`
+    // and zero `new Function(`; the only two `Function("` occurrences are core-js's and decimal.js's
+    // global-object fallbacks, which short-circuit on globalThis/self and are unreachable in a browser.
+    // No WebAssembly in client chunks, and every shipped plugin admin bundle (marketplace/plugins/*/dist)
+    // is clean too. Test: src/lib/__tests__/embedHostsCsp.test.ts asserts script-src never regains it.
+    //
+    // What DOES stay in script-src, because removing it breaks the app (a regression):
     //   • blob: — the admin loads each plugin's frontend bundle via `import(URL.createObjectURL(blob))`
     //     (lib/pluginBundleLoader.ts). Without script-src blob:, every plugin admin UI + its icons fail
     //     to render. (This was the cause of the "no icons" regression.)
-    //   • 'unsafe-eval' — the Puck visual editor and some bundled libs use Function()/eval at runtime.
     //   • 'unsafe-inline' — Next.js App Router emits inline bootstrap/hydration <script> tags; a full
     //     per-request nonce migration is out of scope. (So script-src isn't an XSS backstop today — the
     //     server-side sanitizer in lib/sanitize.ts is the real XSS defense.)
@@ -67,15 +72,40 @@ const nextConfig: NextConfig = {
     // an empty hole with no "Unsupported video URL" marker. Deriving it means a new provider can only
     // be added in one place. Test: src/lib/__tests__/embedHostsCsp.test.ts.
     // Resource directives (script/style/font/img) allow https: — the app loads its OWN theme assets
-    // (fonts under /uploads/fonts, theme CSS/JS, images) and, crucially, the Puck editor renders the
-    // theme inside an `about:srcdoc` iframe where the CSP keyword 'self' does NOT resolve to the page
-    // origin, so same-origin https assets are blocked unless https: is allowed. These directories are
-    // NOT the XSS line of defense anyway (script-src already has 'unsafe-inline'/'unsafe-eval' for
-    // Next.js + Puck; the server-side sanitizer is the XSS control). The REAL value kept here is the
-    // structural set: frame-ancestors 'self' (cross-origin clickjacking), object-src 'none', base-uri 'self'.
+    // (fonts under /uploads/fonts, theme CSS/JS, images) over https.
+    //
+    // The old justification here — "the Puck editor renders the theme inside an about:srcdoc iframe,
+    // where the CSP keyword 'self' does NOT resolve to the page origin" — is DEAD: Puck is gone, there
+    // is no srcdoc iframe anywhere in frontend/src, and Verso's canvas is an ordinary same-origin route
+    // (<iframe src="/admin/canvas-frame">), where 'self' resolves normally.
+    //
+    // The TRUE reason https: remains in script-src is the bundled analytics-tag plugin: its public
+    // loader (marketplace/plugins/analytics-tag/public/loader.js) injects <script> elements pointing at
+    // https://www.googletagmanager.com/gtag/js, https://plausible.io/js/script.js, and — the blocker for
+    // a static allow-list — an ADMIN-ENTERED Matomo origin (validated only as https, different per site).
+    // This header is baked at BUILD time and cannot know that per-site origin, so no explicit origin list
+    // can be written here today. To narrow it later: proxy the admin-entered Matomo origin same-origin
+    // (or render it into a per-request header), then replace https: with an explicit origin allow-list —
+    // googletagmanager.com + plausible.io + the proxied Matomo path. Dropping https: outright without
+    // that is a product decision (it disables third-party analytics tags), not a cleanup.
+    //
+    // These resource directives are NOT the XSS line of defense anyway (script-src still carries
+    // 'unsafe-inline' for the Next.js bootstrap; the server-side sanitizer is the XSS control). The REAL
+    // value kept here is the structural set: frame-ancestors 'self' (cross-origin clickjacking),
+    // object-src 'none', base-uri 'self'.
+    // 'unsafe-eval' is DEVELOPMENT-ONLY. React's development build calls eval() for its debugging
+    // features (reconstructing component stacks across environments) and, served the strict header,
+    // logs "eval() is not supported in this environment … React requires eval() in development mode"
+    // on every page — the app still works, but a dev console painted red on load hides real errors.
+    // React never uses eval() in production, the shipped chunks contain none (measured), and Vitest runs
+    // with NODE_ENV=test, so the strict production shape is what the tests pin and what `next start`
+    // serves. Keyed on === 'development' precisely so no other environment inherits the allowance.
+    const scriptSrc = process.env.NODE_ENV === 'development'
+      ? "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: https:"
+      : "script-src 'self' 'unsafe-inline' blob: https:";
     const csp = [
       "default-src 'self'",
-      "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: https:",
+      scriptSrc,
       "worker-src 'self' blob:",
       "style-src 'self' 'unsafe-inline' https:",
       "img-src 'self' data: blob: https:",
@@ -95,8 +125,13 @@ const nextConfig: NextConfig = {
           { key: 'X-Content-Type-Options', value: 'nosniff' },
           { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
           // Deny powerful device features WordJS core never uses + opt out of the Topics API (audit F-09).
-          // Deliberately does NOT restrict `payment` (Stripe Elements in the online-store plugin uses the
-          // Payment Request API for Apple/Google Pay) so this stays regression-free for bundled plugins.
+          // It deliberately does NOT list `payment` at all, which leaves the Payment Request API at its
+          // browser default. NOTE the old comment here was wrong: it claimed the online-store plugin uses
+          // Stripe Elements / the Payment Request API for Apple/Google Pay. It does not — the plugin
+          // creates a Checkout Session server-side (api.stripe.com, secret key never leaves the server)
+          // and the browser leaves by TOP-LEVEL NAVIGATION to Stripe's own hosted page, which this header
+          // does not govern. So nothing bundled depends on `payment` being unrestricted; the directive is
+          // left as-is here on purpose (comment-only correction — changing it is a separate decision).
           { key: 'Permissions-Policy', value: 'camera=(), microphone=(), geolocation=(), browsing-topics=()' },
         ],
       },

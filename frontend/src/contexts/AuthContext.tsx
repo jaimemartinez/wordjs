@@ -3,6 +3,9 @@
 import { createContext, useContext, useState, useEffect, useCallback, useMemo, ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { SESSION_ENDED_EVENT } from "@/lib/api";
+// This context talks to /auth/* with raw fetch (not the api() client), so it carries the double-submit
+// CSRF token itself — see lib/csrf.ts for why every cookie-carrying mutation must.
+import { csrfHeaders } from "@/lib/csrf";
 
 interface MfaStatus {
     required: boolean;      // the user's role is subject to the enforced-MFA policy
@@ -81,6 +84,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                     await fetch(`${API_URL}/auth/refresh`, {
                         method: "POST",
                         credentials: "include",
+                        // Cookie-authenticated mutation → double-submit token (see lib/csrf.ts). The
+                        // response ROTATES wjs_csrf; nothing caches the value, so the next request
+                        // reads the new one.
+                        headers: csrfHeaders(),
                     });
                     console.debug("Session extended via Sliding Window");
                 } catch (err) {
@@ -133,7 +140,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         try {
             const res = await fetch(`${API_URL}/auth/login`, {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
+                // A STALE session cookie from a previous sign-in still makes this a cookie-carrying
+                // mutation as far as the gate is concerned, so the token travels here too.
+                headers: { "Content-Type": "application/json", ...csrfHeaders() },
                 body: JSON.stringify({ username, password }),
                 credentials: "include", // Receive and store HttpOnly cookie
             });
@@ -176,7 +185,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         try {
             const res = await fetch(`${API_URL}/auth/mfa`, {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
+                headers: { "Content-Type": "application/json", ...csrfHeaders() },
                 body: JSON.stringify({ mfaToken, code }),
                 credentials: "include",
             });
@@ -211,6 +220,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             await fetch(`${API_URL}/auth/logout`, {
                 method: "POST",
                 credentials: "include",
+                headers: csrfHeaders(),
             });
         } catch (error) {
             console.error("Logout error:", error);

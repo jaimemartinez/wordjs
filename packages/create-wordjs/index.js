@@ -10,7 +10,7 @@
  *   1. Downloads the latest pre-compiled WordJS release ZIP from GitHub (no build step needed).
  *   2. Extracts it into <dir> and installs the runtime dependencies (npm run release:install).
  *   3. Generates a one-time install token and starts the server (npm run start:mono) with it,
- *      printing a clickable https://localhost:3000/install?token=… URL — the browser install
+ *      printing a clickable https://localhost:3000/install#token=… URL — the browser install
  *      wizard takes it from there (pick SQLite/PostgreSQL, create your admin, done).
  *
  * Plain Node, no TypeScript. Only runtime dependency: adm-zip (ZIP extraction).
@@ -729,7 +729,7 @@ async function main() {
         console.log(`      cd ${opts.dir}`);
         console.log(`      npm run start:mono${opts.http ? '        (with WORDJS_HTTP=1 in the environment for plain HTTP)' : ''}`);
         console.log('');
-        console.log(`   The console will print your one-time install URL (${proto}://localhost:3000/install?token=…).`);
+        console.log(`   The console will print your one-time install URL (${proto}://localhost:3000/install#token=…).`);
         console.log(line + '\n');
         return;
     }
@@ -743,7 +743,12 @@ async function main() {
     console.log(`\n${line}`);
     console.log('✅ WordJS is ready — finish setup in your browser:');
     console.log('');
-    console.log(`   → ${proto}://localhost:3000/install?token=${token}`);
+    // The token rides in the URL FRAGMENT, not a `?token=` query string: a fragment is never sent to
+    // any server, so this bootstrap secret stays out of access/proxy logs and out of the `Referer` of
+    // every sub-resource the install page loads. The wizard reads `#token=` (and still accepts a
+    // legacy `?token=`) and scrubs it from the address bar. Keep in sync with the backend's own
+    // banner in backend/src/core/install-token.ts.
+    console.log(`   → ${proto}://localhost:3000/install#token=${token}`);
     console.log('');
     console.log('   • The server is starting below — give it ~15–30 seconds, then open the URL.');
     if (!opts.http) {

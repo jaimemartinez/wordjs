@@ -13,6 +13,7 @@ import type { Request, Response, NextFunction, CookieOptions } from 'express';
  * intersection over Request rather than a redeclaration of one property.
  */
 
+const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const config = require('../config/app');
 const User = require('../models/User');
@@ -338,6 +339,160 @@ function queryToken(req: Request): string | null {
     return typeof v === 'string' && v ? v : null;
 }
 
+// ─── DOUBLE-SUBMIT CSRF TOKEN ─────────────────────────────────────────────────────────────────────
+/**
+ * The SECOND half of the CSRF defence, on top of the origin check below (which stays exactly as it
+ * was — this adds, it does not replace).
+ *
+ * WHY a second half at all. The origin check is a *negative* signal: it rejects a request whose
+ * Origin/Referer says "somewhere else". It therefore depends entirely on the attacker's browser
+ * telling the truth about where the request came from, and on our being able to enumerate our own
+ * origins. Every historical CSRF bypass of that shape — a browser that omits Origin on a form POST, a
+ * plugin/extension surface that rewrites it, a sibling origin the allow-list was configured to trust,
+ * a `<link rel=prefetch>`/redirect chain that launders the referrer — walks straight past it. The
+ * double-submit token is a *positive* signal instead: the request must prove it could READ a value
+ * that only a same-origin script can read. The same-origin policy, not a header's honesty, is what
+ * enforces that.
+ *
+ * The scheme:
+ *   • `wjs_csrf` — 32 random bytes, base64url, set alongside EVERY session cookie (issueSessionCookie
+ *     is the one door, so login/register/refresh/MFA-completion all get it by construction), NOT
+ *     httpOnly because same-origin JS has to read it and echo it back.
+ *   • `X-CSRF-Token` — the header the client echoes on every mutating request. A cross-origin page can
+ *     make the browser SEND the cookie, but it cannot READ it, so it cannot produce the header. (A
+ *     custom header also forces a CORS preflight, which our CORS policy answers only for allowed
+ *     origins — a third, independent reason the forged request never arrives.)
+ *
+ * The cookie is per-browser, not per-user-session-secret-derived: its whole job is to be a value the
+ * attacker's page cannot read. It carries no authority on its own — presenting it without the session
+ * cookie authenticates nothing.
+ */
+const CSRF_COOKIE = 'wjs_csrf';
+const CSRF_HEADER = 'X-CSRF-Token';
+
+/** 32 random bytes, base64url — URL/cookie-safe, no padding, nothing to escape. */
+function newCsrfToken(): string {
+    return crypto.randomBytes(32).toString('base64url');
+}
+
+/** The CSRF cookie as a STRING, or null — same value-level boundary as sessionCookie above. */
+function csrfCookie(req: Request): string | null {
+    const v = req && req.cookies ? req.cookies[CSRF_COOKIE] : undefined;
+    return typeof v === 'string' && v ? v : null;
+}
+
+/**
+ * THE session cookie's transport options. Lives here, next to the two cookies that must agree, rather
+ * than in routes/auth.ts where it used to be: the CSRF cookie has to travel with EXACTLY the same
+ * `secure`/`sameSite`/`path`/`maxAge` as the session cookie, and the only way that cannot drift is for
+ * the CSRF options to be DERIVED from the session options rather than written out a second time. A
+ * function, not a const, because the tests (and the installer) mutate `config` after this module is
+ * first required — a load-time snapshot would freeze `secure:false` on a site that later gets HTTPS.
+ */
+function sessionCookieOptions(): CookieOptions {
+    const siteUsesHttps = config.siteUrl?.startsWith('https://') || config.ssl?.enabled;
+    return {
+        httpOnly: true,
+        secure: siteUsesHttps, // Send over HTTPS if site uses it
+        sameSite: 'lax', // Protect against CSRF while allowing normal navigation
+        maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+        path: '/'
+    };
+}
+
+/**
+ * The CSRF cookie's options, DERIVED from whatever options the session cookie is being set with — so
+ * "secure when the session cookie is secure, same sameSite, same path" is true by construction and not
+ * by a second copy of the derivation. The ONE difference is `httpOnly:false`: the whole mechanism
+ * depends on same-origin JS being able to read this value back out.
+ */
+function csrfCookieOptions(sessionOptions?: CookieOptions): CookieOptions {
+    return { ...(sessionOptions || sessionCookieOptions()), httpOnly: false };
+}
+
+/**
+ * Mint the CSRF cookie for a request that already has a session cookie but no CSRF cookie yet.
+ *
+ * WHY this exists: the gate below is fail-closed — a cookie-authenticated mutating request with no
+ * `wjs_csrf` cookie is refused. Without a backfill, every session issued BEFORE this feature shipped
+ * would be bricked in a way the user cannot escape: the login POST carries the stale session cookie
+ * (so it is refused) and so does the logout POST, leaving "delete your cookies by hand" as the only
+ * way out. Minting on a SAFE, authenticated request closes that: the app's first `GET /auth/me` heals
+ * the session before any mutation is attempted.
+ *
+ * It cannot be used to bypass anything. The value is server-generated randomness the attacker's page
+ * still cannot read (a cross-origin response's Set-Cookie is as invisible to it as the cookie itself),
+ * and it is only ever minted where the browser ALREADY sends a session cookie. It is deliberately not
+ * called from `optionalAuth`, which runs on public, cacheable routes where a shared cache could store
+ * the Set-Cookie and hand one visitor's token to another.
+ */
+function ensureCsrfCookie(req: Request, res: Response): void {
+    if (!sessionCookie(req)) return; // no ambient cookie authority → nothing to protect
+    if (csrfCookie(req)) return;     // already has one — never rotate outside issueSessionCookie
+    res.cookie(CSRF_COOKIE, newCsrfToken(), csrfCookieOptions());
+}
+
+/**
+ * Constant-time string compare. Length is checked FIRST because `crypto.timingSafeEqual` throws on
+ * differing lengths (it is not a compare that returns false — it is a RangeError), and a throw inside
+ * an Express 4 async middleware is the hang documented above sanitizeCookies. The length itself is not
+ * a secret: every token we mint is the same length, so a length mismatch is always simply "wrong".
+ */
+function timingSafeStringEqual(a: string, b: string): boolean {
+    const ba = Buffer.from(a, 'utf8');
+    const bb = Buffer.from(b, 'utf8');
+    if (ba.length !== bb.length) return false;
+    return crypto.timingSafeEqual(ba, bb);
+}
+
+/**
+ * Does this request carry a real `Authorization: Bearer` credential? ONE definition, because the
+ * header-less branch of csrfProtection and the double-submit gate must agree on what "a Bearer caller"
+ * is — two copies of this predicate is exactly how one surface ends up exempting a caller the other
+ * one blocks. The 'Bearer null'/'Bearer undefined' literals are what a browser client sends when it
+ * stringifies a missing token; they are not credentials.
+ */
+function hasBearerCredential(req: Request): boolean {
+    const authHeader = req.get('Authorization') || '';
+    return authHeader.startsWith('Bearer ')
+        && authHeader !== 'Bearer null' && authHeader !== 'Bearer undefined';
+}
+
+/**
+ * THE DOUBLE-SUBMIT GATE. Runs only for mutating methods, only after the origin check has already
+ * accepted the request (see csrfProtection) — the two are AND-ed, never alternatives.
+ *
+ * Exempt, and why:
+ *   • Bearer callers. A `wjt_` API token (or a session JWT sent as a header) is not ambient: no
+ *     browser attaches it automatically, so there is nothing for a hostile page to ride. Requiring a
+ *     cookie-derived token from a headless client that has no cookie jar would just break every
+ *     machine integration for no gain. This is the same boundary `isHeadless` already draws.
+ *   • Requests with no session cookie. Nothing to abuse — an anonymous POST (a public form, the
+ *     analytics beacon) carries no authority. Note the check keys on the COOKIE BEING PRESENT, not on
+ *     the request having been authenticated: this middleware runs globally, BEFORE any route's
+ *     `authenticate`, and a gate that waited to learn the answer would have to be re-mounted on every
+ *     router — including ones that do not exist yet. Cookie-present is the fail-closed proxy, and it
+ *     deliberately covers a logged-in user's POST to a *public* route too, because that request does
+ *     carry their ambient session.
+ *   • GET/HEAD/OPTIONS never reach here at all (csrfProtection returns first).
+ */
+function csrfTokenGate(req: Request, res: Response, next: NextFunction) {
+    if (hasBearerCredential(req)) return next();
+    if (!sessionCookie(req)) return next();
+
+    const cookieToken = csrfCookie(req);
+    const headerToken = req.get(CSRF_HEADER);
+    if (!cookieToken || !headerToken || !timingSafeStringEqual(cookieToken, headerToken)) {
+        console.warn(`[CSRF] Missing or mismatched ${CSRF_HEADER} on ${req.method} ${req.path}`);
+        return res.status(403).json({
+            code: 'rest_csrf_token',
+            message: 'Missing or invalid CSRF token. Reload the page and try again.',
+            data: { status: 403 }
+        });
+    }
+    next();
+}
+
 /**
  * THE ONE DOOR that mints the interactive session cookie.
  *
@@ -353,6 +508,12 @@ function queryToken(req: Request): string | null {
  * Returns true when it REFUSED and already sent the response (the caller must return immediately), false
  * when the cookie was set and the caller should continue — the same "true means handled" convention as
  * requireSelfPasswordReauth in routes/users.ts.
+ *
+ * It is also THE ONE DOOR for the matching CSRF cookie, for the same reason: every route that mints a
+ * session (login, register, refresh, MFA completion) mints a fresh CSRF token with it, and a route
+ * added later inherits both by construction instead of by someone remembering. Rotating on every
+ * issuance — not just on login — means a session that survives a refresh never keeps a token minted
+ * for a previous authentication.
  */
 function issueSessionCookie(req: Request, res: Response, token: string, options: CookieOptions): boolean {
     if (isHeadless(req)) {
@@ -364,7 +525,23 @@ function issueSessionCookie(req: Request, res: Response, token: string, options:
         return true;
     }
     res.cookie(SESSION_COOKIE, token, options);
+    res.cookie(CSRF_COOKIE, newCsrfToken(), csrfCookieOptions(options));
     return false;
+}
+
+/**
+ * Clear BOTH cookies — the session and its CSRF partner. One helper so logout cannot clear one and
+ * leave the other: a stranded `wjs_csrf` is harmless on its own, but it is also a lie about session
+ * state, and the next login would silently keep the old token instead of rotating (issueSessionCookie
+ * would overwrite it, but only if the login request gets that far).
+ *
+ * `path` must match what the cookies were SET with or the browser ignores the deletion — the session
+ * options are the source of that truth here, exactly as they are for issuing.
+ */
+function clearSessionCookies(res: Response): void {
+    const { path } = sessionCookieOptions();
+    res.clearCookie(SESSION_COOKIE, { path });
+    res.clearCookie(CSRF_COOKIE, { path });
 }
 
 /**
@@ -401,6 +578,12 @@ async function authenticate(req: Request, res: Response, next: NextFunction) {
     // Priority 2: HttpOnly cookie (for browser clients) — always a string or null, see sessionCookie.
     if (!token) {
         token = sessionCookie(req);
+        // A cookie-carrying browser is exactly the client that needs a CSRF token, and this is the
+        // first authenticated surface every session touches (the admin boots with GET /auth/me).
+        // Deliberately BEFORE the token is verified: a browser holding an expired session must still
+        // come away with a CSRF cookie, or its very next request — the login POST — would be refused
+        // by the gate with no way to satisfy it. See ensureCsrfCookie.
+        if (token) ensureCsrfCookie(req, res);
     }
 
     if (!token) {
@@ -436,6 +619,7 @@ async function authenticateAllowQuery(req: Request, res: Response, next: NextFun
         token = authHeader.substring(7);
     } else if (sessionCookie(req)) {
         token = sessionCookie(req);
+        ensureCsrfCookie(req, res); // same backfill as authenticate() — see there
     } else if (queryToken(req)) {
         // Last-resort fallback (documented leak above). Kept for legacy EventSource/download clients
         // that can supply neither header nor cookie.
@@ -579,8 +763,19 @@ function sameOriginAllowList(host: string | undefined): string[] {
 }
 
 /**
- * CSRF Protection for state-changing requests
- * Validates Origin/Referer headers against allowed origins
+ * CSRF Protection for state-changing requests — TWO independent checks, AND-ed.
+ *
+ *  1. ORIGIN PINNING (this function): Origin/Referer must be an exact match for one of our own
+ *     origins, with the gateway-pinned X-Forwarded-Host as the trusted host. Fails closed when both
+ *     headers are absent, unless the caller is a Bearer client.
+ *  2. DOUBLE-SUBMIT TOKEN (`csrfTokenGate`, reached from every accepting branch below): a
+ *     cookie-authenticated mutating request must echo the non-httpOnly `wjs_csrf` cookie back in
+ *     `X-CSRF-Token`. See the block above csrfTokenGate for why the first check is not enough on its
+ *     own.
+ *
+ * Defence in depth means BOTH must pass, so every `return next()` in the origin logic below hands off
+ * to the token gate instead of admitting the request outright. The only paths that skip the gate are
+ * the ones that skip this whole function: a safe method, and the two pre-install setup doors.
  */
 function csrfProtection(req: Request, res: Response, next: NextFunction) {
     // Only check state-changing methods
@@ -634,7 +829,7 @@ function csrfProtection(req: Request, res: Response, next: NextFunction) {
         try {
             const originHost = new URL(requestOrigin).host;
             if (originHost === host) {
-                return next();
+                return csrfTokenGate(req, res, next);
             }
         } catch {
             // Invalid origin URL
@@ -649,11 +844,11 @@ function csrfProtection(req: Request, res: Response, next: NextFunction) {
     // cannot be CSRF'd via an ambient cookie. So: allow header-less requests ONLY when they carry a
     // Bearer token (not the cookie); otherwise require a positive same-origin signal and reject.
     if (!origin && !referer) {
-        const authHeader = req.get('Authorization') || '';
-        const isBearer = authHeader.startsWith('Bearer ')
-            && authHeader !== 'Bearer null' && authHeader !== 'Bearer undefined';
-        if (isBearer) {
-            return next();
+        if (hasBearerCredential(req)) {
+            // A Bearer caller is exempt from the token gate too (no ambient cookie), so this could call
+            // next() directly — it goes through the gate anyway so there is ONE accepting path and a
+            // future change to the gate's exemptions cannot silently miss this branch.
+            return csrfTokenGate(req, res, next);
         }
         console.warn(`[CSRF] Blocked header-less cookie request to ${req.path}`);
         return res.status(403).json({
@@ -673,7 +868,7 @@ function csrfProtection(req: Request, res: Response, next: NextFunction) {
         try { return new URL(allowed).origin === requestOrigin; } catch { return false; }
     };
     if (requestOrigin && allowedOrigins.some(originMatches)) {
-        return next();
+        return csrfTokenGate(req, res, next);
     }
 
     console.warn(`[CSRF] Blocked request from ${requestOrigin || 'unknown'} to ${req.path}`);
@@ -702,6 +897,14 @@ module.exports = {
     issueSessionCookie,
     sessionOnly,
     SESSION_COOKIE,
+    // Double-submit CSRF token — the cookie's name/options and the header the client must echo, so
+    // routes/auth.ts (logout) and the tests consume the same definitions the gate enforces.
+    CSRF_COOKIE,
+    CSRF_HEADER,
+    csrfCookie,
+    sessionCookieOptions,
+    csrfCookieOptions,
+    clearSessionCookies,
     // Request-value boundary — cookies and query params are not necessarily strings.
     sanitizeCookies,
     sessionCookie,

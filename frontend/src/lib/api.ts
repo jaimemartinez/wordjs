@@ -1,3 +1,4 @@
+import { applyCsrfHeader, csrfHeaders } from './csrf';
 import { createContentClient } from './generated/content-client.generated';
 export type {
     ContentCreateInput,
@@ -119,6 +120,11 @@ export async function api<T>(endpoint: string, options: ApiOptions = {}): Promis
     const isFormData = options.body instanceof FormData;
     const headers: Record<string, string> = {
         ...(isFormData ? {} : { "Content-Type": "application/json" }),
+        // DOUBLE-SUBMIT CSRF: echo the `wjs_csrf` cookie back in X-CSRF-Token. Added for EVERY method
+        // (the backend only enforces it on mutating ones) so no caller has to remember which of its
+        // requests is a mutation — and BEFORE options.headers, so an explicit caller override still
+        // wins, exactly like Content-Type.
+        ...csrfHeaders(),
         ...options.headers,
     };
 
@@ -828,6 +834,7 @@ export const themesApi = {
             const xhr = new XMLHttpRequest();
             xhr.open("POST", `${API_URL}/themes/upload`);
             xhr.withCredentials = true; // Use HttpOnly cookies
+            applyCsrfHeader(xhr); // cookie-authenticated mutation — must carry X-CSRF-Token (after open())
 
             if (onProgress) {
                 xhr.upload.onprogress = (event) => {
@@ -988,6 +995,7 @@ export const mediaApi = {
             const xhr = new XMLHttpRequest();
             xhr.open("POST", `${API_URL}/media`);
             xhr.withCredentials = true; // Use HttpOnly cookies
+            applyCsrfHeader(xhr); // cookie-authenticated mutation — must carry X-CSRF-Token (after open())
 
             xhr.upload.onprogress = (event) => {
                 if (event.lengthComputable) {

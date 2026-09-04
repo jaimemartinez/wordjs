@@ -110,7 +110,7 @@ The workflow then publishes a **GitHub Release** with the versioned `wordjs-<tag
 > ```bash
 > npx create-wordjs@latest my-site
 > ```
-> It then installs the runtime dependencies for you (`npm run release:install` — no build step), seeds self-signed HTTPS (pass `--http` for plain HTTP) and starts the server (`npm run start:mono`) with a one-time install token, printing a ready-to-click `https://localhost:3000/install?token=…` URL. Pass `--no-start` to scaffold + install only; start it later with `cd my-site && npm run start:mono` (or `npm start` for the 3-service split). The manual download below is the equivalent, step-by-step alternative.
+> It then installs the runtime dependencies for you (`npm run release:install` — no build step), seeds self-signed HTTPS (pass `--http` for plain HTTP) and starts the server (`npm run start:mono`) with a one-time install token, printing a ready-to-click `https://localhost:3000/install#token=…` URL. Pass `--no-start` to scaffold + install only; start it later with `cd my-site && npm run start:mono` (or `npm start` for the 3-service split). The manual download below is the equivalent, step-by-step alternative.
 
 1. Download `wordjs-<tag>.zip` from the GitHub Release and unzip it.
 2. Install **runtime deps only** (no build/compile step — prebuilt native binaries are downloaded):
@@ -128,7 +128,7 @@ The workflow then publishes a **GitHub Release** with the versioned `wordjs-<tag
    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
    🔑 WordJS is not installed yet — finish setup in your browser:
 
-      → https://localhost:3000/install?token=<token>
+      → https://localhost:3000/install#token=<token>
 
       Install token (if you prefer to paste it): <token>
    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -336,6 +336,24 @@ If the flag is set but the probe fails (e.g. "Failed to connect to bus"), the lo
 
 > On **Windows** and **macOS** there is no cgroup option. On **Windows** a preventive cap now ships as a **Job Object** (`ProcessMemoryLimit` = 768 MB, default-on, probe-gated, pure-JS via PowerShell P/Invoke; opt out with `sandbox.useJobObjectMemoryCap=false`), with the reactive RSS poll as a backstop. On **macOS** the reactive RSS poll provides the resident cap, and process separation provides crash containment either way.
 
+### `config.sandbox.cpuBurstSeconds` — reactive CPU watchdog (default-on, no cgroup needed)
+
+`cpuQuotaPercent` above is *preventive* but needs systemd, a delegated `cpu` controller and two opt-ins. On every path that has none of that — a plain Linux launch, macOS, a host whose cgroup probe failed — a **default-on reactive watchdog** is the CPU bound instead. The same host-side poll that reads the child's rss also reads its cumulative CPU time, and a child that holds **≥ 95% of one core for `cpuBurstSeconds` seconds with no quiet tick** is `SIGKILL`ed, with the reason on the plugin's health surface:
+
+```
+[Isolate my-plugin] killed: child cpu over budget (>=95% of one core sustained for 60s).
+```
+
+```json
+{
+  "sandbox": {
+    "cpuBurstSeconds": 60
+  }
+}
+```
+
+Default `60`; `0` disables it. The window is a full minute on purpose: legitimate plugin work is bursty (an import, a thumbnail batch, a sitemap rebuild all peg a core for seconds) and a false positive kills a *working* plugin, so a single tick below the threshold resets the window. Raise it if your plugins do long CPU-bound batches; lower it only if you would rather kill honest work than wait a minute. It is **not** applied on Windows (the Job Object CPU *rate* cap there is preventive and already default-on) nor inside the cgroup scope (there `child.pid` is `systemd-run`, not the plugin — set `cpuQuotaPercent` for a preventive cap in that mode). Being reactive, it bounds a burn rather than preventing one; `cpuQuotaPercent` remains the real ceiling where you can run scopes.
+
 ### `config.sandbox.addressSpaceCapMb` — RLIMIT_AS override (Linux; probe-certified POSIX only)
 
 On Linux the child is also launched under a kernel `RLIMIT_AS` (virtual address-space) ceiling — a coarse backstop that holds even if the host event loop is wedged. WordJS only activates it after a child proves that the candidate limit boots with the real arguments. It defaults to **16384 MB** and is deliberately loose: V8 reserves a ~4 GB pointer-compression cage, and in dev the `ts-node` compiler needs several GB of virtual space, so a tighter ceiling crashes legitimate plugin loads. Override it only on a **compiled (non-`ts-node`) production build with ample RAM headroom**:
@@ -376,7 +394,7 @@ Before going live, confirm:
 2. [ ] **Real `jwtSecret`** — a cryptographically secure value, not a placeholder. JWTs are revocable via `token_valid_after` (logout and password change invalidate older tokens).
 3. [ ] **Real `dbPassword`** — rotate any password committed during development.
 4. [ ] **Proper mTLS certificates** — the gateway verifies upstream (backend/frontend) certificates against the cluster CA and requires an allowed internal CN. Provide real certs rather than relying on insecure defaults.
-5. [ ] **CSP follow-up** — the gateway's Helmet config now sets a CSP, but a permissive one (it mirrors the backend's: `'unsafe-inline'`/`'unsafe-eval'` in `script-src`, open `img-src`/`connect-src`), and it only covers the responses the gateway generates itself — proxied responses keep the upstream's own policy. Tightening it is still a hardening item.
+5. [ ] **CSP follow-up** — the gateway's Helmet config now sets a CSP, but still a permissive one (it mirrors the backend's — `'unsafe-inline'` in `script-src`, open `img-src`/`connect-src` — minus `'unsafe-eval'`, which has been removed), and it only covers the responses the gateway generates itself — proxied responses keep the upstream's own policy. Tightening it is still a hardening item.
 
 > **Status:** WordJS is pre-production and primarily solo-maintained. An **independent security audit is recommended before production**. See `POSITIONING.md` for the sandbox-as-thesis product direction.
 

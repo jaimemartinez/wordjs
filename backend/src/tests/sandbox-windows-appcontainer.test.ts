@@ -164,15 +164,85 @@ describe('sandbox-windows: generated script hygiene (all platforms)', () => {
         assert.notStrictEqual(pluginA, sw.appContainerProfileNameForPlugin('C:\\sites\\two', 'alpha'));
     });
 
+    // The cache key folds in the granted root's own identity (bigint `ino` + `birthtimeMs`), so a fictional
+    // path needs a stubbed stat to be meaningful. `sandbox-windows` holds the very `fs` module object this
+    // file imports, so swapping the method here is what the module sees; it is restored in the same
+    // synchronous body, before any other test can observe it.
+    function withStubbedIdentity<T>(ino: bigint, birthtimeMs: bigint, fn: () => T): T {
+        const real = fs.statSync;
+        (fs as any).statSync = () => ({ ino, birthtimeMs });
+        try { return fn(); } finally { (fs as any).statSync = real; }
+    }
+
     test('the ACL provisioning cache is scoped to SID, path and access shape', () => {
         const sid = 'S-1-15-2-1-2-3';
-        const rx = sw.__aclCacheKey(sid, 'C:\\sites\\one', 'rx');
-        assert.match(rx, /^[a-f0-9]{64}$/);
-        assert.strictEqual(rx, sw.__aclCacheKey(sid, 'c:\\SITES\\ONE', 'rx'));
-        assert.notStrictEqual(rx, sw.__aclCacheKey(sid, 'C:\\sites\\two', 'rx'));
-        assert.notStrictEqual(rx, sw.__aclCacheKey(sid, 'C:\\sites\\one', 'full'));
-        assert.notStrictEqual(rx, sw.__aclCacheKey('S-1-15-2-9-8-7', 'C:\\sites\\one', 'rx'));
-        assert.match(sw.__aclCacheRoot(), /WordJS[\\/]sandbox-acl-cache[\\/]v3$/);
+        withStubbedIdentity(1n, 2n, () => {
+            const rx = sw.__aclCacheKey(sid, 'C:\\sites\\one', 'rx');
+            assert.match(rx, /^[a-f0-9]{64}$/);
+            assert.strictEqual(rx, sw.__aclCacheKey(sid, 'c:\\SITES\\ONE', 'rx'));
+            assert.notStrictEqual(rx, sw.__aclCacheKey(sid, 'C:\\sites\\two', 'rx'));
+            assert.notStrictEqual(rx, sw.__aclCacheKey(sid, 'C:\\sites\\one', 'full'));
+            assert.notStrictEqual(rx, sw.__aclCacheKey('S-1-15-2-9-8-7', 'C:\\sites\\one', 'rx'));
+        });
+        assert.match(sw.__aclCacheRoot(), /WordJS[\\/]sandbox-acl-cache[\\/]v4$/);
+    });
+
+    test('the ACL cache key changes when the granted root is recreated at the same path', () => {
+        // Stubbed, so this runs deterministically everywhere: a real remove-and-recreate reuses inodes
+        // often enough on Linux/macOS to be flaky. The win32 test below covers the real filesystem.
+        const sid = 'S-1-15-2-1-2-3';
+        const dir = 'C:\\app\\dist';
+        const key = (ino: bigint, birth: bigint) => withStubbedIdentity(ino, birth, () => sw.__aclCacheKey(sid, dir, 'rx'));
+        const original = key(100n, 1700000000000n);
+        assert.match(original, /^[a-f0-9]{64}$/);
+        // `npm run build` (or unpacking a new release bundle) leaves the same path holding a NEW directory
+        // that inherited no package-SID ACE. Either half of the identity moving must be enough to miss,
+        // because NTFS tunneling can carry a creation time across a same-name recreate.
+        assert.notStrictEqual(key(101n, 1700000000000n), original, 'a new file id must miss the cache');
+        assert.notStrictEqual(key(100n, 1700000000001n), original, 'a new creation time must miss the cache');
+        // And an untouched directory must still hit it, or the cache would buy nothing.
+        assert.strictEqual(key(100n, 1700000000000n), original);
+    });
+
+    test('a directory with no readable identity is never reported as already granted', () => {
+        // Point the cache root at a temp tree: this test writes a marker, and must never touch the
+        // operator's real cache under LOCALAPPDATA.
+        const sid = 'S-1-15-2-1-2-3';
+        const previous = process.env.LOCALAPPDATA;
+        const fakeLocal = fs.mkdtempSync(path.join(os.tmpdir(), 'wjs-aclcache-'));
+        const zone = fs.mkdtempSync(path.join(os.tmpdir(), 'wjs-aclzone-'));
+        try {
+            process.env.LOCALAPPDATA = fakeLocal;
+            const marker = path.join(sw.__aclCacheRoot(), `${sw.__aclCacheKey(sid, zone, 'rx')}.ok`);
+            fs.mkdirSync(path.dirname(marker), { recursive: true });
+            fs.writeFileSync(marker, `${zone}\n`, 'utf8');
+            assert.strictEqual(sw.__aclGrantIsCached(sid, zone, 'rx'), true, 'a marker for the live directory must be honoured');
+
+            fs.rmSync(zone, { recursive: true, force: true });
+            assert.ok(fs.existsSync(marker), 'the marker file outlives the directory -- that is the whole trap');
+            assert.strictEqual(sw.__aclCacheKey(sid, zone, 'rx'), null, 'no identity, no key');
+            assert.strictEqual(sw.__aclGrantIsCached(sid, zone, 'rx'), false, 'a directory that is gone is never already-granted');
+        } finally {
+            if (previous === undefined) delete process.env.LOCALAPPDATA; else process.env.LOCALAPPDATA = previous;
+            fs.rmSync(fakeLocal, { recursive: true, force: true });
+            fs.rmSync(zone, { recursive: true, force: true });
+        }
+    });
+
+    test('a real directory recreated at the same path misses the cache', { skip: IS_WIN ? false : 'the NTFS file id is the fingerprint under test' }, () => {
+        const sid = 'S-1-15-2-1-2-3';
+        const base = fs.mkdtempSync(path.join(os.tmpdir(), 'wjs-aclid-'));
+        const zone = path.join(base, 'dist');
+        try {
+            fs.mkdirSync(zone);
+            const before = sw.__aclCacheKey(sid, zone, 'rx');
+            assert.match(before, /^[a-f0-9]{64}$/);
+            fs.rmSync(zone, { recursive: true, force: true });
+            fs.mkdirSync(zone);
+            assert.notStrictEqual(sw.__aclCacheKey(sid, zone, 'rx'), before, 'a rebuilt tree inherits no package-SID ACE, so it must be re-granted');
+        } finally {
+            fs.rmSync(base, { recursive: true, force: true });
+        }
     });
 
     test('the probe covers both network policies while retaining read and child-process denials', () => {

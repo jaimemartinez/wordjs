@@ -24,11 +24,14 @@
  *
  * Two lists cannot be kept in step by intention. There is one list here, and both sides read it.
  *
- * `node_modules` is the one exclusion NOT enforced at runtime, and that is deliberate: a plugin's
- * dependencies are skipped by the scanner because they are third-party code the author did not write,
- * but a plugin must obviously be able to require them. That asymmetry is a real gap in what the scanner
- * covers — the dependency tree is vetted by the install-time integrity checks and the runtime guards,
- * not by the AST scan — and it is named here rather than left implicit.
+ * `node_modules` is the one exclusion NOT enforced at runtime, and that is deliberate: a plugin must
+ * obviously be able to require its dependencies. It is excluded from the OWN-SOURCE walk below for a
+ * different reason than the bundle directories: a shipped dependency tree needs bounds (file count,
+ * file size, symlink containment) and a different calibration of the noisy gates, so `plugins.ts` scans
+ * it in a pass of its own — `collectShippedDependencyFiles` + the dependency branch of `scanOneFile` —
+ * rather than by walking it here. Skipping it below therefore no longer means "unread": what that pass
+ * cannot read (too many files, too large, an escaping symlink, an unparseable file) is reported as a
+ * finding, and documentation/security.md §4 states the bounds.
  */
 
 /** Directory names the scanner skips for every package, plugin or theme. */

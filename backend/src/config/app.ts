@@ -421,6 +421,17 @@ const config: AppConfig = {
         // mem cap OOM-kills at budget), NOT on ephemeral CI runners. The probe validates the EXACT scope
         // (mem+cpu) before activating, so enabling it where cpu isn't delegated falls back to the normal launch.
         cpuQuotaPercent: Number(fileConfig.sandbox?.cpuQuotaPercent) > 0 ? Number(fileConfig.sandbox.cpuQuotaPercent) : 0,
+        // REACTIVE per-plugin CPU watchdog, DEFAULT-ON everywhere the kernel gives us no preventive CPU
+        // cap (a plain Linux launch, macOS, any host whose cgroup probe failed). The host-side poll that
+        // already reads the child rss also reads its cumulative CPU time and SIGKILLs a child that holds
+        // >=95% of ONE core for this many seconds WITHOUT a single quiet tick. 60 s by default because
+        // legitimate plugin work is bursty (an import, a thumbnail batch, a sitemap rebuild all peg a core
+        // for seconds) and a false positive kills a working plugin; 0 DISABLES the watchdog entirely.
+        // Unlike cpuQuotaPercent this needs no cgroup, no systemd and no opt-in — it is the floor, while
+        // cpuQuotaPercent stays the PREVENTIVE ceiling for operators who can run scopes. Skipped on win32
+        // (the Job Object CPU rate cap there is preventive and already default-on) and in cgroup mode
+        // (child.pid is systemd-run, not the node child — same reason the RSS poll is skipped there).
+        cpuBurstSeconds: Number.isFinite(Number(fileConfig.sandbox?.cpuBurstSeconds)) && Number(fileConfig.sandbox?.cpuBurstSeconds) >= 0 ? Number(fileConfig.sandbox.cpuBurstSeconds) : 60,
         // Windows: preventive per-plugin memory cap via a Job Object. Probe-gated → falls back to the poll.
         useJobObjectMemoryCap: fileConfig.sandbox?.useJobObjectMemoryCap !== false,
         // Virtual-address-space backstop (MB) via RLIMIT_AS on the non-cgroup Linux path (loose by design —

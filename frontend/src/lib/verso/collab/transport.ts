@@ -12,6 +12,7 @@
  */
 
 import type { CollabTransport, PostResponse, StreamHandlers } from "./types";
+import { csrfHeaders } from "@/lib/csrf";
 
 /**
  * Eventos que el cliente escucha por nombre. `EventSource` NO entrega los eventos con `event:` por
@@ -56,7 +57,9 @@ export function createBrowserTransport(): CollabTransport {
       const res = await fetch(url, {
         method: "POST",
         credentials: "same-origin",
-        headers: { "Content-Type": "application/json" },
+        // La cookie de sesión viaja sola en same-origin, así que este POST ES una mutación
+        // autenticada por cookie: tiene que llevar el token double-submit (ver lib/csrf.ts).
+        headers: { "Content-Type": "application/json", ...csrfHeaders() },
         body: JSON.stringify(body),
       });
       let parsed: unknown = null;

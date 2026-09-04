@@ -3,7 +3,7 @@
  *
  * Espec: el heartbeat inline del PuckEditor legacy (L1398-1430) — POST /api/v1/presence/:pageId
  * cada 10s con body "{}"; la respuesta trae los OTROS editores activos ({ editors: [{id,name}] });
- * sendBeacon con { action: "leave" } en beforeunload Y al parar (para que el servidor no espere el
+ * un POST { action: "leave" } en beforeunload Y al parar (para que el servidor no espere el
  * TTL completo). Un tick offline/!ok conserva el último estado conocido (nunca borra el chip por
  * un fallo transitorio), exactamente como el legacy.
  *
@@ -12,6 +12,8 @@
  * vuelo que resuelve tras parar) es testeable en node con timers falsos y deps inyectadas; el
  * componente solo cablea `startPresenceHeartbeat(pageId, setCoEditors)` en un efecto.
  */
+
+import { csrfHeaders } from "@/lib/csrf";
 
 export interface PresenceEditor {
     id: number;
@@ -40,6 +42,24 @@ export interface PresenceDeps {
 }
 
 function defaultLeaveBeacon(url: string): void {
+    // El leave ES una mutación autenticada por cookie, así que necesita el token double-submit
+    // (ver lib/csrf.ts) — y `navigator.sendBeacon` NO PUEDE poner cabeceras, con lo que su POST
+    // ahora sería rechazado con 403 en silencio y el servidor esperaría el TTL entero, justo lo que
+    // este beacon existe para evitar. `fetch` con `keepalive` sobrevive igual al unload y SÍ admite
+    // cabeceras; sendBeacon queda como respaldo por si el navegador no trae keepalive (donde el
+    // POST se pierde exactamente igual que antes de este cambio, nunca peor).
+    try {
+        void fetch(url, {
+            method: "POST",
+            keepalive: true,
+            credentials: "same-origin",
+            headers: { "Content-Type": "application/json", ...csrfHeaders() },
+            body: JSON.stringify({ action: "leave" }),
+        }).catch(() => { /* best-effort */ });
+        return;
+    } catch {
+        /* fetch inexistente o sin keepalive — cae al beacon */
+    }
     try {
         navigator.sendBeacon?.(url, new Blob([JSON.stringify({ action: "leave" })], { type: "application/json" }));
     } catch {
@@ -70,7 +90,9 @@ export function startPresenceHeartbeat(
         try {
             const res = await fetchFn(url, {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
+                // Mutación autenticada por cookie: el heartbeat tiene que llevar el token
+                // double-submit o el backend lo rechaza con 403 (ver lib/csrf.ts).
+                headers: { "Content-Type": "application/json", ...csrfHeaders() },
                 credentials: "same-origin",
                 body: "{}",
             });

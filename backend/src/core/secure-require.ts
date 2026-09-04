@@ -1006,9 +1006,10 @@ function installSecureRequire() {
     //    strip its sandbox by deferring fs/exec to a later tick where ALS + the stack frame are gone.
     //    Core schedulers (no effective plugin) are untouched; in-context schedules keep the same
     //    context they already inherit via ALS (no behavior change).
-    // setImmediate / queueMicrotask are intentionally NOT wrapped: they're hot paths and the
-    // per-call effective-plugin resolution would tax core throughput for narrow gain. The
-    // common deliberate-defer vectors (setTimeout/setInterval) are anchored.
+    // setImmediate / queueMicrotask / process.nextTick ARE also anchored — see 4b below — with a
+    // cheaper ALS-only check (getCurrentPlugin, no stack walk) so the hot path stays cheap. An
+    // earlier version of this comment said they were "intentionally NOT wrapped"; 4b superseded that
+    // decision the day a deferred require('child_process') in a never-scanned dist/ file was found.
     const timerCtx = require('./plugin-context');
     for (const m of ['setTimeout', 'setInterval']) {
         const orig = (global as any)[m];

@@ -9,6 +9,13 @@
             "env": { "WORDJS_HTTP": "1" }
         },
         {
+            "name": "wordjs-mono-prod",
+            "runtimeExecutable": "npm",
+            "runtimeArgs": ["run", "start:mono"],
+            "port": 3000,
+            "env": { "WORDJS_HTTP": "1" }
+        },
+        {
             "name": "verso-dock-drill",
             "runtimeExecutable": "npm",
             "runtimeArgs": ["--prefix", "frontend", "run", "dev", "--", "-p", "3005"],

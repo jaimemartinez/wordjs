@@ -10,7 +10,9 @@ const User = require('../models/User');
 // issueSessionCookie is the ONE door that mints the interactive session cookie: it refuses a request
 // that arrived on a `wjt_` API token, so a leaked headless token can never be traded for a 7-day session
 // (see middleware/auth.ts). sessionOnly lives there too, next to the headless mark it reads.
-const { authenticate, generateToken, verifyToken, issueSessionCookie, sessionOnly, sessionCookie } = require('../middleware/auth');
+// sessionCookieOptions/clearSessionCookies live there too: the session cookie and its `wjs_csrf`
+// double-submit partner must agree on secure/sameSite/path, so ONE module owns both halves.
+const { authenticate, generateToken, verifyToken, issueSessionCookie, sessionOnly, sessionCookie, sessionCookieOptions, clearSessionCookies } = require('../middleware/auth');
 const { isAdmin, can } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
 // THE ROUTE-ID CONTRACT — see core/query-params: one definition of "a route id" for the whole tree.
@@ -322,16 +324,16 @@ async function endLoginAttempt(u: any): Promise<void> {
     if (e.n === 0) _inflightMem.delete(key); else _inflightMem.set(key, e);
 }
 
-// Cookie configuration for secure HttpOnly tokens
-// Detect if site uses HTTPS from config
-const siteUsesHttps = config.siteUrl?.startsWith('https://') || config.ssl?.enabled;
-const COOKIE_OPTIONS: CookieOptions = {
-    httpOnly: true,
-    secure: siteUsesHttps, // Send over HTTPS if site uses it
-    sameSite: 'lax', // Protect against CSRF while allowing normal navigation
-    maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
-    path: '/'
-};
+// Cookie configuration for secure HttpOnly tokens.
+//
+// The definition MOVED to middleware/auth.ts (sessionCookieOptions). It is not a style preference: the
+// `wjs_csrf` double-submit cookie has to be set with exactly the same secure/sameSite/path as the
+// session cookie, and the only way that cannot drift is for the CSRF options to be derived from the
+// session options at the single door that issues both (issueSessionCookie). Keeping a second copy of
+// the derivation here is what would let an operator's HTTPS site end up with a `secure` session cookie
+// and a non-`secure` CSRF cookie. Called per request rather than snapshotted at module load, so a
+// config change (installer, tests) is not frozen into the first require of this file.
+const COOKIE_OPTIONS = (): CookieOptions => sessionCookieOptions();
 
 /**
  * @swagger
@@ -466,7 +468,7 @@ router.post('/register', asyncHandler(async (req: Request, res: Response) => {
         }
 
         const token = generateToken(user);
-        if (issueSessionCookie(req, res, token, COOKIE_OPTIONS)) return;
+        if (issueSessionCookie(req, res, token, COOKIE_OPTIONS())) return;
 
         res.status(201).json({ user: user.toJSON() });
     } catch (error) {
@@ -590,7 +592,7 @@ router.post('/login', asyncHandler(async (req: Request, res: Response) => {
         }
 
         const token = generateToken(user);
-        if (issueSessionCookie(req, res, token, COOKIE_OPTIONS)) return;
+        if (issueSessionCookie(req, res, token, COOKIE_OPTIONS())) return;
         res.json({ user: user.toJSON(), mfa: await mfa.evaluate(user) });
     } catch (error) {
         await recordLoginFail(lockId);
@@ -642,7 +644,7 @@ router.post('/refresh', authenticate, (req: Request, res: Response) => {
     const token = generateToken(req.user);
 
     // Update HttpOnly cookie
-    if (issueSessionCookie(req, res, token, COOKIE_OPTIONS)) return;
+    if (issueSessionCookie(req, res, token, COOKIE_OPTIONS())) return;
 
     res.json({
         user: req.user.toJSON()
@@ -669,7 +671,9 @@ router.post('/logout', asyncHandler(async (req: Request, res: Response) => {
             }
         }
     } catch { /* invalid/expired token — nothing to revoke */ }
-    res.clearCookie('wordjs_token', { path: '/' });
+    // Clears BOTH the session cookie and its `wjs_csrf` double-submit partner — one helper, in the same
+    // module that issues them, so a future third cookie cannot be left behind here.
+    clearSessionCookies(res);
     res.json({ success: true, message: 'Logged out successfully' });
 }));
 
@@ -1031,7 +1035,7 @@ router.post('/mfa', asyncHandler(async (req: Request, res: Response) => {
         }
         await clearLoginFails(lockKey);
         const token = generateToken(user);
-        if (issueSessionCookie(req, res, token, COOKIE_OPTIONS)) return;
+        if (issueSessionCookie(req, res, token, COOKIE_OPTIONS())) return;
         res.json({ user: user.toJSON(), mfa: await mfa.evaluate(user) });
     } finally {
         await endLoginAttempt(lockKey);

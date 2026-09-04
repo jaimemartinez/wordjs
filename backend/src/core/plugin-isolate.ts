@@ -580,6 +580,141 @@ const RSS_BUDGET_BYTES = 768 * 1024 * 1024;
 // to the plugin without touching the host). Both are generous — no legitimate plugin approaches them.
 const FD_CAP = 4096;
 const PIDS_MAX = 512;
+
+// --- REACTIVE per-plugin CPU watchdog (default-ON wherever the kernel gives us no preventive CPU cap) -
+// The PREVENTIVE CPU caps are partial. Linux has one only as `CPUQuota=` inside the systemd scope, which
+// is opt-in TWICE (sandbox.useCgroupMemoryCap AND sandbox.cpuQuotaPercent); Windows has a default-on Job
+// Object CPU RATE cap. Everywhere else — a plain Linux launch, macOS, any host whose cgroup probe failed —
+// a plugin could peg a core forever and nothing stopped it. That was the resource residual written down in
+// documentation/security.md §4 ("by default a plugin can still burn CPU"), and this closes it: the SAME
+// host-side poll that already reads the child's rss also reads its CUMULATIVE CPU time, and a child that
+// holds >= CPU_BURN_RATIO of ONE core for sandbox.cpuBurstSeconds without a single quiet tick is SIGKILLed
+// down the same path as an rss overage.
+//
+// WHY A SUSTAINED WINDOW AND NOT AN INSTANT THRESHOLD. Legitimate plugin work IS bursty — an import, a
+// thumbnail batch, a sitemap rebuild each peg a core for seconds. A one-tick trigger would kill honest
+// plugins, so the default is a FULL MINUTE of unbroken saturation and one tick below the ratio resets it.
+// That makes this a DoS backstop, not a scheduler.
+//
+// WHAT IT IS NOT. It is REACTIVE: a burn is bounded, never prevented, and a plugin that alternates 59 s of
+// burn with one idle tick is out of scope BY DESIGN (the alternative is killing honest bursty work). An
+// operator who wants a real ceiling still sets cpuQuotaPercent (Linux) or leaves the Windows rate cap on.
+const CPU_BURN_RATIO = 0.95;            // >= 95% of ONE core makes a tick count as "burning"
+const CPU_BURST_SECONDS_DEFAULT = 60;   // sandbox.cpuBurstSeconds default; 0 disables the watchdog
+
+// One observation. `at` is the wall clock (ms) at which the tick that produced it ENDED; `ratio` is
+// Δcpu/Δwall across that tick (1 = one core saturated, >1 is possible for a multi-threaded child).
+type CpuSample = { at: number; ratio: number };
+
+/**
+ * THE DECISION — kept PURE so the property that matters can be pinned without burning a core for a
+ * minute in CI (see backend/src/tests/plugin-isolate-cpu-watchdog.test.ts).
+ *
+ * True only when the NEWEST sample and every consecutive sample before it sit at or above
+ * `thresholdRatio`, AND that unbroken run already spans at least `windowMs`. A single sample under the
+ * ratio anywhere inside the run resets it — that is exactly what lets bursty-but-honest work survive.
+ *
+ * The span is measured from the OLDEST over-threshold sample's timestamp, which UNDER-counts the burn by
+ * the one tick that sample itself covers. Deliberate: a false positive kills a working plugin, so the
+ * watchdog must err towards firing LATE, and one poll tick against a 60 s window is noise.
+ */
+function isSustainedCpuBurn(samples: CpuSample[], thresholdRatio: number, windowMs: number): boolean {
+    if (!Array.isArray(samples) || samples.length === 0) return false;
+    // windowMs <= 0 is the DISABLED spelling (sandbox.cpuBurstSeconds = 0). Return false rather than
+    // letting "no window" degrade into "any burn qualifies", which would kill on the first busy tick.
+    if (!(windowMs > 0) || !(thresholdRatio > 0)) return false;
+    const newest = samples[samples.length - 1];
+    if (!newest || !(newest.ratio >= thresholdRatio)) return false;
+    let i = samples.length - 1;
+    while (i > 0 && samples[i - 1] && samples[i - 1].ratio >= thresholdRatio) i--;
+    return (newest.at - samples[i].at) >= windowMs;
+}
+
+/**
+ * `ps -o cputime=` output -> seconds. The format is [[dd-]hh:]mm:ss[.frac] (macOS prints mm:ss.ss).
+ * Returns -1 for anything it does not fully understand, so an unparsed tick is SKIPPED: a fake 0 would
+ * read as "the counter went backwards" and silently reset the window a real burn had already filled.
+ */
+function parsePsCpuTime(raw: string): number {
+    const s = String(raw || '').trim();
+    if (!s) return -1;
+    let days = 0;
+    let rest = s;
+    const dash = s.indexOf('-');
+    if (dash > 0) {
+        if (!/^\d+$/.test(s.slice(0, dash))) return -1;
+        days = Number(s.slice(0, dash));
+        rest = s.slice(dash + 1);
+    }
+    const parts = rest.split(':');
+    if (parts.length < 2 || parts.length > 3) return -1;
+    let secs = 0;
+    for (const p of parts) {
+        if (!/^\d+(\.\d+)?$/.test(p)) return -1;
+        secs = secs * 60 + Number(p);
+    }
+    return days * 86400 + secs;
+}
+
+// USER_HZ for /proc/<pid>/stat's utime+stime, read ONCE from the host. It is a build-time constant of the
+// C library, not a guaranteed 100: the 100 fallback is right on every mainstream Linux, but hard-coding it
+// on a host built with a different USER_HZ would mis-scale every CPU reading — and a watchdog that
+// mis-scales its input either never fires or kills honest plugins.
+let clkTck = 0;
+function clockTicksPerSecond(): number {
+    if (clkTck > 0) return clkTck;
+    clkTck = 100;
+    try {
+        const r = require('child_process').spawnSync('getconf', ['CLK_TCK'], { encoding: 'utf8', timeout: 5000 });
+        const n = (r && r.status === 0) ? parseInt(String(r.stdout).trim(), 10) : NaN;
+        if (Number.isFinite(n) && n > 0) clkTck = n;
+    } catch { /* the 100 fallback stands */ }
+    return clkTck;
+}
+
+/**
+ * A /proc/<pid>/stat LINE -> cumulative CPU in clock ticks (utime + stime), or -1 when unreadable.
+ *
+ * PURE and exported for its test because this is the single likeliest place for the watchdog to be
+ * quietly wrong, and it is unreachable on the Windows and macOS boxes this repo is developed on: field 2
+ * (`comm`) is the process NAME IN PARENTHESES and may itself contain spaces and parens (Node children are
+ * commonly '(node)', but a plugin can rename itself), so the fields must be counted from the LAST ')'.
+ * Splitting the whole line on spaces is the classic way to read the wrong two numbers here — and an
+ * off-by-one would read a flags/fault counter as CPU time, giving a watchdog that never fires or one that
+ * kills honest plugins, with nothing on the health surface to say which.
+ */
+function parseProcStatCpuTicks(raw: string): number {
+    const line = String(raw || '');
+    const close = line.lastIndexOf(')');
+    if (close < 0) return -1;
+    const f = line.slice(close + 2).split(' '); // f[0] is field 3 (state) => field N is f[N - 3]
+    const utime = parseInt(f[11], 10); // field 14
+    const stime = parseInt(f[12], 10); // field 15
+    if (!Number.isFinite(utime) || !Number.isFinite(stime) || utime < 0 || stime < 0) return -1;
+    return utime + stime;
+}
+
+/** Cumulative CPU seconds of `pid` from /proc/<pid>/stat, or -1 when the file or the line is unreadable. */
+function procCpuSeconds(pid: number): number {
+    let ticks: number;
+    try { ticks = parseProcStatCpuTicks(String(fs.readFileSync(`/proc/${pid}/stat`, 'utf8'))); } catch { return -1; }
+    return ticks < 0 ? -1 : ticks / clockTicksPerSecond();
+}
+
+/**
+ * The configured burn window in ms; 0 = watchdog disabled. FAIL-CLOSED: if config cannot be read at all
+ * the DEFAULT window applies (watchdog stays ON), because "config unavailable" must never quietly become
+ * "this child has no CPU bound" — the same reasoning that makes requireHardening default to true.
+ */
+function cpuBurstWindowMs(): number {
+    let secs: number = CPU_BURST_SECONDS_DEFAULT;
+    try {
+        const s = require('../config/app').sandbox;
+        const v = Number(s && s.cpuBurstSeconds);
+        if (Number.isFinite(v) && v >= 0) secs = v;
+    } catch { /* config unavailable => default window, watchdog ON */ }
+    return secs > 0 ? Math.floor(secs * 1000) : 0;
+}
 // The cgroup-scope resource caps, built ONCE so probeCgroupCap and the real launch apply the IDENTICAL
 // set. A mismatch is exactly what broke the first CPU-quota attempt (#192): the probe validated a
 // memory-only scope while the launch ALSO passed CPUQuota, so it green-lit a config that then failed to
@@ -1308,7 +1443,14 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
     // AppContainer path already sets its own working directory. Worth recording and NOT fixed here: on
     // Linux the child still inherits whatever directory the server was started from, so this class of
     // failure has always been sensitive to how WordJS was launched.
-    const childCwd = process.platform === 'darwin' ? path.parse(APP_ROOT).root : undefined;
+    // Start the child in the filesystem ROOT on the POSIX paths, not in the host's working directory.
+    // On macOS this is required (Seatbelt withholds the cwd ancestors, so getcwd() would EPERM — see the
+    // ts-node preload note); on Linux it is defence-in-depth: process.cwd() no longer discloses the
+    // deployment path and cwd-relative resolution has nothing to resolve against. The plugin already
+    // learns its own directory from __filename, so nothing is hidden that mattered — but the child's
+    // starting point should be the least informative directory there is. Windows keeps the default: the
+    // AppContainer path is launched by the relay and the source-mode worker is exempt from confinement.
+    const childCwd = (process.platform === 'darwin' || process.platform === 'linux') ? path.parse(APP_ROOT).root : undefined;
     // The other half, and it is not optional: with the working directory at the filesystem root,
     // ts-node has nowhere to search for tsconfig.json, so it is named outright. Source mode only — a
     // compiled worker never loads ts-node. Listed in SAFE_ENV_KEYS so the child's own environment prune
@@ -1700,6 +1842,50 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
                 try { child.kill('SIGKILL'); } catch { /* gone */ }
             }
         };
+        // REACTIVE CPU watchdog (see CPU_BURN_RATIO above). It rides the SAME poll as the rss reading, so
+        // it costs one extra /proc read on Linux and NOTHING on macOS (a single `ps` returns both columns).
+        //
+        // WHERE IT IS DELIBERATELY NOT WIRED:
+        //   • win32 — the Job Object CPU RATE cap there is PREVENTIVE and default-on, so a reactive killer
+        //     would only add spawns; and on the AppContainer path `child.pid` is the PowerShell relay, so
+        //     there is no contained pid to sample and the contained child already carries a kernel rate cap.
+        //   • cgroup mode — `child.pid` is systemd-run, not the node child, exactly as for the RSS poll.
+        //     An operator already running scopes gets the PREVENTIVE cap by setting sandbox.cpuQuotaPercent;
+        //     leaving it at 0 there is a documented opt-out, not a silent gap.
+        // Both exclusions are expressed by WHERE the sampling calls live (inside the two poll branches
+        // below), not by a flag — a flag would drift from the branch that actually reads the pid.
+        const cpuWindowMs = cpuBurstWindowMs();
+        const cpuSamples: CpuSample[] = [];
+        let lastCpu: { at: number; seconds: number } | null = null;
+        let cpuKilled = false;
+        const noteCpuSeconds = (cpuSeconds: number) => {
+            if (cpuKilled || cpuWindowMs <= 0 || !(cpuSeconds >= 0)) return;
+            const now = Date.now();
+            const prev = lastCpu;
+            lastCpu = { at: now, seconds: cpuSeconds };
+            if (!prev) return; // the first reading only establishes a baseline — a delta needs two
+            const dWall = now - prev.at;
+            if (dWall <= 0) return;
+            const dCpu = cpuSeconds - prev.seconds;
+            // A counter that went BACKWARDS means we are no longer reading the same process (pid reuse
+            // after the child died) or read garbage. Drop the whole run rather than record a negative
+            // ratio: distrusting the history is the fail-safe choice, an invented sample is not.
+            if (dCpu < 0) { cpuSamples.length = 0; return; }
+            cpuSamples.push({ at: now, ratio: (dCpu * 1000) / dWall });
+            // Bounded retention: twice the window is strictly more than the decision can ever read, so the
+            // array cannot grow with uptime AND pruning can never shorten a run that already qualifies.
+            const cutoff = now - cpuWindowMs * 2;
+            while (cpuSamples.length > 2 && cpuSamples[0].at < cutoff) cpuSamples.shift();
+            if (!isSustainedCpuBurn(cpuSamples, CPU_BURN_RATIO, cpuWindowMs)) return;
+            cpuKilled = true;
+            const reason = `child cpu over budget (>=${Math.round(CPU_BURN_RATIO * 100)}% of one core sustained for ${Math.round(cpuWindowMs / 1000)}s)`;
+            // Unlike the rss overage, this reason is also parked on the health surface: a CPU kill has no
+            // other trace (no fatal IPC frame, no exit message), so without this the admin health panel
+            // would show a bare restart with lastError null and nobody could tell why the plugin died.
+            getHealth(slug).lastError = reason;
+            console.error(`[Isolate ${logSafe(slug)}] killed: ${reason}.`);
+            try { child.kill('SIGKILL'); } catch { /* gone */ }
+        };
         if (!cgroupOk && process.platform === 'linux' && child.pid) {
             // Cheapest path: synchronous /proc read on the host loop (field 2 of statm = resident pages).
             // The Landlock shim execs Node in place, so child.pid is always the process being measured.
@@ -1709,6 +1895,9 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
             };
             rssPoll = setInterval(() => {
                 try { killOverBudget(rssBytesOf(child.pid)); } catch { /* child gone / statm unavailable */ }
+                // Cumulative CPU from /proc/<pid>/stat on the SAME tick, so Δcpu and Δwall describe the
+                // same interval. Guarded separately: an unreadable stat must not skip the rss reading.
+                try { if (child.pid) noteCpuSeconds(procCpuSeconds(child.pid)); } catch { /* child gone / stat unavailable */ }
             }, 250);
             if (rssPoll.unref) rssPoll.unref();
         } else if ((process.platform === 'win32' || process.platform === 'darwin') && pollPid) {
@@ -1720,6 +1909,15 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
             // indirection to unwind there and `pollPid === child.pid`.
             let busy = false;
             let tick = 0;
+            // macOS only: has the two-column `ps` been proven to work on this host? The rss column is the
+            // ENFORCEMENT path here (macOS has no preventive resident cap at all), and the CPU watchdog
+            // added a second `-o cputime=` to that very command. If some macOS build rejected the keyword,
+            // ps would exit non-zero with EMPTY stdout, rssBytes would stay -1 on every tick, and the
+            // resident cap would silently stop enforcing while the health surface still showed green — the
+            // exact failure mode the pollPid comment above refuses to accept. So the FIRST rejected query
+            // demotes this child permanently to the original rss-only command and gives up its CPU
+            // watchdog, out loud. Losing the watchdog is a downgrade; losing the memory cap is not an option.
+            let psTwoColumn = true;
             rssPoll = setInterval(() => {
                 if (busy || !pollPid) return;
                 // Once the kernel Job Object cap is confirmed (win32), enforcement is preventive and
@@ -1732,13 +1930,28 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
                 try {
                     proc = (process.platform === 'win32')
                         ? spawn('tasklist', ['/FI', `PID eq ${pollPid}`, '/NH', '/FO', 'CSV'], { windowsHide: true })
-                        : spawn('ps', ['-o', 'rss=', '-p', String(pollPid)]);
+                        // macOS: ONE ps returns BOTH columns, so the CPU watchdog adds no extra spawn to a
+                        // poll that already costs one. Two separate `-o` flags rather than `-o rss=,cputime=`
+                        // because in BSD ps an `=` header swallows the rest of its argument, which would
+                        // collapse the two columns into one mis-named field. Demoted to the original
+                        // rss-only form for the rest of this child's life if the host ever rejects it.
+                        : spawn('ps', psTwoColumn
+                            ? ['-o', 'rss=', '-o', 'cputime=', '-p', String(pollPid)]
+                            : ['-o', 'rss=', '-p', String(pollPid)]);
                 } catch { busy = false; return; }
                 let out = '';
                 try { proc.stdout.on('data', (d: any) => { out += d.toString(); }); } catch { /* */ }
                 proc.on('error', () => { busy = false; });
-                proc.on('close', () => {
+                proc.on('close', (code: any) => {
                     busy = false;
+                    // A non-zero ps with NOTHING on stdout means the command shape was rejected — not that
+                    // the pid is gone (a dead pid also exits non-zero with empty output, which is why this
+                    // only ever demotes the query and never kills; a dead child stops the poll through its
+                    // own exit handler). Demoting on a dead pid costs at most one child's watchdog.
+                    if (process.platform === 'darwin' && psTwoColumn && code !== 0 && !out.trim()) {
+                        psTwoColumn = false;
+                        console.warn(`[Isolate ${logSafe(slug)}] this host's ps rejected '-o cputime=' — falling back to the rss-only query; the reactive CPU watchdog is OFF for this child (the resident cap is unaffected).`);
+                    }
                     try {
                         let rssBytes = -1;
                         if (process.platform === 'win32') {
@@ -1750,8 +1963,13 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
                                 if (digits) rssBytes = parseInt(digits, 10) * 1024;
                             }
                         } else {
-                            const kb = parseInt(out.trim(), 10); // ps -o rss= → KiB
+                            const kb = parseInt(out.trim(), 10); // ps -o rss= → KiB (leading column)
                             if (!isNaN(kb)) rssBytes = kb * 1024;
+                            // Second column is `cputime=` — [[dd-]hh:]mm:ss[.frac] of cumulative CPU. Absent
+                            // or unparseable (older ps, dead pid) => parsePsCpuTime returns -1 and
+                            // noteCpuSeconds ignores the tick; the rss cap above is untouched either way.
+                            const cpuField = psTwoColumn ? out.trim().split(/\s+/)[1] : undefined;
+                            if (cpuField !== undefined) noteCpuSeconds(parsePsCpuTime(cpuField));
                         }
                         if (rssBytes >= 0) killOverBudget(rssBytes);
                     } catch { /* unparseable → skip this tick */ }
@@ -2545,6 +2763,14 @@ module.exports = {
     // layers can never be active.
     __platformLaunchDecision: platformLaunchDecision,
     __nativeSandboxRequired: nativeSandboxRequired,
+    // The reactive CPU watchdog's DECISION, exported as a PURE function for exactly the reason
+    // __platformLaunchDecision is: the property that matters — an unbroken 60 s burn kills, a shorter
+    // burst does not, one quiet tick resets — cannot be asserted by actually pegging a core for a minute
+    // in CI. Its input parser ships with it, because a cputime string the watchdog mis-reads is a watchdog
+    // that never fires. Pinned by backend/src/tests/plugin-isolate-cpu-watchdog.test.ts on every host.
+    isSustainedCpuBurn, parsePsCpuTime, parseProcStatCpuTicks,
+    CPU_BURN_RATIO, CPU_BURST_SECONDS_DEFAULT,
+    __cpuBurstWindowMs: cpuBurstWindowMs,
     // The Linux floor choice, exported as a PURE function for the same reason and pinned by
     // backend/src/tests/sandbox-linux-zeroconf-wiring.test.ts on every host — including Windows and
     // macOS boxes, where neither Linux floor can ever exist and the fallback is therefore the ONLY

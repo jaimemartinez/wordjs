@@ -1,0 +1,205 @@
+name: Dependency audit (scheduled)
+
+# AN ADVISORY IS PUBLISHED ON THE ADVISORY DATABASE'S CLOCK, NOT ON OURS.
+#
+# The only automatic advisory check this repository had was the CI audit gate (`scripts/ci-audit.mjs`,
+# run from `ci.yml` and `release.yml`). That gate is good — it blocks on a real high/critical advisory in
+# a production dependency, tolerates an npm service outage instead of amplifying it, and is bounded to
+# ~2.5 min — but it only ever runs on `push`, `pull_request` and a `v*` tag. Nothing about our source
+# changes when GitHub/npm publishes a new advisory against a dependency we already ship, so a critical
+# CVE landing on a quiet Friday stays invisible until somebody happens to push. On a repository that can
+# go days without a commit that is a days-long blind window on the exact class of problem the gate
+# exists to catch.
+#
+# Dependabot ALERTS would close that window, but they are a repository SETTING (Security & analysis) that
+# only the owner can switch on; `.github/dependabot.yml` in this repo configures weekly VERSION-update
+# PRs, which is a different feature and does not react to advisories. This workflow is the part that can
+# live in the tree and therefore travels with any clone/fork: the same audit gate, on a daily timer.
+#
+# It runs the identical `scripts/ci-audit.mjs` the push-time gate runs, so a scheduled failure means
+# exactly what a CI failure means and is fixed the same way. It deliberately covers ALL SIX npm
+# workspaces — including `/` and `/setup`, which `ci.yml` does not audit today because no CI job installs
+# them — so the timer is the broadest advisory sweep in the repository.
+on:
+  schedule:
+    # 04:41 UTC daily. Off-peak, and deliberately off the hour: GitHub queues scheduled workflows across
+    # the whole platform, and runs asking for :00 are the ones that get delayed the most.
+    - cron: '41 4 * * *'
+  workflow_dispatch:
+
+# Least privilege for the GITHUB_TOKEN (see the same block in ci.yml). The audit legs only read the
+# repository; the report job below declares its own, wider set — a job-level `permissions:` REPLACES
+# this block rather than adding to it — because it is the one job that writes anything back to GitHub.
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: "Audit ${{ matrix.slug }}"
+    runs-on: ubuntu-latest
+    # GitHub's default job timeout is SIX HOURS: a hung step would look like a slow one forever. See the
+    # long note in ci.yml. Measured shape of one leg: a cold-cache `npm ci` on the heaviest workspace
+    # (frontend) plus the audit gate's own ~2.5 min worst case (npm's advisory endpoint completely down)
+    # is what sizes this. 10 minutes clears that with margin and still fails a genuine hang the same day.
+    timeout-minutes: 10
+    strategy:
+      # Every workspace must report. `fail-fast: true` would cancel the other five the moment one found
+      # an advisory, and the report job below would then name a single workspace while the rest were
+      # never audited — precisely the "green by absence" shape this repository keeps closing.
+      fail-fast: false
+      matrix:
+        # `dir` is the working directory and `lock` its lockfile (the npm cache key). `slug` exists
+        # because `dir` contains characters that are not legal in an artifact name (`.`, `/`), and the
+        # marker artifacts below are how the report job learns WHICH legs failed.
+        include:
+          - { slug: root, dir: '.', lock: package-lock.json }
+          - { slug: backend, dir: backend, lock: backend/package-lock.json }
+          - { slug: frontend, dir: frontend, lock: frontend/package-lock.json }
+          - { slug: gateway, dir: gateway, lock: gateway/package-lock.json }
+          - { slug: setup, dir: setup, lock: setup/package-lock.json }
+          - { slug: create-wordjs, dir: packages/create-wordjs, lock: packages/create-wordjs/package-lock.json }
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: 'npm'
+          # One lockfile per leg, on purpose. A step that lists several lockfiles shares ONE cache entry
+          # across them, so a single cold/changed lockfile cools every job that names it — the cold-cache
+          # deadlock already paid for once in ci.yml. Six independent keys cannot do that to each other.
+          cache-dependency-path: ${{ matrix.lock }}
+
+      - name: Install dependencies
+        working-directory: ${{ matrix.dir }}
+        # `npm audit` reads the installed tree, so the install is part of the gate, not preparation for
+        # it. The `|| npm install` fallback mirrors ci.yml (a lockfile that has drifted out of sync must
+        # not read as an advisory). Both attempts are wrapped in `timeout` because an install that hangs
+        # against a degraded registry would otherwise eat the whole job budget and report as a timeout
+        # with nothing audited; a bounded install that fails is a clear, actionable failure instead.
+        run: timeout 8m npm ci || timeout 8m npm install
+
+      - name: Audit (block high/critical prod vulns)
+        working-directory: ${{ matrix.dir }}
+        # The SAME wrapper the push-time gate runs, invoked by absolute path so `working-directory` stays
+        # the workspace being audited (ci-audit.mjs audits `process.cwd()`). It blocks on a real
+        # high/critical production advisory, and treats a confirmed npm advisory-service outage as
+        # "audit unavailable": retried, then warned loudly and allowed to pass. That last part matters
+        # more here than in CI — a scheduled job that turned every npm outage into a filed issue would
+        # train everyone to ignore the issues this workflow files.
+        run: node "$GITHUB_WORKSPACE/scripts/ci-audit.mjs"
+
+      # HOW THE REPORT JOB LEARNS WHICH LEGS FAILED.
+      #
+      # A matrix job cannot hand distinct outputs to a downstream job (all legs write the same output
+      # names and collide), and `needs.audit.result` is a single aggregate verdict — "something failed",
+      # not "frontend failed". A marker artifact per failing leg is the channel that survives the matrix.
+      # The report job treats a MISSING marker as unknown-but-real (a leg killed by the job timeout is
+      # force-terminated and never reaches an `if: failure()` step), so this is an enrichment, never the
+      # thing that decides whether an issue is filed.
+      - name: Record this workspace as failed (marker for the report job)
+        if: failure()
+        run: |
+          set -u
+          mkdir -p "$RUNNER_TEMP/audit-failure"
+          printf '%s\n' '${{ matrix.dir }}' > "$RUNNER_TEMP/audit-failure/workspace.txt"
+
+      - name: Upload the failure marker
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: audit-failed-${{ matrix.slug }}
+          path: ${{ runner.temp }}/audit-failure/workspace.txt
+          # Long enough to debug a failure found on Monday morning; these are three-byte files, but an
+          # unbounded retention on a DAILY workflow accumulates forever.
+          retention-days: 7
+
+  report:
+    name: Open or update the failure issue
+    needs: audit
+    # `failure()` — not `always()` — so a green sweep is silent. A cancelled run (someone hit cancel, or
+    # the whole workflow was superseded) is not a failure and files nothing.
+    if: failure()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read # checkout is not needed, but `gh` resolves the repo from GH_REPO and needs read
+      issues: write # the ONE write this workflow performs: file/annotate the failure issue
+    steps:
+      - name: Collect the failure markers
+        # `continue-on-error` because "no artifacts matched" is a legitimate state — every leg can fail
+        # by job timeout, which force-terminates the runner before any `if: failure()` step runs. The
+        # step below handles an empty/absent directory and says so in the issue rather than pretending
+        # the failure list is complete.
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          pattern: audit-failed-*
+          path: markers
+
+      - name: File or annotate the issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -u
+          shopt -s nullglob globstar
+
+          title="Dependency audit failed ($(date -u +%Y-%m-%d))"
+
+          # Which workspaces reported a failure. Empty is meaningful, not an error — see the note on the
+          # download step — so the body says "could not be determined" instead of listing nothing.
+          workspaces=""
+          # An explicit `if`, not `[ -n "$ws" ] && workspaces=…`. GitHub runs `run:` blocks as
+          # `bash -e`, and an `&&` list whose LEFT side fails is a failed command at the end of a loop
+          # body: the step would exit — reporting nothing — the first time a marker file was empty.
+          for f in markers/**/workspace.txt; do
+            ws="$(tr -d '\r\n' < "$f")"
+            if [ -n "$ws" ]; then
+              workspaces="${workspaces}- \`${ws}\`"$'\n'
+            fi
+          done
+          if [ -z "$workspaces" ]; then
+            workspaces="- _(could not be determined — a leg that hits the job timeout is force-terminated before it can record a marker; open the run and read the job list)_"$'\n'
+          fi
+
+          {
+            echo "The scheduled dependency audit failed on \`$(date -u +%Y-%m-%dT%H:%M:%SZ)\`."
+            echo
+            echo "**Workspaces that failed:**"
+            echo
+            printf '%s' "$workspaces"
+            echo
+            echo "**Run:** $RUN_URL"
+            echo
+            echo "This workflow runs \`scripts/ci-audit.mjs\` — the same gate \`ci.yml\` and \`release.yml\` run — in each npm workspace."
+            echo "A failure here means one of:"
+            echo
+            echo "1. A **high/critical advisory in a production dependency**. This is the case the timer exists for: it means an advisory was published against something we already ship, with no push of ours involved. Reproduce with \`npm audit --omit=dev --audit-level=high\` in the named workspace and upgrade; do not bypass."
+            echo "2. The **install failed** (\`npm ci\`/\`npm install\`, bounded to 8 minutes). Nothing was audited, so this is not a clean bill of health."
+            echo "3. An **unrecognised audit failure**. \`ci-audit.mjs\` fails closed on an audit result it cannot classify, rather than assuming it is safe."
+            echo
+            echo "A confirmed npm advisory-service outage is *not* one of them — the wrapper retries it and passes with a \`::warning::\`, so this issue is never an npm outage."
+            echo
+            echo "_Filed automatically by \`.github/workflows/dependency-audit.yml\`. Close it once the audit is green again._"
+          } > issue-body.md
+
+          # FIND THE EXISTING ISSUE BY EXACT TITLE, WITHOUT THE SEARCH INDEX.
+          #
+          # `gh issue list --search 'in:title …'` goes through GitHub's search index, which lags issue
+          # creation by seconds-to-minutes and matches on tokens rather than the whole string. On a
+          # re-run minutes after the first failure that lag reads as "no existing issue" and files a
+          # duplicate. Listing open issues and comparing the title verbatim in jq is deterministic.
+          number="$(gh issue list --state open --limit 200 --json number,title \
+            | jq -r --arg t "$title" 'map(select(.title == $t)) | (.[0].number // empty)')"
+
+          if [ -n "$number" ]; then
+            echo "Commenting on existing issue #$number"
+            gh issue comment "$number" --body-file issue-body.md
+          else
+            echo "Opening a new issue: $title"
+            # No --label: a label that does not exist in the repository makes `gh issue create` fail, and
+            # a failure to LABEL must never swallow the failure being reported.
+            gh issue create --title "$title" --body-file issue-body.md
+          fi

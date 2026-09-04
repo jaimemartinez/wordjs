@@ -92,8 +92,11 @@ describe('real launch wiring and visibility', () => {
 
         // Both halves, because cwd="/" ALONE was candidate C1 and it dies: ts-node then searches for
         // tsconfig.json from "/" and never finds it.
-        assert.match(isolateSource, /const childCwd = process\.platform === 'darwin' \? path\.parse\(APP_ROOT\)\.root : undefined;/,
-            'the child must get a deterministic working directory on macOS');
+        // Generalised to Linux on 2026-09-04 as defence-in-depth (process.cwd() no longer discloses the
+        // deployment path there either); the property under test is unchanged — a deterministic root cwd,
+        // never an ancestor grant. Windows keeps the default (AppContainer relay / exempt dev worker).
+        assert.match(isolateSource, /const childCwd = \(process\.platform === 'darwin' \|\| process\.platform === 'linux'\) \? path\.parse\(APP_ROOT\)\.root : undefined;/,
+            'the child must get a deterministic working directory on macOS and Linux');
         assert.match(isolateSource, /workerEnv\.TS_NODE_PROJECT = path\.join\(APP_ROOT, 'tsconfig\.json'\)/,
             'ts-node must be told where its config is, or the cwd change strands it');
         assert.match(isolateSource, /'COMSPEC', 'TS_NODE_PROJECT'\]/,

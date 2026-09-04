@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useId, useState } from "react";
+import { csrfHeaders } from "@/lib/csrf";
 
 /* ============================================================
  * Bloque "Formulario" para el editor visual.
@@ -155,7 +156,10 @@ export function FormBlockRender(props: FormBlockProps & { puck?: any }) {
         try {
             const res = await fetch("/api/v1/forms/submit", {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
+                // Anonymous visitors have no session cookie and the gate never asks them for a token;
+                // a SIGNED-IN visitor submitting the same public form does carry one, and their POST
+                // would be refused without this. Public surfaces are not exempt — see lib/csrf.ts.
+                headers: { "Content-Type": "application/json", ...csrfHeaders() },
                 credentials: "same-origin",
                 body: JSON.stringify(body),
             });

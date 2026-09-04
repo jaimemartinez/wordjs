@@ -42,8 +42,8 @@
       "semanticSha256": "dd4150cbbf70aa15c90992d91c4954c7d0502e27ca6901eef6c717dcc4f33c8e"
     },
     "verificationSurface": {
-      "backendTestFiles": 219,
-      "frontendTestFiles": 170,
+      "backendTestFiles": 222,
+      "frontendTestFiles": 172,
       "sandboxWorkflowSemanticSha256": "2242d3affab94e2867c9b345986300f8adc8e67b27d6e911cccdd9112f61891d",
       "performanceBudgetsSha256": "5a608e783d98267030d14c9ce70edb7cc9f5354cbf006c31353648425d7a7556"
     }

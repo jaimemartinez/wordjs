@@ -127,7 +127,17 @@ function rawRequest(port: number, requestLine: string, headers: string[]): Promi
 }
 
 const port = () => server.address().port;
-const cookie = () => `Cookie: wordjs_token=${jwt.sign({ userId: adminId, username: 'jefa' }, SECRET, { algorithm: 'HS256', expiresIn: '1h' })}`;
+
+/**
+ * The DOUBLE-SUBMIT CSRF pair a real browser carries alongside the session (middleware/auth.ts): the
+ * `wjs_csrf` cookie, echoed back in X-CSRF-Token. Both halves are a fixed literal here because this
+ * suite speaks raw HTTP/1.0 and never signs in — the gate compares the cookie to the header, it does
+ * not verify the value against anything else. Carrying it makes the CONTROL below an HONEST browser
+ * request under the CURRENT contract; the exploit cases keep it too, and still fail on the ORIGIN
+ * check (rest_csrf_invalid), which is what those tests assert and must keep asserting.
+ */
+const CSRF_TOKEN = 'raw-socket-suite-double-submit-token';
+const cookie = () => `Cookie: wordjs_token=${jwt.sign({ userId: adminId, username: 'jefa' }, SECRET, { algorithm: 'HS256', expiresIn: '1h' })}; wjs_csrf=${CSRF_TOKEN}`;
 
 /** GET the collab stream — the gate that the global CSRF middleware never runs on. */
 const collabStream = (headers: string[]) =>
@@ -135,7 +145,7 @@ const collabStream = (headers: string[]) =>
 
 /** POST a state change — the gate the global CSRF middleware DOES run on. */
 const csrfPost = (headers: string[]) =>
-    rawRequest(port(), `POST ${PREFIX}/posts HTTP/1.0`, [cookie(), ...headers]);
+    rawRequest(port(), `POST ${PREFIX}/posts HTTP/1.0`, [cookie(), `X-CSRF-Token: ${CSRF_TOKEN}`, ...headers]);
 
 before(async () => {
     await database.init({ driver: 'sqlite-native' });
@@ -185,7 +195,8 @@ describe('CONTROLS — the host-less request must really arrive, and the gates m
 
     test('CONTROL: with a real Host, a genuine same-origin POST passes the global CSRF gate', async () => {
         const res = await csrfPost(['Host: example.com', 'Origin: http://example.com']);
-        assert.notStrictEqual(res.status, 403, 'the fix must not cost an honest same-origin caller anything');
+        assert.notStrictEqual(res.status, 403,
+            'the fix must not cost an honest same-origin caller anything — one that now also echoes its wjs_csrf cookie in X-CSRF-Token, which is what "honest" means since the double-submit token was added');
     });
 });
 

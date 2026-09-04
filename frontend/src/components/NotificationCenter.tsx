@@ -5,6 +5,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/contexts/ToastContext";
 import { useI18n } from "@/contexts/I18nContext";
 import Link from "next/link";
+import { csrfHeaders } from "@/lib/csrf";
 
 interface Notification {
     uuid: string;
@@ -168,6 +169,7 @@ export default function NotificationCenter({ variant = 'floating', isCollapsed =
             const res = await fetch(`${API_URL}/notifications/${uuid}/read`, {
                 method: "POST",
                 credentials: 'include',
+                headers: csrfHeaders(), // cookie-authenticated mutation — see lib/csrf.ts
             });
             if (res.ok) {
                 setNotifications(prev =>
@@ -184,6 +186,7 @@ export default function NotificationCenter({ variant = 'floating', isCollapsed =
             const res = await fetch(`${API_URL}/notifications/read-all`, {
                 method: "POST",
                 credentials: 'include',
+                headers: csrfHeaders(),
             });
             if (res.ok) {
                 setNotifications(prev => prev.map(n => ({ ...n, is_read: 1 })));
@@ -201,6 +204,7 @@ export default function NotificationCenter({ variant = 'floating', isCollapsed =
             const res = await fetch(`${API_URL}/notifications/${uuid}`, {
                 method: "DELETE",
                 credentials: 'include',
+                headers: csrfHeaders(),
             });
             if (res.ok) {
                 setNotifications(prev => prev.filter(n => n.uuid !== uuid));

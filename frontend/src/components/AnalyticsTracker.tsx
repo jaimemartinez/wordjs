@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from 'react';
 import { usePathname, useSearchParams } from 'next/navigation';
+import { csrfHeaders } from '@/lib/csrf';
 
 export function AnalyticsTracker() {
     const pathname = usePathname();
@@ -25,7 +26,10 @@ export function AnalyticsTracker() {
 
                 await fetch('/api/v1/analytics/track', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    // The beacon is public, but fetch defaults to credentials:'same-origin', so a
+                    // signed-in reader's page view carries their session cookie and therefore needs
+                    // the double-submit token (see lib/csrf.ts).
+                    headers: { 'Content-Type': 'application/json', ...csrfHeaders() },
                     body: JSON.stringify({
                         type: 'page_view',
                         resource: url
