@@ -705,14 +705,14 @@ jobs:
             backend/package-lock.json
             frontend/package-lock.json
             gateway/package-lock.json
-      - name: Install root dependencies (concurrently/helmet/compression del monolito)
-        run: npm ci || npm install
-      - name: Install backend dependencies
-        working-directory: backend
-        run: npm ci || npm install
-      - name: Install frontend dependencies
-        working-directory: frontend
-        run: npm ci || npm install
+      - name: Install all workspaces in parallel (root, backend, frontend, gateway, setup)
+        # Was three SEQUENTIAL installs (root → backend → frontend) summing to ~14.5 min. On a cold
+        # cache that left nothing under the 15-min ceiling for Playwright + the suite, so the job was
+        # cancelled before it could finish once and WARM its cache — a self-perpetuating deadlock (a
+        # cancelled job saves no cache, so the next run is cold again). ci:all runs the workspace
+        # installs concurrently: wall time becomes the LONGEST single install, not their sum, which
+        # fits cold and lets the run complete and warm the cache. See scripts/ci-install.mjs.
+        run: npm run ci:all
       - name: Install Playwright chromium (with system deps)
         working-directory: frontend
         # `--with-deps` shells out to apt-get, and both that and the browser download have stalled

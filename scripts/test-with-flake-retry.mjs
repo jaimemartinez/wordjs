@@ -28,39 +28,52 @@ import { fileURLToPath } from 'node:url';
 const NODE_TEST_ARGS = process.argv.slice(2);
 const FLAKE = 'Unable to deserialize cloned data';
 
+// Capture stdout and stderr SEPARATELY. The flake decision is made on stdout alone, because the whole
+// TAP report — the `not ok` line and its indented YAML detail (`failureType:`, `error: '…deserialize…'`)
+// — is written to stdout as one contiguous run. Node prints an uncaughtException's stack to STDERR, and
+// an earlier version of this wrapper merged both streams into one buffer by arrival order: that stderr
+// stack landed BETWEEN the `not ok` line and its `error:` line, pushing the flake marker out of the
+// fixed-size window the detector scanned, so a pure flake was judged a real failure and never retried.
+// Separate streams cannot interleave; the block below is exactly what the runner emitted, in order.
 function run() {
     return new Promise((resolve) => {
         const child = spawn(process.execPath, ['--test', ...NODE_TEST_ARGS], {
             stdio: ['ignore', 'pipe', 'pipe'],
         });
-        let out = '';
-        const echo = (b) => { const s = b.toString(); out += s; process.stdout.write(s); };
-        child.stdout.on('data', echo);
-        child.stderr.on('data', echo);
-        child.on('error', (e) => resolve({ code: -1, out: out + '\n' + String(e && e.message || e) }));
-        child.on('exit', (code) => resolve({ code, out }));
+        let stdout = '', stderr = '';
+        child.stdout.on('data', (b) => { const s = b.toString(); stdout += s; process.stdout.write(s); });
+        child.stderr.on('data', (b) => { const s = b.toString(); stderr += s; process.stderr.write(s); });
+        child.on('error', (e) => resolve({ code: -1, stdout, stderr: stderr + '\n' + String(e && e.message || e) }));
+        child.on('exit', (code) => resolve({ code, stdout, stderr }));
     });
 }
 
+const indentOf = (l) => (l.match(/^[ \t]*/)[0] || '').length;
+
 /**
  * Is EVERY failure in this run the deserialize flake, and nothing else? Only then may we retry.
- * A `not ok` line that is not immediately explained by the deserialize error is a real failure.
+ * Pass the child's STDOUT (the TAP stream); a `not ok` whose YAML detail block does not name the
+ * deserialize error is a real failure, and a real failure is never retried.
  */
-export function onlyDeserializeFlake(out) {
-    if (!out.includes(FLAKE)) return false;                 // this run did not hit the flake at all
-    const lines = out.split('\n');
+export function onlyDeserializeFlake(stdout) {
+    if (!stdout.includes(FLAKE)) return false;              // this run did not hit the flake at all
+    const lines = stdout.split('\n');
     const notOkIdx = [];
     lines.forEach((l, i) => { if (/^\s*not ok \d+/.test(l)) notOkIdx.push(i); });
     if (notOkIdx.length === 0) return false;                // failed but no `not ok` — unknown shape, do not retry
-    // Every `not ok` must be explained by the deserialize flake in ITS OWN block. The block runs from
-    // this `not ok` to the NEXT one (capped at a few lines), so one flaky suite can never lend its
-    // deserialize error to a genuinely-failed suite listed above it — that mix must NOT be retried.
-    for (let k = 0; k < notOkIdx.length; k++) {
-        const start = notOkIdx[k];
-        const nextNotOk = k + 1 < notOkIdx.length ? notOkIdx[k + 1] : lines.length;
-        const end = Math.min(nextNotOk, start + 6);
-        const window = lines.slice(start, end).join('\n');
-        if (!window.includes(FLAKE)) return false;          // a real failure sits in this block — do not retry
+    // Each `not ok`'s explanation is its TAP YAML block: the lines indented MORE than the `not ok`
+    // itself, up to the first line that dedents back to (or past) it — which is the next `not ok`, an
+    // `ok`, or the `# tests/pass/fail` summary. The block is delimited by INDENT, not a fixed line
+    // count, so it can never borrow the next failure's error, and blank lines inside a block are kept.
+    for (const start of notOkIdx) {
+        const base = indentOf(lines[start]);
+        let block = lines[start];
+        for (let i = start + 1; i < lines.length; i++) {
+            if (lines[i].trim() === '') { block += '\n' + lines[i]; continue; }
+            if (indentOf(lines[i]) <= base) break;          // dedent → this failure's block ended
+            block += '\n' + lines[i];
+        }
+        if (!block.includes(FLAKE)) return false;           // this failure is explained by something else — real
     }
     return true;
 }
@@ -70,22 +83,27 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   await main();
 }
 
+// Up to two retries: the flake is a race in the runner's force-exit teardown, so a fresh run usually
+// clears it, and the wrapped suites are small and fast enough that a couple of extra attempts cost
+// seconds. A REAL failure exits on the first attempt — the retries only ever apply to a pure flake.
+const RETRIES = 2;
+
 async function main() {
 let res = await run();
 if (res.code === 0) process.exit(0);
 
-if (onlyDeserializeFlake(res.out)) {
-    console.warn('::warning::node:test hit the known --test-force-exit deserialize flake (every failure was the runner, not an assertion) — retrying the suite once.');
+let attempt = 0;
+while (onlyDeserializeFlake(res.stdout) && attempt < RETRIES) {
+    attempt++;
+    console.warn(`::warning::node:test hit the known --test-force-exit deserialize flake (every failure was the runner, not an assertion) — retrying the suite (attempt ${attempt} of ${RETRIES}).`);
     res = await run();
     if (res.code === 0) process.exit(0);
-    // Second failure: if it is STILL only the flake, the environment is degraded — report it as such
-    // rather than pretending success, but make clear it was the runner, not a test.
-    if (onlyDeserializeFlake(res.out)) {
-        console.error('::error::the --test-force-exit deserialize flake persisted across a retry — this is a node:test runner problem, not a failed assertion, but the suite could not be certified this run.');
-    }
-    process.exit(res.code || 1);
 }
 
-// Not the flake — a real failure. Do not retry.
+// Still failing. If it is STILL only the flake, the runner never settled — report it as the runner's
+// fault, loudly, rather than pretending success; otherwise fall through and surface the real failure.
+if (onlyDeserializeFlake(res.stdout)) {
+    console.error(`::error::the --test-force-exit deserialize flake persisted across ${RETRIES} retries — this is a node:test runner problem, not a failed assertion, but the suite could not be certified this run.`);
+}
 process.exit(res.code || 1);
 }
