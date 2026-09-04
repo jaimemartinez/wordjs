@@ -287,7 +287,11 @@ jobs:
           [ -n "$f6_suites" ] || { echo "::error::the F6 glob matched nothing after subtraction — this leg would certify f0-f5 only"; exit 1; }
           echo "F6 suites under this Redis condition:$f6_suites"
 
-          node --test --test-force-exit --test-concurrency=1 -r ts-node/register \
+          # Wrapped to retry ONCE on the known node:test --test-force-exit deserialize flake, and only
+          # when EVERY failure is that runner flake — a real assertion failure is never retried. See
+          # scripts/test-with-flake-retry.mjs.
+          node "$GITHUB_WORKSPACE/scripts/test-with-flake-retry.mjs" \
+            --test-force-exit --test-concurrency=1 -r ts-node/register \
             src/tests/f0-*.test.ts \
             src/tests/f1-*.test.ts \
             src/tests/f2-*.test.ts \
