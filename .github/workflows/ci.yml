@@ -321,7 +321,15 @@ jobs:
   backend:
     name: Backend (typecheck + test)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # 25, not 15. The suite grew a set of tests that BOOT REAL ISOLATED PLUGINS — each forks a child,
+    # installs the guards and drives an escape over the real RPC path (sandbox-fs-surface-sweep,
+    # sandbox-reviewed-builtins-escape, and the process-surface / IPC-frame cases). That is seconds of
+    # wall-clock apiece, and against the real Postgres/MySQL/Redis services this job attaches it pushed
+    # the run past 15 minutes — the last 09-02 run finished under it, the isolate tests added since did
+    # not. It is SLOW, not hung: the same suite completes locally in ~12 min on SQLite, and it was only
+    # this timeout that cancelled it, never a failing assertion. The ceiling still catches a genuine
+    # hang; it just has honest margin over the real duration now, matching the release verify job.
+    timeout-minutes: 25
     services:
       postgres:
         image: postgres:16
