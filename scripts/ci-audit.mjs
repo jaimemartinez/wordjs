@@ -25,18 +25,30 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const LEVEL = 'high';               // block at high and above (high + critical)
-const RETRIES = 3;
-const BACKOFF_MS = [4000, 10000, 20000];
+const RETRIES = 1;                  // 2 attempts total — see PER_ATTEMPT_MS for why this is bounded
+const BACKOFF_MS = [8000];
+const PER_ATTEMPT_MS = 75000;       // kill a single npm audit that hangs on a down endpoint
 
+// WHY A PER-ATTEMPT TIMEOUT EXISTS. The first version of this wrapper retried up to four times with no
+// per-attempt cap. On a persistently-down advisory endpoint each `npm audit` hangs while npm does its
+// OWN internal retries — ~2 min apiece — so four of them plus backoff took ~8 min and blew the job's
+// 10-min budget. That made the resilient audit SLOWER than the hard-fail it replaced. Now each attempt
+// is killed at 75s and counted as a service failure, so the whole gate is bounded to roughly
+// 75s + 8s + 75s ≈ 2.5 min even when npm is completely down.
 function runAudit() {
     return new Promise((resolve) => {
         const child = spawn('npm', ['audit', '--omit=dev', `--audit-level=${LEVEL}`, '--json'],
             { cwd: process.cwd(), shell: process.platform === 'win32' });
-        let out = '', err = '';
+        let out = '', err = '', timedOut = false;
+        const timer = setTimeout(() => { timedOut = true; try { child.kill('SIGKILL'); } catch { /* gone */ } }, PER_ATTEMPT_MS);
         child.stdout.on('data', (b) => { out += b; });
         child.stderr.on('data', (b) => { err += b; });
-        child.on('error', (e) => resolve({ code: -1, out, err: String(e && e.message || e) }));
-        child.on('exit', (code) => resolve({ code, out, err }));
+        child.on('error', (e) => { clearTimeout(timer); resolve({ code: -1, out, err: String(e && e.message || e) }); });
+        child.on('exit', (code) => {
+            clearTimeout(timer);
+            if (timedOut) resolve({ code: -1, out, err: `npm audit did not return within ${PER_ATTEMPT_MS / 1000}s — treating as service unavailable` });
+            else resolve({ code, out, err });
+        });
     });
 }
 
