@@ -331,14 +331,29 @@ function buildSeatbeltProfile(opts: SeatbeltProfileOptions): string {
     // the realpath gives the Cellar directory (which does not).
     let homeDir = '';
     try { homeDir = normalizePath(require('os').homedir()) || ''; } catch { homeDir = ''; }
-    const runtimePrefixes = uniq(nodePaths.map((n) => ppath.dirname(ppath.dirname(n))))
-        .filter((p) => normalizePath(p) !== null)
-        // Too shallow to be "the runtime" -- see MIN_RUNTIME_PREFIX_COMPONENTS.
-        .filter((p) => p.split('/').filter(Boolean).length >= MIN_RUNTIME_PREFIX_COMPONENTS)
-        // …and never the home directory or an ancestor of it. `/Users/<name>/bin/node` would otherwise
-        // derive the whole home directory as a "runtime prefix" and hand back exactly the read row this
-        // profile exists to close. A runtime INSIDE the home directory (nvm) is fine and still granted.
-        .filter((p) => !(homeDir && isWithin(homeDir, p)));
+    // A SHARED package prefix (Homebrew, MacPorts, the nodejs.org pkg → /usr/local, /opt/homebrew, …) is
+    // NOT "the Node runtime": granting file-read* on the whole prefix hands the plugin the operator's
+    // entire package tree — every other formula's data, and the prefix's own etc/ configs (the exact
+    // over-broad read `MIN_RUNTIME_PREFIX_COMPONENTS` was meant to stop, which /usr/local (2 components)
+    // slips past). When the derived prefix is one of these, grant only the subdirs a runtime actually needs
+    // — the binary, its dylibs and Homebrew's keg store — so bin/lib/opt/Cellar stay readable (node boots)
+    // while etc/, share/, var/ and sibling data do not. A DEDICATED runtime dir (nvm/asdf/fnm) is granted
+    // whole, as before. (adversarial-audit: Seatbelt /usr/local read)
+    const SHARED_RUNTIME_PARENTS = new Set(['/usr', '/usr/local', '/opt/local', '/opt/homebrew']);
+    const RUNTIME_SUBDIRS = ['bin', 'sbin', 'lib', 'libexec', 'opt', 'Cellar'];
+    const expandRuntimePrefix = (p: string): string[] =>
+        SHARED_RUNTIME_PARENTS.has(p) ? RUNTIME_SUBDIRS.map((d) => `${p}/${d}`) : [p];
+    const runtimePrefixes = uniq(
+        uniq(nodePaths.map((n) => ppath.dirname(ppath.dirname(n))))
+            .filter((p) => normalizePath(p) !== null)
+            // Too shallow to be "the runtime" -- see MIN_RUNTIME_PREFIX_COMPONENTS.
+            .filter((p) => p.split('/').filter(Boolean).length >= MIN_RUNTIME_PREFIX_COMPONENTS)
+            // …and never the home directory or an ancestor of it. `/Users/<name>/bin/node` would otherwise
+            // derive the whole home directory as a "runtime prefix" and hand back exactly the read row this
+            // profile exists to close. A runtime INSIDE the home directory (nvm) is fine and still granted.
+            .filter((p) => !(homeDir && isWithin(homeDir, p)))
+            .flatMap(expandRuntimePrefix),
+    ).filter((p) => normalizePath(p) !== null);
 
     // ── W^X: a tree that is WRITABLE is never MAPPED EXECUTABLE ─────────────────────────────────────
     // The plugin's own directory is writable. Granting file-map-executable anywhere that overlaps a

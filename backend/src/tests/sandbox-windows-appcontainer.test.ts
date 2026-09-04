@@ -80,7 +80,11 @@ describe('sandbox-windows: generated script hygiene (all platforms)', () => {
 
     test('traverse is non-recursive; writable files are W^X; revoke removes grants and denies', () => {
         const traverse = sw.__buildIcaclsScript('traverse');
-        assert.match(traverse, /\/grant:r .*\(RX\)/);
+        // TRAVERSE-ONLY: FILE_TRAVERSE (X) + attribute reads to stat a known path, but NOT FILE_LIST_DIRECTORY
+        // (RD) — (RX) would have let the plugin ENUMERATE the ancestor zones (secret filenames, sibling roster).
+        assert.match(traverse, /\/grant:r .*\(RA,REA,RC,S,X\)/);
+        assert.ok(!/\(RX\)/.test(traverse), 'traverse must not grant (RX): on a directory that includes FILE_LIST_DIRECTORY');
+        assert.ok(!/:\([^)]*\bRD\b/.test(traverse), 'traverse must not grant RD (list directory) — no enumeration of ancestor zones');
         assert.ok(!traverse.includes('(OI)(CI)'), 'an ancestor traversal grant must not flow into sibling trees');
         assert.ok(!traverse.includes("'/T'"), 'traverse must not recurse');
         assert.match(sw.__buildIcaclsScript('rx'), /\/grant:r .*\(OI\)\(CI\)\(RX\)/);

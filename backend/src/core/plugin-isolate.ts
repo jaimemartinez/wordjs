@@ -230,6 +230,32 @@ function dropLivePid(slug: string, pid: number | undefined) {
 }
 /** Pids we spawned for this slug and have not observed exiting. Empty ⇒ nothing of ours is running. */
 function getLivePids(slug: string): number[] { return Array.from(livePids.get(slug) || []); }
+/**
+ * cgroup path only: child.pid is the systemd-run WRAPPER, but the transient .scope (the actual plugin
+ * node + any grandchildren) is tracked by the manager, not tied to the wrapper's lifetime — a SIGKILL of
+ * the scope is asynchronous, so the wrapper can exit while a plugin process is still resident. Dropping
+ * the live-pid on the wrapper's exit alone let awaitIsolateStopped — the DELETE/reload precondition —
+ * report "stopped" while the plugin was still alive in the scope. Hold the pid until `systemctl is-active`
+ * shows the unit gone (non-zero). Bounded + best-effort: if systemctl is missing/slow, drop after the
+ * ceiling so teardown can never hang, and never leave a pid stuck forever.
+ */
+function dropLivePidWhenScopeGone(slug: string, pid: number | undefined, unit: string): void {
+    const deadline = Date.now() + 4000;
+    const check = () => {
+        let done = false;
+        let proc: any;
+        try { proc = spawn('systemctl', ['--user', 'is-active', unit], { stdio: 'ignore' }); }
+        catch { dropLivePid(slug, pid); return; }
+        proc.on('error', () => { if (!done) { done = true; dropLivePid(slug, pid); } });
+        proc.on('exit', (code: number | null) => {
+            if (done) return; done = true;
+            // is-active exits 0 while the scope still has processes; non-zero once it is gone.
+            if (code !== 0 || Date.now() >= deadline) dropLivePid(slug, pid);
+            else setTimeout(check, 100);
+        });
+    };
+    check();
+}
 
 // --- IPC-frame containment guard (backend/src/tests flake + a plugin→host DoS) -------------------
 // The bridge reads each isolated child over a child_process IPC channel in `serialization:'advanced'`
@@ -1736,7 +1762,14 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
             }, process.platform === 'darwin' ? 400 : 1000);
             if (rssPoll.unref) rssPoll.unref();
         }
-        child.on('exit', () => { if (rssPoll) clearInterval(rssPoll); dropLivePid(slug, spawnedPid); });
+        child.on('exit', () => {
+            if (rssPoll) clearInterval(rssPoll);
+            // cgroup path: confirm the transient scope is actually gone before declaring the pid dead — the
+            // wrapper can exit while the scoped node is still being SIGKILLed. Other paths: child.pid IS the
+            // plugin, so its exit is authoritative.
+            if (cgroupUnit && spawnedPid) dropLivePidWhenScopeGone(slug, spawnedPid, cgroupUnit);
+            else dropLivePid(slug, spawnedPid);
+        });
         const api = createPluginApi(slug);
         let invokeId = 0;
         // Backpressure: bound concurrent worker→host bridge calls so a runaway/malicious plugin can't

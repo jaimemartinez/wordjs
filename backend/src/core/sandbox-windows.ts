@@ -334,7 +334,14 @@ function buildIcaclsScript(mode: AclMode): string {
             "  $null = & icacls $d /remove:d \"*${sid}\" /T /C /Q",
         ]
         : mode === 'traverse'
-            ? ["  $null = & icacls $d /grant:r \"*${sid}:(RX)\" /C /Q"]
+            // TRAVERSE-ONLY, not (RX). The simple right RX = FILE_GENERIC_READ|FILE_GENERIC_EXECUTE, and on a
+            // DIRECTORY FILE_GENERIC_READ includes FILE_LIST_DIRECTORY (0x1) — so (RX) let a plugin ENUMERATE
+            // the ancestor zones (APP_ROOT, the plugins/ parent), reading the operator's secret filenames and
+            // the full sibling-plugin roster. These zones exist only to be PASSED THROUGH to reach the rx/
+            // full grants on specific children, which needs FILE_TRAVERSE (X) plus attribute reads to stat a
+            // KNOWN path — never FILE_LIST_DIRECTORY. Grant exactly that: RA/REA (stat), RC/S, X (traverse),
+            // and deliberately NOT RD (list) or read-data. (adversarial-audit: AppContainer traverse enumerates)
+            ? ["  $null = & icacls $d /grant:r \"*${sid}:(RA,REA,RC,S,X)\" /C /Q"]
             : mode === 'rx'
                 ? ["  $null = & icacls $d /grant:r \"*${sid}:(OI)(CI)(RX)\" /T /C /Q"]
                 : [

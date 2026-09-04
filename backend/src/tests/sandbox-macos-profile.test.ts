@@ -78,6 +78,19 @@ describe('SBPL profile skeleton', () => {
             'deny-default must precede the inherited process-tree carve-out');
     });
 
+    test('a shared package prefix (/usr/local, Homebrew) is narrowed to runtime subdirs, not granted whole', () => {
+        // node at /usr/local/bin/node → dirname(dirname) = /usr/local, which slips past
+        // MIN_RUNTIME_PREFIX_COMPONENTS. It must NOT become a whole-prefix read (etc/ configs, sibling
+        // formulae, var/), only the subdirs a runtime needs so node can still map its dylibs.
+        const p = build({ nodePath: '/usr/local/bin/node' });
+        assert.ok(!p.includes('(allow file-read* (subpath "/usr/local"))'),
+            '/usr/local must never be granted as a whole subpath — that exposes the operator package tree');
+        assert.ok(p.includes('(allow file-read* (subpath "/usr/local/lib"))'), 'the runtime dylib dir stays readable');
+        assert.ok(p.includes('(allow file-read* (subpath "/usr/local/opt"))'), 'Homebrew keg symlinks stay readable');
+        assert.ok(p.includes('(allow file-read* (subpath "/usr/local/Cellar"))'), 'Homebrew keg store stays readable');
+        assert.ok(!/subpath "\/usr\/local\/etc"/.test(p), 'the prefix etc/ configs must NOT be granted');
+    });
+
     test('the legacy builder fallback grants appRoot read-only', () => {
         const p = build();
         assert.ok(p.includes('(allow file-read-data (literal "/"))'), 'Node realpath needs only the root directory vnode');
