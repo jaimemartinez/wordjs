@@ -411,9 +411,14 @@ const config: AppConfig = {
         // is exactly what real-systemd CI caught). Default-ON is a follow-up gated on a ts-node-aware / larger
         // budget. Probe-gated regardless → falls back to the /proc poll where systemd --user is unavailable.
         useCgroupMemoryCap: fileConfig.sandbox?.useCgroupMemoryCap === true,
-        // Linux: PREVENTIVE per-plugin CPU quota in the SAME cgroup scope as the memory cap (CPUQuota=N% of
-        // ONE core — 100 = a full core, 50 = half) so a runaway/malicious plugin can't peg every core
-        // (anti-DoS). OPT-IN (default 0 = off) AND only takes effect together with useCgroupMemoryCap: both
+        // PREVENTIVE per-plugin CPU quota — the ONE knob behind BOTH kernel CPU caps this project has, and
+        // the reason the reactive watchdog below can stand down for a child. On Linux it is CPUQuota=N% in the
+        // SAME cgroup scope as the memory cap (N% of ONE core — 100 = a full core, 50 = half); on Windows it
+        // is JOBOBJECT_CPU_RATE_CONTROL_INFORMATION (HARD_CAP) on the AppContainer relay's Job Object, which
+        // the relay installs only when 0 < N < 100 — at 100 or above it installs nothing, and the
+        // non-AppContainer Windows launch has no CPU cap on any setting (its Job Object carries the memory
+        // limit alone). OPT-IN (default 0 = off), so a stock install has NO preventive CPU cap on any platform.
+        // On Linux it also only takes effect together with useCgroupMemoryCap: both
         // share one systemd --user scope, and that scope's memory.max is what makes skipping the /proc RSS
         // poll safe (under a scope, child.pid is systemd-run, so the poll can't read the node child). Needs a
         // systemd host whose `cpu` controller is delegated to the user cgroup — TRUE on bare metal + Proxmox
@@ -421,16 +426,22 @@ const config: AppConfig = {
         // mem cap OOM-kills at budget), NOT on ephemeral CI runners. The probe validates the EXACT scope
         // (mem+cpu) before activating, so enabling it where cpu isn't delegated falls back to the normal launch.
         cpuQuotaPercent: Number(fileConfig.sandbox?.cpuQuotaPercent) > 0 ? Number(fileConfig.sandbox.cpuQuotaPercent) : 0,
-        // REACTIVE per-plugin CPU watchdog, DEFAULT-ON everywhere the kernel gives us no preventive CPU
-        // cap (a plain Linux launch, macOS, any host whose cgroup probe failed). The host-side poll that
-        // already reads the child rss also reads its cumulative CPU time and SIGKILLs a child that holds
-        // >=95% of ONE core for this many seconds WITHOUT a single quiet tick. 60 s by default because
-        // legitimate plugin work is bursty (an import, a thumbnail batch, a sitemap rebuild all peg a core
-        // for seconds) and a false positive kills a working plugin; 0 DISABLES the watchdog entirely.
+        // REACTIVE per-plugin CPU watchdog, DEFAULT-ON everywhere no preventive CPU cap is ACTUALLY
+        // installed for the child — which, with cpuQuotaPercent at its 0 default, is everywhere. The
+        // host-side poll that already reads the child rss also reads its cumulative CPU time and SIGKILLs
+        // a child that holds >=95% of ONE core for this many seconds WITHOUT a single quiet tick. 60 s by
+        // default because legitimate plugin work is bursty (an import, a thumbnail batch, a sitemap
+        // rebuild all peg a core for seconds) and a false positive kills a working plugin; 0 DISABLES the
+        // watchdog entirely.
         // Unlike cpuQuotaPercent this needs no cgroup, no systemd and no opt-in — it is the floor, while
-        // cpuQuotaPercent stays the PREVENTIVE ceiling for operators who can run scopes. Skipped on win32
-        // (the Job Object CPU rate cap there is preventive and already default-on) and in cgroup mode
-        // (child.pid is systemd-run, not the node child — same reason the RSS poll is skipped there).
+        // cpuQuotaPercent stays the PREVENTIVE ceiling for operators who can install one. It is SKIPPED only
+        // where such a cap really exists for that child: Linux cgroup mode with cpuQuotaPercent > 0 (CPUQuota
+        // in the scope), or the Windows AppContainer relay with 0 < cpuQuotaPercent < 100 (the Job Object rate
+        // cap). It RUNS on plain Linux (/proc/<pid>/stat), on macOS (ps -o cputime=) and on win32 (tasklist /V,
+        // CPU Time read by column position and sampled every 30 s because that column has 1 s resolution — so
+        // a Windows kill lands at ~90 s of unbroken burn rather than ~60 s). The single residual is cgroup mode
+        // WITHOUT a quota: child.pid is systemd-run there, so nothing can sample the plugin, and that host is
+        // warned once at launch instead of being counted as covered.
         cpuBurstSeconds: Number.isFinite(Number(fileConfig.sandbox?.cpuBurstSeconds)) && Number(fileConfig.sandbox?.cpuBurstSeconds) >= 0 ? Number(fileConfig.sandbox.cpuBurstSeconds) : 60,
         // Windows: preventive per-plugin memory cap via a Job Object. Probe-gated → falls back to the poll.
         useJobObjectMemoryCap: fileConfig.sandbox?.useJobObjectMemoryCap !== false,

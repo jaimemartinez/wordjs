@@ -277,8 +277,8 @@ Every isolated plugin is wrapped by the mechanism native to its OS. All three pa
 | OS | Native mechanism | Guarantees retained for every plugin |
 |---|---|---|
 | Linux | Landlock + `no_new_privs` + seccomp-bpf | read/write allowlist, W^X writable zones, cross-process and process-creation restrictions, dangerous-syscall/anonymous-executable/x32-ABI denial; every socket denied without the network grant and only AF_INET/AF_INET6 clients admitted with it |
-| Windows | AppContainer + Job Object | package-SID filesystem boundary, child-process prohibition, memory/process/CPU limits; only `internetClient` is added when network is granted |
-| macOS | deny-by-default Seatbelt | scoped reads/writes, process fork/exec and process-inspection denial; outbound network is allowed only when granted |
+| Windows | AppContainer + Job Object | package-SID filesystem boundary, child-process prohibition, memory and process limits, plus an **opt-in** CPU-rate cap (`sandbox.cpuQuotaPercent`, default `0` = off); only `internetClient` is added when network is granted |
+| macOS | deny-by-default Seatbelt | scoped reads/writes and process-inspection denial — `process-fork`/`process-exec` are deliberately allowed, since a descendant inherits the same Seatbelt domain; outbound network is allowed only when granted |
 
 A network grant changes only egress. It never removes the filesystem, process or resource sandbox. Linux no longer needs a separately installed launcher, unprivileged user namespaces or sysctl changes; `/usr/bin/perl` applies Landlock/seccomp to itself and then `exec`s Node.
 
@@ -316,7 +316,7 @@ It is **OFF by default** because auto-detecting usable cgroup/systemd support ac
 }
 ```
 
-Setting `sandbox.cpuQuotaPercent` (default `0` = off) adds a **per-plugin CPU quota** — `CPUQuota=N%` of *one* core, so `100` is a full core and `50` is half — inside the **same** systemd scope, so it only takes effect together with `useCgroupMemoryCap` and needs a host whose `cpu` controller is delegated to the user cgroup (true on bare metal and Proxmox LXC, not on ephemeral CI runners). The probe validates the exact memory+CPU scope before activating.
+Setting `sandbox.cpuQuotaPercent` (default `0` = off) adds a **per-plugin CPU quota** — `CPUQuota=N%` of *one* core, so `100` is a full core and `50` is half — inside the **same** systemd scope, so it only takes effect together with `useCgroupMemoryCap` and needs a host whose `cpu` controller is delegated to the user cgroup (true on bare metal and Proxmox LXC, not on ephemeral CI runners). The probe validates the exact memory+CPU scope before activating. (On **Windows** the same knob installs the Job Object CPU-rate cap instead — see below.)
 
 (Add the `sandbox` block to `backend/wordjs-config.json`.) No root is required — `systemd-run --user --scope` runs `node` as a **direct child** of `systemd-run`, inheriting the IPC fd. Even when the flag is set, WordJS runs a **probe first** (validates spawn + IPC round-trip + clean teardown on this host) and only activates the cap if the probe passes; any failure falls back cleanly to the Linux `RLIMIT_AS` + RSS-poll path.
 
@@ -342,11 +342,11 @@ If the flag is set but the probe fails (e.g. "Failed to connect to bus"), the lo
 [Sandbox] sandbox.useCgroupMemoryCap is set but the cgroup probe failed (no usable --user scope) — falling back to the RSS poll.
 ```
 
-> On **Windows** and **macOS** there is no cgroup option. On **Windows** a preventive cap now ships as a **Job Object** (`ProcessMemoryLimit` = 768 MB, default-on, probe-gated, pure-JS via PowerShell P/Invoke; opt out with `sandbox.useJobObjectMemoryCap=false`), with the reactive RSS poll as a backstop. On **macOS** the reactive RSS poll provides the resident cap, and process separation provides crash containment either way.
+> On **Windows** and **macOS** there is no cgroup option. On **Windows** a preventive cap now ships as a **Job Object** (`ProcessMemoryLimit` = 768 MB, default-on, probe-gated, pure-JS via PowerShell P/Invoke; opt out with `sandbox.useJobObjectMemoryCap=false`), with the reactive RSS poll as a backstop. That same Job Object can also carry a **CPU-rate** cap, but that one is **opt-in** and driven by the very same `sandbox.cpuQuotaPercent` knob as the Linux quota (default `0` = off). On **macOS** the reactive RSS poll provides the resident cap, and process separation provides crash containment either way.
 
 ### `config.sandbox.cpuBurstSeconds` — reactive CPU watchdog (default-on, no cgroup needed)
 
-`cpuQuotaPercent` above is *preventive* but needs systemd, a delegated `cpu` controller and two opt-ins. On every path that has none of that — a plain Linux launch, macOS, a host whose cgroup probe failed — a **default-on reactive watchdog** is the CPU bound instead. The same host-side poll that reads the child's rss also reads its cumulative CPU time, and a child that holds **≥ 95% of one core for `cpuBurstSeconds` seconds with no quiet tick** is `SIGKILL`ed, with the reason on the plugin's health surface:
+`cpuQuotaPercent` above is *preventive*, but on Linux it needs systemd, a delegated `cpu` controller and two opt-ins, and on Windows — where the same knob drives the Job Object rate cap — it is off at `0` by default. On every path where no preventive cap is actually installed — Windows without `cpuQuotaPercent`, a plain Linux launch, macOS, a host whose cgroup probe failed — a **default-on reactive watchdog** is the CPU bound instead. The same host-side poll that reads the child's rss also reads its cumulative CPU time, and a child that holds **≥ 95% of one core for `cpuBurstSeconds` seconds with no quiet tick** is `SIGKILL`ed, with the reason on the plugin's health surface:
 
 ```
 [Isolate my-plugin] killed: child cpu over budget (>=95% of one core sustained for 60s).
@@ -360,7 +360,7 @@ If the flag is set but the probe fails (e.g. "Failed to connect to bus"), the lo
 }
 ```
 
-Default `60`; `0` disables it. The window is a full minute on purpose: legitimate plugin work is bursty (an import, a thumbnail batch, a sitemap rebuild all peg a core for seconds) and a false positive kills a *working* plugin, so a single tick below the threshold resets the window. Raise it if your plugins do long CPU-bound batches; lower it only if you would rather kill honest work than wait a minute. It is **not** applied on Windows (the Job Object CPU *rate* cap there is preventive and already default-on) nor inside the cgroup scope (there `child.pid` is `systemd-run`, not the plugin — set `cpuQuotaPercent` for a preventive cap in that mode). Being reactive, it bounds a burn rather than preventing one; `cpuQuotaPercent` remains the real ceiling where you can run scopes.
+Default `60`; `0` disables it. The window is a full minute on purpose: legitimate plugin work is bursty (an import, a thumbnail batch, a sitemap rebuild all peg a core for seconds) and a false positive kills a *working* plugin, so a single tick below the threshold resets the window. Raise it if your plugins do long CPU-bound batches; lower it only if you would rather kill honest work than wait a minute. It samples Linux `/proc/<pid>/stat`, macOS `ps -o cputime=` and, on Windows, the `CPU Time` column of `tasklist /V`, and stands down only where a preventive cap **is** installed — Windows with `cpuQuotaPercent > 0` (Job Object rate control) or the cgroup scope with `cpuQuotaPercent > 0` (`CPUQuota`). **The cgroup scope with no quota is the one configuration left with no CPU bound at all**: there `child.pid` is `systemd-run`, not the plugin (exactly as for the RSS poll), so set `cpuQuotaPercent` — the server warns once at launch if you do not. Being reactive, the watchdog bounds a burn rather than preventing one; `cpuQuotaPercent` remains the real ceiling wherever you can install it.
 
 ### `config.sandbox.addressSpaceCapMb` — RLIMIT_AS override (Linux; probe-certified POSIX only)
 

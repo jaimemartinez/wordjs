@@ -94,13 +94,16 @@ memory caps outside systemd Linux and Windows, and the absence of an independent
   (`--max-old-space-size`), an opt-in **preventive cgroup `MemoryMax`** per child on systemd Linux
   (`systemd-run --user --scope`, probe-gated), an opt-in **preventive per-plugin CPU quota** on
   systemd Linux (`sandbox.cpuQuotaPercent` → `CPUQuota` in the same cgroup scope, probe-gated), a
-  **default-on reactive per-plugin CPU watchdog** everywhere the kernel gives no preventive CPU cap
+  **default-on reactive per-plugin CPU watchdog** everywhere no preventive CPU cap is actually installed
   (`sandbox.cpuBurstSeconds` — 60 s by default, `0` disables: a child holding **≥ 95% of one core**
   for that long without a single quiet tick is `SIGKILL`ed and the reason parked on its health
-  record; sampled from Linux `/proc/<pid>/stat` and macOS `ps`, and deliberately not wired on
-  Windows, where the Job Object CPU-rate cap below is preventive and default-on, nor for
-  cgroup-managed children, where `sandbox.cpuQuotaPercent` is the operator's preventive ceiling), a
-  **default-on preventive Windows Job Object** cap
+  record; sampled from Linux `/proc/<pid>/stat`, macOS `ps -o cputime=` and Windows `tasklist /V`, and
+  standing down only where a preventive cap IS installed — Windows with `sandbox.cpuQuotaPercent` > 0
+  (Job Object rate control) or cgroup mode with the same knob set; cgroup mode **without** a quota is
+  the one configuration left with no CPU bound at all, because the child the host can see there is
+  `systemd-run` rather than the node process, and the server warns once at launch), an **opt-in
+  preventive Windows Job Object CPU-rate cap** (`sandbox.cpuQuotaPercent`, default `0` = off — the
+  same knob as the Linux quota), a **default-on preventive Windows Job Object** memory cap
   (pure-JS PowerShell P/Invoke, probe-gated), a host-side **RSS poll** elsewhere / as a backstop
   (Linux `/proc`, Windows `tasklist`, macOS `ps` → `SIGKILL`) and a loose Linux `RLIMIT_AS` backstop,
   per-child bridge-call rate + message-rate caps, RPC timeouts with wedged-child recycling, bounded
@@ -127,7 +130,9 @@ memory caps outside systemd Linux and Windows, and the absence of an independent
   macOS**; there the reactive poll + process separation apply.
 - The syscall/process surface is reduced by the native kernel: Linux always installs a Landlock domain
   and a seccomp policy that denies process creation, anonymous executable images and namespace/kernel-control paths while retaining thread creation; Windows prohibits child-process creation in the AppContainer token and Job;
-  macOS denies fork/exec through Seatbelt. The mechanisms differ, but the authority contract is common.
+  macOS denies process inspection through Seatbelt while deliberately allowing `process-fork`/`process-exec`,
+  so a descendant simply inherits the same Seatbelt domain. The mechanisms differ, but the authority
+  contract is common.
 - The model has had several red-team passes (ten rounds) plus the OS-isolation pivot; it has
   **not had an independent third-party audit**.
 

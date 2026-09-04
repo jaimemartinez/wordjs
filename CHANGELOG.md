@@ -23,8 +23,12 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 - **A runaway isolated plugin is killed.** The sandbox's memory poll now also samples CPU time: a
   child that stays at or above 95% of one core for `sandbox.cpuBurstSeconds` seconds (default 60;
   `0` disables the check) is sent SIGKILL and its health record says why. Linux reads
-  `/proc/<pid>/stat`, macOS uses `ps`; Windows AppContainer and cgroup-managed children are left to
-  their own limits.
+  `/proc/<pid>/stat`, macOS uses `ps`, Windows reads the CPU-time column of `tasklist /V` (sampled
+  every 30 s, so a Windows kill lands within about one and a half windows). The watchdog stands down
+  only where a preventive cap is actually installed — `sandbox.cpuQuotaPercent` on Windows (Job
+  Object rate control) or inside the Linux cgroup scope; that quota stays opt-in, and a Linux cgroup
+  scope enabled without it is the one configuration the watchdog cannot sample (the server warns at
+  launch).
 - **A plugin's shipped `node_modules` are scanned before load.** The pre-load AST scanner used to
   stop at the plugin's own sources; it now walks the dependency tree the plugin ships, under bounds
   (4,000 files, 1 MB per file, depth 32). Reaching a bound is itself reported as a finding rather

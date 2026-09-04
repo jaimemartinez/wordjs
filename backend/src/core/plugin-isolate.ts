@@ -581,15 +581,25 @@ const RSS_BUDGET_BYTES = 768 * 1024 * 1024;
 const FD_CAP = 4096;
 const PIDS_MAX = 512;
 
-// --- REACTIVE per-plugin CPU watchdog (default-ON wherever the kernel gives us no preventive CPU cap) -
-// The PREVENTIVE CPU caps are partial. Linux has one only as `CPUQuota=` inside the systemd scope, which
-// is opt-in TWICE (sandbox.useCgroupMemoryCap AND sandbox.cpuQuotaPercent); Windows has a default-on Job
-// Object CPU RATE cap. Everywhere else — a plain Linux launch, macOS, any host whose cgroup probe failed —
-// a plugin could peg a core forever and nothing stopped it. That was the resource residual written down in
-// documentation/security.md §4 ("by default a plugin can still burn CPU"), and this closes it: the SAME
-// host-side poll that already reads the child's rss also reads its CUMULATIVE CPU time, and a child that
-// holds >= CPU_BURN_RATIO of ONE core for sandbox.cpuBurstSeconds without a single quiet tick is SIGKILLed
-// down the same path as an rss overage.
+// --- REACTIVE per-plugin CPU watchdog (default-ON wherever no PREVENTIVE CPU cap is actually installed) -
+// BOTH PREVENTIVE CPU CAPS ARE OPT-IN, AND OFF BY DEFAULT ON EVERY PLATFORM. There are exactly two of
+// them and ONE config knob (sandbox.cpuQuotaPercent, default 0) drives both:
+//   · Linux, cgroup mode — `CPUQuota=` inside the systemd scope. cgroupResourceProps() pushes it ONLY
+//     when the percent is > 0, so cgroup mode with the knob at 0 is a scope with a memory cap and no CPU
+//     cap at all.
+//   · Windows, AppContainer relay — JOBOBJECT_CPU_RATE_CONTROL_INFORMATION on the contained child's Job
+//     Object, installed by the relay only `if (cpu > 0 && cpu < 100)` (core/sandbox-windows.ts,
+//     buildRelayScript) from that SAME knob. The non-AppContainer Windows launch has NO CPU cap on any
+//     setting: assignProcessToJobObject below sets ProcessMemoryLimit and nothing else (buildJobCapScript),
+//     and sandbox-windows' richer applyWindowsJobCaps — which does carry a CPU rate cap — is not wired
+//     into this launch path.
+// So a stock install has no preventive CPU bound ANYWHERE, Windows included. That is the resource residual
+// written down in documentation/security.md §4 ("by default a plugin can still burn CPU"), and this closes
+// it: the SAME host-side poll that already reads the child's rss also reads its CUMULATIVE CPU time, and a
+// child that holds >= CPU_BURN_RATIO of ONE core for sandbox.cpuBurstSeconds without a single quiet tick
+// is SIGKILLed down the same path as an rss overage. It runs on plain Linux (/proc/<pid>/stat), macOS
+// (`ps -o cputime=`) and Windows (`tasklist /V`), and stands down only where preventiveCpuCapActive()
+// says the kernel is already holding a ceiling for that particular child.
 //
 // WHY A SUSTAINED WINDOW AND NOT AN INSTANT THRESHOLD. Legitimate plugin work IS bursty — an import, a
 // thumbnail batch, a sitemap rebuild each peg a core for seconds. A one-tick trigger would kill honest
@@ -598,9 +608,26 @@ const PIDS_MAX = 512;
 //
 // WHAT IT IS NOT. It is REACTIVE: a burn is bounded, never prevented, and a plugin that alternates 59 s of
 // burn with one idle tick is out of scope BY DESIGN (the alternative is killing honest bursty work). An
-// operator who wants a real ceiling still sets cpuQuotaPercent (Linux) or leaves the Windows rate cap on.
+// operator who wants a real ceiling sets cpuQuotaPercent — which now buys a kernel cap on Linux cgroup
+// mode AND on the Windows AppContainer path, and buys nothing anywhere else.
 const CPU_BURN_RATIO = 0.95;            // >= 95% of ONE core makes a tick count as "burning"
 const CPU_BURST_SECONDS_DEFAULT = 60;   // sandbox.cpuBurstSeconds default; 0 disables the watchdog
+// WINDOWS ONLY: the shortest interval that may separate two readings fed to the watchdog.
+//
+// `tasklist`'s CPU Time column is H:MM:SS — ONE SECOND of resolution — so Δcpu across a short tick is
+// quantised and the ratio is not. Measured on the development host (a node child spinning on
+// Math.sqrt in a `while (true)`, sampled once a second for 35 s): at 1 s spacing the ratios read
+// 1.06/0.99/1.01/… with a bare 0.000 in the middle of an unbroken burn, and at 10 s spacing one of the
+// three ratios read 0.900. Either would drop below CPU_BURN_RATIO inside a real burn and RESET the
+// window, giving a watchdog that can never fire. At 30 s the same burn read 0.968, and the arithmetic
+// agrees: the worst case is (Δwall − 1 s)/Δwall = 0.967 > 0.95. So Windows samples are spaced at least
+// this far apart, which costs detection latency (a 60 s window needs three 30 s samples ⇒ a kill at
+// ~90 s) and raises the EFFECTIVE Windows threshold from 95% to ~96.7% of a core. Both are the correct
+// side to err on for a watchdog whose false positive kills a working plugin.
+const WIN_CPU_SAMPLE_MIN_MS = 30_000;
+// Latch for the one residual combination (cgroup mode with no CPUQuota) — warned ONCE per host process,
+// never per tick. See where it is set, at the launch that discovers it.
+let cgroupNoCpuQuotaWarned = false;
 
 // One observation. `at` is the wall clock (ms) at which the tick that produced it ENDED; `ratio` is
 // Δcpu/Δwall across that tick (1 = one core saturated, >1 is possible for a multi-threaded child).
@@ -654,6 +681,24 @@ function parsePsCpuTime(raw: string): number {
         secs = secs * 60 + Number(p);
     }
     return days * 86400 + secs;
+}
+
+/**
+ * The CPU Time COLUMN of `tasklist /V /FO CSV` -> seconds, with the SAME -1 contract as parsePsCpuTime
+ * (an unparsed tick is SKIPPED, never faked to 0 — a fake 0 reads as "the counter went backwards" and
+ * silently resets a window a real burn had already filled).
+ *
+ * The column is H:MM:SS with UNBOUNDED hours: a child that has burned 26 hours prints "26:00:01", not
+ * "2:00:01" and not a day field. That is a strict subset of what parsePsCpuTime already accepts, so the
+ * arithmetic is reused rather than written a second time. The SHAPE is checked first because this column
+ * is not always a time: tasklist prints localized text for a process it cannot query ("N/D" on the
+ * Spanish host this was measured on, "N/A" on an English one), and those must land on -1, never on a
+ * number. Everything else about the row is read by COLUMN POSITION for the same reason — see the poll.
+ */
+function parseTasklistCpuTime(raw: string): number {
+    const s = String(raw || '').trim().replace(/^"|"$/g, '').trim();
+    if (!/^\d{1,6}:\d{2}:\d{2}$/.test(s)) return -1;
+    return parsePsCpuTime(s);
 }
 
 // USER_HZ for /proc/<pid>/stat's utime+stime, read ONCE from the host. It is a build-time constant of the
@@ -714,6 +759,51 @@ function cpuBurstWindowMs(): number {
         if (Number.isFinite(v) && v >= 0) secs = v;
     } catch { /* config unavailable => default window, watchdog ON */ }
     return secs > 0 ? Math.floor(secs * 1000) : 0;
+}
+
+/**
+ * sandbox.cpuQuotaPercent as a number, 0 when it is unset or config cannot be read. FAIL-CLOSED in the
+ * same direction as cpuBurstWindowMs: "config unavailable" must resolve to NO preventive cap assumed,
+ * because assuming one is what turns the reactive watchdog off.
+ */
+function configuredCpuQuotaPercent(): number {
+    try {
+        const s = require('../config/app').sandbox;
+        const v = Number(s && s.cpuQuotaPercent);
+        return Number.isFinite(v) && v > 0 ? v : 0;
+    } catch { return 0; }
+}
+
+/**
+ * IS A PREVENTIVE CPU CAP ACTUALLY INSTALLED FOR A CHILD LAUNCHED LIKE THIS? — the ONE predicate that
+ * stands the reactive watchdog down, kept PURE so its truth table can be pinned on every host (the
+ * combinations that matter cannot all exist on any single machine).
+ *
+ * It answers "was a cap APPLIED", not "was one requested", and every input is a fact the launch already
+ * knows:
+ *   · platform      — process.platform at the launch site.
+ *   · appContainer  — `!!acLaunch`: this child came from the Windows AppContainer relay, the only Windows
+ *                     path that installs JOBOBJECT_CPU_RATE_CONTROL_INFORMATION (sandbox-windows.ts,
+ *                     buildRelayScript). The plain-fork Windows path gets assignProcessToJobObject, which
+ *                     sets ProcessMemoryLimit and NO CPU rate — so a Windows child that never went
+ *                     through the relay has no CPU cap on any setting.
+ *   · cgroupOk      — probeCgroupCap() succeeded, i.e. this child really runs inside a systemd --user
+ *                     scope built from cgroupResourceProps(), which carries CPUQuota exactly when the
+ *                     quota is > 0.
+ *   · quotaPercent  — sandbox.cpuQuotaPercent, the single knob behind BOTH caps. 0 (the default) means
+ *                     neither cap exists, whatever the platform.
+ *
+ * The `< 100` on Windows is not a style choice: the relay's Job Object code is literally
+ * `if (cpu > 0 && cpu < 100)`, so a host configured at 100 (or above) gets NO rate control installed at
+ * all and must keep the reactive watchdog. Linux has no such bound — CPUQuota=200% is a legal two-core
+ * ceiling — so the same number means different things on the two platforms and this is where that lives.
+ */
+function preventiveCpuCapActive(launch: { platform: string; appContainer: boolean; cgroupOk: boolean; quotaPercent: number }): boolean {
+    const quota = Number(launch && launch.quotaPercent);
+    if (!Number.isFinite(quota) || quota <= 0) return false;      // the knob is the ONLY source of either cap
+    if (launch.platform === 'win32') return !!launch.appContainer && quota < 100;
+    if (launch.platform === 'linux') return !!launch.cgroupOk;    // CPUQuota rides in the scope, or nowhere
+    return false;                                                 // macOS has no preventive CPU cap at all
 }
 // The cgroup-scope resource caps, built ONCE so probeCgroupCap and the real launch apply the IDENTICAL
 // set. A mismatch is exactly what broke the first CPU-quota attempt (#192): the probe validated a
@@ -1843,18 +1933,48 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
             }
         };
         // REACTIVE CPU watchdog (see CPU_BURN_RATIO above). It rides the SAME poll as the rss reading, so
-        // it costs one extra /proc read on Linux and NOTHING on macOS (a single `ps` returns both columns).
+        // it costs one extra /proc read on Linux, NOTHING on macOS (a single `ps` returns both columns) and
+        // NOTHING measurable on Windows (`/V` widens the tasklist row this poll already spawns: 10 calls
+        // each on the development host averaged 121.4 ms without it and 121.6 ms with it).
         //
-        // WHERE IT IS DELIBERATELY NOT WIRED:
-        //   • win32 — the Job Object CPU RATE cap there is PREVENTIVE and default-on, so a reactive killer
-        //     would only add spawns; and on the AppContainer path `child.pid` is the PowerShell relay, so
-        //     there is no contained pid to sample and the contained child already carries a kernel rate cap.
-        //   • cgroup mode — `child.pid` is systemd-run, not the node child, exactly as for the RSS poll.
-        //     An operator already running scopes gets the PREVENTIVE cap by setting sandbox.cpuQuotaPercent;
-        //     leaving it at 0 there is a documented opt-out, not a silent gap.
-        // Both exclusions are expressed by WHERE the sampling calls live (inside the two poll branches
-        // below), not by a flag — a flag would drift from the branch that actually reads the pid.
+        // WHERE IT STANDS DOWN — and the rule is now exactly one thing: a PREVENTIVE cap is really
+        // installed for THIS child. preventiveCpuCapActive() decides that from the launch's own facts, and
+        // it is FALSE on a stock install everywhere, because sandbox.cpuQuotaPercent defaults to 0.
+        //   • win32 — SAMPLED, via `tasklist /V` on the poll below. The old rule claimed a "default-on"
+        //     Job Object CPU rate cap; there is no such thing. The rate cap exists only on the
+        //     AppContainer path and only when 0 < cpuQuotaPercent < 100, and the non-AppContainer Job
+        //     Object carries a memory limit alone. A stock Windows host had NO CPU bound whatsoever.
+        //   • Linux without cgroup mode, macOS — SAMPLED, unchanged (/proc, ps).
+        //   • cgroup mode — the one place still not sampled, because `child.pid` is systemd-run rather
+        //     than the node grandchild, exactly as for the RSS poll. WITH a quota that is fine (CPUQuota
+        //     is the kernel ceiling); WITHOUT one the child has no CPU bound at all, so that combination
+        //     warns once, out loud, instead of being counted as covered.
         const cpuWindowMs = cpuBurstWindowMs();
+        // Not a const: the AppContainer relay's rate cap is BEST-EFFORT (see the stderr watch below), so
+        // "capped" is a claim this child can lose while it runs.
+        let preventiveCpuCap = preventiveCpuCapActive({
+            platform: process.platform,
+            appContainer: !!acLaunch,
+            cgroupOk,
+            quotaPercent: configuredCpuQuotaPercent(),
+        });
+        if (cgroupOk && !preventiveCpuCap && !cgroupNoCpuQuotaWarned) {
+            cgroupNoCpuQuotaWarned = true;
+            console.warn('[Sandbox] cgroup mode is ON but sandbox.cpuQuotaPercent is 0: isolated plugins have NO CPU bound on this host. The preventive CPUQuota is not in the scope, and the reactive CPU watchdog cannot cover it either (under a --scope, child.pid is systemd-run, not the plugin). Set sandbox.cpuQuotaPercent to install the preventive cap.');
+        }
+        // The relay installs the rate cap best-effort: SetInformationJobObject failing there prints
+        // `WJSAC WARN setcpurate <gle>` on the relay's stderr and the contained child runs on UNCAPPED.
+        // Watch for that line and hand the child back to the reactive watchdog — a cap that reports
+        // success and binds nothing is the precise failure the pollPid note above refuses to accept.
+        if (preventiveCpuCap && acLaunch && child.stderr) {
+            try {
+                child.stderr.on('data', (d: any) => {
+                    if (!preventiveCpuCap || !/WJSAC WARN setcpurate/.test(String(d))) return;
+                    preventiveCpuCap = false;
+                    console.warn(`[Isolate ${logSafe(slug)}] the AppContainer relay could not install the Job Object CPU rate cap — the reactive CPU watchdog takes over for this child.`);
+                });
+            } catch { /* no stderr to watch ⇒ the claim stands, as it did before */ }
+        }
         const cpuSamples: CpuSample[] = [];
         let lastCpu: { at: number; seconds: number } | null = null;
         let cpuKilled = false;
@@ -1909,6 +2029,10 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
             // indirection to unwind there and `pollPid === child.pid`.
             let busy = false;
             let tick = 0;
+            // win32 only: when the last reading was FED to the CPU watchdog. Readings are spaced at least
+            // WIN_CPU_SAMPLE_MIN_MS apart because tasklist's CPU Time column has 1 s resolution (see that
+            // constant for the measurement). 0 = none yet, so the first tick establishes the baseline.
+            let lastWinCpuAt = 0;
             // macOS only: has the two-column `ps` been proven to work on this host? The rss column is the
             // ENFORCEMENT path here (macOS has no preventive resident cap at all), and the CPU watchdog
             // added a second `-o cputime=` to that very command. If some macOS build rejected the keyword,
@@ -1920,16 +2044,22 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
             let psTwoColumn = true;
             rssPoll = setInterval(() => {
                 if (busy || !pollPid) return;
-                // Once the kernel Job Object cap is confirmed (win32), enforcement is preventive and
-                // this poll is telemetry only — spawn the query 1 tick in 10 instead of every tick
+                // Once the kernel Job Object cap is confirmed (win32), RESIDENT enforcement is preventive
+                // and this poll is telemetry only — spawn the query 1 tick in 10 instead of every tick
                 // (with 5 plugins the per-second tasklist spawns cost ~25% of a core at idle). Until
                 // that confirmation (and always on macOS) the poll stays the enforcement backstop.
+                // That downshift is safe for the CPU watchdog too: 1 tick in 10 at 1000 ms is one row
+                // per 10 s, three times the rate the Windows sampler feeds at (WIN_CPU_SAMPLE_MIN_MS).
                 if (jobCapApplied && (tick++ % 10) !== 0) return;
                 busy = true;
                 let proc: any;
                 try {
                     proc = (process.platform === 'win32')
-                        ? spawn('tasklist', ['/FI', `PID eq ${pollPid}`, '/NH', '/FO', 'CSV'], { windowsHide: true })
+                        // `/V` widens the row with Status, User Name, CPU Time and Window Title. It is
+                        // what makes the CPU watchdog possible here, and it is free: 10 calls each on the
+                        // development host averaged 121.4 ms plain and 121.6 ms verbose, so there is no
+                        // reason to keep two query shapes alive.
+                        ? spawn('tasklist', ['/V', '/FI', `PID eq ${pollPid}`, '/NH', '/FO', 'CSV'], { windowsHide: true })
                         // macOS: ONE ps returns BOTH columns, so the CPU watchdog adds no extra spawn to a
                         // poll that already costs one. Two separate `-o` flags rather than `-o rss=,cputime=`
                         // because in BSD ps an `=` header swallows the rest of its argument, which would
@@ -1953,14 +2083,37 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
                         console.warn(`[Isolate ${logSafe(slug)}] this host's ps rejected '-o cputime=' — falling back to the rss-only query; the reactive CPU watchdog is OFF for this child (the resident cap is unaffected).`);
                     }
                     try {
+                        const now = Date.now();
                         let rssBytes = -1;
                         if (process.platform === 'win32') {
-                            // CSV row: …,"<mem> KB" — locale-formatted KiB (e.g. "56.724 KB" / "56,724 K").
-                            // Take the LAST quoted field, strip ALL non-digits (separators + unit) -> KiB.
+                            // CSV row read by COLUMN POSITION, never by header text: `/NH` removes the
+                            // headers and they are LOCALIZED anyway (this was developed on a Spanish
+                            // host). With `/V` the columns are
+                            //   0 Image Name  1 PID  2 Session Name  3 Session#  4 Mem Usage
+                            //   5 Status      6 User Name           7 CPU Time  8 Window Title
+                            // and index 4 is Mem Usage in BOTH shapes, because it is also the last column
+                            // of the non-verbose row.
                             const fields = out.match(/"[^"]*"/g);
-                            if (fields && fields.length) {
-                                const digits = fields[fields.length - 1].replace(/\D/g, "");
+                            if (fields && fields.length >= 5) {
+                                // Mem Usage is locale-formatted KiB ("56.724 KB" / "56,724 K"): strip ALL
+                                // non-digits (separators + unit). Index 4 and NOT "the last field", which
+                                // is what this read used to be: under `/V` the last field is the window
+                                // title ("N/D" for a console child), so the old expression would leave
+                                // rssBytes at -1 on every tick and the resident cap would stop enforcing
+                                // while the health surface stayed green — the exact silent-cap failure the
+                                // pollPid note above exists to refuse.
+                                const digits = fields[4].replace(/\D/g, "");
                                 if (digits) rssBytes = parseInt(digits, 10) * 1024;
+                                // CPU Time on the SAME row, so Δcpu and Δwall describe the same interval.
+                                // Fed only when no preventive cap holds this child (a HARD_CAP rate limit
+                                // makes the ratio unreachable anyway) and only every WIN_CPU_SAMPLE_MIN_MS,
+                                // because the column's 1 s resolution makes a shorter delta unusable.
+                                // Unparsed ("N/D", or a row for a pid that just died) => -1 => the tick is
+                                // skipped by noteCpuSeconds; the rss cap above is untouched either way.
+                                if (!preventiveCpuCap && fields.length >= 8 && (now - lastWinCpuAt) >= WIN_CPU_SAMPLE_MIN_MS) {
+                                    lastWinCpuAt = now;
+                                    noteCpuSeconds(parseTasklistCpuTime(fields[7]));
+                                }
                             }
                         } else {
                             const kb = parseInt(out.trim(), 10); // ps -o rss= → KiB (leading column)
@@ -2768,9 +2921,13 @@ module.exports = {
     // burst does not, one quiet tick resets — cannot be asserted by actually pegging a core for a minute
     // in CI. Its input parser ships with it, because a cputime string the watchdog mis-reads is a watchdog
     // that never fires. Pinned by backend/src/tests/plugin-isolate-cpu-watchdog.test.ts on every host.
-    isSustainedCpuBurn, parsePsCpuTime, parseProcStatCpuTicks,
-    CPU_BURN_RATIO, CPU_BURST_SECONDS_DEFAULT,
+    // preventiveCpuCapActive ships with them for the same reason ONE step earlier: it decides whether the
+    // watchdog runs at all, its truth table spans platforms no single host can exercise, and the previous
+    // version of that decision — "Windows has a default-on CPU rate cap" — was simply false.
+    isSustainedCpuBurn, parsePsCpuTime, parseTasklistCpuTime, parseProcStatCpuTicks,
+    CPU_BURN_RATIO, CPU_BURST_SECONDS_DEFAULT, WIN_CPU_SAMPLE_MIN_MS,
     __cpuBurstWindowMs: cpuBurstWindowMs,
+    __preventiveCpuCapActive: preventiveCpuCapActive,
     // The Linux floor choice, exported as a PURE function for the same reason and pinned by
     // backend/src/tests/sandbox-linux-zeroconf-wiring.test.ts on every host — including Windows and
     // macOS boxes, where neither Linux floor can ever exist and the fallback is therefore the ONLY

@@ -453,14 +453,19 @@ the probe validates that exact property set before the mode activates, so enabli
 `cpu` controller is not delegated falls back to the normal launch instead of failing to start. On the
 non-cgroup Linux path the child also gets `RLIMIT_NOFILE=4096` alongside the `RLIMIT_AS` backstop.
 
-Because that quota is opt-in and Linux-only, every path without a preventive CPU cap — a plain Linux
-launch, macOS, a host whose cgroup probe failed — gets a **default-on reactive CPU watchdog** instead.
+Because that quota is opt-in — and the very same knob is what installs the **Windows** Job Object CPU-rate
+cap, likewise off at `0` — every path with no preventive CPU cap actually installed (Windows without
+`cpuQuotaPercent`, a plain Linux launch, macOS, a host whose cgroup probe failed) gets a **default-on
+reactive CPU watchdog** instead.
 The host-side poll that already reads the child's rss also samples its cumulative CPU time, and a child
 holding **≥ 95% of one core for `config.sandbox.cpuBurstSeconds` (default `60`, `0` disables) with no
 quiet tick** is `SIGKILL`ed, with the reason recorded on the plugin's health surface. A single tick below
 the threshold resets the window, so bursty-but-honest work (an import, a thumbnail batch, a sitemap
-rebuild) is untouched. It is skipped on Windows (the Job Object CPU rate cap there is preventive and
-default-on) and inside the cgroup scope (`child.pid` is `systemd-run` there, as for the RSS poll).
+rebuild) is untouched. It samples Linux `/proc/<pid>/stat`, macOS `ps -o cputime=` and, on Windows, the
+`CPU Time` column of `tasklist /V` — sampled every 30 s because of its 1-second resolution, so a Windows kill lands within about one and a half windows; it stands down only where a preventive cap **is** installed — Windows
+with `cpuQuotaPercent > 0` (Job Object rate control) or cgroup mode with the same knob set. **Cgroup mode
+without a quota is the one configuration with no CPU bound at all** (`child.pid` is `systemd-run` there,
+not the plugin, as for the RSS poll); the server warns once at launch naming the knob.
 
 **Network egress:** by default you get **no outbound network**. The raw socket modules
 (`net`/`tls`/`dgram`/`http`/`https`/`http2`/`dns`) are denied, and the globals `fetch` / `WebSocket` /
