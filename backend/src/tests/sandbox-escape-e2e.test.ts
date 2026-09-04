@@ -316,6 +316,19 @@ const GRANTED_INIT = `
     });
     res.json(out);
   });
+
+  // IPC control-frame forge: a network-granted plugin gets require('net'), and the child inherits fd 3
+  // (the IPC channel). new net.Socket({fd:3}).write(<a valid {kind:'ready'} frame>) would push a
+  // host-trusted frame onto the channel WITHOUT calling connect (so the connect egress guard never fires).
+  // Two independent defenses must hold: (a) constructing a socket over an fd is refused; (b) even a frame
+  // that reached the host is dropped because it is not stamped with the per-spawn nonce.
+  wordjs.http.route('get', '/fd-forge', (req, res) => {
+    const out = {};
+    out.channelFd = (() => { try { return process.channel && process.channel.fd; } catch (e) { return 'unreadable'; } })();
+    out.socketFdBlocked = (() => { try { new (require('net').Socket)({ fd: 3 }); return false; } catch (e) { return true; } })();
+    out.streamFdBlocked = (() => { try { new (require('net').Stream)({ fd: 3 }); return false; } catch (e) { return true; } })();
+    res.json(out);
+  });
 `;
 
 let ungrantedDir = '';
@@ -505,5 +518,13 @@ describe('sandbox escape — a FULLY-GRANTED plugin is still contained (real for
         assert.strictEqual(r.fetchDefined, true, 'network grant must expose a (guarded) fetch — proves the grant flipped');
         allTrue(r, ['loopback', 'metadata', 'ipv6Loopback', 'ipv4Mapped', 'rfc1918', 'netConnect']);
         assert.strictEqual(ssrfHits, before, 'the loopback listener must receive ZERO connections from the plugin');
+    });
+
+    test('IPC control-frame forge: a plugin cannot build a socket over the inherited IPC fd (fd 3)', async () => {
+        const r = await probe(GRANTED, 'fd-forge');
+        // process.channel stays readable (trapping it broke Node's own IPC), so the fd is discoverable —
+        // that is expected. What must hold is that no socket can be CONSTRUCTED over it, so the raw-write
+        // path to forge a host-trusted frame does not exist.
+        allTrue(r, ['socketFdBlocked', 'streamFdBlocked']);
     });
 });

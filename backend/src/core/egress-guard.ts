@@ -294,9 +294,22 @@ function wrapModule(mod: any, overrides: Record<string, any>): any {
     });
 }
 
+// A socket constructed over an EXISTING descriptor — `new net.Socket({fd})` / `{handle}` — wraps that fd
+// WITHOUT ever calling connect, so the connect chokepoint below never sees it. The one descriptor the
+// isolate is born holding is fd 3, the IPC control channel; a plugin that wraps it can write raw bytes to
+// the host and FORGE the control frames the host trusts (a synthetic {kind:'ready'} resolves the load
+// before init() finishes). No legitimate socket is built over a caller-supplied fd — plugins connect to
+// host:port — so this is refused at construction wherever a Socket can be obtained. (IPC-FORGE)
+function assertNoFdConstruction(options: any): void {
+    if (options && typeof options === 'object' && (options.fd != null || options.handle != null)) {
+        throw new Error('[sandbox] constructing a socket over an existing fd/handle is not permitted for plugins');
+    }
+}
+
 function guardNet(mod: any): any {
-    // Cover `new net.Socket().connect(...)` too.
+    // Cover `new net.Socket().connect(...)` and `new net.Socket({fd})` too.
     class GuardedSocket extends mod.Socket {
+        constructor(options?: any, ...rest: any[]) { assertNoFdConstruction(options); super(options, ...rest); }
         connect(...args: any[]) { return secureConnect(mod.Socket.prototype.connect, this, args); }
     }
     return wrapModule(mod, {
@@ -333,6 +346,21 @@ export function installChildNetGuard(): void {
             // for the life of the child. origConnect lives only in this closure, unreachable from plugin
             // code. (EG-1)
             Object.defineProperty(proto, 'connect', { value: patched, writable: false, configurable: false, enumerable: desc ? !!desc.enumerable : false });
+        }
+        // Deny fd/handle construction on the REAL net.Socket too. A network-granted plugin may `import('net')`
+        // (the ESM loader bypasses the require proxy and returns the raw module), and `new net.Socket({fd:3})`
+        // over the inherited IPC channel then forges host-trusted control frames — the connect lock above
+        // never fires because no connect happens. Replace the constructor with a subclass that refuses fd/
+        // handle, locked so a plugin cannot swap it back. Verified: http/https still work (they connect by
+        // host:port, never over a caller fd). (IPC-FORGE)
+        const RealSocket = realNet.Socket;
+        if (RealSocket && !(RealSocket as any).__wjFdGuarded) {
+            class FdGuardedSocket extends RealSocket {
+                constructor(options?: any, ...rest: any[]) { assertNoFdConstruction(options); super(options, ...rest); }
+            }
+            (FdGuardedSocket as any).__wjFdGuarded = true;
+            Object.defineProperty(realNet, 'Socket', { value: FdGuardedSocket, writable: false, configurable: false, enumerable: true });
+            try { Object.defineProperty(realNet, 'Stream', { value: FdGuardedSocket, writable: false, configurable: false, enumerable: true }); } catch { /* alias may be read-only */ }
         }
     } catch { /* best-effort; module-level wrappers remain as defense */ }
 }

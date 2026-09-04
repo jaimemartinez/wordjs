@@ -1302,7 +1302,15 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
     // which this list grants. No secret leaked (a host-only marker does not survive), but the guarantee
     // written above did not hold, and reconnaissance is what a plugin does before anything else.
     // The list is SENT rather than restated in the worker: two copies of an allow-list is two policies.
-    const childCfg = JSON.stringify({ slug, entryFile, coreDir: __dirname, network: netGranted, allowedHosts: (netGranted && !egressDenyAll) ? getEgressAllowlistFor(slug) : [], egressDenyAll, fsRead: fsGrant.read, fsWrite: fsGrant.write, storage, envAllow: SAFE_ENV_KEYS });
+    // Per-spawn frame nonce: the host TRUSTS an inbound control frame by its `kind` alone, so the whole
+    // sandbox depends on only the worker being able to write to the IPC channel. It is not — a plugin
+    // inherits fd 3 and can reach it several ways (a socket built over the fd, a path-less fs write stream,
+    // a raw fs.writeSync(3,…)); blocking each is whack-a-mole. Instead, AUTHENTICATE the origin: the worker
+    // stamps every frame it emits with this secret, the host drops any inbound frame that lacks it, and the
+    // worker scrubs the secret out of process.argv before plugin code runs, so a forged frame written
+    // straight to fd 3 by plugin code can never carry it. Closes the frame-forge class regardless of vector.
+    const frameNonce = require('crypto').randomBytes(24).toString('base64url');
+    const childCfg = JSON.stringify({ slug, entryFile, coreDir: __dirname, network: netGranted, allowedHosts: (netGranted && !egressDenyAll) ? getEgressAllowlistFor(slug) : [], egressDenyAll, fsRead: fsGrant.read, fsWrite: fsGrant.write, storage, envAllow: SAFE_ENV_KEYS, frameNonce });
     const HEAP_FLAG = '--max-old-space-size=256'; // caps the JS HEAP; cgroup/rlimit/poll cap TOTAL memory
     // RSS_BUDGET_BYTES (resident budget — cgroup memory.max AND the /proc poll AND the Job-Object cap) is
     // module-scoped now, shared with cgroupResourceProps() so the probe and this launch never disagree.
@@ -1868,6 +1876,16 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
             if (++msgWindowCount > MAX_MSGS_PER_WINDOW) {
                 console.error(`[Isolate ${logSafe(slug)}] terminated: IPC message-rate flood (${logSafe(msgWindowCount)} in ${logSafe(MSG_WINDOW_MS)}ms).`);
                 try { worker.terminate(); } catch { /* already gone */ }
+                return;
+            }
+            // AUTHENTICATE FRAME ORIGIN. The host trusts a frame by its `kind`, so only the worker may
+            // drive these handlers. The worker stamps every frame it sends with the per-spawn nonce (it
+            // scrubs the nonce out of the child's argv before plugin code runs), so a frame a plugin writes
+            // straight to the inherited IPC fd — a forged {kind:'ready'} that resolves the load before
+            // init(), a {kind:'fatal'}, a {kind:'register-route'} — lacks the nonce and is dropped here.
+            // Counted against the rate cap above first, so a forge flood is still bounded. (IPC-FORGE)
+            if (!msg || typeof msg !== 'object' || msg.__wjn !== frameNonce) {
+                console.error(`[Isolate ${logSafe(slug)}] dropped an unauthenticated IPC frame (kind=${logSafe(String(msg && msg.kind))}).`);
                 return;
             }
             if (msg.kind === 'ready') {
