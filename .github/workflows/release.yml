@@ -37,7 +37,13 @@ jobs:
     runs-on: ubuntu-latest
     # GitHub's default job timeout is SIX HOURS: a hung step would look like a slow one
     # forever. See the long note in ci.yml.
-    timeout-minutes: 20
+    #
+    # 45, not 20: this single job now carries the work ci.yml spreads over four (backend 22, frontend
+    # 15, gateway 15, install-channel 10), on top of one workspace install that is registry-bound and
+    # measured at 13 minutes on a cold cache. 20 was sized for "install + backend" and would turn the
+    # frontend suite red for running at all. Every added step also carries its own `timeout-minutes`
+    # below, so a hang is still named and fails fast rather than eating the job budget.
+    timeout-minutes: 45
     permissions:
       contents: read # checkout only — this gate publishes nothing
     steps:
@@ -55,6 +61,7 @@ jobs:
             frontend/package-lock.json
             gateway/package-lock.json
             setup/package-lock.json
+            packages/create-wordjs/package-lock.json
 
       - name: Install all workspaces
         run: npm run ci:all
@@ -90,11 +97,78 @@ jobs:
 
       - name: Backend type check (strict)
         working-directory: backend
+        timeout-minutes: 10
         run: npx tsc --noEmit
 
       - name: Backend tests
         working-directory: backend
+        timeout-minutes: 20
         run: npm test
+
+      # THE GATE TESTED ONE WORKSPACE OUT OF FOUR.
+      #
+      # Everything above this line runs in `backend/`. The bundle this workflow publishes contains the
+      # compiled FRONTEND as well, and the tag also publishes packages/create-wordjs to npm — and
+      # neither had a single test run against it before publication, nor did the gateway that fronts a
+      # split-mode deployment. The audits were extended to all four workspaces after the adm-zip
+      # advisory shipped; the TESTS never were, so "Verify before publishing" answered "are the
+      # backend's tests green and are the dependencies safe?" while the release ZIP and the npm
+      # package were taken on trust.
+      #
+      # That is the same shape as the incident recorded at the top of this file: a gate whose name
+      # claims more coverage than its steps deliver. The four steps below close it by running exactly
+      # what ci.yml runs for those workspaces, with the same prerequisites — a copy, deliberately, for
+      # the reason the header already gives: waiting on a sibling workflow is a race, duplicating it
+      # is deterministic.
+      - name: Generate plugin registries (match the actually checked-out plugins)
+        # PREREQUISITE for the frontend type check, lifted verbatim from ci.yml's Frontend job: the
+        # committed registries can be generated on a machine that has restricted/local-only plugins
+        # (e.g. the gitignored conference-manager), so on a clean checkout tsc fails on a missing
+        # module unless they are regenerated first.
+        working-directory: frontend
+        run: node scripts/generate-plugin-registry.js && node scripts/generate-admin-plugin-registry.js && node scripts/generate-verso-plugin-registry.js
+
+      - name: Frontend type check
+        working-directory: frontend
+        timeout-minutes: 10
+        run: npx tsc --noEmit
+
+      - name: Frontend tests
+        # `npm run test` is `vitest run` (frontend/package.json). It needs backend/node_modules as well
+        # as its own: three security suites execute backend/src/core/sanitize-meta.ts over the same
+        # hostile corpus as the browser sanitizer, and node resolves that module's sanitize-html from
+        # the backend tree. `npm run ci:all` above installs both, WITHOUT --omit=dev, so it is there.
+        working-directory: frontend
+        timeout-minutes: 15
+        run: npm run test
+
+      - name: Gateway tests
+        working-directory: gateway
+        timeout-minutes: 10
+        run: npm test
+
+      - name: Install channel dependencies
+        # packages/create-wordjs is NOT one of the five workspaces `npm run ci:all` installs (root,
+        # backend, frontend, gateway, setup — see scripts/ci-install.mjs), so its tests need their own
+        # install. The audit step above got away without one only because `npm audit` reads the
+        # lockfile.
+        working-directory: packages/create-wordjs
+        run: npm ci || npm install
+
+      - name: Install channel tests
+        # The ZERO-TESTS guard is copied from ci.yml along with the suite, and it is not decoration:
+        # `node --test test/*.test.js` exits 0 when the shell expands the glob to nothing, so a pattern
+        # that matches no files reports a green step having proved nothing — green by absence, on the
+        # package that npm publishes IMMUTABLY minutes later.
+        working-directory: packages/create-wordjs
+        timeout-minutes: 10
+        run: |
+          set -o pipefail
+          npm test 2>&1 | tee test-output.log
+          grep -qE 'tests [1-9]' test-output.log || {
+            echo "::error::create-wordjs reported ZERO tests — the runner matched no files, so this step proved nothing."
+            exit 1
+          }
 
   build-release:
     name: Build & publish compiled bundle
@@ -230,8 +304,24 @@ jobs:
   #
   # Requires the NPM_TOKEN repository secret (an npm automation token with publish rights).
   # GitHub Actions does not allow `secrets` in a job-level `if:`, so the secret is mirrored into
-  # the job env and each step is gated on it — when the secret is not configured the steps SKIP
-  # cleanly instead of failing the release.
+  # the job env and each step is gated on it.
+  #
+  # A MISSING SECRET IS A FAILED RELEASE, NOT A SKIPPED STEP.
+  #
+  # Every step here used to skip cleanly when NPM_TOKEN was absent, and a final step printed a
+  # `::notice::` — so the workflow went GREEN on a version tag having published a GitHub Release
+  # whose own notes tell the reader to run `npx create-wordjs@latest`. That command would have
+  # installed the PREVIOUS version: the install channel, the first command a new user runs, silently
+  # stayed behind while the tag was reported as fully released. "Configured to skip" and "the secret
+  # fell out of the repo settings" produce the identical green.
+  #
+  # So the two cases are now told apart by the trigger, which is the thing that actually distinguishes
+  # them:
+  #   · TAG push  -> publishing is part of the release. No token, no release: the job FAILS with an
+  #                  `::error::` naming the tag that did not reach npm.
+  #   · Manual run -> packaging rehearsal, nothing is being released. Unchanged: `::notice::` and skip.
+  # (Today the job-level `if:` below already restricts this job to tag pushes, so the manual-run branch
+  # is the documented behaviour should that gate ever be widened — not a second live path.)
   npm-publish:
     name: Publish create-wordjs to npm
     needs: build-release
@@ -270,6 +360,16 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      - name: Skipped (NPM_TOKEN not configured)
-        if: env.NPM_TOKEN == ''
-        run: echo "::notice::NPM_TOKEN secret is not configured — skipping the create-wordjs npm publish. Add an npm automation token as the NPM_TOKEN repo secret to enable it."
+      # On a TAG, the install channel is part of the release. Fail loudly: a green run here means
+      # "v2.1.0 is released", and it is not released if `npx create-wordjs@latest` still fetches 2.0.0.
+      - name: Missing NPM_TOKEN on a version tag (fail the release)
+        if: env.NPM_TOKEN == '' && startsWith(github.ref, 'refs/tags/')
+        run: |
+          echo "::error::NPM_TOKEN is not configured, so create-wordjs was NOT published for ${GITHUB_REF_NAME}. The GitHub Release exists but the install channel is stale: 'npx create-wordjs@latest' still installs the PREVIOUS version. Add an npm automation token as the NPM_TOKEN repository secret and re-run this job."
+          exit 1
+
+      # On a manual run nothing is being released — the workflow is packaging for inspection — so a
+      # missing token is a note, not a failure.
+      - name: Skipped (NPM_TOKEN not configured, manual run)
+        if: env.NPM_TOKEN == '' && github.event_name == 'workflow_dispatch'
+        run: echo "::notice::NPM_TOKEN secret is not configured — skipping the create-wordjs npm publish. This is a manual run, so nothing is being released. Add an npm automation token as the NPM_TOKEN repo secret to enable publishing."

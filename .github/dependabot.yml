@@ -1,36 +1,244 @@
 version: 2
+
+# ONE PR PER PACKAGE IS NOT A DEPENDENCY POLICY — IT IS A BACKLOG.
+#
+# This file used to declare nothing but the six npm directories and a weekly interval, which is the
+# default "one pull request per updated package" behaviour. Across six directories that produced 36
+# simultaneously-open PRs, the oldest two and a half months old: every one of them needs the full CI
+# matrix, a human read and a merge, and each merge rebases the other 35. The cost per accepted update
+# is high enough that nobody pays it, so the safe minor/patch updates — the ones that carry the
+# security fixes — sit unmerged next to the majors nobody intends to take this quarter.
+#
+# Two changes fix that, and both are here:
+#
+#  1. GROUPS. Every directory batches its minor+patch updates into ONE pull request, and its majors
+#     into a second one. A week's worth of routine bumps becomes a single review with a single CI run;
+#     the majors arrive together and clearly labelled as the thing that needs a decision.
+#  2. IGNORES for the majors this project has DELIBERATELY deferred. A grouped majors PR is only
+#     useful if it is mergeable; without these, every week's majors PR would contain express 5, whose
+#     migration is its own programme, and would therefore never be merged — which is exactly the
+#     situation the grouping is meant to end. Each ignore names one dependency and blocks ONLY its
+#     major, so minors and patches (including security fixes) still flow through group 1.
+#
+# The ignores are scoped per directory to the directory that actually declares the dependency, and
+# each carries a one-line reason. When a deferral is lifted, delete its entry — that is the whole
+# ceremony.
 updates:
+  # ── root: the release manifest + repo-wide tooling ───────────────────────────────────────────────
   - package-ecosystem: "npm"
     directory: "/"
     schedule:
       interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Europe/Madrid"
     open-pull-requests-limit: 10
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(deps-dev)"
+    groups:
+      minor-and-patch:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+      majors:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - "major"
+
+  # ── backend ──────────────────────────────────────────────────────────────────────────────────────
   - package-ecosystem: "npm"
     directory: "/backend"
     schedule:
       interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Europe/Madrid"
     open-pull-requests-limit: 10
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(deps-dev)"
+    groups:
+      minor-and-patch:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+      majors:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - "major"
+    ignore:
+      # express 5 rewrites routing and error handling — a migration programme of its own, not a bump.
+      - dependency-name: "express"
+        update-types: ["version-update:semver-major"]
+      # uuid is pinned to ^11 deliberately (the v14 line changed the published entrypoints).
+      - dependency-name: "uuid"
+        update-types: ["version-update:semver-major"]
+      # ioredis 6 changes connection/cluster defaults the multi-node coherence tests depend on.
+      - dependency-name: "ioredis"
+        update-types: ["version-update:semver-major"]
+      # rate-limit-redis 5+ requires the express-rate-limit v7 store contract — paired migration.
+      - dependency-name: "rate-limit-redis"
+        update-types: ["version-update:semver-major"]
+      # file-type 17+ is ESM-only; the backend is CommonJS (tsconfig module: commonjs).
+      - dependency-name: "file-type"
+        update-types: ["version-update:semver-major"]
+
+  # ── gateway ──────────────────────────────────────────────────────────────────────────────────────
   - package-ecosystem: "npm"
     directory: "/gateway"
     schedule:
       interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Europe/Madrid"
     open-pull-requests-limit: 10
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(deps-dev)"
+    groups:
+      minor-and-patch:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+      majors:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - "major"
+    ignore:
+      # express 5 rewrites routing and error handling — the gateway migrates with the backend, not before it.
+      - dependency-name: "express"
+        update-types: ["version-update:semver-major"]
+      # uuid is pinned to ^11 deliberately, in lockstep with the backend.
+      - dependency-name: "uuid"
+        update-types: ["version-update:semver-major"]
+
+  # ── frontend ─────────────────────────────────────────────────────────────────────────────────────
   - package-ecosystem: "npm"
     directory: "/frontend"
     schedule:
       interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Europe/Madrid"
     open-pull-requests-limit: 10
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(deps-dev)"
+    groups:
+      minor-and-patch:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+      majors:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - "major"
+    ignore:
+      # TypeScript 6/7 here is a deferred migration (the backend already moved; the frontend follows
+      # with Next's own type tooling, not ahead of it).
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
+      # ESLint 10 flat-config migration for the Next plugin set is deferred (the backend is already on 10).
+      - dependency-name: "eslint"
+        update-types: ["version-update:semver-major"]
+      # react-dropzone 15+ drops the callback API the media uploader is written against.
+      - dependency-name: "react-dropzone"
+        update-types: ["version-update:semver-major"]
+      # @types/node stays on the 20 line on purpose: package.json engines declares node >=20.9.0, so
+      # the frontend must type-check against the OLDEST runtime it claims to support.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+
+  # ── setup (the install wizard) ───────────────────────────────────────────────────────────────────
   - package-ecosystem: "npm"
     directory: "/setup"
     schedule:
       interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Europe/Madrid"
     open-pull-requests-limit: 10
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(deps-dev)"
+    groups:
+      minor-and-patch:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+      majors:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - "major"
+
+  # ── packages/create-wordjs (the install channel published to npm) ────────────────────────────────
   - package-ecosystem: "npm"
     directory: "/packages/create-wordjs"
     schedule:
       interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Europe/Madrid"
     open-pull-requests-limit: 10
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(deps-dev)"
+    groups:
+      minor-and-patch:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+      majors:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - "major"
+
+  # ── GitHub Actions: one PR for the whole workflow fleet ──────────────────────────────────────────
+  # Several actions are pinned to immutable commit SHAs for supply-chain reasons (see release.yml);
+  # Dependabot updates a SHA pin in place and keeps the version comment, so grouping them is safe.
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Europe/Madrid"
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      actions:
+        applies-to: version-updates
+        patterns:
+          - "*"

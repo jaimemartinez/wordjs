@@ -1,5 +1,5 @@
 /**
- * Swagger spec is not vacuous.
+ * Swagger spec is not vacuous, and it does not lie about its version.
  *
  * Regression guard for the "silently empty spec" bug: swagger.ts globbed
  * `./src/routes/*.js` relative to process.cwd(), but every route is a `.ts`
@@ -53,6 +53,44 @@ describe('swagger spec', () => {
             pathCount >= annotatedFiles.length,
             `swagger spec exposes only ${pathCount} paths but ${annotatedFiles.length} route ` +
                 `files are annotated with @swagger — the spec is under-parsed.`,
+        );
+    });
+
+    // THE VERSION THE SPEC ANNOUNCES IS THE PRODUCT'S, NOT A LITERAL.
+    //
+    // It was hardcoded '1.0.0' and stayed there while the product reached 2.1.0: /api-docs told every
+    // integrator, and every client generated from the spec, a version that had been false since the
+    // first release. A hardcoded string cannot drift into being wrong — it is wrong the moment the
+    // product is bumped, and nothing compared the two. This is that comparison.
+    //
+    // Mutation check performed by hand: putting the literal '1.0.0' back into src/config/swagger.ts
+    // fails the first assertion below with "2.1.0 !== 1.0.0".
+    it('announces the product version, read from the release manifest', () => {
+        const rootManifest = require('../../../package.json');
+
+        assert.strictEqual(
+            specs.info.version,
+            rootManifest.version,
+            `swagger spec announces version ${specs.info.version} but the release manifest ` +
+                `(package.json) says ${rootManifest.version} — the spec's version is not derived ` +
+                `from the product's, so it goes stale at the next release.`,
+        );
+    });
+
+    it('announces a real semver version (never the 0.0.0 fallback)', () => {
+        // resolveProductVersion() in src/config/swagger.ts degrades to '0.0.0' rather than throwing
+        // when no manifest can be read. That is the right behaviour for a docs route at request time
+        // and the wrong outcome for a checkout, so the fallback must never be what the suite sees:
+        // it would mean the manifest lookup is broken in exactly the way this test exists to catch.
+        assert.match(
+            String(specs.info.version),
+            /^\d+\.\d+\.\d+/,
+            `swagger spec version ${specs.info.version} is not semver-shaped.`,
+        );
+        assert.notStrictEqual(
+            specs.info.version,
+            '0.0.0',
+            'swagger spec fell back to 0.0.0 — no package.json could be read from src/config/.',
         );
     });
 });
