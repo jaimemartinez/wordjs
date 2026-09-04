@@ -57,7 +57,7 @@ jobs:
             setup/package-lock.json
 
       - name: Install all workspaces
-        run: npm run install:all
+        run: npm run ci:all
 
       # The audit that v1.14.0 shipped past. Same command and threshold as ci.yml, in every workspace
       # ci.yml audits — a HIGH advisory in a production dependency must never reach a release asset.
@@ -124,7 +124,7 @@ jobs:
       # Dev dependencies are needed: make-release.js compiles the frontend (next build),
       # the backend (tsc) and the plugin bundles before zipping.
       - name: Install all workspaces
-        run: npm run install:all
+        run: npm run ci:all
 
       - name: Build compiled release ZIP
         run: npm run bundle-release

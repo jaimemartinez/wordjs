@@ -321,15 +321,14 @@ jobs:
   backend:
     name: Backend (typecheck + test)
     runs-on: ubuntu-latest
-    # 25, not 15. The suite grew a set of tests that BOOT REAL ISOLATED PLUGINS — each forks a child,
-    # installs the guards and drives an escape over the real RPC path (sandbox-fs-surface-sweep,
-    # sandbox-reviewed-builtins-escape, and the process-surface / IPC-frame cases). That is seconds of
-    # wall-clock apiece, and against the real Postgres/MySQL/Redis services this job attaches it pushed
-    # the run past 15 minutes — the last 09-02 run finished under it, the isolate tests added since did
-    # not. It is SLOW, not hung: the same suite completes locally in ~12 min on SQLite, and it was only
-    # this timeout that cancelled it, never a failing assertion. The ceiling still catches a genuine
-    # hang; it just has honest margin over the real duration now, matching the release verify job.
-    timeout-minutes: 25
+    # Back to 15 after the suite was made fast again, rather than left inflated. The run had crossed
+    # 15 min not because a test hung but because `npm test` re-type-checked every file through ts-node
+    # — work `tsc --noEmit` in the step above already does, paid a second time, ~1.2s per file across
+    # ~220 files. The test script now uses ts-node's transpile-only loader (types are still checked, by
+    # tsc, once), which cut the local suite from ~12 to 9 min. Net of the isolate-booting tests this
+    # session added, the suite is now FASTER than the last 09-02 run that passed under this same
+    # ceiling, so 15 holds with margin and still catches a genuine hang.
+    timeout-minutes: 15
     services:
       postgres:
         image: postgres:16
@@ -758,7 +757,7 @@ jobs:
             gateway/package-lock.json
             setup/package-lock.json
       - name: Install all workspaces
-        run: npm run install:all
+        run: npm run ci:all
       - name: Build the compiled release bundle
         run: npm run bundle-release
       - name: Deploy the compiled bundle in every mode (fail the PR if any mode is broken)
