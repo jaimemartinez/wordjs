@@ -50,11 +50,11 @@
   "dependencies": {
     "compression": "^1.8.1",
     "concurrently": "^10.0.3",
-    "helmet": "^8.1.0",
+    "helmet": "^8.3.0",
     "selfsigned": "^5.5.0"
   },
   "devDependencies": {
     "autocannon": "^8.0.0",
-    "puppeteer-core": "^25.5.0"
+    "puppeteer-core": "^25.9.0"
   }
 }
