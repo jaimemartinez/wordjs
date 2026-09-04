@@ -54,6 +54,8 @@ Notifications are stored in the `notifications` table (UUID, `user_id`, `type`, 
 *   `POST /api/v1/notifications/read-all` — mark all read.
 *   `DELETE /api/v1/notifications/:uuid` — delete one.
 
+The three mutating routes sit behind the double-submit CSRF gate like every other cookie-authenticated write: a caller authenticating with the `wordjs_token` cookie must also send `X-CSRF-Token` equal to its `wjs_csrf` cookie (the frontend spreads `csrfHeaders()` from `lib/csrf.ts` into each of them in `NotificationCenter.tsx`), or the request answers **403** with `code: "rest_csrf_token"`. A caller authenticating with `Authorization: Bearer …` is exempt — it carries no ambient cookie to ride — and the `stream` `GET` is a safe method, never gated.
+
 ## Frontend Integration
 
 The frontend connects to the SSE stream at `/api/v1/notifications/stream`. Broadcasts are addressed: a notification with `user_id == 0` goes to all connected clients, otherwise only to clients whose authenticated user matches.

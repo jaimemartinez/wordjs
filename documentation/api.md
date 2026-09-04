@@ -16,8 +16,8 @@ The backend follows a layered architecture inspired by WordPress but implemented
     *   `MigrationGuard`: Validates `Host` header against `siteUrl`.
     *   `MfaComplianceGate`: Mounted on the API prefix (`backend/src/index.ts`); blocks a user who is required to enrol under the admin MFA-by-role policy (once past their grace period) until they complete MFA enrollment.
 4.  **Security Layers:**
-    *   `AST Scanner`: Static analysis (acorn, fail-closed) of plugin code at install time.
-    *   `Process Isolation`: Every plugin marked `"isolated": true` runs in a **separate OS process** (`child_process.fork` of `backend/src/core/plugin-worker.js`, IPC via v8 structured clone) and reaches the host only through the permission-checked `wordjs` capability bridge — a crash/OOM is contained to the child, never the host. There is **no "trusted" tier**: every plugin is sandboxed and the admin grants each capability per-plugin (Android-style, default-deny). Activation is the grant step — for **any** plugin, not just first-party ones: an admin activating a plugin that holds no grant record grants exactly its *declared* capabilities (see §6.3). No plugin is privileged. A `network`-granted plugin's outbound connections are confined to **public IPs only** by `backend/src/core/egress-guard.ts` (loopback / link-local incl. cloud-metadata `169.254.169.254` / RFC1918 / CGNAT / IPv6 ULA are blocked, validated at connect time). Plugin DB tables are scoped to a `wjp_<slug>_` prefix. See `documentation/plugins.md` / `documentation/security.md`.
+    *   `AST Scanner`: Static analysis (acorn, fail-closed) of plugin code at install, at activation and at boot for every active plugin — of the plugin's own source **and**, in a pass of its own, of the dependency tree it ships in `node_modules/` (bounded to 4,000 files, 1 MB per file, depth 32; hitting a bound is itself reported as a finding, and a symlink resolving outside the plugin directory is refused rather than followed).
+    *   `Process Isolation`: Every plugin marked `"isolated": true` runs in a **separate OS process** (`child_process.fork` of `backend/src/core/plugin-worker.js`, IPC via v8 structured clone) and reaches the host only through the permission-checked `wordjs` capability bridge — a crash/OOM is contained to the child, never the host. A child that holds **≥ 95% of one core** for `sandbox.cpuBurstSeconds` seconds without a single quiet tick (default `60`, `0` disables) is SIGKILLed and the reason parked on its health surface — the reactive floor wherever the kernel gives no preventive CPU cap — it is skipped on Windows, where the Job Object CPU *rate* cap is preventive and default-on, and in cgroup mode, where the sampled pid is the systemd-run scope rather than the plugin child; there the preventive ceiling is the opt-in `sandbox.cpuQuotaPercent` (default `0`, i.e. no CPU cap unless the operator sets one). It is also unavailable on a macOS host whose `ps` rejects `-o cputime=`. There is **no "trusted" tier**: every plugin is sandboxed and the admin grants each capability per-plugin (Android-style, default-deny). Activation is the grant step — for **any** plugin, not just first-party ones: an admin activating a plugin that holds no grant record grants exactly its *declared* capabilities (see §6.3). No plugin is privileged. A `network`-granted plugin's outbound connections are confined to **public IPs only** by `backend/src/core/egress-guard.ts` (loopback / link-local incl. cloud-metadata `169.254.169.254` / RFC1918 / CGNAT / IPv6 ULA are blocked, validated at connect time). Plugin DB tables are scoped to a `wjp_<slug>_` prefix. See `documentation/plugins.md` / `documentation/security.md`.
 5.  **Routing:** `backend/src/routes/index.ts` dispatches to controllers.
 6.  **Controller/Handler:** Executes business logic, interacts with Models/DB.
 7.  **Response:** JSON response sent back.
@@ -46,7 +46,7 @@ Authentication is handled via **JWT (JSON Web Tokens)**.
 1.  **Login:** `POST /api/v1/auth/login`
     *   Input: `username` (or `email`), `password`.
     *   Validation: `bcrypt` comparison.
-    *   Output: `{ user }`. The JWT is set as an **HttpOnly cookie** (`wordjs_token`) — it is **not** returned in the JSON body.
+    *   Output: `{ user }`. The JWT is set as an **HttpOnly cookie** (`wordjs_token`) — it is **not** returned in the JSON body. A second, deliberately JS-readable cookie (`wjs_csrf`) is issued alongside it and must be echoed as `X-CSRF-Token` on every later cookie-authenticated write (§2.4).
     *   Lockout: too many failed attempts for an account return `429 rest_account_locked` (per-account login lockout).
 2.  **Token Usage:**
     *   Primary: the `wordjs_token` HttpOnly cookie is sent automatically by the browser.
@@ -83,12 +83,23 @@ Default roles (the built-in `DEFAULT_ROLES` table in `backend/src/core/roles.ts`
 *   **Subscriber:** `read` and `access_admin_panel` only.
 
 ### 2.4 CSRF Protection
-All state-changing requests (`POST`/`PUT`/`PATCH`/`DELETE`) under the API prefix pass through `csrfProtection` (`backend/src/middleware/auth.ts`, mounted globally in `backend/src/index.ts`). It requires a same-origin signal:
+All state-changing requests (`POST`/`PUT`/`PATCH`/`DELETE`) under the API prefix pass through `csrfProtection` (`backend/src/middleware/auth.ts`, mounted globally in `backend/src/index.ts`). It is **two** checks AND-ed together — a same-origin signal *and* a double-submit token — because every accepting branch of the origin logic hands off to `csrfTokenGate` rather than to `next()`: a perfect token never disables the origin check, and a same-origin request never skips the token. Safe methods (`GET`/`HEAD`/`OPTIONS`) reach neither.
+
+**Same-origin signal:**
 
 *   The `Origin` (or, as a fallback, `Referer`) must match the configured site URL / frontend URL or the request host — an **exact** origin comparison, never a prefix match.
 *   Behind the gateway it honors `X-Forwarded-Host` (the gateway pins it to the real client host) when computing the expected origin.
 *   When **both** `Origin` and `Referer` are absent the request is **rejected** (`403 rest_csrf_invalid`, fail-closed) **unless** it carries a real `Authorization: Bearer <token>` (a genuine server-to-server caller that can't be CSRF'd via an ambient cookie). Cookie-only header-less requests are blocked.
-*   Exactly two paths are exempt — `/setup/install` and `/setup/test-db` — because they run before an origin (or any user) exists. The exemption is an **enumerated set** (`CSRF_EXEMPT_PATHS` in `backend/src/middleware/auth.ts`), not the `/setup` subtree: `POST /setup/migrate` survives installation and authenticates raw credentials from the body, so it needs no ambient cookie and stays subject to the same-origin check. The match is made on the sub-path derived from `req.originalUrl`, **not** on `req.path`: `csrfProtection` is mounted *with* the API prefix, and Express strips a mount path from `req.url` before the middleware runs, so a comparison against the full `/api/v1/setup/install` could never be true. Until that was corrected the documented exemption was dead code and a headless installer following this page got a misleading `403 rest_csrf_invalid` on a site with no users.
+*   Exactly two paths skip **both** halves — `/setup/install` and `/setup/test-db` — because they run before an origin (or any user) exists. The exemption is an **enumerated set** (`CSRF_EXEMPT_PATHS` in `backend/src/middleware/auth.ts`), not the `/setup` subtree: `POST /setup/migrate` survives installation and authenticates raw credentials from the body, so it needs no ambient cookie and stays subject to the same-origin check. The match is made on the sub-path derived from `req.originalUrl`, **not** on `req.path`: `csrfProtection` is mounted *with* the API prefix, and Express strips a mount path from `req.url` before the middleware runs, so a comparison against the full `/api/v1/setup/install` could never be true. Until that was corrected the documented exemption was dead code and a headless installer following this page got a misleading `403 rest_csrf_invalid` on a site with no users.
+
+**Double-submit token:**
+
+*   `issueSessionCookie` — the one door every session goes through (login, register, refresh, MFA completion, installer auto-login) — sets the `wordjs_token` session cookie **and** a freshly minted `wjs_csrf` cookie: 32 random bytes base64url (43 characters), carrying the same `Path`, `SameSite` and `Secure` as the session cookie but **not** `HttpOnly`, because the page has to read it. It rotates on every issuance, so a session never inherits a previous authentication's token, and `POST /auth/logout` clears both cookies. The `wjs_csrf` cookie carries no authority on its own — presented without the session cookie it authenticates nothing.
+*   A cookie-authenticated `POST`/`PUT`/`PATCH`/`DELETE` must echo it: an `X-CSRF-Token` header byte-identical to the `wjs_csrf` cookie (constant-time compare, length checked first). A missing header, an absent cookie or a mismatch answers **`403 rest_csrf_token`**. `X-CSRF-Token` is listed in the CORS `Access-Control-Allow-Headers`, or a cross-origin admin could never send it past the preflight.
+*   **Bearer callers are exempt.** A genuine `Authorization: Bearer <token>` request has no ambient cookie to ride, so it needs neither the token nor an `Origin` — the single accepting path for a header-less caller.
+*   **Verify-first.** The gate verifies the session cookie with the same `verifyToken` `authenticate` calls, and lets a cookie that does **not** verify through untouched: a malformed or expired session authenticates nothing, so `authenticate` answers its own `401` (`rest_token_invalid` / `rest_token_expired`) instead of a misleading `403`. The two can therefore only disagree fail-closed — a revoked-but-unexpired cookie still verifies here and stays gated.
+*   **The two sign-in steps are off the gate:** `POST /auth/login` and `POST /auth/mfa` (`CSRF_TOKEN_EXEMPT_PATHS`), because the caller is *obtaining* the session and demanding its token first would be unsatisfiable. The set is **enumerated and exact**, `POST`-only, and matched on the sub-path derived from `req.originalUrl` — not the `/auth/` subtree: `POST /auth/refresh`, `POST /auth/mfa/setup` and even `POST /auth/loginx` all stay gated.
+*   **A session that predates this feature is healed, not bricked.** A still-valid pre-release session is healed by the back-fill: `ensureCsrfCookie` mints a `wjs_csrf` beside it on its next authenticated *safe* request (e.g. `GET /auth/me`), so its next write already has a token to echo. An expired one is not gated at all — the verify-first rule above lets a cookie that does not verify through, and both sign-in steps are off the gate — so re-authentication is reachable without the user clearing cookies by hand. The back-fill never rotates a token that is already present, and it is deliberately not run on the public `optionalAuth` routes, where a shared cache could store the `Set-Cookie` and hand one visitor's token to another.
 
 ---
 
@@ -147,6 +158,8 @@ All errors should follow the structure defined in `backend/src/middleware/errorH
 ### 5.2 Common Error Codes
 *   `rest_not_logged_in` (401)
 *   `rest_forbidden` (403)
+*   `rest_csrf_token` (403) — a cookie-authenticated `POST`/`PUT`/`PATCH`/`DELETE` carried no `X-CSRF-Token` header matching its `wjs_csrf` cookie (missing header, missing cookie, or a mismatch). See §2.4 and the CSRF section of `documentation/security.md`.
+*   `rest_csrf_invalid` (403) — the same-origin half of the same gate refused the request: its `Origin`/`Referer` did not match the site, or both were absent on a cookie-only (non-Bearer) request. See §2.4 and the CSRF section of `documentation/security.md`.
 *   `rest_no_route` (404)
 *   `rest_invalid_param` (400)
 *   `rest_internal_error` (500) — what an error that merely *escaped* renders as. `errorHandler` only echoes a thrower's own `code`/`message` when the error carries an integer `status`, i.e. when this codebase meant a client to read it; anything else (a driver error, most often) gets this generic body plus a `data.errorId` that ties the response to the full server-side log line. Before that, an anonymous request whose `:id` parsed to `NaN` was answered with the raw SQLSTATE and the engine's own wording.
@@ -165,6 +178,7 @@ Two rules in `backend/src/core/query-params.ts` decide what a malformed paramete
 > **Live Documentation Available**
 > The most up-to-date, interactive reference is the **Swagger UI** available at:
 > `http://localhost:4000/api/v1/docs` (Requires Admin Login)
+> The page attaches your session's CSRF token to every call it makes (a `requestInterceptor` that echoes the `wjs_csrf` cookie as `X-CSRF-Token`), so **Try it out** works for mutating endpoints with an admin session; a Bearer token supplied through **Authorize** works too, since Bearer callers are exempt from the token gate (§2.4).
 
 ### 6.1 Core Modules
 - **Authentication**: `/auth` - Login, Register, Session management.
@@ -179,20 +193,20 @@ Two rules in `backend/src/core/query-params.ts` decide what a malformed paramete
 - **Data**: `/export`, `/export/wxr`, `/import`, `/import/wordpress` (WordPress WXR migration — see §6.9), `/backups`, `/db-migration` (engine migration).
 
 ### 6.2.1 Authentication Flow (JWT)
-1. **Login**: `POST /auth/login` -> sets the `wordjs_token` HttpOnly cookie and returns `{ user }`.
+1. **Login**: `POST /auth/login` -> sets the `wordjs_token` HttpOnly cookie plus the JS-readable `wjs_csrf` token cookie (§2.4) and returns `{ user }` — unless the account has MFA enabled, in which case no cookie is issued and the response is `{ mfaRequired: true, mfaToken }`, with `POST /auth/mfa` issuing both cookies instead.
 2. **Authorize**: the cookie is sent automatically; an `Authorization: Bearer <token>` header is also accepted.
-3. **Session**: The JWT expires in **2 hours** (hardcoded, not `.env`-configurable); the `wordjs_token` cookie has a 7-day `maxAge`. Refresh via `POST /auth/refresh`; `POST /auth/logout` clears the cookie and revokes the token (`token_valid_after`).
+3. **Session**: The JWT expires in **2 hours** (hardcoded, not `.env`-configurable); the `wordjs_token` cookie has a 7-day `maxAge`. Refresh via `POST /auth/refresh` (which rotates both cookies); `POST /auth/logout` clears both cookies and revokes the token (`token_valid_after`).
 
 **Auth endpoints** (`backend/src/routes/auth.ts`, base path `/api/v1/auth`):
 
 | Method | Endpoint                    | Auth | Description                                                        |
 | :----- | :-------------------------- | :--- | :----------------------------------------------------------------- |
-| `POST` | `/login`                    | No   | Log in (`username`/`email` + `password`); sets the HttpOnly cookie |
+| `POST` | `/login`                    | No   | Log in (`username`/`email` + `password`); sets the HttpOnly session cookie **and** the `wjs_csrf` token cookie. Off the double-submit gate (§2.4) — it is how the token is obtained |
 | `POST` | `/register`                 | No   | Self-registration; `403 rest_cannot_register` unless the `users_can_register` option is enabled. When email verification is required the account is created **unverified** and **no** session cookie is issued (`201 { user, verificationRequired: true }`); `POST /auth/login` then answers `403 rest_email_unverified` until `/verify-email` is consumed |
 | `GET`  | `/me`                       | Yes  | Current authenticated user                                         |
 | `POST` | `/validate`                 | Yes  | Validate the current token                                         |
 | `POST` | `/refresh`                  | Session | Re-issue the JWT/cookie. A `Bearer wjt_…` caller is refused (`403 rest_session_from_token_forbidden`) — a headless token can never be exchanged for a session cookie |
-| `POST` | `/logout`                   | No   | Clear the cookie and bump `token_valid_after` (revokes all tokens) |
+| `POST` | `/logout`                   | No   | Clear **both** cookies (`wordjs_token` + `wjs_csrf`) and bump `token_valid_after` (revokes all tokens) |
 | `GET`  | `/password-reset-available` | No   | Public probe: whether self-service password reset can work (mail configured + reachable recovery address model) |
 | `POST` | `/forgot-password`          | No   | Body `{ login }` (username or email). **Always returns 200** (anti-enumeration); emails a single-use reset link (30-min TTL; only the SHA-256 of the token is stored). Rate-limited by the auth limiter |
 | `POST` | `/reset-password`           | No   | Body `{ uid, token, password }`. Consumes the single-use token (constant-time hash compare) and revokes all existing sessions; `400 rest_invalid_reset` / `rest_weak_password` on failure |
@@ -200,7 +214,7 @@ Two rules in `backend/src/core/query-params.ts` decide what a malformed paramete
 | `GET`  | `/tokens`                   | Session + `manage_api_tokens` | List the caller's scoped API tokens (metadata only; secrets are never re-shown) |
 | `POST` | `/tokens`                   | Session + `manage_api_tokens` | Mint a scoped API token. Body `{ name?, scopes?, expiresInDays? }`; the raw `wjt_…` secret is returned **once** (`201`). Refusals, in check order: over the active-token cap → `400 rest_token_limit`; `expiresInDays` present but not a positive number → `400 rest_invalid_param`; unknown scopes → `400 rest_invalid_scope`; caller's role is under the MFA-by-role policy but the caller has not enrolled → `403 rest_mfa_required_for_tokens` (refused even **inside** the grace period, because `Bearer wjt_…` tokens are exempt from the `MfaComplianceGate` and a token minted during grace would sidestep the policy for good) |
 | `DELETE` | `/tokens/:id`             | Session + `manage_api_tokens` | Revoke one of the caller's tokens (`404` if not the caller's or already gone) |
-| `POST` | `/mfa`                      | No   | Complete a login that requires a second factor. Body `{ mfaToken, code }` (TOTP or backup code); issues the session cookie on success (own `mfa:` lockout bucket) |
+| `POST` | `/mfa`                      | No   | Complete a login that requires a second factor. Body `{ mfaToken, code }` (TOTP or backup code); issues both cookies on success (own `mfa:` lockout bucket). Off the double-submit gate (§2.4), like `/login`, as the second half of sign-in |
 | `GET`  | `/mfa/status`               | Yes  | Whether MFA is enabled for the caller + remaining backup-code count |
 | `POST` | `/mfa/setup`                | Session | Begin TOTP enrollment: returns a new `secret` + `otpauthUri` (for the QR). Body **must** carry `currentPassword` (`403 rest_bad_current_password`) |
 | `POST` | `/mfa/enable`               | Session | Verify a code against the pending secret, activate MFA, and return backup codes **once**. Body **must** carry `currentPassword` (`403 rest_bad_current_password`) |
@@ -327,7 +341,7 @@ Base path: `/api/v1/users` (`backend/src/routes/users.ts`). `PUT /me` is declare
 
 > **Note:** A full **system-state backup** (code + assets + DB dump as a ZIP) is a separate engine under `/api/v1/backups/*` and `backend/src/core/backup.ts`, distinct from the logical `/export` above. All backup routes are admin-only (`backend/src/routes/backups.ts`): `GET /backups` (list), `POST /backups` (create), `GET /backups/:filename/download`, `POST /backups/:filename/restore`, `DELETE /backups/:filename`.
 
-> **Install token (pre-install setup):** `POST /setup/install` and `POST /setup/test-db` run before the instance is configured (unauthenticated, CSRF-exempt), so they are gated by a **one-time install token** (`backend/src/core/install-token.ts`) — supply it via the `x-install-token` header or an `installToken` body field (constant-time compared; `403` on mismatch). The token is printed to the server console at boot, mirrored to a `0600` file in the data dir, and overridable via the `WORDJS_INSTALL_TOKEN` env var (≥ 16 chars). Both endpoints also early-return `400` once the site is installed, and the on-disk token mirror is cleared after a successful install. `GET /setup/status` is **not** token-gated; `POST /setup/migrate` instead requires admin username/password.
+> **Install token (pre-install setup):** `POST /setup/install` and `POST /setup/test-db` run before the instance is configured (unauthenticated, CSRF-exempt), so they are gated by a **one-time install token** (`backend/src/core/install-token.ts`) — supply it via the `x-install-token` header or an `installToken` body field (constant-time compared; `403` on mismatch). The token is printed to the server console at boot as a ready-to-open link, `<siteUrl>/install#token=<token>` — in the URL **fragment**, which the browser never transmits and the URL spec strips from `Referer`, so it cannot land in access/proxy logs the way a `?token=` query string would. The install page reads the fragment first, still accepts a legacy `?token=` as a compatibility ramp, and scrubs the token out of the address bar either way. The token is also mirrored to a `0600` file in the data dir for headless installs, and overridable via the `WORDJS_INSTALL_TOKEN` env var (≥ 16 chars — a shorter value is ignored and a random token generated instead). Both endpoints also early-return `400` once the site is installed, and the on-disk token mirror is cleared after a successful install. `GET /setup/status` is **not** token-gated; `POST /setup/migrate` instead requires admin username/password.
 
 > **Plugin permissions (default-deny):** `POST /plugins/:slug/permissions` is the admin's source of truth for grants. An undeclared scope has no effect — `hasPermission` requires **both** the manifest declaration **and** the grant. Activating a plugin with no prior grant record pre-grants exactly its manifest-**declared** permissions, persisted only **after** activation + AST-scan succeed (a plugin that fails its scan leaves behind no grant record).
 
@@ -803,6 +817,8 @@ addAction('wp_insert_post', (postId, data) => {
 
 ### 14.4 How to... Fetch Data in React (Admin)
 **CRITICAL:** The auth token is an **HttpOnly cookie** (`wordjs_token`) — it is **not** in `localStorage` and cannot be read from JS. Send it by passing `credentials: 'include'` so the browser attaches the cookie.
+
+A **mutating** cookie-carrying request (`POST`/`PUT`/`PATCH`/`DELETE`) additionally needs the double-submit header, or it is refused with `403 rest_csrf_token` (§2.4): spread `csrfHeaders()` from `frontend/src/lib/csrf.ts` into its headers — the central `api()` client already does, and `applyCsrfHeader(xhr)` is the `XMLHttpRequest` twin (call it **after** `xhr.open()`).
 ```javascript
 const getData = async () => {
     const res = await fetch('/api/v1/plugin/<your-slug>/hello', {

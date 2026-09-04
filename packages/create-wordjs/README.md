@@ -47,7 +47,7 @@ in CI — plus a pure-JS *SQLite (legacy / WASM)* fallback for hosts where the n
 | Option | Description |
 | --- | --- |
 | `--zip <path-or-url>` | Use a local release ZIP (or a direct ZIP URL) instead of querying the GitHub API. Handy offline or when rate-limited. |
-| `--version <tag>` | Install a specific release (e.g. `--version v1.0.0`) instead of the latest. |
+| `--version <tag>` | Install a specific release (e.g. `--version v2.1.0`) instead of the latest. |
 | `--http` | Serve plain HTTP instead of self-signed HTTPS (sets `WORDJS_HTTP=1`). |
 | `--no-start` | Scaffold and install dependencies only — start the server yourself later. |
 | `--yes`, `-y` | Skip the confirmation prompt (required when `upgrade` runs non-interactively). |
@@ -119,7 +119,7 @@ need `openssl` on the PATH. Full details, port matrix and the manual (source-che
 - **GitHub rate limit / offline**: the release lookup uses the unauthenticated GitHub API. If it
   is rate-limited or you're offline, download `wordjs-v*.zip` from the
   [releases page](https://github.com/jaimemartinez/wordjs/releases) and run
-  `npx create-wordjs@latest my-site --zip ./wordjs-v1.0.0.zip`.
+  `npx create-wordjs@latest my-site --zip ./wordjs-v2.1.0.zip`.
 - **Existing directories**: the target directory must not exist (or must be empty) — the tool
   refuses to overwrite anything.
 

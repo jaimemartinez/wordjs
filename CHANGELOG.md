@@ -4,7 +4,7 @@ All notable changes to WordJS are documented here. This project follows
 [Semantic Versioning](https://semver.org/). Each release is published as a pre-compiled bundle
 on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
-## [Unreleased]
+## [2.1.0] - 2026-09-04
 
 ### Security
 
@@ -33,10 +33,11 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   token never reaches server logs, reverse proxies or a `Referer` header. The install page reads the
   fragment first, still accepts the query form for instructions already written down, and scrubs the
   token from the address bar either way.
-- **`'unsafe-eval'` is gone from the production `script-src`** of both the frontend security header
-  and the gateway. The visual editor that needed it no longer exists and the shipped client chunks
-  contain no `eval`; development builds keep the keyword because React's development build requires
-  it. Tests pin the strict production shape.
+- **`'unsafe-eval'` is gone from the production `script-src`** of the frontend security header, the
+  gateway and the backend's own helmet policy (which only ever serves the Swagger UI as HTML). The
+  visual editor that needed it no longer exists and the shipped client chunks contain no `eval`;
+  development builds keep the keyword because React's development build requires it. Tests pin the
+  strict production shape.
 - **Isolated plugin children on Linux start with the working directory at the filesystem root**, as
   they already did on macOS, so `process.cwd()` no longer discloses the deployment path to a plugin.
 
@@ -54,6 +55,14 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Fixed
 
+- **Swagger UI "Try it out" keeps working under the CSRF token.** The interactive reference at
+  `/api/v1/docs` now attaches the session's `wjs_csrf` token as `X-CSRF-Token` on every request it
+  sends, so a mutating call from that page is accepted instead of answering `403 rest_csrf_token`.
+- **The advice in the dependency-scan finding pointed the wrong way.** When a plugin's shipped
+  `node_modules/` cannot be scanned in full, the finding told authors to "declare `bundled` and let the
+  host install" their packages — but `bundled` is what tells the host to *skip* that install. It now
+  says to stop shipping `node_modules/`, leave `bundled` unset and declare the packages in the
+  manifest's `dependencies`.
 - **Windows: isolated plugins no longer stop loading after a rebuild or an upgrade.** The AppContainer
   grant cache remembered a successful `icacls` grant by SID, path and access shape alone. When
   `backend/dist` or `node_modules` was deleted and recreated at the same path (a rebuild, `npm ci`,

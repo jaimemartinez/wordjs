@@ -102,7 +102,12 @@ app.use(helmet({
     contentSecurityPolicy: {
         directives: {
             defaultSrc: ["'self'"],
-            scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"], // unsafe-inline/eval required for some CMS themes/plugins
+            // The only HTML this origin serves is the Swagger UI page at `${prefix}/docs`, whose
+            // swagger-ui-dist bootstrap is an inline <script> — that, and nothing else, is what
+            // 'unsafe-inline' is for. No script here is ever built from a string, so no 'unsafe-eval':
+            // a theme is a token contract that ships no JavaScript, and a plugin's admin bundle is
+            // executed by the FRONTEND, under the frontend's own header (frontend/next.config.ts).
+            scriptSrc: ["'self'", "'unsafe-inline'"],
             styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
             fontSrc: ["'self'", "https://fonts.gstatic.com", "data:"],
             imgSrc: ["'self'", "data:", "blob:", "https:", "*"], // Allow images from everywhere (CMS content)

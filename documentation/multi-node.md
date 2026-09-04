@@ -155,7 +155,9 @@ Two knock-on settings when a frontend is reached directly rather than through th
 
 - **`siteUrl`** on the backend that replica talks to must be the origin the **browser** uses
   (e.g. `http://10.0.1.23:3001`), or the backend's same-origin CSRF check rejects every POST —
-  including every collaboration op.
+  including every collaboration op. The origin check is only half of it: a cookie-authenticated
+  write must also carry an `X-CSRF-Token` header equal to its own `wjs_csrf` cookie. That pair is
+  compared inside the node handling the request, so it needs no shared state across replicas.
 - **`internalApiUrl`** / **`INTERNAL_API_URL`** points **server-side rendering** at the same backend
   (`http://10.0.1.23:4000/api/v1`). `WORDJS_BACKEND_URL` covers the browser's path; SSR has its own
   resolution (see [frontend.md](frontend.md)). Set both, to the same backend.

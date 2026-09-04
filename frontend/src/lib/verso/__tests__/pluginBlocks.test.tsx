@@ -308,8 +308,8 @@ describe("bloques estáticos (dev, generate-verso-plugin-registry.js)", () => {
         const registry = createBlockRegistry();
         // Mismo shape que emite el generador: entradas con render YA compuesto.
         const staticMap = {
-            Toscano: {
-                label: "Toscano",
+            SampleBlock: {
+                label: "Sample Block",
                 category: "content",
                 fields: { plato: { type: "text", label: "Plato" } },
                 defaultProps: { plato: "" },
@@ -318,16 +318,16 @@ describe("bloques estáticos (dev, generate-verso-plugin-registry.js)", () => {
         };
 
         const first = registerStaticPluginBlocks(registry, staticMap);
-        expect(first).toEqual(["Toscano"]);
+        expect(first).toEqual(["SampleBlock"]);
         expect(registry.version()).toBe(1);
-        const def = registry.get("Toscano")!;
+        const def = registry.get("SampleBlock")!;
         expect(Object.keys(def.fields)).toEqual(expect.arrayContaining(["plato", "hide", "anim", "look"]));
 
         // Segunda pasada idéntica (StrictMode re-ejecuta el useMemo del editor): sin re-registro.
         const second = registerStaticPluginBlocks(registry, staticMap);
         expect(second).toEqual([]);
         expect(registry.version()).toBe(1);
-        expect(registry.get("Toscano")).toBe(def);
+        expect(registry.get("SampleBlock")).toBe(def);
     });
 
     it("el camino runtime hace upsert sobre el estático (misma precedencia que el spread del legacy)", async () => {

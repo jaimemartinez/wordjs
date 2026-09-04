@@ -241,11 +241,12 @@ test('an EXPIRED session cookie is not gated either — the exact pre-release up
 
 // ── login is OUTSIDE the token gate ───────────────────────────────────────────────────────────────
 
-test('POST /auth/login with a session cookie and NO token is accepted — the upgrade lockout', async () => {
-    // The browser this exists for: a session cookie minted BEFORE this feature shipped (so nothing
-    // beside it) whose JWT has since expired. ensureCsrfCookie cannot back-fill a token for it — the
-    // back-fill runs only once authentication has SUCCEEDED — the browser keeps attaching the dead
-    // cookie anyway, and the sign-in form's POST is the one request that has to get the user out of it.
+test('POST /auth/login with a stale session cookie and NO token is accepted — recovery stays reachable', async () => {
+    // The client this exists for: one whose FIRST request is a mutation — an API script, a cookie jar,
+    // a tab that posts straight away — carrying a session cookie minted BEFORE this feature shipped (so
+    // nothing beside it) and never having made the safe request the back-fill rides on. It holds no
+    // token and had no chance to obtain one, and sign-in is the request that has to get it back in.
+    // (A client holding a LIVE cookie takes the enumerated /auth/login exemption instead — next test.)
     const res = await request(app).post(`${B}/auth/login`).set(SAME_ORIGIN)
         .set('Cookie', cookieHeader({ [SESSION_COOKIE]: 'a-session-cookie-that-predates-this-release' }))
         .send({ username: 'admin', password: PASSWORD });
@@ -413,7 +414,7 @@ test('a session that predates this feature is HEALED on its first safe request, 
     assert.ok(minted && /^[A-Za-z0-9_-]{43}$/.test(minted), `expected a freshly minted token, got: ${minted}`);
 });
 
-test('the heal also happens for an EXPIRED session — otherwise the login POST is unsatisfiable', async () => {
+test('the heal also happens for an EXPIRED session — the back-fill runs BEFORE verification', async () => {
     const res = await request(app).get(`${B}/auth/me`).set(SAME_ORIGIN)
         .set('Cookie', cookieHeader({ [SESSION_COOKIE]: 'not-a-jwt' }));
     assert.strictEqual(res.status, 401, JSON.stringify(res.body));
@@ -429,6 +430,31 @@ test('a request that ALREADY has a token is never re-minted (only issueSessionCo
     assert.strictEqual(res.status, 200);
     assert.strictEqual(setCookieLine(res, CSRF_COOKIE), null,
         'rotating on an ordinary read would race every in-flight mutation for no benefit');
+});
+
+// ── the one first-party page that is not the admin app ────────────────────────────────────────────
+
+test('the Swagger UI page ships an interceptor that echoes the token, or "Try it out" cannot mutate', async () => {
+    // /api/v1/docs is promoted in documentation/api.md as the interactive reference, and swagger-ui
+    // fetches with `credentials: 'same-origin'` — so a mutating "Try it out" arrives with the session
+    // cookie and NO X-CSRF-Token, which is exactly the 403 above. swagger-ui-express serialises the
+    // `requestInterceptor` we pass in `swaggerOptions` into the swagger-ui-init.js it generates; this
+    // asserts the names actually reached the browser, so the interceptor cannot drift from the gate.
+    const { session, csrf } = await login();
+    const res = await request(app).get(`${B}/docs/swagger-ui-init.js`).set(SAME_ORIGIN)
+        .set('Cookie', cookieHeader({ [SESSION_COOKIE]: session, [CSRF_COOKIE]: csrf }));
+    assert.strictEqual(res.status, 200, `the docs mount must serve the init script: ${res.status}`);
+
+    // superagent hands a non-text content type back as a Buffer, so read whichever arrived.
+    const js = res.text ? String(res.text) : (Buffer.isBuffer(res.body) ? res.body.toString('utf8') : '');
+    assert.ok(js.length > 0, 'the init script was empty');
+    assert.match(js, /requestInterceptor/, 'no requestInterceptor reached the browser');
+    assert.match(js, new RegExp("['\"]" + CSRF_COOKIE + "['\"]"), `the init script must name the ${CSRF_COOKIE} cookie`);
+    assert.match(js, new RegExp("['\"]" + CSRF_HEADER + "['\"]"), `the init script must name the ${CSRF_HEADER} header`);
+
+    // The serialiser inlines the function's SOURCE into an object literal, so a body that does not
+    // compose there is broken only in the browser. Parse it here instead (compile, never run).
+    assert.doesNotThrow(() => new Function(js), 'the generated swagger-ui-init.js is not valid JavaScript');
 });
 
 test('logout clears BOTH cookies', async () => {

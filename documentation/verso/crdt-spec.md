@@ -1145,7 +1145,7 @@ Se implementa **D14 como primario** (misma decisión, mismo protocolo de mensaje
 | Bundle cliente | 0 | **0** (`EventSource` + `fetch` nativos) |
 | Listeners que hay que cubrir | HTTP **y** HTTPS-con-mTLS del modo separado | ninguno: son rutas de la API |
 | Gateway/nginx | depende del proxy de `upgrade` | **igual que el resto de `/api`** |
-| Autenticación / CSRF | handshake propio que auditar aparte | **el mismo `authenticate` + Origin del resto** |
+| Autenticación / CSRF | handshake propio que auditar aparte | **el mismo `authenticate` + Origin + `X-CSRF-Token` del resto** |
 | Precedente en producción | ninguno | `/api/v1/notifications/stream` |
 
 **Lo que se paga, dicho claro**: la subida cuesta un round-trip HTTP en vez de ir por el mismo
@@ -1195,6 +1195,10 @@ error se paga en tráfico, nunca en corrección.
 2. **CSRF**: los POST los cubre el `csrfProtection` global; el **GET del stream no** (solo mira
    métodos que cambian estado), así que la ruta comprueba el Origin explícitamente. Sin eso, un
    sitio hostil abriría el stream con la cookie ambiental de la víctima y leería su borrador en vivo.
+   Since 2.1.0 `csrfProtection` is two halves AND-ed: the Origin/Host allow-list and a double-submit
+   token gate, so a cookie-authenticated collab POST must also carry an `X-CSRF-Token` header equal
+   to the `wjs_csrf` cookie — `collab/transport.ts` attaches it with `csrfHeaders()`, a mismatch
+   answers `403 rest_csrf_token`, and a Bearer caller is exempt.
 3. **Autorización por el post concreto**: mismo gate que `PUT /posts/:id` vía `capsForType` +
    own/others + published. No se inventa un permiso nuevo. **Sin modo lector** (D16 intacta).
 4. **Atribución infalsificable**: el `siteId` se ata a la conexión SSE; los POST deben presentar un

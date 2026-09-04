@@ -8,11 +8,11 @@
  * `unsafe-inline` for the Next bootstrap and CMS themes, images from anywhere, cross-origin resource
  * policy so the frontend can load backend images. Inventing a stricter policy here would break the admin.
  *
- * ONE DELIBERATE DEPARTURE from the mirror: `script-src` does NOT carry `'unsafe-eval'`. It was there for
- * the Puck editor, which is gone; the real production frontend build has no `eval`/`new Function`, and the
- * frontend header (frontend/next.config.ts) dropped it too, so mirroring it here would only re-widen the
- * gateway's own pages. The backend still lists it (backend/src/index.ts) — narrowing that API/uploads
- * policy is a separate item. Test: test/security-headers.test.js asserts the absence, so it stays gone.
+ * NO `'unsafe-eval'` in `script-src` — and that is now PART of the mirror: the backend does not grant it
+ * either (backend/src/index.ts), so the two policies agree here. It was there for the Puck
+ * editor, which is gone; the real production frontend build has no `eval`/`new Function`, and the frontend
+ * header (frontend/next.config.ts) dropped it as well, so putting it back here would only re-widen the
+ * gateway's own pages. Test: test/security-headers.test.js asserts the absence, so it stays gone.
  *
  * Note on precedence: for PROXIED responses the upstream (backend/frontend) writes its own headers last,
  * so its CSP wins and is passed through unchanged; this policy governs responses the gateway generates

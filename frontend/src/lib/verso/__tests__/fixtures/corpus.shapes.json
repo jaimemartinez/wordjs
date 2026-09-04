@@ -24,6 +24,10 @@
   "PostsGrid",
   "PricingTable",
   "Quote",
+  "SampleHero",
+  "SamplePortfolio",
+  "SampleProcess",
+  "SampleTestimonial",
   "SearchBar",
   "Section",
   "SocialLinks",
@@ -34,10 +38,6 @@
   "Tabs",
   "Testimonial",
   "Text",
-  "ToscanoHero",
-  "ToscanoPortafolio",
-  "ToscanoProceso",
-  "ToscanoTestimonio",
   "VideoEmbed",
   "VideoGallery",
   "YoutubeVideos",
@@ -3281,7 +3281,7 @@
       }
      },
      {
-      "type": "ToscanoHero",
+      "type": "SampleHero",
       "props": {
        "id": "th",
        "heroImage": "xxxxx://xx0.xxxxxxxxxxxxxxxxx.xxx/xxxx-xxxxxx/XX0XXxXXXXXXx0xXXxXXxx0XxxxxXxX0X-0x0xXxX0XxXXx0Xx0xxX0xxX0X-XXxXXxXx00xxXxX0-XxXXXxX0xxx0xxXXXXxX0x00XX0_00xXXx-xXXXxxX000xXXxxxXxx_XxxXXXXXxXXXxx0Xx00XxXxxxxxXxX0XXxXXx0X0xXXxx0x-xxXXXXXXx0XX0xX-_xXxXxxx00xXXXx0xXXX0-xxxXxx0xxxXXXXxxXX0xXx0xxxxxxx0XxxxX-xxXxxXXXXX-xxXXx0xX",
@@ -3293,7 +3293,7 @@
       }
      },
      {
-      "type": "ToscanoProceso",
+      "type": "SampleProcess",
       "props": {
        "id": "tp",
        "eyebrow": "Xxxxxxxxxíx",
@@ -3338,7 +3338,7 @@
       }
      },
      {
-      "type": "ToscanoPortafolio",
+      "type": "SamplePortfolio",
       "props": {
        "id": "tpf",
        "eyebrow": "Xxxxxxxxxx",
@@ -3366,7 +3366,7 @@
       }
      },
      {
-      "type": "ToscanoTestimonio",
+      "type": "SampleTestimonial",
       "props": {
        "id": "tt",
        "quote": "Xxxxxxx xx xxxx xxxxxxxó xxxxxxx xxxx; xxxó xxx xxxxxxxxxxx xxxxxxxxx xxx xxxxxxxx xxxxxxxx xxxxxxxxáx xxx xxxxxxxxxxxx. Xx xxxxxxóx xx xxxxxxx xx, xxxxxxxxxxxxx, xxx xxxxx xx xxxx.",

@@ -49,7 +49,7 @@ Usage:
 
 Options:
   --zip <path-or-url>   Use a local release ZIP (or a direct ZIP URL) instead of asking GitHub.
-  --version <tag>       Install/upgrade to a specific release tag (e.g. v1.0.0) instead of the latest.
+  --version <tag>       Install/upgrade to a specific release tag (e.g. v2.1.0) instead of the latest.
   --http                Serve plain HTTP instead of self-signed HTTPS (sets WORDJS_HTTP=1). (create)
   --no-start            Scaffold + install dependencies only; don't start the server.
   --yes, -y             Skip the confirmation prompt (required when upgrading non-interactively).
@@ -65,7 +65,7 @@ Options:
 
 Examples:
   npx create-wordjs@latest my-site
-  npx create-wordjs@latest my-site --version v1.0.0
+  npx create-wordjs@latest my-site --version v2.1.0
   npx create-wordjs@latest upgrade                     # from inside your site directory
   npx create-wordjs@latest upgrade ./my-site --yes
 
@@ -103,7 +103,7 @@ function parseArgs(argv) {
         const a = argv[i];
         if (a === '-h' || a === '--help') { console.log(HELP); process.exit(0); }
         else if (a === '--zip') { opts.zip = argv[++i] || fail('--zip needs a value (path or URL to a wordjs-*.zip).'); }
-        else if (a === '--version') { opts.version = argv[++i] || fail('--version needs a value (a release tag, e.g. v1.0.0).'); }
+        else if (a === '--version') { opts.version = argv[++i] || fail('--version needs a value (a release tag, e.g. v2.1.0).'); }
         else if (a === '--http') opts.http = true;
         else if (a === '--no-start') opts.start = false;
         else if (a === '--yes' || a === '-y') opts.yes = true;
@@ -130,7 +130,7 @@ function parseArgs(argv) {
         else if (opts.mode === 'join') opts.dir = opts.role ? `wordjs-${opts.role}` : 'wordjs-node';
         else fail('Please specify a directory for your new site.', 'Example: npx create-wordjs@latest my-site');
     }
-    if (opts.version && /^\d/.test(opts.version)) opts.version = 'v' + opts.version;   // accept "1.0.0" for "v1.0.0"
+    if (opts.version && /^\d/.test(opts.version)) opts.version = 'v' + opts.version;   // accept "2.1.0" for "v2.1.0"
     return opts;
 }
 

@@ -27,11 +27,26 @@ interface Seeds { primary: string; secondary: string; bg: string; text: string }
 // hunts, so the population is (a) widened to every theme actually shipped, wherever it lives, and
 // (b) asserted non-empty at the point of use, with a message that says why.
 //
-// `toscano` is a private client theme; it is not ours to police and is excluded on purpose.
+// A privately installed client theme is not ours to police and is excluded on purpose. The skip
+// list is READ from .gitignore — the one file where those private paths are legitimately named —
+// instead of being hardcoded here, so this suite names no client and cannot drift out of sync with
+// what is actually kept out of the tree.
 // ---------------------------------------------------------------------------------------------
 const CATALOG_DIR = path.join(__dirname, '..', '..', '..', 'marketplace', 'themes');
+
+function gitignoredThemeSlugs(): string[] {
+    const file = path.join(__dirname, '..', '..', '..', '.gitignore');
+    if (!fs.existsSync(file)) return [];
+    const out: string[] = [];
+    for (const line of String(fs.readFileSync(file, 'utf8')).split(/\r?\n/)) {
+        const m = /^backend\/themes\/([A-Za-z0-9._-]+)\/?$/.exec(line.trim());
+        if (m) out.push(m[1]);
+    }
+    return out;
+}
+
 const THEME_ROOTS: Array<{ label: string; dir: string; skip: string[] }> = [
-    { label: 'backend/themes', dir: path.join(__dirname, '..', '..', 'themes'), skip: ['toscano'] },
+    { label: 'backend/themes', dir: path.join(__dirname, '..', '..', 'themes'), skip: gitignoredThemeSlugs() },
     { label: 'marketplace/themes', dir: CATALOG_DIR, skip: [] }
 ];
 

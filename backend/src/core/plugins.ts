@@ -536,8 +536,11 @@ type PermissionScanMode = 'declaration' | 'grant';
  * way to hide code: a tree engineered to exceed it fails validation rather than skipping the check.
  *
  * 1 MB per file skips minified/bundled artifacts. Those are the files whose AST is both enormous and
- * least readable; a plugin that needs one can ship the unminified source next to it or declare
- * `"bundled": true` and let the host install its dependencies from the registry instead.
+ * least readable; a plugin that needs one can ship the unminified source next to it, or stop shipping
+ * `node_modules/` altogether — leaving `"bundled"` unset — and declare the packages in the manifest's
+ * `dependencies` so the host installs them from the registry instead. Note the direction: `"bundled":
+ * true` (or an own `node_modules/`) tells the host to SKIP that shared install because the plugin is
+ * already self-contained, so it is the opposite of asking the host to install anything.
  */
 const DEP_SCAN_MAX_FILES = 4000;
 const DEP_SCAN_MAX_FILE_BYTES = 1024 * 1024;
@@ -1607,7 +1610,7 @@ function validatePluginPermissions(
         if (deps.unreadable > 0) reasons.push(`${deps.unreadable} unreadable director${deps.unreadable === 1 ? 'y' : 'ies'}`);
         if (unscannable.length > 0) reasons.push(`${unscannable.length} file(s) could not be scanned: ${unscannable.slice(0, 5).join(', ')}`);
         if (reasons.length > 0) {
-            dangerousCalls.add(`node_modules/: the shipped dependency tree could not be scanned in full — ${reasons.join('; ')} (${deps.files.length} file(s) were scanned). An unscannable dependency tree is a finding, not a pass: ship fewer/smaller dependencies, or declare "bundled" and let the host install them.`);
+            dangerousCalls.add(`node_modules/: the shipped dependency tree could not be scanned in full — ${reasons.join('; ')} (${deps.files.length} file(s) were scanned). An unscannable dependency tree is a finding, not a pass: ship fewer/smaller dependencies, or stop shipping node_modules/ (and leave "bundled" unset) and declare the packages in manifest.json's "dependencies" so the host installs them from the registry.`);
         }
     }
 

@@ -7,8 +7,9 @@ const helmet = require('helmet');
 const { helmetOptions } = require('../src/security-headers');
 
 // The gateway CSP was DISABLED (`helmet({ contentSecurityPolicy: false })`). These lock in that a CSP is
-// now emitted and that it mirrors the backend's policy shape (unsafe-inline for the Next bootstrap, etc.)
-// with ONE deliberate departure: no `'unsafe-eval'`. Mutation-provable: flip any directive in
+// now emitted and that it mirrors the backend's policy shape (unsafe-inline for the Next bootstrap, etc.),
+// the ABSENCE of `'unsafe-eval'` included — the backend does not grant it either, so the two policies
+// agree on that directive as well. Mutation-provable: flip any directive in
 // src/security-headers.js and the matching assertion fails; drop contentSecurityPolicy back to `false`
 // and the "header present" assertion fails; add `'unsafe-eval'` back and the regression test below fails.
 

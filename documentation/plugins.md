@@ -276,7 +276,7 @@ When you upload a plugin ZIP, WordJS validates it **before** reporting success, 
 - **Decompression-bomb cap** — the uncompressed size and entry count are bounded (a small ZIP that expands to gigabytes is rejected). Same guard protects theme uploads and backup restores.
 - **Manifest** — must be valid JSON with a `name` and `"isolated": true`.
 - **Permissions** — every `{scope, access}` is checked against the known vocabulary; a typo (`databse`, `readwrite`) is rejected with the valid list.
-- **AST scan** — the same static scan that runs at activation runs here too; forbidden code (`eval`, `child_process`, dynamic `require`, …) is rejected up front.
+- **AST scan** — the same static scan that runs at activation runs here too; forbidden code (`eval`, `child_process`, dynamic `require`, …) is rejected up front, in your own source and — within the bounds in §7.2 — in any `node_modules/` you ship.
 - **Live-plugin safety** — re-uploading a slug that is currently **active** is refused (409). Deactivate it first so a botched extract can't corrupt a running plugin.
 
 ### Runtime health & auto-restart
@@ -350,8 +350,8 @@ In `manifest.json`, you must declare every capability your plugin needs:
 ### 7.2 The AST Scanner
 When you activate a plugin, WordJS runs a **Static Analysis Scan** (`validatePluginPermissions` in
 `backend/src/core/plugins.ts`). It parses every `.js`/`.ts`/`.cjs`/`.mjs` file in your plugin — skipping
-`node_modules/`, dot-dirs, and the browser-only `client/`, `frontend/` and `dist/` folders — and blocks
-the plugin if it finds:
+dot-dirs and the browser-only `client/`, `frontend/` and `dist/` folders, and taking a shipped
+`node_modules/` in a bounded pass of its own (see below) — and blocks the plugin if it finds:
 *   A call whose callee is named `eval`, `Function`, `exec`, `execSync`, `spawn` or `fork`. The match is
     on the **name**, so `anything.spawn()` trips it too. The only exemption is `.exec()` on something
     *provably* a RegExp — a regex literal (`/re/.exec(s)`) or an identifier bound by `const NAME = /re/`
@@ -387,6 +387,35 @@ the plugin if it finds:
     read-named method (`readFileSync`, `readFile`, `createReadStream`, `existsSync`, `statSync`) costs
     `filesystem:read`, anything else `filesystem:write`. A bare `require('fs')` bound to a local you
     never use is still not a violation.
+
+**Your shipped `node_modules/` is scanned too.** A dependency tree you ship inside the plugin (see
+*Bundled Plugins* in §2) is walked in a pass of its own, bounded so that a huge tree cannot turn a boot
+into a multi-minute AST run: at most **4,000** files, nothing larger than **1 MB** each, no deeper than
+**32** levels, `.js`/`.cjs`/`.mjs` only, and no symlink followed outside your plugin directory (every
+path is realpath-checked, and one that escapes is refused *and* counted). Hitting one of those bounds is
+itself **reported as a finding**, not a pass — the plugin is blocked with `node_modules/: the shipped
+dependency tree could not be scanned in full …`, a message that ends by telling you to ship fewer and
+smaller dependencies *or* to stop shipping `node_modules/` — leaving `"bundled"` unset — and declare
+the packages in your manifest's `dependencies`, so the host installs them from the registry. Findings
+from a dependency file are prefixed with that file's path, and the detector is deliberately
+**re-calibrated** inside one.
+Kept, because they have no benign reading in third-party code:
+`eval`/`Function` matched by name, indirect `(0, eval)(x)`, `(…).constructor('…')` and
+`const F = [].constructor.constructor`, `require`/`import` of a sensitive builtin, and the four
+native-binding `process` escapes — `binding`, `_linkedBinding`, `dlopen`, `getBuiltinModule`. Dropped,
+because they would fire on nearly every package: the **name**-matched `exec`/`execSync`/`spawn`/`fork`
+sinks (`re.exec(s)`, `emitter.fork()` — the way a dependency actually reaches `child_process` is the
+`require`/`import` above, which is still caught), computed `require()`/`import()` and computed member
+calls, every `process` property outside those four (`process.platform`, `process.cwd()`,
+`process.nextTick`), reads of `global`/`globalThis`/`require`/`module`, obfuscated computed access on
+them, and aliasing anything but `eval`/`Function`. Downgraded rather than dropped: filesystem and
+host-API charges are not collected from dependencies at all (io-guard gates every `fs` call against
+*your* grants at the call itself, and a bare `getOption` inside a third-party package is a name
+collision, not a call into WordJS), and a dependency's **networking** builtins — `secure-require`'s own
+`NETWORK_MODULES`, so `net`/`dns` *and* `http`/`https`/`dgram` — stay a fixable *missing capability*
+rather than a hard block, because the runtime already gates exactly those on your Network grant. Runtime
+containment (secure-require, io-guard, the worker's ESM hook, `blockCodeGen`) is still what actually
+stops a dependency at runtime; this pass buys you a look at what you are shipping.
 
 This static scan is **mandatory** — it runs on **every** plugin at activation and re-runs on each boot,
 fail-closed (an unparseable file blocks the plugin). The separate **engine-level runtime block** of
@@ -458,6 +487,10 @@ native addons, and an ESM resolution hook fails closed for the same builtins. Th
 `fs` to your **own** plugin dir (plus a few shared safe zones); the whole `plugins/` tree is intentionally
 **not** a safe zone, so you **cannot** read a sibling plugin's files — another plugin's `package.json`,
 `node_modules`, `data/`, or encryption-key files are unreachable (no cross-plugin data/secret exfiltration).
+The child's working directory is the **filesystem root** on macOS and on the ordinary Linux launch, so
+`process.cwd()` there discloses nothing about where the site is deployed (the opt-in systemd-scope path —
+`sandbox.useCgroupMemoryCap`/`cpuQuotaPercent` — still inherits the server's directory). Never resolve a
+path against the cwd; `wordjs.fs.read`/`write` paths are relative to your own plugin directory.
 
 > ⚠️ **Residual risk and native boundary:** every production plugin is wrapped by a probe-certified
 > native sandbox: Landlock + an always-on seccomp filter on Linux, AppContainer on Windows, and Seatbelt
@@ -492,7 +525,7 @@ For a full list of security rules, see the **[Security Guide](security.md)**.
 
 ## 9. Developer Rules of Gold 🏆
 
-1.  **Auth First:** Call your routes through `api()` from `@/lib/api` — the session is an HttpOnly cookie, so a raw `fetch` needs `credentials: 'include'` and there is no bearer token in `localStorage` to read.
+1.  **Auth First:** Call your routes through `api()` from `@/lib/api` — the session is an HttpOnly cookie, so a raw `fetch` needs `credentials: 'include'` and there is no bearer token in `localStorage` to read. Cookie-authenticated `POST`/`PUT`/`PATCH`/`DELETE` also carry a double-submit CSRF token: `api()` attaches it for you, while a raw `fetch` must send `X-CSRF-Token` equal to the JS-readable `wjs_csrf` cookie or the request is refused with `403 rest_csrf_token`. Your own routes under `/api/v1/plugin/<slug>/…` sit behind that same gate.
 2.  **Use the bridge, not `require`:** In `index.js`, accept `init(wordjs)` and call `wordjs.*`. You **cannot** `require('../../src/core/...')`, `express`, or core modules from inside the child process — that path is gone.
 3.  **Declare `"isolated": true`:** It is mandatory; a plugin without it is rejected.
 4.  **Namespaced routes:** Your routes mount under `/api/v1/plugin/<slug>/...` — fetch them at that path.

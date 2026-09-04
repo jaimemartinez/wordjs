@@ -114,8 +114,50 @@ router.get('/pages', (req: Request, res: Response, next: NextFunction) => {
     postsRoutes.handle(req, res, next);
 });
 
-const { authenticate } = require('../middleware/auth');
+const { authenticate, CSRF_COOKIE, CSRF_HEADER } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/permissions');
+
+// THE CSRF TOKEN, FOR "TRY IT OUT". swagger-ui calls the API with `credentials: 'same-origin'`, so a
+// mutating request from the docs page arrives carrying the session cookie and NO `X-CSRF-Token` —
+// precisely the shape `csrfTokenGate` refuses with `403 rest_csrf_token`. The fix is a
+// `requestInterceptor`, but it runs in the BROWSER: swagger-ui-express@5 serialises any function found
+// in `swaggerOptions` into the `swagger-ui-init.js` it generates (its `stringify()` swaps the value for
+// a placeholder inside JSON.stringify and then substitutes the function's SOURCE back in — see
+// `stringify` in node_modules/swagger-ui-express/index.js), so the function below is emitted as TEXT
+// and must close over nothing on this side. The two names are therefore written out as literals and
+// asserted at require time against the middleware's own exports, so they cannot drift from the gate
+// that enforces them — without building the function from a string in the host process.
+const CSRF_COOKIE_IN_DOCS_PAGE = 'wjs_csrf';
+const CSRF_HEADER_IN_DOCS_PAGE = 'X-CSRF-Token';
+if (CSRF_COOKIE_IN_DOCS_PAGE !== CSRF_COOKIE || CSRF_HEADER_IN_DOCS_PAGE !== CSRF_HEADER) {
+    throw new Error(`API docs: the CSRF names baked into the Swagger page (${CSRF_COOKIE_IN_DOCS_PAGE}, ` +
+        `${CSRF_HEADER_IN_DOCS_PAGE}) no longer match the middleware (${CSRF_COOKIE}, ${CSRF_HEADER})`);
+}
+// Self-contained on purpose (see above): browser globals only, no reference to anything in this module.
+function csrfRequestInterceptor(request: any) {
+    const COOKIE = 'wjs_csrf';
+    const HEADER = 'X-CSRF-Token';
+    const headers = request.headers || (request.headers = {});
+
+    // Never touch a request that already carries the header: the Authorize button's Bearer flow needs
+    // no token at all, and a header somebody set by hand is theirs, not ours.
+    for (const name in headers) {
+        if (name.toLowerCase() === HEADER.toLowerCase()) return request;
+    }
+
+    // The cookie is deliberately not HttpOnly — reading it here is the whole point of double-submit.
+    const jar = String((globalThis as any).document.cookie || '').split(';');
+    for (let i = 0; i < jar.length; i++) {
+        const pair = jar[i].trim();
+        const eq = pair.indexOf('=');
+        if (eq <= 0 || pair.slice(0, eq) !== COOKIE) continue;
+        let value = pair.slice(eq + 1);
+        try { value = decodeURIComponent(value); } catch { /* not percent-encoded — send it raw */ }
+        if (value) headers[HEADER] = value;
+        break;
+    }
+    return request;
+}
 
 // Documentation — built LAZILY on the first /docs request. swaggerJsdoc parses every route and
 // model file to produce the spec, which every boot paid for a page only admins ever open. The
@@ -131,6 +173,9 @@ function buildSwagger(): any[] {
         swaggerUi.setup(swaggerSpecs, {
             customCss: swaggerTheme,
             customSiteTitle: "WordJS API Documentation",
+            swaggerOptions: {
+                requestInterceptor: csrfRequestInterceptor,
+            },
         }),
     ];
     return swaggerHandlers;

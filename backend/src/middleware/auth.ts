@@ -414,11 +414,12 @@ function csrfCookieOptions(sessionOptions?: CookieOptions): CookieOptions {
  * Mint the CSRF cookie for a request that already has a session cookie but no CSRF cookie yet.
  *
  * WHY this exists: the gate below is fail-closed — a cookie-authenticated mutating request with no
- * `wjs_csrf` cookie is refused. Without a backfill, every session issued BEFORE this feature shipped
- * would be bricked in a way the user cannot escape: the login POST carries the stale session cookie
- * (so it is refused) and so does the logout POST, leaving "delete your cookies by hand" as the only
- * way out. Minting on a SAFE, authenticated request closes that: the app's first `GET /auth/me` heals
- * the session before any mutation is attempted.
+ * `wjs_csrf` cookie is refused. Without a backfill, a LIVE session issued BEFORE this feature shipped
+ * could neither mutate nor log out — both are cookie-carrying mutations, and its cookie VERIFIES, so
+ * the gate holds them — leaving "throw the session away and sign in again" as the only way forward.
+ * Minting on a SAFE request closes that: the app's first `GET /auth/me` heals the session before any
+ * mutation is attempted. It is called BEFORE the token is verified, so an EXPIRED session is healed
+ * on that same request too, and comes away with a token it can use from then on.
  *
  * It cannot be used to bypass anything. The value is server-generated randomness the attacker's page
  * still cannot read (a cross-origin response's Set-Cookie is as invisible to it as the cookie itself),
@@ -493,11 +494,14 @@ function csrfTokenGate(req: Request, res: Response, next: NextFunction) {
     // THE RULE: the token gate protects requests the SESSION COOKIE authenticates. A cookie that does not
     // verify authenticates nothing — `authenticate` will answer 401 whatever this gate decides — so there
     // is no ambient authority for a hostile page to ride and nothing for the token to protect. Gating it
-    // anyway is what bricks a browser after an upgrade: a session cookie minted BEFORE this feature shipped
-    // has no wjs_csrf beside it, the back-fill cannot help once the JWT expires (ensureCsrfCookie runs only
-    // after authentication SUCCEEDS), yet the browser keeps attaching the dead cookie — so every recovery
-    // route it might reach (sign in, finish 2FA, request a password reset, verify an email, even log out)
-    // answers 403 until the user deletes cookies by hand.
+    // anyway would answer 403 where 401 is the honest answer, and it would refuse the client whose FIRST
+    // request is a mutation: the back-fill runs from `authenticate` BEFORE verification, so a browser that
+    // loads the app is healed on a safe request even when its session has EXPIRED — but an API script, a
+    // cookie jar or a stale tab that POSTs straight away with a pre-release session cookie never passes
+    // through it and has no token it could send. Letting an unverifiable cookie through keeps every
+    // recovery route (sign in, finish 2FA, request a password reset, verify an email, log out) reachable
+    // with a dead cookie attached, and keeps the gate's meaning honest: the token protects what the cookie
+    // AUTHENTICATES.
     //
     // THE INVARIANT: this gate never skips a cookie that `authenticate` would accept. It holds because the
     // check below is the SAME verification, verbatim — `verifyToken`, the one `authenticate` calls — with

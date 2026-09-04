@@ -52,8 +52,10 @@ the [Separate-mode guide](documentation/separate-mode.md).
 (Playwright chromium against an ephemeral HTTP monolith), and **Compiled bundle smoke-boot** (builds
 the real release ZIP and deploys it in mono, split and enrollment mode via
 `scripts/smoke-deploy.sh`). Two more workflows gate the same push: **Sandbox parity** (the
-plugin sandbox on four OS runners) and **F6 certification**. Run the equivalents locally so review
-is about the change, not a red check:
+plugin sandbox on four OS runners) and **F6 certification**; **CodeQL** also runs on every push and
+pull request to `main`, but it reports into the Security tab rather than blocking a merge. Outside
+the push path, **Release** builds and publishes on a `v*` tag and **Dependency audit** sweeps daily
+(see below). Run the equivalents locally so review is about the change, not a red check:
 
 ```bash
 # Backend
@@ -76,13 +78,19 @@ cd gateway && npm test
 ```
 
 CI also runs a few gates that usually don't need a local equivalent: `npm audit` (blocks
-high/critical prod vulns in each service), a license check (`license-checker --production`, blocks
+high/critical prod vulns in `backend`, `gateway`, `frontend` and `packages/create-wordjs`), a
+license check (`license-checker --production`, blocks
 AGPL/SSPL), backend **integration tests** (`npm run test:integration`, against real Postgres + Redis
 service containers), and a **marketplace catalog integrity** check — if you touch anything under
 `marketplace/plugins/`, rebuild the catalog with `npm run build:marketplace` from the repo root (and
 re-check it with `npm run verify:marketplace`) so it stays consistent. `marketplace/dist/` is a
 **gitignored build output** (not committed) that the release workflow republishes as GitHub Release
 assets — don't try to commit it.
+
+Separately, `.github/workflows/dependency-audit.yml` runs the same `npm audit` gate daily (cron
+`41 4 * * *`) and on demand across all **six** workspaces — root, `backend`, `frontend`, `gateway`,
+`setup` and `packages/create-wordjs` — and opens (or comments on) an issue naming the failing
+workspaces when one fails. Root and `setup` are audited only there, not on the push path.
 
 A green local run isn't a guarantee CI passes (Linux vs. your OS can differ), but it catches the
 common cases.

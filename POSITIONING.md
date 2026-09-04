@@ -60,7 +60,11 @@ memory caps outside systemd Linux and Windows, and the absence of an independent
   + `acorn-walk`): flags `eval` / `Function` / `exec` / `spawn`, `require()` of sensitive
   modules, dynamic/computed/obfuscated access to `process` / `global` / `require`, and
   undeclared capabilities vs. the manifest. **Fail-closed**: an unparseable source file is a
-  violation. The scan runs on **every** plugin — there is no scan-skip for any plugin. (Runtime
+  violation. The scan runs on **every** plugin — there is no scan-skip for any plugin, and the
+  `node_modules/` tree a plugin *ships* is scanned too, in a bounded pass of its own (at most
+  4,000 files, 1 MB per file, 32 levels deep): hitting a bound is itself reported as a finding
+  rather than passing in silence, and a symlink resolving outside the plugin directory is refused
+  and counted. (Runtime
   code generation can additionally be hard-disabled at the engine level via
   `--disallow-code-generation-from-strings` — `config.sandbox.blockCodeGen`, DEFAULT-ON / opt-out via
   `=false` for a plugin whose deps legitimately need `Function()`, and never applied under `ts-node`.)
@@ -82,13 +86,20 @@ memory caps outside systemd Linux and Windows, and the absence of an independent
 - **Module / native lockdown** (`secure-require.ts`): `worker_threads` / `vm` / `module` /
   `inspector` return inert throwing proxies; native `.node` addons, `process.binding`,
   `_linkedBinding` blocked; `fs` / `child_process` proxied and path-confined;
-  `setTimeout` / `setInterval` / EventEmitter listeners re-anchored to plugin context so a
-  plugin can't strip its sandbox by deferring to a later tick.
+  `setTimeout` / `setInterval` / `setImmediate` / `queueMicrotask` / `process.nextTick` and
+  EventEmitter listeners re-anchored to plugin context so a plugin can't strip its sandbox by
+  deferring to a later tick.
 - **DoS containment**: process separation (a child OOM / crash / infinite loop cannot take
   down the host — the host event loop is in a different process), a JS-heap cap
   (`--max-old-space-size`), an opt-in **preventive cgroup `MemoryMax`** per child on systemd Linux
   (`systemd-run --user --scope`, probe-gated), an opt-in **preventive per-plugin CPU quota** on
   systemd Linux (`sandbox.cpuQuotaPercent` → `CPUQuota` in the same cgroup scope, probe-gated), a
+  **default-on reactive per-plugin CPU watchdog** everywhere the kernel gives no preventive CPU cap
+  (`sandbox.cpuBurstSeconds` — 60 s by default, `0` disables: a child holding **≥ 95% of one core**
+  for that long without a single quiet tick is `SIGKILL`ed and the reason parked on its health
+  record; sampled from Linux `/proc/<pid>/stat` and macOS `ps`, and deliberately not wired on
+  Windows, where the Job Object CPU-rate cap below is preventive and default-on, nor for
+  cgroup-managed children, where `sandbox.cpuQuotaPercent` is the operator's preventive ceiling), a
   **default-on preventive Windows Job Object** cap
   (pure-JS PowerShell P/Invoke, probe-gated), a host-side **RSS poll** elsewhere / as a backstop
   (Linux `/proc`, Windows `tasklist`, macOS `ps` → `SIGKILL`) and a loose Linux `RLIMIT_AS` backstop,
@@ -179,7 +190,8 @@ as GitHub Release assets; installs default to `releases/latest/download` but the
 **admin-configurable** — option `marketplace_sources` for plugins and the independent option
 `marketplace_theme_sources` for themes, any number of HTTPS catalogs merged), a
 Plugins → Marketplace admin tab with one-click installs, **sha256-verified** downloads
-routed through the *same* hardened upload pipeline (zip guards + AST scan;
+routed through the *same* hardened upload pipeline (zip guards + the AST scan of the plugin's own
+source *and* its shipped `node_modules/`;
 `backend/src/routes/marketplace.ts`), and per-capability grant disclosure at install. The theme half
 of that mechanism is intact — its own index, its own source option, its own admin tab — but the theme
 catalogue itself was retired, so `marketplace/themes/` no longer exists and the theme index builds

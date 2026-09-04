@@ -178,7 +178,7 @@ describe('core/safe-path — form, canonical resolution, containment', () => {
     });
 
     it('isThemeSlug accepts only what the installer could have written', () => {
-        for (const ok of ['default', 'toscano', 'a', 'Theme-1_x', 'a'.repeat(64)]) {
+        for (const ok of ['default', 'circuito', 'a', 'Theme-1_x', 'a'.repeat(64)]) {
             assert.strictEqual(isThemeSlug(ok), true, `${ok} must be a legal slug`);
         }
         for (const bad of [
