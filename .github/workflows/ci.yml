@@ -330,12 +330,15 @@ jobs:
     #     Type check 7s · Build 6s                        = the suite tooling is fast
     #     Test 310s and still running when the wall hit
     #
-    # Install, `npm audit`, and the `npx license-checker` download are all registry-bound and were at
-    # 3-4× their normal cost on the day this was measured (the npm advisory endpoint was timing out
-    # outright). On a warm cache with a healthy registry each is well under a minute — which is why this
-    # passed before. EVERY step completes; none hangs. The job genuinely needs ~18 min on a cold-cache
-    # day, and it cannot warm the cache until it completes once. 22 breaks that deadlock with margin and
-    # still catches a real hang; a warm run lands around 12.
+    # Install and `npm audit` are registry-bound and were at 3-4× their normal cost on the day this was
+    # measured (the npm advisory endpoint was timing out outright); the audit is now bounded per-attempt
+    # by ci-audit.mjs. The License gate WAS a third live registry hit — `npx license-checker` downloaded
+    # the tool every run and spiked to ~7 min on a degraded registry, blowing this budget outright. It is
+    # now a pinned backend devDependency, so it installs ONCE as part of the cached `npm ci` and the gate
+    # runs the local binary with no network. That removes the only unbounded registry fetch on the
+    # critical path. On a warm cache each remaining step is well under a minute; the job needs ~15 min on
+    # a cold-cache day and cannot warm the cache until it completes once. 22 keeps margin over that and
+    # still catches a real hang; a warm run lands around 10.
     timeout-minutes: 22
     services:
       postgres:
@@ -414,7 +417,10 @@ jobs:
         run: npm run verify:f6
       - name: License gate (block network-copyleft AGPL/SSPL)
         working-directory: backend
-        run: npx --yes license-checker --production --failOn 'AGPL;SSPL'
+        # license-checker is a pinned devDependency (installed by `npm ci`), so npx resolves the LOCAL
+        # binary and makes no network round-trip. Do NOT restore `--yes`: it existed only to auto-confirm
+        # a live download, which is exactly the ~7-min registry spike this step used to inflict.
+        run: npx license-checker --production --failOn 'AGPL;SSPL'
       - name: Test
         # WORDJS_CI_DB=1 turns the driver-conformance suite's postgres+mysql blocks from graceful skips
         # into hard failures: the service containers above are wired precisely so those drivers ARE

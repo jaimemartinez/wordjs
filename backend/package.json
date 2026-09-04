@@ -105,6 +105,7 @@
     "eslint": "^10.5.0",
     "eslint-config-prettier": "^10.1.8",
     "globals": "^17.6.0",
+    "license-checker": "^25.0.1",
     "prettier": "^3.8.4",
     "supertest": "^7.2.2",
     "tailwindcss": "^4.1.18",
