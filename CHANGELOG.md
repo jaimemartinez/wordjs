@@ -12,10 +12,13 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   must carry an `X-CSRF-Token` header equal to the `wjs_csrf` cookie the server issues at login (the
   cookie is readable by scripts and otherwise shares the session cookie's attributes). The check is
   combined with the existing Origin/Host allow-list rather than replacing it, Bearer requests are
-  exempt, a mismatch answers `403 rest_csrf_token`, and the cookie is back-filled on the next
-  authenticated request for sessions that predate this release. The frontend attaches the header
-  through `lib/csrf.ts`; every in-tree mutating fetch path was updated, and the editor presence
-  beacon moved from `sendBeacon` to `fetch` with `keepalive` so it can carry the header.
+  exempt — as are requests whose session cookie no longer verifies (a dead cookie authenticates
+  nothing) and the two steps of sign-in, `POST /auth/login` and `POST /auth/mfa`, which credentials
+  and a signed MFA challenge authenticate rather than the cookie; the Origin/Host allow-list still
+  applies to all of them. A mismatch answers `403 rest_csrf_token`, and the cookie is back-filled
+  on the next authenticated request for sessions that predate this release. The frontend attaches
+  the header through `lib/csrf.ts`; every in-tree mutating fetch path was updated, and the editor
+  presence beacon moved from `sendBeacon` to `fetch` with `keepalive` so it can carry the header.
   `X-CSRF-Token` is now an allowed CORS request header.
 - **A runaway isolated plugin is killed.** The sandbox's memory poll now also samples CPU time: a
   child that stays at or above 95% of one core for `sandbox.cpuBurstSeconds` seconds (default 60;

@@ -11,9 +11,15 @@
  * En local, donde la instancia YA está instalada, `/setup/status` responde
  * installed:true y este paso no toca nada.
  *
- * LOGIN: POST /api/v1/auth/login — el CSRF del backend es same-origin por
- * Origin/Referer (middleware/auth.ts csrfProtection), así que basta la cabecera
- * Origin; la sesión llega como cookie HttpOnly que storageState() captura.
+ * LOGIN: POST /api/v1/auth/login — el CSRF del backend son DOS comprobaciones
+ * AND-eadas (middleware/auth.ts csrfProtection): el same-origin por
+ * Origin/Referer y, además, un token de doble envío — toda petición mutante que
+ * lleve la cookie de sesión debe repetir el valor de la cookie `wjs_csrf` en la
+ * cabecera `X-CSRF-Token`. El login queda DELIBERADAMENTE fuera de ese segundo
+ * gate (lo autentican las credenciales del cuerpo, no la cookie), y por eso aquí
+ * basta con la cabecera Origin pese a que el paso de instalación de arriba ya ha
+ * dejado una cookie de sesión en ESTE mismo APIRequestContext; la sesión llega
+ * como cookie HttpOnly que storageState() captura.
  *
  * Credenciales: la cuenta seed de dev (admin/admin123 — lib/local-dev-stack).
  * Sobreescribibles vía VERSO_E2E_USER / VERSO_E2E_PASS (en CI la contraseña

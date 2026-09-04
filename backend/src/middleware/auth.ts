@@ -458,6 +458,13 @@ function hasBearerCredential(req: Request): boolean {
         && authHeader !== 'Bearer null' && authHeader !== 'Bearer undefined';
 }
 
+// THE TWO STEPS OF SIGN-IN — the mutating routes a session cookie does not authenticate. Step one carries
+// its own credentials in the body; step two carries the short-lived challenge `/auth/login` signed and
+// handed back (`mfa.verifyChallenge`), and issues no cookie of its own until it succeeds. Neither has any
+// use for a token the caller may not yet possess. ENUMERATED and exact, exactly like CSRF_EXEMPT_PATHS
+// above — see csrfTokenGate for why this must never become an '/auth/' or '/auth/mfa/' subtree.
+const CSRF_TOKEN_EXEMPT_PATHS = new Set(['/auth/login', '/auth/mfa']);
+
 /**
  * THE DOUBLE-SUBMIT GATE. Runs only for mutating methods, only after the origin check has already
  * accepted the request (see csrfProtection) — the two are AND-ed, never alternatives.
@@ -467,18 +474,53 @@ function hasBearerCredential(req: Request): boolean {
  *     browser attaches it automatically, so there is nothing for a hostile page to ride. Requiring a
  *     cookie-derived token from a headless client that has no cookie jar would just break every
  *     machine integration for no gain. This is the same boundary `isHeadless` already draws.
- *   • Requests with no session cookie. Nothing to abuse — an anonymous POST (a public form, the
- *     analytics beacon) carries no authority. Note the check keys on the COOKIE BEING PRESENT, not on
- *     the request having been authenticated: this middleware runs globally, BEFORE any route's
+ *   • Requests with no session cookie — and requests whose session cookie does not VERIFY. Nothing to
+ *     abuse in either case: an anonymous POST (a public form, the analytics beacon) carries no authority,
+ *     and neither does a cookie `authenticate` is about to throw away. Note the check keys on the COOKIE,
+ *     not on the request having been authenticated: this middleware runs globally, BEFORE any route's
  *     `authenticate`, and a gate that waited to learn the answer would have to be re-mounted on every
- *     router — including ones that do not exist yet. Cookie-present is the fail-closed proxy, and it
+ *     router — including ones that do not exist yet. A verifiable cookie is the fail-closed proxy, and it
  *     deliberately covers a logged-in user's POST to a *public* route too, because that request does
  *     carry their ambient session.
  *   • GET/HEAD/OPTIONS never reach here at all (csrfProtection returns first).
+ *   • The two steps of sign-in, POST /auth/login and POST /auth/mfa — see below.
  */
 function csrfTokenGate(req: Request, res: Response, next: NextFunction) {
     if (hasBearerCredential(req)) return next();
-    if (!sessionCookie(req)) return next();
+    const session = sessionCookie(req);
+    if (!session) return next();
+
+    // THE RULE: the token gate protects requests the SESSION COOKIE authenticates. A cookie that does not
+    // verify authenticates nothing — `authenticate` will answer 401 whatever this gate decides — so there
+    // is no ambient authority for a hostile page to ride and nothing for the token to protect. Gating it
+    // anyway is what bricks a browser after an upgrade: a session cookie minted BEFORE this feature shipped
+    // has no wjs_csrf beside it, the back-fill cannot help once the JWT expires (ensureCsrfCookie runs only
+    // after authentication SUCCEEDS), yet the browser keeps attaching the dead cookie — so every recovery
+    // route it might reach (sign in, finish 2FA, request a password reset, verify an email, even log out)
+    // answers 403 until the user deletes cookies by hand.
+    //
+    // THE INVARIANT: this gate never skips a cookie that `authenticate` would accept. It holds because the
+    // check below is the SAME verification, verbatim — `verifyToken`, the one `authenticate` calls — with
+    // no clock tolerance and no leniency of its own, and because `authenticate` only ever rejects MORE on
+    // top of it (revocation, a deleted user, the MFA policy gate), never less. So the two can only disagree
+    // in the fail-closed direction: a revoked-but-unexpired cookie still verifies here and stays gated.
+    try { verifyToken(session); }
+    catch { return next(); }
+
+    // The VALID-cookie half of the same rule, which the verification above cannot reach: sign-in is
+    // authenticated by the credentials in the body (and its second step by the signed challenge), so a
+    // caller who already holds a live session must still be able to sign in as somebody — or as themselves
+    // again — without a token. That is the install-then-login case: POST /setup/install auto-issues a
+    // session cookie, so a client reusing ONE cookie jar (frontend/e2e/global.setup.ts drives both through
+    // a single Playwright APIRequestContext) sends a perfectly valid cookie on the very next
+    // POST /auth/login, with no header it could possibly have.
+    //
+    // ENUMERATED and EXACT, not a subtree: POST /auth/refresh IS authenticated by the cookie and must stay
+    // gated, and so must logout and the MFA *management* routes one segment further along (/mfa/setup,
+    // /mfa/enable, /mfa/disable, /mfa/backup-codes, /mfa/policy) — their cookies were issued together with
+    // wjs_csrf, so the frontend already sends the header. The Origin/Host allow-list in csrfProtection
+    // still applies to both steps of sign-in and remains the control against login-CSRF.
+    if (req.method === 'POST' && CSRF_TOKEN_EXEMPT_PATHS.has(pathAfterApiPrefix(req))) return next();
 
     const cookieToken = csrfCookie(req);
     const headerToken = req.get(CSRF_HEADER);

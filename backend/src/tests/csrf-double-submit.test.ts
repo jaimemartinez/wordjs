@@ -214,6 +214,137 @@ test('an ANONYMOUS mutating request is not gated — there is no ambient authori
     assert.strictEqual(res.body.code, 'rest_invalid_credentials');
 });
 
+// ── a cookie that does not VERIFY is not gated ────────────────────────────────────────────────────
+
+test('a MALFORMED session cookie is not gated — it authenticates nothing, so the token protects nothing', async () => {
+    // The class the login exemption alone does not close. /auth/refresh here stands for every recovery
+    // route a browser with a dead cookie might reach (register, forgot-password, reset-password,
+    // verify-email, logout): gating them made the 403 the ONLY answer such a browser could ever get.
+    const res = await request(app).post(`${B}/auth/refresh`).set(SAME_ORIGIN)
+        .set('Cookie', cookieHeader({ [SESSION_COOKIE]: 'not-a-jwt' }));
+    assert.notStrictEqual(res.body.code, 'rest_csrf_token', 'the gate must let an unverifiable cookie through');
+    assert.strictEqual(res.status, 401, JSON.stringify(res.body));
+    assert.strictEqual(res.body.code, 'rest_token_invalid', 'authenticate — not the CSRF gate — must be the one that refuses');
+});
+
+test('an EXPIRED session cookie is not gated either — the exact pre-release upgrade shape', async () => {
+    // Correctly signed by us, same payload issueSessionCookie mints (generateToken: userId + username);
+    // the ONLY difference is that it is past its expiry. This is the browser that has been sitting open
+    // across the upgrade, and the request that must not answer 403.
+    const expired = jwt.sign({ userId: adminId, username: 'admin' }, SECRET, { algorithm: 'HS256', expiresIn: -60 });
+    const res = await request(app).post(`${B}/auth/refresh`).set(SAME_ORIGIN)
+        .set('Cookie', cookieHeader({ [SESSION_COOKIE]: expired }));
+    assert.notStrictEqual(res.body.code, 'rest_csrf_token');
+    assert.strictEqual(res.status, 401, JSON.stringify(res.body));
+    assert.strictEqual(res.body.code, 'rest_token_expired', 'authenticate must be the one that refuses');
+});
+
+// ── login is OUTSIDE the token gate ───────────────────────────────────────────────────────────────
+
+test('POST /auth/login with a session cookie and NO token is accepted — the upgrade lockout', async () => {
+    // The browser this exists for: a session cookie minted BEFORE this feature shipped (so nothing
+    // beside it) whose JWT has since expired. ensureCsrfCookie cannot back-fill a token for it — the
+    // back-fill runs only once authentication has SUCCEEDED — the browser keeps attaching the dead
+    // cookie anyway, and the sign-in form's POST is the one request that has to get the user out of it.
+    const res = await request(app).post(`${B}/auth/login`).set(SAME_ORIGIN)
+        .set('Cookie', cookieHeader({ [SESSION_COOKIE]: 'a-session-cookie-that-predates-this-release' }))
+        .send({ username: 'admin', password: PASSWORD });
+    assert.strictEqual(res.status, 200, JSON.stringify(res.body));
+    assert.ok(setCookieValue(res, CSRF_COOKIE), 'the sign-in must hand back a token the browser can use');
+});
+
+test('login is OFF the gate, not merely lenient — a WRONG token still signs in, and both cookies rotate', async () => {
+    const { session, csrf } = await login();
+    const res = await request(app).post(`${B}/auth/login`).set(SAME_ORIGIN)
+        .set('Cookie', cookieHeader({ [SESSION_COOKIE]: session, [CSRF_COOKIE]: csrf }))
+        // Same length, wrong value — on any gated route this is the mismatch case that answers 403.
+        .set(CSRF_HEADER, 'x'.repeat(csrf.length))
+        .send({ username: 'admin', password: PASSWORD });
+    assert.strictEqual(res.status, 200, JSON.stringify(res.body));
+
+    // Rotation is what makes the exemption safe to hold: whatever token the request arrived with, it is
+    // replaced, so a stale one can never survive a re-login. The session cookie is asserted as RE-ISSUED
+    // rather than as a different string — two JWTs minted for the same user in the same second are byte
+    // identical — while the CSRF token is fresh randomness and must actually differ.
+    const newSession = setCookieLine(res, SESSION_COOKIE);
+    const newCsrf = setCookieValue(res, CSRF_COOKIE);
+    assert.ok(newSession, 'a successful sign-in must re-issue the session cookie');
+    assert.ok(newCsrf, 'a successful sign-in must re-issue the CSRF cookie');
+    assert.notStrictEqual(newCsrf, csrf, 'the sign-in must rotate the CSRF token, not keep the one sent');
+    assert.match(String(newCsrf), /^[A-Za-z0-9_-]{43}$/, `unexpected token shape: ${newCsrf}`);
+});
+
+test('POST /auth/mfa — the SECOND step of sign-in — is off the gate too, with a live cookie attached', async () => {
+    // /auth/login answers `{ mfaRequired, mfaToken }` and issues NO cookies, so the browser reaches this
+    // route holding whatever it had before. What authenticates it is the SIGNED CHALLENGE in the body,
+    // never the cookie — so gating it would lock out exactly the MFA half of the population the login
+    // exemption just rescued. Reaching the handler (a challenge rejection) is the proof.
+    const { session, csrf } = await login();
+    const res = await request(app).post(`${B}/auth/mfa`).set(SAME_ORIGIN)
+        .set('Cookie', cookieHeader({ [SESSION_COOKIE]: session, [CSRF_COOKIE]: csrf }))
+        .send({ mfaToken: 'bogus', code: '000000' });
+    assert.notStrictEqual(res.body.code, 'rest_csrf_token', JSON.stringify(res.body));
+    assert.strictEqual(res.status, 401, JSON.stringify(res.body));
+    assert.strictEqual(res.body.code, 'rest_mfa_challenge_invalid');
+});
+
+test('POST /auth/mfa with an EXPIRED cookie reaches the handler too — both rules agree', async () => {
+    const expired = jwt.sign({ userId: adminId, username: 'admin' }, SECRET, { algorithm: 'HS256', expiresIn: -60 });
+    const res = await request(app).post(`${B}/auth/mfa`).set(SAME_ORIGIN)
+        .set('Cookie', cookieHeader({ [SESSION_COOKIE]: expired }))
+        .send({ mfaToken: 'bogus', code: '000000' });
+    assert.strictEqual(res.status, 401, JSON.stringify(res.body));
+    assert.strictEqual(res.body.code, 'rest_mfa_challenge_invalid');
+});
+
+test('the exemption is EXACT: POST /auth/mfa/setup stays gated — enrollment IS cookie-authenticated', async () => {
+    // One segment past the exempt entry, and on the other side of the line: /mfa/setup, /mfa/enable,
+    // /mfa/disable, /mfa/backup-codes and /mfa/policy all run on the ambient session, whose cookie was
+    // issued together with wjs_csrf. An '/auth/mfa/' subtree exemption would hand enrollment — the one
+    // operation whose owner cannot undo it — to any page that can make the browser POST.
+    const { session, csrf } = await login();
+    const res = await request(app).post(`${B}/auth/mfa/setup`).set(SAME_ORIGIN)
+        .set('Cookie', cookieHeader({ [SESSION_COOKIE]: session, [CSRF_COOKIE]: csrf }))
+        .send({});
+    assert.strictEqual(res.status, 403, JSON.stringify(res.body));
+    assert.strictEqual(res.body.code, 'rest_csrf_token');
+});
+
+test('the exemption is EXACT: POST /auth/refresh stays gated — the cookie IS what authenticates it', async () => {
+    const { session, csrf } = await login();
+    const res = await request(app).post(`${B}/auth/refresh`).set(SAME_ORIGIN)
+        .set('Cookie', cookieHeader({ [SESSION_COOKIE]: session, [CSRF_COOKIE]: csrf }));
+    assert.strictEqual(res.status, 403, JSON.stringify(res.body));
+    assert.strictEqual(res.body.code, 'rest_csrf_token');
+});
+
+test('the exemption is EXACT: a path that merely starts with /auth/login is gated', async () => {
+    // The enumerated Set is the whole point: a startsWith('/auth/login') would hand the exemption to
+    // everything one character further along. (A `/auth/login/../refresh` probe is NOT the assertion to
+    // write — the HTTP client resolves the dot segment before the request is sent, so the server only
+    // ever sees `/auth/refresh`, which the test above already covers. What the normalizer really has to
+    // survive are the forms below and their mirror images.)
+    const { session, csrf } = await login();
+    const res = await request(app).post(`${B}/auth/loginx`).set(SAME_ORIGIN)
+        .set('Cookie', cookieHeader({ [SESSION_COOKIE]: session, [CSRF_COOKIE]: csrf }))
+        .send({ username: 'admin', password: PASSWORD });
+    assert.strictEqual(res.status, 403, JSON.stringify(res.body));
+    assert.strictEqual(res.body.code, 'rest_csrf_token');
+});
+
+test('the exemption is derived from originalUrl, so the URL forms Express routes to login all match', async () => {
+    // pathAfterApiPrefix strips the query, collapses repeated separators and lowercases — the three
+    // rewrites that let ONE exact string stand for every URL Express actually routes to the login
+    // handler. If the exemption compared a differently-derived path, these would 403 instead.
+    const { session } = await login();
+    for (const url of [`${B}/auth/login?redirect=%2Fadmin`, `${B}//auth/login`, `${B}/AUTH/Login`]) {
+        const res = await request(app).post(url).set(SAME_ORIGIN)
+            .set('Cookie', cookieHeader({ [SESSION_COOKIE]: session }))
+            .send({ username: 'admin', password: PASSWORD });
+        assert.strictEqual(res.status, 200, `${url} → ${res.status} ${JSON.stringify(res.body)}`);
+    }
+});
+
 // ── the two halves are AND-ed ─────────────────────────────────────────────────────────────────────
 
 test('a PERFECT token does not disable the origin check', async () => {
@@ -271,9 +402,9 @@ test('CORS advertises X-CSRF-Token, or a cross-origin admin can never send it', 
 
 test('a session that predates this feature is HEALED on its first safe request, not bricked', async () => {
     // The upgrade path. Without the backfill, a browser holding a session cookie minted before this
-    // shipped could neither mutate (no token) nor log out (also a mutation) nor log in again (the stale
-    // cookie makes that a cookie-carrying mutation too) — a lockout escapable only by hand-deleting
-    // cookies.
+    // shipped could neither mutate (no token) nor log out (also a mutation) — it would have to throw the
+    // session away and sign in again, which is why POST /auth/login is off the gate (see above) and why
+    // this heal exists: so a LIVE pre-release session keeps working instead of forcing a re-login.
     const { session } = await login();
     const res = await request(app).get(`${B}/auth/me`).set(SAME_ORIGIN)
         .set('Cookie', cookieHeader({ [SESSION_COOKIE]: session }));

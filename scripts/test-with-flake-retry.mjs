@@ -78,15 +78,15 @@ export function onlyDeserializeFlake(stdout) {
     return true;
 }
 
+// Up to two retries: the flake is a race in the runner's force-exit teardown, so a fresh run usually
+// clears it, and the wrapped suites are small and fast enough that a couple of extra attempts cost
+// seconds. A REAL failure exits on the first attempt — the retries only ever apply to a pure flake.
+const RETRIES = 2; // declared BEFORE main() runs below: a const is not hoisted, and the retry loop reads it
+
 // Only run when invoked directly; importing for a test gets onlyDeserializeFlake without spawning.
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   await main();
 }
-
-// Up to two retries: the flake is a race in the runner's force-exit teardown, so a fresh run usually
-// clears it, and the wrapped suites are small and fast enough that a couple of extra attempts cost
-// seconds. A REAL failure exits on the first attempt — the retries only ever apply to a pure flake.
-const RETRIES = 2;
 
 async function main() {
 let res = await run();
