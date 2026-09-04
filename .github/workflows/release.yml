@@ -63,15 +63,15 @@ jobs:
       # ci.yml audits — a HIGH advisory in a production dependency must never reach a release asset.
       - name: Audit backend (block high/critical prod vulns)
         working-directory: backend
-        run: npm audit --omit=dev --audit-level=high
+        run: node "$GITHUB_WORKSPACE/scripts/ci-audit.mjs"
 
       - name: Audit gateway (block high/critical prod vulns)
         working-directory: gateway
-        run: npm audit --omit=dev --audit-level=high
+        run: node "$GITHUB_WORKSPACE/scripts/ci-audit.mjs"
 
       - name: Audit frontend (block high/critical prod vulns)
         working-directory: frontend
-        run: npm audit --omit=dev --audit-level=high
+        run: node "$GITHUB_WORKSPACE/scripts/ci-audit.mjs"
 
       # THE INSTALL CHANNEL WAS THE ONE PACKAGE NOBODY AUDITED.
       #
@@ -86,7 +86,7 @@ jobs:
       # plugins, which ship their own dependency trees and are audited by the marketplace gate.
       - name: Audit create-wordjs (block high/critical prod vulns)
         working-directory: packages/create-wordjs
-        run: npm audit --omit=dev --audit-level=high
+        run: node "$GITHUB_WORKSPACE/scripts/ci-audit.mjs"
 
       - name: Backend type check (strict)
         working-directory: backend

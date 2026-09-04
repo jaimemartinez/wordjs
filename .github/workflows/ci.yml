@@ -377,7 +377,7 @@ jobs:
         run: npm ci || npm install
       - name: Audit (block high/critical prod vulns)
         working-directory: backend
-        run: npm audit --omit=dev --audit-level=high
+        run: node "$GITHUB_WORKSPACE/scripts/ci-audit.mjs"
       - name: Type check (strict)
         working-directory: backend
         run: npx tsc --noEmit
@@ -540,7 +540,7 @@ jobs:
         run: npm ci || npm install
       - name: Audit (block high/critical prod vulns)
         working-directory: gateway
-        run: npm audit --omit=dev --audit-level=high
+        run: node "$GITHUB_WORKSPACE/scripts/ci-audit.mjs"
       - name: Test
         working-directory: gateway
         run: npm test
@@ -569,7 +569,7 @@ jobs:
         run: npm ci || npm install
       - name: Audit (block high/critical prod vulns)
         working-directory: packages/create-wordjs
-        run: npm audit --omit=dev --audit-level=high
+        run: node "$GITHUB_WORKSPACE/scripts/ci-audit.mjs"
       # ASSERT THAT IT RAN SOMETHING.
       #
       # `node --test <pattern>` exits 0 when the pattern matches NO files. The script's glob is
@@ -618,7 +618,7 @@ jobs:
         run: npm ci --omit=dev || npm install --omit=dev
       - name: Audit (block high/critical prod vulns)
         working-directory: frontend
-        run: npm audit --omit=dev --audit-level=high
+        run: node "$GITHUB_WORKSPACE/scripts/ci-audit.mjs"
       - name: Generate plugin registries (match the actually checked-out plugins)
         # The committed registries can be generated on a machine that has restricted/local-only
         # plugins (e.g. the gitignored conference-manager). Regenerate here so type-check, lint and
