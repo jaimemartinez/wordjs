@@ -200,7 +200,10 @@ describe('an isolated plugin on this host: loads, serves, and is still confined 
     before(async () => {
         setApp(app);
         fs.mkdirSync(dir, { recursive: true });
-        fs.writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify({ name: SLUG, isolated: true, permissions: [] }));
+        fs.writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify({ name: SLUG, isolated: true, permissions: [{ scope: 'express', access: 'register_route' }] }));
+        // The /confinement probe is delivered over a route; grant only express:register_route so it mounts.
+        // The confinement floors it checks (net/fetch/child_process/binding) all stay ungranted.
+        require('../core/plugin-permissions')._setGrantsInMemory(SLUG, ['express:register_route']);
         fs.writeFileSync(entry,
             "exports.init = function (wordjs) {\n" +
             "  wordjs.hooks.addFilter('platform_fallback_filter', (v) => '[ok]' + v);\n" +

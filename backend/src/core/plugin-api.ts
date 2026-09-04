@@ -910,6 +910,10 @@ function createPluginApi(slug: string) {
 
         adminMenu: {
             add(item: any) {
+                // admin_menu:register is an admin-grantable, must-be-explicit verb (isGranted does not imply
+                // it from admin). Every sibling bridge method gates on verifyPermission; this one did not, so
+                // any plugin injected admin-sidebar items regardless of grant/revoke. Gate it like the rest.
+                verifyPermission('admin_menu', 'register');
                 const { registerAdminMenu } = require('./adminMenu');
                 return registerAdminMenu(slug, item);
             }

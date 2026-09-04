@@ -26,7 +26,11 @@ app.use(express.json());
 before(async () => {
     setApp(app); // host owns Express; isolated routes mount here
     fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify({ name: SLUG, isolated: true, permissions: [] }));
+    // Mounting a host route is the express:register_route grant (enforced in the register-route handler,
+    // like email:provider / notifications:provider). The plugin DECLARES it and the admin GRANTS it —
+    // exactly what /admin/plugins does — so its /ping, /anyverb and /netcheck routes mount.
+    fs.writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify({ name: SLUG, isolated: true, permissions: [{ scope: 'express', access: 'register_route' }] }));
+    require('../core/plugin-permissions')._setGrantsInMemory(SLUG, ['express:register_route']);
     fs.writeFileSync(entry,
         "exports.init = function (wordjs) {\n" +
         "  wordjs.hooks.addFilter('test_iso_filter', (v) => '[iso]' + v);\n" +
@@ -152,7 +156,7 @@ test('an isolate CAN write its own data dir when filesystem is granted — and s
     fs.mkdirSync(fsDir, { recursive: true });
     fs.writeFileSync(path.join(fsDir, 'manifest.json'), JSON.stringify({
         name: FSSLUG, isolated: true,
-        permissions: [{ scope: 'filesystem', access: 'read' }, { scope: 'filesystem', access: 'write' }],
+        permissions: [{ scope: 'filesystem', access: 'read' }, { scope: 'filesystem', access: 'write' }, { scope: 'express', access: 'register_route' }],
     }));
     // The published dir is created HERE, by unsandboxed host code. Without it the child's write to
     // public/leak.css would fail with ENOENT and the assertion below would pass for the wrong reason —
@@ -192,7 +196,8 @@ test('an isolate CAN write its own data dir when filesystem is granted — and s
     const before = perms.getGrants(FSSLUG);
     try {
         // The ADMIN grants it (host-side, no plugin context) — exactly what /admin/plugins does.
-        perms._setGrantsInMemory(FSSLUG, ['filesystem:read', 'filesystem:write']);
+        // express:register_route is granted too so the plugin's /fscheck probe route mounts.
+        perms._setGrantsInMemory(FSSLUG, ['filesystem:read', 'filesystem:write', 'express:register_route']);
         await loadIsolatedPlugin(FSSLUG, fsEntry);
 
         const r = await request(app).get(`/api/v1/plugin/${FSSLUG}/fscheck`);
@@ -210,8 +215,10 @@ test('an isolate CAN write its own data dir when filesystem is granted — and s
         assert.ok(refusedBySandbox(r.body.outsideZone), `a granted plugin must be REFUSED writing outside every write zone, got: ${JSON.stringify(r.body.outsideZone)}`);
 
         // REVOKE + respawn (what POST /plugins/:slug/permissions does): the denial must come back, or the
-        // admin's switch is inert for exactly the plugins the gate exists to control.
-        perms._setGrantsInMemory(FSSLUG, []);
+        // admin's switch is inert for exactly the plugins the gate exists to control. Keep only
+        // express:register_route so the /fscheck probe route still mounts — the filesystem grant is what
+        // this revocation is testing.
+        perms._setGrantsInMemory(FSSLUG, ['express:register_route']);
         await reloadIsolatedPlugin(FSSLUG);
         const r2 = await request(app).get(`/api/v1/plugin/${FSSLUG}/fscheck`);
         assert.strictEqual(r2.status, 200);

@@ -21,7 +21,8 @@
  * "not blocked" and the test fails — a broken sandbox cannot pass this file.
  *
  * Two fixtures:
- *   • UNGRANTED (permissions:[], no grants) — the always-on isolation: fs, require, ESM import, network,
+ *   • UNGRANTED (only express:register_route, the harness's probe-delivery channel — every tested
+ *     capability ungranted) — the always-on isolation: fs, require, ESM import, network,
  *     secret-env, IPC bridge-allowlist, and self-grant immutability (none depend on a permission grant).
  *   • GRANTED (database + settings + network, actually granted via _setGrantsInMemory before load) — proves
  *     the guards contain even a FULLY-granted plugin: the SQL scope guard, protected-option guard, and the
@@ -348,7 +349,11 @@ before(async () => {
     await new Promise<void>((resolve) => ssrfListener.listen(0, '127.0.0.1', () => resolve()));
     ssrfPort = (ssrfListener.address() as any).port;
 
-    ungrantedDir = writeFixture(UNGRANTED, [], UNGRANTED_INIT);
+    // express:register_route is the ONLY grant the UNGRANTED fixture gets — it is how the harness reaches
+    // the forked child to run its probes (each probe is an HTTP route), not a capability under test. fs,
+    // require, ESM import, network, SQL, secrets and self-grant all stay ungranted; those are what the
+    // probes below prove are contained regardless.
+    ungrantedDir = writeFixture(UNGRANTED, [{ scope: 'express', access: 'register_route' }], UNGRANTED_INIT);
     // In-zone decoys inside the UNGRANTED plugin's own dir: only the DB-file / BLOCKED_FILES rules can deny
     // reading these (the own-dir zone would otherwise allow them), isolating those guards.
     fs.writeFileSync(path.join(ungrantedDir, 'decoy.db'), SECRET_CONTENT);
@@ -358,10 +363,13 @@ before(async () => {
         { scope: 'database', access: 'read' },
         { scope: 'database', access: 'write' },
         { scope: 'settings', access: 'read' },
+        { scope: 'express', access: 'register_route' },
     ], GRANTED_INIT);
 
     // Grant the GRANTED fixture BEFORE load so cfg.network resolves true at spawn (host context — allowed).
-    perms._setGrantsInMemory(GRANTED, ['database:read', 'database:write', 'settings:read', perms.NETWORK_TOKEN]);
+    // express:register_route is included so its probe routes mount (delivery channel, as for UNGRANTED).
+    perms._setGrantsInMemory(GRANTED, ['database:read', 'database:write', 'settings:read', 'express:register_route', perms.NETWORK_TOKEN]);
+    perms._setGrantsInMemory(UNGRANTED, ['express:register_route']);
 
     await loadWithTimeout(UNGRANTED, path.join(ungrantedDir, 'index.js'));
     await loadWithTimeout(GRANTED, path.join(grantedDir, 'index.js'));

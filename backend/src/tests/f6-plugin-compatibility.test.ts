@@ -76,10 +76,12 @@
  *    process cannot be used as a plugin's network or spawn surface, and that is a test-hygiene measure,
  *    not a security proof.
  *  · `admin_menu:register` / `express:register_route` are declared in KNOWN_PERMISSIONS and shown on the
- *    operator's approval screen, but NOTHING denies those two calls at runtime today (see
- *    plugin-isolate.ts's register-route handler and core/adminMenu.ts — neither consults a grant). They
- *    are therefore asserted as a DISCLOSURE rule, separately from the gated capabilities, and the failure
- *    message says so. Overstating them as enforced is how a test starts lying about what it proves.
+ *    operator's approval screen. These two ARE now denied at runtime without the grant — plugin-isolate.ts's
+ *    register-route handler checks isGranted('express','register_route') and plugin-api.ts's adminMenu.add
+ *    checks verifyPermission('admin_menu','register'), the same must-be-explicit gate as email:provider — so
+ *    the bridge above routes them through gate() like every other capability. They are ALSO asserted as a
+ *    DISCLOSURE rule (a plugin that uses one must declare it), because a declared permission is what the
+ *    operator approves and therefore what gets granted.
  *  · Anything a plugin does with a real socket. The socket layer is replaced by a fake on which nothing
  *    can bind or connect (see makeSocketLayerFake), so an SMTP listener's own bootstrap is exercised down
  *    to its degraded path and no further. That is a limit of the harness, stated rather than hidden.
@@ -418,7 +420,7 @@ function makeBridge(slug: string, manifest: any, rec: Recorder, tmpDir: string):
             async () => { gate('notifications', 'send'); },
             { registerTransport() { gate('notifications', 'provider'); } },
         ),
-        adminMenu: { async add(item: any) { ungated('admin_menu:register'); rec.menus.push(item); } },
+        adminMenu: { async add(item: any) { gate('admin_menu', 'register'); rec.menus.push(item); } },
         cron: { async schedule() { ungated('cron'); } },
         crypto: {
             async randomToken(bytes = 16) { ungated('crypto'); return 'ab'.repeat(bytes); },
@@ -448,7 +450,7 @@ function makeBridge(slug: string, manifest: any, rec: Recorder, tmpDir: string):
         },
         http: {
             route(method: string, routePath: string, opts: any, handler: any) {
-                ungated('express:register_route');
+                gate('express', 'register_route');
                 // Same overload plugin-worker.js accepts: the third argument is either the options
                 // object or the handler itself.
                 const routeHandler = typeof opts === 'function' ? opts : handler;

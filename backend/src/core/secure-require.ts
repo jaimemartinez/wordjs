@@ -16,6 +16,10 @@ const originalChildProcess = require('child_process');
 // genuine module without re-entering the proxy — a plugin-context require('os') routes back here.
 const originalOs = require('os');
 const path = require('path');
+// The module system itself, captured for `isBuiltin` — used to deny Node's underscore-prefixed internal
+// builtins (_http_client, _tls_wrap, _stream_wrap, …) to plugins. isBuiltin is true for a bare builtin id
+// (with or without the node: prefix) and false for a relative path, so a plugin's own `./_helper` is unaffected.
+const nodeModule = require('module');
 // Loaded EAGERLY here (at module init, before any plugin is on the stack / before installSecureRequire
 // patches require) so egress-guard captures the REAL net/tls/dns/... modules, not our proxies. It hands
 // back network builtins wrapped with a public-only egress filter for network-granted plugins.
@@ -495,6 +499,11 @@ const REVIEWED_SAFE_BUILTINS = new Set([
 function classifyBuiltin(id: string): 'blocked' | 'network' | 'intercepted' | 'reviewed-safe' | 'unclassified' {
     const norm = String(id).replace(/^node:/, '');
     const base = norm.split('/')[0];
+    // Node's underscore-prefixed internal builtins (_http_client, _tls_wrap, _stream_wrap, _http_agent, …)
+    // are requirable and hand out raw HTTP/TLS/stream-wrap primitives that sit BELOW net.Socket.prototype
+    // .connect — the egress chokepoint — so they are treated as blocked, never reviewed-safe. Some Node
+    // versions omit them from module.builtinModules, so this classification cannot rely on the enumeration.
+    if (base.startsWith('_') && nodeModule.isBuiltin(norm)) return 'blocked';
     if (BLOCKED_PLUGIN_MODULES.includes(norm) || BLOCKED_PLUGIN_MODULES.includes(base)) return 'blocked';
     if (NETWORK_MODULES.has(norm) || NETWORK_MODULES.has(base)) return 'network';
     if (base === 'fs' || base === 'child_process' || base === 'os') return 'intercepted';
@@ -582,9 +591,17 @@ function secureModuleFor(id: any) {
     const base = norm.split('/')[0];
     const isNet = NETWORK_MODULES.has(norm) || NETWORK_MODULES.has(base);
     const isBlocked = BLOCKED_PLUGIN_MODULES.includes(norm) || BLOCKED_PLUGIN_MODULES.includes(base);
-    if (base !== 'fs' && base !== 'child_process' && base !== 'os' && !isBlocked && !isNet) return undefined;
+    // Node's underscore-prefixed internal builtins (_http_client.ClientRequest, _tls_wrap, _stream_wrap, …)
+    // are requirable and expose socket/stream-wrap primitives BELOW net.Socket.prototype.connect — the egress
+    // chokepoint installChildNetGuard patches — so they would give even a NON-network-granted plugin outbound
+    // reach (they are named by neither NETWORK_MODULES nor BLOCKED_PLUGIN_MODULES, so the deny-list handed them
+    // back raw). Deny every such internal to plugins. isBuiltin is false for a relative './_helper', so a
+    // plugin's own underscore-named file is unaffected; core (no effective plugin) still gets the real module.
+    const isUnderscoreInternal = base.startsWith('_') && nodeModule.isBuiltin(norm);
+    if (base !== 'fs' && base !== 'child_process' && base !== 'os' && !isBlocked && !isNet && !isUnderscoreInternal) return undefined;
     const pluginSlug = getEffectivePlugin();
     if (!pluginSlug) return undefined;
+    if (isUnderscoreInternal) return createBlockedModuleProxy(pluginSlug, norm);
     if (norm === 'fs/promises') return createSecureFsPromises();
     if (base === 'fs') return secureFs;
     if (base === 'child_process') return secureChildProcess;
@@ -937,7 +954,12 @@ function installSecureRequire() {
     // ready made the host consult a filter the plugin had not registered yet. The worker captures the
     // real process.send before this wrapper installs, so its own control frames are unaffected — the
     // plugin reaches the host only through wordjs.*, which is the whole point of the bridge.
-    const PROC_BLOCKED = ['kill', 'abort', 'exit', 'chdir', 'umask', 'setuid', 'setgid', 'seteuid', 'setegid', 'setgroups', 'initgroups', '_kill',
+    //     reallyExit(code) is the NATIVE primitive process.exit wraps: exit() emits the 'exit' event and
+    //       then calls process.reallyExit(). Blocking exit() but not reallyExit() left the twin open — an
+    //       in-process plugin/theme calls process.reallyExit(0) and kills the whole host, skipping even the
+    //       'exit' handlers, and inside the isolate it kills the worker mid-frame. It reaches nothing that
+    //       process.exit did not, so blocking it costs a plugin no legitimate capability.
+    const PROC_BLOCKED = ['kill', 'abort', 'exit', 'reallyExit', 'chdir', 'umask', 'setuid', 'setgid', 'seteuid', 'setegid', 'setgroups', 'initgroups', '_kill',
         'execve', '_debugProcess', '_debugEnd', 'loadEnvFile', 'send', 'disconnect'];
     for (const m of PROC_BLOCKED) {
         const orig = (process as any)[m];

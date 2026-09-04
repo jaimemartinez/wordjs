@@ -449,7 +449,10 @@ function validateManifestPermissions(permissions: any): string[] {
     if (!Array.isArray(permissions)) return ['`permissions` must be an array.'];
     permissions.forEach((p: any, i: number) => {
         if (!p || typeof p !== 'object') { problems.push(`permissions[${i}] must be an object like {scope, access}.`); return; }
-        if (!(p.scope in KNOWN_PERMISSIONS)) {
+        // hasOwnProperty, NOT `in`: `in` walks the prototype chain, so 'toString'/'valueOf'/'constructor'/
+        // '__proto__' would pass as valid scopes (and KNOWN_PERMISSIONS['constructor'] is a function, whose
+        // later `.includes` would throw). Only own keys are real permission scopes.
+        if (!Object.prototype.hasOwnProperty.call(KNOWN_PERMISSIONS, p.scope)) {
             problems.push(`Unknown permission scope "${p.scope}" (valid: ${Object.keys(KNOWN_PERMISSIONS).join(', ')}).`);
             return;
         }

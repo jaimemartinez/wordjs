@@ -51,8 +51,11 @@ before(async () => {
     await database.initializeDatabase();
     dir = path.join(PLUGINS_ROOT, SLUG);
     fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify({ name: SLUG, isolated: true, permissions: [] }));
+    fs.writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify({ name: SLUG, isolated: true, permissions: [{ scope: 'express', access: 'register_route' }] }));
     fs.writeFileSync(path.join(dir, 'index.js'), 'exports.init = function (wordjs) {\n' + INIT + '\n};\n');
+    // Route registration now requires the express:register_route grant; grant it so the path-validation
+    // (ReDoS) rules below are what decides which routes mount, not the grant gate.
+    require('../core/plugin-permissions')._setGrantsInMemory(SLUG, ['express:register_route']);
     await loadIsolatedPlugin(SLUG, path.join(dir, 'index.js'));
     // Give the async register-route messages a moment to be processed host-side.
     await new Promise((r) => setTimeout(r, 300));

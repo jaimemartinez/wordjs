@@ -1975,6 +1975,15 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
             } else if (msg.kind === 'invoke-reply') {
                 rpcSettle(pendingInvoke, msg, msg.value);
             } else if (msg.kind === 'register-route') {
+                // ENFORCE THE GRANT. Mounting a host HTTP route is the `express:register_route` permission
+                // — a high-power verb the admin must grant explicitly (isGranted does not imply it from
+                // admin, same as email:provider). It was validated for verb/path/cap below but never checked
+                // against the grant, so a plugin mounted /api/v1/plugin/<slug>/* regardless of grant/revoke.
+                // Gate it here like register-mail-provider / register-notify-transport already do.
+                if (!isGrantedFor(slug, 'express', 'register_route')) {
+                    console.warn(`[Isolate ${logSafe(slug)}] denied route registration: express:register_route not granted.`);
+                    return;
+                }
                 if (registrationRejected(registeredRoutes, MAX_ROUTES, 'routes')) return;
                 // msg.method is attacker-controlled (a malicious child sends any message): allowlist HTTP
                 // verbs so app[m] below can't invoke an ARBITRARY Express app method (use/set/engine/

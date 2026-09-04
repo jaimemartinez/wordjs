@@ -89,7 +89,7 @@ describe('process surface — host control is blocked for plugins', () => {
 describe('process surface — inventory canary', () => {
     // Reaches the host: process image, native bindings, privileges, lifecycle, debugger, host fs/env.
     const DENIED = new Set([
-        'abort', 'binding', 'chdir', 'dlopen', 'execve', 'exit', 'initgroups', 'kill', 'loadEnvFile',
+        'abort', 'binding', 'chdir', 'dlopen', 'execve', 'exit', 'reallyExit', 'initgroups', 'kill', 'loadEnvFile',
         'setegid', 'seteuid', 'setgid', 'setgroups', 'setuid', 'umask',
         '_debugEnd', '_debugProcess', '_kill', '_linkedBinding',
     ]);
@@ -100,7 +100,7 @@ describe('process surface — inventory canary', () => {
         'getActiveResourcesInfo', 'getBuiltinModule', 'getegid', 'geteuid', 'getgid', 'getgroups',
         'getuid', 'hasUncaughtExceptionCaptureCallback', 'hrtime', 'memoryUsage', 'nextTick',
         'openStdin', 'ref', 'resourceUsage', 'setSourceMapsEnabled', 'setUncaughtExceptionCaptureCallback',
-        'uptime', 'unref', 'reallyExit', 'threadCpuUsage', 'constructor',
+        'uptime', 'unref', 'threadCpuUsage', 'constructor',
         '_fatalException', '_getActiveHandles', '_getActiveRequests',
         '_rawDebug', '_startProfilerIdleNotifier', '_stopProfilerIdleNotifier', '_tickCallback',
         // EventEmitter surface inherited by process

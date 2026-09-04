@@ -462,15 +462,36 @@ const wordjs = {
     }
 };
 
-// Bound a reply payload BEFORE postMessage so a huge object/array can't be structured-cloned onto the
-// HOST heap (the host-side cap runs only AFTER the clone). Cheap bounded node-count walk.
+// Bound a reply payload BEFORE postMessage so a huge value can't be structured-cloned onto the HOST heap
+// (the host-side cap runs only AFTER the clone). Bounds BOTH the node count AND the estimated cloned SIZE.
+//
+// The old walker counted only object NODES via `for..in`, which has three holes structured-clone drives
+// straight through: (1) a single giant string is one node but clones its full byte length; (2) an
+// ArrayBuffer/SharedArrayBuffer/DataView/TypedArray is ~one node but clones byteLength bytes (and `for..in`
+// does not even enumerate an ArrayBuffer/DataView); (3) a Map/Set's entries are not `for..in`-enumerable at
+// all, so a 10M-entry Map passed as one node. Each let a plugin OOM the host by returning it from a
+// hook/route/shortcode/notify handler. Charge bytes for binary/string payloads and descend Map/Set here.
 function replyTooLarge(v) {
-    let n = 0;
+    const MAX_NODES = 2000000;
+    const MAX_BYTES = 96 * 1024 * 1024;   // ~96MB estimated payload — orders of magnitude above any legit reply
+    let nodes = 0, bytes = 0;
     const stack = [v];
     while (stack.length) {
         const cur = stack.pop();
-        if (++n > 2000000) return true;
-        if (cur && typeof cur === 'object') { for (const k in cur) stack.push(cur[k]); }
+        if (++nodes > MAX_NODES) return true;
+        const t = typeof cur;
+        if (t === 'string') { bytes += cur.length * 2; if (bytes > MAX_BYTES) return true; continue; }
+        if (t !== 'object' || cur === null) continue;
+        if (ArrayBuffer.isView(cur)) { bytes += cur.byteLength || 0; if (bytes > MAX_BYTES) return true; continue; }
+        if (cur instanceof ArrayBuffer || (typeof SharedArrayBuffer !== 'undefined' && cur instanceof SharedArrayBuffer)) {
+            bytes += cur.byteLength || 0; if (bytes > MAX_BYTES) return true; continue;
+        }
+        // Map/Set: neither their size nor their entries are `for..in`-visible — charge the entry count and
+        // descend explicitly, so nested huge content is bounded too. The count check trips BEFORE we push,
+        // so a giant Map/Set returns early instead of expanding onto the walk stack.
+        if (cur instanceof Map) { nodes += cur.size; if (nodes > MAX_NODES) return true; for (const [mk, mv] of cur) { stack.push(mk); stack.push(mv); } continue; }
+        if (cur instanceof Set) { nodes += cur.size; if (nodes > MAX_NODES) return true; for (const sv of cur) stack.push(sv); continue; }
+        for (const k in cur) stack.push(cur[k]);
     }
     return false;
 }
