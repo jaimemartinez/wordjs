@@ -1,16 +1,21 @@
 #!/usr/bin/env node
 /**
- * Install every workspace's dependencies with `npm ci`, IN PARALLEL, for CI.
+ * Install every workspace's dependencies IN PARALLEL. Used two ways:
+ *   · `node scripts/ci-install.mjs`                     → `npm ci` in each (CI: deterministic)
+ *   · `node scripts/ci-install.mjs install --omit=dev`  → `npm install --omit=dev` (release:install,
+ *                                                          run by operators in the extracted bundle)
+ * Whatever follows the script name is passed to npm verbatim; with nothing, it defaults to `ci`.
  *
  * The five workspaces (root, backend, frontend, gateway, setup) are independent projects with their
- * own lockfiles — not npm workspaces — so `install:all` installed them one after another:
+ * own lockfiles — not npm workspaces — so both `install:all` and `release:install` ran them one after
+ * another:
  *
- *     npm ci && cd backend && npm ci && cd ../frontend && npm ci && cd ../gateway && npm ci && ...
+ *     npm ci && cd backend && npm ci && cd ../frontend && npm ci && ...
  *
- * That is the sum of five installs in series (~9 min observed, frontend and root ~3 min each), and it
- * ate most of the compiled-bundle job's 15-minute budget before the build even started. They do not
- * depend on each other, so they run concurrently here — wall time becomes the LONGEST single install,
- * not the sum.
+ * That is the sum of five installs in series. Measured in CI on a slow-registry day, `release:install`
+ * alone spent 11+ minutes this way (gateway 4m, backend 3m, frontend 4m) and was still going when the
+ * job timed out — on top of the workspace install that precedes it. They do not depend on each other,
+ * so they run concurrently here — wall time becomes the LONGEST single install, not the sum.
  *
  * Two things this does that a `& … & wait` one-liner does not, and both matter:
  *   · FAILURE PROPAGATES. A bare `wait` returns 0 regardless of what the backgrounded jobs did, so a
@@ -30,21 +35,24 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 // Each workspace, relative to the repo root. Kept explicit so a new one is a deliberate addition.
 const WORKSPACES = ['.', 'backend', 'frontend', 'gateway', 'setup'];
 
-const PER_INSTALL_MS = 10 * 60 * 1000;  // a single npm ci must not exceed this; the whole run is capped by the job timeout
+// Whatever was passed after the script name goes to npm verbatim; default to a deterministic `ci`.
+const NPM_ARGS = process.argv.slice(2).length ? process.argv.slice(2) : ['ci'];
+
+const PER_INSTALL_MS = 12 * 60 * 1000;  // a single install must not exceed this; the whole run is capped by the job timeout
 
 function install(ws) {
     return new Promise((resolve) => {
         const cwd = path.join(ROOT, ws);
         const label = ws === '.' ? 'root' : ws;
         const started = Date.now();
-        const child = spawn('npm', ['ci'], { cwd, shell: process.platform === 'win32', stdio: ['ignore', 'pipe', 'pipe'] });
+        const child = spawn('npm', NPM_ARGS, { cwd, shell: process.platform === 'win32', stdio: ['ignore', 'pipe', 'pipe'] });
 
         const prefix = (buf) => buf.toString().split('\n').filter(Boolean).map((l) => `[${label}] ${l}`).join('\n');
         child.stdout.on('data', (b) => process.stdout.write(prefix(b) + '\n'));
         child.stderr.on('data', (b) => process.stderr.write(prefix(b) + '\n'));
 
         const timer = setTimeout(() => {
-            process.stderr.write(`[${label}] TIMEOUT after ${(PER_INSTALL_MS / 60000)} min — killing npm ci\n`);
+            process.stderr.write(`[${label}] TIMEOUT after ${(PER_INSTALL_MS / 60000)} min — killing npm ${NPM_ARGS[0]}\n`);
             try { child.kill('SIGKILL'); } catch { /* already gone */ }
         }, PER_INSTALL_MS);
 
