@@ -129,6 +129,21 @@ export function isBlockedIp(ip: string): boolean {
         if (b[0] === 0x20 && b[1] === 0x02) {
             return isBlockedV4(`${b[2]}.${b[3]}.${b[4]}.${b[5]}`);
         }
+        // ISATAP (RFC 5214): the interface identifier 0000:5efe:V4V4 / 0200:5efe:V4V4 (bytes 8-11 =
+        // 00|02,00,5e,fe) embeds an IPv4 in the last 4 bytes, under ANY prefix (link-local OR a global one),
+        // which an ISATAP router tunnels to that v4. Same internal-reach as 6to4/NAT64; block when the
+        // embedded v4 is private. (twin of the 6to4/NAT64 branches above)
+        if ((b[8] === 0x00 || b[8] === 0x02) && b[9] === 0x00 && b[10] === 0x5e && b[11] === 0xfe) {
+            return isBlockedV4(`${b[12]}.${b[13]}.${b[14]}.${b[15]}`);
+        }
+        // Teredo (RFC 4380) 2001:0000::/32: the client IPv4 is the last 32 bits XORed with 0xffffffff and the
+        // Teredo server IPv4 is bytes 4-7. Either can be an internal target reached through the tunnel — block
+        // when the deobfuscated client OR the server v4 is private.
+        if (b[0] === 0x20 && b[1] === 0x01 && b[2] === 0x00 && b[3] === 0x00) {
+            const client = `${b[12] ^ 0xff}.${b[13] ^ 0xff}.${b[14] ^ 0xff}.${b[15] ^ 0xff}`;
+            const server = `${b[4]}.${b[5]}.${b[6]}.${b[7]}`;
+            return isBlockedV4(client) || isBlockedV4(server);
+        }
         if (b[0] === 0xfe && (b[1] & 0xc0) === 0x80) return true;  // fe80::/10 link-local
         if (b[0] === 0xfe && (b[1] & 0xc0) === 0xc0) return true;  // fec0::/10 deprecated site-local (RFC 3879)
         if ((b[0] & 0xfe) === 0xfc) return true;                  // fc00::/7 unique-local (ULA)

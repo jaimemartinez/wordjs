@@ -1216,7 +1216,12 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
     // the worker reaches config/secrets only via the RPC bridge, so app secrets in env
     // (JWT_SECRET, DB creds, STRIPE_KEY, …) must never enter the worker's process.env. This is
     // default-deny, unlike the in-worker name-pattern denylist (getProtectedEnv).
-    const SAFE_ENV_KEYS = ['NODE_ENV', 'TZ', 'LANG', 'LC_ALL', 'PATH', 'SystemRoot', 'windir', 'TEMP', 'TMP', 'TMPDIR', 'HOMEDRIVE', 'HOMEPATH', 'PATHEXT', 'NUMBER_OF_PROCESSORS', 'OS', 'COMSPEC', 'TS_NODE_PROJECT'];
+    // HOMEDRIVE/HOMEPATH are DELIBERATELY excluded: together they are the host account's home path
+    // (C:\Users\<username>), i.e. the exact host-identity recon that installOsSandboxScrub neutralises on
+    // os.homedir()/os.userInfo() — leaving them in process.env made the two surfaces disagree and handed
+    // an ungranted plugin the operator's username for free. Nothing in the child needs them. TEMP/TMP/
+    // TMPDIR stay (Node's os.tmpdir() default reads them, and the plugin's own tmp is a separate grant).
+    const SAFE_ENV_KEYS = ['NODE_ENV', 'TZ', 'LANG', 'LC_ALL', 'PATH', 'SystemRoot', 'windir', 'TEMP', 'TMP', 'TMPDIR', 'PATHEXT', 'NUMBER_OF_PROCESSORS', 'OS', 'COMSPEC', 'TS_NODE_PROJECT'];
     const workerEnv: Record<string, string> = {};
     for (const k of SAFE_ENV_KEYS) { if (process.env[k] !== undefined) workerEnv[k] = process.env[k] as string; }
     // OS-ISOLATION: run the untrusted plugin in a SEPARATE OS PROCESS, not a worker_thread. A worker

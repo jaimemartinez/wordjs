@@ -105,10 +105,17 @@ const hardExit = process.exit.bind(process);
  *
  * The guard itself is unchanged: plugin code calling process.exit is still refused.
  */
+// The `fatal` frame's error text is plugin-derived and the host keeps it as operator-facing state
+// (health.lastError). Bound it and strip control characters here so a plugin cannot inject forged log
+// lines (embedded newlines) or a multi-KB message into that surface. The host also logSafe()s it on the
+// way to the log, so this is the belt to that suspenders — the health surface stores the bounded form.
+function sanitizeFatal(s) {
+    return String(s == null ? '' : s).replace(/[\x00-\x1f\x7f]+/g, ' ').slice(0, 500);
+}
 function reportFatalAndExit(what, err) {
     const detail = (err && err.stack) || String((err && err.message) || err);
     try { process.stderr.write(`[sandbox] uncaught ${what} in plugin '${slug}':\n${detail}\n`); } catch { /* stderr gone */ }
-    try { send({ kind: 'fatal', error: `[sandbox] uncaught ${what} in plugin '${slug}': ${String((err && err.message) || err)}` }); } catch { /* parent gone */ }
+    try { send({ kind: 'fatal', error: `[sandbox] uncaught ${what} in plugin '${slug}': ${sanitizeFatal((err && err.message) || err)}` }); } catch { /* parent gone */ }
     hardExit(1);
 }
 process.on('uncaughtException', (e) => reportFatalAndExit('exception', e));
