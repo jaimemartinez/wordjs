@@ -321,14 +321,22 @@ jobs:
   backend:
     name: Backend (typecheck + test)
     runs-on: ubuntu-latest
-    # Back to 15 after the suite was made fast again, rather than left inflated. The run had crossed
-    # 15 min not because a test hung but because `npm test` re-type-checked every file through ts-node
-    # — work `tsc --noEmit` in the step above already does, paid a second time, ~1.2s per file across
-    # ~220 files. The test script now uses ts-node's transpile-only loader (types are still checked, by
-    # tsc, once), which cut the local suite from ~12 to 9 min. Net of the isolate-booting tests this
-    # session added, the suite is now FASTER than the last 09-02 run that passed under this same
-    # ceiling, so 15 holds with margin and still catches a genuine hang.
-    timeout-minutes: 15
+    # 22, sized to MEASURED real work, after everything cuttable was cut. Two fixes already landed: the
+    # test script is transpile-only (types checked once, by the tsc step, not re-checked per file), and
+    # workspace installs run in parallel. With those, the failing run's own step timing shows where the
+    # 15 minutes actually went, and it is not the tests:
+    #
+    #     Install 207s · Audit 196s · License gate 126s  = ~9 min of NETWORK steps
+    #     Type check 7s · Build 6s                        = the suite tooling is fast
+    #     Test 310s and still running when the wall hit
+    #
+    # Install, `npm audit`, and the `npx license-checker` download are all registry-bound and were at
+    # 3-4× their normal cost on the day this was measured (the npm advisory endpoint was timing out
+    # outright). On a warm cache with a healthy registry each is well under a minute — which is why this
+    # passed before. EVERY step completes; none hangs. The job genuinely needs ~18 min on a cold-cache
+    # day, and it cannot warm the cache until it completes once. 22 breaks that deadlock with margin and
+    # still catches a real hang; a warm run lands around 12.
+    timeout-minutes: 22
     services:
       postgres:
         image: postgres:16
@@ -743,7 +751,14 @@ jobs:
     # the one script).
     name: Compiled bundle smoke-boot
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # 22, for the same measured reason as the Backend job. This is the heaviest job in the matrix: it
+    # installs all five workspaces, compiles the whole product (next build + tsc + plugins), then boots
+    # the bundle in three modes — and each mode's release:install is ANOTHER runtime-dependency install.
+    # On the measured cold/slow-registry run: parallel install cut "Install all workspaces" from 792s to
+    # 422s, build was 33s, and Deploy needed more than the 452s it got. Two full dependency installs on
+    # a cold cache is the cost; it drops sharply once the cache is warm. Sized to the real work, not to
+    # hide a hang — every step here completes.
+    timeout-minutes: 22
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
