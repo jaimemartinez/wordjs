@@ -794,7 +794,17 @@ function isPathSafe(targetPath: string, isWrite = false, knownSlug?: string | nu
     // The host DB driver legitimately runs under runWithContext(slug) while serving a scoped bridge
     // query. It may open ONLY the configured database file and its sidecars — never the former broad
     // data/ tree. Inside an isolate the earlier DB block always wins.
-    if (!isWrite && !g.__WORDJS_ISOLATED__) {
+    //
+    // READS AND WRITES ALIKE. This used to exempt reads only, which is invisible under sqlite-native
+    // (better-sqlite3 writes from C++, nothing here ever sees it) and fatal under sqlite-legacy: sql.js
+    // keeps the database in memory and persists it with fs.writeFileSync(activeDbPath) after every
+    // committed write (drivers/sqlite-legacy.ts save()). Serving a bridged INSERT from a plugin thus
+    // ended in a host-side WRITE of data/wordjs.db under that plugin's context, this guard called it
+    // "outside safe zones", and every plugin holding database:write failed to load on the pure-JS
+    // driver — the one a fresh install falls back to when the native module is missing. In the host
+    // process the only code that runs under a plugin slug is the bridge, so the write is core's own;
+    // an isolated child never reaches this branch (the __WORDJS_ISOLATED__ block above returns first).
+    if (!g.__WORDJS_ISOLATED__) {
         const cfgDbPaths = getConfiguredDbPaths();
         if (cfgDbPaths.some(db => resolved === db || resolved.startsWith(db + '-'))) isAllowed = true;
     }
