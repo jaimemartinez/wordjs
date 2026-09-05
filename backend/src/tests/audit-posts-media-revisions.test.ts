@@ -547,3 +547,302 @@ describe('#14/#15 restoreRevision is a post write and a SCOPED meta restore', ()
             'a versioned key absent from the snapshot must be cleared, not kept');
     });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+// MODERN IMAGE FORMATS (2026-09) — every derivative used to keep the SOURCE format, so a JPEG/PNG
+// upload produced a ladder of JPEG/PNG and the public markup could only ever offer those bytes.
+// The upload pipeline now writes a WebP (and an AVIF where sharp can encode one) BESIDE each size
+// and beside the original, recorded in an additive `sources` map. Three things have to hold, and all
+// three are exercised through the REAL router with a REAL sharp against the REAL temp uploads dir:
+// the files land and are registered, a failing encoder cannot cost anyone their upload, and the
+// delete path reclaims them like any other derivative.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+describe('modern-format derivatives (WebP/AVIF) on upload', () => {
+    const sharp = require('sharp');
+
+    /** Does THIS install's sharp write AVIF? 0.35 reports it as `heif` (alias avif), others as `avif`. */
+    const avifSupported = Boolean(sharp.format?.avif?.output?.file || sharp.format?.heif?.output?.file);
+
+    /**
+     * A PNG built in memory — no binary fixture in the repo. 700px wide on purpose: the ladder skips
+     * any entry the source cannot fill, so a narrower image would produce only the cropped thumbnail
+     * and the interesting case (a derivative of a real ladder entry) would never be reached.
+     */
+    const pngFixture = (): Promise<Buffer> => sharp({
+        create: { width: 700, height: 400, channels: 3, background: { r: 30, g: 120, b: 200 } }
+    }).png().toBuffer();
+
+    const uploadPng = (buf: Buffer, filename: string) =>
+        as('admin', 'post', '/media').attach('file', buf, { filename, contentType: 'image/png' });
+
+    /** Absolute path of a file recorded relative to the attachment's own directory. */
+    const beside = (details: any, file: string) => path.join(TMP_UPLOADS, path.dirname(details.file), file);
+
+    test('a WebP lands beside every size AND the original, and is registered in the metadata', async () => {
+        const res = await uploadPng(await pngFixture(), 'modern.png');
+        assert.strictEqual(res.status, 201, `expected 201, got ${res.status}: ${JSON.stringify(res.body)}`);
+
+        const details = res.body.mediaDetails;
+        assert.ok(details.sizes.w640, 'the 640px ladder entry is the derivative we are pinning');
+
+        // 1. The ORIGINAL format is untouched — this is additive, not a replacement.
+        assert.ok(details.sizes.w640.file.endsWith('.png'), 'the size itself must still be a PNG');
+        assert.strictEqual(details.sizes.w640.mimeType, 'image/png');
+
+        // 2. The per-size derivative is registered under the size's own `sources` map, keyed by MIME.
+        const sizeWebp = details.sizes.w640.sources?.['image/webp'];
+        assert.ok(sizeWebp, 'the w640 size must carry a WebP derivative in sources');
+        assert.strictEqual(sizeWebp.file, details.sizes.w640.file.replace(/\.png$/, '.webp'),
+            'the derivative is the size filename with the extension swapped');
+        assert.strictEqual(sizeWebp.mimeType, 'image/webp');
+        assert.ok(sizeWebp.filesize > 0 && sizeWebp.width === details.sizes.w640.width);
+        assert.ok(fs.existsSync(beside(details, sizeWebp.file)), 'the WebP file must exist on disk');
+
+        // 3. …and the FULL-SIZE one hangs off the metadata root, where the original's own dims live.
+        const fullWebp = details.sources?.['image/webp'];
+        assert.ok(fullWebp, 'the full-size original must carry a WebP derivative too');
+        assert.strictEqual(fullWebp.width, details.width, 'the full-size derivative keeps the source width');
+        assert.ok(fs.existsSync(beside(details, fullWebp.file)), 'the full-size WebP must exist on disk');
+
+        // 4. AVIF is conditional on the build: assert whichever branch this host is actually on, so
+        //    a sharp without libheif reports "WebP only" instead of a green test that proved nothing.
+        const sizeAvif = details.sizes.w640.sources?.['image/avif'];
+        if (avifSupported) {
+            assert.ok(sizeAvif, 'this sharp CAN encode AVIF, so the derivative must be there');
+            assert.ok(fs.existsSync(beside(details, sizeAvif.file)), 'the AVIF file must exist on disk');
+        } else {
+            assert.strictEqual(sizeAvif, undefined, 'a sharp that cannot encode AVIF must record none');
+        }
+
+        // 5. DELETION reclaims them. A derivative that outlives its attachment is an orphan the media
+        //    library can never surface again — the exact leak Media.delete's size loop exists to stop.
+        const originalPath = path.join(TMP_UPLOADS, details.file);
+        const derivatives = [
+            beside(details, sizeWebp.file),
+            beside(details, fullWebp.file),
+            ...(sizeAvif ? [beside(details, sizeAvif.file)] : []),
+        ];
+        assert.strictEqual(await Media.delete(res.body.id, true), true);
+        for (const file of derivatives) {
+            assert.strictEqual(fs.existsSync(file), false, `Media.delete left a derivative behind: ${file}`);
+        }
+        assert.strictEqual(fs.existsSync(originalPath), false,
+            'the original must still be deleted (the new targets did not displace the old ones)');
+    });
+
+    test('a failing modern encoder does NOT fail the upload — the original ladder still lands', async () => {
+        // Build the fixture BEFORE the stub, so the failure is confined to the derivative encode.
+        const png = await pngFixture();
+        const realWebp = sharp.prototype.webp;
+        const realAvif = sharp.prototype.avif;
+        // The realistic shapes: a build without the encoder, a libheif that refuses the input, a full
+        // disk. All of them surface as a throw out of the encode, and none of them is the uploader's
+        // problem — the upload must still commit, with the derivatives it could not produce absent.
+        sharp.prototype.webp = function () { throw new Error('stub: webp encoder unavailable'); };
+        sharp.prototype.avif = function () { throw new Error('stub: avif encoder unavailable'); };
+
+        let res: any;
+        try {
+            res = await uploadPng(png, 'noencoder.png');
+        } finally {
+            sharp.prototype.webp = realWebp;
+            sharp.prototype.avif = realAvif;
+        }
+
+        assert.strictEqual(res.status, 201, `a failed derivative encode must not fail the upload (got ${res.status})`);
+        const details = res.body.mediaDetails;
+        assert.ok(details.sizes.w640 && details.sizes.w640.file.endsWith('.png'),
+            'the original-format ladder must be complete and unaffected');
+        assert.strictEqual(details.sizes.w640.sources, undefined, 'no per-size derivative may be claimed');
+        assert.deepStrictEqual(details.sources, {}, 'no full-size derivative may be claimed');
+
+        // Nothing half-written may survive either: a truncated .webp on disk would be served as a
+        // valid image forever, since the metadata is the only thing that knows it should not exist.
+        const dir = path.join(TMP_UPLOADS, path.dirname(details.file));
+        const stem = path.basename(details.file, '.png');
+        const orphans = fs.readdirSync(dir)
+            .filter((f: string) => f.startsWith(stem) && (f.endsWith('.webp') || f.endsWith('.avif')));
+        assert.deepStrictEqual(orphans, [], `a failed encode left files behind: ${orphans.join(', ')}`);
+    });
+
+    /**
+     * ABOVE THE DECODED-BYTE BUDGET THERE ARE NO MODERN DERIVATIVES AT ALL — NOT A CAPPED LADDER.
+     *
+     * `MODERN_MAX_DECODED_BYTES` bounds what the route will decode for a FULL-SIZE modern encode, and
+     * the median real-world upload (any photo above ~8 MP) is over it. The route used to skip only the
+     * full-size task and encode the per-size ladder anyway: up to 7 sizes x 2 formats of WebP/AVIF,
+     * written to disk, recorded in `_wp_attachment_metadata`, holding slots of the process-wide encode
+     * budget — and never rendered by anything. `<picture>` picks the first `<source>` the browser
+     * supports and then chooses only from THAT srcset, so a modern ladder that stops at 1920 while the
+     * original-format srcset runs to 3000 caps every modern browser at 1920; frontend buildSrcSet
+     * therefore drops any format whose widest candidate falls short of the original's, and
+     * components/content/blocks.tsx repeats the check on the persisted props. The two halves have to
+     * agree, and this pins the agreement from the backend side: over budget the upload commits with
+     * its original-format ladder and NOTHING else — no files, no `sources`, no wasted slots.
+     *
+     * Both sides of the gate are measured in one test so the "no derivatives" half cannot be green
+     * because the modern path stopped working altogether.
+     */
+    test('over the decoded-byte budget an upload produces NO modern derivatives, and under it the full ladder', async () => {
+        // 3000 x 3000 x 3 channels = 27,000,000 decoded bytes, over the route's 24 MiB (25,165,824).
+        // The dimensions are literals on purpose: a test that imported the constant would agree with
+        // the implementation even if both were wrong.
+        const overBudgetPng = await sharp({
+            create: { width: 3000, height: 3000, channels: 3, background: { r: 200, g: 60, b: 30 } }
+        }).png().toBuffer();
+
+        const res = await uploadPng(overBudgetPng, 'overbudget.png');
+        assert.strictEqual(res.status, 201, `expected 201, got ${res.status}: ${JSON.stringify(res.body)}`);
+        const details = res.body.mediaDetails;
+
+        // 1. The original-format ladder is complete — this bound gives up the optimization, never the
+        //    image. w1920 exists precisely because the source is wider than the widest ladder entry,
+        //    which is also what makes a modern ladder unrenderable here.
+        assert.ok(details.sizes.w1920 && details.sizes.w1920.file.endsWith('.png'),
+            'the original-format ladder must be complete and unaffected');
+        assert.strictEqual(details.width, 3000, 'the full-size candidate the modern maps would have to reach');
+
+        // 2. No metadata claims a modern derivative — neither the full-size map nor ANY size's.
+        assert.deepStrictEqual(details.sources, {}, 'no full-size derivative is possible over the budget');
+        for (const [name, entry] of Object.entries<any>(details.sizes)) {
+            assert.strictEqual(entry.sources, undefined,
+                `size '${name}' claims a modern derivative the renderer can never select`);
+        }
+
+        // 3. And none was written. A file on disk that no metadata references is dead disk the media
+        //    library cannot even show you; the CPU and the encode slots that produced it are already
+        //    spent by the time anyone notices.
+        const dir = path.join(TMP_UPLOADS, path.dirname(details.file));
+        const stem = path.basename(details.file, '.png');
+        const dead = fs.readdirSync(dir)
+            .filter((f: string) => f.startsWith(stem) && (f.endsWith('.webp') || f.endsWith('.avif')));
+        assert.deepStrictEqual(dead, [],
+            `the over-budget upload encoded modern files nothing can render: ${dead.join(', ')}`);
+
+        // 4. POSITIVE CONTROL — under the gate, the full ladder INCLUDING the full-size entry, which
+        //    is the entry that makes every per-size one renderable.
+        const under = await uploadPng(await pngFixture(), 'underbudget.png');
+        assert.strictEqual(under.status, 201, `expected 201, got ${under.status}`);
+        const ok = under.body.mediaDetails;
+        assert.ok(ok.sources['image/webp'], 'an upload under the budget must still get its full-size WebP');
+        assert.strictEqual(ok.sources['image/webp'].width, ok.width,
+            'the full-size derivative must reach the width buildSrcSet measures the format against');
+        assert.ok(ok.sizes.w640.sources['image/webp'], 'and its per-size ones');
+    });
+
+    /**
+     * THE ENCODE BUDGET IS PROCESS-WIDE, NOT PER REQUEST.
+     *
+     * `MODERN_ENCODE_CONCURRENCY` used to bound only the worker count inside ONE call to
+     * `encodeModernDerivatives`, and that function runs once per REQUEST — so N simultaneous uploads
+     * ran 2N concurrent AVIF encodes. By the measurements the route's own comment carries (a 24MP
+     * source: ~1.1GB peak RSS for a single encode), that is a small host OOMed by whoever holds
+     * `upload_files`, which is a contributor-level capability. The middleware twin
+     * (middleware/image-negotiation.ts) already kept its budget at module scope for exactly this
+     * reason; the upload copy left that property behind.
+     *
+     * The overlap here is DETERMINISTIC, not timed: the encoder stub parks the first upload's workers
+     * inside `toFile` and the second upload is only started once the budget is provably full, so
+     * "they overlapped" is a fact of the sequencing rather than a hope about scheduling. The claim is
+     * then measured on both sides — the peak concurrency the encoder ever saw, AND the second
+     * upload's own metadata, which must show it degraded to its original-format ladder instead of
+     * stacking a second pair of encodes on top of the first.
+     */
+    test('the encode budget is shared ACROSS requests — a second upload cannot double it', async () => {
+        const png = await pngFixture();
+        const realWebp = sharp.prototype.webp;
+        const realAvif = sharp.prototype.avif;
+
+        // The budget the route enforces. Kept as a literal on purpose: a test that imported the
+        // constant would agree with the implementation even if both were wrong.
+        const BUDGET = 2;
+
+        let active = 0;
+        let peak = 0;
+        let release!: () => void;
+        let signalFull!: () => void;
+        const gate = new Promise<void>((resolve) => { release = resolve; });
+        const budgetFull = new Promise<void>((resolve) => { signalFull = resolve; });
+        let announced = false;
+
+        // Replaces the encoder, not the pipeline: every call parks in `toFile` until the gate opens,
+        // so the FIRST upload holds its slots for as long as this test needs them to be held.
+        const parkingEncoder = function stubEncoder() {
+            return {
+                toFile: async () => {
+                    active++;
+                    peak = Math.max(peak, active);
+                    if (active >= BUDGET && !announced) { announced = true; signalFull(); }
+                    await gate;
+                    active--;
+                    return { width: 1, height: 1, size: 1 };
+                },
+            };
+        };
+        sharp.prototype.webp = parkingEncoder;
+        sharp.prototype.avif = parkingEncoder;
+
+        // EVERY wait is bounded, and the loser's timer is always cleared. This matters more than it
+        // looks: WITHOUT the shared budget the second upload does not fail here, it PARKS in the
+        // encoder alongside the first (which is the defect — 2N concurrent encodes), and an
+        // unbounded await would hang the whole suite until CI killed it. A regression has to arrive
+        // as a sentence.
+        const deadline = async <T>(work: Promise<T>, message: string): Promise<T> => {
+            let timer: any;
+            try {
+                return await Promise.race([
+                    work,
+                    new Promise<T>((_resolve, reject) => {
+                        timer = setTimeout(() => reject(new Error(message)), 30_000);
+                    }),
+                ]);
+            } finally {
+                clearTimeout(timer);
+            }
+        };
+
+        let first: any;
+        let second: any;
+        try {
+            // supertest only sends on .then(), so this is what actually starts the request.
+            const firstUpload: Promise<any> = uploadPng(png, 'budget-first.png').then((r: any) => r);
+            const secondUpload = (): Promise<any> => uploadPng(png, 'budget-second.png').then((r: any) => r);
+            // A timed-out race leaves its loser pending; keep both reachable so neither can surface
+            // as an unhandled rejection after this test has already reported.
+            firstUpload.catch(() => { /* reported by the deadline below */ });
+
+            await deadline(budgetFull, 'the first upload never reached the encode budget');
+            const pending = secondUpload();                       // …arrives with the budget full
+            pending.catch(() => { /* same */ });
+            second = await deadline(pending,
+                'the over-budget upload never returned: it queued behind the budget (or ran alongside it) instead of degrading');
+            release();
+            first = await deadline(firstUpload, 'the first upload never completed after the gate opened');
+        } finally {
+            release();  // never leave a parked request behind, however this test ends
+            sharp.prototype.webp = realWebp;
+            sharp.prototype.avif = realAvif;
+        }
+
+        assert.strictEqual(peak, BUDGET,
+            `the encoder saw ${peak} concurrent encodes; the process-wide budget is ${BUDGET}`);
+
+        // The second upload SUCCEEDS — degrading is the contract, failing is not.
+        assert.strictEqual(second.status, 201, `the over-budget upload must still commit (got ${second.status})`);
+        const overBudget = second.body.mediaDetails;
+        assert.ok(overBudget.sizes.w640 && overBudget.sizes.w640.file.endsWith('.png'),
+            'its original-format ladder must be complete — only the modern derivatives are given up');
+        assert.strictEqual(overBudget.sizes.w640.sources, undefined,
+            'an upload that never got a slot must not claim a per-size derivative');
+        assert.deepStrictEqual(overBudget.sources, {},
+            'nor a full-size one: 2N concurrent encodes is exactly what the budget exists to prevent');
+
+        // POSITIVE CONTROL: the upload that DID hold the budget still produced its derivatives, so the
+        // assertions above are measuring a bound and not a modern-format path that simply stopped working.
+        assert.strictEqual(first.status, 201);
+        assert.ok(first.body.mediaDetails.sources['image/webp'],
+            'the upload that held the budget must still get its full-size derivative');
+        assert.ok(first.body.mediaDetails.sizes.w640.sources['image/webp'],
+            'and its per-size ones');
+    });
+});

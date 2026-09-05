@@ -85,6 +85,27 @@ describe('taxonomía en toJSON, extracto vaciable y filtro MIME', () => {
         }
     }
 
+    /**
+     * Lo mismo, para las consultas a `users`. `toJSON` dejó de emitir el `author_id` pelado y ahora
+     * serializa la IDENTIDAD del autor, así que el listado tiene exactamente el mismo N+1 potencial
+     * que tenía la taxonomía — y se mide igual: contando las consultas REALES que salen del modelo.
+     */
+    async function withUserQueryCount<T>(fn: () => Promise<T>): Promise<{ result: T; userQueries: number }> {
+        const driver = database.getDbAsync();
+        const originalAll = driver.all;
+        let userQueries = 0;
+        driver.all = function patched(sql: any, ...rest: any[]) {
+            if (/FROM users\b/i.test(String(sql))) userQueries++;
+            return originalAll.call(this, sql, ...rest);
+        };
+        try {
+            const result = await fn();
+            return { result, userQueries };
+        } finally {
+            driver.all = originalAll;
+        }
+    }
+
     before(async () => {
         request = require('supertest');
         await database.init({ driver: 'sqlite-native' });
@@ -94,9 +115,11 @@ describe('taxonomía en toJSON, extracto vaciable y filtro MIME', () => {
         // llena DESPUÉS de conectar la BD — sin esto cada create responde 400.
         await require('../core/post-types').initPostTypes();
 
+        // user_nicename SEMBRADO A PROPÓSITO y distinto tanto del login como del nombre visible: es
+        // la identidad PÚBLICA del autor, y el serializador debe leer esa columna y ninguna otra.
         await dbAsync.run(
-            `INSERT INTO users (user_login, user_pass, user_email, display_name) VALUES (?, ?, ?, ?)`,
-            ['admin', 'x', 'admin@example.com', 'Administrator']
+            `INSERT INTO users (user_login, user_pass, user_email, display_name, user_nicename) VALUES (?, ?, ?, ?, ?)`,
+            ['admin', 'x', 'admin@example.com', 'Administrator', 'administradora']
         );
         const row = await dbAsync.get(`SELECT id FROM users WHERE user_login = ?`, ['admin']);
         adminId = row.id;
@@ -158,6 +181,59 @@ describe('taxonomía en toJSON, extracto vaciable y filtro MIME', () => {
             [newsId, guidesId].sort((a, b) => a - b),
             'los ids que la API emite deben poder reenviarse tal cual'
         );
+    });
+
+    /**
+     * EL AUTOR ES UN OBJETO, Y RESOLVERLO NO PUEDE VOLVER EL LISTADO UN N+1.
+     *
+     * `toJSON` emitía `author: this.authorId` — un NÚMERO pelado — mientras el contrato generado
+     * (ContentRecord) lo declara como objeto desde F2: los tres consumidores que leen
+     * `post.author?.displayName` (OpenGraph, JSON-LD y la portada) leían `undefined` SIEMPRE. Se
+     * mueve el CÓDIGO al CONTRATO, no al revés.
+     *
+     * La segunda mitad es la lección de la taxonomía, aplicada antes de repetirla: serializar una
+     * relación sin hidratarla en lote convierte cualquier página en una consulta por entrada. Se
+     * cuentan las consultas de verdad, con su control negativo.
+     */
+    it('toJSON emite author como {id,displayName,slug}, y el listado lo resuelve en UNA consulta', async () => {
+        const json = await (await Post.findById(taggedPostId)).toJSON();
+        assert.deepStrictEqual(
+            json.author,
+            { id: adminId, displayName: 'Administrator', slug: 'administradora' },
+            'un número aquí es el bug: display_name es el nombre, y el slug es user_nicename'
+        );
+        assert.strictEqual(json.authorId, adminId, 'el id crudo conserva una clave propia');
+
+        // NUNCA el correo ni nada más de la fila: una firma de autor no es un listado de cuentas.
+        assert.deepStrictEqual(Object.keys(json.author).sort(), ['displayName', 'id', 'slug']);
+
+        // Y NUNCA el login: es lo que teclea el formulario de acceso, y `GET /posts` es anónimo. El
+        // respaldo cuando user_nicename está vacío es el id, no `user_login` (models/Post.ts).
+        assert.ok(!JSON.stringify(json).includes('"admin"'),
+            'el login no puede aparecer en el post serializado');
+
+        const hydrated = await withUserQueryCount(async () => {
+            const posts = await Post.findAllWithRelations({ type: 'post', status: 'publish', limit: 50 });
+            assert.ok(posts.length >= 2, 'hacen falta varias entradas para que el contador signifique algo');
+            for (const post of posts) {
+                assert.ok(post._authorCache !== undefined, `el post ${post.id} debe salir hidratado con el autor DEFINIDO`);
+            }
+            return await Promise.all(posts.map((p: any) => p.toJSON()));
+        });
+        assert.strictEqual(hydrated.userQueries, 1,
+            `el listado hidratado debe resolver TODOS los autores en una consulta, hizo ${hydrated.userQueries}`);
+        for (const serialized of hydrated.result) {
+            assert.strictEqual(typeof serialized.author, 'object', 'ninguna entrada del listado puede volver al número');
+        }
+
+        // CONTROL NEGATIVO: sin hidratar, el respaldo es una consulta por post — que es lo que hace
+        // significativa la aserción de arriba.
+        const plain = await withUserQueryCount(async () => {
+            const posts = await Post.findAll({ type: 'post', status: 'publish', limit: 50 });
+            return await Promise.all(posts.map((p: any) => p.toJSON()));
+        });
+        assert.strictEqual(plain.userQueries, plain.result.length,
+            'sin hidratar debe haber UNA consulta de usuario por entrada');
     });
 
     it('un post SIN términos emite arrays vacíos, no claves ausentes', async () => {

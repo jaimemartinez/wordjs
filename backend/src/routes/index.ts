@@ -34,6 +34,34 @@ const healthRoutes = require('./health');
 const hooksRoutes = require('./hooks');
 
 // API Info endpoint
+/**
+ * @swagger
+ * /:
+ *   get:
+ *     summary: REST API index
+ *     description: The versioned API's own entry point - a map from area name to mounted path, so a client can discover the surface without reading the router. Unauthenticated, though it still sits behind the install guard like everything else under the prefix.
+ *     tags: [System]
+ *     security: []
+ *     responses:
+ *       200:
+ *         description: The API banner and its route map
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 name:
+ *                   type: string
+ *                 description:
+ *                   type: string
+ *                 version:
+ *                   type: string
+ *                 routes:
+ *                   type: object
+ *                   description: Area name to mounted absolute path.
+ *                   additionalProperties:
+ *                     type: string
+ */
 router.get('/', (req: Request, res: Response) => {
     res.json({
         name: 'WordJS REST API',
@@ -109,6 +137,60 @@ router.use('/import', require('./import'));
 router.use('/', exportRoutes);
 
 // Pages endpoint (alias for posts with type=page)
+/**
+ * @swagger
+ * /pages:
+ *   get:
+ *     summary: List pages - an alias for GET /posts with type=page
+ *     description: The request is handed to the posts router with type forced to page, so every filter, header, authorization rule and response shape of GET /posts applies unchanged, including the X-WP-Total and X-WP-TotalPages headers and the refusal of a repeated scalar query parameter. A type sent by the caller is OVERWRITTEN, not merged - this endpoint cannot be used to list anything else.
+ *     tags: [Posts]
+ *     security:
+ *       - bearerAuth: []
+ *       - {}
+ *     parameters:
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *       - in: query
+ *         name: per_page
+ *         schema:
+ *           type: integer
+ *       - in: query
+ *         name: search
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: status
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: orderby
+ *         schema:
+ *           type: string
+ *           enum: [date, modified, title, id, menu_order]
+ *       - in: query
+ *         name: order
+ *         schema:
+ *           type: string
+ *           enum: [asc, desc]
+ *       - in: query
+ *         name: author
+ *         description: Comma-separated author IDs and/or slugs, exactly as on GET /posts.
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: A list of pages
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 $ref: '#/components/schemas/Post'
+ *       400:
+ *         description: A malformed, unsupported or repeated scalar query parameter (rest_invalid_param)
+ */
 router.get('/pages', (req: Request, res: Response, next: NextFunction) => {
     req.query.type = 'page';
     postsRoutes.handle(req, res, next);

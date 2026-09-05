@@ -59,7 +59,7 @@ const MAX_RESPONSE_ANY_OCCURRENCES = 0;
 /** Boundary files that still contain at least one `req: any`. A brand-new untyped route file raises it. */
 const MAX_UNTYPED_BOUNDARY_FILES = 0;
 /** Boundary files that are FULLY migrated: at least one typed `req` and not one `req: any` left. */
-const MIN_FULLY_TYPED_BOUNDARY_FILES = 43;
+const MIN_FULLY_TYPED_BOUNDARY_FILES = 44;
 /**
  * Does this workflow actually HAND `needle` to a runner, inside a `run:` step?
  *
@@ -528,60 +528,78 @@ function checkLegacyPluginCompatibilityCoverage(): CheckOutcome {
     // behaviour identical whether the gate is run from the CLI or from a test.
     const childEnv: NodeJS.ProcessEnv = { ...process.env };
     for (const key of Object.keys(childEnv)) if (key.startsWith('NODE_TEST_')) delete childEnv[key];
-    // Run the suite, retrying ONLY when it comes back INCOMPLETE — a non-zero exit whose shortfall is
-    // plugins that produced NO verdict at all, with none that actually failed. That is the signature of
-    // the node:test --test-force-exit deserialize flake (the same runner race backend's own `npm test`
-    // is wrapped for): under force-exit the run's tail subtests are lost over the runner's IPC, so the
-    // plugins that had not reported yet end up unreported rather than failing. The direct run of this
-    // same suite in the F6 phase-suites leg passes; only this nested spawn occasionally loses its tail.
-    // A genuine plugin failure is a `not ok` line and is NEVER retried — it stays a hard failure, so
-    // this can only ever paper over the runner flake, never over lost coverage.
-    const MAX_COMPAT_ATTEMPTS = 3;
-    let run!: ReturnType<typeof spawnSync>;
-    let output = '';
-    let passed = new Set<string>();
-    let failed = new Set<string>();
-    let skipped = new Set<string>();
-    for (let attempt = 1; ; attempt++) {
-        run = spawnSync(process.execPath, [
-            '--test', '--test-force-exit', '--test-concurrency=1', '--test-reporter=tap',
-            '-r', 'ts-node/register', PLUGIN_COMPATIBILITY_SUITE,
-        ], { cwd: BACKEND_ROOT, encoding: 'utf8', env: childEnv, maxBuffer: 64 * 1024 * 1024 });
-        output = `${run.stdout || ''}${run.stderr || ''}`;
+    // THE FLAKE-RETRY POLICY LIVES IN EXACTLY ONE PLACE, AND THIS GATE USES THAT ONE.
+    //
+    // This check used to carry a second, local copy of the retry, and the copy was INERT from the day it
+    // was written. It retried only when `failed.size === 0` — "the run produced no `not ok` line at all" —
+    // because the force-exit deserialize flake was believed to drop the run's tail subtests silently. It
+    // does not. When the runner cannot deserialize a child's IPC frame it FAILS THE FILE, and the TAP
+    // stream carries a column-0 line whose NAME is the file path rather than a plugin slug:
+    //
+    //     not ok 1 - src/tests/f6-plugin-compatibility.test.ts
+    //       error: 'Unable to deserialize cloned data due to invalid or unsupported version.'
+    //
+    // The parser below adds that to `failed`, so `failed.size` was 1 in precisely the case the retry
+    // existed for, `incompleteFlake` was false every time, and the retry never ran once. Measured on the
+    // CI platform (linux, node 22, Redis reachable, this suite): the flake hits ~1 run in 4, and 4 of 10
+    // runs of this check failed WITHOUT EMITTING A SINGLE RETRY NOTE. With the delegation below, 1 of 12.
+    //
+    // The flake ITSELF is fixed at its source in core/cache.ts, and the mechanism was not what the
+    // surrounding comments say. It is not force-exit killing a child mid-write — it reproduces at the
+    // same rate with `--test-force-exit` removed (7/20 runs). It tracks REACHABLE REDIS: 0/20 failures
+    // with the cache off, ~30% with it connected, because core/cache logged '⚡ Redis Object Cache
+    // Connected' to STDOUT from an async 'connect' callback, and node:test children report results over
+    // stdout as V8 frames. That write landed inside a frame. Moving it to stderr: 0/20. Which is also
+    // why only the "Redis connected" leg went red and why nobody reproduced it on Windows.
+    //
+    // This delegation stays regardless, because the gate must not depend on one module never logging
+    // asynchronously again, and because the local copy of the retry was measurably dead.
+    //
+    // So the retry is delegated to scripts/test-with-flake-retry.mjs — the same wrapper the F6 workflow
+    // already runs every one of these suites through, and the one whose predicate is honest about the
+    // shape: retry only when EVERY `not ok` in the run is explained, inside its own TAP YAML block, by
+    // the deserialize error. A plugin that genuinely fails is a `not ok` whose block says something else,
+    // and it is never retried. One policy, in one file, instead of two that disagree about the bug.
+    //
+    // `--test` is NOT passed here: the wrapper prepends it.
+    const run = spawnSync(process.execPath, [
+        path.join(REPO_ROOT, 'scripts', 'test-with-flake-retry.mjs'),
+        '--test-force-exit', '--test-concurrency=1', '--test-reporter=tap',
+        '-r', 'ts-node/register', PLUGIN_COMPATIBILITY_SUITE,
+    ], { cwd: BACKEND_ROOT, encoding: 'utf8', env: childEnv, maxBuffer: 64 * 1024 * 1024 });
+    const output = `${run.stdout || ''}${run.stderr || ''}`;
 
-        // Which per-plugin tests PASSED, read off the run. A `not ok` line is deliberately not counted:
-        // a plugin whose compatibility test fails has no compatibility evidence, whatever the file says.
-        // A SKIPPED TEST IS NOT A PASSING TEST, AND TAP SAYS SO IN THE DIRECTIVE.
-        //
-        // This read `/^ok\s+\d+\s+-\s+(.+?)\s*(?:#.*)?$/`, and that trailing `(?:#.*)?` swallowed the very
-        // thing that distinguishes the two outcomes. node:test emits `ok 1 - contact-forms # SKIP` for a
-        // skipped test and exits 0, so a one-token edit — `test(slug, { skip: true }, ...)` — marked all 31
-        // plugins covered while running none of them. The ratchet would then have been satisfied by exactly
-        // what it was written to replace.
-        //
-        // The directive is now captured and inspected: SKIP and TODO are recorded as neither passed nor
-        // failed, and named, so a suite that stops executing is loud instead of flattering.
-        passed = new Set<string>();
-        failed = new Set<string>();
-        skipped = new Set<string>();
-        for (const line of output.split(/\r?\n/)) {
-            const ok = /^ok\s+\d+\s+-\s+(.+?)(?:\s+#\s*(.*))?$/.exec(line);
-            if (ok) {
-                const directive = (ok[2] || '').trim();
-                if (/^(?:SKIP|TODO)\b/i.test(directive)) skipped.add(ok[1].trim());
-                else passed.add(ok[1].trim());
-                continue;
-            }
-            const notOk = /^not ok\s+\d+\s+-\s+(.+?)(?:\s+#\s*(.*))?$/.exec(line);
-            if (notOk) failed.add(notOk[1].trim());
+    // Which per-plugin tests PASSED, read off the run. A `not ok` line is deliberately not counted:
+    // a plugin whose compatibility test fails has no compatibility evidence, whatever the file says.
+    // A SKIPPED TEST IS NOT A PASSING TEST, AND TAP SAYS SO IN THE DIRECTIVE.
+    //
+    // This read `/^ok\s+\d+\s+-\s+(.+?)\s*(?:#.*)?$/`, and that trailing `(?:#.*)?` swallowed the very
+    // thing that distinguishes the two outcomes. node:test emits `ok 1 - contact-forms # SKIP` for a
+    // skipped test and exits 0, so a one-token edit — `test(slug, { skip: true }, ...)` — marked all 31
+    // plugins covered while running none of them. The ratchet would then have been satisfied by exactly
+    // what it was written to replace.
+    //
+    // The directive is now captured and inspected: SKIP and TODO are recorded as neither passed nor
+    // failed, and named, so a suite that stops executing is loud instead of flattering.
+    //
+    // The wrapper echoes every attempt it makes, so these sets are the UNION over attempts. That is the
+    // right reading and it cannot launder a failure: the wrapper only ever makes a second attempt when
+    // the first one's every `not ok` was the runner flake, so a plugin that actually failed ends the run
+    // there and stays out of `passed`. A run the wrapper could not settle still exits non-zero and is
+    // still reported as a failure below.
+    const passed = new Set<string>();
+    const failed = new Set<string>();
+    const skipped = new Set<string>();
+    for (const line of output.split(/\r?\n/)) {
+        const ok = /^ok\s+\d+\s+-\s+(.+?)(?:\s+#\s*(.*))?$/.exec(line);
+        if (ok) {
+            const directive = (ok[2] || '').trim();
+            if (/^(?:SKIP|TODO)\b/i.test(directive)) skipped.add(ok[1].trim());
+            else passed.add(ok[1].trim());
+            continue;
         }
-
-        const unreportedNow = slugs.filter((slug) => !passed.has(slug) && !failed.has(slug) && !skipped.has(slug));
-        const incompleteFlake = run.status !== 0 && failed.size === 0 && unreportedNow.length > 0;
-        if (!incompleteFlake || attempt >= MAX_COMPAT_ATTEMPTS) break;
-        notes.push(`[F6-C05] ${PLUGIN_COMPATIBILITY_SUITE} came back incomplete — ${unreportedNow.length} plugin(s) `
-            + `produced no verdict and none failed, the node:test force-exit deserialize flake rather than lost `
-            + `coverage; retrying (attempt ${attempt + 1}/${MAX_COMPAT_ATTEMPTS}).`);
+        const notOk = /^not ok\s+\d+\s+-\s+(.+?)(?:\s+#\s*(.*))?$/.exec(line);
+        if (notOk) failed.add(notOk[1].trim());
     }
 
     const skippedPlugins = slugs.filter((slug) => skipped.has(slug));

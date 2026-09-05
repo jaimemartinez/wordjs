@@ -21,6 +21,22 @@
  *
  * MUTATION PROOF: delete the `purge` field from SystemHealth.getFullStatus and the second test fails;
  * make checkPurge report every failure (transient included) and the first test's `OK` disappears.
+ *
+ * ---------------------------------------------------------------------------------------------------
+ * The nested block at the bottom covers TWO MORE degradations of exactly the same class — permanent,
+ * invisible, announced once as a console line on a boot nobody watches:
+ *
+ *   · the database manager falling back to the pure-JS `sqlite-legacy` driver, which has no FTS5, so
+ *     ranked full-text search silently becomes LIKE matching;
+ *   · isolated plugins running with NO CPU bound (cgroup mode with `sandbox.cpuQuotaPercent` at 0);
+ *   · the audit-log retention prune falling BEHIND — stopping at its per-run cap with rows still
+ *     outside the window, i.e. losing the race against a write side that every failed login feeds.
+ *     `auditRetentionState()` was exported "for the cron log and for anyone asking whether retention
+ *     is keeping up" and read by nobody, so the only trace was a console.warn on a cron tick.
+ *
+ * They live here because the surface is the same one: this file already boots a real database, mints a
+ * real administrator token and reads `/health/details` back over the REAL routes tree, and the notice
+ * they raise goes into the same `admin_notices` option the /admin/notices screen renders.
  */
 
 const { describe, it, before, after } = require('node:test');
@@ -246,5 +262,187 @@ describe('/health/details makes a permanently broken purge channel visible', () 
         const pub = await request(app).get('/api/v1/health');
         assert.strictEqual(pub.status, 200);
         assert.strictEqual(pub.body.purge, undefined);
+    });
+
+    /**
+     * NESTED so it runs inside this file's live database (the outer `after` closes it), and so the
+     * admin token and the real routes tree above are reused rather than rebuilt.
+     */
+    describe('the silent degradations an operator used to have to read the boot log to find', () => {
+        const DB_NOTICE_ID = 'db.sqlite-legacy-fallback';
+        const CPU_STATES = ['unbounded', 'preventive', 'reactive'];
+        let options: any;
+        let notices: any;
+        let realDegradationGetter: any = null;
+
+        const noticeIds = async (): Promise<string[]> => {
+            const stored = await options.getOption('admin_notices', []);
+            return (Array.isArray(stored) ? stored : []).map((n: any) => n && n.id);
+        };
+
+        before(() => {
+            options = require('../core/options');
+            notices = require('../core/admin-notices');
+        });
+
+        after(async () => {
+            // Never leave a stub or a notice behind for whatever runs next in this process.
+            if (realDegradationGetter) database.getDriverDegradation = realDegradationGetter;
+            try { await options.updateOption('admin_notices', []); } catch { /* ignore */ }
+        });
+
+        // The state cannot be produced for real in-suite (better-sqlite3 cannot be made to vanish
+        // mid-process), so the DEGRADATION is the fixture and everything downstream of it — the health
+        // report, the notice, the retirement — is the real code.
+        const FORCED = {
+            driverRequested: 'sqlite-native',
+            driverActive: 'sqlite-legacy',
+            reason: "'sqlite-native' failed to load (Could not locate the bindings file) — the pure-JS "
+                + "'sqlite-legacy' driver has no FTS5, so ranked full-text search is unavailable and site "
+                + 'search falls back to LIKE matching',
+            at: new Date('2026-09-01T10:00:00.000Z').toISOString(),
+        };
+
+        it('/health/details flags the sqlite-legacy fallback and names the driver that is REALLY running', async () => {
+            realDegradationGetter = database.getDriverDegradation;
+            database.getDriverDegradation = () => FORCED;
+
+            const res = await request(app)
+                .get('/api/v1/health/details')
+                .set('Authorization', `Bearer ${adminToken}`);
+            assert.strictEqual(res.status, 200);
+            assert.ok(res.body.database, '/health/details must carry a database section');
+            assert.strictEqual(res.body.database.degraded, true);
+            // Actionable, not just "degraded": what was lost, and why.
+            assert.match(String(res.body.database.reason), /full-text/i);
+            assert.match(String(res.body.database.reason), /LIKE/);
+            // The ACTIVE driver, asked of the manager — not `config.dbDriver`, which is the request.
+            assert.strictEqual(res.body.database.driver, database.getDbType().driver);
+
+            // And it is not a field stuck at true: with the real getter back, the flag goes.
+            database.getDriverDegradation = realDegradationGetter;
+            realDegradationGetter = null;
+            const healthy = await request(app)
+                .get('/api/v1/health/details')
+                .set('Authorization', `Bearer ${adminToken}`);
+            assert.strictEqual(healthy.body.database.degraded, false);
+            assert.strictEqual(healthy.body.database.reason, undefined);
+        });
+
+        it('the fallback leaves ONE persistent admin notice, and a healthy boot retires it', async () => {
+            // Two "boots" on the broken driver — the notice is a STATE, not an event, so it must not
+            // accumulate the way CrashGuard's append-only rows do.
+            await database.reportDriverDegradation(FORCED);
+            await database.reportDriverDegradation(FORCED);
+
+            const stored = await options.getOption('admin_notices', []);
+            const rows = (Array.isArray(stored) ? stored : []).filter((n: any) => n && n.id === DB_NOTICE_ID);
+            assert.strictEqual(rows.length, 1, 'a re-raised condition must upsert, never append');
+            assert.strictEqual(rows[0].type, 'error');
+            assert.strictEqual(rows[0].dismissible, true);
+            // The date is the CONDITION's, not the write's: a months-old fault must not sort to the top
+            // of /admin/notices as if it were new on every restart.
+            assert.strictEqual(rows[0].timestamp, Date.parse(FORCED.at));
+            // It says what was lost and how to fix it — the whole reason it is not just a log line.
+            assert.match(rows[0].message, /search/i);
+            assert.match(rows[0].message, /better-sqlite3|dbDriver/);
+
+            // A boot on the requested driver retires it, WITHOUT anyone dismissing it by hand.
+            await database.reportDriverDegradation(null);
+            assert.ok(!(await noticeIds()).includes(DB_NOTICE_ID), 'a healthy boot must retire the notice');
+        });
+
+        it('pushAdminNotice is idempotent by id, and clearAdminNotice removes exactly that row', async () => {
+            const id = 'test.admin-notice-idempotence';
+            const input = {
+                id,
+                level: 'warning',
+                title: 'Something to fix:',
+                message: 'the same condition, observed twice',
+                since: 1_700_000_000_000,
+            };
+
+            assert.strictEqual(await notices.pushAdminNotice(input), true);
+            assert.strictEqual(await notices.pushAdminNotice(input), true);
+
+            const stored = await options.getOption('admin_notices', []);
+            const rows = (Array.isArray(stored) ? stored : []).filter((n: any) => n && n.id === id);
+            assert.strictEqual(rows.length, 1, 'calling twice must leave one entry');
+            assert.strictEqual(rows[0].timestamp, 1_700_000_000_000);
+            // The stored shape is the one /admin/notices already normalises — a new writer must not
+            // invent a dialect the screen would drop or render as "neutral".
+            assert.deepStrictEqual(
+                Object.keys(rows[0]).sort(),
+                ['dismissible', 'id', 'message', 'timestamp', 'type']
+            );
+            assert.strictEqual(rows[0].type, 'warning');
+            assert.match(rows[0].message, /Something to fix/);
+
+            assert.strictEqual(await notices.clearAdminNotice(id), true);
+            assert.ok(!(await noticeIds()).includes(id), 'clearAdminNotice must remove the row');
+            // Idempotent in that direction too: clearing what is already gone is a no-op, not an error.
+            assert.strictEqual(await notices.clearAdminNotice(id), true);
+        });
+
+        it('/health/details states the sandbox CPU bound, in one of the three words that mean something', async () => {
+            const res = await request(app)
+                .get('/api/v1/health/details')
+                .set('Authorization', `Bearer ${adminToken}`);
+            assert.strictEqual(res.status, 200);
+            assert.ok(
+                CPU_STATES.includes(res.body.sandbox.cpu),
+                `sandbox.cpu must be one of ${CPU_STATES.join('/')}, got ${JSON.stringify(res.body.sandbox.cpu)}`
+            );
+            // It is the ISOLATE's answer, not a value the route invented.
+            assert.strictEqual(res.body.sandbox.cpu, require('../core/plugin-isolate').getSandboxCpuBound());
+            // The rest of the sandbox section survives the merge.
+            assert.ok(res.body.sandbox.status, 'sandbox.status must still be reported');
+        });
+
+        it('/health/details says whether audit-log retention is keeping up', async () => {
+            const audit = require('../core/audit');
+            const details = async () => request(app)
+                .get('/api/v1/health/details')
+                .set('Authorization', `Bearer ${adminToken}`);
+
+            // A REAL prune over the REAL table first — nothing here pokes the state the endpoint reads.
+            await audit.pruneAuditLog();
+            const healthy = await details();
+            assert.strictEqual(healthy.status, 200);
+            assert.ok(healthy.body.audit, '/health/details must carry an audit section');
+            assert.strictEqual(healthy.body.audit.retentionDays, audit.DEFAULT_AUDIT_RETENTION_DAYS,
+                'the window the prune actually used is reported, not re-derived by the reader');
+            assert.strictEqual(healthy.body.audit.behind, false, 'a prune with nothing left to do is not behind');
+            assert.ok(Number.isFinite(healthy.body.audit.lastRunAt), 'and it says WHEN it last ran');
+
+            // The differential half: make retention really fall behind — rows outside the window and a
+            // run that stops at its cap — and the flag has to move. A field stuck at false reports
+            // nothing, which is indistinguishable from the console.warn nobody read.
+            const { dbTimestamp } = require('../core/analytics-retention');
+            const stale = dbTimestamp(Date.now() - 400 * 86400000);
+            const dbAsync = database.getDbAsync();
+            for (let i = 0; i < 3; i++) {
+                await dbAsync.run(
+                    `INSERT INTO audit_log (actor_id, action, target_type, target_id, detail, created_at)
+                     VALUES (NULL, 'audit.prune', 'audit_log', 'retention-fixture', '{}', ?)`,
+                    [stale]);
+            }
+            const removed = await audit.pruneAuditLog(null, { maxRows: 1 });
+            assert.strictEqual(removed, 1, 'the capped run removes exactly its cap');
+
+            const behind = await details();
+            assert.strictEqual(behind.body.audit.behind, true,
+                'a run that stopped at a cap with rows still outside the window is BEHIND, and must say so');
+            assert.strictEqual(behind.body.audit.lastRemoved, 1);
+
+            // …and it clears by itself once the prune catches up — an operator who fixes the problem and
+            // is contradicted by the screen that told them to fix it learns to ignore that screen.
+            await audit.pruneAuditLog();
+            const caughtUp = await details();
+            assert.strictEqual(caughtUp.body.audit.behind, false);
+            assert.strictEqual(
+                (await dbAsync.get("SELECT COUNT(*) AS c FROM audit_log WHERE target_id = 'retention-fixture'")).c,
+                0, 'the fixture rows really were pruned, so the flag cleared for the right reason');
+        });
     });
 });

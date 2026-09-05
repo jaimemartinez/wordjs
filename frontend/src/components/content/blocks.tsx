@@ -43,7 +43,7 @@ const splitForBlock = (text: unknown, html: boolean, p: IxTextProps) =>
     p.ixWords === false || !ixTargetsWords(p.ix, p.ixCtx ?? IX_SYS_CTX)
         ? null
         : ixSplitWords(text, { html });
-import { sizesForWidth } from "@/lib/imageSrcset";
+import { sizesForWidth, srcSetMaxWidth, MODERN_SOURCE_TYPES } from "@/lib/imageSrcset";
 import SelfHostedVideo from "./SelfHostedVideo";
 import AudioTransport from "./AudioTransport";
 import ParticleFieldCanvas from "./ParticleField";
@@ -882,17 +882,20 @@ export function HeadingBlock({ title, level, elementId, color, size, weight, tra
     );
 }
 
-export function ImageBlock({ src, alt, borderRadius, radius, shadow, width, fit, elementId, css, srcSet, imgWidth, imgHeight }: any) {
-    return (
+export function ImageBlock({ src, alt, borderRadius, radius, shadow, width, fit, elementId, css, srcSet, srcSetModern, imgWidth, imgHeight }: any) {
+    const sizesAttr = sizesForWidth(width);
+    const img = (
         <img
             id={elementId || undefined}
             src={src}
             // Responsive candidates built from real backend variants at pick
-            // time (resolveData). `sizes` is derived from the CURRENT block
-            // width so later width edits stay coherent. Legacy pages have no
-            // srcSet and render exactly as before.
+            // time — by the editor's media field and by "insert from the
+            // library", both of which commit them with the `src` they describe
+            // (see lib/imageSrcset.ts). `sizes` is derived from the CURRENT
+            // block width so later width edits stay coherent. A page saved
+            // before the feature carries no srcSet and renders as it always did.
             srcSet={srcSet || undefined}
-            sizes={srcSet ? sizesForWidth(width) : undefined}
+            sizes={srcSet ? sizesAttr : undefined}
             width={imgWidth || undefined}
             height={imgHeight || undefined}
             loading="lazy"
@@ -911,6 +914,46 @@ export function ImageBlock({ src, alt, borderRadius, radius, shadow, width, fit,
             }}
             className={bc('image')}
         />
+    );
+
+    // MODERN FORMATS. `srcSetModern` is the per-format map the editor persisted from the backend's
+    // `sources` metadata when the image was picked (AVIF first — `<source>` order IS the selection
+    // order, so the most efficient format has to come first). The `<img>` above is
+    // the unchanged fallback and stays the LAST child, which is what a browser without `<picture>`
+    // support, or without either format, actually renders: same `alt`, `loading`, `sizes`, intrinsic
+    // width/height, same class, same style, same id. An attachment uploaded before the derivatives
+    // existed carries no map and this whole branch is skipped, so its markup is byte-identical.
+    //
+    // A FORMAT THAT DOES NOT REACH THE FULL WIDTH IS NOT OFFERED. The `<img>` is a fallback for a
+    // browser that supports NEITHER format — it is not a wider tier the same browser can fall back
+    // to: `<picture>` takes the first supported `<source>` and then chooses only among ITS candidates.
+    // Above ~8 MP the backend now gives up the whole FORMAT rather than only its full-size entry, so
+    // it no longer writes a map that stops short. The check is not therefore redundant: these props
+    // are PERSISTED, and a page saved while the pipeline still wrote partial maps carries one to this
+    // day. Offering it would cap every modern browser at the widest ladder entry on exactly the large
+    // photos where the original matters most — `buildSrcSet` refuses such a map on the way in, this
+    // refuses it on the way out.
+    const fullWidth = srcSetMaxWidth(srcSet) || Number(imgWidth) || 0;
+    const modernTypes = MODERN_SOURCE_TYPES.filter((type) => {
+        const candidates = srcSetModern?.[type];
+        if (!candidates) return false;
+        // Unknown full width (no srcSet, no intrinsic width) — nothing to compare against, so keep it.
+        return !fullWidth || srcSetMaxWidth(candidates) >= fullWidth;
+    });
+    if (modernTypes.length === 0) return img;
+
+    return (
+        // `display: contents` keeps the wrapper out of layout entirely: <picture> is an inline box by
+        // default, which would introduce a baseline gap under an image the theme styles as a block.
+        // The <img> therefore lays out against the same parent it did before this element existed.
+        <picture style={{ display: 'contents' }}>
+            {modernTypes.map((type) => (
+                // `sizes` belongs on every source too: its srcset uses `w` descriptors, and a source
+                // without `sizes` falls back to 100vw and over-fetches.
+                <source key={type} type={type} srcSet={srcSetModern[type]} sizes={sizesAttr} />
+            ))}
+            {img}
+        </picture>
     );
 }
 

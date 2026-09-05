@@ -158,7 +158,7 @@ async function generateSitemap(posts: any[], options: SeoOptions = {}) {
 
     // Homepage
     xml += '  <url>\n';
-    xml += `    <loc>${siteUrl}/</loc>\n`;
+    xml += `    <loc>${escapeHtml(siteUrl)}/</loc>\n`;
     xml += '    <changefreq>daily</changefreq>\n';
     xml += '    <priority>1.0</priority>\n';
     xml += '  </url>\n';
@@ -185,7 +185,7 @@ async function generateSitemap(posts: any[], options: SeoOptions = {}) {
         const priority = type === 'page' ? '0.8' : '0.6';
 
         xml += '  <url>\n';
-        xml += `    <loc>${url}</loc>\n`;
+        xml += `    <loc>${escapeHtml(url)}</loc>\n`;
         if (lastmod) {
             xml += `    <lastmod>${new Date(lastmod).toISOString().split('T')[0]}</lastmod>\n`;
         }
@@ -201,13 +201,18 @@ async function generateSitemap(posts: any[], options: SeoOptions = {}) {
 
 /**
  * Generate robots.txt content
+ *
+ * `sitemapUrl` is passed in rather than assembled here: the sitemap's public address is decided in
+ * ONE place (`publicSeoUrl` in core/feeds.ts), and this file printing its own second spelling of it
+ * is exactly how the advertisement and the document that answers it come apart. The default keeps
+ * the string this function has always emitted for any caller that supplies only the site URL.
  */
-function generateRobotsTxt(siteUrl = '') {
+function generateRobotsTxt(siteUrl = '', sitemapUrl = `${siteUrl}/sitemap.xml`) {
     return `User-agent: *
 Allow: /
 
 # Sitemap
-Sitemap: ${siteUrl}/sitemap.xml
+Sitemap: ${sitemapUrl}
 
 # Blocked paths
 Disallow: /api/
@@ -240,9 +245,18 @@ function escapeHtml(text: any) {
  * before the markup; the caller (routes/seo) converts too, and both must, because a second caller
  * with a raw option is exactly how the invalid value got in.
  */
-function generateRssFeed(posts: any[], options: { siteUrl?: string; title?: string; description?: string; language?: string } = {}) {
+function generateRssFeed(posts: any[], options: { siteUrl?: string; title?: string; description?: string; language?: string; link?: string; selfUrl?: string } = {}) {
     const siteUrl = options.siteUrl || '';
     const rfc822 = (d: any) => { const t = new Date(d); return isNaN(t.getTime()) ? new Date().toUTCString() : t.toUTCString(); };
+
+    // A SCOPED channel (a category/tag/author feed) is the same generator pointed at a filtered post
+    // list, plus the two URLs that identify WHICH channel it is: where it belongs (`link`) and where
+    // it lives (`selfUrl`). Both are optional and, when absent, render the exact strings this function
+    // has always rendered — the site feed's bytes do not move because a scoped feed exists. The
+    // supplied values are escaped; the defaults are not, deliberately, because escaping them would
+    // change today's output for a siteUrl containing an XML metacharacter.
+    const channelLink = options.link ? escapeHtml(options.link) : `${siteUrl}/`;
+    const selfHref = options.selfUrl ? escapeHtml(options.selfUrl) : `${siteUrl}/feed`;
 
     let items = '';
     for (const post of posts) {
@@ -254,10 +268,18 @@ function generateRssFeed(posts: any[], options: { siteUrl?: string; title?: stri
         const title = escapeHtml(post.postTitle || post.title || slug);
         const rawExcerpt = post.postExcerpt || post.excerpt ||
             String(post.postContent || post.content || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 280);
+        // THE ITEM URL IS ESCAPED, and it is not decoration: `<link>` and `<guid>` are XML TEXT NODES,
+        // so a slug (or a siteUrl) carrying `&` used to emit a bare ampersand — which is not
+        // well-formed XML. A strict reader rejects the WHOLE channel, not the one entry, so a single
+        // bad slug silently killed every RSS feed on the site; and since the scoped category/tag/author
+        // channels are this same generator, one slug took four more public URLs down with it. The
+        // twins already agreed on the rule and this one was the straggler: `generateSitemapUrlset`
+        // escapes `<loc>` and `generateAtomFeed` escapes the very same value in `<id>`/`href`, so the
+        // two renderings of one item used to disagree about their own permalink.
         items += '    <item>\n';
         items += `      <title>${title}</title>\n`;
-        items += `      <link>${url}</link>\n`;
-        items += `      <guid isPermaLink="true">${url}</guid>\n`;
+        items += `      <link>${escapeHtml(url)}</link>\n`;
+        items += `      <guid isPermaLink="true">${escapeHtml(url)}</guid>\n`;
         items += `      <pubDate>${rfc822(post.postDate || post.date || post.created_at)}</pubDate>\n`;
         items += `      <description>${escapeHtml(rawExcerpt)}</description>\n`;
         items += '    </item>\n';
@@ -267,11 +289,11 @@ function generateRssFeed(posts: any[], options: { siteUrl?: string; title?: stri
 <rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
   <channel>
     <title>${escapeHtml(options.title || 'WordJS Site')}</title>
-    <link>${siteUrl}/</link>
+    <link>${channelLink}</link>
     <description>${escapeHtml(options.description || '')}</description>
     <language>${toLanguageTag(options.language)}</language>
     <lastBuildDate>${new Date().toUTCString()}</lastBuildDate>
-    <atom:link href="${siteUrl}/feed" rel="self" type="application/rss+xml"/>
+    <atom:link href="${selfHref}" rel="self" type="application/rss+xml"/>
 ${items}  </channel>
 </rss>`;
 }

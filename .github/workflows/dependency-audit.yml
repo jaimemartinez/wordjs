@@ -59,9 +59,9 @@ jobs:
           - { slug: setup, dir: setup, lock: setup/package-lock.json }
           - { slug: create-wordjs, dir: packages/create-wordjs, lock: packages/create-wordjs/package-lock.json }
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: 'npm'
@@ -106,7 +106,7 @@ jobs:
 
       - name: Upload the failure marker
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: audit-failed-${{ matrix.slug }}
           path: ${{ runner.temp }}/audit-failure/workspace.txt
@@ -132,7 +132,7 @@ jobs:
         # step below handles an empty/absent directory and says so in the issue rather than pretending
         # the failure list is complete.
         continue-on-error: true
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: audit-failed-*
           path: markers

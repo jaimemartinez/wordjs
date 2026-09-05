@@ -174,15 +174,52 @@ router.use(authenticate, refuseHeadlessAccountSecurity);
  *         name: role
  *         schema:
  *           type: string
+*       - in: query
+ *         name: orderby
+ *         schema:
+ *           type: string
+ *           enum: [id, user_login, display_name, user_email, user_registered]
+ *       - in: query
+ *         name: order
+ *         schema:
+ *           type: string
+ *           enum: [asc, desc]
  *     responses:
  *       200:
  *         description: A list of users
+ *         headers:
+ *           X-WP-Total:
+ *             schema:
+ *               type: integer
+ *           X-WP-TotalPages:
+ *             schema:
+ *               type: integer
  *         content:
  *           application/json:
  *             schema:
  *               type: array
  *               items:
  *                 $ref: '#/components/schemas/User'
+ *       400:
+ *         description: >-
+ *           rest_invalid_param — a scalar query parameter was repeated or bracketed (e.g.
+ *           ?order=asc&order=desc). The offending parameter is named in data.params.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ *       401:
+ *         description: "rest_not_logged_in — no valid credential."
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ *       403:
+ *         description: "rest_forbidden (the list_users capability is missing) or mfa_enrollment_required."
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
  */
 router.get('/', can('list_users'), asyncHandler(async (req: Request, res: Response) => {
     // Refuse a repeated scalar before anything reads it — this is what turns the `?order=asc&
@@ -241,6 +278,36 @@ router.get('/', can('list_users'), asyncHandler(async (req: Request, res: Respon
  * GET /users/me
  * Get current user
  */
+/**
+ * @swagger
+ * /users/me:
+ *   get:
+ *     summary: Get the authenticated user
+ *     description: >-
+ *       Declared before /users/{id} so the literal path is never captured by the parameterised route.
+ *     tags: [Users]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: The current user
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/User'
+ *       401:
+ *         description: "rest_not_logged_in — no valid credential."
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ *       403:
+ *         description: "mfa_enrollment_required — the caller's role requires 2FA and the grace window has expired."
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ */
 router.get('/me', (req: Request, res: Response) => {
     res.json(req.user.toJSON());
 });
@@ -248,6 +315,49 @@ router.get('/me', (req: Request, res: Response) => {
 /**
  * GET /users/:id
  * Get single user
+ */
+/**
+ * @swagger
+ * /users/{id}:
+ *   get:
+ *     summary: Get one user
+ *     description: A user may always read their own record; reading anyone else's needs the list_users capability.
+ *     tags: [Users]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     responses:
+ *       200:
+ *         description: The user
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/User'
+ *       401:
+ *         description: "rest_not_logged_in — no valid credential."
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ *       403:
+ *         description: "rest_forbidden (not you, and no list_users capability) or mfa_enrollment_required."
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ *       404:
+ *         description: >-
+ *           rest_user_invalid_id — no such user, or the id is not a well-formed route id (the router-level
+ *           route-id contract answers 404 for a malformed id rather than letting NaN reach the database).
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
  */
 router.get('/:id', asyncHandler(async (req: Request, res: Response) => {
     // `String(...)` is the coercion `parseInt` already applied to this argument implicitly; it is here
@@ -297,14 +407,59 @@ router.get('/:id', asyncHandler(async (req: Request, res: Response) => {
  *                 type: string
  *               password:
  *                 type: string
+*               displayName:
+ *                 type: string
  *               role:
  *                 type: string
+ *                 description: A slug from the live role map. Defaults to subscriber.
  *                 enum: [administrator, editor, author, contributor, subscriber]
+ *               personalEmail:
+ *                 type: string
+ *                 description: Optional recovery address, preferred over the primary one when a reset link is sent.
+ *               professionalMailbox:
+ *                 type: boolean
+ *                 description: >-
+ *                   The admin-owned "Professional Mail Account" grant. Only settable here and on
+ *                   PUT /users/{id} by a caller holding edit_users; it is never self-service.
+ *     parameters:
+ *       - in: header
+ *         name: X-CSRF-Token
+ *         schema:
+ *           type: string
+ *         description: >-
+ *           Double-submit CSRF token — the value of the non-HttpOnly `wjs_csrf` cookie. Required when the
+ *           request is authenticated by the session cookie; Bearer/API-token callers are exempt from the
+ *           token gate, but see the 403 below — this route refuses API tokens outright.
  *     responses:
  *       201:
  *         description: User created
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/User'
+ *       400:
+ *         description: >-
+ *           rest_missing_param (username/email/password absent), rest_invalid_param (malformed primary
+ *           email), rest_invalid_personal_email, or rest_user_exists.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ *       401:
+ *         description: "rest_not_logged_in — no valid credential."
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
  *       403:
- *         description: Forbidden
+ *         description: >-
+ *           rest_forbidden (not an administrator), rest_csrf_token / rest_csrf_invalid,
+ *           mfa_enrollment_required, or the headless refusal — every POST in this router is an
+ *           account-security operation, so a `wjt_` API token may not create accounts.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
  */
 router.post('/', isAdmin, asyncHandler(async (req: Request, res: Response) => {
     const { username, email, password, displayName, role = 'subscriber', personalEmail } = req.body;
@@ -373,6 +528,13 @@ router.post('/', isAdmin, asyncHandler(async (req: Request, res: Response) => {
  *         required: true
  *         schema:
  *           type: integer
+*       - in: header
+ *         name: X-CSRF-Token
+ *         schema:
+ *           type: string
+ *         description: >-
+ *           Double-submit CSRF token — the value of the non-HttpOnly `wjs_csrf` cookie. Required when the
+ *           request is authenticated by the session cookie.
  *     requestBody:
  *       content:
  *         application/json:
@@ -383,26 +545,96 @@ router.post('/', isAdmin, asyncHandler(async (req: Request, res: Response) => {
  *                 type: string
  *               displayName:
  *                 type: string
+ *               url:
+ *                 type: string
  *               password:
  *                 type: string
+ *                 minLength: 8
+ *               currentPassword:
+ *                 type: string
+ *                 description: >-
+ *                   Sudo re-auth. Required only for a SELF edit that changes the password or a
+ *                   recovery-bearing address; an edit_users caller acting on someone else never needs it.
  *               role:
  *                 type: string
+ *                 description: >-
+ *                   Resending the target's CURRENT role is a no-op. A real change needs promote_users,
+ *                   is refused on your own account, and may never grant capabilities beyond the caller's.
+ *               personalEmail:
+ *                 type: string
+ *                 description: Recovery address. Supplying it blank CLEARS it — presence, not blankness, is the write.
+ *               professionalMailbox:
+ *                 type: boolean
+ *                 description: The admin-owned mailbox grant; changing it requires edit_users whoever the target is.
  *     responses:
  *       200:
  *         description: User updated
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/User'
+ *       400:
+ *         description: >-
+ *           rest_weak_password (self edit, under 8 characters), rest_invalid_email (malformed or already
+ *           taken — one uniform message, so this is never an account-existence oracle),
+ *           rest_invalid_personal_email, or rest_invalid_role.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ *       401:
+ *         description: "rest_not_logged_in — no valid credential."
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
  *       403:
- *         description: Forbidden
+ *         description: >-
+ *           rest_forbidden (not you and no edit_users; a non-administrator editing a privileged account;
+ *           changing the mailbox grant without edit_users; assigning a role you may not grant),
+ *           rest_cannot_edit_own_role, rest_bad_current_password (the sudo re-auth failed),
+ *           rest_reserved_mail_domain / rest_mailbox_address_locked (a self-service caller claiming an
+ *           address on the site's mail domain), rest_csrf_token / rest_csrf_invalid,
+ *           mfa_enrollment_required, or the headless refusal when the body carries an account-security
+ *           field (password, currentPassword, email, personalEmail, role, professionalMailbox) — a
+ *           cosmetic-only PUT is still allowed on an API token.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
  *       404:
- *         description: User not found
+ *         description: "rest_user_invalid_id — no such user, or a malformed route id."
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ *       429:
+ *         description: "rest_login_throttled — too many simultaneous sudo re-auth attempts from this address."
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
  */
 /**
  * @swagger
  * /users/me:
- *   put:
+*   put:
  *     summary: Update current user profile
+ *     description: >-
+ *       Self-service only. The role and the professional-mailbox grant are deliberately NOT read here —
+ *       they are admin-owned and can only be written through PUT /users/{id} by a caller with the right
+ *       capability.
  *     tags: [Users]
  *     security:
  *       - bearerAuth: []
+ *     parameters:
+ *       - in: header
+ *         name: X-CSRF-Token
+ *         schema:
+ *           type: string
+ *         description: >-
+ *           Double-submit CSRF token — the value of the non-HttpOnly `wjs_csrf` cookie. Required when the
+ *           request is authenticated by the session cookie.
  *     requestBody:
  *       content:
  *         application/json:
@@ -413,11 +645,56 @@ router.post('/', isAdmin, asyncHandler(async (req: Request, res: Response) => {
  *                 type: string
  *               displayName:
  *                 type: string
+ *               url:
+ *                 type: string
  *               password:
  *                 type: string
+ *                 minLength: 8
+ *               currentPassword:
+ *                 type: string
+ *                 description: >-
+ *                   Sudo re-auth, required when the request changes the password or either recovery
+ *                   address. Checked LAST, after the format and uniqueness refusals.
+ *               personalEmail:
+ *                 type: string
+ *                 description: Recovery address. Supplying it blank CLEARS it.
  *     responses:
  *       200:
  *         description: Profile updated
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/User'
+ *       400:
+ *         description: >-
+ *           rest_weak_password (under 8 characters), rest_invalid_email (malformed or already taken — one
+ *           uniform message) or rest_invalid_personal_email.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ *       401:
+ *         description: "rest_not_logged_in — no valid credential."
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ *       403:
+ *         description: >-
+ *           rest_bad_current_password (the sudo re-auth failed), rest_reserved_mail_domain /
+ *           rest_mailbox_address_locked (the requested primary address belongs to the site's own mail
+ *           domain), rest_csrf_token / rest_csrf_invalid, mfa_enrollment_required, or the headless
+ *           refusal when the body carries an account-security field.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ *       429:
+ *         description: "rest_login_throttled — too many simultaneous sudo re-auth attempts from this address."
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
  */
 // NOTE: must be declared BEFORE '/:id' — Express matches in order and '/:id' would otherwise
 // capture the literal path 'me' (parseInt('me') → NaN → "Invalid user ID"). Mirrors GET /me / GET /:id.
@@ -788,6 +1065,69 @@ router.put('/me', asyncHandler(async (req: Request, res: Response) => {
  *
  * Declared before '/:id' so the literal path is never captured by the parameterised route.
  */
+/**
+ * @swagger
+ * /users/me/sessions/revoke:
+ *   post:
+ *     summary: Sign out everywhere
+ *     description: >-
+ *       Stamps the caller's JWT security epoch, so every session token issued so far — INCLUDING the
+ *       calling session — stops authenticating. API tokens are left alone; revoke those individually
+ *       with DELETE /auth/tokens/{id}. The client must send the user back to the login screen.
+ *     tags: [Users]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: header
+ *         name: X-CSRF-Token
+ *         schema:
+ *           type: string
+ *         description: >-
+ *           Double-submit CSRF token — the value of the non-HttpOnly `wjs_csrf` cookie. Required when the
+ *           request is authenticated by the session cookie.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [currentPassword]
+ *             properties:
+ *               currentPassword:
+ *                 type: string
+ *                 description: Sudo re-auth — this is a state the owner cannot undo, so a cookie alone is not enough.
+ *     responses:
+ *       200:
+ *         description: Every session of this account has been cut off
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 signedOut:
+ *                   type: boolean
+ *       401:
+ *         description: "rest_not_logged_in — no valid credential."
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ *       403:
+ *         description: >-
+ *           rest_bad_current_password (the sudo re-auth failed), the headless refusal (a leaked API token
+ *           must not be able to knock the owner out of their browsers), rest_csrf_token /
+ *           rest_csrf_invalid, or mfa_enrollment_required.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ *       429:
+ *         description: "rest_login_throttled — too many simultaneous sudo re-auth attempts from this address."
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ */
 router.post('/me/sessions/revoke', asyncHandler(async (req: Request, res: Response) => {
     if (await requireSudoPassword(req, res, (req.body || {}).currentPassword)) return;
     // ONE implementation of the epoch stamp, shared with both token-revocation doors.
@@ -1031,6 +1371,73 @@ router.put('/:id', asyncHandler(async (req: Request, res: Response) => {
  *     administrator who loses their authenticator therefore still needs another admin — that residual is
  *     inherent to being the only account with the keys.
  */
+/**
+ * @swagger
+ * /users/{id}/mfa/reset:
+ *   post:
+ *     summary: Administrative two-factor reset
+ *     description: >-
+ *       The way OUT of a 2FA lockout — clears the target's mfa_* meta so they can log in with their
+ *       password again and re-enroll. NEVER on your own account: disabling your own second factor still
+ *       goes through POST /auth/mfa/disable, which demands a current code.
+ *     tags: [Users]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *       - in: header
+ *         name: X-CSRF-Token
+ *         schema:
+ *           type: string
+ *         description: >-
+ *           Double-submit CSRF token — the value of the non-HttpOnly `wjs_csrf` cookie. Required when the
+ *           request is authenticated by the session cookie.
+ *     responses:
+ *       200:
+ *         description: Two-factor authentication cleared for that account
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 reset:
+ *                   type: boolean
+ *                 id:
+ *                   type: integer
+ *       400:
+ *         description: >-
+ *           rest_cannot_reset_own_mfa (use POST /auth/mfa/disable with a current code), or
+ *           rest_invalid_param for a malformed id.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ *       401:
+ *         description: "rest_not_logged_in — no valid credential."
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ *       403:
+ *         description: >-
+ *           rest_forbidden (no edit_users capability, or a non-administrator acting on a privileged
+ *           account), the headless refusal (a leaked API token must never strip a second factor),
+ *           rest_csrf_token / rest_csrf_invalid, or mfa_enrollment_required.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ *       404:
+ *         description: "rest_user_invalid_id — no such user, or a malformed route id."
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ */
 router.post('/:id/mfa/reset', can('edit_users'), asyncHandler(async (req: Request, res: Response) => {
     // THE ROUTE-ID CONTRACT — see core/query-params. The router-level `router.param('id', ...)` above
     // already refuses a malformed id with this router's 404, so for a bad id this branch is now
@@ -1082,15 +1489,51 @@ router.post('/:id/mfa/reset', can('edit_users'), asyncHandler(async (req: Reques
  *         required: true
  *         schema:
  *           type: integer
+*       - in: header
+ *         name: X-CSRF-Token
+ *         schema:
+ *           type: string
+ *         description: >-
+ *           Double-submit CSRF token — the value of the non-HttpOnly `wjs_csrf` cookie. Required when the
+ *           request is authenticated by the session cookie.
  *     responses:
  *       200:
  *         description: User deleted
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 deleted:
+ *                   type: boolean
+ *                 previous:
+ *                   $ref: '#/components/schemas/User'
  *       400:
- *         description: Cannot delete self
+ *         description: "rest_user_cannot_delete — you cannot delete yourself."
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ *       401:
+ *         description: "rest_not_logged_in — no valid credential."
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
  *       403:
- *         description: Forbidden
+ *         description: >-
+ *           rest_forbidden (not an administrator), the headless refusal (a `wjt_` API token may not
+ *           destroy an account), rest_csrf_token / rest_csrf_invalid, or mfa_enrollment_required.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
  *       404:
- *         description: User not found
+ *         description: "rest_user_invalid_id — no such user, or a malformed route id."
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
  */
 router.delete('/:id', isAdmin, asyncHandler(async (req: Request, res: Response) => {
     const userId = parseInt(String(req.params.id), 10);

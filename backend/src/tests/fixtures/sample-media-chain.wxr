@@ -1,0 +1,200 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- CHAINED-RENAME media WXR fixture for wxr-import.test.ts.
+
+     The rename map core/wxr-import applies on top of the base URL swap draws its VALUES from the same
+     namespace as its KEYS, so one file's disambiguation can be another file's original name. This
+     fixture is the ordinary export that produces exactly that: WordPress mints `chain-1.jpg` itself once
+     `chain.jpg` exists, so a site carrying both is not hostile at all — and the test seeds
+     `2025/05/chain.jpg` on disk first, so the target install already holds the name the first item asks
+     for. The plan is then
+
+         2025/05/chain.jpg   -> 2025/05/chain-1.jpg
+         2025/05/chain-1.jpg -> 2025/05/chain-1-1.jpg
+
+     and applying those as two sequential substring swaps sends every reference to attachment A onto
+     attachment B's bytes: the WRONG image behind a live URL, not a 404 anyone would notice.
+
+     __ORIGIN__ is replaced at runtime with the origin of the test's OWN http.createServer, exactly as in
+     sample-media-menus.wxr. The posts come BEFORE the attachments, which is the ordinary WXR ordering
+     and the reason placements are planned up front.
+
+       · `chain-post-a`     — references `chain.jpg`, in the body and in the excerpt.
+       · `chain-post-b`     — references `chain-1.jpg`, the name item A is about to be moved to.
+       · `chain-post-edges` — three references that are NOT the ones being moved: `chain.jpg.bak` (a
+                              longer path this one is a prefix of), `my-chain.jpg` (a longer file name)
+                              and the same path on a host the base swap does not own.
+       · `chain-puck`       — the same cascade reached through a `_puck_data` string leaf.
+-->
+<rss version="2.0"
+     xmlns:excerpt="http://wordpress.org/export/1.2/excerpt/"
+     xmlns:content="http://purl.org/rss/1.0/modules/content/"
+     xmlns:wfw="http://wellformedweb.org/CommentAPI/"
+     xmlns:dc="http://purl.org/dc/elements/1.1/"
+     xmlns:wp="http://wordpress.org/export/1.2/">
+<channel>
+	<title>Chained Rename Blog</title>
+	<link>https://chain.fixture.example</link>
+	<description>Two attachments whose disambiguations collide</description>
+	<wp:wxr_version>1.2</wp:wxr_version>
+	<wp:base_site_url>https://chain.fixture.example</wp:base_site_url>
+	<wp:base_blog_url>https://chain.fixture.example</wp:base_blog_url>
+
+	<item>
+		<title>Post With The First Image</title>
+		<link>https://chain.fixture.example/chain-post-a</link>
+		<pubDate>Tue, 06 May 2025 09:00:00 +0000</pubDate>
+		<dc:creator><![CDATA[jdoe]]></dc:creator>
+		<guid isPermaLink="false">https://chain.fixture.example/?p=901</guid>
+		<description></description>
+		<content:encoded><![CDATA[<p>The first image.</p>
+<figure><img src="__ORIGIN__/wp-content/uploads/2025/05/chain.jpg" alt="First" /></figure>]]></content:encoded>
+		<excerpt:encoded><![CDATA[See __ORIGIN__/wp-content/uploads/2025/05/chain.jpg]]></excerpt:encoded>
+		<wp:post_id>901</wp:post_id>
+		<wp:post_date><![CDATA[2025-05-06 09:00:00]]></wp:post_date>
+		<wp:post_date_gmt><![CDATA[2025-05-06 09:00:00]]></wp:post_date_gmt>
+		<wp:comment_status><![CDATA[closed]]></wp:comment_status>
+		<wp:ping_status><![CDATA[closed]]></wp:ping_status>
+		<wp:post_name><![CDATA[chain-post-a]]></wp:post_name>
+		<wp:status><![CDATA[publish]]></wp:status>
+		<wp:post_parent>0</wp:post_parent>
+		<wp:menu_order>0</wp:menu_order>
+		<wp:post_type><![CDATA[post]]></wp:post_type>
+		<wp:post_password><![CDATA[]]></wp:post_password>
+		<wp:is_sticky>0</wp:is_sticky>
+	</item>
+
+	<item>
+		<title>Post With The Second Image</title>
+		<link>https://chain.fixture.example/chain-post-b</link>
+		<pubDate>Tue, 06 May 2025 09:01:00 +0000</pubDate>
+		<dc:creator><![CDATA[jdoe]]></dc:creator>
+		<guid isPermaLink="false">https://chain.fixture.example/?p=902</guid>
+		<description></description>
+		<content:encoded><![CDATA[<p>The second image.</p>
+<figure><img src="__ORIGIN__/wp-content/uploads/2025/05/chain-1.jpg" alt="Second" /></figure>]]></content:encoded>
+		<excerpt:encoded></excerpt:encoded>
+		<wp:post_id>902</wp:post_id>
+		<wp:post_date><![CDATA[2025-05-06 09:01:00]]></wp:post_date>
+		<wp:post_date_gmt><![CDATA[2025-05-06 09:01:00]]></wp:post_date_gmt>
+		<wp:comment_status><![CDATA[closed]]></wp:comment_status>
+		<wp:ping_status><![CDATA[closed]]></wp:ping_status>
+		<wp:post_name><![CDATA[chain-post-b]]></wp:post_name>
+		<wp:status><![CDATA[publish]]></wp:status>
+		<wp:post_parent>0</wp:post_parent>
+		<wp:menu_order>0</wp:menu_order>
+		<wp:post_type><![CDATA[post]]></wp:post_type>
+		<wp:post_password><![CDATA[]]></wp:post_password>
+		<wp:is_sticky>0</wp:is_sticky>
+	</item>
+
+	<item>
+		<title>Post With The Near Misses</title>
+		<link>https://chain.fixture.example/chain-post-edges</link>
+		<pubDate>Tue, 06 May 2025 09:02:00 +0000</pubDate>
+		<dc:creator><![CDATA[jdoe]]></dc:creator>
+		<guid isPermaLink="false">https://chain.fixture.example/?p=903</guid>
+		<description></description>
+		<content:encoded><![CDATA[<p>Backup at __ORIGIN__/wp-content/uploads/2025/05/chain.jpg.bak</p>
+<p>Elsewhere: https://other.example/wp-content/uploads/2025/05/chain.jpg</p>
+<figure><img src="__ORIGIN__/wp-content/uploads/2025/05/my-chain.jpg" alt="Another file entirely" /></figure>]]></content:encoded>
+		<excerpt:encoded></excerpt:encoded>
+		<wp:post_id>903</wp:post_id>
+		<wp:post_date><![CDATA[2025-05-06 09:02:00]]></wp:post_date>
+		<wp:post_date_gmt><![CDATA[2025-05-06 09:02:00]]></wp:post_date_gmt>
+		<wp:comment_status><![CDATA[closed]]></wp:comment_status>
+		<wp:ping_status><![CDATA[closed]]></wp:ping_status>
+		<wp:post_name><![CDATA[chain-post-edges]]></wp:post_name>
+		<wp:status><![CDATA[publish]]></wp:status>
+		<wp:post_parent>0</wp:post_parent>
+		<wp:menu_order>0</wp:menu_order>
+		<wp:post_type><![CDATA[post]]></wp:post_type>
+		<wp:post_password><![CDATA[]]></wp:post_password>
+		<wp:is_sticky>0</wp:is_sticky>
+	</item>
+
+	<item>
+		<title>Chain Builder Page</title>
+		<link>https://chain.fixture.example/chain-puck</link>
+		<pubDate>Tue, 06 May 2025 09:03:00 +0000</pubDate>
+		<dc:creator><![CDATA[jdoe]]></dc:creator>
+		<guid isPermaLink="false">https://chain.fixture.example/?page_id=904</guid>
+		<description></description>
+		<content:encoded><![CDATA[]]></content:encoded>
+		<excerpt:encoded></excerpt:encoded>
+		<wp:post_id>904</wp:post_id>
+		<wp:post_date><![CDATA[2025-05-06 09:03:00]]></wp:post_date>
+		<wp:post_date_gmt><![CDATA[2025-05-06 09:03:00]]></wp:post_date_gmt>
+		<wp:comment_status><![CDATA[closed]]></wp:comment_status>
+		<wp:ping_status><![CDATA[closed]]></wp:ping_status>
+		<wp:post_name><![CDATA[chain-puck]]></wp:post_name>
+		<wp:status><![CDATA[publish]]></wp:status>
+		<wp:post_parent>0</wp:post_parent>
+		<wp:menu_order>0</wp:menu_order>
+		<wp:post_type><![CDATA[page]]></wp:post_type>
+		<wp:post_password><![CDATA[]]></wp:post_password>
+		<wp:is_sticky>0</wp:is_sticky>
+		<wp:postmeta>
+			<wp:meta_key><![CDATA[_puck_data]]></wp:meta_key>
+			<wp:meta_value><![CDATA[{"content":[{"type":"Image","props":{"src":"__ORIGIN__/wp-content/uploads/2025/05/chain.jpg","alt":"Builder first"}}],"root":{"props":{"title":"Chain Builder"}}}]]></wp:meta_value>
+		</wp:postmeta>
+	</item>
+
+	<item>
+		<title>Chain A</title>
+		<link>https://chain.fixture.example/chain-post-a/chain-a</link>
+		<pubDate>Tue, 06 May 2025 09:04:00 +0000</pubDate>
+		<dc:creator><![CDATA[jdoe]]></dc:creator>
+		<guid isPermaLink="false">__ORIGIN__/wp-content/uploads/2025/05/chain.jpg</guid>
+		<description></description>
+		<content:encoded><![CDATA[]]></content:encoded>
+		<excerpt:encoded><![CDATA[]]></excerpt:encoded>
+		<wp:post_id>905</wp:post_id>
+		<wp:post_date><![CDATA[2025-05-06 09:04:00]]></wp:post_date>
+		<wp:post_date_gmt><![CDATA[2025-05-06 09:04:00]]></wp:post_date_gmt>
+		<wp:comment_status><![CDATA[closed]]></wp:comment_status>
+		<wp:ping_status><![CDATA[closed]]></wp:ping_status>
+		<wp:post_name><![CDATA[chain-a]]></wp:post_name>
+		<wp:status><![CDATA[inherit]]></wp:status>
+		<wp:post_parent>901</wp:post_parent>
+		<wp:menu_order>0</wp:menu_order>
+		<wp:post_type><![CDATA[attachment]]></wp:post_type>
+		<wp:post_password><![CDATA[]]></wp:post_password>
+		<wp:is_sticky>0</wp:is_sticky>
+		<wp:attachment_url>__ORIGIN__/wp-content/uploads/2025/05/chain.jpg</wp:attachment_url>
+		<wp:post_mime_type><![CDATA[image/jpeg]]></wp:post_mime_type>
+		<wp:postmeta>
+			<wp:meta_key><![CDATA[_wp_attached_file]]></wp:meta_key>
+			<wp:meta_value><![CDATA[2025/05/chain.jpg]]></wp:meta_value>
+		</wp:postmeta>
+	</item>
+
+	<item>
+		<title>Chain B</title>
+		<link>https://chain.fixture.example/chain-post-b/chain-b</link>
+		<pubDate>Tue, 06 May 2025 09:05:00 +0000</pubDate>
+		<dc:creator><![CDATA[jdoe]]></dc:creator>
+		<guid isPermaLink="false">__ORIGIN__/wp-content/uploads/2025/05/chain-1.jpg</guid>
+		<description></description>
+		<content:encoded><![CDATA[]]></content:encoded>
+		<excerpt:encoded><![CDATA[]]></excerpt:encoded>
+		<wp:post_id>906</wp:post_id>
+		<wp:post_date><![CDATA[2025-05-06 09:05:00]]></wp:post_date>
+		<wp:post_date_gmt><![CDATA[2025-05-06 09:05:00]]></wp:post_date_gmt>
+		<wp:comment_status><![CDATA[closed]]></wp:comment_status>
+		<wp:ping_status><![CDATA[closed]]></wp:ping_status>
+		<wp:post_name><![CDATA[chain-b]]></wp:post_name>
+		<wp:status><![CDATA[inherit]]></wp:status>
+		<wp:post_parent>902</wp:post_parent>
+		<wp:menu_order>0</wp:menu_order>
+		<wp:post_type><![CDATA[attachment]]></wp:post_type>
+		<wp:post_password><![CDATA[]]></wp:post_password>
+		<wp:is_sticky>0</wp:is_sticky>
+		<wp:attachment_url>__ORIGIN__/wp-content/uploads/2025/05/chain-1.jpg</wp:attachment_url>
+		<wp:post_mime_type><![CDATA[image/jpeg]]></wp:post_mime_type>
+		<wp:postmeta>
+			<wp:meta_key><![CDATA[_wp_attached_file]]></wp:meta_key>
+			<wp:meta_value><![CDATA[2025/05/chain-1.jpg]]></wp:meta_value>
+		</wp:postmeta>
+	</item>
+</channel>
+</rss>

@@ -11,7 +11,11 @@
  *   2. Extracts it into <dir> and installs the runtime dependencies (npm run release:install).
  *   3. Generates a one-time install token and starts the server (npm run start:mono) with it,
  *      printing a clickable https://localhost:3000/install#token=… URL — the browser install
- *      wizard takes it from there (pick SQLite/PostgreSQL, create your admin, done).
+ *      wizard takes it from there (pick SQLite/PostgreSQL, create your admin, done). That URL is
+ *      printed by THIS process, which owns the token, so it is unconditional.
+ *      With --no-start there is no token from here: the server mints its own on its first boot and
+ *      prints it in its banner only when ITS stdout is a TTY (or WORDJS_PRINT_INSTALL_TOKEN=1);
+ *      otherwise it writes it to <dir>/backend/data/install-token (mode 0600) and prints the path.
  *
  * Plain Node, no TypeScript. Only runtime dependency: adm-zip (ZIP extraction).
  */
@@ -729,7 +733,12 @@ async function main() {
         console.log(`      cd ${opts.dir}`);
         console.log(`      npm run start:mono${opts.http ? '        (with WORDJS_HTTP=1 in the environment for plain HTTP)' : ''}`);
         console.log('');
-        console.log(`   The console will print your one-time install URL (${proto}://localhost:3000/install#token=…).`);
+        console.log('   That first boot mints a one-time install token. The server prints it in its');
+        console.log(`   banner as a clickable URL (${proto}://localhost:3000/install#token=…) only when its`);
+        console.log('   stdout is a terminal — which it is if you run the command above yourself. Off a');
+        console.log('   TTY (systemd, Docker, a pipe) the banner shows the URL WITHOUT the token; read it');
+        console.log(`   from ${path.join(opts.dir, 'backend', 'data', 'install-token')} (mode 0600) instead,`);
+        console.log('   or set WORDJS_PRINT_INSTALL_TOKEN=1 to have it printed either way.');
         console.log(line + '\n');
         return;
     }
@@ -758,7 +767,9 @@ async function main() {
     }
     console.log('   • Stop the server:  press Ctrl+C in this window.');
     console.log(`   • Start it later:   cd ${opts.dir} && npm run start:mono`);
-    console.log('     (a fresh install URL is printed on every start until setup is finished)');
+    console.log('     (a fresh token is minted on every start until setup is finished; the server prints');
+    console.log('      it in its banner when stdout is a terminal, and always writes it to');
+    console.log('      backend/data/install-token, mode 0600)');
     if (process.platform === 'linux') {
         console.log('');
         console.log('   • RECEIVING email from the internet? WordJS listens on port 25 (the MX port).');

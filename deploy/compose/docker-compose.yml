@@ -1,0 +1,67 @@
+# WordJS — one-click single-container deploy.
+#
+#   1. printf 'WORDJS_INSTALL_TOKEN=%s\n' "$(openssl rand -hex 24)" > .env
+#   2. docker compose up -d --build
+#   3. open http://localhost:3000/install and paste the token
+#
+# See README.md in this directory. This is the SIMPLEST working WordJS: one process (monolith mode:
+# gateway concerns + backend + Next.js frontend on a single HTTP port), an embedded SQLite database, and
+# two named volumes holding everything that must outlive the container.
+#
+# For the Postgres + Redis + two-replica stack that demonstrates multi-node coherence, use the compose
+# file at the REPOSITORY ROOT instead — it is a different thing and it is not installable (see its
+# header). For Kubernetes, see ../helm/wordjs.
+
+# DIFFERENT from the root compose file's project name ("wordjs") on purpose. Compose keys containers and
+# volumes by project name, so sharing one would make `up` here treat the root demo's stack as a stale
+# definition of this project and tear it down — and vice versa. Distinct names let both exist.
+name: wordjs-site
+
+services:
+  wordjs:
+    # No image is published to a registry yet — there is no GHCR/Docker Hub publish step in
+    # .github/workflows/release.yml — so this builds from the repository you are sitting in. Once an
+    # image IS published, replace `build:` with `image: <registry>/wordjs:<tag>` and drop `--build` from
+    # the command above. Deliberately not pre-filled with a registry path that does not resolve.
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    image: wordjs:local
+    restart: unless-stopped
+    ports:
+      # host:container. Change the HOST side to move the site off :3000; keep the container side at the
+      # value of PORT (3000), which is what the app listens on and what the HEALTHCHECK probes.
+      - "3000:3000"
+    environment:
+      # The public origin — for the PRE-SEEDED path only. `docker/entrypoint.sh` is the ONLY reader of
+      # this variable, and it writes it into wordjs-config.json only under WORDJS_PRESEED_CONFIG=1,
+      # which this stack deliberately does not set (a pre-seeded container comes up already installed
+      # and can never run the wizard). In the SETUP MODE this file uses, the origin that lands in the
+      # config — the one the CSRF/CORS checks compare against — is the `siteUrl` the wizard POSTs to
+      # /api/v1/setup/install, i.e. the URL you were browsing. Here the variable only decorates the
+      # entrypoint's "finish setup at …" log line. Behind a reverse proxy: run the wizard AT your real
+      # https:// origin (and set this too, so a later pre-seed agrees with it).
+      WORDJS_SITE_URL: ${WORDJS_SITE_URL:-http://localhost:3000}
+      # The one-time token gating the pre-install endpoints, so nobody who can reach a not-yet-installed
+      # instance can complete the install before you do. Supply your OWN (>= 16 characters, or it is
+      # ignored with a warning) via .env — see step 1 above.
+      #
+      # Leaving it empty is fine and safe: the app then mints a random 48-hex-char token and writes it to
+      # the data volume at backend/data/install-token (0600). It is NOT in `docker compose logs wordjs`:
+      # the boot banner prints the token only when stdout is a TTY, and a detached container's stdout is a
+      # log stream, so the banner shows /install with no #token=... fragment and names the file instead.
+      # Read it with:  docker compose exec wordjs cat /app/backend/data/install-token
+      # (or set WORDJS_PRINT_INSTALL_TOKEN=1 here to have the banner print it in the logs anyway).
+      WORDJS_INSTALL_TOKEN: ${WORDJS_INSTALL_TOKEN:-}
+    volumes:
+      # Everything that must survive `docker compose down`. backend/data holds the SQLite database, the
+      # install-token mirror, AND wordjs-config.json — the entrypoint anchors the config here with a
+      # symlink precisely so a recreated container comes back INSTALLED instead of re-offering the
+      # wizard on top of a populated database.
+      - wordjs-data:/app/backend/data
+      # The media library. Separate volume so it can be backed up, resized or replaced independently.
+      - wordjs-uploads:/app/backend/uploads
+
+volumes:
+  wordjs-data:
+  wordjs-uploads:

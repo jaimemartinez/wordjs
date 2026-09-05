@@ -10,9 +10,74 @@ const { authenticate, authenticateAllowQuery } = require('../middleware/auth');
 // These routes are reachable by ANY signed-in user, subscribers included, so a bare `e.message`
 // here published the database driver's text to the least-privileged account in the CMS.
 const { publicErrorText } = require('../middleware/errorHandler');
+/**
+ * @swagger
+ * tags:
+ *   name: Notifications
+ *   description: Per-user notification inbox plus a Server-Sent Events channel that pushes new notifications as they are created. Every operation is scoped to the calling user; a notification addressed to user 0 is a broadcast that any signed-in user may read and dismiss.
+ * components:
+ *   schemas:
+ *     Notification:
+ *       type: object
+ *       properties:
+ *         uuid:
+ *           type: string
+ *         user_id:
+ *           type: integer
+ *           description: 0 means a broadcast to every user.
+ *         type:
+ *           type: string
+ *         title:
+ *           type: string
+ *         message:
+ *           type: string
+ *         data:
+ *           type: string
+ *           nullable: true
+ *           description: JSON-encoded payload.
+ *         icon:
+ *           type: string
+ *           nullable: true
+ *         color:
+ *           type: string
+ *           nullable: true
+ *         action_url:
+ *           type: string
+ *           nullable: true
+ *         is_read:
+ *           type: integer
+ *         created_at:
+ *           type: string
+ */
 
 /**
  * SSE Endpoint for real-time notifications
+ */
+/**
+ * @swagger
+ * /notifications/stream:
+ *   get:
+ *     summary: Subscribe to the live notification stream (Server-Sent Events)
+ *     description: Long-lived text/event-stream response. Because EventSource cannot set headers, this route also accepts the session token as a token query parameter in addition to the Authorization header and the session cookie. The server writes a retry directive, then a keepalive comment every 5 seconds, then one SSE frame per notification. Concurrency is capped at 8 streams per user and 1000 per process; a refused connection receives an error frame carrying too_many_streams and is closed immediately.
+ *     tags: [Notifications]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: token
+ *         required: false
+ *         description: Session token, for EventSource clients that cannot send an Authorization header.
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: The event stream. Each frame is a JSON notification; comment lines starting with a colon are keepalives.
+ *         content:
+ *           text/event-stream:
+ *             schema:
+ *               type: string
+ *       401:
+ *         description: Not logged in (rest_not_logged_in)
  */
 router.get('/stream', authenticateAllowQuery, (req: Request, res: Response) => {
     const startTime = Date.now();
@@ -67,6 +132,29 @@ router.get('/stream', authenticateAllowQuery, (req: Request, res: Response) => {
 /**
  * Get notification list
  */
+/**
+ * @swagger
+ * /notifications:
+ *   get:
+ *     summary: List the notifications of the calling user
+ *     description: Returns up to 50 unread notifications, newest first, followed by the 5 most recent read ones.
+ *     tags: [Notifications]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: The notifications of the calling user
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 $ref: '#/components/schemas/Notification'
+ *       401:
+ *         description: Not logged in (rest_not_logged_in)
+ *       500:
+ *         description: The notifications could not be loaded
+ */
 router.get('/', authenticate, async (req: Request, res: Response) => {
     try {
         const userId = req.user.id;
@@ -80,6 +168,37 @@ router.get('/', authenticate, async (req: Request, res: Response) => {
 
 /**
  * Mark as read
+ */
+/**
+ * @swagger
+ * /notifications/{uuid}/read:
+ *   post:
+ *     summary: Mark one notification as read
+ *     tags: [Notifications]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: uuid
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Marked as read
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *       401:
+ *         description: Not logged in (rest_not_logged_in)
+ *       404:
+ *         description: No such notification for this user. The uuid is not a capability - it is matched against the caller own rows and against broadcasts.
+ *       500:
+ *         description: The notification could not be marked as read
  */
 router.post('/:uuid/read', authenticate, async (req: Request, res: Response) => {
     try {
@@ -95,6 +214,29 @@ router.post('/:uuid/read', authenticate, async (req: Request, res: Response) => 
 /**
  * Mark all as read
  */
+/**
+ * @swagger
+ * /notifications/read-all:
+ *   post:
+ *     summary: Mark every notification of the calling user as read
+ *     tags: [Notifications]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: All notifications marked as read
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *       401:
+ *         description: Not logged in (rest_not_logged_in)
+ *       500:
+ *         description: The notifications could not be marked as read
+ */
 router.post('/read-all', authenticate, async (req: Request, res: Response) => {
     try {
         await notificationService.markAllAsRead(req.user.id);
@@ -107,6 +249,37 @@ router.post('/read-all', authenticate, async (req: Request, res: Response) => {
 
 /**
  * Delete a notification
+ */
+/**
+ * @swagger
+ * /notifications/{uuid}:
+ *   delete:
+ *     summary: Delete one notification
+ *     tags: [Notifications]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: uuid
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Notification deleted
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *       401:
+ *         description: Not logged in (rest_not_logged_in)
+ *       404:
+ *         description: No such notification for this user
+ *       500:
+ *         description: The notification could not be deleted
  */
 router.delete('/:uuid', authenticate, async (req: Request, res: Response) => {
     try {

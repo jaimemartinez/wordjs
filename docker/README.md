@@ -16,12 +16,33 @@ Multi-stage:
 2. **runtime** — slim, **non-root** (`wordjs`, uid 1001), `tini` as PID 1 for clean signal handling.
    Copies the compiled tree and runs `npm run release:install` (`--omit=dev`, so `ts-node`/`typescript`
    are absent) — the app runs the **compiled dist**, never TypeScript. A `HEALTHCHECK` polls
-   **`/readyz`**, which returns 200 only once the app is installed, booted, and the database answers.
+   **`/healthz`** (liveness: answered by the monolith's dispatcher before the backend app, so it is green
+   whenever the process is serving — including while the site is still uninstalled). **`/readyz`** is the
+   deeper check — 200 only once the app is installed, booted, and the database answers — and it is the
+   wrong probe for a container `HEALTHCHECK`: a fresh container awaiting its setup wizard would sit
+   `unhealthy` forever and any `depends_on: condition: service_healthy` would never fire. It is used as
+   the Kubernetes `readinessProbe` in `deploy/helm/wordjs` instead.
 
 Because the app reads its **database** settings from `backend/wordjs-config.json` (only Redis + a few
-flags are environment-read), `entrypoint.sh` materializes that file from environment variables on first
-boot (idempotent; a pre-existing/mounted config is never overwritten). Writing `dbDriver` marks the app
-installed, so `/readyz` can go green without the interactive wizard.
+flags are environment-read), `entrypoint.sh` can materialize that file from environment variables — but
+it does so **only when `WORDJS_PRESEED_CONFIG=1`**, and never over an existing config.
+
+> **Why that is opt-in.** `core/configManager.isInstalled()` keys off `installedAt || dbDriver`, so any
+> config written before first boot marks the instance **installed** — and `POST /api/v1/setup/install`
+> then answers `400 Already installed` for the life of that volume. The container serves pages, but no
+> administrator can ever be created (the CMS bootstrap deliberately seeds none — see the enrollment leg
+> of `scripts/smoke-deploy.sh`), so nobody can log in. Pre-seeding unconditionally, as this entrypoint
+> used to, therefore shipped an image that could not be installed. The default now writes nothing: the
+> container boots into **setup mode**, mints an install token and serves `/install`. Pre-seed only when
+> you mean to skip the wizard — an external database, or a replica joining an already-installed site.
+
+`entrypoint.sh` also anchors `backend/wordjs-config.json` into the **data volume** with a symlink (the
+real file becomes `backend/data/wordjs-config.json`). Without that, the config the wizard writes lives in
+the container's writable layer and is lost on recreate, while its database survives — so the container
+would come back offering the wizard again on top of a populated database. Every writer of that file uses
+a plain `writeFileSync` (no atomic rename), so the write follows the symlink rather than replacing it,
+and a dangling symlink reads as "no config" (`fs.statSync` throws), which is exactly right on a first
+boot. A **regular** file at that path — baked in or bind-mounted — is left alone and wins.
 
 > **Password gotcha (real, load-bearing):** `backend/src/config/app.ts` regenerates and persists a
 > random `dbPassword` when the flat key is missing **or literally `"password"`**, and a random
@@ -34,6 +55,7 @@ installed, so `/readyz` can go green without the interactive wizard.
 
 | Variable | Default | Purpose |
 |---|---|---|
+| `WORDJS_PRESEED_CONFIG` | *(unset)* | `1` writes the config below and comes up **already installed**, skipping the wizard. Unset = boot into setup mode and serve `/install`. Every row below is read only when this is `1` |
 | `WORDJS_DB_DRIVER` | `sqlite-native` | `postgres` for multi-node |
 | `WORDJS_DB_HOST` / `WORDJS_DB_PORT` | `localhost` / `5432` | shared Postgres address |
 | `WORDJS_DB_USER` / `WORDJS_DB_NAME` | `postgres` / `wordjs` | Postgres role + database |
@@ -41,7 +63,7 @@ installed, so `/readyz` can go green without the interactive wizard.
 | `WORDJS_JWT_SECRET` | dev placeholder | **share across replicas** |
 | `WORDJS_REDIS_ENABLED` | `false` | `true` turns on cross-node coherence |
 | `WORDJS_REDIS_HOST` / `WORDJS_REDIS_PORT` | `127.0.0.1` / `6379` | shared Redis |
-| `WORDJS_SITE_URL` | `http://localhost:3000` | public origin |
+| `WORDJS_SITE_URL` | `http://localhost:3000` | public origin, written as `siteUrl` in the generated config. In **setup mode** (the default) nothing reads it but the entrypoint's "finish setup at …" log line — there the config's `siteUrl` comes from the wizard's own install request |
 | `WORDJS_BACKEND_PORT` | `4000` | written as `port` in the generated config — the loopback port of the monolith's in-process backend (`monolith.js` reads `appConfig.port`); not exposed publicly, the public port is `PORT` |
 | `PORT` | `3000` | public HTTP port inside the container (written as `gatewayPort`) |
 
@@ -74,6 +96,11 @@ backend tier from [`documentation/multi-node.md`](../documentation/multi-node.md
   `multi-node.md`; until then, plugin-activation fan-out across nodes is not representative here.
 - **TLS is terminated as plain HTTP** inside the containers (`WORDJS_HTTP=1`). Put a reverse proxy
   (Nginx/Caddy/Cloudflare) or the built-in gateway HTTPS in front for a real deployment.
+- **You cannot log in.** Both replicas set `WORDJS_PRESEED_CONFIG=1` — they must, because the database is
+  external and because `app2` has to join the site rather than install one — so both come up already
+  "installed" and the wizard never runs. No administrator is created (the bootstrap deliberately seeds
+  none). This stack demonstrates coherence and public browsing; it is not a site you can administer. For
+  that, use [`deploy/compose`](../deploy/compose): one container, SQLite, wizard-driven.
 
 ## CI coverage
 
@@ -85,3 +112,12 @@ freshly-random value — by node B through the shared infrastructure. Break the 
 or the cache invalidation and node B never observes it, so the job goes red. The same job also
 `docker compose config`-validates this stack. Building and booting the two-container compose is left out
 of the per-PR budget on purpose; it is a manual/local check (`docker compose up --build`).
+
+The **`Docker image (build + boot + install)`** job covers the image itself, which nothing used to: it
+builds the `Dockerfile` (always from a cold cache: only final-image layers are exported, so the builder stage is rebuilt every run), boots a container, asserts a fresh one is
+alive on `/healthz` but **not** ready (`/readyz` → 503) and **not** installed, drives the headless
+install with `x-install-token` — the same request `scripts/smoke-deploy.sh` uses — and then asserts
+`setup/status` reports installed, `/readyz` turns 200, the home page answers 200, and the container's own
+`HEALTHCHECK` reports `healthy`. Container logs are dumped on failure. It also renders both compose files
+and `helm lint`/`helm template`s the chart in [`deploy/helm/wordjs`](../deploy/helm/wordjs), including a
+check that `replicaCount=2` is refused.

@@ -74,6 +74,45 @@ function scalarString(value: unknown, field: string, fallback: string): string {
     return value;
 }
 
+/**
+ * The author a serialised post carries — the SAME three fields the public surfaces need and no more.
+ *
+ * `toJSON()` used to emit `author: this.authorId`, a bare number, while the generated content contract
+ * (frontend/src/lib/generated/content-client.generated.ts, ContentRecord) has always typed it as an
+ * object: every consumer written against the contract — the OpenGraph `authors`, the JSON-LD `author`
+ * and the blog roll's byline — read `post.author?.displayName` off a number and got `undefined`
+ * forever. The CODE is what moves to the CONTRACT here.
+ *
+ * `slug` is the public author identity — `user_nicename`, and NEVER `user_login`. It is an OUTPUT, so
+ * it may only carry a value that was chosen to be public: the login is what the login form takes, and
+ * a byline that spells it turns every public page into a username enumerator. Where the column is
+ * still empty the slug is the user ID, which `?author=` and `/author/<id>` already resolve — so a
+ * public page can always link to `/author/<slug>` and narrow `GET /posts?author=<slug>` with the very
+ * value it was handed. (The INPUT side of that filter still matches a login as well; accepting an
+ * identifier someone already knows is not the same act as publishing one.)
+ *
+ * NOTHING ELSE FROM THE ROW. `users` also holds the e-mail and the password hash; an author byline is
+ * not an account listing, and `/users` is authenticated precisely so a public post cannot become one.
+ */
+interface PostAuthorRef {
+    id: number;
+    displayName: string;
+    slug: string;
+}
+
+/**
+ * A `categories` / `tags` / `author` filter, normalised into the two identities the list accepts.
+ *
+ * WordPress addresses a term or an author by numeric id; a public page only ever has the SLUG (that is
+ * what its URL carries). Both are therefore accepted in the same comma-separated list and split by
+ * SHAPE — all-digits is an id, anything else is a slug — which is the same rule the author feed uses
+ * for its path segment, so the two surfaces cannot disagree about what `/author/2` means.
+ */
+interface PostIdentityFilter {
+    ids: number[];
+    slugs: string[];
+}
+
 class Post {
     id?: number;
     authorId?: number;
@@ -113,6 +152,10 @@ class Post {
     // per taxonomy so the fallback is skipped (the "resolved none" branch).
     // Shape: { category: [{id,name,slug}], post_tag: [...] } — only the taxonomies toJSON emits.
     _termsCache?: Record<string, Array<{ id: number; name: string; slug: string }>> | undefined;
+    // Optional pre-loaded author identity (set by hydrateRelations, same contract as the two above:
+    // `undefined` means "not resolved yet" and toJSON falls back to ONE per-post query). Serializing
+    // the author as an object without this would turn every listing into an N+1 over `users`.
+    _authorCache?: PostAuthorRef | undefined;
 
     constructor(data: any) {
         this.id = data.id;
@@ -225,6 +268,65 @@ class Post {
     }
 
     /**
+     * The author identity of a post whose `users` row is gone (or was never there: `author_id` 0 on
+     * imported content). The KEY stays present and the shape stays the declared one — an absent key
+     * is indistinguishable from "the server does not send it" and forces every consumer to be
+     * fail-closed, which is the exact bug the terms bucket above exists to avoid.
+     */
+    static unknownAuthor(authorId: any): PostAuthorRef {
+        const numeric = Number(authorId);
+        return { id: Number.isFinite(numeric) ? numeric : 0, displayName: '', slug: '' };
+    }
+
+    /**
+     * The public author identity of SEVERAL posts in ONE query, keyed by user id.
+     *
+     * The twin of getTermsForIds/getAllMetaForIds for `users`: serialising the author as an object
+     * without this would make every listing an N+1 over the user table.
+     *
+     * `user_login` IS NOT SELECTED, and that is the point rather than an economy. It used to be the
+     * fallback for both fields, and `user_nicename` was a column nothing ever wrote (NOT NULL DEFAULT
+     * '', config/database.ts) while `display_name` defaults to the login too (User.create) — so on a
+     * default install BOTH emitted strings were verbatim `users.user_login`, the exact value the login
+     * form takes, published by an anonymous `GET /posts` for every account that has ever posted. A
+     * byline is not an account listing. `user_nicename` is now derived at creation (models/User.ts)
+     * and backfilled for existing rows (migration 0015), and where it is still empty the fallback is
+     * the user ID — an identity `?author=` already resolves and `/author/<id>` is already addressed
+     * by. Not selecting the column at all is what keeps a future edit from reintroducing the leak.
+     */
+    static async getAuthorsForIds(ids: any[]): Promise<Record<string, PostAuthorRef>> {
+        const result: Record<string, PostAuthorRef> = {};
+        const wanted = [...new Set((Array.isArray(ids) ? ids : []).filter((id) => id != null && id !== ''))];
+        if (wanted.length === 0) return result;
+
+        const placeholders = wanted.map(() => '?').join(',');
+        const rows = await dbAsync.all(
+            `SELECT id, display_name, user_nicename FROM users WHERE id IN (${placeholders})`,
+            wanted
+        );
+        for (const row of rows) {
+            const nicename = row.user_nicename == null ? '' : String(row.user_nicename).trim();
+            result[row.id] = {
+                id: row.id,
+                displayName: String(row.display_name || row.id),
+                slug: nicename || String(row.id),
+            };
+        }
+        return result;
+    }
+
+    /**
+     * THIS post's author, preferring hydrateRelations' batch and otherwise doing ONE query it
+     * memoizes on the instance — the same fallback contract as the featured image and the terms.
+     */
+    async getSerializedAuthor(): Promise<PostAuthorRef> {
+        if (this._authorCache !== undefined) return this._authorCache;
+        if (this.authorId == null) return (this._authorCache = Post.unknownAuthor(this.authorId));
+        const byId = await Post.getAuthorsForIds([this.authorId]);
+        return (this._authorCache = byId[this.authorId as any] || Post.unknownAuthor(this.authorId));
+    }
+
+    /**
      * Get categories
      */
     async getCategories() {
@@ -294,7 +396,12 @@ class Post {
             link: this.getPermalink(),
             title: this.postTitle,
             excerpt: stripShortcodes(this.postExcerpt || generateExcerpt(this.postContent)),
-            author: this.authorId,
+            // THE CONTRACT, NOT THE COLUMN. See PostAuthorRef: this key has been typed as an object by
+            // the generated content client since F2 while the model sent the bare `author_id`, so every
+            // consumer that reads `author.displayName` read `undefined`. `authorId` is emitted
+            // alongside it so anything that was really after the id keeps a name for it.
+            author: await this.getSerializedAuthor(),
+            authorId: this.authorId,
             parent: this.postParent,
             menuOrder: this.menuOrder,
             commentStatus: this.commentStatus,
@@ -633,6 +740,128 @@ class Post {
     }
 
     /**
+     * A `categories` / `tags` / `author` value, whatever shape the caller had, as ids + slugs.
+     *
+     * The HTTP contract (which spellings are legal, and which answer 400) belongs to the route —
+     * routes/posts.ts validates before it ever gets here. This is the tolerant normaliser the model
+     * owes its DIRECT callers (a plugin, a test, core code holding a term id), and it accepts the four
+     * shapes those callers actually have: a number, an array, a comma-separated string, or the
+     * already-parsed selector. Returns null for "no filter", never an empty selector — the difference
+     * between "filter by nothing" and "do not filter" is the difference between zero rows and all of
+     * them, and only the caller knows which it meant.
+     */
+    static identityFilter(value: any): PostIdentityFilter | null {
+        if (value === undefined || value === null || value === '') return null;
+        if (typeof value === 'object' && !Array.isArray(value)
+            && (Array.isArray(value.ids) || Array.isArray(value.slugs))) {
+            const ids = (value.ids || []).map((id: any) => Number(id)).filter((id: number) => Number.isFinite(id));
+            const slugs = (value.slugs || []).map((slug: any) => String(slug)).filter(Boolean);
+            return ids.length || slugs.length ? { ids, slugs } : null;
+        }
+        const tokens: any[] = Array.isArray(value) ? value : String(value).split(',');
+        const ids: number[] = [];
+        const slugs: string[] = [];
+        for (const token of tokens) {
+            const text = typeof token === 'number' ? String(token) : String(token == null ? '' : token).trim();
+            if (!text) continue;
+            // Split by SHAPE, exactly as the author feed reads its path segment: all-digits is an id.
+            if (/^[0-9]+$/.test(text)) ids.push(Number(text));
+            else slugs.push(text);
+        }
+        return ids.length || slugs.length ? { ids, slugs } : null;
+    }
+
+    /**
+     * The WHERE fragment for one taxonomy filter, as a semi-join on the term relationships.
+     *
+     * `<posts>.id IN (SELECT tr.object_id …)` rather than a JOIN on purpose: a JOIN would multiply the
+     * row by the number of matching terms, which silently breaks BOTH halves of the pagination it has
+     * to keep honest (LIMIT/OFFSET over duplicated rows, and a COUNT(*) that counts relationships
+     * instead of posts). The subquery reads three tables none of which is `posts`, so it is also the
+     * one shape MySQL accepts here — its ER 1093 refusal is about a subquery over the statement's OWN
+     * table, and there is no LIMIT inside it (ER 1235).
+     *
+     * Every value is a placeholder, on all three drivers, so the identity a caller sent can only ever
+     * be compared — never parsed as SQL.
+     */
+    static _taxonomyCondition(selector: PostIdentityFilter, taxonomy: string, col: string) {
+        const parts: string[] = [];
+        const params: any[] = [taxonomy];
+        if (selector.ids.length) {
+            parts.push(`t.term_id IN (${selector.ids.map(() => '?').join(',')})`);
+            params.push(...selector.ids);
+        }
+        if (selector.slugs.length) {
+            parts.push(`t.slug IN (${selector.slugs.map(() => '?').join(',')})`);
+            params.push(...selector.slugs);
+        }
+        // An empty selector cannot reach here (identityFilter answers null), but an impossible
+        // condition — never a dropped filter — is the fail-closed answer if it ever did.
+        if (parts.length === 0) return { sql: '1 = 0', params: [] as any[] };
+        return {
+            sql: `${col}id IN (`
+                + 'SELECT tr.object_id FROM term_relationships tr '
+                + 'JOIN term_taxonomy tt ON tt.term_taxonomy_id = tr.term_taxonomy_id '
+                + 'JOIN terms t ON t.term_id = tt.term_id '
+                + `WHERE tt.taxonomy = ? AND (${parts.join(' OR ')}))`,
+            params,
+        };
+    }
+
+    /**
+     * The WHERE fragment for the author filter, or null when there is none.
+     *
+     * A bare number keeps the EXACT `author_id = ?` shape this model has always emitted — the list
+     * route's authorization forces a concrete id (or the -1 sentinel that must match nothing) into
+     * this option and nothing about that may change. Anything else is the ids/slugs selector: ids are
+     * compared against the column, slugs are resolved through `users` in a subquery so a public page
+     * can narrow by nicename without a users endpoint to enumerate — and, as the slug branch spells
+     * out, without the subquery itself becoming the enumeration.
+     */
+    static _authorCondition(author: any, col: string): { sql: string; params: any[] } | null {
+        if (author === undefined || author === null || author === '') return null;
+        if (typeof author === 'number') {
+            if (!Number.isFinite(author) || author === 0) return null;
+            return { sql: `${col}author_id = ?`, params: [author] };
+        }
+        const selector = Post.identityFilter(author);
+        if (!selector) return null;
+
+        const parts: string[] = [];
+        const params: any[] = [];
+        if (selector.ids.length) {
+            parts.push(`${col}author_id IN (${selector.ids.map(() => '?').join(',')})`);
+            params.push(...selector.ids);
+        }
+        if (selector.slugs.length) {
+            const ph = selector.slugs.map(() => '?').join(',');
+            // THE SLUG IS `user_nicename`. `user_login` is accepted only for an account that has no
+            // nicename — the pre-0015 rows the backfill could not name — and NEVER as an alias for
+            // one that does.
+            //
+            // The unconditional `OR user_login IN (…)` this replaces was a login-existence ORACLE on
+            // an anonymous endpoint: `?author=<guess>` returned that account's posts on a hit and an
+            // empty list on a miss, so the filter answered "does this login exist" for any guess, one
+            // request at a time. That is the same fact the serialiser stopped publishing two hundred
+            // lines up; leaving the query able to confirm it one login at a time would have moved the
+            // leak rather than closed it. An input may accept an identifier the caller already holds
+            // — it may not become a way to discover one.
+            //
+            // `user_nicename <> ''` on the first branch because this schema defaults that column to
+            // the empty string: without it a slug that normalised to '' would match every account at
+            // once. The `IS NULL` on the second is defensive — the column is NOT NULL on all three
+            // drivers, and a future one that isn't must not silently turn the login back into a
+            // universal alias.
+            parts.push(`${col}author_id IN (SELECT id FROM users `
+                + `WHERE (user_nicename IN (${ph}) AND user_nicename <> '') `
+                + `OR (user_login IN (${ph}) AND (user_nicename IS NULL OR user_nicename = '')))`);
+            params.push(...selector.slugs, ...selector.slugs);
+        }
+        if (parts.length === 0) return { sql: '1 = 0', params: [] };
+        return { sql: parts.length === 1 ? parts[0] : `(${parts.join(' OR ')})`, params };
+    }
+
+    /**
      * Build the shared WHERE clause used by BOTH findAll() and count() so the two
      * can never drift. Returns { joins, conditions, params }. The `alias` param
      * controls column prefixing: pass 'p' when querying `posts p` (findAll), or ''
@@ -649,7 +878,9 @@ class Post {
             includeStatuses = null,
             metaKey,
             metaValue,
-            mimeType
+            mimeType,
+            categories,
+            tags
         } = options;
 
         const col = alias ? `${alias}.` : '';
@@ -712,10 +943,30 @@ class Post {
             }
         }
 
-        // Author
-        if (author) {
-            conditions.push(`${col}author_id = ?`);
-            params.push(author);
+        // Author — a bare id (every existing caller), or the ids/slugs selector the list route parses.
+        const authorClause = Post._authorCondition(author, col);
+        if (authorClause) {
+            conditions.push(authorClause.sql);
+            params.push(...authorClause.params);
+        }
+
+        // TAXONOMY FILTERS — `categories` and `tags`, the two taxonomies toJSON() serialises.
+        //
+        // They were destructured by the list route and passed to NOTHING, so `?categories=3` returned
+        // exactly the rows no filter returns: a listing that answered a different question than the
+        // one it was asked, confidently, with the matching X-WP-Total. They live HERE, in the shared
+        // builder, for the same reason `mimeType` does — a filter applied only to the rows would leave
+        // the paginator counting the whole site and announcing pages that come back empty.
+        //
+        // AND ACROSS taxonomies (two conditions, ANDed like every other filter here), OR WITHIN a list
+        // (one condition per taxonomy whose subquery matches any of the requested terms) — WordPress's
+        // `categories=`/`tags=` semantics.
+        for (const [value, taxonomy] of [[categories, 'category'], [tags, 'post_tag']] as const) {
+            const selector = Post.identityFilter(value);
+            if (!selector) continue;
+            const clause = Post._taxonomyCondition(selector, taxonomy, col);
+            conditions.push(clause.sql);
+            params.push(...clause.params);
         }
 
         // Parent
@@ -1775,6 +2026,14 @@ class Post {
         const termsById = await Post.getTermsForIds(ids);
         for (const post of posts) {
             post._termsCache = termsById[post.id] || Post.emptyTermsBucket();
+        }
+
+        // Batch-hydrate the AUTHOR toJSON() now serialises as an object. Same contract again: every
+        // post leaves here with a DEFINED identity (the "resolved, no such user" value when the row is
+        // gone), so a listing never falls back to the per-post users query.
+        const authorsById = await Post.getAuthorsForIds(posts.map((p: any) => p.authorId));
+        for (const post of posts) {
+            post._authorCache = authorsById[post.authorId] || Post.unknownAuthor(post.authorId);
         }
 
         return posts;

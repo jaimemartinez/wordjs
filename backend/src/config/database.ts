@@ -15,6 +15,35 @@ let driverName = config.dbDriver || 'sqlite-native';
 let driver: any = null;
 let driverAsync: any = null; // New Async Driver
 
+// THE FALLBACK, REMEMBERED.
+//
+// The downgrade below ('sqlite-native' unavailable ⇒ pure-JS 'sqlite-legacy') is not cosmetic: the
+// legacy driver has NO FTS5, so migration 0008 declines to build posts_fts and site search silently
+// drops from ranked full-text to LIKE matching (see core/schema-migrations.ts). Until now the only
+// trace was one console.warn on a boot nobody reads, and every surface that answers "which driver?"
+// answered from `config.dbDriver` — i.e. what the operator ASKED for — so the admin health panel
+// confidently named 'sqlite-native' on the very host that was not running it.
+//
+// Kept as STATE rather than a log line so /health/details and the persistent admin notice can both
+// read the one fact. Postgres and MySQL are never downgraded (an explicit non-sqlite driver that
+// fails still throws), so this can only ever describe the sqlite pair.
+type DriverDegradation = {
+  driverRequested: string;
+  driverActive: string;
+  reason: string;
+  at: string;
+};
+let driverDegradation: DriverDegradation | null = null;
+
+/** The active downgrade, or null when the requested driver really is the one running. */
+function getDriverDegradation(): DriverDegradation | null {
+  return driverDegradation;
+}
+
+// One id per CONDITION (see core/admin-notices): a hundred restarts on a broken native binary leave
+// one row on /admin/notices, and the first boot that loads the native driver retires it.
+const DEGRADED_DRIVER_NOTICE_ID = 'db.sqlite-legacy-fallback';
+
 type TransactionQuery = {
   get: (...args: any[]) => Promise<any>;
   all: (...args: any[]) => Promise<any>;
@@ -111,6 +140,10 @@ async function loadDriver(overrideName: string | null = null) {
   }
 
   driverName = name; // Update global state
+  // Every load attempt starts from "not degraded", so a re-init that finally gets the native driver
+  // (tests, migrations, or simply the next boot after `npm rebuild better-sqlite3`) clears the state
+  // instead of inheriting a stale downgrade from the previous attempt.
+  driverDegradation = null;
 
   try {
     console.log(`🔌 DB Manager: Loading driver '${name}'...`);
@@ -162,9 +195,18 @@ async function loadDriver(overrideName: string | null = null) {
     const recoverable = (!overrideName || /^sqlite/.test(name)) && name !== 'sqlite-legacy';
     if (recoverable) {
       console.warn(`⚠️  DB Manager: '${name}' unavailable — falling back to pure-JS 'sqlite-legacy'.`);
+      console.warn(`⚠️  DB Manager: 'sqlite-legacy' has no FTS5 — ranked full-text search is DISABLED and site search falls back to LIKE matching.`);
       driver = require('../drivers/sqlite-legacy');
       driverName = 'sqlite-legacy';
       driverAsync = null;
+      // Remembered, not just logged. Published as an admin notice + /health/details once the database
+      // is up (reportDriverDegradation, called from initializeDatabase).
+      driverDegradation = {
+        driverRequested: name,
+        driverActive: 'sqlite-legacy',
+        reason: `'${name}' failed to load (${e.message}) — the pure-JS 'sqlite-legacy' driver has no FTS5, so ranked full-text search is unavailable and site search falls back to LIKE matching`,
+        at: new Date().toISOString(),
+      };
     } else {
       throw e;
     }
@@ -529,6 +571,46 @@ async function initializeDatabase() {
     console.warn('[DB] Analytics table init skipped:', e.message);
   }
   await checkDbDivergence();
+  // The options table exists from here on, so this is the first moment a persistent notice can be
+  // written — for this degradation and for anything raised earlier (an isolated plugin can launch
+  // before the schema is up). index.ts is not involved: the manager publishes its own state.
+  await reportDriverDegradation();
+}
+
+/**
+ * Publish — or RETIRE — the persistent admin notice for a silent driver downgrade.
+ *
+ * The argument exists so the state and its publication can be exercised independently (there is no
+ * way to make better-sqlite3 vanish mid-suite); production calls it with no arguments.
+ *
+ * BEST-EFFORT BY CONSTRUCTION: a notice that cannot be stored must never take the boot down with it.
+ */
+async function reportDriverDegradation(degradation: DriverDegradation | null = driverDegradation): Promise<void> {
+  try {
+    const { pushAdminNotice, clearAdminNotice, flushPendingAdminNotices } = require('../core/admin-notices');
+    if (degradation) {
+      await pushAdminNotice({
+        id: DEGRADED_DRIVER_NOTICE_ID,
+        level: 'error',
+        title: 'Ranked search is disabled:',
+        message:
+          `this site is running on the pure-JS '${degradation.driverActive}' database driver because ` +
+          `'${degradation.driverRequested}' could not be loaded, and that driver has no full-text index — ` +
+          'site search is matching with LIKE instead of ranking results. To fix it, restore the native ' +
+          'driver (npm rebuild better-sqlite3 in backend/, then restart) or set "dbDriver" explicitly in ' +
+          'backend/wordjs-config.json. Both SQLite drivers read a database file of their own, so switch ' +
+          'with npm run migrate rather than by editing the config alone.',
+        since: Date.parse(degradation.at) || Date.now(),
+      });
+    } else {
+      // A boot on the requested driver retires the notice. Without this the panel would go on
+      // demanding a fix that has already been made, and an operator learns to ignore the panel.
+      await clearAdminNotice(DEGRADED_DRIVER_NOTICE_ID);
+    }
+    await flushPendingAdminNotices();
+  } catch (e: any) {
+    console.warn(`[DB] the driver-degradation notice could not be recorded: ${e && e.message}`);
+  }
 }
 
 // Boot guard for the per-driver-file footgun: each SQLite driver keeps its OWN data file
@@ -813,6 +895,10 @@ module.exports = {
   clearDatabase, // Exposed
   createPluginTable,
   getDbType,
+  // The silent-downgrade state and its publisher (see DriverDegradation above). routes/health.ts
+  // reads the getter so /health/details reports the ACTIVE driver, not the configured one.
+  getDriverDegradation,
+  reportDriverDegradation,
   hasActiveTransaction,
   afterCommit,
   db: dbProxy,

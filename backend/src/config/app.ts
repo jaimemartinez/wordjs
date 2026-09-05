@@ -116,6 +116,15 @@ export interface AppConfig {
         token: string;
     };
 
+    // Structured logging (core/logger). Always well-formed so the logger and the access-log
+    // middleware read it unconditionally. `level` is overridden by the LOG_LEVEL environment
+    // variable; `accessLog` turns off the one-line-per-request access record without silencing the
+    // rest of the application's logs. See documentation/observability.md.
+    logging: {
+        level: string;
+        accessLog: boolean;
+    };
+
     // F6 rollout ramp for the generated content validator (core/content-rollout). Always
     // well-formed — the write path reads it per request and must never branch on undefined.
     // `mode` is the global rung ('off' | 'shadow' | 'enforce', default 'enforce'); `types` holds a
@@ -369,6 +378,29 @@ const config: AppConfig = {
     // Prometheus metrics scrape token (empty = /metrics disabled / returns 404).
     metrics: {
         token: fileConfig.metrics?.token || process.env.METRICS_TOKEN || ''
+    },
+    // Structured logging.
+    //
+    // PRECEDENCE IS env > file > default, the order core/logger's resolveLevel() applies and the order
+    // documentation/observability.md documents. It used to be the OPPOSITE here (`fileConfig || env`),
+    // which did not change the level in force — core/logger reads LOG_LEVEL itself first — but made
+    // this field report a level the process was not running at whenever both were set. Anything that
+    // ever reads it back (a settings panel, a health report, a support bundle) would have stated the
+    // wrong one, and the two files' comments both looked correct in isolation.
+    //
+    // An unrecognised value is SKIPPED rather than normalized away, so a typo in LOG_LEVEL falls
+    // through to the file's level instead of silently resetting it to 'info'. core/logger validates
+    // again before handing anything to pino, which throws on an unknown level.
+    logging: {
+        level: (() => {
+            const names = new Set(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']);
+            for (const candidate of [process.env.LOG_LEVEL, fileConfig.logging?.level]) {
+                const value = String(candidate || '').trim().toLowerCase();
+                if (names.has(value)) return value;
+            }
+            return 'info';
+        })(),
+        accessLog: fileConfig.logging?.accessLog !== false
     },
     // F6 validator rollout ramp. Normalized by core/content-rollout so the file, the environment
     // levers (WORDJS_CONTENT_VALIDATION*) and the runtime override cannot drift into three

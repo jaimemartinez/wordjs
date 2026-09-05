@@ -1,4 +1,4 @@
-import { getPosts, getSettings, getMenuByLocation, getThemeChrome, getThemeManifest } from "@/lib/server-api";
+import { getPostPool, getSettings, getMenuByLocation, getThemeChrome, getThemeManifest } from "@/lib/server-api";
 import type { Post } from "@/lib/api";
 import { toResolved, filterByCategory } from "@/lib/resolvedPost";
 import { parseTemplateParts, type TemplateTree, type TemplateBlock } from "@/lib/templateData";
@@ -35,15 +35,28 @@ export interface RouteContext {
 /** Only these derive content from the site; everything else in a template is structure. */
 const NEEDS_POSTS = new Set(["PostsGrid", "CategoryPosts"]);
 
-function needsPosts(list: unknown): boolean {
-    if (!Array.isArray(list)) return false;
+/**
+ * How many posts one listing block will show. ONE definition, read by the scan that sizes the fetch
+ * and by the decoration that slices it — a pool smaller than the slice is the bug this prevents.
+ */
+const listingCount = (p: Record<string, unknown> | undefined): number => Math.max(1, Number(p?.count) || 6);
+
+/**
+ * The largest `count` any listing in this template asks for, or 0 when it has no listing at all —
+ * which is also the "this template costs no fetch" answer. It walks the whole tree instead of
+ * short-circuiting on the first hit, because the number, not the boolean, is what sizes the pool:
+ * a template with a 4-card grid above a 12-card one must fetch for the twelve.
+ */
+function neededPostCount(list: unknown): number {
+    if (!Array.isArray(list)) return 0;
+    let max = 0;
     for (const node of list) {
         if (!node || typeof node !== "object") continue;
         const b = node as TemplateBlock;
-        if (b.type && NEEDS_POSTS.has(b.type)) return true;
-        if (b.props && needsPosts((b.props as Record<string, unknown>).items)) return true;
+        if (b.type && NEEDS_POSTS.has(b.type)) max = Math.max(max, listingCount(b.props as Record<string, unknown> | undefined));
+        if (b.props) max = Math.max(max, neededPostCount((b.props as Record<string, unknown>).items));
     }
-    return false;
+    return max;
 }
 
 function decorate(list: unknown, posts: Post[], ctx: RouteContext): unknown {
@@ -59,7 +72,7 @@ function decorate(list: unknown, posts: Post[], ctx: RouteContext): unknown {
         }
 
         if (b.type && NEEDS_POSTS.has(b.type)) {
-            const count = Math.max(1, Number(props?.count) || 6);
+            const count = listingCount(props);
             const slug = String(props?.categorySlug || ctx.categorySlug || "").trim().toLowerCase();
             // Same best-effort rule the page resolver uses, and the same honesty about it: the list
             // endpoint takes no category filter, so an unmatched slug falls back to the newest posts
@@ -165,11 +178,16 @@ export async function resolveTemplateBlocks(
 ): Promise<TemplateTree> {
     const partNames = new Set<string>();
     if (themeSlug) collectPartNames(tree.content, partNames);
-    if (!needsPosts(tree.content) && partNames.size === 0) return tree;
+    const needed = neededPostCount(tree.content);
+    if (needed === 0 && partNames.size === 0) return tree;
 
     let content = tree.content as unknown;
-    if (needsPosts(tree.content)) {
-        const posts = ctx.posts ?? ((await getPosts("post", "publish")) || []);
+    if (needed > 0) {
+        // A POOL sized by the template's own blocks, never by `posts_per_page`: that Reading setting
+        // belongs to the blog roll, and a theme's query loop asking for 12 cards must get 12 whether
+        // the owner's front page shows 3 or 30. Routes that already know their posts (an archive, a
+        // search) still win — `ctx.posts` short-circuits the fetch entirely.
+        const posts = ctx.posts ?? ((await getPostPool("post", "publish", needed)) || []);
         content = decorate(content, posts, ctx);
     }
     if (partNames.size > 0) {

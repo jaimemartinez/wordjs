@@ -1141,7 +1141,8 @@ WordPress's (`single-{post_type}-{slug}` → `single-{post_type}` → `single` �
 alternate templates (`product.tall.json`), with the grammar kept closed: names are composed only from
 a route's own slug and post type, and nothing else.
 
-**Reachable today** — these five kinds have a route under `frontend/src/app/(public)`:
+**Reachable today** — every kind the hierarchy knows now has a route under
+`frontend/src/app/(public)`:
 
 | Route | File | Tried in order |
 | --- | --- | --- |
@@ -1149,22 +1150,26 @@ a route's own slug and post type, and nothing else.
 | Single post, `/{slug}` and `/{category}/{slug}` | `[slug]/page.tsx`, `[slug]/[postSlug]/page.tsx` | `single-{post_type}-{slug}.json` → `single-{post_type}.json` → `single.json` → `page.json` |
 | Page, `/pages/{slug}` | `pages/[slug]/page.tsx` | `page-{slug}.json` → `page.json` |
 | Search | `search/page.tsx` | `search.json` → `archive.json` → `page.json` |
+| Category archive, `/category/{slug}` | `category/[slug]/[[...paged]]/page.tsx` | `category-{slug}.json` → `category.json` → `archive.json` → `page.json` |
+| Tag archive, `/tag/{slug}` | `tag/[slug]/[[...paged]]/page.tsx` | `tag-{slug}.json` → `tag.json` → `archive.json` → `page.json` |
+| Author archive, `/author/{id}` | `author/[slug]/[[...paged]]/page.tsx` | `author-{id}.json` → `author.json` → `archive.json` → `page.json` |
+| Date archive, `/archive/{yyyy}[/{mm}]` | `archive/[...segments]/page.tsx` | `date.json` → `archive.json` → `page.json` |
 | **404** | `not-found.tsx` | `404.json` → `page.json` |
 
-**Not reachable — no such route exists in WordJS.** The hierarchy knows these kinds, but nothing asks
-for them today, so shipping one of these files has **no effect**:
+`archive.json` is the shared fallback for **home, search and all four archives** — ship it when you
+want every listing on the site to look alike without touching single posts and pages, and add
+`category.json` / `tag.json` / `author.json` / `date.json` only where one of them must differ.
 
-| Kind | Would try | Status |
-| --- | --- | --- |
-| Category archive | `category-{slug}.json` → `category.json` → `archive.json` → `page.json` | No category-archive route. `/{category}/{slug}` is a *post* under a category path, not a listing. |
-| Tag archive | `tag-{slug}.json` → `tag.json` → `archive.json` → `page.json` | No tag route. |
-| Author archive | `author-{slug}.json` → `author.json` → `archive.json` → `page.json` | No author route. |
-| Date archive | `date.json` → `archive.json` → `page.json` | No date route. |
+**Two things the table does not say, because they are the routes' business and not the hierarchy's:**
 
-That table is deliberately explicit: an earlier version of this document promised an "Archive" route
-that did not exist, and a theme author has no way to tell a template that never matches from one that
-matches and does nothing. `archive.json` itself **is** reachable — as the shared fallback for home and
-search — so ship it when you want those two to look alike without touching single posts and pages.
+* `/taxonomy/{taxonomy}/{term}` is a second address for a taxonomy archive. It resolves through the
+  *same* `category` / `tag` chain as the dedicated URL and canonicalises to it, so it never needs (or
+  gets) a template name of its own.
+* Date archives live under `/archive/`, not at `/{yyyy}`. `(public)/[slug]` already owns every
+  one-segment public path, and Next refuses two differently-named dynamic segments in the same
+  position — so `/2026` is either a post slugged `2026` or the year archive, never both. The literal
+  prefix is the collision-free address, and it reserves the slug `archive` the same way `/search`,
+  `/pages` and `/preview` are already reserved.
 
 **Every chain ends at `page.json`.** It is this system's `index.php`: a theme that ships only that one
 file affects every route, 404 included.
@@ -1239,12 +1244,48 @@ an arrangement of empty space into a blog layout.
 | `SearchBar` | `placeholder`, `buttonText`, `align`, `width`, `inputBg`, `inputBorderColor`, `inputRadius`, `buttonBg`, `buttonColor`, `buttonRadius` |
 
 **The route decides which posts a listing shows.** On a search template the listing shows the search
-results; elsewhere it falls back to the latest published posts. A `categorySlug` that matches nothing
-falls back to the newest posts rather than showing an empty grid, and the block knows which of the two
-it got. Everything is resolved on the server, so the posts are in the HTML a crawler sees.
+results; on an archive template it shows that archive's posts; elsewhere it falls back to the latest
+published posts. A `categorySlug` that matches nothing falls back to the newest posts rather than
+showing an empty grid, and the block knows which of the two it got. Everything is resolved on the
+server, so the posts are in the HTML a crawler sees.
 
 These three were deliberately excluded until this data path existed, because a block that validates
 and then renders empty is exactly the failure the contract is built to prevent.
+
+#### The archive template context
+
+An archive route (`/category`, `/tag`, `/author`, `/archive/{yyyy}[/{mm}]`, `/taxonomy`) hands its
+template exactly two things. They are not template *variables* — this system has no expression
+language, and a template can neither read nor print them — they are what the route pre-resolves into
+the listing blocks before rendering:
+
+| Given to the template | Value on an archive | What consumes it |
+| --- | --- | --- |
+| `posts` | **Every** published post the archive matched, newest first — not the current page's slice | `PostsGrid` and `CategoryPosts`, each taking its own `count` from the top |
+| `categorySlug` | The term's slug, on category and taxonomy archives only | A `CategoryPosts` block that declares no `categorySlug` of its own |
+
+**Why the whole list and not the page.** A `PostsGrid` on `archive.json` carries its own `count`;
+handing it the slice would silently cap it at `posts_per_page` on page 1 and hand it page 3's posts on
+page 3. The **pager is the route's**, rendered below whatever the template arranges; the listing block
+is the theme's, and the two are independent on purpose.
+
+**What the template wraps.** The `PageContent` slot receives the archive's own markup — a
+`.wjs-archive-header` (kind eyebrow, `h1` term name, description, post count), the same
+`.wjs-post-card` list the front page's blog roll emits, and a `.wjs-pagination` nav. A theme that
+styled the blog roll already styles the archive; the archive-only hooks are:
+
+`wjs-archive`, `wjs-archive-header`, `wjs-archive-kind`, `wjs-archive-title`,
+`wjs-archive-description`, `wjs-archive-count`, `wjs-pagination`, `wjs-pagination-prev`,
+`wjs-pagination-next`, `wjs-pagination-link`, `wjs-pagination-current`, `wjs-pagination-gap`.
+
+**Page size is `posts_per_page`** (Settings → Reading), clamped to 1…100, defaulting to 10. Pagination
+is a path (`/category/news/page/2`), never a query string — a query string would read `searchParams`
+and drop the whole archive out of the Full-Route Cache. `page/1`, a page past the end, an unknown term
+and a malformed tail are all **404**, never a soft-200 empty listing.
+
+**`templates/archive.html`** — the Handlebars file some bundled themes still ship — is *not* what these
+routes render. It belongs to the legacy backend renderer (`backend/src/routes/frontend.ts`); the Next
+public site reads `templates/archive.json` and the rest of this section's contract.
 
 ### Named template parts (`theme.json` `templateParts` + `chrome/<name>.json`)
 

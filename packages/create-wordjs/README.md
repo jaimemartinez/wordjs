@@ -114,8 +114,12 @@ need `openssl` on the PATH. Full details, port matrix and the manual (source-che
   self-signed certificate. Your browser will warn once ("Your connection is not private") —
   click *Advanced → Proceed*. That is expected for localhost. Prefer plain HTTP? Use `--http`.
 - **Stop / restart**: press `Ctrl+C` to stop. Start again any time with
-  `cd my-site && npm run start:mono`. Until setup is finished, every start prints a fresh
-  one-time install URL, so you never need to keep the original token around.
+  `cd my-site && npm run start:mono`. Until setup is finished, every start mints a fresh one-time
+  install token, so you never need to keep the original around. The server prints it in its boot
+  banner — as a clickable `/install#token=…` URL — only when its stdout is a terminal, which it is
+  when you run that command yourself; off a TTY (systemd, Docker, a pipe) the banner shows the URL
+  without the token. Either way the token is written to `my-site/backend/data/install-token`
+  (mode `0600`), and `WORDJS_PRINT_INSTALL_TOKEN=1` prints it in the banner regardless.
 - **GitHub rate limit / offline**: the release lookup uses the unauthenticated GitHub API. If it
   is rate-limited or you're offline, download `wordjs-v*.zip` from the
   [releases page](https://github.com/jaimemartinez/wordjs/releases) and run

@@ -90,6 +90,8 @@ npm run typecheck  # tsc --noEmit
 cd backend
 npm test                  # node ../scripts/test-with-flake-retry.mjs --test-force-exit --test-concurrency=1 -r ts-node/register/transpile-only src/tests/*.test.ts (node:test + supertest; transpile-only — types are checked by `npm run typecheck`)
 npm run test:integration  # node ../scripts/test-with-flake-retry.mjs --test-force-exit -r ts-node/register src/tests-integration/*.test.ts (needs Postgres + Redis)
+npm run test:coverage     # the same unit suite under c8 — prints a summary, writes coverage/lcov.info
+npm run test:coverage:check  # the same, plus --check-coverage against the committed floor (the CI gate)
 npm run lint              # eslint (flat config)
 npm run format
 ```
@@ -101,6 +103,48 @@ Both test scripts run `node --test …` through `scripts/test-with-flake-retry.m
 The DB driver conformance suite (`src/tests/driver-conformance.test.ts`) runs the **async** drivers it has a dialect-descriptor block for (`sqlite-native`, `postgres`, and `mysql`, each skipped gracefully when its backend isn't reachable — and hard-failed in CI via `WORDJS_CI_DB=1`) against the shared interface (`src/drivers/interface.ts`: `connect/get/all/run/exec/transaction/close`). The `mysql` (`mysql2`) block feeds the same SQLite-dialect SQL and asserts the driver's translation layer. The legacy `sqlite-legacy` (sql.js) driver uses the older **sync** shape and is intentionally out of scope here. The 6th interface method, `transaction(fn)`, is an atomic `BEGIN`/`COMMIT`/`ROLLBACK` wrapper that passes a `tx` bound to a single connection (the basis of the atomic-transaction guarantee). **Adding a new database** = implement that interface (including `transaction()`) and add a conformance block.
 
 The **integration suite** (`src/tests-integration/`, run by `npm run test:integration` and in CI against real `postgres:16` + `redis:7` containers) exercises the multi-node coordination paths and full-app endpoints: distributed-lock lease CAS against Postgres (`dist-lock.integration.test.ts`), Redis pub/sub coherence (`coherence.integration.test.ts`), and the health/metrics endpoints (`health.integration.test.ts`).
+
+### Coverage — a ratchet, not a target
+
+Until now nothing in this repository measured coverage: no c8, no nyc, no istanbul, no `@vitest/coverage-*`, no threshold anywhere. There were ~4,500 backend assertions and ~3,700 frontend ones and **no number**, which meant one specific failure could not be seen — a refactor deletes the last test of a module and every gate stays green, because a suite only reports on what it runs.
+
+```bash
+cd backend  && npm run test:coverage        # measure (summary + coverage/lcov.info)
+cd backend  && npm run test:coverage:check  # measure and FAIL under the committed floor
+cd frontend && npm run test:coverage        # measure + threshold in one command
+```
+
+Both write `coverage/` next to their package (gitignored; CI uploads `lcov.info` as a build artifact instead of publishing a badge).
+
+**The first measurement, 2026-09-04:**
+
+| Suite | Lines | Statements | Branches | Functions | Committed floor (lines) |
+| --- | --- | --- | --- | --- | --- |
+| Backend (`node:test`, 220 files, one clean pass, no flake retry) | **82.65 %** (72,047 / 87,168) | 82.65 % | 73.20 % | 82.05 % | **80** |
+| Frontend (`vitest`, 173 files / 3,683 tests) | **42.45 %** (8,981 / 21,156) | 41.43 % | 39.85 % | 30.93 % | **40** |
+
+**The rule is a ratchet.** Each floor sits a little over **two points under the number measured when it was introduced**, and its only job is to fail a run that **drops** coverage. It is not a target and it says nothing about the percentage being good enough. Only **lines** is gated: branches/functions are reported so a drop is visible, but a single gated dimension is enough for a ratchet and three more are three more ways to flap.
+
+- Raise a floor when the measured number rises — ideally in the same PR that raised it, so the gain cannot be silently spent later.
+- **Never lower a floor to turn a red run green.** A red coverage step means lines that used to be exercised no longer are; the fix is a test, or a deliberate, reviewed deletion of the code those lines were in.
+- Backend: `--check-coverage --lines <floor>` inside `test:coverage:check` in `backend/package.json`. Frontend: `test.coverage.thresholds.lines` in `frontend/vitest.config.mts`.
+
+**Where the first floors came from, and why they are conservative.** Both were measured on a developer machine with **no Postgres/MySQL/Redis reachable**, so the driver-conformance and integration blocks skipped gracefully and their lines went uncovered. CI runs the same suite with `WORDJS_CI_DB=1` against real service containers, where those blocks execute — so the number CI reports should be **higher** than the number the floor was derived from. That direction is safe (the gate cannot false-fail on it), but it does leave the ratchet slacker than it needs to be: **tighten each floor to two points under CI's first reported number**, in its own PR, once you have seen it.
+
+**Both tools count files no test ever loads** — c8 via `--all`, vitest because `coverage.include` defines the universe rather than filtering what the run happened to load (Vitest 4 dropped `coverage.all`). That is the point: a module nothing imports must be reported as uncovered rather than left out of the denominator, which is exactly what a "% of the files we happened to load" number hides. **What each denominator actually contains differs between the two suites, so it is stated per suite rather than once.**
+
+- **Frontend** (`coverage.include` / `coverage.exclude` in `frontend/vitest.config.mts`): the universe is `src/**/*.ts` and `src/**/*.tsx`. Excluded are the test files themselves, generated code (`src/generated/**`, `src/lib/generated/**`, `*.generated.ts`), the two per-machine plugin registries plus the generated `admin/plugin/[slug]/page.tsx`, and `.d.ts` declarations — and **nothing else**. Notably `src/lib/plugins-registry.ts` (named like a generated file, but hand-written) and `src/instrumentation.ts` (a Next entry point no unit test loads) stay in the denominator, uncovered: excluding code *because* it is untested is how a coverage number becomes decorative.
+- **Backend** (the `--src` / `--exclude` flags in `backend/package.json`): the universe is `backend/src` only, and the exclusions are the two test trees and `.d.ts`. Two consequences the frontend list does not share, both deliberate to name rather than discover: **generated code is *not* excluded** here — `src/generated/content-dtos.generated.ts` and `visual-contract.generated.ts`, ~1,251 emitted lines, sit in the denominator, where the frontend excludes exactly that class of file; and `--src src` puts **`backend/scripts/**` entirely outside the measurement** — ~6,263 lines of gate scripts (`verify-f0-baseline.ts`, `verify-f1`…`verify-f6`, `build-marketplace.js`, `perf-calibrate.mjs`) that the unit suite *does* exercise, so the reported percentage says nothing about them.
+
+Those two disagreements are a rule stated once and implemented twice. Reconciling them — add `--exclude "src/generated/**"` to both backend coverage scripts, and decide whether `backend/scripts` belongs in the denominator — is a change to the floors as well as the flags, so it belongs in its own PR with a re-measurement, not in a docs edit.
+
+**Both gates were checked in both directions**, because a threshold nobody has seen go red is indistinguishable from no threshold: c8 at `--lines 99` exits 1 with *"Coverage for lines (8.4%) does not meet global threshold (99%)"* and at `--lines 5` exits 0; vitest at `thresholds.lines: 95` exits 1 with the same shape, and at the committed `40` exits 0.
+
+**It is not free.** The coverage command re-runs the whole suite under instrumentation, so budget roughly the length of `npm test` again, and c8 writes one raw V8 profile per spawned process into `backend/coverage/tmp` — that intermediate tree reached **~1.1 GB** across the 330-odd processes the backend suite spawns. **It is not transient — the merge does not delete it.** c8's `clean` runs *before* a run, not after, so `backend/coverage/tmp` survives a green run (measured: 1.1 GB across 333 files immediately after one) and is only cleared when the next coverage run overwrites it; `rm -rf backend/coverage` is a thing to do by hand. `.dockerignore` excludes `coverage/` for exactly this reason — otherwise the builder's `COPY . .` ships it into the build context. The merge itself is streamed (peak RSS stayed under 200 MB), so it is disk and wall-clock you are paying, not memory. Both CI jobs therefore run the coverage step **last**, and their `timeout-minutes` were raised to match (Backend 22 → 32, Frontend 15 → 20).
+
+**The frontend coverage run raises `testTimeout` to 30 s, and that is not a way of hiding a slow test.** `src/components/blocks/__tests__/classAttributeChannel.test.tsx` walks the frontend source tree from inside a test: ~1.6 s uninstrumented, past Vitest's 5 s default under v8 coverage, because every module the walk touches is transformed and instrumented on the way. Plain `npm run test` keeps the 5 s default, so a test that genuinely became slow still fails there; the longer clock applies only to the run that pays for instrumentation, where a 5 s ceiling would make the ratchet look like a flake.
+
+**How c8 sees the backend suite, which had to be verified rather than assumed.** `npm test` runs `scripts/test-with-flake-retry.mjs`, which spawns `node --test`, which spawns one child process per test file — the code under measurement is two levels of `spawn` below c8. c8 works by exporting `NODE_V8_COVERAGE`, and that variable is inherited by both spawns, so every child writes its profile into the same directory and c8 merges them. `--test-force-exit` does **not** truncate the profile either; V8 flushes coverage on the process-exit path as well. This was checked empirically before the floor was set (three test files on their own already reported ~52% of the lines they load, i.e. non-zero and plausible), because "coverage ran and reported 0%" and "coverage ran and the collection is broken" look identical from the outside.
 
 ### Plugin frontends
 
@@ -122,6 +166,7 @@ npm run build  # next build
 npm start      # node scripts/start-frontend.js prod
 npm run lint   # eslint .
 npm run test   # vitest run (unit tests, e.g. the XSS sanitizer in src/lib/__tests__/sanitize.test.ts)
+npm run test:coverage  # vitest run --coverage (v8 provider) — summary + coverage/lcov.info, and the ratchet gate
 ```
 
 In **production** the frontend loads plugin UI from pre-compiled bundles via the Plugin API (no `next build` of plugin code required); in **development** it uses Next.js dynamic imports with HMR.
@@ -250,20 +295,59 @@ Behaviour: **idempotent / re-runnable** — existing users (by login/email), ter
 
 ---
 
+## ⏱️ Performance budgets, and calibrating them on Linux
+
+There are three performance gates, and they measure different things:
+
+| Command | What it enforces | Where |
+| --- | --- | --- |
+| `cd backend && npm run perf:f0` | Five **absolute p95 millisecond** ceilings for content operations | `backend/f0-performance-budgets.json#contentMilliseconds` |
+| `npm run perf:bench:enforce` | HTTP steady state, as a **ratio to `/healthz`** measured in the same run (needs a **production** build running — dev numbers are meaningless, Next's caches do not persist in dev) | `backend/f0-baseline.json#performanceBudget.httpSteadyState` |
+| `backend/src/tests/f6-performance-budget.test.ts` (runs inside `npm test`) | The four F6 plan operations — creation, update, query, render — as a **ratio to a same-run reference workload** (ten single-row inserts through the active driver) | `backend/f0-baseline.json#performanceBudget.operations` |
+
+The ratio form exists because **a millisecond is a property of the machine**: a slower host inflates numerator and denominator together, so the ratio survives being moved between machines, while a real regression moves the numerator alone. The absolute ceilings survive as a secondary catastrophe check and may never be looser than the F0 file they descend from — `backend/scripts/verify-f0-baseline.ts` enforces that descent.
+
+### The gap this closes
+
+`performanceBudget.measuredOn.platform` says `win32`. Every ratio in the committed budget was observed across eight runs on **one Windows laptop** and had never been measured on the platform that enforces it. The file itself records the consequence: the ceilings sit at **2.0×** the worst calibration run, which is `1.5×` for measurement noise **times** an allowance for having only ever been calibrated on one platform, and `provisionalMargin` states the remedy — *"once the harness has run on the CI host, record that observation and tighten the ceilings back toward 1.5×"*. Its own `sensitivityNote` is candid that at 2.0× the gate "does not catch a 20% slowdown".
+
+The `Performance budgets (Linux measurement; calibrate/enforce on dispatch)` job in `ci.yml` runs the harness on `ubuntu-latest`. On every push and pull request it measures **one** round, prints each observation next to the ceiling it is judged by and uploads the table as an artifact, but it **does not fail** — the Windows-calibrated ceilings are already enforced on every run by `f6-performance-budget.test.ts` inside the Backend job, and a second enforcing copy on a second cold runner would only add flakes. `workflow_dispatch` runs the same four assertions with `--enforce`; `workflow_dispatch` with `calibrate: true` runs eight rounds and mints a paste-ready Linux budget. `--enforce` returns to the push path in the commit that lands that calibration.
+
+### Calibration flow: dispatch → artifact → paste → PR
+
+1. **Dispatch.** Actions → *CI* → *Run workflow* → tick **`calibrate`**. The job then runs **eight** rounds instead of one.
+2. **Download.** Take the `perf-calibration.json` artifact from that run (it is uploaded on success *and* on failure — a run that went over a ceiling is exactly the run whose numbers you need).
+3. **Paste.** Copy the artifact's **`.performanceBudget`** value over `performanceBudget` in `backend/f0-baseline.json`. It is emitted in that exact shape, with `measuredOn.platform: linux` and ceilings at **1.5×** the worst of the eight rounds — the noise factor alone, because a calibration measured on the enforcing platform no longer owes the single-platform allowance.
+4. **PR.** Open one. Nothing is written by CI on purpose: a budget change is a review decision, and both `backend/src/tests/f6-performance-budget.test.ts` and `npm run verify:f0` re-check the pasted block (ceiling inside `methodology.ceilingMarginRange`, every operation measured and budgeted in both directions, the reference observation strictly inside its own bounds, no F6 ceiling looser than the F0 one it inherits).
+
+Run the same thing locally with:
+
+```bash
+node backend/scripts/perf-calibrate.mjs --enforce             # one round, print the table, fail if over
+node backend/scripts/perf-calibrate.mjs --calibrate --rounds 8  # mint a block for THIS host
+```
+
+Two things the script deliberately will not do. It **does not measure anything itself** — it spawns `backend/src/tests/f6-performance-budget.test.ts` (with `WORDJS_F6_PERF_PRINT=1`, which makes that suite emit its run as one JSON line) and only repeats and reduces, so the calibration can never come from a harness other than the one CI enforces with. And it **never raises `maximumMillisecondsP95`**: those absolute ceilings descend from `f0-performance-budgets.json`, so a p95 that has grown past one is reported as a finding and exits non-zero, rather than being legislated away.
+
+Measure on an **idle** host. A round takes about **2.5 seconds** (10 warmups, 150 reference samples, 60 samples per operation, 10 % trimmed mean — all read from `performanceBudget.methodology`, so the harness and the budget cannot drift apart), so eight rounds cost under a minute and there is no reason to skimp. A busy machine, on the other hand, produces ratios that are noise: measured back to back on the same laptop, `contentQuery` read 1.02× idle and 2.04× while a full test suite was running — over its 1.72× ceiling, on identical code.
+
+---
+
 ## 🤖 CI
 
-`.github/workflows/ci.yml` runs eight parallel jobs on every push/PR (Node 22):
+`.github/workflows/ci.yml` runs its jobs in parallel on every push/PR (Node 22), plus a `workflow_dispatch` entry point whose only input is `calibrate` (see § Performance budgets above):
 
 The backend, gateway, frontend, and install-channel (`packages/create-wordjs`) jobs each run an **audit gate** — `node scripts/ci-audit.mjs`, a wrapper that runs `npm audit --omit=dev --audit-level=high --json` in the job's working directory with a per-attempt timeout and one retry — that fails on any high/critical **production** dependency CVE (and on any unrecognised audit failure). Only a confirmed npm advisory-service outage across both attempts is allowed through: the step then emits `::warning::` annotations and passes, so a registry outage does not make the whole repository un-mergeable. Then:
 
 - **Gates that travel (`gates-travel`):** a checkout-only job (no npm, no database) that asserts every file on an explicit manifest of required gates is present and tracked by git, and that every tracked test file is actually run by one of the suites this workflow invokes — plus a check that every job in every workflow declares a `timeout-minutes` (GitHub's default is six hours, where a hang is indistinguishable from a slow run).
-- **Backend:** audit gate → strict typecheck (`tsc --noEmit`) → **lint** (`npm run lint`) → **build** (`npm run build`) → the seven **phase verifiers** `npm run verify:f0` … `verify:f6` (one per ADR under `documentation/adr/`, sources in `backend/scripts/verify-f*.ts`) → **license gate** (`license-checker --production --failOn 'AGPL;SSPL'`) → unit tests (run with `WORDJS_CI_DB=1` against a `mysql:8` service container, so the `postgres` + `mysql` driver-conformance blocks **hard-fail** instead of skipping — the only CI coverage of the SQLite→MySQL translation layer) → the **F0 content performance budgets** (`npm run perf:f0`, enforced against `backend/f0-performance-budgets.json`) → **integration tests** (`npm run test:integration`) against real `postgres:16` + `redis:7` service containers → **marketplace catalog integrity** (re-runs `node backend/scripts/build-marketplace.js`, then `node backend/scripts/verify-marketplace.js --rebuild`: it re-hashes every zip on disk against its catalog entry's sha256/size, compares the manifest inside each zip with the entry, requires every declared frontend entry to have its compiled `dist/*.bundle.js` in the package, rejects packages carrying a plugin's runtime `data/` or exceeding the installer's 10MB cap, rejects unreferenced leftovers in `dist/`, and — via `--rebuild` — requires a second build of unchanged sources to be byte-identical. `marketplace/dist/` is a gitignored build artifact published as Release assets by `release.yml`, not committed to the repo).
+- **Backend:** audit gate → strict typecheck (`tsc --noEmit`) → **lint** (`npm run lint`) → **build** (`npm run build`) → the seven **phase verifiers** `npm run verify:f0` … `verify:f6` (one per ADR under `documentation/adr/`, sources in `backend/scripts/verify-f*.ts`) → **license gate** (`license-checker --production --failOn 'AGPL;SSPL'`) → unit tests (run with `WORDJS_CI_DB=1` against a `mysql:8` service container, so the `postgres` + `mysql` driver-conformance blocks **hard-fail** instead of skipping — the only CI coverage of the SQLite→MySQL translation layer) → the **F0 content performance budgets** (`npm run perf:f0`, enforced against `backend/f0-performance-budgets.json`) → **integration tests** (`npm run test:integration`) against real `postgres:16` + `redis:7` service containers → **marketplace catalog integrity** (re-runs `node backend/scripts/build-marketplace.js`, then `node backend/scripts/verify-marketplace.js --rebuild`: it re-hashes every zip on disk against its catalog entry's sha256/size, compares the manifest inside each zip with the entry, requires every declared frontend entry to have its compiled `dist/*.bundle.js` in the package, rejects packages carrying a plugin's runtime `data/` or exceeding the installer's 10MB cap, rejects unreferenced leftovers in `dist/`, and — via `--rebuild` — requires a second build of unchanged sources to be byte-identical. `marketplace/dist/` is a gitignored build artifact published as Release assets by `release.yml`, not committed to the repo) → the **coverage ratchet** (`npm run test:coverage:check` — the same unit suite re-run under c8, failing below the committed line floor; last in the job so every pre-existing gate reports first and a coverage-tooling problem can never mask the real signal, with `coverage/lcov.info` uploaded as an artifact).
 - **Multi-node coherence (`multinode`):** boots two backend cores as **separate OS processes** against one shared `postgres:16` + `redis:7` (`npm run test:multinode`) and asserts that an option/role change written on node A is observed on node B through the Redis bus — the cross-process path the single-process `coherence.integration.test.ts` cannot cover. It also `docker compose config -q`-validates the container stack.
 - **Gateway:** audit gate → tests (`node --test test/*.test.js`).
 - **Install channel (`install-channel`):** `packages/create-wordjs`, the `npx create-wordjs` installer published to npm — audit gate → its own `npm test` (`node --test test/*.test.js`), wrapped in a guard that fails the step if the run reported zero tests (so a glob that matches no files cannot pass by absence) → `node index.js --help` to prove the published bin still boots. This is the only job that audits the `create-wordjs` package's dependencies (the workspace-level audits do not cover it).
-- **Frontend:** audit gate → **generate plugin registries** (`generate-plugin-registry.js` + `generate-admin-plugin-registry.js` + `generate-verso-plugin-registry.js`, so type-check/lint/build only reference the checked-out plugins) → two **anti-drift gates** that regenerate a committed artifact and `git diff --exit-code` it (`backend/public/theme-tokens.json` via `scripts/generate-token-manifest.js`, and `frontend/src/lib/assetVersion.generated.ts` via `scripts/generate-asset-version.js`), each preceded by a `git ls-files --error-unmatch` guard so the diff can never be vacuously green on an untracked file → strict typecheck (`tsc --noEmit`) → lint → **vitest** (`npm run test`) → production build (`next build`). (There is no vendored-editor build step any more: Verso is plain in-tree source under `frontend/src/components/verso/` + `frontend/src/lib/verso/`, compiled by `next build` like the rest of the app.)
+- **Frontend:** audit gate → **generate plugin registries** (`generate-plugin-registry.js` + `generate-admin-plugin-registry.js` + `generate-verso-plugin-registry.js`, so type-check/lint/build only reference the checked-out plugins) → two **anti-drift gates** that regenerate a committed artifact and `git diff --exit-code` it (`backend/public/theme-tokens.json` via `scripts/generate-token-manifest.js`, and `frontend/src/lib/assetVersion.generated.ts` via `scripts/generate-asset-version.js`), each preceded by a `git ls-files --error-unmatch` guard so the diff can never be vacuously green on an untracked file → strict typecheck (`tsc --noEmit`) → lint → **vitest** (`npm run test`) → production build (`next build`) → the **coverage ratchet** (`npm run test:coverage`, threshold in `frontend/vitest.config.mts`, `coverage/lcov.info` uploaded as an artifact). (There is no vendored-editor build step any more: Verso is plain in-tree source under `frontend/src/components/verso/` + `frontend/src/lib/verso/`, compiled by `next build` like the rest of the app.)
 - **Verso E2E (`verso-e2e`):** Playwright (chromium, headless) against an ephemeral plain-HTTP monolith that Playwright's own `webServer` starts (`npm run dev:mono` with `WORDJS_HTTP=1`); the `setup` project installs the instance through `WORDJS_INSTALL_TOKEN` and logs in by API, sharing `storageState` with the specs. Traces are uploaded as an artifact on failure.
 - **Compiled-bundle smoke-boot (`bundle-boot`):** builds the real release bundle (`npm run bundle-release`) and **deploys it in every mode** — monolith, split, and cluster enrollment — via `scripts/smoke-deploy.sh`, so a file that lives in `src/` but is stripped from the compiled `dist/` fails the PR instead of the release. This is the only job that runs the packaged **compiled** artifact rather than `ts-node` source; it mirrors the same step in `release.yml`.
+- **Performance budgets (`perf-budgets`):** runs the F6 in-process performance harness on `ubuntu-latest` and prints every observed ratio/p95 next to the committed ceiling, without failing on push or pull request (the Backend job already enforces the committed ceilings); `--enforce` applies on `workflow_dispatch` only. On `workflow_dispatch` with `calibrate: true` it runs eight rounds and uploads a paste-ready `performanceBudget` block measured on Linux. Additive and **not a required check** — see § Performance budgets above for why, and for the dispatch → artifact → paste → PR flow.
 
 The license gate keeps the distribution MIT-clean by failing on network-copyleft (AGPL/SSPL) production dependencies.
 

@@ -112,6 +112,47 @@ function bundlePathFor(folder: string, bundleType: string): string | null {
 // asyncHandler, because requireScalarQuery THROWS and this handler is async: without it Express 4
 // never sees the rejection, the caller waits for a response that is not coming, and the refusal is
 // rendered by nobody. It also stops any other rejection in here from hanging the request.
+/**
+ * @swagger
+ * /plugins/{slug}/bundle:
+ *   get:
+ *     summary: Download a plugin pre-compiled frontend bundle
+ *     description: Serves plugins/<folder>/dist/<type>.bundle.js. Unauthenticated, like the other static plugin assets. The slug may be either the on-disk folder or the admin page slug declared in the plugin manifest; anything outside the character allowlist, and any bundle type outside the allowlist, is refused rather than joined into a path. The URL is unversioned, so the response carries a weak ETag and Cache-Control no-cache - send If-None-Match to get a 304.
+ *     tags: [Plugins]
+ *     security: []
+ *     parameters:
+ *       - in: path
+ *         name: slug
+ *         required: true
+ *         schema:
+ *           type: string
+ *           pattern: '^[a-zA-Z0-9_-]+$'
+ *       - in: query
+ *         name: type
+ *         required: false
+ *         description: Which published bundle to serve. Defaults to admin.
+ *         schema:
+ *           type: string
+ *           enum: [admin, component, hooks]
+ *       - in: header
+ *         name: If-None-Match
+ *         required: false
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: The bundle
+ *         content:
+ *           application/javascript:
+ *             schema:
+ *               type: string
+ *       304:
+ *         description: The bundle is unchanged (ETag match)
+ *       400:
+ *         description: Invalid plugin slug, an unknown bundle type, or a repeated type parameter (rest_invalid_param)
+ *       404:
+ *         description: No such plugin, or the plugin has not been built
+ */
 router.get('/:slug/bundle', asyncHandler(async (req: Request, res: Response) => {
     requireScalarQuery(req.query, BUNDLE_QUERY_FIELDS);
 
@@ -163,6 +204,35 @@ router.get('/:slug/bundle', asyncHandler(async (req: Request, res: Response) => 
  * 
  * Returns build manifest for a plugin bundle
  */
+/**
+ * @swagger
+ * /plugins/{slug}/bundle/manifest:
+ *   get:
+ *     summary: Read the build manifest of a plugin bundle
+ *     description: Serves plugins/<folder>/dist/manifest.build.json. A slug that resolves to no installed folder is a 404 - the raw slug is never used as a directory name.
+ *     tags: [Plugins]
+ *     security: []
+ *     parameters:
+ *       - in: path
+ *         name: slug
+ *         required: true
+ *         schema:
+ *           type: string
+ *           pattern: '^[a-zA-Z0-9_-]+$'
+ *     responses:
+ *       200:
+ *         description: The build manifest
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *       400:
+ *         description: Invalid plugin slug
+ *       404:
+ *         description: No such plugin, or no build manifest was published
+ *       500:
+ *         description: The manifest could not be read or parsed
+ */
 router.get('/:slug/bundle/manifest', async (req: Request, res: Response) => {
     const { slug } = req.params as { slug: string };
 
@@ -192,6 +262,45 @@ router.get('/:slug/bundle/manifest', async (req: Request, res: Response) => {
  * GET /api/v1/plugins/:slug/bundle/css
  * 
  * Returns CSS bundle for a plugin (if exists)
+ */
+/**
+ * @swagger
+ * /plugins/{slug}/bundle/css:
+ *   get:
+ *     summary: Download the stylesheet that goes with a plugin bundle
+ *     description: Same slug mapping, allowlist and containment proof as the JavaScript bundle. A plugin with no stylesheet is not an error - the response is 200 with an empty body, so the loader can always issue the request. Cached by ETag revalidation, like the bundle.
+ *     tags: [Plugins]
+ *     security: []
+ *     parameters:
+ *       - in: path
+ *         name: slug
+ *         required: true
+ *         schema:
+ *           type: string
+ *           pattern: '^[a-zA-Z0-9_-]+$'
+ *       - in: query
+ *         name: type
+ *         required: false
+ *         description: Which published bundle stylesheet to serve. Defaults to admin.
+ *         schema:
+ *           type: string
+ *           enum: [admin, component, hooks]
+ *       - in: header
+ *         name: If-None-Match
+ *         required: false
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: The stylesheet, or an empty body when the plugin ships none
+ *         content:
+ *           text/css:
+ *             schema:
+ *               type: string
+ *       304:
+ *         description: The stylesheet is unchanged (ETag match)
+ *       400:
+ *         description: Invalid plugin slug, an unknown bundle type, or a repeated type parameter (rest_invalid_param)
  */
 router.get('/:slug/bundle/css', asyncHandler(async (req: Request, res: Response) => {
     requireScalarQuery(req.query, BUNDLE_QUERY_FIELDS);

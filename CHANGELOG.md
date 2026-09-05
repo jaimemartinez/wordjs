@@ -4,6 +4,123 @@ All notable changes to WordJS are documented here. This project follows
 [Semantic Versioning](https://semver.org/). Each release is published as a pre-compiled bundle
 on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
+## [Unreleased]
+
+### Security
+
+- **Comments are no longer a free write channel.** `POST /comments` has its own rate limiter (5 per 10
+  minutes for anonymous callers, 30 for signed-in ones, keyed separately), a honeypot field that silently
+  discards bot submissions, a 64 KB size cap, a duplicate guard, and a `comments:pre_insert` hook a spam
+  plugin can veto through. Before, only the global API limiter applied.
+- **The audit log records what an operator needs to answer.** Login success and failure, logout, password
+  and MFA changes, API token creation and revocation, content create/update/publish/trash/restore/delete,
+  backup create/restore/delete and marketplace installs are audited (thirty call sites against a typed
+  action catalogue that a test enforces); rows older than `audit_retention_days` (default 365) are pruned
+  daily.
+- **MFA-by-role can cover personal API tokens.** A new policy switch, `enforceForApiTokens` (off by
+  default), refuses a `wjt_` token whose owner is in a required role and has no second factor; the
+  enrolment routes stay reachable and a compliant owner's token passes untouched.
+- **Silent degradations now speak.** A fallback to the pure-JS `sqlite-legacy` driver (no full-text
+  search) and a Linux cgroup scope without a CPU quota each raise a persistent admin notice, and
+  `GET /health/details` reports the real active driver and the sandbox CPU bound.
+- **The OpenAPI document is validated structurally** on every test run: thirteen operations that lacked a
+  `responses` object made the published spec invalid; an unparsable `@swagger` block now fails loudly.
+- **Public author identity is never the login.** Posts, archives and feeds address an author by
+  `user_nicename` (derived at account creation, backfilled by migration 0015) or by id; a login only
+  resolves for an account that has no nicename, so `?author=<login>` and `/author/<login>/feed.xml` no
+  longer confirm which sign-in names exist. Login failures for unknown accounts are audited as a keyed
+  digest, not the typed identifier.
+- **The comment honeypot is indistinguishable from a real insert**: a discarded submission answers with
+  the id the next real row would take and the repeat guard behaves identically on both paths, so a bot
+  cannot learn it was trapped. Anonymous duplicate detection is scoped to the caller.
+- **RSS `<link>` and `<guid>` are escaped**, so a slug containing `&` no longer produces a feed readers
+  reject; term and author feeds name their canonical URL rather than the spelling they were asked with.
+- **Bootstrap secrets stay out of log aggregators.** The one-time install token and the generated initial
+  admin password are printed only when stdout is a terminal (or `WORDJS_PRINT_INSTALL_TOKEN=1`); headless
+  deployments read them from the 0600 files under `backend/data/` or supply `WORDJS_INSTALL_TOKEN`.
+  Bridged `console.*` lines are scrubbed for credential shapes, an incoming `X-Request-Id` is honoured
+  only behind a trusted proxy, and public SEO operations are declared unauthenticated in OpenAPI.
+- **WordPress import cannot overwrite an upload or forge its own bookkeeping**: colliding file names are
+  disambiguated, dot-leading path segments refused, files land via temp-and-rename and are removed if the
+  row fails, the per-run byte budget is enforced per chunk, and the importer's idempotency meta keys are
+  protected from post meta writes.
+- **A plugin's "Reviewed" badge only comes from the official catalog.** Records fetched from any other
+  source are shown as unreviewed, `first-party` is checked against the manifest author, review evidence
+  is refused on non-reviewed ledger records, a review is bound to the reviewed version and a source digest,
+  and a pull request cannot change a plugin and its review record at once.
+
+### Added
+
+- **Public archives**: `/category/<slug>`, `/tag/<slug>`, `/author/<slug>`, `/archive/<yyyy>[/<mm>]` and
+  `/taxonomy/<tax>/<term>`, paginated by path, served from the ISR cache and purged on publish; themes
+  receive a documented archive template context.
+- **Sitemap index and feeds**: `sitemap.xml` becomes a `<sitemapindex>` above 1,000 URLs with chunked
+  children; Atom, JSON Feed 1.1, per-category, per-tag, per-author and comments feeds; all of them and
+  `robots.txt` at their public root URLs, proxied by the frontend in every deployment mode.
+- **WordPress import that brings the site**: attachments are downloaded (same SSRF guard as marketplace
+  and webhooks, 50 MB per file, 1 GB per run, resumable, failures reported per item) and menus are imported
+  with hierarchy, targets and locations. Content URLs are rewritten. The import stays idempotent.
+- **Modern image formats**: every raster upload gets WebP (and AVIF where the encoder supports it)
+  derivatives beside the existing size ladder, and public pages render `<picture>` with them. The markup
+  follows the image: picking one from the media library stores its variants on the block, so a page saved
+  earlier keeps its plain `<img>` until the image is picked again.
+- **Structured logging and real metrics**: pino with request correlation ids, secret redaction and a
+  console bridge that turns the legacy `console.*` lines into structured JSON; `/metrics` gains request
+  rate, latency histogram, error rate, DB pool and sandbox state series. See `documentation/observability.md`.
+- **Docker built, booted and installed in CI**, plus ready-to-run templates under `deploy/` (single-container
+  compose and a monolith Helm chart).
+- **A third-party plugin review programme**: public criteria (`marketplace/REVIEW.md`), a committed review
+  ledger, a PR-triggered review workflow, a submission template, `verify:marketplace` rules that catch a
+  permission change after review, and a review badge in the admin Marketplace.
+- **Real filters on the posts API**: `?categories=`, `?tags=` and `?author=` accept ids or slugs (OR within,
+  AND across) in both the list and its total; posts serialise `author` as `{ id, displayName, slug }` as the
+  content contract always declared.
+- **Coverage is measured** (c8 for the backend, vitest coverage for the frontend) with a ratchet floor in
+  CI, and a performance-budget job runs the bench on the Linux runner and can emit a Linux calibration.
+- **Repository hygiene**: `main` requires a pull request and sixteen green checks; Dependabot alerts,
+  security updates and grouped updates are on; the release gate tests every shipped workspace and fails a
+  tag whose npm publish could not run; the OpenAPI document reports the real product version.
+
+### Changed
+
+- **Headless deployments no longer see the install token in the logs** (see Security above). Docker,
+  systemd and CI operators read `backend/data/install-token`, pre-set `WORDJS_INSTALL_TOKEN`, or opt back
+  in with `WORDJS_PRINT_INSTALL_TOKEN=1`. Interactive terminals are unchanged.
+- The admin Marketplace label reads **Reviewed** instead of "Sandboxed & reviewed"; the sandbox statement
+  moved into every badge's tooltip, because it is true of every plugin and was not what the badge attested.
+- The Linux performance-budget CI job measures on push and pull requests and enforces only on manual
+  dispatch, until the Linux calibration lands; the Windows-calibrated budget test in the backend suite keeps
+  enforcing on every run.
+
+### Fixed
+
+- The F6 "Redis connected" certification leg failed about one run in four with no failing assertion: the
+  object cache logged its connect banner to stdout from an asynchronous callback and corrupted the frame
+  stream node:test uses to report results. The banner now goes to stderr, `closeAll()` really closes the
+  sockets, and the C05 gate reuses the shared flake-retry wrapper instead of a local copy that never fired.
+- The home page walk over more than 100 posts repeated the first page's tail instead of fetching the next
+  page; the archive pages filtered the whole site in memory instead of asking the API.
+- `<picture>` could serve a smaller image than the plain `<img>` when the modern-format derivative
+  stopped short of the original's widest size; such formats are dropped from the `<source>` list.
+- The WebP/AVIF encode budget was per request, so parallel uploads could exceed it; it is now per process.
+- The comment rate ceilings are options (`comment_rate_anon`, `comment_rate_auth`) and the limiter is no
+  longer constructed inside the request handler.
+- Dismissing an admin notice bypassed the locked writer the rest of the notice system uses.
+- The audit health surface reports the retention window and whether pruning is behind.
+
+- The Docker image always came up "installed": the entrypoint wrote `wordjs-config.json` unconditionally,
+  so the setup wizard was unreachable and no administrator could be created. Pre-seeding is now opt-in
+  (`WORDJS_PRESEED_CONFIG=1`), the config lives in the data volume, and the container health check is a
+  liveness probe so a fresh container is not reported unhealthy while it waits for the wizard.
+- `GET /posts?categories=…&tags=…` accepted both parameters and ignored them.
+- Posts returned `author` as a bare id while the generated contract said `{ id, displayName }`, so the
+  public author name, OpenGraph `authors` and JSON-LD `author` were always empty.
+- The home page blog roll was capped at ten posts because the server fetch never sent `per_page`.
+- The one documented analytics operation was published at `/api/v1/api/v1/analytics/stats`; four public
+  routes were advertised as authenticated.
+- Dependabot could not update `nodemailer` because a fixed `overrides` entry conflicted with the direct
+  dependency; the override now follows it.
+
 ## [2.1.0] - 2026-09-04
 
 ### Security

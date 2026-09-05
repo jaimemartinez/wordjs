@@ -312,7 +312,7 @@ CI (`.github/workflows/ci.yml`, Node 22) runs the strict type-check, the compile
 
 ## 🔮 Roadmap
 
-- **🧩 Third-party marketplace** — open the catalog to community authors, where "sandboxed & reviewed" is a verifiable trust badge.
+- **🧩 Third-party marketplace** — the on-ramp is built and only the authors are missing: the review policy is public ([`marketplace/REVIEW.md`](marketplace/REVIEW.md)), decisions are recorded in a tracked ledger (`marketplace/reviews.json`), every catalog entry publishes `review.status` (`first-party` / `reviewed` / `unreviewed`), and the badge is shown for `reviewed`. The gate is real: `npm run verify:marketplace` fails if an entry claims a review with no ledger record, if a reviewed plugin's permissions have changed since the review that granted the badge, or if a first-party plugin marks *itself* reviewed. What remains is the community — all 31 catalog plugins are first-party today.
 - **☁️ Media CDN** — S3-compatible object storage.
 - **🌐 Multi-site** — manage multiple domains from one install.
 - **🛡️ More kernel hardening** — building on the default-on Landlock/AppContainer/Seatbelt layer; preventive memory caps outside systemd Linux and Windows are the open gap.

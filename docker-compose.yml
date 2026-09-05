@@ -24,6 +24,20 @@
 name: wordjs
 
 x-app-env: &app-env
+  # Come up ALREADY INSTALLED, wired from the variables below, with the setup wizard skipped. Required
+  # here for two reasons: the database is external (the wizard would otherwise have to be told about
+  # Postgres interactively), and `app2` must join the site `app` is already serving rather than run an
+  # installer of its own. The cost is that no administrator is ever created, so this stack demonstrates
+  # cross-node coherence and public browsing — it is NOT a stack you can log into. For a site you can
+  # actually install and administer, use deploy/compose (single container, SQLite, wizard-driven).
+  #
+  # ⚠ THESE VALUES ARE READ ONCE, ON THE FIRST BOOT OF EACH REPLICA. The entrypoint writes the config
+  # into the DATA VOLUME (`app-data` / `app2-data` below) and, on every later start, takes its "existing
+  # wordjs-config.json found — leaving it untouched" branch. So after you edit anything here, a plain
+  # `docker compose up -d` recreates the containers around the OLD config and the change is silently
+  # decorative. Re-up with `docker compose up -d -V` (recreate anonymous/attached volumes) or
+  # `docker compose down -v && docker compose up -d --build` to actually apply it.
+  WORDJS_PRESEED_CONFIG: "1"
   # Database — shared Postgres. NOTE: the password is deliberately NOT the literal 'password': the app
   # regenerates a random dbPassword when it sees that placeholder, which would break the shared login.
   WORDJS_DB_DRIVER: postgres
@@ -75,6 +89,13 @@ services:
     ports:
       - "3000:3000"
     volumes:
+      # PER-REPLICA data volume, NAMED on purpose. The image declares `VOLUME /app/backend/data`, so this
+      # path gets a volume whether or not one is listed here — and an unlisted one is ANONYMOUS: Compose
+      # preserves it across a recreate, `docker volume ls` shows it as a hex blob, and nothing tells you it
+      # is the reason an edited `x-app-env` value did not take. Naming it makes the state visible
+      # (`docker volume ls`), removable (`docker compose down -v`), and per-node — the config here carries
+      # each replica's own siteUrl, and the shared state that MUST be shared lives in Postgres and Redis.
+      - app-data:/app/backend/data
       - uploads:/app/backend/uploads
     depends_on:
       postgres:
@@ -92,6 +113,10 @@ services:
     ports:
       - "3001:3000"
     volumes:
+      # Its OWN data volume — see the note on `app`. Sharing one between the replicas would put two
+      # processes on one SQLite file and one config; the coherence this stack demonstrates travels over
+      # Postgres and Redis, not over a shared data directory.
+      - app2-data:/app/backend/data
       - uploads:/app/backend/uploads
     depends_on:
       postgres:
@@ -106,4 +131,9 @@ services:
 
 volumes:
   pgdata:
+  # backend/data per replica: the pre-seeded wordjs-config.json (with its jwtSecret) and the 0600
+  # install-token mirror. Named rather than anonymous so `docker volume ls` shows them and
+  # `docker compose down -v` really removes them — see the warning on x-app-env above.
+  app-data:
+  app2-data:
   uploads:

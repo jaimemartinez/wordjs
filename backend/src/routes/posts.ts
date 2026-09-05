@@ -41,7 +41,7 @@ const { asyncHandler } = require('../middleware/errorHandler');
 // THE SCALAR QUERY RULE (core/query-params): a parameter declared scalar arrives once, as a string,
 // or the request is a 400. Same rule firstNonStringField()/invalidParamType() below apply to this
 // file's list and body fields — this is that rule for a single value, reusable by the other routers.
-const { scalarQueryParam, requireRouteId } = require('../core/query-params');
+const { scalarQueryParam, requireRouteId, isRouteId } = require('../core/query-params');
 const { saveRevision, isRevisionableMeta } = require('../core/revisions');
 const sanitizeHtml = require('sanitize-html');
 
@@ -86,6 +86,29 @@ const { sanitizeTitle } = require('../core/formatting');
 // MULTILINGUAL: validate a BCP-47 language tag at the route boundary (the model canonicalizes; the
 // route rejects an unparseable non-empty value with a 400 instead of silently clearing it).
 const { parseLanguageTag } = require('../core/language-tag');
+
+// ───────────────────────────────────────────────────────────────────────────────────────────────────
+// AUDIT — who changed which content, and how its VISIBILITY moved.
+//
+// ONE ROW PER REQUEST, and the action names the most specific thing that happened: a trash is not an
+// "update", and "who put this live?" must be answerable with `WHERE action = 'post.publish'` rather
+// than by parsing a detail blob. The status transition travels in `from`/`to` so the generic
+// `post.update` rows stay informative too.
+//
+// The single exception is a creation that is BORN published (importers and headless clients do exactly
+// this): it records post.create AND post.publish, because otherwise a publish query silently misses
+// every post that never spent a moment as a draft.
+//
+// WHAT IS NEVER RECORDED: the title, the content, the excerpt, the meta bag. An audit row says that a
+// write happened and who made it; the revision history is what stores what the text used to be, and
+// copying content in here would turn a security log into a second, unbounded copy of the site.
+// ───────────────────────────────────────────────────────────────────────────────────────────────────
+const { recordAudit } = require('../core/audit');
+
+/** True when a status makes content publicly reachable, now or on a schedule. */
+function isPublicStatus(status: any): boolean {
+    return status === 'publish' || status === 'future';
+}
 
 /**
  * THE DOWNGRADED EDIT GATE — type family + ownership, WITHOUT edit_published_<type>s.
@@ -326,12 +349,76 @@ const POST_BODY_NON_STRING_FIELDS: readonly string[] = Object.freeze([
 /**
  * Query parameters this file READS. Everything in a URL query is a string; an Array or an object here
  * is Express's qs parser reflecting `?status[]=publish`, i.e. a caller reaching for exactly this class.
- * (`categories`/`tags` are destructured by the list handler but never used, so they are not read and
- * not listed — adding them would 400 a request that is legal today.)
+ *
+ * `categories`/`tags` joined the table when they became REAL filters. They were previously excluded
+ * on the grounds that "adding them would 400 a request that is legal today" — which was true only
+ * because the handler destructured them and passed them to nothing, so `?categories[]=3` was legal in
+ * the sense that every spelling of it was equally ignored. A value that now decides which rows come
+ * back is a value whose shape has to be settled first, like every other one here.
  */
 const LIST_QUERY_STRING_FIELDS: readonly string[] = Object.freeze([
-    'page', 'per_page', 'status', 'type', 'search', 'orderby', 'order', 'author',
+    'page', 'per_page', 'status', 'type', 'search', 'orderby', 'order', 'author', 'categories', 'tags',
 ]);
+
+/**
+ * THE IDENTITY-LIST GRAMMAR of `?categories=`, `?tags=` and `?author=`.
+ *
+ * One comma-separated list per parameter. An element is either a row ID (all digits) or a SLUG — a
+ * term's `slug`, or an author's `user_nicename`/`user_login` — split by shape, which is the same rule
+ * `routes/seo.ts` applies to the `/author/<segment>/feed.xml` path segment so the two surfaces cannot
+ * disagree about what `2` means.
+ *
+ * WHAT IS REFUSED, AND WHY EACH ONE IS REFUSED RATHER THAN DROPPED:
+ *   · an EMPTY element (`1,,2`, `1,`) — a list with a hole in it is a caller bug, and silently
+ *     narrowing to the elements that did parse answers a question nobody asked;
+ *   · an all-digit element that no id column can hold (`0`, `9999999999`) — the same bound
+ *     core/query-params states for a route id, for the same reason: Postgres answers
+ *     `22003 value out of range` and the caller gets a 500 from a filter;
+ *   · a control character, or an element longer than a slug column can be;
+ *   · more elements than MAX_IDENTITY_ELEMENTS, so one URL cannot expand into an unbounded IN() list.
+ *
+ * An ENTIRELY empty value (`?categories=`) is ABSENT, not malformed — the same reading `?type=` gets
+ * three guards down, and the shape a form submits for "no filter chosen".
+ */
+const MAX_IDENTITY_ELEMENTS = 50;
+const MAX_IDENTITY_SLUG_LENGTH = 200;
+/** True when `value` carries a control character — never part of a slug, and a terminal-escape sink. */
+function hasControlCharacter(value: string): boolean {
+    for (let i = 0; i < value.length; i++) {
+        const code = value.charCodeAt(i);
+        if (code < 0x20 || code === 0x7f) return true;
+    }
+    return false;
+}
+
+type IdentityList = { ids: number[]; slugs: string[] };
+type IdentityParse = { ok: true; value?: IdentityList } | { ok: false; detail: string };
+
+function parseIdentityList(raw: string | undefined): IdentityParse {
+    if (raw === undefined || raw === null || raw.trim() === '') return { ok: true };
+    const elements = raw.split(',');
+    if (elements.length > MAX_IDENTITY_ELEMENTS) {
+        return { ok: false, detail: `At most ${MAX_IDENTITY_ELEMENTS} comma-separated values are accepted.` };
+    }
+    const ids: number[] = [];
+    const slugs: string[] = [];
+    for (const element of elements) {
+        const value = element.trim();
+        if (!value) return { ok: false, detail: 'Empty value in a comma-separated list.' };
+        if (/^[0-9]+$/.test(value)) {
+            // The SAME predicate the route-id contract uses (core/query-params.isRouteId), not a
+            // second, weaker one written here — which is the exact drift that module documents.
+            if (!isRouteId(value)) return { ok: false, detail: `'${value}' is not a valid ID.` };
+            ids.push(Number(value));
+            continue;
+        }
+        if (value.length > MAX_IDENTITY_SLUG_LENGTH || hasControlCharacter(value)) {
+            return { ok: false, detail: 'Invalid slug in a comma-separated list.' };
+        }
+        slugs.push(value);
+    }
+    return { ok: true, value: { ids, slugs } };
+}
 
 /**
  * The FIRST field in `fields` that is present on `source` and is not a string, or null.
@@ -356,6 +443,20 @@ function invalidParamType(res: Response, field: string) {
         code: 'rest_invalid_param',
         message: `Invalid parameter '${field}': expected a string.`,
         data: { status: 400, params: { [field]: 'Expected a string.' } },
+    });
+}
+
+/**
+ * The 400 for a field whose SHAPE was fine and whose VALUE cannot denote anything.
+ *
+ * Deliberately the same code and the same body layout as invalidParamType — one refusal shape for
+ * `GET /posts`, so a caller parses one thing and `data.params` always names the offending field.
+ */
+function invalidParamValue(res: Response, field: string, detail: string) {
+    return res.status(400).json({
+        code: 'rest_invalid_param',
+        message: `Invalid parameter '${field}': ${detail}`,
+        data: { status: 400, params: { [field]: detail } },
     });
 }
 
@@ -418,6 +519,18 @@ async function serializeVisibleContent(post: any, user?: ContentRouteUser) {
  *         status:
  *           type: string
  *           enum: [publish, draft, pending, private, trash]
+ *         author:
+ *           type: object
+ *           description: The post's author identity. `slug` is user_nicename, or the numeric id when the account has no nicename — never user_login.
+ *           properties:
+ *             id:
+ *               type: integer
+ *             displayName:
+ *               type: string
+ *             slug:
+ *               type: string
+ *         authorId:
+ *           type: integer
  *
  * /posts:
  *   get:
@@ -440,6 +553,47 @@ async function serializeVisibleContent(post: any, user?: ContentRouteUser) {
  *         name: status
  *         schema:
  *           type: string
+ *       - in: query
+ *         name: type
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: orderby
+ *         schema:
+ *           type: string
+ *           enum: [date, modified, title, id, menu_order]
+ *       - in: query
+ *         name: order
+ *         schema:
+ *           type: string
+ *           enum: [asc, desc]
+ *       - in: query
+ *         name: categories
+ *         description: >-
+ *           Comma-separated category term IDs and/or slugs. A post matches when it carries ANY of
+ *           them; combining this with `tags` requires BOTH taxonomies to match. Applied to the rows
+ *           and to X-WP-Total alike. A malformed element answers 400 rest_invalid_param.
+ *         schema:
+ *           type: string
+ *         example: news,3
+ *       - in: query
+ *         name: tags
+ *         description: >-
+ *           Comma-separated post_tag term IDs and/or slugs, with the same OR-within/AND-across
+ *           semantics as `categories`.
+ *         schema:
+ *           type: string
+ *         example: react
+ *       - in: query
+ *         name: author
+ *         description: >-
+ *           Comma-separated author IDs and/or slugs (user_nicename; a login matches only an account with no nicename) — the
+ *           same identity the author feed resolves, so a public author archive can be listed without
+ *           an authenticated users endpoint. Authorization may still narrow the result to the calling
+ *           user's own posts when a non-published status is requested.
+ *         schema:
+ *           type: string
+ *         example: jane-doe
  *     responses:
  *       200:
  *         description: A list of posts
@@ -469,6 +623,28 @@ router.get('/', optionalAuth, asyncHandler(async (req: MaybeAuthenticatedRequest
         categories,
         tags
     } = req.query;
+
+    // THE THREE FILTERS THE DOCUMENTATION HAS ALWAYS PROMISED, PARSED ONCE.
+    //
+    // `categories` and `tags` were destructured here and handed to NEITHER Post.findAllWithRelations
+    // NOR Post.count, so `?categories=3` returned exactly what no filter returns — a listing that
+    // answered a different question than the one it was asked, with a matching X-WP-Total to make it
+    // look deliberate. `author` was worse than ignored: `parseInt('jane-doe', 10)` is NaN, NaN is
+    // falsy, so an author SLUG silently widened the request to the whole site.
+    //
+    // Parsed before anything is authorized, and refused (not narrowed) when it cannot denote a row —
+    // see the IDENTITY-LIST GRAMMAR above.
+    const parsedFilters: Array<[string, IdentityParse]> = [
+        ['categories', parseIdentityList(categories)],
+        ['tags', parseIdentityList(tags)],
+        ['author', parseIdentityList(author)],
+    ];
+    for (const [field, parsed] of parsedFilters) {
+        if (!parsed.ok) return invalidParamValue(res, field, parsed.detail);
+    }
+    const categoriesFilter = (parsedFilters[0][1] as { ok: true; value?: IdentityList }).value;
+    const tagsFilter = (parsedFilters[1][1] as { ok: true; value?: IdentityList }).value;
+    const requestedAuthor = (parsedFilters[2][1] as { ok: true; value?: IdentityList }).value;
 
     // The LIST is the discovery half of the same surface: leaving it open let a caller enumerate every
     // nav_menu_item id (and then write its meta) without ever touching the menus API. Reject an
@@ -520,7 +696,11 @@ router.get('/', optionalAuth, asyncHandler(async (req: MaybeAuthenticatedRequest
     // A privileged caller (edit_others_posts / read_private_posts) may see others' unpublished posts;
     // an unprivileged logged-in user may only see THEIR OWN non-published posts, so we force the author
     // filter to their id whenever non-publish statuses are requested.
-    let authorFilter = author ? parseInt(author, 10) : undefined;
+    //
+    // The requested author selector is the STARTING point; every assignment below REPLACES it with a
+    // concrete id, which is the pre-existing semantics of this gate and the reason it is safe: an
+    // authorization that narrows to "your own posts" must not be intersectable with anything.
+    let authorFilter: IdentityList | number | undefined = requestedAuthor;
     let effectiveStatus = status;
     const listPolicy = capsForType(resolvedType) || capsFor('post');
     const canReadAllOfType = !!(req.user
@@ -562,6 +742,8 @@ router.get('/', optionalAuth, asyncHandler(async (req: MaybeAuthenticatedRequest
         status: includeStatuses ? null : effectiveStatus,
         includeStatuses,
         author: authorFilter,
+        categories: categoriesFilter,
+        tags: tagsFilter,
         search,
         limit,
         offset,
@@ -570,11 +752,15 @@ router.get('/', optionalAuth, asyncHandler(async (req: MaybeAuthenticatedRequest
         order: ['asc', 'desc'].includes(order.toLowerCase()) ? order.toUpperCase() : 'DESC'
     });
 
+    // THE SAME FILTERS, VERBATIM. The count is what X-WP-Total/X-WP-TotalPages report, so a filter
+    // applied to the rows and not here would announce pages the caller cannot reach.
     const total = await Post.count({
         type: resolvedType,
         status: includeStatuses ? null : effectiveStatus,
         includeStatuses,
         author: authorFilter,
+        categories: categoriesFilter,
+        tags: tagsFilter,
         search
     });
     const totalPages = Math.ceil(total / limit);
@@ -586,8 +772,38 @@ router.get('/', optionalAuth, asyncHandler(async (req: MaybeAuthenticatedRequest
 }));
 
 /**
- * GET /posts/slug/:slug
- * Get single post by slug. Optional ?type= narrows the lookup to ONE post type.
+ * @swagger
+ * /posts/slug/{slug}:
+ *   get:
+ *     summary: Get a single post by slug
+ *     description: A slug is unique per post TYPE, not globally, so a post and a page may both own "about". Without a type the lookup runs post, then page, then untyped, and stops at the first candidate THIS caller may read - so a colleague's draft that happens to share the slug cannot take a published page off the public site. Authentication is optional and widens what counts as readable. Internal post types are never addressable here.
+ *     tags: [Posts]
+ *     security:
+ *       - bearerAuth: []
+ *       - {}
+ *     parameters:
+ *       - in: path
+ *         name: slug
+ *         required: true
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: type
+ *         required: false
+ *         description: Narrow the lookup to one post type. An internal type is refused; an unregistered one stays addressable and simply matches nothing, so content whose custom type was removed can still be migrated.
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: The post
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Post'
+ *       400:
+ *         description: type is not a string, or it names an internal post type (rest_invalid_post_type)
+ *       404:
+ *         description: Nothing with that slug is visible to this caller. rest_post_invalid_id when a row exists but may not be read, rest_post_invalid_slug when nothing matches at all - both are 404, so neither answer confirms that a draft exists.
  */
 router.get('/slug/:slug', optionalAuth, asyncHandler(async (req: MaybeAuthenticatedRequest<SlugParams, unknown, TypeQuery>, res: Response) => {
     // A SLUG IS UNIQUE PER TYPE, NOT GLOBALLY. generateUniqueSlug de-duplicates within one post_type,
@@ -662,8 +878,30 @@ router.get('/slug/:slug', optionalAuth, asyncHandler(async (req: MaybeAuthentica
 }));
 
 /**
- * GET /posts/:id
- * Get single post
+ * @swagger
+ * /posts/{id}:
+ *   get:
+ *     summary: Get a single post by id
+ *     description: Authentication is optional and decides what counts as readable - an anonymous caller sees published content only. A post that exists but may not be read answers the same 404 as one that does not exist, so the endpoint never confirms that a draft is there. Internal post types are not addressable here.
+ *     tags: [Posts]
+ *     security:
+ *       - bearerAuth: []
+ *       - {}
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     responses:
+ *       200:
+ *         description: The post
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Post'
+ *       404:
+ *         description: No such post, an id that is not a plain in-range integer, an internal post type, or a post this caller may not read (rest_post_invalid_id)
  */
 router.get('/:id', optionalAuth, asyncHandler(async (req: MaybeAuthenticatedRequest<IdParams>, res: Response) => {
     const post = await Post.findById(parseInt(req.params.id, 10));
@@ -900,6 +1138,16 @@ router.post('/', authenticate, asyncHandler(async (req: AuthenticatedRequest<Rec
         return created;
     });
 
+    await recordAudit(req.user.id, 'post.create', 'post', post.id, {
+        type: post.postType, status: post.postStatus, slug: post.postName
+    });
+    // Born public — see the "single exception" note above the recordAudit import.
+    if (isPublicStatus(post.postStatus)) {
+        await recordAudit(req.user.id, 'post.publish', 'post', post.id, {
+            type: post.postType, from: 'new', to: post.postStatus, slug: post.postName
+        });
+    }
+
     res.status(201).json(await serializeVisibleContent(post, req.user));
 }));
 
@@ -1123,6 +1371,29 @@ router.put('/:id', authenticate, asyncHandler(async (req: AuthenticatedRequest<I
             data: { status: 404 }
         });
     }
+
+    // THE TRANSITION IS READ FROM THE STORED ROW, NOT FROM THE REQUEST. `status` in the body is a wish:
+    // the publish gate above may have downgraded it to 'pending', and Post.update re-evaluates a
+    // 'publish' with a future date into 'future'. Comparing the pre-write status with what is actually
+    // in the table is the only way the log records what HAPPENED instead of what was asked for.
+    const wasStatus = post.postStatus;
+    const nowStatus = fresh.postStatus;
+    const transition = { type: fresh.postType, from: wasStatus, to: nowStatus, slug: fresh.postName };
+    if (wasStatus === 'trash' && nowStatus !== 'trash') {
+        await recordAudit(req.user.id, 'post.restore', 'post', postId, transition);
+    } else if (nowStatus === 'trash' && wasStatus !== 'trash') {
+        await recordAudit(req.user.id, 'post.trash', 'post', postId, transition);
+    } else if (isPublicStatus(nowStatus) && !isPublicStatus(wasStatus)) {
+        await recordAudit(req.user.id, 'post.publish', 'post', postId, transition);
+    } else if (autosave !== true) {
+        // An ordinary edit. EDITOR AUTOSAVES ARE EXCLUDED, exactly as they are excluded from the
+        // revision snapshot a few lines up: they are produced by a timer, not by a decision, and one
+        // open tab emits thousands a day — enough to bury every deliberate action in the log and to
+        // outpace the retention prune. A save that MOVES THE STATUS still lands, autosave or not,
+        // through the three branches above; only the "nothing visible changed" case is dropped.
+        await recordAudit(req.user.id, 'post.update', 'post', postId, transition);
+    }
+
     res.json(await serializeVisibleContent(fresh, req.user));
 }));
 
@@ -1180,6 +1451,18 @@ router.delete('/:id', authenticate, asyncHandler(async (req: AuthenticatedReques
     const force = scalarQueryParam(req.query.force, 'force') === 'true';
     await Post.delete(postId, force);
 
+    // `?force=true` is unrecoverable and a plain DELETE is a trash: two different events, and the audit
+    // log is the only place that keeps the difference after the row is gone. Recorded with the state the
+    // post HAD, since for a forced delete there is nothing left to read afterwards. Spelled as two
+    // calls rather than one with a conditional action, so the catalogue gate in the audit test can read
+    // both names straight out of the source.
+    const gone = { type: post.postType, from: post.postStatus, slug: post.postName };
+    if (force) {
+        await recordAudit(req.user.id, 'post.delete', 'post', postId, { ...gone, to: 'deleted' });
+    } else {
+        await recordAudit(req.user.id, 'post.trash', 'post', postId, { ...gone, to: 'trash' });
+    }
+
     if (force) {
         res.json({ deleted: true, previous: await serializeVisibleContent(post, req.user) });
     } else {
@@ -1197,8 +1480,60 @@ router.delete('/:id', authenticate, asyncHandler(async (req: AuthenticatedReques
 
 
 /**
- * POST /posts/:id/meta
- * Update post meta
+ * @swagger
+ * /posts/{id}/meta:
+ *   post:
+ *     summary: Write one post meta key
+ *     description: A single-key write is an explicit statement of intent, so a key the server owns is REFUSED rather than silently skipped. The key must be a string - an array is refused, not coerced - non-empty, within the column bound, and never a reserved name. Authorization is the SAME gate as PUT /posts/{id}, edit_published capability included; the one documented exception is the narrow set of non-content keys such as the editorial review thread, where the published-post rule is not applied because writing them changes nothing a visitor can see. A revisionable key is snapshotted BEFORE the write and the write is abandoned if that snapshot fails, so a content write always leaves a recovery point. HTML- and URL-bearing values are sanitized on write.
+ *     tags: [Posts]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [key]
+ *             properties:
+ *               key:
+ *                 type: string
+ *                 description: The meta key.
+ *               value:
+ *                 description: Any JSON value. An object or an array is measured against the meta complexity bounds before it is sanitized.
+ *     responses:
+ *       200:
+ *         description: The stored key and its sanitized value
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 key:
+ *                   type: string
+ *                   description: The STORAGE key, which differs from the key sent when a WordJS-owned alias was resolved.
+ *                 value:
+ *                   description: The value as stored, after sanitizing.
+ *                 post_id:
+ *                   type: integer
+ *       400:
+ *         description: The key is missing or not a string (rest_missing_param), or it is reserved or longer than the column allows (rest_invalid_param)
+ *       401:
+ *         description: Not logged in (rest_not_logged_in)
+ *       403:
+ *         description: This caller may not edit the post (rest_forbidden), or the key is server-managed (rest_protected_meta)
+ *       404:
+ *         description: No such post, a malformed id, or an internal post type (rest_post_invalid_id)
+ *       413:
+ *         description: The value is past the meta complexity bounds (rest_meta_value_too_complex)
+ *       500:
+ *         description: The pre-write revision snapshot failed, so the write was NOT applied (rest_revision_failed)
  */
 router.post('/:id/meta', authenticate, asyncHandler(async (req: AuthenticatedRequest<IdParams, MetaWriteBody>, res: Response) => {
     const postId = parseInt(req.params.id, 10);
@@ -1344,8 +1679,31 @@ router.post('/:id/meta', authenticate, asyncHandler(async (req: AuthenticatedReq
 }));
 
 /**
- * GET /posts/:id/meta
- * Get all post meta
+ * @swagger
+ * /posts/{id}/meta:
+ *   get:
+ *     summary: Read the full meta map of a post
+ *     description: The read twin of the write gate. Authentication is optional and the same visibility rule as the single-post read applies - without it the SEO drafts, internal notes, plugin-stashed data and trash bookkeeping of draft, private, pending and trashed posts would be world-readable. Internal post types are not addressable here.
+ *     tags: [Posts]
+ *     security:
+ *       - bearerAuth: []
+ *       - {}
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     responses:
+ *       200:
+ *         description: Every meta key of the post, as a flat map of storage key to value
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               additionalProperties: true
+ *       404:
+ *         description: No such post, a malformed id, an internal post type, or a post this caller may not read (rest_post_invalid_id)
  */
 router.get('/:id/meta', optionalAuth, asyncHandler(async (req: MaybeAuthenticatedRequest<IdParams>, res: Response) => {
     const postId = parseInt(req.params.id, 10);
@@ -1376,8 +1734,47 @@ router.get('/:id/meta', optionalAuth, asyncHandler(async (req: MaybeAuthenticate
 // ---------------------------------------------------------------------------
 
 /**
- * PUT /posts/:id/language
- * Set or clear a post's content language (BCP-47). Body: { language: 'pt-BR' | null | '' }.
+ * @swagger
+ * /posts/{id}/language:
+ *   put:
+ *     summary: Set or clear a post's content language
+ *     description: A non-empty value must parse as a BCP-47 tag. null or an empty string clears the language back to unset. The response is the post as it now stands.
+ *     tags: [Posts]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               language:
+ *                 type: string
+ *                 nullable: true
+ *                 description: A BCP-47 tag. null or an empty string clears it.
+ *                 example: pt-BR
+ *     responses:
+ *       200:
+ *         description: The post, with its language applied
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Post'
+ *       400:
+ *         description: The value is not a valid BCP-47 tag (rest_invalid_language)
+ *       401:
+ *         description: Not logged in (rest_not_logged_in)
+ *       403:
+ *         description: This caller may not edit the post (rest_forbidden)
+ *       404:
+ *         description: No such post, a malformed id, or an internal post type (rest_post_invalid_id)
  */
 router.put('/:id/language', authenticate, asyncHandler(async (req: AuthenticatedRequest<IdParams, LanguageBody>, res: Response) => {
     const postId = parseInt(req.params.id, 10);
@@ -1404,9 +1801,52 @@ router.put('/:id/language', authenticate, asyncHandler(async (req: Authenticated
 }));
 
 /**
- * GET /posts/:id/translations
- * List this post's translations in other languages. Anonymous callers see PUBLISHED siblings only;
- * the owner / an editor sees unpublished ones too (management view).
+ * @swagger
+ * /posts/{id}/translations:
+ *   get:
+ *     summary: List this post's translations in other languages
+ *     description: Authentication is optional. Every sibling is put through the same read gate as the single-post route, so an anonymous caller sees published translations only while the owner or an editor also sees the unpublished ones. The post itself is never in the list.
+ *     tags: [Posts]
+ *     security:
+ *       - bearerAuth: []
+ *       - {}
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     responses:
+ *       200:
+ *         description: This post's language and translation group, plus the siblings this caller may read
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 language:
+ *                   type: string
+ *                   nullable: true
+ *                 group:
+ *                   type: string
+ *                   nullable: true
+ *                 translations:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       id:
+ *                         type: integer
+ *                       language:
+ *                         type: string
+ *                       slug:
+ *                         type: string
+ *                       type:
+ *                         type: string
+ *                       status:
+ *                         type: string
+ *       404:
+ *         description: No such post, a malformed id, an internal post type, or a post this caller may not read (rest_post_invalid_id)
  */
 router.get('/:id/translations', optionalAuth, asyncHandler(async (req: MaybeAuthenticatedRequest<IdParams>, res: Response) => {
     const postId = parseInt(req.params.id, 10);
@@ -1425,9 +1865,64 @@ router.get('/:id/translations', optionalAuth, asyncHandler(async (req: MaybeAuth
 }));
 
 /**
- * POST /posts/:id/translations
- * Link this post and another as translations of each other (symmetric, idempotent).
- * Body: { translationId }. The caller must be able to edit BOTH posts.
+ * @swagger
+ * /posts/{id}/translations:
+ *   post:
+ *     summary: Link this post and another as translations of each other
+ *     description: Symmetric and idempotent - both posts end up in one translation group, and when either already belongs to a group that WHOLE set is folded in, not just the two posts. The caller must be able to edit BOTH posts. Unlike the GET, the list returned here is the raw group and includes unpublished siblings, which is what the editor doing the linking needs to see.
+ *     tags: [Posts]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [translationId]
+ *             properties:
+ *               translationId:
+ *                 type: integer
+ *                 description: The other post's id. A positive integer, and different from the id in the path.
+ *     responses:
+ *       200:
+ *         description: The surviving translation group and its members
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 group:
+ *                   type: string
+ *                 translations:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       id:
+ *                         type: integer
+ *                       language:
+ *                         type: string
+ *                       slug:
+ *                         type: string
+ *                       type:
+ *                         type: string
+ *                       status:
+ *                         type: string
+ *       400:
+ *         description: translationId is missing, not a positive integer, or equal to the id in the path (rest_invalid_param), or the two posts could not be linked (rest_link_failed)
+ *       401:
+ *         description: Not logged in (rest_not_logged_in)
+ *       403:
+ *         description: This caller may not edit both posts (rest_forbidden)
+ *       404:
+ *         description: Either post is missing, has a malformed id, or is an internal post type (rest_post_invalid_id)
  */
 router.post('/:id/translations', authenticate, asyncHandler(async (req: AuthenticatedRequest<IdParams, TranslationBody>, res: Response) => {
     const postId = parseInt(req.params.id, 10);
@@ -1456,8 +1951,36 @@ router.post('/:id/translations', authenticate, asyncHandler(async (req: Authenti
 }));
 
 /**
- * DELETE /posts/:id/translations
- * Remove this post from its translation set (the rest stay linked).
+ * @swagger
+ * /posts/{id}/translations:
+ *   delete:
+ *     summary: Remove this post from its translation set
+ *     description: The remaining members stay linked to each other. Idempotent - a post that belongs to no set answers the same success.
+ *     tags: [Posts]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     responses:
+ *       200:
+ *         description: The post no longer belongs to a translation set
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *       401:
+ *         description: Not logged in (rest_not_logged_in)
+ *       403:
+ *         description: This caller may not edit the post (rest_forbidden)
+ *       404:
+ *         description: No such post, a malformed id, or an internal post type (rest_post_invalid_id)
  */
 router.delete('/:id/translations', authenticate, asyncHandler(async (req: AuthenticatedRequest<IdParams>, res: Response) => {
     const postId = parseInt(req.params.id, 10);

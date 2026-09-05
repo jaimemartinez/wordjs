@@ -6,7 +6,9 @@
  *   • evaluate() classifies a user as required / within-grace / enforced correctly;
  *   • the gate 403s `mfa_enrollment_required` for a past-grace, un-enrolled COOKIE session of a required
  *     role on non-exempt routes, but lets the enrollment/session escape hatch through, never blocks a
- *     non-subject role or a compliant/within-grace user, and EXEMPTS Bearer/API-token clients;
+ *     non-subject role or a compliant/within-grace user, and EXEMPTS Bearer/API-token clients by default;
+ *   • `enforceForApiTokens` (opt-in, default off) extends that same 403 to a `wjt_` token whose owner is
+ *     un-enrolled past grace — with a token-specific hint — while a compliant owner's token still passes;
  *   • the policy routes (/auth/mfa/policy) are admin-only and NOT reachable by an enforced admin (so a
  *     2FA-less admin can't disable the requirement instead of enrolling).
  *
@@ -198,11 +200,94 @@ test('a non-required role is never blocked by the gate', async () => {
     await policyOff();
 });
 
-test('Bearer/API-token clients are EXEMPT from the enrollment gate (headless — cannot enroll)', async () => {
+test('Bearer/API-token clients are EXEMPT from the enrollment gate by DEFAULT (headless — cannot enroll)', async () => {
+    // Today's behaviour, pinned: with enforceForApiTokens OFF (the default, and what every pre-existing
+    // install stores), an admin token whose owner has no 2FA keeps working past the grace window.
     await mfa.setPolicy({ requiredRoles: ['administrator'], graceDays: 0 });
+    assert.strictEqual((await mfa.getPolicy()).enforceForApiTokens, false, 'flag defaults to off');
     const tok = await ApiToken.generate({ userId: U.boss, name: 'ci', scopes: 'read' });
     const res = await request(app).get('/api/v1/users').set('Authorization', `Bearer ${tok.token}`);
     assert.notStrictEqual(res.body.code, 'mfa_enrollment_required', 'token must not be enrollment-gated');
+    assert.strictEqual(res.status, 200);
+    await policyOff();
+});
+
+test('with enforceForApiTokens ON, an API token of an un-enrolled required-role owner is REFUSED', async () => {
+    await mfa.setPolicy({ requiredRoles: ['administrator'], graceDays: 0, enforceForApiTokens: true });
+    const tok = await ApiToken.generate({ userId: U.boss, name: 'ci-enforced', scopes: 'read' });
+    const res = await request(app).get('/api/v1/users').set('Authorization', `Bearer ${tok.token}`);
+    assert.strictEqual(res.status, 403);
+    assert.strictEqual(res.body.code, 'mfa_enrollment_required', 'same code/shape as the cookie path');
+    assert.ok(res.body.data && typeof res.body.data.graceDeadline !== 'undefined');
+    // The hint must name the TOKEN's remedy: a machine client can never answer a TOTP challenge, so the
+    // caller has to be told the owner must enroll (or an admin revoke the token).
+    assert.match(res.body.message, /token/i);
+    assert.match(res.body.message, /enroll/i);
+
+    // A string that merely LOOKS like a token is not answered with "enroll MFA" — that would make the gate
+    // an oracle for which wjt_ values exist. The route's own auth 401s it instead.
+    const bogus = await request(app).get('/api/v1/users').set('Authorization', 'Bearer wjt_not-a-real-token');
+    assert.strictEqual(bogus.status, 401);
+    assert.notStrictEqual(bogus.body.code, 'mfa_enrollment_required');
+    await policyOff();
+});
+
+test('with enforceForApiTokens ON, a token whose owner HAS 2FA still passes (no TOTP over Bearer)', async () => {
+    await mfa.setPolicy({ requiredRoles: ['administrator'], graceDays: 0, enforceForApiTokens: true });
+    await User.updateMeta(U.boss, mfa.META.enabled, '1');
+    const tok = await ApiToken.generate({ userId: U.boss, name: 'ci-compliant', scopes: 'read' });
+    const res = await request(app).get('/api/v1/users').set('Authorization', `Bearer ${tok.token}`);
+    assert.strictEqual(res.status, 200);
+    assert.notStrictEqual(res.body.code, 'mfa_enrollment_required');
+    await User.deleteMeta(U.boss, mfa.META.enabled);
+    await policyOff();
+});
+
+test('under token enforcement, the enrollment allowlist stays reachable for a cookie session', async () => {
+    // Regression pin: the flag only ADDS the headless case — it must not narrow the escape hatch that keeps
+    // an enforced user from being bricked.
+    await mfa.setPolicy({ requiredRoles: ['administrator'], graceDays: 0, enforceForApiTokens: true });
+    for (const p of ['/api/v1/auth/me', '/api/v1/auth/mfa/status']) {
+        const res = await request(app).get(p).set('Cookie', cookie('boss'));
+        assert.strictEqual(res.status, 200, `${p} must stay reachable under enforcement`);
+    }
+    const blocked = await request(app).get('/api/v1/users').set('Cookie', cookie('boss'));
+    assert.strictEqual(blocked.status, 403);
+    assert.strictEqual(blocked.body.code, 'mfa_enrollment_required');
+    await policyOff();
+});
+
+test('PUT /auth/mfa/policy validates enforceForApiTokens, and GET returns it', async () => {
+    await policyOff(); // gate off: the admin must be able to reach the policy route
+    // Bearer SESSION JWT (not a wjt_ token): sessionOnly accepts it and it needs no CSRF header.
+    const bearer = jwt.sign({ userId: U.boss }, SECRET, { algorithm: 'HS256', expiresIn: '1h' });
+
+    for (const bad of ['yes', 1, {}]) {
+        const res = await request(app).put('/api/v1/auth/mfa/policy')
+            .set('Authorization', `Bearer ${bearer}`)
+            .send({ requiredRoles: ['administrator'], graceDays: 3650, enforceForApiTokens: bad });
+        assert.strictEqual(res.status, 400, `non-boolean ${JSON.stringify(bad)} must be refused`);
+        assert.strictEqual(res.body.code, 'rest_invalid_param');
+    }
+    assert.strictEqual((await mfa.getPolicy()).requiredRoles.length, 0, 'a refused PUT changed nothing');
+
+    // Long grace so the admin stays un-enforced and can read the policy back through the route.
+    const saved = await request(app).put('/api/v1/auth/mfa/policy')
+        .set('Authorization', `Bearer ${bearer}`)
+        .send({ requiredRoles: ['administrator'], graceDays: 3650, enforceForApiTokens: true });
+    assert.strictEqual(saved.status, 200);
+    assert.strictEqual(saved.body.policy.enforceForApiTokens, true);
+
+    const read = await request(app).get('/api/v1/auth/mfa/policy').set('Authorization', `Bearer ${bearer}`);
+    assert.strictEqual(read.status, 200);
+    assert.strictEqual(read.body.policy.enforceForApiTokens, true, 'GET surfaces the stored flag');
+
+    // Omitted → false: the PUT is a full replace, exactly like requiredRoles/graceDays.
+    const omitted = await request(app).put('/api/v1/auth/mfa/policy')
+        .set('Authorization', `Bearer ${bearer}`)
+        .send({ requiredRoles: ['administrator'], graceDays: 3650 });
+    assert.strictEqual(omitted.status, 200);
+    assert.strictEqual(omitted.body.policy.enforceForApiTokens, false);
     await policyOff();
 });
 

@@ -92,9 +92,10 @@ const CSRF_EXEMPT_PATHS = new Set(['/setup/install', '/setup/test-db']);
  * (the route's own `authenticate` still does the real auth below); it only adds a pre-filter.
  *
  * Cheap when the feature is off (empty requiredRoles → one cached getOption). Bearer/API-token clients are
- * exempt (headless, can't enroll; a NEW token can't be minted because POST /auth/tokens is not exempt).
- * Fails OPEN on an internal error — enforcement is a policy layer on top of auth, and breaking it must not
- * take the whole site down; the underlying session auth is unaffected.
+ * exempt by DEFAULT (headless, can't enroll; a NEW token can't be minted because POST /auth/tokens is not
+ * exempt) — the admin opt-in `policy.enforceForApiTokens` extends the gate to them too, see
+ * enforceApiTokenMfa below. Fails OPEN on an internal error — enforcement is a policy layer on top of auth,
+ * and breaking it must not take the whole site down; the underlying session auth is unaffected.
  */
 async function mfaComplianceGate(req: Request, res: Response, next: NextFunction) {
     // Reading the policy is site-wide; if it can't be read we can't enforce anything, so fail OPEN here
@@ -105,7 +106,8 @@ async function mfaComplianceGate(req: Request, res: Response, next: NextFunction
     if (!policy.requiredRoles.length) return next();
 
     // Resolve the interactive session token from EITHER transport, mirroring authenticate()'s priority
-    // (Authorization header first, then cookie). A genuine `wjt_` API token is headless and exempt; but a
+    // (Authorization header first, then cookie). A genuine `wjt_` API token is headless and takes the
+    // opt-in path below (exempt unless the admin enabled `enforceForApiTokens`); but a
     // raw SESSION JWT presented as `Authorization: Bearer <jwt>` authenticates a full session and MUST be
     // enforced — exempting all Bearer requests let an un-enrolled admin replay their own session JWT as a
     // header to skip the gate entirely (and then mint a wjt_ token). Only the wjt_ prefix is exempt.
@@ -113,7 +115,10 @@ async function mfaComplianceGate(req: Request, res: Response, next: NextFunction
     let token: string | null = null;
     if (authHeader && authHeader.startsWith('Bearer ') && authHeader !== 'Bearer null' && authHeader !== 'Bearer undefined') {
         const bearer = authHeader.slice(7);
-        if (bearer.startsWith(ApiToken.PREFIX)) return next(); // headless API token — exempt (see note below)
+        // Headless API token: exempt unless the admin opted in with `enforceForApiTokens` (see the helper).
+        if (bearer.startsWith(ApiToken.PREFIX)) {
+            return policy.enforceForApiTokens ? enforceApiTokenMfa(bearer, req, res, next) : next();
+        }
         token = bearer; // a session JWT over the Bearer transport — subject to enforcement
     }
     if (!token) token = sessionCookie(req);
@@ -122,7 +127,9 @@ async function mfaComplianceGate(req: Request, res: Response, next: NextFunction
     // exempt exactly like on the Bearer path.
     const qToken = token ? null : queryToken(req);
     if (qToken) {
-        if (qToken.startsWith(ApiToken.PREFIX)) return next();
+        if (qToken.startsWith(ApiToken.PREFIX)) {
+            return policy.enforceForApiTokens ? enforceApiTokenMfa(qToken, req, res, next) : next();
+        }
         token = qToken;
     }
     if (!token) return next(); // no session — nothing to enforce (the route's own auth still applies)
@@ -157,9 +164,53 @@ async function mfaComplianceGate(req: Request, res: Response, next: NextFunction
             data: { status: 503 }
         });
     }
-    // NOTE (documented residual, adversarial review #2): a `wjt_` API token minted BEFORE the policy took
-    // effect keeps working for a required-role user — token clients are categorically exempt (they cannot
-    // perform interactive 2FA). Revoke such tokens if a role's headless access must also be gated.
+}
+
+/**
+ * The `wjt_` half of the gate — reached only when the admin turned `enforceForApiTokens` ON.
+ *
+ * This closes the documented residual (adversarial review #2): a token minted BEFORE the policy took effect
+ * used to keep working for a required-role user, so turning on "MFA required for administrators" left every
+ * pre-existing admin token as an MFA-less door, and revoking each by hand was the only remedy.
+ *
+ * What it does NOT do: ask a machine client for a TOTP. A token can never answer a challenge, so the only
+ * two states are "the owner is compliant" (pass — the token was minted from an MFA-protected session, and
+ * POST /auth/tokens already refuses a policy-subject un-enrolled user) and "the owner is not" (refuse, with
+ * the SAME `mfa_enrollment_required` 403 shape the cookie path uses; only the hint differs, because the
+ * caller's remedy is the OWNER enrolling — or an admin revoking the token — not an interactive enrolment
+ * screen this request could ever reach).
+ *
+ * Unknown/expired token → next(): identifying it is the route's own auth job, and answering "enrol MFA" to
+ * a garbage credential would turn this gate into an oracle for which token strings are real.
+ */
+async function enforceApiTokenMfa(raw: string, req: Request, res: Response, next: NextFunction) {
+    // Same enrolment escape hatch as a cookie session: the allowlist is applied identically, so a token
+    // whose owner CAN drive /auth/mfa/{setup,enable} keeps that path (and /auth/tokens and /auth/mfa/policy
+    // stay off it, exactly as for a session).
+    if (isMfaEnforceExempt(req)) return next();
+    try {
+        // A second lookup on top of verifyApiTokenAndAttachUser's, and deliberately so: the gate runs BEFORE
+        // any route's auth, so it has only the raw string. It costs one hash lookup and only on requests
+        // that both present a wjt_ token AND run under an opted-in policy.
+        const record = await ApiToken.findByRawToken(raw);
+        if (!record) return next();
+        const user = await User.findById(record.userId);
+        if (!user) return next();
+        const status = await mfa.evaluate(user);
+        if (!status.enforced) return next();
+        return res.status(403).json({
+            code: 'mfa_enrollment_required',
+            message: 'Two-factor authentication is required for this token owner\'s role. An API token cannot complete a 2FA challenge: the token\'s owner must enroll in two-factor authentication (or an administrator must revoke this token).',
+            data: { status: 403, graceDeadline: status.graceDeadline }
+        });
+    } catch (e: any) {
+        console.warn('[mfa] gate: token compliance check failed, failing closed:', e && e.message);
+        return res.status(503).json({
+            code: 'mfa_check_failed',
+            message: 'Could not verify two-factor compliance. Please try again.',
+            data: { status: 503 }
+        });
+    }
 }
 
 /**

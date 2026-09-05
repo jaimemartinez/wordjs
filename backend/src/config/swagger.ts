@@ -88,7 +88,14 @@ const options = {
             },
         ],
     },
-    apis: [asGlob('../routes/*.{ts,js}'), asGlob('../models/*.{ts,js}')], // Path to the API docs
+    // THE APP ENTRY IS A SOURCE OF OPERATIONS TOO, and leaving it out of this list made four of them
+    // invisible. /healthz, /readyz, /metrics and /api are declared with app.get() in src/index.ts, at the
+    // server ROOT rather than under the /api/v1 prefix; each carries its own `servers` block saying so, so
+    // documenting them here states where they really live instead of implying a prefix they do not have.
+    // src/tests/swagger-spec.test.ts re-runs THESE globs strictly and indexes the same files for source
+    // locations - it READS them off the export below rather than restating them, so the three lists
+    // cannot come apart.
+    apis: [asGlob('../routes/*.{ts,js}'), asGlob('../models/*.{ts,js}'), asGlob('../index.{ts,js}')], // Path to the API docs
 };
 
 const specs = swaggerJsdoc(options);
@@ -129,3 +136,26 @@ if (specs.paths?.['/posts/{id}']?.put) {
 }
 
 module.exports = specs;
+
+/**
+ * THE GLOBS SWAGGER-JSDOC REALLY SCANNED, exposed so no second copy of them can exist.
+ *
+ * src/tests/swagger-spec.test.ts re-runs the same sources with `failOnErrors: true` (the strict pass
+ * this module deliberately does NOT do, because /api-docs must keep serving) and indexes the same
+ * files to turn a JSON pointer into a `file:line`. It used to retype the list as a literal, so a glob
+ * added or dropped here left the strict gate and the source index silently checking a DIFFERENT set of
+ * files — a comment saying "keep the three lists in step" is not a gate, which is this batch's own
+ * stated philosophy applied to itself.
+ *
+ * NON-ENUMERABLE ON PURPOSE. `module.exports` IS the OpenAPI document: it is serialised to /api-docs,
+ * meta-schema-validated by @apidevtools/swagger-parser, and hashed into the F0 baseline. OpenAPI 3.0
+ * forbids unknown root fields that do not start with `x-`, so an ordinary property would make the
+ * document invalid and move the baseline hash. Hidden from Object.keys and JSON.stringify, this is
+ * reachable from a require() and invisible to every consumer that walks the document.
+ */
+Object.defineProperty(module.exports, '__apis', {
+    value: Object.freeze([...options.apis]),
+    enumerable: false,
+    writable: false,
+    configurable: false,
+});

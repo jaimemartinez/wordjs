@@ -737,6 +737,22 @@ export interface MarketplaceEntry {
     size: number;
     sha256: string;
     source?: string; // which configured source (URL) this entry came from
+    // Whether `source` is the catalog the review programme actually speaks for — this project's own
+    // release assets, or this checkout's marketplace/dist. Stamped by the BACKEND (routes/marketplace.ts
+    // isOfficialSource), never by the index: an admin may point WordJS at any number of catalogs, and
+    // `review` inside a third-party index is that index's claim, not ours. The backend already rewrites
+    // such an entry to `unreviewed`; the UI treats a missing/false flag the same way, so the two would
+    // have to fail together for an unvetted listing to render as a vetted one.
+    official?: boolean;
+    // Maintainer review state, built into the index from marketplace/reviews.json (policy: marketplace/REVIEW.md).
+    // Optional for the same reason as `hasVersoBlock`: the catalog is fetched at RUNTIME and can be an index
+    // built BEFORE reviews existed. A missing field therefore means "unreviewed", never "reviewed".
+    review?: {
+        status: 'first-party' | 'reviewed' | 'unreviewed';
+        reviewer?: string;
+        date?: string;
+        notes?: string;
+    };
     // Annotations added by the backend against the local install:
     installed: boolean;
     active: boolean;
@@ -939,14 +955,27 @@ export interface MediaItem {
         height: number;
         file: string;
         filesize: number;
+        /** Full-size WebP/AVIF siblings keyed by MIME type (backend/src/models/Media.ts); absent or {} when none. */
+        sources?: Record<string, MediaDerivativeSource>;
         sizes: Record<string, {
             file: string;
             width: number;
             height: number;
             mimeType: string;
             filesize: number;
+            /** Per-size WebP/AVIF siblings keyed by MIME type; absent or {} when none. */
+            sources?: Record<string, MediaDerivativeSource>;
         }>;
     };
+}
+
+/** One modern-format derivative as the media API reports it (see lib/imageSrcset.ts for the consumer). */
+export interface MediaDerivativeSource {
+    file: string;
+    width: number;
+    height: number;
+    mimeType: string;
+    filesize?: number;
 }
 
 /** The query the media list endpoint understands (backend/src/routes/media.ts GET /). */
@@ -1129,6 +1158,9 @@ export interface WxrAnalysis {
     };
 }
 
+/** What to do with the attachment items in a WXR — see documentation/wordpress-import.md. */
+export type ImportMediaMode = "download" | "link" | "skip";
+
 export interface ImportSummary {
     site: { title: string; link: string };
     authors: { created: number; matched: number };
@@ -1138,6 +1170,26 @@ export interface ImportSummary {
     attachments: { created: number; skipped: number };
     comments: { created: number; skipped: number };
     navItems: { skipped: number };
+    /** The media pass: what was fetched, what was not, and exactly why not, per file. */
+    media: {
+        mode: ImportMediaMode | string;
+        downloaded: number;
+        linked: number;
+        skipped: number;
+        failed: number;
+        /** Bytes that landed in the media library. */
+        bytes: number;
+        /** Bytes pulled off the network, refused and failed items included. */
+        fetchedBytes: number;
+        failures: { url: string; reason: string }[];
+    };
+    /** The menu pass: menus, their items, and whether any theme location could be assigned. */
+    menus: {
+        created: number;
+        matched: number;
+        items: { created: number; skipped: number };
+        locations: { assigned: number; unassigned: number; reason: string | null };
+    };
     errors: string[];
 }
 
@@ -1153,12 +1205,22 @@ export const importApi = {
     },
     wordpress: (
         file: File,
-        options: { defaultAuthorId?: number; importComments?: boolean; importAttachments?: boolean } = {}
+        options: {
+            defaultAuthorId?: number;
+            importComments?: boolean;
+            /** download / link / skip. Wins over the legacy importAttachments boolean. */
+            media?: ImportMediaMode;
+            /** Allow `http://` attachment sources. Off by default — the SSRF guard applies either way. */
+            allowHttp?: boolean;
+            importAttachments?: boolean;
+        } = {}
     ) => {
         const fd = new FormData();
         fd.append("file", file);
         if (options.defaultAuthorId) fd.append("defaultAuthorId", String(options.defaultAuthorId));
         fd.append("importComments", options.importComments === false ? "0" : "1");
+        if (options.media) fd.append("media", options.media);
+        fd.append("allowHttp", options.allowHttp ? "1" : "0");
         fd.append("importAttachments", options.importAttachments ? "1" : "0");
         return api<{ success: boolean; summary: ImportSummary }>("/import/wordpress", {
             method: "POST",
@@ -1354,6 +1416,9 @@ export interface MfaPolicy {
     requiredRoles: string[];
     graceDays: number;
     enforcedAt: number | null;
+    // Opt-in: extend the enforcement gate to `Bearer wjt_…` personal API tokens. Off on every install that
+    // predates the field, so headless clients keep working until an admin deliberately turns it on.
+    enforceForApiTokens: boolean;
 }
 /**
  * Enrolment is SUDO-GATED on the backend (routes/auth.ts): both /auth/mfa/setup — the call that hands
@@ -1382,7 +1447,7 @@ export const mfaApi = {
     disable: (code: string) => apiPost<{ disabled: boolean }>("/auth/mfa/disable", { code }),
     regenerateBackupCodes: (code: string) => apiPost<{ backupCodes: string[]; message: string }>("/auth/mfa/backup-codes", { code }),
     getPolicy: () => apiGet<{ policy: MfaPolicy }>("/auth/mfa/policy"),
-    savePolicy: (policy: { requiredRoles: string[]; graceDays: number }) => apiPut<{ policy: MfaPolicy }>("/auth/mfa/policy", policy),
+    savePolicy: (policy: { requiredRoles: string[]; graceDays: number; enforceForApiTokens: boolean }) => apiPut<{ policy: MfaPolicy }>("/auth/mfa/policy", policy),
     /**
      * Administrative two-factor reset — the way OUT of a 2FA lockout, and the reason enrolment above can
      * be password-gated without creating an unrecoverable state. It lives under the USERS router

@@ -22,6 +22,12 @@ const { can } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
 
 // Fonts directory
+/**
+ * @swagger
+ * tags:
+ *   name: Fonts
+ *   description: The font files installed under uploads/fonts and served from /uploads/fonts. Listing is public because a theme stylesheet needs the family names; installing and deleting require the manage_options capability. The accept rule for an upload is the file EXTENSION alone (ttf, otf, woff, woff2, eot) - font MIME types are inconsistent across browsers, so a declared font MIME never waves a file through on its own.
+ */
 const fontsDir = path.join(config.uploads.dir, 'fonts');
 
 // System fonts that are shown as "protected" in the listing and blocked from
@@ -96,6 +102,44 @@ function uploadFontSingle(req: Request, res: Response, next: NextFunction) {
 /**
  * GET /fonts
  * List all installed fonts
+ */
+/**
+ * @swagger
+ * /fonts:
+ *   get:
+ *     summary: List the installed fonts
+ *     description: Family and variant are parsed out of the stored filename. Protected system fonts sort first, then family, then variant. The url is origin-relative on purpose - an absolute one would embed the upload-era host and break the font face rule on every other origin.
+ *     tags: [Fonts]
+ *     security: []
+ *     responses:
+ *       200:
+ *         description: The installed fonts
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 type: object
+ *                 properties:
+ *                   filename:
+ *                     type: string
+ *                   family:
+ *                     type: string
+ *                   variant:
+ *                     type: string
+ *                   url:
+ *                     type: string
+ *                     description: Origin-relative, under /uploads/fonts.
+ *                   size:
+ *                     type: integer
+ *                   modified:
+ *                     type: string
+ *                     format: date-time
+ *                   protected:
+ *                     type: boolean
+ *                     description: A bundled system font. It is listed but cannot be deleted.
+ *       500:
+ *         description: The fonts directory could not be read
  */
 router.get('/', optionalAuth, asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
     // Read the directory
@@ -204,6 +248,48 @@ router.get('/', optionalAuth, asyncHandler(async (req: Request, res: Response, n
  * POST /fonts
  * Upload a new font
  */
+/**
+ * @swagger
+ * /fonts:
+ *   post:
+ *     summary: Upload a font file
+ *     description: Multipart upload of a single file field, at most 10 MB. The stored name is derived, never taken from the client - a sanitised base plus a random suffix plus a font extension - so an upload can neither overwrite an existing font nor write a non-font file under the fonts directory.
+ *     tags: [Fonts]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             required: [file]
+ *             properties:
+ *               file:
+ *                 type: string
+ *                 format: binary
+ *     responses:
+ *       201:
+ *         description: Font stored
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                 file:
+ *                   type: string
+ *                   description: The derived stored filename.
+ *                 url:
+ *                   type: string
+ *       400:
+ *         description: No file, a non-font extension, or the 10 MB limit exceeded
+ *       401:
+ *         description: Not logged in (rest_not_logged_in)
+ *       403:
+ *         description: The manage_options capability is required
+ */
 router.post('/', authenticate, can('manage_options'), uploadFontSingle, asyncHandler(async (req: Request, res: Response) => {
     if (!req.file) {
         return res.status(400).json({ error: 'No file uploaded' });
@@ -219,6 +305,43 @@ router.post('/', authenticate, can('manage_options'), uploadFontSingle, asyncHan
 /**
  * DELETE /fonts/:filename
  * Delete a font
+ */
+/**
+ * @swagger
+ * /fonts/{filename}:
+ *   delete:
+ *     summary: Delete an installed font
+ *     description: Refused for a bundled system font, and refused when the family name still appears in a setting, in post content or in page layout meta - the check is a usage search, so deleting a font cannot silently break a page that renders with it.
+ *     tags: [Fonts]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: filename
+ *         required: true
+ *         description: The stored filename. Only its basename is used, so a path cannot escape the fonts directory.
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Font deleted
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *       400:
+ *         description: The font is still referenced by a setting, a post or a page layout
+ *       401:
+ *         description: Not logged in (rest_not_logged_in)
+ *       403:
+ *         description: The manage_options capability is required, or the font is a protected system font
+ *       404:
+ *         description: No such font
+ *       500:
+ *         description: The usage check could not be run, so the deletion was refused
  */
 router.delete('/:filename', authenticate, can('manage_options'), asyncHandler(async (req: Request, res: Response) => {
     const filename = path.basename(req.params.filename); // Prevent path traversal

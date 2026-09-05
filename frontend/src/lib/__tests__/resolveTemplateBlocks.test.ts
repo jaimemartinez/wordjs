@@ -5,12 +5,16 @@ import { describe, it, expect, vi } from 'vitest';
  *
  * A template's listing must be filled on the SERVER, from the posts the ROUTE is about. The failure
  * these guard against is not a crash — it is a listing that renders confidently and answers the wrong
- * question: a search page showing the newest posts because the resolver only ever knew
- * getPosts("post","publish"). So the load-bearing assertions here are about WHICH posts arrive, and
+ * question: a search page showing the newest posts because the resolver only ever knew how to ask for
+ * the newest published ones. So the load-bearing assertions here are about WHICH posts arrive, and
  * about a structure-only template costing no fetch at all.
+ *
+ * The fallback loader is `getPostPool`, NOT `getPosts`: the latter is sized by `posts_per_page`, the
+ * Reading setting for the blog roll, and a theme's query loop asking for 12 cards must get 12 whether
+ * the owner's front page shows 3 or 30.
  */
 
-const getPosts = vi.fn(async () => [
+const getPostPool = vi.fn(async () => [
     { id: 1, title: 'Latest one', slug: 'latest-one', status: 'publish' },
     { id: 2, title: 'Latest two', slug: 'latest-two', status: 'publish' },
 ]);
@@ -34,7 +38,7 @@ const chromeFiles: Record<string, string> = {
 };
 const getThemeChrome = vi.fn(async (_slug: string, part: string) => chromeFiles[part] ?? null);
 vi.mock('@/lib/server-api', () => ({
-    getPosts: (...a: unknown[]) => getPosts(...(a as [])),
+    getPostPool: (...a: unknown[]) => getPostPool(...(a as [])),
     getSettings: async () => ({ blogname: 'Site' }),
     getMenuByLocation: async () => ({ items: [] }),
     getThemeManifest: (...a: unknown[]) => manifest(...(a as [])),
@@ -63,26 +67,26 @@ describe('resolveTemplateBlocks', () => {
         expect(resolved).toHaveLength(1);
         expect(resolved[0].title).toBe('A search hit');
         // …and it must not have gone looking for posts of its own.
-        expect(getPosts).not.toHaveBeenCalled();
+        expect(getPostPool).not.toHaveBeenCalled();
     });
 
     it('falls back to latest published only when the route says nothing', async () => {
-        getPosts.mockClear();
+        getPostPool.mockClear();
         const out = await resolveTemplateBlocks(tree([listing()]));
-        expect(getPosts).toHaveBeenCalledTimes(1);
+        expect(getPostPool).toHaveBeenCalledTimes(1);
         expect(firstListing(out).props.resolvedPosts.map((p: any) => p.title)).toEqual(['Latest one', 'Latest two']);
     });
 
     it('costs no fetch when the template is pure structure', async () => {
-        getPosts.mockClear();
+        getPostPool.mockClear();
         const structural = tree([{ type: 'Section', props: { items: [{ type: 'PageContent', props: {} }] } }]);
         const out = await resolveTemplateBlocks(structural);
-        expect(getPosts).not.toHaveBeenCalled();
+        expect(getPostPool).not.toHaveBeenCalled();
         expect(out).toBe(structural);   // untouched, not a rebuilt copy
     });
 
     it('reaches a listing nested inside containers', async () => {
-        getPosts.mockClear();
+        getPostPool.mockClear();
         const out = await resolveTemplateBlocks(tree([
             { type: 'Section', props: { items: [{ type: 'Grid', props: { columns: 2, items: [listing()] } }] } },
         ]), { posts: [{ id: 3, title: 'Nested', slug: 'n', status: 'publish' }] as any });

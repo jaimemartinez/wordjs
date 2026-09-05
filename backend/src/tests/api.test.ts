@@ -346,4 +346,298 @@ describe('API HTTP layer', () => {
         assert.strictEqual(idRes.status, 403, 'PUT /users/:ownId self password change without currentPassword must 403 (was 200 — the bypass)');
         assert.strictEqual(idRes.body.code, 'rest_bad_current_password');
     });
+
+    /* ---------------------------------------------------------------------------------------------
+     * POST /comments — the abuse posture (dedicated limiter, honeypot, repeat guard).
+     *
+     * These drive the REAL middleware, not a rebuilt copy of its numbers: the limiter hangs off the
+     * router's own POST declaration (routes/comments.ts, THE COMMENT ABUSE POSTURE), so mounting the
+     * router — which this file already does — mounts it. The cap is read from the module's own export
+     * rather than typed here, so a test that says "the 6th is refused" cannot go on passing after
+     * someone changes the 5 to a 50.
+     *
+     * Each case starts by rebuilding the limiter, which hands it a fresh MemoryStore: that is how a
+     * case begins from an empty bucket instead of inheriting whatever the previous one spent, and it
+     * is why these do not depend on the order node:test happens to pick.
+     * ------------------------------------------------------------------------------------------- */
+    const commentsRoute = require('../routes/comments');
+    const resetCommentLimiter = () => commentsRoute.useCommentLimiterStore(undefined);
+    const ANON_CAP: number = commentsRoute.COMMENT_RATE_MAX_ANON;
+    const HONEYPOT: string = commentsRoute.COMMENT_HONEYPOT_FIELD;
+    const DUPLICATE_SCAN_LIMIT: number = commentsRoute.COMMENT_DUPLICATE_SCAN_LIMIT;
+
+    /** A published post with comments open, inserted directly so this does not depend on the writer. */
+    async function seedCommentablePost(title: string): Promise<number> {
+        const dbAsync = database.getDbAsync();
+        const res = await dbAsync.run(
+            `INSERT INTO posts (author_id, post_title, post_content, post_status, post_type, comment_status)
+             VALUES (?, ?, ?, ?, ?, ?) RETURNING id`,
+            [1, title, 'body', 'publish', 'post', 'open']
+        );
+        return res.lastID;
+    }
+
+    const guest = (postId: number, content: string, extra: any = {}) => ({
+        post: postId, content, author_name: 'Reader', author_email: 'reader@example.com', ...extra
+    });
+
+    it('POST /comments throttles an anonymous flood (the 6th in the window is 429 rest_comment_rate_limited)', async () => {
+        resetCommentLimiter();
+        const postId = await seedCommentablePost('Rate limited');
+
+        // Distinct bodies: this case is about the RATE, and an identical body would be refused by the
+        // repeat guard first — the test would then pass for a reason it is not asserting.
+        for (let i = 0; i < ANON_CAP; i++) {
+            const ok = await request(app).post('/api/v1/comments').send(guest(postId, `flood ${i}`));
+            assert.strictEqual(ok.status, 201, `comment ${i + 1} of ${ANON_CAP} must still be accepted, got ${ok.status}`);
+        }
+
+        const blocked = await request(app).post('/api/v1/comments').send(guest(postId, 'flood over the line'));
+        assert.strictEqual(blocked.status, 429, `comment ${ANON_CAP + 1} must be refused, got ${blocked.status}`);
+        assert.strictEqual(blocked.body.code, 'rest_comment_rate_limited');
+        assert.strictEqual(blocked.body.data.status, 429, 'the 429 body must carry the API error shape');
+    });
+
+    it('POST /comments answers a filled honeypot exactly like a success and stores nothing', async () => {
+        resetCommentLimiter();
+        const Comment = require('../models/Comment');
+        const postId = await seedCommentablePost('Honeypot');
+        const before = await Comment.count({ postId });
+
+        const trapped = await request(app).post('/api/v1/comments')
+            .send(guest(postId, 'buy pills', { [HONEYPOT]: 'http://spam.example' }));
+        assert.strictEqual(trapped.status, 201, 'the trap must be indistinguishable from an accepted comment');
+        assert.strictEqual(trapped.body.status, 'pending', '…including the status a real pending comment reports');
+        assert.strictEqual(await Comment.count({ postId }), before, 'a tripped honeypot may not store a row');
+
+        // The differential half: the trap is a trap, not a global mute. Without this the assertion above
+        // would read green on a route that had stopped storing anything at all.
+        const honest = await request(app).post('/api/v1/comments').send(guest(postId, 'a real comment'));
+        assert.strictEqual(honest.status, 201);
+        assert.strictEqual(await Comment.count({ postId }), before + 1, 'the honest path still stores');
+    });
+
+    it('POST /comments refuses a repeat of the same body inside the window (409 rest_comment_duplicate)', async () => {
+        resetCommentLimiter();
+        const postId = await seedCommentablePost('Duplicates');
+
+        const first = await request(app).post('/api/v1/comments').send(guest(postId, 'Great post!'));
+        assert.strictEqual(first.status, 201);
+
+        const repeat = await request(app).post('/api/v1/comments').send(guest(postId, 'Great post!'));
+        assert.strictEqual(repeat.status, 409, `the repeat must be refused, got ${repeat.status}`);
+        assert.strictEqual(repeat.body.code, 'rest_comment_duplicate');
+
+        // …and it is a REPEAT guard, not a one-comment-per-post guard.
+        const different = await request(app).post('/api/v1/comments').send(guest(postId, 'And a second thought.'));
+        assert.strictEqual(different.status, 201, 'a different body from the same author is still accepted');
+    });
+
+    /* -----------------------------------------------------------------------------------------------
+     * THE DISCARD IS NOT AN ORACLE. The cases below are the ones that used to distinguish a
+     * discarded comment from an accepted one, which is the same thing as saying the honeypot had a
+     * name a bot could learn in one probe (and take the `comments:pre_insert` veto with it, since that
+     * answers through the same payload).
+     * --------------------------------------------------------------------------------------------- */
+
+    it('POST /comments answers a discard with a payload an honest 201 cannot be told apart from', async () => {
+        resetCommentLimiter();
+        const Comment = require('../models/Comment');
+        const postId = await seedCommentablePost('Discard is not an oracle');
+        const before = await Comment.count({ postId });
+
+        // Trapped FIRST and honest second, deliberately: the trap stores nothing, so the id the honest
+        // insert really takes is exactly the id the discard claimed. `id: 0` — or any other stand-in —
+        // fails the assertion below, which is the whole point of it.
+        const trapped = await request(app).post('/api/v1/comments')
+            .send(guest(postId, 'buy pills', { [HONEYPOT]: 'http://spam.example' }));
+        const honest = await request(app).post('/api/v1/comments').send(guest(postId, 'a real thought'));
+
+        assert.strictEqual(trapped.status, 201);
+        assert.strictEqual(honest.status, 201);
+        assert.strictEqual(await Comment.count({ postId }), before + 1, 'exactly one of the two was stored');
+
+        assert.deepStrictEqual(Object.keys(trapped.body).sort(), Object.keys(honest.body).sort(),
+            'the two payloads must carry the same fields');
+        assert.ok(Number(honest.body.id) >= 1, 'the honest 201 reports a real row id');
+        assert.strictEqual(trapped.body.id, honest.body.id,
+            'the discarded id must be the one the next real insert takes — it was 0, a one-request oracle');
+        // Everything except the body itself (and the second the clock happened to be on) is identical.
+        const shape = (b: any) => ({ ...b, content: null, date: null, dateGmt: null });
+        assert.deepStrictEqual(shape(trapped.body), shape(honest.body));
+
+        // The two timestamps are nulled out of that comparison because the clock may have ticked
+        // between the two requests — so their SHAPE is asserted here instead, or a difference in
+        // precision would hide behind the very field that was excused. The honest pair is the value the
+        // row was read back with (comment_date / comment_date_gmt are TEXT columns, so byte-for-byte
+        // what currentTime()/currentTimeGMT() wrote); the discard builds its pair from those same two
+        // helpers, and both must read 'YYYY-MM-DD HH:MM:SS'.
+        const STAMP = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
+        for (const [label, body] of [['trapped', trapped.body], ['honest', honest.body]] as const) {
+            assert.match(String(body.date), STAMP, `${label}.date must carry the stored local-time shape`);
+            assert.match(String(body.dateGmt), STAMP, `${label}.dateGmt must carry the stored UTC shape`);
+        }
+    });
+
+    it('POST /comments advances the fake id across two discards, the way two accepted comments do', async () => {
+        resetCommentLimiter();
+        const Comment = require('../models/Comment');
+        const postId = await seedCommentablePost('Discards advance');
+        const before = await Comment.count({ postId });
+
+        // DIFFERENT bodies on purpose: the repeat guard hashes [post, caller, body], so neither half of
+        // it fires and both attempts are 201s. Reading the id straight off `MAX(comment_id) + 1` — a
+        // discard stores nothing, so MAX never moves — made these two EQUAL, and two accepted comments
+        // can never report the same id. That pair was the trap's name, learnable in two requests.
+        const first = await request(app).post('/api/v1/comments')
+            .send(guest(postId, 'buy pills', { [HONEYPOT]: 'x' }));
+        const second = await request(app).post('/api/v1/comments')
+            .send(guest(postId, 'buy more pills', { [HONEYPOT]: 'x' }));
+
+        assert.strictEqual(first.status, 201);
+        assert.strictEqual(second.status, 201, 'a second trapped body must still look accepted');
+        assert.ok(Number(first.body.id) >= 1, 'both ids are plausible row ids');
+        assert.ok(Number(second.body.id) > Number(first.body.id),
+            `two discards must report strictly increasing ids, got ${first.body.id} then ${second.body.id}`);
+        assert.strictEqual(await Comment.count({ postId }), before, 'and neither of them stored a row');
+    });
+
+    it('POST /comments keeps the fake id ahead of the table after real rows land between two discards', async () => {
+        resetCommentLimiter();
+        const Comment = require('../models/Comment');
+        const postId = await seedCommentablePost('Discards stay ahead');
+
+        const trappedBefore = await request(app).post('/api/v1/comments')
+            .send(guest(postId, 'first spam', { [HONEYPOT]: 'x' }));
+        assert.strictEqual(trappedBefore.status, 201);
+
+        // The table then runs well past whatever number the last discard claimed. Through the REAL
+        // writer rather than over HTTP: these are other people, and the per-IP limiter would refuse
+        // them from this one address.
+        for (let i = 0; i < 25; i++) {
+            await Comment.create({
+                postId, author: `Reader ${i}`, authorEmail: `reader${i}@example.com`,
+                content: `chatter ${i}`, authorIp: '198.51.100.9'
+            });
+        }
+        const honest = await request(app).post('/api/v1/comments').send(guest(postId, 'a real thought'));
+        const trappedAfter = await request(app).post('/api/v1/comments')
+            .send(guest(postId, 'second spam', { [HONEYPOT]: 'x' }));
+
+        assert.strictEqual(honest.status, 201);
+        assert.strictEqual(trappedAfter.status, 201);
+
+        // A HIGH-WATER mark, not a counter running on its own. This is the half of the invariant the
+        // strictly-increasing case above cannot see: a per-process counter that merely incremented
+        // would now be far BEHIND the table and hand out an id a real row already holds — the same tell
+        // in reverse, and one a bot reads by fetching the comment it was told it had just created.
+        assert.ok(Number(trappedAfter.body.id) > Number(honest.body.id),
+            `the fake id must stay ahead of the table, got ${trappedAfter.body.id} after a real ${honest.body.id}`);
+        assert.ok(Number(trappedAfter.body.id) > Number(trappedBefore.body.id),
+            'and still strictly above the previous discard');
+        const stored = await Comment.findById(Number(trappedAfter.body.id));
+        assert.strictEqual(stored, null, 'and it is still an id no row holds — nothing was stored');
+    });
+
+    it('POST /comments answers a REPEAT identically on both paths (201 then 409, trapped or not)', async () => {
+        resetCommentLimiter();
+        const postId = await seedCommentablePost('Repeat on both paths');
+
+        const honestFirst = await request(app).post('/api/v1/comments').send(guest(postId, 'the same words'));
+        assert.strictEqual(honestFirst.status, 201);
+        const honestAgain = await request(app).post('/api/v1/comments').send(guest(postId, 'the same words'));
+        assert.strictEqual(honestAgain.status, 409, 'the honest repeat is refused (regression anchor)');
+
+        const trappedFirst = await request(app).post('/api/v1/comments')
+            .send(guest(postId, 'other same words', { [HONEYPOT]: 'x' }));
+        assert.strictEqual(trappedFirst.status, 201);
+        const trappedAgain = await request(app).post('/api/v1/comments')
+            .send(guest(postId, 'other same words', { [HONEYPOT]: 'x' }));
+        // The second tell: the trap used to return BEFORE the repeat guard, so a bot posting the same
+        // body twice saw 201/201 while a human saw 201/409. Ordering the guard first is only half of the
+        // fix — the discarded comment is in no table, so the guard also has to remember it.
+        assert.strictEqual(trappedAgain.status, 409,
+            'a repeated body must be refused on the discarded path too, or the trap announces itself');
+        assert.deepStrictEqual(trappedAgain.body, honestAgain.body, 'and with the identical refusal');
+    });
+
+    it('the repeat guard survives a busy thread: it reads the comments of the CALLER, not of the post', async () => {
+        resetCommentLimiter();
+        const Comment = require('../models/Comment');
+        const postId = await seedCommentablePost('Busy thread');
+
+        const first = await request(app).post('/api/v1/comments').send(guest(postId, 'my only thought'));
+        assert.strictEqual(first.status, 201);
+
+        // The thread gets livelier than the scan window, through the REAL writer and from other authors.
+        // (Not over HTTP: these are other people, and the limiter would refuse them from this one IP.)
+        for (let i = 0; i <= DUPLICATE_SCAN_LIMIT; i++) {
+            await Comment.create({
+                postId, author: `Reader ${i}`, authorEmail: `reader${i}@example.com`,
+                content: `chatter ${i}`, authorIp: '203.0.113.7'
+            });
+        }
+
+        const repeat = await request(app).post('/api/v1/comments').send(guest(postId, 'my only thought'));
+        assert.strictEqual(repeat.status, 409,
+            'a scan of the newest rows on the POST loses this caller row, and the guard then fails open');
+    });
+
+    it('an operator can move the anonymous ceiling without editing the router, and cannot switch it off', async () => {
+        const { updateOption } = require('../core/options');
+        const OPTION: string = commentsRoute.COMMENT_RATE_OPTION_ANON;
+        try {
+            // Raised, and read at REQUEST time: the same limiter instance answers to the new number.
+            await updateOption(OPTION, 2);
+            resetCommentLimiter();
+            const postId = await seedCommentablePost('Operator ceiling');
+            for (let i = 0; i < 2; i++) {
+                const ok = await request(app).post('/api/v1/comments').send(guest(postId, `raised ${i}`));
+                assert.strictEqual(ok.status, 201, `comment ${i + 1} must be inside the operator's ceiling`);
+            }
+            const blocked = await request(app).post('/api/v1/comments').send(guest(postId, 'over the operator line'));
+            assert.strictEqual(blocked.status, 429, 'the third must be refused: the option, not the default 5, is in force');
+            assert.strictEqual(blocked.body.code, 'rest_comment_rate_limited');
+
+            // And a value that means "no limiter" is clamped rather than obeyed: 0 becomes 1, so the
+            // door narrows instead of disappearing (and does not fall back to the default either).
+            await updateOption(OPTION, 0);
+            resetCommentLimiter();
+            const zeroPost = await seedCommentablePost('Clamped ceiling');
+            const one = await request(app).post('/api/v1/comments').send(guest(zeroPost, 'the only one allowed'));
+            assert.strictEqual(one.status, 201);
+            const two = await request(app).post('/api/v1/comments').send(guest(zeroPost, 'one too many'));
+            assert.strictEqual(two.status, 429, '0 must clamp to 1 — neither "refuse everyone" nor "no limiter"');
+        } finally {
+            await updateOption(OPTION, '');
+            resetCommentLimiter();
+        }
+    });
+
+    it('POST /comments keeps serving an authenticated caller past the anonymous ceiling', async () => {
+        resetCommentLimiter();
+        const dbAsync = database.getDbAsync();
+        await dbAsync.run(
+            `INSERT INTO users (user_login, user_pass, user_email, display_name) VALUES (?, ?, ?, ?)`,
+            ['comment-poster', 'x', 'comment-poster@example.com', 'Poster']
+        );
+        const row = await dbAsync.get(`SELECT * FROM users WHERE user_login = ?`, ['comment-poster']);
+        const uid = row.ID || row.id;
+        const token = jwt.sign({ userId: uid, username: 'comment-poster' }, SECRET, { algorithm: 'HS256', expiresIn: '2h' });
+        const postId = await seedCommentablePost('Authenticated allowance');
+
+        // One MORE than the anonymous cap: on a single shared ceiling this loop is where the 429 lands.
+        for (let i = 0; i <= ANON_CAP; i++) {
+            const res = await request(app).post('/api/v1/comments')
+                .set('Authorization', `Bearer ${token}`)
+                .send({ post: postId, content: `signed thought ${i}` });
+            assert.strictEqual(res.status, 201,
+                `authenticated comment ${i + 1} must be accepted, got ${res.status} ${JSON.stringify(res.body)}`);
+        }
+
+        // The two tiers are separate key spaces, not one bucket with two ceilings: the anonymous budget
+        // on this very IP is still intact after the account above spent more than all of it.
+        const anon = await request(app).post('/api/v1/comments').send(guest(postId, 'and one from a stranger'));
+        assert.strictEqual(anon.status, 201, `the anonymous bucket must be untouched, got ${anon.status}`);
+    });
 });

@@ -11,6 +11,10 @@
 # Default command is the single-process "monolith" (gateway concerns + backend + Next.js frontend on one
 # HTTP port), which is the simplest working WordJS. See docker-compose.yml for a Postgres + Redis +
 # multi-replica stack, and docker/README.md for what that does and does not prove.
+#
+# A fresh container boots UNINSTALLED and serves the setup wizard at /install — see docker/entrypoint.sh
+# for why that is the default and how to opt out. Ready-to-run templates live in deploy/: a one-click
+# single-container compose (deploy/compose) and a monolith-only Helm chart (deploy/helm/wordjs).
 
 # ---------------------------------------------------------------------------------------------------
 # Stage 1 — builder: full toolchain, all workspaces, produce the compiled release tree.
@@ -64,23 +68,44 @@ RUN set -eux; \
     apt-get purge -y python3 make g++; \
     apt-get autoremove -y; \
     rm -rf /var/lib/apt/lists/*; \
+    mkdir -p /app/backend/data /app/backend/uploads; \
     chown -R wordjs:wordjs /app
 
+# The two paths that hold state the image must NOT own. monolith.js chdir()s into backend/ and the
+# runtime resolves both relative to that cwd, so these are the exact paths a volume has to cover:
+#   backend/data     SQLite database, the 0600 install-token mirror, and — because the entrypoint
+#                    anchors it here with a symlink — wordjs-config.json, i.e. the install state itself.
+#   backend/uploads  the media library.
+# Declared AFTER the chown above so the mount inherits wordjs-owned, writable directories (content added
+# to a VOLUME path by a LATER layer would be discarded). compose/Helm mount named volumes / a PVC over
+# these; a bare `docker run` gets anonymous volumes and still keeps its data across a container restart.
+VOLUME ["/app/backend/data", "/app/backend/uploads"]
+
 # HTTP on the public port inside the container — terminate TLS at a reverse proxy / the compose network.
-# (WORDJS_HTTP=1 makes monolith.js serve plain HTTP so the healthcheck below needs no cert handling.)
+# WORDJS_HTTP=1 makes monolith.js serve plain HTTP instead of resolving a TLS certificate, so the port is
+# probe-able with no cert handling and the container never generates or renews a self-signed cert. Unset
+# it only if you mount real certificates and want the container itself to terminate TLS.
 ENV NODE_ENV=production \
     WORDJS_HTTP=1 \
     PORT=3000
 
 EXPOSE 3000
 
-# Readiness probe: /readyz returns 200 only once the app is installed, booted, AND the database answers
-# (503 otherwise). Long start-period covers the first-boot schema migration + plugin isolate startup.
-HEALTHCHECK --interval=15s --timeout=5s --start-period=120s --retries=6 \
-    CMD node -e "require('http').get('http://127.0.0.1:'+(process.env.PORT||3000)+'/readyz',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
+# LIVENESS, not readiness. /healthz is answered directly by monolith.js's dispatcher (before the backend
+# app), so it reports "this process is serving" even while the site is still uninstalled — which is the
+# question Docker actually asks: should this container be restarted?
+#
+# It deliberately is NOT /readyz. /readyz returns 503 until the instance is installed AND booted AND the
+# database answers, so a fresh container awaiting the setup wizard would sit `unhealthy` forever and any
+# `depends_on: condition: service_healthy` would never fire — the one-click flow could not start. /readyz
+# is the right probe for an orchestrator that must hold traffic off a not-yet-ready replica, and that is
+# exactly where deploy/helm/wordjs uses it: livenessProbe /healthz, readinessProbe /readyz.
+HEALTHCHECK --interval=15s --timeout=5s --start-period=90s --retries=6 \
+    CMD node -e "require('http').get('http://127.0.0.1:'+(process.env.PORT||3000)+'/healthz',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
 
 USER wordjs
 
-# tini (PID 1) -> entrypoint (writes wordjs-config.json from env if absent) -> the app command.
+# tini (PID 1) -> entrypoint (anchors the config in the data volume; pre-seeds it from env only when
+# WORDJS_PRESEED_CONFIG=1) -> the app command.
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/wordjs-entrypoint"]
 CMD ["node", "monolith.js", "prod"]

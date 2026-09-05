@@ -41,6 +41,7 @@ const { getOption, updateOption, deleteOption } = require('../core/options');
 const { getAllPlugins } = require('../core/plugins');
 const { installPluginFromZip, runPluginUpdate, createInstallTmp } = require('./plugins');
 const pluginOrigins = require('../core/plugin-origins');
+const { recordAudit } = require('../core/audit');
 
 // THE SCALAR QUERY RULE — see core/query-params.
 const { requireScalarQuery } = require('../core/query-params');
@@ -112,6 +113,61 @@ async function resolveSources(): Promise<{ url: string; isLocal: boolean }[]> {
     if (single) return [{ url: single, isLocal: !/^https?:\/\//i.test(single) }];
     if (fs.existsSync(path.join(LOCAL_DIST, INDEX_FILE))) return [{ url: LOCAL_DIST, isLocal: true }];
     return [{ url: DEFAULT_REMOTE, isLocal: false }];
+}
+
+// The official catalog's own release path, derived from DEFAULT_REMOTE so the two cannot drift: any
+// release of THIS repository counts, because pinning a fixed release
+// (https://github.com/<owner>/wordjs/releases/download/v1.6.1) is a documented, supported configuration
+// and must not cost the entry its badge.
+const OFFICIAL_RELEASES_PREFIX = (() => {
+    try {
+        const u = new URL(DEFAULT_REMOTE);
+        // /<owner>/<repo>/releases/...  →  /<owner>/<repo>/releases/
+        const parts = u.pathname.split('/').filter(Boolean);
+        return `${u.protocol}//${u.host.toLowerCase()}/${parts.slice(0, 3).join('/')}/`;
+    } catch {
+        return '';
+    }
+})();
+
+/**
+ * Is this source the one the review badge is actually a statement about?
+ *
+ * WHY THIS EXISTS. `review` arrives INSIDE a catalog index, and every configured source is merged and
+ * passed to the admin UI verbatim. `marketplace/reviews.json`, `verify-marketplace.js` and the whole of
+ * REVIEW.md only ever cover THIS project's catalog — nothing anywhere validates a review claim made by
+ * a private, third-party or compromised index. So an arbitrary URL could hand the admin an entry
+ * carrying `review: {status:"reviewed", reviewer:"…", date:"…"}`, rendered as the affirmative badge on
+ * the highest-privilege screen in the product, directly above an Install button, backed by no ledger
+ * anywhere on earth. `first-party` is the same problem wearing the project's own name.
+ *
+ * An admin pointing WordJS at another catalog is a supported, deliberate feature (resolveSources) and
+ * that does not change: the entries are still listed and still installable. What they cannot do is
+ * borrow OUR claim about them. Everything from a non-official source is republished as `unreviewed`,
+ * which is the truth — nobody the badge speaks for has looked at it.
+ *
+ * A LOCAL directory counts as official only when it is this checkout's own marketplace/dist, which is
+ * built from the tracked sources and the tracked ledger by build-marketplace.js and gated by
+ * verify-marketplace.js in CI. Any other directory on disk is somebody else's index.
+ */
+function isOfficialSource(url: string, isLocal: boolean): boolean {
+    const raw = String(url || '').trim();
+    if (!raw) return false;
+    if (isLocal) {
+        try {
+            return path.resolve(raw) === path.resolve(LOCAL_DIST);
+        } catch {
+            return false;
+        }
+    }
+    try {
+        const u = new URL(raw);
+        if (u.protocol !== 'https:') return false;
+        const normalized = `${u.protocol}//${u.host.toLowerCase()}${u.pathname}`;
+        return !!OFFICIAL_RELEASES_PREFIX && `${normalized}/`.startsWith(OFFICIAL_RELEASES_PREFIX);
+    } catch {
+        return false;
+    }
 }
 
 const FETCH_TIMEOUT_MS = 15000;
@@ -251,12 +307,22 @@ async function getCatalog(refresh = false): Promise<{ merged: any[]; sources: an
     for (const s of srcs) {
         try {
             const list = await loadCatalog(s.url, s.isLocal);
+            const official = isOfficialSource(s.url, s.isLocal);
             let added = 0;
             for (const e of list) {
                 const id = String(e.id || '');
                 if (!id || seen.has(id)) continue;
                 seen.add(id);
-                merged.push({ ...e, source: s.url }); // each entry remembers its source (used at install)
+                // Each entry remembers its source (used at install) and whether that source is the one
+                // the review programme actually speaks for. A `review` from anywhere else is REPLACED,
+                // not passed through: the badge is a claim by this project about this project's catalog,
+                // and no other index gets to make it on our behalf. See isOfficialSource.
+                merged.push({
+                    ...e,
+                    source: s.url,
+                    official,
+                    review: official ? e.review : { status: 'unreviewed' },
+                });
                 added++;
             }
             sources.push({ url: s.url, isLocal: s.isLocal, ok: true, count: list.length, added });
@@ -273,7 +339,88 @@ async function getCatalog(refresh = false): Promise<{ merged: any[]; sources: an
  * /marketplace/catalog:
  *   get:
  *     summary: Browse the plugin marketplace catalog (annotated with installed/active state)
+ *     description: Every configured source is read and merged, deduplicated by entry id with earlier sources winning. A source that cannot be read is reported inside sources with ok false rather than failing the whole browse, so one bad URL cannot hide the rest. Each entry is annotated against this install - present, active, the installed version, whether a newer version is listed, and whether that update can be applied in one click, which additionally requires the catalog entry's source to match the source the plugin was installed from. The merge is cached for five minutes; refresh=1 bypasses the cache.
  *     tags: [Plugins]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: refresh
+ *         required: false
+ *         schema:
+ *           type: string
+ *           enum: ['1']
+ *         description: Send 1 to re-read every source instead of serving the cached merge. It is a scalar - repeating it is refused with 400, never resolved to one of the values.
+ *     responses:
+ *       200:
+ *         description: The merged catalog, annotated with this install's state
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 source:
+ *                   type: string
+ *                   description: The first source's URL, kept for backwards compatibility with clients written before the list existed.
+ *                 isLocal:
+ *                   type: boolean
+ *                 sources:
+ *                   type: array
+ *                   description: Per-source status. A source that failed carries ok false and its error instead of a count.
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       url:
+ *                         type: string
+ *                       isLocal:
+ *                         type: boolean
+ *                       ok:
+ *                         type: boolean
+ *                       count:
+ *                         type: integer
+ *                       added:
+ *                         type: integer
+ *                       error:
+ *                         type: string
+ *                 count:
+ *                   type: integer
+ *                 plugins:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       id:
+ *                         type: string
+ *                       version:
+ *                         type: string
+ *                       source:
+ *                         type: string
+ *                       official:
+ *                         type: boolean
+ *                         description: True when the entry came from this project's own release catalog, or from this checkout's marketplace/dist. The review programme covers only that catalog, so an entry from any other source is republished with review.status unreviewed whatever its own index claimed.
+ *                       installed:
+ *                         type: boolean
+ *                       active:
+ *                         type: boolean
+ *                       installedVersion:
+ *                         type: string
+ *                         nullable: true
+ *                       updateAvailable:
+ *                         type: boolean
+ *                       updatable:
+ *                         type: boolean
+ *                         description: True only when an update exists AND the catalog entry's source matches the recorded install origin. An update listed but not updatable is shown without the button.
+ *                       installedFrom:
+ *                         type: string
+ *                         nullable: true
+ *       400:
+ *         description: A scalar query parameter arrived more than once or as a non-string (rest_invalid_param)
+ *       401:
+ *         description: Not logged in (rest_not_logged_in)
+ *       403:
+ *         description: Not an administrator
+ *       502:
+ *         description: The catalog could not be read at all, so there is nothing to annotate
  */
 router.get('/catalog', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     // OUTSIDE the try on purpose: the catch below turns anything thrown in here into a 502 about the
@@ -319,11 +466,64 @@ router.get('/catalog', authenticate, isAdmin, asyncHandler(async (req: Request, 
  * /marketplace/install:
  *   post:
  *     summary: Download a catalog plugin and install it through the standard upload pipeline
+ *     description: The bytes are fetched from the source the entry was listed under, or read from a local dist directory after the resolved path is proven to stay inside it, and then sha256-verified against the catalog entry. A remote entry that carries no sha256 is refused outright rather than installed unverified. The verified zip is handed to the same pipeline manual uploads use, so the zip-bomb budget, the Zip Slip refusal, slug validation and the manifest plus AST scan all apply unchanged. When the plugin is already installed the request takes the in-place update path instead, exactly as /marketplace/update. Every attempt is written to the audit log, successes and failures alike.
  *     tags: [Plugins]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [id]
+ *             properties:
+ *               id:
+ *                 type: string
+ *                 description: The catalog entry id.
+ *     responses:
+ *       200:
+ *         description: The pipeline result. The status is the one the install or update pipeline returns, so a refusal inside the pipeline surfaces with its own status and body.
+ *       400:
+ *         description: Missing id, a catalog entry naming an unsafe file or a path outside the local marketplace directory, a package over the size ceiling, a remote entry with no sha256, or a sha256 mismatch - the package is never installed unverified
+ *       401:
+ *         description: Not logged in (rest_not_logged_in)
+ *       403:
+ *         description: Not an administrator
+ *       404:
+ *         description: No such id in the catalog, or the local package file is missing
+ *       502:
+ *         description: The catalog could not be read, or the package could not be downloaded
  */
 // Install a catalog entry — or, when the plugin is already installed, UPDATE it in place (preserving its
 // data/, tables and grants; see routes/plugins.ts runPluginUpdate). Mounted on BOTH /install and /update
 // so any client works; the origin gate inside runPluginUpdate makes an update refuse a foreign source.
+/**
+ * The audit `detail` for one marketplace apply.
+ *
+ * INSTALLING A PLUGIN IS EXECUTING SOMEBODY ELSE'S CODE ON THIS SERVER, so what the log needs is not
+ * merely "a plugin arrived" but WHERE FROM: the source the catalogue entry was listed under, its
+ * version, and whether the bytes carried an integrity hash at all (a remote entry without one is
+ * refused above — recording the flag is what makes that refusal auditable rather than assumed). The
+ * hash itself is not stored: `sha256` matches the audit sanitizer's secret-key filter and would be
+ * dropped anyway, and source + version already identify the artifact.
+ *
+ * FAILURES ARE RECORDED TOO, via `ok:false`. A rejected install is the interesting half of an intrusion
+ * attempt, and a log that only holds successes cannot tell "nobody tried" from "everybody failed".
+ *
+ * Only the DETAIL is built here, never the action name: the two recordAudit calls keep their action as
+ * a literal so the catalogue gate in src/tests/audit-trail.test.ts can still read it out of the source.
+ */
+function applyAuditDetail(entry: any, result: any): Record<string, any> {
+    return {
+        source: String((entry && entry.source) || '').slice(0, 200),
+        version: entry && entry.version != null ? String(entry.version).slice(0, 64) : null,
+        integrityVerified: !!(entry && entry.sha256),
+        ok: !!(result && result.ok),
+        status: result && result.status != null ? Number(result.status) : null
+    };
+}
+
 const handleMarketplaceApply = asyncHandler(async (req: Request, res: Response) => {
     const id = String((req.body || {}).id || '').trim();
     if (!id) return res.status(400).json({ error: 'Falta el id del plugin.' });
@@ -404,11 +604,13 @@ const handleMarketplaceApply = asyncHandler(async (req: Request, res: Response) 
         if (installedNow) {
             // In-place update (preserves data/tables/grants, gated to the install origin, fail-safe rollback).
             const result = await runPluginUpdate(slug, tmp.zipPath, origin);
+            await recordAudit(req.user && req.user.id, 'marketplace.update', 'plugin', slug, applyAuditDetail(entry, result));
             return res.status(result.status).json(result.body);
         }
         // Fresh install — then record where it came from so future updates are bound to this source.
         const result = await installPluginFromZip(tmp.zipPath, file);
         if (result.ok) { try { await pluginOrigins.setPluginOrigin(slug, origin); } catch { /* non-fatal */ } }
+        await recordAudit(req.user && req.user.id, 'marketplace.install', 'plugin', slug, applyAuditDetail(entry, result));
         return res.status(result.status).json(result.body);
     } finally {
         // ALWAYS — including the throw paths inside the pipeline. The zip is already gone by then; this
@@ -417,17 +619,113 @@ const handleMarketplaceApply = asyncHandler(async (req: Request, res: Response) 
     }
 });
 router.post('/install', authenticate, isAdmin, handleMarketplaceApply);
+/**
+ * @swagger
+ * /marketplace/update:
+ *   post:
+ *     summary: Update an installed catalog plugin in place
+ *     description: The same handler as /marketplace/install. When the plugin is already installed the bytes go through the in-place update path, which preserves its data directory, tables and grants and refuses an update whose catalog source differs from the source the plugin was installed from. Integrity is mandatory for a remote source - an entry without a sha256, or one whose bytes do not match it, is refused. Every attempt is written to the audit log, successes and failures alike.
+ *     tags: [Plugins]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [id]
+ *             properties:
+ *               id:
+ *                 type: string
+ *                 description: The catalog entry id.
+ *     responses:
+ *       200:
+ *         description: The pipeline result. The status is the one the install or update pipeline returns, so a refusal inside the pipeline surfaces with its own status and body.
+ *       400:
+ *         description: Missing id, a catalog entry naming an unsafe file, a package over the size ceiling, a remote entry with no sha256, or a sha256 mismatch - the package is never installed unverified
+ *       401:
+ *         description: Not logged in (rest_not_logged_in)
+ *       403:
+ *         description: Not an administrator
+ *       404:
+ *         description: No such id in the catalog, or the local package file is missing
+ *       502:
+ *         description: The catalog could not be read, or the package could not be downloaded
+ */
 router.post('/update', authenticate, isAdmin, handleMarketplaceApply);
 
 /**
  * @swagger
  * /marketplace/sources:
  *   get:
- *     summary: Get the admin-configured marketplace source URLs (+ the built-in default)
+ *     summary: Get the admin-configured plugin marketplace source URLs (+ the built-in default)
+ *     description: Independent from the theme source list. usingDefault is true only when nothing has ever been configured, in which case the resolver falls back to the legacy single-source option, then to the repo-local dist when it carries a plugin index, and finally to the built-in default. An explicitly saved empty list is a configuration, not a default.
  *     tags: [Plugins]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: The configured sources, the built-in default and whether the default is in use
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 configured:
+ *                   type: array
+ *                   items:
+ *                     type: string
+ *                 default:
+ *                   type: string
+ *                 usingDefault:
+ *                   type: boolean
+ *       401:
+ *         description: Not logged in (rest_not_logged_in)
+ *       403:
+ *         description: Not an administrator
  *   put:
- *     summary: Replace the marketplace source URLs (admin). Each must be https (or http://localhost).
+ *     summary: Replace the plugin marketplace source URLs (admin)
+ *     description: Each entry must be https, or http on localhost outside production. A local directory is deliberately not settable here - that would point the server's catalog reader at an arbitrary path. Blank entries and duplicates are dropped and the list is truncated to the source ceiling. An explicitly saved empty list means no sources at all; send reset true instead to forget the list and go back to the fallback chain. Either way the merged catalog cache is dropped so the next browse re-reads.
  *     tags: [Plugins]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               sources:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *               reset:
+ *                 type: boolean
+ *                 description: When true the configured list is deleted and the fallback chain applies again.
+ *     responses:
+ *       200:
+ *         description: The configured sources, the built-in default and whether the default is in use
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 configured:
+ *                   type: array
+ *                   items:
+ *                     type: string
+ *                 default:
+ *                   type: string
+ *                 usingDefault:
+ *                   type: boolean
+ *       400:
+ *         description: sources is not an array, or one of the URLs is not an acceptable remote
+ *       401:
+ *         description: Not logged in (rest_not_logged_in)
+ *       403:
+ *         description: Not an administrator
  */
 router.get('/sources', authenticate, isAdmin, asyncHandler(async (_req: Request, res: Response) => {
     const configured = await readConfiguredSources();
@@ -495,6 +793,78 @@ async function resolveThemeSources(): Promise<{ url: string; isLocal: boolean }[
     return [{ url: DEFAULT_REMOTE, isLocal: false }];
 }
 
+/**
+ * @swagger
+ * /marketplace/themes/sources:
+ *   get:
+ *     summary: Get the admin-configured theme marketplace source URLs (+ the built-in default)
+ *     description: Independent from the plugin source list. When nothing is configured the resolver falls back to the repo-local dist if it carries a theme index, and then to the built-in default.
+ *     tags: [Themes]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: The configured sources, the built-in default and whether the default is in use
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 configured:
+ *                   type: array
+ *                   items:
+ *                     type: string
+ *                 default:
+ *                   type: string
+ *                 usingDefault:
+ *                   type: boolean
+ *       401:
+ *         description: Not logged in (rest_not_logged_in)
+ *       403:
+ *         description: Not an administrator
+ *   put:
+ *     summary: Replace the theme marketplace source URLs (admin)
+ *     description: Each entry must be https, or http on localhost. Duplicates are dropped and the list is truncated to the source ceiling. An explicitly saved empty list disables the remote theme marketplace; send reset true instead to forget the list and go back to the fallback chain.
+ *     tags: [Themes]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               sources:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *               reset:
+ *                 type: boolean
+ *                 description: When true the configured list is deleted and the fallback chain applies again.
+ *     responses:
+ *       200:
+ *         description: The configured sources, the built-in default and whether the default is in use
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 configured:
+ *                   type: array
+ *                   items:
+ *                     type: string
+ *                 default:
+ *                   type: string
+ *                 usingDefault:
+ *                   type: boolean
+ *       401:
+ *         description: Not logged in (rest_not_logged_in)
+ *       403:
+ *         description: Not an administrator
+ *       400:
+ *         description: sources is not an array, or one of the URLs is not an acceptable remote
+ */
 router.get('/themes/sources', authenticate, isAdmin, asyncHandler(async (_req: Request, res: Response) => {
     const configured = await readConfiguredThemeSources();
     res.json({ configured: configured || [], default: DEFAULT_REMOTE, usingDefault: configured === null });
@@ -560,7 +930,79 @@ async function getThemesCatalog(refresh = false): Promise<{ merged: any[]; sourc
  * /marketplace/themes/catalog:
  *   get:
  *     summary: Browse the theme marketplace catalog (annotated with installed/active state)
+ *     description: The theme index rides its own source list, so it can point at a different origin than the plugin catalog. Sources are merged and deduplicated by entry id with earlier sources winning, and a source that cannot be read is reported inside sources with ok false rather than failing the browse. Installed state is read from the themes directory on disk, and active state from the current theme, both best-effort - an unreadable theme.json leaves installedVersion null rather than failing the request. The merge is cached for five minutes, keyed so that rebuilding a local dist invalidates it; refresh=1 bypasses the cache.
  *     tags: [Themes]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: refresh
+ *         required: false
+ *         schema:
+ *           type: string
+ *           enum: ['1']
+ *         description: Send 1 to re-read every source instead of serving the cached merge. It is a scalar - repeating it is refused with 400, never resolved to one of the values.
+ *     responses:
+ *       200:
+ *         description: The merged theme catalog, annotated with this install's state
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 source:
+ *                   type: string
+ *                   description: The first source's URL, kept for backwards compatibility with clients written before the list existed.
+ *                 isLocal:
+ *                   type: boolean
+ *                 sources:
+ *                   type: array
+ *                   description: Per-source status. A source that failed carries ok false and its error instead of a count.
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       url:
+ *                         type: string
+ *                       isLocal:
+ *                         type: boolean
+ *                       ok:
+ *                         type: boolean
+ *                       count:
+ *                         type: integer
+ *                       added:
+ *                         type: integer
+ *                       error:
+ *                         type: string
+ *                 count:
+ *                   type: integer
+ *                 themes:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       id:
+ *                         type: string
+ *                       version:
+ *                         type: string
+ *                       source:
+ *                         type: string
+ *                       installed:
+ *                         type: boolean
+ *                       active:
+ *                         type: boolean
+ *                       installedVersion:
+ *                         type: string
+ *                         nullable: true
+ *                       updateAvailable:
+ *                         type: boolean
+ *       400:
+ *         description: A scalar query parameter arrived more than once or as a non-string (rest_invalid_param)
+ *       401:
+ *         description: Not logged in (rest_not_logged_in)
+ *       403:
+ *         description: Not an administrator
+ *       502:
+ *         description: The theme catalog could not be read at all, so there is nothing to annotate
  */
 router.get('/themes/catalog', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     // Same placement as the plugin catalog above, for the same reason.
@@ -600,7 +1042,49 @@ router.get('/themes/catalog', authenticate, isAdmin, asyncHandler(async (req: Re
  * /marketplace/themes/install:
  *   post:
  *     summary: Download a catalog theme and install it through the hardened theme pipeline
+ *     description: Same contract as the plugin installer, for the same reason - a theme's functions.js runs in-process. The bytes are fetched from the source the entry was listed under, or read from a local dist directory after the resolved path is proven to stay inside it, and then sha256-verified against the catalog entry. A remote entry with no sha256 is refused rather than installed unverified. The verified zip goes to the theme install pipeline, which refuses an invalid slug, a zip whose entries escape the slug directory, a path traversal or Zip Slip attempt, and an archive with no theme.json. Installing over an existing theme is refused - delete it first.
  *     tags: [Themes]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [id]
+ *             properties:
+ *               id:
+ *                 type: string
+ *                 description: The catalog entry id, which is also the slug the theme is installed under.
+ *     responses:
+ *       200:
+ *         description: The theme was installed. The status is the one the theme pipeline returns, so a refusal inside the pipeline surfaces with its own status and body.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
+ *                 slug:
+ *                   type: string
+ *       400:
+ *         description: Missing id, a catalog entry naming an unsafe file or a path outside the local marketplace directory, a package over the size ceiling, a remote entry with no sha256, a sha256 mismatch, or a package the theme pipeline rejects - an invalid slug, entries outside the slug directory, a traversal or Zip Slip attempt, or no theme.json
+ *       401:
+ *         description: Not logged in (rest_not_logged_in)
+ *       403:
+ *         description: Not an administrator
+ *       404:
+ *         description: No such id in the theme catalog, or the local package file is missing
+ *       409:
+ *         description: A theme with that slug is already installed - delete it before reinstalling
+ *       500:
+ *         description: Unpacking the verified archive failed
+ *       502:
+ *         description: The theme catalog could not be read, or the package could not be downloaded
  */
 router.post('/themes/install', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     const id = String((req.body || {}).id || '').trim();
@@ -667,3 +1151,7 @@ router.post('/themes/install', authenticate, isAdmin, asyncHandler(async (req: R
 }));
 
 module.exports = router;
+// Exported for the catalog gate's tests (same pattern as routes/plugins.ts): which sources the review
+// badge is a statement about is a security decision, and it deserves its own negative controls without
+// booting a database to reach it.
+module.exports.isOfficialSource = isOfficialSource;

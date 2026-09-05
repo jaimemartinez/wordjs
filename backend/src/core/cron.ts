@@ -408,6 +408,10 @@ async function rescheduleBackup(frequency?: any) {
  * Now handles async nature
  */
 async function initDefaultCronEvents() {
+    // Required here rather than at module load: core/audit reaches the database, and this module is
+    // imported by the plugin API surface long before the DB is up.
+    const { AUDIT_PRUNE_HOOK } = require('./audit');
+
     try {
         // Schedule version check (daily)
         if (!(await nextScheduled('wordjs_version_check'))) {
@@ -445,6 +449,15 @@ async function initDefaultCronEvents() {
         // fiable en multinodo: un contador cooperativo lo deja mentiroso justo el proceso que muere.
         if (!(await nextScheduled('wordjs_collab_sweep'))) {
             await scheduleEvent(Date.now(), 'hourly', 'wordjs_collab_sweep');
+        }
+
+        // Audit-log retention (daily). The audit table is append-only for the application and, until
+        // this event existed, nothing ever removed a row from it — while the login routes now write to
+        // it on every attempt, successful or not. The prune itself lives in core/audit (next to the
+        // table's only other writer); this is where it gets a clock. runCron already holds a
+        // distributed leader lease, so on N nodes the prune runs on exactly one of them per tick.
+        if (!(await nextScheduled(AUDIT_PRUNE_HOOK))) {
+            await scheduleEvent(Date.now(), 'daily', AUDIT_PRUNE_HOOK);
         }
     } catch (e) {
         console.error('Failed to init cron events:', e);
@@ -490,6 +503,12 @@ async function initDefaultCronEvents() {
         } catch (e) {
             console.error('Barrido de salas colaborativas fallido:', e);
         }
+    });
+
+    // 2d. Audit-log retention. The handler never throws (see core/audit.runAuditRetention) — a prune
+    // that fails must not take down the tick that also runs the scheduled backup.
+    addAction(AUDIT_PRUNE_HOOK, async () => {
+        await require('./audit').runAuditRetention();
     });
 
     // 3. React to Option Updates

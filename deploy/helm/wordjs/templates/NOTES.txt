@@ -1,0 +1,52 @@
+WordJS is starting as a single monolith pod.
+
+1. Watch it come up. The pod stays NOT READY until the site is installed -- /readyz is 503 while an
+   instance is uninstalled, which is correct and expected on a first install:
+
+     kubectl --namespace {{ .Release.Namespace }} rollout status deployment/{{ include "wordjs.fullname" . }} --watch
+     kubectl --namespace {{ .Release.Namespace }} logs -f deployment/{{ include "wordjs.fullname" . }}
+
+{{- if not (or .Values.installToken.value .Values.installToken.existingSecret) }}
+
+2. Read the one-time install token. It is NOT in those logs: the boot banner prints the token only when
+   stdout is a TTY, and a pod's stdout is a log stream, so the banner shows /install without the
+   #token=... fragment and names the file instead. Read it from the data volume:
+
+     kubectl --namespace {{ .Release.Namespace }} exec deployment/{{ include "wordjs.fullname" . }} -- cat /app/backend/data/install-token
+
+   (mode 0600, removed once the site is installed.) To have it printed in the logs anyway, add
+   WORDJS_PRINT_INSTALL_TOKEN=1 via extraEnv. To supply your own instead, reinstall with
+   --set installToken.value=$(openssl rand -hex 24).
+{{- else }}
+
+2. Your install token was taken from {{ if .Values.installToken.existingSecret }}the existing secret "{{ .Values.installToken.existingSecret }}"{{ else }}the secret "{{ include "wordjs.fullname" . }}-install-token"{{ end }}. Read it back with:
+
+     kubectl --namespace {{ .Release.Namespace }} get secret {{ if .Values.installToken.existingSecret }}{{ .Values.installToken.existingSecret }} -o jsonpath='{.data.{{ .Values.installToken.existingSecretKey }}}'{{ else }}{{ include "wordjs.fullname" . }}-install-token -o jsonpath='{.data.install-token}'{{ end }} | base64 -d
+{{- end }}
+
+3. Open the setup wizard. Readiness gates the Service, so port-forward straight to the pod:
+
+     kubectl --namespace {{ .Release.Namespace }} port-forward deployment/{{ include "wordjs.fullname" . }} 3000:3000
+     # then browse http://localhost:3000/install
+
+{{- $url := include "wordjs.siteUrl" . }}
+{{- if $url }}
+
+   This release is configured for the public origin {{ $url }} -- browse there once the pod is READY,
+   and RUN THE WIZARD THERE: the config's siteUrl, which the CSRF/CORS checks compare against, is taken
+   from the install request itself, so requests arriving on any other origin will be rejected.
+   (WORDJS_SITE_URL is exported to the pod, but the entrypoint only writes it into the config under
+   WORDJS_PRESEED_CONFIG=1, which this chart does not set.)
+{{- else }}
+
+   NOTE: neither siteUrl nor an ingress host is set, so nothing pins the public origin -- whatever URL
+   you run the wizard from becomes the config's siteUrl (http://localhost:3000 for the port-forward
+   above). Fine for a test. Before exposing this release, set `siteUrl` AND install through that URL,
+   or admin requests from the real origin will fail the CSRF origin check.
+{{- end }}
+
+4. Finish the wizard: pick a database (SQLite needs nothing) and create the administrator. The pod
+   turns READY the moment the install completes and the database answers.
+
+Limits of this chart: monolith only, replicaCount pinned to 1, plain HTTP inside the pod (terminate TLS
+at your ingress), and no bundled PostgreSQL/Redis. See deploy/helm/wordjs/README.md.

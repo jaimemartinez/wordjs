@@ -22,6 +22,88 @@ function secretsMatch(a: any, b: any) {
     return crypto.timingSafeEqual(ah, bh);
 }
 
+/**
+ * @swagger
+ * tags:
+ *   name: Internal
+ *   description: >-
+ *     Control-plane hooks the gateway calls on the backend. NOT for public API clients — they are not
+ *     part of the versioned REST surface, they are authenticated by a shared secret rather than by a user
+ *     credential, and their contract may change without notice.
+ */
+
+/**
+ * @swagger
+ * /gateway-update:
+ *   servers:
+ *     - url: /api/internal
+ *       description: >-
+ *         Internal control plane. This router is mounted OUTSIDE the versioned /api/v1 base, so the full
+ *         path is /api/internal/gateway-update.
+ *   post:
+ *     summary: Tell the backend which port the gateway now listens on
+ *     description: >-
+ *       INTERNAL — called by the gateway, not by public clients. Authenticated by the shared gateway
+ *       secret in the `x-gateway-secret` header, compared in constant time; a backend with no secret
+ *       configured refuses everything rather than matching an empty value. A genuine port CHANGE is
+ *       persisted and the backend then exits so its supervisor respawns it with the new configuration —
+ *       so an identical or invalid update is deliberately rejected or acknowledged as a no-op instead,
+ *       to keep a flood of them from forcing repeated restarts. Not subject to the API-prefix CSRF
+ *       middleware, because it is mounted outside that prefix.
+ *     tags: [Internal]
+ *     security: []
+ *     parameters:
+ *       - in: header
+ *         name: x-gateway-secret
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: The shared gateway secret from the instance configuration.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [gatewayPort]
+ *             properties:
+ *               gatewayPort:
+ *                 type: integer
+ *                 minimum: 1
+ *                 maximum: 65535
+ *     responses:
+ *       200:
+ *         description: >-
+ *           Either the configuration already matched (a no-op acknowledgement) or it was rewritten and
+ *           the backend is about to restart. The message says which.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
+ *       400:
+ *         description: gatewayPort missing, or not an integer in 1-65535.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/PlainError'
+ *       401:
+ *         description: The gateway secret is missing, wrong, or not configured on this backend.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/PlainError'
+ *       500:
+ *         description: The configuration could not be written.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/PlainError'
+ */
 // POST /api/internal/gateway-update
 router.post('/gateway-update', (req: Request, res: Response) => {
     // SECURITY: Validate the gateway secret in constant time (no early-out timing oracle), and refuse

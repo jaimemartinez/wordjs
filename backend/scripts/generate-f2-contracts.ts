@@ -175,7 +175,11 @@ function commonPrefix(schemas: Schema[]): string[] {
         '    type: string;',
         '    date: string;',
         '    dateGmt?: string;',
-        '    author: { id: number; displayName: string };',
+        // `slug` is user_nicename, falling back to user_login — the identity the author feed resolves
+        // and the one `GET /posts?author=` accepts, so a public page can link an author archive and
+        // list it with the SAME value the record handed it.
+        '    author: { id: number; displayName: string; slug: string };',
+        '    authorId?: number;',
         '    commentStatus: string;',
         '    meta?: Record<string, unknown>;',
         '    featuredMedia?: { id: number; url: string; title?: string };',

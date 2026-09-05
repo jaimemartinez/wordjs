@@ -51,6 +51,77 @@ function normalizeEmail(email: any): string {
     return normalizeAddress(email);
 }
 
+/**
+ * THE PUBLIC AUTHOR SLUG.
+ *
+ * `user_nicename` is the identity every public author surface is addressed by — the byline a post
+ * serialises (models/Post.ts getAuthorsForIds), `GET /posts?author=<slug>`, the author feed and its
+ * `/author/<slug>` link. The column has existed since the base schema as NOT NULL DEFAULT '' and
+ * nothing ever wrote it, so every one of those surfaces fell back to `user_login` — publishing the
+ * value the login form takes, for every account that has ever posted. The readers no longer fall
+ * back; this is the writer that gives them something to read.
+ *
+ * The source is the DISPLAY NAME, slugified by core/formatting.sanitizeTitle — the same producer
+ * behind every other slug in the product (post_name, term slugs), so "what does this text slugify
+ * to" has exactly one answer here. An account with no display name of its own stores the login as its
+ * display name (below), so its slug is the slugified login: the same value WordPress derives, and now
+ * a real, separate column an admin can change instead of an invisible fallback nobody could.
+ *
+ * Returns '' when the name slugifies to nothing (an entirely non-latin display name). Inventing a
+ * slug would be worse than emitting none: Post.getAuthorsForIds then falls back to the user id, which
+ * is an identity `?author=` and `/author/<id>` already resolve.
+ *
+ * NOTE the same rule is applied by schema migration 0015 to accounts that predate it. The shared half
+ * is sanitizeTitle itself; the migration cannot call this function (requiring a model from a
+ * migration would re-enter config/database while it is still initializing), which is why the two are
+ * written against the same core helper rather than one calling the other. `NUMERIC_NICENAME_PREFIX`
+ * below is the OTHER half they must keep in step, and it is duplicated there for the same reason.
+ */
+/**
+ * AN ALL-DIGIT SLUG IS A USER ID TO EVERY READER, SO IT IS NEVER WRITTEN AS ONE.
+ *
+ * Author identity is split by SHAPE at every consumer — `Post.identityFilter` and `_authorCondition`,
+ * routes/posts.ts parseIdentityList, the `/author/<segment>/feed.xml` handler in routes/seo.ts, and
+ * the frontend author page — and in all of them all-digits means "a users.id", never a nicename. That
+ * grammar is deliberate and it predates this column; what did not exist before is a WRITER that can
+ * put an all-digit value INTO the column. A display name of "1984", "2024" or "007" slugifies to
+ * itself, so the slug the byline publishes would resolve to a DIFFERENT account (or to none), and
+ * routes/seo.ts would print a canonical `/author/1984` its own resolver cannot read back.
+ *
+ * So a base that is all digits is prefixed. Prefix rather than suffix because `user-1984` says what
+ * it is, and the dedupe suffix below is itself numeric (`-2`, `-3`) — building on a seed that already
+ * contains a `-` keeps every disambiguated variant non-numeric too. `''` is not an option here: the id
+ * fallback only fires for an EMPTY column, and discarding a name the admin chose merely to avoid a
+ * shape is a worse trade than one visible prefix.
+ *
+ * TWIN: core/schema-migrations.ts migration 0015 applies the identical rule to pre-existing rows and
+ * MUST produce the same value for the same display name. Change both or neither.
+ */
+const NUMERIC_NICENAME_PREFIX = 'user-';
+
+async function generateUniqueNicename(source: any): Promise<string> {
+    // sanitizeTitle already lower-cases, ASCII-folds and bounds to MAX_SLUG_LENGTH; every
+    // disambiguated variant is built from that bounded base, never from the caller's raw string.
+    const base = sanitizeTitle(String(source == null ? '' : source));
+    if (!base) return '';
+
+    // See NUMERIC_NICENAME_PREFIX. Everything below is built from `seed`, so no variant of an
+    // all-digit display name can reach the column in id shape.
+    const seed = /^[0-9]+$/.test(base) ? `${NUMERIC_NICENAME_PREFIX}${base}` : base;
+
+    let candidate = seed;
+    let counter = 1;
+    // Best-effort de-duplication, like Post.generateUniqueSlug: there is no unique index on this
+    // column (it is a display identity, not a key), so a concurrent signup can still land the same
+    // value. That costs two authors one shared archive URL, never a failed registration.
+    while (true) {
+        const existing = await dbAsync.get('SELECT id FROM users WHERE user_nicename = ?', [candidate]);
+        if (!existing) return candidate;
+        counter++;
+        candidate = `${seed}-${counter}`;
+    }
+}
+
 class User {
     id?: number;
     userLogin?: string;
@@ -150,6 +221,13 @@ class User {
         // Hash password
         const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS);
 
+        // The stored display name, resolved ONCE so the public slug below is derived from the very
+        // value that lands in the column rather than from a second reading of the same rule.
+        const display = displayName || username;
+        // THE PUBLIC AUTHOR SLUG — see generateUniqueNicename. An explicit `nicename` wins (the WXR
+        // importer has one in hand, and an admin form could offer it); otherwise it is derived.
+        const nicename = await generateUniqueNicename(data.nicename || display);
+
         // Insert User. The findByLogin/findByEmail checks above leave a TOCTOU window — two concurrent
         // signups can both pass the check and reach here. The unique indexes (idx_users_login /
         // idx_users_email) make the DB reject the loser; translate that into the SAME "already exists"
@@ -157,9 +235,9 @@ class User {
         let result;
         try {
             result = await dbAsync.run(`
-                INSERT INTO users (user_login, user_pass, user_email, display_name, user_registered)
-                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP) RETURNING id
-            `, [username, hashedPassword, normalizedEmail, displayName || username]);
+                INSERT INTO users (user_login, user_pass, user_email, display_name, user_nicename, user_registered)
+                VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP) RETURNING id
+            `, [username, hashedPassword, normalizedEmail, display, nicename]);
         } catch (e: any) {
             if (isUniqueViolation(e)) {
                 throw new Error('Username or email already exists', { cause: e });

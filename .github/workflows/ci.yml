@@ -3,6 +3,18 @@ name: CI
 on:
   push:
   pull_request:
+  # Manual dispatch exists for the performance budgets in backend/f0-baseline.json, which were calibrated
+  # on a single Windows laptop and whose Linux numbers no log has ever printed. A plain dispatch runs the
+  # `perf-budgets` job below in ENFORCING mode (push and pull_request only measure — see that job for why);
+  # `calibrate: true` runs it in calibration mode instead, eight rounds on this runner, and uploads a
+  # paste-ready `performanceBudget` block measured on Linux.
+  workflow_dispatch:
+    inputs:
+      calibrate:
+        description: 'Re-calibrate the F6 performance budget on this Linux runner (8 rounds, emits perf-calibration.json). Leave false for a normal enforcing run.'
+        type: boolean
+        required: false
+        default: false
 
 # Least privilege for the GITHUB_TOKEN handed to every job below. Without this block the token keeps
 # the repository's DEFAULT permissions, which on many repos still includes write access to contents,
@@ -52,7 +64,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Every required gate file is present and tracked
         # The manifest is deliberately EXPLICIT. A derived check cannot work here: in a CI checkout an
@@ -339,7 +351,16 @@ jobs:
     # critical path. On a warm cache each remaining step is well under a minute; the job needs ~15 min on
     # a cold-cache day and cannot warm the cache until it completes once. 22 keeps margin over that and
     # still catches a real hang; a warm run lands around 10.
-    timeout-minutes: 22
+    #
+    # RAISED 22 -> 32 when the coverage ratchet was added as the last step. That step RE-RUNS the whole
+    # unit suite under c8, so it costs roughly what the Test step costs plus instrumentation overhead —
+    # the measured Test step is 310s, and c8 adds the per-process profile write plus a merge over one
+    # profile per test file (~220 of them). That is about +8 minutes on the critical path, which does not
+    # fit under 22 on the cold-cache day this budget was sized for. The alternative — a separate job, so
+    # coverage runs in parallel instead of extending this one — was rejected on purpose: the ratchet has
+    # to gate the SAME suite this job certifies, and a second job would install and boot everything again
+    # to measure the identical thing.
+    timeout-minutes: 32
     services:
       postgres:
         image: postgres:16
@@ -369,8 +390,8 @@ jobs:
         options: >-
           --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot -ppassword" --health-interval 10s --health-timeout 5s --health-retries 10
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: 'npm'
@@ -472,6 +493,52 @@ jobs:
           node backend/scripts/build-marketplace.js
           node backend/scripts/verify-marketplace.js --rebuild
 
+      - name: Coverage ratchet (c8 over the same suite)
+        # THE NUMBER THAT DID NOT EXIST. ~4,500 backend assertions and no coverage instrumentation
+        # anywhere in the repository — no c8, no nyc, no istanbul, no threshold. "Well tested" was a
+        # claim nobody could check, and the failure mode it hides is specific: a refactor deletes the
+        # last test of a module and every gate stays green, because a suite can only report on what it
+        # runs. `--all` is what closes that: a source file no test ever loads is counted as UNCOVERED
+        # rather than being absent from the denominator.
+        #
+        # THIS IS A RATCHET, NOT A TARGET. `--lines` is set two points under the number measured when
+        # the script was introduced, so it fails a run that DROPS coverage and says nothing about any
+        # percentage being good. Raise the floor when the measured number rises; the one move that is
+        # never correct is lowering it to turn a red run green.
+        #
+        # It runs LAST on purpose. The suite is executed a second time here, under instrumentation, so
+        # every pre-existing gate above reports first — a coverage-tooling problem can never delay or
+        # mask the real signal, and on a run that is already red this step simply never spends the time.
+        #
+        # `WORDJS_CI_DB=1` is set for the same reason as on the Test step, and it also keeps the RATCHET
+        # honest: without it the postgres/mysql conformance blocks skip gracefully when a service
+        # container is unreachable, and a skipped block is fewer covered lines — so a container hiccup
+        # would read as a coverage DROP and fail this gate for a reason that has nothing to do with the
+        # tests. Hard-failing on an unreachable engine turns that into the accurate error instead.
+        #
+        # c8 collects from the SPAWNED processes, which is the part that had to be verified rather than
+        # assumed: `npm test` goes through scripts/test-with-flake-retry.mjs, which spawns `node --test`,
+        # which spawns one child per test file — coverage two levels down. c8 works by exporting
+        # NODE_V8_COVERAGE, that variable is inherited by both spawns, and `--test-force-exit` does NOT
+        # truncate the profile (V8 flushes it on the process-exit path too). Measured on this repo: three
+        # test files alone reported 52% of the lines they load, so the collection is real. The full
+        # suite then measured 82.65% of lines (72,047/87,168) in ONE pass with no flake retry, which is
+        # where the floor of 80 comes from — and `--check-coverage` was proved to go red (at --lines 99)
+        # and green (at --lines 5) before it was wired in here.
+        working-directory: backend
+        env:
+          WORDJS_CI_DB: '1'
+        run: npm run test:coverage:check
+
+      - name: Upload backend coverage (lcov)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: backend-coverage-lcov
+          path: backend/coverage/lcov.info
+          retention-days: 7
+          if-no-files-found: warn
+
   multinode:
     # Multi-node coherence leg. Boots TWO backend cores as SEPARATE OS PROCESSES against ONE shared
     # Postgres 16 + Redis 7 and asserts the property that only holds across nodes: an option/role change
@@ -507,8 +574,8 @@ jobs:
         options: >-
           --health-cmd "redis-cli ping" --health-interval 10s --health-timeout 5s --health-retries 5
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: 'npm'
@@ -535,8 +602,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: 'npm'
@@ -564,8 +631,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: 'npm'
@@ -602,10 +669,15 @@ jobs:
   frontend:
     name: Frontend (lint + build)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # RAISED 15 -> 20 when the coverage ratchet was added as the last step: it re-runs the vitest suite
+    # under the v8 provider and additionally transforms every file `coverage.include` matches — including
+    # the ones no test loads, which is the whole point of the number. The install here is already the
+    # step this budget was sized around (two workspaces, run in parallel precisely because their sum blew
+    # the old ceiling on a cold cache); +5 keeps the same margin over the new critical path.
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: 'npm'
@@ -677,6 +749,33 @@ jobs:
       - name: Build
         working-directory: frontend
         run: npm run build
+      - name: Coverage ratchet (vitest v8)
+        # Sibling of the Backend job's coverage step, and the same rule: `coverage.thresholds.lines` in
+        # frontend/vitest.config.mts sits two points under the number measured when it was introduced,
+        # so this fails a run that LOSES coverage and asserts nothing about the percentage being good.
+        # `coverage.include` there is the universe, not a filter over what the tests happened to load —
+        # Vitest 4 reports every file it matches — so a component with no test at all counts as
+        # uncovered rather than being absent from the denominator.
+        #
+        # Last in the job, after Build, for the same reason as the backend step: this re-runs the suite
+        # under instrumentation, so every existing gate reports first and a coverage-tooling problem can
+        # never mask the real signal.
+        #
+        # The script raises testTimeout to 30s for the instrumented run ONLY (the `Test` step above keeps
+        # Vitest's 5s default, so a test that genuinely became slow still fails there). One suite walks
+        # the frontend source tree from inside a test — 1.6s uninstrumented, over 5s under v8 coverage
+        # because every module the walk touches gets transformed and instrumented on the way. Without
+        # that, this gate would go red on instrumentation cost and read as a flake.
+        working-directory: frontend
+        run: npm run test:coverage
+      - name: Upload frontend coverage (lcov)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: frontend-coverage-lcov
+          path: frontend/coverage/lcov.info
+          retention-days: 7
+          if-no-files-found: warn
 
   verso-e2e:
     # F6 — programa E2E del editor Verso (Playwright chromium headless) contra un
@@ -703,8 +802,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: 'npm'
@@ -746,7 +845,7 @@ jobs:
         run: npx playwright test
       - name: Upload traces on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: verso-e2e-traces
           path: frontend/e2e/.results/
@@ -774,8 +873,8 @@ jobs:
     # hide a hang — every step here completes.
     timeout-minutes: 22
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: 'npm'
@@ -802,3 +901,386 @@ jobs:
           echo "app root: $app"
           ( cd "$app" && npm run release:install ) || { echo "::error::release:install failed in the extracted bundle"; exit 1; }
           bash "$GITHUB_WORKSPACE/scripts/smoke-deploy.sh" "$app"
+
+  docker-image:
+    # THE CONTAINER GAP. The Dockerfile and compose files have been tracked for months, but the only
+    # thing CI ever asked of them was `docker compose config -q` — a YAML parse. The image was never
+    # built and never booted here, so every property that only appears at runtime went unverified: that
+    # the multi-stage build actually produces a runnable tree, that the non-root user can write the data
+    # it needs, that the entrypoint leaves the instance INSTALLABLE, and that a fresh container can be
+    # taken from boot to a working site without a human.
+    #
+    # That last one was broken. The entrypoint unconditionally wrote a wordjs-config.json, and
+    # `configManager.isInstalled()` keys off `installedAt || dbDriver` — so every container came up
+    # already "installed", `POST /api/v1/setup/install` answered `400 Already installed`, and no
+    # administrator could ever be created (the CMS bootstrap deliberately seeds none). The image booted
+    # and served pages, which is exactly why a parse-only gate never noticed.
+    #
+    # So this job drives the container the way an operator does: build, boot, read the health endpoints,
+    # complete the install headlessly with the install token, and check the site is really installed and
+    # really serving. It is the container-shaped sibling of `bundle-boot` (which does this for the
+    # compiled ZIP) and it uses the SAME install request as scripts/smoke-deploy.sh.
+    #
+    # NOT in any required-check list — that is a repository setting and out of scope for this file. The
+    # job name below is stable precisely so it can be added to one.
+    name: Docker image (build + boot + install)
+    runs-on: ubuntu-latest
+    # The image performs the whole product build (npm run install:all + bundle-release: next build, tsc,
+    # plugin bundles) AND a second, runtime-only dependency install (release:install --omit=dev) — the
+    # same two installs plus compile that `bundle-boot` measures at ~22 minutes on a cold npm cache —
+    # then boots the container and runs the install sequence. Budget it as ALWAYS COLD: the layer cache
+    # configured below deliberately does not export the builder stage (see the note on `cache-to`), so
+    # there is no warm path to size against. 35 covers a full build. This is an ESTIMATE derived from
+    # bundle-boot's measured profile, not an observed number for this job; tighten it against real runs
+    # rather than leaving it generous forever.
+    timeout-minutes: 35
+    #
+    # IT RUNS ON EVERY PUSH AND PR, INCLUDING DOCS-ONLY ONES, AND THAT IS A CHOICE — recorded here so it
+    # is visible rather than accidental. `paths`/`paths-ignore` are WORKFLOW-level filters in GitHub
+    # Actions, not job-level: adding one would gate all eleven jobs in this file, and a required check that
+    # is skipped rather than green blocks a PR indefinitely, which is a far worse failure than a slow one.
+    # A job-level `if:` would need a changed-files gate job in front of every consumer. Neither is worth it
+    # while this job is not required and the runner it uses is not on anyone's critical path. If the cost
+    # does become real, the shape to reach for is one small gate job publishing a `changed` output that
+    # this job's `if:` reads — not a workflow-level filter.
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Buildx
+        # Pinned to an immutable commit SHA (supply-chain: a moving tag can be repointed to malicious
+        # code) — the same policy the anchore/softprops actions follow elsewhere in this repository.
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - name: Deployment templates parse
+        # Both compose files, including the one-click template under deploy/. Cheap, and it fails before
+        # a twenty-minute image build if an anchor or a service graph is malformed.
+        run: |
+          set -euo pipefail
+          docker compose -f docker-compose.yml config -q
+          docker compose -f deploy/compose/docker-compose.yml config -q
+          echo "both compose files render"
+
+      - name: Helm chart lints and renders
+        # Helm ships in the GitHub-hosted runner image. Deliberately NOT guarded with a
+        # "command -v helm || exit 0": a gate that skips itself when its tool disappears is the
+        # green-while-broken pattern this workflow exists to prevent. If the runner image ever drops
+        # Helm this turns red and somebody decides what to do about it.
+        run: |
+          set -euo pipefail
+          helm version
+          helm lint deploy/helm/wordjs --set image.repository=example/wordjs
+          helm template wordjs deploy/helm/wordjs \
+            --set image.repository=example/wordjs \
+            --set image.tag=ci \
+            --set ingress.enabled=true \
+            --set siteUrl=https://cms.example.test \
+            --set installToken.value=0123456789abcdef0123 > /tmp/wordjs-chart.yaml
+          # A render that merely does not crash proves very little. Assert the things the chart exists to
+          # get right, so a silent regression in a template is caught here rather than in a cluster.
+          for want in \
+            'path: /readyz' \
+            'path: /healthz' \
+            'type: Recreate' \
+            'fsGroup: 1001' \
+            'kind: PersistentVolumeClaim' \
+            'kind: Ingress' \
+            'kind: Secret' \
+            'name: wordjs-install-token' \
+            'helm.sh/resource-policy: keep' \
+            'value: "https://cms.example.test"'; do
+            grep -qF "$want" /tmp/wordjs-chart.yaml \
+              || { echo "::error::the rendered chart is missing: $want"; exit 1; }
+          done
+          # THE SECRET AND THE DEPLOYMENT MUST AGREE, and asserting the two strings above only proves each
+          # half exists. `installToken.value` is passed precisely to exercise this path: deployment.yaml
+          # emits a `secretKeyRef` at `<fullname>-install-token`, and secret.yaml emits that Secret under
+          # its own `{{- if }}`. Two templates whose guards must stay in step is the coupling worth
+          # gating — if secret.yaml is deleted, renamed, or its guard drifts, `helm template` still
+          # succeeds and every install lands a pod in CreateContainerConfigError. So read the name the
+          # Deployment actually asks for and require a Secret of that name in the SAME render.
+          ref="$(awk '/secretKeyRef:/{f=1; next} f&&/name:/{print $2; exit}' /tmp/wordjs-chart.yaml)"
+          [ -n "$ref" ] || { echo "::error::the Deployment renders no secretKeyRef for the install token, though installToken.value was set"; exit 1; }
+          awk -v want="$ref" '
+            /^kind: Secret$/ { insecret = 1; next }
+            /^kind: / { insecret = 0 }
+            insecret && $1 == "name:" && $2 == want { found = 1 }
+            END { exit(found ? 0 : 1) }
+          ' /tmp/wordjs-chart.yaml \
+            || { echo "::error::the Deployment references Secret '$ref' but no Secret of that name is in the render — secret.yaml and deployment.yaml have drifted apart"; exit 1; }
+          echo "install-token Secret '$ref' is rendered by the same values that make the Deployment ask for it"
+          # THE DEFAULT TAG. Every render above passes `--set image.tag=ci`, so none of them can see the
+          # path the documentation actually tells an operator to take: `helm install ... --set
+          # image.repository=<registry>/wordjs` with NO tag, which falls through to `.Chart.AppVersion`.
+          # A stale appVersion there is an ImagePullBackOff on the one install path we publish, and it is
+          # invisible to a gate that always overrides the tag. Assert it against the product version.
+          version="$(node -p "require('./package.json').version")"
+          helm template wordjs deploy/helm/wordjs \
+            --set image.repository=example/wordjs > /tmp/wordjs-chart-defaulttag.yaml
+          grep -qF "image: \"example/wordjs:${version}\"" /tmp/wordjs-chart-defaulttag.yaml || {
+            echo "::error::with no --set image.tag the chart renders $(grep -m1 'image: "example/wordjs:' /tmp/wordjs-chart-defaulttag.yaml | tr -d ' ') but the product is ${version} — bump appVersion in deploy/helm/wordjs/Chart.yaml (and the tag in documentation/deployment.md's Kubernetes example)"
+            exit 1
+          }
+          echo "the default image tag is appVersion, and appVersion is the product version (${version})"
+          # The chart is monolith-only and says so; prove the guard rail is real rather than a comment.
+          if helm template wordjs deploy/helm/wordjs \
+               --set image.repository=example/wordjs --set replicaCount=2 >/dev/null 2>&1; then
+            echo "::error::the chart rendered with replicaCount=2 — the single-replica guard in _helpers.tpl is not enforcing"
+            exit 1
+          fi
+          echo "chart renders, and refuses to render more than one replica"
+
+      - name: Build the image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: ./Dockerfile
+          # Load into the local daemon instead of pushing: nothing is published from CI.
+          load: true
+          push: false
+          tags: wordjs:ci
+          # THE CACHE HERE DOES NOT MAKE THIS BUILD WARM, AND THAT IS DELIBERATE. `mode=min` exports only
+          # the layers of the FINAL image, and this Dockerfile is multi-stage: every expensive layer —
+          # `npm run install:all` and `npm run bundle-release`, the ~20 minutes this job's timeout is
+          # sized around — lives in the `builder` stage, which is discarded from the exported image. Those
+          # layers are therefore never written here and `cache-from` can never restore them. What the pair
+          # does buy is the small runtime stage (`npm ci --omit=dev` on an unchanged release tree); the
+          # builder is paid in full on every run.
+          #
+          # WHY NOT `mode=max`, which would export the builder and make the warm path real: the GitHub
+          # Actions cache is 10 GB PER REPOSITORY, LRU-evicted, and it is the same 10 GB every
+          # `actions/setup-node` npm cache in this workflow lives in. This image is ~2.6 GB; its full
+          # builder cache would evict those npm caches and make every OTHER job cold — the cold-cache
+          # cascade this file has already been through once, traded for a speed-up on a job that is on
+          # nobody's critical path. If that trade is ever worth making, it is `mode=max,scope=docker-image`
+          # plus a hard look at what it evicts, not a silent flip of one word.
+          cache-from: type=gha
+          cache-to: type=gha,mode=min
+
+      - name: Boot the container and install it headlessly
+        run: |
+          set -uo pipefail
+
+          BASE="http://localhost:3000"
+          # A real token, supplied out-of-band exactly as a headless deploy would. It must be >= 16 chars
+          # or the app ignores it (with a warning) and mints its own, which would make the install below
+          # fail for a confusing reason.
+          TOKEN="$(openssl rand -hex 24)"
+          echo "::add-mask::$TOKEN"
+
+          fail() {
+            echo "::error::$1"
+            echo "==== docker logs wordjs-ci (last 200 lines) ===="
+            docker logs --tail 200 wordjs-ci 2>&1 || true
+            echo "==== docker inspect .State ===="
+            docker inspect -f '{{ json .State }}' wordjs-ci 2>&1 || true
+            exit 1
+          }
+
+          code() { curl -sS -o /dev/null -w '%{http_code}' --max-time 15 -H "Origin: $BASE" "$1" 2>/dev/null; }
+          body() { curl -sS --max-time 15 -H "Origin: $BASE" "$1" 2>/dev/null; }
+
+          docker run -d --name wordjs-ci \
+            -e WORDJS_INSTALL_TOKEN="$TOKEN" \
+            -e WORDJS_SITE_URL="$BASE" \
+            -p 3000:3000 \
+            wordjs:ci \
+            || { echo "::error::docker run failed — the image did not start at all"; exit 1; }
+
+          echo "── waiting for /healthz (120s) ──"
+          ok=0
+          for i in $(seq 1 60); do
+            if [ "$(code "$BASE/healthz")" = 200 ]; then ok=1; echo "   /healthz after ~$((i * 2))s"; break; fi
+            docker inspect -f '{{ .State.Running }}' wordjs-ci 2>/dev/null | grep -q true \
+              || fail "the container exited before it ever served /healthz"
+            sleep 2
+          done
+          [ "$ok" = 1 ] || fail "the container did not serve /healthz within 120s"
+
+          health="$(body "$BASE/healthz")"
+          echo "   /healthz: $health"
+          case "$health" in
+            *'"role":"monolith"'*) ;;
+            *) fail "/healthz was not answered by the monolith: $health" ;;
+          esac
+
+          # The state a fresh container MUST be in: alive, NOT ready, NOT installed. This is the exact
+          # regression that shipped — a pre-seeded config made a fresh container report installed and the
+          # install endpoint then refused forever — so assert the negative explicitly.
+          ready_before="$(code "$BASE/readyz")"
+          [ "$ready_before" = 503 ] \
+            || fail "/readyz answered $ready_before on an UNINSTALLED container; it must be 503 so an orchestrator holds traffic — that is what the Helm readinessProbe relies on"
+          echo "   /readyz is 503 before install, as it must be"
+
+          status="$(body "$BASE/api/v1/setup/status")"
+          echo "   setup/status: $status"
+          case "$status" in
+            *'"installed":false'*) ;;
+            *) fail "a fresh container did not report an UNINSTALLED instance — the wizard is unreachable and no administrator can ever be created: $status" ;;
+          esac
+
+          [ "$(code "$BASE/install")" = 200 ] || fail "GET /install did not answer 200 on a fresh container — the wizard is unreachable"
+          echo "   /install is 200"
+
+          echo "── installing headlessly ──"
+          install_out="$(curl -sS --max-time 180 -X POST "$BASE/api/v1/setup/install" \
+            -H 'Content-Type: application/json' -H "Origin: $BASE" -H "x-install-token: $TOKEN" \
+            -d '{"siteName":"Docker Image Gate","adminUser":"ciadmin","adminEmail":"ci@example.test","adminPassword":"Docker-Image-Gate-1","dbDriver":"sqlite-native","siteUrl":"http://localhost:3000"}' 2>&1)"
+          case "$install_out" in
+            *'"success":true'*) ;;
+            *) fail "the headless install failed: $install_out" ;;
+          esac
+          echo "   installed"
+
+          status="$(body "$BASE/api/v1/setup/status")"
+          echo "   setup/status: $status"
+          case "$status" in
+            *'"installed":true'*) ;;
+            *) fail "setup/status still does not report an installed instance after a successful install: $status" ;;
+          esac
+
+          # /readyz is the deep check — installed AND booted AND the database answers. Poll: the install
+          # returns as soon as it has committed, and the boot finishes a moment later.
+          ok=0
+          for i in $(seq 1 30); do
+            if [ "$(code "$BASE/readyz")" = 200 ]; then ok=1; echo "   /readyz went ready after ~$((i * 2))s"; break; fi
+            sleep 2
+          done
+          [ "$ok" = 1 ] || fail "/readyz never reached 200 after a successful install — the container is installed but cannot serve"
+          echo "   /readyz: $(body "$BASE/readyz")"
+
+          # The home page. '/' is static + ISR, so the first hits after an install can serve the
+          # prerendered shell while the on-demand purge lands — poll for 200 rather than asserting the
+          # first response (the same lesson as smoke-deploy.sh).
+          ok=0
+          for i in $(seq 1 30); do
+            if [ "$(code "$BASE/")" = 200 ]; then ok=1; echo "   home page 200 after ~$((i * 2))s"; break; fi
+            sleep 2
+          done
+          [ "$ok" = 1 ] || fail "the home page never answered 200 on an installed container"
+
+          # The HEALTHCHECK declared in the Dockerfile must actually mark the container healthy. It
+          # probes /healthz for exactly the reason asserted above: /readyz would leave a container
+          # awaiting its wizard permanently unhealthy, and any depends_on: service_healthy dead.
+          ok=0
+          for i in $(seq 1 30); do
+            hs="$(docker inspect -f '{{ .State.Health.Status }}' wordjs-ci 2>/dev/null)"
+            if [ "$hs" = healthy ]; then ok=1; echo "   container HEALTHCHECK: healthy after ~$((i * 2))s"; break; fi
+            sleep 2
+          done
+          [ "$ok" = 1 ] || fail "the container never reported healthy — the Dockerfile HEALTHCHECK does not pass against a working site"
+
+          echo "the image builds, boots, installs headlessly and serves a real site"
+
+      - name: Stop the container
+        if: always()
+        # `-v` as well as `-f`: the image declares `VOLUME /app/backend/data` and `/app/backend/uploads`,
+        # so this container owns two ANONYMOUS volumes that `docker rm` alone leaves behind. Harmless on an
+        # ephemeral runner, but this line is also the teardown an operator copies out of the docs, and
+        # there it leaks a volume holding a jwtSecret and an install token per run.
+        run: docker rm -fv wordjs-ci 2>/dev/null || true
+
+  perf-budgets:
+    # THE BUDGET NOBODY HAS EVER SEEN THE NUMBERS OF.
+    #
+    # backend/f0-baseline.json#performanceBudget carries `measuredOn.platform: win32`. Every ratio in it
+    # was observed across eight runs on one Windows laptop, and the file is candid about the cost: the
+    # denominator is ten AUTOCOMMIT inserts while the numerators are transactions, per-statement
+    # durability costs more on that filesystem than on ext4, so the Windows denominator is inflated and a
+    # Windows-tight ceiling would flap here. The recorded margin is therefore 2.0x = 1.5x for measurement
+    # noise TIMES an allowance for never having been measured anywhere else, and `provisionalMargin` says
+    # in as many words what to do about it: "once the harness has run on the CI host, record that
+    # observation and tighten the ceilings back toward 1.5x".
+    #
+    # WHAT IS ACTUALLY MISSING — stated precisely, because the first draft of this comment got it wrong.
+    # The harness is NOT unrun on Linux: backend/src/tests/f6-performance-budget.test.ts is matched by the
+    # Backend job's own `src/tests/*.test.ts` glob, carries no CI or platform skip, and has therefore been
+    # measuring AND enforcing the committed win32 ceilings on this very runner on every push — and passing,
+    # or Backend would be red today. What has never existed is the OBSERVATION: the suite asserts and says
+    # nothing, so no log anywhere prints what Linux actually measures next to the ceiling it is judged by,
+    # and there is no multi-round mode from which a Linux budget could be minted. That gap is what this job
+    # closes, and it is the whole of what it adds.
+    #
+    # SO IT MEASURES, IT DOES NOT RE-ENFORCE. On push/pull_request the script runs in measure mode: it
+    # prints each observation beside its ceiling and uploads the raw numbers, and it does not fail the run.
+    # Two reasons, both decisive. (1) `--enforce` re-derives, on a second whole runner and a second cold
+    # `npm ci`, exactly the four assertions the Backend job already made this commit — a duplicate gate is
+    # not a second opinion. (2) The ceilings are still the Windows ones, so an enforcing run here is red BY
+    # DESIGN until a Linux calibration lands — and a job that is red by design on main is how a team learns
+    # to stop reading the check list, which would cost far more than this job buys. `--enforce` is available
+    # on `workflow_dispatch` (below) for anyone who wants the verdict on demand; put it back on push in the
+    # same commit that lands the Linux `performanceBudget` block, and only then make the job required.
+    #
+    # `workflow_dispatch` with `calibrate: true` runs EIGHT rounds and mints a paste-ready
+    # `performanceBudget` block with `measuredOn.platform: linux` and ceilings at 1.5x the worst round —
+    # the noise factor alone, because a calibration on the enforcing platform no longer owes the
+    # single-platform allowance. The flow is: dispatch -> download the perf-calibration.json artifact ->
+    # paste its `.performanceBudget` into backend/f0-baseline.json -> open a PR. It is deliberately not
+    # written by CI: a budget change is a review decision, and the F6 suite plus verify-f0-baseline.ts
+    # both re-check the pasted block.
+    #
+    # ADDITIVE, AND NOT A REQUIRED CHECK YET. It changes NOTHING about how F6 enforces the budget today
+    # (f6-performance-budget.test.ts still runs inside the Backend job's Test step, against the committed
+    # ceilings, unchanged — that is the enforcement, and it is untouched). The job name below is stable so
+    # it can be made required once the calibration it produces has landed.
+    name: Performance budgets (Linux measurement; calibrate/enforce on dispatch)
+    runs-on: ubuntu-latest
+    # MEASURED, not guessed: the harness is ten warmups, 150 reference samples and 60 samples of each of
+    # the four plan operations against a temp SQLite file, and one round takes ~2.5 SECONDS end to end on
+    # an idle host — ts-node startup and the schema migrations included. Eight calibration rounds are
+    # therefore well under a minute, and essentially all of this job is the backend install, the same
+    # cold-cache cost the Backend job budgets ~9 minutes of network for. 20 is generous over that and
+    # still decisive against a hang.
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm ci || npm install
+      - name: Measure the F6 budget on this runner (calibrate/enforce on dispatch only)
+        # ONE script drives all three modes, and it does not re-implement the measurement: it spawns
+        # backend/src/tests/f6-performance-budget.test.ts — the very harness F6 certifies with, wired to
+        # performanceBudget.methodology (10 warmups, 60 operation samples, 150 reference samples, 10%
+        # trimmed mean) — and reduces its rounds. A second copy of "the same methodology" here would be
+        # a calibration minted from a harness nobody enforces with, which is the fixture-vs-producer trap
+        # this repository has already paid for once.
+        #
+        # THE MODE IS CHOSEN BY THE EVENT, not by a variable that could be empty for two different
+        # reasons. `inputs.calibrate` is empty on push/pull_request (the `inputs` context is only
+        # populated for workflow_dispatch/workflow_call), so `github.event_name` is the honest switch:
+        #
+        #   push / pull_request  -> neither flag: measure, print the table, write the artifact, exit 0.
+        #                           The verdict is NOT re-asserted here — the Backend job's Test step
+        #                           already enforced this budget on this runner, this commit.
+        #   workflow_dispatch    -> `--enforce`: the same four assertions, on demand, when someone wants
+        #                           the verdict spelled out in one log.
+        #   dispatch + calibrate -> `--calibrate --rounds 8`: mint a paste-ready Linux budget.
+        #
+        # Put `--enforce` back on the push path in the same commit that lands the Linux calibration; a
+        # ceiling measured on another platform is not one to fail a push on.
+        env:
+          CALIBRATE: ${{ inputs.calibrate }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -u
+          if [ "${CALIBRATE:-false}" = "true" ]; then
+            node backend/scripts/perf-calibrate.mjs --calibrate --rounds 8 --out perf-calibration.json
+          elif [ "${EVENT_NAME}" = "workflow_dispatch" ]; then
+            node backend/scripts/perf-calibrate.mjs --enforce --out perf-calibration.json
+          else
+            echo "measure-only: the F6 budget is enforced by the Backend job's Test step, not re-asserted here."
+            node backend/scripts/perf-calibrate.mjs --out perf-calibration.json
+          fi
+      - name: Upload the raw Linux measurements
+        # `always()`: a run that went OVER a ceiling is precisely the run whose numbers someone needs.
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: perf-calibration.json
+          path: perf-calibration.json
+          retention-days: 30
+          if-no-files-found: warn

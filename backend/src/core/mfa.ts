@@ -139,13 +139,19 @@ async function backupCount(userId: number): Promise<number> {
 // are measured in DAYS — seconds of propagation are immaterial, per-request SELECTs are not).
 const POLICY_OPTION = 'mfa_policy';
 const POLICY_TTL_MS = 10_000;
-let _policyCache: { value: { requiredRoles: string[]; graceDays: number; enforcedAt: number | null }; at: number } | null = null;
+/**
+ * The stored policy. `enforceForApiTokens` extends the gate to `wjt_` personal API tokens: it defaults to
+ * FALSE so an existing install keeps today's behaviour (headless tokens categorically exempt), and only
+ * ever ADDS enforcement when an admin turns it on. See mfaComplianceGate in middleware/auth.ts.
+ */
+type MfaPolicy = { requiredRoles: string[]; graceDays: number; enforcedAt: number | null; enforceForApiTokens: boolean };
+let _policyCache: { value: MfaPolicy; at: number } | null = null;
 try {
     require('./hooks').addAction('updated_option', async (name: any) => {
         if (name === POLICY_OPTION) _policyCache = null;
     });
 } catch { /* hooks unavailable in isolated unit tests */ }
-const DEFAULT_POLICY = { requiredRoles: [] as string[], graceDays: 0, enforcedAt: null as number | null };
+const DEFAULT_POLICY: MfaPolicy = { requiredRoles: [], graceDays: 0, enforcedAt: null, enforceForApiTokens: false };
 // Cap the grace window (~10 years) so a fat-fingered huge value can't silently turn enforcement into a
 // permanent no-op (adversarial review #5).
 const MAX_GRACE_DAYS = 3650;
@@ -155,7 +161,7 @@ function clampGraceDays(v: any): number {
 }
 
 /** Read the enforcement policy, always fully-shaped + validated (getOption may return a partial/legacy row). */
-async function getPolicy(): Promise<{ requiredRoles: string[]; graceDays: number; enforcedAt: number | null }> {
+async function getPolicy(): Promise<MfaPolicy> {
     if (_policyCache && Date.now() - _policyCache.at < POLICY_TTL_MS) return _policyCache.value;
     const p = await getOption(POLICY_OPTION, DEFAULT_POLICY);
     const requiredRoles = Array.isArray(p && p.requiredRoles)
@@ -164,7 +170,10 @@ async function getPolicy(): Promise<{ requiredRoles: string[]; graceDays: number
     const graceDays = clampGraceDays(p && p.graceDays);
     const enforcedAtNum = Number(p && p.enforcedAt);
     const enforcedAt = p && p.enforcedAt != null && Number.isFinite(enforcedAtNum) ? enforcedAtNum : null;
-    const value = { requiredRoles, graceDays, enforcedAt };
+    // Strict `=== true`: a row written before this field existed (and any truthy junk) reads as OFF, so an
+    // upgrade can never silently start refusing tokens that worked yesterday.
+    const enforceForApiTokens = (p && p.enforceForApiTokens) === true;
+    const value = { requiredRoles, graceDays, enforcedAt, enforceForApiTokens };
     _policyCache = { value, at: Date.now() };
     return value;
 }
@@ -175,19 +184,21 @@ async function getPolicy(): Promise<{ requiredRoles: string[]; graceDays: number
  * stamped when the policy first requires ≥1 role and cleared when it requires none — so it can't be back-
  * dated to retroactively expire everyone's grace, and toggling the feature off then on restarts the clock.
  */
-async function setPolicy(input: any): Promise<{ requiredRoles: string[]; graceDays: number; enforcedAt: number | null }> {
+async function setPolicy(input: any): Promise<MfaPolicy> {
     const validRoles = getRoles() || {};
     const requiredRoles = (Array.isArray(input && input.requiredRoles)
         ? ([...new Set(input.requiredRoles.map((r: any) => String(r)))] as string[])
         : []).filter((r: string) => Object.prototype.hasOwnProperty.call(validRoles, r));
     const graceDays = clampGraceDays(input && input.graceDays);
+    // Same full-replace contract as requiredRoles/graceDays: an omitted field means "off", not "unchanged".
+    const enforceForApiTokens = (input && input.enforceForApiTokens) === true;
 
     const prev = await getPolicy();
     let enforcedAt = prev.enforcedAt;
     if (requiredRoles.length === 0) enforcedAt = null;                          // feature off → clear the clock
     else if (!enforcedAt) enforcedAt = Math.floor(Date.now() / 1000);          // just turned on → stamp now
 
-    const policy = { requiredRoles, graceDays, enforcedAt };
+    const policy = { requiredRoles, graceDays, enforcedAt, enforceForApiTokens };
     await updateOption(POLICY_OPTION, policy);
     _policyCache = { value: policy, at: Date.now() };  // write-through: this node enforces instantly
     return policy;

@@ -1,0 +1,179 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- HOSTILE media WXR fixture for wxr-import.test.ts — everything a third party's export can name that
+     the importer must not take at face value.
+
+     __ORIGIN__ is replaced at runtime with the origin of the test's OWN http.createServer, exactly as in
+     sample-media-menus.wxr. This file is imported AFTER that one, so `2025/01/photo.jpg` is already a
+     real, stored attachment when these items arrive:
+
+       · `hostile-collide`  — a DIFFERENT source URL (`other.jpg`) whose `_wp_attached_file` names the
+                              path that attachment already holds. Its bytes must not land on top of it.
+       · `hostile-dotdir`   — `_wp_attached_file` inside a dot-directory: `.derivatives/` is the image
+                              negotiation cache, served with `Cache-Control: immutable`.
+       · `hostile-plant`    — an ordinary post carrying the importer's OWN idempotency keys, which the
+                              next run would index and believe.
+       · `hostile-puck`     — a block-builder page whose image URL lives in `_puck_data`, not in the body.
+-->
+<rss version="2.0"
+     xmlns:excerpt="http://wordpress.org/export/1.2/excerpt/"
+     xmlns:content="http://purl.org/rss/1.0/modules/content/"
+     xmlns:wfw="http://wellformedweb.org/CommentAPI/"
+     xmlns:dc="http://purl.org/dc/elements/1.1/"
+     xmlns:wp="http://wordpress.org/export/1.2/">
+<channel>
+	<title>Hostile Fixture Blog</title>
+	<link>https://hostile.fixture.example</link>
+	<description>Attachments that name paths they do not own</description>
+	<wp:wxr_version>1.2</wp:wxr_version>
+	<wp:base_site_url>https://hostile.fixture.example</wp:base_site_url>
+	<wp:base_blog_url>https://hostile.fixture.example</wp:base_blog_url>
+
+	<item>
+		<title>Post With The Colliding Image</title>
+		<link>https://hostile.fixture.example/hostile-post</link>
+		<pubDate>Mon, 10 Mar 2025 08:00:00 +0000</pubDate>
+		<dc:creator><![CDATA[jdoe]]></dc:creator>
+		<guid isPermaLink="false">https://hostile.fixture.example/?p=701</guid>
+		<description></description>
+		<content:encoded><![CDATA[<p>Body.</p>
+<figure><img src="__ORIGIN__/wp-content/uploads/2025/01/other.jpg" alt="The other one" /></figure>]]></content:encoded>
+		<excerpt:encoded></excerpt:encoded>
+		<wp:post_id>701</wp:post_id>
+		<wp:post_date><![CDATA[2025-03-10 08:00:00]]></wp:post_date>
+		<wp:post_date_gmt><![CDATA[2025-03-10 08:00:00]]></wp:post_date_gmt>
+		<wp:comment_status><![CDATA[closed]]></wp:comment_status>
+		<wp:ping_status><![CDATA[closed]]></wp:ping_status>
+		<wp:post_name><![CDATA[hostile-post]]></wp:post_name>
+		<wp:status><![CDATA[publish]]></wp:status>
+		<wp:post_parent>0</wp:post_parent>
+		<wp:menu_order>0</wp:menu_order>
+		<wp:post_type><![CDATA[post]]></wp:post_type>
+		<wp:post_password><![CDATA[]]></wp:post_password>
+		<wp:is_sticky>0</wp:is_sticky>
+	</item>
+
+	<item>
+		<title>Collide</title>
+		<link>https://hostile.fixture.example/hostile-post/collide</link>
+		<pubDate>Mon, 10 Mar 2025 08:01:00 +0000</pubDate>
+		<dc:creator><![CDATA[jdoe]]></dc:creator>
+		<guid isPermaLink="false">__ORIGIN__/wp-content/uploads/2025/01/other.jpg</guid>
+		<description></description>
+		<content:encoded><![CDATA[]]></content:encoded>
+		<excerpt:encoded><![CDATA[]]></excerpt:encoded>
+		<wp:post_id>702</wp:post_id>
+		<wp:post_date><![CDATA[2025-03-10 08:01:00]]></wp:post_date>
+		<wp:post_date_gmt><![CDATA[2025-03-10 08:01:00]]></wp:post_date_gmt>
+		<wp:comment_status><![CDATA[closed]]></wp:comment_status>
+		<wp:ping_status><![CDATA[closed]]></wp:ping_status>
+		<wp:post_name><![CDATA[hostile-collide]]></wp:post_name>
+		<wp:status><![CDATA[inherit]]></wp:status>
+		<wp:post_parent>701</wp:post_parent>
+		<wp:menu_order>0</wp:menu_order>
+		<wp:post_type><![CDATA[attachment]]></wp:post_type>
+		<wp:post_password><![CDATA[]]></wp:post_password>
+		<wp:is_sticky>0</wp:is_sticky>
+		<wp:attachment_url>__ORIGIN__/wp-content/uploads/2025/01/other.jpg</wp:attachment_url>
+		<wp:post_mime_type><![CDATA[image/jpeg]]></wp:post_mime_type>
+		<wp:postmeta>
+			<wp:meta_key><![CDATA[_wp_attached_file]]></wp:meta_key>
+			<wp:meta_value><![CDATA[2025/01/photo.jpg]]></wp:meta_value>
+		</wp:postmeta>
+	</item>
+
+	<item>
+		<title>Dot Directory</title>
+		<link>https://hostile.fixture.example/hostile-post/dotdir</link>
+		<pubDate>Mon, 10 Mar 2025 08:02:00 +0000</pubDate>
+		<dc:creator><![CDATA[jdoe]]></dc:creator>
+		<guid isPermaLink="false">__ORIGIN__/wp-content/uploads/2025/03/legit.jpg</guid>
+		<description></description>
+		<content:encoded><![CDATA[]]></content:encoded>
+		<excerpt:encoded><![CDATA[]]></excerpt:encoded>
+		<wp:post_id>703</wp:post_id>
+		<wp:post_date><![CDATA[2025-03-10 08:02:00]]></wp:post_date>
+		<wp:post_date_gmt><![CDATA[2025-03-10 08:02:00]]></wp:post_date_gmt>
+		<wp:comment_status><![CDATA[closed]]></wp:comment_status>
+		<wp:ping_status><![CDATA[closed]]></wp:ping_status>
+		<wp:post_name><![CDATA[hostile-dotdir]]></wp:post_name>
+		<wp:status><![CDATA[inherit]]></wp:status>
+		<wp:post_parent>701</wp:post_parent>
+		<wp:menu_order>0</wp:menu_order>
+		<wp:post_type><![CDATA[attachment]]></wp:post_type>
+		<wp:post_password><![CDATA[]]></wp:post_password>
+		<wp:is_sticky>0</wp:is_sticky>
+		<wp:attachment_url>__ORIGIN__/wp-content/uploads/2025/03/legit.jpg</wp:attachment_url>
+		<wp:post_mime_type><![CDATA[image/jpeg]]></wp:post_mime_type>
+		<wp:postmeta>
+			<wp:meta_key><![CDATA[_wp_attached_file]]></wp:meta_key>
+			<wp:meta_value><![CDATA[.derivatives/ab/hijacked.jpg]]></wp:meta_value>
+		</wp:postmeta>
+	</item>
+
+	<item>
+		<title>Plant</title>
+		<link>https://hostile.fixture.example/hostile-plant</link>
+		<pubDate>Mon, 10 Mar 2025 08:03:00 +0000</pubDate>
+		<dc:creator><![CDATA[jdoe]]></dc:creator>
+		<guid isPermaLink="false">https://hostile.fixture.example/?p=704</guid>
+		<description></description>
+		<content:encoded><![CDATA[<p>An ordinary post that claims to be two other things.</p>]]></content:encoded>
+		<excerpt:encoded></excerpt:encoded>
+		<wp:post_id>704</wp:post_id>
+		<wp:post_date><![CDATA[2025-03-10 08:03:00]]></wp:post_date>
+		<wp:post_date_gmt><![CDATA[2025-03-10 08:03:00]]></wp:post_date_gmt>
+		<wp:comment_status><![CDATA[closed]]></wp:comment_status>
+		<wp:ping_status><![CDATA[closed]]></wp:ping_status>
+		<wp:post_name><![CDATA[hostile-plant]]></wp:post_name>
+		<wp:status><![CDATA[publish]]></wp:status>
+		<wp:post_parent>0</wp:post_parent>
+		<wp:menu_order>0</wp:menu_order>
+		<wp:post_type><![CDATA[post]]></wp:post_type>
+		<wp:post_password><![CDATA[]]></wp:post_password>
+		<wp:is_sticky>0</wp:is_sticky>
+		<wp:postmeta>
+			<wp:meta_key><![CDATA[_wxr_source_url]]></wp:meta_key>
+			<wp:meta_value><![CDATA[__ORIGIN__/wp-content/uploads/2025/01/other.jpg]]></wp:meta_value>
+		</wp:postmeta>
+		<wp:postmeta>
+			<wp:meta_key><![CDATA[_wxr_menu_item_id]]></wp:meta_key>
+			<wp:meta_value><![CDATA[601]]></wp:meta_value>
+		</wp:postmeta>
+		<wp:postmeta>
+			<wp:meta_key><![CDATA[_wxr_remote_url]]></wp:meta_key>
+			<wp:meta_value><![CDATA[https://evil.example/pixel.jpg]]></wp:meta_value>
+		</wp:postmeta>
+		<wp:postmeta>
+			<wp:meta_key><![CDATA[harmless_note]]></wp:meta_key>
+			<wp:meta_value><![CDATA[ordinary meta must still import]]></wp:meta_value>
+		</wp:postmeta>
+	</item>
+
+	<item>
+		<title>Builder Page</title>
+		<link>https://hostile.fixture.example/hostile-puck</link>
+		<pubDate>Mon, 10 Mar 2025 08:04:00 +0000</pubDate>
+		<dc:creator><![CDATA[jdoe]]></dc:creator>
+		<guid isPermaLink="false">https://hostile.fixture.example/?page_id=705</guid>
+		<description></description>
+		<content:encoded><![CDATA[]]></content:encoded>
+		<excerpt:encoded></excerpt:encoded>
+		<wp:post_id>705</wp:post_id>
+		<wp:post_date><![CDATA[2025-03-10 08:04:00]]></wp:post_date>
+		<wp:post_date_gmt><![CDATA[2025-03-10 08:04:00]]></wp:post_date_gmt>
+		<wp:comment_status><![CDATA[closed]]></wp:comment_status>
+		<wp:ping_status><![CDATA[closed]]></wp:ping_status>
+		<wp:post_name><![CDATA[hostile-puck]]></wp:post_name>
+		<wp:status><![CDATA[publish]]></wp:status>
+		<wp:post_parent>0</wp:post_parent>
+		<wp:menu_order>0</wp:menu_order>
+		<wp:post_type><![CDATA[page]]></wp:post_type>
+		<wp:post_password><![CDATA[]]></wp:post_password>
+		<wp:is_sticky>0</wp:is_sticky>
+		<wp:postmeta>
+			<wp:meta_key><![CDATA[_puck_data]]></wp:meta_key>
+			<wp:meta_value><![CDATA[{"content":[{"type":"Image","props":{"src":"__ORIGIN__/wp-content/uploads/2025/01/photo.jpg","alt":"Builder image","href":"javascript:alert(1)"}}],"root":{"props":{"title":"Builder"}}}]]></wp:meta_value>
+		</wp:postmeta>
+	</item>
+</channel>
+</rss>

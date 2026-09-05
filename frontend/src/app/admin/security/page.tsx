@@ -364,6 +364,7 @@ function MfaPolicyForm() {
     const [roles, setRoles] = useState<Record<string, Role>>({});
     const [required, setRequired] = useState<string[]>([]);
     const [graceDays, setGraceDays] = useState(7);
+    const [enforceForApiTokens, setEnforceForApiTokens] = useState(false);
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
 
@@ -374,6 +375,7 @@ function MfaPolicyForm() {
                 setRoles(rolesData);
                 setRequired(policy.requiredRoles || []);
                 setGraceDays(typeof policy.graceDays === "number" ? policy.graceDays : 7);
+                setEnforceForApiTokens(policy.enforceForApiTokens === true);
             } catch (e: any) {
                 addToast(e?.message || "Failed to load the MFA policy", "error");
             } finally {
@@ -388,8 +390,13 @@ function MfaPolicyForm() {
     const save = async () => {
         setSaving(true);
         try {
-            const { policy } = await mfaApi.savePolicy({ requiredRoles: required, graceDays: Number(graceDays) || 0 });
+            const { policy } = await mfaApi.savePolicy({
+                requiredRoles: required,
+                graceDays: Number(graceDays) || 0,
+                enforceForApiTokens,
+            });
             setRequired(policy.requiredRoles);
+            setEnforceForApiTokens(policy.enforceForApiTokens === true);
             addToast(policy.requiredRoles.length ? "Two-factor enforcement updated" : "Two-factor enforcement disabled", "success");
         } catch (e: any) {
             addToast(e?.message || "Failed to save the MFA policy", "error");
@@ -434,6 +441,23 @@ function MfaPolicyForm() {
                     );
                 })}
             </div>
+
+            <label className="flex items-start gap-3 px-4 py-3 rounded-2xl border-2 border-gray-200 dark:border-gray-700 bg-white/40 dark:bg-black/10 cursor-pointer">
+                <input
+                    type="checkbox"
+                    checked={enforceForApiTokens}
+                    onChange={(e) => setEnforceForApiTokens(e.target.checked)}
+                    className="mt-0.5 w-4 h-4 accent-emerald-600"
+                />
+                <span>
+                    <span className="block font-bold text-gray-800 dark:text-gray-100">Also enforce for personal API tokens</span>
+                    <span className="block text-[11px] text-gray-400 mt-0.5">
+                        Blocks <code>Bearer wjt_…</code> tokens whose owner is in a selected role and hasn&apos;t enrolled — including
+                        tokens minted before this policy. A token can&apos;t answer a 2FA challenge, so the fix is for its owner to
+                        enrol (or for the token to be revoked). Off by default.
+                    </span>
+                </span>
+            </label>
 
             <div className="flex flex-wrap items-end gap-4">
                 <div>

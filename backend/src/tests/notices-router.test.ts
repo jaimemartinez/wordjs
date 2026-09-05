@@ -178,4 +178,58 @@ describe('/api/v1/notices (admin notices have their own namespace)', () => {
         assert.deepStrictEqual(res.body, []);
         await updateOption('admin_notices', []);
     });
+
+    /* ---------------------------------------------------------------------------------------------
+     * ONE LOCKED WRITER, NOT TWO DIALECTS.
+     *
+     * `admin_notices` is a whole array rewritten by a read-modify-write, and it has three writers: the
+     * plugin CrashGuard, core/admin-notices.ts — which fires on EVERY boot and every isolated-plugin
+     * launch, so the window is far wider than it used to be — and this DELETE. The first two take the
+     * `wordjs:admin-notices` lock and re-read the option under it; the DELETE used to read at one line
+     * and write at the next with no lock at all, so an administrator dismissing one notice could drop a
+     * degradation raised a millisecond earlier. A notice lost to a race is a degradation nobody is ever
+     * told about, which is the exact failure the writer module exists to end.
+     * ------------------------------------------------------------------------------------------- */
+
+    it('the dismissal goes through the shared writer instead of owning a second read-modify-write', () => {
+        // Derived from the route's own SOURCE: the behavioural case below can only sample the race, and
+        // a race that is merely unlikely passes on a good day. This is the half that cannot.
+        const src = fs.readFileSync(path.join(__dirname, '..', 'routes', 'notices.ts'), 'utf8');
+        assert.match(src, /clearAdminNotice\s*\(/,
+            'the DELETE handler must dismiss through core/admin-notices clearAdminNotice()');
+        assert.ok(!/updateOption\s*\(/.test(src),
+            'routes/notices.ts must not write admin_notices itself — that unlocked read-modify-write IS the race');
+    });
+
+    it('a dismissal concurrent with a freshly raised notice loses neither', async () => {
+        const notices = require('../core/admin-notices');
+        await updateOption('admin_notices', []);
+
+        // Repeated, because this samples a real interleaving rather than forcing one: whichever writer
+        // used to finish last simply overwrote the other, so either the dismissed notice comes back or
+        // the new degradation is never seen again.
+        for (let round = 0; round < 5; round++) {
+            const dismissId = `race-dismiss-${round}`;
+            const raiseId = `race-raise-${round}`;
+            assert.strictEqual(
+                await notices.pushAdminNotice({ id: dismissId, level: 'warning', message: 'about to be dismissed' }),
+                true);
+
+            const [, del] = await Promise.all([
+                notices.pushAdminNotice({ id: raiseId, level: 'error', message: 'raised while the other was dismissed' }),
+                request(app)
+                    .delete(`/api/v1/notices/${encodeURIComponent(dismissId)}`)
+                    .set('Authorization', `Bearer ${adminToken}`),
+            ]);
+            assert.strictEqual(del.status, 200, `round ${round}: the dismissal must be answered`);
+
+            const stored = await getOption('admin_notices', []);
+            const ids = (Array.isArray(stored) ? stored : []).map((n: any) => n && n.id);
+            assert.ok(!ids.includes(dismissId), `round ${round}: the dismissed notice must stay dismissed`);
+            assert.ok(ids.includes(raiseId),
+                `round ${round}: the degradation raised at the same moment must survive the dismissal`);
+        }
+
+        await updateOption('admin_notices', []);
+    });
 });

@@ -968,15 +968,25 @@ const baseConfig: any = {
                 // library, build srcSet + intrinsic dims from the backend-reported
                 // variants (registry populated by the picker's onSelect — no network,
                 // no URL guessing). Legacy pages without srcSet pass through untouched.
-                let { srcSet, imgWidth, imgHeight } = props;
+                // `srcSetModern` is the per-format map (image/avif, image/webp) the renderer turns
+                // into <source> elements; it comes from the SAME backend metadata as srcSet, so it
+                // is persisted and invalidated together with it and never on its own.
+                let { srcSet, srcSetModern, imgWidth, imgHeight } = props;
                 const picked = getPickedMedia(props.src);
                 if (picked) {
-                    srcSet = buildSrcSet(props.src, picked).srcSet;
+                    const built = buildSrcSet(props.src, picked);
+                    srcSet = built.srcSet;
+                    srcSetModern = built.modern;
                     imgWidth = picked.width || undefined;
                     imgHeight = picked.height || undefined;
-                } else if (srcSet && !srcSetBelongsTo(props.src, srcSet)) {
-                    // src was hand-edited to another URL — the stored variants would 404.
+                } else if ([srcSet, ...Object.values(srcSetModern || {})].some(
+                    (candidates) => candidates && !srcSetBelongsTo(props.src, candidates as string))) {
+                    // src was hand-edited to another URL — the stored variants would 404. Every
+                    // format is checked, because a small upload can carry a modern srcset with no
+                    // original-format one (buildSrcSet's two-candidate threshold applies only to the
+                    // latter), and that lone map would otherwise survive a src change unnoticed.
                     srcSet = undefined;
+                    srcSetModern = undefined;
                     imgWidth = undefined;
                     imgHeight = undefined;
                 }
@@ -985,6 +995,7 @@ const baseConfig: any = {
                         ...props,
                         css,
                         srcSet,
+                        srcSetModern,
                         imgWidth,
                         imgHeight,
                         // Clear legacy prop to avoid confusion (optional, but cleaner)

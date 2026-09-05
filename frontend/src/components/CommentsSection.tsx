@@ -11,6 +11,13 @@ const AVATAR_BG = [
     "var(--wjs-color-secondary,#6b7280)",
 ];
 
+// The hidden field the backend traps on (routes/comments.ts HONEYPOT_FIELD, and the SAME name the
+// contact-form block uses — one convention per site). A human never sees it and never fills it, so a
+// non-empty value on the wire is a bot; the server answers such a request exactly as it answers a real
+// one and stores nothing. It is hidden OFF-SCREEN rather than with `display:none`/`hidden`: naive bots
+// skip fields that are not rendered, and this trap only works if they fill it.
+const HONEYPOT_FIELD = "_hp";
+
 function InitialsAvatar({ name }: { name: string }) {
     const initials = (name || "").trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase() || "?";
     let hash = 0;
@@ -38,6 +45,8 @@ export default function CommentsSection({ postId }: { postId: number }) {
     const [authorEmail, setAuthorEmail] = useState("");
     const [authorUrl, setAuthorUrl] = useState("");
     const [content, setContent] = useState("");
+    // Always sent, always empty for a human — see HONEYPOT_FIELD.
+    const [honeypot, setHoneypot] = useState("");
 
     useEffect(() => {
         loadComments();
@@ -68,13 +77,19 @@ export default function CommentsSection({ postId }: { postId: number }) {
 
         setSubmitting(true);
         try {
-            await commentsApi.create({
+            // Built as a value rather than passed as a literal on purpose: the honeypot is anti-spam
+            // plumbing, not part of a comment, so commentsApi.create's declared body does not name it —
+            // and TypeScript's excess-property check only fires on a fresh literal handed straight to
+            // the call. Widening the API type instead would put `_hp` in every caller's contract.
+            const payload = {
                 post: postId,
                 content,
                 author_name: authorName,
                 author_email: authorEmail,
-                author_url: authorUrl
-            });
+                author_url: authorUrl,
+                [HONEYPOT_FIELD]: honeypot
+            };
+            await commentsApi.create(payload);
             setSuccessMessage("Comment submitted successfully! It awaits moderation.");
             setContent("");
             // Don't reload immediately if it's pending moderation, 
@@ -205,6 +220,31 @@ export default function CommentsSection({ postId }: { postId: number }) {
                             onChange={(e) => setContent(e.target.value)}
                             className={inputClass}
                         ></textarea>
+                    </div>
+                    {/* Honeypot anti-spam — see HONEYPOT_FIELD. Off-screen, out of the tab order,
+                        hidden from assistive tech and never autofilled, so no human ever meets it. */}
+                    <div
+                        className="wjs-comment-hp"
+                        aria-hidden="true"
+                        style={{
+                            position: "absolute",
+                            left: "-9999px",
+                            top: "auto",
+                            width: "1px",
+                            height: "1px",
+                            overflow: "hidden",
+                        }}
+                    >
+                        <label htmlFor="comment-hp">Do not fill in this field</label>
+                        <input
+                            id="comment-hp"
+                            type="text"
+                            name={HONEYPOT_FIELD}
+                            tabIndex={-1}
+                            autoComplete="off"
+                            value={honeypot}
+                            onChange={(e) => setHoneypot(e.target.value)}
+                        />
                     </div>
                     <button
                         type="submit"

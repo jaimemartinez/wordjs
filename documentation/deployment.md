@@ -123,7 +123,7 @@ The workflow then publishes a **GitHub Release** with the versioned `wordjs-<tag
    # or
    npm start              # 3-service split: gateway + backend + frontend
    ```
-4. **Read the one-time install token from the server console.** On a not-yet-installed instance the boot path mints a random token (24 random bytes, hex) and prints it in a banner, together with a ready-to-click install URL that pre-fills it:
+4. **Read the one-time install token.** On a not-yet-installed instance the boot path mints a random token (24 random bytes, hex), writes it to `backend/data/install-token` (mode `0600`) and prints a banner. **Whether that banner contains the token depends on where stdout goes.** On a **TTY** — you started the server yourself in a terminal — it prints the token together with a ready-to-click install URL that pre-fills it:
    ```
    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
    🔑 WordJS is not installed yet — finish setup in your browser:
@@ -133,7 +133,22 @@ The workflow then publishes a **GitHub Release** with the versioned `wordjs-<tag
       Install token (if you prefer to paste it): <token>
    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
    ```
-   The pre-install endpoints (`POST /api/v1/setup/install`, `POST /api/v1/setup/test-db`) reject any request whose token is missing or mismatched (constant-time), so this gates a pre-install takeover. The install wizard prompts for it; supply it via the `x-install-token` header or an `installToken` body field. For headless/Docker deploys the same token is **also** mirrored to a `0600` file in the runtime data dir (`backend/data/install-token`, never shipped, removed once installed) and can be **overridden** out-of-band via the `WORDJS_INSTALL_TOKEN` env var — but an operator-supplied env token **must be ≥ 16 chars** or it is ignored (a warning is logged) and a random token is used instead. The token is in-memory only: a fresh one is minted on each restart while uninstalled, and it becomes irrelevant once the instance is installed. Note the token travels in the URL **fragment** (`#token=`), which a browser never sends to the server — so it cannot land in access or proxy logs, nor in the `Referer` of a sub-resource — and the wizard scrubs it from the address bar the moment it reads it (an older `?token=` link is still accepted, and scrubbed the same way).
+   When stdout is **not** a terminal (Docker, systemd, CI, anything piped) the banner prints the `/install` URL **without** the `#token=` fragment and names the file instead — the backend's console output is bridged into structured JSON that [observability.md](observability.md) tells operators to ship to a log aggregator, and a bootstrap secret printed there is a bootstrap secret indexed there, forever:
+   ```
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   🔑 WordJS is not installed yet — finish setup in your browser:
+
+      → https://localhost:3000/install
+
+      The install token is NOT printed: stdout is not a terminal, so this line would be
+      shipped to whatever aggregates these logs. Read it from the file instead:
+
+         cat backend/data/install-token
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   ```
+   So: read it from the terminal if you have one, otherwise `cat backend/data/install-token` (mode `0600`), or supply your own with `WORDJS_INSTALL_TOKEN`. Set `WORDJS_PRINT_INSTALL_TOKEN=1` to print it in the banner regardless of where stdout goes.
+
+   The pre-install endpoints (`POST /api/v1/setup/install`, `POST /api/v1/setup/test-db`) reject any request whose token is missing or mismatched (constant-time), so this gates a pre-install takeover. The install wizard prompts for it; supply it via the `x-install-token` header or an `installToken` body field. For headless/Docker deploys the same token is **always** written to a `0600` file in the runtime data dir (`backend/data/install-token`, never shipped, removed once installed), which is the source of truth whenever the banner does not print it. It can also be **overridden** out-of-band via the `WORDJS_INSTALL_TOKEN` env var — but an operator-supplied env token **must be ≥ 16 chars** or it is ignored (a warning is logged) and a random token is used instead. The token is in-memory only: a fresh one is minted on each restart while uninstalled, and it becomes irrelevant once the instance is installed. Note the token travels in the URL **fragment** (`#token=`), which a browser never sends to the server — so it cannot land in access or proxy logs, nor in the `Referer` of a sub-resource — and the wizard scrubs it from the address bar the moment it reads it (an older `?token=` link is still accepted, and scrubbed the same way).
 5. Finish in the **browser install wizard**: pick your database — **SQLite** (native, zero-config), **PostgreSQL**, **MySQL / MariaDB**, or **SQLite (legacy / WASM)** (the wizard runs a live connection test for PostgreSQL/MySQL) — then create your admin account. See `INSTALL.md` inside the bundle for the same steps.
 
 > **LAN / remote access & TLS.** In monolith mode the process binds **`0.0.0.0`** on the public port, so it is reachable from other machines. The backend's **Site-URL guard rejects host mismatches**, so set the site host / `siteUrl` (in the install wizard or `backend/wordjs-config.json`) to the **IP or domain you will actually use** — not `localhost`. For a public deployment, terminate **TLS at a reverse proxy** (Nginx/Caddy/Cloudflare) in front of the bundle, or use the built-in HTTPS. (Behind a TLS-terminating proxy you can force the monolith to serve **plain HTTP** by setting `WORDJS_HTTP=1`, which skips the self-signed/gateway-cert resolution entirely.) CORS needs **no per-deployment config**: it allows the configured origins (`siteUrl`, `frontendUrl`, `gatewayUrl`) **plus any same-origin request** — detected by matching the request's `Origin` hostname against the **gateway-pinned `X-Forwarded-Host`**, falling back to `Host` for the direct monolith. (This is the same trusted-host derivation the CSRF check uses, so the two always agree; matching the raw `Host` would treat any `127.0.0.1` page as same-origin behind the gateway's `changeOrigin` rewrite.) Because the monolith (and a reverse proxy that forwards `Host`) serves the app and API from one origin, this same-origin match covers `npx create-wordjs` + nginx with zero CORS tuning. Only an explicit `nodeEnv: "development"` additionally reflects `localhost`/`127.0.0.1`/`::1`; an arbitrary origin is never reflected (since `credentials: true` is set). **CSRF:** on top of that origin check, a cookie-authenticated write (`POST`/`PUT`/`PATCH`/`DELETE`) must echo the `wjs_csrf` cookie issued at sign-in in an `X-CSRF-Token` header — the admin UI does this for you and `Authorization: Bearer` clients are exempt — so a reverse proxy in front of WordJS must pass that request header through rather than strip it.
@@ -216,6 +231,10 @@ Example `backend/wordjs-config.json`:
 
 > **Database choice:** SQLite is the zero-config default — the canonical driver is `sqlite-native` (better-sqlite3); `sqlite-legacy` (pure-JS WASM) is an automatic fallback. The browser install wizard offers all four engines — **SQLite (native)**, **PostgreSQL**, **MySQL / MariaDB**, and **SQLite (legacy / WASM)** — with a live connection test for PostgreSQL and MySQL; each corresponds to a `dbDriver` value in `backend/wordjs-config.json`, which you can also set directly. For **Postgres** set `dbDriver: "postgres"` (the `pg` client) + the `db` block pointed at an external Postgres server. For **MySQL / MariaDB** (8.0+) set `dbDriver: "mysql"` (aliased `mariadb`, via `mysql2`) with `dbPort: 3306` and the same `db` connection block — the driver translates the SQLite dialect to MySQL at the boundary.
 
+> **What the `sqlite-legacy` fallback costs you.** If a SQLite driver cannot be loaded — almost always a missing or mismatched `better-sqlite3` native binary after a Node upgrade or a copied `node_modules` — the manager does **not** fail the boot: it falls back to the pure-JS `sqlite-legacy` driver, which reads the same file format. That keeps the site up, but `sqlite-legacy` has **no FTS5**, so the full-text index is never built and **site search silently drops from ranked results to `LIKE` matching**. Postgres and MySQL are never downgraded this way; an explicit non-SQLite driver that fails to load still stops the boot.
+>
+> Because this is invisible from the front end, the fallback now reports itself in two places instead of one boot-log line: a **persistent admin notice** (`db.sqlite-legacy-fallback`, shown on **Admin → Notices**) and `GET /api/v1/health/details`, whose `database` section carries `driver` (the driver **actually** running, not the configured one), `degraded: true` and a `reason`. To fix it, run `npm rebuild better-sqlite3` in `backend/` and restart — the next boot on the native driver retires the notice on its own. Note that each SQLite driver keeps its **own** data file, so if you decide to stay on a different driver, move the data with `npm run migrate` rather than by editing `dbDriver` alone.
+
 ---
 
 ## 🏃 Run in Production
@@ -249,6 +268,156 @@ pm2 start npm --name "wordjs-frontend" -- start
 ```
 
 > Make sure `cd backend && npm run build` has run first, otherwise the backend falls back to slower `ts-node`.
+
+---
+
+## 🐳 Containers: Docker & Kubernetes
+
+Ready-to-run templates live in **[`deploy/`](../deploy)**. Both run the **monolith** — one process, one
+HTTP port — from the image built by the repository's root `Dockerfile`.
+
+### The image
+
+Multi-stage. The **builder** installs every workspace and runs `npm run bundle-release`, i.e. the exact
+artifact `scripts/make-release.js` produces (`next build`, backend `tsc → dist`, plugin bundles). The
+**runtime** stage is slim and **non-root** (`wordjs`, uid 1001), runs `tini` as PID 1 for clean signal
+handling, installs production dependencies only (`--omit=dev`, so `ts-node`/`typescript` are absent) and
+runs the **compiled** build via `node monolith.js prod`. No TypeScript is transpiled at runtime.
+
+| | |
+|---|---|
+| **Port** | `3000`, plain HTTP. `WORDJS_HTTP=1` is baked in: the container never resolves, generates or renews a TLS certificate, so it is probe-able as-is and TLS terminates at your proxy or ingress. Unset it only if you mount real certificates and want the container itself to serve HTTPS |
+| **Volumes** | `/app/backend/data` and `/app/backend/uploads`, declared in the image. `monolith.js` chdir()s into `backend/`, and the runtime resolves both relative to that cwd. **Named volumes and host bind mounts are not equivalent here** — see the ownership note below |
+| **`HEALTHCHECK`** | `GET /healthz` — **liveness**. Answered by the monolith's dispatcher before the backend app, so it means "this process is serving" and stays green while the site is still uninstalled |
+| **Readiness** | `GET /readyz` — 200 only when installed **and** booted **and** the database answers; 503 otherwise. Not the container `HEALTHCHECK` (an uninstalled container would then be permanently `unhealthy`, and any `depends_on: condition: service_healthy` would never fire), but exactly right as a Kubernetes `readinessProbe` |
+
+`backend/data` holds the SQLite database, the `0600` install-token mirror **and `wordjs-config.json`**.
+That file normally sits beside the code at `backend/wordjs-config.json`, where a container recreate would
+lose it; the entrypoint anchors it into the data volume with a symlink, so a replaced container comes
+back **installed** rather than re-offering the wizard on top of a populated database. Back both volumes
+up together — the config carries the `jwtSecret`, and restoring a database without it invalidates every
+session.
+
+> **A host bind mount does not inherit the image's ownership — a named volume does.** The container runs
+> as **uid 1001**, and the Dockerfile `chown`s `/app` *before* the `VOLUME` instruction. That ordering is
+> what makes a **named** volume work: Docker seeds a new named volume from the image path, content and
+> ownership included, so it arrives owned by `1001:1001` and the non-root process can write it. A **host
+> bind mount** (`-v ./wordjs-data:/app/backend/data`, the first thing most people reach for when they want
+> the SQLite file on the host) is **not seeded**: it keeps the host directory's ownership — root, or your
+> own uid — and uid 1001 cannot write it, so the install fails on a permissions error that points at
+> nothing. Either pre-create and chown the host directory, or use named volumes and let the image do it:
+>
+> ```bash
+> mkdir -p wordjs-data wordjs-uploads && sudo chown 1001:1001 wordjs-data wordjs-uploads
+> ```
+>
+> The Kubernetes equivalent is `fsGroup: 1001`, which the chart already sets — same problem, different
+> mechanism.
+>
+> One more consequence of the volume being declared in the image: a container gets one at
+> `/app/backend/data` **whether or not you list it**, and an unlisted one is *anonymous* — it survives a
+> `docker compose up -d` recreate, so an edited environment variable that only the entrypoint's first boot
+> reads is silently ignored. Name your volumes — both compose templates in this repository do — and remove
+> a container with `docker rm -fv` rather than `docker rm -f` so its volumes go with it.
+
+> **A fresh container boots UNINSTALLED, and that is deliberate.** `core/configManager.isInstalled()`
+> keys off `installedAt || dbDriver`, so *any* config written before first boot marks the instance
+> installed — and `POST /api/v1/setup/install` then answers `400 Already installed` forever, leaving a
+> site with no administrator (the CMS bootstrap seeds none by design). So the entrypoint writes nothing
+> by default: the container enters **setup mode**, mints an install token and serves `/install`.
+> Set **`WORDJS_PRESEED_CONFIG=1`** to opt into the opposite — a container that comes up already
+> installed, wired from the environment variables in [`docker/README.md`](../docker/README.md), with the
+> wizard skipped. That is for an external database or for a replica joining a site another node already
+> installed; it creates no administrator.
+
+### One-click: Docker Compose
+
+```bash
+cd deploy/compose
+printf 'WORDJS_INSTALL_TOKEN=%s\n' "$(openssl rand -hex 24)" > .env   # >= 16 chars, or it is ignored
+docker compose up -d --build
+# then open http://localhost:3000/install and paste the token
+```
+
+One container, SQLite, two named volumes. Leaving `WORDJS_INSTALL_TOKEN` empty is fine — the app mints
+one and writes it to `backend/data/install-token` (`0600`) in the `wordjs-data` volume; read it with
+`docker compose exec wordjs cat /app/backend/data/install-token`. It is **not** in `docker compose logs
+wordjs`: a detached container's stdout is not a TTY, so the banner prints `/install` **without** the
+`#token=…` fragment and names the file (set `WORDJS_PRINT_INSTALL_TOKEN=1` to print it in the logs
+anyway, or pre-set `WORDJS_INSTALL_TOKEN` as above — the recommended path).
+The banner's scheme and port follow the listener (`WORDJS_HTTP` / `PORT`), so in this container it is an
+`http://localhost:3000/…` URL that actually connects.
+
+**Run the wizard at the URL you will really browse.** The origin it POSTs as `siteUrl` is what lands in
+the config and feeds the CSRF/CORS origin checks, so a mismatch makes every admin POST fail.
+`WORDJS_SITE_URL` does **not** do that for you: `docker/entrypoint.sh` is its only reader and only
+writes it into the config under `WORDJS_PRESEED_CONFIG=1` — in setup mode it just decorates the
+entrypoint's "finish setup at …" log line. Full notes in
+[`deploy/compose/README.md`](../deploy/compose/README.md).
+
+Measured on a first local run of this stack: a cold `docker compose up -d --build` took **≈ 15 minutes**
+and produced a **≈ 2.6 GB** image; the container runs as **uid 1001**; a fresh container is
+**uninstalled** until the wizard (or the headless API call below) completes; and all install state is
+anchored in the data volume.
+
+**Installing headlessly** (what CI does) is the same request the wizard sends:
+
+```bash
+curl -fsS -X POST http://localhost:3000/api/v1/setup/install \
+  -H 'Content-Type: application/json' \
+  -H 'Origin: http://localhost:3000' \
+  -H "x-install-token: $WORDJS_INSTALL_TOKEN" \
+  -d '{"siteName":"My Site","adminUser":"admin1","adminEmail":"you@example.com",
+       "adminPassword":"a-long-password","dbDriver":"sqlite-native",
+       "siteUrl":"http://localhost:3000"}'
+```
+
+Then `GET /api/v1/setup/status` reports `"installed":true` and `/readyz` turns 200.
+
+> The compose file at the **repository root** is a different thing: Postgres + Redis + **two** app
+> replicas demonstrating cross-node coherence. Because a second replica can only join a site that is
+> already installed, it sets `WORDJS_PRESEED_CONFIG=1` and therefore has **no administrator** — it is
+> browsable, not loggable-into. See [`docker/README.md`](../docker/README.md).
+
+### Kubernetes
+
+A minimal chart lives at **[`deploy/helm/wordjs`](../deploy/helm/wordjs)**.
+
+```bash
+docker build -t <registry>/wordjs:2.1.0 . && docker push <registry>/wordjs:2.1.0
+helm install wordjs deploy/helm/wordjs \
+  --namespace wordjs --create-namespace \
+  --set image.repository=<registry>/wordjs --set image.tag=2.1.0 \
+  --set siteUrl=https://cms.example.com \
+  --set installToken.value="$(openssl rand -hex 24)"
+kubectl -n wordjs port-forward deployment/wordjs 3000:3000   # then browse /install
+```
+
+It renders a Deployment (`strategy: Recreate`, `fsGroup: 1001` so the non-root user can write the
+volumes), a Service, two `ReadWriteOnce` PVCs annotated `helm.sh/resource-policy: keep`, an optional
+Ingress, and a Secret for the install token. Probes are split as above: `startupProbe` and
+`livenessProbe` on `/healthz`, `readinessProbe` on `/readyz` — so the Service carries no traffic until
+the site is genuinely installed and its database answers, which is why the wizard is reached by
+`port-forward` rather than through the Service.
+
+**Its limits, stated plainly.** `replicaCount` is pinned to **1** and the chart *fails to render* if you
+raise it: the pod owns a ReadWriteOnce volume and, by default, an embedded SQLite database — single
+writer, single node. `Recreate` means a few seconds of downtime per upgrade (a rolling update would
+deadlock on the volume). There is no bundled PostgreSQL or Redis, no TLS inside the pod, and no HPA,
+PodDisruptionBudget, NetworkPolicy or backup automation. Scaling out needs an external database *plus*
+the shared `themes/`, `plugins/`, `backups/`, `public/` and `ssl/` mounts from
+[`multi-node.md`](multi-node.md) — which this chart does not model. There is also **no published
+registry image**: nothing pushes one, so `image.repository` has no default and the chart refuses to
+render without it rather than emit a reference that cannot pull.
+
+### What CI checks
+
+The `Docker image (build + boot + install)` job builds the image, boots the container, asserts a fresh
+one is alive (`/healthz`) but **not** ready (`/readyz` → 503) and **not** installed, runs the headless
+install above, then asserts `setup/status` reports installed, `/readyz` turns 200, the home page answers
+200 and the container's own `HEALTHCHECK` reports `healthy`. It also `helm lint`s and `helm template`s
+the chart (including a check that `replicaCount=2` is refused) and renders both compose files. Container
+logs are dumped on any failure.
 
 ---
 
@@ -360,7 +529,17 @@ If the flag is set but the probe fails (e.g. "Failed to connect to bus"), the lo
 }
 ```
 
-Default `60`; `0` disables it. The window is a full minute on purpose: legitimate plugin work is bursty (an import, a thumbnail batch, a sitemap rebuild all peg a core for seconds) and a false positive kills a *working* plugin, so a single tick below the threshold resets the window. Raise it if your plugins do long CPU-bound batches; lower it only if you would rather kill honest work than wait a minute. It samples Linux `/proc/<pid>/stat`, macOS `ps -o cputime=` and, on Windows, the `CPU Time` column of `tasklist /V`, and stands down only where a preventive cap **is** installed — Windows with `cpuQuotaPercent > 0` (Job Object rate control) or the cgroup scope with `cpuQuotaPercent > 0` (`CPUQuota`). **The cgroup scope with no quota is the one configuration left with no CPU bound at all**: there `child.pid` is `systemd-run`, not the plugin (exactly as for the RSS poll), so set `cpuQuotaPercent` — the server warns once at launch if you do not. Being reactive, the watchdog bounds a burn rather than preventing one; `cpuQuotaPercent` remains the real ceiling wherever you can install it.
+Default `60`; `0` disables it. The window is a full minute on purpose: legitimate plugin work is bursty (an import, a thumbnail batch, a sitemap rebuild all peg a core for seconds) and a false positive kills a *working* plugin, so a single tick below the threshold resets the window. Raise it if your plugins do long CPU-bound batches; lower it only if you would rather kill honest work than wait a minute. It samples Linux `/proc/<pid>/stat`, macOS `ps -o cputime=` and, on Windows, the `CPU Time` column of `tasklist /V`, and stands down only where a preventive cap **is** installed — Windows with `cpuQuotaPercent > 0` (Job Object rate control) or the cgroup scope with `cpuQuotaPercent > 0` (`CPUQuota`). **The cgroup scope with no quota is the one configuration left with no CPU bound at all**: there `child.pid` is `systemd-run`, not the plugin (exactly as for the RSS poll), so set `cpuQuotaPercent`. Being reactive, the watchdog bounds a burn rather than preventing one; `cpuQuotaPercent` remains the real ceiling wherever you can install it.
+
+> **How to tell which bound you actually have.** Enabling `useCgroupMemoryCap` without `cpuQuotaPercent` leaves isolated plugins able to peg a core indefinitely, and until now the only trace was a single `[Sandbox]` line on the boot that discovered it. That combination now also raises a **persistent admin notice** (`sandbox.cgroup-no-cpu-quota`, on **Admin → Notices**), and `GET /api/v1/health/details` reports `sandbox.cpu` in one word:
+>
+> | `sandbox.cpu` | meaning |
+> | --- | --- |
+> | `preventive` | a kernel ceiling is installed — cgroup `CPUQuota`, or the Windows Job Object rate cap. A burn cannot happen. |
+> | `reactive` | no ceiling, but the host-side poll `SIGKILL`s a sustained burn. A burn is bounded, not prevented. |
+> | `unbounded` | neither. **This is the call to action** — set `sandbox.cpuQuotaPercent`, or turn `useCgroupMemoryCap` off to fall back to the reactive watchdog. |
+>
+> The value is the outcome the last isolated launch actually got, not a rule re-derived from the config; before any plugin has launched it answers conservatively from the knobs (a cgroup host with no quota reads `unbounded` rather than claiming a bound it may not have). The first launch that confirms a real bound retires the notice.
 
 ### `config.sandbox.addressSpaceCapMb` — RLIMIT_AS override (Linux; probe-certified POSIX only)
 
@@ -389,7 +568,7 @@ The value is floored at 6144 MB and validated by a boot probe (using the same `e
 1.  **Firewall:** Only open port `3000` (Gateway) to the public. Ports `4000` (Backend) and `3001` (Frontend) should stay internal.
 2.  **HTTPS:** Use a service like **Cloudflare** or a simple **Nginx Reverse Proxy** on top of the Gateway to handle SSL (Certbot).
 3.  **Secrets:** Ensure your `gatewaySecret` and `jwtSecret` in `wordjs-config.json` are cryptographically secure (auto-generated by the installer).
-4.  **Install token:** On a fresh, not-yet-installed instance the pre-install endpoints (`POST /api/v1/setup/install`, `POST /api/v1/setup/test-db`) are gated by a **one-time install token** printed to the server console (also mirrored to `backend/data/install-token`, `0600`, and overridable via `WORDJS_INSTALL_TOKEN` ≥ 16 chars). Read it from the console to complete the wizard; it is cleared once installed. See **[How an operator deploys a release](#how-an-operator-deploys-a-release)**.
+4.  **Install token:** On a fresh, not-yet-installed instance the pre-install endpoints (`POST /api/v1/setup/install`, `POST /api/v1/setup/test-db`) are gated by a **one-time install token** written to `backend/data/install-token` (`0600`) and overridable via `WORDJS_INSTALL_TOKEN` (≥ 16 chars). It is printed in the boot banner **only when stdout is a TTY** or `WORDJS_PRINT_INSTALL_TOKEN=1` — off a TTY the banner omits the `#token=` fragment and names the file, so the bootstrap secret is not shipped to your log aggregator. Read it from the terminal, or from that file, to complete the wizard; it is cleared once installed. See **[How an operator deploys a release](#how-an-operator-deploys-a-release)**.
 5.  **Metrics:** The Prometheus `/metrics` endpoint is **disabled (returns 404) by default** — it only serves once a scrape token is set via `config.metrics.token` (`wordjs-config.json`) or the `METRICS_TOKEN` env var. Once set, scrape with `Authorization: Bearer <token>` (header only — `?token=` is not accepted); a wrong token returns 401. So metrics are never exposed publicly unless you opt in.
 6.  **CORS:** No extra config is needed — in production CORS allows the configured origins (`siteUrl`, `frontendUrl`, `gatewayUrl`) **plus any same-origin request** (`Origin` host matching the gateway-pinned `X-Forwarded-Host`, or `Host` when there is no proxy), which covers the monolith and a reverse proxy that forwards `Host`; only an explicit `nodeEnv: "development"` additionally reflects `localhost`/`127.0.0.1`/`::1`.
 7.  **Private keys 0600:** Auto-generated private keys (`ssl-auto.key`, `gateway-internal.key`, ACME `privkey.pem`) are written owner-only (`0600`) on POSIX (`chmod` is a no-op on Windows), so the self-signed/auto keys are not world-readable.

@@ -372,6 +372,59 @@ router.post('/:id/location', authenticate, isAdmin, asyncHandler(async (req: Req
  * POST /menus/:id/items
  * Add menu item
  */
+/**
+ * @swagger
+ * /menus/{id}/items:
+ *   post:
+ *     summary: Add an item to a menu
+ *     tags: [Menus]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         description: The menu id.
+ *         schema:
+ *           type: integer
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [title]
+ *             properties:
+ *               title:
+ *                 type: string
+ *               url:
+ *                 type: string
+ *                 description: Sanitised before it is stored - anything that is not an acceptable link becomes a bare hash.
+ *               target:
+ *                 type: string
+ *               type:
+ *                 type: string
+ *                 description: What the item points at, for example a post type or a taxonomy.
+ *               objectId:
+ *                 type: integer
+ *                 description: The id of the pointed-at object, when the item is not a plain link.
+ *               parent:
+ *                 type: integer
+ *                 description: Parent menu item id, for nested menus.
+ *               order:
+ *                 type: integer
+ *               classes:
+ *                 type: string
+ *     responses:
+ *       201:
+ *         description: The created menu item
+ *       400:
+ *         description: Title is required (rest_missing_param)
+ *       401:
+ *         description: Not logged in (rest_not_logged_in)
+ *       403:
+ *         description: Not an administrator
+ */
 router.post('/:id/items', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     const menuId = parseInt(req.params.id as string, 10);
     const { title, url, target, type, objectId, parent, order, classes } = req.body;
@@ -404,6 +457,53 @@ router.post('/:id/items', authenticate, isAdmin, asyncHandler(async (req: Reques
  * PUT /menus/items/:itemId
  * Update menu item
  */
+/**
+ * @swagger
+ * /menus/items/{itemId}:
+ *   put:
+ *     summary: Update a menu item
+ *     description: Only the fields present in the body are changed. A url that is present is sanitised; an explicitly cleared one becomes a bare hash rather than being dropped.
+ *     tags: [Menus]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: itemId
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               title:
+ *                 type: string
+ *               url:
+ *                 type: string
+ *               target:
+ *                 type: string
+ *               type:
+ *                 type: string
+ *               objectId:
+ *                 type: integer
+ *               parent:
+ *                 type: integer
+ *               order:
+ *                 type: integer
+ *               classes:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: The updated menu item
+ *       401:
+ *         description: Not logged in (rest_not_logged_in)
+ *       403:
+ *         description: Not an administrator
+ *       404:
+ *         description: Menu item not found (rest_menu_item_invalid)
+ */
 router.put('/items/:itemId', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     const itemId = parseInt(req.params.itemId as string, 10);
 
@@ -432,6 +532,39 @@ router.put('/items/:itemId', authenticate, isAdmin, asyncHandler(async (req: Req
 /**
  * DELETE /menus/items/:itemId
  * Delete menu item
+ */
+/**
+ * @swagger
+ * /menus/items/{itemId}:
+ *   delete:
+ *     summary: Delete a menu item
+ *     tags: [Menus]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: itemId
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     responses:
+ *       200:
+ *         description: Menu item deleted. The body carries the deleted row as previous.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 deleted:
+ *                   type: boolean
+ *                 previous:
+ *                   type: object
+ *       401:
+ *         description: Not logged in (rest_not_logged_in)
+ *       403:
+ *         description: Not an administrator
+ *       404:
+ *         description: Menu item not found (rest_menu_item_invalid)
  */
 router.delete('/items/:itemId', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     const itemId = parseInt(req.params.itemId as string, 10);

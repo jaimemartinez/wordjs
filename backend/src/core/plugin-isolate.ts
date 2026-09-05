@@ -628,6 +628,16 @@ const WIN_CPU_SAMPLE_MIN_MS = 30_000;
 // Latch for the one residual combination (cgroup mode with no CPUQuota) — warned ONCE per host process,
 // never per tick. See where it is set, at the launch that discovers it.
 let cgroupNoCpuQuotaWarned = false;
+// Its counterpart on the other side of that fork: the first launch that CONFIRMS a CPU bound retires
+// the persistent admin notice a previous boot may have raised. Latched for the same reason the warning
+// is — platform, cgroup delegation and sandbox.cpuQuotaPercent are host-level facts, identical for
+// every child in this process, so one launch answers for all of them.
+let cgroupCpuBoundConfirmed = false;
+// The bound the LAST isolated launch actually got, latched for GET /health/details (`sandbox.cpu`).
+// null until a plugin has launched — getSandboxCpuBound() answers from the knobs until then.
+let sandboxCpuBound: 'unbounded' | 'preventive' | 'reactive' | null = null;
+// One id per CONDITION (see core/admin-notices): re-raised on every boot, one row on /admin/notices.
+const CGROUP_CPU_NOTICE_ID = 'sandbox.cgroup-no-cpu-quota';
 
 // One observation. `at` is the wall clock (ms) at which the tick that produced it ENDED; `ratio` is
 // Δcpu/Δwall across that tick (1 = one core saturated, >1 is possible for a multi-threaded child).
@@ -804,6 +814,70 @@ function preventiveCpuCapActive(launch: { platform: string; appContainer: boolea
     if (launch.platform === 'win32') return !!launch.appContainer && quota < 100;
     if (launch.platform === 'linux') return !!launch.cgroupOk;    // CPUQuota rides in the scope, or nowhere
     return false;                                                 // macOS has no preventive CPU cap at all
+}
+
+/**
+ * THE CPU BOUND ON THIS HOST, IN ONE WORD — what GET /health/details reports as `sandbox.cpu`.
+ *
+ *   · 'preventive' — a kernel ceiling is installed for the child (cgroup CPUQuota, or the Windows
+ *                    Job Object rate cap). A burn cannot happen.
+ *   · 'reactive'   — no ceiling, but the host-side poll samples the child's CPU time and SIGKILLs a
+ *                    sustained burn. A burn is bounded, not prevented.
+ *   · 'unbounded'  — neither. An isolated plugin can peg a core for as long as it likes.
+ *
+ * After the first launch this is the OUTCOME that launch got, not a rule re-derived from config —
+ * the same discipline SystemHealth.sandboxStatusFor() exists to enforce for the confinement layer.
+ *
+ * BEFORE any launch there is no outcome to report (cgroupOk needs the probe), so it answers from the
+ * knobs — and answers CONSERVATIVELY. The reactive watchdog is default-on and covers every path that
+ * has no preventive cap, so 'reactive' is what a launch would produce, EXCEPT in the one combination
+ * this file already warns about: Linux cgroup mode with no quota, where the watchdog cannot run at all
+ * because child.pid is systemd-run. Claiming a bound we might not have is the failure mode; that
+ * combination therefore reads 'unbounded' until a launch says otherwise.
+ */
+function getSandboxCpuBound(): 'unbounded' | 'preventive' | 'reactive' {
+    if (sandboxCpuBound) return sandboxCpuBound;
+    if (cpuBurstWindowMs() <= 0) return 'unbounded'; // the watchdog is switched off (cpuBurstSeconds: 0)
+    let cgroupRequested = false;
+    try { cgroupRequested = !!require('../config/app').sandbox?.useCgroupMemoryCap; } catch { /* config unavailable */ }
+    if (process.platform === 'linux' && cgroupRequested && configuredCpuQuotaPercent() <= 0) return 'unbounded';
+    return 'reactive';
+}
+
+/**
+ * The cgroup-without-a-quota residual, put where an administrator will actually meet it.
+ *
+ * A once-per-process console.warn is exactly how the dead purge channel stayed invisible for months
+ * (audit 2026-08-18 #27): the operator's only trace was a log line on a boot nobody was watching.
+ * These two helpers never throw and never reject — a plugin launch must not be able to fail because a
+ * notice could not be stored.
+ */
+function raiseCgroupCpuNotice(): void {
+    try {
+        require('./admin-notices').pushAdminNotice({
+            id: CGROUP_CPU_NOTICE_ID,
+            level: 'error',
+            title: 'Isolated plugins have no CPU limit:',
+            message:
+                'the preventive cgroup cap is enabled (sandbox.useCgroupMemoryCap) but sandbox.cpuQuotaPercent ' +
+                'is 0, so no CPUQuota rides in the systemd scope — and the reactive CPU watchdog cannot cover ' +
+                'this host either, because under a --scope the process WordJS can see is systemd-run rather ' +
+                'than the plugin. A single plugin can peg a core indefinitely. Set sandbox.cpuQuotaPercent in ' +
+                'backend/wordjs-config.json (100 = one full core) and restart, or turn sandbox.useCgroupMemoryCap ' +
+                'off to fall back to the reactive watchdog.',
+            since: Date.now(),
+        });
+    } catch (e: any) {
+        console.warn(`[Sandbox] the CPU-bound admin notice could not be raised: ${e && e.message}`);
+    }
+}
+
+function retireCgroupCpuNotice(): void {
+    try {
+        require('./admin-notices').clearAdminNotice(CGROUP_CPU_NOTICE_ID);
+    } catch (e: any) {
+        console.warn(`[Sandbox] the CPU-bound admin notice could not be retired: ${e && e.message}`);
+    }
 }
 // The cgroup-scope resource caps, built ONCE so probeCgroupCap and the real launch apply the IDENTICAL
 // set. A mismatch is exactly what broke the first CPU-quota attempt (#192): the probe validated a
@@ -1958,9 +2032,27 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
             cgroupOk,
             quotaPercent: configuredCpuQuotaPercent(),
         });
+        // THE BOUND THIS CHILD ACTUALLY GOT, latched for the health surface (`sandbox.cpu`). "Sampled"
+        // is the RSS poll's OWN condition below, not the config's: the CPU watchdog rides that same
+        // tick, so wherever the poll does not run the watchdog does not either.
+        const cpuSampled = cpuWindowMs > 0 && (
+            (process.platform === 'linux' && !cgroupOk && !!child.pid)
+            || ((process.platform === 'win32' || process.platform === 'darwin') && !!pollPid)
+        );
+        sandboxCpuBound = preventiveCpuCap ? 'preventive' : (cpuSampled ? 'reactive' : 'unbounded');
         if (cgroupOk && !preventiveCpuCap && !cgroupNoCpuQuotaWarned) {
             cgroupNoCpuQuotaWarned = true;
             console.warn('[Sandbox] cgroup mode is ON but sandbox.cpuQuotaPercent is 0: isolated plugins have NO CPU bound on this host. The preventive CPUQuota is not in the scope, and the reactive CPU watchdog cannot cover it either (under a --scope, child.pid is systemd-run, not the plugin). Set sandbox.cpuQuotaPercent to install the preventive cap.');
+            // …and the same sentence somewhere it survives the boot log.
+            raiseCgroupCpuNotice();
+            // The `else if` below is guarded on the bound itself, not on this branch, so the SECOND
+            // launch on a quota-less cgroup host (where the latch is already set) still cannot retire
+            // the notice: sandboxCpuBound is 'unbounded' there.
+        } else if (!cgroupCpuBoundConfirmed && sandboxCpuBound !== 'unbounded') {
+            // A launch that really does have a bound retires the notice a previous boot left behind —
+            // the operator who sets cpuQuotaPercent must see the panel agree on the next restart.
+            cgroupCpuBoundConfirmed = true;
+            retireCgroupCpuNotice();
         }
         // The relay installs the rate cap best-effort: SetInformationJobObject failing there prints
         // `WJSAC WARN setcpurate <gle>` on the relay's stderr and the contained child runs on UNCAPPED.
@@ -1971,6 +2063,11 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
                 child.stderr.on('data', (d: any) => {
                     if (!preventiveCpuCap || !/WJSAC WARN setcpurate/.test(String(d))) return;
                     preventiveCpuCap = false;
+                    // The health surface must lose the claim WITH the cap: this child is now covered by
+                    // the poll below (pollPid is set on the AppContainer path), i.e. reactive, not
+                    // preventive. A panel that keeps saying 'preventive' here is the "reports success
+                    // and binds nothing" failure this watch exists to catch.
+                    sandboxCpuBound = 'reactive';
                     console.warn(`[Isolate ${logSafe(slug)}] the AppContainer relay could not install the Job Object CPU rate cap — the reactive CPU watchdog takes over for this child.`);
                 });
             } catch { /* no stderr to watch ⇒ the claim stands, as it did before */ }
@@ -2897,6 +2994,10 @@ module.exports = {
     // This platform's native kernel confinement layer (Landlock / AppContainer / Seatbelt / none).
     probePlatformConfinement, getSandboxPlatformState, getSandboxPlatformNetworkState,
     getSandboxPlatformConfinement, platformKernelMechanism, isolatedLaunchPosture,
+    // The CPU bound this host actually has ('preventive' | 'reactive' | 'unbounded') — read by
+    // routes/health.ts for `sandbox.cpu`. The cgroup-without-a-quota residual is the only value that
+    // means "no bound at all", and it also raises a persistent admin notice at the launch that finds it.
+    getSandboxCpuBound,
     // Exported for its test only. The forwarding sink is line-buffered, and the bug it hid — a child
     // that dies mid-line losing its only output — is invisible from outside: you would have to spawn a
     // real plugin that crashes in exactly that shape to observe it. Reaching it directly is what lets

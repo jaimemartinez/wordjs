@@ -1,0 +1,38 @@
+# WordJS code owners.
+#
+# WHAT THIS FILE IS FOR. One thing, and it is the review ledger. `marketplace/reviews.json` is the only
+# tracked file in this repository whose contents are a CLAIM ABOUT A HUMAN DECISION: a record in it is
+# what puts the "Reviewed" badge on a catalog entry, on the highest-privilege screen in the product,
+# immediately above an Install button. Every other check in the marketplace pipeline verifies that the
+# artefacts agree with each other; nothing in a diff can verify WHO wrote a line of the ledger.
+#
+# The ledger is therefore owned, and a change to it requires the owner's review. The mechanical half of
+# the same rule lives in .github/workflows/plugin-review.yml, which refuses a pull request that edits a
+# plugin package AND the ledger together — a submitter cannot record their own review even in a diff
+# nobody reads closely. Ownership is the other half: it decides who may record one at all.
+#
+# HOW THIS BECOMES ENFORCEMENT. CODEOWNERS by itself only REQUESTS a review. It becomes a gate when
+# "Require review from Code Owners" is enabled on the protected branch — and that setting is meaningful
+# only once a second maintainer exists, because GitHub does not let an author approve their own pull
+# request: with a single maintainer, requiring code-owner review on a file that maintainer edits would
+# block every change to it, including a legitimate review record. So the setting is turned on with the
+# second maintainer account, and until then this file's job is to make the ownership explicit, put the
+# ledger on the owner's review queue automatically, and record what the branch protection must become.
+# marketplace/REVIEW.md §8 says the same thing in the policy, where an outside author will read it.
+#
+# Syntax: last matching pattern wins. Paths are anchored with a leading slash where a repository-root
+# match is meant, so `/marketplace/reviews.json` is that one file and nothing else named like it.
+
+# The review ledger — the badge itself.
+/marketplace/reviews.json           @jaimemartinez
+
+# The policy the badge refers to, and the code that decides what a ledger record MEANS: the shared
+# reader, the gate that binds a record to the permissions/version/contents it was granted against, the
+# submission scanner, and the workflow that keeps a submission out of the ledger. A change here can
+# hollow out the ledger without touching it.
+/marketplace/REVIEW.md              @jaimemartinez
+/backend/scripts/marketplace-review.js   @jaimemartinez
+/backend/scripts/verify-marketplace.js   @jaimemartinez
+/backend/scripts/scan-plugin.mjs         @jaimemartinez
+/.github/workflows/plugin-review.yml     @jaimemartinez
+/.github/CODEOWNERS                 @jaimemartinez

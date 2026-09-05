@@ -29,7 +29,7 @@ const SYMBOL_CONTENT = [
 ];
 
 const getMenuByRef = vi.fn(async () => ({ items: MENU_ITEMS }));
-const getPosts = vi.fn(async () => [
+const getPostPool = vi.fn(async () => [
     { id: 41, title: "Real post", slug: "real-post", excerpt: "…", status: "publish", date: "2026-08-17" },
 ]);
 const getPostById = vi.fn(async (id: number) =>
@@ -39,7 +39,7 @@ const getPostById = vi.fn(async (id: number) =>
 );
 
 vi.mock("@/lib/server-api", () => ({
-    getPosts: (...args: unknown[]) => getPosts(...(args as [])),
+    getPostPool: (...args: unknown[]) => getPostPool(...(args as [])),
     getPostById: (...args: unknown[]) => getPostById(...(args as [number])),
     getMenuByRef: (...args: unknown[]) => getMenuByRef(...(args as [])),
     getSettings: vi.fn(async () => ({})),
@@ -61,7 +61,7 @@ type Node = { type: string; props: Record<string, unknown> };
 
 beforeEach(() => {
     getMenuByRef.mockClear();
-    getPosts.mockClear();
+    getPostPool.mockClear();
     getPostById.mockClear();
 });
 
@@ -79,7 +79,7 @@ describe("resolveDynamicBlocks — symbol interiors are collected before the dat
 
     it("a PostsGrid that exists ONLY inside a symbol schedules the posts fetch and gets real posts", async () => {
         const out = (await resolveDynamicBlocks(tree())) as { content: Node[] };
-        expect(getPosts).toHaveBeenCalledTimes(1);
+        expect(getPostPool).toHaveBeenCalledTimes(1);
         const symbol = out.content.find((n) => n.type === "Symbol")!;
         const injected = symbol.props.resolvedSymbolItems as Node[];
         const grid = injected.find((n) => n.type === "PostsGrid")!;

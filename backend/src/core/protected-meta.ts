@@ -46,6 +46,18 @@ import { REVISION_SNAPSHOT_META_KEY } from './revision-constants';
  *  · `_edit_lock` / `_edit_last` — editing-session bookkeeping. Nothing live writes them today (the
  *    importers explicitly SKIP them as non-portable), so listing them costs nothing and stops the
  *    generic bag from becoming their first writer.
+ *  · `_wxr_source_url` / `_wxr_menu_item_id` / `_wxr_remote_url` — the WXR importer's own IDEMPOTENCY
+ *    KEYS (core/wxr-media.ts, core/wxr-menus.ts). They are not descriptive metadata: the next run
+ *    INDEXES them and treats a hit as "this is already imported", so a value a client (or a third
+ *    party's XML, through the importer's generic postmeta copier) can author is a way to make the
+ *    importer report a real attachment as already present and point its id map at the planted post,
+ *    or to suppress real menu items as `skipped`. `_wxr_remote_url` is the same shape one door over:
+ *    models/Media.formatAttachment PREFERS it over the guid, so a writable value re-points an
+ *    attachment's `sourceUrl` at any host. Core writes all three directly (Post.updateMeta), exactly
+ *    as Media.create() writes `_wp_attached_file` — "protected" is a rule about the SURFACE, not the
+ *    bytes (see the header). The literals are duplicated here rather than imported so this module
+ *    keeps its zero-dependency shape; backend/src/tests/wxr-import.test.ts asserts the two modules
+ *    agree, so they cannot drift.
  */
 const PROTECTED_POST_META: Set<string> = new Set([
     '_wp_attached_file',
@@ -54,6 +66,9 @@ const PROTECTED_POST_META: Set<string> = new Set([
     '_wp_trash_meta_time',
     '_edit_lock',
     '_edit_last',
+    '_wxr_source_url',
+    '_wxr_menu_item_id',
+    '_wxr_remote_url',
     // F4 snapshot envelopes are executable restore instructions. Allowing a generic meta request to
     // forge one would turn a later restore into an arbitrary core-column/meta write.
     REVISION_SNAPSHOT_META_KEY,

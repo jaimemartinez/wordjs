@@ -801,6 +801,47 @@ async function recoverInterruptedPluginUpdates(): Promise<void> {
  *   get:
  *     summary: Enqueued frontend assets (scripts/styles) for ACTIVE plugins — public, for the site layout
  *     tags: [Plugins]
+ *     responses:
+ *       200:
+ *         description: >-
+ *           Scripts and styles enqueued by the currently ACTIVE plugins. Every stored entry is re-checked
+ *           against the published plugin surface on the way out, so an entry pointing at a path that is no
+ *           longer served is omitted rather than emitted as a broken tag. Sent with
+ *           Cache-Control public, max-age=60.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               required: [scripts, styles]
+ *               properties:
+ *                 scripts:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       handle:
+ *                         type: string
+ *                         description: Namespaced as "<slug>:<handle>".
+ *                       src:
+ *                         type: string
+ *                       inFooter:
+ *                         type: boolean
+ *                       strategy:
+ *                         type: string
+ *                 styles:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       handle:
+ *                         type: string
+ *                         description: Namespaced as "<slug>:<handle>".
+ *                       src:
+ *                         type: string
+ *                       media:
+ *                         type: string
+ *       429:
+ *         description: Global per-IP API rate limit exceeded.
  */
 router.get('/assets', asyncHandler(async (req: Request, res: Response) => {
     const { getActiveAssets } = require('../core/plugin-assets');
@@ -926,6 +967,58 @@ router.get('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: Re
  *     summary: Live runtime health of an isolated plugin
  *     tags: [Plugins]
  *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: slug
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: >-
+ *           The isolate's live health — the TRUE runtime state, which can disagree with the persisted
+ *           "active" flag after a crash. A managed isolate with no health record yet reports only its state.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               required: [state]
+ *               properties:
+ *                 state:
+ *                   type: string
+ *                   description: running, crashed, crash-looping or restarting.
+ *                 pid:
+ *                   type: integer
+ *                 startedAt:
+ *                   type: integer
+ *                   description: Epoch milliseconds.
+ *                 uptimeMs:
+ *                   type: integer
+ *                 restarts:
+ *                   type: integer
+ *                 lastExitCode:
+ *                   type: integer
+ *                   nullable: true
+ *                 lastError:
+ *                   type: string
+ *                   nullable: true
+ *                 rssBytes:
+ *                   type: integer
+ *       400:
+ *         description: The slug is not a well-formed plugin slug (rejected before any path is built).
+ *       401:
+ *         description: >-
+ *           Not authenticated: no session cookie and no Bearer credential, an expired/revoked token, or a
+ *           token whose owner no longer exists (rest_not_logged_in, rest_token_expired, rest_token_revoked,
+ *           rest_token_invalid, rest_user_invalid).
+ *       403:
+ *         description: >-
+ *           Authenticated but not an administrator (rest_forbidden), or an API token whose scope does not
+ *           reach this resource (rest_token_scope_insufficient).
+ *       404:
+ *         description: The plugin is not a loaded isolate (never loaded, or not run in isolation).
+ *       429:
+ *         description: Global per-IP API rate limit exceeded.
  */
 router.get('/:slug/status', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     const slug = safeSlugParam(req.params.slug);
@@ -1026,6 +1119,72 @@ router.post('/:slug/activate', authenticate, isAdmin, asyncHandler(async (req: R
  *     summary: Set the per-permission grants for a plugin (admin) — Android-style, default-deny
  *     tags: [Plugins]
  *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: slug
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               granted:
+ *                 type: array
+ *                 description: The full granted set, as "scope:access" tokens. Absent or non-array means "grant nothing".
+ *                 items:
+ *                   type: string
+ *               network:
+ *                 type: boolean
+ *                 description: Truthy adds the "network" grant to the set above.
+ *     responses:
+ *       200:
+ *         description: >-
+ *           Grants persisted. A revoke is re-validated against the code on disk immediately: if the plugin
+ *           still needs a capability that was just denied it is deactivated (deactivated/deactivationReason);
+ *           otherwise a running isolate is re-spawned so the change takes effect now (reloaded). Both the
+ *           deactivation and the reload are best-effort — the grant itself is already stored either way.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               required: [success, slug, granted, network, reloaded, deactivated, message]
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 slug:
+ *                   type: string
+ *                 granted:
+ *                   type: array
+ *                   items:
+ *                     type: string
+ *                 network:
+ *                   type: boolean
+ *                 reloaded:
+ *                   type: boolean
+ *                 deactivated:
+ *                   type: boolean
+ *                 deactivationReason:
+ *                   type: string
+ *                   nullable: true
+ *                 message:
+ *                   type: string
+ *       400:
+ *         description: The slug is not a well-formed plugin slug.
+ *       401:
+ *         description: >-
+ *           Not authenticated: no session cookie and no Bearer credential, an expired/revoked token, or a
+ *           token whose owner no longer exists (rest_not_logged_in, rest_token_expired, rest_token_revoked,
+ *           rest_token_invalid, rest_user_invalid).
+ *       403:
+ *         description: >-
+ *           Authenticated but not an administrator (rest_forbidden); an API token whose scope does not grant
+ *           write access here (rest_token_scope_insufficient); or a cookie-authenticated request that failed
+ *           the same-origin / double-submit CSRF gate (rest_csrf_invalid, rest_csrf_token).
+ *       429:
+ *         description: Global per-IP API rate limit exceeded.
  */
 router.post('/:slug/permissions', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     const slug = safeSlugParam(req.params.slug);
@@ -1104,14 +1263,103 @@ router.post('/:slug/permissions', authenticate, isAdmin, asyncHandler(async (req
 /**
  * @swagger
  * /plugins/{slug}/egress-hosts:
+ *   parameters:
+ *     - in: path
+ *       name: slug
+ *       required: true
+ *       schema:
+ *         type: string
  *   get:
  *     summary: Get a plugin's egress allowlist (admin). Only meaningful for a network-granted plugin.
  *     tags: [Plugins]
  *     security: [{ bearerAuth: [] }]
+ *     responses:
+ *       200:
+ *         description: The stored allowlist, plus whether the plugin actually holds the network grant.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               required: [slug, hosts, network]
+ *               properties:
+ *                 slug:
+ *                   type: string
+ *                 hosts:
+ *                   type: array
+ *                   description: Empty means "no allowlist" — every public host is reachable.
+ *                   items:
+ *                     type: string
+ *                 network:
+ *                   type: boolean
+ *       400:
+ *         description: The slug is not a well-formed plugin slug.
+ *       401:
+ *         description: >-
+ *           Not authenticated: no session cookie and no Bearer credential, an expired/revoked token, or a
+ *           token whose owner no longer exists (rest_not_logged_in, rest_token_expired, rest_token_revoked,
+ *           rest_token_invalid, rest_user_invalid).
+ *       403:
+ *         description: >-
+ *           Authenticated but not an administrator (rest_forbidden), or an API token whose scope does not
+ *           reach this resource (rest_token_scope_insufficient).
+ *       429:
+ *         description: Global per-IP API rate limit exceeded.
  *   post:
  *     summary: Set a plugin's egress allowlist (admin). Empty = allow all public hosts; non-empty = default-deny except listed hosts + their subdomains.
  *     tags: [Plugins]
  *     security: [{ bearerAuth: [] }]
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               hosts:
+ *                 type: array
+ *                 description: >-
+ *                   Hostnames, optionally wildcarded. Entries carrying a scheme, path or port are dropped
+ *                   silently. An empty array clears the list (back to allow-all-public). Absent or non-array
+ *                   is treated as an empty array.
+ *                 items:
+ *                   type: string
+ *     responses:
+ *       200:
+ *         description: >-
+ *           Allowlist stored (hosts echoes back what SURVIVED validation, not what was sent). A running
+ *           isolate is re-spawned best-effort so the child re-installs the list; reloaded says whether that
+ *           happened.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               required: [success, slug, hosts, reloaded, message]
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 slug:
+ *                   type: string
+ *                 hosts:
+ *                   type: array
+ *                   items:
+ *                     type: string
+ *                 reloaded:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
+ *       400:
+ *         description: The slug is not a well-formed plugin slug.
+ *       401:
+ *         description: >-
+ *           Not authenticated: no session cookie and no Bearer credential, an expired/revoked token, or a
+ *           token whose owner no longer exists (rest_not_logged_in, rest_token_expired, rest_token_revoked,
+ *           rest_token_invalid, rest_user_invalid).
+ *       403:
+ *         description: >-
+ *           Authenticated but not an administrator (rest_forbidden); an API token whose scope does not grant
+ *           write access here (rest_token_scope_insufficient); or a cookie-authenticated request that failed
+ *           the same-origin / double-submit CSRF gate (rest_csrf_invalid, rest_csrf_token).
+ *       429:
+ *         description: Global per-IP API rate limit exceeded.
  */
 router.get('/:slug/egress-hosts', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     const slug = safeSlugParam(req.params.slug);
@@ -1299,6 +1547,71 @@ function getClaimedPorts(slug: string): number[] {
  *     tags: [Plugins]
  *     security:
  *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: slug
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: >-
+ *           One verdict per port the manifest claims. Inspection only works on Linux with ss available;
+ *           anywhere else the verdict is uninspectable, which callers must NOT read as "free".
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               required: [slug, conflicts]
+ *               properties:
+ *                 slug:
+ *                   type: string
+ *                 conflicts:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     required: [port, inUse, canFree]
+ *                     properties:
+ *                       port:
+ *                         type: integer
+ *                       inUse:
+ *                         type: boolean
+ *                       canFree:
+ *                         type: boolean
+ *                         description: Whether POST /plugins/{slug}/free-port could act on this occupant.
+ *                       uninspectable:
+ *                         type: boolean
+ *                         description: The sockets could not be looked at — distinct from a genuinely free port.
+ *                       reason:
+ *                         type: string
+ *                       occupant:
+ *                         type: object
+ *                         properties:
+ *                           process:
+ *                             type: string
+ *                           pids:
+ *                             type: array
+ *                             items:
+ *                               type: integer
+ *                           loopbackOnly:
+ *                             type: boolean
+ *                           service:
+ *                             type: string
+ *                           label:
+ *                             type: string
+ *       400:
+ *         description: The slug is not a well-formed plugin slug.
+ *       401:
+ *         description: >-
+ *           Not authenticated: no session cookie and no Bearer credential, an expired/revoked token, or a
+ *           token whose owner no longer exists (rest_not_logged_in, rest_token_expired, rest_token_revoked,
+ *           rest_token_invalid, rest_user_invalid).
+ *       403:
+ *         description: >-
+ *           Authenticated but not an administrator (rest_forbidden), or an API token whose scope does not
+ *           reach this resource (rest_token_scope_insufficient).
+ *       429:
+ *         description: Global per-IP API rate limit exceeded.
  */
 router.get('/:slug/port-conflicts', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     const slug = safeSlugParam(req.params.slug);
@@ -1322,6 +1635,91 @@ router.get('/:slug/port-conflicts', authenticate, isAdmin, asyncHandler(async (r
  *     tags: [Plugins]
  *     security:
  *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: slug
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [port]
+ *             properties:
+ *               port:
+ *                 type: integer
+ *                 description: Must be one of the ports this plugin's manifest declares in claimPorts.
+ *               allowDisable:
+ *                 type: boolean
+ *                 description: >-
+ *                   The admin's explicit confirmation, travelling WITH the request. Strictly true or the
+ *                   core refuses to disable anything (409 CONSENT_REQUIRED), so a stale client snapshot can
+ *                   never turn into an unconsented service disable.
+ *     responses:
+ *       200:
+ *         description: >-
+ *           The port was freed, or was already free. A running isolate is reloaded afterwards so the
+ *           plugin's own bind logic can take the port right away.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               required: [success, port, reloaded]
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 port:
+ *                   type: integer
+ *                 freed:
+ *                   type: boolean
+ *                 alreadyFree:
+ *                   type: boolean
+ *                 service:
+ *                   type: string
+ *                 label:
+ *                   type: string
+ *                 reloaded:
+ *                   type: boolean
+ *       400:
+ *         description: >-
+ *           The slug is not a well-formed plugin slug, or the port is not an integer this plugin's manifest
+ *           declares in claimPorts. This endpoint is a targeted fix for a declared need, never a generic
+ *           service-stopping API.
+ *       401:
+ *         description: >-
+ *           Not authenticated: no session cookie and no Bearer credential, an expired/revoked token, or a
+ *           token whose owner no longer exists (rest_not_logged_in, rest_token_expired, rest_token_revoked,
+ *           rest_token_invalid, rest_user_invalid).
+ *       403:
+ *         description: >-
+ *           Authenticated but not an administrator (rest_forbidden); an API token whose scope does not grant
+ *           write access here (rest_token_scope_insufficient); or a cookie-authenticated request that failed
+ *           the same-origin / double-submit CSRF gate (rest_csrf_invalid, rest_csrf_token).
+ *       409:
+ *         description: >-
+ *           The port cannot be freed as asked. code is CONSENT_REQUIRED (allowDisable was not sent, and
+ *           details.conflict carries a fresh look at the occupant so the client can re-prompt) or
+ *           PORT_NOT_FREEABLE (the occupant is not a known, disableable system MTA).
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 error:
+ *                   type: string
+ *                 code:
+ *                   type: string
+ *                 details:
+ *                   type: object
+ *       429:
+ *         description: Global per-IP API rate limit exceeded.
+ *       502:
+ *         description: >-
+ *           The disable ran but the port did not come free (PORT_STILL_IN_USE), or the disable command
+ *           itself failed (DISABLE_FAILED).
  */
 router.post('/:slug/free-port', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     const slug = safeSlugParam(req.params.slug);

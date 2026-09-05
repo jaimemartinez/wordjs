@@ -28,18 +28,20 @@
  * durante la convivencia Puck↔Verso.
  *
  * NO PORTADO A PROPÓSITO (documentado, pendiente de una ola F3 posterior):
- *  - `resolveData` de Image (persistencia de srcSet/imgWidth/imgHeight desde la media library y
- *    saneo de srcSet ajeno) y de Columns (sync columnStyles↔columnCount + migración de props
- *    legacy css.gap/minHeight/backgroundColor/borderRadius). `BlockDefinition` aún no modela
- *    resolución async por bloque; el picker de Image SÍ registra el media elegido
- *    (rememberPickedMedia) para que el equivalente Verso pueda derivar el srcSet igual que hoy.
+ *  - `resolveData` de Columns (sync columnStyles↔columnCount + migración de props legacy
+ *    css.gap/minHeight/backgroundColor/borderRadius). `BlockDefinition` aún no modela resolución
+ *    async por bloque.
+ *    El de Image SÍ tiene equivalente, y no como hook de resolución: las props de imagen responsive
+ *    (srcSet/srcSetModern/imgWidth/imgHeight) las escribe el propio campo de media (MediaUrlField,
+ *    más abajo) en la MISMA transacción que cambia `src`, que es la única forma de que un solo
+ *    deshacer no pueda separarlas. Ver la cabecera de lib/imageSrcset.ts.
  *
  * Campos ROOT: la asimetría postConfig/pageConfig (SEO/category/allowComments SOLO en post) se
  * porta a DOS definiciones exportadas — rootFieldsPost / rootFieldsPage — jamás colapsadas.
  */
 import React, { useState } from "react";
 import { t as translate, getStoredLanguage } from "@/lib/i18n";
-import { rememberPickedMedia } from "@/lib/imageSrcset";
+import { imageMediaPropsFor, rememberPickedMedia, type ImageMediaProps } from "@/lib/imageSrcset";
 import { useEditorPosts } from "@/lib/useEditorPosts";
 import { useEditorMenu } from "@/lib/useEditorMenu";
 import type { ChromeMenuItem } from "@/lib/chromeData";
@@ -55,6 +57,7 @@ import {
     type ColumnStyle,
 } from "@/components/versoConfig";
 import { MenuLocationPickerControl, MenuPickerControl } from "@/components/verso/fields/MenuSourceControls";
+import { useVersoPanelHandle } from "@/components/verso/fields/versoPanelHandleContext";
 import MenuItemsEditor from "@/components/verso/fields/MenuItemsEditor";
 import { formBlockFields, formBlockDefaults, FormBlockRender } from "@/components/blocks/FormBlock";
 import { symbolBlockFields, symbolBlockDefaults } from "@/components/blocks/SymbolBlock";
@@ -133,8 +136,18 @@ const linkField = (label: string): VersoField => ({
 
 /**
  * Campo de URL de media (input + «elegir de la biblioteca»). Réplica del custom inline de
- * versoConfig; `remember` reproduce la diferencia real entre Image (registra el MediaItem completo
- * para derivar srcSet) y Hero.bgImage (solo guarda la URL).
+ * versoConfig; `remember` reproduce la diferencia real entre Image (que además de la URL persiste
+ * las props de imagen responsive del MediaItem elegido) y Hero.bgImage (solo guarda la URL).
+ *
+ * POR QUÉ ESTE CAMPO ESCRIBE PROPS HERMANAS. El contrato de un campo `custom` (registry.ts) entrega
+ * solo el valor del propio campo, pero `srcSet`/`srcSetModern`/`imgWidth`/`imgHeight` describen
+ * EXACTAMENTE ese `src` y no tienen sentido separadas de él: en dos comandos distintos son dos
+ * entradas de historia, y un solo deshacer deja el srcset de la imagen ANTERIOR pegado a la nueva
+ * —justo el estado que la invalidación existe para impedir—. Así que cuando el campo vive dentro del
+ * panel de Verso (VersoPanelHandleContext) las cinco props se commitean en UN `setProps`, el mismo
+ * comando y la misma clave de coalescencia que usa el panel, de modo que teclear la URL a mano sigue
+ * siendo una sola entrada de historia. Fuera del panel no hay handle y corre el `onChange` de
+ * siempre, sin props derivadas: derivarlas es asunto del editor, no del contrato del campo.
  */
 function MediaUrlField({ value, onChange, placeholder, remember }: {
     value: unknown;
@@ -143,12 +156,44 @@ function MediaUrlField({ value, onChange, placeholder, remember }: {
     remember?: boolean;
 }) {
     const [isModalOpen, setIsModalOpen] = useState(false);
+    const handle = useVersoPanelHandle();
+
+    // `src` + las props derivadas de él, juntas o ninguna. Un `src` que no venga del picker (URL
+    // externa, tecleada a mano) no tiene metadatos: imageMediaPropsFor las LIMPIA, y `undefined` en
+    // un patch de setProps borra la clave, así que el bloque vuelve a la forma que tiene una página
+    // guardada antes de esta función.
+    const commitSrc = (next: string) => {
+        const state = remember && handle ? handle.getState() : null;
+        const nodeId = state ? state.selection.nodeId : null;
+        const node = state && nodeId ? state.doc.nodes[nodeId] : undefined;
+        if (!handle || !nodeId || !node || node.type !== "Image") {
+            onChange(next);
+            return;
+        }
+        const props = node.props as Record<string, unknown>;
+        const previous: ImageMediaProps = {
+            srcSet: typeof props.srcSet === "string" ? props.srcSet : undefined,
+            srcSetModern: (props.srcSetModern as ImageMediaProps["srcSetModern"]) || undefined,
+            imgWidth: typeof props.imgWidth === "number" ? props.imgWidth : undefined,
+            imgHeight: typeof props.imgHeight === "number" ? props.imgHeight : undefined,
+        };
+        const media = imageMediaPropsFor(
+            next,
+            previous,
+            typeof props.src === "string" ? props.src : undefined,
+        );
+        handle.transact((tx) => tx.setProps(nodeId, { src: next, ...media }), {
+            coalesceKey: `props:${nodeId}:src`,
+            label: "Editar src",
+        });
+    };
+
     return (
         <div className="flex flex-col gap-2">
             <input
                 className="p-2 border rounded text-sm w-full"
                 value={(value as string) || ""}
-                onChange={(e) => onChange(e.target.value)}
+                onChange={(e) => commitSrc(e.target.value)}
                 placeholder={placeholder}
             />
             <button
@@ -162,9 +207,10 @@ function MediaUrlField({ value, onChange, placeholder, remember }: {
                 isOpen={isModalOpen}
                 onClose={() => setIsModalOpen(false)}
                 onSelect={(item) => {
+                    // El registro va ANTES del commit: commitSrc deriva las props leyéndolo.
                     if (remember) rememberPickedMedia(item);
                     // URL RELATIVA (sourceUrl), no guid — el guid incrusta el host de subida.
-                    onChange(item.sourceUrl || item.guid);
+                    commitSrc(item.sourceUrl || item.guid);
                     setIsModalOpen(false);
                 }}
             />
