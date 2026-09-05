@@ -10,7 +10,7 @@ version: 0.1.0
 # the root package.json: a stale value here is not cosmetic, it is an ImagePullBackOff (or, worse, a
 # silently stale image that was pushed once). CI asserts the equality — see the Helm gate in
 # .github/workflows/ci.yml, which renders once WITHOUT `--set image.tag` for exactly this reason.
-appVersion: "2.1.0"
+appVersion: "2.2.0"
 keywords:
   - cms
   - wordjs

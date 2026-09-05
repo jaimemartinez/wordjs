@@ -101,7 +101,9 @@ memory caps outside systemd Linux and Windows, and the absence of an independent
   standing down only where a preventive cap IS installed — Windows with `sandbox.cpuQuotaPercent` > 0
   (Job Object rate control) or cgroup mode with the same knob set; cgroup mode **without** a quota is
   the one configuration left with no CPU bound at all, because the child the host can see there is
-  `systemd-run` rather than the node process, and the server warns once at launch), an **opt-in
+  `systemd-run` rather than the node process — it now warns at launch, raises the persistent admin
+  notice `sandbox.cgroup-no-cpu-quota` and reports the real bound as `sandbox.cpu` on
+  `GET /health/details`, but announced is not bounded), an **opt-in
   preventive Windows Job Object CPU-rate cap** (`sandbox.cpuQuotaPercent`, default `0` = off — the
   same knob as the Linux quota), a **default-on preventive Windows Job Object** memory cap
   (pure-JS PowerShell P/Invoke, probe-gated), a host-side **RSS poll** elsewhere / as a backstop
@@ -200,14 +202,24 @@ source *and* its shipped `node_modules/`;
 `backend/src/routes/marketplace.ts`), and per-capability grant disclosure at install. The theme half
 of that mechanism is intact — its own index, its own source option, its own admin tab — but the theme
 catalogue itself was retired, so `marketplace/themes/` no longer exists and the theme index builds
-empty; the four themes WordJS ships are bundled in `backend/themes/`. What
-follows below — the trust badge, the third-party review pipeline, and the revenue model — is the
-commercial layer to build on top of that shipped mechanism.
+empty; the four themes WordJS ships are bundled in `backend/themes/`.
 
-- **"Sandboxed & Reviewed" trust badge.** A plugin earns it by: (a) passing the AST static
+**The review programme now ships too**: public criteria (`marketplace/REVIEW.md`), submission by pull
+request with a dedicated template, automated checks in CI (`.github/workflows/plugin-review.yml` —
+manifest requirements, the same AST scan an admin's own upload gets, catalog and ledger integrity)
+followed by a human checklist, a tracked decision ledger (`marketplace/reviews.json`) that a
+submission's own pull request may not touch, and a **Reviewed** badge that only the official catalog
+can grant. The on-ramp exists; the authors do not. What follows below — the badge as a paid tier,
+reviewer capacity, and the revenue model — is the commercial layer to build on top of that.
+
+- **The "Reviewed" trust badge** (shipped; the label is deliberately *not* "Sandboxed & reviewed",
+  because sandboxing is true of **every** plugin and was never what the badge attested — that
+  statement moved into each badge's tooltip). A plugin earns it by: (a) passing the AST static
   scan clean (fail-closed), (b) running in the sandbox with a minimal, sensible capability set
   (core tables off-limits, no network unless it genuinely needs it) — verified, not
-  self-declared, and (c) passing human review of its capability manifest. **Every** plugin is
+  self-declared, and (c) passing human review of its capability manifest. The ledger record binds
+  the badge to the reviewed version and to a digest of the reviewed content, so a later upload
+  cannot inherit it. **Every** plugin is
   *structurally* prevented from touching `users` / `options` / secrets regardless of the
   permissions it requests — there is no tier that unlocks them.
 - **Capability-manifest disclosure to buyers.** Because the bridge is permission-checked and
@@ -219,7 +231,9 @@ commercial layer to build on top of that shipped mechanism.
 - **Review pipeline (mostly automated).** AST scan on upload → capability diff on every
   version bump (flag a plugin that newly requests `network` / `filesystem` / absolute routes)
   → human spot-check for badge tier. The scanner does the heavy lifting; humans gate the
-  badge.
+  badge. Shipped: the submission workflow runs those checks on every plugin pull request and
+  `npm run verify:marketplace` fails a permission change made after the review that granted the
+  badge. What is not automatable is reviewer capacity — today that is one person.
 - **Per-capability grants as a product surface.** Every plugin is sandboxed; the install/admin
   UI shows exactly which capabilities a plugin *requests* and lets the operator grant each one
   (default-deny, Android-style). Higher-risk grants — **`network`** (outbound),
@@ -294,7 +308,8 @@ enlarges the trust surface:
 
 | Risk / gap | Why it matters | What we do about it |
 |---|---|---|
-| **Ecosystem from zero** | The marketplace pitch needs plugins; the built-in marketplace now ships **31 first-party plugins**, but there are still **no third-party authors**. A safe marketplace without a community is still a thin ecosystem. | First-party seeding is done (31 catalog plugins across commerce / marketing / content / SEO); next: a paid early-developer program; lead with *internal / agency* private marketplaces (don't need scale to be valuable). |
+| **Ecosystem from zero** | The marketplace pitch needs plugins; the built-in marketplace now ships **31 first-party plugins**, but there are still **no third-party authors**. A safe marketplace without a community is still a thin ecosystem — and the sandbox, our best asset, only pays off once there is outside code to confine. | First-party seeding is done (31 catalog plugins across commerce / marketing / content / SEO), and the **review programme now ships**: public criteria (`marketplace/REVIEW.md`), submission by pull request, automated checks in CI plus a human checklist, a tracked ledger and a **Reviewed** badge only the official catalog can grant. The on-ramp exists and only the authors are missing. Next: a paid early-developer program; lead with *internal / agency* private marketplaces (don't need scale to be valuable). |
+| **Bus factor is one** | 923 of the 928 commits in the history carry one email address (the rest are Dependabot and GitHub's merge author); there is no company, no SLA and no second reviewer. A vendor questionnaire asks this before it asks about Landlock, and `.github/CODEOWNERS` can only become a real gate once a second owner exists — GitHub forbids self-approval. | Recruit a second maintainer with commit access: it is the same unlock for code-owner review, for reviewer capacity in the plugin programme and for any support story. Until then say so plainly in README and SECURITY.md rather than implying a team. |
 | **Kernel-surface parity** | Plugins run in separate processes and under Landlock+seccomp, AppContainer, or Seatbelt. All three are default-on, probe-gated, grant-invariant and fail-closed in production. | CI certifies the compiled launch on real Linux/Windows/macOS kernels; remaining: preventive memory parity on macOS and an independent audit. Never claim "unbreakable." |
 | **No independent audit** | Self-asserted security doesn't sell to the exact segment we target. Several internal red-team passes ≠ external sign-off. | Commission a third-party pentest / audit of the sandbox; publish results + a public threat model. Make "independently audited" a marketing milestone. |
 | **AST scanner is pattern-based** | A static scanner can be evaded; it's a filter, not a proof. Over-reliance in the badge claim is a liability. | Position the scanner as *one layer*; the runtime bridge + default-deny capability grants are the real boundary. Keep fail-closed; expand coverage; treat scan-clean as necessary-not-sufficient for the badge. |
@@ -312,9 +327,9 @@ trust tier, no bypass), a fail-closed AST scanner, and network / secret / core-t
 We win by being honest about what is still unaudited while building on the
 marketplace mechanism that now ships (a curated, sha256-verified catalog of 31 first-party
 plugins installed through the hardened pipeline) and the hosted offering that turn "your plugins
-can't compromise your site" into the product. The work to get there is **a third-party
-ecosystem (review pipeline + badge), an external audit, tenant-level containment on
-hosted, and a deliberately shrunken minimal-capability core** (cut ACME,
+can't compromise your site" into the product. The review pipeline and the badge now ship, so the
+work to get there is **third-party authors to use them, an external audit, a second maintainer,
+tenant-level containment on hosted, and a deliberately shrunken minimal-capability core** (cut ACME,
 pick one DB). The license question is resolved (MIT).
 
 ---

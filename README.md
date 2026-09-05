@@ -74,7 +74,7 @@ So a plugin that turns out to be buggy, greedy, or outright malicious **stays in
 | **License** | MIT | GPLv2 | MIT | MIT (paid tier) | MIT (paid cloud) |
 | **Ecosystem maturity** | ⚠️ young, first-party only | 60k+ plugins | large | large | growing |
 
-The honest row is the last one: WordJS is young, and every plugin and theme it ships today is first-party — there's no third-party author community yet. What it already has is the row at the top.
+The honest row is the last one: WordJS is young, and every plugin and theme it ships today is still first-party. The on-ramp for outside authors now exists — a public review policy ([`marketplace/REVIEW.md`](marketplace/REVIEW.md)), submission by pull request, automated checks in CI plus a human checklist, and a **Reviewed** badge only the official catalog can grant — but nobody has walked up it yet. What it already has is the row at the top.
 
 ---
 
@@ -87,7 +87,7 @@ The honest row is the last one: WordJS is young, and every plugin and theme it s
 - Drag-and-drop visual editor (**Verso**, built in-house) with **39 blocks** & edit-in-place text
 - **Token-driven themes** + a live customizer
 - **31 plugins** in the marketplace, one-click install; **4 bundled themes**
-- Real **SEO**: server-rendered pages, sitemap, RSS, social cards
+- Real **SEO**: server-rendered pages, category/tag/author/date **archives**, sitemap index, RSS/Atom/JSON feeds, social cards
 - Media library with automatic **AVIF/WebP** optimization
 
 </td><td width="33%" valign="top">
@@ -97,7 +97,7 @@ The honest row is the last one: WordJS is young, and every plugin and theme it s
 - **Ask-permission** capabilities, default-deny
 - Install-time code scanner + one-click **sha256-verified** marketplace
 - WordPress-style **hooks, filters & shortcodes**
-- **Import from WordPress** (posts, pages, comments, dates)
+- **Import from WordPress** (posts, pages, comments, dates, **media and menus**)
 
 </td><td width="33%" valign="top">
 
@@ -106,7 +106,8 @@ The honest row is the last one: WordJS is young, and every plugin and theme it s
 - Or split / multi-machine over secure mTLS
 - SQLite · PostgreSQL · MySQL/MariaDB
 - Automatic **HTTPS** (Let's Encrypt)
-- **2FA**, API tokens, webhooks, metrics
+- **Docker image** + one-click compose / Helm templates
+- **2FA**, API tokens, webhooks, structured logs & `/metrics`
 
 </td></tr>
 </table>
@@ -122,15 +123,15 @@ The honest row is the last one: WordJS is young, and every plugin and theme it s
 - **Ask-permission model (default-deny).** A plugin's manifest *requests* scoped capabilities (`database`, `filesystem`, `settings`, `users:read`, `email:provider`, `notifications:provider`, `network`, …); an **admin grants each one per plugin**. A call works only if the capability is BOTH declared AND granted. Activation shows the admin exactly what the plugin requests and grants that declared set — only when the plugin has no grant record yet, so a later per-permission revoke survives a re-activation. First-party plugins get no extra privilege — same sandbox, same rules.
 - **Native kernel confinement on every supported platform (default-on).** Each plugin child is also wrapped by the operating system's own sandbox: **Landlock + seccomp-bpf** on Linux (with `no-new-privs`), a zero-capability **AppContainer** on Windows, **Seatbelt** on macOS. Filesystem authority is scoped to the plugin's own zones, and a plugin **without** the `network` grant can't reach the network at all — the kernel refuses it below JavaScript, so it can't touch the internet or your internal services. Each mechanism is **probe-gated** (a confined child is spawned beside an unconfined control and must actually be refused what it must be refused), and production is **fail-closed**: if the probe can't certify the host, the isolated plugin doesn't run unless the operator sets `sandbox.requireHardening:false`. The live mechanism and its state are reported on admin `GET /health/details`.
 - **Per-plugin data isolation.** Each plugin gets only its own `wjp_<slug>_` database tables and a secret-scrubbed view of config — core `users`/`options`/`sessions` and secrets are unreachable. On **PostgreSQL/MySQL** the database itself enforces this via a per-plugin low-privilege role/user.
-- **Plugin & theme marketplace.** A curated catalog of **31 first-party plugins** with one-click, **sha256-verified** installs through the same hardened, sandboxed pipeline as manual uploads. Themes ride the same mechanism on an independent catalog and their own admin tab, but that catalog was retired and currently builds empty — the themes you get are the four bundled in `backend/themes/`. Sources are admin-configurable (point it at any HTTPS catalog); all catalog items are first-party today, with third-party submissions on the roadmap.
+- **Plugin & theme marketplace.** A curated catalog of **31 first-party plugins** with one-click, **sha256-verified** installs through the same hardened, sandboxed pipeline as manual uploads. Themes ride the same mechanism on an independent catalog and their own admin tab, but that catalog was retired and currently builds empty — the themes you get are the four bundled in `backend/themes/`. Sources are admin-configurable (point it at any HTTPS catalog), and the **Reviewed** badge is honoured only for entries the official catalog serves — a review claim from any other source is shown as unreviewed. All catalog items are first-party today; third-party submissions are open under the public review policy ([`marketplace/REVIEW.md`](marketplace/REVIEW.md)), and nobody outside the project has submitted one yet.
 
 **Authoring & content**
 - **Visual builder** (**Verso**, built in-house — see *The editor* below) — drag-and-drop editing, **in-place rich text** (bold, italic, links with an open-in-new-tab toggle, bullet and numbered lists, clear formatting), a per-block **Appearance** panel (background colour/gradient/image/glass, border, shadow, typography, hover effects — with tablet/mobile overrides on the box and type metrics: padding, margins, max-width, min-height, font-size, line-height, letter-spacing, alignment and radius; colours, backgrounds, shadows and motion are deliberately one look per block), a searchable block inserter with reusable section patterns, and a **device preview** that sizes the canvas to the real device width (desktop 1280 / tablet 768 / mobile 375), so the site's actual CSS breakpoints fire.
 - **Real server-side rendering** — public pages are React Server Components, so crawlers and first paint get the real content, per-page metadata (`generateMetadata`), OpenGraph/Twitter cards, JSON-LD, real `404`s, and a no-JS search form.
-- **SEO basics** — semantic HTML, `sitemap.xml`, `robots.txt`, and an RSS feed.
+- **SEO, archives and feeds** — semantic HTML; public `/category/`, `/tag/`, `/author/`, date and custom-taxonomy archives, paginated by path and rendered through the theme's `archive.html`; a `sitemap.xml` that becomes a `<sitemapindex>` with chunked children above 1,000 URLs (`SITEMAP_MAX_URLS` in `backend/src/core/feeds.ts`); `robots.txt`; and RSS, Atom, JSON Feed, per-category / per-tag / per-author and comments feeds — all served at their public root URLs in every deployment mode.
 - **Themes** — a shared, token-driven CSS framework (`--wjs-*` design tokens) that auto-styles pages, plus a live **customizer** at `/admin/themes/customize`. A theme's optional server-side `functions.js` runs in the **same sandbox** as plugins.
 - **Hooks, filters & shortcodes** (WordPress-style), **dynamic roles & permissions** (database-driven), and **UI in español / english / português**.
-- **WordPress (WXR) importer** — upload a `.xml` export to bring over authors, categories/tags, posts/pages (with meta, term relationships, and threaded comments), preserving publish dates. Idempotent and re-runnable.
+- **WordPress (WXR) importer** — upload a `.xml` export to bring over authors, categories/tags, posts/pages (with meta, term relationships, and threaded comments), preserving publish dates. **Attachments are downloaded** through the same SSRF guard as webhooks (50 MB per file and 1 GB per run by default, resumable, failures reported per item) and **menus come across with hierarchy**, targets and locations; content and editor-tree URLs are rewritten to the new library. Idempotent and re-runnable.
 - **Backups** — full-site export/restore with retention pruning, plus **privacy-first analytics** (no cookies, daily-rotated salted IP hashing) and a **built-in cron**.
 
 **Operations**
@@ -138,6 +139,7 @@ The honest row is the last one: WordJS is young, and every plugin and theme it s
 - **Automatic TLS** — Let's Encrypt via HTTP-01 or DNS-01, manual upload, or a self-signed dev fallback; renewal works in single-process mode too.
 - **Databases** — SQLite (default), PostgreSQL, or MySQL 8+/MariaDB, all behind one interface with a migration system to move between them.
 - **Headless-friendly** — scoped API tokens (`Authorization: Bearer wjt_…`, per-resource scopes), HMAC-signed SSRF-safe webhooks, and token-gated Prometheus metrics.
+- **Observable** — structured pino logging with request correlation ids and credential scrubbing, and a `/metrics` endpoint carrying request rate, latency histogram, error rate, DB pool and sandbox state. See [Observability](documentation/observability.md).
 - **Native mail server** — an optional, fully sandboxed first-party plugin: inbound SMTP, direct-MX delivery, and DKIM signing.
 
 </details>
@@ -196,6 +198,8 @@ The **same codebase** runs three ways — switch anytime, no data migration:
 | 🔀 **Split** *(default)* | Gateway + backend + frontend on one host | Scaling services independently |
 | 🌐 **Separate** | The three services on **different machines**, joined over mTLS | Larger, distributed setups |
 
+In a container instead: the repository ships a Dockerfile that CI **builds, boots, health-checks and installs through the setup wizard** on every run (the `docker-image` job in `.github/workflows/ci.yml`), plus ready-to-run templates under [`deploy/`](deploy/) — a single-container [`compose`](deploy/compose/) stack and a monolith [Helm chart](deploy/helm/wordjs/).
+
 ```bash
 # The whole thing, one process:
 npx create-wordjs@latest my-site          # then open the printed wizard URL
@@ -243,6 +247,7 @@ See the [Separate-mode guide](documentation/separate-mode.md) for the walkthroug
 | 🚀 [Deployment](documentation/deployment.md) | 🧩 [Separate Mode](documentation/separate-mode.md) | 🌐 [Multi-Node Ops](documentation/multi-node.md) |
 | 📥 [Import from WordPress](documentation/wordpress-import.md) | 🔔 [Notifications](documentation/notifications.md) | 📡 [REST API](documentation/api.md) |
 | 🔐 [Security Policy](SECURITY.md) | 🛡️ [Security Architecture](documentation/security.md) | 🧭 [Product Positioning](POSITIONING.md) |
+| 📈 [Observability](documentation/observability.md) | 🧾 [Plugin Review Policy](marketplace/REVIEW.md) | |
 
 > Live API reference (Swagger/OpenAPI) is served at `http://localhost:4000/api/v1/docs` (admin only).
 
@@ -254,7 +259,7 @@ See the [Separate-mode guide](documentation/separate-mode.md) for the walkthroug
 >
 > WordJS recently completed rounds of **security hardening** (fixing a CSRF bypass, committed secrets, and XSS sinks, among others). The plugin sandbox has had multiple internal red-team passes — but there is **no independent third-party audit yet**. An external audit is strongly recommended before any production or internet-facing deployment, and the residual risks are documented plainly in [SECURITY.md](SECURITY.md) and [POSITIONING.md](POSITIONING.md).
 >
-> The whole ecosystem is **first-party**: the marketplace ships 31 plugins (the theme catalog was retired and builds empty; four themes come bundled), and there's no third-party author community or public review pipeline yet. **Use it to build, learn, and experiment — do your own review before trusting it with real data or real users.**
+> The whole ecosystem is **first-party**: the marketplace ships 31 plugins (the theme catalog was retired and builds empty; four themes come bundled). The public review pipeline now exists — policy, submission by pull request, automated checks in CI, a tracked decision ledger and a **Reviewed** badge ([`marketplace/REVIEW.md`](marketplace/REVIEW.md)) — but no third-party author community has formed around it yet. **Use it to build, learn, and experiment — do your own review before trusting it with real data or real users.**
 
 ---
 
@@ -304,7 +309,7 @@ In production the backend is **compiled** (`tsc` → `dist/`) and run as plain J
 | `npm test` | Test suite (`node --test`) |
 | `npm run lint` / `format` | ESLint / Prettier |
 
-CI (`.github/workflows/ci.yml`, Node 22) runs the strict type-check, the compiled build, a dependency license gate, an `npm audit` gate that blocks high/critical production advisories in `backend`, `gateway`, `frontend` and `packages/create-wordjs`, the unit suite with `WORDJS_CI_DB=1` so the driver-conformance tests hard-fail (rather than skip) unless they really ran against the `postgres:16` and `mysql:8` service containers, integration tests against real `postgres:16` + `redis:7` containers, a separate two-process multi-node coherence job on shared Postgres + Redis, and the frontend lint/type-check/tests/build. A separate scheduled workflow (`.github/workflows/dependency-audit.yml`) re-runs that audit across all six workspaces — root and `setup` included — every day at 04:41 UTC and opens or updates an issue when one of them fails.
+CI (`.github/workflows/ci.yml`, Node 22) runs the strict type-check, the compiled build, a dependency license gate, an `npm audit` gate that blocks high/critical production advisories in `backend`, `gateway`, `frontend` and `packages/create-wordjs`, the unit suite with `WORDJS_CI_DB=1` so the driver-conformance tests hard-fail (rather than skip) unless they really ran against the `postgres:16` and `mysql:8` service containers, integration tests against real `postgres:16` + `redis:7` containers, a separate two-process multi-node coherence job on shared Postgres + Redis, a **coverage ratchet** (c8 for the backend, vitest coverage for the frontend) that fails a run dropping below the committed floor, a job that **builds the Docker image, boots it and completes the installer inside the container**, and the frontend lint/type-check/tests/build. A separate scheduled workflow (`.github/workflows/dependency-audit.yml`) re-runs that audit across all six workspaces — root and `setup` included — every day at 04:41 UTC and opens or updates an issue when one of them fails.
 
 </details>
 
