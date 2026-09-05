@@ -4,7 +4,8 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { settingsApi, menusApi } from "@/lib/api";
 import { sanitizeHTML } from "@/lib/sanitize";
-import { safeChromeHref } from "@/lib/chromeData";
+import { usePathname } from "next/navigation";
+import { safeChromeHref, menuAriaCurrent } from "@/lib/chromeData";
 import PublicSidebar from "./PublicSidebar";
 import type { FooterColumns, FooterVariant } from "@/lib/themeLayout";
 
@@ -42,6 +43,9 @@ export default function Footer({ previewSettings, previewMenu, previewSocials, v
     const [settings, setSettings] = useState<any>(previewSettings || {});
     const [footerMenu, setFooterMenu] = useState<any[]>(previewMenu || []);
     const [socialLinks, setSocialLinks] = useState<any[]>(previewSocials || []);
+    // The footer menu is a menu like any other: its link to the page being viewed is marked too, with
+    // the shared matcher, so the cue is not a header-only privilege. Read once, outside the .map().
+    const pathname = usePathname();
 
     useEffect(() => {
         if (previewSettings) {
@@ -163,7 +167,7 @@ export default function Footer({ previewSettings, previewMenu, previewSocials, v
                                         <ul className="space-y-2 text-[var(--wjs-color-text-footer-dim,gray)]">
                                             {footerMenu.map((item) => (
                                                 <li key={item.id}>
-                                                    <Link href={item.url || '#'} className="hover:text-[var(--wjs-color-primary,white)] transition-colors">
+                                                    <Link href={item.url || '#'} className="hover:text-[var(--wjs-color-primary,white)] transition-colors" aria-current={menuAriaCurrent(item.url, pathname)}>
                                                         {item.title}
                                                     </Link>
                                                 </li>

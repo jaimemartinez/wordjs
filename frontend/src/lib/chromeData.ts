@@ -169,6 +169,52 @@ export function menuTargetRel(target: unknown): { target: "_self" | "_blank"; re
         : { target: "_self" };
 }
 
+// ── CURRENT-PAGE MARKING ───────────────────────────────────────────────────────────────────────────
+//
+// Shared by EVERY surface that paints a menu item (the composed chrome nav, its mobile drawer, the
+// NavMenu/MegaMenu blocks, the default Header/Footer) so "is this link the page I am on?" is answered
+// the SAME way everywhere — one definition, no per-surface drift. Pure and DOM-free: the caller reads
+// the pathname (usePathname on the client surfaces, see NavCurrentLink) and passes it in.
+//
+// MATCHING RULES, deliberately narrow — a wrong aria-current is worse than none, because a screen
+// reader then announces the wrong page as current:
+//   • pathname only — a query string carries no page identity and is dropped, so a "/contact?ref=x"
+//     menu item still marks /contact.
+//   • a NON-EMPTY FRAGMENT disqualifies the link entirely. "/#venues" points at the home page, but it
+//     names a SECTION of it, and a one-page menu is full of those: marking it would announce two
+//     current links in the same nav ("Home" AND "Venues") and underline both, which is precisely the
+//     confusion the cue exists to remove. Exactly one link per nav is the invariant.
+//   • trailing slashes are equal ("/about/" ≡ "/about"); "/" stays "/" and therefore matches only "/".
+//   • percent-encoding is folded via decodeURI, so a stored "/qu%C3%A9" matches a rendered "/qué".
+//   • EXACT match only. There is no ancestor notion in the nav (breadcrumbs own that idea, and they
+//     compute it from real post ancestry, not from url prefixes), so "/products" is NOT marked while
+//     on "/products/widgets" — a url-prefix guess would mark "/" on every page of the site.
+//   • only ROOT-RELATIVE hrefs are candidates. An absolute url (even to this very site), a
+//     protocol-relative "//host", a "mailto:"/"tel:" link or a bare fragment can never match: the
+//     origin is not knowable identically on the server and in the browser, and guessing it is exactly
+//     how a hydration mismatch is born.
+function normalizeNavPath(value: string): string | null {
+    const hash = value.indexOf("#");
+    if (hash !== -1 && value.slice(hash + 1) !== "") return null; // a section, not a page — see above
+    const path = (hash === -1 ? value : value.slice(0, hash)).split("?", 1)[0];
+    if (!path.startsWith("/") || path.startsWith("//")) return null;
+    let decoded = path;
+    try { decoded = decodeURI(path); } catch { /* malformed escape — compare the raw form */ }
+    return decoded.length > 1 && decoded.endsWith("/") ? decoded.replace(/\/+$/, "") || "/" : decoded;
+}
+
+export function isCurrentMenuPath(href: unknown, pathname: unknown): boolean {
+    if (typeof href !== "string" || typeof pathname !== "string") return false;
+    const target = normalizeNavPath(href.trim());
+    return target !== null && target === normalizeNavPath(pathname.trim());
+}
+
+// The value to spread onto the link. `undefined` (not "false") so React omits the attribute entirely
+// on the links that are not current — `aria-current="false"` is legal but noisier for no gain.
+export function menuAriaCurrent(href: unknown, pathname: unknown): "page" | undefined {
+    return isCurrentMenuPath(href, pathname) ? "page" : undefined;
+}
+
 function isPlainObject(value: unknown): value is Record<string, unknown> {
     return typeof value === "object" && value !== null && !Array.isArray(value);
 }

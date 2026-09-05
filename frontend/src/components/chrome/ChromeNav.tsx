@@ -1,6 +1,8 @@
 // Presentational chrome block (composable-chrome contract v1). Server-compatible: no hooks, no
 // "use client" — the mobile hamburger lives in the ChromeNavMobile client island it mounts next to
-// the desktop nav. Items arrive RESOLVED by ChromeRenderer (menu by location); the block never
+// the desktop nav, and each link is a NavCurrentLink island (see that file: the layout is prerendered
+// per route AND preserved across client navigations, so only usePathname can say which item is the
+// current page). Items arrive RESOLVED by ChromeRenderer (menu by location); the block never
 // fetches. Link colors keep today's header/footer token fallbacks per location.
 //
 // SUBMENUS. The menu model stores a parent hierarchy (post_parent); buildMenuTree nests the flat
@@ -12,10 +14,10 @@
 // the children, Tab out closes it — the accessible, escapable CSS-only pattern. Positioning uses
 // LOGICAL properties (start/ps/ms) so it is correct under RTL. A menu with NO children renders exactly
 // as it did before submenus existed — the flat path below is byte-for-byte unchanged.
-import Link from "next/link";
 import type { ChromeMenuItem } from "@/lib/chromeData";
 import { buildMenuTree } from "@/lib/chromeData";
 import ChromeNavMobile from "./ChromeNavMobile";
+import { NavCurrentLink } from "./NavCurrentLink";
 
 // Static literal maps so Tailwind sees every class (no interpolation).
 const LINK_CLASS: Record<"header" | "footer", string> = {
@@ -48,9 +50,9 @@ function NavItem({
 }) {
     const children = item.children ?? [];
     const link = (
-        <Link href={item.url || "#"} className={LINK_CLASS[location]}>
+        <NavCurrentLink href={item.url || "#"} className={LINK_CLASS[location]}>
             {item.title}
-        </Link>
+        </NavCurrentLink>
     );
 
     if (children.length === 0) {
@@ -118,9 +120,9 @@ export default function ChromeNav({ location, orientation, items }: ChromeNavVie
     const hook = location === "header" ? " wjs-header-nav" : " wjs-footer-nav";
     // Flat links — the exact markup this block shipped before submenus. Used whenever no item nests.
     const flatLinks = tree.map((item) => (
-        <Link key={item.id} href={item.url || "#"} className={LINK_CLASS[location]}>
+        <NavCurrentLink key={item.id} href={item.url || "#"} className={LINK_CLASS[location]}>
             {item.title}
-        </Link>
+        </NavCurrentLink>
     ));
     const treeList = tree.map((item) => (
         <NavItem key={item.id} item={item} location={location} orientation={orientation} depth={0} />
