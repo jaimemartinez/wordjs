@@ -14,6 +14,17 @@ const fs = require('fs');
 const { resolveWithin } = require('../core/safe-path');
 const { runContentMutation, isContentMutationActive } = require('../core/content-outbox');
 
+/**
+ * Where a `link`-mode WXR import records that an attachment's bytes live on ANOTHER host.
+ *
+ * The literal is duplicated from core/wxr-media's REMOTE_URL_META_KEY deliberately, and only here: that
+ * module requires THIS one, so requiring it back would be the io-guard cycle again. The key is
+ * server-owned (core/protected-meta's PROTECTED_POST_META), so no route's generic meta bag and no third
+ * party's `wp:postmeta` can author one — which is what makes it usable as an ownership marker rather
+ * than as a hint. wxr-import.test.ts pins the two spellings against each other end to end.
+ */
+const REMOTE_SOURCE_META_KEY = '_wxr_remote_url';
+
 class Media {
     /**
      * Create a media attachment
@@ -31,6 +42,12 @@ class Media {
             width,
             height,
             sizes = {},
+            // Modern-format derivatives of the FULL-SIZE original, keyed by MIME type
+            // (`{'image/webp': {file, width, height, mimeType, filesize}, …}`). Per-size derivatives
+            // ride inside their own `sizes[<name>].sources`. Both are ADDITIVE: an attachment written
+            // before this feature simply has neither key and every reader falls back to the original
+            // format, which is what it already did.
+            sources = {},
             description = '',
             caption = '',
             alt = ''
@@ -57,7 +74,8 @@ class Media {
             width: width || 0,
             height: height || 0,
             filesize: fileSize,
-            sizes: sizes || {}
+            sizes: sizes || {},
+            sources: sources || {}
         };
 
         await Post.updateMeta(attachment.id, '_wp_attachment_metadata', metadata);
@@ -107,14 +125,30 @@ class Media {
         const attachedFile = allMeta['_wp_attached_file'] || '';
         const alt = allMeta['_wp_attachment_image_alt'] || '';
 
+        // AN ATTACHMENT WHOSE BYTES ARE SOMEWHERE ELSE. The WXR importer's `link` mode creates the row
+        // and deliberately downloads nothing, so the file lives on the OLD site. Its guid holds the
+        // remote URL, but the normalization below rewrites ANY absolute guid containing '/uploads/' into
+        // a local path — and a stock WordPress URL (https://old/wp-content/uploads/...) contains exactly
+        // that, so every linked attachment resolved to a local file that was never fetched: a 404 on the
+        // standard layout, counted as a successful import. core/wxr-media therefore stamps the remote URL
+        // under a key of its own, and it WINS here. Only that key is trusted (it is server-owned, in
+        // core/protected-meta's PROTECTED_POST_META); the guid normalization below is untouched, because
+        // it is what makes an ordinary attachment portable when the site moves domain.
+        const remoteSource = allMeta[REMOTE_SOURCE_META_KEY];
+        const remoteUrl = typeof remoteSource === 'string' && /^https?:\/\//i.test(remoteSource)
+            ? remoteSource
+            : '';
+
         // DYNAMIC URL RESOLUTION:
         // The 'guid' field stores a relative path (e.g., /uploads/image.jpg)
         // We construct the full URL dynamically using current site config.
         // This makes the system fully portable across domains.
         let relativePath = post.guid || '';
 
-        // Handle legacy absolute URLs by extracting relative path
-        if (relativePath.startsWith('http://') || relativePath.startsWith('https://')) {
+        if (remoteUrl) {
+            relativePath = remoteUrl;
+        } else if (relativePath.startsWith('http://') || relativePath.startsWith('https://')) {
+            // Handle legacy absolute URLs by extracting relative path
             const urlMatch = relativePath.match(/\/uploads\/.+$/);
             relativePath = urlMatch ? urlMatch[0] : `/uploads/${attachedFile}`;
         } else if (attachedFile && !relativePath.startsWith('/uploads')) {
@@ -123,8 +157,8 @@ class Media {
             relativePath = `/uploads/${safePath}`;
         }
 
-        // Build absolute URL for API response
-        const absoluteUrl = `${config.site.url}${relativePath}`;
+        // Build absolute URL for API response (a linked attachment is already absolute, and elsewhere)
+        const absoluteUrl = remoteUrl || `${config.site.url}${relativePath}`;
 
         return {
             id: post.id,
@@ -151,7 +185,10 @@ class Media {
                 height: metadata.height || 0,
                 file: attachedFile || metadata.file || '',
                 filesize: metadata.filesize || 0,
-                sizes: metadata.sizes || {}
+                sizes: metadata.sizes || {},
+                // Modern-format derivatives of the full-size original (`{}` for anything uploaded
+                // before the feature, or on a host whose sharp cannot write them).
+                sources: metadata.sources || {}
             }
         };
     }
@@ -204,7 +241,7 @@ class Media {
      * (the DB row still goes, so a poisoned value cannot make an attachment undeletable); a single bad
      * size entry drops only itself, because each surviving path carries its own containment proof.
      */
-    static _deletableFiles(storedFile: unknown, sizes: any): string[] {
+    static _deletableFiles(storedFile: unknown, sizes: any, sources: any = null): string[] {
         if (typeof storedFile !== 'string' || storedFile.length === 0) return [];
         const uploadDir = path.resolve(config.uploads.dir);
 
@@ -222,20 +259,64 @@ class Media {
         // The main file's directory, as VALIDATED segments (e.g. ['2026','08']) — not as a dirname
         // string, which is how the escape used to propagate.
         const dirSegments = segments.slice(0, -1);
-        for (const size of Object.values(sizes || {})) {
-            const file = (size as any)?.file;
-            if (typeof file !== 'string' || file.length === 0) continue;
-            const sizeSegments = file.split(/[/\\]+/).filter((s: string) => s.length > 0);
-            const sizePath = sizeSegments.length > 0
-                ? resolveWithin(uploadDir, ...dirSegments, ...sizeSegments)
+
+        // Every sibling file is resolved through THIS one helper, so a derivative can no more escape
+        // than a size can: same uploads root, same already-proven directory segments, same per-path
+        // containment proof, same drop-only-itself failure mode. The WebP/AVIF derivatives added in
+        // 2026 are just more entries flowing through it — a new file kind must never grow a second,
+        // weaker resolver.
+        const pushSibling = (file: unknown, kind: string): void => {
+            if (typeof file !== 'string' || file.length === 0) return;
+            const fileSegments = file.split(/[/\\]+/).filter((s: string) => s.length > 0);
+            const resolved = fileSegments.length > 0
+                ? resolveWithin(uploadDir, ...dirSegments, ...fileSegments)
                 : null;
-            if (!sizePath) {
-                console.warn(`Media.delete: refusing to unlink a size path that escapes the uploads directory: ${JSON.stringify(file)}`);
-                continue;
+            if (!resolved) {
+                console.warn(`Media.delete: refusing to unlink a ${kind} path that escapes the uploads directory: ${JSON.stringify(file)}`);
+                return;
             }
-            targets.push(sizePath);
+            targets.push(resolved);
+        };
+
+        /** The modern-format derivatives hanging off one metadata node (`{'image/webp': {file}, …}`). */
+        const pushSources = (map: any): void => {
+            for (const source of Object.values(map || {})) pushSibling((source as any)?.file, 'derivative');
+        };
+
+        for (const size of Object.values(sizes || {})) {
+            pushSibling((size as any)?.file, 'size');
+            pushSources((size as any)?.sources);
         }
+        // …and the derivatives of the full-size original, which hang off the metadata root.
+        pushSources(sources);
         return targets;
+    }
+
+    /**
+     * Does this attachment's row OWN the file its `_wp_attached_file` names, or merely point at it?
+     *
+     * A row owns a file when something wrote one for it — an upload, or a `download`-mode WXR import,
+     * which claims its path against the media library, the disk and the rest of its run before writing
+     * a byte (core/wxr-media's claimRelativePath). `link` mode does none of that: it is the mode whose
+     * whole point is that the bytes stay on the OLD host, so it creates the row, stamps the remote URL
+     * here, and copies the WXR's own `_wp_attached_file` verbatim — an UNCLAIMED path, which a third
+     * party's export is free to spell as `2025/01/photo.jpg` under the same YYYY/MM layout every
+     * WordPress uses. That aliases whatever this install already keeps there, and deleting the imported
+     * row then unlinked a REAL upload's bytes: the genuine attachment survived pointing at a file that
+     * was gone, site-wide broken image, no warning. `_wp_attachment_metadata` widened it from one file
+     * to a whole subtree, since every `sizes[*].file` resolves beside the main one.
+     *
+     * WHY THE MARKER AND NOT A CLAIM. Claiming the path in `link` mode would rename the row away from
+     * the file it describes — and that path is the ONLY thing an operator copying `wp-content/uploads`
+     * across by hand has to go on, which is the entire reason the mode exists. It would also protect
+     * nothing already in the database. Ownership is created by WRITING a file, and this row never wrote
+     * one, so the honest rule is the narrow one: the row goes, the bytes stay. The failure mode that
+     * remains is a leaked file rather than a destroyed one, and it is the same one an operator who
+     * never copied the uploads across already has.
+     */
+    static async _isRemotelyLinked(id: number): Promise<boolean> {
+        const remote = await Post.getMeta(id, REMOTE_SOURCE_META_KEY);
+        return typeof remote === 'string' && /^https?:\/\//i.test(remote);
     }
 
     /**
@@ -246,10 +327,14 @@ class Media {
         const media = await Media.findById(id);
         if (!media) return false;
 
+        // A LINKED ATTACHMENT OWNS NO LOCAL BYTES, so it may not unlink any — see _isRemotelyLinked.
+        // Asked last, so a row with no path (or a caller that keeps the file) costs no extra query.
+        const mayUnlink = deleteFile && !!media.mediaDetails.file && !(await Media._isRemotelyLinked(id));
+
         // Resolve targets while metadata still exists, but unlink only AFTER the database commits.
         // A rollback must never leave a live attachment row pointing at a file we already removed.
-        if (deleteFile && media.mediaDetails.file) {
-            const targets = Media._deletableFiles(media.mediaDetails.file, media.mediaDetails.sizes);
+        if (mayUnlink) {
+            const targets = Media._deletableFiles(media.mediaDetails.file, media.mediaDetails.sizes, media.mediaDetails.sources);
             database.afterCommit(() => {
                 for (const target of targets) {
                     try { if (fs.existsSync(target)) fs.unlinkSync(target); }

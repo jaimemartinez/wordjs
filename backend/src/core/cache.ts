@@ -114,8 +114,30 @@ if (config.redis && config.redis.enabled !== false) {
             maxRetriesPerRequest: 1
         });
 
+        // THIS LINE GOES TO STDERR, AND THE STREAM IS THE POINT — DO NOT "TIDY" IT BACK TO console.log.
+        //
+        // It is written from ioredis's 'connect' callback, i.e. from the event loop at whatever moment
+        // the TCP handshake completes. Under node:test a test file runs in a CHILD PROCESS that reports
+        // its results to the runner over STDOUT, V8-serialized: `FileTest.#processRawBuffer` reads
+        // length-prefixed frames off that pipe. An asynchronous write into the same stream can land
+        // INSIDE a frame, and the parent then throws
+        //     Unable to deserialize cloned data due to invalid or unsupported version.
+        // failing the whole FILE with no failed assertion in it. That is the F6 "Redis connected" flake
+        // that has been red-lighting f6-plugin-compatibility.test.ts and F6-C05 on and off for weeks.
+        //
+        // Measured on linux/node 22, 20 runs of that suite per condition:
+        //     Redis connected, this line on stdout ......... 6/20 FAILED
+        //     …same, with --test-force-exit removed ........ 7/20 FAILED   (so force-exit is NOT the cause)
+        //     Redis disabled ............................... 0/20
+        //     Redis degraded (dead port: only the throttled
+        //       console.warn below fires, already stderr) .. 0/20          (why CI's degraded leg is green)
+        //     Redis connected, this line on stderr ......... 0/20 FAILED
+        //
+        // stderr is a separate pipe that carries no frames, so the message stays exactly as visible to
+        // operators (docker, systemd and CI all capture both streams) while being unable to corrupt the
+        // runner's channel. The same reasoning applies to any future ASYNCHRONOUS log in this module.
         redis.on('connect', () => {
-            console.log('⚡ Redis Object Cache Connected');
+            process.stderr.write('⚡ Redis Object Cache Connected\n');
             redisAvailable = true;
         });
 
@@ -308,10 +330,34 @@ function subscribe(channel: string, handler: (message: string) => void): void {
     subscriber.subscribe(channel).catch((e: any) => console.warn('[Cache] subscribe failed:', e.message));
 }
 
-/** Quit all Redis connections (object-cache, subscriber, rate-limit). For graceful shutdown / tests. */
+/**
+ * Quit all Redis connections (object-cache, subscriber, rate-limit). For graceful shutdown / tests.
+ *
+ * `quit()` ALONE DOES NOT CLOSE THE SOCKET, and this function used to stop there. QUIT is a Redis
+ * COMMAND, so ioredis has to send it: on a client that is still `connecting` — and these clients are
+ * built with `enableOfflineQueue: false` precisely so nothing waits on a reconnect — the command is
+ * rejected immediately instead of being queued. The rejection landed in the `catch` below, the loop
+ * moved on, and the connection stayed open.
+ *
+ * That is not cosmetic. f6-plugin-compatibility.test.ts calls this in its `after()` hook so that its
+ * process can END rather than be killed, and the hook did not achieve it: measured with
+ * process.getActiveResourcesInfo(), TWO TCPSocketWrap handles were live before this call and the SAME
+ * TWO after it, and the suite could not exit without `--test-force-exit` (it hung until killed). With
+ * the disconnect below it exits on its own.
+ *
+ * THIS IS NOT THE FIX FOR THE F6 "Redis connected" FLAKE — the stream change on the 'connect' handler
+ * above is. Measured, not assumed: the deserialize flake occurs at the same rate with and without this
+ * disconnect (6/20 vs 3/12 runs), and it occurs with `--test-force-exit` REMOVED too (7/20), so "a child
+ * killed mid-write by force-exit" was never the mechanism. Leaving a socket open is simply its own bug.
+ *
+ * `disconnect()` is not a command — it tears the socket down locally, whatever state it is in — so it
+ * runs unconditionally after the graceful attempt. On a client that already quit it is a no-op.
+ */
 async function closeAll() {
     for (const c of [redis, subscriber, rateLimitClient]) {
-        try { if (c && typeof c.quit === 'function') await c.quit(); } catch { /* already closing */ }
+        if (!c) continue;
+        try { if (typeof c.quit === 'function') await c.quit(); } catch { /* already closing */ }
+        try { if (typeof c.disconnect === 'function') c.disconnect(); } catch { /* already closed */ }
     }
 }
 

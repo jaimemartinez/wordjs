@@ -1,5 +1,5 @@
 import { cache } from "react";
-import { getPosts, getPostById, getMenuByRef, getSettings, type MenuItem } from "@/lib/server-api";
+import { getPostPool, getPostById, getMenuByRef, getSettings, type MenuItem } from "@/lib/server-api";
 import type { Post } from "@/lib/api";
 import { toResolved, filterByCategory, type ResolvedPost } from "@/lib/resolvedPost";
 
@@ -52,6 +52,13 @@ export const resolveDynamicBlocks = cache(async (data: unknown): Promise<unknown
 
     const DYNAMIC = new Set(["PostsGrid", "CategoryPosts"]);
 
+    /**
+     * How many posts one listing block will show. ONE definition, read by the scan that sizes the
+     * fetch and by the decoration that slices it — a pool smaller than the slice is exactly the bug
+     * this exists to make impossible.
+     */
+    const listingCount = (p: Record<string, unknown> | undefined): number => Math.max(1, Number(p?.count) || 6);
+
     // A NavMenu binds to the site menu by REFERENCE (a location key or a menu id) — it never stores the
     // items. This turns one such reference into a stable string so equal refs on one page fetch once,
     // and so the same key can be recomputed in decorate() to pick the right list back out.
@@ -69,6 +76,8 @@ export const resolveDynamicBlocks = cache(async (data: unknown): Promise<unknown
     // Only pay for fetches the page actually needs: posts for the dynamic listings, referenced
     // wjs_symbol posts for Symbol blocks, and the menu behind each distinct NavMenu reference.
     let needPosts = false;
+    /** The largest `count` any listing on this page asks for — the floor for the pool fetched below. */
+    let maxListingCount = 0;
     let needIdentity = false;
     let needToc = false;
     const symbolIds = new Set<number>();
@@ -83,7 +92,10 @@ export const resolveDynamicBlocks = cache(async (data: unknown): Promise<unknown
         for (const n of nodes) {
             if (!n || typeof n !== "object") continue;
             const node = n as { type?: string; props?: Record<string, unknown> };
-            if (node.type && DYNAMIC.has(node.type)) needPosts = true;
+            if (node.type && DYNAMIC.has(node.type)) {
+                needPosts = true;
+                maxListingCount = Math.max(maxListingCount, listingCount(node.props));
+            }
             if (node.type === "SiteLogo") needIdentity = true;
             if (node.type === "TableOfContents") needToc = true;
             if (node.type === "Symbol" && collectSymbolIds) {
@@ -166,7 +178,14 @@ export const resolveDynamicBlocks = cache(async (data: unknown): Promise<unknown
     };
     collectHeadings((data as { content?: unknown }).content, false);
 
-    const all = needPosts ? (await getPosts("post", "publish")) || [] : [];
+    // A POOL, not a page of results. `getPosts` is sized by the site's `posts_per_page` — the Reading
+    // setting for the BLOG ROLL — and these blocks are not the blog roll: an owner who shortens the
+    // front page to three posts would otherwise shrink every PostsGrid on the site to three cards and
+    // leave every CategoryPosts filtering inside the newest three, which almost never contains the
+    // category it was pointed at (the list endpoint takes no category filter, so the match happens
+    // here). `getPostPool` keeps the old fixed floor of ten and raises it to the biggest `count` on
+    // the page, so a block's own number is the only thing that decides how much of it is shown.
+    const all = needPosts ? (await getPostPool("post", "publish", maxListingCount)) || [] : [];
 
     // Site identity (blogname + site_logo) for SiteLogo blocks — the single settings read is React-cached
     // and tagged, so it collapses with every other `/settings` read on the page. Injected as a plain
@@ -246,7 +265,7 @@ export const resolveDynamicBlocks = cache(async (data: unknown): Promise<unknown
             }
 
             if (node.type && DYNAMIC.has(node.type)) {
-                const count = Math.max(1, Number(props?.count) || 6);
+                const count = listingCount(props);
                 const slug = String(props?.categorySlug || "").trim().toLowerCase();
                 // Category filtering is best-effort: the list endpoint does not take a category
                 // filter, so an unmatched slug falls back to the newest posts rather than showing

@@ -53,6 +53,103 @@ function sweep(room: Map<string, { name: string; ts: number }>) {
 // `isRestExposedPostType` on top: `revision` and `nav_menu_item` are rows in `posts` that carry no
 // capability_type, so the family resolver lands them in the plain `post` family. They belong to their
 // own APIs and there is no editor session to have presence in.
+/**
+ * @swagger
+ * tags:
+ *   name: Presence
+ *   description: >-
+ *     Editing presence — a soft-lock SIGNAL, not co-editing. State is per-process and expires after 25
+ *     seconds, so on a multi-node backend each node only sees its own editors: the warning can miss, it
+ *     can never false-positive.
+ */
+
+/**
+ * @swagger
+ * /presence/{postId}:
+ *   post:
+ *     summary: Heartbeat in a post's editing room, or leave it
+ *     description: >-
+ *       One call per tick — it registers the caller (unless `action` is "leave") and always answers with
+ *       the OTHER active editors. Authorized per POST, not per capability family: the caller must be able
+ *       to edit THIS row, because the answer names who else has it open. "leave" is deliberately
+ *       ungated — it can only remove the caller's own entry and always answers an empty list, so a user
+ *       whose permissions changed while the editor was open can still retract their beacon.
+ *     tags: [Presence]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: postId
+ *         required: true
+ *         schema:
+ *           type: integer
+ *       - in: header
+ *         name: X-CSRF-Token
+ *         schema:
+ *           type: string
+ *         description: >-
+ *           Double-submit CSRF token — the value of the non-HttpOnly `wjs_csrf` cookie. Required when the
+ *           request is authenticated by the session cookie; Bearer/API-token callers are exempt.
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               action:
+ *                 type: string
+ *                 description: Send "leave" to drop out of the room. Any other value (or none) is a heartbeat.
+ *                 enum: [leave]
+ *     responses:
+ *       200:
+ *         description: The other editors currently in this post's room
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 ok:
+ *                   type: boolean
+ *                 editors:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       id:
+ *                         type: integer
+ *                       name:
+ *                         type: string
+ *       400:
+ *         description: The post id is not a well-formed route id.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 error:
+ *                   type: string
+ *       401:
+ *         description: "rest_not_logged_in — no valid credential."
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ *       403:
+ *         description: >-
+ *           rest_forbidden — the post does not exist, is not a REST-exposed type, or the caller may not
+ *           edit it. The three are deliberately indistinguishable, so this is never an existence oracle
+ *           over other people's drafts. Also rest_csrf_token / rest_csrf_invalid, or
+ *           mfa_enrollment_required.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 code:
+ *                   type: string
+ *                 error:
+ *                   type: string
+ */
 router.post('/:postId', authenticate, asyncHandler(async (req: Request, res: Response) => {
     // THE ROUTE-ID CONTRACT — see core/query-params. The 400 and its body are unchanged (they are
     // this route's published answer); the PREDICATE is now the single shared one. The local test was

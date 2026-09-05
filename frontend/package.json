@@ -14,6 +14,7 @@
     "start": "node scripts/start-frontend.js prod",
     "lint": "eslint .",
     "test": "vitest run",
+    "test:coverage": "vitest run --coverage --testTimeout=30000",
     "generate-plugins": "node scripts/generate-plugin-registry.js && node scripts/generate-admin-plugin-registry.js"
   },
   "dependencies": {
@@ -38,6 +39,7 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@vitest/coverage-v8": "^4.1.10",
     "esbuild": "^0.28.2",
     "eslint": "^9",
     "eslint-config-next": "16.1.1",

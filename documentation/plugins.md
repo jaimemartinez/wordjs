@@ -256,6 +256,20 @@ with none configured the default is the GitHub release assets
 (`https://github.com/jaimemartinez/wordjs/releases/latest/download`). See
 **[Plugins Reference §10](plugins-reference.md)** for the catalog.
 
+### Getting your plugin reviewed
+
+The catalog is open to outside authors, and the review programme is public:
+**[`marketplace/REVIEW.md`](../marketplace/REVIEW.md)**. It covers what the **reviewed** badge
+certifies and what it deliberately does not (§1 — it is a statement about process, not a security
+audit; the sandbox below is where isolation actually lives), what a submission's `manifest.json` must
+carry (§2), the checks that run automatically on the pull request (§3), the four questions a human
+reviewer asks (§4), and when a review expires (§6 — any permission change invalidates it
+mechanically, not by request).
+
+Submit by opening a pull request that adds `marketplace/plugins/<slug>/`, using the
+`?template=plugin-submission.md` pull-request template. A plugin the project itself maintains carries
+`review.status: "first-party"`, never `"reviewed"` — see §8 on why.
+
 ### The Distribution Workflow (Standard)
 1.  **Build:** Run `node scripts/build-plugin.js my-plugin`.
 2.  **Zip:** Compress your plugin folder (including the new `dist/` folder).

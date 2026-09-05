@@ -1,0 +1,19 @@
+apiVersion: v2
+name: wordjs
+description: WordJS CMS — single-process monolith (backend API + Next.js frontend on one HTTP port)
+type: application
+# Chart version. Bump on any change to the chart itself.
+version: 0.1.0
+# The WordJS release this chart was written against — and, because values.yaml leaves `image.tag` empty
+# and deployment.yaml renders `{{ .Values.image.tag | default .Chart.AppVersion }}`, THE TAG THE
+# DOCUMENTED INSTALL ACTUALLY PULLS when nobody passes `--set image.tag`. Keep it equal to the version in
+# the root package.json: a stale value here is not cosmetic, it is an ImagePullBackOff (or, worse, a
+# silently stale image that was pushed once). CI asserts the equality — see the Helm gate in
+# .github/workflows/ci.yml, which renders once WITHOUT `--set image.tag` for exactly this reason.
+appVersion: "2.1.0"
+keywords:
+  - cms
+  - wordjs
+home: https://github.com/jaimemartinez/wordjs
+sources:
+  - https://github.com/jaimemartinez/wordjs

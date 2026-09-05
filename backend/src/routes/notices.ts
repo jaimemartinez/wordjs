@@ -23,7 +23,16 @@ import type { Request, Response } from 'express';
 
 const express = require('express');
 const router = express.Router();
-const { getOption, updateOption } = require('../core/options');
+const { getOption } = require('../core/options');
+// THE DISMISSAL IS A WRITER LIKE THE OTHERS, NOT A SECOND DIALECT OF ONE. `admin_notices` is a whole
+// array rewritten by a read-modify-write, and it now has three writers: the plugin CrashGuard
+// (core/plugins.ts), core/admin-notices.ts — which fires on EVERY boot and every isolated-plugin
+// launch — and this route. The other two take the `wordjs:admin-notices` lock and re-read under it;
+// this one used to read at one line and write at the next with no lock at all, so an administrator
+// dismissing a notice could silently drop a degradation raised a millisecond earlier. That is the
+// exact failure core/admin-notices.ts exists to end, so the route calls ITS writer instead of owning
+// a copy of the sequence.
+const { clearAdminNotice } = require('../core/admin-notices');
 const { authenticate } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
@@ -75,22 +84,31 @@ router.get('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: Re
  *     responses:
  *       200:
  *         description: Dismissed (idempotent); returns how many notices remain
+ *       503:
+ *         description: >-
+ *           rest_notice_not_dismissed — the shared writer could not take the admin-notices lock (or the
+ *           option was unreachable), so nothing was written. The dismissal is queued and the request is
+ *           safe to repeat.
  */
 router.delete('/:id', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     const { id } = req.params;
-    const stored = await getOption('admin_notices', []);
-    const notices = Array.isArray(stored) ? stored : [];
 
-    const initialLength = notices.length;
-    const remaining = notices.filter((n: any) => n && n.id !== id);
-
-    // Only write when something actually changed: dismissing an already-gone notice must not churn an
-    // autoloaded option (and invalidate its boot cache) for nothing.
-    if (remaining.length !== initialLength) {
-        await updateOption('admin_notices', remaining);
+    // One locked read-modify-write, shared with the two writers that raise notices. It is idempotent
+    // and it only writes when something actually changed, so dismissing an already-gone notice still
+    // does not churn an autoloaded option (and invalidate its boot cache) for nothing.
+    const dismissed = await clearAdminNotice(id);
+    if (!dismissed) {
+        // Never answer 200 for a write that did not happen: the screen would remove the row and the
+        // next refresh would put it back, which is how an operator learns to distrust the screen.
+        return res.status(503).json({
+            code: 'rest_notice_not_dismissed',
+            message: 'The notice could not be dismissed right now. Please try again.',
+            data: { status: 503 }
+        });
     }
 
-    res.json({ success: true, remaining: remaining.length });
+    const stored = await getOption('admin_notices', []);
+    res.json({ success: true, remaining: Array.isArray(stored) ? stored.length : 0 });
 }));
 
 module.exports = router;

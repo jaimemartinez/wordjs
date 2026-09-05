@@ -55,3 +55,23 @@ backend/plugins/toscano-platform
 # Large root-level audit notes (not needed at build; docs/ and documentation/ are kept)
 AUDITORIA_*.md
 SANDBOX_AUDIT_*.md
+
+# Deployment templates that CONSUME this image (compose stacks, the Helm chart). They describe how the
+# built image is run, so nothing in the build needs them — and a change to a template must not
+# invalidate the build cache. `docker/` is NOT listed: the Dockerfile copies docker/entrypoint.sh.
+deploy
+
+# The local knowledge-graph artefact (gitignored, ~336 MB in a working tree). Nothing in the image reads
+# it, and it is pure weight in the build context: `docker build` tars the whole context and ships it to
+# the daemon BEFORE the first layer runs, so this alone adds minutes to every local build. CI never has
+# it, so this only ever speeds up local builds — it can never change what the image contains.
+graphify-out/
+
+# Coverage output — the same class of weight, and bigger. `npm run test:coverage` leaves one raw V8
+# profile per spawned process under backend/coverage/tmp: MEASURED at ~1.1 GB across 333 files after a
+# green run. c8's `clean` runs BEFORE a run, not after, so that tree is not transient — it survives until
+# the next coverage run overwrites it. Without these entries the builder's `COPY . .` ships all of it into
+# the context AND into a layer, and invalidates that layer's cache every time anyone measures coverage.
+# Both spellings: `coverage/` for the root tree, `**/coverage/` for backend/ and frontend/.
+coverage/
+**/coverage/

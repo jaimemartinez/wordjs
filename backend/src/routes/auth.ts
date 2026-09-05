@@ -28,6 +28,44 @@ const loginThrottle = require('../core/login-throttle');
 const { clientIp } = require('../core/client-ip');
 // The ONE self-service email-write rule (shared with routes/users.ts) — see core/mailbox.ts.
 const { refuseSelfServiceEmailChange, isValidAddress } = require('../core/mailbox');
+// Append-only audit trail. Every call here is best-effort by construction (recordAudit swallows its
+// own errors) — an unwritable audit row must never turn a successful login into a 500.
+const { recordAudit } = require('../core/audit');
+
+/**
+ * A caller-supplied string, bounded, for an audit `detail`.
+ *
+ * The attempted username on a FAILED login is attacker-controlled and unauthenticated: storing it raw
+ * would let anyone who can reach /auth/login write megabytes per attempt into the one table that is
+ * supposed to survive an incident. 64 characters is longer than any real login.
+ */
+function auditText(v: any, max = 64): string {
+    return String(v == null ? '' : v).slice(0, max);
+}
+
+/**
+ * A stable, non-reversible marker for an attempted identifier that names NO account.
+ *
+ * The audit trail records the attempted username on a failed login because half of "wrong password"
+ * is knowing WHICH account is being guessed. But the single most common way a credential leaks into a
+ * log is a password typed into the username box, and that string is exactly what an unknown-account
+ * failure would otherwise persist in clear — in `detail` AND in `target_id`, readable by every
+ * administrator through GET /audit, for the 365 days the retention window keeps.
+ *
+ * So an unknown identifier is recorded as a digest instead: an operator can still see that the SAME
+ * unknown string is being tried a thousand times (which is the enumeration signal the row exists for)
+ * without the string itself being in the table. KEYED with the server's own secret rather than a bare
+ * sha256: a plain hash of a weak password is a dictionary attack away from the password, and the
+ * reader we are protecting the user from here is an administrator who already has the log. The key
+ * changes when the JWT secret is rotated, so digests correlate within a deployment's key lifetime,
+ * which is far longer than any incident.
+ */
+function attemptDigest(value: any): string {
+    return crypto.createHmac('sha256', String(config.jwt.secret || ''))
+        .update(String(value == null ? '' : value))
+        .digest('hex')
+        .slice(0, 16);
+}
 
 // Per-account login lockout: the per-IP rate limiter is defeated by a botnet/proxy pool targeting a
 // single account, and there was no account-level throttle. Lock an account for a cooldown after N
@@ -138,12 +176,25 @@ function inflightBucket(purpose: LockPurpose, subject: string | number, req: Req
     return lockBucket(purpose, `${subject}|${clientIp(req)}`);
 }
 
-async function resolveLockIdentifier(identifier: any) {
+/**
+ * The account a submitted identifier names, or null when it names none.
+ *
+ * Split out of resolveLockIdentifier because two call sites need the ANSWER, not just the bucket
+ * subject: the throttle (which must count a probe for a nonexistent account too) and the failure
+ * audit (which must not persist an identifier that matched nothing — see attemptDigest). Resolving
+ * once and passing the account along keeps the pre-authentication database work an anonymous caller
+ * can drive at exactly what it was.
+ */
+async function findAccountByIdentifier(identifier: any) {
     try {
         const User = require('../models/User');
-        const u = (await User.findByLogin(identifier)) || (await User.findByEmail(identifier));
-        return u ? u.userLogin : identifier;
-    } catch { return identifier; }
+        return (await User.findByLogin(identifier)) || (await User.findByEmail(identifier)) || null;
+    } catch { return null; }
+}
+
+async function resolveLockIdentifier(identifier: any) {
+    const u = await findAccountByIdentifier(identifier);
+    return u ? u.userLogin : identifier;
 }
 
 // Lazily-resolved shared store client (null on single-node or if Redis isn't configured).
@@ -344,6 +395,84 @@ const COOKIE_OPTIONS = (): CookieOptions => sessionCookieOptions();
 
 /**
  * @swagger
+ * components:
+ *   schemas:
+ *     RestError:
+ *       type: object
+ *       description: The uniform WordJS REST error envelope.
+ *       properties:
+ *         code:
+ *           type: string
+ *           description: Machine-readable error code, e.g. rest_invalid_param.
+ *         message:
+ *           type: string
+ *         data:
+ *           type: object
+ *           properties:
+ *             status:
+ *               type: integer
+ *     MfaStatus:
+ *       type: object
+ *       description: Compliance of one account against the admin-enforced MFA-by-role policy.
+ *       properties:
+ *         required:
+ *           type: boolean
+ *           description: The account's role is listed in the policy.
+ *         enabled:
+ *           type: boolean
+ *           description: The account has TOTP enrolled.
+ *         enforced:
+ *           type: boolean
+ *           description: Required, not enrolled and past the grace deadline — requests are refused with mfa_enrollment_required.
+ *         withinGrace:
+ *           type: boolean
+ *         graceDeadline:
+ *           type: integer
+ *           nullable: true
+ *           description: Epoch seconds, or null when the account is not subject to the policy.
+ *     MfaPolicy:
+ *       type: object
+ *       properties:
+ *         requiredRoles:
+ *           type: array
+ *           items:
+ *             type: string
+ *         graceDays:
+ *           type: integer
+ *         enforcedAt:
+ *           type: integer
+ *           nullable: true
+ *           description: Epoch seconds at which enforcement started, or null while no role requires MFA.
+ *         enforceForApiTokens:
+ *           type: boolean
+ *     ApiTokenSummary:
+ *       type: object
+ *       description: API token metadata. The secret itself is returned once, by POST /auth/tokens, and never again.
+ *       properties:
+ *         id:
+ *           type: integer
+ *         name:
+ *           type: string
+ *           nullable: true
+ *         tokenPrefix:
+ *           type: string
+ *         scopes:
+ *           type: array
+ *           items:
+ *             type: string
+ *         lastUsedAt:
+ *           type: integer
+ *           nullable: true
+ *         expiresAt:
+ *           type: integer
+ *           nullable: true
+ *         revoked:
+ *           type: boolean
+ *         createdAt:
+ *           type: string
+ */
+/**
+ * @swagger
  * /auth/register:
  *   post:
  *     summary: Register a new user
@@ -365,11 +494,43 @@ const COOKIE_OPTIONS = (): CookieOptions => sessionCookieOptions();
  *                 minLength: 8
  *               displayName:
  *                 type: string
- *     responses:
+*     responses:
  *       201:
- *         description: User created successfully
+ *         description: >-
+ *           Account created. A session cookie is issued unless email verification is required, in which
+ *           case the account stays inactive until POST /auth/verify-email consumes the emailed token.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 user:
+ *                   $ref: '#/components/schemas/User'
+ *                 verificationRequired:
+ *                   type: boolean
+ *                   description: Present and true only when the account must verify its email before logging in.
+ *                 message:
+ *                   type: string
  *       400:
- *         description: Validation error or user exists
+ *         description: >-
+ *           rest_missing_param (username/email/password absent), rest_invalid_param (bad email format,
+ *           password shorter than 8 or longer than 72 characters) or rest_user_exists.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ *       403:
+ *         description: >-
+ *           rest_cannot_register (self-registration is disabled site-wide), or
+ *           rest_reserved_mail_domain / rest_mailbox_address_locked when the requested address belongs to
+ *           the site's own mail domain — those are provisioned by an administrator, never claimed here.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ *       429:
+ *         description: Rate limited by the strict per-IP auth limiter.
+ *     security: []
  */
 router.post('/register', asyncHandler(async (req: Request, res: Response) => {
     // ... (rest of the function)
@@ -501,18 +662,61 @@ router.post('/register', asyncHandler(async (req: Request, res: Response) => {
  *                 type: string
  *               password:
  *                 type: string
- *     responses:
+*     responses:
  *       200:
- *         description: Login successful
+ *         description: >-
+ *           Either the login COMPLETED (a session cookie was issued and the body carries the user), or a
+ *           second factor is owed — in which case the body is only mfaRequired plus a short-lived
+ *           mfaToken that must be exchanged at POST /auth/mfa. Both cases are 200.
  *         content:
  *           application/json:
  *             schema:
- *               type: object
- *               properties:
- *                 user:
- *                   $ref: '#/components/schemas/User'
+ *               oneOf:
+ *                 - type: object
+ *                   title: Session issued
+ *                   properties:
+ *                     user:
+ *                       $ref: '#/components/schemas/User'
+ *                     mfa:
+ *                       $ref: '#/components/schemas/MfaStatus'
+ *                 - type: object
+ *                   title: Second factor required
+ *                   required: [mfaRequired, mfaToken]
+ *                   properties:
+ *                     mfaRequired:
+ *                       type: boolean
+ *                     mfaToken:
+ *                       type: string
+ *                       description: Short-lived signed challenge proving the password step passed.
+ *       400:
+ *         description: "rest_missing_param — username or password absent."
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
  *       401:
- *         description: Invalid credentials
+ *         description: "rest_invalid_credentials — deliberately identical for an unknown user and a wrong password."
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ *       403:
+ *         description: >-
+ *           rest_email_unverified — the password was correct but the account has not confirmed its email
+ *           address yet.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ *       429:
+ *         description: >-
+ *           rest_login_throttled (escalating per-IP-and-account lockout, or too many simultaneous
+ *           attempts for this account) or rest_account_locked (account-wide backstop). Carries Retry-After.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ *     security: []
  */
 router.post('/login', asyncHandler(async (req: Request, res: Response) => {
     const { username, password } = req.body;
@@ -525,9 +729,15 @@ router.post('/login', asyncHandler(async (req: Request, res: Response) => {
         });
     }
 
+    // Resolved ONCE: the throttle bucket needs the account below, and so does the failure audit in the
+    // catch — where whether the identifier named a real account decides whether it is safe to store.
+    const account = await findAccountByIdentifier(username);
     // lockBucket, not the bare identifier: this is the ONE bucket whose subject the caller chooses, so it
     // must be confined to its own purpose or it IS the whole store (see the note above lockBucket).
-    const lockId = lockBucket('login', await resolveLockIdentifier(username));
+    // The subject is resolveLockIdentifier's, unchanged: the account's canonical login when the
+    // identifier names one, and the submitted string when it does not — deliberately, so a probe for a
+    // nonexistent account is still counted.
+    const lockId = lockBucket('login', account ? account.userLogin : username);
     // Honest client IP: the TCP peer unless a proxy is genuinely trusted (core/client-ip). Keying the
     // per-(IP+account) throttle on req.ip let a monolith client rotate X-Forwarded-For to mint a fresh
     // bucket every attempt and evade this lockout entirely (audit 2026-08-08 P1).
@@ -591,11 +801,45 @@ router.post('/login', asyncHandler(async (req: Request, res: Response) => {
             return res.json({ mfaRequired: true, mfaToken: mfa.signChallenge(user.id) });
         }
 
+        // A COMPLETED login — recorded where the session is actually issued, never where the password
+        // merely checked out. The MFA branch above returns a challenge, not a session; its success is
+        // recorded by POST /auth/mfa, which is the handler that finishes that login.
+        await recordAudit(user.id, 'auth.login.success', 'user', user.id, {
+            username: auditText(user.userLogin), method: 'password', ip: auditText(ip, 45)
+        });
+
         const token = generateToken(user);
         if (issueSessionCookie(req, res, token, COOKIE_OPTIONS())) return;
         res.json({ user: user.toJSON(), mfa: await mfa.evaluate(user) });
     } catch (error) {
         await recordLoginFail(lockId);
+        // THE ATTEMPTED ACCOUNT, NEVER THE PASSWORD — the whole point of recording a failure is to see
+        // WHICH account is being guessed, and half of "wrong password" reports is the account name. The
+        // password is not passed to recordAudit at all (rather than relying on sanitizeDetail's
+        // secret-key filter to catch it downstream), and the actor is null: nobody authenticated here.
+        //
+        // ...AND NOT A PASSWORD TYPED INTO THE USERNAME BOX. "Never the password" was true of the
+        // `password` FIELD and false of the row: an identifier that matches no account is very often a
+        // credential in the wrong box, and it used to be stored verbatim in `detail` and in `target_id`,
+        // where every administrator can read it for the 365 days retention keeps. So the raw string is
+        // recorded only when it resolves to a real account (in which case it is that account's own
+        // login, which the log may name); anything else is recorded as a keyed digest, which still
+        // answers "is the same unknown identifier being tried over and over?" — see attemptDigest.
+        //
+        // ONLY THE CREDENTIAL CHECK IS RECORDED, not the 429s above it. The throttle refusals are the
+        // branch an attacker can drive at will; keeping them out means the audit write rate for a
+        // brute-force run is bounded by the lockout ladder rather than by the attacker.
+        const knownLogin = account ? auditText(account.userLogin) : null;
+        const digest = knownLogin ? null : attemptDigest(username);
+        await recordAudit(
+            null, 'auth.login.failure', 'user',
+            knownLogin || `hmac:${digest}`,
+            knownLogin
+                ? { username: knownLogin, ip: auditText(ip, 45) }
+                // NOT `usernameHash`: sanitizeDetail drops any key matching /hash/ as secret-named, so
+                // that spelling would silently store nothing at all.
+                : { usernameDigest: digest, unknownAccount: true, ip: auditText(ip, 45) }
+        );
         // Advance the per-(IP+account) escalation ladder; this attempt still answers 401 (a later
         // attempt gets the 429), matching the account-lockout flow above.
         await loginThrottle.fail(ip, lockId);
@@ -614,6 +858,36 @@ router.post('/login', asyncHandler(async (req: Request, res: Response) => {
  * GET /auth/me
  * Get current user
  */
+/**
+ * @swagger
+ * /auth/me:
+ *   get:
+ *     summary: Get the authenticated user
+ *     description: >-
+ *       The user object is returned UNWRAPPED, with one extra top-level `mfa` key describing the
+ *       account's two-factor status.
+ *     tags: [Auth]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: The current user plus two-factor status
+ *         content:
+ *           application/json:
+ *             schema:
+ *               allOf:
+ *                 - $ref: '#/components/schemas/User'
+ *                 - type: object
+ *                   properties:
+ *                     mfa:
+ *                       $ref: '#/components/schemas/MfaStatus'
+ *       401:
+ *         description: "rest_not_logged_in — no valid session cookie, session JWT or API token."
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ */
 router.get('/me', authenticate, asyncHandler(async (req: Request, res: Response) => {
     // mfa is an EXTRA top-level key (the client reads /auth/me as the user object directly — do not re-wrap).
     res.json({ ...req.user.toJSON(), mfa: await mfa.evaluate(req.user) });
@@ -622,6 +896,50 @@ router.get('/me', authenticate, asyncHandler(async (req: Request, res: Response)
 /**
  * POST /auth/validate
  * Validate token
+ */
+/**
+ * @swagger
+ * /auth/validate:
+ *   post:
+ *     summary: Validate the caller's credentials
+ *     description: Answers 200 when the presented session cookie, session JWT or API token still authenticates.
+ *     tags: [Auth]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: header
+ *         name: X-CSRF-Token
+ *         schema:
+ *           type: string
+ *         description: >-
+ *           Double-submit CSRF token — the value of the non-HttpOnly `wjs_csrf` cookie. Required when the
+ *           request is authenticated by the session cookie; Bearer/API-token callers are exempt.
+ *     responses:
+ *       200:
+ *         description: The credential is valid
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 valid:
+ *                   type: boolean
+ *                 user:
+ *                   $ref: '#/components/schemas/User'
+ *       401:
+ *         description: "rest_not_logged_in — the credential is missing, expired or revoked."
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ *       403:
+ *         description: >-
+ *           rest_csrf_token / rest_csrf_invalid (double-submit token or same-origin check failed), or
+ *           mfa_enrollment_required when the caller's role requires 2FA and the grace window has expired.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
  */
 router.post('/validate', authenticate, (req: Request, res: Response) => {
     res.json({
@@ -640,6 +958,51 @@ router.post('/validate', authenticate, (req: Request, res: Response) => {
  * revoking the token did not cut off. issueSessionCookie refuses the exchange (403) for any headless
  * request; a genuine cookie/JWT session refreshes exactly as before.
  */
+/**
+ * @swagger
+ * /auth/refresh:
+ *   post:
+ *     summary: Refresh the interactive session
+ *     description: >-
+ *       Mints a fresh session JWT and re-issues the session cookie together with its `wjs_csrf` partner.
+ *       A HEADLESS caller is refused — a leaked `wjt_` API token can never be traded for a 7-day
+ *       interactive session.
+ *     tags: [Auth]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: header
+ *         name: X-CSRF-Token
+ *         schema:
+ *           type: string
+ *         description: >-
+ *           Double-submit CSRF token — the value of the non-HttpOnly `wjs_csrf` cookie. Required when the
+ *           request is authenticated by the session cookie.
+ *     responses:
+ *       200:
+ *         description: Session refreshed; a new session cookie is set
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 user:
+ *                   $ref: '#/components/schemas/User'
+ *       401:
+ *         description: "rest_not_logged_in — no valid credential."
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ *       403:
+ *         description: >-
+ *           The caller is headless (an API token may not obtain a session cookie), rest_csrf_token /
+ *           rest_csrf_invalid, or mfa_enrollment_required.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ */
 router.post('/refresh', authenticate, (req: Request, res: Response) => {
     const token = generateToken(req.user);
 
@@ -655,9 +1018,51 @@ router.post('/refresh', authenticate, (req: Request, res: Response) => {
  * POST /auth/logout
  * Clear auth cookie
  */
+/**
+ * @swagger
+ * /auth/logout:
+ *   post:
+ *     summary: Log out
+ *     description: >-
+ *       Clears the session cookie and its `wjs_csrf` partner, and — when a valid token was presented —
+ *       stamps the account's security epoch so every previously issued session JWT stops authenticating.
+ *       Succeeds even with no credential at all, in which case nothing is revoked.
+ *     tags: [Auth]
+ *     security: []
+ *     parameters:
+ *       - in: header
+ *         name: X-CSRF-Token
+ *         schema:
+ *           type: string
+ *         description: >-
+ *           Double-submit CSRF token — the value of the non-HttpOnly `wjs_csrf` cookie. Required when a
+ *           VALID session cookie is attached; a request with no cookie (or an unverifiable one) is exempt.
+ *     responses:
+ *       200:
+ *         description: Logged out
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
+ *       403:
+ *         description: "rest_csrf_token / rest_csrf_invalid — the anti-CSRF checks refused the request."
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ */
 router.post('/logout', asyncHandler(async (req: Request, res: Response) => {
     // Best-effort revocation: stamp the user's security epoch so the just-cleared token (and any
     // stolen copy of it) can no longer authenticate. Logout still succeeds without a valid token.
+    // Who logged out, when it is knowable. A logout with no valid token revokes nothing and is not an
+    // event: recording an anonymous 'auth.logout' on every unauthenticated POST would hand an
+    // unauthenticated caller a free row in the audit table.
+    let actorId: any = null;
     try {
         const ah = req.headers.authorization;
         let token = (ah && ah.startsWith('Bearer ')) ? ah.substring(7) : null;
@@ -668,9 +1073,13 @@ router.post('/logout', asyncHandler(async (req: Request, res: Response) => {
             const decoded = verifyToken(token);
             if (decoded && decoded.userId) {
                 await User.updateMeta(decoded.userId, 'token_valid_after', String(Math.floor(Date.now() / 1000)));
+                actorId = decoded.userId;
             }
         }
     } catch { /* invalid/expired token — nothing to revoke */ }
+    if (actorId !== null) {
+        await recordAudit(actorId, 'auth.logout', 'user', actorId, { ip: auditText(clientIp(req), 45) });
+    }
     // Clears BOTH the session cookie and its `wjs_csrf` double-submit partner — one helper, in the same
     // module that issues them, so a future third cookie cannot be left behind here.
     clearSessionCookies(res);
@@ -759,6 +1168,27 @@ async function recoveryTarget(user: any): Promise<string> {
  * GET /auth/password-reset-available
  * Public probe so the login page shows "Forgot password?" only when self-service reset can actually work.
  */
+/**
+ * @swagger
+ * /auth/password-reset-available:
+ *   get:
+ *     summary: Can self-service password reset actually work?
+ *     description: >-
+ *       Public probe so the login page shows "Forgot password?" only when a mail provider is loaded AND
+ *       declares itself able to deliver. Reveals nothing about any account.
+ *     tags: [Auth]
+ *     security: []
+ *     responses:
+ *       200:
+ *         description: Availability of the self-service reset flow
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 available:
+ *                   type: boolean
+ */
 router.get('/password-reset-available', asyncHandler(async (_req: Request, res: Response) => {
     res.json({ available: await mailReady() });
 }));
@@ -767,6 +1197,50 @@ router.get('/password-reset-available', asyncHandler(async (_req: Request, res: 
  * POST /auth/forgot-password
  * Body: { login } (username or account email). ALWAYS 200 — never reveals whether the account exists
  * or has a reachable recovery address (anti-enumeration). Rate-limited by authLimiter in index.ts.
+ */
+/**
+ * @swagger
+ * /auth/forgot-password:
+ *   post:
+ *     summary: Request a password-reset link
+ *     description: >-
+ *       ALWAYS answers 200 with the same body — whether the account exists, has a reachable recovery
+ *       address, or mail is unavailable. That uniformity is the anti-enumeration control, so there is no
+ *       failure status to document. The link is delivered to the account's personal_email, or to its
+ *       primary address when that is external; a mailbox on the site's own domain is never used.
+ *     tags: [Auth]
+ *     security: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [login]
+ *             properties:
+ *               login:
+ *                 type: string
+ *                 description: Username or account email address.
+ *     responses:
+ *       200:
+ *         description: Uniform acknowledgement
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 ok:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
+ *       403:
+ *         description: "rest_csrf_invalid — the same-origin check refused the request."
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ *       429:
+ *         description: Rate limited by the strict per-IP auth limiter.
  */
 router.post('/forgot-password', asyncHandler(async (req: Request, res: Response) => {
     const login = String((req.body && req.body.login) || '').trim();
@@ -810,6 +1284,62 @@ router.post('/forgot-password', asyncHandler(async (req: Request, res: Response)
  * Body: { uid, token, password }. Consumes the single-use token and revokes all existing sessions.
  * Rate-limited by authLimiter in index.ts.
  */
+/**
+ * @swagger
+ * /auth/reset-password:
+ *   post:
+ *     summary: Consume a reset link and set a new password
+ *     description: >-
+ *       The token is single-use and valid for 30 minutes. A successful reset revokes every existing
+ *       session of the account.
+ *     tags: [Auth]
+ *     security: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [uid, token, password]
+ *             properties:
+ *               uid:
+ *                 type: integer
+ *               token:
+ *                 type: string
+ *               password:
+ *                 type: string
+ *                 minLength: 8
+ *                 maxLength: 72
+ *     responses:
+ *       200:
+ *         description: Password reset
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 ok:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
+ *       400:
+ *         description: >-
+ *           rest_invalid_reset (missing, unknown, expired or already-consumed link — one uniform answer,
+ *           so a bad token never reveals whether the account exists), rest_weak_password (under 8
+ *           characters) or rest_invalid_param (over 72 characters).
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ *       403:
+ *         description: "rest_csrf_invalid — the same-origin check refused the request."
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ *       429:
+ *         description: Rate limited by the strict per-IP auth limiter.
+ */
 router.post('/reset-password', asyncHandler(async (req: Request, res: Response) => {
     const uid = parseInt((req.body && req.body.uid), 10);
     const token = String((req.body && req.body.token) || '');
@@ -835,6 +1365,13 @@ router.post('/reset-password', asyncHandler(async (req: Request, res: Response) 
     await User.updateMeta(uid, 'password_reset_hash', '');
     await User.updateMeta(uid, 'password_reset_expires', '0');
 
+    // A credential replaced through the anonymous recovery flow, and it revoked every session of that
+    // account. The actor IS the account: possession of the emailed single-use token is the only proof
+    // this route ever has. Never the password, nor the token — only that the reset happened.
+    await recordAudit(uid, 'auth.password.reset', 'user', uid, {
+        username: auditText(user.userLogin), via: 'recovery_link', ip: auditText(clientIp(req), 45)
+    });
+
     res.json({ ok: true, message: 'Your password has been reset. You can now log in with your new password.' });
 }));
 
@@ -843,6 +1380,57 @@ router.post('/reset-password', asyncHandler(async (req: Request, res: Response) 
  * Body: { uid, token }. Consumes the single-use email-verification token minted at registration and
  * flips the account to verified (clears `email_verification_pending`), after which login works. Uniform
  * failure for a bad/expired/consumed token. Rate-limited by authLimiter in index.ts.
+ */
+/**
+ * @swagger
+ * /auth/verify-email:
+ *   post:
+ *     summary: Confirm an email address after registration
+ *     description: >-
+ *       Consumes the single-use token minted at registration (valid for 24 hours) and clears the
+ *       pending flag, after which the account can log in.
+ *     tags: [Auth]
+ *     security: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [uid, token]
+ *             properties:
+ *               uid:
+ *                 type: integer
+ *               token:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Email verified
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 ok:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
+ *       400:
+ *         description: >-
+ *           rest_invalid_verification — missing, unknown, expired or already-consumed link. One uniform
+ *           answer for every failure.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ *       403:
+ *         description: "rest_csrf_invalid — the same-origin check refused the request."
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ *       429:
+ *         description: Rate limited by the strict per-IP auth limiter.
  */
 router.post('/verify-email', asyncHandler(async (req: Request, res: Response) => {
     const uid = parseInt((req.body && req.body.uid), 10);
@@ -881,6 +1469,45 @@ const MAX_ACTIVE_TOKENS_PER_USER = 100;
  * GET /auth/tokens
  * List the current user's API tokens (metadata only — the secret is never returned after creation).
  */
+/**
+ * @swagger
+ * /auth/tokens:
+ *   get:
+ *     summary: List the caller's API tokens
+ *     description: >-
+ *       Metadata only — a token's secret is shown once, at creation, and is unrecoverable afterwards.
+ *       Requires an INTERACTIVE session (cookie or session JWT) and the manage_api_tokens capability; a
+ *       `wjt_` API token may not manage tokens.
+ *     tags: [Auth]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: The caller's tokens
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 tokens:
+ *                   type: array
+ *                   items:
+ *                     $ref: '#/components/schemas/ApiTokenSummary'
+ *       401:
+ *         description: "rest_not_logged_in — no valid credential."
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ *       403:
+ *         description: >-
+ *           The caller is headless (an API token may not manage tokens), rest_forbidden (the
+ *           manage_api_tokens capability is missing), or mfa_enrollment_required.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ */
 router.get('/tokens', authenticate, sessionOnly, can('manage_api_tokens'), asyncHandler(async (req: Request, res: Response) => {
     const tokens = await ApiToken.listForUser(req.user.id);
     res.json({ tokens });
@@ -893,6 +1520,86 @@ router.get('/tokens', authenticate, sessionOnly, can('manage_api_tokens'), async
  *   scopes: a global 'read'|'write'|'*' (all resources), and/or per-resource grants like
  *   'posts:write','media:read' (comma-string or array). write implies read; a token holding only
  *   resource scopes is confined to those resources. Unrecognized scopes are REJECTED (400).
+ */
+/**
+ * @swagger
+ * /auth/tokens:
+ *   post:
+ *     summary: Mint an API token
+ *     description: >-
+ *       The plaintext token is returned ONCE and can never be shown again. Requires an interactive
+ *       session and the manage_api_tokens capability. At most 100 active tokens per user.
+ *     tags: [Auth]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: header
+ *         name: X-CSRF-Token
+ *         schema:
+ *           type: string
+ *         description: >-
+ *           Double-submit CSRF token — the value of the non-HttpOnly `wjs_csrf` cookie. Required when the
+ *           request is authenticated by the session cookie.
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               name:
+ *                 type: string
+ *                 description: Human label for the token.
+ *               scopes:
+ *                 description: >-
+ *                   A comma-separated string or an array. A global "read", "write" or "*", and/or
+ *                   per-resource grants such as "posts:write" / "media:read". write implies read. An
+ *                   unrecognized scope is rejected rather than silently dropped.
+ *                 oneOf:
+ *                   - type: string
+ *                   - type: array
+ *                     items:
+ *                       type: string
+ *               expiresInDays:
+ *                 type: number
+ *                 description: Positive number of days until expiry; omit for a token that never expires.
+ *     responses:
+ *       201:
+ *         description: Token created — this is the only time the secret is disclosed
+ *         content:
+ *           application/json:
+ *             schema:
+ *               allOf:
+ *                 - $ref: '#/components/schemas/ApiTokenSummary'
+ *                 - type: object
+ *                   properties:
+ *                     token:
+ *                       type: string
+ *                       description: The plaintext secret. Save it now.
+ *                     message:
+ *                       type: string
+ *       400:
+ *         description: >-
+ *           rest_token_limit (100 active tokens already), rest_invalid_param (expiresInDays is not a
+ *           positive number) or rest_invalid_scope.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ *       401:
+ *         description: "rest_not_logged_in — no valid credential."
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ *       403:
+ *         description: >-
+ *           The caller is headless, rest_forbidden (no manage_api_tokens), rest_csrf_token /
+ *           rest_csrf_invalid, mfa_enrollment_required, or rest_mfa_required_for_tokens — the account's
+ *           role requires 2FA and it has not enrolled, so it may not mint a token even during grace.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
  */
 router.post('/tokens', authenticate, sessionOnly, can('manage_api_tokens'), asyncHandler(async (req: Request, res: Response) => {
     const { name, scopes, expiresInDays } = req.body || {};
@@ -948,6 +1655,12 @@ router.post('/tokens', authenticate, sessionOnly, can('manage_api_tokens'), asyn
         expiresInDays: expiresInDays != null ? Number(expiresInDays) : null
     });
 
+    // A new long-lived credential exists. The plaintext and the `tokenPrefix` are deliberately NOT in
+    // the detail — what an investigator needs is WHICH token id, minted by whom, with what reach.
+    await recordAudit(req.user.id, 'auth.token.create', 'api_token', created.id, {
+        label: auditText(created.name), scopes: created.scopes, expiresAt: created.expiresAt
+    });
+
     // `token` is the plaintext — surface it now; it can never be shown again.
     res.status(201).json({
         id: created.id,
@@ -963,6 +1676,66 @@ router.post('/tokens', authenticate, sessionOnly, can('manage_api_tokens'), asyn
 /**
  * DELETE /auth/tokens/:id
  * Revoke one of the current user's tokens. Idempotent-ish: 404 if it isn't the caller's or is already gone.
+ */
+/**
+ * @swagger
+ * /auth/tokens/{id}:
+ *   delete:
+ *     summary: Revoke one of the caller's API tokens
+ *     tags: [Auth]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *       - in: header
+ *         name: X-CSRF-Token
+ *         schema:
+ *           type: string
+ *         description: >-
+ *           Double-submit CSRF token — the value of the non-HttpOnly `wjs_csrf` cookie. Required when the
+ *           request is authenticated by the session cookie.
+ *     responses:
+ *       200:
+ *         description: Token revoked
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 revoked:
+ *                   type: boolean
+ *                 id:
+ *                   type: integer
+ *       400:
+ *         description: "rest_invalid_param — the id is not a well-formed route id."
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ *       401:
+ *         description: "rest_not_logged_in — no valid credential."
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ *       403:
+ *         description: >-
+ *           The caller is headless, rest_forbidden (no manage_api_tokens), rest_csrf_token /
+ *           rest_csrf_invalid, or mfa_enrollment_required.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ *       404:
+ *         description: "rest_token_not_found — not the caller's token, or already revoked."
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
  */
 router.delete('/tokens/:id', authenticate, sessionOnly, can('manage_api_tokens'), asyncHandler(async (req: Request, res: Response) => {
     // THE ROUTE-ID CONTRACT — see core/query-params. The 400 and its body are this route's published
@@ -983,6 +1756,7 @@ router.delete('/tokens/:id', authenticate, sessionOnly, can('manage_api_tokens')
             data: { status: 404 }
         });
     }
+    await recordAudit(req.user.id, 'auth.token.revoke', 'api_token', id, {});
     res.json({ revoked: true, id });
 }));
 
@@ -994,6 +1768,67 @@ router.delete('/tokens/:id', authenticate, sessionOnly, can('manage_api_tokens')
 /**
  * POST /auth/mfa — complete a login that requires a second factor. Body: { mfaToken, code }.
  * The challenge token proves the password step passed; verify a TOTP/backup code, then issue the session.
+ */
+/**
+ * @swagger
+ * /auth/mfa:
+ *   post:
+ *     summary: Complete a login that requires a second factor
+ *     description: >-
+ *       Public by design — this is the second half of authentication, gated by the short-lived challenge
+ *       token POST /auth/login issues only after the password check. Accepts a TOTP code or a backup
+ *       code; on success the session cookie is issued.
+ *     tags: [Auth]
+ *     security: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [mfaToken, code]
+ *             properties:
+ *               mfaToken:
+ *                 type: string
+ *                 description: The challenge token returned by POST /auth/login.
+ *               code:
+ *                 type: string
+ *                 description: A current TOTP code, or one of the account's backup codes.
+ *     responses:
+ *       200:
+ *         description: Login complete; a session cookie is set
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 user:
+ *                   $ref: '#/components/schemas/User'
+ *                 mfa:
+ *                   $ref: '#/components/schemas/MfaStatus'
+ *       401:
+ *         description: >-
+ *           rest_mfa_challenge_invalid (the challenge is missing, malformed or expired),
+ *           rest_user_invalid (the account behind the challenge no longer exists) or rest_mfa_invalid
+ *           (wrong code).
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ *       403:
+ *         description: "rest_csrf_invalid — the same-origin check refused the request."
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ *       429:
+ *         description: >-
+ *           rest_account_locked (too many wrong codes for this account) or rest_login_throttled (too many
+ *           simultaneous attempts; carries Retry-After).
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
  */
 router.post('/mfa', asyncHandler(async (req: Request, res: Response) => {
     const { mfaToken, code } = req.body || {};
@@ -1034,6 +1869,11 @@ router.post('/mfa', asyncHandler(async (req: Request, res: Response) => {
             return res.status(401).json({ code: 'rest_mfa_invalid', message: 'Invalid authentication code.', data: { status: 401 } });
         }
         await clearLoginFails(lockKey);
+        // The second half of a 2FA login: THIS is where the session is issued, so this is where the
+        // completed login is recorded (POST /auth/login only handed out a challenge).
+        await recordAudit(user.id, 'auth.login.success', 'user', user.id, {
+            username: auditText(user.userLogin), method: 'mfa', ip: auditText(clientIp(req), 45)
+        });
         const token = generateToken(user);
         if (issueSessionCookie(req, res, token, COOKIE_OPTIONS())) return;
         res.json({ user: user.toJSON(), mfa: await mfa.evaluate(user) });
@@ -1043,6 +1883,33 @@ router.post('/mfa', asyncHandler(async (req: Request, res: Response) => {
 }));
 
 /** GET /auth/mfa/status — is MFA on for the current user + how many backup codes remain. */
+/**
+ * @swagger
+ * /auth/mfa/status:
+ *   get:
+ *     summary: Two-factor status for the caller
+ *     tags: [Auth]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Whether TOTP is on, and how many backup codes remain
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 enabled:
+ *                   type: boolean
+ *                 backupCodesRemaining:
+ *                   type: integer
+ *       401:
+ *         description: "rest_not_logged_in — no valid credential."
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ */
 router.get('/mfa/status', authenticate, asyncHandler(async (req: Request, res: Response) => {
     res.json({ enabled: await mfa.isEnabled(req.user.id), backupCodesRemaining: await mfa.backupCount(req.user.id) });
 }));
@@ -1063,6 +1930,76 @@ function requireSudoPassword(req: Request, res: Response): Promise<boolean> {
 }
 
 /** POST /auth/mfa/setup — begin enrollment: returns a new secret + otpauth URI (for the QR). */
+/**
+ * @swagger
+ * /auth/mfa/setup:
+ *   post:
+ *     summary: Begin two-factor enrollment
+ *     description: >-
+ *       Mints a pending TOTP secret and returns it with an otpauth URI for the QR code. Because this is
+ *       the door that DISCLOSES the secret, it demands the account password again (sudo re-auth) — an
+ *       ambient session cookie alone must never be able to enroll an attacker's authenticator. Requires
+ *       an interactive session; an API token is refused.
+ *     tags: [Auth]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: header
+ *         name: X-CSRF-Token
+ *         schema:
+ *           type: string
+ *         description: >-
+ *           Double-submit CSRF token — the value of the non-HttpOnly `wjs_csrf` cookie. Required when the
+ *           request is authenticated by the session cookie.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [currentPassword]
+ *             properties:
+ *               currentPassword:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Pending secret issued
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 secret:
+ *                   type: string
+ *                 otpauthUri:
+ *                   type: string
+ *       400:
+ *         description: "rest_mfa_already_enabled — disable the existing second factor before re-enrolling."
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ *       401:
+ *         description: "rest_not_logged_in — no valid credential."
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ *       403:
+ *         description: >-
+ *           rest_bad_current_password (the sudo re-auth failed), the caller is headless, or
+ *           rest_csrf_token / rest_csrf_invalid.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ *       429:
+ *         description: "rest_login_throttled — too many simultaneous sudo attempts from this address."
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ */
 router.post('/mfa/setup', authenticate, sessionOnly, asyncHandler(async (req: Request, res: Response) => {
     // Before the pending secret is minted or disclosed: /mfa/setup is what hands the caller the TOTP
     // secret, so it is the first door that must prove the password, not just the second one.
@@ -1075,6 +2012,82 @@ router.post('/mfa/setup', authenticate, sessionOnly, asyncHandler(async (req: Re
 }));
 
 /** POST /auth/mfa/enable — verify a code against the pending secret, activate, return backup codes once. */
+/**
+ * @swagger
+ * /auth/mfa/enable:
+ *   post:
+ *     summary: Activate two-factor authentication
+ *     description: >-
+ *       Verifies a code against the pending secret from POST /auth/mfa/setup, turns 2FA on and returns
+ *       the backup codes ONCE. Also demands the account password (sudo re-auth), because activating is
+ *       the step that actually locks the account. Requires an interactive session.
+ *     tags: [Auth]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: header
+ *         name: X-CSRF-Token
+ *         schema:
+ *           type: string
+ *         description: >-
+ *           Double-submit CSRF token — the value of the non-HttpOnly `wjs_csrf` cookie. Required when the
+ *           request is authenticated by the session cookie.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [currentPassword, code]
+ *             properties:
+ *               currentPassword:
+ *                 type: string
+ *               code:
+ *                 type: string
+ *                 description: A TOTP code generated from the pending secret.
+ *     responses:
+ *       200:
+ *         description: Two-factor enabled; backup codes are shown once
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 enabled:
+ *                   type: boolean
+ *                 backupCodes:
+ *                   type: array
+ *                   items:
+ *                     type: string
+ *                 message:
+ *                   type: string
+ *       400:
+ *         description: "rest_mfa_invalid — the code did not verify against the pending secret."
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ *       401:
+ *         description: "rest_not_logged_in — no valid credential."
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ *       403:
+ *         description: >-
+ *           rest_bad_current_password (the sudo re-auth failed), the caller is headless, or
+ *           rest_csrf_token / rest_csrf_invalid.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ *       429:
+ *         description: "rest_login_throttled — too many simultaneous attempts from this address."
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ */
 router.post('/mfa/enable', authenticate, sessionOnly, asyncHandler(async (req: Request, res: Response) => {
     // Both halves of enrollment are gated, not just /setup: a pending secret may already exist (minted
     // before this guard shipped, or by the legitimate owner who then walked away), and activating it is
@@ -1100,6 +2113,8 @@ router.post('/mfa/enable', authenticate, sessionOnly, asyncHandler(async (req: R
             return res.status(400).json({ code: 'rest_mfa_invalid', message: 'Invalid code. Check your device clock and try again.', data: { status: 400 } });
         }
         await clearLoginFails(lk);
+        // The backup codes themselves are in `result` and go nowhere near the log.
+        await recordAudit(req.user.id, 'auth.mfa.enable', 'user', req.user.id, {});
         res.json({ enabled: true, backupCodes: result.backupCodes, message: 'Save these backup codes now — they will not be shown again.' });
     } finally {
         await endLoginAttempt(slot);
@@ -1107,6 +2122,72 @@ router.post('/mfa/enable', authenticate, sessionOnly, asyncHandler(async (req: R
 }));
 
 /** POST /auth/mfa/disable — turn MFA off (requires a current TOTP or backup code). */
+/**
+ * @swagger
+ * /auth/mfa/disable:
+ *   post:
+ *     summary: Turn two-factor authentication off
+ *     description: >-
+ *       Requires a current TOTP or backup code. Idempotent — 200 with disabled=true when 2FA was already
+ *       off. Repeated wrong codes buy an escalating bounded WAIT, never a lockout, so this door can never
+ *       be used to lock the owner out of their own second factor. Requires an interactive session.
+ *     tags: [Auth]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: header
+ *         name: X-CSRF-Token
+ *         schema:
+ *           type: string
+ *         description: >-
+ *           Double-submit CSRF token — the value of the non-HttpOnly `wjs_csrf` cookie. Required when the
+ *           request is authenticated by the session cookie.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [code]
+ *             properties:
+ *               code:
+ *                 type: string
+ *                 description: A current TOTP code, or one of the account's backup codes.
+ *     responses:
+ *       200:
+ *         description: Two-factor disabled
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 disabled:
+ *                   type: boolean
+ *       400:
+ *         description: "rest_mfa_invalid — wrong authentication code."
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ *       401:
+ *         description: "rest_not_logged_in — no valid credential."
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ *       403:
+ *         description: "The caller is headless, or rest_csrf_token / rest_csrf_invalid."
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ *       429:
+ *         description: "rest_login_throttled — too many simultaneous attempts from this address."
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ */
 router.post('/mfa/disable', authenticate, sessionOnly, asyncHandler(async (req: Request, res: Response) => {
     if (!(await mfa.isEnabled(req.user.id))) return res.json({ disabled: true });
     // 'mfa_manage' (count-only), never 'mfa'. This door needs `authenticate` + `sessionOnly` and NOT the
@@ -1125,6 +2206,9 @@ router.post('/mfa/disable', authenticate, sessionOnly, asyncHandler(async (req: 
         }
         await clearLoginFails(lk);
         await mfa.disable(req.user.id);
+        // Turning the second factor OFF is the direction that weakens the account — and this is the
+        // cheapest door in the file to reach with a hijacked session (no sudo password). It leaves a row.
+        await recordAudit(req.user.id, 'auth.mfa.disable', 'user', req.user.id, {});
         res.json({ disabled: true });
     } finally {
         await endLoginAttempt(slot);
@@ -1132,6 +2216,74 @@ router.post('/mfa/disable', authenticate, sessionOnly, asyncHandler(async (req: 
 }));
 
 /** POST /auth/mfa/backup-codes — regenerate backup codes (requires a current code); returns them once. */
+/**
+ * @swagger
+ * /auth/mfa/backup-codes:
+ *   post:
+ *     summary: Regenerate the backup codes
+ *     description: >-
+ *       Requires a current TOTP or backup code. The new set REPLACES the previous one and is returned
+ *       once. Requires an interactive session.
+ *     tags: [Auth]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: header
+ *         name: X-CSRF-Token
+ *         schema:
+ *           type: string
+ *         description: >-
+ *           Double-submit CSRF token — the value of the non-HttpOnly `wjs_csrf` cookie. Required when the
+ *           request is authenticated by the session cookie.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [code]
+ *             properties:
+ *               code:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: A fresh set of backup codes, shown once
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 backupCodes:
+ *                   type: array
+ *                   items:
+ *                     type: string
+ *                 message:
+ *                   type: string
+ *       400:
+ *         description: "rest_mfa_not_enabled (2FA is off) or rest_mfa_invalid (wrong code)."
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ *       401:
+ *         description: "rest_not_logged_in — no valid credential."
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ *       403:
+ *         description: "The caller is headless, or rest_csrf_token / rest_csrf_invalid."
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ *       429:
+ *         description: "rest_login_throttled — too many simultaneous attempts from this address."
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ */
 router.post('/mfa/backup-codes', authenticate, sessionOnly, asyncHandler(async (req: Request, res: Response) => {
     if (!(await mfa.isEnabled(req.user.id))) {
         return res.status(400).json({ code: 'rest_mfa_not_enabled', message: 'MFA is not enabled.', data: { status: 400 } });
@@ -1149,7 +2301,13 @@ router.post('/mfa/backup-codes', authenticate, sessionOnly, asyncHandler(async (
             return res.status(400).json({ code: 'rest_mfa_invalid', message: 'Invalid authentication code.', data: { status: 400 } });
         }
         await clearLoginFails(lk);
-        res.json({ backupCodes: await mfa.regenerateBackupCodes(req.user.id), message: 'Save these backup codes now — they replace your previous set.' });
+        const backupCodes = await mfa.regenerateBackupCodes(req.user.id);
+        // Regenerating backup codes grants a fresh set of second factors — persistence, in an attacker's
+        // hands. The codes are never passed to the log; only the fact and the count.
+        await recordAudit(req.user.id, 'auth.mfa.backup_codes', 'user', req.user.id, {
+            count: Array.isArray(backupCodes) ? backupCodes.length : 0
+        });
+        res.json({ backupCodes, message: 'Save these backup codes now — they replace your previous set.' });
     } finally {
         await endLoginAttempt(slot);
     }
@@ -1162,21 +2320,137 @@ router.post('/mfa/backup-codes', authenticate, sessionOnly, asyncHandler(async (
 // requirement instead of enrolling" bypass.
 
 /** GET /auth/mfa/policy — read the enforcement policy (admin only). */
+/**
+ * @swagger
+ * /auth/mfa/policy:
+ *   get:
+ *     summary: Read the MFA-by-role enforcement policy
+ *     description: >-
+ *       Administrator only, and interactive-session only — a headless API token, even an administrator's,
+ *       may not read or change interactive-login security. This route is NOT on the enrollment allowlist,
+ *       so an enforced administrator must enroll before reaching it.
+ *     tags: [Auth]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: The current policy
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 policy:
+ *                   $ref: '#/components/schemas/MfaPolicy'
+ *       401:
+ *         description: "rest_not_logged_in — no valid credential."
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ *       403:
+ *         description: >-
+ *           rest_forbidden (not an administrator), the caller is headless, or mfa_enrollment_required.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ */
 router.get('/mfa/policy', authenticate, sessionOnly, isAdmin, asyncHandler(async (_req: Request, res: Response) => {
     res.json({ policy: await mfa.getPolicy() });
 }));
 
-/** PUT /auth/mfa/policy — set which roles require MFA + the grace period (admin only). Body: { requiredRoles, graceDays }. */
+/**
+ * PUT /auth/mfa/policy — set which roles require MFA + the grace period (admin only).
+ * Body: { requiredRoles, graceDays, enforceForApiTokens }.
+ */
+/**
+ * @swagger
+ * /auth/mfa/policy:
+ *   put:
+ *     summary: Set the MFA-by-role enforcement policy
+ *     description: >-
+ *       FULL REPLACE — an omitted field means "off", not "unchanged". Role slugs are validated against
+ *       the live role map and unknown ones are dropped. Administrator only, interactive-session only, and
+ *       not on the enrollment allowlist.
+ *     tags: [Auth]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: header
+ *         name: X-CSRF-Token
+ *         schema:
+ *           type: string
+ *         description: >-
+ *           Double-submit CSRF token — the value of the non-HttpOnly `wjs_csrf` cookie. Required when the
+ *           request is authenticated by the session cookie.
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               requiredRoles:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                 description: Role slugs that must have 2FA. An empty list turns enforcement off.
+ *               graceDays:
+ *                 type: number
+ *                 minimum: 0
+ *               enforceForApiTokens:
+ *                 type: boolean
+ *                 description: >-
+ *                   Must be a real boolean — "false", 0 and "on" are REJECTED rather than coerced,
+ *                   because this flag can start refusing existing headless clients.
+ *     responses:
+ *       200:
+ *         description: The stored policy
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 policy:
+ *                   $ref: '#/components/schemas/MfaPolicy'
+ *       400:
+ *         description: >-
+ *           rest_invalid_param — requiredRoles is not an array, graceDays is negative or not a number, or
+ *           enforceForApiTokens is not a boolean.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ *       401:
+ *         description: "rest_not_logged_in — no valid credential."
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ *       403:
+ *         description: >-
+ *           rest_forbidden (not an administrator), the caller is headless, rest_csrf_token /
+ *           rest_csrf_invalid, or mfa_enrollment_required.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ */
 router.put('/mfa/policy', authenticate, sessionOnly, isAdmin, asyncHandler(async (req: Request, res: Response) => {
-    const { requiredRoles, graceDays } = req.body || {};
+    const { requiredRoles, graceDays, enforceForApiTokens } = req.body || {};
     if (requiredRoles != null && !Array.isArray(requiredRoles)) {
         return res.status(400).json({ code: 'rest_invalid_param', message: 'requiredRoles must be an array of role slugs.', data: { status: 400 } });
     }
     if (graceDays != null && (!Number.isFinite(Number(graceDays)) || Number(graceDays) < 0)) {
         return res.status(400).json({ code: 'rest_invalid_param', message: 'graceDays must be a non-negative number.', data: { status: 400 } });
     }
+    // Rejected rather than coerced: this flag can start REFUSING existing headless clients, so a caller that
+    // sends "false"/0/"on" must be told it was mis-typed instead of having a truthiness rule guessed for it.
+    if (enforceForApiTokens != null && typeof enforceForApiTokens !== 'boolean') {
+        return res.status(400).json({ code: 'rest_invalid_param', message: 'enforceForApiTokens must be a boolean.', data: { status: 400 } });
+    }
     // setPolicy validates role slugs against the live role map + manages enforcedAt.
-    res.json({ policy: await mfa.setPolicy({ requiredRoles, graceDays }) });
+    res.json({ policy: await mfa.setPolicy({ requiredRoles, graceDays, enforceForApiTokens }) });
 }));
 
 module.exports = router;

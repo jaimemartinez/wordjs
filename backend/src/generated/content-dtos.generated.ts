@@ -93,7 +93,8 @@ export interface ContentRecord {
     type: string;
     date: string;
     dateGmt?: string;
-    author: { id: number; displayName: string };
+    author: { id: number; displayName: string; slug: string };
+    authorId?: number;
     commentStatus: string;
     meta?: Record<string, unknown>;
     featuredMedia?: { id: number; url: string; title?: string };

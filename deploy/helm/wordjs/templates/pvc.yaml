@@ -1,0 +1,41 @@
+{{- if and .Values.persistence.data.enabled (not .Values.persistence.data.existingClaim) }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "wordjs.fullname" . }}-data
+  labels:
+    {{- include "wordjs.labels" . | nindent 4 }}
+  # Kept on "helm uninstall": this volume holds the database, wordjs-config.json and the jwtSecret.
+  # Deleting it with the release would silently destroy the site. Remove it deliberately.
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes:
+    - {{ .Values.persistence.data.accessMode }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.data.size }}
+  {{- with .Values.persistence.data.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+{{- end }}
+{{- if and .Values.persistence.uploads.enabled (not .Values.persistence.uploads.existingClaim) }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "wordjs.fullname" . }}-uploads
+  labels:
+    {{- include "wordjs.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes:
+    - {{ .Values.persistence.uploads.accessMode }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.uploads.size }}
+  {{- with .Values.persistence.uploads.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+{{- end }}

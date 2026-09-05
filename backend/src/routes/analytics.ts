@@ -19,12 +19,53 @@ const STATS_QUERY_FIELDS: readonly string[] = Object.freeze(['period']);
 
 /**
  * @swagger
- * /api/v1/analytics/stats:
+ * tags:
+ *   name: Analytics
+ *   description: Site traffic and engagement. The aggregate report is administrator-only; the tracking beacon is an anonymous public write, bounded in code and pruned by a retention job.
+ */
+
+/**
+ * @swagger
+ * /analytics/stats:
  *   get:
  *     summary: Get aggregated analytics stats
+ *     description: One row per day in the window, each carrying a traffic count (page_view events) and an engagement count (everything else). The day label is the short weekday name.
  *     tags: [Analytics]
  *     security:
  *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: period
+ *         required: false
+ *         description: weekly is the last 7 days; anything else is the last 30. Sending it more than once is refused rather than resolved.
+ *         schema:
+ *           type: string
+ *           enum: [weekly, monthly]
+ *           default: weekly
+ *     responses:
+ *       200:
+ *         description: One entry per day that has events in the window
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 type: object
+ *                 properties:
+ *                   name:
+ *                     type: string
+ *                   traffic:
+ *                     type: integer
+ *                   engagement:
+ *                     type: integer
+ *       400:
+ *         description: period was sent more than once (rest_invalid_param)
+ *       401:
+ *         description: Not logged in (rest_not_logged_in)
+ *       403:
+ *         description: Not an administrator
+ *       500:
+ *         description: The report could not be produced
  */
 router.get('/stats', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     // OUTSIDE the try, and wrapped in asyncHandler: inside, the catch would turn the caller's own
@@ -98,6 +139,50 @@ function boundedMetadata(raw: any): Record<string, string | number | boolean> | 
     return out;
 }
 
+/**
+ * @swagger
+ * /analytics/track:
+ *   post:
+ *     summary: Record one analytics event (the public tracking beacon)
+ *     description: Anonymous and unauthenticated - this is the beacon the frontend fires on page load. It is bounded in three ways because it writes a permanent row - a dedicated per-IP rate limit mounted on this exact route, the hard input bounds below, and a retention job that prunes the table. The visitor IP is salted and hashed, never stored raw, and the calling user id is recorded only when a session happens to be present.
+ *     tags: [Analytics]
+ *     security: []
+ *     requestBody:
+ *       required: false
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               type:
+ *                 type: string
+ *                 default: page_view
+ *                 description: An allowlist, not a length check - it chooses how the row is counted in the report.
+ *                 enum: [page_view, engagement, click, search, conversion, comment, login, api_call]
+ *               resource:
+ *                 type: string
+ *                 default: /
+ *                 description: The path being reported. Truncated to 255 characters rather than refused, so a long campaign URL is not silently dropped.
+ *               metadata:
+ *                 type: object
+ *                 description: A FLAT object of at most 20 string, number or boolean values - keys up to 60 characters, values up to 200, and at most 2048 bytes once serialised. Nested objects and arrays are refused, not coerced.
+ *     responses:
+ *       200:
+ *         description: Event recorded
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *       400:
+ *         description: Unknown event type, a non-string resource, or metadata outside the bounds above (rest_invalid_param)
+ *       429:
+ *         description: Too many events from this address (the per-IP limiter mounted on this route)
+ *       500:
+ *         description: The event could not be stored (analytics_track_failed). A storage failure is reported as one - it used to answer 200.
+ */
 router.post('/track', async (req: Request, res: Response) => {
     const { type, resource, metadata } = req.body || {};
 

@@ -1,0 +1,114 @@
+# WordJS Helm values — MONOLITH ONLY, SINGLE REPLICA. See README.md for what that rules out.
+
+image:
+  # No image is published to a registry yet (there is no image publish step in release.yml), so there is
+  # no default that would resolve. Build and push the repository's root Dockerfile, then set this:
+  #   docker build -t <registry>/wordjs:2.0.0 . && docker push <registry>/wordjs:2.0.0
+  repository: ""
+  # Defaults to .Chart.AppVersion when empty.
+  tag: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+# Hard-pinned to 1 and validated at render time. The chart deploys the monolith against a ReadWriteOnce
+# volume and (by default) an embedded SQLite database: single writer, single node. Raising this renders
+# an error rather than a broken release. Scaling out needs an external database plus the shared mounts
+# in documentation/multi-node.md — out of scope for this chart.
+replicaCount: 1
+
+# The public origin users will browse, exported to the pod as WORDJS_SITE_URL. With ingress.enabled=true
+# and a host set, it is derived from that host unless you override it here.
+#
+# HONEST SCOPE: docker/entrypoint.sh is the only reader of WORDJS_SITE_URL, and it writes the value into
+# wordjs-config.json only under WORDJS_PRESEED_CONFIG=1 (the extraEnv example further down). This chart
+# does not set that, so the pod boots into SETUP MODE and the origin that actually reaches the config —
+# the one the CSRF/CORS checks compare against — is the `siteUrl` the wizard POSTs to
+# /api/v1/setup/install. So set this to the URL you will expose, and then INSTALL THROUGH IT; the two
+# then agree, and the release notes point operators at the right address.
+siteUrl: ""
+
+# The one-time token gating POST /api/v1/setup/install.
+installToken:
+  # Supply your own (>= 16 characters, or the app ignores it and mints a random one). Leave empty to let
+  # the app generate one — then read it from backend/data/install-token (mode 0600) inside the data
+  # volume, with `kubectl exec`, NOT from `kubectl logs`: the boot banner prints the token only when
+  # stdout is a TTY, and a pod's stdout is a log stream. Add WORDJS_PRINT_INSTALL_TOKEN=1 via extraEnv
+  # to have it printed in the logs anyway.
+  value: ""
+  # Or point at a Secret you manage yourself. Takes precedence over `value` when set.
+  existingSecret: ""
+  existingSecretKey: install-token
+
+service:
+  type: ClusterIP
+  port: 80
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  host: wordjs.example.com
+  path: /
+  pathType: Prefix
+  tls: []
+  # - secretName: wordjs-tls
+  #   hosts:
+  #     - wordjs.example.com
+
+persistence:
+  # backend/data — the SQLite database, the install-token mirror, and wordjs-config.json (the entrypoint
+  # anchors the config here so a recreated pod comes back INSTALLED instead of re-offering the wizard).
+  data:
+    enabled: true
+    size: 8Gi
+    # Empty uses the cluster default StorageClass.
+    storageClass: ""
+    accessMode: ReadWriteOnce
+    existingClaim: ""
+  # backend/uploads — the media library.
+  uploads:
+    enabled: true
+    size: 20Gi
+    storageClass: ""
+    accessMode: ReadWriteOnce
+    existingClaim: ""
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 512Mi
+  limits:
+    # The Node process plus one forked OS child per isolated plugin. Below ~1Gi the first boot's schema
+    # migration and plugin isolate startup are a realistic OOM risk.
+    memory: 2Gi
+
+# The image runs as uid/gid 1001 (`wordjs`). fsGroup makes the mounted PVCs group-writable for it —
+# without it a freshly provisioned, root-owned volume is read-only to the app and the install fails.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1001
+  runAsGroup: 1001
+  fsGroup: 1001
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+
+# Extra environment variables, e.g. an external database. Note that pointing the app at an external
+# database also requires WORDJS_PRESEED_CONFIG=1 (which makes the pod come up already installed and
+# SKIPS the wizard) — see README.md before doing that.
+extraEnv: []
+# - name: WORDJS_PRESEED_CONFIG
+#   value: "1"
+# - name: WORDJS_DB_DRIVER
+#   value: postgres
+
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}

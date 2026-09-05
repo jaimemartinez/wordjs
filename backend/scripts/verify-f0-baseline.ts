@@ -4,6 +4,9 @@
  * This intentionally records surfaces, not implementation formatting:
  *   - Express route declarations (including unannotated routes)
  *   - the semantic OpenAPI contract (documentation prose removed)
+ *   - the documented SHARE of that REST surface, against a committed floor (`openapi.coverageFloor`);
+ *     the counts above are anti-drift only and a re-cut baseline accepts any of them, so without a
+ *     floor coverage can fall to nothing while every gate stays green
  *   - explicit request-boundary `any` debt
  *   - the serialisable plugin bridge ABI
  *   - the real-OS sandbox workflow and performance budgets
@@ -144,6 +147,48 @@ function semanticFileHash(file: string): string {
     return sha256(normalized);
 }
 
+/**
+ * The floor used when the committed baseline does not name one.
+ *
+ * A default is not a policy — the committed `openapi.coverageFloor` is — but an ABSENT key must not
+ * mean "no gate". That is exactly how `f0BudgetKey` silently switched off the performance rule for a
+ * whole operation, and the same shape of hole here would be worse: coverage is the one number this
+ * file computes that can decay without any count changing shape.
+ */
+const DEFAULT_COVERAGE_FLOOR = 0.9;
+
+/**
+ * The documented share of the REST surface: OpenAPI operations over Express endpoint declarations.
+ *
+ * WHAT THE DENOMINATOR IS, AND WHAT IT DELIBERATELY IS NOT.
+ *
+ * `restSource.endpointDeclarations` is every `app.<method>(path)` / `router.<method>(path)` this file
+ * already inventories across backend/src/routes/**.ts AND backend/src/index.ts. Three treatments,
+ * each chosen so the ratio errs toward being too LOW rather than too flattering:
+ *
+ *   · `router.use` mounts are NOT counted. A mount is not an operation — it has no method to document
+ *     — and it is already inventoried separately as `restSource.mountDeclarations`. Counting them
+ *     would inflate the denominator with rows nothing could ever document, i.e. would build a ceiling
+ *     into the ratio that no amount of work could reach.
+ *   · The SSE streams (`/collab/{postId}/stream`, `/notifications/stream`) ARE counted, on both sides.
+ *     They are ordinary GET declarations with a `text/event-stream` response, and a long-lived
+ *     response is not a reason to leave the contract undescribed — a client still has to know the
+ *     frames, the caps and the refusal codes.
+ *   · Declarations that live OUTSIDE the documented server (`/healthz`, the frontend catch-alls and
+ *     the other root-level `app.get` handlers in index.ts) stay in the denominator even though the
+ *     spec's single server is `/api/v1` and they can never appear under it. That is why this is a
+ *     conservative ratio and not an exact one: it is a floor on a floor, and the honest direction for
+ *     a gate to be wrong in. The alternative — filtering the denominator by an allow-list of prefixes
+ *     — would make the number prettier and give anyone lowering coverage a second place to hide.
+ *
+ * Rounded to four decimals so the recorded value is reproducible across hosts and does not churn on
+ * float representation.
+ */
+function coverageRatio(operations: number, endpointDeclarations: number): number {
+    if (!Number.isFinite(operations) || !Number.isFinite(endpointDeclarations) || endpointDeclarations <= 0) return 0;
+    return Math.round((operations / endpointDeclarations) * 10000) / 10000;
+}
+
 function collectSnapshot(): any {
     const routes = routeInventory();
     const endpoints = routes.filter((route) => HTTP_METHODS.has(route.method));
@@ -174,6 +219,9 @@ function collectSnapshot(): any {
         openapi: {
             paths: swaggerPaths.length,
             operations: swaggerOperations,
+            // The DOCUMENTED SHARE of the REST surface. See coverageRatio and verifyOpenapiCoverage
+            // below for the denominator and for the floor that makes it a gate rather than a number.
+            coverage: coverageRatio(swaggerOperations, endpoints.length),
             semanticSha256: sha256(stable(semanticPaths)),
         },
         typingDebt: {
@@ -393,33 +441,105 @@ function verifyPerformanceBudget(baseline: any): string[] {
     return problems;
 }
 
+/**
+ * THE COVERAGE FLOOR — the half of the OpenAPI gate that is not anti-drift.
+ *
+ * `snapshot.openapi` pins the path count, the operation count and the semantic hash, so the spec
+ * cannot change SHAPE without a deliberate re-cut of the baseline. What none of that pins is the
+ * RATIO: add ten routes and document none of them and every pinned number moves legitimately, the
+ * baseline is regenerated because "the counts changed", and coverage silently falls. That is not a
+ * hypothetical — this repository reached roughly 55% documented that way, one honest re-cut at a time.
+ *
+ * So the committed baseline names a floor, `openapi.coverageFloor`, and this refuses a tree whose
+ * coverage is under it. The floor is a plain committed number, not a ratchet: raising it is a visible
+ * edit in review, and lowering it is a visible edit in review. A ratchet computed from history would
+ * only move the argument into the tooling and would make a legitimate mass-deprecation impossible
+ * without disabling the gate entirely.
+ *
+ * The floor lives BESIDE `snapshot` rather than inside it for the same reason the performance budget
+ * does: `--print` regenerates the snapshot from the tree, so a policy number stored in there would be
+ * overwritten by its own measurement on every accepted change. `--print` carries this block through
+ * verbatim instead.
+ */
+function verifyOpenapiCoverage(baseline: any, snapshot: any): string[] {
+    const problems: string[] = [];
+    const declared = baseline && baseline.openapi ? baseline.openapi.coverageFloor : undefined;
+    let floor = DEFAULT_COVERAGE_FLOOR;
+    if (declared !== undefined) {
+        if (typeof declared !== 'number' || !Number.isFinite(declared) || declared <= 0 || declared > 1) {
+            problems.push(`openapi.coverageFloor: expected a ratio in (0, 1], got ${stable(declared)}`);
+            return problems;
+        }
+        floor = declared;
+    }
+
+    const operations = snapshot && snapshot.openapi ? snapshot.openapi.operations : undefined;
+    const declarations = snapshot && snapshot.restSource ? snapshot.restSource.endpointDeclarations : undefined;
+    if (!Number.isInteger(operations) || operations < 0) {
+        problems.push(`openapi.coverage: no operation count to measure, got ${stable(operations)}`);
+    }
+    if (!Number.isInteger(declarations) || declarations <= 0) {
+        // A zero denominator is the vacuous-green shape: coverageRatio answers 0, which would read as
+        // a catastrophic regression, but the real fault is that the route inventory found nothing.
+        problems.push(`restSource.endpointDeclarations: expected a positive integer denominator, got ${stable(declarations)} — a coverage ratio with no REST surface under it measures nothing`);
+    }
+    if (problems.length) return problems;
+
+    const coverage = coverageRatio(operations, declarations);
+    if (coverage < floor) {
+        problems.push(
+            `openapi.coverage: ${coverage} (${operations} of ${declarations} endpoint declarations documented) is below the committed floor ${floor} — ` +
+                `document the new endpoints, or change openapi.coverageFloor in f0-baseline.json in the same commit and say why the API is being published with less of it described`,
+        );
+    }
+    return problems;
+}
+
 function verify(): { ok: boolean; current: any; differences: string[] } {
     if (!fs.existsSync(BASELINE_PATH)) {
         return { ok: false, current: collectSnapshot(), differences: [`missing ${relative(BASELINE_PATH)}`] };
     }
     const baseline = JSON.parse(fs.readFileSync(BASELINE_PATH, 'utf8'));
     const current = collectSnapshot();
-    const differences = [...diff(baseline.snapshot, current), ...verifyPerformanceBudget(baseline)];
+    const differences = [
+        ...diff(baseline.snapshot, current),
+        ...verifyPerformanceBudget(baseline),
+        ...verifyOpenapiCoverage(baseline, current),
+    ];
     return { ok: differences.length === 0, current, differences };
 }
 
 if (require.main === module) {
     const result = verify();
     if (process.argv.includes('--print')) {
-        // Carries the F6 performance budget through verbatim. `--print > f0-baseline.json` is the
-        // documented way to accept an intentional snapshot change, and printing only the snapshot would
-        // have deleted the budget block as a side effect of an unrelated route rename.
+        // Carries the F6 performance budget AND the OpenAPI coverage floor through verbatim.
+        // `--print > f0-baseline.json` is the documented way to accept an intentional snapshot change,
+        // and printing only the snapshot would have deleted those blocks as a side effect of an
+        // unrelated route rename. The floor in particular is a POLICY number: regenerating it from the
+        // tree it is supposed to judge would make the gate agree with whatever it was handed.
         const existing = fs.existsSync(BASELINE_PATH) ? JSON.parse(fs.readFileSync(BASELINE_PATH, 'utf8')) : {};
         const printed: any = { schemaVersion: 1, snapshot: result.current };
+        if (existing.openapi) printed.openapi = existing.openapi;
         if (existing.performanceBudget) printed.performanceBudget = existing.performanceBudget;
         process.stdout.write(`${JSON.stringify(printed, null, 2)}\n`);
     } else if (!result.ok) {
         console.error('F0 baseline drift detected. Intentional contract changes must update f0-baseline.json and explain the compatibility impact.');
+        console.error(`  (OpenAPI coverage is ${result.current.openapi.coverage} — ${result.current.openapi.operations} of ${result.current.restSource.endpointDeclarations} endpoint declarations documented.)`);
         for (const item of result.differences) console.error(`  - ${item}`);
         process.exitCode = 1;
     } else {
         console.log('F0 baseline verified: REST source, OpenAPI, typing debt, plugin ABI, tests, sandbox workflow, budgets and the F6 performance budget match.');
+        console.log(`OpenAPI coverage: ${result.current.openapi.coverage} (${result.current.openapi.operations} of ${result.current.restSource.endpointDeclarations} endpoint declarations documented).`);
     }
 }
 
-module.exports = { collectSnapshot, verify, stable, diff, verifyPerformanceBudget };
+module.exports = {
+    collectSnapshot,
+    verify,
+    stable,
+    diff,
+    verifyPerformanceBudget,
+    verifyOpenapiCoverage,
+    coverageRatio,
+    DEFAULT_COVERAGE_FLOOR,
+};

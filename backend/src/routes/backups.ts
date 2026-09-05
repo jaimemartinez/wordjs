@@ -10,6 +10,13 @@ const { createBackup, listBackups, deleteBackup, getBackupPath, restoreBackup } 
 const { authenticate } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
+// A RESTORE IS THE MOST DESTRUCTIVE OPERATION THE PRODUCT OFFERS: it replaces the database and the
+// uploads with somebody else's snapshot, and everything written since that snapshot — including the
+// audit rows describing whatever preceded it — goes with it. Hence the ORDER below: the restore row is
+// written AFTER the swap, into the restored database, which is the only copy that still exists once
+// the operation finishes. (A restore that throws leaves no row: there is no database left to put one
+// in that a reader would ever see.)
+const { recordAudit } = require('../core/audit');
 
 /**
  * @swagger
@@ -50,6 +57,9 @@ router.get('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: Re
 router.post('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     // Potentially long running, might want to increase timeout or use background job in future
     const result = await createBackup();
+    await recordAudit(req.user && req.user.id, 'backup.create', 'backup', (result && result.filename) || '', {
+        size: (result && result.size) != null ? result.size : null
+    });
     res.json(result);
 }));
 
@@ -76,6 +86,8 @@ router.delete('/:filename', authenticate, isAdmin, asyncHandler(async (req: Requ
     if (!success) {
         return res.status(404).json({ error: 'Backup not found' });
     }
+    // Recorded only on the path that actually removed a file — a 404 destroyed nothing.
+    await recordAudit(req.user && req.user.id, 'backup.delete', 'backup', req.params.filename, {});
     res.json({ success: true });
 }));
 
@@ -125,6 +137,8 @@ router.get('/:filename/download', authenticate, isAdmin, asyncHandler(async (req
  */
 router.post('/:filename/restore', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     const results = await restoreBackup(req.params.filename);
+    // AFTER the swap — see the note next to the recordAudit import.
+    await recordAudit(req.user && req.user.id, 'backup.restore', 'backup', req.params.filename, {});
     res.json({ success: true, results });
 }));
 

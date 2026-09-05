@@ -729,6 +729,78 @@ const MIGRATIONS: Migration[] = [
             );
             console.log('   ✓ [migration 0014] durable transactional content outbox ready');
         }
+    },
+    {
+        // THE PUBLIC AUTHOR SLUG, for the accounts that predate it.
+        //
+        // `user_nicename` has been NOT NULL DEFAULT '' since the base schema and nothing ever wrote
+        // it, so every public author surface fell back to `user_login` — publishing the value the
+        // login form takes, on every byline, feed and JSON-LD fragment, for every account that has
+        // ever posted. The fallback is gone (models/Post.ts) and User.create now derives the column
+        // (models/User.ts); this fills it in for rows created before either, so an upgraded install
+        // gets real author slugs instead of the bare-id fallback those readers degrade to.
+        //
+        // The RULE is the one User.generateUniqueNicename applies: core/formatting.sanitizeTitle of
+        // the display name, an all-digit result prefixed with `user-`, de-duplicated with -2/-3. It is
+        // expressed against ctx SQL here rather than by calling the model, because requiring
+        // models/User from a migration would re-enter config/database while it is still initializing.
+        // sanitizeTitle is the shared half, so the two writers cannot disagree about what a given
+        // display name slugifies to; the all-digit guard is DUPLICATED below (it cannot be imported
+        // from the model for the same reason), and models/User.ts NUMERIC_NICENAME_PREFIX is its twin.
+        // Change both or neither: an upgraded install and a new signup must derive the same slug from
+        // the same display name.
+        //
+        // DETERMINISTIC and RE-RUNNABLE: rows are taken in id order and the taken-set is seeded with
+        // every nicename already present, so the same users produce the same slugs on every install,
+        // and a row that already has one is never rewritten (a restored backup keeps its URLs).
+        // NEVER FATAL: an author slug is a display identity — the readers fall back to the user id,
+        // which `?author=` and `/author/<id>` already resolve — so a failure here must not stop boot.
+        id: '0015_backfill_user_nicename',
+        up: async (ctx: MigrationCtx) => {
+            try {
+                const { sanitizeTitle } = require('./formatting');
+                const rows = (await ctx.all('SELECT id, display_name, user_nicename FROM users ORDER BY id')) || [];
+                const nicenameOf = (v: any): string => (v == null ? '' : String(v).trim());
+
+                const taken = new Set<string>();
+                for (const row of rows) {
+                    const existing = nicenameOf(row.user_nicename);
+                    if (existing) taken.add(existing);
+                }
+
+                let filled = 0;
+                let unnameable = 0;
+                for (const row of rows) {
+                    if (nicenameOf(row.user_nicename)) continue;
+                    const base = sanitizeTitle(String(row.display_name == null ? '' : row.display_name));
+                    if (!base) { unnameable++; continue; }
+                    // TWIN of models/User.ts NUMERIC_NICENAME_PREFIX — see the note above. An
+                    // all-digit slug is read as a users.id by every consumer of this column, so a
+                    // display name like "1984" or "2024" would publish a byline that resolves to a
+                    // different account or to none. Everything below is built from `seed`, so the
+                    // -2/-3 variants stay non-numeric too.
+                    const seed = /^[0-9]+$/.test(base) ? `user-${base}` : base;
+                    let candidate = seed;
+                    let counter = 1;
+                    while (taken.has(candidate)) {
+                        counter++;
+                        candidate = `${seed}-${counter}`;
+                    }
+                    await ctx.run('UPDATE users SET user_nicename = ? WHERE id = ?', [candidate, row.id]);
+                    taken.add(candidate);
+                    filled++;
+                }
+
+                if (filled > 0) {
+                    console.log(`   ✓ [migration 0015] public author slug derived for ${filled} account(s)`);
+                }
+                if (unnameable > 0) {
+                    console.warn(`   [migration 0015] ${unnameable} account(s) have a display name that slugifies to nothing; they stay addressable by user id until one is given a name.`);
+                }
+            } catch (e: any) {
+                console.warn(`⚠️  [migration 0015] author-slug backfill skipped (non-fatal — authors stay addressable by user id): ${e && e.message}`);
+            }
+        }
     }
 ];
 

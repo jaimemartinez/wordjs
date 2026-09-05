@@ -28,6 +28,12 @@ const EXPORT_FLAG_FIELDS: readonly string[] = Object.freeze([
 ]);
 
 // Configure multer for import file upload
+/**
+ * @swagger
+ * tags:
+ *   name: Export
+ *   description: Whole-site export and import. Administrator only. The JSON archive is the format this API also restores from; the WXR export is the WordPress interchange format, for moving content to another platform.
+ */
 const upload = multer({
     dest: path.resolve('./data/imports'),
     limits: { fileSize: 50 * 1024 * 1024 } // 50MB max
@@ -44,6 +50,67 @@ type ImportRequest = Request & { file?: { path: string } };
 /**
  * GET /export
  * Export site as JSON
+ */
+/**
+ * @swagger
+ * /export:
+ *   get:
+ *     summary: Export the whole site as a JSON archive
+ *     description: Each section flag is a scalar and repeating one is refused rather than resolved - an export is what someone restores from, so a flag that reads as its own opposite is not something to discover later. Media, posts, pages, settings and menus are included unless the flag is exactly false; users are excluded unless the flag is exactly true. The response carries a Content-Disposition attachment header.
+ *     tags: [Export]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: media
+ *         schema:
+ *           type: string
+ *           enum: ["true", "false"]
+ *           default: "true"
+ *       - in: query
+ *         name: posts
+ *         schema:
+ *           type: string
+ *           enum: ["true", "false"]
+ *           default: "true"
+ *       - in: query
+ *         name: pages
+ *         schema:
+ *           type: string
+ *           enum: ["true", "false"]
+ *           default: "true"
+ *       - in: query
+ *         name: users
+ *         description: Excluded unless this is exactly true.
+ *         schema:
+ *           type: string
+ *           enum: ["true", "false"]
+ *           default: "false"
+ *       - in: query
+ *         name: settings
+ *         schema:
+ *           type: string
+ *           enum: ["true", "false"]
+ *           default: "true"
+ *       - in: query
+ *         name: menus
+ *         schema:
+ *           type: string
+ *           enum: ["true", "false"]
+ *           default: "true"
+ *     responses:
+ *       200:
+ *         description: The site archive
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *       400:
+ *         description: A section flag was sent more than once (rest_invalid_param)
+ *       401:
+ *         description: Not logged in (rest_not_logged_in)
+ *       403:
+ *         description: Not an administrator
  */
 router.get('/export', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     // Refuse a repeated flag before any of them is read, so the six comparisons below are all string
@@ -69,6 +136,27 @@ router.get('/export', authenticate, isAdmin, asyncHandler(async (req: Request, r
  * GET /export/wxr
  * Export site as WordPress WXR format
  */
+/**
+ * @swagger
+ * /export/wxr:
+ *   get:
+ *     summary: Export the site in the WordPress WXR format
+ *     description: An XML document, served as an attachment. It takes no options - the WXR export is always the whole content set.
+ *     tags: [Export]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: The WXR document
+ *         content:
+ *           application/xml:
+ *             schema:
+ *               type: string
+ *       401:
+ *         description: Not logged in (rest_not_logged_in)
+ *       403:
+ *         description: Not an administrator
+ */
 router.get('/export/wxr', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     const wxr = await exportToWXR();
 
@@ -80,6 +168,63 @@ router.get('/export/wxr', authenticate, isAdmin, asyncHandler(async (req: Reques
 /**
  * POST /import
  * Import site from JSON
+ */
+/**
+ * @swagger
+ * /import:
+ *   post:
+ *     summary: Restore a JSON site archive
+ *     description: The archive arrives either as an uploaded file (multipart field file, at most 50 MB) or as a data field in the body. The uploaded temporary file is always removed, including when the archive fails to parse. This is the counterpart of GET /export; the WordPress WXR importer lives under /import/wordpress.
+ *     tags: [Import]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               file:
+ *                 type: string
+ *                 format: binary
+ *               updateExisting:
+ *                 type: string
+ *                 enum: ["true", "false"]
+ *               importUsers:
+ *                 type: string
+ *                 enum: ["true", "false"]
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               data:
+ *                 description: The archive itself, as an object or as a JSON string.
+ *                 oneOf:
+ *                   - type: object
+ *                   - type: string
+ *               updateExisting:
+ *                 type: boolean
+ *               importUsers:
+ *                 type: boolean
+ *     responses:
+ *       200:
+ *         description: The import results
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 results:
+ *                   type: object
+ *       400:
+ *         description: No import data was provided
+ *       401:
+ *         description: Not logged in (rest_not_logged_in)
+ *       403:
+ *         description: Not an administrator
  */
 router.post('/import', authenticate, isAdmin, upload.single('file'), asyncHandler(async (req: ImportRequest, res: Response) => {
     let data;

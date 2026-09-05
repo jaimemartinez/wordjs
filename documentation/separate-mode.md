@@ -199,7 +199,10 @@ Browse `https://<gateway-ip>:3000` — the gateway proxies `/` to the frontend (
 backend through the gateway) and `/api`, `/uploads`, `/themes`, `/public` to the backend.
 
 First run shows the install wizard. Finish it in the browser, or headlessly against the gateway with
-the one-time install token the backend prints at boot (also at `backend/data/install-token`):
+the one-time install token the backend mints at boot. Read it from `backend/data/install-token` (mode
+`0600`) on the backend node: the boot banner prints the token itself only when the backend's stdout is a
+TTY, so under systemd or any piped start it names that file instead. Set `WORDJS_PRINT_INSTALL_TOKEN=1`
+to print it anyway, or supply your own out-of-band with `WORDJS_INSTALL_TOKEN` (≥ 16 chars):
 
 ```bash
 curl -k -X POST https://<gateway-ip>:3000/api/v1/setup/install \

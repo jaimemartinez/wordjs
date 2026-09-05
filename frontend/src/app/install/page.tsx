@@ -45,7 +45,8 @@ export default function InstallPage() {
     // Step 1: Site
     const [siteName, setSiteName] = useState("");
     const [siteDescription, setSiteDescription] = useState("Just another WordJS site");
-    // One-time install token printed to the server console/logs while WordJS is not yet installed —
+    // One-time install token minted at boot while WordJS is not yet installed (printed on a TTY, always
+    // written to backend/data/install-token) —
     // authorizes the pre-install setup endpoints so a network-exposed instance can't be hijacked first.
     const [installToken, setInstallToken] = useState("");
     const [demoContent, setDemoContent] = useState(true);
@@ -69,7 +70,7 @@ export default function InstallPage() {
     useEffect(() => {
         // Compute origin after mount to avoid an SSR/client hydration mismatch.
         setSiteUrl(window.location.origin);
-        // Prefill the install token from the clickable `…/install#token=…` URL the server console
+        // Prefill the install token from the clickable `…/install#token=…` URL the server terminal
         // prints. The token rides in the FRAGMENT precisely because a fragment is never sent to the
         // server (no access logs, no Referer); `?token=` is still accepted as a fallback so a
         // printout from an older build keeps working, and BOTH are scrubbed from the address bar
@@ -269,8 +270,8 @@ export default function InstallPage() {
                                     </div>
                                     <div className="group">
                                         <label className={labelCls}>Install Token</label>
-                                        <input type="text" required className={inputCls} value={installToken} onChange={(e) => setInstallToken(e.target.value.trim())} placeholder="Paste the token from your server console" autoComplete="off" spellCheck={false} />
-                                        <p className="text-xs text-gray-500 mt-1">For security, WordJS prints a one-time <span className="font-semibold">install token</span> to the server console/logs while it is not yet installed. Paste it here to authorize setup.</p>
+                                        <input type="text" required className={inputCls} value={installToken} onChange={(e) => setInstallToken(e.target.value.trim())} placeholder="Paste the token from your terminal or backend/data/install-token" autoComplete="off" spellCheck={false} />
+                                        <p className="text-xs text-gray-500 mt-1">For security, WordJS mints a one-time <span className="font-semibold">install token</span> while it is not yet installed: it is printed in the terminal that started the server and always written to <code>backend/data/install-token</code>. Paste it here to authorize setup.</p>
                                     </div>
                                     <label className="flex items-start gap-3 cursor-pointer select-none rounded-lg border border-gray-200 p-3.5 hover:border-gray-300 transition-colors">
                                         <input type="checkbox" checked={demoContent} onChange={(e) => setDemoContent(e.target.checked)} className="mt-0.5 h-4 w-4 rounded border-gray-300 text-gray-900 focus:ring-gray-400" />

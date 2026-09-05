@@ -2,6 +2,7 @@ import type { Request, Response } from 'express';
 const express = require('express');
 const router = express.Router();
 const SystemHealth = require('../core/system-health');
+const database = require('../config/database');
 const { authenticate } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/permissions');
 // See middleware/errorHandler: an unrecognised failure's own text never crosses the wire.
@@ -81,6 +82,21 @@ router.get('/', async (req: Request, res: Response) => {
  *
  *
  *       `sandbox.useKernelHardening: false` explicitly turns the Linux layer off.
+ *
+ *
+ *       `sandbox.cpu` is the CPU bound isolated plugins actually have on this host: `preventive`
+ *       (a kernel ceiling — cgroup `CPUQuota` or the Windows Job Object rate cap), `reactive` (no
+ *       ceiling, but the host-side poll SIGKILLs a sustained burn) or `unbounded` (neither: a plugin
+ *       can peg a core indefinitely). `unbounded` is the only call to action, and it also raises the
+ *       persistent admin notice `sandbox.cgroup-no-cpu-quota`; the fix is `sandbox.cpuQuotaPercent`.
+ *
+ *
+ *       `database.degraded` is true when the manager fell back to the pure-JS `sqlite-legacy` driver
+ *       because the requested SQLite driver would not load. That driver has NO full-text index, so
+ *       ranked search is unavailable and site search matches with LIKE; `database.reason` names the
+ *       load failure. `database.driver` is the driver that is ACTUALLY running, which is not
+ *       necessarily the configured `dbDriver`. The same condition raises the persistent admin notice
+ *       `db.sqlite-legacy-fallback`, and both retire on a boot that loads the requested driver.
  *     tags: [Health]
  *     security:
  *       - bearerAuth: []
@@ -94,6 +110,20 @@ router.get('/', async (req: Request, res: Response) => {
  *               properties:
  *                 database:
  *                   type: object
+ *                   properties:
+ *                     status:
+ *                       type: string
+ *                       enum: [OK, ERROR]
+ *                     driver:
+ *                       type: string
+ *                       description: The driver ACTUALLY in use, which may differ from the configured dbDriver.
+ *                       example: sqlite-native
+ *                     degraded:
+ *                       type: boolean
+ *                       description: True when the manager fell back to the pure-JS sqlite-legacy driver (no full-text index).
+ *                     reason:
+ *                       type: string
+ *                       description: Present only when degraded — the load failure that forced the fallback, and what it costs.
  *                 mtls:
  *                   type: object
  *                 filesystem:
@@ -107,6 +137,13 @@ router.get('/', async (req: Request, res: Response) => {
  *                     platform:
  *                       type: string
  *                       example: linux
+ *                     cpu:
+ *                       type: string
+ *                       description: >
+ *                         The CPU bound isolated plugins actually have. `preventive` = kernel ceiling
+ *                         (cgroup CPUQuota / Windows Job Object rate cap); `reactive` = the host-side
+ *                         poll kills a sustained burn; `unbounded` = no bound at all.
+ *                       enum: [unbounded, preventive, reactive]
  *                     hardening:
  *                       type: string
  *                       description: Native sandbox state for this operating system.
@@ -189,13 +226,106 @@ router.get('/', async (req: Request, res: Response) => {
  *                       type: integer
  *                     delayedSeconds:
  *                       type: integer
+ *                 audit:
+ *                   type: object
+ *                   description: What the daily audit-log retention prune last did.
+ *                   properties:
+ *                     retentionDays:
+ *                       type: integer
+ *                       nullable: true
+ *                       description: >-
+ *                         The window the last prune used (0 = pruning is switched off), or null when no
+ *                         prune has run in this process yet.
+ *                     behind:
+ *                       type: boolean
+ *                       description: >-
+ *                         True when the last run stopped at a cap with rows still outside the window —
+ *                         retention is losing the race against the write side, exactly as
+ *                         `database.degraded` reports a driver that is not the one that was asked for.
+ *                     lastRunAt:
+ *                       type: integer
+ *                       nullable: true
+ *                       description: Epoch milliseconds of the last prune, or null if it has not run.
+ *                     lastRemoved:
+ *                       type: integer
+ *                     lastError:
+ *                       type: string
+ *                       nullable: true
  *       403:
  *         description: Forbidden (Non-admin)
  */
+/**
+ * TWO SILENT DEGRADATIONS, ADDED TO THE REPORT.
+ *
+ * Both were real, permanent and announced exactly once — as a console line on a boot nobody watches,
+ * the same shape as the dead purge channel this endpoint already reports:
+ *
+ *   · `database.degraded` — the manager falls back from 'sqlite-native' to the pure-JS
+ *     'sqlite-legacy' driver whenever the native binary is missing. That driver has no FTS5, so
+ *     ranked full-text search is gone and site search quietly becomes LIKE matching.
+ *     `database.driver` is deliberately the ACTIVE driver: SystemHealth.checkDatabase() answers from
+ *     `config.dbDriver`, which is what the operator ASKED for, so on the one host where the fallback
+ *     had fired the panel confidently named the driver that was NOT running.
+ *   · `sandbox.cpu` — whether isolated plugins have a CPU bound at all, and of which kind. The one
+ *     value that is a call to action is 'unbounded'.
+ *
+ * Merged here rather than inside SystemHealth so the two facts are read from the modules that OWN
+ * them (the database manager and the isolate) instead of being re-derived from configuration — which
+ * is precisely how `database.driver` came to be wrong. Never throws: this is the page an operator
+ * opens when things are already broken.
+ */
+function withDegradationFields(status: any): any {
+    const report = status && typeof status === 'object' ? status : {};
+
+    const databaseSection: any = report.database || {};
+    let degradation: any = null;
+    let activeDriver: string | undefined;
+    try {
+        if (typeof database.getDriverDegradation === 'function') degradation = database.getDriverDegradation();
+        activeDriver = database.getDbType().driver;
+    } catch { /* the manager is the subject of this report — it must not be able to break it */ }
+    report.database = {
+        ...databaseSection,
+        driver: activeDriver || databaseSection.driver,
+        degraded: !!degradation,
+        ...(degradation ? { reason: degradation.reason } : {}),
+    };
+
+    // Fail LOUD: an isolate module we cannot ask is not evidence of a cap, so the unknown answer is
+    // the alarming one, never the reassuring one.
+    let cpu = 'unbounded';
+    try {
+        const iso = require('../core/plugin-isolate');
+        if (typeof iso.getSandboxCpuBound === 'function') cpu = iso.getSandboxCpuBound();
+    } catch { /* isolate module unavailable */ }
+    report.sandbox = { ...(report.sandbox || {}), cpu };
+
+    // A THIRD DEGRADATION OF THE SAME CLASS. core/audit.ts prunes the audit log once a day and latches
+    // what the run did — including `behind`, which means it stopped at a cap with rows still outside
+    // the window, i.e. retention is losing the race against the write side (and this is the table every
+    // failed login writes to, from an unauthenticated surface). That state was exported for a health
+    // surface and read by nobody, so the ONLY trace was a console.warn on a tick nobody watches: the
+    // exact shape of the dead purge channel this endpoint already reports.
+    try {
+        const { auditRetentionState } = require('../core/audit');
+        const retention = auditRetentionState();
+        report.audit = {
+            ...(report.audit || {}),
+            retentionDays: retention.retentionDays,
+            behind: !!retention.behind,
+            lastRunAt: retention.lastRunAt,
+            lastRemoved: retention.lastRemoved,
+            lastError: retention.lastError,
+        };
+    } catch { /* the audit module is not reportable — never break the page an operator opens when things are broken */ }
+
+    return report;
+}
+
 router.get('/details', authenticate, isAdmin, async (req: Request, res: Response) => {
     try {
         const fullStatus = await SystemHealth.getFullStatus();
-        res.json(fullStatus);
+        res.json(withDegradationFields(fullStatus));
     } catch (err) {
         console.error('[health] /details failed:', err);
         res.status(500).json({ error: publicErrorText(err, 'The system health report could not be produced.') });

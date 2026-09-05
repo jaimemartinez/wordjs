@@ -147,8 +147,17 @@ function backendBaseCandidates(): string[] {
     return candidates;
 }
 
-/** The validated, canonical backend API base. Always a well-formed `scheme://host[:port][/path]`. */
-function resolveServerBase(): string {
+/**
+ * The validated, canonical backend API base. Always a well-formed `scheme://host[:port][/path]`.
+ *
+ * EXPORTED for `app/(public)/_seo/upstream.ts`, the raw-body proxy behind the public feed and sitemap
+ * URLs. `serverFetch` below ends in `res.json()` and a sitemap is not JSON, so that route cannot go
+ * through it — but it must reach the same backend, chosen by the same rules. It used to carry a copy
+ * of this resolver, which is a second place for the allowlists to be edited and only one of them to
+ * be. Only the three functions that decide WHERE a request goes are shared; nothing about how the
+ * request is made or cached is.
+ */
+export function resolveServerBase(): string {
     for (const candidate of backendBaseCandidates()) {
         const base = sanitizeBackendBase(candidate);
         if (base) return base;
@@ -173,8 +182,10 @@ function resolveStaticBase(): string {
  * re-parsed and refused unless the origin still matches and the path is still under the base's path
  * (at a SEGMENT boundary, never a string prefix). Returns null when it is not; every caller already
  * degrades on a null/failed fetch, so this fails closed on the same path.
+ *
+ * Exported alongside resolveServerBase for the same reason — see its comment.
  */
-function backendUrl(base: string, endpoint: string): string | null {
+export function backendUrl(base: string, endpoint: string): string | null {
     let joined: URL;
     let root: URL;
     try {
@@ -194,8 +205,9 @@ function backendUrl(base: string, endpoint: string): string | null {
 // host-based guards by construction — the configured siteUrl is exactly what they compare against —
 // and keeps public renders free of request-header reads, which is the difference between a route
 // Next can serve from the Full-Route Cache and one it must re-render per request.
+// Exported alongside resolveServerBase for the same reason — see its comment.
 let _pubHost: { value: { host: string; proto: string } | null; at: number } | null = null;
-function configuredPublicHost(): { host: string; proto: string } | null {
+export function configuredPublicHost(): { host: string; proto: string } | null {
     if (_pubHost && Date.now() - _pubHost.at < 10_000) return _pubHost.value;
     let value: { host: string; proto: string } | null = null;
     try {
@@ -490,9 +502,104 @@ export const getPostById = cache((id: number): Promise<Post | null> =>
     serverFetch<Post>(`/posts/${id}`, { revalidate: 30, tags: ['posts', `post:${id}`] })
 );
 
-export const getPosts = cache((type = 'post', status = 'publish'): Promise<Post[] | null> =>
-    serverFetch<Post[]>(`/posts?type=${encodeURIComponent(type)}&status=${encodeURIComponent(status)}`, { revalidate: 30, tags: ['posts', `posts:${type}`] })
-);
+/** The backend clamps `per_page` at 100 (backend/src/routes/posts.ts). */
+const API_MAX_PER_PAGE = 100;
+/** WordPress's own default when the option is unset or unusable (backend/src/core/options.ts). */
+const DEFAULT_POSTS_PER_PAGE = 10;
+/** Hard ceiling on the paging walk, so a huge `posts_per_page` cannot turn one render into a fan-out. */
+const MAX_POST_PAGES = 20;
+
+/**
+ * `posts_per_page` from the site options — the number the site OWNER chose for the blog roll.
+ *
+ * The settings endpoint JSON-parses option values, so this arrives as a NUMBER on a normal site and as
+ * a string from raw/legacy sources; both shapes are read. Deliberately NOT clamped to the API's page
+ * size: the walk below covers a value larger than one API page, which is the whole point of asking.
+ */
+async function resolvePostsPerPage(): Promise<number> {
+    const settings = await getSettings();
+    const raw = (settings as Record<string, unknown> | null)?.posts_per_page;
+    const n = typeof raw === 'number' ? raw : parseInt(String(raw ?? ''), 10);
+    if (!Number.isFinite(n) || n < 1) return DEFAULT_POSTS_PER_PAGE;
+    return Math.floor(n);
+}
+
+/**
+ * The newest `wanted` posts of one type, walked over as many API pages as it takes.
+ *
+ * THE PAGE SIZE IS CONSTANT FOR THE WHOLE WALK, AND THAT IS NOT A STYLE CHOICE. The backend computes
+ * `offset = (page - 1) * limit` from THAT request's own `per_page` (backend/src/routes/posts.ts), so
+ * shrinking the size on the last iteration moves the window BACKWARDS instead of forwards: with
+ * `wanted=150`, `per_page=100&page=1` followed by `per_page=50&page=2` returns rows 1..100 and then
+ * rows 51..100 — fifty duplicates (duplicate React keys) and posts 101..150 never fetched at all.
+ * One size for every request, `page` incremented, and the overshoot trimmed at the end.
+ *
+ * `null` is preserved for "the backend could not be reached", which is what the homepage renders its
+ * Service-Unavailable state from — distinct from an empty list, which means the site has no posts.
+ */
+async function walkPosts(type: string, status: string, wanted: number): Promise<Post[] | null> {
+    const query = `type=${encodeURIComponent(type)}&status=${encodeURIComponent(status)}`;
+    const size = Math.min(API_MAX_PER_PAGE, wanted);
+    const out: Post[] = [];
+
+    for (let page = 1; out.length < wanted && page <= MAX_POST_PAGES; page++) {
+        const batch = await serverFetch<Post[]>(
+            `/posts?${query}&per_page=${size}&page=${page}`,
+            { revalidate: 30, tags: ['posts', `posts:${type}`] },
+        );
+        // A failed FIRST page is "no answer" (null); a failure part-way through a walk still has real
+        // rows to show, so it degrades to what it has rather than discarding the page.
+        if (!Array.isArray(batch)) return page === 1 ? null : out.slice(0, wanted);
+        out.push(...batch);
+        if (batch.length < size) break;
+    }
+    // The last request is a WHOLE page, so the walk can overshoot: hand back exactly what was asked for.
+    return out.slice(0, wanted);
+}
+
+/**
+ * THE BLOG ROLL's loader: exactly `posts_per_page` posts, the number the site OWNER chose for it.
+ *
+ * IT SENDS `per_page`. It used not to, so it took the backend's default of TEN rows and the site's
+ * `posts_per_page` setting did nothing at all on the front page: an owner who asked for 20 posts got
+ * 10, silently, with no page 2 to reach the rest.
+ *
+ * IT IS NOT A GENERAL "GIVE ME THE POSTS". A Reading setting is a statement about ONE listing — the
+ * front page — and nothing else on the site may be resized by it. A PostsGrid asking for 6 cards
+ * still wants 6 when the owner sets the roll to 3, and a CategoryPosts filtering client-side needs a
+ * pool WIDER than what it will show or its category simply is not in it (the list endpoint takes no
+ * category filter, so the match happens over whatever this returns). Every caller that is not the
+ * roll therefore uses `getPostPool` below, which cannot shrink below the backend's own default.
+ *
+ * The two `generateStaticParams` callers ((public)/[slug] and (public)/pages/[slug]) still use this
+ * one, and that is not an oversight: it only decides how many paths are PRE-rendered at build time.
+ * A path left out is rendered on demand and cached like any other, so a low `posts_per_page` costs a
+ * first-visit render there, never a missing or truncated page.
+ */
+export const getPosts = cache(async (type = 'post', status = 'publish'): Promise<Post[] | null> =>
+    walkPosts(type, status, await resolvePostsPerPage()));
+
+/**
+ * THE DYNAMIC BLOCKS' loader: a pool to CHOOSE from, never a page of results to display.
+ *
+ * `minimum` is the largest `count` any listing block on the page asks for, so the pool is at least as
+ * big as the biggest thing that will be sliced out of it. It is a floor, not the size: the pool never
+ * drops below the backend's own default of ten rows nor below `posts_per_page`, which keeps a
+ * category filter looking at more posts than a single block will show. And it is clamped to one API
+ * page, because `count` is read from stored block props — the editor's field maxima (12 for
+ * PostsGrid, 10 for CategoryPosts) are UI, not a guarantee about what a hand-edited or imported
+ * `_puck_data` carries, and a page render must not be able to fan out into twenty backend requests
+ * because one prop says 9999.
+ */
+export const getPostPool = cache(async (
+    type = 'post',
+    status = 'publish',
+    minimum = 0,
+): Promise<Post[] | null> => {
+    const asked = Number.isFinite(minimum) ? Math.min(API_MAX_PER_PAGE, Math.floor(minimum)) : 0;
+    const wanted = Math.max(DEFAULT_POSTS_PER_PAGE, await resolvePostsPerPage(), asked);
+    return walkPosts(type, status, wanted);
+});
 
 /** Search published posts + pages server-side. Tolerates both `Post[]` and `{ posts: Post[] }` shapes. */
 export async function searchPosts(query: string): Promise<Post[]> {

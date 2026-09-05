@@ -1,0 +1,130 @@
+{{- include "wordjs.validate" . -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "wordjs.fullname" . }}
+  labels:
+    {{- include "wordjs.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  # Recreate, NOT RollingUpdate: the pod holds a ReadWriteOnce volume, so a rolling update would deadlock
+  # with the new pod Pending on a volume the old pod has not released. Costs a few seconds of downtime
+  # per upgrade -- the honest trade for a single-writer deployment.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "wordjs.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "wordjs.selectorLabels" . | nindent 8 }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: wordjs
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: 3000
+              protocol: TCP
+          env:
+            {{- with (include "wordjs.siteUrl" .) }}
+            - name: WORDJS_SITE_URL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- if .Values.installToken.existingSecret }}
+            - name: WORDJS_INSTALL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.installToken.existingSecret }}
+                  key: {{ .Values.installToken.existingSecretKey }}
+            {{- else if .Values.installToken.value }}
+            - name: WORDJS_INSTALL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "wordjs.fullname" . }}-install-token
+                  key: install-token
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          # LIVENESS: /healthz is answered by the monolith dispatcher before the backend app, so it says
+          # "this process is serving" even while the site is still uninstalled. Restarting a pod that is
+          # merely waiting for the setup wizard would be wrong, which is why liveness is not /readyz.
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 6
+          # READINESS: /readyz is 200 only when the instance is installed AND booted AND the database
+          # answers; 503 otherwise. So the Service carries no traffic until the site can actually serve
+          # it -- including, deliberately, for as long as the install wizard has not been completed.
+          # Reach the wizard with "kubectl port-forward" while readiness is still red.
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          # STARTUP: the first boot runs the schema migration and starts one forked OS process per
+          # isolated plugin. Holding liveness off for up to 5 minutes stops a slow first boot from being
+          # killed and restarted forever.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 30
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /app/backend/data
+            - name: uploads
+              mountPath: /app/backend/uploads
+      volumes:
+        - name: data
+          {{- if .Values.persistence.data.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.data.existingClaim | default (printf "%s-data" (include "wordjs.fullname" .)) }}
+          {{- else }}
+          # No PVC: the database, the config and therefore the whole install are lost when the pod is
+          # replaced. Only ever appropriate for a throwaway test.
+          emptyDir: {}
+          {{- end }}
+        - name: uploads
+          {{- if .Values.persistence.uploads.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.uploads.existingClaim | default (printf "%s-uploads" (include "wordjs.fullname" .)) }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

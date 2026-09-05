@@ -11,13 +11,13 @@ const { publicErrorText } = require('../middleware/errorHandler');
 
 // Gate for the PRE-INSTALL endpoints (/install, /test-db). These run before the instance is
 // configured, so they are unauthenticated and exempt from CSRF — require the one-time install token
-// (printed to the server console at boot) to stop a pre-install takeover. Constant-time compared in
+// (written to backend/data/install-token at boot, printed only when stdout is a TTY) to stop a pre-install takeover. Constant-time compared in
 // verifyInstallToken(). Accepts the token via the `x-install-token` header or an `installToken` body
-// field so the installer UX stays simple (operator copies it from the logs).
+// field so the installer UX stays simple (operator copies it from the terminal or the 0600 file).
 function requireInstallToken(req: Request, res: Response): boolean {
     const provided = req.get('x-install-token') || (req.body && req.body.installToken);
     if (!verifyInstallToken(provided)) {
-        res.status(403).json({ error: 'Invalid or missing install token. Check the server console for the install token.' });
+        res.status(403).json({ error: 'Invalid or missing install token. Read it from the server terminal or from backend/data/install-token.' });
         return false;
     }
     return true;
@@ -71,7 +71,60 @@ function isEnrolledConfig(cfg: any, certExists: boolean): boolean {
     return !!(cfg && cfg.advertiseHost && cfg.mtls && cfg.mtls.cert && certExists);
 }
 
+/**
+ * @swagger
+ * tags:
+ *   name: Setup
+ *   description: >-
+ *     The installation wizard and the post-move repair endpoint. These predate any account, so they are
+ *     gated by the one-time install token minted at boot (0600 file; printed only on a TTY) rather than by a session.
+ */
+
+/**
+ * @swagger
+ * components:
+ *   schemas:
+ *     PlainError:
+ *       type: object
+ *       description: >-
+ *         The bare error envelope used by the installer and the certificate endpoints. It is NOT the
+ *         rest_* envelope the rest of the API returns.
+ *       properties:
+ *         error:
+ *           type: string
+ */
 // Check installation status
+/**
+ * @swagger
+ * /setup/status:
+ *   get:
+ *     summary: Is this instance installed, and does its stored URL still match the request host?
+ *     description: >-
+ *       Public and unauthenticated — the wizard and the migration screen both poll it before anything
+ *       exists to authenticate against. `mismatch` is what the migration guard keys on: while it is
+ *       true, every route outside /setup answers 409 migration_required.
+ *     tags: [Setup]
+ *     security: []
+ *     responses:
+ *       200:
+ *         description: Install state
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 installed:
+ *                   type: boolean
+ *                 mismatch:
+ *                   type: boolean
+ *                   description: The configured site URL does not match the host this request arrived on.
+ *                 configUrl:
+ *                   type: string
+ *                   nullable: true
+ *                 detectedUrl:
+ *                   type: string
+ *                   description: Derived from X-Forwarded-Proto / X-Forwarded-Host, falling back to the request's own.
+ */
 router.get('/status', (req: Request, res: Response) => {
     const installed = isInstalled();
     const currentConfig = getConfig();
@@ -108,6 +161,91 @@ router.get('/status', (req: Request, res: Response) => {
 // Test a database connection BEFORE committing the install, so the wizard can validate Postgres
 // credentials. Isolated: uses a throwaway pg client and never switches the live driver. Always 200
 // with { ok, message|error } so the wizard can render the result inline.
+/**
+ * @swagger
+ * /setup/test-db:
+ *   post:
+ *     summary: Validate database credentials before committing the install
+ *     description: >-
+ *       Uses a throwaway client and never switches the live driver. A connection FAILURE is reported as
+ *       200 with ok=false so the wizard can render it inline — the non-200 answers below are about the
+ *       endpoint itself, not about the database. Exempt from the CSRF checks, because it runs before any
+ *       origin or user exists; the install token is what guards it instead.
+ *     tags: [Setup]
+ *     security: []
+ *     parameters:
+ *       - in: header
+ *         name: x-install-token
+ *         schema:
+ *           type: string
+ *         description: >-
+ *           The one-time install token minted at boot (`backend/data/install-token`, printed only when stdout is a TTY). May also be sent as an
+ *           `installToken` body field. Compared in constant time.
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               installToken:
+ *                 type: string
+ *                 description: Alternative to the x-install-token header.
+ *               dbDriver:
+ *                 type: string
+ *                 default: sqlite-native
+ *                 enum: [sqlite-native, sqlite-legacy, postgres, mysql]
+ *               db:
+ *                 type: object
+ *                 description: Connection details. Required for postgres and mysql; ignored for the SQLite drivers.
+ *                 properties:
+ *                   host:
+ *                     type: string
+ *                   port:
+ *                     type: integer
+ *                   user:
+ *                     type: string
+ *                   password:
+ *                     type: string
+ *                   database:
+ *                     type: string
+ *                   ssl:
+ *                     type: boolean
+ *     responses:
+ *       200:
+ *         description: The probe ran — read `ok` for the verdict
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 ok:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
+ *                   description: Present when ok is true.
+ *                 error:
+ *                   type: string
+ *                   description: Present when ok is false — the driver's own message, or an unknown-driver refusal.
+ *       400:
+ *         description: The instance is already installed, so this endpoint is closed.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 ok:
+ *                   type: boolean
+ *                 error:
+ *                   type: string
+ *       403:
+ *         description: Invalid or missing install token.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/PlainError'
+ *       429:
+ *         description: Rate limited by the setup limiter.
+ */
 router.post('/test-db', async (req: Request, res: Response) => {
     if (isInstalled()) return res.status(400).json({ ok: false, error: 'Already installed' });
     if (!requireInstallToken(req, res)) return;
@@ -163,6 +301,135 @@ router.post('/test-db', async (req: Request, res: Response) => {
     }
 });
 
+/**
+ * @swagger
+ * /setup/install:
+ *   post:
+ *     summary: Install the instance
+ *     description: >-
+ *       One-shot: closed forever once `isInstalled()` is true. Writes the config, creates the
+ *       administrator, runs the migrations, optionally seeds starter content, and auto-logs the
+ *       administrator in by issuing a session cookie. Exempt from the CSRF checks (no origin and no user
+ *       exist yet) — the one-time install token is the gate. The site URL is taken from an explicit
+ *       `siteUrl` when given; otherwise it is derived from X-Forwarded-Proto / X-Forwarded-Host and
+ *       validated against a strict hostname-or-IP pattern, because those headers are caller-controlled
+ *       and the value ends up in the same-origin allow-list. On a cluster-enrolled node the enrollment
+ *       identity and gateway wiring are preserved rather than overwritten.
+ *     tags: [Setup]
+ *     security: []
+ *     parameters:
+ *       - in: header
+ *         name: x-install-token
+ *         schema:
+ *           type: string
+ *         description: >-
+ *           The one-time install token minted at boot (`backend/data/install-token`, printed only when stdout is a TTY). May also be sent as an
+ *           `installToken` body field.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [siteName, adminUser, adminEmail, adminPassword]
+ *             properties:
+ *               installToken:
+ *                 type: string
+ *               siteName:
+ *                 type: string
+ *               siteDescription:
+ *                 type: string
+ *               adminUser:
+ *                 type: string
+ *                 description: At least 3 characters, from letters, digits and . _ - only.
+ *               adminEmail:
+ *                 type: string
+ *               adminPassword:
+ *                 type: string
+ *                 minLength: 10
+ *               dbDriver:
+ *                 type: string
+ *                 default: sqlite-native
+ *                 enum: [sqlite-native, sqlite-legacy, postgres, mysql]
+ *               db:
+ *                 type: object
+ *                 description: Required for postgres and mysql — host, database and user at minimum.
+ *                 properties:
+ *                   host:
+ *                     type: string
+ *                   port:
+ *                     type: integer
+ *                   user:
+ *                     type: string
+ *                   password:
+ *                     type: string
+ *                   database:
+ *                     type: string
+ *                   ssl:
+ *                     type: boolean
+ *               siteUrl:
+ *                 type: string
+ *                 description: >-
+ *                   Explicit absolute http(s) origin. Takes precedence over the request headers; its host
+ *                   must still be a valid hostname or IP.
+ *               frontendUrl:
+ *                 type: string
+ *               demoContent:
+ *                 type: boolean
+ *                 default: true
+ *                 description: Seed a starter home page, welcome post, About page and header menu.
+ *     responses:
+ *       200:
+ *         description: Installed. A session cookie for the new administrator is set when auto-login succeeded.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 autoLoggedIn:
+ *                   type: boolean
+ *                 redirectTo:
+ *                   type: string
+ *                 emailProviderAvailable:
+ *                   type: boolean
+ *                   description: >-
+ *                     False on a fresh install with no mail plugin — self-service password recovery will
+ *                     not work until one is loaded.
+ *                 tests:
+ *                   type: object
+ *                   properties:
+ *                     total:
+ *                       type: integer
+ *                     passed:
+ *                       type: integer
+ *                     failed:
+ *                       type: integer
+ *       400:
+ *         description: >-
+ *           Already installed, or a validation failure — missing site name, a bad admin username or
+ *           email, an admin password under 10 characters, an unknown database driver, missing
+ *           Postgres/MySQL connection details, or a site host that could not be derived or validated.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/PlainError'
+ *       403:
+ *         description: Invalid or missing install token.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/PlainError'
+ *       429:
+ *         description: Rate limited by the setup limiter.
+ *       500:
+ *         description: The configuration could not be written, or the install itself failed.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/PlainError'
+ */
 // Install endpoint
 router.post('/install', async (req: Request, res: Response) => {
     if (isInstalled()) {
@@ -574,6 +841,88 @@ router.post('/install', async (req: Request, res: Response) => {
     }
 });
 
+/**
+ * @swagger
+ * /setup/migrate:
+ *   post:
+ *     summary: Repoint an installed instance at the host it now answers on
+ *     description: >-
+ *       The escape hatch from a domain move. While the stored site URL disagrees with the request host,
+ *       the migration guard answers 409 on every route outside /setup — including /auth/login — so this
+ *       endpoint authenticates raw ADMINISTRATOR credentials from the body instead of a session. It is
+ *       NOT CSRF-exempt (unlike /setup/install and /setup/test-db): it needs no ambient cookie, so the
+ *       same-origin check costs it nothing. Wrong password and correct-password-but-not-an-administrator
+ *       are answered identically, so the only distinguishable outcome is a correct administrator
+ *       credential; repeated failures buy an escalating bounded WAIT under a dedicated throttle bucket
+ *       that can never lock the real administrator out of interactive login. The new host is derived
+ *       from X-Forwarded-Host / Host and validated exactly as POST /setup/install validates it.
+ *     tags: [Setup]
+ *     security: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [username, password]
+ *             properties:
+ *               username:
+ *                 type: string
+ *               password:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: >-
+ *           Site URL repointed and the mTLS identities re-issued for the new domain. Only the safe
+ *           fields are echoed — never the whole config, which carries the JWT and gateway secrets.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 siteUrl:
+ *                   type: string
+ *                 frontendUrl:
+ *                   type: string
+ *       400:
+ *         description: >-
+ *           The instance is not installed, or no valid site host could be derived from this request —
+ *           send the migration through the host you are migrating TO.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/PlainError'
+ *       401:
+ *         description: >-
+ *           Credentials absent, or the uniform refusal for "wrong password" and "correct password but
+ *           not an administrator" — deliberately indistinguishable.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/PlainError'
+ *       403:
+ *         description: The same-origin CSRF check refused the request.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ *       429:
+ *         description: >-
+ *           Too many simultaneous attempts for this account from this address, or the strict per-IP auth
+ *           limiter (10 per hour) that this route is mounted behind.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/PlainError'
+ *       500:
+ *         description: The new configuration could not be written.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/PlainError'
+ */
 // Migration endpoint
 router.post('/migrate', async (req: Request, res: Response) => {
     if (!isInstalled()) {

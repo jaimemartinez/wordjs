@@ -185,3 +185,203 @@ describe('separate mode — the installer must not undo cluster enrollment', () 
         });
     });
 });
+
+/**
+ * THE INSTALL BANNER MUST NAME A URL THAT CONNECTS — found by the first local Docker run of the image.
+ *
+ * 5. `core/install-token.ts` hardcoded `https://localhost:3000` and deliberately distrusted a config
+ *    `siteUrl` equal to `http://localhost:3000` (the untouched default). The Docker image bakes
+ *    `WORDJS_HTTP=1`, under which `monolith.js resolveSSL()` returns null and the process serves PLAIN
+ *    HTTP — so a fresh container printed `→ https://localhost:3000/install#token=…`, a URL that cannot
+ *    connect, while `deploy/compose/README.md` promised a ready-to-click `http://…` one. The scheme is
+ *    now READ from the listener (`WORDJS_HTTP`) and the port from `PORT`, exactly as `monolith.js` and
+ *    `core/cert-manager.getMonolithConfig()` read them.
+ *
+ * The resolver takes the configured siteUrl as an ARGUMENT so these assertions never require
+ * `config/app` (whose require regenerates and persists secrets) — the caller does that lookup.
+ */
+describe('install banner URL — the printed scheme follows the listener, not a hardcoded default', () => {
+    const { resolveInstallBaseUrl } = require('../core/install-token');
+
+    describe('no configured siteUrl — derive it from the process environment', () => {
+        test('WORDJS_HTTP=1 (what the Docker image bakes) prints http', () => {
+            assert.strictEqual(resolveInstallBaseUrl(null, { WORDJS_HTTP: '1' }), 'http://localhost:3000');
+        });
+
+        test('unset WORDJS_HTTP keeps the previous https default (dev sslAuto / self-signed)', () => {
+            assert.strictEqual(resolveInstallBaseUrl(null, {}), 'https://localhost:3000');
+        });
+
+        test('only the literal "1" means plain HTTP — monolith.js compares it that way', () => {
+            assert.strictEqual(resolveInstallBaseUrl(null, { WORDJS_HTTP: 'true' }), 'https://localhost:3000');
+            assert.strictEqual(resolveInstallBaseUrl(null, { WORDJS_HTTP: '0' }), 'https://localhost:3000');
+        });
+
+        test('PORT is honoured — the container may publish the app anywhere', () => {
+            assert.strictEqual(resolveInstallBaseUrl(null, { WORDJS_HTTP: '1', PORT: '8080' }), 'http://localhost:8080');
+            assert.strictEqual(resolveInstallBaseUrl(null, { PORT: '8443' }), 'https://localhost:8443');
+        });
+
+        test('an unusable PORT falls back to 3000, like Number(process.env.PORT) || 3000', () => {
+            assert.strictEqual(resolveInstallBaseUrl(null, { WORDJS_HTTP: '1', PORT: '' }), 'http://localhost:3000');
+            assert.strictEqual(resolveInstallBaseUrl(null, { WORDJS_HTTP: '1', PORT: 'nope' }), 'http://localhost:3000');
+        });
+
+        test('the default port for the scheme is dropped, as monolith.js does in its redirect', () => {
+            assert.strictEqual(resolveInstallBaseUrl(null, { PORT: '443' }), 'https://localhost');
+            assert.strictEqual(resolveInstallBaseUrl(null, { WORDJS_HTTP: '1', PORT: '80' }), 'http://localhost');
+            // ...and NOT the other way round: :80 under https is a real, non-default port.
+            assert.strictEqual(resolveInstallBaseUrl(null, { PORT: '80' }), 'https://localhost:80');
+        });
+    });
+
+    describe('a configured siteUrl still wins — unless it is the untouched placeholder', () => {
+        test('an operator-set origin is printed verbatim, whatever the environment says', () => {
+            assert.strictEqual(
+                resolveInstallBaseUrl('https://cms.example.com', { WORDJS_HTTP: '1', PORT: '8080' }),
+                'https://cms.example.com'
+            );
+        });
+
+        test('a trailing slash never doubles up in front of /install', () => {
+            assert.strictEqual(resolveInstallBaseUrl('https://cms.example.com/', {}), 'https://cms.example.com');
+        });
+
+        test('the shipped placeholder counts as unset, so the environment decides', () => {
+            // THE REGRESSION: trusting this value would print http:// on an HTTPS dev box.
+            assert.strictEqual(resolveInstallBaseUrl('http://localhost:3000', {}), 'https://localhost:3000');
+            assert.strictEqual(
+                resolveInstallBaseUrl('http://localhost:3000', { WORDJS_HTTP: '1' }),
+                'http://localhost:3000'
+            );
+        });
+
+        test('an empty / absent config value is not mistaken for a configured origin', () => {
+            assert.strictEqual(resolveInstallBaseUrl('', { WORDJS_HTTP: '1' }), 'http://localhost:3000');
+            assert.strictEqual(resolveInstallBaseUrl('   ', { WORDJS_HTTP: '1' }), 'http://localhost:3000');
+            assert.strictEqual(resolveInstallBaseUrl(undefined, { WORDJS_HTTP: '1' }), 'http://localhost:3000');
+        });
+    });
+});
+
+/**
+ * THE BANNER MUST NOT PUT THE BOOTSTRAP SECRET IN A LOG AGGREGATOR.
+ *
+ * 6. The banner printed the install token twice — once inside a clickable `#token=` URL and once bare
+ *    — on every boot of an uninstalled instance. "Printed to the console" was written when a console
+ *    was a terminal an operator was watching. It is not: `core/logger`'s console bridge turns this
+ *    banner into structured JSON on stdout, and `documentation/observability.md` tells operators to
+ *    ship stdout to Loki/ELK/Datadog. So the one-time secret that gates a pre-install takeover became
+ *    a durable, indexed, searchable record readable by everyone who can read logs — as did the
+ *    generated administrator password `index.ts` prints in the same shape.
+ *
+ *    The value is now printed only when stdout is a TTY, or when `WORDJS_PRINT_INSTALL_TOKEN=1` says
+ *    the operator has decided their sink is trustworthy. Otherwise the banner names the 0600 file. No
+ *    headless flow loses anything: the file and `WORDJS_INSTALL_TOKEN` are how Docker, Compose, Helm
+ *    and the Verso E2E suite already obtain it.
+ */
+describe('install banner — the token is printed only to a terminal', () => {
+    const MODULE = require.resolve('../core/install-token');
+    const CONFIG = require.resolve('../config/app');
+    const PROBE_TOKEN = 'banner-probe-token-0123456789';
+
+    let savedTokenFile: Buffer | null = null;
+    let tokenFilePath = '';
+    let hadTokenFile = false;
+    let installedConfigStub = false;
+
+    before(() => {
+        // Keep the promise the previous block makes: these assertions must never require `config/app`,
+        // whose load regenerates and persists secrets. generateInstallToken() looks it up internally,
+        // so a stub is seeded ONLY when nothing has loaded it already.
+        if (!require.cache[CONFIG]) {
+            require.cache[CONFIG] = { id: CONFIG, filename: CONFIG, loaded: true, exports: { siteUrl: null } } as any;
+            installedConfigStub = true;
+        }
+        tokenFilePath = require('../core/install-token').INSTALL_TOKEN_FILE;
+        hadTokenFile = fs.existsSync(tokenFilePath);
+        if (hadTokenFile) savedTokenFile = fs.readFileSync(tokenFilePath);
+    });
+
+    after(() => {
+        // The banner writes the 0600 mirror as a side effect; put back exactly what was there.
+        try {
+            if (hadTokenFile && savedTokenFile) fs.writeFileSync(tokenFilePath, savedTokenFile, { mode: 0o600 });
+            else fs.unlinkSync(tokenFilePath);
+        } catch { /* nothing to restore */ }
+        if (installedConfigStub) delete require.cache[CONFIG];
+        delete require.cache[MODULE];
+    });
+
+    /** Print one banner from a FRESH module (the token is memoised for the life of a module instance). */
+    function banner(env: Record<string, string | undefined>, isTTY: boolean): string {
+        const savedEnv: Record<string, string | undefined> = {};
+        for (const key of ['WORDJS_INSTALL_TOKEN', 'WORDJS_PRINT_INSTALL_TOKEN']) {
+            savedEnv[key] = process.env[key];
+            if (env[key] === undefined) delete process.env[key]; else process.env[key] = env[key] as string;
+        }
+        const savedIsTTY = (process.stdout as any).isTTY;
+        const savedLog = console.log;
+        const out: string[] = [];
+        (process.stdout as any).isTTY = isTTY;
+        console.log = (...args: any[]): void => { out.push(args.map(String).join(' ')); };
+        try {
+            delete require.cache[MODULE];
+            require('../core/install-token').generateInstallToken();
+        } finally {
+            console.log = savedLog;
+            (process.stdout as any).isTTY = savedIsTTY;
+            for (const [key, value] of Object.entries(savedEnv)) {
+                if (value === undefined) delete process.env[key]; else process.env[key] = value;
+            }
+        }
+        return out.join('\n');
+    }
+
+    test('on a TTY the banner is unchanged: the clickable URL and the bare token', () => {
+        const text = banner({ WORDJS_INSTALL_TOKEN: PROBE_TOKEN }, true);
+        assert.match(text, /WordJS is not installed yet/);
+        assert.ok(text.includes(`/install#token=${PROBE_TOKEN}`), `the clickable URL lost its token:\n${text}`);
+        assert.ok(text.includes(`Install token (if you prefer to paste it): ${PROBE_TOKEN}`), `the bare token line disappeared:\n${text}`);
+    });
+
+    test('OFF a TTY the token appears NOWHERE — not bare, and not in the URL fragment', () => {
+        const text = banner({ WORDJS_INSTALL_TOKEN: PROBE_TOKEN }, false);
+        assert.ok(!text.includes(PROBE_TOKEN), `the bootstrap secret reached stdout on a headless boot:\n${text}`);
+        assert.ok(!text.includes('#token='), 'the fragment form still carries the value — it is the same secret');
+        // …and the operator is not left guessing: the banner still opens the wizard and names the file.
+        assert.match(text, /WordJS is not installed yet/);
+        assert.match(text, /\/install$/m);
+        assert.ok(text.includes(tokenFilePath), `the banner must name the 0600 file it wrote:\n${text}`);
+        assert.match(text, /WORDJS_PRINT_INSTALL_TOKEN=1/);
+    });
+
+    test('WORDJS_PRINT_INSTALL_TOKEN=1 is the escape hatch for an operator who trusts their log sink', () => {
+        const text = banner({ WORDJS_INSTALL_TOKEN: PROBE_TOKEN, WORDJS_PRINT_INSTALL_TOKEN: '1' }, false);
+        assert.ok(text.includes(`/install#token=${PROBE_TOKEN}`), `the opt-in did not restore the printed token:\n${text}`);
+    });
+
+    test('the file mirror is written either way — it is the channel the headless banner points at', () => {
+        banner({ WORDJS_INSTALL_TOKEN: PROBE_TOKEN }, false);
+        assert.strictEqual(fs.readFileSync(tokenFilePath, 'utf8'), PROBE_TOKEN);
+    });
+
+    describe('shouldPrintBootstrapSecret — the decision itself, used by the admin-password banner too', () => {
+        const { shouldPrintBootstrapSecret } = require('../core/install-token');
+
+        test('a terminal prints, a pipe does not', () => {
+            assert.strictEqual(shouldPrintBootstrapSecret({}, { isTTY: true }), true);
+            assert.strictEqual(shouldPrintBootstrapSecret({}, { isTTY: false }), false);
+            assert.strictEqual(shouldPrintBootstrapSecret({}, {}), false);
+            assert.strictEqual(shouldPrintBootstrapSecret({}, null), false);
+        });
+
+        test('only the literal "1" opts in — a truthy-looking value must not silently print a secret', () => {
+            assert.strictEqual(shouldPrintBootstrapSecret({ WORDJS_PRINT_INSTALL_TOKEN: '1' }, { isTTY: false }), true);
+            assert.strictEqual(shouldPrintBootstrapSecret({ WORDJS_PRINT_INSTALL_TOKEN: ' 1 ' }, { isTTY: false }), true);
+            assert.strictEqual(shouldPrintBootstrapSecret({ WORDJS_PRINT_INSTALL_TOKEN: 'true' }, { isTTY: false }), false);
+            assert.strictEqual(shouldPrintBootstrapSecret({ WORDJS_PRINT_INSTALL_TOKEN: 'yes' }, { isTTY: false }), false);
+            assert.strictEqual(shouldPrintBootstrapSecret({ WORDJS_PRINT_INSTALL_TOKEN: '0' }, { isTTY: false }), false);
+        });
+    });
+});

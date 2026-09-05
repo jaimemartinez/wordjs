@@ -1222,7 +1222,9 @@ describe('REGRESSION: the WXR importer keeps an attachment\'s path (a CORE-OWNED
         const xml = XML(attachmentItem('9001', 'photo-a', '2024/01/photo.jpg',
             `<wp:postmeta><wp:meta_key>_wp_attachment_metadata</wp:meta_key><wp:meta_value><![CDATA[${metadata}]]></wp:meta_value></wp:postmeta>`));
 
-        const summary = await importWxr(xml, { defaultAuthorId: U.admin, importAttachments: true });
+        // `link` is the mode this suite is about: create the record, fetch nothing, and let the WXR's own
+        // `_wp_attached_file` be the only record of where the file lives (validated by SHAPE, below).
+        const summary = await importWxr(xml, { defaultAuthorId: U.admin, media: 'link' });
         assert.strictEqual(summary.attachments.created, 1, JSON.stringify(summary));
 
         const row = await dbAsync.get(`SELECT id FROM posts WHERE post_name = 'photo-a' AND post_type = 'attachment'`);
@@ -1254,7 +1256,7 @@ describe('REGRESSION: the WXR importer keeps an attachment\'s path (a CORE-OWNED
         for (let i = 0; i < evil.length; i++) {
             const name = `photo-evil-${i}`;
             const summary = await importWxr(XML(attachmentItem(`92${i}`, name, evil[i])),
-                { defaultAuthorId: U.admin, importAttachments: true });
+                { defaultAuthorId: U.admin, media: 'link' });
             assert.strictEqual(summary.attachments.created, 1, `${evil[i]}: row not created`);
             const row = await dbAsync.get(`SELECT id FROM posts WHERE post_name = ? AND post_type = 'attachment'`, [name]);
             assert.strictEqual(await rawMeta(row.id, '_wp_attached_file'), null,

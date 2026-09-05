@@ -34,6 +34,12 @@
  *      file is left in dist to be uploaded as a release asset.
  *   7. (--rebuild) Determinism: a second build of unchanged sources must be byte-identical. The whole
  *      "deterministic catalog" claim rests on this and nothing verified it.
+ *   8. The review badge (marketplace/REVIEW.md): every entry publishes a `review` object; a `reviewed`
+ *      status matches a record in the tracked ledger marketplace/reviews.json; that record's
+ *      reviewedPermissionsSha256 still matches the manifest's permission set (a plugin cannot widen
+ *      its capabilities and keep the badge); its reviewedVersion + reviewedContentSha256 still match
+ *      the package on disk (a plugin cannot swap its code and keep the badge); a first-party plugin can
+ *      never be "reviewed"; and "first-party" can only be claimed by a first-party author.
  *
  * Usage:  node backend/scripts/verify-marketplace.js [--rebuild]
  *         (run build-marketplace.js first; --rebuild runs a second build and diffs it)
@@ -49,6 +55,9 @@ const { spawnSync } = require('child_process');
 // Same resolver build-plugin.js uses, so "which bundles should be in this zip" cannot drift from
 // "which bundles the builder emits" — the drift that already shipped bundle-less catalog zips once.
 const { resolveBlockEntry } = require('./plugin-block-contract');
+// The review ledger reader shared with build-marketplace.js. Same reason as above: "what does the
+// review badge mean" must have exactly one definition, or the gate ends up certifying its own copy.
+const { readLedger, reviewFor, permissionsSha256, packageContentSha256, isFirstPartyAuthor, REVIEW_STATUSES } = require('./marketplace-review');
 
 const ROOT = process.env.WORDJS_MARKETPLACE_ROOT
     ? path.resolve(process.env.WORDJS_MARKETPLACE_ROOT)
@@ -70,6 +79,10 @@ const JUNK_RE = /(^|\/)(\.DS_Store|Thumbs\.db|desktop\.ini|__MACOSX|\.git|node_m
 
 const errors = [];
 const fail = (msg) => errors.push(msg);
+
+// The tracked review ledger (marketplace/reviews.json), loaded once by main(). {} when there is none —
+// which is the correct reading of "nothing reviewed yet", and the state a fixture tree is in.
+let ledger = {};
 
 function readJson(file) {
     return JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -111,6 +124,128 @@ function expectedBundles(dir, manifest) {
     resolve('hooks', hooks, Boolean(fe.hooks));
 
     return { expected, missingSrc };
+}
+
+/**
+ * (8) THE REVIEW BADGE  —  marketplace/REVIEW.md.
+ *
+ * `review.status: "reviewed"` is the only field in the catalog that makes a claim about a HUMAN
+ * decision, so it is the only one an author could gain by writing down and nobody would notice. Each of
+ * the checks below crosses a representation boundary (catalog artifact ↔ tracked ledger ↔ source
+ * manifest ↔ source tree) rather than re-deriving a field with the formula that produced it:
+ *
+ *   a. The published `review` matches what marketplace/reviews.json says today. A catalog built from
+ *      an older ledger, or hand-edited after the build, disagrees here.
+ *   b. A "reviewed" plugin's permissions are still the ones the reviewer approved. Every review is
+ *      bound to reviewedPermissionsSha256 — the sorted, deduped grant-token set at review time — so a
+ *      plugin that quietly adds `filesystem:write` after being reviewed FAILS and must be re-reviewed
+ *      (REVIEW.md §6). Without this the badge would survive exactly the change it exists to gate.
+ *   b2. A "reviewed" plugin is still the CODE the reviewer read. The permission hash pins what the
+ *      plugin may reach and says nothing about what it does; without this bind a reviewed plugin could
+ *      replace the whole of index.js, ship it under the same permissions at 1.0.1 (or jump to 3.0.0,
+ *      which §6 already calls a new submission's worth of change), and the badge was republished
+ *      unchanged — with nothing anywhere recording WHICH version had been reviewed. reviewedVersion +
+ *      reviewedContentSha256 are checked against the manifest and the tracked source tree.
+ *   c. The conflict-of-interest rule, BOTH WAYS. A first-party plugin is "first-party", never
+ *      "reviewed": when the reviewer and the author are the same project the badge certifies nothing.
+ *      And "first-party" is not a status an outside submission may award itself — it is what waives the
+ *      two §2 requirements that exist for outside submissions (an OSI licence and a public repository
+ *      where the source of this version can be read), so a submission that self-declares it publishes
+ *      the first-party pill AND opts out of the requirements that make review possible at all. Both
+ *      directions are mechanical; only one of them used to be.
+ *
+ * FAIL, NOT DOWNGRADE. Every one of these makes the run RED rather than quietly republishing the entry
+ * as `unreviewed`. The badge is derived from the ledger by the BUILDER, so a silent downgrade would
+ * need the same rule in build-marketplace.js as well — a second copy of a rule is precisely the drift
+ * this module's shared reader exists to prevent — and it would drop a maintainer's recorded decision
+ * with a green check on the run. Red is also cheap here: `reviewed` is a rare, outside-only claim (a
+ * first-party package can never carry it), so routine maintenance cannot trip these.
+ */
+function verifyReview(entry, meta, dir) {
+    const label = `plugin ${entry.id}`;
+    const got = entry.review;
+
+    if (!got || typeof got !== 'object' || Array.isArray(got)) {
+        fail(`${label}: catalog entry has no "review" object — every entry must publish one (see marketplace/REVIEW.md)`);
+        return;
+    }
+    if (!REVIEW_STATUSES.includes(got.status)) {
+        fail(`${label}: review.status "${got.status}" is not one of ${REVIEW_STATUSES.join(', ')}`);
+        return;
+    }
+
+    // (a) The catalog must agree with the ledger that is committed right now.
+    const expected = reviewFor(ledger, entry.id);
+    for (const key of [...new Set([...Object.keys(expected), ...Object.keys(got)])].sort()) {
+        if (String(expected[key] ?? '') !== String(got[key] ?? '')) {
+            fail(`${label}: catalog publishes review.${key} "${got[key] ?? ''}" but marketplace/reviews.json says "${expected[key] ?? ''}" — rebuild the catalog`);
+        }
+    }
+
+    const record = ledger[entry.id];
+
+    // (c) Conflict of interest, the "first-party" direction. Checked for the CLAIM as published, so a
+    // hand-edited index is caught as well as a self-written ledger record.
+    if (got.status === 'first-party' && !isFirstPartyAuthor(meta.author)) {
+        fail(
+            `${label}: marketplace/reviews.json records "first-party" but manifest.json author is "${meta.author || ''}" — ` +
+            `"first-party" means authored by the project itself, and it WAIVES the license and ` +
+            `repository requirements that exist for outside submissions (REVIEW.md §2, §3 note, §8). ` +
+            `An outside package is "unreviewed" until a reviewer records a decision`,
+        );
+    }
+
+    if (got.status === 'reviewed') {
+        if (!record || record.status !== 'reviewed') {
+            fail(`${label}: catalog claims review.status "reviewed" but marketplace/reviews.json records no review for it`);
+            return;
+        }
+        // (c) Conflict of interest, the "reviewed" direction.
+        if (isFirstPartyAuthor(meta.author)) {
+            fail(`${label}: author "${meta.author}" is the project itself — a first-party plugin carries review.status "first-party", never "reviewed" (REVIEW.md §8)`);
+        }
+        // (b) The review is bound to the capability set it was granted against.
+        const current = permissionsSha256(meta.permissions);
+        if (current !== record.reviewedPermissionsSha256) {
+            fail(
+                `${label}: permissions changed since the review of ${record.date} by ${record.reviewer} ` +
+                `(reviewed ${record.reviewedPermissionsSha256}, manifest.json now ${current}) — ` +
+                `re-review is required before the badge may be published (REVIEW.md §6)`,
+            );
+        }
+        // (b2) ... and to the artefact the reviewer actually read. Both halves are reported in one run:
+        // a version bump WITH a code change is one re-review, not two rounds of red.
+        const srcVersion = String(meta.version || '1.0.0');
+        if (srcVersion !== String(record.reviewedVersion)) {
+            fail(
+                `${label}: version changed since the review of ${record.date} by ${record.reviewer} ` +
+                `(reviewed ${record.reviewedVersion}, manifest.json now ${srcVersion}) — ` +
+                `a review is a statement about one version; re-review is required before the badge may be published (REVIEW.md §6)`,
+            );
+        }
+        const content = packageContentSha256(dir);
+        if (content !== record.reviewedContentSha256) {
+            fail(
+                `${label}: package contents changed since the review of ${record.date} by ${record.reviewer} ` +
+                `(reviewed ${record.reviewedContentSha256}, marketplace/plugins/${entry.id} now ${content}) — ` +
+                `the code carrying the badge is not the code that was read; re-review is required (REVIEW.md §6)`,
+            );
+        }
+    }
+}
+
+/**
+ * (8, continued) The ledger itself. A record for a plugin that no longer exists is not harmless: it is
+ * a review decision that survives the code it was made about, ready to re-attach itself to whatever
+ * later takes that slug.
+ */
+function verifyLedger(srcRoot) {
+    const sources = new Set(sourceDirs(srcRoot));
+    for (const slug of Object.keys(ledger)) {
+        if (!sources.has(slug)) {
+            fail(`marketplace/reviews.json: records "${slug}", which has no package under marketplace/plugins/ — drop the stale entry`);
+        }
+    }
 }
 
 /**
@@ -200,6 +335,10 @@ function verifyEntry(entry, kind, srcRoot, seenFiles) {
 
     // (3) Declared frontend must actually be compiled into the package (plugins only).
     if (kind === 'plugin') {
+        // (8) The review badge, against the tracked ledger, the source manifest's permissions and the
+        // package source tree the review was made about.
+        verifyReview(entry, meta, dir);
+
         const { expected, missingSrc } = expectedBundles(dir, meta);
         for (const m of missingSrc) {
             fail(`${label}: manifest declares a frontend entry whose source file is missing (${m}) — build-plugin skips it silently and the package ships without that bundle`);
@@ -287,6 +426,15 @@ function main() {
         process.exit(1);
     }
 
+    // The review ledger is a GATE INPUT, so a malformed one is a failure, never a silent {} that would
+    // downgrade every badge to `unreviewed` and pass.
+    try {
+        ledger = readLedger(ROOT);
+    } catch (e) {
+        fail(e.message);
+    }
+    verifyLedger(SRC);
+
     const seenFiles = new Set();
     verifyCatalog('plugin', INDEX_FILE, 'plugins', SRC, seenFiles);
     verifyCatalog('theme', THEMES_INDEX_FILE, 'themes', THEMES_SRC, seenFiles);
@@ -305,7 +453,7 @@ function main() {
         console.error('');
         process.exit(1);
     }
-    console.log(`✅ marketplace catalog verified — every published zip matches its catalog entry (sha256, size, inner manifest, compiled bundles).`);
+    console.log(`✅ marketplace catalog verified — every published zip matches its catalog entry (sha256, size, inner manifest, compiled bundles) and every review badge matches the ledger.`);
 }
 
 main();

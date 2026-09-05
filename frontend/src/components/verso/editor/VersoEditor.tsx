@@ -60,7 +60,7 @@ import { useModal } from "@/contexts/ModalContext";
 import { trStr } from "@/lib/editorI18n";
 import { replayAnimations } from "@/components/blocks/AnimationField";
 import { revisionsApi, type MediaItem, type Revision } from "@/lib/api";
-import { rememberPickedMedia } from "@/lib/imageSrcset";
+import { imageMediaPropsForItem, rememberPickedMedia } from "@/lib/imageSrcset";
 import type { TemplateKind } from "@/lib/templateData";
 import {
     computeAutosaveWaitMs,
@@ -721,6 +721,13 @@ export default function VersoEditor({
 
     // Elegir en la biblioteca inserta un bloque Image AL FINAL (misma semántica que el legacy):
     // sourceUrl RELATIVO, nunca guid (incrusta el host de subida); una transacción = un undo.
+    //
+    // El bloque nace ya con sus props de imagen responsive (srcSet/srcSetModern/imgWidth/imgHeight)
+    // derivadas del MediaItem que acaba de elegirse: son las que convierten el <img> del render
+    // público en un <picture> con las variantes WebP/AVIF que la subida generó. Aquí NO hace falta el
+    // registro del picker (rememberPickedMedia) porque tenemos el MediaItem entero delante; lo que
+    // esa vía resuelve es el caso del panel, donde el campo solo ve una URL. Ver la cabecera de
+    // lib/imageSrcset.ts.
     const insertMediaItem = useCallback(
         (item: MediaItem) => {
             setMediaOpen(false);
@@ -735,7 +742,13 @@ export default function VersoEditor({
             const id = crypto.randomUUID();
             const block: VersoItem = {
                 type: "Image",
-                props: { ...defaults, id, src: item.sourceUrl || item.guid, alt: item.title || "" },
+                props: {
+                    ...defaults,
+                    id,
+                    src: item.sourceUrl || item.guid,
+                    alt: item.title || "",
+                    ...imageMediaPropsForItem(item),
+                },
             };
             const doc = handle.getDoc();
             handle.transact((tx) => tx.insertNode(block, ROOT_ID, ROOT_SLOT, doc.rootChildren.length), {

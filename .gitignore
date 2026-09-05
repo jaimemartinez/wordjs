@@ -163,3 +163,12 @@ backend/plugins/stitch-themes/
 # simulate a site root with no wordjs-config.json). Removed on both the passing and failing path;
 # ignored as well so a regression in that cleanup can never put it in a commit.
 backend/tmp-installer-test/
+
+# Coverage output. `backend/npm run test:coverage` (c8) and `frontend/npm run test:coverage` (vitest v8)
+# both write a report tree next to their package; CI uploads lcov.info as an artifact instead. Regenerated
+# on every run, so it must never be tracked. frontend/.gitignore already carried its own `/coverage`.
+coverage/
+# Raw perf measurements written by backend/scripts/perf-calibrate.mjs (uploaded by the perf-budgets CI
+# job as an artifact). The CALIBRATION is committed by pasting its .performanceBudget into
+# backend/f0-baseline.json in a reviewed PR — never by tracking this file.
+/perf-calibration.json

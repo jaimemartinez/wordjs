@@ -12,7 +12,8 @@ import { useEffect, useMemo, useState } from "react";
 import { marketplaceApi, MarketplaceEntry, MarketplaceSourceStatus } from "@/lib/api";
 import { permMeta } from "@/lib/permissionMeta";
 import { useToast } from "@/contexts/ToastContext";
-import { FaSearch, FaSyncAlt, FaDownload, FaCheck, FaThLarge, FaStore, FaCog, FaTrash, FaPlus } from "react-icons/fa";
+import { FaSearch, FaSyncAlt, FaDownload, FaCheck, FaThLarge, FaStore, FaCog, FaTrash, FaPlus, FaShieldAlt, FaCodeBranch, FaQuestionCircle } from "react-icons/fa";
+import type { IconType } from "react-icons";
 import { Button, EmptyState } from "@/components/ui";
 
 const permToken = (p: { scope: string; access?: string }) =>
@@ -20,6 +21,74 @@ const permToken = (p: { scope: string; access?: string }) =>
 
 function fmtKB(bytes: number) {
     return bytes >= 1024 * 1024 ? `${(bytes / (1024 * 1024)).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
+
+/**
+ * What the WordJS maintainers claim about this listing, resolved to the pill that leads the badge row.
+ *
+ * A MISSING `review` is not an unknown to be hidden: the catalog is fetched at RUNTIME and this install
+ * may be reading an index built before reviews existed, so absence resolves to "unreviewed" — the same
+ * copy an explicitly unreviewed entry gets. Never let "we don't know" render as "we vouched for it".
+ *
+ * `official` says whether the entry came from the catalog the review programme actually covers. An
+ * administrator may point WordJS at any number of catalogs, and `review` travels INSIDE whichever index
+ * answered — so a private or compromised source could otherwise hand this screen an affirmative badge,
+ * with a reviewer's name and a date, backed by no ledger anywhere. The backend already rewrites those
+ * entries to `unreviewed` (routes/marketplace.ts, isOfficialSource); this is the second lock, and it is
+ * deliberately fail-closed: a missing flag reads as not-official, so a badge requires BOTH the backend
+ * to have stamped the entry official AND the entry to carry the claim.
+ *
+ * The reviewed pill does NOT say "sandboxed". REVIEW.md §1 is emphatic that the sandbox "applies to
+ * every plugin in the catalog regardless of badge" — putting the word only on the reviewed pill makes
+ * the differentiator read as "the others are not sandboxed", which is the exact misreading §1 exists to
+ * prevent, on the label that sells the install. The sandbox is stated in the tooltip of every pill.
+ *
+ * Split out (and exported) because the tab itself is a fetch-on-mount client tree: this is the piece a
+ * unit test can drive with one entry per status.
+ */
+const SANDBOX_NOTE = "Every plugin runs in the same sandbox with only the permissions you grant, badge or no badge.";
+
+export function reviewPill(review: MarketplaceEntry["review"], official?: boolean): { label: string; title: string; tone: string; Icon: IconType } {
+    switch (official ? review?.status : undefined) {
+        case "reviewed": {
+            const by = [review?.reviewer, review?.date].filter(Boolean).join(" · ");
+            return {
+                label: "Reviewed",
+                title: `${by ? `Reviewed by ${by}` : "Reviewed by the WordJS maintainers"} — a human read this submission against marketplace/REVIEW.md §4 and recorded the decision. It is not a security audit. ${SANDBOX_NOTE}`,
+                tone: "bg-emerald-50 border-emerald-100/50 text-emerald-600",
+                Icon: FaShieldAlt,
+            };
+        }
+        case "first-party":
+            return {
+                label: "First-party",
+                title: review?.notes || "Maintained in the WordJS repository by the WordJS project.",
+                tone: "bg-slate-50 border-slate-200/40 text-slate-500",
+                Icon: FaCodeBranch,
+            };
+        default:
+            return {
+                label: "Unreviewed",
+                title: official === false
+                    // Not the official catalog: whatever this index claimed about itself is not a claim
+                    // the WordJS maintainers ever made, so say that instead of the generic copy.
+                    ? `Listed by a catalog source other than the official WordJS one, so it carries no review by the WordJS maintainers. ${SANDBOX_NOTE}`
+                    : `Not reviewed by the WordJS maintainers; the sandbox and your permission grants are the safeguards. ${SANDBOX_NOTE}`,
+                // Muted + dashed: reads as an absent certification rather than a granted one.
+                tone: "bg-white/40 border-slate-200 border-dashed text-slate-400",
+                Icon: FaQuestionCircle,
+            };
+    }
+}
+
+/** The review pill itself — same shape/typography as the block and permission pills next to it. */
+export function ReviewPill({ review, official }: { review: MarketplaceEntry["review"]; official?: boolean }) {
+    const { label, title, tone, Icon } = reviewPill(review, official);
+    return (
+        <span title={title} className={`inline-flex items-center gap-1 text-[8px] font-extrabold uppercase tracking-widest px-2.5 py-1 rounded-full border shadow-sm ${tone}`}>
+            <Icon className="text-[7px]" /> {label}
+        </span>
+    );
 }
 
 export default function MarketplaceTab({ onInstalled }: { onInstalled: () => void }) {
@@ -303,6 +372,8 @@ export default function MarketplaceTab({ onInstalled }: { onInstalled: () => voi
                                 <p className="text-slate-500 text-xs mb-4 line-clamp-3 flex-1 font-medium leading-relaxed">{e.description}</p>
 
                                 <div className="flex items-center gap-2 flex-wrap mb-5">
+                                    {/* trust first: what the maintainers claim about this listing leads the row */}
+                                    <ReviewPill review={e.review} official={e.official} />
                                     {/* new field first, pre-Verso catalogs fall back to the old one */}
                                     {(e.hasVersoBlock ?? e.hasPuckBlock) && (
                                         <span className="inline-flex items-center gap-1 text-[8px] font-extrabold uppercase tracking-widest px-2.5 py-1 rounded-full bg-indigo-50 border border-indigo-100/50 text-indigo-650 shadow-sm">

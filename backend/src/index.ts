@@ -16,6 +16,19 @@ require('dotenv').config();
 // Import configuration
 const config = require('./config/app');
 
+// STRUCTURED LOGGING — installed immediately after the config that decides its level, and before any
+// other module in this file has had a chance to print. The bridge routes the backend's existing
+// console.log/info/warn/error/debug calls through core/logger, so boot output is JSON with a level and
+// a timestamp from the very first line, without editing 802 call sites in this change (they are marked
+// `legacy: true` and migrated in a follow-up). See documentation/observability.md.
+//
+// NOT under `node --test`: the unit suites read node:test's own output off this stream, and turning
+// every console line into JSON makes a failing assertion unreadable. NODE_ENV is not set to 'test' by
+// the test scripts, so NODE_TEST_CONTEXT (which the runner sets in every test child) is the gate that
+// actually fires — the NODE_ENV check is kept for a harness that does set it.
+const { consoleBridge } = require('./core/logger');
+if (config.nodeEnv !== 'test' && !process.env.NODE_TEST_CONTEXT) consoleBridge();
+
 /**
  * WHERE THIS INSTALLATION LIVES ON DISK — the anchor every relative path in this file resolves
  * against, and NOT the directory the process happens to have been started in.
@@ -94,6 +107,20 @@ app.set('trust proxy', resolveTrustProxy());
 // leaving express-rate-limit's default req.ip means the bucket can never diverge from the trust
 // decision, even if later middleware rewrites req.ip.
 const ipKey = (req: any) => clientIp(req);
+
+// REQUEST CORRELATION AND HTTP METRICS — THE FIRST MIDDLEWARE ON THE APP, ahead of helmet, CORS, the
+// cookie parser and every limiter. It mints (or validates and echoes) X-Request-Id and opens the
+// AsyncLocalStorage that core/logger reads, so EVERY line any later middleware produces — a helmet
+// rejection, a CORS denial, a 429, a handler's own log, a 500 from the error handler — carries the id
+// that ties it to the rest of that request. Mounted any later, the lines emitted before it are exactly
+// the ones with no id, which is the opposite of what correlation is for.
+//
+// httpMetrics rides the same mount so it reads the SAME `startedAt` the access line uses: one clock per
+// request, so the latency histogram and the log can never disagree. Both are pure observers — they add
+// one response header and register one `finish` listener, and neither can end a response.
+const { requestContext } = require('./middleware/request-context');
+const { httpMetrics } = require('./core/metrics');
+app.use(requestContext, httpMetrics);
 
 // Security Headers
 const helmet = require('helmet');
@@ -429,6 +456,16 @@ app.post(`${config.api.prefix}/forms/submit`, formsSubmitLimiter);
 // (#21) Same exact-path shape for the anonymous tracking beacon, so the admin's authenticated
 // GET /analytics/stats never draws on the public write budget.
 app.post(`${config.api.prefix}/analytics/track`, analyticsLimiter);
+// POST /comments is the third anonymous public write, and until now the loosest: `optionalAuth` lets a
+// guest post and the only ceiling was the global apiLimiter (1000/15min), ~100× looser than the two
+// mounts above. Its limiter is BUILT AND MOUNTED on the router's own `router.post('/')` declaration
+// (routes/comments.ts, THE COMMENT ABUSE POSTURE) rather than here, for two reasons stated in full
+// there: an app-level mount runs before that router's optionalAuth, so the authenticated tier would
+// never apply and a prefix mount would charge a moderator's POST /comments/:id/approve to the public
+// budget; and a second `app.post('${prefix}/comments')` here would be a new endpoint declaration in the
+// F0 REST inventory. What stays here is the part this file owns for EVERY limiter — the shared Redis
+// store, without which a multi-node install enforces N× the configured cap.
+require('./routes/comments').useCommentLimiterStore(limiterStore('rl:comments:'));
 
 // SECURITY: CSRF Protection for all API routes
 const { csrfProtection } = require('./middleware/auth');
@@ -732,6 +769,37 @@ let appReady = false;
 let pluginsReady = false;
 
 // Liveness — the process is up and the event loop is responsive. Deliberately does NOT touch the DB.
+/**
+ * @swagger
+ * /healthz:
+ *   get:
+ *     summary: Liveness probe
+ *     description: Registered at the ROOT, above the install guard, the API rate limiter and CSRF, so it is unauthenticated, CSRF-free and never turned into a 503 by the setup guard. It deliberately does NOT touch the database - a liveness probe that fails while the database is slow restarts the one process that was not broken. Ask /readyz whether this instance can serve traffic.
+ *     tags: [System]
+ *     servers:
+ *       - url: /
+ *         description: Served at the server ROOT, not under the /api/v1 prefix this document's default server names.
+ *     security: []
+ *     responses:
+ *       200:
+ *         description: The process is up and the event loop is answering
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: string
+ *                   enum: [ok]
+ *                 uptime:
+ *                   type: number
+ *                   description: Seconds since this process started.
+ *                 pid:
+ *                   type: integer
+ *                 timestamp:
+ *                   type: string
+ *                   format: date-time
+ */
 app.get('/healthz', (req: Request, res: Response) => {
     res.json({ status: 'ok', uptime: process.uptime(), pid: process.pid, timestamp: new Date().toISOString() });
 });
@@ -739,6 +807,32 @@ app.get('/healthz', (req: Request, res: Response) => {
 // Prometheus metrics (default Node/process metrics + app gauges). DISABLED unless a scrape token is
 // configured (config.metrics.token), so metrics are never exposed publicly by default. Scrape with
 // `Authorization: Bearer <token>` — HEADER ONLY. Root-level so it's CSRF-free and not rate-limited.
+/**
+ * @swagger
+ * /metrics:
+ *   get:
+ *     summary: Prometheus scrape endpoint (default Node and process metrics plus app gauges)
+ *     description: DISABLED unless a scrape token is configured, and the disabled answer is an empty 404 - an install that has not opted in exposes no metrics and does not advertise the endpoint either. When a token IS configured it is read from the Authorization header ONLY, as a Bearer credential, and compared in constant time; a token in the query string is not accepted, because that leaks a long-lived secret into access logs, Referer headers and browser history. Registered at the ROOT, so it is CSRF-free and not rate-limited.
+ *     tags: [System]
+ *     servers:
+ *       - url: /
+ *         description: Served at the server ROOT, not under the /api/v1 prefix this document's default server names.
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: The metrics exposition, in the Prometheus text format the registry declares
+ *         content:
+ *           text/plain:
+ *             schema:
+ *               type: string
+ *       401:
+ *         description: The Authorization header is absent or does not match the configured scrape token. Empty body.
+ *       404:
+ *         description: No scrape token is configured, so metrics are switched off. Empty body, and indistinguishable from a route that does not exist.
+ *       500:
+ *         description: The metrics registry could not be rendered. Empty body.
+ */
 app.get('/metrics', async (req: Request, res: Response) => {
     const token = config.metrics && config.metrics.token;
     if (!token) return res.status(404).end();
@@ -759,6 +853,61 @@ app.get('/metrics', async (req: Request, res: Response) => {
 
 // Readiness — installed, fully booted, and the database answers. Returns 503 (not 200) when not
 // ready, so an orchestrator/load-balancer holds traffic until the instance can actually serve it.
+/**
+ * @swagger
+ * /readyz:
+ *   get:
+ *     summary: Readiness probe
+ *     description: Installed, fully booted, and the database answers. Registered at the ROOT, above the install guard, the API rate limiter and CSRF. Not-ready is a 503 rather than a 200 with a flag, so an orchestrator or load balancer holds traffic back until the instance can really serve it. The checks object is returned on every path, including the error path, so the reason is never only in the status.
+ *     tags: [System]
+ *     servers:
+ *       - url: /
+ *         description: Served at the server ROOT, not under the /api/v1 prefix this document's default server names.
+ *     security: []
+ *     responses:
+ *       200:
+ *         description: Installed, booted, and the database answered
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: string
+ *                   enum: [ready]
+ *                 checks:
+ *                   type: object
+ *                   properties:
+ *                     installed:
+ *                       type: boolean
+ *                     booted:
+ *                       type: boolean
+ *                     db:
+ *                       type: string
+ *                       enum: [unknown, ok, error]
+ *       503:
+ *         description: Not ready. status is setup_required when the install has never been completed, starting while the instance is still booting, and not_ready when the database does not answer or the check itself threw - in which case error carries the reason.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: string
+ *                   enum: [setup_required, starting, not_ready]
+ *                 checks:
+ *                   type: object
+ *                   properties:
+ *                     installed:
+ *                       type: boolean
+ *                     booted:
+ *                       type: boolean
+ *                     db:
+ *                       type: string
+ *                       enum: [unknown, ok, error]
+ *                 error:
+ *                   type: string
+ */
 app.get('/readyz', async (req: Request, res: Response) => {
     const checks: any = { installed: false, booted: appReady, db: 'unknown' };
     try {
@@ -905,6 +1054,35 @@ app.use(config.api.prefix, (req: Request, res: Response, next: NextFunction) => 
 app.use(config.api.prefix, routes);
 
 // API info at /api endpoint  
+/**
+ * @swagger
+ * /api:
+ *   get:
+ *     summary: Product banner and pointer to the versioned API
+ *     description: A root-level banner naming the product, its API version and the ABSOLUTE URL of the versioned API, so a client that only knows the site's origin can discover where the API itself lives. Unauthenticated, and outside the /api/v1 prefix.
+ *     tags: [System]
+ *     servers:
+ *       - url: /
+ *         description: Served at the server ROOT, not under the /api/v1 prefix this document's default server names.
+ *     security: []
+ *     responses:
+ *       200:
+ *         description: The product banner
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 name:
+ *                   type: string
+ *                 description:
+ *                   type: string
+ *                 version:
+ *                   type: string
+ *                 api:
+ *                   type: string
+ *                   description: The absolute base URL of the versioned REST API.
+ */
 app.get('/api', (req: Request, res: Response) => {
     res.json({
         name: 'WordJS',
@@ -1382,12 +1560,19 @@ async function initialize() {
             const dataDir = nodePath.resolve(__dirname, '../data');
             const pwFile = nodePath.join(dataDir, 'initial-admin-password');
             let stored: string;
+            // Whether the 0600 file — the channel that replaces printing the password on a headless
+            // deploy — actually exists. If it does not, printing is the ONLY channel left and the
+            // account would otherwise be unrecoverable, so the gate below falls open.
+            let pwFileWritten = false;
             try {
                 if (!nodeFs.existsSync(dataDir)) nodeFs.mkdirSync(dataDir, { recursive: true });
                 nodeFs.writeFileSync(pwFile, `${password}\n`, { mode: 0o600 });
+                pwFileWritten = true;
                 stored = `\n   (also written to ${pwFile}, mode 0600 — delete it once you have signed in)`;
             } catch (e: any) {
-                // Never block boot on this: the password is printed above either way.
+                // Never block boot on this: with no file, the password IS printed above (see the gate)
+                // whatever stdout is, because the alternative is an administrator account nobody can
+                // ever sign in to.
                 stored = `\n   (could not write ${pwFile}: ${e && e.message} — copy the password from this log)`;
             }
             console.log('');
@@ -1395,10 +1580,18 @@ async function initialize() {
             console.log('🔑 Bootstrap administrator created — this is shown ONCE:');
             console.log('');
             console.log(`      user:     admin`);
-            console.log(`      password: ${password}`);
+            // Printed ONLY to a real terminal (or under WORDJS_PRINT_INSTALL_TOKEN=1, or when the 0600
+            // file could not be written and printing is the last channel). This banner goes through the
+            // console bridge into JSON on stdout, which operators are told to ship to a log aggregator —
+            // so on every headless deploy this line put a live administrator password into a searchable
+            // log store, next to the URL of the site it opens.
+            const showPassword = !pwFileWritten || require('./core/install-token').shouldPrintBootstrapSecret();
+            console.log(`      password: ${showPassword ? password : '(not printed — stdout is not a terminal; read the file named below)'}`);
             console.log(`${stored}`);
             console.log('');
-            console.log('   ⚠️  Sign in and change it. Anyone who can read this log can use it.');
+            console.log(showPassword
+                ? '   ⚠️  Sign in and change it. Anyone who can read this log can use it.'
+                : '   ⚠️  Sign in and change it, then delete the file above.');
             console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
             console.log('');
         }

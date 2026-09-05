@@ -43,6 +43,12 @@ const config = require('../config/app');
 const Post = require('../models/Post');
 const collab = require('../core/collab-rooms');
 const { routeIdOrNull } = require('../core/query-params');
+/**
+ * @swagger
+ * tags:
+ *   name: Collaboration
+ *   description: Real-time collaborative editing for the Verso editor - a Server-Sent Events downstream channel plus small JSON uploads for CRDT operations, presence, resynchronisation and leaving. These routes are always mounted by the backend; the switch is CLIENT side and defaults to ON - a deployment turns it off with NEXT_PUBLIC_WORDJS_COLLAB=off, and a single browser with localStorage.wordjs_collab set to off, in which case the editor opens no connection at all. Authentication is the ordinary session cookie or bearer token; a token is never accepted from the query string. Authorization is per post and identical to PUT /posts/{id}. The replica identity is the siteId nonce bound to the SSE connection at join time, and every upload must present a siteId that belongs to a live connection of the calling user; the server derives the authoritative replica id itself and never trusts a user id sent by a client. Every operation is re-parsed and sanitised with the same sanitizer the ordinary write path uses before it is stored or broadcast.
+ */
 
 /* ------------------------------------------------------------------------------------------- */
 /* Gates                                                                                         */
@@ -296,6 +302,44 @@ async function connGate(req: Request, res: Response): Promise<any | null> {
 /* GET /:postId/stream — canal de BAJADA (SSE)                                                   */
 /* ------------------------------------------------------------------------------------------- */
 
+/**
+ * @swagger
+ * /collab/{postId}/stream:
+ *   get:
+ *     summary: Open the collaborative session for one post (Server-Sent Events)
+ *     description: Long-lived text/event-stream response and the only way to join a room. The global CSRF middleware does not cover GET, so this route checks Origin/Referer itself and answers 403 rest_csrf_invalid for a cross-site request; a non-browser client with a bearer token and no Origin or Referer is allowed. The first frame is welcome, carrying the epoch, the base snapshot, the operations recorded after it, the current members, the server-derived self identity and the limits block (maxOpsPerSec, maxBytesPerSec, maxFrameBytes, rateRetryMs) that the client must obey. Later frames are ops, presence, members, warning and error. The session is re-authorised while it is open, so signing out, a password change, an expired or revoked token, or losing the capability closes the stream with an error frame carrying unauthorized. A refusal to join is also delivered inside the stream (the headers are already sent) as an error frame with a code, a retryable flag and retryAfterMs.
+ *     tags: [Collaboration]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: postId
+ *         required: true
+ *         schema:
+ *           type: integer
+ *       - in: query
+ *         name: siteId
+ *         required: true
+ *         description: Replica nonce chosen by the client. It must match s_ followed by 1 to 32 base32 characters. It is a nonce, not an identity - the server derives the replica id from it and the authenticated user id.
+ *         schema:
+ *           type: string
+ *           pattern: '^s_[a-z2-7]{1,32}$'
+ *     responses:
+ *       200:
+ *         description: The event stream. Frames are welcome, ops, presence, members, warning and error.
+ *         content:
+ *           text/event-stream:
+ *             schema:
+ *               type: string
+ *       400:
+ *         description: Unusable post id (rest_invalid_param) or a malformed siteId (collab_bad_site)
+ *       401:
+ *         description: Not logged in (rest_not_logged_in)
+ *       403:
+ *         description: Cross-site request blocked (rest_csrf_invalid), or you cannot edit this post (rest_forbidden)
+ *       404:
+ *         description: Post not found (rest_post_invalid)
+ */
 router.get('/:postId/stream', authenticate, asyncHandler(async (req: Request, res: Response) => {
     const postId = parsePostId(req.params.postId);
     if (postId === null) {
@@ -428,6 +472,99 @@ router.get('/:postId/stream', authenticate, asyncHandler(async (req: Request, re
 /* POST /:postId/ops — SUBIDA                                                                    */
 /* ------------------------------------------------------------------------------------------- */
 
+/**
+ * @swagger
+ * /collab/{postId}/ops:
+ *   post:
+ *     summary: Upload CRDT operations to a collaborative session
+ *     description: The upstream half of the transport. A cookie-authenticated client must send the double-submit CSRF header X-CSRF-Token matching the wjs_csrf cookie, and the request must be same-origin; a bearer client carries no ambient credential and needs neither. Each operation must declare the same siteId the caller bound to its live stream. Accepted operations are broadcast to the other members but not echoed back to the sender, which is why rejected and normalized travel in the response - they are the only way the sender learns that something of its own was refused or rewritten by the sanitiser.
+ *     tags: [Collaboration]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: postId
+ *         required: true
+ *         schema:
+ *           type: integer
+ *       - in: header
+ *         name: X-CSRF-Token
+ *         required: false
+ *         description: Required for cookie-authenticated clients; it must equal the wjs_csrf cookie.
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [siteId, ops]
+ *             properties:
+ *               siteId:
+ *                 type: string
+ *                 description: The replica nonce this caller presented on its live SSE stream. It must belong to a live connection of the calling user.
+ *               rateAck:
+ *                 type: integer
+ *                 description: Serial number of the last rate notice received, echoed back to acknowledge the wait.
+ *               rateSeal:
+ *                 type: string
+ *                 description: Seal that came with that notice. A serial without its seal identifies no connection and is ignored.
+ *               epoch:
+ *                 type: integer
+ *                 description: The room epoch the client believes it is on. A mismatch is refused with collab_epoch rather than silently rebased.
+ *               ops:
+ *                 type: array
+ *                 description: CRDT operations, each declaring the same siteId as the connection.
+ *                 items:
+ *                   type: object
+ *               txId:
+ *                 description: Opaque client correlation id, echoed back untouched.
+ *     responses:
+ *       200:
+ *         description: The frame was processed. Some operations may still have been rejected individually.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 ok:
+ *                   type: boolean
+ *                 txId:
+ *                   nullable: true
+ *                 accepted:
+ *                   type: integer
+ *                 known:
+ *                   type: integer
+ *                   description: Operations the room had already seen (a safe replay).
+ *                 rejected:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                 persisted:
+ *                   type: boolean
+ *                 normalized:
+ *                   type: array
+ *                   description: Operations the sanitiser rewrote, so the sender can adopt the stored value.
+ *                   items:
+ *                     type: object
+ *       400:
+ *         description: Unusable post id (rest_invalid_param), or a frame the validator refused as a WHOLE - ops that is not an array, or an array longer than the advertised ops-per-frame limit (collab_bad_frame). A single unusable op inside an otherwise valid frame is not an error - it comes back in the 200 response's rejected list.
+ *       401:
+ *         description: Not logged in (rest_not_logged_in)
+ *       403:
+ *         description: You cannot edit this post (rest_forbidden). Authorization is the same gate PUT /posts/{id} applies - there is no reader mode.
+ *       404:
+ *         description: Post not found (rest_post_invalid)
+ *       409:
+ *         description: No live SSE session for that siteId (collab_no_session), the connection is closed (collab_closed), or the room epoch moved and the document must be reloaded (collab_epoch)
+ *       413:
+ *         description: Frame larger than the advertised maxFrameBytes (collab_frame_too_large)
+ *       429:
+ *         description: Rate limited (collab_rate_limit). The body carries retryAfterMs, rateNotice and rateSeal; the next upload must echo both rateAck and rateSeal or the refusal counts as disobedience and, after 3 strikes, the connection is closed.
+ *       503:
+ *         description: The operations could not be stored (collab_store_failed)
+ */
 router.post('/:postId/ops', authenticate, asyncHandler(async (req: Request, res: Response) => {
     const conn = await connGate(req, res);
     if (!conn) return;
@@ -455,6 +592,71 @@ router.post('/:postId/ops', authenticate, asyncHandler(async (req: Request, res:
 /* POST /:postId/presence                                                                        */
 /* ------------------------------------------------------------------------------------------- */
 
+/**
+ * @swagger
+ * /collab/{postId}/presence:
+ *   post:
+ *     summary: Publish this replica cursor and selection to the other members
+ *     description: Ephemeral - presence is broadcast, never stored, and is dropped when the connection ends. Same CSRF rule as the operations route. Rate limited separately from operations at 20 updates per second per connection.
+ *     tags: [Collaboration]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: postId
+ *         required: true
+ *         schema:
+ *           type: integer
+ *       - in: header
+ *         name: X-CSRF-Token
+ *         required: false
+ *         description: Required for cookie-authenticated clients; it must equal the wjs_csrf cookie.
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [siteId]
+ *             properties:
+ *               siteId:
+ *                 type: string
+ *                 description: The replica nonce this caller presented on its live SSE stream. It must belong to a live connection of the calling user.
+ *               rateAck:
+ *                 type: integer
+ *                 description: Serial number of the last rate notice received, echoed back to acknowledge the wait.
+ *               rateSeal:
+ *                 type: string
+ *                 description: Seal that came with that notice. A serial without its seal identifies no connection and is ignored.
+ *               sel:
+ *                 type: object
+ *                 nullable: true
+ *                 description: The cursor or selection to publish. Omit or send null to clear it.
+ *     responses:
+ *       200:
+ *         description: Presence broadcast
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 ok:
+ *                   type: boolean
+ *       400:
+ *         description: Unusable post id (rest_invalid_param)
+ *       401:
+ *         description: Not logged in (rest_not_logged_in)
+ *       403:
+ *         description: You cannot edit this post (rest_forbidden). Authorization is the same gate PUT /posts/{id} applies - there is no reader mode.
+ *       404:
+ *         description: Post not found (rest_post_invalid)
+ *       409:
+ *         description: No live SSE session for that siteId (collab_no_session), the connection is closed (collab_closed), or the room is gone and the client must rejoin (collab_no_room). Presence never compares epochs, so it never answers collab_epoch.
+ *       429:
+ *         description: Rate limited (collab_rate_limit) against the presence bucket, which is separate from the operations one. The body carries retryAfterMs, rateNotice and rateSeal; the next upload must echo both rateAck and rateSeal or the refusal counts as disobedience and, after 3 strikes, the connection is closed.
+ */
 router.post('/:postId/presence', authenticate, asyncHandler(async (req: Request, res: Response) => {
     const conn = await connGate(req, res);
     if (!conn) return;
@@ -470,6 +672,83 @@ router.post('/:postId/presence', authenticate, asyncHandler(async (req: Request,
 /* POST /:postId/resync                                                                          */
 /* ------------------------------------------------------------------------------------------- */
 
+/**
+ * @swagger
+ * /collab/{postId}/resync:
+ *   post:
+ *     summary: Close a gap by version vector after a dropped or delayed stream
+ *     description: The cheapest request to write and the most expensive to serve - it reads the room log - so it is charged against the same token buckets as an upload, with a minimum byte cost taken up front. Same CSRF rule as the operations route. A complete flag of false means the answer was truncated and the client should apply what it got and ask again.
+ *     tags: [Collaboration]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: postId
+ *         required: true
+ *         schema:
+ *           type: integer
+ *       - in: header
+ *         name: X-CSRF-Token
+ *         required: false
+ *         description: Required for cookie-authenticated clients; it must equal the wjs_csrf cookie.
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [siteId]
+ *             properties:
+ *               siteId:
+ *                 type: string
+ *                 description: The replica nonce this caller presented on its live SSE stream. It must belong to a live connection of the calling user.
+ *               rateAck:
+ *                 type: integer
+ *                 description: Serial number of the last rate notice received, echoed back to acknowledge the wait.
+ *               rateSeal:
+ *                 type: string
+ *                 description: Seal that came with that notice. A serial without its seal identifies no connection and is ignored.
+ *               epoch:
+ *                 type: integer
+ *                 description: The room epoch the client believes it is on.
+ *               vv:
+ *                 type: object
+ *                 description: Version vector - the highest sequence this replica has seen per remote replica.
+ *     responses:
+ *       200:
+ *         description: The operations this replica is missing
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 epoch:
+ *                   type: integer
+ *                 ops:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                 base:
+ *                   nullable: true
+ *                   description: The snapshot the operations apply to, sent when the client is too far behind for the log alone.
+ *                 complete:
+ *                   type: boolean
+ *                   description: False when the answer was truncated and another resync is needed.
+ *       400:
+ *         description: Unusable post id (rest_invalid_param)
+ *       401:
+ *         description: Not logged in (rest_not_logged_in)
+ *       403:
+ *         description: You cannot edit this post (rest_forbidden). Authorization is the same gate PUT /posts/{id} applies - there is no reader mode.
+ *       404:
+ *         description: Post not found (rest_post_invalid)
+ *       409:
+ *         description: No live SSE session for that siteId (collab_no_session), or the connection is closed (collab_closed). A resync is never refused for a stale epoch - an epoch the client no longer shares is answered with a 200 carrying the base snapshot to re-seed from.
+ *       429:
+ *         description: Rate limited - either the connection's own upload buckets (collab_rate_limit) or the per-user history-read budget (collab_read_budget), which is a SEPARATE code so a client can slow its reads without also freezing its uploads. Both carry retryAfterMs, rateNotice and rateSeal, and the next upload must echo rateAck and rateSeal.
+ */
 router.post('/:postId/resync', authenticate, asyncHandler(async (req: Request, res: Response) => {
     const conn = await connGate(req, res);
     if (!conn) return;
@@ -488,6 +767,65 @@ router.post('/:postId/resync', authenticate, asyncHandler(async (req: Request, r
 /* POST /:postId/leave                                                                           */
 /* ------------------------------------------------------------------------------------------- */
 
+/**
+ * @swagger
+ * /collab/{postId}/leave:
+ *   post:
+ *     summary: Leave the collaborative session explicitly
+ *     description: What the browser unload handler calls. Closing the SSE connection has the same effect, so this is an optimisation that removes the member immediately instead of waiting for the socket to be noticed as gone.
+ *     tags: [Collaboration]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: postId
+ *         required: true
+ *         schema:
+ *           type: integer
+ *       - in: header
+ *         name: X-CSRF-Token
+ *         required: false
+ *         description: Required for cookie-authenticated clients; it must equal the wjs_csrf cookie.
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [siteId]
+ *             properties:
+ *               siteId:
+ *                 type: string
+ *                 description: The replica nonce this caller presented on its live SSE stream. It must belong to a live connection of the calling user.
+ *               rateAck:
+ *                 type: integer
+ *                 description: Serial number of the last rate notice received, echoed back to acknowledge the wait.
+ *               rateSeal:
+ *                 type: string
+ *                 description: Seal that came with that notice. A serial without its seal identifies no connection and is ignored.
+ *     responses:
+ *       200:
+ *         description: Left the session
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 ok:
+ *                   type: boolean
+ *       400:
+ *         description: Unusable post id (rest_invalid_param)
+ *       401:
+ *         description: Not logged in (rest_not_logged_in)
+ *       403:
+ *         description: You cannot edit this post (rest_forbidden). Authorization is the same gate PUT /posts/{id} applies - there is no reader mode.
+ *       404:
+ *         description: Post not found (rest_post_invalid)
+ *       409:
+ *         description: No live SSE session for that siteId (collab_no_session). Leaving is not rate limited and does not compare epochs, so it answers none of collab_closed, collab_epoch, collab_frame_too_large or collab_rate_limit - once the connection is found, the departure always succeeds.
+ */
 router.post('/:postId/leave', authenticate, asyncHandler(async (req: Request, res: Response) => {
     const conn = await connGate(req, res);
     if (!conn) return;

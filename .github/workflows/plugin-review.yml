@@ -1,0 +1,202 @@
+name: Plugin review
+
+# THE MECHANICAL HALF OF marketplace/REVIEW.md.
+#
+# Runs the checks of REVIEW.md §3 against the plugin package(s) a pull request touches, so that a human
+# reviewer only ever spends their attention on §4 — permission minimality, data handling, admin UI
+# safety, the update path — and never on whether the manifest has an author or whether the zip is
+# installable. Both halves have to exist for the "reviewed" badge to mean anything; this is the half a
+# machine can do.
+#
+# THIS IS NOT A REQUIRED CHECK YET, deliberately. Making it required is a repository setting, and today
+# every package under marketplace/plugins/ is first-party: the job would gate the project's own
+# maintenance before it ever gated a submission. IT SHOULD BE MADE REQUIRED ON THE FIRST EXTERNAL
+# SUBMISSION — at that moment a red run stops being a note to ourselves and becomes the thing standing
+# between an unreviewed third party and the catalog.
+#
+# WHAT §3.3 ACTUALLY MEANS HERE, PRECISELY. .github/workflows/sandbox-parity.yml runs on this same pull
+# request and certifies THE SANDBOX on four runners — the native confinement (Landlock + seccomp,
+# Seatbelt, AppContainer) and the JS guard layer, exercised with its own fixed probes and real malicious
+# plugins through the real RPC path. It does NOT install the submitted package and does not boot it on
+# three operating systems: it never reads marketplace/ at all. So what a green matrix tells a reviewer
+# is that the walls the submission will run inside hold on every OS — not that this submission runs
+# confined on every OS. That is why REVIEW.md §4's update path asks the author to test it themselves.
+#
+# Actions are referenced exactly as the other workflows in this directory reference them: first-party
+# actions by major tag, and any third-party action by immutable commit SHA (see release.yml). This job
+# uses no third-party actions, so there is nothing here to pin.
+
+on:
+  pull_request:
+    paths:
+      - 'marketplace/plugins/**'
+      - 'marketplace/reviews.json'
+  workflow_dispatch:
+    inputs:
+      slug:
+        description: 'Plugin slug under marketplace/plugins/ (leave blank to check every package)'
+        required: false
+        type: string
+
+# The job only READS the repository. The result is published to the run's own step summary rather than
+# as a pull-request comment precisely so this stays true: a comment would need `pull-requests: write`,
+# a scope that a submission's own dependencies would inherit during `npm ci`. A submission is untrusted
+# code by definition — that is the entire premise of reviewing it — so it does not get a writable token.
+permissions:
+  contents: read
+
+concurrency:
+  group: plugin-review-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    name: Submission checks (REVIEW.md §2-3)
+    runs-on: ubuntu-latest
+    # Every job in this repository carries one, because GitHub's default is SIX HOURS and a hung step is
+    # otherwise indistinguishable from a slow one. The work here is an install, a compile and two scans.
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The changed-plugin diff below needs the pull request's base commit, which a shallow
+          # checkout does not have.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+
+      # THE LEDGER IS NOT PART OF A SUBMISSION.
+      #
+      # marketplace/reviews.json is a tracked file and `on.paths` above accepts a pull request that
+      # edits it. Nothing downstream asks WHO wrote a record: verify-marketplace.js checks that the
+      # catalog agrees with the ledger and that the ledger agrees with the manifest, which a submitter
+      # appending their own `{"status":"reviewed", "reviewer":"<their handle>", …}` satisfies perfectly —
+      # the hashes are computed from their own package. Every mechanical check goes green and the only
+      # control left is a maintainer noticing a reviews.json hunk inside a large diff, which is exactly
+      # the "good intentions of whoever edits the ledger" REVIEW.md §8 says it does not rely on.
+      #
+      # So the combination is refused outright, before anything else runs. A review is recorded by a
+      # reviewer, in its own pull request, on top of the submission that has already landed or been
+      # read. .github/CODEOWNERS then decides who may open that second pull request.
+      - name: A submission may not write the review ledger
+        if: github.event_name == 'pull_request'
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          ledger="$(git diff --name-only --merge-base "$BASE_SHA" "$HEAD_SHA" -- marketplace/reviews.json)"
+          packages="$(git diff --name-only --merge-base "$BASE_SHA" "$HEAD_SHA" -- marketplace/plugins/)"
+          if [ -n "$ledger" ] && [ -n "$packages" ]; then
+            echo "::error file=marketplace/reviews.json::This pull request edits both a plugin package and marketplace/reviews.json. The review ledger is written by a REVIEWER, in a separate pull request — a submission that records its own review is not a review (REVIEW.md §5, §8). Split the change: the package here, the ledger record in its own pull request."
+            exit 1
+          fi
+          if [ -n "$ledger" ]; then
+            echo "::notice file=marketplace/reviews.json::Ledger-only change — the badge itself. The catalog integrity step below re-derives every published review from this file and binds each 'reviewed' record to the permissions, version and contents it was granted against."
+          fi
+
+      - name: Which packages does this change touch?
+        id: changed
+        shell: bash
+        # Inputs are read through the environment, never interpolated into the script body: `${{ }}`
+        # expansion happens BEFORE bash sees the line, so a slug containing shell metacharacters would
+        # execute as part of this step. The slug is then matched against [a-z0-9-] before it is ever
+        # used as a path component.
+        env:
+          SLUG_INPUT: ${{ inputs.slug }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [ -n "${SLUG_INPUT:-}" ]; then
+            slugs="$SLUG_INPUT"
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            slugs="$(ls marketplace/plugins)"
+          else
+            slugs="$(git diff --name-only --merge-base "$BASE_SHA" "$HEAD_SHA" -- marketplace/plugins/ \
+              | awk -F/ 'NF > 2 { print $3 }' | sort -u)"
+          fi
+
+          # A pull request that touches ONLY the ledger changes no package, so `slugs` is empty and every
+          # step below used to be skipped — a fully green run on the one change that actually GRANTS a
+          # badge, which is the highest-privilege change this workflow claims to cover. The catalog
+          # integrity step is what reads the ledger, so it has to run for that case too.
+          ledger=false
+          if [ "${{ github.event_name }}" = "pull_request" ] \
+            && [ -n "$(git diff --name-only --merge-base "$BASE_SHA" "$HEAD_SHA" -- marketplace/reviews.json)" ]; then
+            ledger=true
+          fi
+          echo "ledger=$ledger" >> "$GITHUB_OUTPUT"
+
+          checked=""
+          for slug in $slugs; do
+            if ! printf '%s' "$slug" | grep -Eq '^[a-z0-9][a-z0-9-]*$'; then
+              echo "::error::Refusing slug '$slug' — a plugin slug is [a-z0-9-]."
+              exit 1
+            fi
+            if [ ! -d "marketplace/plugins/$slug" ]; then
+              echo "::notice::Skipping '$slug' — no package under marketplace/plugins/ (deleted in this change?)."
+              continue
+            fi
+            checked="$checked $slug"
+          done
+
+          echo "slugs=$(echo $checked)" >> "$GITHUB_OUTPUT"
+          echo "Packages to check:${checked:- (none)}"
+
+      - name: Install backend dependencies
+        if: steps.changed.outputs.slugs != '' || steps.changed.outputs.ledger == 'true'
+        working-directory: backend
+        run: npm ci || npm install
+
+      - name: Build the backend (the scanner runs from compiled dist, as production does)
+        id: build
+        if: steps.changed.outputs.slugs != '' || steps.changed.outputs.ledger == 'true'
+        working-directory: backend
+        run: npm run build
+
+      - name: Manifest requirements (REVIEW.md §2)
+        if: ${{ steps.build.outcome == 'success' && steps.changed.outputs.slugs != '' }}
+        run: node backend/scripts/scan-plugin.mjs --only=manifest ${{ steps.changed.outputs.slugs }}
+
+      - name: AST scan (REVIEW.md §3.2 — the same scan an admin's own upload gets)
+        # Runs even when the manifest step above FAILED, so an author fixing one problem at a time sees
+        # every mechanical finding in one run rather than one per push. Still skipped when the build
+        # never produced a scanner to run.
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.changed.outputs.slugs != '' }}
+        run: node backend/scripts/scan-plugin.mjs --only=scan ${{ steps.changed.outputs.slugs }}
+
+      - name: Catalog integrity and the review ledger (REVIEW.md §3.4, §6, §8)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        # verify-marketplace.js is what enforces the parts of the policy that outlive the submission:
+        # the package is installable and reproducible, the published `review` matches the tracked
+        # ledger, a "reviewed" plugin's permissions/version/contents have not moved since the review
+        # that granted the badge, a first-party plugin is never marked "reviewed", and "first-party" is
+        # never claimed by a package the project did not write.
+        run: |
+          node backend/scripts/build-marketplace.js
+          node backend/scripts/verify-marketplace.js --rebuild
+
+      - name: What a human still has to do
+        if: ${{ !cancelled() && steps.changed.outputs.slugs != '' }}
+        shell: bash
+        run: |
+          {
+            echo "### Still needs a human (REVIEW.md §4)"
+            echo
+            echo "The checks above are mechanical. None of them is a security review, and a green run is"
+            echo "not a reason to accept a submission. A reviewer must still read and write down:"
+            echo
+            echo "- **Permission minimality** — is every requested capability used, and is each the narrowest that works?"
+            echo "- **Data handling** — what personal data is collected, where it is stored, whether it leaves the installation."
+            echo "- **Admin UI content safety** — is anything the plugin did not produce rendered into the admin screen unescaped?"
+            echo "- **Update path** — does it migrate its own tables and survive deactivate/reactivate on a populated database?"
+            echo "- **Runs confined on Linux, macOS and Windows** — the \`Sandbox parity\` workflow on this pull request certifies the SANDBOX on four runners; it never reads \`marketplace/\`, so it does not install this package or boot it anywhere. Confirm the author tested the plugin under all three (§3.3, §4)."
+            echo
+            echo "Policy: [marketplace/REVIEW.md](${{ github.server_url }}/${{ github.repository }}/blob/${{ github.event.pull_request.head.sha || github.sha }}/marketplace/REVIEW.md)"
+          } >> "$GITHUB_STEP_SUMMARY"

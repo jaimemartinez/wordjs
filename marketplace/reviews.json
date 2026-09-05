@@ -1,0 +1,126 @@
+{
+    "analytics-tag": {
+        "status": "first-party",
+        "notes": "Maintained in this repository by the WordJS project; not independently reviewed."
+    },
+    "auctions": {
+        "status": "first-party",
+        "notes": "Maintained in this repository by the WordJS project; not independently reviewed."
+    },
+    "bookings": {
+        "status": "first-party",
+        "notes": "Maintained in this repository by the WordJS project; not independently reviewed."
+    },
+    "breadcrumbs": {
+        "status": "first-party",
+        "notes": "Maintained in this repository by the WordJS project; not independently reviewed."
+    },
+    "card-gallery": {
+        "status": "first-party",
+        "notes": "Maintained in this repository by the WordJS project; not independently reviewed."
+    },
+    "conference-manager": {
+        "status": "first-party",
+        "notes": "Maintained in this repository by the WordJS project; not independently reviewed."
+    },
+    "contact-forms": {
+        "status": "first-party",
+        "notes": "Maintained in this repository by the WordJS project; not independently reviewed."
+    },
+    "cookie-consent": {
+        "status": "first-party",
+        "notes": "Maintained in this repository by the WordJS project; not independently reviewed."
+    },
+    "digital-downloads": {
+        "status": "first-party",
+        "notes": "Maintained in this repository by the WordJS project; not independently reviewed."
+    },
+    "donations": {
+        "status": "first-party",
+        "notes": "Maintained in this repository by the WordJS project; not independently reviewed."
+    },
+    "event-tickets": {
+        "status": "first-party",
+        "notes": "Maintained in this repository by the WordJS project; not independently reviewed."
+    },
+    "events-calendar": {
+        "status": "first-party",
+        "notes": "Maintained in this repository by the WordJS project; not independently reviewed."
+    },
+    "faq": {
+        "status": "first-party",
+        "notes": "Maintained in this repository by the WordJS project; not independently reviewed."
+    },
+    "image-lightbox": {
+        "status": "first-party",
+        "notes": "Maintained in this repository by the WordJS project; not independently reviewed."
+    },
+    "invoices": {
+        "status": "first-party",
+        "notes": "Maintained in this repository by the WordJS project; not independently reviewed."
+    },
+    "job-board": {
+        "status": "first-party",
+        "notes": "Maintained in this repository by the WordJS project; not independently reviewed."
+    },
+    "mail-server": {
+        "status": "first-party",
+        "notes": "Maintained in this repository by the WordJS project; not independently reviewed."
+    },
+    "newsletter": {
+        "status": "first-party",
+        "notes": "Maintained in this repository by the WordJS project; not independently reviewed."
+    },
+    "notification-bar": {
+        "status": "first-party",
+        "notes": "Maintained in this repository by the WordJS project; not independently reviewed."
+    },
+    "online-store": {
+        "status": "first-party",
+        "notes": "Maintained in this repository by the WordJS project; not independently reviewed."
+    },
+    "photo-carousel": {
+        "status": "first-party",
+        "notes": "Maintained in this repository by the WordJS project; not independently reviewed."
+    },
+    "polls": {
+        "status": "first-party",
+        "notes": "Maintained in this repository by the WordJS project; not independently reviewed."
+    },
+    "popup-builder": {
+        "status": "first-party",
+        "notes": "Maintained in this repository by the WordJS project; not independently reviewed."
+    },
+    "related-posts": {
+        "status": "first-party",
+        "notes": "Maintained in this repository by the WordJS project; not independently reviewed."
+    },
+    "restaurant-menu": {
+        "status": "first-party",
+        "notes": "Maintained in this repository by the WordJS project; not independently reviewed."
+    },
+    "social-share": {
+        "status": "first-party",
+        "notes": "Maintained in this repository by the WordJS project; not independently reviewed."
+    },
+    "table-of-contents": {
+        "status": "first-party",
+        "notes": "Maintained in this repository by the WordJS project; not independently reviewed."
+    },
+    "testimonials": {
+        "status": "first-party",
+        "notes": "Maintained in this repository by the WordJS project; not independently reviewed."
+    },
+    "vendor-marketplace": {
+        "status": "first-party",
+        "notes": "Maintained in this repository by the WordJS project; not independently reviewed."
+    },
+    "video-gallery": {
+        "status": "first-party",
+        "notes": "Maintained in this repository by the WordJS project; not independently reviewed."
+    },
+    "youtube-videos": {
+        "status": "first-party",
+        "notes": "Maintained in this repository by the WordJS project; not independently reviewed."
+    }
+}

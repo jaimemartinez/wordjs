@@ -131,8 +131,17 @@ export default async function PublicLayout({
             footerMenu={footerMenu?.items}
             footerSocials={footerSocials}
         >
-            {/* RSS auto-discovery — React hoists this to <head> on every public page */}
-            <link rel="alternate" type="application/rss+xml" title={settings?.blogname || "RSS"} href="/feed" />
+            {/* Feed auto-discovery — React hoists these to <head> on every public page.
+                The hrefs are the PUBLIC feed URLs, the ones a reader guesses and a validator expects:
+                `/feed.xml`, `/feed.atom`, `/feed.json`, each a route handler in this same tree
+                (`_seo/upstream.ts`) that streams the backend's `/api/v1/seo/…` document through
+                unchanged. They used to point straight at that backend prefix, which answers, but which
+                `robots.txt` tells crawlers to stay out of (`Disallow: /api/`). Three formats, one item source:
+                RSS 2.0 for the readers that only speak it, Atom for the validators that prefer it,
+                JSON Feed for anything modern. */}
+            <link rel="alternate" type="application/rss+xml" title={settings?.blogname || "RSS"} href="/feed.xml" />
+            <link rel="alternate" type="application/atom+xml" title={`${settings?.blogname || "Atom"} (Atom)`} href="/feed.atom" />
+            <link rel="alternate" type="application/feed+json" title={`${settings?.blogname || "JSON"} (JSON Feed)`} href="/feed.json" />
             {/* Transiciones entre páginas (C1): dos reglas de CSS, cero JS. Van en el LAYOUT porque
                 la variante entre documentos necesita la regla en el documento que sale y en el que
                 entra; aquí, toda página pública la lleva. Apagado por defecto. */}

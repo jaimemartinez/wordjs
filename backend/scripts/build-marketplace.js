@@ -18,6 +18,10 @@ const { spawnSync } = require('child_process');
 // never by naming one manifest key here: a local copy of this logic already drifted once (it looked
 // for `frontend.component.entry`, a key that never existed) and shipped bundle-less zips.
 const { readDeclaredBlockEntry } = require('./plugin-block-contract');
+// The review programme (marketplace/REVIEW.md). Every catalog entry publishes a `review` object
+// derived from the tracked ledger marketplace/reviews.json — never invented here, and never defaulting
+// to anything more flattering than `unreviewed`.
+const { readLedger, reviewFor } = require('./marketplace-review');
 
 // Repo root. WORDJS_MARKETPLACE_ROOT lets the catalog tests drive THIS script (the real producer)
 // over a small fixture tree instead of re-implementing the packing rules in the test — a test whose
@@ -85,7 +89,7 @@ function buildFrontendBundles(slug, manifest) {
     }
 }
 
-function buildOne(slug) {
+function buildOne(slug, ledger) {
     const dir = path.join(SRC, slug);
     const manifestPath = path.join(dir, 'manifest.json');
     if (!fs.existsSync(manifestPath)) throw new Error(`${slug}: missing manifest.json`);
@@ -133,6 +137,10 @@ function buildOne(slug) {
         description: manifest.description || '',
         author: manifest.author || '',
         category: CATEGORIES[slug] || 'General',
+        // Review programme (marketplace/REVIEW.md). Read from the tracked ledger, defaulting to
+        // `unreviewed` for a slug nobody has recorded a decision about — the badge is something a human
+        // grants in a committed file, never something the build infers from the plugin being present.
+        review: reviewFor(ledger, slug),
         permissions: manifest.permissions || [],
         hasAdminPage: !!(fe.adminPage && fe.adminPage.entry),
         hasVersoBlock: !!declaredBlock,
@@ -196,14 +204,18 @@ function main() {
     fs.rmSync(DIST, { recursive: true, force: true });
     fs.mkdirSync(DIST, { recursive: true });
 
+    // Read ONCE, before any packing: a malformed ledger throws here (readLedger validates it), so the
+    // build fails outright instead of quietly stamping `unreviewed` onto every entry in the catalog.
+    const ledger = readLedger(ROOT);
+
     const slugs = fs.readdirSync(SRC, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name).sort();
     const entries = [];
     const failures = [];
     for (const slug of slugs) {
         try {
-            const entry = buildOne(slug);
+            const entry = buildOne(slug, ledger);
             entries.push(entry);
-            console.log(`  ✓ ${entry.file}  (${(entry.size / 1024).toFixed(1)} KB, ${entry.category})`);
+            console.log(`  ✓ ${entry.file}  (${(entry.size / 1024).toFixed(1)} KB, ${entry.category}, ${entry.review.status})`);
         } catch (e) {
             failures.push(`${slug}: ${e.message}`);
             console.error(`  ✗ ${slug}: ${e.message}`);

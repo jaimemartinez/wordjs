@@ -146,6 +146,29 @@ just report what you find through the private channel first.
 - **Docs** — the honest kind: what a capability grants, how to import from WordPress, how to write a
   theme.
 
+## Submitting a plugin
+
+The marketplace catalog is open to outside authors, and the policy is public:
+**[`marketplace/REVIEW.md`](marketplace/REVIEW.md)**. Read §1 first — it says plainly what the
+"reviewed" badge certifies (that a human read the submission against a written checklist and signed
+it) and what it does not (it is not a security audit; the sandbox is where isolation actually lives).
+
+1. Build against the sandbox — [`documentation/plugins.md`](documentation/plugins.md) §7 covers the
+   permissions manifest and the AST scanner, §12 the per-plugin capability grants an administrator
+   grants one at a time.
+2. Open a pull request adding `marketplace/plugins/<slug>/` with the submission template — GitHub's
+   template chooser exists for issues only, so it has to be named in the URL:
+   **<https://github.com/jaimemartinez/wordjs/compare?template=plugin-submission.md>**. Without the
+   `?template=` parameter you get the repository's default template, not the submission checklist.
+3. The **Plugin review** workflow runs the mechanical checks (REVIEW.md §3). Green means a reviewer
+   picks it up; it is not itself an approval. The review record in `marketplace/reviews.json` is
+   written by the reviewer in a separate pull request — one that changes both a package and the
+   ledger is refused.
+4. Expect questions about permission minimality — it is the item most submissions fail.
+
+Found a security issue in a plugin that is already published? That is not a pull request — see
+[`SECURITY.md`](SECURITY.md).
+
 ## Licensing
 
 WordJS is **MIT-licensed**. By contributing, you agree that your contributions are licensed under the
