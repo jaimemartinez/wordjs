@@ -548,22 +548,10 @@ export default function VersoEditor({
 
     /* ---------------- guardado: manual + autosave + preview ---------------- */
 
-    /**
-     * Envío del outbox de colaboración ANTES de un guardado explícito: el snapshot que se persiste
-     * y las ops que ven los demás tienen que contar la misma historia. Va por ref para no reordenar
-     * medio componente solo porque `handleManualSave` se declara antes que la sesión.
-     */
-    const collabFlushRef = useRef<(() => Promise<void>) | null>(null);
-
-    const handleManualSave = useCallback(async () => {
-        if (!onSave) return;
-        await collabFlushRef.current?.().catch(() => undefined);
-        const ok = await runManualSave(onSave);
-        if (!ok) return;
-        setSavedAt(new Date());
-        setLastSaveWasAuto(false);
-        setToastMsg(trStr("¡Cambios guardados con éxito!", language));
-    }, [onSave, language]);
+    // `handleManualSave` vive AHORA debajo de la sesión de colaboración (busca «guardado manual»):
+    // necesita el `flush` del outbox y leerlo por ref obligaba a pasar ese ref, durante el render, a
+    // la fábrica de acciones de la paleta — lo que rechaza react-hooks/refs. `collab.flush` es un
+    // useCallback de identidad estable, así que la dependencia no cambia nada de la cadencia.
 
     // Autosave: solo drafts, pisos 8000/30000 (autosavePolicy), flag {autosave:true}, un fallo
     // (ok===false o excepción) no estampa nada — mismo efecto que el wrapper actual (W10).
@@ -639,9 +627,23 @@ export default function VersoEditor({
     const sendCollabCommand = collab.sendCommand;
     const setCollabSelection = collab.setSelection;
     const collabFlush = collab.flush;
-    useEffect(() => {
-        collabFlushRef.current = collabFlush;
-    }, [collabFlush]);
+
+    /* ---------------- guardado manual ---------------- */
+
+    /**
+     * Envío del outbox de colaboración ANTES de un guardado explícito: el snapshot que se persiste
+     * y las ops que ven los demás tienen que contar la misma historia. Con la colaboración apagada
+     * `flush` es un no-op, igual que lo era el ref todavía sin rellenar.
+     */
+    const handleManualSave = useCallback(async () => {
+        if (!onSave) return;
+        await collabFlush().catch(() => undefined);
+        const ok = await runManualSave(onSave);
+        if (!ok) return;
+        setSavedAt(new Date());
+        setLastSaveWasAuto(false);
+        setToastMsg(trStr("¡Cambios guardados con éxito!", language));
+    }, [onSave, language, collabFlush]);
 
     /**
      * SALIDA. El sink del store entrega los comandos EFECTIVOS (índices clampados, `idMap`

@@ -521,10 +521,18 @@ export default function VersoTextSurface({
     const bubbleRef = React.useRef<VersoBubbleMenuHandle | null>(null);
     const sessionRef = React.useRef<SessionState | null>(null);
 
+    // Callbacks del padre por ref: la sesión se monta UNA vez por (useFallback, nodeId, schema) y
+    // sus manejadores tienen que invocar SIEMPRE la última versión sin volver a montarla.
+    // La escritura va en un efecto de layout —escribir un ref durante el render es lo que rechaza
+    // react-hooks/refs—: el ref nace ya sembrado con el primer valor y todas las lecturas
+    // (emitRich/emitPlain, Escape, click fuera, bubble) ocurren en manejadores de evento, es decir
+    // después del commit, así que ninguna llega a ver un valor rancio.
     const onContentRef = React.useRef(onContent);
-    onContentRef.current = onContent;
     const onRequestEndRef = React.useRef(onRequestEnd);
-    onRequestEndRef.current = onRequestEnd;
+    React.useLayoutEffect(() => {
+        onContentRef.current = onContent;
+        onRequestEndRef.current = onRequestEnd;
+    });
 
     React.useLayoutEffect(() => {
         const marker = markerRef.current;
