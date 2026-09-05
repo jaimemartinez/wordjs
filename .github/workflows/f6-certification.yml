@@ -65,7 +65,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: The two F6 suites certify the SAME engine matrix
         run: |
@@ -222,8 +222,8 @@ jobs:
       REDIS_HOST: '127.0.0.1'
       REDIS_PORT: ${{ matrix.redis_port }}
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: 'npm'
@@ -323,7 +323,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: The delegated workflow exists and still certifies Linux, Windows and macOS
         run: |
           set -u
