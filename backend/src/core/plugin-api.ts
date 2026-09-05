@@ -494,7 +494,7 @@ const PREFIX_REGISTRY_FILE = path.join(ROOT_DIR, 'data', 'wjp-prefix-registry.js
 // readable ONLY by that creator, regardless of prefix math. Stored in the same plugin-untouchable registry
 // under '@<table>' keys (a real prefix starts with 'wjp_', never '@', so the two namespaces never collide).
 const TABLE_CREATORS = new Map<string, string>();
-function loadPersistedPrefixes(): void {
+function loadPersistedPrefixesImpl(): void {
     try {
         const obj = JSON.parse(require('fs').readFileSync(PREFIX_REGISTRY_FILE, 'utf8'));
         if (obj && typeof obj === 'object') {
@@ -506,7 +506,7 @@ function loadPersistedPrefixes(): void {
         }
     } catch { /* registry absent/unreadable — the dir seed still applies */ }
 }
-function persistRegistry(key: string, slug: string): void {
+function persistRegistryImpl(key: string, slug: string): void {
     try {
         const fsm = require('fs');
         let obj: any = {};
@@ -517,6 +517,15 @@ function persistRegistry(key: string, slug: string): void {
         fsm.writeFileSync(PREFIX_REGISTRY_FILE, JSON.stringify(obj));
     } catch { /* best effort — in-memory + dir seed remain the fallback */ }
 }
+// THE REGISTRY FILE IS HOST BOOKKEEPING, SO IT IS TOUCHED AS THE HOST. These three run from bridge
+// calls made inside runWithContext(slug) (createPluginTable → recordTableCreator, the boot seed), and
+// io-guard attributes every fs call in that context to the plugin; data/wjp-prefix-registry.json is on
+// its plugin-untouchable list, so the host's own persistence was being refused as a plugin write —
+// silently (best effort), which left table ownership in memory only and re-seeded on every boot.
+// runAsHost() clears the plugin from the context for exactly these calls; the paths are constants.
+function loadPersistedPrefixes(): void { require('./plugin-context').runAsHost(() => loadPersistedPrefixesImpl()); }
+function persistRegistry(key: string, slug: string): void { require('./plugin-context').runAsHost(() => persistRegistryImpl(key, slug)); }
+function ensureAllPrefixesClaimed() { return require('./plugin-context').runAsHost(() => ensureAllPrefixesClaimedImpl()); }
 function persistPrefix(prefix: string, slug: string): void { persistRegistry(prefix, slug); }
 // Record `table` as created by `slug` (idempotent, in-memory + on disk). First-creator wins.
 function recordTableCreator(table: string, slug: string): void {
@@ -527,7 +536,7 @@ function recordTableCreator(table: string, slug: string): void {
 }
 
 let _allPrefixesClaimed = false;
-function ensureAllPrefixesClaimed() {
+function ensureAllPrefixesClaimedImpl() {
     if (_allPrefixesClaimed) return;
     _allPrefixesClaimed = true;
     try {

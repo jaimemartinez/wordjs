@@ -275,6 +275,24 @@ test('io-guard: DB file blocked in the child, allowed (read AND write) for the h
     } finally { if (prev === undefined) delete g.__WORDJS_ISOLATED__; else g.__WORDJS_ISOLATED__ = prev; }
 });
 
+// The host's own bookkeeping files are touched AS THE HOST even when the trigger is a bridged plugin
+// call. io-guard attributes fs access inside runWithContext(slug) to the plugin, and the table-prefix
+// registry (data/wjp-prefix-registry.json) is plugin-untouchable by design — so core's persistence of
+// it, triggered from a plugin's createPluginTable, was being refused as if the plugin had written it.
+test('io-guard: the prefix registry stays plugin-untouchable, and the host reaches it through runAsHost', async () => {
+    const { isPathSafe } = require('../core/io-guard');
+    const { runAsHost } = require('../core/plugin-context');
+    const root = path.resolve(__dirname, '../../');
+    const registry = path.join(root, 'data', 'wjp-prefix-registry.json');
+    await runWithContext(SLUG, async () => {
+        assert.equal(isPathSafe(registry, false), false, 'a plugin must not read the ownership registry');
+        assert.equal(isPathSafe(registry, true), false, 'a plugin must not write the ownership registry');
+        assert.equal(runAsHost(() => isPathSafe(registry, true)), true, 'the host may persist its own registry');
+        assert.equal(runAsHost(() => isPathSafe(registry, false)), true);
+        // and the context is restored after the host detour
+        assert.equal(isPathSafe(registry, true), false);
+    });
+});
 // provideMail (becoming the host-wide mail sender) requires the explicit `email:provider` grant —
 // there is no trusted bypass. The test plugin neither declares nor is granted it, so it's denied.
 test('bridge provideMail requires the email:provider grant (no bypass)', async () => {
