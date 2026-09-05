@@ -76,7 +76,9 @@ kept verbatim in `turnaround-followups-2026-09-04.md` for the next triage.
 
 ## Phase 8 — Documentation, changelog, release 2.2.0
 
-- [ ] SECURITY.md Known Limitations, README, POSITIONING updated; CHANGELOG entry; tag cut on green CI.
+- [x] SECURITY.md Known Limitations, README, POSITIONING updated; CHANGELOG entry (`[2.2.0] - 2026-09-05`);
+      version 2.2.0 in the manifests, the Helm chart and the deployment examples. The tag `v2.2.0` is cut on the
+      merged `main` of this phase's pull request once its required checks are green.
 
 ## Needs a person (prepared, not flippable from the repository)
 

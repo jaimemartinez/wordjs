@@ -384,10 +384,10 @@ Then `GET /api/v1/setup/status` reports `"installed":true` and `/readyz` turns 2
 A minimal chart lives at **[`deploy/helm/wordjs`](../deploy/helm/wordjs)**.
 
 ```bash
-docker build -t <registry>/wordjs:2.1.0 . && docker push <registry>/wordjs:2.1.0
+docker build -t <registry>/wordjs:2.2.0 . && docker push <registry>/wordjs:2.2.0
 helm install wordjs deploy/helm/wordjs \
   --namespace wordjs --create-namespace \
-  --set image.repository=<registry>/wordjs --set image.tag=2.1.0 \
+  --set image.repository=<registry>/wordjs --set image.tag=2.2.0 \
   --set siteUrl=https://cms.example.com \
   --set installToken.value="$(openssl rand -hex 24)"
 kubectl -n wordjs port-forward deployment/wordjs 3000:3000   # then browse /install
