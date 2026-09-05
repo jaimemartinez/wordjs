@@ -430,10 +430,19 @@ export function MenuItemsPanel({ binding }: { binding: MenuBinding }) {
 
     // Un cargador POR MONTAJE del panel: su guardia de secuencia descarta resoluciones rancias
     // (la carrera del refetch de mutación lento contra una carga más nueva).
+    //
+    // Se materializa PEREZOSAMENTE dentro de `load`, no en el cuerpo del render: `commit` lee
+    // `deadRef`, y tanto mirar `loaderRef.current` como pasar un lector de refs a createMenuLoader
+    // durante el render es lo que rechaza react-hooks/refs. Sigue habiendo UN solo cargador por
+    // montaje —el ref sobrevive a los renders— y por tanto UNA sola guardia de secuencia; `load` no
+    // se llama nunca en render (solo desde efectos y manejadores), así que la primera carga sigue
+    // ocurriendo en el mismo momento que antes.
     const loaderRef = React.useRef<((b: MenuBinding) => Promise<void>) | null>(null);
-    if (!loaderRef.current) loaderRef.current = createMenuLoader(menusApi, commit);
 
-    const load = React.useCallback((): Promise<void> => loaderRef.current!(binding), [binding]);
+    const load = React.useCallback((): Promise<void> => {
+        if (loaderRef.current == null) loaderRef.current = createMenuLoader(menusApi, commit);
+        return loaderRef.current(binding);
+    }, [binding, commit]);
 
     React.useEffect(() => {
         setStatus("loading");

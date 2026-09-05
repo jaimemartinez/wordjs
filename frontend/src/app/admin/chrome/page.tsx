@@ -71,9 +71,13 @@ export default function ChromeEditorPage() {
     const baselineJsonRef = useRef<string>("");
     // loadPart must keep a STABLE identity: re-running it reloads the composition and dropría las
     // ediciones sin guardar. The context hands out a NEW t() on every provider render, so read the
-    // translator through a ref instead of depending on it.
+    // translator through a ref instead of depending on it. The ref is SEEDED with the first t() and
+    // refreshed from an effect — writing it during render is what react-hooks/refs refuses, and the
+    // only reads live in async error paths of loadPart, which always run after the commit.
     const tRef = useRef(t);
-    tRef.current = t;
+    useEffect(() => {
+        tRef.current = t;
+    }, [t]);
 
     const loadPart = useCallback(async (target: ChromePart, opts: { skipSite?: boolean } = {}) => {
         setLoading(true);
