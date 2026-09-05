@@ -247,7 +247,7 @@ test('io-guard blocks plugin reads of the database file under data/ (in the chil
 // DB file — but on the HOST the bridge runs callApi in the plugin's context, and the host DB driver
 // must still be allowed to open data/wordjs.db for the plugin's scoped queries. So the DB-file block is
 // child-only; the host driver is allowed only for the configured DB literal, not data/ broadly.
-test('io-guard: DB file blocked in the child, allowed for the host bridge driver', async () => {
+test('io-guard: DB file blocked in the child, allowed (read AND write) for the host bridge driver', async () => {
     const { isPathSafe } = require('../core/io-guard');
     const root = path.resolve(__dirname, '../../');
     const configuredDb = path.resolve(require('../config/app').dbPath);
@@ -258,13 +258,41 @@ test('io-guard: DB file blocked in the child, allowed for the host bridge driver
             delete g.__WORDJS_ISOLATED__;                                    // HOST (bridge driver context)
             assert.equal(isPathSafe(configuredDb, false), true);             // configured host DB → allowed
             assert.equal(isPathSafe(otherDb, false), false);                 // another DB literal stays denied
+            // WRITES TOO. The pure-JS sqlite-legacy driver persists with fs.writeFileSync(dbPath) after
+            // every committed write (drivers/sqlite-legacy.ts save()), and that call runs INSIDE the
+            // plugin's context whenever the bridge serves the plugin's INSERT. Exempting reads only made
+            // every plugin with database:write fail to load on that driver ("tried to WRITE outside safe
+            // zones: data/wordjs.db") while sqlite-native, which writes from C++, never noticed.
+            assert.equal(isPathSafe(configuredDb, true), true);              // host driver flushing the DB → allowed
+            assert.equal(isPathSafe(configuredDb + '-journal', true), true); // …and its sidecars
+            assert.equal(isPathSafe(otherDb, true), false);                  // another DB literal stays denied
+            assert.equal(isPathSafe(path.join(root, 'data', 'notes.db'), true), false); // any other .db under data/
             g.__WORDJS_ISOLATED__ = true;                                   // isolated CHILD (plugin code)
             assert.equal(isPathSafe(configuredDb, false), false);            // plugin reading raw DB → blocked
+            assert.equal(isPathSafe(configuredDb, true), false);             // plugin WRITING the raw DB → blocked
             assert.equal(isPathSafe(path.join(root, '.env'), false), false); // secret file → blocked
         });
     } finally { if (prev === undefined) delete g.__WORDJS_ISOLATED__; else g.__WORDJS_ISOLATED__ = prev; }
 });
 
+// The host's own bookkeeping files are touched AS THE HOST even when the trigger is a bridged plugin
+// call. io-guard attributes fs access inside runWithContext(slug) to the plugin, and the table-prefix
+// registry (data/wjp-prefix-registry.json) is plugin-untouchable by design — so core's persistence of
+// it, triggered from a plugin's createPluginTable, was being refused as if the plugin had written it.
+test('io-guard: the prefix registry stays plugin-untouchable, and the host reaches it through runAsHost', async () => {
+    const { isPathSafe } = require('../core/io-guard');
+    const { runAsHost } = require('../core/plugin-context');
+    const root = path.resolve(__dirname, '../../');
+    const registry = path.join(root, 'data', 'wjp-prefix-registry.json');
+    await runWithContext(SLUG, async () => {
+        assert.equal(isPathSafe(registry, false), false, 'a plugin must not read the ownership registry');
+        assert.equal(isPathSafe(registry, true), false, 'a plugin must not write the ownership registry');
+        assert.equal(runAsHost(() => isPathSafe(registry, true)), true, 'the host may persist its own registry');
+        assert.equal(runAsHost(() => isPathSafe(registry, false)), true);
+        // and the context is restored after the host detour
+        assert.equal(isPathSafe(registry, true), false);
+    });
+});
 // provideMail (becoming the host-wide mail sender) requires the explicit `email:provider` grant —
 // there is no trusted bypass. The test plugin neither declares nor is granted it, so it's denied.
 test('bridge provideMail requires the email:provider grant (no bypass)', async () => {

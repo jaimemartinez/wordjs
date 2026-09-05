@@ -21,6 +21,20 @@ function runWithContext(pluginSlug: string, callback: () => any) {
 }
 
 /**
+ * Run a callback as the HOST, with no plugin in the context — for core work that legitimately happens
+ * while serving a plugin's bridged request but is the host's own (its registries, its bookkeeping
+ * files). Inside runWithContext(slug) every filesystem operation is attributed to that plugin by
+ * io-guard, so a host-owned file the guard rightly forbids to plugins (data/wjp-prefix-registry.json
+ * is one) becomes unwritable for the host itself the moment the write is triggered from a bridge
+ * call. This clears the store for the duration of the callback and nothing else: the plugin's own
+ * frames are not on the stack here (the bridge runs host code), so getEffectivePlugin() is null and
+ * the guard treats the access as core's. Never hand plugin-controlled paths to it.
+ */
+function runAsHost<T>(callback: () => T): T {
+    return storage.run(undefined, callback);
+}
+
+/**
  * Get the current plugin slug from context
  */
 function getCurrentPlugin() {
@@ -370,6 +384,7 @@ try {
 
 module.exports = {
     runWithContext,
+    runAsHost,
     getCurrentPlugin,
     getPluginFromStack,
     getEffectivePlugin,
