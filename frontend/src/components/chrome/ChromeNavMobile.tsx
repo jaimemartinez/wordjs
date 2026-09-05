@@ -8,7 +8,8 @@
 import Link from "next/link";
 import { createPortal } from "react-dom";
 import { useEffect, useId, useRef, useState } from "react";
-import { safeMenuHref, menuTargetRel, type ChromeMenuItem } from "@/lib/chromeData";
+import { usePathname } from "next/navigation";
+import { safeMenuHref, menuTargetRel, menuAriaCurrent, type ChromeMenuItem } from "@/lib/chromeData";
 
 // Everything the drawer can hand focus to. Kept in one place: the open effect uses it both to place
 // the initial focus and to find the cycle ends for the Tab trap.
@@ -35,19 +36,24 @@ export function MobileNavItems({
     onNavigate: () => void;
     depth: number;
 }) {
+    // Read ONCE per list, not per item: a hook may not be called inside a .map() callback. The drawer
+    // marks the current page exactly like the desktop nav — the same link is current on both surfaces.
+    const pathname = usePathname();
     return (
         <>
             {items.map((item) => {
                 const children = item.children ?? [];
                 const tr = menuTargetRel(item.target);
+                const href = safeMenuHref(item.url);
                 return (
                     <div key={item.id} className={depth > 0 ? "ps-4 border-s border-[var(--wjs-border-subtle,#f3f4f6)]" : ""}>
                         <Link
-                            href={safeMenuHref(item.url)}
+                            href={href}
                             target={tr.target}
                             rel={tr.rel}
                             className="block text-lg text-[var(--wjs-color-text-main,#374151)] hover:text-[var(--wjs-color-primary,#2F6D86)] font-medium py-2 border-b border-[var(--wjs-border-subtle,#f3f4f6)] transition-colors"
                             onClick={onNavigate}
+                            aria-current={menuAriaCurrent(href, pathname)}
                         >
                             {item.title}
                         </Link>
@@ -67,6 +73,8 @@ export default function ChromeNavMobile({ items }: { items: ChromeMenuItem[] }) 
     // Any nesting in the tree switches the drawer to the recursive (indented) renderer; a flat menu
     // keeps its original per-link markup.
     const hasSubmenus = items.some((item) => (item.children?.length ?? 0) > 0);
+    // Current-page marking for the FLAT branch below (the nested branch reads it in MobileNavItems).
+    const pathname = usePathname();
     const [open, setOpen] = useState(false);
     const [mounted, setMounted] = useState(false);
     // Unique panel id — a composition may hold several horizontal header navs (one per row).
@@ -192,14 +200,16 @@ export default function ChromeNavMobile({ items }: { items: ChromeMenuItem[] }) 
                             // with the SAME href/target render guard as the nested branch above.
                             items.map((item) => {
                                 const tr = menuTargetRel(item.target);
+                                const href = safeMenuHref(item.url);
                                 return (
                                     <Link
                                         key={item.id}
-                                        href={safeMenuHref(item.url)}
+                                        href={href}
                                         target={tr.target}
                                         rel={tr.rel}
                                         className="text-lg text-[var(--wjs-color-text-main,#374151)] hover:text-[var(--wjs-color-primary,#2F6D86)] font-medium py-2 border-b border-[var(--wjs-border-subtle,#f3f4f6)] transition-colors"
                                         onClick={() => setOpen(false)}
+                                        aria-current={menuAriaCurrent(href, pathname)}
                                     >
                                         {item.title}
                                     </Link>

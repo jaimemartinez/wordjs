@@ -48,6 +48,7 @@ import SelfHostedVideo from "./SelfHostedVideo";
 import AudioTransport from "./AudioTransport";
 import ParticleFieldCanvas from "./ParticleField";
 import ChromeNavMobile from "@/components/chrome/ChromeNavMobile";
+import { NavCurrentAnchor } from "@/components/chrome/NavCurrentLink";
 import NavMenuMobile from "./NavMenuMobile";
 import NavClickSubmenus from "./NavClickSubmenus";
 import OffCanvasClient from "./OffCanvasClient";
@@ -176,11 +177,13 @@ function NavMenuItem({
 }) {
     const children = item.children ?? [];
     const tr = navTargetRel(targetOf(item.id));
-    // Label as TEXT (React escapes it) — never dangerouslySetInnerHTML.
+    // Label as TEXT (React escapes it) — never dangerouslySetInnerHTML. NavCurrentAnchor emits the
+    // same bare <a> this block has always emitted, plus aria-current="page" when the href IS the page
+    // being viewed (see NavCurrentLink for why that is computed client-side).
     const link = (
-        <a href={safeNavHref(item.url)} target={tr.target} rel={tr.rel}>
+        <NavCurrentAnchor href={safeNavHref(item.url)} target={tr.target} rel={tr.rel}>
             {item.title}
-        </a>
+        </NavCurrentAnchor>
     );
 
     if (children.length === 0) {
@@ -402,11 +405,12 @@ export function MegaMenuBlock({ menu, fullWidth = true, trigger = "hover", panel
     const targetOf = (id: string | number) => targetById.get(String(id));
     const items = top.map((item, i) => {
         const tr = navTargetRel(targetOf(item.id));
-        // The trigger is a REAL link; the label as TEXT (React escapes it) — never innerHTML.
+        // The trigger is a REAL link; the label as TEXT (React escapes it) — never innerHTML. Same
+        // current-page marking as the NavMenu top-level item it is byte-identical to.
         const link = (
-            <a href={safeNavHref(item.url)} target={tr.target} rel={tr.rel}>
+            <NavCurrentAnchor href={safeNavHref(item.url)} target={tr.target} rel={tr.rel}>
                 {item.title}
-            </a>
+            </NavCurrentAnchor>
         );
         // While editing, the nav shows plain links and the panels render ONCE in the authoring area
         // below (a slot function must not be invoked twice — its drop zone is a single instance).

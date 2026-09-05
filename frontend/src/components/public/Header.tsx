@@ -1,7 +1,9 @@
 "use client";
 
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { useEffect, useState, useRef } from "react";
+import { menuAriaCurrent } from "@/lib/chromeData";
 import type { HeaderVariant } from "@/lib/themeLayout";
 
 interface HeaderProps {
@@ -27,6 +29,10 @@ export default function Header({ disableSticky = false, variant = "classic", sti
     const [siteTitle, setSiteTitle] = useState<string>(initialSettings?.blogname || "");
     const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
     const headerRef = useRef<HTMLElement>(null);
+    // Current-page marking for both nav surfaces below (desktop row + mobile panel). Read once here,
+    // never inside the .map()s — and shared with the composed chrome nav through menuAriaCurrent, so
+    // "which link is current" cannot drift between the default header and a composition.
+    const pathname = usePathname();
 
     useEffect(() => {
         // Only react to scroll when sticky (full page / editor preview).
@@ -173,6 +179,7 @@ export default function Header({ disableSticky = false, variant = "classic", sti
                         href={item.url}
                         onClick={(e) => handleNavClick(e, item.url)}
                         className="text-[var(--wjs-color-text-main,gray)] hover:text-[var(--wjs-color-primary,blue)] font-medium transition-colors"
+                        aria-current={menuAriaCurrent(item.url, pathname)}
                     >
                         {item.title}
                     </Link>
@@ -279,6 +286,7 @@ export default function Header({ disableSticky = false, variant = "classic", sti
                                     href={item.url}
                                     className="text-lg text-[var(--wjs-color-text-main,#374151)] hover:text-[var(--wjs-color-primary,#2F6D86)] font-medium py-2 border-b border-[var(--wjs-border-subtle,#f3f4f6)] transition-colors"
                                     onClick={(e) => handleNavClick(e, item.url)}
+                                    aria-current={menuAriaCurrent(item.url, pathname)}
                                 >
                                     {item.title}
                                 </Link>
