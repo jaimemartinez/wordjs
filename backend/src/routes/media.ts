@@ -151,8 +151,13 @@ async function encodeModernDerivatives(
             if (activeModernEncodes >= MODERN_ENCODE_CONCURRENCY) return;
             activeModernEncodes++;
             const { task, format } = queue[next++];
-            const file = `${task.stem}${format.ext}`;
-            const target = path.join(dir, file);
+            // `task.stem` is a basename by construction (path.basename(...) at both call sites), but the
+            // sink below deletes a file, so the containment is proven HERE, next to the sink, in the shape
+            // a taint analysis recognises: basename() strips any directory component, and the resolved
+            // target must stay under `dir`. A stem that fails either test is skipped, never written.
+            const file = path.basename(`${task.stem}${format.ext}`);
+            const target = path.resolve(dir, file);
+            if (!target.startsWith(path.resolve(dir) + path.sep)) { activeModernEncodes--; continue; }
             try {
                 const pipeline = task.build();
                 const info = format.key === 'avif'
