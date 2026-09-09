@@ -25,7 +25,7 @@
     "date-fns": "^4.1.0",
     "dompurify": "^3.4.14",
     "next": "^16.3.4",
-    "qrcode-generator": "^1.4.4",
+    "qrcode-generator": "^2.0.4",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-dropzone": "^14.4.1",
@@ -39,7 +39,7 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
-    "@vitest/coverage-v8": "^4.1.10",
+    "@vitest/coverage-v8": "^5.0.0",
     "esbuild": "^0.28.2",
     "eslint": "^9",
     "eslint-config-next": "16.3.4",
@@ -47,7 +47,7 @@
     "eslint-plugin-react-hooks": "^7.1.1",
     "tailwindcss": "^4",
     "typescript": "^5",
-    "vitest": "^4.1.10"
+    "vitest": "^5.0.0"
   },
   "overrides": {
     "sharp": "^0.35.3",
