@@ -1758,6 +1758,216 @@ function findMainFile(pluginDir: string) {
     return null;
 }
 
+// ── ORPHANED PLUGINS ──────────────────────────────────────────────────────────────────────────────
+/**
+ * THE ONE DEFINITION OF "ORPHANED", because three surfaces used to hold three different ones.
+ *
+ * `plugins/<slug>/` can be left holding only build output — a `dist/` with no manifest.json and no
+ * entry file — while the `active_plugins` option still names <slug>. The product then contradicted
+ * itself three ways, and each surface's answer was locally reasonable:
+ *
+ *   · scanPlugins() skips a directory with neither a manifest nor a main file, so getAllPlugins() —
+ *     GET /plugins and the marketplace catalog annotation — never listed it. The "Instalados" tab did
+ *     not show it, and the catalog card offered Install.
+ *   · every install guard asked isPluginActive(), which reads the OPTION alone, so the install was
+ *     refused with 409 "currently active. Deactivate it before re-uploading" — about something the
+ *     administrator could not see, let alone deactivate. A dead end with no way out of it.
+ *   · the boot loop `for (const slug of activePlugins)` merely `continue`d on a slug it could not
+ *     resolve, so the contradiction survived every restart, forever, and the dev registry generators
+ *     went on printing "No manifest: <slug>".
+ *
+ * A slug is ORPHANED when it is CLAIMED — listed in `active_plugins`, or present as a directory — and
+ * NOT loadable, i.e. not something scanPlugins() would return. "Loadable" is deliberately expressed
+ * as "scanPlugins listed it" rather than re-derived from the same files: a second copy of that rule
+ * is a second thing to drift, which is the shape of the bug this exists to end.
+ *
+ * ONE STATE IS DELIBERATELY NOT AN ORPHAN: a directory whose only entry is `data/`. Uninstall leaves
+ * that on purpose (routes/plugins removePluginDirPreservingData — encryption keys, attachments) and
+ * installPluginFromZip ADOPTS it on reinstall. It is the intended residue of a plugin that WAS
+ * uninstalled, so reporting it would put a red "broken install" card in the admin after every
+ * successful uninstall. It becomes an orphan the moment `active_plugins` names it, because only then
+ * is it a contradiction.
+ */
+type OrphanedPlugin = {
+    slug: string;
+    /** Listed in `active_plugins` — the half that made install and deactivate misbehave. */
+    active: boolean;
+    /** `plugins/<slug>/` exists on this node. */
+    hasDirectory: boolean;
+    /**
+     * The directory holds NO manifest.json and NO entry file, so removing it destroys no plugin code.
+     * FALSE for a directory whose manifest is merely unreadable: that is a BROKEN plugin, not a
+     * residue, and its files are someone's work — nothing may delete it on the orphan path.
+     */
+    residual: boolean;
+    reason: 'missing' | 'no-manifest' | 'unreadable-manifest';
+};
+
+/**
+ * Notice id convention, matching 'db.sqlite-legacy-fallback' and 'sandbox.cgroup-no-cpu-quota':
+ * `<area>.<condition>`, with the slug appended because this condition is per-plugin. Stable across
+ * boots, so core/admin-notices upserts ONE row per slug however many times the site restarts.
+ */
+const ORPHAN_NOTICE_PREFIX = 'plugins.orphaned-active.';
+const orphanNoticeId = (slug: string) => `${ORPHAN_NOTICE_PREFIX}${slug}`;
+
+/** Why scanPlugins() would skip this directory — or null when it would list it. */
+function pluginDirDefect(pluginDir: string): { reason: 'no-manifest' | 'unreadable-manifest'; residual: boolean } | null {
+    const manifestPath = path.join(pluginDir, 'manifest.json');
+    if (fs.existsSync(manifestPath)) {
+        try { JSON.parse(fs.readFileSync(manifestPath, 'utf8')); return null; }
+        // scanPlugins `continue`s on an unparsable manifest, so this directory is not loadable — but
+        // the plugin's CODE is still in it. Never residual, therefore never deletable from here.
+        catch { return { reason: 'unreadable-manifest', residual: false }; }
+    }
+    if (findMainFile(pluginDir)) return null; // manifest-less legacy plugin: scanPlugins lists it
+    return { reason: 'no-manifest', residual: true };
+}
+
+/** The `data/`-only residue an uninstall leaves on purpose (see the header above). */
+function isPreservedDataResidue(pluginDir: string): boolean {
+    try {
+        const entries = fs.readdirSync(pluginDir);
+        return entries.length > 0 && entries.every((e: string) => e === 'data');
+    } catch { return false; } // unreadable → not something we get to call "intended"
+}
+
+/**
+ * Every orphan on this node, given the active list.
+ *
+ * SYNCHRONOUS on purpose: the prune below decides INSIDE the `active_plugins` lock, on the very array
+ * it is about to write, so a concurrent activation cannot be judged against a list read before it
+ * landed. It also does NOT swallow a failure to read the plugins directory — scanPlugins throws there
+ * — because a prune computed from an empty listing would drop EVERY active plugin. Fail closed.
+ */
+function orphansFrom(active: string[]): OrphanedPlugin[] {
+    ensurePluginsDir();
+    const loadable = new Set(scanPlugins().map((p: any) => p.slug));
+    const activeSet = new Set((Array.isArray(active) ? active : []).map((s) => String(s)));
+    const dirs = new Set<string>(
+        fs.readdirSync(PLUGINS_DIR, { withFileTypes: true })
+            .filter((e: any) => e.isDirectory())
+            .map((e: any) => e.name as string)
+    );
+
+    const out: OrphanedPlugin[] = [];
+    for (const slug of new Set<string>([...activeSet, ...dirs])) {
+        if (loadable.has(slug)) continue;
+        if (!dirs.has(slug)) {
+            out.push({ slug, active: activeSet.has(slug), hasDirectory: false, residual: false, reason: 'missing' });
+            continue;
+        }
+        const dir = path.join(PLUGINS_DIR, slug);
+        if (isPreservedDataResidue(dir) && !activeSet.has(slug)) continue; // intended, not a fault
+        const defect = pluginDirDefect(dir);
+        if (!defect) continue; // loadable after all (the tree changed under scanPlugins) — nothing to report
+        out.push({ slug, active: activeSet.has(slug), hasDirectory: true, residual: defect.residual, reason: defect.reason });
+    }
+    return out.sort((a, b) => a.slug.localeCompare(b.slug));
+}
+
+/** The orphans as the routes see them (reads `active_plugins` itself). */
+async function listOrphanedPlugins(): Promise<OrphanedPlugin[]> {
+    return orphansFrom(await getActivePlugins());
+}
+
+/**
+ * BOOT RECONCILIATION: drop every `active_plugins` entry whose files are not loadable, and TELL the
+ * administrator.
+ *
+ * The write goes through withActivePluginsLock — the same atomic read-modify-write activate,
+ * deactivate and CrashGuard use — and the orphan set is computed inside the mutator, so nothing is
+ * dropped on the strength of a stale read. A healthy site writes NOTHING (the mutator returns
+ * undefined), so this costs one option read per boot.
+ *
+ * The notice is what makes the fix visible: a `console.warn` on a boot nobody watched is exactly how
+ * this state stayed invisible in the first place. Best-effort — losing a notice is acceptable,
+ * wedging boot is not.
+ */
+async function pruneOrphanedActivePlugins(): Promise<OrphanedPlugin[]> {
+    const pruned: OrphanedPlugin[] = [];
+    await withActivePluginsLock((active) => {
+        const orphans = orphansFrom(active).filter((o) => o.active);
+        if (!orphans.length) return undefined; // healthy: no write at all
+        pruned.push(...orphans);
+        const drop = new Set(orphans.map((o) => o.slug));
+        return active.filter((s) => !drop.has(s));
+    });
+
+    for (const o of pruned) {
+        console.warn(`[plugins] '${logSafe(o.slug)}' was listed active but is not loadable (${logSafe(o.reason)}) — removed from active_plugins.`);
+        try {
+            await require('./admin-notices').pushAdminNotice({
+                id: orphanNoticeId(o.slug),
+                level: 'warning',
+                message: `Plugin ${o.slug} was marked active but its files are missing; it has been removed from the active list — reinstall it from the Marketplace`,
+                since: Date.now(),
+            });
+        } catch (e: any) {
+            console.warn(`[plugins] the orphan notice for '${logSafe(o.slug)}' could not be raised: ${logSafe(e && e.message)}`);
+        }
+    }
+    return pruned;
+}
+
+/** Retire ONE slug's orphan notice — the administrator has dealt with it. Never throws. */
+async function clearOrphanNotice(slug: string): Promise<boolean> {
+    try { return await require('./admin-notices').clearAdminNotice(orphanNoticeId(slug)); }
+    catch (e: any) { console.warn(`[plugins] the orphan notice for '${logSafe(slug)}' could not be retired: ${logSafe(e && e.message)}`); return false; }
+}
+
+/**
+ * Retire the orphan notice of every slug that is loadable again — the boot after a reinstall. Without
+ * it the panel keeps demanding a fix that has already been made, and an operator who is contradicted
+ * by the screen that told them to act learns to ignore that screen (see core/admin-notices).
+ */
+async function retireResolvedOrphanNotices(): Promise<string[]> {
+    const retired: string[] = [];
+    try {
+        const stored = await getOption('admin_notices', []);
+        if (!Array.isArray(stored) || !stored.length) return retired;
+        const loadable = new Set(scanPlugins().map((p: any) => p.slug));
+        for (const row of stored) {
+            const id = row && typeof row.id === 'string' ? row.id : '';
+            if (!id.startsWith(ORPHAN_NOTICE_PREFIX)) continue;
+            const slug = id.slice(ORPHAN_NOTICE_PREFIX.length);
+            if (!loadable.has(slug)) continue;
+            if (await clearOrphanNotice(slug)) retired.push(slug);
+        }
+    } catch (e: any) {
+        console.warn(`[plugins] resolved orphan notices could not be retired: ${logSafe(e && e.message)}`);
+    }
+    return retired;
+}
+
+/**
+ * RECLAIM one orphaned slug for the install/cleanup paths: drop its stale `active_plugins` entry
+ * (atomically, under the same lock as every other writer) and report what the caller still has to do
+ * about the files on disk.
+ *
+ * Returns null when the slug is NOT an orphan — the caller must then go on treating it as a real,
+ * possibly RUNNING plugin, which is what keeps the "refuse to overwrite a live plugin" guard intact.
+ */
+async function reclaimOrphanedPlugin(slug: string): Promise<(OrphanedPlugin & { droppedActiveEntry: boolean }) | null> {
+    // Boxed so the assignment inside the mutator is not narrowed away by control-flow analysis.
+    const box: { found: OrphanedPlugin | null; dropped: boolean } = { found: null, dropped: false };
+    await withActivePluginsLock((active) => {
+        box.found = orphansFrom(active).find((o) => o.slug === slug) || null;
+        if (!box.found || !box.found.active) return undefined;
+        box.dropped = true;
+        return active.filter((s) => s !== slug);
+    });
+    const found = box.found;
+    if (!found) return null;
+    if (box.dropped) {
+        console.warn(`[plugins] '${logSafe(slug)}' was listed active with no loadable files (${logSafe(found.reason)}) — stale entry dropped so the slug can be reinstalled.`);
+        // A pending supervised restart can still hold the slug even though nothing is registered
+        // (see the DELETE handler's note); unloadIsolatedPlugin cancels it and is idempotent.
+        try { unloadIsolatedPlugin(slug); } catch { /* nothing of ours is running for an orphan */ }
+    }
+    return { ...found, droppedActiveEntry: box.dropped };
+}
+
 /**
  * Get list of active plugin slugs
  */
@@ -2091,6 +2301,21 @@ function unloadOnePlugin(slug: string) {
  * Load all active plugins
  */
 async function loadActivePlugins() {
+    // 0. RECONCILE THE STORED INTENTION WITH WHAT IS ON DISK, before anything reads the list.
+    //
+    // The loop at the bottom of this function used to `continue` past an active slug it could not
+    // resolve, which left the contradiction in place for the next boot, and the next — while the
+    // install path went on refusing "it is currently active" for a plugin no screen could show. The
+    // prune drops those entries and raises a persistent admin notice per slug; the retirement pass is
+    // its counterpart, clearing the notice of anything that is loadable again after a reinstall.
+    // Guarded: a reconciliation that cannot run must not take the boot down with it.
+    try {
+        await pruneOrphanedActivePlugins();
+        await retireResolvedOrphanNotices();
+    } catch (e: any) {
+        console.warn(`[plugins] orphaned-entry reconciliation skipped: ${logSafe(e && e.message)}`);
+    }
+
     const activePlugins = await getActivePlugins();
     const plugins = scanPlugins();
     const CrashGuard = require('./crash-guard');
@@ -2312,6 +2537,15 @@ module.exports = {
     scanPlugins,
     getActivePlugins,
     isPluginActive,
+    // The orphan reconciliation. getAllPlugins() deliberately keeps its contract (only loadable
+    // plugins), so every consumer that filters it — /plugins/active, the registry generators, the
+    // marketplace's `installed` flag — stays honest; the routes project these separately.
+    listOrphanedPlugins,
+    pruneOrphanedActivePlugins,
+    retireResolvedOrphanNotices,
+    reclaimOrphanedPlugin,
+    clearOrphanNotice,
+    ORPHAN_NOTICE_PREFIX,
     uninstallPluginData,
     activatePlugin,
     deactivatePlugin,
