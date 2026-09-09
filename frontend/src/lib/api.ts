@@ -287,6 +287,13 @@ export interface Plugin {
     runtime?: PluginRuntime | null;   // live isolate health when active (null if inactive / not an isolate)
     hasTheme?: boolean;               // plugin bundles a companion theme/ folder (installable via installTheme)
     themeInstalled?: boolean;         // themes/<slug>-theme already exists
+    // ORPHANED entry: the backend claims this slug (active_plugins named it, or a directory is still
+    // on disk) but nothing loadable is there. Always `active: false`, so no other consumer of a plugin
+    // list can mistake one for a running plugin — only the admin screen acts on these.
+    broken?: boolean;
+    brokenReason?: 'missing' | 'no-manifest' | 'unreadable-manifest';
+    wasActive?: boolean;              // it was still listed in active_plugins when the backend looked
+    removable?: boolean;              // its directory holds no code, so "Quitar restos" may delete it
 }
 
 export interface PluginRuntime {
@@ -672,7 +679,9 @@ export const revisionsApi = {
 export const pluginsApi = {
     list: () => apiGet<Plugin[]>("/plugins"),
     activate: (slug: string) => apiPost(`/plugins/${slug}/activate`, {}),
-    deactivate: (slug: string) => apiPost(`/plugins/${slug}/deactivate`, {}),
+    /** Also the cleanup door for an ORPHANED slug: it always clears the stale active_plugins entry, and
+     * removes the leftover directory when that directory holds no plugin code (`residueRemoved`). */
+    deactivate: (slug: string) => apiPost<{ success: boolean; message?: string; orphaned?: boolean; residueRemoved?: boolean }>(`/plugins/${slug}/deactivate`, {}),
     /** Hot-reload a running isolated plugin (re-runs the AST scan, re-registers routes). */
     reload: (slug: string) => apiPost<{ success: boolean; slug: string; message: string }>(`/plugins/${slug}/reload`, {}),
     /** Live runtime health of an isolated plugin. */
