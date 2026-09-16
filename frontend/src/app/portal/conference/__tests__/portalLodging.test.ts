@@ -12,6 +12,7 @@ import {
     canEditLodging,
     deadlineMessage,
     deadlineState,
+    dragDecision,
     fmtDeadline,
     emptyRuleForm,
     fieldLabelOf,
@@ -21,6 +22,7 @@ import {
     isLodgingFrozen,
     lodgingSummary,
     normalizeLodgingStatus,
+    parseDragId,
     parseRuleParams,
     portalErrorMessage,
     roomLabel,
@@ -346,5 +348,83 @@ describe("lodging deadline — deadlineState / deadlineMessage / fmtDeadline (th
     it("phrases the banner for open and passed deadlines", () => {
         expect(deadlineMessage({ deadline: '2026-10-01', deadline_passed: false })).toBe('Puedes acomodar y enviar los hospedajes hasta el 01/10/2026 (inclusive).');
         expect(deadlineMessage({ deadline: '2026-10-01', deadline_passed: true })).toBe('El plazo para acomodar los hospedajes venció el 01/10/2026. Solo el administrador puede modificarlos.');
+    });
+});
+
+describe("drag & drop — parseDragId / dragDecision (LodgingTab's native DnD; the server re-validates every drop)", () => {
+    // Room 1 has a bed left (Ana 11 + Beto 12 of 3), room 2 is full (Carla 21, Dani 22 of 2), room 3 is empty; Eva 31 waits unassigned.
+    const rooms: LodgingRoom[] = [
+        room({ id: 1, capacity: 3, occupied: 2, occupants: [{ id: 11 }, { id: 12 }] }),
+        room({ id: 2, capacity: 2, occupied: 2, occupants: [{ id: 21 }, { id: 22 }] }),
+        room({ id: 3, capacity: 1, occupied: 0, occupants: [] }),
+    ];
+    const unassigned = [{ id: 31 }];
+
+    it("parseDragId reads the chip's positive integer id and rejects everything else", () => {
+        expect(parseDragId('31')).toBe(31);
+        expect(parseDragId(' 12 ')).toBe(12);
+        expect(parseDragId('')).toBeNull();
+        expect(parseDragId('0')).toBeNull();
+        expect(parseDragId('-3')).toBeNull();
+        expect(parseDragId('1.5')).toBeNull();
+        expect(parseDragId('abc')).toBeNull();
+        expect(parseDragId('12abc')).toBeNull();
+        expect(parseDragId(null)).toBeNull();
+        expect(parseDragId(undefined)).toBeNull();
+        expect(parseDragId('99999999999999999999')).toBeNull();
+    });
+
+    it("places an unassigned attendee into a room with a free bed", () => {
+        expect(dragDecision({ attendeeId: 31, fromRoomId: null, toRoomId: 1, rooms, unassigned })).toEqual({ ok: true });
+        expect(dragDecision({ attendeeId: 31, fromRoomId: null, toRoomId: 3, rooms, unassigned })).toEqual({ ok: true });
+    });
+
+    it("refuses a full room (`full`), from the unassigned list and from another room alike", () => {
+        expect(dragDecision({ attendeeId: 31, fromRoomId: null, toRoomId: 2, rooms, unassigned })).toEqual({ ok: false, reason: 'full' });
+        expect(dragDecision({ attendeeId: 11, fromRoomId: 1, toRoomId: 2, rooms, unassigned })).toEqual({ ok: false, reason: 'full' });
+    });
+
+    it("treats the attendee's own room as a no-op (`same`), never as `full`", () => {
+        expect(dragDecision({ attendeeId: 21, fromRoomId: 2, toRoomId: 2, rooms, unassigned })).toEqual({ ok: false, reason: 'same' });
+        expect(dragDecision({ attendeeId: 11, fromRoomId: 1, toRoomId: 1, rooms, unassigned })).toEqual({ ok: false, reason: 'same' });
+        expect(dragDecision({ attendeeId: 31, fromRoomId: null, toRoomId: null, rooms, unassigned })).toEqual({ ok: false, reason: 'same' });
+    });
+
+    it("moves an occupant between rooms and frees a bed when dropped on the unassigned panel", () => {
+        expect(dragDecision({ attendeeId: 12, fromRoomId: 1, toRoomId: 3, rooms, unassigned })).toEqual({ ok: true });
+        expect(dragDecision({ attendeeId: 21, fromRoomId: 2, toRoomId: null, rooms, unassigned })).toEqual({ ok: true });
+    });
+
+    it("refuses an attendee or a room the payload does not know (`unknown`), including a stale drag origin", () => {
+        expect(dragDecision({ attendeeId: 999, fromRoomId: null, toRoomId: 1, rooms, unassigned })).toEqual({ ok: false, reason: 'unknown' });
+        expect(dragDecision({ attendeeId: 31, fromRoomId: null, toRoomId: 77, rooms, unassigned })).toEqual({ ok: false, reason: 'unknown' });
+        // The payload was reloaded under the drag: Ana now lives in room 1, the drag says she came from room 3.
+        expect(dragDecision({ attendeeId: 11, fromRoomId: 3, toRoomId: 2, rooms, unassigned })).toEqual({ ok: false, reason: 'unknown' });
+        expect(dragDecision({ attendeeId: 31, fromRoomId: 1, toRoomId: 3, rooms, unassigned })).toEqual({ ok: false, reason: 'unknown' });
+        expect(dragDecision({ attendeeId: 31, fromRoomId: null, toRoomId: 1, rooms: undefined, unassigned })).toEqual({ ok: false, reason: 'unknown' });
+        expect(dragDecision({ attendeeId: 31, fromRoomId: null, toRoomId: 1, rooms, unassigned: undefined })).toEqual({ ok: false, reason: 'unknown' });
+    });
+
+    it("compares ids coerced, as the rest of the tab and the server do (string ids from a driver/projection still decide like numbers)", () => {
+        // Attendee 31 unassigned, room '1' with a bed left; every id travels as a string.
+        const sid = (s: string) => s as unknown as number;
+        const strRooms = [
+            room({ id: sid('1'), capacity: 3, occupied: 2, occupants: [{ id: sid('11') }] }),
+            room({ id: sid('2'), capacity: 1, occupied: 1, occupants: [{ id: sid('21') }] }),
+        ];
+        const strUnassigned = [{ id: sid('31') }];
+        expect(dragDecision({ attendeeId: 31, fromRoomId: null, toRoomId: 1, rooms: strRooms, unassigned: strUnassigned })).toEqual({ ok: true });
+        expect(dragDecision({ attendeeId: 11, fromRoomId: 1, toRoomId: 1, rooms: strRooms, unassigned: strUnassigned })).toEqual({ ok: false, reason: 'same' });
+        expect(dragDecision({ attendeeId: 11, fromRoomId: 1, toRoomId: null, rooms: strRooms, unassigned: strUnassigned })).toEqual({ ok: true });
+        expect(dragDecision({ attendeeId: 31, fromRoomId: null, toRoomId: 2, rooms: strRooms, unassigned: strUnassigned })).toEqual({ ok: false, reason: 'full' });
+    });
+
+    it("counts capacity from the server's `occupied` (a foreign stray fills the bed even if unlisted) and the last bed is still a bed", () => {
+        const stray = [room({ id: 5, capacity: 2, occupied: 2, occupants: [{ id: 51 }] })];
+        expect(dragDecision({ attendeeId: 31, fromRoomId: null, toRoomId: 5, rooms: stray, unassigned })).toEqual({ ok: false, reason: 'full' });
+        const lastBed = [room({ id: 6, capacity: 2, occupied: 1, occupants: [{ id: 61 }] })];
+        expect(dragDecision({ attendeeId: 31, fromRoomId: null, toRoomId: 6, rooms: lastBed, unassigned })).toEqual({ ok: true });
+        const over = [room({ id: 7, capacity: 1, occupied: 3, occupants: [{ id: 71 }] })];
+        expect(dragDecision({ attendeeId: 31, fromRoomId: null, toRoomId: 7, rooms: over, unassigned })).toEqual({ ok: false, reason: 'full' });
     });
 });

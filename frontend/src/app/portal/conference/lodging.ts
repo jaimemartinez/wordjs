@@ -124,6 +124,57 @@ export const freeBeds = (room: LodgingRoom | null | undefined): number => {
 export const roomsWithSpace = (rooms: LodgingRoom[] | null | undefined): LodgingRoom[] =>
     (Array.isArray(rooms) ? rooms : []).filter((r) => freeBeds(r) > 0);
 
+// ---------------------------------------------------------------------------------------------------
+// Drag & drop (the decisions behind LodgingTab's native HTML5 DnD; the server re-validates every drop)
+// ---------------------------------------------------------------------------------------------------
+
+/** Why a drop is refused client-side: `same` = the attendee is already there (no-op), `full` = no free bed, `unknown` = an id not in the payload. */
+export type DragRefusal = 'same' | 'full' | 'unknown';
+
+export type DragDecision = { ok: true; reason?: undefined } | { ok: false; reason: DragRefusal };
+
+/**
+ * The attendee id carried by a drag (`dataTransfer.setData('text/plain', String(id))`): a positive
+ * integer, or null for anything else (text dragged in from outside the tab, blanks, floats, garbage).
+ */
+export const parseDragId = (text: unknown): number | null => {
+    const s = String(text == null ? '' : text).trim();
+    if (!/^\d+$/.test(s)) return null;
+    const n = Number(s);
+    return Number.isSafeInteger(n) && n > 0 ? n : null;
+};
+
+/**
+ * Whether a dragged attendee may be dropped on a room (`toRoomId`) or on the "Sin habitación" panel
+ * (`toRoomId` null). `fromRoomId` is where the drag started (null = the unassigned list). The attendee
+ * must exist in the payload (a room's occupants or `unassigned`) AND still be where the drag started —
+ * a drag begun over a payload that has since been reloaded is `unknown`, never acted on. The target
+ * room must exist, and a room accepts only with a free bed — except that dropping on the room the
+ * attendee already occupies is a `same` no-op, never `full` (so is unassigned → unassigned).
+ */
+export const dragDecision = ({ attendeeId, fromRoomId, toRoomId, rooms, unassigned }: {
+    attendeeId: number;
+    fromRoomId: number | null;
+    toRoomId: number | null;
+    rooms: LodgingRoom[] | null | undefined;
+    unassigned?: LodgingAttendee[] | null;
+}): DragDecision => {
+    // Ids are compared coerced, as everywhere else in the tab (and as the server does): a driver or
+    // projection that ships them as strings must not make the hover ring and the drop disagree.
+    const list = Array.isArray(rooms) ? rooms : [];
+    const inRoom = list.find((r) => Array.isArray(r.occupants) && r.occupants.some((a) => a && Number(a.id) === attendeeId));
+    const inUnassigned = Array.isArray(unassigned) && unassigned.some((a) => a && Number(a.id) === attendeeId);
+    if (!inRoom && !inUnassigned) return { ok: false, reason: 'unknown' };
+    const from = inRoom ? Number(inRoom.id) : null;
+    if (from !== fromRoomId) return { ok: false, reason: 'unknown' };
+    if (toRoomId == null) return from == null ? { ok: false, reason: 'same' } : { ok: true };
+    const target = list.find((r) => Number(r.id) === toRoomId);
+    if (!target) return { ok: false, reason: 'unknown' };
+    if (from === toRoomId) return { ok: false, reason: 'same' };
+    if (freeBeds(target) <= 0) return { ok: false, reason: 'full' };
+    return { ok: true };
+};
+
 export type LodgingSummary = {
     rooms: number;
     beds: number;

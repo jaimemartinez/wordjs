@@ -8,6 +8,7 @@ import {
     canEditLodging,
     deadlineMessage,
     deadlineState,
+    dragDecision,
     emptyPredicate,
     emptyRuleForm,
     fmtTimestamp,
@@ -15,6 +16,7 @@ import {
     lodgingSummary,
     normalizeLodgingStatus,
     opNeedsNoValue,
+    parseDragId,
     portalErrorMessage,
     PRED_OPS,
     roomLabel,
@@ -29,6 +31,7 @@ import {
     unassignedHint,
     unassignedLabel,
     type AssignmentRunResult,
+    type DragRefusal,
     type LodgingData,
     type LodgingRoom,
     type LodgingRule,
@@ -63,6 +66,9 @@ import {
 const API = '/api/v1/plugin/conference-manager';
 
 type HeaderMap = Record<string, string>;
+
+/** What a drop target shows while a chip hovers it: `dragDecision`'s verdict flattened to one word. */
+type DropVerdict = 'ok' | DragRefusal;
 
 export type HospedajesProps = {
     /** The page's `portalAuthHeaders` (CSRF + the x-portal-token fallback); the cookie is the primary path. */
@@ -116,6 +122,20 @@ export default function Hospedajes({ authHeaders, onLocationRefresh }: Hospedaje
     const [editor, setEditor] = useState<RuleEditor | null>(null);
     /** Unassigned attendee id → the room picked in its select (as a string, '' = none). */
     const [pick, setPick] = useState<Record<number, string>>({});
+    /** The attendee chip under drag (native HTML5 DnD) and where it started: null = the "Sin habitación" list. */
+    const [dragging, setDragging] = useState<{ id: number; fromRoomId: number | null } | null>(null);
+    /**
+     * The drop target under the pointer (`room:<id>` or `unassigned`) and the client-side verdict for the
+     * chip over it: 'ok' (it can take it), 'same' (the chip already lives there — a silent no-op, never
+     * painted as a refusal), 'full' / 'unknown' (refused).
+     */
+    const [dropHover, setDropHover] = useState<{ key: string; reason: DropVerdict } | null>(null);
+    /**
+     * dragenter/dragleave depth per drop target. `dragleave` fires for every child crossed and WebKit
+     * reports `relatedTarget === null` on it, so the standard counter (not `relatedTarget`) tells apart
+     * "moved onto a child" from "really left the target".
+     */
+    const dragDepth = useRef(new Map<string, number>());
     const mounted = useRef(true);
     // `authHeaders` is a closure over the page's token; keep the latest without re-running the load effect.
     const headersRef = useRef(authHeaders);
@@ -245,6 +265,100 @@ export default function Hospedajes({ authHeaders, onLocationRefresh }: Hospedaje
             onOk: () => setPick((prev) => { const next = { ...prev }; delete next[inscriptionId]; return next; }),
         });
 
+    // ── Drag & drop (additive: the ✕ buttons and the select + "Asignar" path stay as the touch/keyboard way) ──
+    // A drop ends in exactly the same single `assign()` call as those controls: optimistic behaviour,
+    // the sequenced reload and the error toasts are identical. Only the pointer-side decisions
+    // (`dragDecision`) run client-side; the server re-validates every move.
+    const canDrag = editable && !busy;
+    const dropKey = (toRoomId: number | null) => (toRoomId == null ? 'unassigned' : `room:${toRoomId}`);
+    const decide = (attendeeId: number, fromRoomId: number | null, toRoomId: number | null) =>
+        dragDecision({ attendeeId, fromRoomId, toRoomId, rooms, unassigned });
+
+    const chipDragProps = (attendeeId: number, fromRoomId: number | null) => ({
+        draggable: canDrag,
+        onDragStart: (e: React.DragEvent<HTMLElement>) => {
+            if (!canDrag) { e.preventDefault(); return; }
+            e.dataTransfer.setData('text/plain', String(attendeeId));
+            e.dataTransfer.effectAllowed = 'move';
+            setDragging({ id: attendeeId, fromRoomId });
+        },
+        onDragEnd: () => { dragDepth.current.clear(); setDragging(null); setDropHover(null); },
+    });
+
+    const dropTargetProps = (toRoomId: number | null) => ({
+        onDragEnter: (e: React.DragEvent<HTMLElement>) => {
+            // Foreign drags (text or a file from outside the tab) are never counted: no dragend would reset them.
+            if (!dragging || !canDrag) return;
+            e.preventDefault();
+            const key = dropKey(toRoomId);
+            dragDepth.current.set(key, (dragDepth.current.get(key) ?? 0) + 1);
+        },
+        onDragOver: (e: React.DragEvent<HTMLElement>) => {
+            // Not our chip: let the browser refuse the drop.
+            if (!dragging || !canDrag) return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            const key = dropKey(toRoomId);
+            const verdict = decide(dragging.id, dragging.fromRoomId, toRoomId);
+            const reason: DropVerdict = verdict.ok ? 'ok' : verdict.reason;
+            // Switching tiles replaces the key at once; the counter below only decides when to CLEAR it.
+            setDropHover((h) => (h && h.key === key && h.reason === reason ? h : { key, reason }));
+        },
+        onDragLeave: () => {
+            // dragleave fires for every child crossed (and WebKit gives no relatedTarget): the pointer has
+            // really left the target only once its dragenter/dragleave depth is back to zero.
+            const key = dropKey(toRoomId);
+            const depth = (dragDepth.current.get(key) ?? 0) - 1;
+            if (depth > 0) { dragDepth.current.set(key, depth); return; }
+            dragDepth.current.delete(key);
+            setDropHover((h) => (h && h.key === key ? null : h));
+        },
+        onDrop: (e: React.DragEvent<HTMLElement>) => {
+            e.preventDefault();
+            const from = dragging;
+            dragDepth.current.clear();
+            setDragging(null);
+            setDropHover(null);
+            if (!from || !canDrag) return;
+            // The state that drove the hover ring is the source of truth; the dataTransfer only cross-checks
+            // that the browser delivered OUR chip (not a stale one from another tab or window).
+            const id = parseDragId(e.dataTransfer.getData('text/plain'));
+            if (id == null || id !== Number(from.id)) return;
+            const verdict = decide(from.id, from.fromRoomId, toRoomId);
+            if (!verdict.ok) {
+                if (verdict.reason === 'full') addToast('La habitación está llena.', 'error');
+                else if (verdict.reason === 'unknown') addToast('No se pudo identificar al participante; vuelve a intentarlo.', 'error');
+                return; // `same`: dropped where it already was — nothing to do.
+            }
+            assign(from.id, toRoomId);
+        },
+    });
+
+    /** The verdict of the target a chip hovers (null while nothing hovers it). */
+    const hoverOn = (toRoomId: number | null): DropVerdict | null =>
+        dropHover && dropHover.key === dropKey(toRoomId) ? dropHover.reason : null;
+
+    /**
+     * The ring a room tile wears while a chip hovers it: blue when it can take it, rose when it refuses
+     * ('full' / 'unknown'), and a neutral grey over the room the chip already lives in ('same' is a
+     * silent no-op, never a refusal — the very tile a drag starts from would otherwise flash red).
+     */
+    const dropRing = (toRoomId: number | null): string => {
+        const v = hoverOn(toRoomId);
+        if (v === null) return '';
+        if (v === 'ok') return 'ring-4 ring-blue-400/60';
+        if (v === 'same') return 'ring-4 ring-gray-200';
+        return 'ring-4 ring-rose-400/60';
+    };
+
+    /** The same three moods for the unassigned Card's dashed outline (its idle colour is grey). */
+    const unassignedOutline = (): string => {
+        const v = hoverOn(null);
+        if (v === 'ok') return 'outline-blue-500';
+        if (v === null || v === 'same') return 'outline-gray-200';
+        return 'outline-rose-400';
+    };
+
     const runAuto = () => act('/portal/lodging/run', {}, {
         onOk: (r) => setRunResult({
             assignedCount: Number(r.assignedCount) || 0,
@@ -356,6 +470,16 @@ export default function Hospedajes({ authHeaders, onLocationRefresh }: Hospedaje
                                     Enviar a validación
                                 </Button>
                             </div>
+                            {/* Native HTML5 drag never fires from touch (Android Chrome scrolls instead), so the DnD copy
+                                is for fine pointers only; coarse pointers get the select + «Asignar» / ✕ instructions. */}
+                            <p className="hidden pointer-fine:flex items-start gap-2 text-xs text-gray-500 leading-relaxed" data-testid="lodging-dnd-hint">
+                                <i className="fa-solid fa-hand-pointer text-blue-500 mt-0.5" aria-hidden="true"></i>
+                                <span>Arrastra un participante a una habitación, o entre habitaciones; suéltalo en «Sin habitación» para liberar la cama.</span>
+                            </p>
+                            <p className="hidden pointer-coarse:flex items-start gap-2 text-xs text-gray-500 leading-relaxed" data-testid="lodging-touch-hint">
+                                <i className="fa-solid fa-hand-pointer text-blue-500 mt-0.5" aria-hidden="true"></i>
+                                <span>Usa «Elige habitación…» y «Asignar» para colocar a un participante; ✕ en su nombre para liberar la cama.</span>
+                            </p>
                             {runResult && (
                                 /* The admin's run report card: amber when a rule was broken, emerald otherwise. */
                                 <div className={cx("rounded-3xl border p-6 shadow-xl", runViolations.length > 0 ? 'bg-amber-50/40 border-amber-200' : 'bg-emerald-50/40 border-emerald-200')} data-testid="lodging-run-result">
@@ -442,7 +566,12 @@ export default function Hospedajes({ authHeaders, onLocationRefresh }: Hospedaje
                                         const taken = Number(room.occupied) || occ.length;
                                         const percent = cap > 0 ? Math.min(100, (taken / cap) * 100) : 0;
                                         return (
-                                            <div key={room.id} className={cx("group/room p-5 rounded-3xl border-2 transition-all duration-300 relative overflow-hidden flex flex-col gap-4", full ? 'bg-white border-rose-100 shadow-sm' : 'bg-white border-white shadow-sm hover:border-blue-400 hover:shadow-xl hover:-translate-y-1')}>
+                                            <div
+                                                key={room.id}
+                                                className={cx("group/room p-5 rounded-3xl border-2 transition-all duration-300 relative overflow-hidden flex flex-col gap-4", full ? 'bg-white border-rose-100 shadow-sm' : 'bg-white border-white shadow-sm hover:border-blue-400 hover:shadow-xl hover:-translate-y-1', dropRing(room.id))}
+                                                data-testid={`lodging-drop-room-${room.id}`}
+                                                {...(editable ? dropTargetProps(room.id) : {})}
+                                            >
                                                 <div className="flex justify-between items-start gap-2">
                                                     <div className="min-w-0">
                                                         <span className={cx("text-xl", headingCls)}>Hab. {String(room.room_number ?? '')}</span>
@@ -468,7 +597,13 @@ export default function Hospedajes({ authHeaders, onLocationRefresh }: Hospedaje
                                                 ) : (
                                                     <ul className="flex flex-wrap gap-2">
                                                         {occ.map((a) => (
-                                                            <li key={a.id} className="inline-flex items-center gap-2 max-w-full pl-3 pr-1.5 py-1 rounded-full bg-gray-50 border border-gray-100 text-xs font-bold text-gray-800">
+                                                            <li
+                                                                key={a.id}
+                                                                className={cx("inline-flex items-center gap-2 max-w-full pr-1.5 py-1 rounded-full bg-gray-50 border border-gray-100 text-xs font-bold text-gray-800", editable ? 'pl-2' : 'pl-3', canDrag && 'pointer-fine:cursor-grab pointer-fine:select-none', dragging?.id === a.id && 'opacity-60 cursor-grabbing')}
+                                                                data-testid={`lodging-chip-${a.id}`}
+                                                                {...chipDragProps(a.id, room.id)}
+                                                            >
+                                                                {editable && <i className="fa-solid fa-grip-vertical text-[9px] text-gray-300 shrink-0 pointer-coarse:hidden" aria-hidden="true"></i>}
                                                                 <span className="truncate">{attendeeName(a)}{a.family_group ? <span className="text-[10px] text-gray-400 font-medium ml-1">· {String(a.family_group)}</span> : null}</span>
                                                                 {editable && (
                                                                     <button type="button" onClick={() => assign(a.id, null)} disabled={busy} title="Quitar de la habitación" className="w-6 h-6 rounded-full flex items-center justify-center bg-white text-gray-400 hover:bg-rose-600 hover:text-white transition-all shadow-sm shrink-0 disabled:opacity-50 disabled:cursor-not-allowed" aria-label={`Quitar a ${attendeeName(a)} de la habitación`}>
@@ -488,8 +623,12 @@ export default function Hospedajes({ authHeaders, onLocationRefresh }: Hospedaje
                         ))}
                     </div>
 
-                    {/* Unassigned */}
-                    <Card>
+                    {/* Unassigned — also the drop target that frees a bed (dashed outline while editable) */}
+                    <Card
+                        className={cx("transition-all duration-300", editable && 'outline-2 outline-dashed -outline-offset-2', editable && unassignedOutline())}
+                        data-testid="lodging-drop-unassigned"
+                        {...(editable ? dropTargetProps(null) : {})}
+                    >
                         <CardHeader icon="fa-user-clock" tone="amber" title="Sin habitación" caption={`${unassigned.length} participantes`} />
                         {unassigned.length === 0 ? (
                             <div className="p-8 text-center">
@@ -499,9 +638,17 @@ export default function Hospedajes({ authHeaders, onLocationRefresh }: Hospedaje
                             <ul className="divide-y divide-gray-50" data-testid="lodging-unassigned">
                                 {unassigned.map((a) => (
                                     <li key={a.id} className="px-5 sm:px-8 py-4 flex flex-col sm:flex-row sm:items-center gap-3 hover:bg-blue-50/30 transition-colors">
-                                        <div className="flex-1 min-w-0">
-                                            <div className="font-black text-gray-900 truncate">{attendeeName(a)}</div>
-                                            <div className={cx(captionCls, "mt-0.5")}>{[a.gender, a.family_group].filter((v) => v != null && String(v).trim() !== '').map(String).join(' · ')}</div>
+                                        {/* The draggable chip is the name block, not the row: the select must keep its own pointer. */}
+                                        <div
+                                            className={cx("flex-1 min-w-0 flex items-center gap-3 rounded-xl", canDrag && 'pointer-fine:cursor-grab pointer-fine:select-none', dragging?.id === a.id && 'opacity-60 cursor-grabbing')}
+                                            data-testid={`lodging-chip-${a.id}`}
+                                            {...chipDragProps(a.id, null)}
+                                        >
+                                            {editable && <i className="fa-solid fa-grip-vertical text-xs text-gray-300 shrink-0 pointer-coarse:hidden" aria-hidden="true"></i>}
+                                            <div className="min-w-0">
+                                                <div className="font-black text-gray-900 truncate">{attendeeName(a)}</div>
+                                                <div className={cx(captionCls, "mt-0.5")}>{[a.gender, a.family_group].filter((v) => v != null && String(v).trim() !== '').map(String).join(' · ')}</div>
+                                            </div>
                                         </div>
                                         {editable && (() => {
                                             // A pick survives refetches; once its room filled up it is no longer an option
