@@ -74,6 +74,10 @@ const AUDIT_ACTIONS = Object.freeze({
     MARKETPLACE_UPDATE: 'marketplace.update',
     PLUGIN_ACTIVATE: 'plugin.activate',
     PLUGIN_DEACTIVATE: 'plugin.deactivate',
+    // An ORPHANED slug reclaimed: `active_plugins` named it while its files were not loadable, so the
+    // stale entry was dropped and (only when the directory held no manifest and no entry file) its
+    // residue removed. Recorded because it both changes the active list and deletes from disk.
+    PLUGIN_ORPHAN_RECLAIM: 'plugin.orphan_reclaim',
     THEME_ACTIVATE: 'theme.activate',
     THEME_MODS_IMPORT: 'theme.mods.import',
 

@@ -608,7 +608,7 @@ const handleMarketplaceApply = asyncHandler(async (req: Request, res: Response) 
             return res.status(result.status).json(result.body);
         }
         // Fresh install — then record where it came from so future updates are bound to this source.
-        const result = await installPluginFromZip(tmp.zipPath, file);
+        const result = await installPluginFromZip(tmp.zipPath, file, undefined, req.user && req.user.id);
         if (result.ok) { try { await pluginOrigins.setPluginOrigin(slug, origin); } catch { /* non-fatal */ } }
         await recordAudit(req.user && req.user.id, 'marketplace.install', 'plugin', slug, applyAuditDetail(entry, result));
         return res.status(result.status).json(result.body);

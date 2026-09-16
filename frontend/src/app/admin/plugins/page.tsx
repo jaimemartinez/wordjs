@@ -68,6 +68,87 @@ function fmtMB(bytes?: number | null) {
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+// ---------------------------------------------------------------------------
+// ORPHANED (broken) plugins
+// ---------------------------------------------------------------------------
+
+/**
+ * Why this card exists. `plugins/<slug>/` can be left holding only build output while the
+ * `active_plugins` option still names <slug>. Before this, the plugin was invisible here (the backend
+ * list only carried loadable plugins) while every install of that slug was refused with "is currently
+ * active. Deactivate it before re-uploading" — so the admin had nothing to click and no way out. The
+ * backend now projects those slugs with `broken: true`, and this is the card that lets them act:
+ * reinstall from the marketplace, or clear the leftovers.
+ *
+ * Exported for the unit test — the page itself is a fetch-on-mount client tree.
+ */
+export const BROKEN_REASON_COPY: Record<string, string> = {
+    'missing': 'Instalación incompleta — faltan los archivos del plugin',
+    'no-manifest': 'Instalación incompleta — faltan los archivos del plugin',
+    'unreadable-manifest': 'Instalación dañada — su manifest.json no se puede leer',
+};
+
+export function brokenReasonText(plugin: Pick<Plugin, 'brokenReason'>): string {
+    // An unknown/absent reason must still read as broken, never as healthy: the fallback is the
+    // generic incomplete-install copy, not an empty string.
+    return BROKEN_REASON_COPY[plugin.brokenReason || ''] || BROKEN_REASON_COPY['no-manifest'];
+}
+
+/** Broken entries lead the grid: they are the ones blocking an install and needing a decision. */
+export function partitionPlugins(plugins: Plugin[]): { broken: Plugin[]; healthy: Plugin[] } {
+    return {
+        broken: plugins.filter((p) => p.broken),
+        healthy: plugins.filter((p) => !p.broken),
+    };
+}
+
+export function BrokenPluginCard({ plugin, onReinstall, onCleanup, busy }: {
+    plugin: Plugin;
+    onReinstall: (plugin: Plugin) => void;
+    onCleanup: (plugin: Plugin) => void;
+    busy?: boolean;
+}) {
+    return (
+        <div
+            data-testid="broken-plugin-card"
+            className="group relative rounded-[24px] p-6 transition-all duration-500 border bg-gradient-to-b from-amber-50/80 to-white/60 border-amber-300/70 shadow-[0_10px_20px_-10px_rgba(217,119,6,0.15)] backdrop-blur-xl hover:-translate-y-1.5 hover:shadow-[0_20px_40px_-15px_rgba(0,0,0,0.08)]"
+        >
+            <div className="flex justify-between items-start mb-4">
+                <div className="p-3.5 rounded-2xl bg-amber-100 text-amber-600">
+                    <FaExclamationTriangle className="text-lg" />
+                </div>
+                <span className="text-[8px] font-extrabold uppercase tracking-widest px-2.5 py-1 rounded-full border bg-amber-50 border-amber-200/60 text-amber-700">
+                    Roto
+                </span>
+            </div>
+
+            <h3 className="font-extrabold text-slate-900 text-lg mb-1 break-all">{plugin.slug}</h3>
+            <p className="text-xs text-amber-700 font-semibold leading-relaxed mb-2">{brokenReasonText(plugin)}</p>
+            <p className="text-xs text-slate-500 leading-relaxed mb-5">
+                {plugin.wasActive
+                    ? 'Estaba marcado como activo, pero no hay nada que cargar. Se ha quitado de la lista de activos.'
+                    : 'Quedan restos de este plugin en el servidor, pero no hay nada que cargar.'}
+            </p>
+
+            <div className="flex flex-wrap gap-2">
+                <button
+                    onClick={() => onReinstall(plugin)}
+                    className="px-4 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider bg-blue-600 text-white hover:bg-blue-700 active:scale-95 transition-all shadow-sm flex items-center gap-2"
+                >
+                    <FaStore className="text-[10px]" /> Reinstalar desde el Marketplace
+                </button>
+                <button
+                    onClick={() => onCleanup(plugin)}
+                    disabled={busy}
+                    className="px-4 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider bg-white text-rose-600 border border-rose-200 hover:bg-rose-50 active:scale-95 transition-all shadow-sm flex items-center gap-2 disabled:opacity-50"
+                >
+                    <FaTrash className="text-[10px]" /> Quitar restos
+                </button>
+            </div>
+        </div>
+    );
+}
+
 export default function PluginsPage() {
     const { t } = useI18n();
     const [plugins, setPlugins] = useState<Plugin[]>([]);
@@ -106,8 +187,13 @@ export default function PluginsPage() {
     const [search, setSearch] = useState("");
     const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive'>('all');
 
-    // Installed vs Marketplace view.
+    // Installed vs Marketplace view. `marketplaceFocus` is the slug "Reinstalar desde el Marketplace"
+    // hands over, so the catalog opens already filtered down to the entry the admin came for.
     const [tab, setTab] = useState<'installed' | 'marketplace'>('installed');
+    const [marketplaceFocus, setMarketplaceFocus] = useState<string>("");
+
+    // "Quitar restos" in flight (per slug) for an orphaned entry.
+    const [cleaningUp, setCleaningUp] = useState<Record<string, boolean>>({});
 
     // Android-style per-permission grants (default-deny). The admin toggles each DECLARED capability.
     const [permsModalPlugin, setPermsModalPlugin] = useState<Plugin | null>(null);
@@ -138,11 +224,15 @@ export default function PluginsPage() {
         return () => { if (searchTimer.current) clearTimeout(searchTimer.current); };
     }, [searchInput]);
 
-    // Derive the visible list (filter + search) before rendering.
+    // Derive the visible list (filter + search) before rendering. Orphaned entries obey the SEARCH but
+    // not the active/inactive filter: they are neither, and hiding them behind a filter would put the
+    // admin back where they started — unable to see the thing that is blocking the install.
     const visiblePlugins = useMemo(() => {
         return plugins.filter((p) => {
-            if (statusFilter === 'active' && !p.active) return false;
-            if (statusFilter === 'inactive' && p.active) return false;
+            if (!p.broken) {
+                if (statusFilter === 'active' && !p.active) return false;
+                if (statusFilter === 'inactive' && p.active) return false;
+            }
             if (search) {
                 const hay = `${p.name} ${p.description || ''} ${p.slug}`.toLowerCase();
                 if (!hay.includes(search)) return false;
@@ -150,6 +240,37 @@ export default function PluginsPage() {
             return true;
         });
     }, [plugins, statusFilter, search]);
+
+    const { broken: brokenPlugins, healthy: healthyPlugins } = useMemo(
+        () => partitionPlugins(visiblePlugins),
+        [visiblePlugins],
+    );
+
+    // "Reinstalar desde el Marketplace": switch tabs and pre-filter the catalog to this slug, so the
+    // admin lands on the entry instead of scrolling a catalog for the name they just read.
+    const reinstallFromMarketplace = (plugin: Plugin) => {
+        setMarketplaceFocus(plugin.slug);
+        setTab('marketplace');
+    };
+
+    // "Quitar restos": the deactivate route is the cleanup door — it clears the stale active entry and
+    // removes the leftover directory when that directory holds no plugin code.
+    const cleanupOrphan = async (plugin: Plugin) => {
+        setCleaningUp((m) => ({ ...m, [plugin.slug]: true }));
+        try {
+            const res = await pluginsApi.deactivate(plugin.slug);
+            addToast(res.message || `Restos de "${plugin.slug}" eliminados.`, "success");
+            loadPlugins();
+            refreshMenus();
+            // The stored active list just changed — the runtime loader's memo would otherwise stay stale.
+            reloadActivePlugins();
+        } catch (error: unknown) {
+            const message = error instanceof Error ? error.message : "Error desconocido";
+            addToast("No se pudieron quitar los restos: " + message, "error", 0);
+        } finally {
+            setCleaningUp((m) => ({ ...m, [plugin.slug]: false }));
+        }
+    };
 
     const openPermissions = (plugin: Plugin) => {
         // Only keep grants that the plugin actually declares (drop any stale grant for a removed perm).
@@ -904,7 +1025,7 @@ export default function PluginsPage() {
             {/* Marketplace view */}
             {tab === 'marketplace' && (
                 <div className="relative z-10">
-                    <MarketplaceTab onInstalled={loadPlugins} />
+                    <MarketplaceTab onInstalled={loadPlugins} initialSearch={marketplaceFocus} />
                 </div>
             )}
 
@@ -956,7 +1077,17 @@ export default function PluginsPage() {
                     />
                 ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-                        {visiblePlugins.map((plugin) => {
+                        {/* Orphaned entries first — they are what blocks a reinstall of that slug. */}
+                        {brokenPlugins.map((plugin) => (
+                            <BrokenPluginCard
+                                key={`broken-${plugin.slug}`}
+                                plugin={plugin}
+                                busy={!!cleaningUp[plugin.slug]}
+                                onReinstall={reinstallFromMarketplace}
+                                onCleanup={cleanupOrphan}
+                            />
+                        ))}
+                        {healthyPlugins.map((plugin) => {
                             const rm = plugin.runtime ? (RUNTIME_META[plugin.runtime.state] || RUNTIME_META.stopped) : null;
                             const rss = fmtMB(plugin.runtime?.rssBytes);
                             const isCrashLooping = plugin.runtime?.state === 'crash-looping';

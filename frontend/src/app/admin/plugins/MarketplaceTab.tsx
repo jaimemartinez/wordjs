@@ -91,14 +91,20 @@ export function ReviewPill({ review, official }: { review: MarketplaceEntry["rev
     );
 }
 
-export default function MarketplaceTab({ onInstalled }: { onInstalled: () => void }) {
+/**
+ * `initialSearch` is how the Instalados tab hands over a slug: the "Reinstalar desde el Marketplace"
+ * action on an orphaned (broken) entry switches tabs and names the plugin, so the catalog opens
+ * already filtered to it instead of asking the admin to find a name they just read. It seeds the
+ * search box only — the admin can clear or change it like any other search.
+ */
+export default function MarketplaceTab({ onInstalled, initialSearch = "" }: { onInstalled: () => void; initialSearch?: string }) {
     const { addToast } = useToast();
     const [entries, setEntries] = useState<MarketplaceEntry[]>([]);
     const [source, setSource] = useState<string>("");
     const [isLocal, setIsLocal] = useState(false);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string>("");
-    const [search, setSearch] = useState("");
+    const [search, setSearch] = useState(initialSearch);
     const [category, setCategory] = useState<string>("all");
     const [installing, setInstalling] = useState<Record<string, boolean>>({});
     const [confirmEntry, setConfirmEntry] = useState<MarketplaceEntry | null>(null);

@@ -17,7 +17,7 @@ const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { getAllPlugins, activatePlugin, deactivatePlugin, createSamplePlugin, isPluginActive, validatePluginPermissions, validateManifestPermissions, uninstallPluginData, PLUGINS_DIR } = require('../core/plugins');
+const { getAllPlugins, activatePlugin, deactivatePlugin, createSamplePlugin, isPluginActive, validatePluginPermissions, validateManifestPermissions, uninstallPluginData, listOrphanedPlugins, reclaimOrphanedPlugin, clearOrphanNotice, PLUGINS_DIR } = require('../core/plugins');
 const { assertZipWithinBudget } = require('../core/zip-guard');
 const { authenticate, authenticateAllowQuery } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/permissions');
@@ -269,7 +269,7 @@ router.post('/upload', authenticate, isAdmin, upload.single('plugin'), asyncHand
     if (!req.file) {
         return res.status(400).json({ error: 'No file uploaded' });
     }
-    const result = await installPluginFromZip(req.file.path, req.file.originalname);
+    const result = await installPluginFromZip(req.file.path, req.file.originalname, undefined, req.user && req.user.id);
     res.status(result.status).json(result.body);
 }));
 
@@ -289,8 +289,13 @@ router.post('/upload', authenticate, isAdmin, upload.single('plugin'), asyncHand
  *   path then deletes the stash. The plugin is destroyed and a stray directory is left behind.
  *   Mismatch is refused rather than retargeted: silently extracting a zip into a directory it did not
  *   name would let a zip for one plugin overwrite another.
+ * @param actorId The administrator behind the request, for the audit row this pipeline can write on
+ *   its own (reclaiming an ORPHANED slug drops an `active_plugins` entry and deletes from disk, which
+ *   is a lifecycle mutation like activate/deactivate and is logged like one). The two HTTP callers
+ *   pass `req.user.id`; the update path leaves it undefined — it cannot reach an orphan, because it
+ *   refuses a slug with no manifest.json long before this.
  */
-async function installPluginFromZip(zipPathIn: string, originalName: string, expectedSlug?: string): Promise<{ ok: boolean; status: number; body: any }> {
+async function installPluginFromZip(zipPathIn: string, originalName: string, expectedSlug?: string, actorId?: any): Promise<{ ok: boolean; status: number; body: any }> {
     // CONTENCION PRIMERO — INLINE, Y AQUI SE QUEDA.
     //
     // POR QUE AQUI Y NO EN UN HELPER (no lo refactorices a una utilidad). Esta funcion borra su zip
@@ -444,7 +449,32 @@ async function installPluginFromZip(zipPathIn: string, originalName: string, exp
 
         // INTEGRITY: refuse to overwrite a RUNNING plugin's code in place — a botched extract would
         // corrupt a working plugin and the next reload would swap live code with no warning.
-        if (await isPluginActive(intendedSlug)) {
+        //
+        // AN ORPHAN IS NOT RUNNING. `active_plugins` is a stored INTENTION, and it can name a slug
+        // whose files are not loadable at all (core/plugins' orphan header). This guard used to read
+        // that option ALONE, so a residual `plugins/<slug>/dist/` with the option still listing <slug>
+        // answered 409 "Deactivate it before re-uploading" — about a plugin the Instalados tab did not
+        // show and therefore could not deactivate. So reconcile FIRST: reclaimOrphanedPlugin drops the
+        // stale entry atomically and returns null for anything that is a real plugin, which is what
+        // leaves the live-plugin refusal below exactly as strict as it was.
+        const orphan = await reclaimOrphanedPlugin(intendedSlug);
+        if (orphan) {
+            // Remove the RESIDUE — and only a residue. `residual` is core's proof that the directory
+            // holds no manifest.json and no entry file; a merely unreadable manifest is a broken
+            // plugin whose code is still someone's work, so it keeps `residual: false` and falls
+            // through to the "a plugin directory already exists" refusal below. data/ survives either
+            // way (removePluginDirPreservingData), so the adopt path reconnects the preserved state.
+            let removedResidue = false;
+            if (orphan.residual && fs.existsSync(installedDir)) {
+                try { removePluginDirPreservingData(installedDir); removedResidue = true; }
+                catch (e: any) { console.warn('[plugins] residue of orphaned %s could not be removed: %s', logSafe(intendedSlug), logSafe(e && e.message)); }
+            }
+            await recordAudit(actorId, 'plugin.orphan_reclaim', 'plugin', intendedSlug, {
+                via: 'install', reason: orphan.reason,
+                droppedActiveEntry: orphan.droppedActiveEntry, removedResidue,
+            });
+            await clearOrphanNotice(intendedSlug);
+        } else if (await isPluginActive(intendedSlug)) {
             discardZip();
             return { ok: false, status: 409, body: { error: `Plugin '${intendedSlug}' is currently active. Deactivate it before re-uploading (this prevents corrupting a running plugin).` } };
         }
@@ -927,7 +957,12 @@ router.get('/active', asyncHandler(async (req: Request, res: Response) => {
  *       - bearerAuth: []
  *     responses:
  *       200:
- *         description: List of all plugins
+ *         description: >-
+ *           List of all plugins. ORPHANED slugs — claimed by the active_plugins option, or merely left
+ *           on disk, with no loadable files — are included with `broken: true`, `active: false`,
+ *           `brokenReason` (missing | no-manifest | unreadable-manifest), `wasActive` and `removable`
+ *           (its directory holds no code, so the deactivate route may delete it). They are NOT part of
+ *           GET /plugins/active nor of the marketplace catalog's `installed` flag.
  */
 router.get('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     // Await getAllPlugins()
@@ -940,7 +975,35 @@ router.get('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: Re
     // admin sees the TRUE state, not just the persisted 'active' flag which can lie after a crash.
     const { getIsolateStatus } = require('../core/plugin-isolate');
     const { THEMES_DIR } = require('../core/themes');
-    res.json(plugins.map((p: any) => {
+    // ORPHANS ride along as an EXPLICIT projection, they are not folded into getAllPlugins().
+    //
+    // That list is consumed by GET /plugins/active, by the dev registry generators and by the
+    // marketplace's `installed` flag, and every one of them would start lying if an entry with no
+    // files appeared in it (the catalog card would offer "Installed" for something that cannot run).
+    // So the contract of getAllPlugins() is unchanged and this screen — the only place an
+    // administrator can act on an orphan — projects them itself, flagged `broken: true` and never
+    // `active`, next to the plugins that really are installed.
+    const orphanRows = (await listOrphanedPlugins()).map((o: any) => ({
+        name: o.slug,
+        slug: o.slug,
+        version: '',
+        description: '',
+        author: '',
+        homepage: '',
+        path: '',
+        active: false,
+        permissions: [],
+        requestedPermissions: [],
+        grantedPermissions: getGrants(o.slug),
+        runtime: null,
+        hasTheme: false,
+        themeInstalled: false,
+        broken: true,
+        brokenReason: o.reason,          // 'missing' | 'no-manifest' | 'unreadable-manifest'
+        wasActive: !!o.active,           // it was listed in active_plugins when we looked
+        removable: !!o.residual,         // its directory holds no code, so cleanup may delete it
+    }));
+    res.json(orphanRows.concat(plugins.map((p: any) => {
         const requested = Array.from(new Set((p.permissions || [])
             .map((perm: any) => (perm && perm.scope) ? (perm.scope === 'network' ? 'network' : `${perm.scope}:${perm.access || 'read'}`) : null)
             .filter(Boolean)));
@@ -957,7 +1020,7 @@ router.get('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: Re
             hasTheme,
             themeInstalled: hasTheme && fs.existsSync(path.join(THEMES_DIR, `${p.slug}-theme`)),
         };
-    }));
+    })));
 }));
 
 /**
@@ -1761,7 +1824,7 @@ router.post('/:slug/free-port', authenticate, isAdmin, asyncHandler(async (req: 
  * @swagger
  * /plugins/{slug}/deactivate:
  *   post:
- *     summary: Deactivate a plugin
+ *     summary: Deactivate a plugin — or clean up an orphaned slug
  *     tags: [Plugins]
  *     security:
  *       - bearerAuth: []
@@ -1773,7 +1836,11 @@ router.post('/:slug/free-port', authenticate, isAdmin, asyncHandler(async (req: 
  *           type: string
  *     responses:
  *       200:
- *         description: Plugin deactivated
+ *         description: >-
+ *           Plugin deactivated. For an ORPHANED slug (listed active, or left on disk, with no loadable
+ *           files) the response also carries `orphaned: true` and `residueRemoved` — the stale
+ *           active_plugins entry is always cleared, and the leftover directory is removed only when it
+ *           holds no manifest.json and no entry file (its data/ subdir is preserved either way).
  */
 router.post('/:slug/deactivate', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     // SECURITY: Validate slug — and use the VALIDATED value below, never req.params.slug again.
@@ -1782,15 +1849,52 @@ router.post('/:slug/deactivate', authenticate, isAdmin, asyncHandler(async (req:
         return res.status(400).json({ error: 'Invalid plugin slug' });
     }
 
+    // Is this an ORPHAN rather than a plugin? This route is the ONE door out of that state — the admin
+    // UI's "Quitar restos" presses it — so it has to answer for a slug whose files are not loadable.
+    // deactivatePlugin() already clears the `active_plugins` entry (it early-returns for a slug that is
+    // not listed, which is why the orphan is looked up BEFORE the call, not after), so the extra work
+    // here is the RESIDUE on disk: removed only when core proved the directory holds no manifest.json
+    // and no entry file, and even then data/ survives (removePluginDirPreservingData).
+    const orphan = (await listOrphanedPlugins()).find((o: any) => o.slug === slug) || null;
+
     const result = await deactivatePlugin(slug);
+
+    let residueRemoved = false;
+    if (orphan) {
+        if (orphan.residual) {
+            try {
+                const dir = resolveSafePluginDir(slug);
+                if (fs.existsSync(dir)) { removePluginDirPreservingData(dir); residueRemoved = true; }
+            } catch (e: any) {
+                console.warn('[plugins] residue of orphaned %s could not be removed: %s', logSafe(slug), logSafe(e && e.message));
+            }
+        }
+        await clearOrphanNotice(slug);
+    }
 
     // Trigger frontend registry regeneration
     regenerateRegistry();
 
-    // AUDIT: an admin deactivated a plugin. Slug only — no secret material.
-    await recordAudit(req.user && req.user.id, 'plugin.deactivate', 'plugin', slug, {});
+    // AUDIT: an admin deactivated a plugin — or reclaimed an orphaned slug, which is a different act
+    // (it deletes from disk) and gets its own action name rather than hiding inside 'plugin.deactivate'.
+    if (orphan) {
+        await recordAudit(req.user && req.user.id, 'plugin.orphan_reclaim', 'plugin', slug, {
+            via: 'deactivate', reason: orphan.reason,
+            droppedActiveEntry: !!orphan.active, removedResidue: residueRemoved,
+        });
+    } else {
+        await recordAudit(req.user && req.user.id, 'plugin.deactivate', 'plugin', slug, {});
+    }
 
-    res.json(result);
+    if (!orphan) return res.json(result);
+    res.json({
+        ...result,
+        orphaned: true,
+        residueRemoved,
+        message: residueRemoved
+            ? `Plugin '${slug}' had no loadable files; its stale entry and leftover directory were removed.`
+            : `Plugin '${slug}' had no loadable files; its stale entry was removed.${orphan.hasDirectory ? ' Its directory still holds files and was left untouched — delete the plugin to remove it.' : ''}`,
+    });
 }));
 
 /**

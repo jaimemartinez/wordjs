@@ -4,6 +4,23 @@ All notable changes to WordJS are documented here. This project follows
 [Semantic Versioning](https://semver.org/). Each release is published as a pre-compiled bundle
 on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
+## [Unreleased]
+
+### Fixed
+
+- **An "active" plugin whose files are gone is no longer a dead end.** A plugin directory left holding
+  only build output — no `manifest.json`, no entry file — while `active_plugins` still named it put three
+  surfaces in contradiction: the admin's Installed tab did not show it (the scan skips a directory it
+  cannot load), every reinstall was refused with `409 Plugin '<slug>' is currently active. Deactivate it
+  before re-uploading` (the guard read the option alone), and boot never reconciled the two, so the state
+  survived every restart. One definition of "orphaned" now covers all three: boot prunes the stale entry
+  and raises a persistent admin notice per slug (retired automatically once the plugin is loadable again),
+  an install over an orphan drops the entry and removes the leftover directory before proceeding, the
+  admin screen shows the entry as a broken card offering *Reinstalar desde el Marketplace* and *Quitar
+  restos*, and `POST /plugins/:slug/deactivate` is the cleanup door for it. Real plugin files are never
+  removed on this path: a directory is only deleted when it holds no manifest and no entry file, its
+  `data/` subdir is preserved, and a genuinely running plugin is still refused an in-place overwrite.
+
 ## [2.2.0] - 2026-09-05
 
 ### Security
