@@ -6,6 +6,8 @@ import { csrfHeaders } from "@/lib/csrf";
 // Pure form helpers (seeding, string-only values, request body, money) — see form.ts for the contract
 // with conference-manager: values travel as strings, the SERVER canonicalises numbers.
 import { fieldOptions, fmtMoney, formBody, initialFormValues, inputToFormValue, isLocationFull, paymentMethodsOf, seatsLabel, type PortalField } from "./form";
+// The Hospedajes tab (lodging per location): its own data flow, one GET /portal/lodging, mounted only while selected.
+import Hospedajes from "./LodgingTab";
 // Import global API helper specifically suitable for handling custom headers or URLs if needed,
 // but basically we can reuse the generic apiGet/Post if we can override headers or just use fetch for the auth ones.
 // We'll create a simple local fetcher for the portal to manage the custom token auth simpler.
@@ -165,6 +167,8 @@ function LocationPortalContent() {
     // Dashboard State
     const [inscriptions, setInscriptions] = useState<Inscription[]>([]);
     const [view, setView] = useState<'list' | 'add'>('list');
+    // Dashboard tab. The participants tab is the pre-existing UI, untouched; Hospedajes mounts on demand.
+    const [tab, setTab] = useState<'participants' | 'lodging'>('participants');
     const [error, setError] = useState<string | null>(null);
 
     // Dynamic Form Data. Every value is a STRING (a blank number field is '' — never 0 — and the raw
@@ -641,6 +645,25 @@ function LocationPortalContent() {
                     </div>
                 </div>
 
+                {/* Tabs: Participantes (the original dashboard) | Hospedajes (lodging per location) */}
+                <div className="flex items-center gap-1 mb-4 border-b border-gray-200" role="tablist" data-testid="portal-tabs">
+                    {([['participants', 'Participantes', 'fa-users'], ['lodging', 'Hospedajes', 'fa-bed']] as const).map(([key, label, icon]) => (
+                        <button
+                            key={key}
+                            type="button"
+                            role="tab"
+                            aria-selected={tab === key}
+                            onClick={() => setTab(key)}
+                            className={`px-4 py-2.5 -mb-px text-sm font-medium border-b-2 transition flex items-center gap-2 ${tab === key ? 'border-blue-600 text-blue-700' : 'border-transparent text-gray-500 hover:text-gray-800'}`}
+                        >
+                            <i className={`fa-solid ${icon}`}></i> {label}
+                        </button>
+                    ))}
+                </div>
+
+                {tab === 'lodging' ? (
+                    <Hospedajes authHeaders={portalAuthHeaders} onLocationRefresh={refreshMyLocation} />
+                ) : (
                 <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
                     <div className="p-4 border-b border-gray-200 flex justify-between items-center bg-gray-50/50">
                         <h2 className="font-bold text-gray-800">
@@ -848,6 +871,7 @@ function LocationPortalContent() {
                         </div>
                     )}
                 </div>
+                )}
             </main>
             {showPaymentModal && (
                 <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 overflow-y-auto animate-in fade-in duration-200">

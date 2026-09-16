@@ -21,6 +21,17 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   coordinator portal only offers the enabled ones and the server refuses a payment recorded with a form the
   location does not receive; the admin's own entries must name one of the two. Locations created before this
   version receive both.
+- **Conference Manager 2.5.0 — lodging per location: the coordinator arranges, the admin validates.** The admin
+  allots hotel rooms to a location (a whole hotel or a selection of its rooms); the coordinator portal gains a
+  *Hospedajes* tab where the coordinator places their own attendees into those rooms by hand or with the automatic
+  assignment, driven by the admin's rules plus the location's own rules, and then submits the arrangement. The admin
+  reviews it (rooms, unplaced attendees, every broken rule — split families, mixed rooms, missing companions,
+  over-capacity) and validates it, returns it with observations or reopens it. A submitted or validated
+  arrangement is protected: its rooms cannot be deleted, shrunk or re-allotted and its attendees cannot be moved
+  until the admin reopens it. The admin keeps everything it had: the conference-wide automatic assignment still
+  covers every location (each with its rooms and rules) and the manual assignment still reaches any free room the
+  attendee may occupy. Rule predicates are now validated against the form's fields on both the admin and the portal
+  route, and the state changes are single conditional updates.
 
 ### Fixed
 

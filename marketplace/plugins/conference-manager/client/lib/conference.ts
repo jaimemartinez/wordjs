@@ -32,6 +32,10 @@ export interface Room {
     family_name?: string;
     notes?: string;
     occupied?: number;
+    /** null = pool room (the admin's conference-wide assignment); a location id = allotted to that location. */
+    location_id: number | null;
+    /** Resolved by GET /hotels (LEFT JOIN locations); null/undefined for a pool room. */
+    location_name?: string | null;
 }
 
 export interface Inscription {
@@ -142,6 +146,87 @@ export interface Location {
     inscribed: number;
     /** Forms of payment the location receives (subset of PAYMENT_METHODS, resolved by the server). */
     payment_methods: string[];
+    // --- Lodging per location (2.5.0) -------------------------------------------------------
+    /** draft = the coordinator is arranging; submitted = waiting for the admin; validated = closed. */
+    lodging_status: LodgingStatus;
+    /** The admin's observations when returning the arrangement (cleared on validate). */
+    lodging_note?: string | null;
+    lodging_submitted_at?: string | null;
+    lodging_reviewed_at?: string | null;
+    /** Rooms allotted to this location (COUNT). */
+    rooms_allotted?: number;
+    /** Beds allotted to this location (SUM of the allotted rooms' capacity). */
+    beds_allotted?: number;
+    /** Its attendees with a room (any room, pool included). */
+    lodged?: number;
+    /** Its non-cancelled attendees without a room. */
+    unlodged?: number;
+}
+
+export type LodgingStatus = 'draft' | 'submitted' | 'validated';
+
+/** A location is frozen (the coordinator can't edit, the admin must reopen) while under review or validated. */
+export const isLodgingFrozen = (status?: string | null): boolean =>
+    status === 'submitted' || status === 'validated';
+
+/** One broken rule as reported by the server's arrangement audit. */
+export interface LodgingViolation {
+    rule: string;
+    detail: string;
+    hard: boolean | number;
+}
+
+/** Attendee projection carried by GET /locations/:id/lodging (plus the conference's dynamic field columns). */
+export interface LodgingOccupant {
+    id: number;
+    first_name: string;
+    last_name: string;
+    gender?: string;
+    family_group?: string;
+    status?: string | null;
+    [field: string]: any;
+}
+
+export interface LodgingReviewRoom {
+    id: number;
+    hotel_name: string;
+    room_number: string;
+    capacity: number;
+    gender?: string;
+    is_family?: number;
+    family_name?: string;
+    notes?: string;
+    occupied: number;
+    occupants: LodgingOccupant[];
+}
+
+/** Response of GET /locations/:id/lodging — everything the admin needs to review one location's arrangement. */
+export interface LodgingReview {
+    location: {
+        id: number;
+        name: string;
+        lodging_status: LodgingStatus;
+        lodging_note?: string | null;
+        lodging_submitted_at?: string | null;
+        lodging_reviewed_at?: string | null;
+        capacity: number | null;
+        inscribed: number;
+    };
+    rooms: LodgingReviewRoom[];
+    unassigned: LodgingOccupant[];
+    placed_elsewhere: { id: number; first_name: string; last_name: string; hotel_name: string; room_number: string }[];
+    rules: { conference: AssignmentRule[]; location: AssignmentRule[] };
+    violations: LodgingViolation[];
+    counts: { placed: number; unassigned: number; hard_violations: number; soft_violations: number; placed_elsewhere: number };
+}
+
+/** Result of POST /assignment/run — totals plus one entry per delegated location the run covered or skipped. */
+export interface AssignmentRunReport {
+    assignedCount: number;
+    remaining: number;
+    violations: LodgingViolation[];
+    by_location?: { location_id: number; name: string; assignedCount: number; remaining: number; violations: LodgingViolation[] }[];
+    skipped_frozen?: { location_id: number; name: string; status: LodgingStatus }[];
 }
 
 /** The closed vocabulary of forms of payment — cash or bank transfer (mirrors the plugin). */
@@ -222,6 +307,15 @@ export const conferenceApi = {
         apiPut(`/plugin/conference-manager/locations/${id}`, data),
     deleteLocation: (id: number) => apiDelete(`/plugin/conference-manager/locations/${id}`),
 
+    // Lodging per location: the admin allots rooms and only validates the coordinator's arrangement.
+    /** Allot every room of the hotel (or only `room_ids`) to a location; `location_id: null` sends them back to the pool. */
+    allotHotel: (hotelId: number, data: { location_id: number | null; room_ids?: number[] }) =>
+        apiPost<{ success: boolean; rooms: number }>(`/plugin/conference-manager/hotels/${hotelId}/allot`, data),
+    getLocationLodging: (id: number) => apiGet<LodgingReview>(`/plugin/conference-manager/locations/${id}/lodging`),
+    validateLodging: (id: number) => apiPost<{ success: boolean }>(`/plugin/conference-manager/locations/${id}/lodging/validate`, {}),
+    returnLodging: (id: number, note: string) => apiPost<{ success: boolean }>(`/plugin/conference-manager/locations/${id}/lodging/return`, { note }),
+    reopenLodging: (id: number) => apiPost<{ success: boolean }>(`/plugin/conference-manager/locations/${id}/lodging/reopen`, {}),
+
     // Hotels (requires conference_id)
     getHotels: (conferenceId: number) => apiGet<Hotel[]>(`/plugin/conference-manager/hotels?conference_id=${conferenceId}`),
     createHotel: (conferenceId: number, data: Partial<Hotel>) =>
@@ -231,7 +325,8 @@ export const conferenceApi = {
 
     // Rooms
     createRoom: (data: Partial<Room>) => apiPost('/plugin/conference-manager/rooms', data),
-    updateRoom: (id: number, data: Partial<Room>) => apiPut(`/plugin/conference-manager/rooms/${id}`, data),
+    /** `location_id` (number | null) re-allots a single room; the server refuses it for a frozen location (409). */
+    updateRoom: (id: number, data: Partial<Room> & { location_id?: number | null }) => apiPut(`/plugin/conference-manager/rooms/${id}`, data),
     deleteRoom: (id: number) => apiDelete(`/plugin/conference-manager/rooms/${id}`),
 
     // Inscriptions (requires conference_id)
@@ -262,8 +357,9 @@ export const conferenceApi = {
     getAssignmentRules: (conferenceId: number) => apiGet<AssignmentRule[]>(`/plugin/conference-manager/assignment/rules?conference_id=${conferenceId}`),
     saveAssignmentRule: (data: Partial<AssignmentRule>) => apiPost('/plugin/conference-manager/assignment/rules', data),
     deleteAssignmentRule: (id: number) => apiDelete(`/plugin/conference-manager/assignment/rules/${id}`),
-    runAssignment: (conferenceId: number) => apiPost('/plugin/conference-manager/assignment/run', { conference_id: conferenceId }),
-    resetAssignments: (conferenceId: number) => apiPost('/plugin/conference-manager/assignment/reset', { conference_id: conferenceId }),
+    runAssignment: (conferenceId: number) => apiPost<AssignmentRunReport>('/plugin/conference-manager/assignment/run', { conference_id: conferenceId }),
+    // Clears every scope except the frozen locations, which come back in `skipped_frozen`.
+    resetAssignments: (conferenceId: number) => apiPost<{ success: boolean; skipped_frozen?: { location_id: number; name: string }[] }>('/plugin/conference-manager/assignment/reset', { conference_id: conferenceId }),
 
     // Fields
     getFields: (conferenceId: number) => apiGet<ConferenceField[]>(`/plugin/conference-manager/fields?conference_id=${conferenceId}`),

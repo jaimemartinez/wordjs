@@ -9,7 +9,7 @@ import { registerTranslations } from "../../../../../frontend/src/lib/i18n";
 import { useToast } from "../../../../../frontend/src/contexts/ToastContext";
 // Import local translations data
 import { translations } from "../lib/i18n";
-import { conferenceApi, PAYMENT_METHODS, Conference, Inscription, Hotel, Room, Location, ConferenceField, Payment, buildInscriptionPayload, seedLocationId, isImageProof, fmtMoney, paymentActions } from "../lib/conference";
+import { conferenceApi, PAYMENT_METHODS, Conference, Inscription, Hotel, Room, Location, ConferenceField, Payment, LodgingReview, buildInscriptionPayload, seedLocationId, isImageProof, fmtMoney, paymentActions, isLodgingFrozen } from "../lib/conference";
 import { useModal } from "@/contexts/ModalContext";
 import { StatCard } from "../../../../../frontend/src/components/ui/StatCard";
 import { ActionCard } from "../../../../../frontend/src/components/ui/ActionCard";
@@ -18,6 +18,17 @@ import { ActionCard } from "../../../../../frontend/src/components/ui/ActionCard
 registerTranslations(translations);
 
 type View = 'list' | 'dashboard' | 'inscriptions' | 'lodging' | 'locations' | 'reports' | 'assignment' | 'fields' | 'pricing';
+
+// Lodging status of a location (draft | submitted | validated): i18n key + badge classes, shared by the
+// locations cards, the review modal and the inscriptions assign modal.
+const LODGING_STATUS_META: Record<string, { key: string; fallback: string; cls: string; icon: string }> = {
+    draft: { key: 'lodging.status.draft', fallback: 'Borrador', cls: 'bg-gray-100 text-gray-500', icon: 'fa-pen-ruler' },
+    submitted: { key: 'lodging.status.submitted', fallback: 'Enviado a validación', cls: 'bg-amber-50 text-amber-700 border border-amber-200', icon: 'fa-paper-plane' },
+    validated: { key: 'lodging.status.validated', fallback: 'Validado', cls: 'bg-emerald-50 text-emerald-700 border border-emerald-200', icon: 'fa-circle-check' },
+};
+const lodgingStatusMeta = (status?: string | null) => LODGING_STATUS_META[status || 'draft'] || LODGING_STATUS_META.draft;
+// t() has no interpolation; the few keys that name a location carry a literal {name} placeholder.
+const withName = (text: string, name: string) => String(text || '').split('{name}').join(name);
 
 function ConferenceManagerContent() {
     const { currentConference, conferences, setCurrentConference, refreshConferences, loading } = useConference();
@@ -487,7 +498,8 @@ function ConferenceDashboard({ conferenceId, onNavigate }: { conferenceId: numbe
         hotels: 0,
         rooms: 0,
         paid: 0,
-        unpaid: 0
+        unpaid: 0,
+        lodgingToValidate: 0
     });
     const [loading, setLoading] = useState(true);
 
@@ -496,21 +508,25 @@ function ConferenceDashboard({ conferenceId, onNavigate }: { conferenceId: numbe
 
         const loadStats = async () => {
             try {
-                const [inscriptions, hotels] = await Promise.all([
+                const [inscriptions, hotels, locData] = await Promise.all([
                     conferenceApi.getInscriptions(conferenceId).catch(() => []),
-                    conferenceApi.getHotels(conferenceId).catch(() => [])
+                    conferenceApi.getHotels(conferenceId).catch(() => []),
+                    conferenceApi.getLocations(conferenceId).catch(() => null)
                 ]);
 
                 const paid = inscriptions.filter(i => i.payment_status === 'paid').length;
                 const unpaid = inscriptions.filter(i => i.payment_status !== 'paid').length;
                 const totalRooms = hotels.reduce((sum, h) => sum + (h.rooms?.length || 0), 0);
+                // Locations whose coordinator sent the lodging and is waiting for the admin's validation.
+                const lodgingToValidate = (locData?.locations || []).filter(l => l.lodging_status === 'submitted').length;
 
                 setStats({
                     inscriptions: inscriptions.length,
                     hotels: hotels.length,
                     rooms: totalRooms,
                     paid,
-                    unpaid
+                    unpaid,
+                    lodgingToValidate
                 });
             } catch (error) {
                 console.error('Failed to load stats:', error);
@@ -582,12 +598,13 @@ function ConferenceDashboard({ conferenceId, onNavigate }: { conferenceId: numbe
             </div>
 
             {/* Stats Grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-6">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-6">
                 <StatCard icon="fa-users" label={t('inscriptions')} value={stats.inscriptions} color="blue" />
                 <StatCard icon="fa-bed" label={t('hotels')} value={stats.hotels} color="purple" />
                 <StatCard icon="fa-door-open" label={t('rooms')} value={stats.rooms} color="indigo" />
                 <StatCard icon="fa-circle-check" label={t('paid')} value={stats.paid} color="green" />
                 <StatCard icon="fa-circle-xmark" label={t('unpaid')} value={stats.unpaid} color="red" />
+                <StatCard icon="fa-clipboard-check" label={t('lodging.pending.validation') || 'Hospedajes por validar'} value={stats.lodgingToValidate} color={stats.lodgingToValidate > 0 ? 'orange' : 'gray'} onClick={() => onNavigate('locations')} />
             </div>
 
             {/* Actions Grid */}
@@ -1573,7 +1590,32 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
                                 <i className="fa-solid fa-xmark text-lg"></i>
                             </button>
                         </div>
+                        {(() => {
+                            // The attendee's location (by id, or by name for legacy rows) decides which allotted
+                            // rooms are open to them, and whether the whole arrangement is frozen.
+                            const targetLocId = seedLocationId(assignTarget, confLocations);
+                            const targetLoc = targetLocId == null ? null : confLocations.find(l => Number(l.id) === Number(targetLocId)) || null;
+                            const frozen = !!targetLoc && isLodgingFrozen(targetLoc.lodging_status);
+                            return (
                         <div className="p-8 max-h-[65vh] overflow-y-auto modern-scrollbar">
+                            {frozen ? (
+                                <div className="p-6 rounded-2xl bg-amber-50 border border-amber-200 flex items-start gap-4">
+                                    <div className="w-10 h-10 rounded-xl bg-amber-100 text-amber-600 flex items-center justify-center shrink-0">
+                                        <i className="fa-solid fa-lock"></i>
+                                    </div>
+                                    <div>
+                                        <div className="flex items-center gap-2 mb-1">
+                                            <span className={`px-2 py-0.5 rounded-full text-[8px] font-black uppercase tracking-widest ${lodgingStatusMeta(targetLoc!.lodging_status).cls}`}>
+                                                {t(lodgingStatusMeta(targetLoc!.lodging_status).key) || lodgingStatusMeta(targetLoc!.lodging_status).fallback}
+                                            </span>
+                                        </div>
+                                        <p className="text-sm text-amber-800 font-medium leading-relaxed">
+                                            {withName(t('lodging.frozen.notice') || 'El hospedaje de la localidad «{name}» está en validación o validado. Reábrelo desde Localidades antes de cambiar la habitación de este participante.', targetLoc!.name)}
+                                        </p>
+                                    </div>
+                                </div>
+                            ) : (
+                            <>
                             {assignTarget.room_id && (
                                 <button
                                     onClick={() => doAssign(null)}
@@ -1598,18 +1640,28 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
                                                 {(hotel.rooms || []).map(room => {
                                                     const full = (room.occupied || 0) >= room.capacity && assignTarget.room_id !== room.id;
                                                     const current = assignTarget.room_id === room.id;
+                                                    // A room allotted to another location is closed to this attendee (roomAllows).
+                                                    const foreign = room.location_id != null && Number(room.location_id) !== Number(targetLocId);
+                                                    const blocked = full || foreign;
+                                                    const roomLoc = room.location_id != null ? (room.location_name || `#${room.location_id}`) : null;
                                                     return (
                                                         <button
                                                             key={room.id}
-                                                            disabled={full}
+                                                            disabled={blocked}
+                                                            title={foreign ? roomLoc || undefined : undefined}
                                                             onClick={() => doAssign(room.id)}
                                                             className={`px-3 py-2.5 rounded-xl border-2 text-left transition-all ${current
                                                                 ? 'border-blue-500 bg-blue-50'
-                                                                : full
+                                                                : blocked
                                                                     ? 'border-gray-100 bg-gray-50 opacity-50 cursor-not-allowed'
                                                                     : 'border-gray-100 hover:border-emerald-400 hover:bg-emerald-50'}`}
                                                         >
                                                             <div className="font-black text-sm text-gray-900">{room.room_number}</div>
+                                                            {roomLoc && (
+                                                                <div className={`text-[9px] font-black uppercase tracking-widest truncate ${foreign ? 'text-rose-500' : 'text-indigo-500'}`}>
+                                                                    <i className="fa-solid fa-map-pin mr-1"></i>{roomLoc}
+                                                                </div>
+                                                            )}
                                                             <div className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">
                                                                 {(room.occupied || 0)}/{room.capacity}
                                                             </div>
@@ -1624,7 +1676,11 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
                                     ))}
                                 </div>
                             )}
+                            </>
+                            )}
                         </div>
+                            );
+                        })()}
                     </div>
                 </div>
             )}
@@ -1645,6 +1701,13 @@ function LodgingPage({ conferenceId }: { conferenceId: number }) {
     const [roomForm, setRoomForm] = useState<Partial<Room>>({ room_number: '', capacity: 2, notes: '' });
     const [isBulk, setIsBulk] = useState(false);
     const [bulkConfig, setBulkConfig] = useState({ start: 1, end: 10, prefix: '' });
+    // Allotment of rooms to locations: the locations of the conference, the location picked per hotel
+    // ('' = pool), the hotel whose tiles are in selection mode and the selected room ids.
+    const [locations, setLocations] = useState<Location[]>([]);
+    const [allotTarget, setAllotTarget] = useState<Record<number, string>>({});
+    const [selectHotel, setSelectHotel] = useState<number | null>(null);
+    const [selectedRooms, setSelectedRooms] = useState<Set<number>>(new Set());
+    const [allotting, setAllotting] = useState<number | null>(null);
 
     const fetchHotels = async () => {
         if (!conferenceId) return;
@@ -1659,9 +1722,61 @@ function LodgingPage({ conferenceId }: { conferenceId: number }) {
         }
     };
 
+    const fetchLocations = async () => {
+        if (!conferenceId) return;
+        try {
+            const data = await conferenceApi.getLocations(conferenceId);
+            setLocations(data?.locations || []);
+        } catch (e) {
+            console.error(e);
+        }
+    };
+
     useEffect(() => {
         fetchHotels();
+        fetchLocations();
     }, [conferenceId]);
+
+    // Allot the whole hotel, or only the selected tiles, to the location picked in that hotel's select.
+    // The server refuses it (409) when an occupant belongs to another location or a location is frozen;
+    // those messages surface as toasts untouched.
+    const applyAllot = async (hotel: Hotel, roomIds?: number[]) => {
+        const raw = allotTarget[hotel.id] || '';
+        const locationId = raw === '' ? null : Number(raw);
+        if (roomIds && roomIds.length === 0) { addToast(t('allot.none.selected') || 'Selecciona al menos una habitación.', 'warning'); return; }
+        // The select defaults to the pool: a stray click on "Aplicar" would silently take every allotted
+        // room of the hotel away from its coordinators — confirm when the click actually un-allots one.
+        if (locationId === null) {
+            const affected = (hotel.rooms || []).filter(r => r.location_id != null && (!roomIds || roomIds.includes(r.id)));
+            if (affected.length > 0 && !await confirm(t('allot.confirm.pool') || 'Se devolverán al pool las habitaciones de este hotel ya asignadas a una localidad; sus encargados dejarán de verlas. ¿Continuar?', t('allot.apply.hotel') || 'Aplicar', true)) return;
+        }
+        setAllotting(hotel.id);
+        try {
+            await conferenceApi.allotHotel(hotel.id, roomIds ? { location_id: locationId, room_ids: roomIds } : { location_id: locationId });
+            addToast(t('allot.done') || 'Habitaciones actualizadas', 'success');
+            if (selectHotel === hotel.id) { setSelectHotel(null); setSelectedRooms(new Set()); }
+            fetchHotels();
+            fetchLocations();
+        } catch (error: any) {
+            addToast(error?.message || 'Error', 'error');
+        } finally {
+            setAllotting(null);
+        }
+    };
+
+    const toggleSelectMode = (hotel: Hotel) => {
+        if (selectHotel === hotel.id) { setSelectHotel(null); setSelectedRooms(new Set()); return; }
+        setSelectHotel(hotel.id);
+        setSelectedRooms(new Set());
+    };
+
+    const toggleRoomSelected = (roomId: number) => {
+        setSelectedRooms(prev => {
+            const next = new Set(prev);
+            if (next.has(roomId)) next.delete(roomId); else next.add(roomId);
+            return next;
+        });
+    };
 
     const handleHotelSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -1796,6 +1911,58 @@ function LodgingPage({ conferenceId }: { conferenceId: number }) {
                     </div>
 
                     <div className="p-8 bg-gray-50/30">
+                        {(hotel.rooms && hotel.rooms.length > 0) && (
+                            <div className="mb-6 p-4 bg-white rounded-2xl border border-gray-100 shadow-sm flex flex-col lg:flex-row lg:items-center gap-3">
+                                <div className="flex items-center gap-3 min-w-0">
+                                    <div className="w-9 h-9 rounded-xl bg-indigo-50 text-indigo-500 flex items-center justify-center text-sm shrink-0">
+                                        <i className="fa-solid fa-map-location-dot"></i>
+                                    </div>
+                                    <div className="min-w-0">
+                                        <div className="text-[9px] font-bold text-gray-400 uppercase tracking-widest">{t('allot.title') || 'Asignar habitaciones a localidad'}</div>
+                                        {locations.length === 0 && <div className="text-[10px] text-gray-400">{t('allot.no.locations') || 'Crea una localidad para poder asignarle habitaciones.'}</div>}
+                                    </div>
+                                </div>
+                                <div className="flex flex-wrap items-center gap-2 lg:ml-auto">
+                                    <select
+                                        value={allotTarget[hotel.id] || ''}
+                                        onChange={e => setAllotTarget({ ...allotTarget, [hotel.id]: e.target.value })}
+                                        className="border-2 border-gray-100 rounded-xl px-3 py-2 bg-gray-50/30 focus:bg-white focus:border-indigo-500 transition-all outline-none text-gray-900 font-medium text-xs"
+                                    >
+                                        <option value="">{t('allot.pool') || 'Sin asignar (pool)'}</option>
+                                        {locations.map(l => <option key={l.id} value={String(l.id)}>{l.name}</option>)}
+                                    </select>
+                                    <button
+                                        type="button"
+                                        disabled={allotting === hotel.id}
+                                        onClick={() => applyAllot(hotel)}
+                                        className="px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest bg-gray-900 text-white hover:bg-indigo-600 transition-all disabled:opacity-50 flex items-center gap-2"
+                                    >
+                                        <i className="fa-solid fa-hotel text-[8px]"></i> {t('allot.apply.hotel') || 'Aplicar a todo el hotel'}
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => toggleSelectMode(hotel)}
+                                        className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest border-2 transition-all flex items-center gap-2 ${selectHotel === hotel.id ? 'border-indigo-500 bg-indigo-50 text-indigo-700' : 'border-gray-100 bg-white text-gray-500 hover:border-indigo-300'}`}
+                                    >
+                                        <i className={`fa-solid ${selectHotel === hotel.id ? 'fa-xmark' : 'fa-object-group'} text-[8px]`}></i>
+                                        {selectHotel === hotel.id ? (t('allot.select.cancel') || 'Cancelar selección') : (t('allot.select.mode') || 'Seleccionar habitaciones')}
+                                    </button>
+                                    {selectHotel === hotel.id && (
+                                        <button
+                                            type="button"
+                                            disabled={allotting === hotel.id || selectedRooms.size === 0}
+                                            onClick={() => applyAllot(hotel, Array.from(selectedRooms))}
+                                            className="px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest bg-indigo-600 text-white hover:bg-indigo-700 transition-all disabled:opacity-50 flex items-center gap-2"
+                                        >
+                                            <i className="fa-solid fa-check text-[8px]"></i> {t('allot.apply.selection') || 'Aplicar a la selección'} ({selectedRooms.size})
+                                        </button>
+                                    )}
+                                </div>
+                                {selectHotel === hotel.id && (
+                                    <p className="w-full lg:w-auto lg:basis-full text-[10px] text-indigo-500 font-medium">{t('allot.hint') || 'Pulsa las habitaciones que quieras y aplica la localidad elegida a la selección.'}</p>
+                                )}
+                            </div>
+                        )}
                         {(!hotel.rooms || hotel.rooms.length === 0) ? (
                             <div className="flex flex-col items-center justify-center py-16 text-gray-300 border-2 border-dashed border-gray-200 rounded-3xl bg-white/50">
                                 <i className="fa-solid fa-door-closed text-4xl mb-4 opacity-30"></i>
@@ -1809,24 +1976,45 @@ function LodgingPage({ conferenceId }: { conferenceId: number }) {
                                     const occ = room.occupied || 0;
                                     const isFull = cap > 0 && occ >= cap;
                                     const occupancyPercent = cap > 0 ? Math.min(100, (occ / cap) * 100) : 0;
+                                    const selecting = selectHotel === hotel.id;
+                                    const selected = selecting && selectedRooms.has(room.id);
+                                    const badge = room.location_id != null ? (room.location_name || `#${room.location_id}`) : null;
 
                                     return (
-                                        <div key={room.id} className={`
+                                        <div
+                                            key={room.id}
+                                            onClick={selecting ? () => toggleRoomSelected(room.id) : undefined}
+                                            className={`
                                             group/room p-5 rounded-3xl border-2 transition-all duration-300 relative overflow-hidden flex flex-col justify-between h-32
-                                            ${isFull
-                                                ? 'bg-white border-rose-100 shadow-sm opacity-80'
-                                                : 'bg-white border-white shadow-sm hover:border-blue-400 hover:shadow-xl hover:-translate-y-1'}
+                                            ${selecting ? 'cursor-pointer' : ''}
+                                            ${selected
+                                                ? 'bg-indigo-50 border-indigo-500 shadow-lg'
+                                                : isFull
+                                                    ? 'bg-white border-rose-100 shadow-sm opacity-80'
+                                                    : 'bg-white border-white shadow-sm hover:border-blue-400 hover:shadow-xl hover:-translate-y-1'}
                                         `}>
                                             <div className="flex justify-between items-start z-10">
-                                                <span className="font-black text-xl text-gray-900 italic tracking-tighter">{room.room_number}</span>
+                                                <div className="min-w-0">
+                                                    <span className="font-black text-xl text-gray-900 italic tracking-tighter">{room.room_number}</span>
+                                                    {badge && (
+                                                        <div className="mt-0.5 max-w-full truncate px-1.5 py-0.5 rounded-md bg-indigo-50 text-indigo-600 text-[8px] font-black uppercase tracking-widest" title={badge}>
+                                                            <i className="fa-solid fa-map-pin mr-1"></i>{badge}
+                                                        </div>
+                                                    )}
+                                                </div>
                                                 <div className="flex items-center gap-1.5">
+                                                    {selecting && (
+                                                        <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[8px] border-2 ${selected ? 'bg-indigo-600 border-indigo-600 text-white' : 'border-gray-200 text-transparent'}`}>
+                                                            <i className="fa-solid fa-check"></i>
+                                                        </div>
+                                                    )}
                                                     {room.notes && (
                                                         <div className="w-5 h-5 rounded-full bg-blue-50 flex items-center justify-center text-blue-400 group-hover/room:bg-blue-100 transition-colors" title={room.notes}>
                                                             <i className="fa-solid fa-info text-[8px]"></i>
                                                         </div>
                                                     )}
                                                     <button
-                                                        onClick={() => handleDeleteRoom(room)}
+                                                        onClick={e => { e.stopPropagation(); handleDeleteRoom(room); }}
                                                         title={t('delete.room') || 'Eliminar habitación'}
                                                         className="w-5 h-5 rounded-full flex items-center justify-center text-gray-300 hover:text-rose-600 hover:bg-rose-50 transition-colors opacity-0 group-hover/room:opacity-100 [@media(hover:none)]:opacity-100"
                                                     >
@@ -3154,11 +3342,17 @@ function AssignmentPage({ conferenceId }: { conferenceId: number }) {
         }
     };
 
+    // "«Norte» no se tocó: hospedaje en validación/validado — reábrelo desde Localidades"
+    const skippedFrozenLine = (name: string) =>
+        withName(t('assignment.skipped.frozen') || '«{name}» no se tocó: hospedaje en validación/validado — reábrelo desde Localidades', name);
+
     const handleReset = async () => {
         if (!await confirm(t('confirm.reset.assignments') || 'Reset all assignments?', t('reset.assignments') || "Reset Assignments", true)) return;
         try {
-            await conferenceApi.resetAssignments(conferenceId);
-            addToast(t('assignment.reset.done'), 'success');
+            const result: any = await conferenceApi.resetAssignments(conferenceId);
+            const skipped: any[] = (result && result.skipped_frozen) || [];
+            if (skipped.length > 0) addToast(`${t('assignment.reset.done')}. ${skipped.map(s => skippedFrozenLine(s.name)).join(' ')}`, 'warning');
+            else addToast(t('assignment.reset.done'), 'success');
             loadData();
         } catch (e) {
             addToast('Error resetting assignments', 'error');
@@ -3325,6 +3519,31 @@ function AssignmentPage({ conferenceId }: { conferenceId: number }) {
                         <button onClick={() => setRunReport(null)} className="ml-auto text-gray-300 hover:text-gray-500"><i className="fa-solid fa-xmark"></i></button>
                     </div>
                     <p className="text-xs text-gray-600 mb-3">Asignados <b>{runReport.assignedCount}</b>{runReport.remaining ? <> · <span className="text-amber-700 font-bold">{runReport.remaining} sin cupo</span></> : null}.</p>
+                    {/* One line per delegated location the run covered, then the frozen ones it skipped. */}
+                    {(runReport.by_location || []).length > 0 && (
+                        <div className="mb-3">
+                            <div className="text-[9px] font-black uppercase tracking-widest text-gray-400 mb-1">{t('assignment.by.location') || 'Por localidad'}</div>
+                            <ul className="space-y-1">
+                                {runReport.by_location.map((l: any) => (
+                                    <li key={l.location_id} className="text-xs text-gray-700 flex items-center gap-2">
+                                        <i className="fa-solid fa-map-pin text-[9px] text-indigo-400"></i>
+                                        <b>{l.name}</b>: {l.assignedCount} {t('assignment.assigned.short') || 'asignados'}
+                                        {l.remaining ? <span className="text-amber-700 font-bold"> · {l.remaining} {t('assignment.remaining.short') || 'sin cupo'}</span> : null}
+                                    </li>
+                                ))}
+                            </ul>
+                        </div>
+                    )}
+                    {(runReport.skipped_frozen || []).length > 0 && (
+                        <ul className="mb-3 space-y-1">
+                            {runReport.skipped_frozen.map((l: any) => (
+                                <li key={l.location_id} className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 flex items-center gap-2">
+                                    <i className="fa-solid fa-lock text-[9px]"></i>
+                                    <span>{skippedFrozenLine(l.name)}</span>
+                                </li>
+                            ))}
+                        </ul>
+                    )}
                     {(runReport.violations || []).length === 0 ? (
                         <p className="text-xs text-emerald-700 font-medium">Todas las reglas se cumplieron. ✓</p>
                     ) : (
@@ -3459,6 +3678,14 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
     // Inline capacity editor on a card: which location and the value being typed.
     const [capacityEdit, setCapacityEdit] = useState<{ id: number; value: string } | null>(null);
     const [savingCapacity, setSavingCapacity] = useState(false);
+    // "Revisar hospedaje" modal: the location being reviewed, the GET /locations/:id/lodging payload,
+    // the observations typed for a return, and the action in flight.
+    const [reviewLoc, setReviewLoc] = useState<Location | null>(null);
+    const [review, setReview] = useState<LodgingReview | null>(null);
+    const [reviewLoading, setReviewLoading] = useState(false);
+    const [returnNote, setReturnNote] = useState('');
+    const [showReturnForm, setShowReturnForm] = useState(false);
+    const [reviewBusy, setReviewBusy] = useState(false);
 
     const loadLocations = async () => {
         setLoading(true);
@@ -3477,7 +3704,13 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
         loadLocations();
     }, [conferenceId]);
 
-    const { confirm } = useModal();
+    // In-page confirm that renders ABOVE this page's own z-[100] modals (the review modal awaits it for
+    // Validar / Reabrir) — the shared useModal dialog is z-50 and would sit BEHIND the review modal, so
+    // its buttons could never be clicked and the promise would never resolve. Same
+    // (message, label, danger) signature as useModal's confirm; the promise resolves to the choice.
+    const [confirmState, setConfirmState] = useState<{ message: string; label: string; danger: boolean; resolve: (v: boolean) => void } | null>(null);
+    const confirm = (message: string, label = 'Confirmar', danger = false) =>
+        new Promise<boolean>(resolve => setConfirmState({ message, label, danger, resolve }));
 
     const canCreate = !!newLocation.name.trim() && /^\d+$/.test(newLocation.capacity.trim()) && Number(newLocation.capacity) > 0;
     const handleCreate = async () => {
@@ -3591,6 +3824,96 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
         }
     };
 
+    // --- Lodging review (the admin only validates the coordinator's arrangement) ---------------
+    const loadReview = async (id: number) => {
+        setReviewLoading(true);
+        try {
+            setReview(await conferenceApi.getLocationLodging(id));
+        } catch (error: any) {
+            addToast(error?.message || t('lodging.error.loading') || 'Error al cargar el hospedaje', 'error');
+        } finally {
+            setReviewLoading(false);
+        }
+    };
+
+    const openReview = (loc: Location) => {
+        setReviewLoc(loc);
+        setReview(null);
+        setReturnNote('');
+        setShowReturnForm(false);
+        loadReview(loc.id);
+    };
+
+    const closeReview = () => {
+        setReviewLoc(null);
+        setReview(null);
+        setShowReturnForm(false);
+    };
+
+    // Each transition is a compare-and-set on the server (409 when the status moved meanwhile); after
+    // any of them the modal reloads its payload and the cards refresh their status/counters.
+    const handleValidate = async () => {
+        if (!reviewLoc) return;
+        if (!await confirm(t('lodging.confirm.validate') || '¿Validar el hospedaje de esta localidad? El encargado no podrá modificarlo hasta que lo reabras.', t('lodging.validate') || 'Validar', false)) return;
+        setReviewBusy(true);
+        try {
+            await conferenceApi.validateLodging(reviewLoc.id);
+            addToast(t('lodging.validated.done') || 'Hospedaje validado', 'success');
+            await loadReview(reviewLoc.id);
+            loadLocations();
+        } catch (error: any) {
+            addToast(error?.message || 'Error', 'error');
+        } finally {
+            setReviewBusy(false);
+        }
+    };
+
+    const handleReturn = async () => {
+        if (!reviewLoc) return;
+        const note = returnNote.trim();
+        if (!note) { addToast(t('lodging.return.note.required') || 'Indica las observaciones para el encargado.', 'warning'); return; }
+        setReviewBusy(true);
+        try {
+            await conferenceApi.returnLodging(reviewLoc.id, note);
+            addToast(t('lodging.returned.done') || 'Hospedaje devuelto al encargado', 'success');
+            setShowReturnForm(false);
+            setReturnNote('');
+            await loadReview(reviewLoc.id);
+            loadLocations();
+        } catch (error: any) {
+            addToast(error?.message || 'Error', 'error');
+        } finally {
+            setReviewBusy(false);
+        }
+    };
+
+    const handleReopen = async () => {
+        if (!reviewLoc) return;
+        if (!await confirm(t('lodging.confirm.reopen') || '¿Reabrir el hospedaje? El encargado podrá volver a modificarlo.', t('lodging.reopen') || 'Reabrir', false)) return;
+        setReviewBusy(true);
+        try {
+            await conferenceApi.reopenLodging(reviewLoc.id);
+            addToast(t('lodging.reopened.done') || 'Hospedaje reabierto', 'success');
+            await loadReview(reviewLoc.id);
+            loadLocations();
+        } catch (error: any) {
+            addToast(error?.message || 'Error', 'error');
+        } finally {
+            setReviewBusy(false);
+        }
+    };
+
+    // The server stamps CURRENT_TIMESTAMP: SQLite returns `YYYY-MM-DD HH:MM:SS` in UTC with no zone
+    // marker (Chrome would read it as local time, Safari as an invalid date) — parse that form as UTC.
+    const fmtDate = (v?: string | null) => {
+        if (!v) return '';
+        const s = String(v).trim();
+        const sql = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?)$/.exec(s);
+        const d = new Date(sql ? `${sql[1]}T${sql[2]}Z` : s);
+        return isNaN(d.getTime()) ? s : d.toLocaleString();
+    };
+    const occupantName = (p: any) => `${p.first_name || ''} ${p.last_name || ''}`.trim() || `#${p.id}`;
+
     return (
         <div className="space-y-10 animate-in fade-in duration-500">
             {/* Premium Public Link Card */}
@@ -3631,6 +3954,10 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
                             {isPublished
                                 ? 'El portal está listo para recibir inscripciones. Comparte este enlace exclusivo con tus coordinadores y responsables de cada zona para iniciar el proceso.'
                                 : 'Tu portal aún está en modo borrador. El enlace no funcionará correctamente hasta que publiques el formulario desde la pestaña de campos.'}
+                        </p>
+                        <p className={`text-xs font-medium leading-relaxed max-w-xl mt-3 ${isPublished ? 'text-emerald-800/60' : 'text-gray-400'}`}>
+                            <i className="fa-solid fa-bed mr-1.5"></i>
+                            {t('portal.publish.hint') || 'Los encargados necesitan el formulario publicado para entrar al portal (inscripciones y hospedaje).'}
                         </p>
                     </div>
                     <button
@@ -3810,6 +4137,43 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
                                                 </div>
                                             </div>
                                         </div>
+                                        {(() => {
+                                            const meta = lodgingStatusMeta(loc.lodging_status);
+                                            const unlodged = Number(loc.unlodged) || 0;
+                                            return (
+                                                <div className={`p-3 bg-white rounded-xl border shadow-sm transition-colors ${loc.lodging_status === 'submitted' ? 'border-amber-200' : 'border-gray-50 group-hover:border-blue-100'}`}>
+                                                    <div className="flex items-center gap-4">
+                                                        <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-sm ${loc.lodging_status === 'submitted' ? 'bg-amber-50 text-amber-500' : loc.lodging_status === 'validated' ? 'bg-emerald-50 text-emerald-500' : 'bg-purple-50 text-purple-400'}`}>
+                                                            <i className="fa-solid fa-bed"></i>
+                                                        </div>
+                                                        <div className="flex-1 min-w-0">
+                                                            <div className="flex items-center gap-2 flex-wrap">
+                                                                <div className="text-[9px] font-bold text-gray-400 uppercase tracking-widest">{t('lodging.block') || 'Hospedaje'}</div>
+                                                                <span className={`px-2 py-0.5 rounded-full text-[8px] font-black uppercase tracking-widest ${meta.cls}`}>
+                                                                    <i className={`fa-solid ${meta.icon} mr-1`}></i>{t(meta.key) || meta.fallback}
+                                                                </span>
+                                                            </div>
+                                                            <div className="text-[11px] font-bold text-gray-600 mt-1 flex flex-wrap gap-x-1.5">
+                                                                <span>{Number(loc.rooms_allotted) || 0} {t('lodging.rooms.short') || 'hab.'}</span>
+                                                                <span className="text-gray-300">·</span>
+                                                                <span>{Number(loc.beds_allotted) || 0} {t('lodging.beds.short') || 'camas'}</span>
+                                                                <span className="text-gray-300">·</span>
+                                                                <span>{Number(loc.lodged) || 0} {t('lodging.lodged.short') || 'alojados'}</span>
+                                                                <span className="text-gray-300">·</span>
+                                                                <span className={unlodged > 0 ? 'text-amber-600' : ''}>{unlodged} {t('lodging.unlodged.short') || 'sin habitación'}</span>
+                                                            </div>
+                                                        </div>
+                                                        <button
+                                                            onClick={() => openReview(loc)}
+                                                            title={t('lodging.review') || 'Revisar hospedaje'}
+                                                            className={`shrink-0 text-[10px] font-black uppercase tracking-widest px-3 py-2 rounded-xl transition-all shadow-sm ${loc.lodging_status === 'submitted' ? 'bg-amber-500 text-white hover:bg-amber-600' : 'bg-white text-purple-600 hover:bg-purple-600 hover:text-white'}`}
+                                                        >
+                                                            <i className="fa-solid fa-clipboard-check mr-1"></i>{t('lodging.review') || 'Revisar hospedaje'}
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            );
+                                        })()}
                                         <div className="flex items-center gap-4 p-3 bg-white rounded-xl border border-gray-50 shadow-sm group-hover:border-blue-100 transition-colors">
                                             <div className="w-8 h-8 rounded-lg bg-blue-50 text-blue-400 flex items-center justify-center text-sm">
                                                 <i className="fa-solid fa-user-tie"></i>
@@ -3835,6 +4199,252 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
                     </div>
                 </div>
             )}
+
+            {/* Lodging review modal — fed by GET /locations/:id/lodging; the admin validates / returns / reopens. */}
+            {reviewLoc && (() => {
+                const status = review?.location?.lodging_status || reviewLoc.lodging_status || 'draft';
+                const meta = lodgingStatusMeta(status);
+                const counts = review?.counts || { placed: 0, unassigned: 0, hard_violations: 0, soft_violations: 0, placed_elsewhere: 0 };
+                const violations = review?.violations || [];
+                const note = review ? review.location?.lodging_note : reviewLoc.lodging_note;
+                const submittedAt = review ? review.location?.lodging_submitted_at : reviewLoc.lodging_submitted_at;
+                const reviewedAt = review ? review.location?.lodging_reviewed_at : reviewLoc.lodging_reviewed_at;
+                const hardLabel = t('rule.hard') || 'Obligatoria';
+                const softLabel = t('rule.soft') || 'Preferente';
+                return (
+                    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 overflow-y-auto animate-in fade-in duration-200">
+                        <div className="bg-white rounded-[32px] shadow-2xl w-full max-w-4xl border border-gray-100 overflow-hidden animate-in zoom-in-95 duration-200 max-h-[92vh] flex flex-col">
+                            <div className="bg-gray-50/50 px-8 py-6 border-b border-gray-100 flex items-center justify-between gap-4">
+                                <div className="min-w-0">
+                                    <div className="flex items-center gap-3 flex-wrap">
+                                        <h3 className="font-bold text-xl text-gray-900 italic truncate">{t('lodging.review.title') || 'Revisión de hospedaje'} — {reviewLoc.name}</h3>
+                                        <span className={`px-2.5 py-1 rounded-full text-[9px] font-black uppercase tracking-widest ${meta.cls}`}>
+                                            <i className={`fa-solid ${meta.icon} mr-1`}></i>{t(meta.key) || meta.fallback}
+                                        </span>
+                                    </div>
+                                    <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-1 flex flex-wrap gap-x-3">
+                                        {submittedAt && <span>{t('lodging.submitted.at') || 'Enviado'}: {fmtDate(submittedAt)}</span>}
+                                        {reviewedAt && <span>{t('lodging.reviewed.at') || 'Revisado'}: {fmtDate(reviewedAt)}</span>}
+                                    </p>
+                                </div>
+                                <button onClick={closeReview} className="text-gray-400 hover:text-gray-600 transition-colors p-2 hover:bg-gray-100 rounded-lg shrink-0">
+                                    <i className="fa-solid fa-xmark text-lg"></i>
+                                </button>
+                            </div>
+
+                            <div className="p-8 space-y-8 overflow-y-auto modern-scrollbar flex-1">
+                                {reviewLoading && !review ? (
+                                    <div className="text-center py-16"><div className="inline-block w-8 h-8 border-4 border-purple-500 border-t-transparent rounded-full animate-spin"></div></div>
+                                ) : !review ? (
+                                    <div className="text-center py-16 text-gray-400 text-sm">{t('lodging.error.loading') || 'Error al cargar el hospedaje'}</div>
+                                ) : (
+                                    <>
+                                        {/* The four counts */}
+                                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                                            {[
+                                                { label: t('lodging.counts.placed') || 'Alojados', value: counts.placed, cls: 'bg-emerald-50 text-emerald-700', icon: 'fa-bed' },
+                                                { label: t('lodging.counts.unassigned') || 'Sin habitación', value: counts.unassigned, cls: counts.unassigned > 0 ? 'bg-amber-50 text-amber-700' : 'bg-gray-50 text-gray-500', icon: 'fa-user-slash' },
+                                                { label: t('lodging.counts.hard') || 'Faltas obligatorias', value: counts.hard_violations, cls: counts.hard_violations > 0 ? 'bg-rose-50 text-rose-700' : 'bg-gray-50 text-gray-500', icon: 'fa-triangle-exclamation' },
+                                                { label: t('lodging.counts.soft') || 'Faltas preferentes', value: counts.soft_violations, cls: counts.soft_violations > 0 ? 'bg-amber-50 text-amber-700' : 'bg-gray-50 text-gray-500', icon: 'fa-circle-exclamation' },
+                                            ].map((c, i) => (
+                                                <div key={i} className={`rounded-2xl p-4 ${c.cls}`}>
+                                                    <div className="text-[9px] font-black uppercase tracking-widest opacity-70"><i className={`fa-solid ${c.icon} mr-1`}></i>{c.label}</div>
+                                                    <div className="text-2xl font-black italic tracking-tighter mt-1">{c.value}</div>
+                                                </div>
+                                            ))}
+                                        </div>
+
+                                        {/* Actions by status */}
+                                        <div className={`rounded-2xl border p-5 ${status === 'submitted' ? 'bg-amber-50/40 border-amber-200' : status === 'validated' ? 'bg-emerald-50/40 border-emerald-200' : 'bg-gray-50 border-gray-100'}`}>
+                                            {status === 'submitted' && (
+                                                <div className="space-y-4">
+                                                    <div className="flex flex-wrap items-center gap-3">
+                                                        <button
+                                                            onClick={handleValidate}
+                                                            disabled={reviewBusy}
+                                                            className="px-6 py-3 rounded-xl bg-emerald-600 text-white font-black text-[10px] uppercase tracking-widest hover:bg-emerald-700 transition-all disabled:opacity-50 flex items-center gap-2 shadow-lg shadow-emerald-500/20"
+                                                        >
+                                                            <i className="fa-solid fa-circle-check"></i> {t('lodging.validate') || 'Validar'}
+                                                        </button>
+                                                        <button
+                                                            onClick={() => setShowReturnForm(v => !v)}
+                                                            disabled={reviewBusy}
+                                                            className={`px-6 py-3 rounded-xl font-black text-[10px] uppercase tracking-widest transition-all disabled:opacity-50 flex items-center gap-2 border-2 ${showReturnForm ? 'border-amber-500 bg-amber-100 text-amber-800' : 'border-amber-300 bg-white text-amber-700 hover:bg-amber-50'}`}
+                                                        >
+                                                            <i className="fa-solid fa-rotate-left"></i> {t('lodging.return') || 'Devolver'}
+                                                        </button>
+                                                    </div>
+                                                    {showReturnForm && (
+                                                        <div className="space-y-2">
+                                                            <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-widest ml-1">{t('lodging.return.note') || 'Observaciones para el encargado'} *</label>
+                                                            <textarea
+                                                                value={returnNote}
+                                                                onChange={e => setReturnNote(e.target.value)}
+                                                                rows={3}
+                                                                maxLength={2000}
+                                                                required
+                                                                placeholder={t('lodging.return.note.placeholder') || 'Explica qué debe corregir el encargado…'}
+                                                                className="w-full border-2 border-amber-200 rounded-xl px-4 py-3 bg-white focus:border-amber-500 transition-all outline-none text-gray-900 font-medium text-sm"
+                                                                autoFocus
+                                                            />
+                                                            <div className="flex justify-end">
+                                                                <button
+                                                                    onClick={handleReturn}
+                                                                    disabled={reviewBusy || !returnNote.trim()}
+                                                                    className="px-6 py-2.5 rounded-xl bg-amber-500 text-white font-black text-[10px] uppercase tracking-widest hover:bg-amber-600 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                                                                >
+                                                                    <i className="fa-solid fa-paper-plane"></i> {t('lodging.return') || 'Devolver'}
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            )}
+                                            {status === 'validated' && (
+                                                <div className="flex flex-wrap items-center gap-3">
+                                                    <p className="text-sm text-emerald-800 font-medium flex-1"><i className="fa-solid fa-circle-check mr-2"></i>{t('lodging.status.validated') || 'Validado'}</p>
+                                                    <button
+                                                        onClick={handleReopen}
+                                                        disabled={reviewBusy}
+                                                        className="px-6 py-3 rounded-xl border-2 border-emerald-300 bg-white text-emerald-700 font-black text-[10px] uppercase tracking-widest hover:bg-emerald-50 transition-all disabled:opacity-50 flex items-center gap-2"
+                                                    >
+                                                        <i className="fa-solid fa-lock-open"></i> {t('lodging.reopen') || 'Reabrir'}
+                                                    </button>
+                                                </div>
+                                            )}
+                                            {status === 'draft' && (
+                                                <div className="space-y-3">
+                                                    <p className="text-sm text-gray-500 font-medium"><i className="fa-solid fa-hourglass-half mr-2"></i>{t('lodging.not.submitted') || 'El encargado aún no ha enviado el hospedaje'}</p>
+                                                    {note && (
+                                                        <div className="p-4 rounded-xl bg-amber-50 border border-amber-200">
+                                                            <div className="text-[9px] font-black uppercase tracking-widest text-amber-600 mb-1">{t('lodging.note.label') || 'Observaciones enviadas al encargado'}</div>
+                                                            <p className="text-sm text-amber-900 whitespace-pre-wrap">{note}</p>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            )}
+                                        </div>
+
+                                        {/* Violations: hard in red, soft in amber */}
+                                        <div>
+                                            <h4 className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-3">{t('lodging.violations') || 'Reglas incumplidas'}</h4>
+                                            {violations.length === 0 ? (
+                                                <p className="text-xs text-emerald-700 font-medium"><i className="fa-solid fa-check mr-1"></i>{t('lodging.violations.none') || 'Todas las reglas se cumplen.'}</p>
+                                            ) : (
+                                                <ul className="space-y-1.5">
+                                                    {violations.map((v: any, i: number) => (
+                                                        <li key={i} className={`flex items-start gap-2 text-xs p-2.5 rounded-xl border ${v.hard ? 'bg-rose-50 border-rose-200 text-rose-800' : 'bg-amber-50 border-amber-200 text-amber-800'}`}>
+                                                            <span className={`mt-0.5 px-1.5 py-0.5 rounded text-[8px] font-black uppercase tracking-widest whitespace-nowrap ${v.hard ? 'bg-rose-100 text-rose-600' : 'bg-amber-100 text-amber-700'}`}>{v.hard ? hardLabel : softLabel}</span>
+                                                            <span><b>{v.rule}</b> — {v.detail}</span>
+                                                        </li>
+                                                    ))}
+                                                </ul>
+                                            )}
+                                        </div>
+
+                                        {/* Rooms with occupants */}
+                                        <div>
+                                            <h4 className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-3">{t('lodging.rooms.title') || 'Habitaciones y ocupantes'} ({review.rooms.length})</h4>
+                                            {review.rooms.length === 0 ? (
+                                                <p className="text-xs text-gray-400 italic">{t('lodging.rooms.none') || 'Esta localidad no tiene habitaciones asignadas.'}</p>
+                                            ) : (
+                                                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                                                    {review.rooms.map(room => {
+                                                        const over = (room.occupied || 0) > (room.capacity || 0);
+                                                        return (
+                                                            <div key={room.id} className={`p-4 rounded-2xl border ${over ? 'border-rose-200 bg-rose-50/30' : 'border-gray-100 bg-gray-50/40'}`}>
+                                                                <div className="flex items-center justify-between gap-2 mb-2">
+                                                                    <div className="min-w-0">
+                                                                        <div className="font-black text-sm text-gray-900 italic tracking-tighter truncate">{room.room_number}</div>
+                                                                        <div className="text-[9px] text-gray-400 font-bold uppercase tracking-widest truncate">{room.hotel_name}</div>
+                                                                    </div>
+                                                                    <span className={`text-xs font-black whitespace-nowrap ${over ? 'text-rose-600' : 'text-gray-700'}`}>{room.occupied || 0}<span className="text-gray-300">/</span>{room.capacity}</span>
+                                                                </div>
+                                                                {(room.occupants || []).length === 0 ? (
+                                                                    <p className="text-[10px] text-gray-300 italic">{t('lodging.room.empty') || 'Vacía'}</p>
+                                                                ) : (
+                                                                    <ul className="space-y-1">
+                                                                        {room.occupants.map((p: any) => (
+                                                                            <li key={p.id} className="text-xs text-gray-700 flex items-center gap-2">
+                                                                                <i className={`fa-solid ${p.gender === 'F' ? 'fa-venus text-pink-400' : p.gender === 'M' ? 'fa-mars text-blue-400' : 'fa-user text-gray-300'} text-[9px]`}></i>
+                                                                                <span className="truncate">{occupantName(p)}</span>
+                                                                                {p.family_group && <span className="text-[8px] font-black uppercase tracking-widest text-indigo-500 bg-indigo-50 px-1.5 rounded">{p.family_group}</span>}
+                                                                            </li>
+                                                                        ))}
+                                                                    </ul>
+                                                                )}
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
+                                            )}
+                                        </div>
+
+                                        {/* Unassigned */}
+                                        <div>
+                                            <h4 className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-3">{t('lodging.unassigned.title') || 'Participantes sin habitación'} ({review.unassigned.length})</h4>
+                                            {review.unassigned.length === 0 ? (
+                                                <p className="text-xs text-emerald-700 font-medium"><i className="fa-solid fa-check mr-1"></i>{t('lodging.unassigned.none') || 'Todos los participantes tienen habitación.'}</p>
+                                            ) : (
+                                                <div className="flex flex-wrap gap-2">
+                                                    {review.unassigned.map((p: any) => (
+                                                        <span key={p.id} className="px-3 py-1.5 rounded-xl bg-amber-50 border border-amber-200 text-xs font-bold text-amber-800">{occupantName(p)}</span>
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </div>
+
+                                        {/* Placed by the admin into pool rooms (read-only for the coordinator) */}
+                                        {(review.placed_elsewhere || []).length > 0 && (
+                                            <div>
+                                                <h4 className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-3">{t('lodging.elsewhere.title') || 'Alojados por el administrador en habitaciones del pool'} ({review.placed_elsewhere.length})</h4>
+                                                <ul className="space-y-1">
+                                                    {review.placed_elsewhere.map(p => (
+                                                        <li key={p.id} className="text-xs text-gray-700 flex items-center gap-2">
+                                                            <i className="fa-solid fa-bed text-[9px] text-purple-400"></i>
+                                                            <span>{occupantName(p)}</span>
+                                                            <span className="text-gray-400">— {p.hotel_name} · {p.room_number}</span>
+                                                        </li>
+                                                    ))}
+                                                </ul>
+                                            </div>
+                                        )}
+
+                                        {/* The location's own rules, read-only */}
+                                        <div>
+                                            <h4 className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-1">{t('lodging.rules.title') || 'Reglas propias del encargado'} ({(review.rules?.location || []).length})</h4>
+                                            <p className="text-[10px] text-gray-400 mb-3">{t('lodging.rules.conference.hint') || 'Se aplican además las reglas de la conferencia'} ({(review.rules?.conference || []).length}).</p>
+                                            {(review.rules?.location || []).length === 0 ? (
+                                                <p className="text-xs text-gray-400 italic">{t('lodging.rules.none') || 'El encargado no ha definido reglas propias.'}</p>
+                                            ) : (
+                                                <div className="divide-y divide-gray-100 rounded-2xl border border-gray-100 overflow-hidden">
+                                                    {review.rules.location.map((rule: any) => (
+                                                        <div key={rule.id} className={`p-3 flex items-center gap-3 ${rule.enabled ? 'bg-white' : 'bg-gray-50 opacity-60'}`}>
+                                                            <div className="w-8 h-8 rounded-lg bg-indigo-50 text-indigo-500 flex items-center justify-center text-xs shrink-0">
+                                                                <i className={`fa-solid ${ruleTypeMeta(rule.type).icon}`}></i>
+                                                            </div>
+                                                            <div className="flex-1 min-w-0">
+                                                                <div className="flex items-center gap-2 flex-wrap">
+                                                                    <span className="font-black text-sm text-gray-900 truncate">{rule.name}</span>
+                                                                    <span className="px-2 py-0.5 rounded-full text-[8px] font-black uppercase tracking-widest bg-indigo-50 text-indigo-600">{ruleTypeMeta(rule.type).label}</span>
+                                                                    <span className={`px-2 py-0.5 rounded-full text-[8px] font-black uppercase tracking-widest ${rule.hard ? 'bg-rose-50 text-rose-600' : 'bg-gray-100 text-gray-400'}`}>{rule.hard ? hardLabel : softLabel}</span>
+                                                                </div>
+                                                                <div className="text-[9px] text-gray-400 font-bold uppercase tracking-widest mt-0.5">
+                                                                    {t('priority')}: {rule.priority}{rule.config ? ` · ${rule.config}` : ''}
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </div>
+                                    </>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                );
+            })()}
 
             {/* Create Location Modal */}
             {showModal && (
@@ -3939,6 +4549,33 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
                                     {t('create')}
                                 </button>
                             </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* In-page confirm dialog — z-[120], above the review modal (z-100). */}
+            {confirmState && (
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[120] flex items-center justify-center p-4 animate-in fade-in duration-150">
+                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md border border-gray-100 overflow-hidden animate-in zoom-in-95 duration-150">
+                        <div className="p-6">
+                            <p className="text-gray-800 font-medium leading-relaxed">{confirmState.message}</p>
+                        </div>
+                        <div className="px-6 py-4 bg-gray-50/50 border-t border-gray-100 flex justify-end gap-3">
+                            <button
+                                type="button"
+                                onClick={() => { confirmState.resolve(false); setConfirmState(null); }}
+                                className="px-5 py-2 text-gray-500 font-bold hover:bg-gray-100 rounded-xl transition"
+                            >
+                                {t('cancel') || 'Cancelar'}
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => { confirmState.resolve(true); setConfirmState(null); }}
+                                className={`px-5 py-2 text-white font-bold rounded-xl shadow-lg transition ${confirmState.danger ? 'bg-rose-600 hover:bg-rose-700 shadow-rose-500/30' : 'bg-blue-600 hover:bg-blue-700 shadow-blue-500/30'}`}
+                            >
+                                {confirmState.label}
+                            </button>
                         </div>
                     </div>
                 </div>

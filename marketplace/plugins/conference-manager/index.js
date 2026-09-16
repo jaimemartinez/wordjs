@@ -20,7 +20,7 @@
 
 exports.metadata = {
     name: 'Conference Manager',
-    version: '2.4.0',
+    version: '2.5.0',
     description: 'Manage multiple conference inscriptions, payments, and lodging assignments.',
     author: 'WordJS'
 };
@@ -134,6 +134,12 @@ exports.init = async function (wordjs) {
             'responsible_phone TEXT',
             'capacity INT',
             'payment_methods TEXT',
+            // Lodging review (2.5.0): draft | submitted | validated — read as COALESCE(lodging_status, 'draft').
+            'lodging_status TEXT DEFAULT \'draft\'',
+            'lodging_note TEXT',
+            'lodging_submitted_at DATETIME',
+            'lodging_reviewed_at DATETIME',
+            'lodging_reviewed_by TEXT',
             `FOREIGN KEY (conference_id) REFERENCES ${T.conferences}(id) ON DELETE CASCADE`
         ]);
 
@@ -158,6 +164,9 @@ exports.init = async function (wordjs) {
             'is_family INT DEFAULT 0',
             'family_name TEXT',
             'notes TEXT',
+            // NULL = pool room (the admin's conference-wide assignment); non-null = allotted to that
+            // location. Plain column, no FK (ALTER cannot add one on SQLite; both install paths must agree).
+            'location_id INT',
             `FOREIGN KEY (hotel_id) REFERENCES ${T.hotels}(id) ON DELETE CASCADE`
         ]);
 
@@ -217,6 +226,8 @@ exports.init = async function (wordjs) {
             'config TEXT',
             'params TEXT DEFAULT \'{}\'',
             'hard INT DEFAULT 0',
+            // NULL = the admin's conference rule; non-null = that location's own rule (coordinator). No FK.
+            'location_id INT',
             `FOREIGN KEY (conference_id) REFERENCES ${T.conferences}(id) ON DELETE CASCADE`
         ]);
 
@@ -577,6 +588,17 @@ exports.init = async function (wordjs) {
         await addColumnIfMissing(T.locations, 'capacity', 'INT');
         // Forms of payment the location receives (JSON array; NULL = both, see enabledPaymentMethods).
         await addColumnIfMissing(T.locations, 'payment_methods', 'TEXT');
+        // Lodging per location (2.5.0): rooms allotted to a location, the location's own assignment
+        // rules, and the review state of its arrangement. Plain columns (no FK — see createTable).
+        await addColumnIfMissing(T.rooms, 'location_id', 'INT');
+        await addColumnIfMissing(T.rules, 'location_id', 'INT');
+        await addColumnIfMissing(T.locations, 'lodging_status', "TEXT DEFAULT 'draft'");
+        await addColumnIfMissing(T.locations, 'lodging_note', 'TEXT');
+        await addColumnIfMissing(T.locations, 'lodging_submitted_at', 'DATETIME');
+        await addColumnIfMissing(T.locations, 'lodging_reviewed_at', 'DATETIME');
+        await addColumnIfMissing(T.locations, 'lodging_reviewed_by', 'TEXT');
+        await createIndex(`${P}idx_rooms_location`, T.rooms, 'location_id');
+        await createIndex(`${P}idx_rules_location`, T.rules, 'location_id');
         // Stable location identity: `location_id` is the portal ISOLATION KEY; the free-text `location`
         // stays as the display label. ONE-OFF backfill from the label, run only on the boot that creates
         // the column (a 2.1.0 → 2.2.0 upgrade): afterwards a NULL location_id is a deliberate state —
@@ -741,6 +763,120 @@ exports.init = async function (wordjs) {
     }
     const shortText = (v, max) => (v === undefined || v === null || v === '' ? null : String(v).slice(0, max));
 
+    // ── lodging per location (2.5.0) — shared helpers ────────────────────────────────────────────
+    // A room with a non-null `location_id` is ALLOTTED to that location: only its attendees may sleep
+    // there (roomAllows). A location is DELEGATED when it has at least one allotted room, and FROZEN
+    // while its arrangement is under review (lodging_status submitted | validated).
+    const frozenSqlOf = (col) => `COALESCE(${col}, 'draft') IN ('submitted', 'validated')`;
+    const frozenSql = frozenSqlOf('lodging_status');
+    const LODGING_STATUSES = new Set(['draft', 'submitted', 'validated']);
+    const lodgingStatusOf = (row) => (row && LODGING_STATUSES.has(row.lodging_status) ? row.lodging_status : 'draft');
+    const isFrozen = (row) => lodgingStatusOf(row) !== 'draft';
+    // Invariant 1: a pool room takes anyone; an allotted room takes only its location's attendees.
+    const roomAllows = (room, person) => room.location_id == null || Number(room.location_id) === Number(person.location_id);
+    // `:id` route params (and body ids): a positive integer or null.
+    const positiveInt = (v) => {
+        if (typeof v !== 'number' && typeof v !== 'string') return null;
+        if (typeof v === 'string' && !/^\s*[0-9]+\s*$/.test(v)) return null;
+        const n = Number(v);
+        return Number.isInteger(n) && n > 0 ? n : null;
+    };
+    // Invariant 3: a frozen location's rooms and occupants are read-only for everyone. `locationIdOrRow`
+    // is a location id (looked up) or a row carrying { id, name, lodging_status }. A missing location
+    // (deleted meanwhile) is not frozen. Throws 409.
+    async function assertLocationNotFrozen(locationIdOrRow, action) {
+        if (locationIdOrRow == null) return;
+        const row = typeof locationIdOrRow === 'object' ? locationIdOrRow
+            : await db.get(`SELECT id, name, lodging_status FROM ${T.locations} WHERE id = ?`, [locationIdOrRow]);
+        if (!row || !isFrozen(row)) return;
+        throw httpError(409, `El hospedaje de la localidad «${row.name}» está en validación/validado; reábrelo antes de ${action}.`);
+    }
+
+    // ── rule validation (shared by POST /assignment/rules and the portal's rule editor) ──────────
+    // Fields a rule (or a predicate inside its params) may read: the conference's defined form fields
+    // plus these base columns. Anything else (notes, custom_data, payment columns…) is rejected, so a
+    // predicate can never be a read oracle over data the caller may not see.
+    const BASE_RULE_FIELDS = ['first_name', 'last_name', 'gender', 'email', 'phone', 'document_number', 'family_group', 'location'];
+    const PRED_OPS = new Set(['any', 'filled', 'empty', 'eq', 'neq', 'contains', 'gt', 'gte', 'lt', 'lte']);
+    const RULE_PARAMS_MAX_CHARS = 4096, RULE_MAX_PREDICATES = 20, RULE_PRIORITY_MAX = 1000000;
+    // The allowed field-name set of a conference: defined fields ∪ BASE_RULE_FIELDS.
+    async function ruleFieldNames(conferenceId) {
+        const rows = await db.all(`SELECT name FROM ${T.fields} WHERE conference_id = ?`, [conferenceId]);
+        return new Set([...BASE_RULE_FIELDS, ...rows.map(r => r.name).filter(isFieldColumn)]);
+    }
+    // Body → { name, type, enabled, priority, config, params (object), hard } or throws 400.
+    function normalizeRule(body, { conferenceId, fieldNames }) {
+        const src = body && typeof body === 'object' && !Array.isArray(body) ? body : {};
+        const names = fieldNames instanceof Set ? fieldNames : new Set(fieldNames || BASE_RULE_FIELDS);
+        const cleanName = typeof src.name === 'string' ? src.name.trim() : '';
+        if (!cleanName) throw httpError(400, 'El nombre de la regla es obligatorio.');
+        if (!RULE_TYPES.has(src.type)) throw httpError(400, 'Tipo de regla inválido.');
+        const cfg = src.config == null ? '' : String(src.config).trim();
+        if (cfg !== '' && !names.has(cfg)) throw httpError(400, 'El campo de la regla es inválido.');
+        // params: a JSON object (a string body is parsed), bounded in size and in shape.
+        let params;
+        if (src.params == null) params = {};
+        else if (typeof src.params === 'string') {
+            const t = src.params.trim();
+            if (!t) params = {};
+            else { try { params = JSON.parse(t); } catch { params = null; } }
+        } else params = src.params;
+        if (!params || typeof params !== 'object' || Array.isArray(params)) throw httpError(400, 'Los parámetros de la regla no son JSON válido.');
+        const invalid = () => httpError(400, 'Los parámetros de la regla son inválidos.');
+        const out = { ...params };
+        for (const k of ['min_size', 'min']) {
+            if (out[k] === undefined || out[k] === null || out[k] === '') { delete out[k]; continue; }
+            const n = typeof out[k] === 'number' || typeof out[k] === 'string' ? Number(out[k]) : NaN;
+            if (!Number.isInteger(n) || n < 1) throw invalid();
+            out[k] = n;
+        }
+        const normPred = (pr) => {
+            if (!pr || typeof pr !== 'object' || Array.isArray(pr)) throw invalid();
+            const op = pr.op == null || pr.op === '' ? 'eq' : pr.op;
+            if (typeof op !== 'string' || !PRED_OPS.has(op)) throw invalid();
+            const field = pr.field == null ? '' : String(pr.field).trim();
+            if (field === '' ? op !== 'any' : !names.has(field)) throw invalid();
+            const p = { field, op };
+            if (pr.value !== undefined && pr.value !== null) {
+                if (typeof pr.value === 'object' || typeof pr.value === 'function') throw invalid();
+                const v = String(pr.value);
+                if (v.length > 200) throw invalid();
+                p.value = v;
+            }
+            return p;
+        };
+        for (const k of ['when', 'subject', 'needs']) {
+            if (out[k] === undefined || out[k] === null) { delete out[k]; continue; }
+            let arr = out[k];
+            if (!Array.isArray(arr)) { if (arr && typeof arr === 'object') arr = [arr]; else throw invalid(); }
+            if (arr.length > RULE_MAX_PREDICATES) throw invalid();
+            out[k] = arr.map(normPred);
+        }
+        if (JSON.stringify(out).length > RULE_PARAMS_MAX_CHARS) throw invalid();
+        let priority = 0;
+        if (src.priority !== undefined && src.priority !== null && src.priority !== '') {
+            priority = typeof src.priority === 'number' || typeof src.priority === 'string' ? Number(src.priority) : NaN;
+            if (!Number.isInteger(priority) || Math.abs(priority) > RULE_PRIORITY_MAX) throw httpError(400, 'La prioridad de la regla debe ser un número entero.');
+        }
+        return {
+            name: shortText(cleanName, 100),
+            type: src.type,
+            enabled: src.enabled === undefined ? 1 : (src.enabled ? 1 : 0),
+            priority,
+            config: cfg,
+            params: out,
+            hard: src.hard ? 1 : 0,
+        };
+    }
+    // A stored rule row → the engine/audit shape (params parsed, flags as booleans).
+    const parseRuleRow = (r) => {
+        let params = {};
+        try { params = r.params ? (typeof r.params === 'string' ? JSON.parse(r.params) : r.params) : {}; } catch { params = {}; }
+        return { id: r.id, name: r.name, type: r.type, field: r.config, params: params && typeof params === 'object' ? params : {}, hard: !!r.hard, enabled: r.enabled == null ? true : !!Number(r.enabled), priority: r.priority, location_id: r.location_id == null ? null : r.location_id };
+    };
+    // What a rule looks like on the wire (admin review + portal): params as an object.
+    const ruleProjection = (r) => ({ id: r.id, name: r.name, type: r.type, config: r.config == null ? '' : r.config, params: parseRuleRow(r).params, hard: Number(r.hard) ? 1 : 0, priority: r.priority, enabled: r.enabled == null ? 1 : (Number(r.enabled) ? 1 : 0), location_id: r.location_id == null ? null : r.location_id });
+
     // ── dynamic pricing engine ───────────────────────────────────────────────────────────────────
     // Numeric-looking values compare by their canonical text ("30" == "30.0" == "0030"), everything
     // else case-insensitively — so a rule value `30` matches stored "30" and legacy "30.0" alike.
@@ -888,10 +1024,11 @@ exports.init = async function (wordjs) {
             // Single joined query with a correlated occupancy subquery (mirrors runAssignment),
             // then group rooms under their hotel in JS — avoids the per-hotel + per-room N+1.
             const rooms = await db.all(`
-                SELECT r.*,
+                SELECT r.*, l.name AS location_name,
                 (SELECT COUNT(*) FROM ${T.inscriptions} i WHERE i.room_id = r.id) as occupied
                 FROM ${T.rooms} r
                 JOIN ${T.hotels} h ON r.hotel_id = h.id
+                LEFT JOIN ${T.locations} l ON r.location_id = l.id
                 WHERE h.conference_id = ?
             `, [conference_id]);
 
@@ -1214,10 +1351,23 @@ exports.init = async function (wordjs) {
         try {
             const conf = await db.get(`SELECT *, (SELECT COUNT(*) FROM ${T.fields} WHERE conference_id = ${T.conferences}.id) as fields_count FROM ${T.conferences} WHERE id = ?`, [conference_id]);
             // `inscribed` = seats taken (see occupiedSql), so the card can show 12 / 50 without a second call.
+            // Lodging (2.5.0): rooms/beds allotted to the location, its attendees with a room (any room)
+            // and its non-cancelled attendees still without one.
             const locations = await db.all(
-                `SELECT l.*, (SELECT COUNT(*) FROM ${T.inscriptions} i WHERE i.location_id = l.id AND ${occupiedSql('i.status')}) AS inscribed`
+                `SELECT l.*, (SELECT COUNT(*) FROM ${T.inscriptions} i WHERE i.location_id = l.id AND ${occupiedSql('i.status')}) AS inscribed,`
+                + ` (SELECT COUNT(*) FROM ${T.rooms} r WHERE r.location_id = l.id) AS rooms_allotted,`
+                + ` (SELECT COALESCE(SUM(r.capacity), 0) FROM ${T.rooms} r WHERE r.location_id = l.id) AS beds_allotted,`
+                + ` (SELECT COUNT(*) FROM ${T.inscriptions} i WHERE i.location_id = l.id AND i.room_id IS NOT NULL) AS lodged,`
+                + ` (SELECT COUNT(*) FROM ${T.inscriptions} i WHERE i.location_id = l.id AND i.room_id IS NULL AND ${occupiedSql('i.status')}) AS unlodged`
                 + ` FROM ${T.locations} l WHERE l.conference_id = ? ORDER BY l.name`, [conference_id]);
-            for (const l of locations) l.payment_methods = enabledPaymentMethods(l);
+            for (const l of locations) {
+                l.payment_methods = enabledPaymentMethods(l);
+                l.lodging_status = lodgingStatusOf(l);
+                l.rooms_allotted = Number(l.rooms_allotted) || 0;
+                l.beds_allotted = Number(l.beds_allotted) || 0;
+                l.lodged = Number(l.lodged) || 0;
+                l.unlodged = Number(l.unlodged) || 0;
+            }
             res.json({ locations, conference: conf });
         } catch (e) { sendError(res, e); }
     });
@@ -1289,11 +1439,71 @@ exports.init = async function (wordjs) {
 
     http.route('delete', '/locations/:id', { auth: true, admin: true }, async (req, res) => {
         try {
+            const id = positiveInt(req.params.id);
+            if (!id) return res.status(404).json({ error: 'Localidad no encontrada.' });
+            // Lodging: its attendees leave the rooms that were allotted to it (those rooms go back to
+            // the pool and would otherwise hold people of no location), and its own rules go with it.
+            await db.run(`UPDATE ${T.inscriptions} SET room_id = NULL WHERE location_id = ? AND room_id IN (SELECT id FROM ${T.rooms} WHERE location_id = ?)`, [id, id]);
+            await db.run(`UPDATE ${T.rooms} SET location_id = NULL WHERE location_id = ?`, [id]);
+            await db.run(`DELETE FROM ${T.rules} WHERE location_id = ?`, [id]);
             // No FK can be added by ALTER in SQLite: detach the attendees explicitly. The label is kept
             // for history (reports/CSV still show where they registered).
-            await db.run(`UPDATE ${T.inscriptions} SET location_id = NULL WHERE location_id = ?`, [req.params.id]);
-            await db.run(`DELETE FROM ${T.locations} WHERE id = ?`, [req.params.id]);
+            await db.run(`UPDATE ${T.inscriptions} SET location_id = NULL WHERE location_id = ?`, [id]);
+            await db.run(`DELETE FROM ${T.locations} WHERE id = ?`, [id]);
             res.json({ success: true });
+        } catch (e) { sendError(res, e); }
+    });
+
+    // ── lodging review (admin validates what the coordinator arranged) ───────────────────────
+    // The arrangement of a location: its allotted rooms with L's occupants, L's attendees without a
+    // room, those the admin placed elsewhere, the rules in force and the audit of the current state.
+    http.route('get', '/locations/:id/lodging', { auth: true, admin: true }, async (req, res) => {
+        try {
+            const id = positiveInt(req.params.id);
+            const loc = id ? await db.get(`SELECT * FROM ${T.locations} WHERE id = ?`, [id]) : null;
+            if (!loc) return res.status(404).json({ error: 'Localidad no encontrada.' });
+            res.json(await loadLodging(loc, { forAdmin: true }));
+        } catch (e) { sendError(res, e); }
+    });
+    // State transitions are compare-and-set: ONE conditional UPDATE under the assignment lock; a 409 is
+    // derived from `changes === 0` (someone else moved the state first).
+    http.route('post', '/locations/:id/lodging/validate', { auth: true, admin: true }, async (req, res) => {
+        try {
+            const id = positiveInt(req.params.id);
+            const loc = id ? await db.get(`SELECT id FROM ${T.locations} WHERE id = ?`, [id]) : null;
+            if (!loc) return res.status(404).json({ error: 'Localidad no encontrada.' });
+            const r = await withAssignmentLock(() => db.run(
+                `UPDATE ${T.locations} SET lodging_status = 'validated', lodging_reviewed_at = CURRENT_TIMESTAMP, lodging_reviewed_by = ?, lodging_note = NULL WHERE id = ? AND COALESCE(lodging_status, 'draft') = 'submitted'`,
+                [reviewerOf(req), id]));
+            if (!r || !r.changes) return res.status(409).json({ error: 'El hospedaje no está enviado a validación.' });
+            res.json({ success: true, lodging_status: 'validated' });
+        } catch (e) { sendError(res, e); }
+    });
+    http.route('post', '/locations/:id/lodging/return', { auth: true, admin: true }, async (req, res) => {
+        try {
+            const id = positiveInt(req.params.id);
+            const loc = id ? await db.get(`SELECT id FROM ${T.locations} WHERE id = ?`, [id]) : null;
+            if (!loc) return res.status(404).json({ error: 'Localidad no encontrada.' });
+            const note = typeof (req.body || {}).note === 'string' ? req.body.note.trim() : '';
+            if (!note) return res.status(400).json({ error: 'Indica las observaciones para el encargado.' });
+            if (note.length > 2000) return res.status(400).json({ error: 'Las observaciones son demasiado largas (máximo 2000 caracteres).' });
+            const r = await withAssignmentLock(() => db.run(
+                `UPDATE ${T.locations} SET lodging_status = 'draft', lodging_note = ?, lodging_reviewed_at = CURRENT_TIMESTAMP, lodging_reviewed_by = ? WHERE id = ? AND COALESCE(lodging_status, 'draft') = 'submitted'`,
+                [note, reviewerOf(req), id]));
+            if (!r || !r.changes) return res.status(409).json({ error: 'El hospedaje no está enviado a validación.' });
+            res.json({ success: true, lodging_status: 'draft' });
+        } catch (e) { sendError(res, e); }
+    });
+    // Reopen a validated arrangement (keeps it and the review stamps; the coordinator may edit again).
+    http.route('post', '/locations/:id/lodging/reopen', { auth: true, admin: true }, async (req, res) => {
+        try {
+            const id = positiveInt(req.params.id);
+            const loc = id ? await db.get(`SELECT id FROM ${T.locations} WHERE id = ?`, [id]) : null;
+            if (!loc) return res.status(404).json({ error: 'Localidad no encontrada.' });
+            const r = await withAssignmentLock(() => db.run(
+                `UPDATE ${T.locations} SET lodging_status = 'draft' WHERE id = ? AND COALESCE(lodging_status, 'draft') = 'validated'`, [id]));
+            if (!r || !r.changes) return res.status(409).json({ error: 'El hospedaje no está validado.' });
+            res.json({ success: true, lodging_status: 'draft' });
         } catch (e) { sendError(res, e); }
     });
 
@@ -1329,11 +1539,70 @@ exports.init = async function (wordjs) {
     });
     http.route('delete', '/hotels/:id', { auth: true, admin: true }, async (req, res) => {
         try {
+            const id = positiveInt(req.params.id);
+            if (!id) return res.status(404).json({ error: 'Hotel no encontrado.' });
+            // A room allotted to a frozen location is part of an arrangement under review.
+            const frozen = await db.get(
+                `SELECT l.id, l.name, l.lodging_status FROM ${T.rooms} r JOIN ${T.locations} l ON r.location_id = l.id WHERE r.hotel_id = ? AND ${frozenSqlOf('l.lodging_status')} ORDER BY l.name LIMIT 1`, [id]);
+            if (frozen) await assertLocationNotFrozen(frozen, 'eliminar sus habitaciones');
             // Free any attendees assigned to this hotel's rooms before the FK cascade drops the rooms,
             // so occupancy counts stay honest.
-            await db.run(`UPDATE ${T.inscriptions} SET room_id = NULL WHERE room_id IN (SELECT id FROM ${T.rooms} WHERE hotel_id = ?)`, [req.params.id]);
-            await db.run(`DELETE FROM ${T.hotels} WHERE id = ?`, [req.params.id]);
+            await db.run(`UPDATE ${T.inscriptions} SET room_id = NULL WHERE room_id IN (SELECT id FROM ${T.rooms} WHERE hotel_id = ?)`, [id]);
+            await db.run(`DELETE FROM ${T.hotels} WHERE id = ?`, [id]);
             res.json({ success: true });
+        } catch (e) { sendError(res, e); }
+    });
+
+    // Allot every room of a hotel (or only `room_ids`) to a location — `location_id` null = back to the
+    // pool. All-or-nothing: the frozen checks (target + every affected room's current location) and the
+    // occupant check run first, then ONE UPDATE.
+    http.route('post', '/hotels/:id/allot', { auth: true, admin: true }, async (req, res) => {
+        const { location_id, room_ids } = req.body || {};
+        try {
+            const hotelId = positiveInt(req.params.id);
+            const hotel = hotelId ? await db.get(`SELECT id, conference_id FROM ${T.hotels} WHERE id = ?`, [hotelId]) : null;
+            if (!hotel) return res.status(404).json({ error: 'Hotel no encontrado.' });
+            let target = null;
+            if (location_id !== undefined && location_id !== null && location_id !== '') {
+                const lid = positiveInt(location_id);
+                target = lid ? await db.get(`SELECT id, name, lodging_status FROM ${T.locations} WHERE id = ? AND conference_id = ?`, [lid, hotel.conference_id]) : null;
+                if (!target) return res.status(400).json({ error: 'Localidad no encontrada en esta conferencia.' });
+            }
+            let roomIds = null;
+            if (room_ids !== undefined && room_ids !== null) {
+                if (!Array.isArray(room_ids) || room_ids.length === 0 || room_ids.length > 1000) return res.status(400).json({ error: 'Habitación inválida.' });
+                roomIds = [...new Set(room_ids.map(positiveInt))];
+                if (roomIds.some(x => !x)) return res.status(400).json({ error: 'Habitación inválida.' });
+                const owned = await db.get(`SELECT COUNT(*) AS c FROM ${T.rooms} WHERE hotel_id = ? AND id IN (${roomIds.map(() => '?').join(', ')})`, [hotelId, ...roomIds]);
+                if (Number(owned && owned.c) !== roomIds.length) return res.status(400).json({ error: 'Habitación inválida.' });
+            }
+            const inSql = roomIds ? ` AND r.id IN (${roomIds.map(() => '?').join(', ')})` : '';
+            const inParams = roomIds || [];
+            // The checks and the UPDATE run under the assignment lock: an engine run loads occupancy
+            // into memory and flushes at the end, so an allotment landing in between would let it place
+            // a non-delegated attendee into a room that is no longer a pool room.
+            const outcome = await withAssignmentLock(async () => {
+                // Frozen: the target, then every location whose rooms would change hands.
+                if (target) await assertLocationNotFrozen(target.id, 'cambiar sus habitaciones');
+                const frozen = await db.get(
+                    `SELECT l.id, l.name, l.lodging_status FROM ${T.rooms} r JOIN ${T.locations} l ON r.location_id = l.id WHERE r.hotel_id = ?${inSql} AND ${frozenSqlOf('l.lodging_status')} ORDER BY l.name LIMIT 1`,
+                    [hotelId, ...inParams]);
+                if (frozen) await assertLocationNotFrozen(frozen, 'cambiar sus habitaciones');
+                // Occupants: an allotted room may only hold the target location's attendees.
+                if (target) {
+                    const bad = await db.all(
+                        `SELECT DISTINCT r.room_number FROM ${T.inscriptions} i JOIN ${T.rooms} r ON i.room_id = r.id WHERE r.hotel_id = ?${inSql} AND (i.location_id IS NULL OR i.location_id != ?) ORDER BY r.room_number`,
+                        [hotelId, ...inParams, target.id]);
+                    if (bad.length) return { bad };
+                }
+                const r = await db.run(`UPDATE ${T.rooms} SET location_id = ? WHERE hotel_id = ?${roomIds ? ` AND id IN (${roomIds.map(() => '?').join(', ')})` : ''}`, [target ? target.id : null, hotelId, ...inParams]);
+                return { changes: Number(r && r.changes) || 0 };
+            });
+            if (outcome.bad) {
+                const names = outcome.bad.map(b => b.room_number).slice(0, 20).join(', ');
+                return res.status(409).json({ error: `Hay ocupantes de otra localidad en ${outcome.bad.length === 1 ? 'la habitación' : 'las habitaciones'} ${names}; libéralas antes de asignarlas.`, rooms: outcome.bad.map(b => b.room_number) });
+            }
+            res.json({ success: true, rooms: outcome.changes });
         } catch (e) { sendError(res, e); }
     });
 
@@ -1349,35 +1618,73 @@ exports.init = async function (wordjs) {
             res.json({ success: true, id: r.lastID });
         } catch (e) { sendError(res, e); }
     });
+    // `location_id` (positive integer | null | '' → null) allots the room to a location of the room's
+    // conference. Checks, in order: frozen (the room's current location when location_id/capacity
+    // changes; the target location when allotting), then occupants (an allotted room may only hold the
+    // target location's attendees).
     http.route('put', '/rooms/:id', { auth: true, admin: true }, async (req, res) => {
-        const { room_number, capacity, gender, is_family, family_name, notes } = req.body;
+        const { room_number, capacity, gender, is_family, family_name, notes, location_id } = req.body;
         try {
+            const id = positiveInt(req.params.id);
+            const room = id ? await db.get(`SELECT r.*, h.conference_id FROM ${T.rooms} r JOIN ${T.hotels} h ON r.hotel_id = h.id WHERE r.id = ?`, [id]) : null;
+            if (!room) return res.status(404).json({ error: 'Habitación no encontrada.' });
             const sets = [], params = [];
             if (room_number !== undefined) {
                 if (!String(room_number).trim()) return res.status(400).json({ error: 'El número de habitación es obligatorio.' });
                 sets.push('room_number = ?'); params.push(String(room_number).trim());
             }
-            if (capacity !== undefined) {
-                const cap = Math.max(1, Number(capacity) || 1);
-                // Never shrink capacity below the people already placed in the room.
-                const occ = await db.get(`SELECT COUNT(*) as c FROM ${T.inscriptions} WHERE room_id = ?`, [req.params.id]);
-                if (cap < (occ?.c || 0)) return res.status(400).json({ error: `La capacidad no puede ser menor que los ${occ.c} ocupantes actuales.` });
-                sets.push('capacity = ?'); params.push(cap);
+            // Resolve the target location first so every 400 precedes the frozen/occupant 409s.
+            let target;   // undefined = not in the body; null = back to the pool; row = allot
+            if (location_id !== undefined) {
+                if (location_id === null || location_id === '') target = null;
+                else {
+                    const lid = positiveInt(location_id);
+                    target = lid ? await db.get(`SELECT id, name, lodging_status FROM ${T.locations} WHERE id = ? AND conference_id = ?`, [lid, room.conference_id]) : null;
+                    if (!target) return res.status(400).json({ error: 'Localidad no encontrada en esta conferencia.' });
+                }
             }
+            const locationChanges = target !== undefined && (target ? Number(target.id) : null) !== (room.location_id == null ? null : Number(room.location_id));
+            let cap = null;
+            if (capacity !== undefined) cap = Math.max(1, Number(capacity) || 1);
+            const capacityChanges = cap !== null && cap !== Number(room.capacity);
             if (gender !== undefined) { sets.push('gender = ?'); params.push(gender || 'Mixed'); }
             if (is_family !== undefined) { sets.push('is_family = ?'); params.push(is_family ? 1 : 0); }
             if (family_name !== undefined) { sets.push('family_name = ?'); params.push(family_name || null); }
             if (notes !== undefined) { sets.push('notes = ?'); params.push(notes || null); }
-            if (!sets.length) return res.json({ success: true });
-            params.push(req.params.id);
-            await db.run(`UPDATE ${T.rooms} SET ${sets.join(', ')} WHERE id = ?`, params);
+            // The occupant checks and the UPDATE are serialised with the engine (which loads occupancy
+            // into memory, places people, then flushes): a re-allotment or a capacity change may not
+            // interleave with a run's load→flush window.
+            await withAssignmentLock(async () => {
+                if ((locationChanges || capacityChanges) && room.location_id != null) await assertLocationNotFrozen(room.location_id, 'cambiar sus habitaciones');
+                if (locationChanges && target) await assertLocationNotFrozen(target.id, 'cambiar sus habitaciones');
+                if (cap !== null) {
+                    // Never shrink capacity below the people already placed in the room.
+                    const occ = await db.get(`SELECT COUNT(*) as c FROM ${T.inscriptions} WHERE room_id = ?`, [id]);
+                    if (cap < (occ?.c || 0)) throw httpError(400, `La capacidad no puede ser menor que los ${occ.c} ocupantes actuales.`);
+                    sets.push('capacity = ?'); params.push(cap);
+                }
+                if (target !== undefined) {
+                    if (target) {
+                        const foreign = await db.get(`SELECT COUNT(*) AS c FROM ${T.inscriptions} WHERE room_id = ? AND (location_id IS NULL OR location_id != ?)`, [id, target.id]);
+                        if (Number(foreign && foreign.c) > 0) throw httpError(409, 'La habitación tiene ocupantes de otra localidad; libérala antes de asignarla.');
+                    }
+                    sets.push('location_id = ?'); params.push(target ? target.id : null);
+                }
+                if (!sets.length) return;
+                params.push(id);
+                await db.run(`UPDATE ${T.rooms} SET ${sets.join(', ')} WHERE id = ?`, params);
+            });
             res.json({ success: true });
         } catch (e) { sendError(res, e); }
     });
     http.route('delete', '/rooms/:id', { auth: true, admin: true }, async (req, res) => {
         try {
-            await db.run(`UPDATE ${T.inscriptions} SET room_id = NULL WHERE room_id = ?`, [req.params.id]);
-            await db.run(`DELETE FROM ${T.rooms} WHERE id = ?`, [req.params.id]);
+            const id = positiveInt(req.params.id);
+            if (!id) return res.status(404).json({ error: 'Habitación no encontrada.' });
+            const room = await db.get(`SELECT id, location_id FROM ${T.rooms} WHERE id = ?`, [id]);
+            if (room && room.location_id != null) await assertLocationNotFrozen(room.location_id, 'eliminar sus habitaciones');
+            await db.run(`UPDATE ${T.inscriptions} SET room_id = NULL WHERE room_id = ?`, [id]);
+            await db.run(`DELETE FROM ${T.rooms} WHERE id = ?`, [id]);
             res.json({ success: true });
         } catch (e) { sendError(res, e); }
     });
@@ -1418,6 +1725,22 @@ exports.init = async function (wordjs) {
             const loc = await resolveAdminLocation(existing.conference_id, { location_id: fieldValues.location_id });
             if (loc === null) { sets.push('location_id = ?', 'location = ?'); params.push(null, null); }
             else if (loc) { sets.push('location_id = ?', 'location = ?'); params.push(loc.id, loc.name); }
+            // Lodging: moving an attendee out of a frozen location is refused (the arrangement is under
+            // review); a move out of an ALLOTTED room frees the bed (invariant 1) unless the room is
+            // allotted to the DESTINATION location (the placement stays valid), and a cancellation
+            // always frees the bed (invariant 2) — even in a frozen location.
+            const currentLocationId = existing.location_id == null ? null : Number(existing.location_id);
+            const locationChanges = loc !== undefined && (loc ? Number(loc.id) : null) !== currentLocationId;
+            let freeBed = false;
+            if (locationChanges) {
+                if (currentLocationId != null) await assertLocationNotFrozen(currentLocationId, 'mover a sus participantes');
+                if (existing.room_id != null) {
+                    const curRoom = await db.get(`SELECT location_id FROM ${T.rooms} WHERE id = ?`, [existing.room_id]);
+                    if (curRoom && curRoom.location_id != null && Number(curRoom.location_id) !== (loc ? Number(loc.id) : NaN)) freeBed = true;
+                }
+            }
+            if (newStatus === 'cancelled' && existing.room_id != null) freeBed = true;
+            if (freeBed) { sets.push('room_id = ?'); params.push(null); }
             // Capacity: the edit takes a seat when the attendee ends up counted in a location where they were
             // not counted before — moved in from elsewhere (or from no location), or un-cancelled in place.
             // Staying put, cancelling, or leaving a location never needs a free seat.
@@ -1455,29 +1778,42 @@ exports.init = async function (wordjs) {
 
     // Manual room assignment — validates capacity + same-conference scope (auto-assign already does;
     // the manual path used to bare-UPDATE and could overfill or cross-place). Pass room_id null to free.
+    // Lodging (2.5.0): the attendee's location must not be frozen; a cancelled attendee is never placed;
+    // an allotted room only takes its own location's attendees (roomAllows).
     http.route('post', '/inscriptions/:id/assign', { auth: true, admin: true }, async (req, res) => {
-        const roomId = req.body.room_id;
+        const { room_id: rawRoomId } = req.body || {};
         try {
-            const ins = await db.get(`SELECT * FROM ${T.inscriptions} WHERE id = ?`, [req.params.id]);
+            const id = positiveInt(req.params.id);
+            const ins = id ? await db.get(`SELECT * FROM ${T.inscriptions} WHERE id = ?`, [id]) : null;
             if (!ins) return res.status(404).json({ error: 'Inscripción no encontrada.' });
-
-            if (roomId === null || roomId === undefined || roomId === '') {
-                await db.run(`UPDATE ${T.inscriptions} SET room_id = NULL WHERE id = ?`, [req.params.id]);
-                return res.json({ success: true });
-            }
-            const room = await db.get(
-                `SELECT r.*, h.conference_id,
-                        (SELECT COUNT(*) FROM ${T.inscriptions} i WHERE i.room_id = r.id) as occupied
-                 FROM ${T.rooms} r JOIN ${T.hotels} h ON r.hotel_id = h.id WHERE r.id = ?`, [roomId]);
-            if (!room) return res.status(404).json({ error: 'Habitación no encontrada.' });
-            if (Number(room.conference_id) !== Number(ins.conference_id)) {
-                return res.status(400).json({ error: 'Esa habitación pertenece a otra conferencia.' });
-            }
-            const alreadyHere = Number(ins.room_id) === Number(roomId);
-            if (!alreadyHere && room.occupied >= room.capacity) {
-                return res.status(400).json({ error: 'La habitación está llena.' });
-            }
-            await db.run(`UPDATE ${T.inscriptions} SET room_id = ? WHERE id = ?`, [roomId, req.params.id]);
+            const unassign = rawRoomId === null || rawRoomId === undefined || rawRoomId === '';
+            const roomId = unassign ? null : positiveInt(rawRoomId);
+            if (!unassign && !roomId) return res.status(400).json({ error: 'Habitación inválida.' });
+            // Check-then-write under the assignment lock: two concurrent assigns into the last bed (or an
+            // assign racing an engine run's load→flush window) would otherwise overbook the room. The
+            // UPDATE is conditional on the capacity as well, so a lost race answers "llena" instead of
+            // writing.
+            await withAssignmentLock(async () => {
+                if (ins.location_id != null) await assertLocationNotFrozen(ins.location_id, 'cambiar su hospedaje');
+                if (unassign) {
+                    await db.run(`UPDATE ${T.inscriptions} SET room_id = NULL WHERE id = ?`, [id]);
+                    return;
+                }
+                if (ins.status === 'cancelled') throw httpError(400, 'Un participante cancelado no ocupa habitación.');
+                const room = await db.get(
+                    `SELECT r.*, h.conference_id, l.name AS location_name,
+                            (SELECT COUNT(*) FROM ${T.inscriptions} i WHERE i.room_id = r.id) as occupied
+                     FROM ${T.rooms} r JOIN ${T.hotels} h ON r.hotel_id = h.id LEFT JOIN ${T.locations} l ON r.location_id = l.id WHERE r.id = ?`, [roomId]);
+                if (!room) throw httpError(404, 'Habitación no encontrada.');
+                if (Number(room.conference_id) !== Number(ins.conference_id)) throw httpError(400, 'Esa habitación pertenece a otra conferencia.');
+                if (!roomAllows(room, ins)) throw httpError(400, `Esa habitación está asignada a la localidad «${room.location_name || room.location_id}».`);
+                const alreadyHere = Number(ins.room_id) === Number(roomId);
+                if (alreadyHere) return;
+                if (room.occupied >= room.capacity) throw httpError(400, 'La habitación está llena.');
+                // Plain UPDATE on purpose: the capacity check above runs under the assignment lock, and an
+                // UPDATE whose subquery reads the table being updated is refused by MySQL (error 1093).
+                await db.run(`UPDATE ${T.inscriptions} SET room_id = ? WHERE id = ?`, [roomId, id]);
+            });
             res.json({ success: true });
         } catch (e) { sendError(res, e); }
     });
@@ -1623,51 +1959,38 @@ exports.init = async function (wordjs) {
         const { conference_id } = req.query;
         if (!conference_id) return res.status(400).json({ error: 'Missing conference_id' });
         try {
-            const list = await db.all(`SELECT * FROM ${T.rules} WHERE conference_id = ? ORDER BY priority DESC`, [conference_id]);
+            // The admin's conference rules only; a location's own rules travel with its lodging view.
+            const list = await db.all(`SELECT * FROM ${T.rules} WHERE conference_id = ? AND location_id IS NULL ORDER BY priority DESC, id ASC`, [conference_id]);
             res.json(list);
         } catch (e) { sendError(res, e); }
     });
 
     const RULE_TYPES = new Set(['keep_together', 'separate_by', 'split_by', 'require_companion']);
+    // The admin's CONFERENCE rules (location_id IS NULL). A location's own rules are the coordinator's
+    // (portal) and are never reachable through this route: an `id` of a location rule is a 404.
     http.route('post', '/assignment/rules', { auth: true, admin: true }, async (req, res) => {
-        const { id, conference_id, name, type, enabled, priority, config, params, hard } = req.body;
+        const { id, conference_id, name, type, enabled, priority, config, params, hard } = req.body || {};
         if (!conference_id) return res.status(400).json({ error: 'Missing conference_id' });
         try {
-            const cleanName = typeof name === 'string' ? name.trim() : '';
-            if (!cleanName) return res.status(400).json({ error: 'El nombre de la regla es obligatorio.' });
-            if (!RULE_TYPES.has(type)) return res.status(400).json({ error: 'Tipo de regla inválido.' });
-            const cfg = config == null ? '' : String(config).trim();
-            if (cfg !== '' && !isFieldColumn(cfg)) return res.status(400).json({ error: 'El campo de la regla es inválido.' });
-            // params is a JSON blob of the rule type's extra config — normalize to a string.
-            let paramsObj;
-            if (params == null) paramsObj = {};
-            else if (typeof params === 'string') {
-                const t = params.trim();
-                if (!t) paramsObj = {};
-                else { try { paramsObj = JSON.parse(t); } catch { paramsObj = null; } }
-            } else paramsObj = params;
-            if (!paramsObj || typeof paramsObj !== 'object' || Array.isArray(paramsObj)) return res.status(400).json({ error: 'Los parámetros de la regla no son JSON válido.' });
-            const paramsStr = JSON.stringify(paramsObj);
-            const hardVal = hard ? 1 : 0;
-            const en = enabled === undefined ? 1 : (enabled ? 1 : 0);
-            const prio = Number(priority) || 0;
+            const rule = normalizeRule({ name, type, enabled, priority, config, params, hard }, { conferenceId: conference_id, fieldNames: await ruleFieldNames(conference_id) });
+            const paramsStr = JSON.stringify(rule.params);
             if (id) {
                 // Verify the rule belongs to the specified conference before updating.
-                const existing = await db.get(`SELECT conference_id FROM ${T.rules} WHERE id = ?`, [id]);
-                if (!existing) return res.status(404).json({ error: 'Regla no encontrada.' });
+                const existing = await db.get(`SELECT conference_id, location_id FROM ${T.rules} WHERE id = ?`, [id]);
+                if (!existing || existing.location_id != null) return res.status(404).json({ error: 'Regla no encontrada.' });
                 if (String(existing.conference_id) !== String(conference_id)) {
                     return res.status(403).json({ error: 'La regla no pertenece a esta conferencia.' });
                 }
                 await db.run(
-                    `UPDATE ${T.rules} SET name = ?, type = ?, enabled = ?, priority = ?, config = ?, params = ?, hard = ? WHERE id = ?`,
-                    [cleanName, type, en, prio, cfg, paramsStr, hardVal, id]
+                    `UPDATE ${T.rules} SET name = ?, type = ?, enabled = ?, priority = ?, config = ?, params = ?, hard = ? WHERE id = ? AND location_id IS NULL`,
+                    [rule.name, rule.type, rule.enabled, rule.priority, rule.config, paramsStr, rule.hard, id]
                 );
             } else {
                 const conf = await db.get(`SELECT id FROM ${T.conferences} WHERE id = ?`, [conference_id]);
                 if (!conf) return res.status(404).json({ error: 'Conferencia no encontrada.' });
                 await db.run(
-                    `INSERT INTO ${T.rules} (conference_id, name, type, enabled, priority, config, params, hard) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-                    [conference_id, cleanName, type, en, prio, cfg, paramsStr, hardVal]
+                    `INSERT INTO ${T.rules} (conference_id, name, type, enabled, priority, config, params, hard, location_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+                    [conference_id, rule.name, rule.type, rule.enabled, rule.priority, rule.config, paramsStr, rule.hard]
                 );
             }
             res.json({ success: true });
@@ -1676,21 +1999,31 @@ exports.init = async function (wordjs) {
 
     http.route('delete', '/assignment/rules/:id', { auth: true, admin: true }, async (req, res) => {
         try {
-            await db.run(`DELETE FROM ${T.rules} WHERE id = ?`, [req.params.id]);
+            const id = positiveInt(req.params.id);
+            const r = id ? await db.run(`DELETE FROM ${T.rules} WHERE id = ? AND location_id IS NULL`, [id]) : null;
+            if (!r || !r.changes) return res.status(404).json({ error: 'Regla no encontrada.' });
             res.json({ success: true });
         } catch (e) { sendError(res, e); }
     });
 
+    // Clears every room of the conference EXCEPT those of frozen locations (their arrangement is
+    // under review); those are listed in `skipped_frozen` so the admin knows to reopen them.
     http.route('post', '/assignment/reset', { auth: true, admin: true }, async (req, res) => {
         const { conference_id } = req.body;
         if (!conference_id) return res.status(400).json({ error: 'Missing conference_id' });
         try {
             // Serialize with runs so a reset can't interleave with an in-flight assignment.
-            await withAssignmentLock(() => db.run(`UPDATE ${T.inscriptions} SET room_id = NULL WHERE conference_id = ?`, [conference_id]));
-            res.json({ success: true });
+            const skipped = await withAssignmentLock(async () => {
+                const frozen = await db.all(`SELECT id, name FROM ${T.locations} WHERE conference_id = ? AND ${frozenSql} ORDER BY name`, [conference_id]);
+                await db.run(`UPDATE ${T.inscriptions} SET room_id = NULL WHERE conference_id = ? AND (location_id IS NULL OR location_id NOT IN (SELECT id FROM ${T.locations} WHERE ${frozenSql} ))`, [conference_id]);
+                return frozen.map(l => ({ location_id: l.id, name: l.name }));
+            });
+            res.json({ success: true, skipped_frozen: skipped });
         } catch (e) { sendError(res, e); }
     });
 
+    // Conference-wide run: the pool scope plus every delegated location that is not frozen (see
+    // runAssignment). Returns totals + by_location + skipped_frozen.
     http.route('post', '/assignment/run', { auth: true, admin: true }, async (req, res) => {
         const { conference_id } = req.body;
         if (!conference_id) return res.status(400).json({ error: 'Missing conference_id' });
@@ -1726,6 +2059,32 @@ exports.init = async function (wordjs) {
             default: return false;
         }
     }
+    // ONE implementation of "an attendee's value of a rule field" and "a condition holds for an
+    // attendee", shared by the engine and by auditArrangement. The custom_data fallback keeps legacy
+    // rows (values not yet backfilled into a real column) visible to the rules; it is safe because
+    // normalizeRule only lets a rule name a defined field or a base column.
+    function ruleVal(p, f) {
+        return (p[f] !== undefined && p[f] !== null && p[f] !== '') ? p[f] : (p.custom_data && typeof p.custom_data === 'object' ? p.custom_data[f] : undefined);
+    }
+    function condMatches(preds, p) {
+        return !Array.isArray(preds) || preds.length === 0 || preds.every(pr => attrMatches(pr, (f) => ruleVal(p, f)));
+    }
+    // Distinct non-blank, case-folded values of `field` across `people`.
+    const distinctValues = (people, field) => {
+        const seen = new Map();
+        for (const p of people) { const v = ruleVal(p, field); if (v != null && String(v).trim() !== '') { const k = String(v).trim().toLowerCase(); if (!seen.has(k)) seen.set(k, String(v).trim()); } }
+        return [...seen.values()];
+    };
+    // Companion rules a room's occupants do not satisfy.
+    const companionUnmetIn = (companionRules, occupants) => {
+        const out = [];
+        for (const rule of companionRules) {
+            const min = Number(rule.params.min) || 1;
+            if (!occupants.some(o => condMatches(rule.params.subject, o))) continue;
+            if (occupants.filter(o => condMatches(rule.params.needs, o)).length < min) out.push(rule);
+        }
+        return out;
+    };
 
     // Composable, priority-ordered, best-effort room assignment. Rule types (all field-generic):
     //   keep_together     — members sharing `field` should share a room (params.min_size, params.when[])
@@ -1740,41 +2099,70 @@ exports.init = async function (wordjs) {
     // RETURNS { assignedCount, remaining, violations[] } naming whatever it could not satisfy — every
     // kept-together group that had to be divided (by a hard separate_by, a split_by or for lack of a
     // room big enough) is reported under its rule's name with that rule's `hard` flag.
+    //
+    // SCOPES (2.5.0). A run never crosses a scope: the POOL scope is (pool rooms ↔ attendees of no
+    // location or of a non-delegated location, conference rules only); a LOCATION scope is (the rooms
+    // allotted to L ↔ L's attendees, conference rules ∪ L's own rules). Occupants already in a scope's
+    // rooms count for capacity; those outside the scope's participant filter (a foreign stray, a
+    // cancelled row) are `fixed` and never moved by the repair pass. `runAssignmentScope` runs ONE
+    // scope; `runAssignment(conferenceId, { locationId })` runs a location scope when `locationId` is
+    // given and, when it is undefined, the admin's conference-wide sweep (pool + every non-frozen
+    // delegated location). Callers hold withAssignmentLock.
     const ASSIGN_MAX_PARTICIPANTS = 5000;
-    async function runAssignment(conferenceId) {
-        const ruleRows = await db.all(`SELECT * FROM ${T.rules} WHERE conference_id = ? AND enabled = 1 ORDER BY priority DESC, id ASC`, [conferenceId]);
-        const rules = ruleRows.map(r => {
-            let params = {};
-            try { params = r.params ? JSON.parse(r.params) : {}; } catch { params = {}; }
-            return { id: r.id, name: r.name, type: r.type, field: r.config, params: params || {}, hard: !!r.hard, priority: r.priority };
-        });
+    async function runAssignmentScope(conferenceId, locationId, opts = {}) {
+        const isPool = locationId == null;
+        const ruleRows = isPool
+            ? await db.all(`SELECT * FROM ${T.rules} WHERE conference_id = ? AND enabled = 1 AND location_id IS NULL ORDER BY priority DESC, id ASC`, [conferenceId])
+            : await db.all(`SELECT * FROM ${T.rules} WHERE conference_id = ? AND enabled = 1 AND (location_id IS NULL OR location_id = ?) ORDER BY priority DESC, id ASC`, [conferenceId, locationId]);
+        const rules = ruleRows.map(parseRuleRow);
         const keepRules = rules.filter(r => r.type === 'keep_together');
         const separateRules = rules.filter(r => r.type === 'separate_by');
         const splitRules = rules.filter(r => r.type === 'split_by');
         const companionRules = rules.filter(r => r.type === 'require_companion');
 
-        let participants = (await db.all(`SELECT * FROM ${T.inscriptions} WHERE conference_id = ? AND room_id IS NULL`, [conferenceId]))
-            .map(p => ({ ...p, custom_data: parseCd(p.custom_data) }));
+        // The set of delegated locations decides who belongs to the pool scope; a FROZEN location's
+        // attendees are out of every scope but their own (reset/manual assign refuse to touch them,
+        // so the sweep must not place them either — see `skipped_frozen`).
+        let delegated = opts.delegatedIds;
+        if (isPool && !delegated) {
+            delegated = new Set((await db.all(`SELECT DISTINCT location_id FROM ${T.rooms} WHERE location_id IS NOT NULL`)).map(r => Number(r.location_id)));
+        }
+        let frozenIds = opts.frozenIds;
+        if (isPool && !frozenIds) {
+            frozenIds = new Set((await db.all(`SELECT id FROM ${T.locations} WHERE conference_id = ? AND ${frozenSql}`, [conferenceId])).map(r => Number(r.id)));
+        }
+        const inScope = (p) => (p.status == null || p.status !== 'cancelled') && (isPool
+            ? (p.location_id == null || (!delegated.has(Number(p.location_id)) && !frozenIds.has(Number(p.location_id))))
+            : Number(p.location_id) === Number(locationId));
+
+        const participantRows = isPool
+            ? await db.all(`SELECT * FROM ${T.inscriptions} WHERE conference_id = ? AND room_id IS NULL AND ${occupiedSql()} AND (location_id IS NULL OR location_id NOT IN (SELECT DISTINCT location_id FROM ${T.rooms} WHERE location_id IS NOT NULL )) AND (location_id IS NULL OR location_id NOT IN (SELECT id FROM ${T.locations} WHERE ${frozenSql} ))`, [conferenceId])
+            : await db.all(`SELECT * FROM ${T.inscriptions} WHERE conference_id = ? AND location_id = ? AND room_id IS NULL AND ${occupiedSql()}`, [conferenceId, locationId]);
+        const participants = participantRows.map(p => ({ ...p, custom_data: parseCd(p.custom_data) }));
         if (participants.length > ASSIGN_MAX_PARTICIPANTS) throw httpError(400, `Demasiados inscritos sin asignar para una sola ejecución (máximo ${ASSIGN_MAX_PARTICIPANTS}).`);
 
+        const roomScopeSql = isPool ? 'r.location_id IS NULL' : 'r.location_id = ?';
+        const roomScopeParams = isPool ? [conferenceId] : [conferenceId, locationId];
         const roomRows = await db.all(
-            `SELECT r.*, h.name as hotel_name FROM ${T.rooms} r JOIN ${T.hotels} h ON r.hotel_id = h.id WHERE h.conference_id = ?`,
-            [conferenceId]
+            `SELECT r.*, h.name as hotel_name FROM ${T.rooms} r JOIN ${T.hotels} h ON r.hotel_id = h.id WHERE h.conference_id = ? AND ${roomScopeSql}`,
+            roomScopeParams
         );
         // Occupancy in ONE query (no per-room SELECT), grouped by room in JS.
         const occRows = await db.all(
-            `SELECT i.* FROM ${T.inscriptions} i WHERE i.room_id IN (SELECT r.id FROM ${T.rooms} r JOIN ${T.hotels} h ON r.hotel_id = h.id WHERE h.conference_id = ? )`,
-            [conferenceId]
+            `SELECT i.* FROM ${T.inscriptions} i WHERE i.room_id IN (SELECT r.id FROM ${T.rooms} r JOIN ${T.hotels} h ON r.hotel_id = h.id WHERE h.conference_id = ? AND ${roomScopeSql} )`,
+            roomScopeParams
         );
         const occByRoom = new Map();
         for (const o of occRows) {
             if (!occByRoom.has(o.room_id)) occByRoom.set(o.room_id, []);
-            occByRoom.get(o.room_id).push({ ...o, custom_data: parseCd(o.custom_data) });
+            const occ = { ...o, custom_data: parseCd(o.custom_data) };
+            if (!inScope(occ)) occ.fixed = true;   // counts for capacity, never moved by this run
+            occByRoom.get(o.room_id).push(occ);
         }
-        const rooms = roomRows.map(r => ({ id: r.id, capacity: Math.max(1, Number(r.capacity) || 1), room_number: r.room_number, hotel_name: r.hotel_name, occupants: occByRoom.get(r.id) || [] }));
+        const rooms = roomRows.map(r => ({ id: r.id, capacity: Math.max(1, Number(r.capacity) || 1), room_number: r.room_number, hotel_name: r.hotel_name, location_id: r.location_id == null ? null : r.location_id, occupants: occByRoom.get(r.id) || [] }));
 
-        const val = (p, f) => (p[f] !== undefined && p[f] !== null && p[f] !== '') ? p[f] : (p.custom_data ? p.custom_data[f] : undefined);
-        const cond = (preds, p) => !Array.isArray(preds) || preds.length === 0 || preds.every(pr => attrMatches(pr, (f) => val(p, f)));
+        const val = ruleVal;
+        const cond = condMatches;
 
         let assignedCount = 0;
         const violations = [];
@@ -1785,30 +2173,20 @@ exports.init = async function (wordjs) {
         const mergedSeparateOk = (occupants, people) => {
             for (const rule of separateRules) {
                 if (!rule.hard) continue;
-                const seen = new Set();
-                for (const p of occupants.concat(people)) { const v = val(p, rule.field); if (v != null && String(v).trim() !== '') seen.add(String(v).trim().toLowerCase()); }
-                if (seen.size > 1) return false;
+                if (distinctValues(occupants.concat(people), rule.field).length > 1) return false;
             }
             return true;
         };
-        const companionUnmet = (occupants) => {
-            const out = [];
-            for (const rule of companionRules) {
-                const min = Number(rule.params.min) || 1;
-                if (!occupants.some(o => cond(rule.params.subject, o))) continue;
-                if (occupants.filter(o => cond(rule.params.needs, o)).length < min) out.push(rule);
-            }
-            return out;
-        };
+        // Invariant 1 + hard separate_by, at EVERY placement site.
+        const compatible = (room, people) => people.every(p => roomAllows(room, p)) && mergedSeparateOk(room.occupants, people);
+        const companionUnmet = (occupants) => companionUnmetIn(companionRules, occupants);
         // Higher = better room for placing `people`: penalize soft-separate mixing, companion gaps, waste.
         const score = (room, people) => {
             let s = 0;
             const after = room.occupants.concat(people);
             for (const rule of separateRules) {
                 if (rule.hard) continue;
-                const seen = new Set();
-                for (const p of after) { const v = val(p, rule.field); if (v != null && String(v).trim() !== '') seen.add(String(v).trim().toLowerCase()); }
-                if (seen.size > 1) s -= 5;
+                if (distinctValues(after, rule.field).length > 1) s -= 5;
             }
             s -= companionUnmet(after).length * 3;
             s -= Math.abs(room.capacity - after.length) * 0.1;
@@ -1838,7 +2216,7 @@ exports.init = async function (wordjs) {
         // value, so a forced division can be reported under that rule's name.
         const placePartition = (people, group) => {
             if (people.length === 0) return;
-            const feasible = rooms.filter(room => (room.capacity - room.occupants.length) >= people.length && mergedSeparateOk(room.occupants, people));
+            const feasible = rooms.filter(room => (room.capacity - room.occupants.length) >= people.length && compatible(room, people));
             if (feasible.length) {
                 feasible.sort((a, b) => score(b, people) - score(a, people));
                 for (const p of [...people]) assignTo(feasible[0], p);
@@ -1857,7 +2235,7 @@ exports.init = async function (wordjs) {
                 let target = null, freeMax = 0;
                 for (const room of rooms) {
                     const free = room.capacity - room.occupants.length;
-                    if (free >= 1 && free > freeMax && mergedSeparateOk(room.occupants, [people[0]])) { target = room; freeMax = free; }
+                    if (free >= 1 && free > freeMax && compatible(room, [people[0]])) { target = room; freeMax = free; }
                 }
                 if (target && freeMax >= 1) {
                     for (const p of people.slice(0, freeMax)) assignTo(target, p);
@@ -1871,7 +2249,7 @@ exports.init = async function (wordjs) {
             }
             let target = null, best = -Infinity;
             for (const room of rooms) {
-                if ((room.capacity - room.occupants.length) >= 1 && mergedSeparateOk(room.occupants, people)) { const s = score(room, people); if (s > best) { best = s; target = room; } }
+                if ((room.capacity - room.occupants.length) >= 1 && compatible(room, people)) { const s = score(room, people); if (s > best) { best = s; target = room; } }
             }
             if (target) assignTo(target, people[0]);
             // else: left unassigned → aggregated into the single capacity violation at the end.
@@ -1912,7 +2290,8 @@ exports.init = async function (wordjs) {
         for (const u of units) placeUnit(u);
 
         // Repair pass for HARD require_companion: pull a "needs" member into a room that has a subject
-        // but too few companions (respecting capacity + hard separate), without stranding the donor.
+        // but too few companions (respecting capacity + hard separate + roomAllows), without stranding
+        // the donor. Only occupants of THIS scope are movable (`fixed` ones stay where they are).
         for (const rule of companionRules) {
             if (!rule.hard) continue;
             const min = Number(rule.params.min) || 1;
@@ -1926,7 +2305,7 @@ exports.init = async function (wordjs) {
                         const donorHasSubject = donor.occupants.some(o => cond(rule.params.subject, o));
                         const donorNeeds = donor.occupants.filter(o => cond(rule.params.needs, o)).length;
                         if (donorHasSubject && donorNeeds <= min) continue; // don't break the donor's own rule
-                        const cand = donor.occupants.find(o => cond(rule.params.needs, o) && mergedSeparateOk(room.occupants, [o]));
+                        const cand = donor.occupants.find(o => !o.fixed && cond(rule.params.needs, o) && compatible(room, [o]));
                         if (cand) { moveTo(room, donor, cand); have++; moved = true; break; }
                     }
                     if (!moved) break;
@@ -1951,6 +2330,181 @@ exports.init = async function (wordjs) {
         const remaining = participants.length - assignedCount;
         if (remaining > 0) noteViol('capacidad', remaining === 1 ? '1 inscrito quedó sin cupo — faltan habitaciones.' : `${remaining} inscritos quedaron sin cupo — faltan habitaciones.`, true);
         return { assignedCount, remaining, violations };
+    }
+
+    // Delegated locations of a conference (at least one allotted room), with their review status.
+    async function delegatedLocations(conferenceId) {
+        const rows = await db.all(
+            `SELECT l.id, l.name, l.lodging_status FROM ${T.locations} l WHERE l.conference_id = ? AND EXISTS (SELECT 1 FROM ${T.rooms} r WHERE r.location_id = l.id ) ORDER BY l.name`,
+            [conferenceId]);
+        return rows.map(l => ({ id: l.id, name: l.name, status: lodgingStatusOf(l) }));
+    }
+
+    // `locationId` given (number) → that location's scope only (the coordinator's run; the admin's
+    // per-location run). `locationId` null → the pool scope only. `locationId` undefined → the admin's
+    // conference-wide sweep: the pool scope, then one scope per delegated location that is not frozen,
+    // in name order. Totals on top, per-location detail in `by_location`, EVERY frozen location of the
+    // conference (delegated or not — its attendees are untouchable either way) in `skipped_frozen`.
+    async function runAssignment(conferenceId, { locationId } = {}) {
+        if (locationId === null) return runAssignmentScope(conferenceId, null);
+        if (locationId !== undefined) return runAssignmentScope(conferenceId, locationId);
+        const delegated = await delegatedLocations(conferenceId);
+        const frozenRows = await db.all(`SELECT id, name, lodging_status FROM ${T.locations} WHERE conference_id = ? AND ${frozenSql} ORDER BY name`, [conferenceId]);
+        const frozenIds = new Set(frozenRows.map(l => Number(l.id)));
+        const pool = await runAssignmentScope(conferenceId, null, { delegatedIds: new Set(delegated.map(l => Number(l.id))), frozenIds });
+        const result = {
+            assignedCount: pool.assignedCount, remaining: pool.remaining, violations: pool.violations.slice(), by_location: [],
+            skipped_frozen: frozenRows.map(l => ({ location_id: l.id, name: l.name, status: lodgingStatusOf(l) })),
+        };
+        for (const l of delegated) {
+            if (frozenIds.has(Number(l.id))) continue;
+            const r = await runAssignmentScope(conferenceId, l.id);
+            result.assignedCount += r.assignedCount;
+            result.remaining += r.remaining;
+            for (const v of r.violations) result.violations.push({ rule: v.rule, detail: `«${l.name}»: ${v.detail}`, hard: v.hard });
+            result.by_location.push({ location_id: l.id, name: l.name, assignedCount: r.assignedCount, remaining: r.remaining, violations: r.violations });
+        }
+        return result;
+    }
+
+    // ── arrangement audit (pure — no db) ──────────────────────────────────────────────────────────
+    // `rooms[i].occupants` and `unassigned` are full attendee rows (custom_data parsed); `rules` are
+    // stored rows or parsed rules (only enabled ones count). Returns every rule the CURRENT arrangement
+    // breaks plus over-capacity rooms, and the headline counts. Shared by the admin review and the portal.
+    // `placed_elsewhere` (L's attendees the admin put in a pool/foreign room) only take part in the
+    // keep_together check — a group split between scopes IS split — through a synthetic room each;
+    // they never count as `placed`.
+    function auditArrangement({ rooms = [], unassigned = [], rules = [], placed_elsewhere = [] }) {
+        const parsed = rules.map(r => (r.field !== undefined && typeof r.hard === 'boolean' ? r : parseRuleRow(r))).filter(r => r.enabled !== false);
+        const violations = [];
+        const note = (rule, detail, hard) => { if (!violations.some(v => v.rule === rule && v.detail === detail)) violations.push({ rule, detail, hard: !!hard }); };
+        const label = (room) => `Habitación ${room.room_number || room.id}`;
+        const companionRules = parsed.filter(r => r.type === 'require_companion');
+        for (const room of rooms) {
+            const occ = Array.isArray(room.occupants) ? room.occupants : [];
+            for (const rule of parsed) {
+                if (rule.type !== 'separate_by' || !rule.field) continue;
+                const values = distinctValues(occ, rule.field);
+                if (values.length > 1) note(rule.name, `${label(room)}: mezcla ${values.length} valores de «${rule.field}» (${values.join(', ')}).`, rule.hard);
+            }
+            for (const rule of companionUnmetIn(companionRules, occ)) note(rule.name, `${label(room)}: no se cumplió «${rule.name}».`, rule.hard);
+            const cap = Math.max(1, Number(room.capacity) || 1);
+            const n = room.occupied != null ? Math.max(Number(room.occupied) || 0, occ.length) : occ.length;
+            if (n > cap) note('capacidad', `${label(room)}: ${n} ocupantes para ${cap} camas.`, true);
+        }
+        // keep_together: a group (case-insensitive value of the field, `when` honoured, size ≥ min_size)
+        // whose members sit in more than one room, or in a room while others are still unassigned.
+        const everyone = [];
+        for (const room of rooms) for (const o of (room.occupants || [])) everyone.push({ p: o, room });
+        for (const p of unassigned) everyone.push({ p, room: null });
+        for (const p of placed_elsewhere) {
+            everyone.push({ p, room: { id: `x${p.room_id}`, room_number: `${p.hotel_name ? p.hotel_name + ' ' : ''}${p.room_number || p.room_id}` } });
+        }
+        for (const rule of parsed) {
+            if (rule.type !== 'keep_together' || !rule.field) continue;
+            const min = Number(rule.params.min_size) || 1;
+            const groups = new Map();
+            for (const e of everyone) {
+                if (!condMatches(rule.params.when, e.p)) continue;
+                const v = ruleVal(e.p, rule.field);
+                if (v == null || String(v).trim() === '') continue;
+                const display = String(v).trim(), k = display.toLowerCase();
+                if (!groups.has(k)) groups.set(k, { display, rooms: new Map(), unassigned: 0, size: 0 });
+                const g = groups.get(k);
+                g.size++;
+                if (e.room) g.rooms.set(e.room.id, e.room); else g.unassigned++;
+            }
+            for (const g of groups.values()) {
+                if (g.size < min) continue;
+                const nRooms = g.rooms.size;
+                if (nRooms > 1 || (nRooms === 1 && g.unassigned > 0)) {
+                    const names = [...g.rooms.values()].map(r => r.room_number || r.id).join(', ');
+                    const roomsPart = nRooms === 1 ? `1 habitación (${names})` : `${nRooms} habitaciones (${names})`;
+                    const tail = g.unassigned > 0 ? ` y ${g.unassigned} sin asignar` : '';
+                    note(rule.name, `El grupo «${g.display}» está en ${roomsPart}${tail}.`, rule.hard);
+                }
+            }
+        }
+        const placed = rooms.reduce((n, r) => n + (Array.isArray(r.occupants) ? r.occupants.length : 0), 0);
+        const counts = {
+            placed,
+            unassigned: unassigned.length,
+            hard_violations: violations.filter(v => v.hard).length,
+            soft_violations: violations.filter(v => !v.hard).length,
+        };
+        return { violations, counts };
+    }
+
+    // ── a location's lodging view (admin review + coordinator portal) ─────────────────────────────
+    // `location` is the location row. `forAdmin` = true adds room notes/gender and the occupant's
+    // status; false is the portal projection (id, first_name, last_name, gender, family_group + the
+    // conference's dynamic field columns — never notes, raw custom_data, status, payment columns, room
+    // notes) and lists only non-cancelled attendees. Either way `occupants` / `unassigned` /
+    // `placed_elsewhere` are L's OWN attendees: a foreign stray in one of L's rooms counts in `occupied`
+    // but is never listed. `lodging_reviewed_by` is never part of the result.
+    async function loadLodging(location, { forAdmin = false } = {}) {
+        const L = location, cid = L.conference_id;
+        const fieldRows = await db.all(`SELECT name, label, type FROM ${T.fields} WHERE conference_id = ? ORDER BY sort_order ASC, id ASC`, [cid]);
+        const fields = fieldRows.filter(f => isFieldColumn(f.name)).map(f => ({ name: f.name, label: f.label, type: f.type }));
+        const attendeeCols = [...new Set(['id', 'first_name', 'last_name', 'gender', 'family_group', ...(forAdmin ? ['status'] : []), ...fields.map(f => f.name)])];
+        const projectAttendee = (p) => { const o = {}; for (const c of attendeeCols) o[c] = p[c] === undefined ? null : p[c]; return o; };
+        const roomRows = await db.all(
+            `SELECT r.*, h.name AS hotel_name, (SELECT COUNT(*) FROM ${T.inscriptions} i WHERE i.room_id = r.id) AS occupied
+             FROM ${T.rooms} r JOIN ${T.hotels} h ON r.hotel_id = h.id
+             WHERE r.location_id = ? AND h.conference_id = ? ORDER BY h.name, r.room_number, r.id`, [L.id, cid]);
+        const people = (await db.all(
+            `SELECT i.*, r.room_number, r.location_id AS room_location_id, h.name AS hotel_name
+             FROM ${T.inscriptions} i LEFT JOIN ${T.rooms} r ON i.room_id = r.id LEFT JOIN ${T.hotels} h ON r.hotel_id = h.id
+             WHERE i.location_id = ? AND i.conference_id = ? ORDER BY i.last_name, i.first_name, i.id`, [L.id, cid]))
+            .map(p => ({ ...p, custom_data: parseCd(p.custom_data) }));
+        const ruleRows = await db.all(`SELECT * FROM ${T.rules} WHERE conference_id = ? AND (location_id IS NULL OR location_id = ?) ORDER BY priority DESC, id ASC`, [cid, L.id]);
+
+        const roomIds = new Set(roomRows.map(r => Number(r.id)));
+        const occByRoom = new Map();
+        const unassignedRows = [], elsewhereRows = [];
+        for (const p of people) {
+            const cancelled = p.status === 'cancelled';
+            if (p.room_id != null && roomIds.has(Number(p.room_id))) {
+                if (cancelled && !forAdmin) continue;
+                if (!occByRoom.has(Number(p.room_id))) occByRoom.set(Number(p.room_id), []);
+                occByRoom.get(Number(p.room_id)).push(p);
+            } else if (cancelled) {
+                continue;                       // a cancelled attendee never occupies a bed and is not "sin habitación"
+            } else if (p.room_id != null) {
+                elsewhereRows.push(p);          // placed by the admin outside L's allotted rooms (pool or another location)
+            } else {
+                unassignedRows.push(p);
+            }
+        }
+        const auditRooms = roomRows.map(r => ({ id: r.id, room_number: r.room_number, capacity: r.capacity, occupied: r.occupied, occupants: occByRoom.get(Number(r.id)) || [] }));
+        const { violations, counts } = auditArrangement({ rooms: auditRooms, unassigned: unassignedRows, rules: ruleRows, placed_elsewhere: elsewhereRows });
+        counts.placed_elsewhere = elsewhereRows.length;
+
+        const rooms = roomRows.map(r => {
+            const base = { id: r.id, hotel_name: r.hotel_name, room_number: r.room_number, capacity: r.capacity, is_family: r.is_family, family_name: r.family_name, occupied: Number(r.occupied) || 0 };
+            if (forAdmin) { base.gender = r.gender; base.notes = r.notes; }
+            base.occupants = (occByRoom.get(Number(r.id)) || []).map(projectAttendee);
+            return base;
+        });
+        const ruleSplit = { conference: [], location: [] };
+        for (const r of ruleRows) (r.location_id == null ? ruleSplit.conference : ruleSplit.location).push(ruleProjection(r));
+        return {
+            location: {
+                id: L.id, name: L.name,
+                lodging_status: lodgingStatusOf(L), lodging_note: L.lodging_note == null ? null : L.lodging_note,
+                lodging_submitted_at: L.lodging_submitted_at == null ? null : L.lodging_submitted_at,
+                lodging_reviewed_at: L.lodging_reviewed_at == null ? null : L.lodging_reviewed_at,
+                capacity: L.capacity == null ? null : L.capacity,
+                inscribed: people.filter(p => p.status !== 'cancelled').length,
+            },
+            rooms,
+            unassigned: unassignedRows.map(projectAttendee),
+            placed_elsewhere: elsewhereRows.map(p => ({ id: p.id, first_name: p.first_name, last_name: p.last_name, hotel_name: p.hotel_name, room_number: p.room_number })),
+            rules: ruleSplit,
+            fields,
+            violations,
+            counts,
+        };
     }
 
 
@@ -2091,7 +2645,7 @@ exports.init = async function (wordjs) {
                 maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days (host clamps anything longer)
             });
 
-            res.json({ success: true, token, location: { id: location.id, name: location.name, responsible_name: location.responsible_name, conference_id: location.conference_id, capacity: location.capacity, inscribed: await locationOccupancy(location.id), payment_methods: enabledPaymentMethods(location) } });
+            res.json({ success: true, token, location: { id: location.id, name: location.name, responsible_name: location.responsible_name, conference_id: location.conference_id, capacity: location.capacity, inscribed: await locationOccupancy(location.id), payment_methods: enabledPaymentMethods(location), ...(await portalLodgingSummary(location)) } });
         } catch (e) { sendError(res, e); }
         finally { if (acquired) endLoginAttempt(location_id); }
     });
@@ -2100,10 +2654,13 @@ exports.init = async function (wordjs) {
     http.route('get', '/portal/me', async (req, res) => {
         const location = await resolvePortalLocation(req);
         if (!location) return res.status(401).json({ error: 'No token' });
-        // Strip the secret access code before sending to the client; add the live seat count so the
-        // portal can show 12 / 50 and close its form when the location is full.
-        const { code, ...safe } = location;
-        res.json({ ...safe, inscribed: await locationOccupancy(location.id), payment_methods: enabledPaymentMethods(location) });
+        // Strip the secret access code (and the reviewing admin's id) before sending to the client; add
+        // the live seat count so the portal can show 12 / 50 and close its form when the location is
+        // full, plus the lodging summary (status, rooms allotted, attendees without a room). The other
+        // lodging columns stay out too: GET /portal/lodging is the only source of the note/stamps and it
+        // hides the note once the arrangement is submitted — this twin surface must not leak it.
+        const { code, lodging_reviewed_by, lodging_note, lodging_submitted_at, lodging_reviewed_at, lodging_status, ...safe } = location;
+        res.json({ ...safe, inscribed: await locationOccupancy(location.id), payment_methods: enabledPaymentMethods(location), ...(await portalLodgingSummary(location)) });
     });
 
     // 4b. Logout — clear the namespaced session cookie so a refresh on a shared device does not
@@ -2270,6 +2827,253 @@ exports.init = async function (wordjs) {
             const ownedIds = owned.map(o => o.id);
             await recomputePayments(`id IN (${ownedIds.map(() => '?').join(', ')})`, ownedIds);
             res.json({ success: true, applied: owned.length, skipped });
+        } catch (e) { sendError(res, e); }
+    });
+
+    // === PORTAL LODGING (2.5.0) — the coordinator arranges THEIR attendees in THEIR allotted rooms ===
+    // Every route resolves the location first (401 otherwise); every query is scoped by location.id
+    // AND location.conference_id. Writes are refused unless the arrangement is a draft (409 while it
+    // is submitted / validated); state transitions are compare-and-set UPDATEs under the assignment
+    // lock. Nothing here can reach a pool room, another location's room or another location's rules.
+    const PORTAL_FROZEN_MSG = 'El hospedaje está en validación/validado y no se puede modificar.';
+    const PORTAL_RULES_MAX = 50;
+    const PORTAL_RUN_COOLDOWN_MS = 5000;
+    // Lodging summary for the /portal/login and /portal/me payloads: status (COALESCE'd), the number of
+    // rooms allotted to the location and its non-cancelled attendees without a room.
+    async function portalLodgingSummary(location) {
+        const row = await db.get(
+            `SELECT (SELECT COUNT(*) FROM ${T.rooms} r WHERE r.location_id = ?) AS rooms_allotted,`
+            + ` (SELECT COUNT(*) FROM ${T.inscriptions} i WHERE i.location_id = ? AND i.conference_id = ? AND i.room_id IS NULL AND ${occupiedSql('i.status')}) AS unlodged`,
+            [location.id, location.id, location.conference_id]);
+        return {
+            lodging_status: lodgingStatusOf(location),
+            rooms_allotted: Number(row && row.rooms_allotted) || 0,
+            unlodged: Number(row && row.unlodged) || 0,
+        };
+    }
+    // Re-reads the status (the resolved row may be a few ms old) and throws 409 unless it is a draft.
+    // Used inside the assignment lock by the routes that write.
+    async function assertPortalDraft(location) {
+        const fresh = await db.get(`SELECT id, lodging_status FROM ${T.locations} WHERE id = ?`, [location.id]);
+        if (!fresh || isFrozen(fresh)) throw httpError(409, PORTAL_FROZEN_MSG);
+    }
+    // A body id: undefined/null/'' → null; otherwise a positive integer or 400 with the given message.
+    const bodyId = (v, msg) => {
+        if (v === undefined || v === null || v === '') return null;
+        const n = positiveInt(v);
+        if (!n) throw httpError(400, msg);
+        return n;
+    };
+    const portalRuleProjection = (r) => { const { location_id, ...pub } = r; return pub; };
+
+    // 8. The whole lodging view in ONE request (the portal must not fan out: the login throttle caps
+    // in-flight authenticated calls per location).
+    http.route('get', '/portal/lodging', async (req, res) => {
+        const location = await resolvePortalLocation(req);
+        if (!location) return res.status(401).json({ error: 'No token' });
+        try {
+            const view = await loadLodging(location, { forAdmin: false });
+            const status = view.location.lodging_status;
+            res.json({
+                status,
+                // The admin's observations only matter while the coordinator can act on them.
+                note: status === 'draft' ? view.location.lodging_note : null,
+                submitted_at: view.location.lodging_submitted_at,
+                reviewed_at: view.location.lodging_reviewed_at,
+                can_edit: status === 'draft',
+                rooms: view.rooms,
+                unassigned: view.unassigned,
+                placed_elsewhere: view.placed_elsewhere,
+                rules: { conference: view.rules.conference.map(portalRuleProjection), location: view.rules.location.map(portalRuleProjection) },
+                fields: view.fields,
+                violations: view.violations,
+                counts: view.counts,
+            });
+        } catch (e) { sendError(res, e); }
+    });
+
+    // 8b. Manual placement: { inscription_id, room_id | null }. The attendee must be L's; the room must be
+    // allotted to L (a pool room or another location's room is "not found"); a cancelled attendee is
+    // never placed; capacity is enforced. Unassigning only works out of L's own rooms — an attendee the
+    // admin placed in a pool room is read-only for the coordinator (placed_elsewhere).
+    http.route('post', '/portal/lodging/assign', async (req, res) => {
+        const location = await resolvePortalLocation(req);
+        if (!location) return res.status(401).json({ error: 'No token' });
+        const { inscription_id, room_id: rawRoomId } = req.body || {};
+        try {
+            if (isFrozen(location)) return res.status(409).json({ error: PORTAL_FROZEN_MSG });
+            const insId = positiveInt(inscription_id);
+            if (!insId) return res.status(400).json({ error: 'Identificador inválido.' });
+            const roomId = bodyId(rawRoomId, 'Habitación inválida.');
+            // Everything from the ownership checks to the UPDATE runs under the assignment lock (the
+            // status is re-read there): two concurrent assigns into the last bed, an engine run's
+            // load→flush window, or an admin re-allotting the room may not interleave with this
+            // check-then-write. The placement UPDATE is conditional on the room still being L's and
+            // still having a free bed, so a lost race writes nothing.
+            await withAssignmentLock(async () => {
+                await assertPortalDraft(location);
+                const ins = await db.get(`SELECT id, status, room_id, location_id FROM ${T.inscriptions} WHERE id = ? AND location_id = ? AND conference_id = ?`, [insId, location.id, location.conference_id]);
+                if (!ins) throw httpError(404, 'Inscripción no encontrada.');
+
+                if (roomId === null) {
+                    if (ins.room_id == null) return;
+                    const r = await db.run(
+                        `UPDATE ${T.inscriptions} SET room_id = NULL WHERE id = ? AND location_id = ? AND room_id IN (SELECT id FROM ${T.rooms} WHERE location_id = ?)`,
+                        [ins.id, location.id, location.id]);
+                    if (!r || !r.changes) throw httpError(404, 'Habitación no encontrada.');
+                    return;
+                }
+                const room = await db.get(
+                    `SELECT r.id, r.capacity, (SELECT COUNT(*) FROM ${T.inscriptions} i WHERE i.room_id = r.id) AS occupied
+                     FROM ${T.rooms} r JOIN ${T.hotels} h ON r.hotel_id = h.id
+                     WHERE r.id = ? AND r.location_id = ? AND h.conference_id = ?`, [roomId, location.id, location.conference_id]);
+                if (!room) throw httpError(404, 'Habitación no encontrada.');
+                if (ins.status === 'cancelled') throw httpError(400, 'Un participante cancelado no ocupa habitación.');
+                const alreadyHere = Number(ins.room_id) === Number(room.id);
+                if (alreadyHere) return;
+                if (Number(room.occupied) >= Number(room.capacity)) throw httpError(400, 'La habitación está llena.');
+                // The room must still be L's when the write lands (an admin re-allotment cannot interleave
+                // thanks to the lock, but the predicate costs nothing). No self-referencing capacity
+                // subquery here: MySQL refuses an UPDATE whose subquery reads the updated table (1093);
+                // the capacity check above is serialised by the assignment lock instead.
+                const r = await db.run(
+                    `UPDATE ${T.inscriptions} SET room_id = ? WHERE id = ? AND location_id = ? AND conference_id = ?`
+                    + ` AND EXISTS (SELECT 1 FROM ${T.rooms} x WHERE x.id = ? AND x.location_id = ?)`,
+                    [room.id, ins.id, location.id, location.conference_id, room.id, location.id]);
+                if (!r || !r.changes) throw httpError(404, 'Habitación no encontrada.');
+            });
+            res.json({ success: true });
+        } catch (e) { sendError(res, e); }
+    });
+
+    // 8c. Auto-assignment of L's scope (its own rules + the admin's). One run per location at a time and
+    // a short cooldown between runs (the engine loads L's whole scope into memory): 429 otherwise.
+    const portalRuns = new Map(); // location id → { inflight, finishedAt }
+    http.route('post', '/portal/lodging/run', async (req, res) => {
+        const location = await resolvePortalLocation(req);
+        if (!location) return res.status(401).json({ error: 'No token' });
+        let acquired = false;
+        try {
+            if (isFrozen(location)) return res.status(409).json({ error: PORTAL_FROZEN_MSG });
+            const now = Date.now();
+            const prev = portalRuns.get(location.id);
+            if (prev && (prev.inflight || now - prev.finishedAt < PORTAL_RUN_COOLDOWN_MS)) {
+                return res.status(429).json({ error: 'Ya hay una asignación en curso para esta localidad.' });
+            }
+            // Keep the map bounded: drop entries whose cooldown has elapsed.
+            for (const [k, v] of portalRuns) if (!v.inflight && now - v.finishedAt >= PORTAL_RUN_COOLDOWN_MS) portalRuns.delete(k);
+            portalRuns.set(location.id, { inflight: true, finishedAt: 0 });
+            acquired = true;
+            const result = await withAssignmentLock(async () => {
+                await assertPortalDraft(location);
+                return runAssignment(location.conference_id, { locationId: location.id });
+            });
+            res.json({ success: true, ...result });
+        } catch (e) { sendError(res, e); }
+        finally { if (acquired) portalRuns.set(location.id, { inflight: false, finishedAt: Date.now() }); }
+    });
+
+    // 8d. Empty L's allotted rooms of L's attendees (a stray the admin put there, or an attendee of L
+    // the admin placed in a pool room, is not touched).
+    http.route('post', '/portal/lodging/reset', async (req, res) => {
+        const location = await resolvePortalLocation(req);
+        if (!location) return res.status(401).json({ error: 'No token' });
+        try {
+            if (isFrozen(location)) return res.status(409).json({ error: PORTAL_FROZEN_MSG });
+            await withAssignmentLock(async () => {
+                await assertPortalDraft(location);
+                await db.run(
+                    `UPDATE ${T.inscriptions} SET room_id = NULL WHERE location_id = ? AND conference_id = ? AND room_id IN (SELECT id FROM ${T.rooms} WHERE location_id = ?)`,
+                    [location.id, location.conference_id, location.id]);
+            });
+            res.json({ success: true });
+        } catch (e) { sendError(res, e); }
+    });
+
+    // 8e. The location's OWN rules: create, or update when `id` names one of L's rules. Same validation
+    // as the admin's rules (normalizeRule with the conference's field names); at most 50 per location.
+    // There is no GET: the rules travel in GET /portal/lodging.
+    http.route('post', '/portal/lodging/rules', async (req, res) => {
+        const location = await resolvePortalLocation(req);
+        if (!location) return res.status(401).json({ error: 'No token' });
+        const { id, name, type, enabled, priority, config, params, hard } = req.body || {};
+        try {
+            if (isFrozen(location)) return res.status(409).json({ error: PORTAL_FROZEN_MSG });
+            const cid = location.conference_id;
+            const rule = normalizeRule({ name, type, enabled, priority, config, params, hard }, { conferenceId: cid, fieldNames: await ruleFieldNames(cid) });
+            const paramsStr = JSON.stringify(rule.params);
+            // The write runs under the assignment lock (where submit flips the status) with the status
+            // re-read, so a rule can never land on an arrangement that was submitted meanwhile.
+            const saved = await withAssignmentLock(async () => {
+                await assertPortalDraft(location);
+                if (id !== undefined && id !== null && id !== '') {
+                    const ruleId = positiveInt(id);
+                    const existing = ruleId ? await db.get(`SELECT id FROM ${T.rules} WHERE id = ? AND location_id = ? AND conference_id = ?`, [ruleId, location.id, cid]) : null;
+                    if (!existing) throw httpError(404, 'Regla no encontrada.');
+                    await db.run(
+                        `UPDATE ${T.rules} SET name = ?, type = ?, enabled = ?, priority = ?, config = ?, params = ?, hard = ? WHERE id = ? AND location_id = ? AND conference_id = ?`,
+                        [rule.name, rule.type, rule.enabled, rule.priority, rule.config, paramsStr, rule.hard, ruleId, location.id, cid]);
+                    return ruleId;
+                }
+                const cnt = await db.get(`SELECT COUNT(*) AS n FROM ${T.rules} WHERE location_id = ? AND conference_id = ?`, [location.id, cid]);
+                if ((Number(cnt && cnt.n) || 0) >= PORTAL_RULES_MAX) throw httpError(400, `Máximo ${PORTAL_RULES_MAX} reglas por localidad.`);
+                const r = await db.run(
+                    `INSERT INTO ${T.rules} (conference_id, name, type, enabled, priority, config, params, hard, location_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                    [cid, rule.name, rule.type, rule.enabled, rule.priority, rule.config, paramsStr, rule.hard, location.id]);
+                return r && r.lastID;
+            });
+            res.json({ success: true, id: saved });
+        } catch (e) { sendError(res, e); }
+    });
+    http.route('delete', '/portal/lodging/rules/:id', async (req, res) => {
+        const location = await resolvePortalLocation(req);
+        if (!location) return res.status(401).json({ error: 'No token' });
+        try {
+            if (isFrozen(location)) return res.status(409).json({ error: PORTAL_FROZEN_MSG });
+            const ruleId = positiveInt(req.params.id);
+            if (!ruleId) return res.status(404).json({ error: 'Regla no encontrada.' });
+            const r = await withAssignmentLock(async () => {
+                await assertPortalDraft(location);
+                return db.run(`DELETE FROM ${T.rules} WHERE id = ? AND location_id = ? AND conference_id = ?`, [ruleId, location.id, location.conference_id]);
+            });
+            if (!r || !r.changes) return res.status(404).json({ error: 'Regla no encontrada.' });
+            res.json({ success: true });
+        } catch (e) { sendError(res, e); }
+    });
+
+    // 8f. Submit the arrangement for the admin's validation (draft → submitted). Refused when the
+    // location has attendees but none of them sleeps in one of its rooms; the admin's previous
+    // observations stay on the row (hidden from the portal while not a draft).
+    http.route('post', '/portal/lodging/submit', async (req, res) => {
+        const location = await resolvePortalLocation(req);
+        if (!location) return res.status(401).json({ error: 'No token' });
+        try {
+            await withAssignmentLock(async () => {
+                const c = await db.get(
+                    `SELECT COUNT(*) AS present,`
+                    + ` SUM(CASE WHEN i.room_id IN (SELECT id FROM ${T.rooms} WHERE location_id = ?) THEN 1 ELSE 0 END) AS placed`
+                    + ` FROM ${T.inscriptions} i WHERE i.location_id = ? AND i.conference_id = ? AND ${occupiedSql('i.status')}`,
+                    [location.id, location.id, location.conference_id]);
+                const present = Number(c && c.present) || 0, placed = Number(c && c.placed) || 0;
+                if (present > 0 && placed === 0) throw httpError(400, 'No hay ninguna asignación de hospedaje para enviar.');
+                const r = await db.run(
+                    `UPDATE ${T.locations} SET lodging_status = 'submitted', lodging_submitted_at = CURRENT_TIMESTAMP WHERE id = ? AND COALESCE(lodging_status, 'draft') = 'draft'`,
+                    [location.id]);
+                if (!r || !r.changes) throw httpError(409, 'El hospedaje ya fue enviado.');
+            });
+            res.json({ success: true, lodging_status: 'submitted' });
+        } catch (e) { sendError(res, e); }
+    });
+    // 8g. Take a submission back (submitted → draft) to keep arranging; a validated arrangement can only
+    // be reopened by the admin.
+    http.route('post', '/portal/lodging/withdraw', async (req, res) => {
+        const location = await resolvePortalLocation(req);
+        if (!location) return res.status(401).json({ error: 'No token' });
+        try {
+            const r = await withAssignmentLock(() => db.run(
+                `UPDATE ${T.locations} SET lodging_status = 'draft' WHERE id = ? AND COALESCE(lodging_status, 'draft') = 'submitted'`, [location.id]));
+            if (!r || !r.changes) return res.status(409).json({ error: 'El hospedaje no está enviado.' });
+            res.json({ success: true, lodging_status: 'draft' });
         } catch (e) { sendError(res, e); }
     });
 
