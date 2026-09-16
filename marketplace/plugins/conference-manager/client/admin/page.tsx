@@ -9,7 +9,7 @@ import { registerTranslations } from "../../../../../frontend/src/lib/i18n";
 import { useToast } from "../../../../../frontend/src/contexts/ToastContext";
 // Import local translations data
 import { translations } from "../lib/i18n";
-import { conferenceApi, Conference, Inscription, Hotel, Room, Location, ConferenceField, Payment, buildInscriptionPayload, seedLocationId, isImageProof, fmtMoney, paymentActions } from "../lib/conference";
+import { conferenceApi, PAYMENT_METHODS, Conference, Inscription, Hotel, Room, Location, ConferenceField, Payment, buildInscriptionPayload, seedLocationId, isImageProof, fmtMoney, paymentActions } from "../lib/conference";
 import { useModal } from "@/contexts/ModalContext";
 import { StatCard } from "../../../../../frontend/src/components/ui/StatCard";
 import { ActionCard } from "../../../../../frontend/src/components/ui/ActionCard";
@@ -1457,9 +1457,7 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
                                         value={paymentForm.method}
                                         onChange={e => setPaymentForm({ ...paymentForm, method: e.target.value })}
                                     >
-                                        <option>Efectivo</option>
-                                        <option>Transferencia</option>
-                                        <option>Consignación</option>
+                                        {PAYMENT_METHODS.map(m => <option key={m}>{m}</option>)}
                                     </select>
                                     <input
                                         type="text"
@@ -3456,7 +3454,8 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
     const [conference, setConference] = useState<Conference | null>(null);
     const [loading, setLoading] = useState(true);
     const [showModal, setShowModal] = useState(false);
-    const [newLocation, setNewLocation] = useState({ name: '', responsible_name: '', responsible_phone: '', capacity: '' });
+    const [newLocation, setNewLocation] = useState({ name: '', responsible_name: '', responsible_phone: '', capacity: '', payment_methods: [...PAYMENT_METHODS] as string[] });
+    const [savingMethods, setSavingMethods] = useState<number | null>(null);
     // Inline capacity editor on a card: which location and the value being typed.
     const [capacityEdit, setCapacityEdit] = useState<{ id: number; value: string } | null>(null);
     const [savingCapacity, setSavingCapacity] = useState(false);
@@ -3486,7 +3485,7 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
         try {
             await conferenceApi.createLocation(conferenceId, { ...newLocation, capacity: Number(newLocation.capacity) });
             setShowModal(false);
-            setNewLocation({ name: '', responsible_name: '', responsible_phone: '', capacity: '' });
+            setNewLocation({ name: '', responsible_name: '', responsible_phone: '', capacity: '', payment_methods: [...PAYMENT_METHODS] });
             loadLocations();
             addToast(t('location.created'), 'success');
         } catch (error: any) {
@@ -3544,6 +3543,22 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
             setTimeout(() => setCopiedId(null), 2000);
         } else {
             addToast(`${t('code') || 'Código'}: ${code}`, 'info');
+        }
+    };
+
+    // Enable or disable one form of payment for a location (the server stores the whole enabled set).
+    const handleToggleMethod = async (loc: Location, method: string) => {
+        const current = Array.isArray(loc.payment_methods) ? loc.payment_methods : [...PAYMENT_METHODS];
+        const next = current.includes(method) ? current.filter(m => m !== method) : [...current, method];
+        setSavingMethods(loc.id);
+        try {
+            await conferenceApi.updateLocation(loc.id, { payment_methods: next });
+            addToast(t('payment.methods.updated') || 'Formas de pago actualizadas', 'success');
+            loadLocations();
+        } catch (error: any) {
+            addToast(error?.message || 'Error', 'error');
+        } finally {
+            setSavingMethods(null);
         }
     };
 
@@ -3765,6 +3780,36 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
                                                 </div>
                                             );
                                         })()}
+                                        <div className="p-3 bg-white rounded-xl border border-gray-50 shadow-sm group-hover:border-blue-100 transition-colors">
+                                            <div className="flex items-center gap-4">
+                                                <div className="w-8 h-8 rounded-lg bg-amber-50 text-amber-500 flex items-center justify-center text-sm">
+                                                    <i className="fa-solid fa-money-bill-wave"></i>
+                                                </div>
+                                                <div className="flex-1 min-w-0">
+                                                    <div className="text-[9px] font-bold text-gray-400 uppercase tracking-widest">{t('payment.methods') || 'Formas de pago'}</div>
+                                                    <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                                                        {PAYMENT_METHODS.map(m => {
+                                                            const on = Array.isArray(loc.payment_methods) ? loc.payment_methods.includes(m) : true;
+                                                            return (
+                                                                <button
+                                                                    key={m}
+                                                                    type="button"
+                                                                    onClick={() => handleToggleMethod(loc, m)}
+                                                                    disabled={savingMethods === loc.id}
+                                                                    title={on ? (t('payment.method.disable') || 'Deshabilitar') : (t('payment.method.enable') || 'Habilitar')}
+                                                                    className={`text-[10px] font-black uppercase tracking-widest px-2.5 py-1 rounded-lg border transition-all disabled:opacity-50 ${on ? 'bg-emerald-50 border-emerald-200 text-emerald-700 hover:bg-emerald-100' : 'bg-gray-50 border-gray-200 text-gray-400 line-through hover:bg-gray-100'}`}
+                                                                >
+                                                                    <i className={`fa-solid ${on ? 'fa-check' : 'fa-ban'} mr-1`}></i>{m}
+                                                                </button>
+                                                            );
+                                                        })}
+                                                        {Array.isArray(loc.payment_methods) && loc.payment_methods.length === 0 && (
+                                                            <span className="text-[10px] font-bold text-rose-500 uppercase tracking-widest">{t('payment.methods.none') || 'Ninguna habilitada'}</span>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
                                         <div className="flex items-center gap-4 p-3 bg-white rounded-xl border border-gray-50 shadow-sm group-hover:border-blue-100 transition-colors">
                                             <div className="w-8 h-8 rounded-lg bg-blue-50 text-blue-400 flex items-center justify-center text-sm">
                                                 <i className="fa-solid fa-user-tie"></i>
@@ -3827,6 +3872,27 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
                                     placeholder={t('location.capacity.placeholder')}
                                 />
                                 <p className="text-[11px] text-gray-400 ml-1 leading-relaxed">{t('location.capacity.help')}</p>
+                            </div>
+
+                            <div className="space-y-1.5">
+                                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1">{t('payment.methods')}</label>
+                                <div className="flex flex-wrap gap-3">
+                                    {PAYMENT_METHODS.map(m => {
+                                        const on = newLocation.payment_methods.includes(m);
+                                        return (
+                                            <label key={m} className={`flex items-center gap-2 px-4 py-2.5 rounded-xl border-2 cursor-pointer transition-all ${on ? 'border-emerald-300 bg-emerald-50 text-emerald-800' : 'border-gray-100 bg-gray-50/30 text-gray-500'}`}>
+                                                <input
+                                                    type="checkbox"
+                                                    checked={on}
+                                                    onChange={() => setNewLocation({ ...newLocation, payment_methods: on ? newLocation.payment_methods.filter(x => x !== m) : [...newLocation.payment_methods, m] })}
+                                                    className="accent-emerald-600"
+                                                />
+                                                <span className="text-sm font-bold">{m}</span>
+                                            </label>
+                                        );
+                                    })}
+                                </div>
+                                <p className="text-[11px] text-gray-400 ml-1 leading-relaxed">{t('payment.methods.help')}</p>
                             </div>
 
                             <div className="space-y-1.5">

@@ -20,7 +20,7 @@
 
 exports.metadata = {
     name: 'Conference Manager',
-    version: '2.3.0',
+    version: '2.4.0',
     description: 'Manage multiple conference inscriptions, payments, and lodging assignments.',
     author: 'WordJS'
 };
@@ -133,6 +133,7 @@ exports.init = async function (wordjs) {
             'responsible_name TEXT',
             'responsible_phone TEXT',
             'capacity INT',
+            'payment_methods TEXT',
             `FOREIGN KEY (conference_id) REFERENCES ${T.conferences}(id) ON DELETE CASCADE`
         ]);
 
@@ -327,6 +328,33 @@ exports.init = async function (wordjs) {
     };
     // Inscription lifecycle states an admin may set directly (PUT /inscriptions/:id).
     const INSCRIPTION_STATUSES = new Set(['pending', 'active', 'cancelled']);
+
+    // Forms of payment (closed vocabulary — cash or bank transfer). Each location enables the ones it
+    // receives, stored as a JSON array in locations.payment_methods; NULL (a location created before the
+    // column existed) means both. Every recorded payment, admin or coordinator, names one of these.
+    const PAYMENT_METHODS = ['Efectivo', 'Transferencia'];
+    // Body value → deduplicated array in catalog order. Throws 400 on anything outside the vocabulary.
+    const parsePaymentMethods = (v) => {
+        if (!Array.isArray(v)) throw httpError(400, 'Las formas de pago deben ser una lista.');
+        const chosen = new Set(v.map(x => (typeof x === 'string' ? x.trim() : x)));
+        for (const m of chosen) if (!PAYMENT_METHODS.includes(m)) throw httpError(400, `Forma de pago inválida: «${m}».`);
+        return PAYMENT_METHODS.filter(m => chosen.has(m));
+    };
+    // Stored JSON (or NULL) of a location row → the enabled array, always in catalog order.
+    const enabledPaymentMethods = (row) => {
+        const stored = row && row.payment_methods;
+        if (stored == null || stored === '') return PAYMENT_METHODS.slice();
+        try { const arr = JSON.parse(stored); return Array.isArray(arr) ? PAYMENT_METHODS.filter(m => arr.includes(m)) : PAYMENT_METHODS.slice(); }
+        catch { return PAYMENT_METHODS.slice(); }
+    };
+    // A payment's `method` must name a catalog entry (and, for the portal, one the location enables).
+    const assertPaymentMethod = (method, allowed) => {
+        const m = typeof method === 'string' ? method.trim() : '';
+        if (!m) throw httpError(400, 'Indica la forma de pago.');
+        if (!PAYMENT_METHODS.includes(m)) throw httpError(400, 'Forma de pago inválida.');
+        if (allowed && !allowed.includes(m)) throw httpError(400, `La forma de pago «${m}» no está habilitada para esta localidad.`);
+        return m;
+    };
 
 
     // Guarded JSON.parse for custom_data — one malformed legacy row must never 500 a whole roster.
@@ -547,6 +575,8 @@ exports.init = async function (wordjs) {
         // every location created from now on; rows that predate the column stay NULL = no limit until the
         // admin sets one (the card shows it as unlimited). See assertLocationHasRoom.
         await addColumnIfMissing(T.locations, 'capacity', 'INT');
+        // Forms of payment the location receives (JSON array; NULL = both, see enabledPaymentMethods).
+        await addColumnIfMissing(T.locations, 'payment_methods', 'TEXT');
         // Stable location identity: `location_id` is the portal ISOLATION KEY; the free-text `location`
         // stays as the display label. ONE-OFF backfill from the label, run only on the boot that creates
         // the column (a 2.1.0 → 2.2.0 upgrade): afterwards a NULL location_id is a deliberate state —
@@ -1187,13 +1217,14 @@ exports.init = async function (wordjs) {
             const locations = await db.all(
                 `SELECT l.*, (SELECT COUNT(*) FROM ${T.inscriptions} i WHERE i.location_id = l.id AND ${occupiedSql('i.status')}) AS inscribed`
                 + ` FROM ${T.locations} l WHERE l.conference_id = ? ORDER BY l.name`, [conference_id]);
+            for (const l of locations) l.payment_methods = enabledPaymentMethods(l);
             res.json({ locations, conference: conf });
         } catch (e) { sendError(res, e); }
     });
 
     // Location names are unique per conference (case-insensitive) so the display label is unambiguous.
     http.route('post', '/locations', { auth: true, admin: true }, async (req, res) => {
-        const { conference_id, name, responsible_name, responsible_phone, capacity } = req.body;
+        const { conference_id, name, responsible_name, responsible_phone, capacity, payment_methods } = req.body;
         if (!conference_id) return res.status(400).json({ error: 'Missing conference_id' });
         const cleanName = String(name || '').trim();
         if (!cleanName) return res.status(400).json({ error: 'El nombre de la localidad es obligatorio.' });
@@ -1202,24 +1233,27 @@ exports.init = async function (wordjs) {
 
         try {
             const cap = parseCapacity(capacity);
+            // Forms of payment: chosen at creation (default both), editable later through PUT.
+            const methods = payment_methods === undefined ? PAYMENT_METHODS.slice() : parsePaymentMethods(payment_methods);
             const conf = await db.get(`SELECT id FROM ${T.conferences} WHERE id = ?`, [conference_id]);
             if (!conf) return res.status(404).json({ error: 'Conferencia no encontrada.' });
             const dup = await db.get(`SELECT id FROM ${T.locations} WHERE conference_id = ? AND LOWER(name) = LOWER(?)`, [conference_id, cleanName]);
             if (dup) return res.status(409).json({ error: 'Ya existe una localidad con ese nombre en esta conferencia.' });
             const code = await genAccessCode();
             const result = await db.run(
-                `INSERT INTO ${T.locations} (conference_id, name, code, responsible_name, responsible_phone, capacity) VALUES (?, ?, ?, ?, ?, ?)`,
-                [conference_id, cleanName, code, responsible_name || null, responsible_phone || null, cap]
+                `INSERT INTO ${T.locations} (conference_id, name, code, responsible_name, responsible_phone, capacity, payment_methods) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                [conference_id, cleanName, code, responsible_name || null, responsible_phone || null, cap, JSON.stringify(methods)]
             );
-            res.json({ success: true, id: result.lastID, code });
+            res.json({ success: true, id: result.lastID, code, payment_methods: methods });
         } catch (e) { sendError(res, e); }
     });
 
     // Update a location; pass rotate_code:true to issue a fresh access code (invalidates old sessions).
     // A rename also refreshes the display label on the location's inscriptions (location_id stays).
     // `capacity` may go up or down, but never below the seats already taken (409 with the current count).
+    // `payment_methods` replaces the enabled set (a form of payment not enabled at creation can be enabled here).
     http.route('put', '/locations/:id', { auth: true, admin: true }, async (req, res) => {
-        const { name, responsible_name, responsible_phone, rotate_code, capacity } = req.body;
+        const { name, responsible_name, responsible_phone, rotate_code, capacity, payment_methods } = req.body;
         try {
             const loc = await db.get(`SELECT * FROM ${T.locations} WHERE id = ?`, [req.params.id]);
             if (!loc) return res.status(404).json({ error: 'Localidad no encontrada.' });
@@ -1241,6 +1275,7 @@ exports.init = async function (wordjs) {
                 if (cap < taken) return res.status(409).json({ error: `El cupo no puede ser menor que los ${taken} inscritos que ya tiene la localidad.`, inscribed: taken });
                 sets.push('capacity = ?'); params.push(cap);
             }
+            if (payment_methods !== undefined) { sets.push('payment_methods = ?'); params.push(JSON.stringify(parsePaymentMethods(payment_methods))); }
             let newCode = null;
             if (rotate_code) { newCode = await genAccessCode(); sets.push('code = ?'); params.push(newCode); }
             if (sets.length) {
@@ -1459,11 +1494,12 @@ exports.init = async function (wordjs) {
             const amt = roundMoney(amount);
             if (amt <= 0) return res.status(400).json({ error: 'El monto debe ser mayor que cero.' });
             const p = assertProof(proof);
+            const m = assertPaymentMethod(method);
             const ins = await db.get(`SELECT id FROM ${T.inscriptions} WHERE id = ?`, [req.params.id]);
             if (!ins) return res.status(404).json({ error: 'Inscripción no encontrada.' });
             // New payments start 'pending' — an admin must validate before they count toward the balance.
             await db.run(`INSERT INTO ${T.payments} (inscription_id, amount, method, reference, proof, status) VALUES (?, ?, ?, ?, ?, 'pending')`,
-                [ins.id, amt, shortText(method, 100), shortText(reference, 100), p]);
+                [ins.id, amt, m, shortText(reference, 100), p]);
             await recomputePayment(ins.id); // validated-only recompute → pending doesn't count yet
             res.json({ success: true });
         } catch (e) { sendError(res, e); }
@@ -2055,7 +2091,7 @@ exports.init = async function (wordjs) {
                 maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days (host clamps anything longer)
             });
 
-            res.json({ success: true, token, location: { id: location.id, name: location.name, responsible_name: location.responsible_name, conference_id: location.conference_id, capacity: location.capacity, inscribed: await locationOccupancy(location.id) } });
+            res.json({ success: true, token, location: { id: location.id, name: location.name, responsible_name: location.responsible_name, conference_id: location.conference_id, capacity: location.capacity, inscribed: await locationOccupancy(location.id), payment_methods: enabledPaymentMethods(location) } });
         } catch (e) { sendError(res, e); }
         finally { if (acquired) endLoginAttempt(location_id); }
     });
@@ -2067,7 +2103,7 @@ exports.init = async function (wordjs) {
         // Strip the secret access code before sending to the client; add the live seat count so the
         // portal can show 12 / 50 and close its form when the location is full.
         const { code, ...safe } = location;
-        res.json({ ...safe, inscribed: await locationOccupancy(location.id) });
+        res.json({ ...safe, inscribed: await locationOccupancy(location.id), payment_methods: enabledPaymentMethods(location) });
     });
 
     // 4b. Logout — clear the namespaced session cookie so a refresh on a shared device does not
@@ -2213,6 +2249,8 @@ exports.init = async function (wordjs) {
             const amt = roundMoney(amount_per_person);
             if (amt <= 0) return res.status(400).json({ error: 'El monto debe ser mayor que cero.' });
             const p = assertProof(proof);
+            // The coordinator may only record a form of payment the admin enabled for this location.
+            const m = assertPaymentMethod(method, enabledPaymentMethods(location));
 
             // ONE ownership query — every id must belong to this coordinator's location (by id).
             const owned = await db.all(
@@ -2223,7 +2261,7 @@ exports.init = async function (wordjs) {
             if (owned.length === 0) return res.status(400).json({ error: 'No se aplicó ningún pago (las personas seleccionadas no pertenecen a esta localidad).' });
 
             // Coordinator-recorded payments also start 'pending' — the admin validates the comprobante.
-            const m = shortText(method, 100), ref = shortText(reference, 100);
+            const ref = shortText(reference, 100);
             await runBatched(owned.map(o => [
                 `INSERT INTO ${T.payments} (inscription_id, amount, method, reference, proof, status) VALUES (?, ?, ?, ?, ?, 'pending')`,
                 [o.id, amt, m, ref, p]

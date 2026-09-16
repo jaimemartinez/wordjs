@@ -5,7 +5,7 @@ import { ToastProvider, useToast } from "@/contexts/ToastContext";
 import { csrfHeaders } from "@/lib/csrf";
 // Pure form helpers (seeding, string-only values, request body, money) — see form.ts for the contract
 // with conference-manager: values travel as strings, the SERVER canonicalises numbers.
-import { fieldOptions, fmtMoney, formBody, initialFormValues, inputToFormValue, isLocationFull, seatsLabel, type PortalField } from "./form";
+import { fieldOptions, fmtMoney, formBody, initialFormValues, inputToFormValue, isLocationFull, paymentMethodsOf, seatsLabel, type PortalField } from "./form";
 // Import global API helper specifically suitable for handling custom headers or URLs if needed,
 // but basically we can reuse the generic apiGet/Post if we can override headers or just use fetch for the auth ones.
 // We'll create a simple local fetcher for the portal to manage the custom token auth simpler.
@@ -31,6 +31,8 @@ interface Location {
     capacity?: number | null;
     /** Seats taken (non-cancelled inscriptions), as counted by the server. */
     inscribed?: number | null;
+    /** Forms of payment enabled for this location (see paymentMethodsOf). */
+    payment_methods?: string[];
 }
 
 interface Inscription {
@@ -651,10 +653,13 @@ function LocationPortalContent() {
                                         onClick={() => {
                                             // Pre-fill amount if only one selected or just leave blank
                                             const defaultAmount = selectedIds.length === 1 ? (inscriptions.find(i => i.id === selectedIds[0])?.total_due || 0) - (inscriptions.find(i => i.id === selectedIds[0])?.amount_paid || 0) : '';
-                                            setPaymentForm(prev => ({ ...prev, amount_per_person: String(defaultAmount) }));
+                                            const methods = paymentMethodsOf(myLocation);
+                                            setPaymentForm(prev => ({ ...prev, amount_per_person: String(defaultAmount), method: methods.includes(prev.method) ? prev.method : (methods[0] || '') }));
                                             setShowPaymentModal(true);
                                         }}
-                                        className="bg-emerald-600 text-white px-4 py-2 rounded-lg hover:bg-emerald-700 transition flex items-center gap-2 text-sm font-medium animate-in zoom-in duration-200 shadow-lg"
+                                        disabled={paymentMethodsOf(myLocation).length === 0}
+                                        title={paymentMethodsOf(myLocation).length === 0 ? 'No hay formas de pago habilitadas para esta localidad.' : undefined}
+                                        className="disabled:opacity-50 disabled:cursor-not-allowed bg-emerald-600 text-white px-4 py-2 rounded-lg hover:bg-emerald-700 transition flex items-center gap-2 text-sm font-medium animate-in zoom-in duration-200 shadow-lg"
                                     >
                                         <i className="fa-solid fa-file-invoice-dollar"></i> Registrar Pago ({selectedIds.length})
                                     </button>
@@ -883,10 +888,11 @@ function LocationPortalContent() {
                                         value={paymentForm.method}
                                         onChange={e => setPaymentForm({ ...paymentForm, method: e.target.value })}
                                     >
-                                        <option>Efectivo</option>
-                                        <option>Transferencia</option>
-                                        <option>Consignación</option>
+                                        {paymentMethodsOf(myLocation).map(m => <option key={m} value={m}>{m}</option>)}
                                     </select>
+                                    {paymentMethodsOf(myLocation).length === 0 && (
+                                        <p className="text-xs text-rose-600 font-medium ml-1">No hay formas de pago habilitadas para esta localidad; contacta al administrador.</p>
+                                    )}
                                 </div>
                                 <div className="space-y-1.5">
                                     <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider ml-1">Referencia (Opcional)</label>

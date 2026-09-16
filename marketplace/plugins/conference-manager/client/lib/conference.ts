@@ -140,7 +140,12 @@ export interface Location {
     capacity: number | null;
     /** Seats taken right now (every non-cancelled inscription of the location). */
     inscribed: number;
+    /** Forms of payment the location receives (subset of PAYMENT_METHODS, resolved by the server). */
+    payment_methods: string[];
 }
+
+/** The closed vocabulary of forms of payment — cash or bank transfer (mirrors the plugin). */
+export const PAYMENT_METHODS = ['Efectivo', 'Transferencia'] as const;
 
 export interface AssignmentRule {
     id: number;
@@ -211,9 +216,9 @@ export const conferenceApi = {
 
     // Locations
     getLocations: (conferenceId: number) => apiGet<{ locations: Location[], conference: Conference }>(`/plugin/conference-manager/locations?conference_id=${conferenceId}`),
-    createLocation: (conferenceId: number, data: { name: string, responsible_name: string, responsible_phone: string, capacity: number | string }) =>
+    createLocation: (conferenceId: number, data: { name: string, responsible_name: string, responsible_phone: string, capacity: number | string, payment_methods?: string[] }) =>
         apiPost('/plugin/conference-manager/locations', { ...data, conference_id: conferenceId }),
-    updateLocation: (id: number, data: { name?: string, responsible_name?: string, responsible_phone?: string, rotate_code?: boolean, capacity?: number | string }) =>
+    updateLocation: (id: number, data: { name?: string, responsible_name?: string, responsible_phone?: string, rotate_code?: boolean, capacity?: number | string, payment_methods?: string[] }) =>
         apiPut(`/plugin/conference-manager/locations/${id}`, data),
     deleteLocation: (id: number) => apiDelete(`/plugin/conference-manager/locations/${id}`),
 

@@ -15,6 +15,12 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   cancelling or deleting an attendee frees the seat. The admin cards show taken / maximum with an inline
   editor; the portal shows the count and closes its form when the location is full. Locations created before
   this version have no limit until one is set.
+- **Conference Manager 2.4.0 — forms of payment per location.** The plugin now accepts exactly two forms of
+  payment, cash (`Efectivo`) and bank transfer (`Transferencia`). When a location is created the admin picks which of
+  them it receives (both by default) and can enable or disable either one later from the location card. The
+  coordinator portal only offers the enabled ones and the server refuses a payment recorded with a form the
+  location does not receive; the admin's own entries must name one of the two. Locations created before this
+  version receive both.
 
 ### Fixed
 

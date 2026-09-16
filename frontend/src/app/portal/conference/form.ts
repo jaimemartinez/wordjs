@@ -67,6 +67,20 @@ export const seatsLabel = (loc: LocationSeats | null | undefined): string => {
     return `${taken} / ${Math.floor(Number(loc.capacity))}`;
 };
 
+/** The forms of payment the plugin accepts (cash or bank transfer); a location enables a subset. */
+export const PAYMENT_METHODS: readonly string[] = ['Efectivo', 'Transferencia'];
+
+/**
+ * Forms of payment enabled for the coordinator's location, as `/portal/me` reports them (`payment_methods`,
+ * an array). An older plugin sends none → every catalog entry, so the payment form never locks up on a
+ * missing field; anything outside the catalog is dropped.
+ */
+export const paymentMethodsOf = (loc: { payment_methods?: unknown } | null | undefined): string[] => {
+    const raw = loc?.payment_methods;
+    if (!Array.isArray(raw)) return [...PAYMENT_METHODS];
+    return PAYMENT_METHODS.filter((m) => raw.includes(m));
+};
+
 /** Money for display: rounded to cents, always two decimals, es-CO separators (`100,20`). */
 export const fmtMoney = (v: unknown): string =>
     (Math.round((Number(v) || 0) * 100) / 100).toLocaleString('es-CO', { minimumFractionDigits: 2, maximumFractionDigits: 2 });

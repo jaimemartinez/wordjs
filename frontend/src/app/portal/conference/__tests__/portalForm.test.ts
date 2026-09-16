@@ -13,6 +13,8 @@ import {
     initialFormValues,
     inputToFormValue,
     isLocationFull,
+    paymentMethodsOf,
+    PAYMENT_METHODS,
     seatsLabel,
     type PortalField,
 } from "../form";
@@ -130,5 +132,21 @@ describe("location seats — isLocationFull / seatsLabel (the /portal/me contrac
         expect(seatsLabel({ capacity: null, inscribed: 12 })).toBe("12 inscritos");
         expect(seatsLabel({ capacity: 50 })).toBe("0 / 50");
         expect(seatsLabel(null)).toBe("0 inscritos");
+    });
+});
+
+describe("paymentMethodsOf — the forms of payment a location enables (the /portal/me contract)", () => {
+    it("returns the enabled subset in catalog order", () => {
+        expect(paymentMethodsOf({ payment_methods: ['Transferencia'] })).toEqual(['Transferencia']);
+        expect(paymentMethodsOf({ payment_methods: ['Transferencia', 'Efectivo'] })).toEqual(['Efectivo', 'Transferencia']);
+        expect(paymentMethodsOf({ payment_methods: [] })).toEqual([]);
+    });
+    it("falls back to the whole catalog when the field is missing (older plugin) or not an array", () => {
+        expect(paymentMethodsOf({})).toEqual([...PAYMENT_METHODS]);
+        expect(paymentMethodsOf(null)).toEqual([...PAYMENT_METHODS]);
+        expect(paymentMethodsOf({ payment_methods: 'Efectivo' })).toEqual([...PAYMENT_METHODS]);
+    });
+    it("drops anything outside the catalog", () => {
+        expect(paymentMethodsOf({ payment_methods: ['Consignación', 'Efectivo', 42] })).toEqual(['Efectivo']);
     });
 });
