@@ -1,7 +1,14 @@
 name: CI
 
 on:
+  # ONE run per event, not two. `push:` with no branch filter fired a full CI on every push to a branch
+  # that ALSO has an open pull request, so each push ran the whole matrix twice — two Backend jobs on two
+  # runners at the same time, each at 29-30 min against a 32-min timeout. The pair raced and the loser was
+  # cancelled at the deadline with 37/38 checks green (PR #349, 2026-09-16; PR #347 before it). Branch
+  # pushes are covered by `pull_request`; `push` keeps main (post-merge) and the release tags.
   push:
+    branches: [main]
+    tags: ['v*']
   pull_request:
   # Manual dispatch exists for the performance budgets in backend/f0-baseline.json, which were calibrated
   # on a single Windows laptop and whose Linux numbers no log has ever printed. A plain dispatch runs the
@@ -28,6 +35,13 @@ on:
 # token, not the GITHUB_TOKEN, so it needs no permission entry.)
 permissions:
   contents: read
+
+# A newer push to the same ref supersedes the run in flight: the superseded run's checks would be
+# reported against a commit nobody will merge, and it is holding two runners the new run needs.
+# main is exempt (every merge commit must keep its own complete record).
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 # EVERY JOB BELOW CARRIES A `timeout-minutes`, because GitHub's default is SIX HOURS.
 #
