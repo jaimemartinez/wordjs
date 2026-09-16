@@ -168,7 +168,7 @@ test('e2e: a too-deep JSON body is a 400 (not a 502 blaming the plugin) and the 
     assert.deepStrictEqual(again.body, { ok: true });
 
     // And a second deep body behaves the same — no strike accumulates toward a crash-loop cap.
-    const deep2 = await request(app).post(`${base}/echo`).set('content-type', 'application/json').send(JSON.stringify(deepObject(5000)));
+    const deep2 = await request(app).post(`${base}/echo`).set('content-type', 'application/json').send(deepJson(5000));
     assert.strictEqual(deep2.status, 400);
     assert.strictEqual((getIsolateStatus(SLUG) || {}).state, 'running');
 });
