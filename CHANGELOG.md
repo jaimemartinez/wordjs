@@ -8,6 +8,21 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Fixed
 
+- **Conference Manager 2.2.0 — the plugin can be activated again, and 23 defects from a functional audit are
+  closed.** Activation had failed since the 2026-08-15 hardening (a `DEFAULT '{}'` column definition was
+  refused by the column-definition allowlist — fixed in core, see above). In the plugin: the portal's bulk
+  payment is bounded (200 unique ids, batched by size) so a coordinator can no longer take the plugin down;
+  portal isolation is keyed by the location **id** instead of its editable name (a one-off backfill maps
+  existing attendees; location names are now unique per conference); number fields are canonicalised on the
+  server for both entry surfaces and an empty required number is refused; editing an attendee re-prices and
+  ignores a client-sent total; the portal shows the estimated fee before submitting; the admin menu is gated on
+  the capability the routes require; dynamic field names cannot shadow real columns; the coordinator listing
+  is an explicit projection; the assignment report names every violated rule incl. hard ones; a malformed
+  row no longer 500s the roster; money is computed in integer cents with an upper bound; payments follow an
+  explicit state machine with review audit and the proof must be an image; `is_unique` also holds on edit;
+  LIKE wildcards are escaped; re-pricing and auto-assignment are paged and bounded; inscription status is a
+  closed vocabulary. Core: a request body the sandbox bridge cannot serialise now answers `400` instead of
+  reporting the plugin as not running.
 - The plugin registry regenerator (the dev-HMR hop after activate/deactivate/delete) is inert under the
   test runner: it rewrote frontend registry sources from tests and echoed its output asynchronously to
   stdout, which corrupts node:test's result channel and made the flake-retry wrapper re-run the whole

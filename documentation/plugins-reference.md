@@ -162,22 +162,40 @@ A complete SMTP server and email manager. Allows sending and receiving emails di
 ---
 
 ## 5. Conference Manager 🎟️
-**ID:** `conference-manager` | **Version:** 2.1.0
+**ID:** `conference-manager` | **Version:** 2.2.0
 
 Complex business logic for managing church conferences.
 
 *   **Features:**
-    *   Inscription/Registration management (admin CRUD + custom form fields + public self-registration endpoints)
-    *   Hotel & Room assignment, including a rule-based auto-assignment engine (`/assignment/rules`, `/assignment/run`, `/assignment/reset`)
-    *   Payment tracking (per-inscription payments + bulk recording via the attendee portal)
-    *   Attendee portal (`/portal/login`, `/portal/me`, `/portal/inscriptions`, `/portal/payments/bulk`) surfaced at `/portal/conference` on the frontend
-    *   Reports (`/reports/summary`) and CSV export of inscriptions (`/inscriptions/export`)
-*   **Requested capabilities:** `database` (read/write — its own `wjp_conference_manager_` tables), `express` (register_route — namespaced routes), `admin_menu` (register — sidebar item).
+    *   Inscription/Registration management: admin CRUD plus a **dynamic registration form** whose fields are
+        defined per conference (schema-follows-form — each field is a real column on the inscriptions table,
+        with `required`/`unique` flags). Dynamic values are canonicalised server-side (`"0030"` → `"30"`), so the
+        admin form and the coordinator portal store the same representation.
+    *   **Fee rules** (`/fee-rules`): the base fee plus ordered `set`/`add` rules matched against form values, in
+        integer cents. `POST /public/quote` returns the fee for a set of values (the portal shows it live while
+        registering); `POST /reprice` re-applies the current rules to every inscription of a conference.
+    *   **Payment validation workflow**: payments enter `pending` (a proof **image** data URL is required, ≤ 1 MB)
+        and an admin moves them to `validated` or `rejected` (`pending → validated | rejected`, `validated →
+        rejected`, `rejected → validated`; a validated payment cannot be deleted); only validated payments count
+        towards `amount_paid` / `payment_status`. Reviews are audited (`reviewed_at`, `reviewed_by`).
+    *   Hotel & Room assignment, including a rule-based auto-assignment engine (`/assignment/rules`,
+        `/assignment/run`, `/assignment/reset`) that reports its **violations** (keep-together groups that had
+        to be split, capacity) with the rule's name and whether the rule was hard.
+    *   **Coordinator portal** (`/portal/login`, `/portal/me`, `/portal/inscriptions`, `/portal/groups`,
+        `/portal/payments/bulk`) surfaced at `/portal/conference` on the frontend. A per-location 6-digit
+        access code is required; there is **no anonymous public registration**. Each coordinator's view is
+        isolated by the location's **id** (not its name — names are unique per conference and renaming a
+        location keeps its attendees), and the portal listing is a projection (no admin notes, room or status).
+    *   Reports (`/reports/summary`, cents-rounded totals) and CSV export of inscriptions (`/inscriptions/export`).
+*   **Documented caps** (a request over a cap answers `400` instead of running unbounded): 200 people per
+    bulk payment, 20 000 inscriptions per `/reprice`, 5 000 unassigned attendees per `/assignment/run`.
+*   **Requested capabilities:** `database` (read/write — its own `wjp_conference_manager_` tables), `express` (register_route — namespaced routes), `admin_menu` (register — sidebar item, gated on `manage_options`).
 *   **Sandbox:** isolated, like every plugin — no trust bypass. Default-deny: activation grants its declared
     capabilities (admin-approved in the activation dialog, refinable/revocable in `/admin/plugins`). It
     stores its data in its own prefixed tables (no unscoped/core-table access — that capability no longer
     exists), building table names from `db.tablePrefix` and creating them idempotently via `db.createTable`
-    (`CREATE TABLE IF NOT EXISTS`). Routes are namespaced under
+    (`CREATE TABLE IF NOT EXISTS`); it extends its own tables with `ALTER TABLE … ADD COLUMN` (allowed for a
+    plugin's own prefixed tables). Routes are namespaced under
     `/api/v1/plugin/conference-manager/*` (absolute routes were removed). The AST scanner runs on it like
     every plugin; there is no scan-skip.
 
