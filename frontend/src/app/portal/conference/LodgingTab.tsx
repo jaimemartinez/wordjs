@@ -2,6 +2,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useToast } from "@/contexts/ToastContext";
+import { StatCard } from "@/components/ui/StatCard";
 import {
     attendeeName,
     canEditLodging,
@@ -23,17 +24,41 @@ import {
     ruleFormToBody,
     ruleSummary,
     ruleToForm,
+    ruleTypeLabel,
     statusLabel,
     unassignedHint,
     unassignedLabel,
     type AssignmentRunResult,
     type LodgingData,
+    type LodgingRoom,
     type LodgingRule,
     type LodgingViolation,
     type RuleForm,
     type RulePredicate,
     type RuleType,
 } from "./lodging";
+import {
+    Badge,
+    Button,
+    Card,
+    CardHeader,
+    captionCls,
+    checkboxCls,
+    cx,
+    EmptyState,
+    Field,
+    headingCls,
+    headingShapeCls,
+    HeroCard,
+    IconButton,
+    inputDenseCls,
+    inputIndigoCls,
+    labelCls,
+    Modal,
+    Notice,
+    SectionDivider,
+    Spinner,
+} from "./ui";
 
 const API = '/api/v1/plugin/conference-manager';
 
@@ -59,6 +84,17 @@ const violationText = (v: unknown): { text: string; hard: boolean } => {
         return { text: [rule, detail].filter(Boolean).join(': ') || JSON.stringify(v), hard: !!o.hard };
     }
     return { text: String(v ?? ''), hard: false };
+};
+
+/** Font Awesome icon of a rule type, as the admin's AssignmentPage rule rows. */
+const ruleTypeIcon = (type: unknown): string => {
+    switch (type) {
+        case 'keep_together': return 'fa-people-group';
+        case 'separate_by': return 'fa-arrows-left-right';
+        case 'split_by': return 'fa-scissors';
+        case 'require_companion': return 'fa-user-shield';
+        default: return 'fa-list-check';
+    }
 };
 
 /**
@@ -167,17 +203,17 @@ export default function Hospedajes({ authHeaders, onLocationRefresh }: Hospedaje
         // No payload yet: loading, or the first load failed. Never fall through to an empty `{}` — that
         // would render a healthy "Borrador" with "no rooms allotted" for a 401/429/500/offline.
         if (loading || !loadError) {
-            return <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-8 text-center text-gray-500">Cargando hospedaje…</div>;
+            return <Card><Spinner label="Cargando hospedaje…" /></Card>;
         }
         return (
-            <div className="bg-white rounded-xl border border-rose-200 shadow-sm p-8 text-center" data-testid="lodging-error">
-                <i className="fa-solid fa-triangle-exclamation text-rose-400 text-2xl mb-3"></i>
-                <p className="text-gray-800 font-medium">No se pudo cargar el hospedaje.</p>
+            <Card className="border-rose-200 p-8 sm:p-10 text-center" data-testid="lodging-error">
+                <div className="w-14 h-14 bg-rose-50 rounded-2xl flex items-center justify-center text-rose-400 text-2xl shadow-sm mx-auto mb-4">
+                    <i className="fa-solid fa-triangle-exclamation"></i>
+                </div>
+                <p className="text-gray-800 font-bold">No se pudo cargar el hospedaje.</p>
                 <p className="text-sm text-gray-500 mt-1">{loadError}</p>
-                <button type="button" onClick={() => { setLoading(true); load(); }} className="mt-4 px-4 py-2 rounded-lg text-sm font-medium bg-blue-600 text-white hover:bg-blue-700 transition">
-                    <i className="fa-solid fa-rotate-right mr-1"></i> Reintentar
-                </button>
-            </div>
+                <Button onClick={() => { setLoading(true); load(); }} icon="fa-rotate-right" className="mt-6">Reintentar</Button>
+            </Card>
         );
     }
     const d: LodgingData = data;
@@ -193,6 +229,14 @@ export default function Hospedajes({ authHeaders, onLocationRefresh }: Hospedaje
     const summary = lodgingSummary(d);
     const hasRooms = rooms.length > 0;
     const spaceRooms = roomsWithSpace(rooms);
+
+    // Rooms grouped by hotel (first-appearance order), one card header per hotel as the admin's LodgingPage.
+    const hotels: Array<{ name: string; rooms: LodgingRoom[] }> = [];
+    for (const room of rooms) {
+        const name = room.hotel_name || 'Hotel';
+        const group = hotels.find((h) => h.name === name);
+        if (group) group.rooms.push(room); else hotels.push({ name, rooms: [room] });
+    }
 
     const assign = (inscriptionId: number, roomId: number | null) =>
         act('/portal/lodging/assign', { inscription_id: inscriptionId, room_id: roomId }, {
@@ -243,181 +287,230 @@ export default function Hospedajes({ authHeaders, onLocationRefresh }: Hospedaje
         onOk: () => act(`/portal/lodging/rules/${rule.id}`, undefined, { method: 'DELETE', okMessage: 'Regla eliminada.' }),
     });
 
-    const btn = 'px-4 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed';
+    const heroTone = status === 'validated' ? 'emerald' : status === 'submitted' ? 'amber' : 'blue';
+    // The admin's LODGING_STATUS_META: draft is a gray pill with a pen-ruler, submitted amber, validated emerald.
+    const statusTone = status === 'validated' ? 'emerald' : status === 'submitted' ? 'amber' : 'gray';
+    const statusIcon = status === 'validated' ? 'fa-circle-check' : status === 'submitted' ? 'fa-paper-plane' : 'fa-pen-ruler';
+    const runViolations = runResult ? (runResult.violations || []) : [];
 
     return (
-        <div className="space-y-6" data-testid="portal-lodging">
+        <div className="space-y-6 sm:space-y-8" data-testid="portal-lodging">
             {/* Status banner */}
-            <div className={`rounded-xl border p-4 flex flex-col gap-3 ${status === 'validated' ? 'bg-emerald-50 border-emerald-200' : status === 'submitted' ? 'bg-blue-50 border-blue-200' : 'bg-white border-gray-200'}`} data-testid="lodging-status">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div className="flex items-center gap-3">
-                        <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold ${status === 'validated' ? 'bg-emerald-100 text-emerald-800' : status === 'submitted' ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-700'}`}>
-                            <i className={`fa-solid ${status === 'validated' ? 'fa-circle-check' : status === 'submitted' ? 'fa-paper-plane' : 'fa-pen'} text-[10px]`}></i>
-                            {statusLabel(status)}
-                        </span>
-                        {status === 'submitted' && d.submitted_at && <span className="text-xs text-gray-500">Enviado el {fmtTimestamp(d.submitted_at)}</span>}
-                        {status === 'validated' && d.reviewed_at && <span className="text-xs text-gray-500">Validado el {fmtTimestamp(d.reviewed_at)}</span>}
+            <HeroCard tone={heroTone} contentClassName="space-y-5" data-testid="lodging-status">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                    <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-3">
+                            <h2 className={cx("text-2xl sm:text-3xl", headingCls)}>Hospedaje</h2>
+                            <Badge tone={statusTone} icon={statusIcon}>{statusLabel(status)}</Badge>
+                        </div>
+                        {status === 'submitted' && d.submitted_at && <div className={cx(captionCls, "mt-2")}>Enviado el {fmtTimestamp(d.submitted_at)}</div>}
+                        {status === 'validated' && d.reviewed_at && <div className={cx(captionCls, "mt-2")}>Validado el {fmtTimestamp(d.reviewed_at)}</div>}
                     </div>
                     {status === 'submitted' && deadlineState(d) !== 'passed' && (
-                        <button type="button" onClick={withdraw} disabled={busy} className={`${btn} border border-blue-300 text-blue-700 hover:bg-blue-100`}>
-                            <i className="fa-solid fa-rotate-left"></i> Retirar envío
-                        </button>
+                        <Button variant="outline" icon="fa-rotate-left" onClick={withdraw} disabled={busy} className="shrink-0">Retirar envío</Button>
                     )}
-                    {status === 'validated' && <span className="text-xs text-emerald-800 font-medium">Solo lectura. Para cambiar la acomodación, pide al administrador reabrir el hospedaje.</span>}
+                    {status === 'validated' && <span className="text-xs text-emerald-800 font-bold sm:max-w-xs sm:text-right">Solo lectura. Para cambiar la acomodación, pide al administrador reabrir el hospedaje.</span>}
                 </div>
                 {deadlineMessage(d) && (
-                    <div className={`rounded-lg border text-sm px-4 py-3 flex items-start gap-2 ${deadlineState(d) === 'passed' ? 'bg-rose-50 border-rose-200 text-rose-900' : 'bg-blue-50 border-blue-200 text-blue-900'}`} data-testid="lodging-deadline">
-                        <i className={`fa-solid ${deadlineState(d) === 'passed' ? 'fa-lock' : 'fa-calendar-check'} mt-0.5`}></i>
+                    <Notice tone={deadlineState(d) === 'passed' ? 'rose' : 'blue'} icon={deadlineState(d) === 'passed' ? 'fa-lock' : 'fa-calendar-check'} data-testid="lodging-deadline">
                         <span>{deadlineMessage(d)}</span>
-                    </div>
+                    </Notice>
                 )}
                 {status === 'draft' && d.note && (
-                    <div className="rounded-lg bg-amber-50 border border-amber-200 text-amber-900 text-sm px-4 py-3" data-testid="lodging-note">
-                        <span className="font-semibold">Observaciones del administrador:</span> {String(d.note)}
-                    </div>
+                    <Notice tone="amber" icon="fa-comment-dots" data-testid="lodging-note">
+                        <span className="font-black">Observaciones del administrador:</span> {String(d.note)}
+                    </Notice>
                 )}
                 {status !== 'draft' && summary.unplaced > 0 && (
-                    <div className="rounded-lg bg-amber-50 border border-amber-200 text-amber-900 text-sm px-4 py-3">
-                        <span className="font-semibold">{unassignedLabel(summary.unplaced)}.</span> {unassignedHint(status)}
-                    </div>
+                    <Notice tone="amber" icon="fa-user-clock">
+                        <span className="font-black">{unassignedLabel(summary.unplaced)}.</span> {unassignedHint(status)}
+                    </Notice>
                 )}
-            </div>
+            </HeroCard>
 
             {!hasRooms ? (
-                <div className="bg-white rounded-xl border border-dashed border-gray-300 p-10 text-center" data-testid="lodging-empty">
-                    <i className="fa-solid fa-bed text-gray-300 text-3xl mb-3"></i>
-                    <p className="text-gray-600 font-medium">El administrador aún no te ha asignado habitaciones.</p>
+                <div data-testid="lodging-empty">
+                    <EmptyState icon="fa-bed" title="El administrador aún no te ha asignado habitaciones." />
                 </div>
             ) : (
                 <>
                     {/* Summary */}
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-4" data-testid="lodging-summary">
-                        <div className="bg-white p-5 rounded-xl border border-gray-200 shadow-sm">
-                            <div className="text-gray-400 text-[10px] font-bold uppercase tracking-wider mb-1">Habitaciones</div>
-                            <div className="text-2xl font-black text-gray-800">{summary.rooms}</div>
-                        </div>
-                        <div className="bg-white p-5 rounded-xl border border-gray-200 shadow-sm">
-                            <div className="text-gray-400 text-[10px] font-bold uppercase tracking-wider mb-1">Camas</div>
-                            <div className="text-2xl font-black text-gray-800">{summary.beds} <span className="text-xs text-gray-400 font-medium">({summary.free} libres)</span></div>
-                        </div>
-                        <div className="bg-white p-5 rounded-xl border border-gray-200 shadow-sm">
-                            <div className="text-gray-400 text-[10px] font-bold uppercase tracking-wider mb-1">Alojados</div>
-                            <div className="text-2xl font-black text-emerald-600">{summary.placed}</div>
-                        </div>
-                        <div className="bg-white p-5 rounded-xl border border-gray-200 shadow-sm">
-                            <div className="text-gray-400 text-[10px] font-bold uppercase tracking-wider mb-1">Sin habitación</div>
-                            <div className={`text-2xl font-black ${summary.unplaced > 0 ? 'text-rose-500' : 'text-gray-800'}`}>{summary.unplaced}</div>
-                        </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 sm:gap-6" data-testid="lodging-summary">
+                        <StatCard icon="fa-door-open" value={summary.rooms} label="Habitaciones" color="blue" />
+                        <StatCard icon="fa-bed" value={summary.beds} label={`Camas (${summary.free} libres)`} color="indigo" />
+                        <StatCard icon="fa-user-check" value={summary.placed} label="Alojados" color="green" />
+                        <StatCard icon="fa-user-clock" value={summary.unplaced} label="Sin habitación" color={summary.unplaced > 0 ? 'red' : 'gray'} />
                     </div>
 
                     {/* Actions */}
                     {editable && (
-                        <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 space-y-3" data-testid="lodging-actions">
-                            <div className="flex flex-wrap gap-2">
-                                <button type="button" onClick={runAuto} disabled={busy || unassigned.length === 0} title={unassigned.length === 0 ? 'No hay participantes sin habitación.' : undefined} className={`${btn} bg-blue-600 text-white hover:bg-blue-700`}>
-                                    <i className="fa-solid fa-wand-magic-sparkles"></i> Asignación automática
-                                </button>
-                                <button type="button" onClick={askReset} disabled={busy || summary.placed === 0} className={`${btn} border border-gray-300 text-gray-700 hover:bg-gray-100`}>
-                                    <i className="fa-solid fa-broom"></i> Quitar todas las asignaciones
-                                </button>
-                                <button type="button" onClick={askSubmit} disabled={busy} className={`${btn} bg-emerald-600 text-white hover:bg-emerald-700 sm:ml-auto`}>
-                                    <i className="fa-solid fa-paper-plane"></i> Enviar a validación
-                                </button>
+                        <Card className="p-5 sm:p-6 space-y-4" data-testid="lodging-actions">
+                            <div className="flex flex-wrap gap-3">
+                                <Button icon="fa-wand-magic-sparkles" onClick={runAuto} disabled={busy || unassigned.length === 0} title={unassigned.length === 0 ? 'No hay participantes sin habitación.' : undefined}>
+                                    Asignación automática
+                                </Button>
+                                <Button variant="dangerGhost" icon="fa-trash-can" onClick={askReset} disabled={busy || summary.placed === 0}>
+                                    Quitar todas las asignaciones
+                                </Button>
+                                <Button variant="success" icon="fa-paper-plane" onClick={askSubmit} disabled={busy} className="sm:ml-auto">
+                                    Enviar a validación
+                                </Button>
                             </div>
                             {runResult && (
-                                <div className="rounded-lg bg-blue-50 border border-blue-100 text-sm text-gray-700 px-4 py-3" data-testid="lodging-run-result">
-                                    <div><b className="text-gray-900">{runResult.assignedCount ?? 0}</b> asignados · <b className="text-gray-900">{runResult.remaining ?? 0}</b> sin asignar</div>
-                                    {(runResult.violations || []).length > 0 && (
-                                        <ul className="mt-2 space-y-1">
-                                            {(runResult.violations || []).map((v, i) => { const t = violationText(v); return <li key={i} className={`text-xs ${t.hard ? 'text-rose-700' : 'text-amber-700'}`}><i className="fa-solid fa-triangle-exclamation mr-1"></i>{t.text}</li>; })}
+                                /* The admin's run report card: amber when a rule was broken, emerald otherwise. */
+                                <div className={cx("rounded-3xl border p-6 shadow-xl", runViolations.length > 0 ? 'bg-amber-50/40 border-amber-200' : 'bg-emerald-50/40 border-emerald-200')} data-testid="lodging-run-result">
+                                    <div className="flex items-center gap-3 mb-3">
+                                        <i className={cx("fa-solid text-lg", runViolations.length > 0 ? 'fa-triangle-exclamation text-amber-500' : 'fa-circle-check text-emerald-500')}></i>
+                                        <h3 className="text-sm font-black text-gray-900 uppercase tracking-widest">Resultado de la asignación</h3>
+                                    </div>
+                                    <p className="text-xs text-gray-600"><b className="text-gray-900">{runResult.assignedCount ?? 0}</b> asignados · <b className="text-gray-900">{runResult.remaining ?? 0}</b> sin asignar</p>
+                                    {runViolations.length > 0 && (
+                                        <ul className="mt-3 space-y-1.5">
+                                            {runViolations.map((v, i) => {
+                                                const t = violationText(v);
+                                                return (
+                                                    <li key={i} className="flex items-start gap-2 text-xs text-gray-700">
+                                                        <span className={cx("mt-0.5 px-1.5 py-0.5 rounded text-[8px] font-black uppercase tracking-widest whitespace-nowrap", t.hard ? 'bg-rose-100 text-rose-600' : 'bg-gray-200 text-gray-500')}>{t.hard ? 'Obligatoria' : 'Preferente'}</span>
+                                                        <span className="min-w-0">{t.text}</span>
+                                                    </li>
+                                                );
+                                            })}
                                         </ul>
                                     )}
                                 </div>
                             )}
-                        </div>
+                        </Card>
                     )}
                 </>
             )}
 
             {/* Violations of the current arrangement — always visible when there are any. */}
             {violations.length > 0 && (
-                <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4" data-testid="lodging-violations">
-                    <h3 className="font-bold text-gray-800 mb-2 text-sm">Reglas incumplidas <span className="text-xs text-gray-400 font-medium">({summary.hardViolations} obligatorias · {summary.softViolations} preferentes)</span></h3>
-                    <ul className="space-y-1">
+                <Card data-testid="lodging-violations">
+                    <CardHeader icon="fa-triangle-exclamation" tone="rose" title="Reglas incumplidas" caption={`${summary.hardViolations} obligatorias · ${summary.softViolations} preferentes`} />
+                    <ul className="p-5 sm:p-6 space-y-2">
                         {violations.map((v, i) => {
                             const t = violationText(v);
                             return (
-                                <li key={i} className={`text-sm px-3 py-1.5 rounded-lg ${t.hard ? 'bg-rose-50 text-rose-800' : 'bg-amber-50 text-amber-800'}`}>
-                                    <span className={`text-[10px] font-bold uppercase tracking-wider mr-2 ${t.hard ? 'text-rose-500' : 'text-amber-600'}`}>{t.hard ? 'Obligatoria' : 'Preferente'}</span>{t.text}
+                                <li key={i}>
+                                    <Notice tone={t.hard ? 'rose' : 'amber'} align="center">
+                                        <div className="flex flex-wrap items-center gap-2">
+                                            <Badge tone={t.hard ? 'rose' : 'amber'}>{t.hard ? 'Obligatoria' : 'Preferente'}</Badge>
+                                            <span className="font-medium">{t.text}</span>
+                                        </div>
+                                    </Notice>
                                 </li>
                             );
                         })}
                     </ul>
-                </div>
+                </Card>
             )}
 
             {hasRooms && (
                 <>
-                    {/* Rooms grid */}
-                    <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-                        <div className="p-4 border-b border-gray-200 bg-gray-50/50"><h2 className="font-bold text-gray-800">Habitaciones</h2></div>
-                        <div className="p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4" data-testid="lodging-rooms">
-                            {rooms.map((room) => {
-                                const occ = Array.isArray(room.occupants) ? room.occupants : [];
-                                const full = freeBeds(room) === 0;
-                                return (
-                                    <div key={room.id} className={`rounded-xl border p-4 ${full ? 'border-gray-300 bg-gray-50' : 'border-gray-200 bg-white'}`}>
-                                        <div className="flex items-start justify-between gap-2 mb-2">
-                                            <div>
-                                                <div className="text-[11px] text-gray-400 font-semibold uppercase tracking-wider">{room.hotel_name || 'Hotel'}</div>
-                                                <div className="font-bold text-gray-900">Hab. {String(room.room_number ?? '')}</div>
-                                                {!!room.is_family && <div className="text-[11px] text-purple-700 bg-purple-50 rounded px-1.5 py-0.5 inline-block mt-1">Familiar{room.family_name ? ` · ${room.family_name}` : ''}</div>}
-                                            </div>
-                                            <span className={`text-xs font-bold px-2 py-1 rounded-md ${full ? 'bg-gray-200 text-gray-700' : 'bg-emerald-50 text-emerald-700'}`}>{Number(room.occupied) || occ.length}/{Number(room.capacity) || 0}</span>
+                    {/* Rooms grid, one card per hotel */}
+                    <div className="space-y-6 sm:space-y-8" data-testid="lodging-rooms">
+                        {hotels.map((hotel) => (
+                            /* The admin LodgingPage hotel card: rounded-[40px], gradient corner, 20×20 gradient tile, info chips. */
+                            <div key={hotel.name} className="group bg-white rounded-[40px] border-2 border-gray-50 overflow-hidden shadow-sm hover:border-blue-500 hover:shadow-2xl transition-all duration-500 relative">
+                                <div className="absolute top-0 right-0 w-64 h-64 bg-gradient-to-br from-blue-50 to-transparent rounded-bl-[100px] opacity-50 pointer-events-none"></div>
+                                <div className="relative p-6 sm:p-8 border-b border-gray-50 flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
+                                    <div className="flex items-center gap-4 sm:gap-6 min-w-0">
+                                        <div className="w-16 h-16 sm:w-20 sm:h-20 bg-gradient-to-br from-blue-50 to-indigo-50 rounded-2xl shadow-inner flex items-center justify-center text-blue-600 text-2xl sm:text-3xl shrink-0 group-hover:scale-110 transition-transform duration-500">
+                                            <i className="fa-solid fa-hotel"></i>
                                         </div>
-                                        {occ.length === 0 ? (
-                                            <div className="text-xs text-gray-400 italic">Vacía</div>
-                                        ) : (
-                                            <ul className="space-y-1">
-                                                {occ.map((a) => (
-                                                    <li key={a.id} className="flex items-center justify-between gap-2 text-sm text-gray-800 bg-gray-50 rounded-lg px-2.5 py-1.5">
-                                                        <span className="truncate">{attendeeName(a)}{a.family_group ? <span className="text-[11px] text-gray-400 ml-1">· {String(a.family_group)}</span> : null}</span>
-                                                        {editable && (
-                                                            <button type="button" onClick={() => assign(a.id, null)} disabled={busy} title="Quitar de la habitación" className="text-gray-400 hover:text-rose-600 disabled:opacity-50 px-1" aria-label={`Quitar a ${attendeeName(a)} de la habitación`}>✕</button>
-                                                        )}
-                                                    </li>
-                                                ))}
-                                            </ul>
-                                        )}
+                                        <div className="min-w-0">
+                                            <h2 className={cx("text-2xl sm:text-3xl leading-none mb-2 truncate", headingCls)}>{hotel.name}</h2>
+                                            <div className="flex flex-wrap items-center gap-2 sm:gap-4">
+                                                <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-50 rounded-lg border border-gray-100">
+                                                    <i className="fa-solid fa-door-open text-[10px] text-gray-400"></i>
+                                                    <span className="text-xs font-bold text-gray-600 uppercase tracking-widest">{hotel.rooms.length} habitaciones</span>
+                                                </div>
+                                                <div className="flex items-center gap-2 px-3 py-1.5 bg-blue-50 rounded-lg border border-blue-100 text-blue-600">
+                                                    <i className="fa-solid fa-bed text-[10px]"></i>
+                                                    <span className="text-xs font-black uppercase tracking-widest">{hotel.rooms.reduce((n, r) => n + freeBeds(r), 0)} camas libres</span>
+                                                </div>
+                                            </div>
+                                        </div>
                                     </div>
-                                );
-                            })}
-                        </div>
+                                </div>
+                                <div className="p-5 sm:p-8 bg-gray-50/30 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                                    {hotel.rooms.map((room) => {
+                                        const occ = Array.isArray(room.occupants) ? room.occupants : [];
+                                        const full = freeBeds(room) === 0;
+                                        const cap = Number(room.capacity) || 0;
+                                        const taken = Number(room.occupied) || occ.length;
+                                        const percent = cap > 0 ? Math.min(100, (taken / cap) * 100) : 0;
+                                        return (
+                                            <div key={room.id} className={cx("group/room p-5 rounded-3xl border-2 transition-all duration-300 relative overflow-hidden flex flex-col gap-4", full ? 'bg-white border-rose-100 shadow-sm' : 'bg-white border-white shadow-sm hover:border-blue-400 hover:shadow-xl hover:-translate-y-1')}>
+                                                <div className="flex justify-between items-start gap-2">
+                                                    <div className="min-w-0">
+                                                        <span className={cx("text-xl", headingCls)}>Hab. {String(room.room_number ?? '')}</span>
+                                                        {!!room.is_family && (
+                                                            <div className="mt-1 max-w-full truncate px-1.5 py-0.5 rounded-md bg-indigo-50 text-indigo-600 text-[8px] font-black uppercase tracking-widest">
+                                                                <i className="fa-solid fa-people-roof mr-1"></i>Familiar{room.family_name ? ` · ${room.family_name}` : ''}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                    <span className="text-xs font-bold text-gray-900 shrink-0">{taken}<span className="text-gray-300">/</span>{cap}</span>
+                                                </div>
+                                                <div className="space-y-2">
+                                                    <div className="flex justify-between items-end">
+                                                        <span className={cx("text-[10px] font-black uppercase tracking-widest", full ? 'text-rose-500' : 'text-gray-400')}>{full ? 'Completa' : 'Libre'}</span>
+                                                        <span className={captionCls}>{freeBeds(room)} libres</span>
+                                                    </div>
+                                                    <div className="h-1.5 w-full bg-gray-100 rounded-full overflow-hidden">
+                                                        <div className={cx("h-full rounded-full transition-all duration-500", full ? 'bg-rose-500' : 'bg-blue-500')} style={{ width: `${percent}%` }}></div>
+                                                    </div>
+                                                </div>
+                                                {occ.length === 0 ? (
+                                                    <div className={cx(captionCls, "italic")}>Vacía</div>
+                                                ) : (
+                                                    <ul className="flex flex-wrap gap-2">
+                                                        {occ.map((a) => (
+                                                            <li key={a.id} className="inline-flex items-center gap-2 max-w-full pl-3 pr-1.5 py-1 rounded-full bg-gray-50 border border-gray-100 text-xs font-bold text-gray-800">
+                                                                <span className="truncate">{attendeeName(a)}{a.family_group ? <span className="text-[10px] text-gray-400 font-medium ml-1">· {String(a.family_group)}</span> : null}</span>
+                                                                {editable && (
+                                                                    <button type="button" onClick={() => assign(a.id, null)} disabled={busy} title="Quitar de la habitación" className="w-6 h-6 rounded-full flex items-center justify-center bg-white text-gray-400 hover:bg-rose-600 hover:text-white transition-all shadow-sm shrink-0 disabled:opacity-50 disabled:cursor-not-allowed" aria-label={`Quitar a ${attendeeName(a)} de la habitación`}>
+                                                                        <i className="fa-solid fa-xmark text-[9px]"></i>
+                                                                    </button>
+                                                                )}
+                                                            </li>
+                                                        ))}
+                                                    </ul>
+                                                )}
+                                                {full && <div className="absolute inset-0 bg-rose-50/10 pointer-events-none"></div>}
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                        ))}
                     </div>
 
                     {/* Unassigned */}
-                    <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-                        <div className="p-4 border-b border-gray-200 bg-gray-50/50 flex items-center justify-between">
-                            <h2 className="font-bold text-gray-800">Sin habitación <span className="text-xs text-gray-400 font-medium">({unassigned.length})</span></h2>
-                        </div>
+                    <Card>
+                        <CardHeader icon="fa-user-clock" tone="amber" title="Sin habitación" caption={`${unassigned.length} participantes`} />
                         {unassigned.length === 0 ? (
-                            <div className="p-6 text-center text-sm text-gray-500">Todos los participantes tienen habitación.</div>
+                            <div className="p-8 text-center">
+                                <p className="text-sm font-bold text-gray-500">Todos los participantes tienen habitación.</p>
+                            </div>
                         ) : (
-                            <ul className="divide-y divide-gray-100" data-testid="lodging-unassigned">
+                            <ul className="divide-y divide-gray-50" data-testid="lodging-unassigned">
                                 {unassigned.map((a) => (
-                                    <li key={a.id} className="px-4 py-3 flex flex-wrap items-center gap-3">
-                                        <div className="flex-1 min-w-[10rem]">
-                                            <div className="font-medium text-gray-900">{attendeeName(a)}</div>
-                                            <div className="text-[11px] text-gray-400">{[a.gender, a.family_group].filter((v) => v != null && String(v).trim() !== '').map(String).join(' · ')}</div>
+                                    <li key={a.id} className="px-5 sm:px-8 py-4 flex flex-col sm:flex-row sm:items-center gap-3 hover:bg-blue-50/30 transition-colors">
+                                        <div className="flex-1 min-w-0">
+                                            <div className="font-black text-gray-900 truncate">{attendeeName(a)}</div>
+                                            <div className={cx(captionCls, "mt-0.5")}>{[a.gender, a.family_group].filter((v) => v != null && String(v).trim() !== '').map(String).join(' · ')}</div>
                                         </div>
                                         {editable && (() => {
                                             // A pick survives refetches; once its room filled up it is no longer an option
                                             // (the select would show the first one) — treat it as "nothing chosen".
                                             const chosen = spaceRooms.some((r) => String(r.id) === pick[a.id]) ? pick[a.id] : '';
                                             return (
-                                            <div className="flex items-center gap-2">
+                                            <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:shrink-0">
                                                 <select
-                                                    className="border rounded-lg p-2 text-sm bg-white"
+                                                    className={cx(inputDenseCls, "sm:w-64")}
                                                     value={chosen}
                                                     onChange={(e) => setPick({ ...pick, [a.id]: e.target.value })}
                                                     aria-label={`Habitación para ${attendeeName(a)}`}
@@ -425,14 +518,14 @@ export default function Hospedajes({ authHeaders, onLocationRefresh }: Hospedaje
                                                     <option value="">Elige habitación…</option>
                                                     {spaceRooms.map((r) => <option key={r.id} value={String(r.id)}>{roomLabel(r)} ({freeBeds(r)} libres)</option>)}
                                                 </select>
-                                                <button
-                                                    type="button"
+                                                <Button
+                                                    size="xs"
+                                                    icon="fa-bed"
                                                     disabled={busy || !chosen}
                                                     onClick={() => { const id = Number(chosen); if (id > 0) assign(a.id, id); }}
-                                                    className={`${btn} bg-blue-600 text-white hover:bg-blue-700 py-2`}
                                                 >
                                                     Asignar
-                                                </button>
+                                                </Button>
                                             </div>
                                             );
                                         })()}
@@ -441,77 +534,75 @@ export default function Hospedajes({ authHeaders, onLocationRefresh }: Hospedaje
                             </ul>
                         )}
                         {editable && unassigned.length > 0 && spaceRooms.length === 0 && (
-                            <div className="px-4 pb-4 text-xs text-rose-600">No quedan camas libres en tus habitaciones; pide al administrador más habitaciones.</div>
+                            <div className="px-5 sm:px-8 pb-5">
+                                <Notice tone="rose" icon="fa-bed" className="text-xs">No quedan camas libres en tus habitaciones; pide al administrador más habitaciones.</Notice>
+                            </div>
                         )}
-                    </div>
+                    </Card>
                 </>
             )}
 
             {/* Placed by the admin in pool rooms — read-only */}
             {elsewhere.length > 0 && (
-                <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden" data-testid="lodging-elsewhere">
-                    <div className="p-4 border-b border-gray-200 bg-gray-50/50">
-                        <h2 className="font-bold text-gray-800">Alojados por el administrador <span className="text-xs text-gray-400 font-medium">({elsewhere.length})</span></h2>
-                        <p className="text-xs text-gray-500 mt-0.5">Participantes de tu localidad ubicados en habitaciones fuera de tu cupo; solo el administrador puede moverlos.</p>
-                    </div>
-                    <ul className="divide-y divide-gray-100">
+                <Card data-testid="lodging-elsewhere">
+                    <CardHeader icon="fa-building-user" tone="indigo" title="Alojados por el administrador" caption={`${elsewhere.length} participantes`} />
+                    <p className="px-5 sm:px-8 pt-4 text-xs text-gray-500 leading-relaxed">Participantes de tu localidad ubicados en habitaciones fuera de tu cupo; solo el administrador puede moverlos.</p>
+                    <ul className="divide-y divide-gray-50 mt-2">
                         {elsewhere.map((p) => (
-                            <li key={p.id} className="px-4 py-2.5 flex items-center justify-between gap-3 text-sm">
-                                <span className="font-medium text-gray-900">{attendeeName(p)}</span>
-                                <span className="text-gray-500">{roomLabel(p)}</span>
+                            <li key={p.id} className="px-5 sm:px-8 py-3.5 flex items-center justify-between gap-3 text-sm hover:bg-blue-50/30 transition-colors">
+                                <span className="font-black text-gray-900 truncate">{attendeeName(p)}</span>
+                                <span className={cx(captionCls, "shrink-0")}>{roomLabel(p)}</span>
                             </li>
                         ))}
                     </ul>
-                </div>
+                </Card>
             )}
 
             {/* Rules */}
-            <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden" data-testid="lodging-rules">
-                <div className="p-4 border-b border-gray-200 bg-gray-50/50">
-                    <h2 className="font-bold text-gray-800">Reglas de asignación</h2>
-                    <p className="text-xs text-gray-500 mt-0.5">La asignación automática aplica las reglas del administrador y las tuyas, por prioridad.</p>
-                </div>
-                <div className="p-4 space-y-5">
-                    <div>
-                        <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Reglas del administrador</h3>
+            <Card data-testid="lodging-rules">
+                <CardHeader
+                    icon="fa-list-check"
+                    tone="indigo"
+                    title="Reglas de asignación"
+                    caption={`${adminRules.length + myRules.length} reglas · orden por prioridad`}
+                    actions={hasRooms && editable && !editor ? (
+                        <Button variant="outlineIndigo" icon="fa-plus" onClick={() => setEditor({ id: null, form: emptyRuleForm() })} disabled={busy}>Nueva regla</Button>
+                    ) : undefined}
+                />
+                <div className="p-5 sm:p-8 space-y-8">
+                    <p className="text-xs text-gray-500 leading-relaxed -mt-2">La asignación automática aplica las reglas del administrador y las tuyas, por prioridad.</p>
+                    <div className="space-y-4">
+                        <SectionDivider>Reglas del administrador</SectionDivider>
                         {adminRules.length === 0 ? (
-                            <div className="text-sm text-gray-400 italic">El administrador no ha definido reglas.</div>
+                            <p className="text-xs text-gray-500 italic text-center py-2">El administrador no ha definido reglas.</p>
                         ) : (
-                            <ul className="space-y-1.5">
+                            <ul className="divide-y divide-gray-50 -mx-5 sm:-mx-8">
                                 {adminRules.map((r) => (
-                                    <li key={r.id} className="rounded-lg bg-gray-50 px-3 py-2 text-sm">
-                                        <div className="font-medium text-gray-800">{r.name}</div>
-                                        <div className="text-xs text-gray-500">{ruleSummary(r, fields)}</div>
+                                    <li key={r.id}>
+                                        <RuleRow rule={r} fields={fields} readOnly />
                                     </li>
                                 ))}
                             </ul>
                         )}
                     </div>
-                    <div>
-                        <div className="flex items-center justify-between mb-2">
-                            <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider">Mis reglas</h3>
-                            {hasRooms && editable && !editor && (
-                                <button type="button" onClick={() => setEditor({ id: null, form: emptyRuleForm() })} disabled={busy} className={`${btn} border border-blue-300 text-blue-700 hover:bg-blue-50 py-1.5`}>
-                                    <i className="fa-solid fa-plus"></i> Nueva regla
-                                </button>
-                            )}
-                        </div>
-                        {myRules.length === 0 && !(editor && editable) ? (
-                            <div className="text-sm text-gray-400 italic">Aún no tienes reglas propias.</div>
+                    <div className="space-y-4">
+                        <SectionDivider>Mis reglas</SectionDivider>
+                        {myRules.length === 0 ? (
+                            <p className="text-xs text-gray-500 italic text-center py-2">Aún no tienes reglas propias.</p>
                         ) : (
-                            <ul className="space-y-1.5">
+                            <ul className="divide-y divide-gray-50 -mx-5 sm:-mx-8">
                                 {myRules.map((r) => (
-                                    <li key={r.id} className={`rounded-lg px-3 py-2 text-sm flex items-start justify-between gap-3 ${Number(r.enabled) === 0 ? 'bg-gray-50 opacity-70' : 'bg-blue-50/60'}`}>
-                                        <div className="min-w-0">
-                                            <div className="font-medium text-gray-800 truncate">{r.name}</div>
-                                            <div className="text-xs text-gray-500">{ruleSummary(r, fields)}</div>
-                                        </div>
-                                        {editable && (
-                                            <div className="flex items-center gap-1 shrink-0">
-                                                <button type="button" onClick={() => setEditor({ id: r.id, form: ruleToForm(r) })} disabled={busy} className="text-gray-500 hover:text-blue-600 p-1.5 disabled:opacity-50" title="Editar" aria-label={`Editar regla ${r.name}`}><i className="fa-solid fa-pen"></i></button>
-                                                <button type="button" onClick={() => askDeleteRule(r)} disabled={busy} className="text-gray-500 hover:text-rose-600 p-1.5 disabled:opacity-50" title="Eliminar" aria-label={`Eliminar regla ${r.name}`}><i className="fa-solid fa-trash-can"></i></button>
-                                            </div>
-                                        )}
+                                    <li key={r.id}>
+                                        <RuleRow
+                                            rule={r}
+                                            fields={fields}
+                                            actions={editable ? (
+                                                <>
+                                                    <IconButton variant="soft" icon="fa-pen" tone="blue" onClick={() => setEditor({ id: r.id, form: ruleToForm(r) })} disabled={busy} title="Editar" aria-label={`Editar regla ${r.name}`} />
+                                                    <IconButton variant="soft" icon="fa-trash-can" tone="rose" onClick={() => askDeleteRule(r)} disabled={busy} title="Eliminar" aria-label={`Eliminar regla ${r.name}`} />
+                                                </>
+                                            ) : undefined}
+                                        />
                                     </li>
                                 ))}
                             </ul>
@@ -528,40 +619,75 @@ export default function Hospedajes({ authHeaders, onLocationRefresh }: Hospedaje
                         )}
                     </div>
                 </div>
-            </div>
+            </Card>
 
             {confirm && (
-                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 animate-in fade-in duration-200" role="dialog" aria-modal="true">
-                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md border border-gray-100 overflow-hidden animate-in zoom-in-95 duration-200">
-                        <div className="px-6 py-5 border-b border-gray-100"><h3 className="font-bold text-lg text-gray-900">{confirm.title}</h3></div>
-                        <div className="px-6 py-5 text-sm text-gray-700">{confirm.text}</div>
-                        <div className="px-6 py-4 flex justify-end gap-3 bg-gray-50/50">
-                            <button type="button" onClick={() => setConfirm(null)} className="px-5 py-2 text-gray-600 font-medium hover:bg-gray-100 rounded-lg transition">Cancelar</button>
-                            <button type="button" onClick={() => { const ok = confirm.onOk; setConfirm(null); ok(); }} className={`px-5 py-2 text-white font-bold rounded-lg transition ${confirm.danger ? 'bg-rose-600 hover:bg-rose-700' : 'bg-blue-600 hover:bg-blue-700'}`}>{confirm.okLabel}</button>
-                        </div>
-                    </div>
-                </div>
+                <Modal
+                    size="sm"
+                    title={confirm.title}
+                    onClose={() => setConfirm(null)}
+                    footer={(
+                        <>
+                            <Button variant="ghost" onClick={() => setConfirm(null)}>Cancelar</Button>
+                            <Button variant={confirm.danger ? 'danger' : 'primary'} onClick={() => { const ok = confirm.onOk; setConfirm(null); ok(); }}>{confirm.okLabel}</Button>
+                        </>
+                    )}
+                >
+                    <p className="text-sm text-gray-700 leading-relaxed">{confirm.text}</p>
+                </Modal>
             )}
         </div>
     );
 }
 
 // Module-level (never define a component inside a component — it steals input focus).
+/**
+ * One rule as the admin's AssignmentPage row (flat, inside a `divide-y` list): 14x14 indigo tile, black
+ * italic name, type + hard/soft pills, priority chip, one-line summary, soft white action buttons. On
+ * phones the actions wrap under the text so the name keeps its width.
+ */
+function RuleRow({ rule, fields, readOnly, actions }: { rule: LodgingRule; fields: { name: string; label: string }[]; readOnly?: boolean; actions?: React.ReactNode }) {
+    const enabled = rule.enabled == null ? true : !!Number(rule.enabled);
+    const hard = !!Number(rule.hard);
+    return (
+        <div className={cx("group p-5 sm:p-6 flex flex-wrap sm:flex-nowrap items-center gap-3 sm:gap-5 transition-all", readOnly ? 'bg-gray-50/60' : 'hover:bg-indigo-50/30', !enabled && 'opacity-60')}>
+            <div className={cx("w-12 h-12 sm:w-14 sm:h-14 rounded-2xl flex items-center justify-center text-lg sm:text-xl shrink-0 transition-all", enabled ? (readOnly ? 'bg-white text-indigo-500 border border-indigo-100 shadow-sm' : 'bg-indigo-600 text-white shadow-lg shadow-indigo-100') : 'bg-white text-gray-300 border border-gray-100 shadow-none')}>
+                <i className={cx("fa-solid", ruleTypeIcon(rule.type), !enabled && 'opacity-30')}></i>
+            </div>
+            <div className="flex-1 min-w-0">
+                <div className="flex flex-wrap items-center gap-2 mb-1">
+                    <h4 className={cx("text-lg", headingShapeCls, "truncate", enabled ? 'text-gray-900' : 'text-gray-400')}>{rule.name}</h4>
+                    <Badge tone="indigo" size="xs">{ruleTypeLabel(rule.type)}</Badge>
+                    <Badge tone={hard ? 'rose' : 'gray'} size="xs">{hard ? 'Obligatoria' : 'Preferente'}</Badge>
+                </div>
+                <div className="flex flex-wrap items-center gap-3">
+                    <div className="flex items-center gap-1.5 px-2 py-1 bg-gray-100 rounded-lg text-[9px] font-bold text-gray-500 uppercase tracking-tight whitespace-nowrap">
+                        <i className="fa-solid fa-bolt text-amber-500"></i>
+                        Prioridad: {rule.priority == null ? '' : String(rule.priority)}
+                    </div>
+                    <div className="text-xs text-gray-500 leading-relaxed min-w-0">{ruleSummary(rule, fields)}</div>
+                </div>
+            </div>
+            {actions ? <div className="flex items-center gap-2 shrink-0 basis-full justify-end sm:basis-auto">{actions}</div> : null}
+        </div>
+    );
+}
+
 function PredicateRow({ label, value, fields, onChange }: { label: string; value: RulePredicate; fields: { name: string; label: string }[]; onChange: (p: RulePredicate) => void }) {
     return (
-        <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">{label}</label>
+        <fieldset className="space-y-1.5 min-w-0">
+            <legend className={labelCls}>{label}</legend>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                <select className="border rounded-lg p-2 text-sm bg-white" value={value.field} onChange={(e) => onChange({ ...value, field: e.target.value })}>
+                <select className={inputIndigoCls} aria-label="Campo" value={value.field} onChange={(e) => onChange({ ...value, field: e.target.value })}>
                     <option value="">Campo…</option>
                     {fields.map((f) => <option key={f.name} value={f.name}>{f.label}</option>)}
                 </select>
-                <select className="border rounded-lg p-2 text-sm bg-white" value={value.op} onChange={(e) => onChange({ ...value, op: e.target.value, value: opNeedsNoValue(e.target.value) ? '' : value.value })}>
+                <select className={inputIndigoCls} aria-label="Operador" value={value.op} onChange={(e) => onChange({ ...value, op: e.target.value, value: opNeedsNoValue(e.target.value) ? '' : value.value })}>
                     {PRED_OPS.map((o) => <option key={o.v} value={o.v}>{o.label}</option>)}
                 </select>
-                <input className="border rounded-lg p-2 text-sm disabled:bg-gray-100" placeholder="Valor" maxLength={200} disabled={opNeedsNoValue(value.op)} value={value.value} onChange={(e) => onChange({ ...value, value: e.target.value })} />
+                <input className={inputIndigoCls} aria-label="Valor" placeholder="Valor" maxLength={200} disabled={opNeedsNoValue(value.op)} value={value.value} onChange={(e) => onChange({ ...value, value: e.target.value })} />
             </div>
-        </div>
+        </fieldset>
     );
 }
 
@@ -577,67 +703,73 @@ function RuleEditorForm({ editor, fields, busy, onChange, onCancel, onSave }: {
     const options = ruleFieldOptions(fields);
     const set = (patch: Partial<RuleForm>) => onChange({ ...form, ...patch });
     const typeMeta = RULE_TYPE_OPTIONS.find((o) => o.v === form.type);
+    const formId = 'lodging-rule-form';
     return (
-        <form className="mt-3 rounded-xl border border-blue-200 bg-blue-50/40 p-4 space-y-3" onSubmit={(e) => { e.preventDefault(); onSave(); }} data-testid="lodging-rule-editor">
-            <div className="font-bold text-gray-800 text-sm">{editor.id == null ? 'Nueva regla' : 'Editar regla'}</div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                    <label className="block text-xs font-medium text-gray-600 mb-1">Nombre</label>
-                    <input className="w-full border rounded-lg p-2 text-sm" maxLength={100} value={form.name} onChange={(e) => set({ name: e.target.value })} placeholder="p. ej. Familias juntas" required />
-                </div>
-                <div>
-                    <label className="block text-xs font-medium text-gray-600 mb-1">Tipo</label>
-                    <select className="w-full border rounded-lg p-2 text-sm bg-white" value={form.type} onChange={(e) => {
-                        const type = e.target.value as RuleType;
-                        set({ type, subject: type === 'require_companion' ? form.subject : emptyPredicate(), needs: type === 'require_companion' ? form.needs : emptyPredicate() });
-                    }}>
-                        {RULE_TYPE_OPTIONS.map((o) => <option key={o.v} value={o.v}>{o.label}</option>)}
-                    </select>
-                    {typeMeta && <p className="text-[11px] text-gray-500 mt-1">{typeMeta.desc}</p>}
-                </div>
-            </div>
-            {form.type !== 'require_companion' ? (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div>
-                        <label className="block text-xs font-medium text-gray-600 mb-1">Campo</label>
-                        <select className="w-full border rounded-lg p-2 text-sm bg-white" value={form.config} onChange={(e) => set({ config: e.target.value })} required>
-                            <option value="">Elige un campo…</option>
-                            {options.map((f) => <option key={f.name} value={f.name}>{f.label}</option>)}
-                        </select>
-                    </div>
-                    {form.type === 'keep_together' && (
-                        <div>
-                            <label className="block text-xs font-medium text-gray-600 mb-1">Tamaño mínimo del grupo</label>
-                            <input type="number" min={1} step={1} className="w-full border rounded-lg p-2 text-sm" value={form.min_size} onChange={(e) => set({ min_size: e.target.value })} placeholder="1" />
-                        </div>
-                    )}
-                </div>
-            ) : (
-                <div className="space-y-3">
-                    <PredicateRow label="Si en la habitación hay alguien que cumple…" value={form.subject} fields={options} onChange={(subject) => set({ subject })} />
-                    <PredicateRow label="…debe haber acompañantes que cumplan" value={form.needs} fields={options} onChange={(needs) => set({ needs })} />
-                    <div className="sm:w-48">
-                        <label className="block text-xs font-medium text-gray-600 mb-1">Acompañantes mínimos</label>
-                        <input type="number" min={1} step={1} className="w-full border rounded-lg p-2 text-sm" value={form.min} onChange={(e) => set({ min: e.target.value })} placeholder="1" />
-                    </div>
-                </div>
+        <Modal
+            size="lg"
+            title={editor.id == null ? 'Nueva regla' : 'Editar regla'}
+            subtitle="Criterio de asignación de habitaciones"
+            onClose={onCancel}
+            footer={(
+                <>
+                    <Button variant="ghost" onClick={onCancel}>Cancelar</Button>
+                    <Button type="submit" form={formId} variant="indigo" disabled={busy} icon="fa-check">{editor.id == null ? 'Crear regla' : 'Guardar regla'}</Button>
+                </>
             )}
-            <div className="flex flex-wrap items-center gap-4">
-                <div className="w-32">
-                    <label className="block text-xs font-medium text-gray-600 mb-1">Prioridad</label>
-                    <input type="number" step={1} className="w-full border rounded-lg p-2 text-sm" value={form.priority} onChange={(e) => set({ priority: e.target.value })} />
+        >
+            <form id={formId} className="space-y-6" onSubmit={(e) => { e.preventDefault(); onSave(); }} data-testid="lodging-rule-editor">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <Field label="Nombre">
+                        {(id) => <input id={id} className={inputIndigoCls} maxLength={100} value={form.name} onChange={(e) => set({ name: e.target.value })} placeholder="p. ej. Familias juntas" required />}
+                    </Field>
+                    <Field label="Tipo" help={typeMeta ? typeMeta.desc : undefined}>
+                        {(id) => (
+                            <select id={id} className={inputIndigoCls} value={form.type} onChange={(e) => {
+                                const type = e.target.value as RuleType;
+                                set({ type, subject: type === 'require_companion' ? form.subject : emptyPredicate(), needs: type === 'require_companion' ? form.needs : emptyPredicate() });
+                            }}>
+                                {RULE_TYPE_OPTIONS.map((o) => <option key={o.v} value={o.v}>{o.label}</option>)}
+                            </select>
+                        )}
+                    </Field>
                 </div>
-                <label className="flex items-center gap-2 text-sm text-gray-700 mt-4">
-                    <input type="checkbox" className="w-4 h-4 rounded border-gray-300" checked={form.hard} onChange={(e) => set({ hard: e.target.checked })} /> Obligatoria (nunca se incumple)
-                </label>
-                <label className="flex items-center gap-2 text-sm text-gray-700 mt-4">
-                    <input type="checkbox" className="w-4 h-4 rounded border-gray-300" checked={form.enabled} onChange={(e) => set({ enabled: e.target.checked })} /> Activa
-                </label>
-            </div>
-            <div className="flex justify-end gap-2 pt-2 border-t border-blue-100">
-                <button type="button" onClick={onCancel} className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition">Cancelar</button>
-                <button type="submit" disabled={busy} className="px-4 py-2 text-sm bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 transition disabled:opacity-50">{editor.id == null ? 'Crear regla' : 'Guardar regla'}</button>
-            </div>
-        </form>
+                {form.type !== 'require_companion' ? (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <Field label="Campo">
+                            {(id) => (
+                                <select id={id} className={inputIndigoCls} value={form.config} onChange={(e) => set({ config: e.target.value })} required>
+                                    <option value="">Elige un campo…</option>
+                                    {options.map((f) => <option key={f.name} value={f.name}>{f.label}</option>)}
+                                </select>
+                            )}
+                        </Field>
+                        {form.type === 'keep_together' && (
+                            <Field label="Tamaño mínimo del grupo">
+                                {(id) => <input id={id} type="number" min={1} step={1} className={inputIndigoCls} value={form.min_size} onChange={(e) => set({ min_size: e.target.value })} placeholder="1" />}
+                            </Field>
+                        )}
+                    </div>
+                ) : (
+                    <div className="space-y-4">
+                        <PredicateRow label="Si en la habitación hay alguien que cumple…" value={form.subject} fields={options} onChange={(subject) => set({ subject })} />
+                        <PredicateRow label="…debe haber acompañantes que cumplan" value={form.needs} fields={options} onChange={(needs) => set({ needs })} />
+                        <Field label="Acompañantes mínimos" className="sm:w-48">
+                            {(id) => <input id={id} type="number" min={1} step={1} className={inputIndigoCls} value={form.min} onChange={(e) => set({ min: e.target.value })} placeholder="1" />}
+                        </Field>
+                    </div>
+                )}
+                <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-end gap-4">
+                    <Field label="Prioridad" className="sm:w-32">
+                        {(id) => <input id={id} type="number" step={1} className={inputIndigoCls} value={form.priority} onChange={(e) => set({ priority: e.target.value })} />}
+                    </Field>
+                    <label className="flex items-center gap-2 text-sm font-medium text-gray-700 sm:pb-3 cursor-pointer">
+                        <input type="checkbox" className={checkboxCls} checked={form.hard} onChange={(e) => set({ hard: e.target.checked })} /> Obligatoria (nunca se incumple)
+                    </label>
+                    <label className="flex items-center gap-2 text-sm font-medium text-gray-700 sm:pb-3 cursor-pointer">
+                        <input type="checkbox" className={checkboxCls} checked={form.enabled} onChange={(e) => set({ enabled: e.target.checked })} /> Activa
+                    </label>
+                </div>
+            </form>
+        </Modal>
     );
 }

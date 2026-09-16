@@ -8,6 +8,9 @@ import { csrfHeaders } from "@/lib/csrf";
 import { fieldOptions, fmtMoney, formBody, initialFormValues, inputToFormValue, isLocationFull, paymentMethodsOf, seatsLabel, type PortalField } from "./form";
 // The Hospedajes tab (lodging per location): its own data flow, one GET /portal/lodging, mounted only while selected.
 import Hospedajes from "./LodgingTab";
+// Visual primitives shared with the conference-manager admin design language (see ui.tsx).
+import { Button, Card, CardHeader, EmptyState, Field, HeroCard, IconButton, Modal, Notice, Spinner, captionCls, captionWideCls, checkboxCls, cx, headingCls, inputBoldCls, inputCls, selectCls, tdCls, thCls, trCls } from "./ui";
+import { StatCard } from "@/components/ui/StatCard";
 // Import global API helper specifically suitable for handling custom headers or URLs if needed,
 // but basically we can reuse the generic apiGet/Post if we can override headers or just use fetch for the auth ones.
 // We'll create a simple local fetcher for the portal to manage the custom token auth simpler.
@@ -74,7 +77,7 @@ const personDisplayName = (person: any, fields: any[]) => {
 
 // Combobox for the GROUPING field: search/pick an existing group (with member preview) or create a
 // new one. Module-level (never define a component inside a component — it steals input focus).
-function GroupPicker({ field, value, onChange, groups }: any) {
+function GroupPicker({ field, value, onChange, groups, id }: any) {
     const [open, setOpen] = useState(false);
     const val = value == null ? '' : String(value);
     const lower = val.trim().toLowerCase();
@@ -84,9 +87,10 @@ function GroupPicker({ field, value, onChange, groups }: any) {
     return (
         <div className="relative">
             <input
+                id={id}
                 type="text"
                 required={!!field.is_required}
-                className="w-full border rounded-lg p-2.5"
+                className={inputCls}
                 placeholder="Buscar grupo existente o escribir uno nuevo…"
                 value={val}
                 onChange={(e) => onChange(e.target.value)}
@@ -95,20 +99,20 @@ function GroupPicker({ field, value, onChange, groups }: any) {
                 autoComplete="off"
             />
             {open && (
-                <div className="absolute z-40 left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-xl max-h-64 overflow-y-auto">
+                <div className="absolute z-40 left-0 right-0 mt-2 bg-white border border-gray-100 rounded-3xl shadow-2xl max-h-64 overflow-y-auto p-2 animate-in slide-in-from-top-2 duration-200">
                     {filtered.length === 0 && !val && (
-                        <div className="px-3 py-2 text-xs text-gray-400">Aún no hay grupos en esta localidad. Escribe para crear el primero.</div>
+                        <div className="px-4 py-3 text-xs font-bold text-gray-500 italic">Aún no hay grupos en esta localidad. Escribe para crear el primero.</div>
                     )}
                     {filtered.map((g: any) => (
                         <button
                             type="button"
                             key={g.name}
                             onMouseDown={(e) => { e.preventDefault(); onChange(g.name); setOpen(false); }}
-                            className="w-full text-left px-3 py-2 hover:bg-blue-50 border-b border-gray-50 last:border-0"
+                            className="w-full text-left px-4 py-3 hover:bg-blue-50 rounded-2xl transition-all group"
                         >
                             <div className="flex items-center justify-between gap-2">
-                                <span className="font-medium text-gray-800 truncate">{g.name}</span>
-                                <span className="text-[11px] text-gray-400 whitespace-nowrap">{g.count} {g.count === 1 ? 'persona' : 'personas'}</span>
+                                <span className="text-sm font-bold text-gray-700 group-hover:text-blue-700 transition-colors truncate">{g.name}</span>
+                                <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest whitespace-nowrap">{g.count} {g.count === 1 ? 'persona' : 'personas'}</span>
                             </div>
                             {g.members && g.members.length > 0 && (
                                 <div className="text-[11px] text-gray-400 truncate mt-0.5">{g.members.map((m: any) => m.name).join(', ')}</div>
@@ -119,7 +123,7 @@ function GroupPicker({ field, value, onChange, groups }: any) {
                         <button
                             type="button"
                             onMouseDown={(e) => { e.preventDefault(); setOpen(false); }}
-                            className="w-full text-left px-3 py-2 text-blue-600 hover:bg-blue-50 font-medium text-sm border-t border-gray-100"
+                            className="w-full text-left px-4 py-3 mt-1 rounded-2xl text-blue-600 hover:bg-blue-50 font-bold text-sm border-t border-gray-50 transition-all"
                         >
                             <i className="fa-solid fa-plus mr-2"></i>Crear grupo «{val.trim()}»
                         </button>
@@ -127,8 +131,8 @@ function GroupPicker({ field, value, onChange, groups }: any) {
                 </div>
             )}
             {exact && exact.members && exact.members.length > 0 && (
-                <div className="mt-1.5 text-xs text-gray-600 bg-blue-50/60 rounded-lg px-3 py-2 border border-blue-100">
-                    <span className="font-semibold">En «{exact.name}» ({exact.count}):</span> {exact.members.map((m: any) => m.name).join(', ')}
+                <div className="mt-2 text-xs text-gray-600 bg-blue-50/60 rounded-xl px-4 py-2.5 border border-blue-100">
+                    <span className="font-bold text-blue-900">En «{exact.name}» ({exact.count}):</span> {exact.members.map((m: any) => m.name).join(', ')}
                 </div>
             )}
         </div>
@@ -483,26 +487,31 @@ function LocationPortalContent() {
     };
 
     if (loading && !myLocation && step === 'dashboard') {
-        return <div className="flex h-screen items-center justify-center">Cargando...</div>;
+        return (
+            <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+                <Spinner label="Cargando..." />
+            </div>
+        );
     }
 
     // === ERROR VIEW ===
     if (error) {
         return (
-            <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
-                <div className="bg-white p-8 rounded-xl shadow-lg w-full max-w-md text-center">
-                    <div className="w-16 h-16 bg-red-100 text-red-600 rounded-full flex items-center justify-center text-3xl mx-auto mb-4">
+            <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+                <HeroCard tone="rose" className="w-full max-w-md text-center">
+                    <div className="w-14 h-14 rounded-2xl bg-rose-500 text-white flex items-center justify-center text-2xl shadow-xl shadow-rose-200 mx-auto mb-5">
                         <i className="fa-solid fa-triangle-exclamation"></i>
                     </div>
-                    <h1 className="text-xl font-bold text-gray-900 mb-2">Acceso No Disponible</h1>
-                    <p className="text-gray-500 mb-6">{error}</p>
-                    <button
+                    <h1 className={cx("text-3xl", headingCls, "mb-2")}>Acceso No Disponible</h1>
+                    <p className="text-sm text-gray-500 font-medium leading-relaxed mb-8">{error}</p>
+                    <Button
+                        block
+                        size="lg"
                         onClick={() => { setError(null); window.history.pushState({}, '', window.location.pathname); loadConferences(); }}
-                        className="w-full bg-blue-600 text-white font-bold py-3 rounded-lg hover:bg-blue-700 transition"
                     >
                         Ver otras conferencias
-                    </button>
-                </div>
+                    </Button>
+                </HeroCard>
             </div>
         );
     }
@@ -510,143 +519,156 @@ function LocationPortalContent() {
     // === LOGIN VIEW ===
     if (step === 'login') {
         return (
-            <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
-                <div className="bg-white p-8 rounded-xl shadow-lg w-full max-w-md">
-                    <div className="text-center mb-6">
-                        <div className="w-16 h-16 bg-blue-600 rounded-full flex items-center justify-center text-white text-3xl mx-auto mb-4">
+            <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+                <HeroCard tone="blue" className="w-full max-w-md">
+                    <div className="flex items-center gap-4 mb-8">
+                        <div className="w-14 h-14 rounded-2xl bg-blue-600 text-white flex items-center justify-center text-2xl shadow-xl shadow-blue-200 shrink-0">
                             <i className="fa-solid fa-map-marker-alt"></i>
                         </div>
-                        <h1 className="text-2xl font-bold text-gray-900">Portal de Localidades</h1>
-                        <p className="text-gray-500">Gestión de inscripciones</p>
+                        <div className="min-w-0">
+                            <h1 className={cx("text-2xl sm:text-3xl", headingCls)}>Portal de Localidades</h1>
+                            <p className={cx(captionCls, "mt-1")}>Gestión de inscripciones</p>
+                        </div>
                     </div>
 
-                    <form onSubmit={handleLogin} className="space-y-4">
-                        <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-1">
-                                Conferencia
-                                {isConferenceLocked && <i className="fa-solid fa-lock text-xs text-gray-400 ml-2" title="Conferencia pre-seleccionada"></i>}
-                            </label>
-                            <select
-                                className={`w-full border rounded-lg p-3 text-gray-900 ${isConferenceLocked ? 'bg-gray-200 cursor-not-allowed opacity-75' : 'bg-gray-50'}`}
-                                value={selectedConference}
-                                onChange={e => setSelectedConference(e.target.value)}
-                                disabled={isConferenceLocked}
-                                required
-                            >
-                                <option value="">Seleccione una conferencia</option>
-                                {conferences.map(c => (
-                                    <option key={c.id} value={c.id}>{c.name}</option>
-                                ))}
-                            </select>
-                        </div>
-
-                        <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-1">Localidad</label>
-                            <select
-                                className="w-full border rounded-lg p-3 bg-gray-50 text-gray-900 disabled:opacity-50"
-                                value={selectedLocation}
-                                onChange={e => setSelectedLocation(e.target.value)}
-                                disabled={!selectedConference}
-                                required
-                            >
-                                <option value="">Seleccione su localidad</option>
-                                {locations.map(l => (
-                                    <option key={l.id} value={l.id}>{l.name}</option>
-                                ))}
-                            </select>
-                        </div>
-
-                        <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-1">Código de Acceso</label>
-                            <div className="relative">
-                                <input
-                                    type="password"
-                                    className="w-full border rounded-lg p-3 pl-10 bg-gray-50 focus:ring-2 focus:ring-blue-500 focus:outline-none"
-                                    placeholder="••••••"
-                                    maxLength={6}
-                                    value={code}
-                                    onChange={e => setCode(e.target.value)}
+                    <form onSubmit={handleLogin} className="space-y-5">
+                        <Field label={<>
+                            Conferencia
+                            {isConferenceLocked && <i className="fa-solid fa-lock text-[9px] text-gray-400 ml-2" title="Conferencia pre-seleccionada"></i>}
+                        </>}>
+                            {(id) => (
+                                <select
+                                    id={id}
+                                    className={cx(selectCls, isConferenceLocked && 'cursor-not-allowed opacity-75')}
+                                    value={selectedConference}
+                                    onChange={e => setSelectedConference(e.target.value)}
+                                    disabled={isConferenceLocked}
                                     required
-                                />
-                                <i className="fa-solid fa-lock absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"></i>
-                            </div>
-                        </div>
+                                >
+                                    <option value="">Seleccione una conferencia</option>
+                                    {conferences.map(c => (
+                                        <option key={c.id} value={c.id}>{c.name}</option>
+                                    ))}
+                                </select>
+                            )}
+                        </Field>
 
-                        <button
+                        <Field label="Localidad">
+                            {(id) => (
+                                <select
+                                    id={id}
+                                    className={selectCls}
+                                    value={selectedLocation}
+                                    onChange={e => setSelectedLocation(e.target.value)}
+                                    disabled={!selectedConference}
+                                    required
+                                >
+                                    <option value="">Seleccione su localidad</option>
+                                    {locations.map(l => (
+                                        <option key={l.id} value={l.id}>{l.name}</option>
+                                    ))}
+                                </select>
+                            )}
+                        </Field>
+
+                        <Field label="Código de Acceso">
+                            {(id) => (
+                                <div className="relative">
+                                    <input
+                                        id={id}
+                                        type="password"
+                                        className={cx(inputBoldCls, "pl-11 tracking-[0.3em]")}
+                                        placeholder="••••••"
+                                        maxLength={6}
+                                        value={code}
+                                        onChange={e => setCode(e.target.value)}
+                                        required
+                                    />
+                                    <i className="fa-solid fa-lock absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 text-xs"></i>
+                                </div>
+                            )}
+                        </Field>
+
+                        <Button
                             type="submit"
+                            block
+                            size="lg"
+                            icon="fa-arrow-right-to-bracket"
                             disabled={loading || !selectedLocation || !code}
-                            className="w-full bg-blue-600 text-white font-bold py-3 rounded-lg hover:bg-blue-700 transition disabled:opacity-50"
+                            className="mt-2"
                         >
                             {loading ? 'Verificando...' : 'Ingresar'}
-                        </button>
+                        </Button>
                     </form>
-                </div>
+                </HeroCard>
             </div>
         );
     }
 
     // === DASHBOARD VIEW ===
+    const paidCount = inscriptions.filter(i => i.payment_status === 'paid').length;
+    const totalPaid = inscriptions.reduce((sum, i) => sum + (Number(i.amount_paid) || 0), 0);
+    const totalPending = inscriptions.reduce((sum, i) => sum + ((Number(i.total_due) || 0) - (Number(i.amount_paid) || 0)), 0);
+    const locationFull = isLocationFull(myLocation);
+    const methods = paymentMethodsOf(myLocation);
     return (
         <div className="min-h-screen bg-gray-50">
-            {/* Header */}
-            <header className="bg-white border-b border-gray-200 sticky top-0 z-30">
+            {/* Slim sticky bar: product name + logout. The location identity lives in the hero below, as the admin dashboard. */}
+            <header className="bg-white/90 backdrop-blur border-b border-gray-100 shadow-sm shadow-gray-100/50 sticky top-0 z-30">
                 <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
-                    <div className="flex justify-between items-center h-16">
-                        <div className="flex items-center gap-3">
-                            <div className="w-10 h-10 bg-blue-100 text-blue-600 rounded-lg flex items-center justify-center">
+                    <div className="flex justify-between items-center gap-4 py-3">
+                        <div className="flex items-center gap-3 min-w-0">
+                            <div className="w-9 h-9 rounded-xl bg-blue-600 flex items-center justify-center text-white text-sm shadow-lg shadow-blue-200 shrink-0">
                                 <i className="fa-solid fa-map-marker-alt"></i>
                             </div>
-                            <div>
-                                <h1 className="text-xl font-bold text-gray-900">{myLocation?.name}</h1>
-                                <p className="text-xs text-gray-500 flex items-center gap-2">
-                                    <span>{myLocation?.responsible_name}</span>
-                                    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold ${isLocationFull(myLocation) ? 'bg-rose-50 text-rose-700' : 'bg-emerald-50 text-emerald-700'}`} data-testid="portal-seats">
-                                        <i className="fa-solid fa-users text-[10px]"></i> {seatsLabel(myLocation)}{isLocationFull(myLocation) ? ' · Cupo lleno' : ''}
-                                    </span>
-                                </p>
-                            </div>
+                            <span className={cx(captionWideCls, "text-blue-600 truncate")}>Portal de Localidades</span>
                         </div>
-                        <button
+                        <IconButton
+                            icon="fa-right-from-bracket"
+                            tone="rose"
                             onClick={logout}
-                            className="text-gray-500 hover:text-red-600 transition"
                             title="Cerrar Sessión"
-                        >
-                            <i className="fa-solid fa-right-from-bracket text-lg"></i>
-                        </button>
+                            className="shrink-0"
+                        />
                     </div>
                 </div>
             </header>
 
-            <main className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+            <main className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8 animate-in fade-in duration-500">
+                {/* The admin ConferenceDashboard hero: tile + caption, black italic name, gray-50 pills */}
+                <HeroCard tone="blue">
+                    <div className="flex items-center gap-3 mb-3">
+                        <div className="w-10 h-10 rounded-xl bg-blue-600 flex items-center justify-center text-white shadow-lg shadow-blue-200 shrink-0">
+                            <i className="fa-solid fa-map-marker-alt"></i>
+                        </div>
+                        <span className={cx(captionWideCls, "text-blue-600 truncate")}>{myLocation?.responsible_name}</span>
+                    </div>
+                    <h1 className={cx("text-3xl sm:text-4xl mb-3 break-words", headingCls)}>{myLocation?.name}</h1>
+                    <div className="flex flex-wrap items-center gap-3 sm:gap-4">
+                        <div className="flex items-center gap-2 bg-gray-50 px-3 py-1.5 rounded-full border border-gray-100" data-testid="portal-seats">
+                            <i className={cx("fa-solid fa-users text-xs text-center w-4", locationFull ? "text-rose-500" : "text-emerald-500")}></i>
+                            <span className={cx("text-xs font-bold", locationFull ? "text-rose-600" : "text-gray-600")}>
+                                {seatsLabel(myLocation)}{locationFull ? ' · Cupo lleno' : ''}
+                            </span>
+                        </div>
+                        {methods.length > 0 && (
+                            <div className="flex items-center gap-2 bg-gray-50 px-3 py-1.5 rounded-full border border-gray-100">
+                                <i className="fa-solid fa-money-bill-wave text-xs text-blue-500 text-center w-4"></i>
+                                <span className="text-xs font-bold text-gray-600">{methods.join(' · ')}</span>
+                            </div>
+                        )}
+                    </div>
+                </HeroCard>
+
                 {/* Stats */}
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-6 mb-8">
-                    <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm">
-                        <div className="text-gray-400 text-[10px] font-bold uppercase tracking-wider mb-2">Total Inscritos</div>
-                        <div className="flex items-end gap-2">
-                            <div className="text-3xl font-black text-blue-600">{inscriptions.length}</div>
-                            <div className="text-gray-400 text-xs mb-1 font-medium italic">personas</div>
-                        </div>
-                    </div>
-                    <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm">
-                        <div className="text-gray-400 text-[10px] font-bold uppercase tracking-wider mb-2">Total Recaudado</div>
-                        <div className="flex items-end gap-1">
-                            <div className="text-3xl font-black text-emerald-600">
-                                ${fmtMoney(inscriptions.reduce((sum, i) => sum + (Number(i.amount_paid) || 0), 0))}
-                            </div>
-                        </div>
-                    </div>
-                    <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm">
-                        <div className="text-gray-400 text-[10px] font-bold uppercase tracking-wider mb-2">Saldo Pendiente</div>
-                        <div className="flex items-end gap-1">
-                            <div className="text-3xl font-black text-rose-500">
-                                ${fmtMoney(inscriptions.reduce((sum, i) => sum + ((Number(i.total_due) || 0) - (Number(i.amount_paid) || 0)), 0))}
-                            </div>
-                        </div>
-                    </div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
+                    <StatCard icon="fa-users" label="Total Inscritos" value={inscriptions.length} color="blue" />
+                    <StatCard icon="fa-sack-dollar" label="Total Recaudado" value={`$${fmtMoney(totalPaid)}`} color="green" />
+                    <StatCard icon="fa-hourglass-half" label="Saldo Pendiente" value={`$${fmtMoney(totalPending)}`} color="red" />
                 </div>
 
                 {/* Tabs: Participantes (the original dashboard) | Hospedajes (lodging per location) */}
-                <div className="flex items-center gap-1 mb-4 border-b border-gray-200" role="tablist" data-testid="portal-tabs">
+                <div className="flex border-b border-gray-200 overflow-x-auto" role="tablist" data-testid="portal-tabs">
                     {([['participants', 'Participantes', 'fa-users'], ['lodging', 'Hospedajes', 'fa-bed']] as const).map(([key, label, icon]) => (
                         <button
                             key={key}
@@ -654,7 +676,7 @@ function LocationPortalContent() {
                             role="tab"
                             aria-selected={tab === key}
                             onClick={() => setTab(key)}
-                            className={`px-4 py-2.5 -mb-px text-sm font-medium border-b-2 transition flex items-center gap-2 ${tab === key ? 'border-blue-600 text-blue-700' : 'border-transparent text-gray-500 hover:text-gray-800'}`}
+                            className={`flex items-center gap-2 px-6 py-3 border-b-2 font-medium text-sm transition-colors whitespace-nowrap ${tab === key ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}`}
                         >
                             <i className={`fa-solid ${icon}`}></i> {label}
                         </button>
@@ -664,15 +686,23 @@ function LocationPortalContent() {
                 {tab === 'lodging' ? (
                     <Hospedajes authHeaders={portalAuthHeaders} onLocationRefresh={refreshMyLocation} />
                 ) : (
-                <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-                    <div className="p-4 border-b border-gray-200 flex justify-between items-center bg-gray-50/50">
-                        <h2 className="font-bold text-gray-800">
-                            {view === 'list' ? 'Participantes' : 'Nueva Inscripción'}
-                        </h2>
-                        {view === 'list' ? (
-                            <div className="flex items-center gap-2">
+                <Card className="animate-in slide-in-from-bottom-4 duration-500">
+                    <CardHeader
+                        icon={view === 'list' ? 'fa-users' : 'fa-user-plus'}
+                        title={view === 'list' ? 'Participantes' : 'Nueva Inscripción'}
+                        caption={view === 'list' ? (
+                            <span className="inline-flex flex-wrap items-center gap-3">
+                                <span>{inscriptions.length} {inscriptions.length === 1 ? 'participante' : 'participantes'}</span>
+                                <span className="w-1 h-1 rounded-full bg-gray-200"></span>
+                                <span className="text-blue-500 font-black">{paidCount} {paidCount === 1 ? 'pagado' : 'pagados'}</span>
+                            </span>
+                        ) : undefined}
+                        actions={view === 'list' ? (
+                            <>
                                 {selectedIds.length > 0 && (
-                                    <button
+                                    <Button
+                                        variant="success"
+                                        icon="fa-file-invoice-dollar"
                                         onClick={() => {
                                             // Pre-fill amount if only one selected or just leave blank
                                             const defaultAmount = selectedIds.length === 1 ? (inscriptions.find(i => i.id === selectedIds[0])?.total_due || 0) - (inscriptions.find(i => i.id === selectedIds[0])?.amount_paid || 0) : '';
@@ -682,91 +712,95 @@ function LocationPortalContent() {
                                         }}
                                         disabled={paymentMethodsOf(myLocation).length === 0}
                                         title={paymentMethodsOf(myLocation).length === 0 ? 'No hay formas de pago habilitadas para esta localidad.' : undefined}
-                                        className="disabled:opacity-50 disabled:cursor-not-allowed bg-emerald-600 text-white px-4 py-2 rounded-lg hover:bg-emerald-700 transition flex items-center gap-2 text-sm font-medium animate-in zoom-in duration-200 shadow-lg"
+                                        className="animate-in zoom-in duration-200"
                                     >
-                                        <i className="fa-solid fa-file-invoice-dollar"></i> Registrar Pago ({selectedIds.length})
-                                    </button>
+                                        Registrar Pago ({selectedIds.length})
+                                    </Button>
                                 )}
-                                <button
+                                <Button
+                                    icon="fa-plus"
                                     onClick={() => setView('add')}
                                     disabled={isLocationFull(myLocation)}
                                     title={isLocationFull(myLocation) ? 'La localidad ha alcanzado su cupo máximo.' : undefined}
-                                    className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition flex items-center gap-2 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
                                 >
-                                    <i className="fa-solid fa-plus"></i> Registrar Nuevo
-                                </button>
-                            </div>
+                                    Registrar Nuevo
+                                </Button>
+                            </>
                         ) : (
-                            <button
-                                onClick={() => setView('list')}
-                                className="text-gray-600 hover:bg-gray-100 px-4 py-2 rounded-lg transition flex items-center gap-2 text-sm font-medium"
-                            >
-                                <i className="fa-solid fa-arrow-left"></i> Volver a la lista
-                            </button>
+                            <Button variant="ghost" icon="fa-arrow-left" onClick={() => setView('list')}>
+                                Volver a la lista
+                            </Button>
                         )}
-                    </div>
+                    />
 
                     {view === 'list' ? (
                         <div className="overflow-x-auto">
-                            <table className="w-full text-sm text-left">
-                                <thead className="text-xs text-gray-500 uppercase bg-gray-50 border-b">
-                                    <tr>
-                                        <th className="px-6 py-3 w-10 text-center">
+                            <table className="w-full text-sm text-left border-collapse">
+                                <thead>
+                                    <tr className="bg-gray-50/50">
+                                        <th scope="col" className={cx(thCls, "w-10 text-center")}>
                                             <input
                                                 type="checkbox"
+                                                aria-label="Seleccionar todos los participantes"
                                                 checked={selectedIds.length === inscriptions.length && inscriptions.length > 0}
                                                 onChange={(e) => {
                                                     if (e.target.checked) setSelectedIds(inscriptions.map(i => i.id));
                                                     else setSelectedIds([]);
                                                 }}
-                                                className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                                                className={checkboxCls}
                                             />
                                         </th>
-                                        <th className="px-6 py-3">Participante</th>
+                                        <th scope="col" className={cx(thCls, "px-8")}>Participante</th>
                                         {fields.map((field) => (
-                                            <th key={field.name} className="px-6 py-3 whitespace-nowrap">{field.label}</th>
+                                            <th key={field.name} scope="col" className={thCls}>{field.label}</th>
                                         ))}
-                                        <th className="px-6 py-3">Pago</th>
+                                        <th scope="col" className={cx(thCls, "text-center")}>Pago</th>
                                     </tr>
                                 </thead>
-                                <tbody>
+                                <tbody className="divide-y divide-gray-50">
                                     {inscriptions.length === 0 ? (
                                         <tr>
-                                            <td colSpan={fields.length + 3} className="px-6 py-8 text-center text-gray-500">
-                                                No hay participantes registrados en esta localidad.
+                                            <td colSpan={fields.length + 3} className="p-6">
+                                                <EmptyState icon="fa-users" padding="sm" title="No hay participantes registrados en esta localidad." />
                                             </td>
                                         </tr>
                                     ) : (
                                         inscriptions.map(i => (
-                                            <tr key={i.id} className={`border-b hover:bg-gray-50 transition-colors ${selectedIds.includes(i.id) ? 'bg-blue-50/50' : ''}`}>
-                                                <td className="px-6 py-4 text-center">
+                                            <tr key={i.id} className={cx(trCls, selectedIds.includes(i.id) && 'bg-blue-50/50')}>
+                                                <td className={cx(tdCls, "text-center")}>
                                                     <input
                                                         type="checkbox"
+                                                        aria-label={`Seleccionar a ${personDisplayName(i, fields)}`}
                                                         checked={selectedIds.includes(i.id)}
                                                         onChange={(e) => {
                                                             if (e.target.checked) setSelectedIds([...selectedIds, i.id]);
                                                             else setSelectedIds(selectedIds.filter(id => id !== i.id));
                                                         }}
-                                                        className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                                                        className={checkboxCls}
                                                     />
                                                 </td>
-                                                <td className="px-6 py-4 font-medium text-gray-900 whitespace-nowrap">
+                                                <td className="px-8 py-5 font-bold text-gray-900 group-hover/row:text-blue-700 transition-colors whitespace-nowrap">
                                                     {/* Display name follows the form — first 1-2 field values. */}
                                                     {personDisplayName(i, fields)}
                                                 </td>
-                                                {fields.map((field) => (
-                                                    <td key={field.name} className="px-6 py-4 text-gray-600 whitespace-nowrap">
-                                                        {String(fieldVal(i, field) || '') || '-'}
-                                                    </td>
-                                                ))}
-                                                <td className="px-6 py-4">
-                                                    <div className="flex flex-col">
-                                                        <span className={`px-2 py-1 rounded-full text-xs font-medium w-fit ${i.payment_status === 'paid' ? 'bg-green-100 text-green-800' :
-                                                            i.payment_status === 'partial' ? 'bg-orange-100 text-orange-800' : 'bg-red-100 text-red-800'
+                                                {fields.map((field) => {
+                                                    const v = String(fieldVal(i, field) || '');
+                                                    return (
+                                                        <td key={field.name} className={tdCls}>
+                                                            <div className="text-gray-600 text-xs font-medium truncate max-w-[180px]">
+                                                                {v !== '' ? v : <span className="text-gray-300 italic">-</span>}
+                                                            </div>
+                                                        </td>
+                                                    );
+                                                })}
+                                                <td className={tdCls}>
+                                                    <div className="flex flex-col items-center gap-1">
+                                                        <span className={`px-4 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest whitespace-nowrap ${i.payment_status === 'paid' ? 'bg-emerald-50 text-emerald-600' :
+                                                            i.payment_status === 'partial' ? 'bg-amber-50 text-amber-600' : 'bg-rose-50 text-rose-600'
                                                             }`}>
                                                             {i.payment_status === 'unpaid' ? 'Sin Pagar' : (i.payment_status === 'paid' ? 'Pagado' : 'Abono')}
                                                         </span>
-                                                        <div className="text-[11px] text-gray-500 mt-1 font-medium">
+                                                        <div className="text-[10px] text-gray-400 font-bold whitespace-nowrap">
                                                             PAGADO: <span className="text-gray-900">${fmtMoney(i.amount_paid)}</span> / <span className="text-gray-400">${fmtMoney(i.total_due)}</span>
                                                         </div>
                                                     </div>
@@ -778,28 +812,30 @@ function LocationPortalContent() {
                             </table>
                         </div>
                     ) : (
-                        <div className="p-6">
+                        <div className="p-6 sm:p-8">
                             {isLocationFull(myLocation) && (
-                                <div className="max-w-2xl mx-auto mb-6 p-4 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-sm flex items-start gap-3">
-                                    <i className="fa-solid fa-circle-exclamation mt-0.5"></i>
+                                <Notice tone="rose" icon="fa-circle-exclamation" className="max-w-2xl mx-auto mb-6">
                                     <span>La localidad ha alcanzado su cupo máximo ({seatsLabel(myLocation)}). No es posible registrar más participantes; contacta al administrador si necesitas ampliar el cupo.</span>
-                                </div>
+                                </Notice>
                             )}
                             <form onSubmit={handleCreateInscription} className="max-w-2xl mx-auto space-y-6">
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
                                     {fields.length === 0 ? (
-                                        <div className="md:col-span-2 text-center p-10 bg-gray-50 rounded-xl border border-dashed border-gray-300">
-                                            <i className="fa-solid fa-triangle-exclamation text-yellow-500 text-3xl mb-3"></i>
-                                            <p className="text-gray-600 font-medium">No hay campos configurados para este formulario.</p>
-                                        </div>
+                                        <EmptyState
+                                            icon="fa-triangle-exclamation"
+                                            title="No hay campos configurados para este formulario."
+                                            className="md:col-span-2"
+                                        />
                                     ) : (
                                         fields.map((field) => (
-                                            <div key={field.name} className={field.width === 50 ? 'col-span-1' : 'md:col-span-2'}>
-                                                <label className="block text-sm font-medium text-gray-700 mb-1">
-                                                    {field.label} {field.is_required ? '*' : ''}
-                                                </label>
-                                                {field.is_group ? (
+                                            <Field
+                                                key={field.name}
+                                                className={field.width === 50 ? 'col-span-1' : 'md:col-span-2'}
+                                                label={<>{field.label} {field.is_required ? <span className="text-rose-500">*</span> : ''}</>}
+                                            >
+                                                {(id) => field.is_group ? (
                                                     <GroupPicker
+                                                        id={id}
                                                         field={field}
                                                         value={formData[field.name] ?? ''}
                                                         onChange={(v: string) => setFormData({ ...formData, [field.name]: inputToFormValue(field, v) })}
@@ -807,8 +843,9 @@ function LocationPortalContent() {
                                                     />
                                                 ) : field.type === 'select' ? (
                                                     <select
+                                                        id={id}
                                                         required={!!field.is_required}
-                                                        className="w-full border rounded-lg p-2.5 bg-white"
+                                                        className={selectCls}
                                                         value={formData[field.name] ?? ''}
                                                         onChange={(e) => setFormData({ ...formData, [field.name]: inputToFormValue(field, e.target.value) })}
                                                     >
@@ -818,166 +855,163 @@ function LocationPortalContent() {
                                                     </select>
                                                 ) : field.type === 'textarea' ? (
                                                     <textarea
+                                                        id={id}
                                                         required={!!field.is_required}
-                                                        className="w-full border rounded-lg p-2.5"
+                                                        className={cx(inputCls, "resize-none")}
                                                         rows={3}
                                                         value={formData[field.name] ?? ''}
                                                         onChange={(e) => setFormData({ ...formData, [field.name]: inputToFormValue(field, e.target.value) })}
                                                     />
                                                 ) : (
                                                     <input
+                                                        id={id}
                                                         type={field.type}
                                                         required={!!field.is_required}
-                                                        className="w-full border rounded-lg p-2.5"
+                                                        className={inputCls}
                                                         value={formData[field.name] ?? ''}
                                                         onChange={(e) => setFormData({ ...formData, [field.name]: inputToFormValue(field, e.target.value) })}
                                                     />
                                                 )}
-                                            </div>
+                                            </Field>
                                         ))
                                     )}
                                 </div>
 
                                 {fields.length > 0 && (
-                                    <div className="rounded-xl border border-blue-100 bg-blue-50/60 px-4 py-3 text-sm text-gray-700" data-testid="portal-quote">
+                                    <Notice tone="blue" icon="fa-receipt" data-testid="portal-quote">
                                         {quote ? (
                                             <>
-                                                <div>Cuota estimada: <b className="text-gray-900">${fmtMoney(quote.total)}</b></div>
-                                                <div className="text-xs text-gray-500 mt-0.5">Se calcula con las reglas de precio de la conferencia; el valor definitivo se fija al guardar.</div>
+                                                <div className="font-medium">Cuota estimada: <b className="text-gray-900">${fmtMoney(quote.total)}</b></div>
+                                                <div className="text-xs text-blue-900/60 mt-0.5">Se calcula con las reglas de precio de la conferencia; el valor definitivo se fija al guardar.</div>
                                             </>
                                         ) : (
-                                            <div className="text-gray-500">Cuota: se calculará al guardar.</div>
+                                            <div className="text-blue-900/70">Cuota: se calculará al guardar.</div>
                                         )}
-                                    </div>
+                                    </Notice>
                                 )}
 
-                                <div className="flex justify-end gap-3 pt-6 border-t mt-4">
-                                    <button
-                                        type="button"
-                                        onClick={() => setView('list')}
-                                        className="px-6 py-2.5 text-gray-700 hover:bg-gray-100 rounded-lg transition"
-                                    >
+                                <div className="flex flex-wrap justify-end gap-3 pt-6 border-t border-gray-50">
+                                    <Button variant="ghost" onClick={() => setView('list')}>
                                         Cancelar
-                                    </button>
-                                    <button
-                                        type="submit"
-                                        disabled={loading || fields.length === 0}
-                                        className="px-6 py-2.5 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 transition disabled:opacity-50"
-                                    >
+                                    </Button>
+                                    <Button type="submit" size="lg" disabled={loading || fields.length === 0}>
                                         Guardar Inscripción
-                                    </button>
+                                    </Button>
                                 </div>
                             </form>
                         </div>
                     )}
-                </div>
+                </Card>
                 )}
             </main>
             {showPaymentModal && (
-                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 overflow-y-auto animate-in fade-in duration-200">
-                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg border border-gray-100 overflow-hidden animate-in zoom-in-95 duration-200">
-                        <div className="bg-gray-50/50 px-8 py-6 border-b border-gray-100 flex items-center justify-between">
-                            <div>
-                                <h3 className="font-bold text-xl text-gray-900 italic">Registrar Pago Grupal</h3>
-                                <p className="text-xs text-gray-500 mt-0.5">Se aplicará a {selectedIds.length} personas seleccionadas</p>
-                            </div>
-                            <button onClick={() => setShowPaymentModal(false)} className="text-gray-400 hover:text-gray-600 transition-colors p-2 hover:bg-gray-100 rounded-lg">
-                                <i className="fa-solid fa-xmark text-lg"></i>
-                            </button>
-                        </div>
-
-                        <form onSubmit={handleBulkPayment} className="p-8 space-y-5">
-                            <div className="space-y-1.5">
-                                <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider ml-1">Monto por Persona</label>
+                <Modal
+                    title="Registrar Pago Grupal"
+                    subtitle={`Se aplicará a ${selectedIds.length} personas seleccionadas`}
+                    onClose={() => setShowPaymentModal(false)}
+                    footer={(
+                        <>
+                            <Button variant="ghost" onClick={() => setShowPaymentModal(false)}>
+                                Cancelar
+                            </Button>
+                            <Button
+                                type="submit"
+                                form="bulk-payment-form"
+                                size="lg"
+                                disabled={loading || !paymentForm.amount_per_person || !paymentForm.proof}
+                            >
+                                {loading ? 'Procesando...' : 'Confirmar Pago'}
+                            </Button>
+                        </>
+                    )}
+                >
+                    <form id="bulk-payment-form" onSubmit={handleBulkPayment} className="space-y-5">
+                        <Field label="Monto por Persona">
+                            {(id) => (
                                 <div className="relative">
                                     <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 font-bold">$</span>
                                     <input
+                                        id={id}
                                         required
                                         type="number"
                                         min="0"
                                         step="any"
-                                        className="w-full border-2 border-gray-100 rounded-xl px-10 py-3 bg-gray-50/30 focus:bg-white focus:border-blue-500 transition-all outline-none text-gray-900 font-bold"
+                                        className={cx(inputBoldCls, "pl-10")}
                                         value={paymentForm.amount_per_person}
                                         onChange={e => setPaymentForm({ ...paymentForm, amount_per_person: e.target.value })}
                                         placeholder="0.00"
                                     />
                                 </div>
-                            </div>
+                            )}
+                        </Field>
 
-                            <div className="grid grid-cols-2 gap-4">
-                                <div className="space-y-1.5">
-                                    <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider ml-1">Método</label>
-                                    <select
-                                        className="w-full border-2 border-gray-100 rounded-xl px-4 py-3 bg-gray-50/30 font-medium outline-none"
-                                        value={paymentForm.method}
-                                        onChange={e => setPaymentForm({ ...paymentForm, method: e.target.value })}
-                                    >
-                                        {paymentMethodsOf(myLocation).map(m => <option key={m} value={m}>{m}</option>)}
-                                    </select>
-                                    {paymentMethodsOf(myLocation).length === 0 && (
-                                        <p className="text-xs text-rose-600 font-medium ml-1">No hay formas de pago habilitadas para esta localidad; contacta al administrador.</p>
-                                    )}
-                                </div>
-                                <div className="space-y-1.5">
-                                    <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider ml-1">Referencia (Opcional)</label>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <Field label="Método">
+                                {(id) => (
+                                    <>
+                                        <select
+                                            id={id}
+                                            className={selectCls}
+                                            value={paymentForm.method}
+                                            onChange={e => setPaymentForm({ ...paymentForm, method: e.target.value })}
+                                        >
+                                            {paymentMethodsOf(myLocation).map(m => <option key={m} value={m}>{m}</option>)}
+                                        </select>
+                                        {paymentMethodsOf(myLocation).length === 0 && (
+                                            <p className="text-xs text-rose-600 font-medium ml-1">No hay formas de pago habilitadas para esta localidad; contacta al administrador.</p>
+                                        )}
+                                    </>
+                                )}
+                            </Field>
+                            <Field label="Referencia (Opcional)">
+                                {(id) => (
                                     <input
-                                        className="w-full border-2 border-gray-100 rounded-xl px-4 py-3 bg-gray-50/30 font-medium outline-none"
+                                        id={id}
+                                        className={inputCls}
                                         value={paymentForm.reference}
                                         onChange={e => setPaymentForm({ ...paymentForm, reference: e.target.value })}
                                         placeholder="# Recibo / Trans"
                                     />
-                                </div>
-                            </div>
+                                )}
+                            </Field>
+                        </div>
 
-                            <div className="space-y-1.5">
-                                <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider ml-1">Comprobante de Pago <span className="text-rose-500">*</span></label>
-                                <div className="border-2 border-dashed border-gray-200 rounded-xl p-4 transition-colors hover:border-blue-400 relative overflow-hidden group">
-                                    <input
-                                        type="file"
-                                        accept="image/*"
-                                        onChange={handleFileChange}
-                                        className="absolute inset-0 opacity-0 cursor-pointer z-10"
-                                    />
-                                    {paymentForm.proof ? (
-                                        <div className="flex items-center gap-3">
-                                            <img src={paymentForm.proof} alt="Comprobante de pago" className="w-12 h-12 rounded-lg object-cover border border-gray-200" />
-                                            <div className="flex-1 min-w-0">
-                                                <p className="text-xs font-bold text-blue-600 truncate">Imagen cargada correctamente</p>
-                                                <p className="text-[10px] text-gray-400 italic">Haz clic para cambiar</p>
+                        <Field label={<>Comprobante de Pago <span className="text-rose-500">*</span></>}>
+                            {(id) => (
+                                <>
+                                    <div className="border-2 border-dashed border-gray-200 rounded-2xl p-4 bg-gray-50/30 transition-colors hover:border-blue-400 focus-within:border-blue-500 relative overflow-hidden group">
+                                        <input
+                                            id={id}
+                                            type="file"
+                                            accept="image/*"
+                                            aria-label="Adjuntar foto del comprobante"
+                                            onChange={handleFileChange}
+                                            className="absolute inset-0 opacity-0 cursor-pointer z-10"
+                                        />
+                                        {paymentForm.proof ? (
+                                            <div className="flex items-center gap-3">
+                                                <img src={paymentForm.proof} alt="Comprobante de pago" className="w-14 h-14 rounded-xl object-cover border border-gray-200 shadow-sm" />
+                                                <div className="flex-1 min-w-0">
+                                                    <p className="text-xs font-bold text-blue-600 truncate">Imagen cargada correctamente</p>
+                                                    <p className="text-[10px] text-gray-400 italic">Haz clic para cambiar</p>
+                                                </div>
+                                                <button type="button" onClick={() => setPaymentForm({ ...paymentForm, proof: '' })} title="Quitar comprobante" aria-label="Quitar comprobante" className="relative z-20 w-9 h-9 flex items-center justify-center rounded-xl bg-white text-rose-500 hover:bg-rose-600 hover:text-white transition-all shadow-sm border border-rose-100">
+                                                    <i className="fa-solid fa-trash-can text-xs"></i>
+                                                </button>
                                             </div>
-                                            <button type="button" onClick={() => setPaymentForm({ ...paymentForm, proof: '' })} className="relative z-20 text-red-500 hover:text-red-700 p-2">
-                                                <i className="fa-solid fa-trash-can"></i>
-                                            </button>
-                                        </div>
-                                    ) : (
-                                        <div className="text-center py-2">
-                                            <i className="fa-solid fa-cloud-arrow-up text-gray-300 text-2xl mb-2 group-hover:text-blue-400 transition-colors"></i>
-                                            <p className="text-xs text-gray-500 font-medium">Adjuntar foto del comprobante</p>
-                                        </div>
-                                    )}
-                                </div>
-                                <p className="text-[10px] text-gray-400 italic ml-1">Obligatorio. El pago quedará <b>pendiente de validación</b> por un administrador.</p>
-                            </div>
-
-                            <div className="flex items-center justify-end gap-3 pt-6">
-                                <button
-                                    type="button"
-                                    onClick={() => setShowPaymentModal(false)}
-                                    className="px-6 py-2.5 text-gray-500 font-bold hover:bg-gray-100 rounded-xl transition"
-                                >
-                                    Cancelar
-                                </button>
-                                <button
-                                    type="submit"
-                                    disabled={loading || !paymentForm.amount_per_person || !paymentForm.proof}
-                                    className="px-8 py-2.5 bg-blue-600 text-white font-bold rounded-xl shadow-lg shadow-blue-500/30 hover:bg-blue-700 transition disabled:opacity-50"
-                                >
-                                    {loading ? 'Procesando...' : 'Confirmar Pago'}
-                                </button>
-                            </div>
-                        </form>
-                    </div>
-                </div>
+                                        ) : (
+                                            <div className="text-center py-2">
+                                                <i className="fa-solid fa-cloud-arrow-up text-gray-300 text-2xl mb-2 group-hover:text-blue-400 transition-colors"></i>
+                                                <p className="text-xs text-gray-500 font-bold">Adjuntar foto del comprobante</p>
+                                            </div>
+                                        )}
+                                    </div>
+                                    <p className="text-[10px] text-gray-400 italic ml-1">Obligatorio. El pago quedará <b>pendiente de validación</b> por un administrador.</p>
+                                </>
+                            )}
+                        </Field>
+                    </form>
+                </Modal>
             )}
         </div>
     );
