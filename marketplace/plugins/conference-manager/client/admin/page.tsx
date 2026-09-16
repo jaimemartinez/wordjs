@@ -9,7 +9,7 @@ import { registerTranslations } from "../../../../../frontend/src/lib/i18n";
 import { useToast } from "../../../../../frontend/src/contexts/ToastContext";
 // Import local translations data
 import { translations } from "../lib/i18n";
-import { conferenceApi, Conference, Inscription, Hotel, Room, Location, ConferenceField, Payment } from "../lib/conference";
+import { conferenceApi, Conference, Inscription, Hotel, Room, Location, ConferenceField, Payment, buildInscriptionPayload, seedLocationId, isImageProof, fmtMoney, paymentActions } from "../lib/conference";
 import { useModal } from "@/contexts/ModalContext";
 import { StatCard } from "../../../../../frontend/src/components/ui/StatCard";
 import { ActionCard } from "../../../../../frontend/src/components/ui/ActionCard";
@@ -665,9 +665,9 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
     const [selectedLocations, setSelectedLocations] = useState<Set<string>>(new Set());
     const [showLocationDropdown, setShowLocationDropdown] = useState(false);
     const [collapsedLocations, setCollapsedLocations] = useState<Set<string>>(new Set());
-    const [formData, setFormData] = useState<any>({
-        custom_data: {}
-    });
+    const [formData, setFormData] = useState<any>({});
+    // The row the edit form was seeded from — the PUT body carries only the keys that differ from it.
+    const [formOriginal, setFormOriginal] = useState<any>(null);
 
     const [editId, setEditId] = useState<number | null>(null); // null = create, id = editing
     const [saving, setSaving] = useState(false);
@@ -801,15 +801,19 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
     // Open the modal for a NEW inscription.
     const openCreate = () => {
         setEditId(null);
-        setFormData({ custom_data: {} });
+        setFormOriginal(null);
+        setFormData({});
         setShowAddModal(true);
     };
 
     // Open the modal pre-filled to EDIT an existing inscription. Dynamic (custom) field values are
-    // flattened onto formData so the same form renders them.
+    // flattened onto formData so the same form renders them; the location select works on the id
+    // (legacy rows that only carry the label are resolved by name).
     const openEdit = (person: Inscription) => {
         setEditId(person.id);
-        setFormData({ ...person, ...(person.custom_data || {}) });
+        const seed = { ...person, ...(person.custom_data || {}), location_id: seedLocationId(person, confLocations) };
+        setFormOriginal(seed);
+        setFormData(seed);
         setShowAddModal(true);
     };
 
@@ -818,16 +822,20 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
         if (!conferenceId) return;
         setSaving(true);
         try {
+            // Only defined form fields + location_id/notes/status travel; never the row's derived
+            // columns (total_due is re-priced by the server from the fee rules on every edit).
+            const payload = buildInscriptionPayload(fields, formData, editId ? formOriginal : null);
             if (editId) {
-                await conferenceApi.updateInscription(editId, formData);
+                await conferenceApi.updateInscription(editId, payload);
                 addToast(t('inscription.updated') || 'Inscripción actualizada', 'success');
             } else {
-                await conferenceApi.createInscription(conferenceId, formData);
+                await conferenceApi.createInscription(conferenceId, payload);
                 addToast(t('inscription.created') || 'Inscripción creada', 'success');
             }
             setShowAddModal(false);
             setEditId(null);
-            setFormData({ custom_data: {} });
+            setFormOriginal(null);
+            setFormData({});
             fetchInscriptions();
         } catch (error: any) {
             addToast(error?.message || 'Error', 'error');
@@ -906,9 +914,8 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
         if (!await confirm(t('confirm.void.payment') || '¿Anular este pago?', t('void.payment') || 'Anular pago', true)) return;
         try {
             await conferenceApi.voidPayment(payment.id);
-            const fresh = await conferenceApi.getPayments(selectedInscription.id);
-            setPayments(fresh);
-            fetchInscriptions();
+            addToast(t('payment.voided') || 'Pago anulado.', 'info');
+            await refreshAfterPaymentAction();
         } catch (error: any) {
             addToast(error?.message || 'Error', 'error');
         }
@@ -1175,9 +1182,9 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
                                                                     >
                                                                         {t(person.payment_status) || person.payment_status}
                                                                     </button>
-                                                                    <div className="text-[10px] text-gray-400 font-bold">${person.amount_paid} / ${person.total_due}</div>
+                                                                    <div className="text-[10px] text-gray-400 font-bold">${fmtMoney(person.amount_paid)} / ${fmtMoney(person.total_due)}</div>
                                                                     {(person as any).pending_amount > 0 && (
-                                                                        <div className="text-[9px] font-black uppercase tracking-widest text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full whitespace-nowrap"><i className="fa-solid fa-clock mr-1"></i>${(person as any).pending_amount} por validar</div>
+                                                                        <div className="text-[9px] font-black uppercase tracking-widest text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full whitespace-nowrap"><i className="fa-solid fa-clock mr-1"></i>${fmtMoney((person as any).pending_amount)} por validar</div>
                                                                     )}
                                                                 </div>
                                                             </td>
@@ -1239,7 +1246,7 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
                     <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl border border-gray-100 overflow-hidden animate-in zoom-in-95 duration-200">
                         <div className="bg-gray-50/50 px-8 py-6 border-b border-gray-100 flex items-center justify-between">
                             <h3 className="font-bold text-xl text-gray-900 italic">{editId ? (t('edit.inscription') || 'Editar Inscripción') : t('new.inscription')}</h3>
-                            <button onClick={() => { setShowAddModal(false); setEditId(null); }} className="text-gray-400 hover:text-gray-600 transition-colors p-2 hover:bg-gray-100 rounded-lg">
+                            <button onClick={() => { setShowAddModal(false); setEditId(null); setFormOriginal(null); }} className="text-gray-400 hover:text-gray-600 transition-colors p-2 hover:bg-gray-100 rounded-lg">
                                 <i className="fa-solid fa-xmark text-lg"></i>
                             </button>
                         </div>
@@ -1253,12 +1260,12 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
                                     <select
                                         required
                                         className="w-full border-2 border-gray-100 rounded-xl px-4 py-2.5 bg-gray-50/30 focus:bg-white focus:border-blue-500 transition-all outline-none text-gray-900 font-medium text-sm"
-                                        value={formData.location || ''}
-                                        onChange={e => handleFormChange('location', e.target.value)}
+                                        value={formData.location_id ?? ''}
+                                        onChange={e => handleFormChange('location_id', e.target.value ? Number(e.target.value) : null)}
                                     >
                                         <option value="">Seleccionar localidad...</option>
                                         {confLocations.map((loc: any) => (
-                                            <option key={loc.id} value={loc.name}>{loc.name}</option>
+                                            <option key={loc.id} value={loc.id}>{loc.name}</option>
                                         ))}
                                     </select>
                                 </div>
@@ -1282,7 +1289,7 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
                                                 <select
                                                     required={!!field.is_required}
                                                     className="w-full border-2 border-gray-100 rounded-xl px-4 py-2.5 bg-gray-50/30 focus:bg-white focus:border-blue-500 transition-all outline-none text-gray-900 font-medium text-sm"
-                                                    value={formData[field.name] || ''}
+                                                    value={formData[field.name] ?? ''}
                                                     onChange={e => handleFormChange(field.name, e.target.value)}
                                                 >
                                                     <option value="">{t('select.option') || 'Seleccionar...'}</option>
@@ -1295,7 +1302,7 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
                                                     type="date"
                                                     required={!!field.is_required}
                                                     className="w-full border-2 border-gray-100 rounded-xl px-4 py-2.5 bg-gray-50/30 focus:bg-white focus:border-blue-500 transition-all outline-none text-gray-900 font-medium text-sm"
-                                                    value={formData[field.name] || ''}
+                                                    value={formData[field.name] ?? ''}
                                                     onChange={e => handleFormChange(field.name, e.target.value)}
                                                 />
                                             ) : field.type === 'textarea' || field.type === 'notes' ? (
@@ -1304,7 +1311,7 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
                                                     placeholder={field.label}
                                                     required={!!field.is_required}
                                                     className="w-full border-2 border-gray-100 rounded-xl px-4 py-2.5 bg-gray-50/30 focus:bg-white focus:border-blue-500 transition-all outline-none text-gray-900 font-medium text-sm resize-none"
-                                                    value={formData[field.name] || ''}
+                                                    value={formData[field.name] ?? ''}
                                                     onChange={e => handleFormChange(field.name, e.target.value)}
                                                 />
                                             ) : (
@@ -1313,7 +1320,7 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
                                                     placeholder={field.label}
                                                     required={!!field.is_required}
                                                     className="w-full border-2 border-gray-100 rounded-xl px-4 py-2.5 bg-gray-50/30 focus:bg-white focus:border-blue-500 transition-all outline-none text-gray-900 font-medium text-sm"
-                                                    value={formData[field.name] || ''}
+                                                    value={formData[field.name] ?? ''}
                                                     onChange={e => handleFormChange(field.name, e.target.value)}
                                                 />
                                             )}
@@ -1323,7 +1330,7 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
                             )}
 
                             <div className="pt-6 flex justify-end gap-3 border-t border-gray-50">
-                                <button type="button" onClick={() => { setShowAddModal(false); setEditId(null); }} className="px-6 py-2.5 text-gray-500 font-bold hover:bg-gray-100 rounded-xl transition">{t('cancel')}</button>
+                                <button type="button" onClick={() => { setShowAddModal(false); setEditId(null); setFormOriginal(null); }} className="px-6 py-2.5 text-gray-500 font-bold hover:bg-gray-100 rounded-xl transition">{t('cancel')}</button>
                                 {fields.length > 0 && (
                                     <button type="submit" disabled={saving} className="px-8 py-2.5 bg-blue-600 text-white font-bold rounded-xl shadow-lg shadow-blue-500/30 hover:bg-blue-700 transition disabled:opacity-50">{saving ? (t('saving') || 'Guardando…') : t('save')}</button>
                                 )}
@@ -1364,7 +1371,7 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
                                             <div className="p-4 flex items-start justify-between gap-4">
                                                 <div className="flex-1">
                                                     <div className="flex items-center gap-2 mb-1">
-                                                        <span className="font-bold text-gray-900">${payment.amount.toLocaleString()}</span>
+                                                        <span className="font-bold text-gray-900">${fmtMoney(payment.amount)}</span>
                                                         <span className="text-[10px] font-bold uppercase bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded">{payment.method}</span>
                                                         {payment.status === 'validated' ? (
                                                             <span className="text-[10px] font-bold uppercase bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded"><i className="fa-solid fa-check mr-1"></i>Validado</span>
@@ -1380,10 +1387,12 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
                                                     </div>
                                                 </div>
 
-                                                {payment.proof && (
+                                                {/* The proof comes from coordinator input: only an image data URL is ever rendered. */}
+                                                {isImageProof(payment.proof) ? (
                                                     <div className="shrink-0 group relative">
                                                         <img
                                                             src={payment.proof}
+                                                            alt="Comprobante"
                                                             className="w-16 h-16 rounded-lg object-cover border border-gray-200 cursor-pointer hover:opacity-80 transition"
                                                             onClick={() => setProofViewer(payment.proof || null)}
                                                         />
@@ -1391,27 +1400,33 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
                                                             <i className="fa-solid fa-magnifying-glass-plus"></i>
                                                         </div>
                                                     </div>
-                                                )}
+                                                ) : payment.proof ? (
+                                                    <span className="shrink-0 self-center text-[10px] font-bold uppercase bg-gray-200 text-gray-500 px-2 py-1 rounded-full whitespace-nowrap" title="El comprobante guardado no es una imagen">Comprobante no válido</span>
+                                                ) : null}
+                                                {(() => { const can = paymentActions(payment.status); return (
                                                 <div className="shrink-0 flex items-center gap-1">
-                                                    {payment.status === 'pending' && (
-                                                        <>
-                                                            <button type="button" onClick={() => handleValidatePayment(payment)} title="Validar pago" className="w-8 h-8 flex items-center justify-center rounded-lg text-emerald-600 hover:text-white hover:bg-emerald-600 border border-emerald-100 transition">
-                                                                <i className="fa-solid fa-check text-xs"></i>
-                                                            </button>
-                                                            <button type="button" onClick={() => handleRejectPayment(payment)} title="Rechazar pago" className="w-8 h-8 flex items-center justify-center rounded-lg text-amber-600 hover:text-white hover:bg-amber-600 border border-amber-100 transition">
-                                                                <i className="fa-solid fa-ban text-xs"></i>
-                                                            </button>
-                                                        </>
+                                                    {can.validate && (
+                                                        <button type="button" onClick={() => handleValidatePayment(payment)} title="Validar pago" className="w-8 h-8 flex items-center justify-center rounded-lg text-emerald-600 hover:text-white hover:bg-emerald-600 border border-emerald-100 transition">
+                                                            <i className="fa-solid fa-check text-xs"></i>
+                                                        </button>
                                                     )}
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => handleVoidPayment(payment)}
-                                                        title={t('void.payment') || 'Anular pago'}
-                                                        className="w-8 h-8 flex items-center justify-center rounded-lg text-gray-300 hover:text-rose-600 hover:bg-rose-50 transition"
-                                                    >
-                                                        <i className="fa-solid fa-trash-can text-xs"></i>
-                                                    </button>
+                                                    {can.reject && (
+                                                        <button type="button" onClick={() => handleRejectPayment(payment)} title="Rechazar pago" className="w-8 h-8 flex items-center justify-center rounded-lg text-amber-600 hover:text-white hover:bg-amber-600 border border-amber-100 transition">
+                                                            <i className="fa-solid fa-ban text-xs"></i>
+                                                        </button>
+                                                    )}
+                                                    {can.remove && (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => handleVoidPayment(payment)}
+                                                            title={t('void.payment') || 'Anular pago'}
+                                                            className="w-8 h-8 flex items-center justify-center rounded-lg text-gray-300 hover:text-rose-600 hover:bg-rose-50 transition"
+                                                        >
+                                                            <i className="fa-solid fa-trash-can text-xs"></i>
+                                                        </button>
+                                                    )}
                                                 </div>
+                                                ); })()}
                                             </div>
                                         </div>
                                     ))}
@@ -1423,7 +1438,7 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
                                 <div className="flex items-center justify-between mb-3">
                                     <h4 className="text-[10px] font-black uppercase tracking-widest text-gray-400">{t('register.payment') || 'Registrar pago'}</h4>
                                     <span className="text-xs font-bold text-gray-500">
-                                        {t('paid')}: <span className="text-emerald-600">${selectedInscription.amount_paid}</span> / ${selectedInscription.total_due}
+                                        {t('paid')}: <span className="text-emerald-600">${fmtMoney(selectedInscription.amount_paid)}</span> / ${fmtMoney(selectedInscription.total_due)}
                                     </span>
                                 </div>
                                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -1462,13 +1477,14 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
                                             {paymentForm.proof ? 'Comprobante cargado — clic para cambiar' : 'Sube una imagen del comprobante'}
                                             <input type="file" accept="image/*" className="hidden" onChange={e => {
                                                 const file = e.target.files?.[0]; if (!file) return;
+                                                if (!/^image\/(png|jpe?g|gif|webp)$/.test(file.type)) { addToast('El comprobante debe ser una imagen (PNG, JPG, GIF o WebP).', 'error'); return; }
                                                 if (file.size > 1024 * 1024) { addToast('El comprobante no puede superar 1 MB.', 'error'); return; }
                                                 const reader = new FileReader();
                                                 reader.onload = () => setPaymentForm(pf => ({ ...pf, proof: String(reader.result || '') }));
                                                 reader.readAsDataURL(file);
                                             }} />
                                         </label>
-                                        {paymentForm.proof && (
+                                        {isImageProof(paymentForm.proof) && (
                                             <img src={paymentForm.proof} className="w-14 h-14 rounded-lg object-cover border border-gray-200" alt="comprobante" />
                                         )}
                                     </div>
@@ -1525,7 +1541,7 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
             )}
 
             {/* Comprobante lightbox — a data: URL is blocked from opening in a new tab, so view it in-app. */}
-            {proofViewer && (
+            {isImageProof(proofViewer) && (
                 <div
                     className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[110] flex items-center justify-center p-6 animate-in fade-in duration-200"
                     onClick={() => setProofViewer(null)}
@@ -1597,7 +1613,7 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
                                                         >
                                                             <div className="font-black text-sm text-gray-900">{room.room_number}</div>
                                                             <div className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">
-                                                                {(room.occupied || 0)}/{room.capacity} · {room.gender}
+                                                                {(room.occupied || 0)}/{room.capacity}
                                                             </div>
                                                         </button>
                                                     );
@@ -2142,7 +2158,7 @@ function PricingPage({ conferenceId }: { conferenceId: number }) {
 
     const fieldLabel = (name: string) => fields.find(f => f.name === name)?.label || name;
     const opLabel = (op: string) => FEE_OPERATORS.find(o => o.value === op)?.label || op;
-    const money = (n: any) => '$' + (Number(n) || 0).toLocaleString();
+    const money = (n: any) => '$' + fmtMoney(n);
     const opNeedsValue = (op: string) => FEE_OPERATORS.find(o => o.value === op)?.needsValue;
 
     if (loading) return <div className="text-center py-20"><div className="inline-block w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div></div>;
@@ -2303,7 +2319,7 @@ function ReportsPage({ conferenceId }: { conferenceId: number }) {
         return () => { alive = false; };
     }, [conferenceId]);
 
-    const money = (n: number) => '$' + (Number(n) || 0).toLocaleString();
+    const money = (n: number) => '$' + fmtMoney(n);
 
     const [exporting, setExporting] = useState(false);
     const downloadCsv = async () => {
@@ -3095,8 +3111,8 @@ function AssignmentPage({ conferenceId }: { conferenceId: number }) {
             setShowRuleModal(false);
             setRuleForm({ name: '', type: 'keep_together', enabled: 1, priority: 50, config: '', hard: 0, params: {} });
             loadData();
-        } catch (e) {
-            addToast('Error saving rule', 'error');
+        } catch (e: any) {
+            addToast(e?.message || 'Error saving rule', 'error');
         }
     };
 
@@ -3104,8 +3120,8 @@ function AssignmentPage({ conferenceId }: { conferenceId: number }) {
         try {
             await conferenceApi.saveAssignmentRule({ ...rule, enabled: rule.enabled ? 0 : 1 });
             loadData();
-        } catch (e) {
-            addToast('Error updating rule', 'error');
+        } catch (e: any) {
+            addToast(e?.message || 'Error updating rule', 'error');
         }
     };
 

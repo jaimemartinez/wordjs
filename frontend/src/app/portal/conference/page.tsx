@@ -3,6 +3,9 @@
 import React, { useState, useEffect } from "react";
 import { ToastProvider, useToast } from "@/contexts/ToastContext";
 import { csrfHeaders } from "@/lib/csrf";
+// Pure form helpers (seeding, string-only values, request body, money) — see form.ts for the contract
+// with conference-manager: values travel as strings, the SERVER canonicalises numbers.
+import { fieldOptions, fmtMoney, formBody, initialFormValues, inputToFormValue, type PortalField } from "./form";
 // Import global API helper specifically suitable for handling custom headers or URLs if needed,
 // but basically we can reuse the generic apiGet/Post if we can override headers or just use fetch for the auth ones.
 // We'll create a simple local fetcher for the portal to manage the custom token auth simpler.
@@ -158,10 +161,14 @@ function LocationPortalContent() {
     const [view, setView] = useState<'list' | 'add'>('list');
     const [error, setError] = useState<string | null>(null);
 
-    // Dynamic Form Data
-    const [formData, setFormData] = useState<Record<string, any>>({});
-    const [fields, setFields] = useState<any[]>([]);
+    // Dynamic Form Data. Every value is a STRING (a blank number field is '' — never 0 — and the raw
+    // input text is sent as-is; the plugin canonicalises "0030" → "30" and rejects non-numbers with 400).
+    const [formData, setFormData] = useState<Record<string, string>>({});
+    const [fields, setFields] = useState<PortalField[]>([]);
     const [groups, setGroups] = useState<any[]>([]);
+    // Live fee quote for the form being filled (POST /public/quote). `null` = not available yet, or the
+    // current values are not quotable (a 400 for an invalid number just hides the line until it is fixed).
+    const [quote, setQuote] = useState<{ total: number } | null>(null);
 
     // Payment State
     const [selectedIds, setSelectedIds] = useState<number[]>([]);
@@ -196,16 +203,36 @@ function LocationPortalContent() {
         try {
             const res = await fetch(`/api/v1/plugin/conference-manager/public/fields?conference_id=${confId}`);
             if (!res.ok) return;
-            const fieldsData = await res.json();
+            const fieldsData: PortalField[] = await res.json();
             setFields(fieldsData);
-            const initial: any = {};
-            fieldsData.forEach((f: any) => {
-                const opts = (f.options || '').split(',').map((o: string) => o.trim()).filter(Boolean);
-                initial[f.name] = f.type === 'number' ? 0 : (f.type === 'select' ? (opts[0] || '') : '');
-            });
-            setFormData(initial);
+            setFormData(initialFormValues(fieldsData));
         } catch (e) { console.error(e); }
     };
+
+    // Live quote: whenever a form value changes while registering, ask the plugin what the fee would be
+    // (the SERVER decides which fields are fee-relevant — one SELECT per quote). Debounced, abortable, and
+    // a 400 (an invalid number mid-typing) just hides the line; the definitive fee is fixed on save.
+    useEffect(() => {
+        if (view !== 'add') { setQuote(null); return; }
+        if (!myLocation?.conference_id || fields.length === 0) return;
+        const conferenceId = myLocation.conference_id;
+        const ctrl = new AbortController();
+        const h = setTimeout(async () => {
+            try {
+                const res = await fetch('/api/v1/plugin/conference-manager/public/quote', {
+                    method: 'POST', signal: ctrl.signal, credentials: 'include',
+                    headers: portalAuthHeaders({ 'Content-Type': 'application/json' }),
+                    body: JSON.stringify({ conference_id: conferenceId, fields: formBody(formData) }),
+                });
+                if (!res.ok) { setQuote(null); return; }
+                const data = await res.json().catch(() => null);
+                setQuote(data && Number.isFinite(Number(data.total)) ? { total: Number(data.total) } : null);
+            } catch { /* aborted / offline — keep the last quote */ }
+        }, 350);
+        return () => { clearTimeout(h); ctrl.abort(); };
+        // portalAuthHeaders is a plain closure over `token`; re-quoting on token change is not needed.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [formData, view, fields, myLocation?.conference_id]);
 
     const verifyToken = async () => {
         setLoading(true);
@@ -350,19 +377,15 @@ function LocationPortalContent() {
             const res = await fetch('/api/v1/plugin/conference-manager/portal/inscriptions', {
                 method: 'POST',
                 headers: portalAuthHeaders({ 'Content-Type': 'application/json' }),
-                body: JSON.stringify(formData),
+                // Strings only, trimmed, '' kept — the server canonicalises and runs the required checks.
+                body: JSON.stringify(formBody(formData)),
                 credentials: 'include'
             });
             if (res.ok) {
                 addToast('Inscripción creada correctamente', 'success');
                 setView('list');
                 // Reset form with initials
-                const initial: any = {};
-                fields.forEach(f => {
-                    const opts = (f.options || '').split(',').map((o: string) => o.trim()).filter(Boolean);
-                    initial[f.name] = f.type === 'number' ? 0 : (f.type === 'select' ? (opts[0] || '') : '');
-                });
-                setFormData(initial);
+                setFormData(initialFormValues(fields));
                 loadInscriptions();
             } else {
                 const err = await res.json().catch(() => ({}));
@@ -582,7 +605,7 @@ function LocationPortalContent() {
                         <div className="text-gray-400 text-[10px] font-bold uppercase tracking-wider mb-2">Total Recaudado</div>
                         <div className="flex items-end gap-1">
                             <div className="text-3xl font-black text-emerald-600">
-                                ${inscriptions.reduce((sum, i) => sum + (i.amount_paid || 0), 0).toLocaleString()}
+                                ${fmtMoney(inscriptions.reduce((sum, i) => sum + (Number(i.amount_paid) || 0), 0))}
                             </div>
                         </div>
                     </div>
@@ -590,7 +613,7 @@ function LocationPortalContent() {
                         <div className="text-gray-400 text-[10px] font-bold uppercase tracking-wider mb-2">Saldo Pendiente</div>
                         <div className="flex items-end gap-1">
                             <div className="text-3xl font-black text-rose-500">
-                                ${inscriptions.reduce((sum, i) => sum + ((i.total_due || 0) - (i.amount_paid || 0)), 0).toLocaleString()}
+                                ${fmtMoney(inscriptions.reduce((sum, i) => sum + ((Number(i.total_due) || 0) - (Number(i.amount_paid) || 0)), 0))}
                             </div>
                         </div>
                     </div>
@@ -694,7 +717,7 @@ function LocationPortalContent() {
                                                             {i.payment_status === 'unpaid' ? 'Sin Pagar' : (i.payment_status === 'paid' ? 'Pagado' : 'Abono')}
                                                         </span>
                                                         <div className="text-[11px] text-gray-500 mt-1 font-medium">
-                                                            PAGADO: <span className="text-gray-900">${i.amount_paid}</span> / <span className="text-gray-400">${i.total_due}</span>
+                                                            PAGADO: <span className="text-gray-900">${fmtMoney(i.amount_paid)}</span> / <span className="text-gray-400">${fmtMoney(i.total_due)}</span>
                                                         </div>
                                                     </div>
                                                 </td>
@@ -722,18 +745,18 @@ function LocationPortalContent() {
                                                 {field.is_group ? (
                                                     <GroupPicker
                                                         field={field}
-                                                        value={formData[field.name]}
-                                                        onChange={(v: string) => setFormData({ ...formData, [field.name]: v })}
+                                                        value={formData[field.name] ?? ''}
+                                                        onChange={(v: string) => setFormData({ ...formData, [field.name]: inputToFormValue(field, v) })}
                                                         groups={groups}
                                                     />
                                                 ) : field.type === 'select' ? (
                                                     <select
                                                         required={!!field.is_required}
                                                         className="w-full border rounded-lg p-2.5 bg-white"
-                                                        value={formData[field.name] || ''}
-                                                        onChange={(e) => setFormData({ ...formData, [field.name]: e.target.value })}
+                                                        value={formData[field.name] ?? ''}
+                                                        onChange={(e) => setFormData({ ...formData, [field.name]: inputToFormValue(field, e.target.value) })}
                                                     >
-                                                        {(field.options || '').split(',').map((o: string) => o.trim()).filter(Boolean).map((opt: string) => (
+                                                        {fieldOptions(field).map((opt: string) => (
                                                             <option key={opt} value={opt}>{opt}</option>
                                                         ))}
                                                     </select>
@@ -742,22 +765,35 @@ function LocationPortalContent() {
                                                         required={!!field.is_required}
                                                         className="w-full border rounded-lg p-2.5"
                                                         rows={3}
-                                                        value={formData[field.name] || ''}
-                                                        onChange={(e) => setFormData({ ...formData, [field.name]: e.target.value })}
+                                                        value={formData[field.name] ?? ''}
+                                                        onChange={(e) => setFormData({ ...formData, [field.name]: inputToFormValue(field, e.target.value) })}
                                                     />
                                                 ) : (
                                                     <input
                                                         type={field.type}
                                                         required={!!field.is_required}
                                                         className="w-full border rounded-lg p-2.5"
-                                                        value={formData[field.name] || ''}
-                                                        onChange={(e) => setFormData({ ...formData, [field.name]: field.type === 'number' ? Number(e.target.value) : e.target.value })}
+                                                        value={formData[field.name] ?? ''}
+                                                        onChange={(e) => setFormData({ ...formData, [field.name]: inputToFormValue(field, e.target.value) })}
                                                     />
                                                 )}
                                             </div>
                                         ))
                                     )}
                                 </div>
+
+                                {fields.length > 0 && (
+                                    <div className="rounded-xl border border-blue-100 bg-blue-50/60 px-4 py-3 text-sm text-gray-700" data-testid="portal-quote">
+                                        {quote ? (
+                                            <>
+                                                <div>Cuota estimada: <b className="text-gray-900">${fmtMoney(quote.total)}</b></div>
+                                                <div className="text-xs text-gray-500 mt-0.5">Se calcula con las reglas de precio de la conferencia; el valor definitivo se fija al guardar.</div>
+                                            </>
+                                        ) : (
+                                            <div className="text-gray-500">Cuota: se calculará al guardar.</div>
+                                        )}
+                                    </div>
+                                )}
 
                                 <div className="flex justify-end gap-3 pt-6 border-t mt-4">
                                     <button

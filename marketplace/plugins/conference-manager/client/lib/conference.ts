@@ -41,7 +41,8 @@ export interface Inscription {
     gender: 'M' | 'F';
     email: string;
     phone: string;
-    location?: string;
+    location?: string;               // display label (kept in sync with the location's name by the server)
+    location_id?: number | null;     // the isolation key — what the admin form sends
     document_number?: string;
     family_group?: string;
     registration_date: string;
@@ -55,6 +56,78 @@ export interface Inscription {
     room_number?: string;
     custom_data?: any;
 }
+
+// ---------------------------------------------------------------------------------------------
+// Pure helpers shared by the admin page (kept here, outside React, so the contract check in the
+// repo's E2E scratchpad can import and exercise them against the real index.js).
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * Keys of an inscription ROW that are derived or server-owned. They come back from GET
+ * /inscriptions and get spread into the edit form's state, but they must never travel in a
+ * POST/PUT body: `total_due` is derived from the fee rules (echoing it used to freeze the price),
+ * the payment columns are recomputed from validated payments, and the rest are joins/ids.
+ */
+export const INSCRIPTION_READONLY_KEYS: readonly string[] = [
+    'id', 'conference_id', 'total_due', 'amount_paid', 'payment_status', 'pending_amount',
+    'registration_date', 'room_id', 'room_number', 'hotel_name', 'custom_data', 'location',
+];
+
+/**
+ * Body for POST /inscriptions (original = null) or PUT /inscriptions/:id (original = the row the
+ * form was seeded from). Only DEFINED form fields plus the three operational keys the server
+ * accepts (`location_id`, `notes`, `status` on edit) are taken from the form state; on edit only
+ * the keys whose value actually changed are sent, so an untouched field is never echoed back.
+ * Field values travel as the raw string the input holds ('' = empty; the server canonicalises
+ * numbers, e.g. "0030" → "30") — never coerced with Number() here.
+ */
+export function buildInscriptionPayload(
+    fields: Pick<ConferenceField, 'name'>[],
+    formData: Record<string, any>,
+    original: Record<string, any> | null,
+): Record<string, any> {
+    const changed = (key: string) => !original || !(key in original) || formData[key] !== original[key];
+    const payload: Record<string, any> = {};
+    for (const f of fields) {
+        if (!f.name || INSCRIPTION_READONLY_KEYS.includes(f.name)) continue;
+        if (!(f.name in formData) || !changed(f.name)) continue;
+        const v = formData[f.name];
+        payload[f.name] = v === undefined || v === null ? '' : String(v);
+    }
+    if ('location_id' in formData && changed('location_id')) {
+        const v = formData.location_id;
+        payload.location_id = v === '' || v === undefined || v === null ? null : Number(v);
+    }
+    if ('notes' in formData && changed('notes')) payload.notes = formData.notes ?? null;
+    if (original && 'status' in formData && changed('status')) payload.status = formData.status;
+    return payload;
+}
+
+/** The location select stores the id; when a legacy row only carries the label, resolve it by name. */
+export function seedLocationId(person: Pick<Inscription, 'location' | 'location_id'>, locations: Pick<Location, 'id' | 'name'>[]): number | null {
+    if (person.location_id !== undefined && person.location_id !== null) return Number(person.location_id);
+    if (!person.location) return null;
+    const hit = locations.find(l => l.name === person.location);
+    return hit ? hit.id : null;
+}
+
+/** A proof is rendered with <img> only when it is an image data URL (coordinator input is untrusted). */
+export const isImageProof = (p?: string | null): boolean =>
+    typeof p === 'string' && /^data:image\/(png|jpe?g|gif|webp);base64,[A-Za-z0-9+/]+=*$/.test(p.trim());
+
+/** Money for display: 2 decimals, integer-cents rounding (matches the server's arithmetic). */
+export const fmtMoney = (v: unknown): string =>
+    (Math.round((Number(v) || 0) * 100) / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+/** Which payment actions the state machine allows (mirrors the server's 409 rules). */
+export const paymentActions = (status?: string | null) => {
+    const s = status || 'pending';
+    return {
+        validate: s === 'pending' || s === 'rejected',
+        reject: s === 'pending' || s === 'validated',
+        remove: s === 'pending' || s === 'rejected',
+    };
+};
 
 export interface Location {
     id: number;

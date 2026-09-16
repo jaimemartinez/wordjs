@@ -306,6 +306,27 @@ function onHostUncaughtException(err: any): void {
     try { console.error(err && err.stack ? err.stack : String(err)); } catch { /* */ }
     process.exit(1);
 }
+// SEND-SIDE twin of the guard above. `child.send()` can throw SYNCHRONOUSLY for two unrelated reasons:
+// the channel is gone (the child died between our `connected` check and the write — ERR_IPC_CHANNEL_CLOSED
+// / EPIPE / ERR_STREAM_DESTROYED), or the MESSAGE itself cannot be serialized — under 'advanced'
+// serialization a body nested a few thousand levels deep overflows the structured-clone recursion
+// (`RangeError: Maximum call stack size exceeded`) while `child.connected` stays true and the child is
+// perfectly healthy. Mapping both to "plugin is not running" produced a 502 with a false detail for a
+// 12 KB request that the CLIENT crafted; the right answer for that is a 400 and NOTHING happening to the
+// isolate (no strike, no restart, no terminate). Pure and exported as a test seam like the classifier above.
+type SendFailure = 'not-running' | 'unserializable';
+function classifySendFailure(err: any, connected: boolean): SendFailure {
+    if (!connected) return 'not-running';
+    const code = err && err.code;
+    if (code === 'ERR_IPC_CHANNEL_CLOSED' || code === 'EPIPE' || code === 'ERR_STREAM_DESTROYED') return 'not-running';
+    return 'unserializable'; // RangeError (depth), DataCloneError, ERR_INVALID_ARG_TYPE, ...
+}
+/** Thrown (rejected) by an RPC whose MESSAGE could not be handed to a live child. finalHandler maps it to 400. */
+class PluginRequestUnserializableError extends Error {
+    statusCode = 400;
+    code = 'ERR_PLUGIN_REQUEST_UNSERIALIZABLE';
+    constructor() { super('request body not serializable/too deep'); this.name = 'PluginRequestUnserializableError'; }
+}
 function retainIpcFrameGuard(): void {
     ipcGuardRefs++;
     if (!ipcGuardInstalled) { process.on('uncaughtException', onHostUncaughtException); ipcGuardInstalled = true; }
@@ -1959,9 +1980,14 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
             // `connected` is the precise signal: child.send() also returns false under mere backpressure,
             // where the message IS still queued, but the IPC channel goes unconnected only once the
             // child is really gone.
-            postMessage: (m: any) => {
+            // Returns `true` (handed over), `false` (child gone) or an Error (the MESSAGE could not be
+            // serialized onto a LIVE channel — see classifySendFailure). The reply-path callers below
+            // ignore the return value; only rpcSend reads it.
+            postMessage: (m: any): true | false | Error => {
                 if (!child.connected) return false;
-                try { child.send(m); return true; } catch { return false; }
+                try { child.send(m); return true; } catch (e) {
+                    return classifySendFailure(e, child.connected) === 'not-running' ? false : new PluginRequestUnserializableError();
+                }
             },
             terminate: () => {
                 try { child.kill('SIGKILL'); } catch { /* already gone */ }
@@ -2304,10 +2330,14 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
             map.set(id, { res, rej, timer });
             // Fail FAST when the child is already gone: waiting out RPC_TIMEOUT_MS for a reply that can
             // never arrive is what turns a stale registration into a socket-exhaustion lever.
-            if (worker.postMessage({ id, ...message }) === false) {
+            // An Error return means the child is alive but THIS message cannot be serialized (a client-
+            // crafted too-deep body): reject with it so the route answers 400, and leave the child alone —
+            // it is not wedged, so no terminate, no strike, no restart.
+            const sent = worker.postMessage({ id, ...message });
+            if (sent !== true) {
                 clearTimeout(timer);
                 map.delete(id);
-                rej(new Error(`Isolated plugin '${slug}' is not running`));
+                rej(sent === false ? new Error(`Isolated plugin '${slug}' is not running`) : sent);
             }
         });
         // Cap a single worker->host reply payload to protect the HOST heap (the worker is also
@@ -2660,6 +2690,12 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
                         res.status(r.status || 200);
                         if (r.body === undefined) res.end(); else res.json(r.body);
                     } catch (e: any) {
+                        // A request the host could not even hand to the (live) child — a body too deep to
+                        // structured-clone — is the CLIENT's fault: 400, not a 502 blaming the plugin.
+                        if (e && e.statusCode === 400) {
+                            res.status(400).json({ error: 'Bad request', detail: String(e.message) });
+                            return;
+                        }
                         res.status(502).json({ error: 'Isolated plugin error', detail: String(e && e.message || e) });
                     }
                 };
@@ -3048,4 +3084,9 @@ module.exports = {
     __retainIpcFrameGuard: retainIpcFrameGuard,
     __releaseIpcFrameGuard: releaseIpcFrameGuard,
     __ipcFrameGuardActive: () => ipcGuardInstalled,
+    // Test seams for the send-side twin (see the regression test): the classifier that decides whether a
+    // synchronous child.send() throw means the CHANNEL is gone (→ "not running") or the MESSAGE is
+    // unserializable (→ 400, child untouched), and the error type rpcSend rejects with in the latter case.
+    __classifySendFailure: classifySendFailure,
+    __PluginRequestUnserializableError: PluginRequestUnserializableError,
 };
