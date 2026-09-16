@@ -875,7 +875,7 @@ exports.init = async function (wordjs) {
     const parseRuleRow = (r) => {
         let params = {};
         try { params = r.params ? (typeof r.params === 'string' ? JSON.parse(r.params) : r.params) : {}; } catch { params = {}; }
-        return { id: r.id, name: r.name, type: r.type, field: r.config, params: params && typeof params === 'object' ? params : {}, hard: !!r.hard, enabled: r.enabled == null ? true : !!Number(r.enabled), priority: r.priority, location_id: r.location_id == null ? null : r.location_id };
+        return { id: r.id, name: r.name, type: r.type, field: r.config, params: params && typeof params === 'object' ? params : {}, hard: !!r.hard, priority: Number(r.priority) || 0, enabled: r.enabled == null ? true : !!Number(r.enabled), location_id: r.location_id == null ? null : r.location_id };
     };
     // What a rule looks like on the wire (admin review + portal): params as an object.
     const ruleProjection = (r) => ({ id: r.id, name: r.name, type: r.type, config: r.config == null ? '' : r.config, params: parseRuleRow(r).params, hard: Number(r.hard) ? 1 : 0, priority: r.priority, enabled: r.enabled == null ? 1 : (Number(r.enabled) ? 1 : 0), location_id: r.location_id == null ? null : r.location_id });
@@ -2080,6 +2080,34 @@ exports.init = async function (wordjs) {
         for (const p of people) { const v = ruleVal(p, field); if (v != null && String(v).trim() !== '') { const k = String(v).trim().toLowerCase(); if (!seen.has(k)) seen.set(k, String(v).trim()); } }
         return [...seen.values()];
     };
+    // FIRST MATCH. Rules are consulted in priority order (priority DESC, then id ASC = the older rule) and
+    // the first one that applies to a person wins a conflict: a family kept together by a keep_together
+    // rule that outranks a separate_by rule may mix that rule's field, and the separate_by rule says
+    // nothing about those members; a separate_by rule that outranks the family rule divides the family
+    // and the family rule says nothing about that division. `rank` = the rule's index in that order.
+    const rankRules = (rules) => [...rules]
+        .sort((a, b) => (Number(b.priority) || 0) - (Number(a.priority) || 0) || (Number(a.id) || 0) - (Number(b.id) || 0))
+        .map((r, i) => ({ ...r, rank: i }));
+    // Is `person` explained for a lower-ranked rule by one of `keepRules` (all outranking it)? Yes when a
+    // keep_together rule applies to the person (`when`), the person has a value for its field and at
+    // least one other member of the same room shares that value — they are together on purpose.
+    const explainedBy = (person, members, keepRules) => {
+        for (const k of keepRules) {
+            if (!k.field || !condMatches(k.params.when, person)) continue;
+            const v = ruleVal(person, k.field);
+            if (v == null || String(v).trim() === '') continue;
+            const key = String(v).trim().toLowerCase();
+            if (members.some(m => m !== person && m.id !== person.id && condMatches(k.params.when, m)
+                && String(ruleVal(m, k.field) == null ? '' : ruleVal(m, k.field)).trim().toLowerCase() === key)) return true;
+        }
+        return false;
+    };
+    // The members of a room composition a separate_by rule still judges (the ones no outranking
+    // keep_together rule explains).
+    const judgedBy = (sepRule, members, keepRules) => {
+        const outranking = keepRules.filter(k => k.rank < sepRule.rank);
+        return outranking.length ? members.filter(m => !explainedBy(m, members, outranking)) : members;
+    };
     // Companion rules a room's occupants do not satisfy.
     const companionUnmetIn = (companionRules, occupants) => {
         const out = [];
@@ -2119,7 +2147,7 @@ exports.init = async function (wordjs) {
         const ruleRows = isPool
             ? await db.all(`SELECT * FROM ${T.rules} WHERE conference_id = ? AND enabled = 1 AND location_id IS NULL ORDER BY priority DESC, id ASC`, [conferenceId])
             : await db.all(`SELECT * FROM ${T.rules} WHERE conference_id = ? AND enabled = 1 AND (location_id IS NULL OR location_id = ?) ORDER BY priority DESC, id ASC`, [conferenceId, locationId]);
-        const rules = ruleRows.map(parseRuleRow);
+        const rules = rankRules(ruleRows.map(parseRuleRow));
         const keepRules = rules.filter(r => r.type === 'keep_together');
         const separateRules = rules.filter(r => r.type === 'separate_by');
         const splitRules = rules.filter(r => r.type === 'split_by');
@@ -2176,9 +2204,10 @@ exports.init = async function (wordjs) {
         // A merged set (a room's occupants + candidate people) is OK for a HARD separate rule iff it has
         // at most one distinct non-blank value of that rule's field.
         const mergedSeparateOk = (occupants, people) => {
+            const after = occupants.concat(people);
             for (const rule of separateRules) {
                 if (!rule.hard) continue;
-                if (distinctValues(occupants.concat(people), rule.field).length > 1) return false;
+                if (distinctValues(judgedBy(rule, after, keepRules), rule.field).length > 1) return false;
             }
             return true;
         };
@@ -2191,7 +2220,7 @@ exports.init = async function (wordjs) {
             const after = room.occupants.concat(people);
             for (const rule of separateRules) {
                 if (rule.hard) continue;
-                if (distinctValues(after, rule.field).length > 1) s -= 5;
+                if (distinctValues(judgedBy(rule, after, keepRules), rule.field).length > 1) s -= 5;
             }
             s -= companionUnmet(after).length * 3;
             s -= Math.abs(room.capacity - after.length) * 0.1;
@@ -2214,8 +2243,8 @@ exports.init = async function (wordjs) {
             return [...map.values()];
         };
 
-        const hardSepFields = separateRules.filter(r => r.hard).map(r => r.field);
-        const hardSepNames = separateRules.filter(r => r.hard).map(r => r.name).join('», «');
+        // The hard separate_by rules that outrank a unit's keep_together rule (every one, for a loner).
+        const dividingRules = (group) => separateRules.filter(r => r.hard && (!group || r.rank < group.rule.rank));
 
         // `group` = null | { rule, key } — the keep_together rule that formed this unit and its display
         // value, so a forced division can be reported under that rule's name.
@@ -2262,8 +2291,10 @@ exports.init = async function (wordjs) {
 
         // Hard separate_by forces a unit to divide along those fields before placement.
         const placeUnit = (unit) => {
-            const parts = partitionBy(unit.people, hardSepFields);
-            if (parts.length > 1 && unit.group) noteViol(unit.group.rule.name, `El grupo «${unit.group.key}» (${unit.people.length}) se dividió por la regla obligatoria «${hardSepNames}».`, unit.group.rule.hard);
+            const dividing = dividingRules(unit.group);
+            const parts = partitionBy(unit.people, dividing.map(r => r.field));
+            // Expected under first match (the separate_by rule ranks first): information, not a broken rule.
+            if (parts.length > 1 && unit.group) noteViol(unit.group.rule.name, `El grupo «${unit.group.key}» (${unit.people.length}) se dividió por «${dividing.map(r => r.name).join('», «')}», que tiene prioridad.`, false);
             for (const part of parts) placePartition(part, unit.group);
         };
 
@@ -2380,7 +2411,8 @@ exports.init = async function (wordjs) {
     // keep_together check — a group split between scopes IS split — through a synthetic room each;
     // they never count as `placed`.
     function auditArrangement({ rooms = [], unassigned = [], rules = [], placed_elsewhere = [] }) {
-        const parsed = rules.map(r => (r.field !== undefined && typeof r.hard === 'boolean' ? r : parseRuleRow(r))).filter(r => r.enabled !== false);
+        const parsed = rankRules(rules.map(r => (r.field !== undefined && typeof r.hard === 'boolean' ? r : parseRuleRow(r))).filter(r => r.enabled !== false));
+        const keepRules = parsed.filter(r => r.type === 'keep_together');
         const violations = [];
         const note = (rule, detail, hard) => { if (!violations.some(v => v.rule === rule && v.detail === detail)) violations.push({ rule, detail, hard: !!hard }); };
         const label = (room) => `Habitación ${room.room_number || room.id}`;
@@ -2389,7 +2421,7 @@ exports.init = async function (wordjs) {
             const occ = Array.isArray(room.occupants) ? room.occupants : [];
             for (const rule of parsed) {
                 if (rule.type !== 'separate_by' || !rule.field) continue;
-                const values = distinctValues(occ, rule.field);
+                const values = distinctValues(judgedBy(rule, occ, keepRules), rule.field);
                 if (values.length > 1) note(rule.name, `${label(room)}: mezcla ${values.length} valores de «${rule.field}» (${values.join(', ')}).`, rule.hard);
             }
             for (const rule of companionUnmetIn(companionRules, occ)) note(rule.name, `${label(room)}: no se cumplió «${rule.name}».`, rule.hard);
@@ -2408,25 +2440,35 @@ exports.init = async function (wordjs) {
         for (const rule of parsed) {
             if (rule.type !== 'keep_together' || !rule.field) continue;
             const min = Number(rule.params.min_size) || 1;
+            // A hard separate_by that outranks this rule divides its groups on purpose: judge each block
+            // of members that share those fields' values separately (a family split by gender is fine;
+            // the men of that family sitting in two rooms is not).
+            const dividing = parsed.filter(r => r.type === 'separate_by' && r.hard && r.field && r.rank < rule.rank);
+            const blockKey = (p) => dividing.map(d => { const v = ruleVal(p, d.field); return v == null ? '' : String(v).trim().toLowerCase(); }).join('\u0001');
             const groups = new Map();
             for (const e of everyone) {
                 if (!condMatches(rule.params.when, e.p)) continue;
                 const v = ruleVal(e.p, rule.field);
                 if (v == null || String(v).trim() === '') continue;
                 const display = String(v).trim(), k = display.toLowerCase();
-                if (!groups.has(k)) groups.set(k, { display, rooms: new Map(), unassigned: 0, size: 0 });
+                if (!groups.has(k)) groups.set(k, { display, size: 0, blocks: new Map() });
                 const g = groups.get(k);
                 g.size++;
-                if (e.room) g.rooms.set(e.room.id, e.room); else g.unassigned++;
+                const bk = blockKey(e.p);
+                if (!g.blocks.has(bk)) g.blocks.set(bk, { rooms: new Map(), unassigned: 0 });
+                const b = g.blocks.get(bk);
+                if (e.room) b.rooms.set(e.room.id, e.room); else b.unassigned++;
             }
             for (const g of groups.values()) {
                 if (g.size < min) continue;
-                const nRooms = g.rooms.size;
-                if (nRooms > 1 || (nRooms === 1 && g.unassigned > 0)) {
-                    const names = [...g.rooms.values()].map(r => r.room_number || r.id).join(', ');
-                    const roomsPart = nRooms === 1 ? `1 habitación (${names})` : `${nRooms} habitaciones (${names})`;
-                    const tail = g.unassigned > 0 ? ` y ${g.unassigned} sin asignar` : '';
-                    note(rule.name, `El grupo «${g.display}» está en ${roomsPart}${tail}.`, rule.hard);
+                for (const b of g.blocks.values()) {
+                    const nRooms = b.rooms.size;
+                    if (nRooms > 1 || (nRooms === 1 && b.unassigned > 0)) {
+                        const names = [...b.rooms.values()].map(r => r.room_number || r.id).join(', ');
+                        const roomsPart = nRooms === 1 ? `1 habitación (${names})` : `${nRooms} habitaciones (${names})`;
+                        const tail = b.unassigned > 0 ? ` y ${b.unassigned} sin asignar` : '';
+                        note(rule.name, `El grupo «${g.display}» está en ${roomsPart}${tail}.`, rule.hard);
+                    }
                 }
             }
         }
