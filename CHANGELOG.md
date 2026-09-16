@@ -24,6 +24,18 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   restos*, and `POST /plugins/:slug/deactivate` is the cleanup door for it. Real plugin files are never
   removed on this path: a directory is only deleted when it holds no manifest and no entry file, its
   `data/` subdir is preserved, and a genuinely running plugin is still refused an in-place overwrite.
+- **Plugins whose tables declare a quoted default containing `{}` or `#` can be activated again.** Since
+  the 2.0.x column-definition hardening, `core/safe-sql` applied its closed character allowlist to the
+  whole definition, including the inside of a `DEFAULT '…'` string literal — so `params TEXT DEFAULT
+  '{}'` (an empty-JSON default), `color TEXT DEFAULT '#3b82f6'` and `availability TEXT NOT NULL DEFAULT
+  '{}'` were refused, the isolated child of every plugin declaring one (three catalog plugins did) died
+  at boot with `createTable: … is not an acceptable column definition`, and its routes answered 500. The
+  allowlist is now applied outside string literals only; inside a literal any printable character except
+  `'`, `\` and control characters/line breaks is accepted once the quoting is proven balanced and
+  unescaped, and every structural check (`--`, parentheses, the single-statement guard) reads the code
+  around the literals rather than their text. A regression guard walks every shipped
+  `marketplace/plugins/*/index.js` and runs its column definitions through the producer, and the F6
+  compatibility bridge now hands each plugin's `createTable` columns to the real `buildCreateTable`.
 
 ## [2.2.0] - 2026-09-05
 

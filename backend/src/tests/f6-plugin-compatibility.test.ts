@@ -52,6 +52,11 @@
  *     try/catch still fails the test rather than hiding the defect.
  *  8. WHAT init() DID must satisfy the host's own acceptance rules:
  *       · every table it creates is under `wjp_<slug>_` — createTable throws otherwise;
+ *       · every column definition it hands to createTable is accepted by the REAL producer
+ *         (core/safe-sql.buildCreateTable, what config/database.createPluginTable assembles the DDL
+ *         with). This bridge stubs the database, so without this the one thing a real site does with
+ *         those strings was never exercised — and `params TEXT DEFAULT '{}'` killed three catalog
+ *         plugins at boot for a month while this suite stayed green;
  *       · every SQL statement it issues passes the REAL guard (plugin-api.assertSqlAllowed), against its
  *         own prefix, so a plugin migration that reaches another plugin's or core's tables is caught;
  *       · every route path/verb satisfies plugin-isolate's register-route gate — a violation there is
@@ -146,6 +151,7 @@ const { resolveBlockEntry, resolveBlockExports } = require('../../scripts/plugin
 const { validateManifestPermissions, validatePluginPermissions, KNOWN_PERMISSIONS } = require('../core/plugins');
 const { PLUGIN_SLUG, FORBIDDEN_KEYS } = require('../core/plugin-permissions');
 const { assertSqlAllowed, isProtectedOption } = require('../core/plugin-api');
+const { buildCreateTable } = require('../core/safe-sql');
 
 const REPO_ROOT = path.resolve(__dirname, '../../..');
 const PLUGINS_ROOT = path.join(REPO_ROOT, 'marketplace', 'plugins');
@@ -340,6 +346,7 @@ type Recorder = {
     ungated: Set<string>;      // capabilities it exercised that no runtime gate consults today
     sql: { kind: 'read' | 'write'; sql: string }[];
     tables: string[];
+    tableColumns: { name: string; columns: unknown }[];
     routes: string[];
     hooks: number;
     shortcodes: string[];
@@ -350,7 +357,7 @@ type Recorder = {
 
 function newRecorder(): Recorder {
     return {
-        denials: [], gated: new Set(), ungated: new Set(), sql: [], tables: [], routes: [],
+        denials: [], gated: new Set(), ungated: new Set(), sql: [], tables: [], tableColumns: [], routes: [],
         hooks: 0, shortcodes: [], menus: [], assets: [], protectedOptions: [],
     };
 }
@@ -402,7 +409,11 @@ function makeBridge(slug: string, manifest: any, rec: Recorder, tmpDir: string):
                 }
                 return (statements || []).map(() => ({ changes: 0, lastID: 1 }));
             },
-            async createTable(name: string) { gate('database', 'write'); rec.tables.push(String(name)); },
+            async createTable(name: string, columns: unknown) {
+                gate('database', 'write');
+                rec.tables.push(String(name));
+                rec.tableColumns.push({ name: String(name), columns });
+            },
             async getType() { gate('database', 'read'); return 'sqlite'; },
         },
         hooks: {
@@ -689,6 +700,17 @@ for (const slug of SLUGS) {
             assert.ok(String(name).toLowerCase().startsWith(prefix),
                 `createTable("${name}") is outside this plugin's namespace "${prefix}" — plugin-api.ts throws on it, `
                 + 'so the plugin cannot finish installing');
+        }
+        // The REAL producer over the plugin's own column definitions: on a site, createTable →
+        // config/database.createPluginTable → core/safe-sql.buildCreateTable, and a refused definition is
+        // an `init-error` in the isolated child (the route then answers 500). The bridge above stubs the
+        // database, so this is the only place in the suite where those strings meet the gate they cross.
+        for (const { name, columns } of rec.tableColumns) {
+            assert.doesNotThrow(
+                () => buildCreateTable(name, columns),
+                `createTable("${name}") hands core/safe-sql a column definition it refuses, so init() throws on a real `
+                + `site and the plugin can never be activated: ${JSON.stringify(columns)}`,
+            );
         }
         // The verb lists are the ones plugin-api.ts hands assertSqlAllowed for each method, so a statement
         // that passes here passes for the same reason it would pass on a real site — and one that fails
