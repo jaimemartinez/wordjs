@@ -42,6 +42,13 @@ function deepObject(depth: number): any {
     return root;
 }
 
+// The same 5000-level body as TEXT, built by concatenation: JSON.stringify(deepObject(5000)) itself
+// blows the call stack on the Linux runner (smaller default stack), which would fail the test before
+// the request is ever sent — the attack is the PARSED depth on the host, so the wire form is what we send.
+function deepJson(depth: number): string {
+    return '{"a":'.repeat(depth) + '1' + '}'.repeat(depth);
+}
+
 // ---------------------------------------------------------------------------------------------------
 // 1. The pure classifier.
 // ---------------------------------------------------------------------------------------------------
@@ -143,7 +150,7 @@ test('e2e: a too-deep JSON body is a 400 (not a 502 blaming the plugin) and the 
     const pidBefore = (isolate.getLivePids(SLUG) || [])[0];
 
     // The attack: a ~30 KB body nested 5000 levels deep.
-    const deep = await request(app).post(`${base}/echo`).set('content-type', 'application/json').send(JSON.stringify(deepObject(5000)));
+    const deep = await request(app).post(`${base}/echo`).set('content-type', 'application/json').send(deepJson(5000));
     assert.strictEqual(deep.status, 400, `expected 400, got ${deep.status} ${JSON.stringify(deep.body)}`);
     assert.strictEqual(deep.body.error, 'Bad request');
     assert.match(String(deep.body.detail), /not serializable|too deep/);
