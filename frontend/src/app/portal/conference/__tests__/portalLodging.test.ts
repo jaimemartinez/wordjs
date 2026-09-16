@@ -10,6 +10,9 @@ import {
     attendeeName,
     BASE_RULE_FIELDS,
     canEditLodging,
+    deadlineMessage,
+    deadlineState,
+    fmtDeadline,
     emptyRuleForm,
     fieldLabelOf,
     fmtTimestamp,
@@ -317,5 +320,31 @@ describe("fmtTimestamp", () => {
         expect(fmtTimestamp('ayer')).toBe('ayer');
         expect(fmtTimestamp(null)).toBe('');
         expect(fmtTimestamp('')).toBe('');
+    });
+});
+
+describe("lodging deadline — deadlineState / deadlineMessage / fmtDeadline (the /portal/lodging contract)", () => {
+    it("has no deadline when the payload carries none (older plugin, null, '')", () => {
+        expect(deadlineState(null)).toBe('none');
+        expect(deadlineState({})).toBe('none');
+        expect(deadlineState({ deadline: null, deadline_passed: true })).toBe('none');
+        expect(deadlineState({ deadline: '', deadline_passed: true })).toBe('none');
+        expect(deadlineMessage({})).toBeNull();
+    });
+    it("trusts the server's deadline_passed flag rather than the client clock", () => {
+        expect(deadlineState({ deadline: '2000-01-01', deadline_passed: false })).toBe('open');
+        expect(deadlineState({ deadline: '2999-01-01', deadline_passed: true })).toBe('passed');
+        expect(deadlineState({ deadline: '2026-10-01' })).toBe('open');
+    });
+    it("formats a bare date as DD/MM/YYYY and keeps the clock of a datetime", () => {
+        expect(fmtDeadline('2026-10-01')).toBe('01/10/2026');
+        expect(fmtDeadline('2026-10-01T18:30:00.000Z')).toBe('01/10/2026 18:30');
+        expect(fmtDeadline('2026-10-01 18:30:00')).toBe('01/10/2026 18:30');
+        expect(fmtDeadline('garbage')).toBe('garbage');
+        expect(fmtDeadline(null)).toBe('');
+    });
+    it("phrases the banner for open and passed deadlines", () => {
+        expect(deadlineMessage({ deadline: '2026-10-01', deadline_passed: false })).toBe('Puedes acomodar y enviar los hospedajes hasta el 01/10/2026 (inclusive).');
+        expect(deadlineMessage({ deadline: '2026-10-01', deadline_passed: true })).toBe('El plazo para acomodar los hospedajes venció el 01/10/2026. Solo el administrador puede modificarlos.');
     });
 });

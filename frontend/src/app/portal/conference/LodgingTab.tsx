@@ -5,6 +5,8 @@ import { useToast } from "@/contexts/ToastContext";
 import {
     attendeeName,
     canEditLodging,
+    deadlineMessage,
+    deadlineState,
     emptyPredicate,
     emptyRuleForm,
     fmtTimestamp,
@@ -256,13 +258,19 @@ export default function Hospedajes({ authHeaders, onLocationRefresh }: Hospedaje
                         {status === 'submitted' && d.submitted_at && <span className="text-xs text-gray-500">Enviado el {fmtTimestamp(d.submitted_at)}</span>}
                         {status === 'validated' && d.reviewed_at && <span className="text-xs text-gray-500">Validado el {fmtTimestamp(d.reviewed_at)}</span>}
                     </div>
-                    {status === 'submitted' && (
+                    {status === 'submitted' && deadlineState(d) !== 'passed' && (
                         <button type="button" onClick={withdraw} disabled={busy} className={`${btn} border border-blue-300 text-blue-700 hover:bg-blue-100`}>
                             <i className="fa-solid fa-rotate-left"></i> Retirar envío
                         </button>
                     )}
                     {status === 'validated' && <span className="text-xs text-emerald-800 font-medium">Solo lectura. Para cambiar la acomodación, pide al administrador reabrir el hospedaje.</span>}
                 </div>
+                {deadlineMessage(d) && (
+                    <div className={`rounded-lg border text-sm px-4 py-3 flex items-start gap-2 ${deadlineState(d) === 'passed' ? 'bg-rose-50 border-rose-200 text-rose-900' : 'bg-blue-50 border-blue-200 text-blue-900'}`} data-testid="lodging-deadline">
+                        <i className={`fa-solid ${deadlineState(d) === 'passed' ? 'fa-lock' : 'fa-calendar-check'} mt-0.5`}></i>
+                        <span>{deadlineMessage(d)}</span>
+                    </div>
+                )}
                 {status === 'draft' && d.note && (
                     <div className="rounded-lg bg-amber-50 border border-amber-200 text-amber-900 text-sm px-4 py-3" data-testid="lodging-note">
                         <span className="font-semibold">Observaciones del administrador:</span> {String(d.note)}

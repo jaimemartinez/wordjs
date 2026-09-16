@@ -32,6 +32,11 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   covers every location (each with its rooms and rules) and the manual assignment still reaches any free room the
   attendee may occupy. Rule predicates are now validated against the form's fields on both the admin and the portal
   route, and the state changes are single conditional updates.
+- **Conference Manager 2.6.0 — a deadline for the coordinators' lodging arrangements.** The admin sets a date on
+  the conference (Localidades page); until that day, inclusive, coordinators arrange, submit or withdraw their
+  lodging from the portal. Afterwards every portal lodging change is refused with the date in the message, the
+  portal shows the arrangement read-only with a notice, and only the administrator changes it — the admin's own
+  tools are not affected. No deadline means no limit; the date can be moved or removed at any time.
 
 ### Fixed
 

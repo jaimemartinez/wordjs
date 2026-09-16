@@ -20,7 +20,7 @@
 
 exports.metadata = {
     name: 'Conference Manager',
-    version: '2.5.0',
+    version: '2.6.0',
     description: 'Manage multiple conference inscriptions, payments, and lodging assignments.',
     author: 'WordJS'
 };
@@ -121,7 +121,8 @@ exports.init = async function (wordjs) {
             'status TEXT DEFAULT \'draft\'',
             'is_form_published INT DEFAULT 0',
             'fee_default REAL DEFAULT 0',
-            'description TEXT'
+            'description TEXT',
+            'lodging_deadline DATETIME'
         ]);
 
         // 2. Locations
@@ -597,6 +598,8 @@ exports.init = async function (wordjs) {
         await addColumnIfMissing(T.locations, 'lodging_submitted_at', 'DATETIME');
         await addColumnIfMissing(T.locations, 'lodging_reviewed_at', 'DATETIME');
         await addColumnIfMissing(T.locations, 'lodging_reviewed_by', 'TEXT');
+        // Deadline for the coordinators' lodging arrangements (NULL = none). Admin-only writes ignore it.
+        await addColumnIfMissing(T.conferences, 'lodging_deadline', 'DATETIME');
         await createIndex(`${P}idx_rooms_location`, T.rooms, 'location_id');
         await createIndex(`${P}idx_rules_location`, T.rules, 'location_id');
         // Stable location identity: `location_id` is the portal ISOLATION KEY; the free-text `location`
@@ -963,7 +966,7 @@ exports.init = async function (wordjs) {
     // in the body are changed, so partial updates are safe.
     const CONFERENCE_STATUSES = new Set(['draft', 'active', 'archived']);
     http.route('put', '/:id', { auth: true, admin: true }, async (req, res) => {
-        const { name, slug, date_start, date_end, fee_default, description, status } = req.body;
+        const { name, slug, date_start, date_end, fee_default, description, status, lodging_deadline } = req.body;
         try {
             const conf = await db.get(`SELECT * FROM ${T.conferences} WHERE id = ?`, [req.params.id]);
             if (!conf) return res.status(404).json({ error: 'Conferencia no encontrada.' });
@@ -992,6 +995,7 @@ exports.init = async function (wordjs) {
                 sets.push('fee_default = ?'); params.push(normFee(fee_default));
             }
             if (description !== undefined) { sets.push('description = ?'); params.push(description || null); }
+            if (lodging_deadline !== undefined) { sets.push('lodging_deadline = ?'); params.push(normDate(lodging_deadline, 'plazo de hospedaje')); }
             if (status !== undefined) {
                 if (!CONFERENCE_STATUSES.has(status)) return res.status(400).json({ error: 'Estado inválido (draft, active o archived).' });
                 sets.push('status = ?'); params.push(status);
@@ -1368,6 +1372,7 @@ exports.init = async function (wordjs) {
                 l.lodged = Number(l.lodged) || 0;
                 l.unlodged = Number(l.unlodged) || 0;
             }
+            if (conf) conf.lodging_deadline_passed = lodgingDeadlineInfo(conf).passed;
             res.json({ locations, conference: conf });
         } catch (e) { sendError(res, e); }
     });
@@ -2853,6 +2858,29 @@ exports.init = async function (wordjs) {
     }
     // Re-reads the status (the resolved row may be a few ms old) and throws 409 unless it is a draft.
     // Used inside the assignment lock by the routes that write.
+    // The admin's deadline for the coordinators' arrangements (conferences.lodging_deadline). NULL = no
+    // deadline. A bare date ('2026-10-01') covers the WHOLE day, like date_end for registrations; a
+    // datetime is exact. Only portal writes honour it — the admin keeps arranging whenever it likes.
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    const isBareDate = (v) => /^\d{4}-\d{2}-\d{2}$/.test(String(v).trim());
+    function lodgingDeadlineInfo(conf) {
+        const rawValue = conf && conf.lodging_deadline;
+        if (rawValue == null || rawValue === '') return { deadline: null, passed: false };
+        const t = new Date(rawValue).getTime();
+        if (!Number.isFinite(t)) return { deadline: null, passed: false };
+        return { deadline: rawValue, passed: Date.now() > (isBareDate(rawValue) ? t + DAY_MS : t) };
+    }
+    // '2026-10-01' → '01/10/2026'; a datetime keeps its clock ('01/10/2026 18:00').
+    const fmtDeadline = (v) => {
+        const m = String(v).trim().match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2}))?/);
+        if (!m) return String(v);
+        return `${m[3]}/${m[2]}/${m[1]}${m[4] ? ` ${m[4]}:${m[5]}` : ''}`;
+    };
+    async function assertLodgingDeadlineOpen(conferenceId) {
+        const conf = await db.get(`SELECT lodging_deadline FROM ${T.conferences} WHERE id = ?`, [conferenceId]);
+        const info = lodgingDeadlineInfo(conf);
+        if (info.passed) throw httpError(403, `El plazo para acomodar los hospedajes venció el ${fmtDeadline(info.deadline)}. Solo el administrador puede modificarlos.`);
+    }
     async function assertPortalDraft(location) {
         const fresh = await db.get(`SELECT id, lodging_status FROM ${T.locations} WHERE id = ?`, [location.id]);
         if (!fresh || isFrozen(fresh)) throw httpError(409, PORTAL_FROZEN_MSG);
@@ -2874,13 +2902,16 @@ exports.init = async function (wordjs) {
         try {
             const view = await loadLodging(location, { forAdmin: false });
             const status = view.location.lodging_status;
+            const deadline = lodgingDeadlineInfo(await db.get(`SELECT lodging_deadline FROM ${T.conferences} WHERE id = ?`, [location.conference_id]));
             res.json({
                 status,
+                deadline: deadline.deadline,
+                deadline_passed: deadline.passed,
                 // The admin's observations only matter while the coordinator can act on them.
                 note: status === 'draft' ? view.location.lodging_note : null,
                 submitted_at: view.location.lodging_submitted_at,
                 reviewed_at: view.location.lodging_reviewed_at,
-                can_edit: status === 'draft',
+                can_edit: status === 'draft' && !deadline.passed,
                 rooms: view.rooms,
                 unassigned: view.unassigned,
                 placed_elsewhere: view.placed_elsewhere,
@@ -2902,6 +2933,7 @@ exports.init = async function (wordjs) {
         const { inscription_id, room_id: rawRoomId } = req.body || {};
         try {
             if (isFrozen(location)) return res.status(409).json({ error: PORTAL_FROZEN_MSG });
+            await assertLodgingDeadlineOpen(location.conference_id);
             const insId = positiveInt(inscription_id);
             if (!insId) return res.status(400).json({ error: 'Identificador inválido.' });
             const roomId = bodyId(rawRoomId, 'Habitación inválida.');
@@ -2955,6 +2987,7 @@ exports.init = async function (wordjs) {
         let acquired = false;
         try {
             if (isFrozen(location)) return res.status(409).json({ error: PORTAL_FROZEN_MSG });
+            await assertLodgingDeadlineOpen(location.conference_id);
             const now = Date.now();
             const prev = portalRuns.get(location.id);
             if (prev && (prev.inflight || now - prev.finishedAt < PORTAL_RUN_COOLDOWN_MS)) {
@@ -2980,6 +3013,7 @@ exports.init = async function (wordjs) {
         if (!location) return res.status(401).json({ error: 'No token' });
         try {
             if (isFrozen(location)) return res.status(409).json({ error: PORTAL_FROZEN_MSG });
+            await assertLodgingDeadlineOpen(location.conference_id);
             await withAssignmentLock(async () => {
                 await assertPortalDraft(location);
                 await db.run(
@@ -2999,6 +3033,7 @@ exports.init = async function (wordjs) {
         const { id, name, type, enabled, priority, config, params, hard } = req.body || {};
         try {
             if (isFrozen(location)) return res.status(409).json({ error: PORTAL_FROZEN_MSG });
+            await assertLodgingDeadlineOpen(location.conference_id);
             const cid = location.conference_id;
             const rule = normalizeRule({ name, type, enabled, priority, config, params, hard }, { conferenceId: cid, fieldNames: await ruleFieldNames(cid) });
             const paramsStr = JSON.stringify(rule.params);
@@ -3030,6 +3065,7 @@ exports.init = async function (wordjs) {
         if (!location) return res.status(401).json({ error: 'No token' });
         try {
             if (isFrozen(location)) return res.status(409).json({ error: PORTAL_FROZEN_MSG });
+            await assertLodgingDeadlineOpen(location.conference_id);
             const ruleId = positiveInt(req.params.id);
             if (!ruleId) return res.status(404).json({ error: 'Regla no encontrada.' });
             const r = await withAssignmentLock(async () => {
@@ -3048,6 +3084,7 @@ exports.init = async function (wordjs) {
         const location = await resolvePortalLocation(req);
         if (!location) return res.status(401).json({ error: 'No token' });
         try {
+            await assertLodgingDeadlineOpen(location.conference_id);
             await withAssignmentLock(async () => {
                 const c = await db.get(
                     `SELECT COUNT(*) AS present,`
@@ -3070,6 +3107,7 @@ exports.init = async function (wordjs) {
         const location = await resolvePortalLocation(req);
         if (!location) return res.status(401).json({ error: 'No token' });
         try {
+            await assertLodgingDeadlineOpen(location.conference_id);
             const r = await withAssignmentLock(() => db.run(
                 `UPDATE ${T.locations} SET lodging_status = 'draft' WHERE id = ? AND COALESCE(lodging_status, 'draft') = 'submitted'`, [location.id]));
             if (!r || !r.changes) return res.status(409).json({ error: 'El hospedaje no está enviado.' });

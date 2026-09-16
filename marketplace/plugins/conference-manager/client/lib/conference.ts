@@ -11,6 +11,10 @@ export interface Conference {
     date_end?: string;
     description?: string;
     is_form_published?: number;
+    /** Deadline for the coordinators' lodging arrangements ('YYYY-MM-DD' or a datetime); null = none. */
+    lodging_deadline?: string | null;
+    /** Computed by GET /locations: the deadline is over (a bare date covers its whole day). */
+    lodging_deadline_passed?: boolean;
 }
 
 export interface Hotel {

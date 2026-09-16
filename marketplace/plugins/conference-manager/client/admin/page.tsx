@@ -3675,6 +3675,9 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
     const [showModal, setShowModal] = useState(false);
     const [newLocation, setNewLocation] = useState({ name: '', responsible_name: '', responsible_phone: '', capacity: '', payment_methods: [...PAYMENT_METHODS] as string[] });
     const [savingMethods, setSavingMethods] = useState<number | null>(null);
+    // Lodging deadline (per conference): the date input mirrors conference.lodging_deadline until saved.
+    const [deadlineInput, setDeadlineInput] = useState('');
+    const [savingDeadline, setSavingDeadline] = useState(false);
     // Inline capacity editor on a card: which location and the value being typed.
     const [capacityEdit, setCapacityEdit] = useState<{ id: number; value: string } | null>(null);
     const [savingCapacity, setSavingCapacity] = useState(false);
@@ -3693,6 +3696,7 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
             const data = await conferenceApi.getLocations(conferenceId);
             setLocations(data.locations);
             setConference(data.conference);
+            setDeadlineInput(String(data.conference?.lodging_deadline || '').slice(0, 10));
         } catch (error) {
             console.error(error);
         } finally {
@@ -3767,6 +3771,24 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
     };
 
     const isPublished = !!conference?.is_form_published;
+
+    // 'YYYY-MM-DD' → 'DD/MM/YYYY' (a datetime keeps its clock); anything else verbatim.
+    const fmtDeadline = (v: unknown): string => {
+        const m = String(v ?? '').trim().match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2}))?/);
+        return m ? `${m[3]}/${m[2]}/${m[1]}${m[4] ? ` ${m[4]}:${m[5]}` : ''}` : String(v ?? '');
+    };
+    const saveDeadline = async (value: string | null) => {
+        setSavingDeadline(true);
+        try {
+            await conferenceApi.updateConference(conferenceId, { lodging_deadline: value } as any);
+            addToast(value ? (t('lodging.deadline.saved') || 'Plazo guardado') : (t('lodging.deadline.cleared') || 'Plazo eliminado'), 'success');
+            loadLocations();
+        } catch (error: any) {
+            addToast(error?.message || 'Error', 'error');
+        } finally {
+            setSavingDeadline(false);
+        }
+    };
 
     const [copiedId, setCopiedId] = useState<number | null>(null);
 
@@ -3971,6 +3993,60 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
                     </button>
                 </div>
             </div>
+
+            {/* Lodging deadline: until when the coordinators may arrange from the portal */}
+            {(() => {
+                const current = conference?.lodging_deadline || null;
+                const passed = !!conference?.lodging_deadline_passed;
+                const dirty = deadlineInput !== String(current || '').slice(0, 10);
+                return (
+                    <div className={`flex flex-col gap-5 lg:flex-row lg:items-center justify-between p-8 rounded-[32px] border-2 shadow-sm ${passed ? 'bg-rose-50/60 border-rose-100' : current ? 'bg-blue-50/40 border-blue-100' : 'bg-gray-50/50 border-white'}`} data-testid="lodging-deadline">
+                        <div className="flex items-start gap-4 flex-1">
+                            <div className={`w-12 h-12 rounded-2xl flex items-center justify-center text-lg shadow-inner shrink-0 ${passed ? 'bg-rose-100 text-rose-600' : 'bg-blue-100 text-blue-600'}`}>
+                                <i className={`fa-solid ${passed ? 'fa-lock' : 'fa-calendar-check'}`}></i>
+                            </div>
+                            <div>
+                                <h3 className="text-xl font-black text-gray-900 italic tracking-tighter">{t('lodging.deadline') || 'Plazo de acomodación de hospedajes'}</h3>
+                                <p className={`text-xs font-bold mt-1 ${passed ? 'text-rose-700' : current ? 'text-blue-700' : 'text-gray-500'}`}>
+                                    {!current
+                                        ? (t('lodging.deadline.none') || 'Sin plazo: los encargados pueden acomodar en cualquier momento.')
+                                        : passed
+                                            ? (t('lodging.deadline.passed') || 'Plazo vencido el {date}: solo el administrador puede modificar los hospedajes.').replace('{date}', fmtDeadline(current))
+                                            : (t('lodging.deadline.until') || 'Los encargados pueden acomodar hasta el {date} (inclusive).').replace('{date}', fmtDeadline(current))}
+                                </p>
+                                <p className="text-[11px] text-gray-400 mt-1 leading-relaxed max-w-xl">{t('lodging.deadline.help')}</p>
+                            </div>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                            <input
+                                type="date"
+                                value={deadlineInput}
+                                onChange={e => setDeadlineInput(e.target.value)}
+                                className="border-2 border-gray-100 rounded-xl px-4 py-3 bg-white focus:border-blue-500 outline-none text-sm font-bold text-gray-900"
+                                aria-label={t('lodging.deadline') || 'Plazo de acomodación de hospedajes'}
+                            />
+                            <button
+                                type="button"
+                                onClick={() => saveDeadline(deadlineInput || null)}
+                                disabled={savingDeadline || !dirty}
+                                className="px-6 py-3 bg-blue-600 text-white rounded-xl hover:bg-blue-700 font-black text-[10px] uppercase tracking-widest shadow-lg shadow-blue-500/20 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+                            >
+                                {t('save') || 'Guardar'}
+                            </button>
+                            {current && (
+                                <button
+                                    type="button"
+                                    onClick={() => saveDeadline(null)}
+                                    disabled={savingDeadline}
+                                    className="px-4 py-3 text-gray-500 hover:text-rose-600 hover:bg-rose-50 rounded-xl font-black text-[10px] uppercase tracking-widest transition-all disabled:opacity-50"
+                                >
+                                    {t('lodging.deadline.clear') || 'Quitar plazo'}
+                                </button>
+                            )}
+                        </div>
+                    </div>
+                );
+            })()}
 
             <div className="flex flex-col gap-4 sm:flex-row sm:items-center justify-between bg-gray-50/50 p-8 rounded-[32px] border-2 border-white shadow-sm">
                 <div>

@@ -82,6 +82,10 @@ export type LodgingData = {
     submitted_at?: string | null;
     reviewed_at?: string | null;
     can_edit?: boolean | null;
+    /** The admin's deadline for arranging ('YYYY-MM-DD' or a datetime); null = none. */
+    deadline?: string | null;
+    /** Server-computed: the deadline is over, every portal write answers 403. */
+    deadline_passed?: boolean | null;
     rooms?: LodgingRoom[];
     unassigned?: LodgingAttendee[];
     placed_elsewhere?: PlacedElsewhere[];
@@ -206,6 +210,30 @@ export const portalErrorMessage = (status: number, body: unknown, fallback: stri
  * Chrome and as an invalid date in Safari — so the SQL form is parsed as UTC explicitly. ISO strings
  * (other drivers) parse as they are; anything unparseable is shown verbatim.
  */
+/** 'YYYY-MM-DD' → 'DD/MM/YYYY'; a datetime keeps its clock ('DD/MM/YYYY HH:mm'); anything else verbatim. */
+export const fmtDeadline = (v: unknown): string => {
+    const m = String(v ?? '').trim().match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2}))?/);
+    return m ? `${m[3]}/${m[2]}/${m[1]}${m[4] ? ` ${m[4]}:${m[5]}` : ''}` : String(v ?? '');
+};
+
+export type DeadlineState = 'none' | 'open' | 'passed';
+
+/** The server decides (`deadline_passed`); a payload from an older plugin has no deadline → 'none'. */
+export const deadlineState = (d: Pick<LodgingData, 'deadline' | 'deadline_passed'> | null | undefined): DeadlineState => {
+    if (!d || d.deadline == null || d.deadline === '') return 'none';
+    return d.deadline_passed ? 'passed' : 'open';
+};
+
+/** The banner line for the deadline, or null when there is none. */
+export const deadlineMessage = (d: Pick<LodgingData, 'deadline' | 'deadline_passed'> | null | undefined): string | null => {
+    const state = deadlineState(d);
+    if (state === 'none') return null;
+    const date = fmtDeadline(d!.deadline);
+    return state === 'passed'
+        ? `El plazo para acomodar los hospedajes venció el ${date}. Solo el administrador puede modificarlos.`
+        : `Puedes acomodar y enviar los hospedajes hasta el ${date} (inclusive).`;
+};
+
 export const fmtTimestamp = (v: unknown, locale = 'es'): string => {
     if (v == null || v === '') return '';
     const s = String(v).trim();
