@@ -37,6 +37,16 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   lodging from the portal. Afterwards every portal lodging change is refused with the date in the message, the
   portal shows the arrangement read-only with a notice, and only the administrator changes it — the admin's own
   tools are not affected. No deadline means no limit; the date can be moved or removed at any time.
+- **Conference Manager 2.7.0 — first-match rules, an editable lodging board, drag & drop.** Assignment rules now
+  work first-match: they are consulted in priority order and the first one that applies wins a conflict, so a
+  family kept together by a higher-priority rule may share a room across genders without the gender rule being
+  reported, and a family divided by a higher-priority gender rule is reported as information, not as a broken
+  rule — in the assignment report, the admin review and the coordinator portal alike. The admin's Assignment
+  page gains an always-visible *Acomodación* board (every hotel, room and occupant, the unplaced attendees
+  grouped by location, a search and a location filter) where attendees are moved by drag & drop or through a
+  room picker, honouring every server rule (capacity, allotment, frozen arrangements, cancelled attendees). The
+  coordinator portal gains the same drag & drop in its Hospedajes tab, and its whole interface now shares the
+  admin's design language.
 
 ### Fixed
 

@@ -20,7 +20,7 @@
 
 exports.metadata = {
     name: 'Conference Manager',
-    version: '2.6.0',
+    version: '2.7.0',
     description: 'Manage multiple conference inscriptions, payments, and lodging assignments.',
     author: 'WordJS'
 };

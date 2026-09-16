@@ -346,8 +346,15 @@ export const conferenceApi = {
     deleteInscription: (id: number) => apiDelete(`/plugin/conference-manager/inscriptions/${id}`),
 
     // Assign
+    /**
+     * Move one attendee into a room (roomId) or out of any room (null). The server refuses, with the
+     * message the UI shows verbatim: a cancelled attendee (400), a full room (400), a room allotted to
+     * another location (400 «Esa habitación está asignada a la localidad …») and an attendee whose
+     * location's lodging is frozen — submitted/validated (409). The accommodation board pre-checks
+     * the same four cases client-side (see AccommodationBoard in admin/page.tsx).
+     */
     assignRoom: (inscriptionId: number, roomId: number | null) =>
-        apiPost(`/plugin/conference-manager/inscriptions/${inscriptionId}/assign`, { room_id: roomId }),
+        apiPost<{ success: boolean }>(`/plugin/conference-manager/inscriptions/${inscriptionId}/assign`, { room_id: roomId }),
 
     // Payments
     addPayment: (inscriptionId: number, data: { amount: number, method: string, reference: string, proof?: string }) =>
