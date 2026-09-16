@@ -6,6 +6,16 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Added
+
+- **Conference Manager 2.3.0 — every location has a maximum number of registrants.** The cap is required when
+  a location is created and can be raised or lowered afterwards, never below the people already registered
+  (the request is refused with the current count). A full location refuses new registrations from the
+  coordinator portal and from the admin, including moving an attendee into it or reinstating a cancelled one;
+  cancelling or deleting an attendee frees the seat. The admin cards show taken / maximum with an inline
+  editor; the portal shows the count and closes its form when the location is full. Locations created before
+  this version have no limit until one is set.
+
 ### Fixed
 
 - **Conference Manager 2.2.0 — the plugin can be activated again, and 23 defects from a functional audit are

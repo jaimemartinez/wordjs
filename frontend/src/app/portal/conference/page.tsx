@@ -5,7 +5,7 @@ import { ToastProvider, useToast } from "@/contexts/ToastContext";
 import { csrfHeaders } from "@/lib/csrf";
 // Pure form helpers (seeding, string-only values, request body, money) — see form.ts for the contract
 // with conference-manager: values travel as strings, the SERVER canonicalises numbers.
-import { fieldOptions, fmtMoney, formBody, initialFormValues, inputToFormValue, type PortalField } from "./form";
+import { fieldOptions, fmtMoney, formBody, initialFormValues, inputToFormValue, isLocationFull, seatsLabel, type PortalField } from "./form";
 // Import global API helper specifically suitable for handling custom headers or URLs if needed,
 // but basically we can reuse the generic apiGet/Post if we can override headers or just use fetch for the auth ones.
 // We'll create a simple local fetcher for the portal to manage the custom token auth simpler.
@@ -27,6 +27,10 @@ interface Location {
     name: string;
     responsible_name: string;
     conference_id?: number;
+    /** Admin-set maximum registrants; null/absent = no limit (see form.ts). */
+    capacity?: number | null;
+    /** Seats taken (non-cancelled inscriptions), as counted by the server. */
+    inscribed?: number | null;
 }
 
 interface Inscription {
@@ -348,6 +352,15 @@ function LocationPortalContent() {
         loadConferences();
     };
 
+    // Re-read the seat count after a registration (the list projection has no status, so it cannot
+    // be derived client-side; the server counts non-cancelled inscriptions).
+    const refreshMyLocation = async () => {
+        try {
+            const res = await fetch('/api/v1/plugin/conference-manager/portal/me', { credentials: 'include', headers: portalAuthHeaders() });
+            if (res.ok) setMyLocation(await res.json());
+        } catch { /* non-critical: the header keeps the last known count */ }
+    };
+
     const loadInscriptions = async () => {
         try {
             const res = await fetch('/api/v1/plugin/conference-manager/portal/inscriptions', {
@@ -387,9 +400,11 @@ function LocationPortalContent() {
                 // Reset form with initials
                 setFormData(initialFormValues(fields));
                 loadInscriptions();
+                refreshMyLocation();
             } else {
                 const err = await res.json().catch(() => ({}));
                 addToast(err.error || 'Error', 'error');
+                if (res.status === 409) refreshMyLocation(); // the location filled up under us
             }
         } catch {
             addToast('Error de conexión', 'error');
@@ -577,7 +592,12 @@ function LocationPortalContent() {
                             </div>
                             <div>
                                 <h1 className="text-xl font-bold text-gray-900">{myLocation?.name}</h1>
-                                <p className="text-xs text-gray-500">{myLocation?.responsible_name}</p>
+                                <p className="text-xs text-gray-500 flex items-center gap-2">
+                                    <span>{myLocation?.responsible_name}</span>
+                                    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold ${isLocationFull(myLocation) ? 'bg-rose-50 text-rose-700' : 'bg-emerald-50 text-emerald-700'}`} data-testid="portal-seats">
+                                        <i className="fa-solid fa-users text-[10px]"></i> {seatsLabel(myLocation)}{isLocationFull(myLocation) ? ' · Cupo lleno' : ''}
+                                    </span>
+                                </p>
                             </div>
                         </div>
                         <button
@@ -641,7 +661,9 @@ function LocationPortalContent() {
                                 )}
                                 <button
                                     onClick={() => setView('add')}
-                                    className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition flex items-center gap-2 text-sm font-medium"
+                                    disabled={isLocationFull(myLocation)}
+                                    title={isLocationFull(myLocation) ? 'La localidad ha alcanzado su cupo máximo.' : undefined}
+                                    className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition flex items-center gap-2 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
                                 >
                                     <i className="fa-solid fa-plus"></i> Registrar Nuevo
                                 </button>
@@ -729,6 +751,12 @@ function LocationPortalContent() {
                         </div>
                     ) : (
                         <div className="p-6">
+                            {isLocationFull(myLocation) && (
+                                <div className="max-w-2xl mx-auto mb-6 p-4 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-sm flex items-start gap-3">
+                                    <i className="fa-solid fa-circle-exclamation mt-0.5"></i>
+                                    <span>La localidad ha alcanzado su cupo máximo ({seatsLabel(myLocation)}). No es posible registrar más participantes; contacta al administrador si necesitas ampliar el cupo.</span>
+                                </div>
+                            )}
                             <form onSubmit={handleCreateInscription} className="max-w-2xl mx-auto space-y-6">
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                                     {fields.length === 0 ? (

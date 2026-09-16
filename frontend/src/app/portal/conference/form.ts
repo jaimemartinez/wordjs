@@ -43,6 +43,30 @@ export const inputToFormValue = (_f: PortalField, raw: string): string => raw;
 export const formBody = (form: Record<string, string>): Record<string, string> =>
     Object.fromEntries(Object.entries(form).map(([k, v]) => [k, v == null ? '' : String(v).trim()]));
 
+/**
+ * Seats of the coordinator's location, as `/portal/me` and `/portal/login` report them: `capacity` is
+ * the admin-set maximum (null = a location created before the limit existed, i.e. no limit) and
+ * `inscribed` the seats taken. Missing/garbage values are read as 0 taken / no limit, so a portal
+ * talking to an older plugin never locks its own form.
+ */
+export type LocationSeats = { capacity?: number | null; inscribed?: number | null };
+
+const seatCount = (v: unknown): number => { const n = Number(v); return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0; };
+
+/** True only when a limit exists and every seat is taken. */
+export const isLocationFull = (loc: LocationSeats | null | undefined): boolean => {
+    if (!loc || loc.capacity == null) return false;
+    const cap = Number(loc.capacity);
+    return Number.isFinite(cap) && cap > 0 && seatCount(loc.inscribed) >= cap;
+};
+
+/** `12 / 50`, or `12 inscritos` when the location has no limit. */
+export const seatsLabel = (loc: LocationSeats | null | undefined): string => {
+    const taken = seatCount(loc?.inscribed);
+    if (!loc || loc.capacity == null || !(Number(loc.capacity) > 0)) return `${taken} inscritos`;
+    return `${taken} / ${Math.floor(Number(loc.capacity))}`;
+};
+
 /** Money for display: rounded to cents, always two decimals, es-CO separators (`100,20`). */
 export const fmtMoney = (v: unknown): string =>
     (Math.round((Number(v) || 0) * 100) / 100).toLocaleString('es-CO', { minimumFractionDigits: 2, maximumFractionDigits: 2 });

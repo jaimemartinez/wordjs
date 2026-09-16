@@ -20,7 +20,7 @@
 
 exports.metadata = {
     name: 'Conference Manager',
-    version: '2.2.0',
+    version: '2.3.0',
     description: 'Manage multiple conference inscriptions, payments, and lodging assignments.',
     author: 'WordJS'
 };
@@ -132,6 +132,7 @@ exports.init = async function (wordjs) {
             'code TEXT NOT NULL',
             'responsible_name TEXT',
             'responsible_phone TEXT',
+            'capacity INT',
             `FOREIGN KEY (conference_id) REFERENCES ${T.conferences}(id) ON DELETE CASCADE`
         ]);
 
@@ -425,16 +426,47 @@ exports.init = async function (wordjs) {
             if (body.location_id === null || body.location_id === '') return null;
             const lid = Number(body.location_id);
             const loc = Number.isInteger(lid) && lid > 0
-                ? await db.get(`SELECT id, name FROM ${T.locations} WHERE id = ? AND conference_id = ?`, [lid, conferenceId]) : null;
+                ? await db.get(`SELECT id, name, capacity FROM ${T.locations} WHERE id = ? AND conference_id = ?`, [lid, conferenceId]) : null;
             if (!loc) throw httpError(400, 'Localidad no encontrada en esta conferencia.');
             return loc;
         }
         if (typeof body.location === 'string' && body.location.trim()) {
-            const loc = await db.get(`SELECT id, name FROM ${T.locations} WHERE conference_id = ? AND LOWER(name) = LOWER(?)`, [conferenceId, body.location.trim()]);
+            const loc = await db.get(`SELECT id, name, capacity FROM ${T.locations} WHERE conference_id = ? AND LOWER(name) = LOWER(?)`, [conferenceId, body.location.trim()]);
             if (!loc) throw httpError(400, 'Localidad no encontrada en esta conferencia.');
             return loc;
         }
         return undefined; // neither key present
+    }
+
+    // === LOCATION CAPACITY ===
+    // A seat is taken by every inscription of the location that is not cancelled — cancelling frees it,
+    // deleting frees it, moving the attendee to another location frees it here and takes one there.
+    const occupiedSql = (col = 'status') => `(${col} IS NULL OR ${col} != 'cancelled')`;
+    const MAX_CAPACITY = 1000000;
+
+    async function locationOccupancy(locationId) {
+        const row = await db.get(`SELECT COUNT(*) AS n FROM ${T.inscriptions} WHERE location_id = ? AND ${occupiedSql()}`, [locationId]);
+        return Number(row && row.n) || 0;
+    }
+
+    // Admin-supplied capacity: a positive integer (strings from a form input are accepted). Throws 400.
+    function parseCapacity(v) {
+        // Only a number or a numeric string: Number(true) and Number([3]) coerce to 1 and 3 and must not.
+        if (typeof v !== 'number' && typeof v !== 'string') throw httpError(400, 'El cupo máximo debe ser un número entero mayor que cero.');
+        if (typeof v === 'string' && !v.trim()) throw httpError(400, 'El cupo máximo de inscritos es obligatorio.');
+        const n = typeof v === 'string' ? Number(v.trim()) : v;
+        if (!Number.isInteger(n) || n < 1 || n > MAX_CAPACITY) throw httpError(400, 'El cupo máximo debe ser un número entero mayor que cero.');
+        return n;
+    }
+
+    // Throws 409 when `loc` ({ id, name, capacity }) has no free seat. A NULL capacity (a location created
+    // before 2.3.0 whose limit was never set) is unlimited. Check-then-insert, like assertUnique: the
+    // bridge has no transactions, so two simultaneous registrations for the LAST seat of a location can
+    // both pass — the same window every other guard in this file accepts.
+    async function assertLocationHasRoom(loc) {
+        if (!loc || loc.capacity == null) return;
+        const taken = await locationOccupancy(loc.id);
+        if (taken >= loc.capacity) throw httpError(409, `La localidad «${loc.name}» ha alcanzado su cupo máximo de ${loc.capacity} inscritos.`);
     }
 
     /**
@@ -511,6 +543,10 @@ exports.init = async function (wordjs) {
         // Payment review audit trail (who validated/rejected, when).
         await addColumnIfMissing(T.payments, 'reviewed_at', 'DATETIME');
         await addColumnIfMissing(T.payments, 'reviewed_by', 'TEXT');
+        // Location capacity (2.3.0): the maximum number of registrants a location accepts. Required on
+        // every location created from now on; rows that predate the column stay NULL = no limit until the
+        // admin sets one (the card shows it as unlimited). See assertLocationHasRoom.
+        await addColumnIfMissing(T.locations, 'capacity', 'INT');
         // Stable location identity: `location_id` is the portal ISOLATION KEY; the free-text `location`
         // stays as the display label. ONE-OFF backfill from the label, run only on the boot that creates
         // the column (a 2.1.0 → 2.2.0 upgrade): afterwards a NULL location_id is a deliberate state —
@@ -1116,7 +1152,7 @@ exports.init = async function (wordjs) {
             // own). It's an operational column, not a form field: `location_id` (preferred) or the
             // legacy `location` name, both resolved against this conference's locations.
             const loc = await resolveAdminLocation(confId, fieldValues);
-            if (loc) { values.location_id = loc.id; values.location = loc.name; }
+            if (loc) { await assertLocationHasRoom(loc); values.location_id = loc.id; values.location = loc.name; }
 
             // first_name / last_name are NOT NULL — default to '' (no more 'Sin Nombre' placeholder);
             // the display name is whatever the form collects, not an assumed column.
@@ -1147,27 +1183,33 @@ exports.init = async function (wordjs) {
         if (!conference_id) return res.status(400).json({ error: 'Missing conference_id' });
         try {
             const conf = await db.get(`SELECT *, (SELECT COUNT(*) FROM ${T.fields} WHERE conference_id = ${T.conferences}.id) as fields_count FROM ${T.conferences} WHERE id = ?`, [conference_id]);
-            const locations = await db.all(`SELECT * FROM ${T.locations} WHERE conference_id = ? ORDER BY name`, [conference_id]);
+            // `inscribed` = seats taken (see occupiedSql), so the card can show 12 / 50 without a second call.
+            const locations = await db.all(
+                `SELECT l.*, (SELECT COUNT(*) FROM ${T.inscriptions} i WHERE i.location_id = l.id AND ${occupiedSql('i.status')}) AS inscribed`
+                + ` FROM ${T.locations} l WHERE l.conference_id = ? ORDER BY l.name`, [conference_id]);
             res.json({ locations, conference: conf });
         } catch (e) { sendError(res, e); }
     });
 
     // Location names are unique per conference (case-insensitive) so the display label is unambiguous.
     http.route('post', '/locations', { auth: true, admin: true }, async (req, res) => {
-        const { conference_id, name, responsible_name, responsible_phone } = req.body;
+        const { conference_id, name, responsible_name, responsible_phone, capacity } = req.body;
         if (!conference_id) return res.status(400).json({ error: 'Missing conference_id' });
         const cleanName = String(name || '').trim();
         if (!cleanName) return res.status(400).json({ error: 'El nombre de la localidad es obligatorio.' });
+        // The maximum number of registrants is part of creating a location, not an afterthought.
+        if (capacity === undefined || capacity === null) return res.status(400).json({ error: 'El cupo máximo de inscritos es obligatorio.' });
 
         try {
+            const cap = parseCapacity(capacity);
             const conf = await db.get(`SELECT id FROM ${T.conferences} WHERE id = ?`, [conference_id]);
             if (!conf) return res.status(404).json({ error: 'Conferencia no encontrada.' });
             const dup = await db.get(`SELECT id FROM ${T.locations} WHERE conference_id = ? AND LOWER(name) = LOWER(?)`, [conference_id, cleanName]);
             if (dup) return res.status(409).json({ error: 'Ya existe una localidad con ese nombre en esta conferencia.' });
             const code = await genAccessCode();
             const result = await db.run(
-                `INSERT INTO ${T.locations} (conference_id, name, code, responsible_name, responsible_phone) VALUES (?, ?, ?, ?, ?)`,
-                [conference_id, cleanName, code, responsible_name || null, responsible_phone || null]
+                `INSERT INTO ${T.locations} (conference_id, name, code, responsible_name, responsible_phone, capacity) VALUES (?, ?, ?, ?, ?, ?)`,
+                [conference_id, cleanName, code, responsible_name || null, responsible_phone || null, cap]
             );
             res.json({ success: true, id: result.lastID, code });
         } catch (e) { sendError(res, e); }
@@ -1175,8 +1217,9 @@ exports.init = async function (wordjs) {
 
     // Update a location; pass rotate_code:true to issue a fresh access code (invalidates old sessions).
     // A rename also refreshes the display label on the location's inscriptions (location_id stays).
+    // `capacity` may go up or down, but never below the seats already taken (409 with the current count).
     http.route('put', '/locations/:id', { auth: true, admin: true }, async (req, res) => {
-        const { name, responsible_name, responsible_phone, rotate_code } = req.body;
+        const { name, responsible_name, responsible_phone, rotate_code, capacity } = req.body;
         try {
             const loc = await db.get(`SELECT * FROM ${T.locations} WHERE id = ?`, [req.params.id]);
             if (!loc) return res.status(404).json({ error: 'Localidad no encontrada.' });
@@ -1192,6 +1235,12 @@ exports.init = async function (wordjs) {
             }
             if (responsible_name !== undefined) { sets.push('responsible_name = ?'); params.push(responsible_name || null); }
             if (responsible_phone !== undefined) { sets.push('responsible_phone = ?'); params.push(responsible_phone || null); }
+            if (capacity !== undefined) {
+                const cap = parseCapacity(capacity);
+                const taken = await locationOccupancy(loc.id);
+                if (cap < taken) return res.status(409).json({ error: `El cupo no puede ser menor que los ${taken} inscritos que ya tiene la localidad.`, inscribed: taken });
+                sets.push('capacity = ?'); params.push(cap);
+            }
             let newCode = null;
             if (rotate_code) { newCode = await genAccessCode(); sets.push('code = ?'); params.push(newCode); }
             if (sets.length) {
@@ -1321,17 +1370,27 @@ exports.init = async function (wordjs) {
 
             const sets = [], params = [];
             for (const [k, v] of Object.entries(vals)) { sets.push(`${k} = ?`); params.push(v); }
+            let newStatus = existing.status;
             if (fieldValues.status !== undefined) {
                 // Closed vocabulary — the same rule the conference `status` already follows. 'pending' is the
                 // insert default, 'active' is what the admin's toggle writes; anything else is a typo or a probe.
                 const st = fieldValues.status == null ? null : String(fieldValues.status);
                 if (st !== null && !INSCRIPTION_STATUSES.has(st)) return res.status(400).json({ error: 'Estado de inscripción inválido.' });
                 sets.push('status = ?'); params.push(st);
+                newStatus = st;
             }
             if (fieldValues.notes !== undefined) { sets.push('notes = ?'); params.push(fieldValues.notes == null ? null : String(fieldValues.notes)); }
             const loc = await resolveAdminLocation(existing.conference_id, { location_id: fieldValues.location_id });
             if (loc === null) { sets.push('location_id = ?', 'location = ?'); params.push(null, null); }
             else if (loc) { sets.push('location_id = ?', 'location = ?'); params.push(loc.id, loc.name); }
+            // Capacity: the edit takes a seat when the attendee ends up counted in a location where they were
+            // not counted before — moved in from elsewhere (or from no location), or un-cancelled in place.
+            // Staying put, cancelling, or leaving a location never needs a free seat.
+            const target = loc !== undefined ? loc
+                : (existing.location_id != null ? await db.get(`SELECT id, name, capacity FROM ${T.locations} WHERE id = ?`, [existing.location_id]) : null);
+            const willCount = !!target && newStatus !== 'cancelled';
+            const wasCountedThere = !!target && existing.location_id === target.id && existing.status !== 'cancelled';
+            if (willCount && !wasCountedThere) await assertLocationHasRoom(target);
             if (sets.length) {
                 params.push(id);
                 await db.run(`UPDATE ${T.inscriptions} SET ${sets.join(', ')} WHERE id = ?`, params);
@@ -1996,7 +2055,7 @@ exports.init = async function (wordjs) {
                 maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days (host clamps anything longer)
             });
 
-            res.json({ success: true, token, location: { id: location.id, name: location.name, responsible_name: location.responsible_name, conference_id: location.conference_id } });
+            res.json({ success: true, token, location: { id: location.id, name: location.name, responsible_name: location.responsible_name, conference_id: location.conference_id, capacity: location.capacity, inscribed: await locationOccupancy(location.id) } });
         } catch (e) { sendError(res, e); }
         finally { if (acquired) endLoginAttempt(location_id); }
     });
@@ -2005,9 +2064,10 @@ exports.init = async function (wordjs) {
     http.route('get', '/portal/me', async (req, res) => {
         const location = await resolvePortalLocation(req);
         if (!location) return res.status(401).json({ error: 'No token' });
-        // Strip the secret access code before sending to the client.
+        // Strip the secret access code before sending to the client; add the live seat count so the
+        // portal can show 12 / 50 and close its form when the location is full.
         const { code, ...safe } = location;
-        res.json(safe);
+        res.json({ ...safe, inscribed: await locationOccupancy(location.id) });
     });
 
     // 4b. Logout — clear the namespaced session cookie so a refresh on a shared device does not
@@ -2090,6 +2150,8 @@ exports.init = async function (wordjs) {
                     return res.status(403).json({ error: 'El período de inscripción para esta conferencia ya cerró.' });
                 }
             }
+            // Seats: the coordinator registers into their OWN location, which may be full (409).
+            await assertLocationHasRoom(location);
 
             // Server-controlled operational state: the coordinator's OWN location (id = isolation key,
             // name = display label). Every RESERVED_INSCRIPTION_COLUMNS key in the body is ignored —

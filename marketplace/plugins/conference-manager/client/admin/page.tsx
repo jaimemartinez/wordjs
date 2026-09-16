@@ -3456,7 +3456,10 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
     const [conference, setConference] = useState<Conference | null>(null);
     const [loading, setLoading] = useState(true);
     const [showModal, setShowModal] = useState(false);
-    const [newLocation, setNewLocation] = useState({ name: '', responsible_name: '', responsible_phone: '' });
+    const [newLocation, setNewLocation] = useState({ name: '', responsible_name: '', responsible_phone: '', capacity: '' });
+    // Inline capacity editor on a card: which location and the value being typed.
+    const [capacityEdit, setCapacityEdit] = useState<{ id: number; value: string } | null>(null);
+    const [savingCapacity, setSavingCapacity] = useState(false);
 
     const loadLocations = async () => {
         setLoading(true);
@@ -3477,12 +3480,13 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
 
     const { confirm } = useModal();
 
+    const canCreate = !!newLocation.name.trim() && /^\d+$/.test(newLocation.capacity.trim()) && Number(newLocation.capacity) > 0;
     const handleCreate = async () => {
-        if (!newLocation.name) return;
+        if (!canCreate) return;
         try {
-            await conferenceApi.createLocation(conferenceId, newLocation);
+            await conferenceApi.createLocation(conferenceId, { ...newLocation, capacity: Number(newLocation.capacity) });
             setShowModal(false);
-            setNewLocation({ name: '', responsible_name: '', responsible_phone: '' });
+            setNewLocation({ name: '', responsible_name: '', responsible_phone: '', capacity: '' });
             loadLocations();
             addToast(t('location.created'), 'success');
         } catch (error: any) {
@@ -3540,6 +3544,24 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
             setTimeout(() => setCopiedId(null), 2000);
         } else {
             addToast(`${t('code') || 'Código'}: ${code}`, 'info');
+        }
+    };
+
+    // Raise or lower the cap; the server refuses a value below the seats already taken (409 with the count).
+    const handleSaveCapacity = async (loc: Location) => {
+        if (!capacityEdit || capacityEdit.id !== loc.id) return;
+        const v = capacityEdit.value.trim();
+        if (!/^\d+$/.test(v) || Number(v) < 1) { addToast(t('location.capacity.help'), 'warning'); return; }
+        setSavingCapacity(true);
+        try {
+            await conferenceApi.updateLocation(loc.id, { capacity: Number(v) });
+            addToast(t('capacity.updated') || 'Cupo actualizado', 'success');
+            setCapacityEdit(null);
+            loadLocations();
+        } catch (error: any) {
+            addToast(error?.message || 'Error', 'error');
+        } finally {
+            setSavingCapacity(false);
         }
     };
 
@@ -3691,6 +3713,58 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
                                     </div>
 
                                     <div className="grid grid-cols-1 gap-3 px-1">
+                                        {(() => {
+                                            const inscribed = Number(loc.inscribed) || 0;
+                                            const cap = loc.capacity == null ? null : Number(loc.capacity);
+                                            const full = cap !== null && inscribed >= cap;
+                                            const pct = cap ? Math.min(100, Math.round((inscribed / cap) * 100)) : 0;
+                                            const editing = capacityEdit?.id === loc.id;
+                                            return (
+                                                <div className={`p-3 bg-white rounded-xl border shadow-sm transition-colors ${full ? 'border-rose-200' : 'border-gray-50 group-hover:border-blue-100'}`}>
+                                                    <div className="flex items-center gap-4">
+                                                        <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-sm ${full ? 'bg-rose-50 text-rose-500' : 'bg-emerald-50 text-emerald-500'}`}>
+                                                            <i className="fa-solid fa-users"></i>
+                                                        </div>
+                                                        <div className="flex-1 min-w-0">
+                                                            <div className="text-[9px] font-bold text-gray-400 uppercase tracking-widest">{t('location.inscribed') || 'Inscritos'} / {t('location.capacity') || 'Cupo máximo'}</div>
+                                                            {editing ? (
+                                                                <div className="flex items-center gap-2 mt-1">
+                                                                    <input
+                                                                        type="number" min={Math.max(1, inscribed)} step={1}
+                                                                        value={capacityEdit!.value}
+                                                                        onChange={e => setCapacityEdit({ id: loc.id, value: e.target.value })}
+                                                                        onKeyDown={e => { if (e.key === 'Enter') handleSaveCapacity(loc); if (e.key === 'Escape') setCapacityEdit(null); }}
+                                                                        className="w-24 border-2 border-blue-200 rounded-lg px-2 py-1 text-sm font-black text-gray-900 outline-none focus:border-blue-500"
+                                                                        autoFocus
+                                                                    />
+                                                                    <button onClick={() => handleSaveCapacity(loc)} disabled={savingCapacity} className="text-[10px] font-black uppercase tracking-widest px-3 py-1.5 rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50">{t('save') || 'Guardar'}</button>
+                                                                    <button onClick={() => setCapacityEdit(null)} className="text-[10px] font-black uppercase tracking-widest px-2 py-1.5 rounded-lg text-gray-400 hover:bg-gray-100">{t('cancel') || 'Cancelar'}</button>
+                                                                </div>
+                                                            ) : (
+                                                                <div className="flex items-center gap-2">
+                                                                    <span className={`text-xs font-black ${full ? 'text-rose-600' : 'text-gray-700'}`}>{inscribed} / {cap === null ? (t('location.unlimited') || 'Sin límite') : cap}</span>
+                                                                    {full && <span className="text-[9px] font-black uppercase tracking-widest px-2 py-0.5 rounded-md bg-rose-50 text-rose-600">{t('location.full') || 'Cupo lleno'}</span>}
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                        {!editing && (
+                                                            <button
+                                                                onClick={() => setCapacityEdit({ id: loc.id, value: cap === null ? String(Math.max(1, inscribed)) : String(cap) })}
+                                                                title={t('edit.capacity') || 'Editar cupo'}
+                                                                className="w-8 h-8 flex items-center justify-center rounded-lg bg-gray-50 text-gray-400 hover:bg-blue-600 hover:text-white transition-all shadow-sm"
+                                                            >
+                                                                <i className="fa-solid fa-pen text-xs"></i>
+                                                            </button>
+                                                        )}
+                                                    </div>
+                                                    {cap !== null && (
+                                                        <div className="mt-2 h-1.5 w-full bg-gray-100 rounded-full overflow-hidden">
+                                                            <div className={`h-full rounded-full transition-all ${full ? 'bg-rose-500' : pct >= 80 ? 'bg-amber-400' : 'bg-emerald-500'}`} style={{ width: `${pct}%` }}></div>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            );
+                                        })()}
                                         <div className="flex items-center gap-4 p-3 bg-white rounded-xl border border-gray-50 shadow-sm group-hover:border-blue-100 transition-colors">
                                             <div className="w-8 h-8 rounded-lg bg-blue-50 text-blue-400 flex items-center justify-center text-sm">
                                                 <i className="fa-solid fa-user-tie"></i>
@@ -3742,6 +3816,20 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
                             </div>
 
                             <div className="space-y-1.5">
+                                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1">{t('location.capacity')} *</label>
+                                <input
+                                    type="number"
+                                    min={1}
+                                    step={1}
+                                    value={newLocation.capacity}
+                                    onChange={e => setNewLocation({ ...newLocation, capacity: e.target.value })}
+                                    className="w-full border-2 border-gray-100 rounded-xl px-4 py-3 bg-gray-50/30 focus:bg-white focus:border-blue-500 transition-all outline-none text-gray-900 font-medium"
+                                    placeholder={t('location.capacity.placeholder')}
+                                />
+                                <p className="text-[11px] text-gray-400 ml-1 leading-relaxed">{t('location.capacity.help')}</p>
+                            </div>
+
+                            <div className="space-y-1.5">
                                 <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1">{t('responsible.person')}</label>
                                 <input
                                     type="text"
@@ -3779,7 +3867,7 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
                                 </button>
                                 <button
                                     onClick={handleCreate}
-                                    disabled={!newLocation.name}
+                                    disabled={!canCreate}
                                     className="px-8 py-3 bg-blue-600 text-white rounded-xl hover:bg-blue-700 font-bold shadow-lg shadow-blue-500/30 active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                                 >
                                     {t('create')}

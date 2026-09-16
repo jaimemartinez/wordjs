@@ -136,6 +136,10 @@ export interface Location {
     code: string;
     responsible_name: string;
     responsible_phone: string;
+    /** Maximum registrants; null on a location created before 2.3.0 whose limit was never set (= no limit). */
+    capacity: number | null;
+    /** Seats taken right now (every non-cancelled inscription of the location). */
+    inscribed: number;
 }
 
 export interface AssignmentRule {
@@ -207,9 +211,9 @@ export const conferenceApi = {
 
     // Locations
     getLocations: (conferenceId: number) => apiGet<{ locations: Location[], conference: Conference }>(`/plugin/conference-manager/locations?conference_id=${conferenceId}`),
-    createLocation: (conferenceId: number, data: { name: string, responsible_name: string, responsible_phone: string }) =>
+    createLocation: (conferenceId: number, data: { name: string, responsible_name: string, responsible_phone: string, capacity: number | string }) =>
         apiPost('/plugin/conference-manager/locations', { ...data, conference_id: conferenceId }),
-    updateLocation: (id: number, data: { name?: string, responsible_name?: string, responsible_phone?: string, rotate_code?: boolean }) =>
+    updateLocation: (id: number, data: { name?: string, responsible_name?: string, responsible_phone?: string, rotate_code?: boolean, capacity?: number | string }) =>
         apiPut(`/plugin/conference-manager/locations/${id}`, data),
     deleteLocation: (id: number) => apiDelete(`/plugin/conference-manager/locations/${id}`),
 
