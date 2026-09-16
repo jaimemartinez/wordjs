@@ -77,6 +77,16 @@ function regenerateRegistry() {
     // (The path was '../../../admin-next/scripts' — a directory that does not exist — so this silently
     // no-op'd on every activate/deactivate. The real generators live in frontend/scripts/.)
     if (process.env.NODE_ENV === 'production') return;
+    // UNDER node:test, NEVER. Two reasons, both measured. (1) The generators rewrite frontend/src
+    // registry sources — a test that activates a plugin must not edit the working tree. (2) Their
+    // output used to be echoed from the execFile callback with console.log, i.e. ASYNCHRONOUSLY to
+    // stdout — and a node:test child reports results to the runner over stdout as V8-serialized
+    // frames. That write landed inside a frame, the runner threw 'Unable to deserialize cloned data',
+    // the whole test FILE failed with no failed assertion, and scripts/test-with-flake-retry.mjs
+    // re-ran the entire suite twice: 3 x 10 min, past the Backend job's timeout. Same class as the
+    // Redis connect banner in core/cache.ts (2026-09-04); same rule — no async stdout in code a test
+    // can reach. NODE_TEST_CONTEXT is set by the runner in every test child (see index.ts).
+    if (process.env.NODE_TEST_CONTEXT) return;
     const scriptsDir = path.resolve(__dirname, '../../../frontend/scripts');
     const scripts = [
         'generate-plugin-registry.js',         // Frontend components
@@ -107,8 +117,9 @@ function regenerateRegistry() {
                     return;
                 }
                 if (process.env.NODE_ENV !== 'production') {
-                    console.log('🔄 %s:', script);
-                    console.log(stdout);
+                    // stderr on purpose: this runs from an async callback, and stdout is the
+                    // node:test result channel (see the guard at the top of this function).
+                    process.stderr.write(`🔄 ${script}:\n${stdout}`);
                 }
             });
         }
@@ -2244,3 +2255,6 @@ module.exports.installPluginFromZip = installPluginFromZip;
 // One-click in-place update (marketplace route) + boot-time recovery of an interrupted update (index.ts).
 module.exports.runPluginUpdate = runPluginUpdate;
 module.exports.recoverInterruptedPluginUpdates = recoverInterruptedPluginUpdates;
+// Test seam only: lets registry-regen-node-test.test.ts drive the real function and prove it is inert
+// under the runner. Not part of the route surface.
+module.exports.__regenerateRegistryForTests = regenerateRegistry;
