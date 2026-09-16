@@ -8,6 +8,10 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Fixed
 
+- The plugin registry regenerator (the dev-HMR hop after activate/deactivate/delete) is inert under the
+  test runner: it rewrote frontend registry sources from tests and echoed its output asynchronously to
+  stdout, which corrupts node:test's result channel and made the flake-retry wrapper re-run the whole
+  backend suite — three suites per CI job, past its timeout.
 - **An "active" plugin whose files are gone is no longer a dead end.** A plugin directory left holding
   only build output — no `manifest.json`, no entry file — while `active_plugins` still named it put three
   surfaces in contradiction: the admin's Installed tab did not show it (the scan skips a directory it
