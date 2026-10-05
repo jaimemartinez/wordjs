@@ -44,6 +44,8 @@ export interface Room {
 
 export interface Inscription {
     id: number;
+    /** Unique random registration code (admin-only) — the barcode payload. */
+    reg_code?: string | null;
     first_name: string;
     last_name: string;
     gender: 'M' | 'F';

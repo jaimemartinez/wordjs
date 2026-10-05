@@ -20,7 +20,7 @@
 
 exports.metadata = {
     name: 'Conference Manager',
-    version: '2.8.0',
+    version: '2.9.0',
     description: 'Manage multiple conference inscriptions, payments, and lodging assignments.',
     author: 'WordJS'
 };
@@ -70,7 +70,7 @@ exports.init = async function (wordjs) {
     // phone / family_group / document_number are FORM-owned columns and are deliberately NOT reserved.
     const RESERVED_INSCRIPTION_COLUMNS = new Set([
         'id', 'conference_id', 'location', 'location_id', 'custom_data', 'registration_date', 'status',
-        'payment_status', 'total_due', 'amount_paid', 'room_id', 'notes',
+        'payment_status', 'total_due', 'amount_paid', 'room_id', 'notes', 'reg_code',
     ]);
     // SQL reserved words that isSafeColumn would otherwise accept as a column name.
     const SQL_RESERVED_WORDS = new Set(['select', 'from', 'where', 'table', 'order', 'group', 'by', 'index', 'primary',
@@ -198,6 +198,9 @@ exports.init = async function (wordjs) {
             'amount_paid REAL DEFAULT 0',
             'room_id INT',
             'notes TEXT',
+            // Registration code (2.9.0): unique, random, admin-only — the barcode payload. VARCHAR, not TEXT,
+            // so MySQL can index it.
+            'reg_code VARCHAR(16)',
             `FOREIGN KEY (conference_id) REFERENCES ${T.conferences}(id) ON DELETE CASCADE`,
             `FOREIGN KEY (room_id) REFERENCES ${T.rooms}(id) ON DELETE SET NULL`
         ]);
@@ -604,6 +607,7 @@ exports.init = async function (wordjs) {
         await addColumnIfMissing(T.locations, 'lodging_reviewed_by', 'TEXT');
         await addColumnIfMissing(T.locations, 'lodging_permission', 'INT DEFAULT 0');
         await addColumnIfMissing(T.locations, 'lodging_permission_until', 'DATETIME');
+        await addColumnIfMissing(T.inscriptions, 'reg_code', 'VARCHAR(16)');
         // Deadline for the coordinators' lodging arrangements (NULL = none). Admin-only writes ignore it.
         await addColumnIfMissing(T.conferences, 'lodging_deadline', 'DATETIME');
         await createIndex(`${P}idx_rooms_location`, T.rooms, 'location_id');
@@ -686,6 +690,8 @@ exports.init = async function (wordjs) {
     } catch (e) {
         console.warn('[conference-manager] data hygiene skipped:', e.message);
     }
+    // (c) Registration codes (2.9.0): unique index + a code for every attendee that has none — run at
+    //     the end of init (see below), once the code generator exists.
 
     /**
      * 6-digit access code that gates a location's portal (SELECT ... WHERE id = ? AND code = ?). The
@@ -697,6 +703,53 @@ exports.init = async function (wordjs) {
      */
     async function genAccessCode() {
         return String(await wordjs.crypto.randomInt(100000, 1000000)); // uniform 6-digit CSPRNG
+    }
+
+    // ── registration codes (2.9.0) ──────────────────────────────────────────────────────────────────
+    // Every attendee gets a unique, random code (10 chars of a 32-letter alphabet without I/O/0/1 =
+    // 50 bits) — the payload of the barcode the admin prints. Admin-only: no portal projection carries
+    // it and no body may set it (RESERVED_INSCRIPTION_COLUMNS). Entropy comes from the host CSPRNG in
+    // bulk (randomToken = up to 64 bytes per RPC, 256 % 32 = 0 so `byte % 32` is uniform), so a
+    // backfill of thousands of rows costs a few hundred bridge calls, not one per character.
+    const REG_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    const REG_CODE_LEN = 10;
+    async function randomRegCodes(n) {
+        const out = [];
+        while (out.length < n) {
+            const hex = String(await wordjs.crypto.randomToken(64));
+            for (let i = 0; i + 2 * REG_CODE_LEN <= hex.length && out.length < n; i += 2 * REG_CODE_LEN) {
+                let code = '';
+                for (let j = 0; j < REG_CODE_LEN; j++) code += REG_CODE_ALPHABET[parseInt(hex.substr(i + 2 * j, 2), 16) % 32];
+                out.push(code);
+            }
+        }
+        return out;
+    }
+    // A code not yet used by any attendee (collisions are ~2^-50 per pair; checked anyway, and the
+    // UNIQUE index catches a race).
+    async function newRegCode() {
+        for (let attempt = 0; attempt < 5; attempt++) {
+            const [code] = await randomRegCodes(1);
+            const taken = await db.get(`SELECT id FROM ${T.inscriptions} WHERE reg_code = ?`, [code]);
+            if (!taken) return code;
+        }
+        throw httpError(500, 'No se pudo generar un código de inscripción único.');
+    }
+    // Give every attendee without a code one (boot backfill + safety net). Batched writes.
+    async function backfillRegCodes() {
+        const rows = await db.all(`SELECT id FROM ${T.inscriptions} WHERE reg_code IS NULL OR reg_code = ''`);
+        if (!rows.length) return 0;
+        const codes = await randomRegCodes(rows.length);
+        const seen = new Set((await db.all(`SELECT reg_code FROM ${T.inscriptions} WHERE reg_code IS NOT NULL`)).map(r => r.reg_code));
+        const writes = [];
+        for (let i = 0; i < rows.length; i++) {
+            let code = codes[i];
+            while (seen.has(code)) code = (await randomRegCodes(1))[0];
+            seen.add(code);
+            writes.push([`UPDATE ${T.inscriptions} SET reg_code = ? WHERE id = ? AND (reg_code IS NULL OR reg_code = '')`, [code, rows[i].id]]);
+        }
+        await runBatched(writes);
+        return rows.length;
     }
 
     // In-process portal-login throttle (single child process → in-memory is sufficient). Per
@@ -1061,7 +1114,7 @@ exports.init = async function (wordjs) {
         const search = q.search ? String(q.search).slice(0, 200) : '';
         if (search) {
             const flds = await db.all(`SELECT name FROM ${T.fields} WHERE conference_id = ?`, [q.conference_id]);
-            const cols = [...new Set([...flds.map(f => f.name).filter(isFieldColumn), 'location'])];
+            const cols = [...new Set([...flds.map(f => f.name).filter(isFieldColumn), 'location', 'reg_code'])];
             const term = `%${likeEscape(search)}%`;
             where += ` AND (` + cols.map(c => `i.${c} LIKE ?${LIKE_ESCAPE}`).join(' OR ') + `)`;
             cols.forEach(() => params.push(term));
@@ -1340,6 +1393,7 @@ exports.init = async function (wordjs) {
             // the attendee's field values — so the attendee isn't instantly 'paid' and tiered/rule
             // pricing takes effect. A client-sent total_due is never honoured.
             values.total_due = await computeFee(confId, values, conf.fee_default);
+            values.reg_code = await newRegCode();
 
             // Duplicate guard: every field flagged "no duplicates" must be unique within the conference
             // (generic — the admin can mark any field, e.g. a document number or an email, as unique).
@@ -1966,7 +2020,7 @@ exports.init = async function (wordjs) {
             const MONEY_COLS = new Set(['total_due', 'amount_paid']);
             const cols = [
                 ...safeFlds.map(f => [f.name, f.label || f.name]),
-                ['status', 'Estado'], ['payment_status', 'Pago'],
+                ['reg_code', 'Código'], ['status', 'Estado'], ['payment_status', 'Pago'],
                 ['total_due', 'Cuota'], ['amount_paid', 'Pagado'],
                 ['hotel_name', 'Hotel'], ['room_number', 'Habitación'],
             ];
@@ -2851,6 +2905,7 @@ exports.init = async function (wordjs) {
 
             // Fee from the pricing rules + base fee, evaluated against the submitted field values.
             values.total_due = await computeFee(conference_id, values, conf.fee_default);
+            values.reg_code = await newRegCode();
 
             const keys = Object.keys(values);
             const result = await db.run(
@@ -3225,6 +3280,13 @@ exports.init = async function (wordjs) {
         order: 50,
         cap: 'manage_options'
     });
+
+    // Registration codes (2.9.0): one UNIQUE index (NULLs allowed while the backfill runs) and a code
+    // for every attendee that has none — idempotent, a no-op once every row has one.
+    try { await db.run(`CREATE UNIQUE INDEX IF NOT EXISTS ${P}uidx_inscriptions_reg_code ON ${T.inscriptions} (reg_code)`); }
+    catch (e) { console.warn('[conference-manager] reg_code unique index skipped:', e.message); }
+    try { await backfillRegCodes(); }
+    catch (e) { console.warn('[conference-manager] reg_code backfill skipped:', e.message); }
 
     console.log('Conference Manager Plugin (Multi-Event, sandboxed) initialized.');
 };

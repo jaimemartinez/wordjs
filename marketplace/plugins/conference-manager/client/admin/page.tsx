@@ -11,6 +11,7 @@ import { useToast } from "../../../../../frontend/src/contexts/ToastContext";
 import { translations } from "../lib/i18n";
 import { conferenceApi, PAYMENT_METHODS, Conference, Inscription, Hotel, Room, Location, ConferenceField, Payment, LodgingReview, buildInscriptionPayload, seedLocationId, isImageProof, fmtMoney, paymentActions, isLodgingFrozen } from "../lib/conference";
 import { useModal } from "@/contexts/ModalContext";
+import { code128Svg } from "../lib/barcode";
 import { StatCard } from "../../../../../frontend/src/components/ui/StatCard";
 import { ActionCard } from "../../../../../frontend/src/components/ui/ActionCard";
 
@@ -657,6 +658,61 @@ const fieldVal = (person: any, field: any) => {
     const cd = person?.custom_data?.[field.name];
     return (cd !== undefined && cd !== null && cd !== '') ? cd : '';
 };
+// Registration-code viewer (admin-only): the Code 128 barcode of an attendee's reg_code, with print,
+// SVG download and copy. The SVG is generated locally from a code of a fixed alphabet (escaped anyway).
+function BarcodeModal({ code, name, onClose }: { code: string; name: string; onClose: () => void }) {
+    const { t } = useI18n();
+    const { addToast } = useToast();
+    const svg = useMemo(() => { try { return code128Svg(code, { module: 3, height: 90, fontSize: 18 }); } catch { return ''; } }, [code]);
+    const print = () => {
+        const w = window.open('', '_blank', 'width=520,height=360');
+        if (!w) { addToast(t('reg.code.print') || 'Imprimir', 'error'); return; }
+        w.document.open();
+        w.document.write(`<!doctype html><html><head><title>${code}</title><style>body{margin:0;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;font-family:sans-serif}h1{font-size:16px;margin:0 0 12px}</style></head><body><h1></h1>${svg}</body></html>`);
+        w.document.close();
+        const h1 = w.document.querySelector('h1');
+        if (h1) h1.textContent = name; // text node, never markup
+        w.focus();
+        setTimeout(() => w.print(), 250);
+    };
+    const download = () => {
+        const url = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' }));
+        const a = document.createElement('a');
+        a.href = url; a.download = `codigo-${code}.svg`;
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+    };
+    const copy = async () => {
+        try { await navigator.clipboard.writeText(code); addToast(t('reg.code.copied') || 'Código copiado', 'success'); }
+        catch { addToast(code, 'info'); }
+    };
+    return (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[110] flex items-center justify-center p-4 animate-in fade-in duration-200" onClick={onClose}>
+            <div className="bg-white rounded-[40px] shadow-2xl w-full max-w-lg border border-gray-100 overflow-hidden animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true">
+                <div className="bg-gray-50/50 px-8 py-6 border-b border-gray-100 flex items-start justify-between gap-4">
+                    <div className="min-w-0">
+                        <h3 className="font-black text-2xl text-gray-900 italic tracking-tighter">{t('reg.code.title') || 'Código de inscripción'}</h3>
+                        <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-1 truncate">{name}</p>
+                    </div>
+                    <button onClick={onClose} className="text-gray-400 hover:text-gray-600 transition-colors p-2 hover:bg-gray-100 rounded-2xl" aria-label="Cerrar">
+                        <i className="fa-solid fa-xmark text-xl"></i>
+                    </button>
+                </div>
+                <div className="p-8 flex flex-col items-center gap-5">
+                    <div className="w-full overflow-x-auto flex justify-center bg-white rounded-2xl border border-gray-100 p-4" dangerouslySetInnerHTML={{ __html: svg }} />
+                    <div className="font-mono text-2xl font-black tracking-[0.3em] text-gray-900">{code}</div>
+                    <p className="text-[11px] text-gray-500"><i className="fa-solid fa-lock mr-1"></i>{t('reg.code.admin.only') || 'Solo visible para el administrador.'}</p>
+                    <div className="flex flex-wrap justify-center gap-2">
+                        <button onClick={print} className="px-5 py-3 rounded-2xl bg-blue-600 text-white hover:bg-blue-700 font-black text-[10px] uppercase tracking-widest shadow-lg shadow-blue-500/30 transition-all"><i className="fa-solid fa-print mr-1.5"></i>{t('reg.code.print') || 'Imprimir'}</button>
+                        <button onClick={download} className="px-5 py-3 rounded-2xl bg-white border-2 border-gray-100 text-gray-700 hover:border-blue-500 hover:text-blue-600 font-black text-[10px] uppercase tracking-widest transition-all"><i className="fa-solid fa-download mr-1.5"></i>{t('reg.code.download') || 'Descargar SVG'}</button>
+                        <button onClick={copy} className="px-5 py-3 rounded-2xl bg-white border-2 border-gray-100 text-gray-700 hover:border-blue-500 hover:text-blue-600 font-black text-[10px] uppercase tracking-widest transition-all"><i className="fa-solid fa-copy mr-1.5"></i>{t('reg.code.copy') || 'Copiar código'}</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+}
+
 const personDisplayName = (person: any, fields: any[]) => {
     const fl = fields || [];
     // Prefer the fields tagged with the name roles; fall back to the first 1-2 form fields.
@@ -673,6 +729,8 @@ const personDisplayName = (person: any, fields: any[]) => {
 function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
     const { t } = useI18n();
     const { addToast } = useToast();
+    // Attendee whose registration barcode is open in the viewer.
+    const [barcodeFor, setBarcodeFor] = useState<Inscription | null>(null);
     const [inscriptions, setInscriptions] = useState<Inscription[]>([]);
     const [fields, setFields] = useState<ConferenceField[]>([]);
     const [confLocations, setConfLocations] = useState<Location[]>([]);
@@ -974,6 +1032,9 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
         <div className="h-full flex flex-col overflow-hidden">
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-10 gap-6 flex-shrink-0 px-1">
                 <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-4 flex-1 w-full">
+                    {barcodeFor && barcodeFor.reg_code && (
+                        <BarcodeModal code={barcodeFor.reg_code} name={personDisplayName(barcodeFor, fields)} onClose={() => setBarcodeFor(null)} />
+                    )}
                     {/* Premium Search */}
                     <div className="relative flex-1 max-w-md">
                         <i className="fa-solid fa-magnifying-glass absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 text-sm"></i>
@@ -1161,6 +1222,7 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
                                                         {fields.map((field, idx) => (
                                                             <th key={field.id} className={`${idx === 0 ? 'px-8' : 'px-6'} py-5 text-[10px] font-black text-gray-400 uppercase tracking-widest whitespace-nowrap`}>{field.label}</th>
                                                         ))}
+                                                        <th className="px-6 py-5 text-[10px] font-black text-gray-400 uppercase tracking-widest text-center whitespace-nowrap">{t('reg.code') || 'Código'}</th>
                                                         <th className="px-6 py-5 text-[10px] font-black text-gray-400 uppercase tracking-widest text-center whitespace-nowrap">{t('payment')}</th>
                                                         <th className="px-6 py-5 text-[10px] font-black text-gray-400 uppercase tracking-widest text-center whitespace-nowrap">{t('lodging')}</th>
                                                         <th className="px-8 py-5 text-[10px] font-black text-gray-400 uppercase tracking-widest text-right whitespace-nowrap">{t('actions')}</th>
@@ -1186,6 +1248,18 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
                                                                     </td>
                                                                 );
                                                             })}
+                                                            <td className="px-6 py-5 text-center">
+                                                                {person.reg_code ? (
+                                                                    <button
+                                                                        onClick={() => setBarcodeFor(person)}
+                                                                        title={t('reg.code.title') || 'Código de inscripción'}
+                                                                        className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-gray-50 hover:bg-blue-600 hover:text-white text-gray-700 transition-all border border-gray-100"
+                                                                    >
+                                                                        <i className="fa-solid fa-barcode text-xs"></i>
+                                                                        <span className="font-mono text-[11px] font-black tracking-wider">{person.reg_code}</span>
+                                                                    </button>
+                                                                ) : <span className="text-gray-300 italic text-xs">{t('reg.code.none') || 'Sin código'}</span>}
+                                                            </td>
                                                             <td className="px-6 py-5">
                                                                 <div className="flex flex-col items-center gap-1">
                                                                     <button

@@ -53,6 +53,12 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   Every other location stays closed; a submitted or validated arrangement still has to be withdrawn or
   reopened first. The portal explains whether the location is working under such a permission, and an
   expired permission is named in the refusal. The admin's own tools are never limited by the deadline.
+- **Conference Manager 2.9.0 — a unique registration code and barcode per attendee.** Every attendee gets a
+  random 10-character code (no ambiguous characters, drawn from the host CSPRNG) when registered from the portal
+  or the admin, and existing attendees receive one at the next start. The code is shown only in the admin
+  panel: a column in the roster opens its Code 128 barcode, which can be printed, downloaded as SVG or copied;
+  the roster search finds an attendee by code and the CSV export includes it. No portal response carries it,
+  no request can set or change it, and a unique index guarantees it is never repeated.
 
 ### Fixed
 
