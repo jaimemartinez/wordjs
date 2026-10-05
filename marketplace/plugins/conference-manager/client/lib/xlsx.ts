@@ -254,7 +254,9 @@ export function buildXlsx(sheetsIn: XlsxSheet[]): Uint8Array {
 
 /** Hand the workbook to the browser as a download. */
 export function downloadXlsx(bytes: Uint8Array, filename: string): void {
-    const blob = new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    // The cast is a TS-lib nuance only: Uint8Array<ArrayBufferLike> is not a BlobPart under TS 5.7+ lib.dom
+    // (it might be backed by a SharedArrayBuffer); ours is always a plain ArrayBuffer from the zip writer.
+    const blob = new Blob([bytes as BlobPart], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
