@@ -306,6 +306,46 @@ export interface ReportSummary {
     byGender: { gender: string; count: number }[];
 }
 
+// Transport (2.11.0) — sold apart from the participation fee.
+export interface TransportTicket {
+    id: number;
+    bus_id: number;
+    inscription_id: number;
+    /** Price at sale time. */
+    price: number;
+    amount_paid: number;
+    payment_status: 'paid' | 'partial' | 'unpaid' | string;
+    created_at?: string;
+}
+export interface Bus {
+    id: number;
+    conference_id: number;
+    name: string;
+    origin?: string | null;
+    destination?: string | null;
+    /** 'YYYY-MM-DDTHH:mm' (as entered) or null. */
+    departure?: string | null;
+    capacity: number;
+    price: number;
+    notes?: string | null;
+    sold: number;
+    /** Sum of the prices of the tickets sold. */
+    revenue: number;
+    /** Sum of the transport payments received. */
+    collected: number;
+    passengers: TransportTicket[];
+}
+export interface TransportPayment {
+    id: number;
+    ticket_id: number;
+    amount: number;
+    method: string;
+    reference?: string | null;
+    date: string;
+    recorded_by?: string | null;
+}
+export type BusInput = { name: string; origin?: string; destination?: string; departure?: string; capacity: number | string; price: number | string; notes?: string };
+
 export const conferenceApi = {
     // Conferences
     getConferences: () => apiGet<Conference[]>('/plugin/conference-manager/list'),
@@ -393,6 +433,17 @@ export const conferenceApi = {
     saveFeeRule: (data: Partial<FeeRule>) => apiPost('/plugin/conference-manager/fee-rules', data),
     deleteFeeRule: (id: number) => apiDelete(`/plugin/conference-manager/fee-rules/${id}`),
     repriceAll: (conferenceId: number) => apiPost<{ success: boolean; total: number; updated: number }>('/plugin/conference-manager/reprice', { conference_id: conferenceId }),
+
+    // Transport (2.11.0)
+    getBuses: (conferenceId: number) => apiGet<Bus[]>(`/plugin/conference-manager/buses?conference_id=${conferenceId}`),
+    createBus: (conferenceId: number, data: BusInput) => apiPost<{ success: boolean; id: number }>('/plugin/conference-manager/buses', { ...data, conference_id: conferenceId }),
+    updateBus: (id: number, data: Partial<BusInput> & { reprice_tickets?: boolean }) => apiPut(`/plugin/conference-manager/buses/${id}`, data),
+    deleteBus: (id: number) => apiDelete(`/plugin/conference-manager/buses/${id}`),
+    addPassengers: (busId: number, inscriptionIds: number[]) => apiPost<{ success: boolean; added: number; skipped: number }>(`/plugin/conference-manager/buses/${busId}/passengers`, { inscription_ids: inscriptionIds }),
+    removePassenger: (busId: number, inscriptionId: number) => apiDelete(`/plugin/conference-manager/buses/${busId}/passengers/${inscriptionId}`),
+    getTicketPayments: (ticketId: number) => apiGet<TransportPayment[]>(`/plugin/conference-manager/tickets/${ticketId}/payments`),
+    addTicketPayment: (ticketId: number, data: { amount: number; method: string; reference?: string; date?: string }) => apiPost(`/plugin/conference-manager/tickets/${ticketId}/payments`, data),
+    deleteTransportPayment: (id: number) => apiDelete(`/plugin/conference-manager/transport-payments/${id}`),
 
     // Reports
     getReportSummary: (conferenceId: number) => apiGet<ReportSummary>(`/plugin/conference-manager/reports/summary?conference_id=${conferenceId}`),

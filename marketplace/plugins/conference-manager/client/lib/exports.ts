@@ -41,6 +41,11 @@ export function availableColumns(fields: ExportField[]): ExportColumn[] {
         { key: 'balance', label: 'Saldo', money: true, width: 12 },
         { key: 'hotel_name', label: 'Hotel' },
         { key: 'room_number', label: 'Habitación', width: 12 },
+        // Transport is sold apart from the fee: its own columns, never mixed into `balance`.
+        { key: 'transport', label: 'Transporte', width: 28 },
+        { key: 'transport_due', label: 'Transporte $', money: true, width: 13 },
+        { key: 'transport_paid', label: 'Transporte pagado', money: true, width: 16 },
+        { key: 'transport_balance', label: 'Transporte saldo', money: true, width: 15 },
         { key: 'registration_date', label: 'Fecha de inscripción', width: 20 },
         { key: 'notes', label: 'Notas (admin)', width: 30 },
     ];
@@ -55,7 +60,26 @@ export function defaultColumnKeys(fields: ExportField[]): string[] {
 }
 
 /** One cell of the custom roster. `extra` carries values the page resolves (e.g. transport labels). */
-export function columnValue(p: ExportPerson, key: string, extra: { transport?: Map<number, string> } = {}): XlsxCell {
+/** Per-attendee transport totals (built from GET /buses by transportByPerson). */
+export type PersonTransport = { labels: string[]; due: number; paid: number };
+
+/** Index the buses' tickets by attendee: bus names, ticket prices and payments summed. */
+export function transportByPerson(buses: { name: string; passengers?: { inscription_id: number; price: number; amount_paid: number }[] }[]): Map<number, PersonTransport> {
+    const out = new Map<number, PersonTransport>();
+    for (const b of buses) {
+        for (const t of b.passengers || []) {
+            const k = Number(t.inscription_id);
+            if (!out.has(k)) out.set(k, { labels: [], due: 0, paid: 0 });
+            const e = out.get(k)!;
+            e.labels.push(b.name);
+            e.due = round2(e.due + num(t.price));
+            e.paid = round2(e.paid + num(t.amount_paid));
+        }
+    }
+    return out;
+}
+
+export function columnValue(p: ExportPerson, key: string, extra: { transport?: Map<number, PersonTransport> } = {}): XlsxCell {
     if (key.startsWith('field:')) {
         const v = fieldValue(p, key.slice(6));
         return v === undefined || v === null ? '' : (typeof v === 'number' ? v : String(v));
@@ -64,10 +88,13 @@ export function columnValue(p: ExportPerson, key: string, extra: { transport?: M
         case 'status': return STATUS_LABEL[String(p.status || 'pending')] || String(p.status || '');
         case 'payment_status': return PAYMENT_LABEL[String(p.payment_status || 'unpaid')] || String(p.payment_status || '');
         case 'total_due': return { money: round2(num(p.total_due)) };
-        case 'transport_due': return { money: round2(num(p.transport_due)) };
         case 'amount_paid': return { money: round2(num(p.amount_paid)) };
-        case 'balance': return { money: round2(num(p.total_due) + num(p.transport_due) - num(p.amount_paid)) };
-        case 'transport': return extra.transport?.get(Number(p.id)) || '';
+        // The participation fee only — transport has its own columns.
+        case 'balance': return { money: round2(num(p.total_due) - num(p.amount_paid)) };
+        case 'transport': return (extra.transport?.get(Number(p.id))?.labels || []).join(', ');
+        case 'transport_due': return { money: extra.transport?.get(Number(p.id))?.due ?? 0 };
+        case 'transport_paid': return { money: extra.transport?.get(Number(p.id))?.paid ?? 0 };
+        case 'transport_balance': { const t = extra.transport?.get(Number(p.id)); return { money: t ? round2(t.due - t.paid) : 0 }; }
         case 'registration_date': return p.registration_date ? String(p.registration_date) : '';
         default: return p[key] === undefined || p[key] === null ? '' : String(p[key]);
     }
@@ -93,7 +120,7 @@ export function buildRosterSheet(opts: {
     fields: ExportField[];
     columnKeys: string[];
     barcodes?: Map<number, BarcodeImage> | null;
-    transport?: Map<number, string>;
+    transport?: Map<number, PersonTransport>;
     name?: string;
 }): XlsxSheet {
     const all = new Map(availableColumns(opts.fields).map((c) => [c.key, c]));
@@ -187,6 +214,43 @@ export function buildHotelReport(opts: { hotels: ReportHotel[]; people: ExportPe
     summary.boldRows!.push(summary.rows.length);
     summary.rows.push(['TOTAL', totRooms, totBeds, totUsed, Math.max(0, totBeds - totUsed), totBeds ? `${Math.round((totUsed / totBeds) * 100)}%` : '—']);
     return opts.onlyHotelId != null ? sheets : [summary, ...sheets];
+}
+
+export type ManifestBus = { id: number; name: string; origin?: string | null; destination?: string | null; departure?: string | null; capacity: number; price: number; sold?: number; revenue?: number; collected?: number; passengers?: { inscription_id: number; price: number; amount_paid: number; payment_status: string }[] };
+
+const route = (b: ManifestBus) => [b.origin, b.destination].filter(Boolean).join(' → ');
+const when = (v?: string | null) => { const m = String(v || '').match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2}))?/); return m ? `${m[3]}/${m[2]}/${m[1]}${m[4] ? ` ${m[4]}:${m[5]}` : ''}` : String(v || ''); };
+
+/** Transport workbook: "Resumen" (one row per bus) + one passenger list per bus (or only `onlyBusId`). */
+export function buildBusManifest(opts: { buses: ManifestBus[]; people: ExportPerson[]; fields: ExportField[]; onlyBusId?: number | null }): XlsxSheet[] {
+    const byId = new Map(opts.people.map((p) => [Number(p.id), p]));
+    const buses = opts.buses.filter((b) => opts.onlyBusId == null || Number(b.id) === Number(opts.onlyBusId));
+    const summary: XlsxSheet = {
+        name: 'Resumen',
+        columns: [{ header: 'Bus', width: 24 }, { header: 'Trayecto', width: 30 }, { header: 'Salida', width: 18 }, { header: 'Capacidad', width: 11 }, { header: 'Vendidos', width: 10 }, { header: 'Libres', width: 9 }, { header: 'Precio', width: 11 }, { header: 'Vendido $', width: 13 }, { header: 'Recaudado $', width: 13 }, { header: 'Por cobrar $', width: 13 }],
+        rows: [], boldRows: [],
+    };
+    const sheets: XlsxSheet[] = [];
+    let tCap = 0, tSold = 0, tRev = 0, tCol = 0;
+    for (const b of buses) {
+        const tickets = b.passengers || [];
+        const rev = round2(tickets.reduce((a, t) => a + num(t.price), 0));
+        const col = round2(tickets.reduce((a, t) => a + num(t.amount_paid), 0));
+        tCap += num(b.capacity); tSold += tickets.length; tRev += rev; tCol += col;
+        summary.rows.push([b.name, route(b), when(b.departure), num(b.capacity), tickets.length, Math.max(0, num(b.capacity) - tickets.length), { money: num(b.price) }, { money: rev }, { money: col }, { money: round2(rev - col) }]);
+        const rows: XlsxCell[][] = tickets
+            .map((t) => ({ t, p: byId.get(Number(t.inscription_id)) || { id: t.inscription_id } }))
+            .sort((x, y) => displayName(x.p, opts.fields).localeCompare(displayName(y.p, opts.fields), 'es'))
+            .map(({ t, p }, i) => [i + 1, displayName(p, opts.fields), String(p.location || ''), String(p.reg_code || ''), String(fieldValue(p, 'phone') ?? ''), { money: num(t.price) }, { money: num(t.amount_paid) }, { money: round2(num(t.price) - num(t.amount_paid)) }, PAYMENT_LABEL[String(t.payment_status || 'unpaid')] || String(t.payment_status || '')]);
+        sheets.push({
+            name: b.name,
+            columns: [{ header: '#', width: 5 }, { header: 'Pasajero', width: 30 }, { header: 'Localidad', width: 18 }, { header: 'Código', width: 14 }, { header: 'Teléfono', width: 15 }, { header: 'Precio', width: 11 }, { header: 'Pagado', width: 11 }, { header: 'Saldo', width: 11 }, { header: 'Estado', width: 11 }],
+            rows: rows.length ? rows : [['', '(sin pasajeros)']],
+        });
+    }
+    summary.boldRows!.push(summary.rows.length);
+    summary.rows.push(['TOTAL', '', '', tCap, tSold, Math.max(0, tCap - tSold), '', { money: round2(tRev) }, { money: round2(tCol) }, { money: round2(tRev - tCol) }]);
+    return opts.onlyBusId != null ? sheets : [summary, ...sheets];
 }
 
 /** `inscripciones-<slug>-2026-10-05.xlsx` */

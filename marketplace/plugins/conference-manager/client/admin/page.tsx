@@ -11,16 +11,17 @@ import { useToast } from "../../../../../frontend/src/contexts/ToastContext";
 import { translations } from "../lib/i18n";
 import { conferenceApi, PAYMENT_METHODS, Conference, Inscription, Hotel, Room, Location, ConferenceField, Payment, LodgingReview, buildInscriptionPayload, seedLocationId, isImageProof, fmtMoney, paymentActions, isLodgingFrozen } from "../lib/conference";
 import { useModal } from "@/contexts/ModalContext";
+import TransportPage from "./TransportPage";
 import { code128Svg, code128Png } from "../lib/barcode";
 import { buildXlsx, downloadXlsx } from "../lib/xlsx";
-import { availableColumns, defaultColumnKeys, filterRoster, buildRosterSheet, buildHotelReport, exportFilename } from "../lib/exports";
+import { availableColumns, defaultColumnKeys, filterRoster, buildRosterSheet, buildHotelReport, exportFilename, transportByPerson } from "../lib/exports";
 import { StatCard } from "../../../../../frontend/src/components/ui/StatCard";
 import { ActionCard } from "../../../../../frontend/src/components/ui/ActionCard";
 
 // Register plugin translations
 registerTranslations(translations);
 
-type View = 'list' | 'dashboard' | 'inscriptions' | 'lodging' | 'locations' | 'reports' | 'assignment' | 'fields' | 'pricing';
+type View = 'list' | 'dashboard' | 'inscriptions' | 'lodging' | 'transport' | 'locations' | 'reports' | 'assignment' | 'fields' | 'pricing';
 
 // Lodging status of a location (draft | submitted | validated): i18n key + badge classes, shared by the
 // locations cards, the review modal and the inscriptions assign modal.
@@ -43,7 +44,7 @@ function ConferenceManagerContent() {
     // Initialize state from local storage
     useEffect(() => {
         const savedView = localStorage.getItem('conference-manager:view') as View;
-        if (savedView && ['list', 'dashboard', 'inscriptions', 'lodging', 'locations', 'assignment', 'fields', 'pricing', 'reports'].includes(savedView)) {
+        if (savedView && ['list', 'dashboard', 'inscriptions', 'lodging', 'transport', 'locations', 'assignment', 'fields', 'pricing', 'reports'].includes(savedView)) {
             setViewState(savedView);
         }
     }, []);
@@ -106,6 +107,7 @@ function ConferenceManagerContent() {
                         { name: t('dashboard'), view: 'dashboard' as View, icon: 'fa-chart-pie' },
                         { name: t('inscriptions'), view: 'inscriptions' as View, icon: 'fa-users' },
                         { name: t('lodging'), view: 'lodging' as View, icon: 'fa-bed' },
+                        { name: t('transport') || 'Transporte', view: 'transport' as View, icon: 'fa-bus' },
                         { name: t('locations'), view: 'locations' as View, icon: 'fa-map-marker-alt' },
                         { name: t('assignment'), view: 'assignment' as View, icon: 'fa-wand-magic-sparkles' },
                         { name: t('fields'), view: 'fields' as View, icon: 'fa-list-check' },
@@ -136,6 +138,7 @@ function ConferenceManagerContent() {
                     {view === 'dashboard' && <ConferenceDashboard conferenceId={currentConference.id} onNavigate={setView} />}
                     {view === 'inscriptions' && <InscriptionsPage conferenceId={currentConference.id} />}
                     {view === 'lodging' && <LodgingPage conferenceId={currentConference.id} />}
+                    {view === 'transport' && <TransportPage conferenceId={currentConference.id} slug={currentConference.slug} />}
                     {view === 'locations' && <LocationsPage conferenceId={currentConference.id} />}
                     {view === 'assignment' && <AssignmentPage conferenceId={currentConference.id} />}
                     {view === 'fields' && <FieldsPage conferenceId={currentConference.id} />}
@@ -745,13 +748,15 @@ function ExcelExportModal({ conferenceId, slug, onClose }: { conferenceId: numbe
     const [paymentStatus, setPaymentStatus] = useState('');
     const [excludeCancelled, setExcludeCancelled] = useState(true);
     const [progress, setProgress] = useState<{ n: number; total: number } | null>(null);
+    // Transport per attendee (bus names, ticket prices, transport payments) for the transport columns.
+    const [transport, setTransport] = useState<Map<number, any>>(new Map());
 
     useEffect(() => {
         let alive = true;
-        Promise.all([conferenceApi.getFields(conferenceId), conferenceApi.getInscriptions(conferenceId), conferenceApi.getLocations(conferenceId)])
-            .then(([f, p, l]) => {
+        Promise.all([conferenceApi.getFields(conferenceId), conferenceApi.getInscriptions(conferenceId), conferenceApi.getLocations(conferenceId), conferenceApi.getBuses(conferenceId).catch(() => [])])
+            .then(([f, p, l, b]) => {
                 if (!alive) return;
-                setFields(f); setPeople(p); setLocs(l.locations || []);
+                setFields(f); setPeople(p); setLocs(l.locations || []); setTransport(transportByPerson((b || []) as any));
                 const all = new Set(availableColumns(f as any).map(c => c.key));
                 let saved: any = null;
                 try { saved = JSON.parse(localStorage.getItem(storeKey) || 'null'); } catch { saved = null; }
@@ -794,7 +799,7 @@ function ExcelExportModal({ conferenceId, slug, onClose }: { conferenceId: numbe
                     if (i % 25 === 0) setProgress({ n: i + 1, total: withCode.length });
                 }
             }
-            const sheet = buildRosterSheet({ people: rows as any, fields: fields as any, columnKeys: selected, barcodes: images });
+            const sheet = buildRosterSheet({ people: rows as any, fields: fields as any, columnKeys: selected, barcodes: images, transport });
             downloadXlsx(buildXlsx([sheet]), exportFilename('inscripciones', slug));
             addToast(t('excel.done') || 'Excel generado', 'success');
         } catch (e: any) {

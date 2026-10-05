@@ -66,6 +66,15 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   per conference. A hotel assignment report (Reports and Hotels pages, or one hotel from its card) produces a
   summary sheet and one sheet per hotel listing every room, its allotment and occupants. The files are real
   .xlsx workbooks built in the browser without new dependencies; text that looks like a formula stays text.
+- **Conference Manager 2.11.0 — transport, sold apart from the participation fee.** A new *Transporte* tab lists
+  buses (name, origin → destination, departure, seats, price per seat) with seats sold, amount sold, collected
+  and outstanding. The admin sells seats to attendees (never beyond the seats left, never to a cancelled
+  attendee, never twice on the same bus); each ticket keeps the price it was sold at and is paid with its own
+  payments (cash or transfer, with reference and date), so it has its own paid / partial / pending status and
+  never touches the attendee's fee, payments or balance. A new price applies to future sales, or to the
+  tickets already sold when asked (refused if it would fall below what a ticket already paid); a ticket or a
+  bus with payments cannot be removed until those payments are. A transport workbook (summary + passenger
+  list per bus, or one bus) and four transport columns in the custom Excel complete it.
 
 ### Fixed
 
