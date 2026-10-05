@@ -88,7 +88,8 @@ export function code128Svg(text: string, opts: BarcodeOptions = {}): string {
 }
 
 /** Rasterise the barcode to PNG bytes in the browser (canvas). Returns the bytes and the pixel size. */
-export async function code128Png(text: string, opts: BarcodeOptions = {}): Promise<{ bytes: Uint8Array; width: number; height: number }> {
+/** Same shape as exports.ts BarcodeImage, so the Excel export can use the result as is. */
+export async function code128Png(text: string, opts: BarcodeOptions = {}): Promise<{ png: Uint8Array; width: number; height: number }> {
     const l = layout(text, opts);
     const canvas = document.createElement('canvas');
     canvas.width = l.width;
@@ -106,5 +107,5 @@ export async function code128Png(text: string, opts: BarcodeOptions = {}): Promi
         ctx.fillText(text, l.width / 2, l.height + 3);
     }
     const blob: Blob = await new Promise((resolve, reject) => canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('code128: PNG encoding failed'))), 'image/png'));
-    return { bytes: new Uint8Array(await blob.arrayBuffer()), width: l.width, height: l.fullHeight };
+    return { png: new Uint8Array(await blob.arrayBuffer()), width: l.width, height: l.fullHeight };
 }

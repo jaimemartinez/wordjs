@@ -11,7 +11,9 @@ import { useToast } from "../../../../../frontend/src/contexts/ToastContext";
 import { translations } from "../lib/i18n";
 import { conferenceApi, PAYMENT_METHODS, Conference, Inscription, Hotel, Room, Location, ConferenceField, Payment, LodgingReview, buildInscriptionPayload, seedLocationId, isImageProof, fmtMoney, paymentActions, isLodgingFrozen } from "../lib/conference";
 import { useModal } from "@/contexts/ModalContext";
-import { code128Svg } from "../lib/barcode";
+import { code128Svg, code128Png } from "../lib/barcode";
+import { buildXlsx, downloadXlsx } from "../lib/xlsx";
+import { availableColumns, defaultColumnKeys, filterRoster, buildRosterSheet, buildHotelReport, exportFilename } from "../lib/exports";
 import { StatCard } from "../../../../../frontend/src/components/ui/StatCard";
 import { ActionCard } from "../../../../../frontend/src/components/ui/ActionCard";
 
@@ -713,6 +715,190 @@ function BarcodeModal({ code, name, onClose }: { code: string; name: string; onC
     );
 }
 
+// ── Excel exports (2.10.0) ───────────────────────────────────────────────────────────────────────────
+// Everything is built in the browser from the admin's own API data (the sandbox can only answer JSON):
+// client/lib/exports.ts shapes the sheets, client/lib/xlsx.ts writes the file, client/lib/barcode.ts
+// rasterises each registration code for the optional barcode column.
+async function downloadHotelReport(conferenceId: number, slug: string | undefined, onlyHotelId: number | null = null) {
+    const [hotels, people, fields, locs] = await Promise.all([
+        conferenceApi.getHotels(conferenceId),
+        conferenceApi.getInscriptions(conferenceId),
+        conferenceApi.getFields(conferenceId),
+        conferenceApi.getLocations(conferenceId),
+    ]);
+    const sheets = buildHotelReport({ hotels: hotels as any, people: people as any, fields: fields as any, locations: (locs.locations || []) as any, onlyHotelId });
+    const hotelName = onlyHotelId != null ? (hotels.find((h: any) => Number(h.id) === Number(onlyHotelId))?.name || 'hotel') : '';
+    downloadXlsx(buildXlsx(sheets), exportFilename(onlyHotelId != null ? 'hotel-' + String(hotelName).toLowerCase() : 'hoteles', slug));
+}
+
+function ExcelExportModal({ conferenceId, slug, onClose }: { conferenceId: number; slug?: string; onClose: () => void }) {
+    const { t } = useI18n();
+    const { addToast } = useToast();
+    const storeKey = `cm:excel:${conferenceId}`;
+    const [fields, setFields] = useState<ConferenceField[]>([]);
+    const [people, setPeople] = useState<Inscription[]>([]);
+    const [locs, setLocs] = useState<Location[]>([]);
+    const [loading, setLoading] = useState(true);
+    const [selected, setSelected] = useState<string[]>([]);
+    const [barcode, setBarcode] = useState(false);
+    const [locationId, setLocationId] = useState('');
+    const [paymentStatus, setPaymentStatus] = useState('');
+    const [excludeCancelled, setExcludeCancelled] = useState(true);
+    const [progress, setProgress] = useState<{ n: number; total: number } | null>(null);
+
+    useEffect(() => {
+        let alive = true;
+        Promise.all([conferenceApi.getFields(conferenceId), conferenceApi.getInscriptions(conferenceId), conferenceApi.getLocations(conferenceId)])
+            .then(([f, p, l]) => {
+                if (!alive) return;
+                setFields(f); setPeople(p); setLocs(l.locations || []);
+                const all = new Set(availableColumns(f as any).map(c => c.key));
+                let saved: any = null;
+                try { saved = JSON.parse(localStorage.getItem(storeKey) || 'null'); } catch { saved = null; }
+                const keys = Array.isArray(saved?.columns) ? saved.columns.filter((k: string) => all.has(k)) : [];
+                setSelected(keys.length ? keys : defaultColumnKeys(f as any).filter(k => all.has(k)));
+                if (saved && typeof saved.barcode === 'boolean') setBarcode(saved.barcode);
+            })
+            .catch((e: any) => addToast(e?.message || 'Error', 'error'))
+            .finally(() => { if (alive) setLoading(false); });
+        return () => { alive = false; };
+    }, [conferenceId]);
+
+    const columns = useMemo(() => availableColumns(fields as any), [fields]);
+    const label = (k: string) => columns.find(c => c.key === k)?.label || k;
+    const rows = useMemo(() => filterRoster(people as any, {
+        locationId: locationId ? Number(locationId) : null,
+        paymentStatus: paymentStatus || null,
+        excludeCancelled,
+    }), [people, locationId, paymentStatus, excludeCancelled]);
+
+    const toggle = (k: string) => setSelected(s => s.includes(k) ? s.filter(x => x !== k) : [...s, k]);
+    const move = (i: number, d: number) => setSelected(s => {
+        const j = i + d;
+        if (j < 0 || j >= s.length) return s;
+        const n = [...s]; [n[i], n[j]] = [n[j], n[i]]; return n;
+    });
+
+    const generate = async () => {
+        if (!selected.length) { addToast(t('excel.columns.none') || 'Elige al menos una columna.', 'warning'); return; }
+        try { localStorage.setItem(storeKey, JSON.stringify({ columns: selected, barcode })); } catch { /* private mode */ }
+        try {
+            let images: Map<number, any> | null = null;
+            if (barcode) {
+                images = new Map();
+                const withCode = rows.filter((p: any) => p.reg_code);
+                setProgress({ n: 0, total: withCode.length });
+                for (let i = 0; i < withCode.length; i++) {
+                    const p: any = withCode[i];
+                    images.set(Number(p.id), await code128Png(String(p.reg_code), { module: 2, height: 44, fontSize: 12 }));
+                    if (i % 25 === 0) setProgress({ n: i + 1, total: withCode.length });
+                }
+            }
+            const sheet = buildRosterSheet({ people: rows as any, fields: fields as any, columnKeys: selected, barcodes: images });
+            downloadXlsx(buildXlsx([sheet]), exportFilename('inscripciones', slug));
+            addToast(t('excel.done') || 'Excel generado', 'success');
+        } catch (e: any) {
+            addToast(e?.message || 'Error', 'error');
+        } finally {
+            setProgress(null);
+        }
+    };
+
+    const busy = !!progress;
+    const input = 'w-full border-2 border-gray-100 rounded-xl px-3 py-2.5 bg-gray-50/30 focus:bg-white focus:border-blue-500 transition-all outline-none text-sm font-medium text-gray-900';
+    return (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[110] flex items-center justify-center p-4 animate-in fade-in duration-200">
+            <div className="bg-white rounded-[40px] shadow-2xl w-full max-w-4xl border border-gray-100 overflow-hidden animate-in zoom-in-95 duration-200 max-h-[92vh] flex flex-col" role="dialog" aria-modal="true">
+                <div className="bg-gray-50/50 px-8 sm:px-10 py-6 border-b border-gray-100 flex items-start justify-between gap-4 shrink-0">
+                    <div>
+                        <h3 className="font-black text-2xl text-gray-900 italic tracking-tighter"><i className="fa-solid fa-file-excel text-emerald-600 mr-2"></i>{t('excel.custom') || 'Excel personalizado'}</h3>
+                        <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-1">{t('excel.custom.subtitle') || 'Elige las columnas, su orden y los filtros'}</p>
+                    </div>
+                    <button onClick={onClose} disabled={busy} className="text-gray-400 hover:text-gray-600 transition-colors p-2 hover:bg-gray-100 rounded-2xl disabled:opacity-40" aria-label="Cerrar">
+                        <i className="fa-solid fa-xmark text-xl"></i>
+                    </button>
+                </div>
+                {loading ? (
+                    <div className="text-center py-20"><div className="inline-block w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div></div>
+                ) : (
+                    <div className="p-6 sm:p-10 space-y-6 overflow-y-auto">
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                            <div className="space-y-1.5">
+                                <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">{t('excel.filter.location') || 'Localidad'}</label>
+                                <select value={locationId} onChange={e => setLocationId(e.target.value)} className={input}>
+                                    <option value="">{t('excel.filter.all') || 'Todas'}</option>
+                                    {locs.map(l => <option key={l.id} value={String(l.id)}>{l.name}</option>)}
+                                </select>
+                            </div>
+                            <div className="space-y-1.5">
+                                <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">{t('excel.filter.payment') || 'Estado de pago'}</label>
+                                <select value={paymentStatus} onChange={e => setPaymentStatus(e.target.value)} className={input}>
+                                    <option value="">{t('excel.filter.all') || 'Todas'}</option>
+                                    <option value="paid">{t('paid') || 'Pagado'}</option>
+                                    <option value="partial">{t('partial') || 'Parcial'}</option>
+                                    <option value="unpaid">{t('unpaid') || 'Pendiente'}</option>
+                                </select>
+                            </div>
+                            <label className="flex items-center gap-3 sm:mt-6 px-4 py-2.5 rounded-xl border-2 border-gray-100 cursor-pointer">
+                                <input type="checkbox" checked={excludeCancelled} onChange={e => setExcludeCancelled(e.target.checked)} className="accent-blue-600 w-4 h-4" />
+                                <span className="text-sm font-bold text-gray-700">{t('excel.filter.cancelled') || 'Excluir cancelados'}</span>
+                            </label>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div>
+                                <div className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1 mb-2">{t('excel.columns.available') || 'Columnas disponibles'}</div>
+                                <div className="rounded-2xl border border-gray-100 divide-y divide-gray-50 max-h-80 overflow-y-auto">
+                                    {columns.map(c => (
+                                        <label key={c.key} className="flex items-center gap-3 px-4 py-2.5 hover:bg-blue-50/40 cursor-pointer">
+                                            <input type="checkbox" checked={selected.includes(c.key)} onChange={() => toggle(c.key)} className="accent-blue-600 w-4 h-4" />
+                                            <span className="text-sm font-medium text-gray-800">{c.label}</span>
+                                            {c.key.startsWith('field:') && <span className="ml-auto text-[9px] font-black uppercase tracking-widest text-gray-300">form</span>}
+                                        </label>
+                                    ))}
+                                </div>
+                            </div>
+                            <div>
+                                <div className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1 mb-2">{t('excel.columns.selected') || 'Columnas del Excel (en orden)'}</div>
+                                <div className="rounded-2xl border border-gray-100 divide-y divide-gray-50 max-h-80 overflow-y-auto">
+                                    {selected.length === 0 && <div className="px-4 py-6 text-center text-xs text-gray-400 italic">{t('excel.columns.none') || 'Elige al menos una columna.'}</div>}
+                                    {selected.map((k, i) => (
+                                        <div key={k} className="flex items-center gap-2 px-4 py-2">
+                                            <span className="w-6 text-[10px] font-black text-gray-300">{i + 1}</span>
+                                            <span className="flex-1 min-w-0 truncate text-sm font-bold text-gray-800">{label(k)}</span>
+                                            <button type="button" onClick={() => move(i, -1)} disabled={i === 0} title={t('excel.move.up') || 'Subir'} className="w-8 h-8 rounded-lg bg-gray-50 text-gray-400 hover:bg-blue-600 hover:text-white disabled:opacity-30"><i className="fa-solid fa-arrow-up text-[10px]"></i></button>
+                                            <button type="button" onClick={() => move(i, 1)} disabled={i === selected.length - 1} title={t('excel.move.down') || 'Bajar'} className="w-8 h-8 rounded-lg bg-gray-50 text-gray-400 hover:bg-blue-600 hover:text-white disabled:opacity-30"><i className="fa-solid fa-arrow-down text-[10px]"></i></button>
+                                            <button type="button" onClick={() => toggle(k)} title={t('excel.remove') || 'Quitar'} className="w-8 h-8 rounded-lg bg-gray-50 text-gray-400 hover:bg-rose-600 hover:text-white"><i className="fa-solid fa-xmark text-[10px]"></i></button>
+                                        </div>
+                                    ))}
+                                </div>
+                                <label className="mt-4 flex items-start gap-3 px-4 py-3 rounded-2xl border-2 border-gray-100 cursor-pointer">
+                                    <input type="checkbox" checked={barcode} onChange={e => setBarcode(e.target.checked)} className="accent-blue-600 w-4 h-4 mt-0.5" />
+                                    <span>
+                                        <span className="block text-sm font-bold text-gray-800"><i className="fa-solid fa-barcode mr-1.5"></i>{t('excel.barcode') || 'Incluir código de barras'}</span>
+                                        <span className="block text-[11px] text-gray-500 mt-0.5">{t('excel.barcode.help') || 'Agrega una columna con la imagen del código de barras de cada inscripción.'}</span>
+                                    </span>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                )}
+                <div className="px-6 sm:px-10 py-5 border-t border-gray-50 bg-gray-50/30 flex flex-wrap items-center justify-between gap-3 shrink-0">
+                    <span className="text-xs font-bold text-gray-500">{(t('excel.rows') || '{n} inscripciones se exportarán').replace('{n}', String(rows.length))}</span>
+                    <div className="flex gap-3">
+                        <button onClick={onClose} disabled={busy} className="px-6 py-3 text-gray-500 font-bold hover:bg-gray-100 rounded-xl transition-all disabled:opacity-40">{t('cancel') || 'Cancelar'}</button>
+                        <button onClick={generate} disabled={busy || loading || !selected.length} className="px-8 py-3 bg-emerald-600 text-white rounded-2xl hover:bg-emerald-700 font-black text-[10px] uppercase tracking-widest shadow-lg shadow-emerald-500/30 transition-all disabled:opacity-50">
+                            {progress
+                                ? <><i className="fa-solid fa-spinner fa-spin mr-1.5"></i>{(t('excel.generating') || 'Generando… {n}/{total}').replace('{n}', String(progress.n)).replace('{total}', String(progress.total))}</>
+                                : <><i className="fa-solid fa-file-excel mr-1.5"></i>{t('excel.generate') || 'Generar Excel'}</>}
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+}
+
 const personDisplayName = (person: any, fields: any[]) => {
     const fl = fields || [];
     // Prefer the fields tagged with the name roles; fall back to the first 1-2 form fields.
@@ -731,6 +917,8 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
     const { addToast } = useToast();
     // Attendee whose registration barcode is open in the viewer.
     const [barcodeFor, setBarcodeFor] = useState<Inscription | null>(null);
+    const [showExcel, setShowExcel] = useState(false);
+    const { currentConference: excelConf } = useConference();
     const [inscriptions, setInscriptions] = useState<Inscription[]>([]);
     const [fields, setFields] = useState<ConferenceField[]>([]);
     const [confLocations, setConfLocations] = useState<Location[]>([]);
@@ -1032,6 +1220,7 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
         <div className="h-full flex flex-col overflow-hidden">
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-10 gap-6 flex-shrink-0 px-1">
                 <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-4 flex-1 w-full">
+                    {showExcel && <ExcelExportModal conferenceId={conferenceId} slug={excelConf?.slug} onClose={() => setShowExcel(false)} />}
                     {barcodeFor && barcodeFor.reg_code && (
                         <BarcodeModal code={barcodeFor.reg_code} name={personDisplayName(barcodeFor, fields)} onClose={() => setBarcodeFor(null)} />
                     )}
@@ -1140,6 +1329,14 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
                     </div>
                 </div>
 
+                <button
+                    onClick={() => setShowExcel(true)}
+                    title={t('excel.custom') || 'Excel personalizado'}
+                    className="flex-shrink-0 bg-white border-2 border-gray-100 text-emerald-700 px-6 py-4 rounded-2xl hover:border-emerald-500 transition-all flex items-center justify-center gap-2 w-full md:w-auto font-black text-[10px] uppercase tracking-widest"
+                >
+                    <i className="fa-solid fa-file-excel text-sm"></i>
+                    <span>{t('excel.custom') || 'Excel personalizado'}</span>
+                </button>
                 <button
                     onClick={openCreate}
                     className="flex-shrink-0 bg-blue-600 text-white px-8 py-4 rounded-2xl hover:bg-blue-700 active:scale-95 transition-all shadow-xl shadow-blue-500/30 flex items-center justify-center gap-3 w-full md:w-auto font-black italic tracking-tighter"
@@ -1766,6 +1963,14 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
 function LodgingPage({ conferenceId }: { conferenceId: number }) {
     const { t } = useI18n(); // Get t() function
     const { addToast } = useToast();
+    const { currentConference: lodgingConf } = useConference();
+    const [reportBusy, setReportBusy] = useState<number | 'all' | null>(null);
+    const hotelReport = async (hotelId: number | null) => {
+        setReportBusy(hotelId ?? 'all');
+        try { await downloadHotelReport(conferenceId, lodgingConf?.slug, hotelId); }
+        catch (e: any) { addToast(e?.message || 'Error', 'error'); }
+        finally { setReportBusy(null); }
+    };
     const { confirm } = useModal();
     const [hotels, setHotels] = useState<Hotel[]>([]);
     const [loading, setLoading] = useState(true);
@@ -1929,12 +2134,21 @@ function LodgingPage({ conferenceId }: { conferenceId: number }) {
                     <h2 className="text-3xl font-black text-gray-900 italic tracking-tighter">{t('hotels.and.rooms')}</h2>
                     <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-1">Gestión de alojamiento y disponibilidad</p>
                 </div>
+                <div className="flex flex-wrap items-center gap-2">
+                <button
+                    onClick={() => hotelReport(null)}
+                    disabled={reportBusy !== null}
+                    className="bg-white border-2 border-gray-100 text-emerald-700 px-6 py-4 rounded-2xl font-black text-[10px] uppercase tracking-widest hover:border-emerald-500 transition-all flex items-center gap-2 disabled:opacity-50"
+                >
+                    <i className={`fa-solid ${reportBusy === 'all' ? 'fa-spinner animate-spin' : 'fa-file-excel'} text-[10px]`}></i> {t('excel.hotels') || 'Reporte de hoteles (Excel)'}
+                </button>
                 <button
                     onClick={() => setShowHotelModal(true)}
                     className="bg-gray-900 text-white px-8 py-4 rounded-2xl font-black text-[10px] uppercase tracking-widest hover:bg-blue-600 transition-all duration-500 shadow-xl hover:shadow-blue-500/30 flex items-center gap-3 transform active:scale-95 translate-y-0 hover:-translate-y-1"
                 >
                     <i className="fa-solid fa-plus text-[8px]"></i> {t('add.hotel')}
                 </button>
+                </div>
             </div>
 
             {loading ? (
@@ -1973,6 +2187,14 @@ function LodgingPage({ conferenceId }: { conferenceId: number }) {
                                 className="bg-white border-2 border-gray-100 px-6 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest text-gray-500 hover:border-blue-500 hover:text-white hover:bg-blue-600 transition-all flex items-center gap-2 shadow-sm"
                             >
                                 <i className="fa-solid fa-plus text-[8px]"></i> {t('add.room')}
+                            </button>
+                            <button
+                                onClick={() => hotelReport(hotel.id)}
+                                disabled={reportBusy !== null}
+                                title={t('excel.hotel.one') || 'Excel de este hotel'}
+                                className="w-11 h-11 flex items-center justify-center rounded-xl bg-white border-2 border-gray-100 text-emerald-600 hover:border-emerald-400 hover:bg-emerald-600 hover:text-white transition-all disabled:opacity-50"
+                            >
+                                <i className={`fa-solid ${reportBusy === hotel.id ? 'fa-spinner animate-spin' : 'fa-file-excel'} text-xs`}></i>
                             </button>
                             <button
                                 onClick={() => handleDeleteHotel(hotel)}
@@ -2582,6 +2804,15 @@ function ReportsPage({ conferenceId }: { conferenceId: number }) {
     const money = (n: number) => '$' + fmtMoney(n);
 
     const [exporting, setExporting] = useState(false);
+    const [showExcel, setShowExcel] = useState(false);
+    const [hotelsBusy, setHotelsBusy] = useState(false);
+    const { currentConference: reportConf } = useConference();
+    const hotelsExcel = async () => {
+        setHotelsBusy(true);
+        try { await downloadHotelReport(conferenceId, reportConf?.slug); }
+        catch (e: any) { addToast(e?.message || 'Error', 'error'); }
+        finally { setHotelsBusy(false); }
+    };
     const downloadCsv = async () => {
         setExporting(true);
         try {
@@ -2630,6 +2861,21 @@ function ReportsPage({ conferenceId }: { conferenceId: number }) {
                     <h2 className="text-2xl font-black text-gray-900 italic tracking-tighter">{t('reports.title') || 'Reportes'}</h2>
                     <p className="text-sm text-gray-400 font-medium">{t('reports.subtitle') || 'Resumen de inscripciones y pagos'}</p>
                 </div>
+                <div className="flex flex-wrap items-center gap-2">
+                {showExcel && <ExcelExportModal conferenceId={conferenceId} slug={reportConf?.slug} onClose={() => setShowExcel(false)} />}
+                <button
+                    onClick={() => setShowExcel(true)}
+                    className="bg-emerald-600 hover:bg-emerald-700 text-white px-6 py-3 rounded-2xl font-black text-xs uppercase tracking-widest transition-all flex items-center gap-2 shadow-lg shadow-emerald-500/30"
+                >
+                    <i className="fa-solid fa-file-excel"></i> {t('excel.custom') || 'Excel personalizado'}
+                </button>
+                <button
+                    onClick={hotelsExcel}
+                    disabled={hotelsBusy}
+                    className="bg-white border-2 border-gray-100 text-gray-700 hover:border-emerald-500 hover:text-emerald-700 px-6 py-3 rounded-2xl font-black text-xs uppercase tracking-widest transition-all flex items-center gap-2 disabled:opacity-50"
+                >
+                    <i className={`fa-solid ${hotelsBusy ? 'fa-spinner animate-spin' : 'fa-hotel'}`}></i> {t('excel.hotels') || 'Reporte de hoteles (Excel)'}
+                </button>
                 <button
                     onClick={downloadCsv}
                     disabled={exporting}
@@ -2637,6 +2883,7 @@ function ReportsPage({ conferenceId }: { conferenceId: number }) {
                 >
                     <i className={`fa-solid ${exporting ? 'fa-spinner animate-spin' : 'fa-file-csv'}`}></i> {t('export.csv') || 'Exportar CSV'}
                 </button>
+                </div>
             </div>
 
             <div className="flex-1 overflow-y-auto modern-scrollbar min-h-0 space-y-8">

@@ -59,6 +59,13 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   panel: a column in the roster opens its Code 128 barcode, which can be printed, downloaded as SVG or copied;
   the roster search finds an attendee by code and the CSV export includes it. No portal response carries it,
   no request can set or change it, and a unique index guarantees it is never repeated.
+- **Conference Manager 2.10.0 — Excel exports.** A custom Excel export (Inscriptions and Reports pages) lets the
+  admin pick and order the columns — every form field plus code, location, status, payment status, fee, paid,
+  balance, hotel, room, registration date and admin notes — filter by location, payment status and cancelled
+  attendees, and add a column with each attendee's registration barcode as an image; the choice is remembered
+  per conference. A hotel assignment report (Reports and Hotels pages, or one hotel from its card) produces a
+  summary sheet and one sheet per hotel listing every room, its allotment and occupants. The files are real
+  .xlsx workbooks built in the browser without new dependencies; text that looks like a formula stays text.
 
 ### Fixed
 
