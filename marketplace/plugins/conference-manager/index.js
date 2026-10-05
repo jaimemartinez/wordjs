@@ -20,7 +20,7 @@
 
 exports.metadata = {
     name: 'Conference Manager',
-    version: '2.11.0',
+    version: '2.12.0',
     description: 'Manage multiple conference inscriptions, payments, and lodging assignments.',
     author: 'WordJS'
 };
@@ -46,6 +46,7 @@ exports.init = async function (wordjs) {
         buses: `${P}buses`,
         tickets: `${P}transport_tickets`,
         transportPayments: `${P}transport_payments`,
+        ledger: `${P}ledger_entries`,
     };
 
     // Schema-follows-form: the registration FORM is the source of truth. Every form field owns a real
@@ -318,7 +319,26 @@ exports.init = async function (wordjs) {
             `FOREIGN KEY (ticket_id) REFERENCES ${T.tickets}(id) ON DELETE CASCADE`
         ]);
 
-        await createIndex(`${P}idx_inscriptions_conference`, T.inscriptions, 'conference_id');        await createIndex(`${P}idx_inscriptions_room`, T.inscriptions, 'room_id');
+        // 11. Accounting (2.12.0): manual income / expense entries of a conference. The money the plugin
+        // already receives (validated inscription payments, transport payments) is NOT copied here — the
+        // ledger view reads it live, read-only, so it can never drift from its source.
+        await db.createTable(T.ledger, [
+            'id INT_PK',
+            'conference_id INT NOT NULL',
+            'kind TEXT NOT NULL',
+            'date DATETIME NOT NULL',
+            'category TEXT',
+            'description TEXT NOT NULL',
+            'amount REAL NOT NULL',
+            'method TEXT',
+            'reference TEXT',
+            'recorded_by TEXT',
+            'created_at DATETIME DEFAULT CURRENT_TIMESTAMP',
+            `FOREIGN KEY (conference_id) REFERENCES ${T.conferences}(id) ON DELETE CASCADE`
+        ]);
+
+        await createIndex(`${P}idx_inscriptions_conference`, T.inscriptions, 'conference_id');
+        await createIndex(`${P}idx_inscriptions_room`, T.inscriptions, 'room_id');
         await createIndex(`${P}idx_rooms_hotel`, T.rooms, 'hotel_id');
         await createIndex(`${P}idx_hotels_conference`, T.hotels, 'conference_id');
 
@@ -652,6 +672,7 @@ exports.init = async function (wordjs) {
         await createIndex(`${P}idx_tickets_bus`, T.tickets, 'bus_id');
         await createIndex(`${P}idx_tickets_inscription`, T.tickets, 'inscription_id');
         await createIndex(`${P}idx_transport_payments_ticket`, T.transportPayments, 'ticket_id');
+        await createIndex(`${P}idx_ledger_conference`, T.ledger, 'conference_id');
         try { await db.run(`CREATE UNIQUE INDEX IF NOT EXISTS ${P}uidx_tickets_bus_inscription ON ${T.tickets} (bus_id, inscription_id)`); }
         catch (e) { console.warn('[conference-manager] ticket unique index skipped:', e.message); }
         // Deadline for the coordinators' lodging arrangements (NULL = none). Admin-only writes ignore it.
@@ -2022,6 +2043,110 @@ exports.init = async function (wordjs) {
             if (!pay) return res.status(404).json({ error: 'Pago no encontrado.' });
             await db.run(`DELETE FROM ${T.transportPayments} WHERE id = ?`, [id]);
             await recomputeTickets('id = ?', [pay.ticket_id]);
+            res.json({ success: true });
+        } catch (e) { sendError(res, e); }
+    });
+
+    // === ACCOUNTING (2.12.0) ===
+    // Manual entries (income / expense) are written here; validated inscription payments and transport
+    // payments are read live as income lines with `source` 'inscription' / 'transport' and `readonly: true`
+    // (they are managed where they belong — the inscription's payments, the ticket's payments).
+    const LEDGER_KINDS = new Set(['income', 'expense']);
+    const LEDGER_DEFAULT_CATEGORIES = { income: ['Inscripciones', 'Transporte', 'Donaciones', 'Patrocinios', 'Ventas', 'Otros ingresos'], expense: ['Hospedaje', 'Transporte', 'Alimentación', 'Logística', 'Materiales', 'Publicidad', 'Honorarios', 'Otros gastos'] };
+    function parseLedgerBody(body, partial) {
+        const out = {};
+        if (!partial || body.kind !== undefined) {
+            if (!LEDGER_KINDS.has(body.kind)) throw httpError(400, 'El tipo debe ser ingreso o egreso.');
+            out.kind = body.kind;
+        }
+        if (!partial || body.amount !== undefined) {
+            const n = Number(body.amount);
+            if (!Number.isFinite(n) || n <= 0) throw httpError(400, 'El monto debe ser mayor que cero.');
+            assertMoneyRange(n, 'El monto');
+            out.amount = roundMoney(n);
+            if (out.amount <= 0) throw httpError(400, 'El monto debe ser mayor que cero.');
+        }
+        if (!partial || body.date !== undefined) {
+            const d = normDate(body.date, 'fecha');
+            if (!d) throw httpError(400, 'La fecha es obligatoria.');
+            out.date = d;
+        }
+        if (!partial || body.description !== undefined) {
+            const v = String(body.description == null ? '' : body.description).trim();
+            if (!v) throw httpError(400, 'La descripción es obligatoria.');
+            out.description = v.slice(0, 300);
+        }
+        if (!partial || body.category !== undefined) {
+            const v = String(body.category == null ? '' : body.category).trim();
+            out.category = v ? v.slice(0, 60) : null;
+        }
+        if (body.method !== undefined) out.method = body.method === null || body.method === '' ? null : assertPaymentMethod(body.method);
+        if (body.reference !== undefined) out.reference = shortText(body.reference, 100);
+        return out;
+    }
+    const ledgerRow = (r) => ({ ...r, amount: roundMoney(Number(r.amount) || 0), source: 'manual', readonly: false });
+
+    // Every movement of a conference: manual entries + validated fee payments + transport payments, newest
+    // first, plus the totals. Filtering (dates, kind, category, source) is the client's job — the whole
+    // ledger of one conference is small enough to send at once.
+    http.route('get', '/accounting', { auth: true, admin: true }, async (req, res) => {
+        const cid = positiveInt(req.query.conference_id);
+        if (!cid) return res.status(400).json({ error: 'Missing conference_id' });
+        try {
+            const manual = (await db.all(`SELECT * FROM ${T.ledger} WHERE conference_id = ? ORDER BY date DESC, id DESC`, [cid])).map(ledgerRow);
+            const fees = await db.all(
+                `SELECT p.id, p.amount, p.method, p.reference, p.date, p.reviewed_at, p.inscription_id, i.location, i.reg_code`
+                + ` FROM ${T.payments} p JOIN ${T.inscriptions} i ON p.inscription_id = i.id WHERE i.conference_id = ? AND p.status = 'validated'`, [cid]);
+            const rides = await db.all(
+                `SELECT tp.id, tp.amount, tp.method, tp.reference, tp.date, t.inscription_id, b.name AS bus_name`
+                + ` FROM ${T.transportPayments} tp JOIN ${T.tickets} t ON tp.ticket_id = t.id JOIN ${T.buses} b ON t.bus_id = b.id WHERE b.conference_id = ?`, [cid]);
+            const auto = [
+                ...fees.map(f => ({ id: `fee-${f.id}`, kind: 'income', date: f.date, category: 'Inscripciones', description: 'Pago de inscripción', amount: roundMoney(Number(f.amount) || 0), method: f.method || null, reference: f.reference || null, inscription_id: f.inscription_id, source: 'inscription', readonly: true })),
+                ...rides.map(r => ({ id: `transport-${r.id}`, kind: 'income', date: r.date, category: 'Transporte', description: `Pasaje — ${r.bus_name}`, amount: roundMoney(Number(r.amount) || 0), method: r.method || null, reference: r.reference || null, inscription_id: r.inscription_id, source: 'transport', readonly: true })),
+            ];
+            const entries = [...manual, ...auto].sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')) || String(b.id).localeCompare(String(a.id)));
+            const cents = { income: 0, expense: 0 };
+            for (const e of entries) cents[e.kind] += toCents(e.amount);
+            const used = { income: new Set(LEDGER_DEFAULT_CATEGORIES.income), expense: new Set(LEDGER_DEFAULT_CATEGORIES.expense) };
+            for (const e of manual) if (e.category) used[e.kind].add(e.category);
+            res.json({
+                entries,
+                totals: { income: fromCents(cents.income), expense: fromCents(cents.expense), balance: fromCents(cents.income - cents.expense) },
+                categories: { income: [...used.income], expense: [...used.expense] },
+            });
+        } catch (e) { sendError(res, e); }
+    });
+
+    http.route('post', '/accounting/entries', { auth: true, admin: true }, async (req, res) => {
+        try {
+            const cid = positiveInt(req.body && req.body.conference_id);
+            if (!cid) return res.status(400).json({ error: 'Missing conference_id' });
+            const conf = await db.get(`SELECT id FROM ${T.conferences} WHERE id = ?`, [cid]);
+            if (!conf) return res.status(404).json({ error: 'Conferencia no encontrada.' });
+            const v = { ...parseLedgerBody(req.body || {}, false), recorded_by: reviewerOf(req) };
+            const keys = Object.keys(v);
+            const r = await db.run(`INSERT INTO ${T.ledger} (conference_id, ${keys.join(', ')}) VALUES (?, ${keys.map(() => '?').join(', ')})`, [cid, ...keys.map(k => v[k])]);
+            res.json({ success: true, id: r.lastID });
+        } catch (e) { sendError(res, e); }
+    });
+
+    http.route('put', '/accounting/entries/:id', { auth: true, admin: true }, async (req, res) => {
+        try {
+            const id = positiveInt(req.params.id);
+            const row = id ? await db.get(`SELECT id FROM ${T.ledger} WHERE id = ?`, [id]) : null;
+            if (!row) return res.status(404).json({ error: 'Movimiento no encontrado.' });
+            const v = parseLedgerBody(req.body || {}, true);
+            const keys = Object.keys(v);
+            if (keys.length) await db.run(`UPDATE ${T.ledger} SET ${keys.map(k => `${k} = ?`).join(', ')} WHERE id = ?`, [...keys.map(k => v[k]), id]);
+            res.json({ success: true });
+        } catch (e) { sendError(res, e); }
+    });
+
+    http.route('delete', '/accounting/entries/:id', { auth: true, admin: true }, async (req, res) => {
+        try {
+            const id = positiveInt(req.params.id);
+            const r = id ? await db.run(`DELETE FROM ${T.ledger} WHERE id = ?`, [id]) : null;
+            if (!r || !r.changes) return res.status(404).json({ error: 'Movimiento no encontrado.' });
             res.json({ success: true });
         } catch (e) { sendError(res, e); }
     });

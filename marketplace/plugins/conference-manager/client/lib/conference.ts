@@ -445,6 +445,12 @@ export const conferenceApi = {
     addTicketPayment: (ticketId: number, data: { amount: number; method: string; reference?: string; date?: string }) => apiPost(`/plugin/conference-manager/tickets/${ticketId}/payments`, data),
     deleteTransportPayment: (id: number) => apiDelete(`/plugin/conference-manager/transport-payments/${id}`),
 
+    // Accounting (2.12.0) — manual entries; fee and transport payments come back read-only in getLedger.
+    getLedger: (conferenceId: number) => apiGet<{ entries: any[]; totals: { income: number; expense: number; balance: number }; categories: { income: string[]; expense: string[] } }>(`/plugin/conference-manager/accounting?conference_id=${conferenceId}`),
+    createLedgerEntry: (conferenceId: number, data: { kind: 'income' | 'expense'; date: string; description: string; amount: number; category?: string; method?: string | null; reference?: string }) => apiPost<{ success: boolean; id: number }>('/plugin/conference-manager/accounting/entries', { ...data, conference_id: conferenceId }),
+    updateLedgerEntry: (id: number, data: Record<string, unknown>) => apiPut(`/plugin/conference-manager/accounting/entries/${id}`, data),
+    deleteLedgerEntry: (id: number) => apiDelete(`/plugin/conference-manager/accounting/entries/${id}`),
+
     // Reports
     getReportSummary: (conferenceId: number) => apiGet<ReportSummary>(`/plugin/conference-manager/reports/summary?conference_id=${conferenceId}`),
     // The sandbox returns JSON only, so the CSV comes back as a string field; the client turns it

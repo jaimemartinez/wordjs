@@ -75,6 +75,12 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   tickets already sold when asked (refused if it would fall below what a ticket already paid); a ticket or a
   bus with payments cannot be removed until those payments are. A transport workbook (summary + passenger
   list per bus, or one bus) and four transport columns in the custom Excel complete it.
+- **Conference Manager 2.12.0 — accounting.** A new *Contabilidad* tab records the income and expenses of a
+  conference (type, date, category, description, amount, form of payment, reference). The money the plugin
+  already receives — validated registration payments and transport payments — appears automatically as
+  read-only income, so the balance is complete without entering anything twice. Totals (income, expenses,
+  balance) and a per-category breakdown follow the date, type, category, source and text filters; the
+  filtered ledger exports to Excel (summary and entries).
 
 ### Fixed
 

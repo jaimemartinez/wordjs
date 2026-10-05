@@ -12,6 +12,7 @@ import { translations } from "../lib/i18n";
 import { conferenceApi, PAYMENT_METHODS, Conference, Inscription, Hotel, Room, Location, ConferenceField, Payment, LodgingReview, buildInscriptionPayload, seedLocationId, isImageProof, fmtMoney, paymentActions, isLodgingFrozen } from "../lib/conference";
 import { useModal } from "@/contexts/ModalContext";
 import TransportPage from "./TransportPage";
+import AccountingPage from "./AccountingPage";
 import { code128Svg, code128Png } from "../lib/barcode";
 import { buildXlsx, downloadXlsx } from "../lib/xlsx";
 import { availableColumns, defaultColumnKeys, filterRoster, buildRosterSheet, buildHotelReport, exportFilename, transportByPerson } from "../lib/exports";
@@ -21,7 +22,7 @@ import { ActionCard } from "../../../../../frontend/src/components/ui/ActionCard
 // Register plugin translations
 registerTranslations(translations);
 
-type View = 'list' | 'dashboard' | 'inscriptions' | 'lodging' | 'transport' | 'locations' | 'reports' | 'assignment' | 'fields' | 'pricing';
+type View = 'list' | 'dashboard' | 'inscriptions' | 'lodging' | 'transport' | 'accounting' | 'locations' | 'reports' | 'assignment' | 'fields' | 'pricing';
 
 // Lodging status of a location (draft | submitted | validated): i18n key + badge classes, shared by the
 // locations cards, the review modal and the inscriptions assign modal.
@@ -44,7 +45,7 @@ function ConferenceManagerContent() {
     // Initialize state from local storage
     useEffect(() => {
         const savedView = localStorage.getItem('conference-manager:view') as View;
-        if (savedView && ['list', 'dashboard', 'inscriptions', 'lodging', 'transport', 'locations', 'assignment', 'fields', 'pricing', 'reports'].includes(savedView)) {
+        if (savedView && ['list', 'dashboard', 'inscriptions', 'lodging', 'transport', 'locations', 'assignment', 'fields', 'pricing', 'reports', 'accounting'].includes(savedView)) {
             setViewState(savedView);
         }
     }, []);
@@ -113,6 +114,7 @@ function ConferenceManagerContent() {
                         { name: t('fields'), view: 'fields' as View, icon: 'fa-list-check' },
                         { name: t('pricing') || 'Precios', view: 'pricing' as View, icon: 'fa-tags' },
                         { name: t('reports'), view: 'reports' as View, icon: 'fa-file-lines' },
+                        { name: t('accounting') || 'Contabilidad', view: 'accounting' as View, icon: 'fa-scale-balanced' },
                     ].map((tab) => {
                         const isActive = view === tab.view;
                         return (
@@ -139,6 +141,7 @@ function ConferenceManagerContent() {
                     {view === 'inscriptions' && <InscriptionsPage conferenceId={currentConference.id} />}
                     {view === 'lodging' && <LodgingPage conferenceId={currentConference.id} />}
                     {view === 'transport' && <TransportPage conferenceId={currentConference.id} slug={currentConference.slug} />}
+                    {view === 'accounting' && <AccountingPage conferenceId={currentConference.id} slug={currentConference.slug} />}
                     {view === 'locations' && <LocationsPage conferenceId={currentConference.id} />}
                     {view === 'assignment' && <AssignmentPage conferenceId={currentConference.id} />}
                     {view === 'fields' && <FieldsPage conferenceId={currentConference.id} />}
