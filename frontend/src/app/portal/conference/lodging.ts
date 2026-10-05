@@ -86,6 +86,10 @@ export type LodgingData = {
     deadline?: string | null;
     /** Server-computed: the deadline is over, every portal write answers 403. */
     deadline_passed?: boolean | null;
+    /** The admin's exception for this location: it may keep arranging after the deadline (2.8.0). */
+    permission?: LodgingPermission | null;
+    /** Server verdict: the deadline is not over, or the location holds an active permission. */
+    window_open?: boolean | null;
     rooms?: LodgingRoom[];
     unassigned?: LodgingAttendee[];
     placed_elsewhere?: PlacedElsewhere[];
@@ -267,22 +271,42 @@ export const fmtDeadline = (v: unknown): string => {
     return m ? `${m[3]}/${m[2]}/${m[1]}${m[4] ? ` ${m[4]}:${m[5]}` : ''}` : String(v ?? '');
 };
 
-export type DeadlineState = 'none' | 'open' | 'passed';
+/**
+ * 'none' = no deadline; 'open' = before it; 'extended' = after it, but the admin gave THIS location a
+ * permission that is still active; 'passed' = after it and no active permission.
+ */
+export type DeadlineState = 'none' | 'open' | 'extended' | 'passed';
 
-/** The server decides (`deadline_passed`); a payload from an older plugin has no deadline → 'none'. */
-export const deadlineState = (d: Pick<LodgingData, 'deadline' | 'deadline_passed'> | null | undefined): DeadlineState => {
+/** The admin's per-location exception, as GET /portal/lodging reports it (`until` null = until revoked). */
+export type LodgingPermission = { granted?: boolean | null; until?: string | null; active?: boolean | null; expired?: boolean | null };
+
+type DeadlineFields = Pick<LodgingData, 'deadline' | 'deadline_passed' | 'permission'>;
+
+/** The server decides (`deadline_passed`, `permission.active`); a payload from an older plugin has no deadline → 'none'. */
+export const deadlineState = (d: DeadlineFields | null | undefined): DeadlineState => {
     if (!d || d.deadline == null || d.deadline === '') return 'none';
-    return d.deadline_passed ? 'passed' : 'open';
+    if (!d.deadline_passed) return 'open';
+    return d.permission?.active ? 'extended' : 'passed';
 };
 
-/** The banner line for the deadline, or null when there is none. */
-export const deadlineMessage = (d: Pick<LodgingData, 'deadline' | 'deadline_passed'> | null | undefined): string | null => {
+const isBareDate = (v: unknown): boolean => /^\d{4}-\d{2}-\d{2}$/.test(String(v ?? '').trim());
+
+/** The banner line for the deadline (and the location's permission), or null when there is no deadline. */
+export const deadlineMessage = (d: DeadlineFields | null | undefined): string | null => {
     const state = deadlineState(d);
     if (state === 'none') return null;
     const date = fmtDeadline(d!.deadline);
-    return state === 'passed'
-        ? `El plazo para acomodar los hospedajes venció el ${date}. Solo el administrador puede modificarlos.`
-        : `Puedes acomodar y enviar los hospedajes hasta el ${date} (inclusive).`;
+    if (state === 'open') return `Puedes acomodar y enviar los hospedajes hasta el ${date} (inclusive).`;
+    const until = d!.permission?.until;
+    if (state === 'extended') {
+        return until
+            ? `El plazo general venció el ${date}, pero el administrador le dio permiso a tu localidad para seguir acomodando hasta el ${fmtDeadline(until)}${isBareDate(until) ? ' (inclusive)' : ''}.`
+            : `El plazo general venció el ${date}, pero el administrador le dio permiso a tu localidad para seguir acomodando hasta que lo retire.`;
+    }
+    if (d!.permission?.expired && until) {
+        return `El plazo para acomodar los hospedajes venció el ${date} y el permiso de tu localidad venció el ${fmtDeadline(until)}. Solo el administrador puede modificarlos.`;
+    }
+    return `El plazo para acomodar los hospedajes venció el ${date}. Solo el administrador puede modificarlos.`;
 };
 
 export const fmtTimestamp = (v: unknown, locale = 'es'): string => {

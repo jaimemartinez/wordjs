@@ -47,6 +47,12 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   room picker, honouring every server rule (capacity, allotment, frozen arrangements, cancelled attendees). The
   coordinator portal gains the same drag & drop in its Hospedajes tab, and its whole interface now shares the
   admin's design language.
+- **Conference Manager 2.8.0 — per-location permission after the lodging deadline.** Once the conference's
+  lodging deadline has passed, the admin can let one location keep arranging (and submit or withdraw its
+  arrangement) from the location card: until a chosen date, inclusive, or until the permission is revoked.
+  Every other location stays closed; a submitted or validated arrangement still has to be withdrawn or
+  reopened first. The portal explains whether the location is working under such a permission, and an
+  expired permission is named in the refusal. The admin's own tools are never limited by the deadline.
 
 ### Fixed
 

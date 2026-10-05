@@ -150,6 +150,14 @@ export interface Location {
     inscribed: number;
     /** Forms of payment the location receives (subset of PAYMENT_METHODS, resolved by the server). */
     payment_methods: string[];
+    /** The admin's exception to the lodging deadline for this location (2.8.0). */
+    lodging_permission?: boolean;
+    /** End of the permission ('YYYY-MM-DD' or a datetime); null = until revoked. */
+    lodging_permission_until?: string | null;
+    lodging_permission_active?: boolean;
+    lodging_permission_expired?: boolean;
+    /** Can the coordinator change the lodging right now (window open and still a draft)? */
+    lodging_can_edit?: boolean;
     // --- Lodging per location (2.5.0) -------------------------------------------------------
     /** draft = the coordinator is arranging; submitted = waiting for the admin; validated = closed. */
     lodging_status: LodgingStatus;
@@ -307,7 +315,7 @@ export const conferenceApi = {
     getLocations: (conferenceId: number) => apiGet<{ locations: Location[], conference: Conference }>(`/plugin/conference-manager/locations?conference_id=${conferenceId}`),
     createLocation: (conferenceId: number, data: { name: string, responsible_name: string, responsible_phone: string, capacity: number | string, payment_methods?: string[] }) =>
         apiPost('/plugin/conference-manager/locations', { ...data, conference_id: conferenceId }),
-    updateLocation: (id: number, data: { name?: string, responsible_name?: string, responsible_phone?: string, rotate_code?: boolean, capacity?: number | string, payment_methods?: string[] }) =>
+    updateLocation: (id: number, data: { name?: string, responsible_name?: string, responsible_phone?: string, rotate_code?: boolean, capacity?: number | string, payment_methods?: string[], lodging_permission?: boolean, lodging_permission_until?: string | null }) =>
         apiPut(`/plugin/conference-manager/locations/${id}`, data),
     deleteLocation: (id: number) => apiDelete(`/plugin/conference-manager/locations/${id}`),
 

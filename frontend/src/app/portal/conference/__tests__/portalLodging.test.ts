@@ -428,3 +428,30 @@ describe("drag & drop — parseDragId / dragDecision (LodgingTab's native DnD; t
         expect(dragDecision({ attendeeId: 31, fromRoomId: null, toRoomId: 7, rooms: over, unassigned })).toEqual({ ok: false, reason: 'full' });
     });
 });
+
+describe("lodging permission — the admin's per-location exception to the deadline (2.8.0)", () => {
+    it("an active permission after the deadline is 'extended'; an inactive or expired one stays 'passed'", () => {
+        expect(deadlineState({ deadline: '2026-10-01', deadline_passed: true, permission: { granted: true, active: true } })).toBe('extended');
+        expect(deadlineState({ deadline: '2026-10-01', deadline_passed: true, permission: { granted: true, active: false, expired: true, until: '2026-10-03' } })).toBe('passed');
+        expect(deadlineState({ deadline: '2026-10-01', deadline_passed: true, permission: { granted: false } })).toBe('passed');
+        expect(deadlineState({ deadline: '2026-10-01', deadline_passed: true, permission: null })).toBe('passed');
+    });
+    it("a permission never changes the state before the deadline or without one", () => {
+        expect(deadlineState({ deadline: '2026-10-01', deadline_passed: false, permission: { granted: true, active: true } })).toBe('open');
+        expect(deadlineState({ deadline: null, deadline_passed: true, permission: { granted: true, active: true } })).toBe('none');
+    });
+    it("phrases an open-ended, a dated and a timed permission", () => {
+        expect(deadlineMessage({ deadline: '2026-10-01', deadline_passed: true, permission: { granted: true, active: true, until: null } }))
+            .toBe('El plazo general venció el 01/10/2026, pero el administrador le dio permiso a tu localidad para seguir acomodando hasta que lo retire.');
+        expect(deadlineMessage({ deadline: '2026-10-01', deadline_passed: true, permission: { granted: true, active: true, until: '2026-10-08' } }))
+            .toBe('El plazo general venció el 01/10/2026, pero el administrador le dio permiso a tu localidad para seguir acomodando hasta el 08/10/2026 (inclusive).');
+        expect(deadlineMessage({ deadline: '2026-10-01', deadline_passed: true, permission: { granted: true, active: true, until: '2026-10-08T18:30:00.000Z' } }))
+            .toBe('El plazo general venció el 01/10/2026, pero el administrador le dio permiso a tu localidad para seguir acomodando hasta el 08/10/2026 18:30.');
+    });
+    it("names both dates when the permission expired, and keeps the plain message otherwise", () => {
+        expect(deadlineMessage({ deadline: '2026-10-01', deadline_passed: true, permission: { granted: true, active: false, expired: true, until: '2026-10-03' } }))
+            .toBe('El plazo para acomodar los hospedajes venció el 01/10/2026 y el permiso de tu localidad venció el 03/10/2026. Solo el administrador puede modificarlos.');
+        expect(deadlineMessage({ deadline: '2026-10-01', deadline_passed: true, permission: { granted: false } }))
+            .toBe('El plazo para acomodar los hospedajes venció el 01/10/2026. Solo el administrador puede modificarlos.');
+    });
+});

@@ -426,7 +426,7 @@ export default function Hospedajes({ authHeaders, onLocationRefresh }: Hospedaje
                     {status === 'validated' && <span className="text-xs text-emerald-800 font-bold sm:max-w-xs sm:text-right">Solo lectura. Para cambiar la acomodación, pide al administrador reabrir el hospedaje.</span>}
                 </div>
                 {deadlineMessage(d) && (
-                    <Notice tone={deadlineState(d) === 'passed' ? 'rose' : 'blue'} icon={deadlineState(d) === 'passed' ? 'fa-lock' : 'fa-calendar-check'} data-testid="lodging-deadline">
+                    <Notice tone={deadlineState(d) === 'passed' ? 'rose' : deadlineState(d) === 'extended' ? 'emerald' : 'blue'} icon={deadlineState(d) === 'passed' ? 'fa-lock' : deadlineState(d) === 'extended' ? 'fa-unlock' : 'fa-calendar-check'} data-testid="lodging-deadline">
                         <span>{deadlineMessage(d)}</span>
                     </Notice>
                 )}

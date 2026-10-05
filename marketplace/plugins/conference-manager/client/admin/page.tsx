@@ -4348,6 +4348,9 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
     // Lodging deadline (per conference): the date input mirrors conference.lodging_deadline until saved.
     const [deadlineInput, setDeadlineInput] = useState('');
     const [savingDeadline, setSavingDeadline] = useState(false);
+    // Per-location permission after the deadline: the card whose editor is open + its date, and the one saving.
+    const [permEdit, setPermEdit] = useState<{ id: number; until: string } | null>(null);
+    const [savingPerm, setSavingPerm] = useState<number | null>(null);
     // Inline capacity editor on a card: which location and the value being typed.
     const [capacityEdit, setCapacityEdit] = useState<{ id: number; value: string } | null>(null);
     const [savingCapacity, setSavingCapacity] = useState(false);
@@ -4457,6 +4460,21 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
             addToast(error?.message || 'Error', 'error');
         } finally {
             setSavingDeadline(false);
+        }
+    };
+
+    // Grant (with an optional end date; '' = until revoked) or revoke a location's permission.
+    const savePermission = async (loc: Location, granted: boolean, until: string) => {
+        setSavingPerm(loc.id);
+        try {
+            await conferenceApi.updateLocation(loc.id, granted ? { lodging_permission: true, lodging_permission_until: until || null } : { lodging_permission: false });
+            addToast(granted ? (t('lodging.permission.granted') || 'Permiso concedido') : (t('lodging.permission.revoked') || 'Permiso retirado'), 'success');
+            setPermEdit(null);
+            loadLocations();
+        } catch (error: any) {
+            addToast(error?.message || 'Error', 'error');
+        } finally {
+            setSavingPerm(null);
         }
     };
 
@@ -4685,6 +4703,12 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
                                             : (t('lodging.deadline.until') || 'Los encargados pueden acomodar hasta el {date} (inclusive).').replace('{date}', fmtDeadline(current))}
                                 </p>
                                 <p className="text-[11px] text-gray-400 mt-1 leading-relaxed max-w-xl">{t('lodging.deadline.help')}</p>
+                                {current && locations.some(l => l.lodging_permission_active) && (
+                                    <p className="text-[11px] font-bold text-emerald-700 mt-1">
+                                        <i className="fa-solid fa-unlock mr-1"></i>
+                                        {(t('lodging.deadline.permissions') || '{n} localidad(es) con permiso fuera de plazo').replace('{n}', String(locations.filter(l => l.lodging_permission_active).length))}
+                                    </p>
+                                )}
                             </div>
                         </div>
                         <div className="flex flex-wrap items-center gap-2">
@@ -4917,6 +4941,89 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
                                                             <i className="fa-solid fa-clipboard-check mr-1"></i>{t('lodging.review') || 'Revisar hospedaje'}
                                                         </button>
                                                     </div>
+                                                </div>
+                                            );
+                                        })()}
+                                        {conference?.lodging_deadline && (() => {
+                                            // Permission to keep arranging after the conference's lodging deadline (2.8.0).
+                                            const granted = !!loc.lodging_permission;
+                                            const active = !!loc.lodging_permission_active;
+                                            const expired = !!loc.lodging_permission_expired;
+                                            const until = loc.lodging_permission_until || null;
+                                            const passed = !!conference?.lodging_deadline_passed;
+                                            const editing = permEdit?.id === loc.id;
+                                            const label = !granted
+                                                ? (passed ? (t('lodging.permission.closed') || 'Cerrado por plazo') : (t('lodging.permission.none') || 'Sin permiso'))
+                                                : expired
+                                                    ? (t('lodging.permission.expired') || 'Permiso vencido el {date}').replace('{date}', fmtDeadline(until))
+                                                    : until
+                                                        ? (t('lodging.permission.until') || 'Con permiso hasta el {date}').replace('{date}', fmtDeadline(until))
+                                                        : (t('lodging.permission.open') || 'Con permiso hasta que lo retires');
+                                            const tone = active ? 'emerald' : (granted && expired) ? 'amber' : passed ? 'rose' : 'gray';
+                                            const toneCls: Record<string, string> = {
+                                                emerald: 'bg-emerald-50 text-emerald-700 border border-emerald-200',
+                                                amber: 'bg-amber-50 text-amber-700 border border-amber-200',
+                                                rose: 'bg-rose-50 text-rose-700 border border-rose-200',
+                                                gray: 'bg-gray-100 text-gray-500',
+                                            };
+                                            return (
+                                                <div className={`p-3 bg-white rounded-xl border shadow-sm transition-colors ${active ? 'border-emerald-100' : 'border-gray-50 group-hover:border-blue-100'}`} data-testid={`lodging-permission-${loc.id}`}>
+                                                    <div className="flex items-center gap-4">
+                                                        <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-sm ${active ? 'bg-emerald-50 text-emerald-500' : passed ? 'bg-rose-50 text-rose-400' : 'bg-gray-50 text-gray-400'}`}>
+                                                            <i className={`fa-solid ${active ? 'fa-unlock' : 'fa-lock'}`}></i>
+                                                        </div>
+                                                        <div className="flex-1 min-w-0">
+                                                            <div className="text-[9px] font-bold text-gray-400 uppercase tracking-widest">{t('lodging.permission') || 'Permiso fuera de plazo'}</div>
+                                                            <span className={`inline-flex items-center mt-1 px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-widest ${toneCls[tone]}`}>{label}</span>
+                                                        </div>
+                                                        {!editing && (
+                                                            <div className="flex flex-wrap items-center justify-end gap-1.5 shrink-0">
+                                                                {(!granted || expired) && (
+                                                                    <button type="button" onClick={() => setPermEdit({ id: loc.id, until: '' })} disabled={savingPerm === loc.id}
+                                                                        className="text-[10px] font-black uppercase tracking-widest px-3 py-2 rounded-xl bg-emerald-600 text-white hover:bg-emerald-700 transition-all shadow-sm disabled:opacity-50">
+                                                                        <i className="fa-solid fa-unlock mr-1"></i>{t('lodging.permission.grant') || 'Dar permiso'}
+                                                                    </button>
+                                                                )}
+                                                                {granted && !expired && (
+                                                                    <button type="button" onClick={() => setPermEdit({ id: loc.id, until: until ? String(until).slice(0, 10) : '' })} disabled={savingPerm === loc.id}
+                                                                        className="text-[10px] font-black uppercase tracking-widest px-3 py-2 rounded-xl bg-gray-50 text-gray-600 hover:bg-blue-600 hover:text-white transition-all shadow-sm disabled:opacity-50">
+                                                                        {t('lodging.permission.change') || 'Cambiar fecha'}
+                                                                    </button>
+                                                                )}
+                                                                {granted && (
+                                                                    <button type="button" onClick={() => savePermission(loc, false, '')} disabled={savingPerm === loc.id}
+                                                                        className="text-[10px] font-black uppercase tracking-widest px-3 py-2 rounded-xl bg-gray-50 text-gray-500 hover:bg-rose-600 hover:text-white transition-all shadow-sm disabled:opacity-50">
+                                                                        {t('lodging.permission.revoke') || 'Retirar permiso'}
+                                                                    </button>
+                                                                )}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                    {editing && (
+                                                        <div className="mt-3 flex flex-wrap items-end gap-2">
+                                                            <div className="space-y-1">
+                                                                <label htmlFor={`perm-until-${loc.id}`} className="block text-[9px] font-bold text-gray-400 uppercase tracking-widest ml-1">{t('lodging.permission.until.label') || 'Hasta (opcional)'}</label>
+                                                                <input id={`perm-until-${loc.id}`} type="date" value={permEdit!.until}
+                                                                    onChange={e => setPermEdit({ id: loc.id, until: e.target.value })}
+                                                                    className="border-2 border-gray-100 rounded-xl px-3 py-2 bg-white focus:border-blue-500 outline-none text-xs font-bold text-gray-900" />
+                                                            </div>
+                                                            <button type="button" onClick={() => savePermission(loc, true, permEdit!.until)} disabled={savingPerm === loc.id}
+                                                                className="text-[10px] font-black uppercase tracking-widest px-4 py-2.5 rounded-xl bg-emerald-600 text-white hover:bg-emerald-700 transition-all shadow-sm disabled:opacity-50">
+                                                                {t('save') || 'Guardar'}
+                                                            </button>
+                                                            <button type="button" onClick={() => setPermEdit(null)}
+                                                                className="text-[10px] font-black uppercase tracking-widest px-3 py-2.5 rounded-xl text-gray-400 hover:bg-gray-100">
+                                                                {t('cancel') || 'Cancelar'}
+                                                            </button>
+                                                            <p className="basis-full text-[11px] text-gray-500 ml-1">{t('lodging.permission.until.help') || 'Vacío = hasta que lo retires. La fecha incluye el día completo.'}</p>
+                                                        </div>
+                                                    )}
+                                                    {active && loc.lodging_status === 'validated' && (
+                                                        <p className="mt-2 text-[11px] font-bold text-amber-700"><i className="fa-solid fa-circle-info mr-1"></i>{t('lodging.permission.validated.hint') || 'El hospedaje está validado: reábrelo para que el encargado pueda modificarlo.'}</p>
+                                                    )}
+                                                    {active && loc.lodging_status === 'submitted' && (
+                                                        <p className="mt-2 text-[11px] font-bold text-gray-500"><i className="fa-solid fa-circle-info mr-1"></i>{t('lodging.permission.submitted.hint') || 'El encargado puede retirar su envío para volver a acomodar.'}</p>
+                                                    )}
                                                 </div>
                                             );
                                         })()}

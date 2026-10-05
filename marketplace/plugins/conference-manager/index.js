@@ -20,7 +20,7 @@
 
 exports.metadata = {
     name: 'Conference Manager',
-    version: '2.7.0',
+    version: '2.8.0',
     description: 'Manage multiple conference inscriptions, payments, and lodging assignments.',
     author: 'WordJS'
 };
@@ -141,6 +141,10 @@ exports.init = async function (wordjs) {
             'lodging_submitted_at DATETIME',
             'lodging_reviewed_at DATETIME',
             'lodging_reviewed_by TEXT',
+            // Exception to the conference's lodging deadline (2.8.0): 1 = this location may keep arranging
+            // after it, until lodging_permission_until (NULL = until the admin revokes it).
+            'lodging_permission INT DEFAULT 0',
+            'lodging_permission_until DATETIME',
             `FOREIGN KEY (conference_id) REFERENCES ${T.conferences}(id) ON DELETE CASCADE`
         ]);
 
@@ -598,6 +602,8 @@ exports.init = async function (wordjs) {
         await addColumnIfMissing(T.locations, 'lodging_submitted_at', 'DATETIME');
         await addColumnIfMissing(T.locations, 'lodging_reviewed_at', 'DATETIME');
         await addColumnIfMissing(T.locations, 'lodging_reviewed_by', 'TEXT');
+        await addColumnIfMissing(T.locations, 'lodging_permission', 'INT DEFAULT 0');
+        await addColumnIfMissing(T.locations, 'lodging_permission_until', 'DATETIME');
         // Deadline for the coordinators' lodging arrangements (NULL = none). Admin-only writes ignore it.
         await addColumnIfMissing(T.conferences, 'lodging_deadline', 'DATETIME');
         await createIndex(`${P}idx_rooms_location`, T.rooms, 'location_id');
@@ -1371,6 +1377,13 @@ exports.init = async function (wordjs) {
                 l.beds_allotted = Number(l.beds_allotted) || 0;
                 l.lodged = Number(l.lodged) || 0;
                 l.unlodged = Number(l.unlodged) || 0;
+                const win = lodgingWindow(conf, l);
+                l.lodging_permission = win.permission.granted;
+                l.lodging_permission_until = win.permission.until;
+                l.lodging_permission_active = win.permission.active;
+                l.lodging_permission_expired = win.permission.expired;
+                // Can the coordinator change the lodging right now? (window open AND still a draft)
+                l.lodging_can_edit = win.open && l.lodging_status === 'draft';
             }
             if (conf) conf.lodging_deadline_passed = lodgingDeadlineInfo(conf).passed;
             res.json({ locations, conference: conf });
@@ -1407,8 +1420,10 @@ exports.init = async function (wordjs) {
     // A rename also refreshes the display label on the location's inscriptions (location_id stays).
     // `capacity` may go up or down, but never below the seats already taken (409 with the current count).
     // `payment_methods` replaces the enabled set (a form of payment not enabled at creation can be enabled here).
+    // `lodging_permission` (true/false) lets this location keep arranging lodging after the conference deadline,
+    // until `lodging_permission_until` (optional date; '' / null = until revoked). Revoking clears the date.
     http.route('put', '/locations/:id', { auth: true, admin: true }, async (req, res) => {
-        const { name, responsible_name, responsible_phone, rotate_code, capacity, payment_methods } = req.body;
+        const { name, responsible_name, responsible_phone, rotate_code, capacity, payment_methods, lodging_permission, lodging_permission_until } = req.body;
         try {
             const loc = await db.get(`SELECT * FROM ${T.locations} WHERE id = ?`, [req.params.id]);
             if (!loc) return res.status(404).json({ error: 'Localidad no encontrada.' });
@@ -1431,6 +1446,19 @@ exports.init = async function (wordjs) {
                 sets.push('capacity = ?'); params.push(cap);
             }
             if (payment_methods !== undefined) { sets.push('payment_methods = ?'); params.push(JSON.stringify(parsePaymentMethods(payment_methods))); }
+            if (lodging_permission !== undefined || lodging_permission_until !== undefined) {
+                const PERM = { true: 1, false: 0, 1: 1, 0: 0 };
+                const granted = lodging_permission === undefined ? (Number(loc.lodging_permission) ? 1 : 0) : PERM[String(lodging_permission)];
+                if (granted === undefined) return res.status(400).json({ error: 'El permiso debe ser verdadero o falso.' });
+                let until = null;
+                if (granted) {
+                    until = lodging_permission_until === undefined ? (loc.lodging_permission_until || null) : normDate(lodging_permission_until, 'permiso de hospedaje');
+                    if (until && lodgingPermissionInfo({ lodging_permission: 1, lodging_permission_until: until }).expired) {
+                        return res.status(400).json({ error: 'La fecha del permiso ya pasó.' });
+                    }
+                }
+                sets.push('lodging_permission = ?', 'lodging_permission_until = ?'); params.push(granted, until);
+            }
             let newCode = null;
             if (rotate_code) { newCode = await genAccessCode(); sets.push('code = ?'); params.push(newCode); }
             if (sets.length) {
@@ -2706,7 +2734,7 @@ exports.init = async function (wordjs) {
         // full, plus the lodging summary (status, rooms allotted, attendees without a room). The other
         // lodging columns stay out too: GET /portal/lodging is the only source of the note/stamps and it
         // hides the note once the arrangement is submitted — this twin surface must not leak it.
-        const { code, lodging_reviewed_by, lodging_note, lodging_submitted_at, lodging_reviewed_at, lodging_status, ...safe } = location;
+        const { code, lodging_reviewed_by, lodging_note, lodging_submitted_at, lodging_reviewed_at, lodging_status, lodging_permission, lodging_permission_until, ...safe } = location;
         res.json({ ...safe, inscribed: await locationOccupancy(location.id), payment_methods: enabledPaymentMethods(location), ...(await portalLodgingSummary(location)) });
     });
 
@@ -2898,8 +2926,6 @@ exports.init = async function (wordjs) {
             unlodged: Number(row && row.unlodged) || 0,
         };
     }
-    // Re-reads the status (the resolved row may be a few ms old) and throws 409 unless it is a draft.
-    // Used inside the assignment lock by the routes that write.
     // The admin's deadline for the coordinators' arrangements (conferences.lodging_deadline). NULL = no
     // deadline. A bare date ('2026-10-01') covers the WHOLE day, like date_end for registrations; a
     // datetime is exact. Only portal writes honour it — the admin keeps arranging whenever it likes.
@@ -2918,11 +2944,37 @@ exports.init = async function (wordjs) {
         if (!m) return String(v);
         return `${m[3]}/${m[2]}/${m[1]}${m[4] ? ` ${m[4]}:${m[5]}` : ''}`;
     };
-    async function assertLodgingDeadlineOpen(conferenceId) {
-        const conf = await db.get(`SELECT lodging_deadline FROM ${T.conferences} WHERE id = ?`, [conferenceId]);
-        const info = lodgingDeadlineInfo(conf);
-        if (info.passed) throw httpError(403, `El plazo para acomodar los hospedajes venció el ${fmtDeadline(info.deadline)}. Solo el administrador puede modificarlos.`);
+    // The admin's exception for ONE location (locations.lodging_permission / _until): it may keep arranging
+    // after the conference deadline, until `until` (a bare date covers its whole day, like the deadline) or,
+    // with no date, until the admin revokes it. A corrupt date reads as "no end" — the admin granted it.
+    function lodgingPermissionInfo(loc) {
+        if (!loc || !Number(loc.lodging_permission)) return { granted: false, until: null, active: false, expired: false };
+        const rawValue = loc.lodging_permission_until;
+        const t = rawValue == null || rawValue === '' ? NaN : new Date(rawValue).getTime();
+        if (!Number.isFinite(t)) return { granted: true, until: null, active: true, expired: false };
+        const expired = Date.now() > (isBareDate(rawValue) ? t + DAY_MS : t);
+        return { granted: true, until: rawValue, active: !expired, expired };
     }
+    // May this location's coordinator change its lodging right now (deadline-wise)? The frozen state
+    // (submitted / validated) is a separate check.
+    function lodgingWindow(conf, loc) {
+        const deadline = lodgingDeadlineInfo(conf);
+        const permission = lodgingPermissionInfo(loc);
+        return { deadline, permission, open: !deadline.passed || permission.active };
+    }
+    // Every portal lodging write: 403 once the deadline has passed, unless the location holds an active
+    // permission. Both rows are re-read so a permission granted or revoked a moment ago applies at once.
+    async function assertLodgingWindowOpen(location) {
+        const conf = await db.get(`SELECT lodging_deadline FROM ${T.conferences} WHERE id = ?`, [location.conference_id]);
+        const loc = await db.get(`SELECT lodging_permission, lodging_permission_until FROM ${T.locations} WHERE id = ?`, [location.id]);
+        const w = lodgingWindow(conf, loc);
+        if (w.open) return;
+        const d = fmtDeadline(w.deadline.deadline);
+        if (w.permission.expired) throw httpError(403, `El plazo para acomodar los hospedajes venció el ${d} y el permiso de tu localidad venció el ${fmtDeadline(w.permission.until)}. Solo el administrador puede modificarlos.`);
+        throw httpError(403, `El plazo para acomodar los hospedajes venció el ${d}. Solo el administrador puede modificarlos.`);
+    }
+    // Re-reads the status (the resolved row may be a few ms old) and throws 409 unless it is a draft.
+    // Used inside the assignment lock by the routes that write.
     async function assertPortalDraft(location) {
         const fresh = await db.get(`SELECT id, lodging_status FROM ${T.locations} WHERE id = ?`, [location.id]);
         if (!fresh || isFrozen(fresh)) throw httpError(409, PORTAL_FROZEN_MSG);
@@ -2944,16 +2996,22 @@ exports.init = async function (wordjs) {
         try {
             const view = await loadLodging(location, { forAdmin: false });
             const status = view.location.lodging_status;
-            const deadline = lodgingDeadlineInfo(await db.get(`SELECT lodging_deadline FROM ${T.conferences} WHERE id = ?`, [location.conference_id]));
+            const win = lodgingWindow(
+                await db.get(`SELECT lodging_deadline FROM ${T.conferences} WHERE id = ?`, [location.conference_id]),
+                await db.get(`SELECT lodging_permission, lodging_permission_until FROM ${T.locations} WHERE id = ?`, [location.id]));
+            const deadline = win.deadline;
             res.json({
                 status,
                 deadline: deadline.deadline,
                 deadline_passed: deadline.passed,
+                // The admin's exception for this location (see lodgingPermissionInfo) and the verdict.
+                permission: win.permission,
+                window_open: win.open,
                 // The admin's observations only matter while the coordinator can act on them.
                 note: status === 'draft' ? view.location.lodging_note : null,
                 submitted_at: view.location.lodging_submitted_at,
                 reviewed_at: view.location.lodging_reviewed_at,
-                can_edit: status === 'draft' && !deadline.passed,
+                can_edit: status === 'draft' && win.open,
                 rooms: view.rooms,
                 unassigned: view.unassigned,
                 placed_elsewhere: view.placed_elsewhere,
@@ -2975,7 +3033,7 @@ exports.init = async function (wordjs) {
         const { inscription_id, room_id: rawRoomId } = req.body || {};
         try {
             if (isFrozen(location)) return res.status(409).json({ error: PORTAL_FROZEN_MSG });
-            await assertLodgingDeadlineOpen(location.conference_id);
+            await assertLodgingWindowOpen(location);
             const insId = positiveInt(inscription_id);
             if (!insId) return res.status(400).json({ error: 'Identificador inválido.' });
             const roomId = bodyId(rawRoomId, 'Habitación inválida.');
@@ -3029,7 +3087,7 @@ exports.init = async function (wordjs) {
         let acquired = false;
         try {
             if (isFrozen(location)) return res.status(409).json({ error: PORTAL_FROZEN_MSG });
-            await assertLodgingDeadlineOpen(location.conference_id);
+            await assertLodgingWindowOpen(location);
             const now = Date.now();
             const prev = portalRuns.get(location.id);
             if (prev && (prev.inflight || now - prev.finishedAt < PORTAL_RUN_COOLDOWN_MS)) {
@@ -3055,7 +3113,7 @@ exports.init = async function (wordjs) {
         if (!location) return res.status(401).json({ error: 'No token' });
         try {
             if (isFrozen(location)) return res.status(409).json({ error: PORTAL_FROZEN_MSG });
-            await assertLodgingDeadlineOpen(location.conference_id);
+            await assertLodgingWindowOpen(location);
             await withAssignmentLock(async () => {
                 await assertPortalDraft(location);
                 await db.run(
@@ -3075,7 +3133,7 @@ exports.init = async function (wordjs) {
         const { id, name, type, enabled, priority, config, params, hard } = req.body || {};
         try {
             if (isFrozen(location)) return res.status(409).json({ error: PORTAL_FROZEN_MSG });
-            await assertLodgingDeadlineOpen(location.conference_id);
+            await assertLodgingWindowOpen(location);
             const cid = location.conference_id;
             const rule = normalizeRule({ name, type, enabled, priority, config, params, hard }, { conferenceId: cid, fieldNames: await ruleFieldNames(cid) });
             const paramsStr = JSON.stringify(rule.params);
@@ -3107,7 +3165,7 @@ exports.init = async function (wordjs) {
         if (!location) return res.status(401).json({ error: 'No token' });
         try {
             if (isFrozen(location)) return res.status(409).json({ error: PORTAL_FROZEN_MSG });
-            await assertLodgingDeadlineOpen(location.conference_id);
+            await assertLodgingWindowOpen(location);
             const ruleId = positiveInt(req.params.id);
             if (!ruleId) return res.status(404).json({ error: 'Regla no encontrada.' });
             const r = await withAssignmentLock(async () => {
@@ -3126,7 +3184,7 @@ exports.init = async function (wordjs) {
         const location = await resolvePortalLocation(req);
         if (!location) return res.status(401).json({ error: 'No token' });
         try {
-            await assertLodgingDeadlineOpen(location.conference_id);
+            await assertLodgingWindowOpen(location);
             await withAssignmentLock(async () => {
                 const c = await db.get(
                     `SELECT COUNT(*) AS present,`
@@ -3149,7 +3207,7 @@ exports.init = async function (wordjs) {
         const location = await resolvePortalLocation(req);
         if (!location) return res.status(401).json({ error: 'No token' });
         try {
-            await assertLodgingDeadlineOpen(location.conference_id);
+            await assertLodgingWindowOpen(location);
             const r = await withAssignmentLock(() => db.run(
                 `UPDATE ${T.locations} SET lodging_status = 'draft' WHERE id = ? AND COALESCE(lodging_status, 'draft') = 'submitted'`, [location.id]));
             if (!r || !r.changes) return res.status(409).json({ error: 'El hospedaje no está enviado.' });
